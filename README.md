@@ -26,6 +26,7 @@ rpmbuild -ba *.spec
 mkdir ~/src
 tar -xvjpf ~/rpmbuild/SOURCES/elfutils-*.tar.bz2
 cd ~/src/elfutils-*
+rm -Rf ~/rpmbuild
 ./configure
 make
 sudo cp -v ./libelf/libelf.a /usr/lib64/
