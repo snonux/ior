@@ -9,7 +9,13 @@ Maybe a spiritual successor of one of my previous projects, I/O Riot https://cod
 To get this running on Fedora 39, run:
 
 ```shell
-sudo dnf install zlib-static glibc-static libzstd-static
+mkdir ~/git
+git clone https://codeberg.org/snonux/ioriotng
+git clone https://github.com/aquasecurity/libbpfgo
+sudo dnf install -y zlib-static glibc-static libzstd-static
+cd libbpfgo
+make
+make libbpfgo-static
 ```
 
 Need libelf static, which isn't in any repos. So we need to compile it ourselves.

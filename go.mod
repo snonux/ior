@@ -1,7 +1,5 @@
-module github.com/aquasecurity/libbpfgo/selftest/map-update
+module ioriotng
 
 go 1.18
 
-require github.com/aquasecurity/libbpfgo v0.4.7-libbpf-1.2.0-b2e29a1
-
-replace github.com/aquasecurity/libbpfgo => ../../
+require github.com/aquasecurity/libbpfgo v0.6.0-libbpf-1.3.0.20240111220235-90dbffffbdab
