@@ -12,7 +12,7 @@ To get this running on Fedora 39, run:
 mkdir ~/git
 git clone https://codeberg.org/snonux/ioriotng
 git clone https://github.com/aquasecurity/libbpfgo
-sudo dnf install -y zlib-static glibc-static libzstd-static
+sudo dnf install -y golang clang zlib-static glibc-static libzstd-static
 cd libbpfgo
 make
 make libbpfgo-static
