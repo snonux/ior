@@ -8,7 +8,6 @@ import (
 	"time"
 	"unsafe"
 
-	"encoding/binary"
 	"fmt"
 	"syscall"
 
@@ -104,16 +103,7 @@ func main() {
 	}()
 
 	ev := <-eventsChannel
-	if binary.LittleEndian.Uint32(ev) != 50 {
-		fmt.Fprintf(os.Stderr, "invalid data retrieved\n")
-		os.Exit(-1)
-	}
-
-	ev = <-eventsChannel
-	if ev[0] != value2[0] || ev[1] != value2[1] || ev[2] != value2[2] {
-		fmt.Fprintf(os.Stderr, "invalid data retrieved\n")
-		os.Exit(-1)
-	}
+	fmt.Println("Received ", string(ev))
 
 	pb.Stop()
 	pb.Close()

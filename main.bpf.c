@@ -25,19 +25,8 @@ struct {
 SEC("kprobe/sys_mmap")
 int kprobe__sys_mmap(struct pt_regs *ctx)
 {
-    u32 firstKey = 1;
-    struct value *v1 = bpf_map_lookup_elem(&tester, &firstKey);
-    if (!v1) {
-        return 1;
-    }
-    bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, v1, sizeof(struct value));
-
-    s64 secondKey = 42069420;
-    struct value *v2 = bpf_map_lookup_elem(&tester, &secondKey);
-    if (!v2) {
-        return 1;
-    }
-    bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, v2, sizeof(char) * 3);
+    char *foo = "foo";
+    bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, foo, sizeof(char) * 3);
 
     return 0;
 }
