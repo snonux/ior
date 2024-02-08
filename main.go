@@ -64,7 +64,7 @@ func main() {
 		os.Exit(-1)
 	}
 
-	if err := tracepoints.AttachSyscalls(bpfModule, "enter_openat", "exit_openat"); err != nil {
+	if err := tracepoints.AttachSyscalls(bpfModule); err != nil {
 		fmt.Fprintf(os.Stderr, err.Error())
 		os.Exit(-1)
 	}
