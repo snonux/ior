@@ -1,6 +1,6 @@
 # ioriotng
 
-<img src=assets/ioriotng-small.png align=left />
+<img src=assets/ioriotng-small.png align=right />
 
 I/O Riot NG is a a experiments with BPF.
 
