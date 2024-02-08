@@ -86,17 +86,16 @@ func main() {
 	}
 
 	pb.Poll(300)
+	for ev := range eventsChannel {
+		var e openatEvent
+		if err := binary.Read(bytes.NewReader(ev), binary.LittleEndian, &e); err != nil {
+			log.Fatal(err)
 
-	ev := <-eventsChannel
-	var e openatEvent
-	if err := binary.Read(bytes.NewReader(ev), binary.LittleEndian, &e); err != nil {
-		log.Fatal(err)
+		}
 
+		fmt.Println(e)
+		pb.Poll(300)
 	}
-
-	fmt.Println("Bytes ", ev)
-	fmt.Println("Struct ", e)
-	fmt.Println("Human ", e.String())
 
 	pb.Stop()
 	pb.Close()
