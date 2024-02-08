@@ -9,6 +9,8 @@ import (
 	"os"
 	"runtime"
 
+	"ioriotng/internal/tracepoints"
+
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
@@ -59,19 +61,12 @@ func main() {
 	err = bpfModule.BPFLoadObject()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load BPF object: %v\n", err)
-		return
+		os.Exit(-1)
 	}
 
-	// Attach to tracepoint
-	prog, err := bpfModule.GetProgram("handle_openat")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to get BPF program: %v\n", err)
-		os.Exit(1)
-	}
-	_, err = prog.AttachTracepoint("syscalls", "sys_exit_openat")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to attach to sys_exit_openat tracepoint: %v\n", err)
-		return
+	if err := tracepoints.AttachSyscalls(bpfModule, "enter_openat", "exit_openat"); err != nil {
+		fmt.Fprintf(os.Stderr, err.Error())
+		os.Exit(-1)
 	}
 
 	testerMap, err := bpfModule.GetMap("tester")
