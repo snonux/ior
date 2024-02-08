@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"os"
+	"log"
 	"runtime"
 
 	"ioriotng/internal/tracepoints"
@@ -48,49 +48,41 @@ func resizeMap(module *bpf.Module, name string, size uint32) error {
 func main() {
 	bpfModule, err := bpf.NewModuleFromFile("main.bpf.o")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		log.Fatal(err)
 	}
 	defer bpfModule.Close()
 
 	if err = resizeMap(bpfModule, "events", 8192); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		log.Fatal(err)
 	}
 
 	err = bpfModule.BPFLoadObject()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load BPF object: %v\n", err)
-		os.Exit(-1)
+		log.Fatal(err)
 	}
 
 	if err := tracepoints.AttachSyscalls(bpfModule); err != nil {
-		fmt.Fprintf(os.Stderr, err.Error())
-		os.Exit(-1)
+		log.Fatal(err)
 	}
 
 	testerMap, err := bpfModule.GetMap("tester")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		log.Fatal(err)
 	}
 
 	if testerMap.Name() != "tester" {
-		fmt.Fprintln(os.Stderr, "wrong map")
-		os.Exit(-1)
+		log.Fatal("wrong map")
 	}
 
 	if testerMap.Type() != bpf.MapTypeHash {
-		fmt.Fprintln(os.Stderr, "wrong map type")
-		os.Exit(-1)
+		log.Fatal("wrong map type")
 	}
 
 	eventsChannel := make(chan []byte)
 	lostChannel := make(chan uint64)
 	pb, err := bpfModule.InitPerfBuf("events", eventsChannel, lostChannel, 1)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		log.Fatal(err)
 	}
 
 	pb.Poll(300)
@@ -98,8 +90,7 @@ func main() {
 	ev := <-eventsChannel
 	var e openatEvent
 	if err := binary.Read(bytes.NewReader(ev), binary.LittleEndian, &e); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		log.Fatal(err)
 
 	}
 

@@ -27,6 +27,7 @@ func filterLines(lines []string) ([]string, error) {
 	return syscalls, nil
 }
 
+// Filter out all used syscall tracepoints from *.bpf.c
 func usedSyscalls() ([]string, error) {
 	var syscalls []string
 
