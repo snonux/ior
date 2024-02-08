@@ -3,16 +3,28 @@ package main
 import "C"
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
 	"os"
 	"runtime"
-	"time"
-	"unsafe"
-
-	"fmt"
-	"syscall"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
+
+type openatEvent struct {
+	FD       int32
+	TID      uint32
+	Filename [256]byte
+	Comm     [16]byte
+}
+
+func (e openatEvent) String() string {
+	filename := e.Filename[:]
+	comm := e.Comm[:]
+	return fmt.Sprintf("tid:%v fd:%v filename:%s, comm:%s",
+		e.TID, e.FD, string(filename), string(comm))
+}
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {
 	m, err := module.GetMap("events")
@@ -44,11 +56,22 @@ func main() {
 		os.Exit(-1)
 	}
 
-	bpfModule.BPFLoadObject()
-	prog, err := bpfModule.GetProgram("kprobe__sys_mmap")
+	err = bpfModule.BPFLoadObject()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		fmt.Fprintf(os.Stderr, "Failed to load BPF object: %v\n", err)
+		return
+	}
+
+	// Attach to tracepoint
+	prog, err := bpfModule.GetProgram("handle_openat")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to get BPF program: %v\n", err)
+		os.Exit(1)
+	}
+	_, err = prog.AttachTracepoint("syscalls", "sys_exit_openat")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to attach to sys_exit_openat tracepoint: %v\n", err)
+		return
 	}
 
 	testerMap, err := bpfModule.GetMap("tester")
@@ -67,25 +90,6 @@ func main() {
 		os.Exit(-1)
 	}
 
-	key1 := uint32(1)
-	value1 := struct{ x int }{50}
-	key1Unsafe := unsafe.Pointer(&key1)
-	value1Unsafe := unsafe.Pointer(&value1)
-	testerMap.Update(key1Unsafe, value1Unsafe)
-
-	key2 := int64(42069420)
-	value2 := []byte{'a', 'b', 'c'}
-	key2Unsafe := unsafe.Pointer(&key2)
-	value2Unsafe := unsafe.Pointer(&value2[0])
-	testerMap.Update(key2Unsafe, value2Unsafe)
-
-	funcName := fmt.Sprintf("__%s_sys_mmap", ksymArch())
-	_, err = prog.AttachKprobe(funcName)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
-	}
-
 	eventsChannel := make(chan []byte)
 	lostChannel := make(chan uint64)
 	pb, err := bpfModule.InitPerfBuf("events", eventsChannel, lostChannel, 1)
@@ -96,14 +100,17 @@ func main() {
 
 	pb.Poll(300)
 
-	go func() {
-		time.Sleep(time.Second)
-		syscall.Mmap(999, 999, 999, 1, 1)
-		syscall.Mmap(999, 999, 999, 1, 1)
-	}()
-
 	ev := <-eventsChannel
-	fmt.Println("Received ", string(ev))
+	var e openatEvent
+	if err := binary.Read(bytes.NewReader(ev), binary.LittleEndian, &e); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(-1)
+
+	}
+
+	fmt.Println("Bytes ", ev)
+	fmt.Println("Struct ", e)
+	fmt.Println("Human ", e.String())
 
 	pb.Stop()
 	pb.Close()
