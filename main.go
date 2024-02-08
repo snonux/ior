@@ -20,11 +20,11 @@ func resizeMap(module *bpf.Module, name string, size uint32) error {
 		return err
 	}
 
-	if err = m.Resize(size); err != nil {
+	if err = m.SetMaxEntries(size); err != nil {
 		return err
 	}
 
-	if actual := m.GetMaxEntries(); actual != size {
+	if actual := m.MaxEntries(); actual != size {
 		return fmt.Errorf("map resize failed, expected %v, actual %v", size, actual)
 	}
 
