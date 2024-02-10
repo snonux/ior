@@ -21,28 +21,28 @@ type BpfMapper interface {
 }
 
 type openEvent struct {
-	FD        int32
-	SyscallID int32
-	TID       uint32
-	Filename  [256]byte
-	Comm      [16]byte
+	FD       int32
+	OpID     int32
+	TID      uint32
+	Filename [256]byte
+	Comm     [16]byte
 }
 
 func (e openEvent) String() string {
 	filename := e.Filename[:]
 	comm := e.Comm[:]
-	return fmt.Sprintf("syscall:%d tid:%v fd:%v filename:%s, comm:%s",
-		e.SyscallID, e.TID, e.FD, string(filename), string(comm))
+	return fmt.Sprintf("opId:%d tid:%v fd:%v filename:%s, comm:%s",
+		e.OpID, e.TID, e.FD, string(filename), string(comm))
 }
 
 type fdEvent struct {
-	FD        int32
-	SyscallID int32
-	TID       uint32
+	FD   int32
+	OpID int32
+	TID  uint32
 }
 
 func (e fdEvent) String() string {
-	return fmt.Sprintf("syscall:%d tid:%v fd:%v", e.SyscallID, e.TID, e.FD)
+	return fmt.Sprintf("opId:%d tid:%v fd:%v", e.OpID, e.TID, e.FD)
 }
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {
@@ -69,7 +69,12 @@ func main() {
 	}
 	defer bpfModule.Close()
 
+	// Todo, could build a eventListener struct, which is generic.
 	if err = resizeMap(bpfModule, "open_event_map", 8192*10); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = resizeMap(bpfModule, "fd_event_map", 8192*10); err != nil {
 		log.Fatal(err)
 	}
 
@@ -115,7 +120,6 @@ func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, map
 	eventsCh := make(chan T)
 
 	pb, err := bpfModule.InitPerfBuf(mapName, rawEventsCh, rawLostCh, 1)
-	pb.Poll(pollSize)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -126,6 +130,7 @@ func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, map
 			pb.Close()
 			close(eventsCh)
 		}()
+		pb.Poll(pollSize)
 		for {
 			select {
 			case <-ctx.Done():

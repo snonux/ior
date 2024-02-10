@@ -1,6 +1,7 @@
 //+build ignore
 
 #include "vmlinux.h"
+#include "opids.h"
 
 #include <bpf/bpf_helpers.h>
 
@@ -14,7 +15,7 @@
 
 struct open_event {
     int fd;
-    int syscall_id;
+    int op_id;
     u32 tid;
     char filename[256];
     char comm[16];
@@ -40,7 +41,7 @@ int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
-    struct open_event event = { .syscall_id = ctx->id };
+    struct open_event event = { .op_id = OPEN };
 
     bpf_probe_read_user_str(event.filename, sizeof(event.filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&event.comm, sizeof(event.comm));
@@ -73,7 +74,7 @@ int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
-    struct open_event event = { .syscall_id = ctx->id };
+    struct open_event event = { .op_id = OPEN_AT };
 
     bpf_probe_read_user_str(event.filename, sizeof(event.filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&event.comm, sizeof(event.comm));
@@ -95,7 +96,7 @@ int handle_exit_openat(struct trace_event_raw_sys_exit *ctx) {
 
 struct fd_event {
     int fd;
-    int syscall_id;
+    int op_id;
     u32 tid;
 };
 
@@ -112,7 +113,7 @@ int handle_enter_close(struct trace_event_raw_sys_enter *ctx) {
 
     struct fd_event event = {
         .fd = (int)ctx->args[0],
-        .syscall_id = ctx->id,
+        .op_id = CLOSE,
         .tid = bpf_get_current_pid_tgid(),
     };
     bpf_perf_event_output(ctx, &fd_event_map, BPF_F_CURRENT_CPU, &event, sizeof(struct fd_event));
