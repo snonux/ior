@@ -94,13 +94,13 @@ func main() {
 
 	go func() {
 		defer wg.Done()
-		for ev := range listenToEvents[openEvent](ctx, bpfModule, "open_event_map") {
+		for ev := range listenToEvents[fdEvent](ctx, bpfModule, "fd_event_map") {
 			log.Println(ev)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for ev := range listenToEvents[fdEvent](ctx, bpfModule, "fd_event_map") {
+		for ev := range listenToEvents[openEvent](ctx, bpfModule, "open_event_map") {
 			log.Println(ev)
 		}
 	}()
@@ -114,12 +114,11 @@ func main() {
 }
 
 func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, mapName string) <-chan T {
-	pollSize := 300
 	rawEventsCh := make(chan []byte)
 	rawLostCh := make(chan uint64) // TODO: Of any use this channel?
 	eventsCh := make(chan T)
 
-	pb, err := bpfModule.InitPerfBuf(mapName, rawEventsCh, rawLostCh, 1)
+	pb, err := bpfModule.InitPerfBuf(mapName, rawEventsCh, rawLostCh, 4096)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -130,7 +129,7 @@ func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, map
 			pb.Close()
 			close(eventsCh)
 		}()
-		pb.Poll(pollSize)
+		pb.Poll(300)
 		for {
 			select {
 			case <-ctx.Done():
@@ -143,7 +142,6 @@ func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, map
 					log.Fatal(err)
 				}
 				eventsCh <- ev
-				pb.Poll(pollSize)
 			}
 		}
 	}()
