@@ -2,38 +2,14 @@
 
 #include "vmlinux.h"
 #include "opids.h"
-
 #include <bpf/bpf_helpers.h>
+#include "maps.bpf.h"
 
 // TODO: Split out this file into several *.bpf.c programs.
 
 // TODO: Make UID_FILTER configurable via a flag from the userland part.
 // For now, this is set to my own user for development purposes.
 #define UID_FILTER 1001 
-
-// Helper structs for opening file(s)
-
-struct open_event {
-    int fd;
-    int op_id;
-    u32 tid;
-    char filename[256];
-    char comm[16];
-};
-
-struct {
-    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-    __uint(key_size, sizeof(u32));
-    __uint(value_size, sizeof(u32));
-} open_event_map SEC(".maps");
-
-// Map to temporarily store the filename from sys_enter_openat
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(key_size, sizeof(u32));
-    __uint(value_size, sizeof(struct open_event));
-    __uint(max_entries, 128); // Adjust size as needed
-} open_event_temp_map SEC(".maps");
 
 SEC("tracepoint/syscalls/sys_enter_open")
 int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
@@ -91,20 +67,6 @@ int handle_exit_openat(struct trace_event_raw_sys_exit *ctx) {
 
     return handle_exit_open(ctx);
 }
-
-// Helper structs for other syscalls on FDs
-
-struct fd_event {
-    int fd;
-    int op_id;
-    u32 tid;
-};
-
-struct {
-    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-    __uint(key_size, sizeof(u32));
-    __uint(value_size, sizeof(u32));
-} fd_event_map SEC(".maps");
 
 SEC("tracepoint/syscalls/sys_enter_close")
 int handle_enter_close(struct trace_event_raw_sys_enter *ctx) {

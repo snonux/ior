@@ -73,12 +73,10 @@ func main() {
 	}
 	defer bpfModule.Close()
 
-	// Todo, could build a eventListener struct, which is generic.
-	if err = resizeMap(bpfModule, "open_event_map", 8192*10); err != nil {
+	if err = resizeMap(bpfModule, "open_event_map", 8192); err != nil {
 		log.Fatal(err)
 	}
-
-	if err = resizeMap(bpfModule, "fd_event_map", 8192*10); err != nil {
+	if err = resizeMap(bpfModule, "fd_event_map", 8192); err != nil {
 		log.Fatal(err)
 	}
 
@@ -107,10 +105,6 @@ func main() {
 		for ev := range listenToEvents[openEvent](ctx, bpfModule, "open_event_map") {
 			log.Println(ev)
 		}
-	}()
-
-	go func() {
-		defer wg.Done()
 	}()
 
 	wg.Wait()
