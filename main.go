@@ -65,7 +65,7 @@ func resizeMap(module *bpf.Module, name string, size uint32) error {
 
 func main() {
 	// To consider for implementation!
-	log.Println("Tracepoints with FD", debugfs.TracepointsWithFd())
+	log.Println(debugfs.TracepointsWithFd())
 
 	bpfModule, err := bpf.NewModuleFromFile("main.bpf.o")
 	if err != nil {
