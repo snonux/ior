@@ -66,19 +66,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	testerMap, err := bpfModule.GetMap("tester")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if testerMap.Name() != "tester" {
-		log.Fatal("wrong map")
-	}
-
-	if testerMap.Type() != bpf.MapTypeHash {
-		log.Fatal("wrong map type")
-	}
-
 	eventsChannel := make(chan []byte)
 	lostChannel := make(chan uint64)
 	pb, err := bpfModule.InitPerfBuf("events", eventsChannel, lostChannel, 1)
