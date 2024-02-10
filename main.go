@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sync"
 
 	"ioriotng/internal/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-type openatEvent struct {
+type openEvent struct {
 	FD        int32
 	SyscallID int32
 	TID       uint32
@@ -22,11 +23,21 @@ type openatEvent struct {
 	Comm      [16]byte
 }
 
-func (e openatEvent) String() string {
+func (e openEvent) String() string {
 	filename := e.Filename[:]
 	comm := e.Comm[:]
 	return fmt.Sprintf("syscall:%d tid:%v fd:%v filename:%s, comm:%s",
 		e.SyscallID, e.TID, e.FD, string(filename), string(comm))
+}
+
+type fdEvent struct {
+	FD        int32
+	SyscallID int32
+	TID       uint32
+}
+
+func (e fdEvent) String() string {
+	return fmt.Sprintf("syscall:%d tid:%v fd:%v", e.SyscallID, e.TID, e.FD)
 }
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {
@@ -66,16 +77,39 @@ func main() {
 		log.Fatal(err)
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		if err := openEvents(bpfModule); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+	}()
+
+	wg.Wait()
+	log.Println("Good bye")
+}
+
+func openEvents(bpfModule *bpf.Module) error {
 	eventsChannel := make(chan []byte)
 	lostChannel := make(chan uint64)
 	pb, err := bpfModule.InitPerfBuf("open_event_map", eventsChannel, lostChannel, 1)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	defer func() {
+		pb.Stop()
+		pb.Close()
+	}()
 
 	pb.Poll(300)
 	for ev := range eventsChannel {
-		var e openatEvent
+		var e openEvent
 		if err := binary.Read(bytes.NewReader(ev), binary.LittleEndian, &e); err != nil {
 			log.Fatal(err)
 
@@ -85,8 +119,7 @@ func main() {
 		pb.Poll(300)
 	}
 
-	pb.Stop()
-	pb.Close()
+	return nil
 }
 
 func ksymArch() string {
