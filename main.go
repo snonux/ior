@@ -15,6 +15,10 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
+type BpfMapper interface {
+	String() string
+}
+
 type openEvent struct {
 	FD        int32
 	SyscallID int32
@@ -82,7 +86,7 @@ func main() {
 
 	go func() {
 		defer wg.Done()
-		if err := openEvents(bpfModule); err != nil {
+		if err := listenToEvents[openEvent](bpfModule, "open_event_map"); err != nil {
 			log.Fatal(err)
 		}
 	}()
@@ -95,10 +99,11 @@ func main() {
 	log.Println("Good bye")
 }
 
-func openEvents(bpfModule *bpf.Module) error {
+func listenToEvents[T BpfMapper](bpfModule *bpf.Module, mapName string) error {
+	pollSize := 300
 	eventsChannel := make(chan []byte)
 	lostChannel := make(chan uint64)
-	pb, err := bpfModule.InitPerfBuf("open_event_map", eventsChannel, lostChannel, 1)
+	pb, err := bpfModule.InitPerfBuf(mapName, eventsChannel, lostChannel, 1)
 	if err != nil {
 		return err
 	}
@@ -107,16 +112,15 @@ func openEvents(bpfModule *bpf.Module) error {
 		pb.Close()
 	}()
 
-	pb.Poll(300)
+	pb.Poll(pollSize)
 	for ev := range eventsChannel {
-		var e openEvent
+		var e T
 		if err := binary.Read(bytes.NewReader(ev), binary.LittleEndian, &e); err != nil {
-			log.Fatal(err)
-
+			return err
 		}
 
 		fmt.Println(e)
-		pb.Poll(300)
+		pb.Poll(pollSize)
 	}
 
 	return nil
