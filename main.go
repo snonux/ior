@@ -30,7 +30,7 @@ func (e openatEvent) String() string {
 }
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {
-	m, err := module.GetMap("events")
+	m, err := module.GetMap("open_event_map")
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func main() {
 	}
 	defer bpfModule.Close()
 
-	if err = resizeMap(bpfModule, "events", 8192); err != nil {
+	if err = resizeMap(bpfModule, "open_event_map", 8192); err != nil {
 		log.Fatal(err)
 	}
 
@@ -68,7 +68,7 @@ func main() {
 
 	eventsChannel := make(chan []byte)
 	lostChannel := make(chan uint64)
-	pb, err := bpfModule.InitPerfBuf("events", eventsChannel, lostChannel, 1)
+	pb, err := bpfModule.InitPerfBuf("open_event_map", eventsChannel, lostChannel, 1)
 	if err != nil {
 		log.Fatal(err)
 	}
