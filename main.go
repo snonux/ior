@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sync"
 
+	"ioriotng/internal/debugfs"
 	"ioriotng/internal/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -63,6 +64,9 @@ func resizeMap(module *bpf.Module, name string, size uint32) error {
 }
 
 func main() {
+	// To consider for implementation!
+	log.Println("Tracepoints with FD", debugfs.TracepointsWithFd())
+
 	bpfModule, err := bpf.NewModuleFromFile("main.bpf.o")
 	if err != nil {
 		log.Fatal(err)
