@@ -15,17 +15,18 @@ import (
 )
 
 type openatEvent struct {
-	FD       int32
-	TID      uint32
-	Filename [256]byte
-	Comm     [16]byte
+	FD        int32
+	SyscallID int32
+	TID       uint32
+	Filename  [256]byte
+	Comm      [16]byte
 }
 
 func (e openatEvent) String() string {
 	filename := e.Filename[:]
 	comm := e.Comm[:]
-	return fmt.Sprintf("tid:%v fd:%v filename:%s, comm:%s",
-		e.TID, e.FD, string(filename), string(comm))
+	return fmt.Sprintf("syscall:%d tid:%v fd:%v filename:%s, comm:%s",
+		e.SyscallID, e.TID, e.FD, string(filename), string(comm))
 }
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {

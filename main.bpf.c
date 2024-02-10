@@ -18,6 +18,7 @@ struct {
 
 struct openat_event {
     int fd;
+    int syscall_id;
     u32 tid;
     char filename[256];
     char comm[16];
@@ -37,13 +38,13 @@ struct {
     __uint(max_entries, 128); // Adjust size as needed
 } temp_events SEC(".maps");
 
-SEC("tracepoint/syscalls/sys_enter_openat")
-int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
+SEC("tracepoint/syscalls/sys_enter_open")
+int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
     u32 tid = bpf_get_current_pid_tgid();
-    struct openat_event event = {};
+    struct openat_event event = { .syscall_id = ctx->id };
 
-    // Capture the filename. Note: You need to handle possible user-space pointer issues
-    bpf_probe_read_user_str(event.filename, sizeof(event.filename), (void *)ctx->args[1]);
+
+    bpf_probe_read_user_str(event.filename, sizeof(event.filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&event.comm, sizeof(event.comm));
     event.tid = tid;
     bpf_map_update_elem(&temp_events, &tid, &event, BPF_ANY);
@@ -51,8 +52,8 @@ int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_exit_openat")
-int handle_exit_openat(struct trace_event_raw_sys_exit *args) {
+SEC("tracepoint/syscalls/sys_exit_open")
+int handle_exit_open(struct trace_event_raw_sys_exit *args) {
     u32 tid = bpf_get_current_pid_tgid();
     struct openat_event *eventp = bpf_map_lookup_elem(&temp_events, &tid);
     if (!eventp) {
@@ -63,6 +64,25 @@ int handle_exit_openat(struct trace_event_raw_sys_exit *args) {
     bpf_map_delete_elem(&temp_events, &tid);
 
     return 0;
+}
+
+
+SEC("tracepoint/syscalls/sys_enter_openat")
+int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
+    u32 tid = bpf_get_current_pid_tgid();
+    struct openat_event event = { .syscall_id = ctx->id };
+
+    bpf_probe_read_user_str(event.filename, sizeof(event.filename), (void *)ctx->args[1]);
+    bpf_get_current_comm(&event.comm, sizeof(event.comm));
+    event.tid = tid;
+    bpf_map_update_elem(&temp_events, &tid, &event, BPF_ANY);
+
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_openat")
+int handle_exit_openat(struct trace_event_raw_sys_exit *args) {
+    return handle_exit_open(args);
 }
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
