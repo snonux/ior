@@ -4,6 +4,8 @@ struct open_event {
     int fd;
     int op_id;
     u32 tid;
+    long enter_time;
+    long exit_time;
     char filename[256];
     char comm[16];
 };
@@ -26,6 +28,8 @@ struct fd_event {
     int fd;
     int op_id;
     u32 tid;
+    long enter_time;
+    long exit_time;
 };
 
 struct {

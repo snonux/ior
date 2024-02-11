@@ -22,11 +22,13 @@ type BpfMapper interface {
 }
 
 type openEvent struct {
-	FD       int32
-	OpID     int32
-	TID      uint32
-	Filename [256]byte
-	Comm     [16]byte
+	FD        int32
+	OpID      int32
+	TID       uint32
+	EnterTime int64
+	ExitTime  int64
+	Filename  [256]byte
+	Comm      [16]byte
 }
 
 func (e openEvent) String() string {
@@ -37,9 +39,11 @@ func (e openEvent) String() string {
 }
 
 type fdEvent struct {
-	FD   int32
-	OpID int32
-	TID  uint32
+	FD        int32
+	OpID      int32
+	TID       uint32
+	EnterTime int64
+	ExitTime  int64
 }
 
 func (e fdEvent) String() string {

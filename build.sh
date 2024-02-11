@@ -17,4 +17,4 @@ export CGO_LDFLAGS="-lelf -lzstd $LIBBPFGO/output/libbpf.a"
 export GOOS=linux
 export GOARCH=amd64
 
-go build -race -tags netgo -ldflags '-w -extldflags "-static"' -o ioriotng ./main.go
+go build -race -tags netgo -ldflags '-w -extldflags "-static"' -o ioriotng ./cmd/ioriotng/main.go
