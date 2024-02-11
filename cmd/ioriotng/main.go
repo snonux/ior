@@ -71,7 +71,7 @@ func main() {
 	// To consider for implementation!
 	log.Println(debugfs.TracepointsWithFd())
 
-	bpfModule, err := bpf.NewModuleFromFile("main.bpf.o")
+	bpfModule, err := bpf.NewModuleFromFile("ioriotng.bpf.o")
 	if err != nil {
 		log.Fatal(err)
 	}

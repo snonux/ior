@@ -9,7 +9,7 @@ echo 'package main' > internal/opids.go
 echo >> internal/opids.go
 sed -E 's/#define (.*) ([0-9]+)/const \1 = \2/' opids.h >> internal/opids.go
 
-clang -g -O2 -Wall -fpie -I../libbpfgo/selftest/common -target bpf -D__TARGET_ARCH_amd64 -I../libbpfgo/output -I../libbpfgo/selftest/common -c main.bpf.c -o main.bpf.o
+clang -g -O2 -Wall -fpie -I../libbpfgo/selftest/common -target bpf -D__TARGET_ARCH_amd64 -I../libbpfgo/output -I../libbpfgo/selftest/common -c ioriotng.bpf.c -o ioriotng.bpf.o
 
 export CC=clang
 export CGO_CFLAGS="-I$LIBBPFGO/output -I$LIBBPFGO/selftest/common"
