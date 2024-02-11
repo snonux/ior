@@ -17,7 +17,7 @@ gobuild:
 	echo 'package main' > internal/opids.go
 	echo >> internal/opids.go
 	sed -E 's/#define (.*) ([0-9]+)/const \1 = \2/' opids.h >> internal/opids.go
-	go build -race -tags netgo -ldflags '-w -extldflags "-static"' -o ioriotng ./cmd/ioriotng/main.go
+	go build -tags netgo -ldflags '-w -extldflags "-static"' -o ioriotng ./cmd/ioriotng/main.go
 
 clean:
 	find . -type f -name ioriotng -delete
