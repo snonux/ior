@@ -12,7 +12,7 @@ build: bpfbuild gobuild
 .PHONY: bpfbuild
 bpfbuild:
 	bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
-	$(CC) -g -O2 -Wall -fpie -I$(LIBBPFGO)/selftest/common -target bpf -D__TARGET_ARCH_amd64 -I$(LIBBPFGO)/output -I$(LIBBPFGO)/selftest/common -c ioriotng.bpf.c -o ioriotng.bpf.o
+	$(CC) -g -O2 -Wall -fpie -target bpf -D__TARGET_ARCH_amd64 -I$(LIBBPFGO)/output -c ioriotng.bpf.c -o ioriotng.bpf.o
 
 .PHONY: gobuild
 gobuild:
