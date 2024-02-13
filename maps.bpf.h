@@ -1,15 +1,17 @@
 //+build ignore
 
 #define TEMP_MAP_SIZES 1024 // Adjust size as needed
+#define MAX_FILENAME_LENGTH 256
+#define MAX_PROGNAME_LENGTH 16
 
 struct open_event {
-    int fd;
-    int op_id;
-    u32 tid;
+    __s32 fd;
+    __s32 op_id;
+    __u32 tid;
     __u64 enter_time;
     __u64 exit_time;
-    char filename[256];
-    char comm[16];
+    char filename[MAX_FILENAME_LENGTH];
+    char comm[MAX_PROGNAME_LENGTH];
 };
 
 struct {
@@ -27,9 +29,9 @@ struct {
 } open_event_temp_map SEC(".maps");
 
 struct fd_event {
-    int fd;
-    int op_id;
-    u32 tid;
+    __s32 fd;
+    __s32 op_id;
+    __u32 tid;
     __u64 enter_time;
     __u64 exit_time;
 };

@@ -27,7 +27,7 @@ type openEvent struct {
 	TID       uint32
 	EnterTime uint64
 	ExitTime  uint64
-	Filename  [256]byte
+	Filename  [256]byte // TODO, use same value as in ioriot.bpf.h
 	Comm      [16]byte
 }
 
@@ -35,8 +35,8 @@ func (e openEvent) String() string {
 	filename := e.Filename[:]
 	comm := e.Comm[:]
 	duration := (e.ExitTime - e.EnterTime) / 1000000000000.0
-	return fmt.Sprintf("%vms %v %v opId:%d tid:%v fd:%v filename:%s, comm:%s",
-		duration, e.ExitTime, e.EnterTime, e.OpID, e.TID, e.FD, string(filename), string(comm))
+	return fmt.Sprintf("%vms opId:%d tid:%d fd:%d filename:%s, comm:%s",
+		duration, e.OpID, e.TID, e.FD, string(filename), string(comm))
 }
 
 type fdEvent struct {
@@ -49,7 +49,7 @@ type fdEvent struct {
 
 func (e fdEvent) String() string {
 	duration := (e.ExitTime - e.EnterTime) / 1000000000000.0
-	return fmt.Sprintf("%vms %v %v opId:%d tid:%v fd:%v", duration, e.ExitTime, e.EnterTime, e.OpID, e.TID, e.FD)
+	return fmt.Sprintf("%vms opId:%d tid:%v fd:%v", duration, e.OpID, e.TID, e.FD)
 }
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {
