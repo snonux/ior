@@ -1,4 +1,4 @@
-package main
+package internal
 
 const OPEN = 1
 const OPEN_AT = 2
