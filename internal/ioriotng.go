@@ -14,43 +14,13 @@ import (
 	"ioriotng/internal/debugfs"
 	"ioriotng/internal/flags"
 	"ioriotng/internal/tracepoints"
+	"ioriotng/internal/types"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
 type BpfMapper interface {
 	String() string
-}
-
-type openEvent struct {
-	FD        int32
-	OpID      int32
-	TID       uint32
-	EnterTime uint64
-	ExitTime  uint64
-	Filename  [256]byte // TODO, use same value as in ioriot.bpf.h
-	Comm      [16]byte
-}
-
-func (e openEvent) String() string {
-	filename := e.Filename[:]
-	comm := e.Comm[:]
-	duration := (e.ExitTime - e.EnterTime) / 1000000000000.0
-	return fmt.Sprintf("%vms opId:%d tid:%d fd:%d filename:%s, comm:%s",
-		duration, e.OpID, e.TID, e.FD, string(filename), string(comm))
-}
-
-type fdEvent struct {
-	FD        int32
-	OpID      int32
-	TID       uint32
-	EnterTime uint64
-	ExitTime  uint64
-}
-
-func (e fdEvent) String() string {
-	duration := (e.ExitTime - e.EnterTime) / 1000000000000.0
-	return fmt.Sprintf("%vms opId:%d tid:%v fd:%v", duration, e.OpID, e.TID, e.FD)
 }
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {
@@ -107,13 +77,13 @@ func Run(flags flags.Flags) {
 
 	go func() {
 		defer wg.Done()
-		for ev := range listenToEvents[fdEvent](ctx, bpfModule, "fd_event_map") {
+		for ev := range listenToEvents[types.FdEvent](ctx, bpfModule, "fd_event_map") {
 			log.Println(ev)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for ev := range listenToEvents[openEvent](ctx, bpfModule, "open_event_map") {
+		for ev := range listenToEvents[types.OpenEvent](ctx, bpfModule, "open_event_map") {
 			log.Println(ev)
 		}
 	}()
