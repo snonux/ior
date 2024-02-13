@@ -29,4 +29,4 @@ clean:
 
 .PHONY: run
 run:
-	sudo ./ioriotng
+	sudo ./ioriotng -uid $$(id -u)

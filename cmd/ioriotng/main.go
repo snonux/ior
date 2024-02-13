@@ -2,10 +2,9 @@ package main
 
 import (
 	"ioriotng/internal"
+	"ioriotng/internal/flags"
 )
 
 func main() {
-	// Here could be some flag parsing....
-
-	internal.Run()
+	internal.Run(flags.New())
 }

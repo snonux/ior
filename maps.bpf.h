@@ -4,16 +4,16 @@
 #define MAX_FILENAME_LENGTH 256
 #define MAX_PROGNAME_LENGTH 16
 
-struct config {
+struct flags {
    __u32 uid_filter;
 };
 
 struct {
    __uint(type, BPF_MAP_TYPE_HASH);
    __type(key, u32);
-   __type(value, struct config);
+   __type(value, struct flags);
    __uint(max_entries, 1 << 24);
-} config_map SEC(".maps");
+} flags_map SEC(".maps");
 
 struct open_event {
     __s32 fd;

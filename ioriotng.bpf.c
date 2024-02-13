@@ -7,8 +7,8 @@
 
 static inline int filter() {
     u32 key = 1;
-    struct config *c = bpf_map_lookup_elem(&config_map, &key);
-    return c == NULL || (bpf_get_current_uid_gid() & 0xFFFFFFFF) != c->uid_filter;
+    struct flags *flagsp = bpf_map_lookup_elem(&flags_map, &key);
+    return flagsp == NULL || (bpf_get_current_uid_gid() & 0xFFFFFFFF) != flagsp->uid_filter;
 }
 
 SEC("tracepoint/syscalls/sys_enter_open")
