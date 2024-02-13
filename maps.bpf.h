@@ -5,8 +5,7 @@
 #define MAX_PROGNAME_LENGTH 16
 
 struct config {
-   int x;
-   char y;
+   __u32 uid_filter;
 };
 
 struct {
