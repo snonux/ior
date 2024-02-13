@@ -78,13 +78,13 @@ func Run(flags flags.Flags) {
 	go func() {
 		defer wg.Done()
 		for ev := range listenToEvents[types.FdEvent](ctx, bpfModule, "fd_event_map") {
-			log.Println(ev)
+			fmt.Println(ev)
 		}
 	}()
 	go func() {
 		defer wg.Done()
 		for ev := range listenToEvents[types.OpenEvent](ctx, bpfModule, "open_event_map") {
-			log.Println(ev)
+			fmt.Println(ev)
 		}
 	}()
 

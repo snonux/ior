@@ -3,21 +3,16 @@ package types
 import "fmt"
 
 type OpenEvent struct {
-	FD        int32
-	OpID      int32
-	TID       uint32
-	EnterTime uint64
-	ExitTime  uint64
-	Filename  [256]byte // TODO, use same value as in ioriot.bpf.h
-	Comm      [16]byte
+	FD       int32
+	TID      uint32
+	Filename [256]byte // TODO, use same value as in ioriot.bpf.h
+	Comm     [16]byte
 }
 
 func (e OpenEvent) String() string {
 	filename := e.Filename[:]
 	comm := e.Comm[:]
-	duration := (e.ExitTime - e.EnterTime) / 1000000000000.0
-	return fmt.Sprintf("%vms opId:%d tid:%d fd:%d filename:%s, comm:%s",
-		duration, e.OpID, e.TID, e.FD, string(filename), string(comm))
+	return fmt.Sprintf("tid:%d fd:%d filename:%s, comm:%s", e.TID, e.FD, string(filename), string(comm))
 }
 
 type FdEvent struct {

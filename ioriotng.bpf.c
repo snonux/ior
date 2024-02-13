@@ -17,14 +17,13 @@ int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
-    struct open_event event = {};
-    event.op_id = OPEN;
-    event.enter_time = bpf_ktime_get_ns();
 
-    bpf_probe_read_user_str(event.filename, sizeof(event.filename), (void *)ctx->args[0]);
-    bpf_get_current_comm(&event.comm, sizeof(event.comm));
-    event.tid = tid;
-    bpf_map_update_elem(&open_event_temp_map, &tid, &event, BPF_ANY);
+    struct open_event open_event = {};
+    open_event.tid = tid;
+    bpf_probe_read_user_str(open_event.filename, sizeof(open_event.filename), (void *)ctx->args[0]);
+    bpf_get_current_comm(&open_event.comm, sizeof(open_event.comm));
+
+    bpf_map_update_elem(&open_event_temp_map, &tid, &open_event, BPF_ANY);
 
     return 0;
 }
@@ -35,13 +34,12 @@ int handle_exit_open(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
-    struct open_event *eventp = bpf_map_lookup_elem(&open_event_temp_map, &tid);
-    if (!eventp) {
+    struct open_event *open_eventp = bpf_map_lookup_elem(&open_event_temp_map, &tid);
+    if (!open_eventp) {
         return 0;
     }
-    eventp->fd = ctx->ret;
-    eventp->exit_time = bpf_ktime_get_ns();
-    bpf_perf_event_output(ctx, &open_event_map, BPF_F_CURRENT_CPU, eventp, sizeof(struct open_event));
+    open_eventp->fd = ctx->ret;
+    bpf_perf_event_output(ctx, &open_event_map, BPF_F_CURRENT_CPU, open_eventp, sizeof(struct open_event));
     bpf_map_delete_elem(&open_event_temp_map, &tid);
 
     return 0;
@@ -54,14 +52,12 @@ int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
 
     u32 tid = bpf_get_current_pid_tgid();
 
-    struct open_event event = {};
-    event.op_id = OPEN_AT;
-    event.enter_time = bpf_ktime_get_ns();
-    event.tid = tid;
+    struct open_event open_event = {};
+    open_event.tid = tid;
 
-    bpf_probe_read_user_str(event.filename, sizeof(event.filename), (void *)ctx->args[1]);
-    bpf_get_current_comm(&event.comm, sizeof(event.comm));
-    bpf_map_update_elem(&open_event_temp_map, &tid, &event, BPF_ANY);
+    bpf_probe_read_user_str(open_event.filename, sizeof(open_event.filename), (void *)ctx->args[1]);
+    bpf_get_current_comm(&open_event.comm, sizeof(open_event.comm));
+    bpf_map_update_elem(&open_event_temp_map, &tid, &open_event, BPF_ANY);
 
     return 0;
 }
@@ -99,13 +95,12 @@ int handle_exit_close(struct trace_event_raw_sys_enter *ctx) {
 
     u32 tid = bpf_get_current_pid_tgid();
 
-    struct open_event *eventp = bpf_map_lookup_elem(&fd_event_temp_map, &tid);
-    if (!eventp) {
+    struct open_event *open_eventp = bpf_map_lookup_elem(&fd_event_temp_map, &tid);
+    if (!open_eventp) {
         return 0;
     }
-    eventp->exit_time = bpf_ktime_get_ns();
 
-    bpf_perf_event_output(ctx, &fd_event_map, BPF_F_CURRENT_CPU, eventp, sizeof(struct fd_event));
+    bpf_perf_event_output(ctx, &fd_event_map, BPF_F_CURRENT_CPU, open_eventp, sizeof(struct fd_event));
     bpf_map_delete_elem(&fd_event_temp_map, &tid);
 
     return 0;

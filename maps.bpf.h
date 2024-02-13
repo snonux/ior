@@ -17,10 +17,7 @@ struct {
 
 struct open_event {
     __s32 fd;
-    __s32 op_id;
     __u32 tid;
-    __u64 enter_time;
-    __u64 exit_time;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
 };
