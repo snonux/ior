@@ -4,6 +4,18 @@
 #define MAX_FILENAME_LENGTH 256
 #define MAX_PROGNAME_LENGTH 16
 
+struct config {
+   int x;
+   char y;
+};
+
+struct {
+   __uint(type, BPF_MAP_TYPE_HASH);
+   __type(key, u32);
+   __type(value, struct config);
+   __uint(max_entries, 1 << 24);
+} config_map SEC(".maps");
+
 struct open_event {
     __s32 fd;
     __s32 op_id;

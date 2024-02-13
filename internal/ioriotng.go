@@ -10,6 +10,7 @@ import (
 	"log"
 	"runtime"
 	"sync"
+	"unsafe"
 
 	"ioriotng/internal/debugfs"
 	"ioriotng/internal/tracepoints"
@@ -69,6 +70,22 @@ func resizeMap(module *bpf.Module, name string, size uint32) error {
 	return nil
 }
 
+func config(bpfModule *bpf.Module) error {
+	configMap, err := bpfModule.GetMap("config_map")
+	if err != nil {
+		return err
+	}
+
+	config := struct {
+		UidFilter int32
+	}{
+		UidFilter: 1001, // TODO: Make configurable via flag,
+	}
+
+	key := uint32(1)
+	return configMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&config))
+}
+
 func Run() {
 	// To consider for implementation!
 	log.Println(debugfs.TracepointsWithFd())
@@ -88,6 +105,10 @@ func Run() {
 
 	err = bpfModule.BPFLoadObject()
 	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := config(bpfModule); err != nil {
 		log.Fatal(err)
 	}
 

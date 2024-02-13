@@ -9,9 +9,16 @@
 // For now, this is set to my own user for development purposes.
 #define UID_FILTER 1001 
 
+
 SEC("tracepoint/syscalls/sys_enter_open")
 int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
-    if ((bpf_get_current_uid_gid() & 0xFFFFFFFF) != UID_FILTER)
+    u32 key = 1;
+    struct config *c = bpf_map_lookup_elem(&config_map, &key);
+    if (!c) {
+        return 0;
+    }
+
+    if ((bpf_get_current_uid_gid() & 0xFFFFFFFF) != c->x)
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
@@ -48,7 +55,13 @@ int handle_exit_open(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_openat")
 int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
-    if ((bpf_get_current_uid_gid() & 0xFFFFFFFF) != UID_FILTER)
+    u32 key = 1;
+    struct config *c = bpf_map_lookup_elem(&config_map, &key);
+    if (!c) {
+        return 0;
+    }
+
+    if ((bpf_get_current_uid_gid() & 0xFFFFFFFF) != c->x)
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
