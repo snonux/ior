@@ -25,8 +25,8 @@ type openEvent struct {
 	FD        int32
 	OpID      int32
 	TID       uint32
-	EnterTime int64
-	ExitTime  int64
+	EnterTime uint64
+	ExitTime  uint64
 	Filename  [256]byte
 	Comm      [16]byte
 }
@@ -34,20 +34,22 @@ type openEvent struct {
 func (e openEvent) String() string {
 	filename := e.Filename[:]
 	comm := e.Comm[:]
-	return fmt.Sprintf("opId:%d tid:%v fd:%v filename:%s, comm:%s",
-		e.OpID, e.TID, e.FD, string(filename), string(comm))
+	duration := (e.ExitTime - e.EnterTime) / 1000000000000.0
+	return fmt.Sprintf("%vms %v %v opId:%d tid:%v fd:%v filename:%s, comm:%s",
+		duration, e.ExitTime, e.EnterTime, e.OpID, e.TID, e.FD, string(filename), string(comm))
 }
 
 type fdEvent struct {
 	FD        int32
 	OpID      int32
 	TID       uint32
-	EnterTime int64
-	ExitTime  int64
+	EnterTime uint64
+	ExitTime  uint64
 }
 
 func (e fdEvent) String() string {
-	return fmt.Sprintf("opId:%d tid:%v fd:%v", e.OpID, e.TID, e.FD)
+	duration := (e.ExitTime - e.EnterTime) / 1000000000000.0
+	return fmt.Sprintf("%vms %v %v opId:%d tid:%v fd:%v", duration, e.ExitTime, e.EnterTime, e.OpID, e.TID, e.FD)
 }
 
 func resizeMap(module *bpf.Module, name string, size uint32) error {
