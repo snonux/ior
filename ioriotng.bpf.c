@@ -4,7 +4,6 @@
 #include "opids.h"
 #include <bpf/bpf_helpers.h>
 #include "maps.bpf.h"
-#include "ringbufs.bpf.h"
 
 static inline int filter() {
     u32 key = 1;
