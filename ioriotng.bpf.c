@@ -17,9 +17,11 @@ int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
+    u64 time = bpf_ktime_get_ns();
 
     struct open_event open_event = {};
     open_event.tid = tid;
+    open_event.time = time;
     bpf_probe_read_user_str(open_event.filename, sizeof(open_event.filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&open_event.comm, sizeof(open_event.comm));
 

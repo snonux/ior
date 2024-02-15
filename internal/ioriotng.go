@@ -23,23 +23,6 @@ type BpfMapper interface {
 	String() string
 }
 
-func resizeMap(module *bpf.Module, name string, size uint32) error {
-	m, err := module.GetMap("open_event_map")
-	if err != nil {
-		return err
-	}
-
-	if err = m.SetMaxEntries(size); err != nil {
-		return err
-	}
-
-	if actual := m.MaxEntries(); actual != size {
-		return fmt.Errorf("map resize failed, expected %v, actual %v", size, actual)
-	}
-
-	return nil
-}
-
 func Run(flags flags.Flags) {
 	// To consider for implementation!
 	log.Println(debugfs.TracepointsWithFd())
@@ -50,10 +33,7 @@ func Run(flags flags.Flags) {
 	}
 	defer bpfModule.Close()
 
-	if err = resizeMap(bpfModule, "open_event_map", 8192); err != nil {
-		log.Fatal(err)
-	}
-	if err = resizeMap(bpfModule, "fd_event_map", 8192); err != nil {
+	if err := flags.ResizeBPFMaps(bpfModule); err != nil {
 		log.Fatal(err)
 	}
 

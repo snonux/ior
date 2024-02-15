@@ -5,6 +5,7 @@ import "fmt"
 type OpenEvent struct {
 	FD       int32
 	TID      uint32
+	Time     uint64
 	Filename [256]byte // TODO, use same value as in ioriot.bpf.h
 	Comm     [16]byte
 }
@@ -12,7 +13,8 @@ type OpenEvent struct {
 func (e OpenEvent) String() string {
 	filename := e.Filename[:]
 	comm := e.Comm[:]
-	return fmt.Sprintf("tid:%d fd:%d filename:%s, comm:%s", e.TID, e.FD, string(filename), string(comm))
+	return fmt.Sprintf("%v tid:%d fd:%d filename:%s, comm:%s",
+		e.Time, e.TID, e.FD, string(filename), string(comm))
 }
 
 type FdEvent struct {
