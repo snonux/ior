@@ -16,9 +16,6 @@ bpfbuild:
 
 .PHONY: gobuild
 gobuild:
-	echo 'package internal' > internal/opids.go
-	echo >> internal/opids.go
-	sed -E 's/#define (.*) ([0-9]+)/const \1 = \2/' opids.h >> internal/opids.go
 	go build -tags netgo -ldflags '-w -extldflags "-static"' -o ioriotng ./cmd/ioriotng/main.go
 
 .PHONY: clean

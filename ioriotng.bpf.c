@@ -1,7 +1,6 @@
 //+build ignore
 
 #include "vmlinux.h"
-#include "opids.h"
 #include <bpf/bpf_helpers.h>
 #include "types.bpf.h"
 #include "maps.bpf.h"
