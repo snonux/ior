@@ -1,9 +1,9 @@
 //+build ignore
 
-#include "vmlinux.h"
+#include "internal/types/vmlinux.h"
 #include <bpf/bpf_helpers.h>
-#include "types.bpf.h"
-#include "maps.bpf.h"
+#include "internal/types/types.bpf.h"
+#include "internal/types/maps.bpf.h"
 
 static inline int filter() {
     u32 key = 1;
