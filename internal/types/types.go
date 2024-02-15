@@ -29,6 +29,8 @@ type OpenatEnterEvent struct {
 	Comm     [MAX_PROGNAME_LENGTH]byte
 }
 
-// TODO: Move Flags type struct to here, too
+type FlagValues struct {
+	UidFilter uint32
+}
 
 // duration := float64(e.ExitTime-e.EnterTime) / float64(1_000_000)

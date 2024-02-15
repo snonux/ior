@@ -3,6 +3,7 @@ package flags
 import (
 	"flag"
 	"fmt"
+	"ioriotng/internal/types"
 	"unsafe"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -17,6 +18,7 @@ func New() (flags Flags) {
 	flag.IntVar(&flags.UidFilter, "uid", 0, "Filter for processes with UID")
 	flag.IntVar(&flags.EventMapSize, "mapSize", 4096, "BPF FD event ring buffer map size")
 	flag.Parse()
+
 	return flags
 }
 
@@ -26,13 +28,10 @@ func (flags Flags) SetBPF(bpfModule *bpf.Module) error {
 		return err
 	}
 
-	flagsValues := struct {
-		UidFilter int32
-	}{
-		UidFilter: int32(flags.UidFilter),
-	}
-
-	key := uint32(1)
+	var (
+		key         = uint32(1)
+		flagsValues = types.FlagValues{uint32(flags.UidFilter)}
+	)
 	return flagsMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&flagsValues))
 }
 
