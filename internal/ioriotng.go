@@ -63,27 +63,6 @@ func Run(flags flags.Flags) {
 		log.Println("Ringbuf data received", len(b), b)
 	}
 
-	/*
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-			go func() {
-				defer wg.Done()
-				for ev := range listenToEvents[types.FdEvent](ctx, bpfModule, "fd_event_map") {
-					fmt.Println(ev)
-				}
-			}()
-		go func() {
-			defer wg.Done()
-			for ev := range listenToEvents[types.OpenEvent](ctx, bpfModule, "open_event_map") {
-				fmt.Println(ev)
-			}
-		}()
-
-		wg.Wait()
-	*/
 	log.Println("Good bye")
 }
 

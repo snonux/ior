@@ -1,34 +1,34 @@
+// These types mirror the C types from types.bpf.h
 package types
 
-import "fmt"
+const (
+	MAX_FILENAME_LENGTH = 256
+	MAX_PROGNAME_LENGTH = 16
+)
 
-type OpenEvent struct {
-	FD        int32
-	TID       uint32
-	EnterTime uint64
-	ExitTime  uint64
-	Filename  [256]byte // TODO, use same value as in ioriot.bpf.h
-	Comm      [16]byte
-}
+const (
+	OPENAT_ENTER_OP_ID = iota + 1
+	OPENAT_EXIT_OP_ID
+	CLOSE_ENTER_OP_ID
+	CLOSE_EXIT_OP_ID
+)
 
-func (e OpenEvent) String() string {
-	filename := e.Filename[:]
-	comm := e.Comm[:]
-	duration := float64(e.ExitTime-e.EnterTime) / float64(1_000_000)
-	return fmt.Sprintf("time:(%v=(%v-%v)/1mio) tid:%d fd:%d filename:%s, comm:%s",
-		duration, e.EnterTime, e.ExitTime, e.TID, e.FD, string(filename), string(comm))
+type NullEvent struct {
+	Tid  uint32
+	Time uint64
 }
 
 type FdEvent struct {
-	FD        int32
-	OpID      int32
-	TID       uint32
-	EnterTime uint64
-	ExitTime  uint64
+	NullEvent
+	Fd int32
 }
 
-func (e FdEvent) String() string {
-	duration := float64(e.ExitTime-e.EnterTime) / float64(1_000_000)
-	return fmt.Sprintf("time:(%vms=(%v-%v)/1mio) opId:%d tid:%v fd:%v",
-		duration, e.EnterTime, e.ExitTime, e.OpID, e.TID, e.FD)
+type OpenatEnterEvent struct {
+	NullEvent
+	Filename [MAX_FILENAME_LENGTH]byte
+	Comm     [MAX_PROGNAME_LENGTH]byte
 }
+
+// TODO: Move Flags type struct to here, too
+
+// duration := float64(e.ExitTime-e.EnterTime) / float64(1_000_000)
