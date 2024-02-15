@@ -4,7 +4,6 @@ import "C"
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -57,7 +56,9 @@ func Run(flags flags.Flags) {
 	rb.Poll(300)
 
 	for raw := range ch {
-		switch raw[0] {
+		switch types.OpId(raw[0]) {
+		// TODO: Actually, need one ring buffer event per enter/exit ... otherwise may be difficult to capture
+		// what belongs to what in event based / multiplexed applications.
 		case types.OPENAT_ENTER_OP_ID:
 			var ev types.OpenatEnterEvent
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
@@ -71,13 +72,13 @@ func Run(flags flags.Flags) {
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
 				log.Fatal(err)
 			}
-			log.Println(ev)
+			fmt.Println(ev)
 		case types.CLOSE_EXIT_OP_ID:
 			var ev types.NullEvent
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
 				log.Fatal(err)
 			}
-			log.Println(ev)
+			fmt.Println(ev)
 		default:
 			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))
 		}

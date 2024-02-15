@@ -5,26 +5,43 @@ import (
 	"fmt"
 )
 
+type OpId uint32
+
 const (
 	MAX_FILENAME_LENGTH = 256
 	MAX_PROGNAME_LENGTH = 16
 )
 
 const (
-	OPENAT_ENTER_OP_ID = iota + 1
+	OPENAT_ENTER_OP_ID OpId = iota + 1
 	OPENAT_EXIT_OP_ID
 	CLOSE_ENTER_OP_ID
 	CLOSE_EXIT_OP_ID
 )
 
+func (id OpId) String() string {
+	switch id {
+	case OPENAT_ENTER_OP_ID:
+		return "openat:enter"
+	case OPENAT_EXIT_OP_ID:
+		return "openat:exit"
+	case CLOSE_ENTER_OP_ID:
+		return "close:enter"
+	case CLOSE_EXIT_OP_ID:
+		return "close:exit"
+	default:
+		panic(fmt.Sprintf("Unknown OpId %d", uint32(id)))
+	}
+}
+
 type NullEvent struct {
-	OpID uint32
+	OpId OpId
 	Tid  uint32
 	Time uint64
 }
 
 func (ev NullEvent) String() string {
-	return fmt.Sprintf("Tid:%v Time:%v", ev.Tid, ev.Time)
+	return fmt.Sprintf("%s Tid:%v Time:%v", ev.OpId, ev.Tid, ev.Time)
 }
 
 type FdEvent struct {
