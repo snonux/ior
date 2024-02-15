@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"log"
 	"runtime"
 
 	"ioriotng/internal/debugfs"
 	"ioriotng/internal/flags"
 	"ioriotng/internal/tracepoints"
+	"ioriotng/internal/types"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -54,16 +56,39 @@ func Run(flags flags.Flags) {
 	}
 	rb.Poll(300)
 
-	for b := range ch {
-		/*
-			if binary.LittleEndian.Uint32(b) != 2021 {
-				log.Fatal("invalid data retrieved", len(b), b)
+	for raw := range ch {
+		switch raw[0] {
+		case types.OPENAT_ENTER_OP_ID:
+			var ev types.OpenatEnterEvent
+			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
+				log.Fatal(err)
 			}
-		*/
-		log.Println("Ringbuf data received", len(b), b)
+			fmt.Println(ev)
+		case types.OPENAT_EXIT_OP_ID:
+			fallthrough
+		case types.CLOSE_ENTER_OP_ID:
+			var ev types.FdEvent
+			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
+				log.Fatal(err)
+			}
+			log.Println(ev)
+		case types.CLOSE_EXIT_OP_ID:
+			var ev types.NullEvent
+			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
+				log.Fatal(err)
+			}
+			log.Println(ev)
+		default:
+			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))
+		}
 	}
 
 	log.Println("Good bye")
+}
+
+func deserialize() {
+	// TODO: Use sync pool to speed up
+
 }
 
 func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, mapName string) <-chan T {

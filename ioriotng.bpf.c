@@ -25,6 +25,7 @@ int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = bpf_get_current_pid_tgid();
     ev->time = bpf_ktime_get_ns();
 
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     bpf_ringbuf_submit(ev, 0);
