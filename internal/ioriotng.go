@@ -6,15 +6,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"log"
 	"runtime"
-	"sync"
 
 	"ioriotng/internal/debugfs"
 	"ioriotng/internal/flags"
 	"ioriotng/internal/tracepoints"
-	"ioriotng/internal/types"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -50,25 +47,43 @@ func Run(flags flags.Flags) {
 		log.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var wg sync.WaitGroup
-	wg.Add(2)
+	ch := make(chan []byte)
+	rb, err := bpfModule.InitRingBuf("event_map", ch)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rb.Poll(300)
 
-	go func() {
-		defer wg.Done()
-		for ev := range listenToEvents[types.FdEvent](ctx, bpfModule, "fd_event_map") {
-			fmt.Println(ev)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for ev := range listenToEvents[types.OpenEvent](ctx, bpfModule, "open_event_map") {
-			fmt.Println(ev)
-		}
-	}()
+	for b := range ch {
+		/*
+			if binary.LittleEndian.Uint32(b) != 2021 {
+				log.Fatal("invalid data retrieved", len(b), b)
+			}
+		*/
+		log.Println("Ringbuf data received", len(b), b)
+	}
 
-	wg.Wait()
+	/*
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+			go func() {
+				defer wg.Done()
+				for ev := range listenToEvents[types.FdEvent](ctx, bpfModule, "fd_event_map") {
+					fmt.Println(ev)
+				}
+			}()
+		go func() {
+			defer wg.Done()
+			for ev := range listenToEvents[types.OpenEvent](ctx, bpfModule, "open_event_map") {
+				fmt.Println(ev)
+			}
+		}()
+
+		wg.Wait()
+	*/
 	log.Println("Good bye")
 }
 
@@ -77,7 +92,7 @@ func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, map
 	rawLostCh := make(chan uint64) // TODO: Of any use this channel?
 	eventsCh := make(chan T)
 
-	pb, err := bpfModule.InitPerfBuf(mapName, rawEventsCh, rawLostCh, 4096)
+	pb, err := bpfModule.InitPerfBuf(mapName, rawEventsCh, rawLostCh, 1024)
 	if err != nil {
 		log.Fatal(err)
 	}
