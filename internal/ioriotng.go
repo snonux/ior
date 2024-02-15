@@ -86,47 +86,6 @@ func Run(flags flags.Flags) {
 	log.Println("Good bye")
 }
 
-func deserialize() {
-	// TODO: Use sync pool to speed up
-
-}
-
-func listenToEvents[T BpfMapper](ctx context.Context, bpfModule *bpf.Module, mapName string) <-chan T {
-	rawEventsCh := make(chan []byte)
-	rawLostCh := make(chan uint64) // TODO: Of any use this channel?
-	eventsCh := make(chan T)
-
-	pb, err := bpfModule.InitPerfBuf(mapName, rawEventsCh, rawLostCh, 1024)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	go func() {
-		defer func() {
-			pb.Stop()
-			pb.Close()
-			close(eventsCh)
-		}()
-		pb.Poll(300)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case lost := <-rawLostCh:
-				log.Println("Lost", lost, mapName, "events. Consider increasing ring buffer!")
-			case rawEv := <-rawEventsCh:
-				var ev T
-				if err := binary.Read(bytes.NewReader(rawEv), binary.LittleEndian, &ev); err != nil {
-					log.Fatal(err)
-				}
-				eventsCh <- ev
-			}
-		}
-	}()
-
-	return eventsCh
-}
-
 func ksymArch() string {
 	switch runtime.GOARCH {
 	case "amd64":
