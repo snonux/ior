@@ -17,13 +17,12 @@ int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     u32 tid = bpf_get_current_pid_tgid();
-    u64 time = bpf_ktime_get_ns();
 
     struct open_event open_event = {};
-    open_event.tid = tid;
-    open_event.time = time;
     bpf_probe_read_user_str(open_event.filename, sizeof(open_event.filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&open_event.comm, sizeof(open_event.comm));
+    open_event.tid = tid;
+    open_event.enter_time = bpf_ktime_get_ns();
 
     bpf_map_update_elem(&open_event_temp_map, &tid, &open_event, BPF_ANY);
 
@@ -40,6 +39,7 @@ int handle_exit_open(struct trace_event_raw_sys_exit *ctx) {
     if (!open_eventp) {
         return 0;
     }
+    open_eventp->exit_time = bpf_ktime_get_ns();
     open_eventp->fd = ctx->ret;
     bpf_perf_event_output(ctx, &open_event_map, BPF_F_CURRENT_CPU, open_eventp, sizeof(struct open_event));
     bpf_map_delete_elem(&open_event_temp_map, &tid);
@@ -55,10 +55,11 @@ int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
     u32 tid = bpf_get_current_pid_tgid();
 
     struct open_event open_event = {};
-    open_event.tid = tid;
 
     bpf_probe_read_user_str(open_event.filename, sizeof(open_event.filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&open_event.comm, sizeof(open_event.comm));
+    open_event.tid = tid;
+    open_event.enter_time = bpf_ktime_get_ns();
     bpf_map_update_elem(&open_event_temp_map, &tid, &open_event, BPF_ANY);
 
     return 0;
@@ -66,9 +67,6 @@ int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_openat")
 int handle_exit_openat(struct trace_event_raw_sys_exit *ctx) {
-    if (filter())
-        return 0;
-
     return handle_exit_open(ctx);
 }
 
@@ -102,6 +100,7 @@ int handle_exit_close(struct trace_event_raw_sys_enter *ctx) {
         return 0;
     }
 
+    open_eventp->exit_time = bpf_ktime_get_ns();
     bpf_perf_event_output(ctx, &fd_event_map, BPF_F_CURRENT_CPU, open_eventp, sizeof(struct fd_event));
     bpf_map_delete_elem(&fd_event_temp_map, &tid);
 
