@@ -2,20 +2,15 @@ package types
 
 import "sync"
 
-var OpenEnterEventPool = sync.Pool{
-	New: func() interface{} {
-		return &OpenatEnterEvent{}
-	},
+func syncPool[T any]() sync.Pool {
+	return sync.Pool{
+		New: func() interface{} {
+			var value T
+			return &value
+		},
+	}
 }
 
-var FdEventPool = sync.Pool{
-	New: func() interface{} {
-		return &FdEvent{}
-	},
-}
-
-var NullEventPool = sync.Pool{
-	New: func() interface{} {
-		return &NullEvent{}
-	},
-}
+var OpenEnterEventPool = syncPool[OpenatEnterEvent]()
+var FdEventPool = syncPool[FdEvent]()
+var NullEventPool = syncPool[NullEvent]()

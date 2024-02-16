@@ -55,7 +55,10 @@ func Run(flags flags.Flags) {
 	}
 	rb.Poll(300)
 
-	enter := make(map[uint32]*types.OpenatEnterEvent)
+	enterOpen := make(map[uint32]*types.OpenatEnterEvent)
+	enterFd := make(map[uint32]*types.FdEvent)
+	// To do this, extract the PID from the TID (pid_tid >> 32)
+	// openFiles := make(map[
 
 	for raw := range ch {
 		switch types.OpId(raw[0]) {
@@ -64,20 +67,20 @@ func Run(flags flags.Flags) {
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
 				log.Fatal(err)
 			}
-			enter[ev.Tid] = ev
+			enterOpen[ev.Tid] = ev
 		case types.OPENAT_EXIT_OP_ID:
 			ev := types.FdEventPool.Get().(*types.FdEvent)
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
 				log.Fatal(err)
 			}
-			enterEv, ok := enter[ev.Tid]
+			enterEv, ok := enterOpen[ev.Tid]
 			if !ok {
 				fmt.Println("Dropping", ev)
 				types.FdEventPool.Put(ev)
 				continue
 			}
 			fmt.Println(enterEv, ev)
-			delete(enter, ev.Tid)
+			delete(enterOpen, ev.Tid)
 			types.FdEventPool.Put(ev)
 			types.OpenEnterEventPool.Put(enterEv)
 		case types.CLOSE_ENTER_OP_ID:
@@ -85,13 +88,22 @@ func Run(flags flags.Flags) {
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
 				log.Fatal(err)
 			}
-			types.FdEventPool.Put(ev)
+			enterFd[ev.Tid] = ev
 		case types.CLOSE_EXIT_OP_ID:
 			ev := types.NullEventPool.Get().(*types.NullEvent)
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
 				log.Fatal(err)
 			}
+			enterEv, ok := enterFd[ev.Tid]
+			if !ok {
+				fmt.Println("Dropping", ev)
+				types.NullEventPool.Put(ev)
+				continue
+			}
+			fmt.Println(enterEv, ev)
+			delete(enterFd, ev.Tid)
 			types.NullEventPool.Put(ev)
+			types.FdEventPool.Put(enterEv)
 		default:
 			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))
 		}
