@@ -62,16 +62,10 @@ func Run(flags flags.Flags) {
 	for raw := range ch {
 		switch types.OpId(raw[0]) {
 		case types.OPENAT_ENTER_OP_ID:
-			ev := types.OpenEnterEventPool.Get().(*types.OpenatEnterEvent)
-			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				panic(err)
-			}
+			ev := readRaw(raw, types.OpenEnterEventPool.Get().(*types.OpenatEnterEvent))
 			enterOpen[ev.Tid] = ev
 		case types.OPENAT_EXIT_OP_ID:
-			ev := types.FdEventPool.Get().(*types.FdEvent)
-			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				panic(err)
-			}
+			ev := readRaw(raw, types.FdEventPool.Get().(*types.FdEvent))
 			enterEv, ok := enterOpen[ev.Tid]
 			if !ok {
 				fmt.Println("Dropping", ev)
@@ -83,16 +77,10 @@ func Run(flags flags.Flags) {
 			types.FdEventPool.Put(ev)
 			types.OpenEnterEventPool.Put(enterEv)
 		case types.CLOSE_ENTER_OP_ID:
-			ev := types.FdEventPool.Get().(*types.FdEvent)
-			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				panic(err)
-			}
+			ev := readRaw(raw, types.FdEventPool.Get().(*types.FdEvent))
 			enterFd[ev.Tid] = ev
 		case types.CLOSE_EXIT_OP_ID:
-			ev := types.NullEventPool.Get().(*types.NullEvent)
-			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				panic(err)
-			}
+			ev := readRaw(raw, types.NullEventPool.Get().(*types.NullEvent))
 			enterEv, ok := enterFd[ev.Tid]
 			if !ok {
 				fmt.Println("Dropping", ev)
@@ -109,6 +97,13 @@ func Run(flags flags.Flags) {
 	}
 
 	fmt.Println("Good bye")
+}
+
+func readRaw[T any](raw []byte, ev *T) *T {
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
+		panic(err)
+	}
+	return ev
 }
 
 func ksymArch() string {
