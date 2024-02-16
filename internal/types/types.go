@@ -69,5 +69,3 @@ func (ev OpenatEnterEvent) String() string {
 type FlagValues struct {
 	UidFilter uint32
 }
-
-// duration := float64(e.ExitTime-e.EnterTime) / float64(1_000_000)

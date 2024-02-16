@@ -16,7 +16,7 @@ type Flags struct {
 
 func New() (flags Flags) {
 	flag.IntVar(&flags.UidFilter, "uid", 0, "Filter for processes with UID")
-	flag.IntVar(&flags.EventMapSize, "mapSize", 4096, "BPF FD event ring buffer map size")
+	flag.IntVar(&flags.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
 	flag.Parse()
 
 	return flags

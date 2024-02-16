@@ -48,7 +48,7 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 
-	ch := make(chan []byte, 1024)
+	ch := make(chan []byte)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
 		panic(err)
@@ -65,6 +65,7 @@ func Run(flags flags.Flags) {
 		case types.OPENAT_ENTER_OP_ID:
 			ev := readRaw(raw, syncpool.OpenEnterEvent.Get().(*types.OpenatEnterEvent))
 			enterOpen[ev.Tid] = ev
+
 		case types.OPENAT_EXIT_OP_ID:
 			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
 			enterEv, ok := enterOpen[ev.Tid]
@@ -73,13 +74,17 @@ func Run(flags flags.Flags) {
 				syncpool.FdEvent.Put(ev)
 				continue
 			}
-			fmt.Println(enterEv, ev)
+			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
+			fmt.Println(duration, "ms", enterEv, ev)
+
 			delete(enterOpen, ev.Tid)
 			syncpool.FdEvent.Put(ev)
 			syncpool.OpenEnterEvent.Put(enterEv)
+
 		case types.CLOSE_ENTER_OP_ID:
 			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
 			enterFd[ev.Tid] = ev
+
 		case types.CLOSE_EXIT_OP_ID:
 			ev := readRaw(raw, syncpool.NullEvent.Get().(*types.NullEvent))
 			enterEv, ok := enterFd[ev.Tid]
@@ -88,10 +93,13 @@ func Run(flags flags.Flags) {
 				syncpool.NullEvent.Put(ev)
 				continue
 			}
-			fmt.Println(enterEv, ev)
+			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
+			fmt.Println(duration, "ms", enterEv, ev)
+
 			delete(enterFd, ev.Tid)
 			syncpool.NullEvent.Put(ev)
 			syncpool.FdEvent.Put(enterEv)
+
 		default:
 			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))
 		}
