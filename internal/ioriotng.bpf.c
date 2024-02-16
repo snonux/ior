@@ -21,7 +21,7 @@ int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->op_id = OPENAT_ENTER_OP_ID;
-    ev->tid_tgid = bpf_get_current_pid_tgid();
+    ev->pid_tgid = bpf_get_current_pid_tgid();
     ev->time = bpf_ktime_get_ns();
 
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
@@ -42,7 +42,7 @@ int handle_exit_openat(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->op_id = OPENAT_EXIT_OP_ID;
-    ev->tid_tgid = bpf_get_current_pid_tgid();
+    ev->pid_tgid = bpf_get_current_pid_tgid();
     ev->time = bpf_ktime_get_ns();
     ev->fd = ctx->ret;
 
@@ -71,7 +71,7 @@ int handle_enter_close(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->op_id = CLOSE_ENTER_OP_ID;
-    ev->tid_tgid = bpf_get_current_pid_tgid();
+    ev->pid_tgid = bpf_get_current_pid_tgid();
     ev->time = bpf_ktime_get_ns();
     ev->fd = (int)ctx->args[0];
 
@@ -89,7 +89,7 @@ int handle_exit_close(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->op_id = CLOSE_EXIT_OP_ID;
-    ev->tid_tgid = bpf_get_current_pid_tgid();
+    ev->pid_tgid = bpf_get_current_pid_tgid();
     ev->time = bpf_ktime_get_ns();
 
     bpf_ringbuf_submit(ev, 0);
