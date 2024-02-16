@@ -27,31 +27,31 @@ func Run(flags flags.Flags) {
 
 	bpfModule, err := bpf.NewModuleFromFile("ioriotng.bpf.o")
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	defer bpfModule.Close()
 
 	if err := flags.ResizeBPFMaps(bpfModule); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	err = bpfModule.BPFLoadObject()
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	if err := flags.SetBPF(bpfModule); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	if err := tracepoints.AttachSyscalls(bpfModule); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	ch := make(chan []byte, 1024)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	rb.Poll(300)
 
@@ -65,13 +65,13 @@ func Run(flags flags.Flags) {
 		case types.OPENAT_ENTER_OP_ID:
 			ev := types.OpenEnterEventPool.Get().(*types.OpenatEnterEvent)
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				log.Fatal(err)
+				panic(err)
 			}
 			enterOpen[ev.Tid] = ev
 		case types.OPENAT_EXIT_OP_ID:
 			ev := types.FdEventPool.Get().(*types.FdEvent)
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				log.Fatal(err)
+				panic(err)
 			}
 			enterEv, ok := enterOpen[ev.Tid]
 			if !ok {
@@ -86,13 +86,13 @@ func Run(flags flags.Flags) {
 		case types.CLOSE_ENTER_OP_ID:
 			ev := types.FdEventPool.Get().(*types.FdEvent)
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				log.Fatal(err)
+				panic(err)
 			}
 			enterFd[ev.Tid] = ev
 		case types.CLOSE_EXIT_OP_ID:
 			ev := types.NullEventPool.Get().(*types.NullEvent)
 			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-				log.Fatal(err)
+				panic(err)
 			}
 			enterEv, ok := enterFd[ev.Tid]
 			if !ok {
