@@ -64,11 +64,11 @@ func Run(flags flags.Flags) {
 		switch types.OpId(raw[0]) {
 		case types.OPENAT_ENTER_OP_ID:
 			ev := readRaw(raw, syncpool.OpenEnterEvent.Get().(*types.OpenatEnterEvent))
-			enterOpen[ev.Tid] = ev
+			enterOpen[ev.PidTGid] = ev
 
 		case types.OPENAT_EXIT_OP_ID:
 			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
-			enterEv, ok := enterOpen[ev.Tid]
+			enterEv, ok := enterOpen[ev.PidTGid]
 			if !ok {
 				fmt.Println("Dropping", ev)
 				syncpool.FdEvent.Put(ev)
@@ -77,17 +77,17 @@ func Run(flags flags.Flags) {
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
-			delete(enterOpen, ev.Tid)
+			delete(enterOpen, ev.PidTGid)
 			syncpool.FdEvent.Put(ev)
 			syncpool.OpenEnterEvent.Put(enterEv)
 
 		case types.CLOSE_ENTER_OP_ID:
 			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
-			enterFd[ev.Tid] = ev
+			enterFd[ev.PidTGid] = ev
 
 		case types.CLOSE_EXIT_OP_ID:
 			ev := readRaw(raw, syncpool.NullEvent.Get().(*types.NullEvent))
-			enterEv, ok := enterFd[ev.Tid]
+			enterEv, ok := enterFd[ev.PidTGid]
 			if !ok {
 				fmt.Println("Dropping", ev)
 				syncpool.NullEvent.Put(ev)
@@ -96,7 +96,7 @@ func Run(flags flags.Flags) {
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
-			delete(enterFd, ev.Tid)
+			delete(enterFd, ev.PidTGid)
 			syncpool.NullEvent.Put(ev)
 			syncpool.FdEvent.Put(enterEv)
 

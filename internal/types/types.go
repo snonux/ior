@@ -35,13 +35,13 @@ func (id OpId) String() string {
 }
 
 type NullEvent struct {
-	OpId OpId
-	Tid  uint32
-	Time uint64
+	OpId    OpId
+	PidTGid uint32
+	Time    uint64
 }
 
 func (ev NullEvent) String() string {
-	return fmt.Sprintf("%s Tid:%v Time:%v", ev.OpId, ev.Tid, ev.Time)
+	return fmt.Sprintf("%s PidTGid:%v Time:%v", ev.OpId, ev.PidTGid, ev.Time)
 }
 
 type FdEvent struct {

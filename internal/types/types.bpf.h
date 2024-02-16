@@ -12,20 +12,20 @@
 
 struct null_event {
     __u32 op_id;
-    __u32 tid;
+    __u32 tid_tgid;
     __u64 time;
 };
 
 struct fd_event {
     __u32 op_id;
-    __u32 tid;
+    __u32 tid_tgid;
     __u64 time;
     __s32 fd;
 };
 
 struct openat_enter_event {
     __u32 op_id; 
-    __u32 tid;
+    __u32 tid_tgid;
     __u64 time;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
