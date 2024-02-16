@@ -10,6 +10,7 @@ import (
 
 	"ioriotng/internal/debugfs"
 	"ioriotng/internal/flags"
+	"ioriotng/internal/syncpool"
 	"ioriotng/internal/tracepoints"
 	"ioriotng/internal/types"
 
@@ -62,35 +63,35 @@ func Run(flags flags.Flags) {
 	for raw := range ch {
 		switch types.OpId(raw[0]) {
 		case types.OPENAT_ENTER_OP_ID:
-			ev := readRaw(raw, types.OpenEnterEventPool.Get().(*types.OpenatEnterEvent))
+			ev := readRaw(raw, syncpool.OpenEnterEvent.Get().(*types.OpenatEnterEvent))
 			enterOpen[ev.Tid] = ev
 		case types.OPENAT_EXIT_OP_ID:
-			ev := readRaw(raw, types.FdEventPool.Get().(*types.FdEvent))
+			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
 			enterEv, ok := enterOpen[ev.Tid]
 			if !ok {
 				fmt.Println("Dropping", ev)
-				types.FdEventPool.Put(ev)
+				syncpool.FdEvent.Put(ev)
 				continue
 			}
 			fmt.Println(enterEv, ev)
 			delete(enterOpen, ev.Tid)
-			types.FdEventPool.Put(ev)
-			types.OpenEnterEventPool.Put(enterEv)
+			syncpool.FdEvent.Put(ev)
+			syncpool.OpenEnterEvent.Put(enterEv)
 		case types.CLOSE_ENTER_OP_ID:
-			ev := readRaw(raw, types.FdEventPool.Get().(*types.FdEvent))
+			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
 			enterFd[ev.Tid] = ev
 		case types.CLOSE_EXIT_OP_ID:
-			ev := readRaw(raw, types.NullEventPool.Get().(*types.NullEvent))
+			ev := readRaw(raw, syncpool.NullEvent.Get().(*types.NullEvent))
 			enterEv, ok := enterFd[ev.Tid]
 			if !ok {
 				fmt.Println("Dropping", ev)
-				types.NullEventPool.Put(ev)
+				syncpool.NullEvent.Put(ev)
 				continue
 			}
 			fmt.Println(enterEv, ev)
 			delete(enterFd, ev.Tid)
-			types.NullEventPool.Put(ev)
-			types.FdEventPool.Put(enterEv)
+			syncpool.NullEvent.Put(ev)
+			syncpool.FdEvent.Put(enterEv)
 		default:
 			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))
 		}
