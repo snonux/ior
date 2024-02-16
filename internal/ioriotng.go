@@ -48,37 +48,50 @@ func Run(flags flags.Flags) {
 		log.Fatal(err)
 	}
 
-	ch := make(chan []byte)
+	ch := make(chan []byte, 1024)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
 		log.Fatal(err)
 	}
 	rb.Poll(300)
 
+	enter := make(map[uint32]*types.OpenatEnterEvent)
+
 	for raw := range ch {
 		switch types.OpId(raw[0]) {
-		// TODO: Actually, need one ring buffer event per enter/exit ... otherwise may be difficult to capture
-		// what belongs to what in event based / multiplexed applications.
 		case types.OPENAT_ENTER_OP_ID:
-			var ev types.OpenatEnterEvent
-			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
+			ev := types.OpenEnterEventPool.Get().(*types.OpenatEnterEvent)
+			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
 				log.Fatal(err)
 			}
-			fmt.Println(ev)
+			enter[ev.Tid] = ev
 		case types.OPENAT_EXIT_OP_ID:
-			fallthrough
+			ev := types.FdEventPool.Get().(*types.FdEvent)
+			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
+				log.Fatal(err)
+			}
+			enterEv, ok := enter[ev.Tid]
+			if !ok {
+				fmt.Println("Dropping", ev)
+				types.FdEventPool.Put(ev)
+				continue
+			}
+			fmt.Println(enterEv, ev)
+			delete(enter, ev.Tid)
+			types.FdEventPool.Put(ev)
+			types.OpenEnterEventPool.Put(enterEv)
 		case types.CLOSE_ENTER_OP_ID:
-			var ev types.FdEvent
-			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
+			ev := types.FdEventPool.Get().(*types.FdEvent)
+			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
 				log.Fatal(err)
 			}
-			fmt.Println(ev)
+			types.FdEventPool.Put(ev)
 		case types.CLOSE_EXIT_OP_ID:
-			var ev types.NullEvent
-			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
+			ev := types.NullEventPool.Get().(*types.NullEvent)
+			if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
 				log.Fatal(err)
 			}
-			fmt.Println(ev)
+			types.NullEventPool.Put(ev)
 		default:
 			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))
 		}
