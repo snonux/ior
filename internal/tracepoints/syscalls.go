@@ -2,7 +2,6 @@ package tracepoints
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -66,11 +65,11 @@ func AttachSyscalls(bpfModule *bpf.Module) error {
 		if err != nil {
 			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)
 		}
-		log.Println("Attached prog handle_" + name)
+		fmt.Println("Attached prog handle_" + name)
 		if _, err = prog.AttachTracepoint("syscalls", fmt.Sprintf("sys_%s", name)); err != nil {
 			return fmt.Errorf("Failed to attach to sys_%s tracepoint: %v", name, err)
 		}
-		log.Println("Attached tracepoint sys_" + name)
+		fmt.Println("Attached tracepoint sys_" + name)
 	}
 	return nil
 }

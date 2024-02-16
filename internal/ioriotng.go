@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"runtime"
 
 	"ioriotng/internal/debugfs"
@@ -23,7 +22,7 @@ type BpfMapper interface {
 
 func Run(flags flags.Flags) {
 	// To consider for implementation!
-	log.Println(debugfs.TracepointsWithFd())
+	fmt.Println(debugfs.TracepointsWithFd())
 
 	bpfModule, err := bpf.NewModuleFromFile("ioriotng.bpf.o")
 	if err != nil {
@@ -109,7 +108,7 @@ func Run(flags flags.Flags) {
 		}
 	}
 
-	log.Println("Good bye")
+	fmt.Println("Good bye")
 }
 
 func ksymArch() string {
