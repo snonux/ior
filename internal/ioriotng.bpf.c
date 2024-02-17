@@ -6,7 +6,7 @@
 #include "types/maps.bpf.h"
 #include "flags/flags.bpf.h"
 
-static inline int filter() {
+static __always_inline int filter() {
     return (bpf_get_current_uid_gid() & 0xFFFFFFFF) != UID_FILTER;
 }
 

@@ -47,7 +47,8 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 
-	ch := make(chan []byte)
+	// 4096 channel size, minimises event drops
+	ch := make(chan []byte, 4096)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
 		panic(err)
