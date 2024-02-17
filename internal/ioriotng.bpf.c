@@ -4,11 +4,10 @@
 #include <bpf/bpf_helpers.h>
 #include "types/types.bpf.h"
 #include "types/maps.bpf.h"
+#include "flags/flags.bpf.h"
 
 static inline int filter() {
-    u32 key = 1;
-    struct flags *flagsp = bpf_map_lookup_elem(&flags_map, &key);
-    return flagsp == NULL || (bpf_get_current_uid_gid() & 0xFFFFFFFF) != flagsp->uid_filter;
+    return (bpf_get_current_uid_gid() & 0xFFFFFFFF) != UID_FILTER;
 }
 
 SEC("tracepoint/syscalls/sys_enter_openat")

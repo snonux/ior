@@ -3,8 +3,6 @@ package flags
 import (
 	"flag"
 	"fmt"
-	"ioriotng/internal/types"
-	"unsafe"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -23,16 +21,10 @@ func New() (flags Flags) {
 }
 
 func (flags Flags) SetBPF(bpfModule *bpf.Module) error {
-	flagsMap, err := bpfModule.GetMap("flags_map")
-	if err != nil {
-		return err
+	if err := bpfModule.InitGlobalVariable("UID_FILTER", uint32(flags.UidFilter)); err != nil {
+		return fmt.Errorf("unable to set up UID_FILTER global variable: %w", err)
 	}
-
-	var (
-		key         = uint32(1)
-		flagsValues = types.FlagValues{uint32(flags.UidFilter)}
-	)
-	return flagsMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&flagsValues))
+	return nil
 }
 
 func (flags Flags) ResizeBPFMaps(bpfModule *bpf.Module) error {

@@ -35,12 +35,11 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 
-	err = bpfModule.BPFLoadObject()
-	if err != nil {
+	if err := flags.SetBPF(bpfModule); err != nil {
 		panic(err)
 	}
 
-	if err := flags.SetBPF(bpfModule); err != nil {
+	if err := bpfModule.BPFLoadObject(); err != nil {
 		panic(err)
 	}
 
