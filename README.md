@@ -16,7 +16,7 @@ To get this running on Fedora 39, run:
 mkdir ~/git
 git clone https://codeberg.org/snonux/ioriotng
 git clone https://github.com/aquasecurity/libbpfgo
-sudo dnf install -y golang clang zlib-static glibc-static libzstd-static
+sudo dnf install -y golang clang bpftool elfutils-libelf-devel zlib-static glibc-static libzstd-static
 cd libbpfgo
 make
 make libbpfgo-static
@@ -34,7 +34,7 @@ sudo dnf builddep rpmbuild/SPECS/*.spec
 cd ~/rpmbuild/SPECS
 rpmbuild -ba *.spec
 mkdir ~/src
-tar -xvjpf ~/rpmbuild/SOURCES/elfutils-*.tar.bz2
+tar -C ~/src -xvjpf ~/rpmbuild/SOURCES/elfutils-*.tar.bz2
 cd ~/src/elfutils-*
 rm -Rf ~/rpmbuild
 ./configure
