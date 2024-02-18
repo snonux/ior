@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"runtime"
 
 	"ioriotng/internal/debugfs"
 	"ioriotng/internal/flags"
@@ -113,15 +112,4 @@ func readRaw[T any](raw []byte, ev *T) *T {
 		panic(err)
 	}
 	return ev
-}
-
-func ksymArch() string {
-	switch runtime.GOARCH {
-	case "amd64":
-		return "x64"
-	case "arm64":
-		return "arm64"
-	default:
-		panic("unsupported architecture")
-	}
 }
