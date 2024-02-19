@@ -62,10 +62,14 @@ func Run(flags flags.Flags) {
 	for raw := range ch {
 		switch OpId(raw[0]) {
 		case OPENAT_ENTER_OP_ID:
+			fallthrough
+		case OPEN_ENTER_OP_ID:
 			ev := readRaw(raw, syncpool.OpenEnterEvent.Get().(*OpenatEnterEvent))
 			enterOpen[ev.PidTGid] = ev
 
 		case OPENAT_EXIT_OP_ID:
+			fallthrough
+		case OPEN_EXIT_OP_ID:
 			ev := readRaw(raw, syncpool.FdEvent.Get().(*FdEvent))
 			enterEv, ok := enterOpen[ev.PidTGid]
 			if !ok {
@@ -117,7 +121,8 @@ func Run(flags flags.Flags) {
 
 func readRaw[T any](raw []byte, ev *T) *T {
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-		panic(err)
+		fmt.Println(ev, raw, len(raw), err)
+		panic(raw)
 	}
 	return ev
 }

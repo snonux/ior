@@ -15,6 +15,8 @@ const (
 const (
 	OPENAT_ENTER_OP_ID OpId = iota + 1
 	OPENAT_EXIT_OP_ID
+	OPEN_ENTER_OP_ID
+	OPEN_EXIT_OP_ID
 	CLOSE_ENTER_OP_ID
 	CLOSE_EXIT_OP_ID
 	WRITE_ENTER_OP_ID
@@ -29,6 +31,10 @@ func (id OpId) String() string {
 		return "openat:enter"
 	case OPENAT_EXIT_OP_ID:
 		return "openat:exit"
+	case OPEN_ENTER_OP_ID:
+		return "open:enter"
+	case OPEN_EXIT_OP_ID:
+		return "open:exit"
 	case CLOSE_ENTER_OP_ID:
 		return "close:enter"
 	case CLOSE_EXIT_OP_ID:
