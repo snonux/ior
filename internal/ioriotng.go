@@ -11,7 +11,7 @@ import (
 	"ioriotng/internal/flags"
 	"ioriotng/internal/syncpool"
 	"ioriotng/internal/tracepoints"
-	"ioriotng/internal/types"
+	. "ioriotng/internal/types"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -54,19 +54,19 @@ func Run(flags flags.Flags) {
 	}
 	rb.Poll(300)
 
-	enterOpen := make(map[uint32]*types.OpenatEnterEvent)
-	enterFd := make(map[uint32]*types.FdEvent)
+	enterOpen := make(map[uint32]*OpenatEnterEvent)
+	enterFd := make(map[uint32]*FdEvent)
 	// To do this, extract the PID from the TID (pid_tid >> 32)
 	// openFiles := make(map[
 
 	for raw := range ch {
-		switch types.OpId(raw[0]) {
-		case types.OPENAT_ENTER_OP_ID:
-			ev := readRaw(raw, syncpool.OpenEnterEvent.Get().(*types.OpenatEnterEvent))
+		switch OpId(raw[0]) {
+		case OPENAT_ENTER_OP_ID:
+			ev := readRaw(raw, syncpool.OpenEnterEvent.Get().(*OpenatEnterEvent))
 			enterOpen[ev.PidTGid] = ev
 
-		case types.OPENAT_EXIT_OP_ID:
-			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
+		case OPENAT_EXIT_OP_ID:
+			ev := readRaw(raw, syncpool.FdEvent.Get().(*FdEvent))
 			enterEv, ok := enterOpen[ev.PidTGid]
 			if !ok {
 				fmt.Println("Dropping", ev)
@@ -80,12 +80,20 @@ func Run(flags flags.Flags) {
 			syncpool.FdEvent.Put(ev)
 			syncpool.OpenEnterEvent.Put(enterEv)
 
-		case types.CLOSE_ENTER_OP_ID:
-			ev := readRaw(raw, syncpool.FdEvent.Get().(*types.FdEvent))
+		case CLOSE_ENTER_OP_ID:
+			fallthrough
+		case WRITE_ENTER_OP_ID:
+			fallthrough
+		case WRITEV_ENTER_OP_ID:
+			ev := readRaw(raw, syncpool.FdEvent.Get().(*FdEvent))
 			enterFd[ev.PidTGid] = ev
 
-		case types.CLOSE_EXIT_OP_ID:
-			ev := readRaw(raw, syncpool.NullEvent.Get().(*types.NullEvent))
+		case CLOSE_EXIT_OP_ID:
+			fallthrough
+		case WRITE_EXIT_OP_ID:
+			fallthrough
+		case WRITEV_EXIT_OP_ID:
+			ev := readRaw(raw, syncpool.NullEvent.Get().(*NullEvent))
 			enterEv, ok := enterFd[ev.PidTGid]
 			if !ok {
 				fmt.Println("Dropping", ev)

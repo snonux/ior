@@ -17,6 +17,10 @@ const (
 	OPENAT_EXIT_OP_ID
 	CLOSE_ENTER_OP_ID
 	CLOSE_EXIT_OP_ID
+	WRITE_ENTER_OP_ID
+	WRITE_EXIT_OP_ID
+	WRITEV_ENTER_OP_ID
+	WRITEV_EXIT_OP_ID
 )
 
 func (id OpId) String() string {
@@ -29,6 +33,14 @@ func (id OpId) String() string {
 		return "close:enter"
 	case CLOSE_EXIT_OP_ID:
 		return "close:exit"
+	case WRITE_ENTER_OP_ID:
+		return "write:enter"
+	case WRITE_EXIT_OP_ID:
+		return "write:exit"
+	case WRITEV_ENTER_OP_ID:
+		return "write:enter"
+	case WRITEV_EXIT_OP_ID:
+		return "write:exit"
 	default:
 		panic(fmt.Sprintf("Unknown OpId %d", uint32(id)))
 	}

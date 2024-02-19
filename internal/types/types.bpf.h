@@ -9,6 +9,10 @@
 #define OPENAT_EXIT_OP_ID 2
 #define CLOSE_ENTER_OP_ID 3
 #define CLOSE_EXIT_OP_ID 4
+#define WRITE_ENTER_OP_ID 5
+#define WRITE_EXIT_OP_ID 6
+#define WRITEV_ENTER_OP_ID 7
+#define WRITEV_EXIT_OP_ID 8
 
 struct null_event {
     __u32 op_id;
