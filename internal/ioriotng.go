@@ -12,23 +12,25 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-func attachSyscalls(bpfModule *bpf.Module) error {
+func attachTracepoints(bpfModule *bpf.Module) error {
 	for _, name := range generated.TracepointList {
 		prog, err := bpfModule.GetProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {
 			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)
 		}
 		fmt.Println("Attached prog handle_" + name)
+
 		if _, err = prog.AttachTracepoint("syscalls", fmt.Sprintf("sys_%s", name)); err != nil {
 			return fmt.Errorf("Failed to attach to sys_%s tracepoint: %v", name, err)
 		}
 		fmt.Println("Attached tracepoint sys_" + name)
 	}
+
 	return nil
 }
 
 func Run(flags flags.Flags) {
-	// To consider for implementation!
+	// Print out tracepoints with fd to consider for implementation!
 	fmt.Println(debugfs.TracepointsWithFd())
 
 	bpfModule, err := bpf.NewModuleFromFile("ioriotng.bpf.o")
@@ -49,7 +51,7 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 
-	if err := attachSyscalls(bpfModule); err != nil {
+	if err := attachTracepoints(bpfModule); err != nil {
 		panic(err)
 	}
 
