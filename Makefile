@@ -12,7 +12,7 @@ build: bpfbuild gobuild
 .PHONY: bpfbuild
 bpfbuild:
 	make -C ./internal/c redo
-	if [ ! -e ioriotng.bpf.o ]; then ln -s ./internal/c/ioriotng.bpf.o .; fi
+	if [ ! -e ioriotng.bpf.o ]; then cp -v ./internal/c/ioriotng.bpf.o .; fi
 
 .PHONY: gobuild
 gobuild:
