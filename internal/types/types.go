@@ -1,4 +1,4 @@
-// These types mirror the C types from types.bpf.h
+// These types mirror the C types from internal/c/types.h
 package types
 
 import (
