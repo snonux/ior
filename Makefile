@@ -11,8 +11,7 @@ build: bpfbuild gobuild
 
 .PHONY: bpfbuild
 bpfbuild:
-	make -C ./internal/c
-	if [ ! -e ioriotng.bpf.c ]; then ln -s ./internal/c/ioriotng.bpf.c .; fi
+	make -C ./internal/c redo
 	if [ ! -e ioriotng.bpf.o ]; then ln -s ./internal/c/ioriotng.bpf.o .; fi
 
 .PHONY: gobuild
@@ -22,7 +21,6 @@ gobuild:
 .PHONY: clean
 clean:
 	find . -type f -name ioriotng -delete
-	if [ -e ioriotng.bpf.c ]; then rm ioriotng.bpf.c; fi
 	if [ -e ioriotng.bpf.o ]; then rm ioriotng.bpf.o; fi
 	make -C ./internal/c clean
 

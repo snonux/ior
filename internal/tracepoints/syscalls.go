@@ -27,20 +27,21 @@ func filterLines(lines []string) ([]string, error) {
 }
 
 // Filter out all used syscall tracepoints from *.bpf.c
-func usedSyscalls() ([]string, error) {
+func tracedSyscalls() ([]string, error) {
 	var syscalls []string
+	const syscallDir = "internal/c/tracepoints"
 
-	files, err := os.ReadDir(".")
+	files, err := os.ReadDir(syscallDir)
 	if err != nil {
 		return syscalls, err
 	}
 
 	for _, file := range files {
 		fileName := file.Name()
-		if !strings.HasSuffix(fileName, ".bpf.c") {
+		if !strings.HasSuffix(fileName, ".c") {
 			continue
 		}
-		content, err := os.ReadFile(fileName)
+		content, err := os.ReadFile(fmt.Sprintf("%s/%s", syscallDir, fileName))
 		if err != nil {
 			return syscalls, err
 		}
@@ -55,7 +56,7 @@ func usedSyscalls() ([]string, error) {
 }
 
 func AttachSyscalls(bpfModule *bpf.Module) error {
-	syscalls, err := usedSyscalls()
+	syscalls, err := tracedSyscalls()
 	if err != nil {
 		return err
 	}
