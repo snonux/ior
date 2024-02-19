@@ -1,5 +1,7 @@
+// This file was generated - don't change manually!
 package types
 
+const MAX_FILENAME_LENGTH = 256
 const MAX_PROGNAME_LENGTH = 16
 const OPENAT_ENTER_OP_ID = 1
 const OPENAT_EXIT_OP_ID = 2

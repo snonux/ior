@@ -23,7 +23,12 @@ grammar NQC {
 }
  
 class NQCToGoActions {
-    method TOP($/) { make "package types\n\n" ~ $<construct>.map(*.made).join('') }
+    method TOP($/) {
+        make "// This file was generated - don't change manually!\n" ~
+             "package types\n\n" ~
+             $<construct>.map(*.made).join('')
+    }
+
     method construct($/) { make $<constant>.made // $<statement>.made // '' }
     method statement($/) { make "\n" ~ $<struct>.made ~ "\n"; }
     method constant($/) { make 'const ' ~ $<identifier> ~ ' = ' ~ $<number> ~ "\n" }

@@ -1,7 +1,5 @@
 //+build ignore
 
-// These types mirror the Go types from internal/types/types.go
-//
 #define MAX_FILENAME_LENGTH 256
 #define MAX_PROGNAME_LENGTH 16
 
