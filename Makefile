@@ -11,9 +11,9 @@ build: bpfbuild gobuild
 
 .PHONY: bpfbuild
 bpfbuild:
-	bpftool btf dump file /sys/kernel/btf/vmlinux format c > ./internal/types/vmlinux.h
-	if [ ! -e ioriotng.bpf.c ]; then ln -s ./internal/ioriotng.bpf.c .; fi
-	$(CC) -g -O2 -Wall -fpie -target bpf -D__TARGET_ARCH_amd64 -I$(LIBBPFGO)/output -c ./internal/ioriotng.bpf.c -o ioriotng.bpf.o
+	make -C ./internal/c
+	if [ ! -e ioriotng.bpf.c ]; then ln -s ./internal/c/ioriotng.bpf.c .; fi
+	if [ ! -e ioriotng.bpf.o ]; then ln -s ./internal/c/ioriotng.bpf.o .; fi
 
 .PHONY: gobuild
 gobuild:
@@ -22,9 +22,9 @@ gobuild:
 .PHONY: clean
 clean:
 	find . -type f -name ioriotng -delete
-	find . -name \*.o -delete
-	find . -name vmlinux.h -delete
 	if [ -e ioriotng.bpf.c ]; then rm ioriotng.bpf.c; fi
+	if [ -e ioriotng.bpf.o ]; then rm ioriotng.bpf.o; fi
+	make -C ./internal/c clean
 
 .PHONY: run
 run:

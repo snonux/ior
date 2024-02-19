@@ -1,10 +1,10 @@
 //+build ignore
 
-#include "types/vmlinux.h"
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
-#include "types/types.bpf.h"
-#include "types/maps.bpf.h"
-#include "flags/flags.bpf.h"
+#include "types.h"
+#include "maps.h"
+#include "flags.h"
 
 static __always_inline int filter() {
     return (bpf_get_current_uid_gid() & 0xFFFFFFFF) != UID_FILTER;
