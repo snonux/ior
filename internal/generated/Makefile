@@ -1,7 +1,13 @@
 all: generate
 
-.PHONY: generate
-generate:
+generate: types tracepoint_list
+
+.PHONY: types
+types:
+	cat ../c/types.h | raku generate.raku nqctogo | tee types/types.go
+
+.PHONY: tracepoint_list
+tracepoint_list:
 	echo 'package generated' > tracepoint_list.go
 	echo '' >> tracepoint_list.go
 	echo 'var TracepointList = []string{' >> tracepoint_list.go
