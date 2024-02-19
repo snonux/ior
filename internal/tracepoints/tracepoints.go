@@ -2,12 +2,13 @@ package tracepoints
 
 import (
 	"fmt"
+	"ioriotng/internal/generated"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
 func AttachSyscalls(bpfModule *bpf.Module) error {
-	for _, name := range tracepointList {
+	for _, name := range generated.TracepointList {
 		// Attach to tracepoint
 		prog, err := bpfModule.GetProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {

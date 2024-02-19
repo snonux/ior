@@ -1,7 +1,6 @@
-// Auto-generated from C, don't change manually!
-package tracepoints
+package generated
 
-var tracepointList = []string{
+var TracepointList = []string{
 	"enter_close",
 	"exit_close",
 	"enter_openat",
