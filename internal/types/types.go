@@ -1,4 +1,5 @@
 // These types mirror the C types from internal/c/types.h
+// TODO: Move to internal/generated, and auto-generate this file!
 package types
 
 import (
