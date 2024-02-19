@@ -12,7 +12,7 @@ build: bpfbuild gobuild
 .PHONY: bpfbuild
 bpfbuild:
 	make -C ./internal/c redo
-	if [ ! -e ioriotng.bpf.o ]; then cp -v ./internal/c/ioriotng.bpf.o .; fi
+	cp -v ./internal/c/ioriotng.bpf.o .
 
 .PHONY: tracepoint_list.go
 tracepoint_list.go:
