@@ -14,7 +14,7 @@ type NullEvent struct {
 	Time uint64
 }
 
-func (n null_event) String() string {
+func (n NullEvent) String() string {
 	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v", n.OpId, n.PidTgid, n.Time)
 }
 
@@ -26,7 +26,7 @@ type FdEvent struct {
 	Fd int32
 }
 
-func (f fd_event) String() string {
+func (f FdEvent) String() string {
 	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Fd:%v", f.OpId, f.PidTgid, f.Time, f.Fd)
 }
 
@@ -39,8 +39,8 @@ type OpenatEnterEvent struct {
 	Comm [MAX_PROGNAME_LENGTH]byte
 }
 
-func (o openat_enter_event) String() string {
-	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Filename:%v Comm:%v", o.OpId, o.PidTgid, o.Time, o.Filename, o.Comm)
+func (o OpenatEnterEvent) String() string {
+	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Filename:%v Comm:%v", o.OpId, o.PidTgid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
 }
 
 
@@ -48,7 +48,7 @@ type Flags struct {
 	UidFilter uint32
 }
 
-func (f flags) String() string {
+func (f Flags) String() string {
 	return fmt.Sprintf("UidFilter:%v", f.UidFilter)
 }
 

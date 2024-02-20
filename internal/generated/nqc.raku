@@ -44,10 +44,14 @@ class NQCToGoActions {
     method !struct-go-string-method($/) returns Str {
         my Str $self-ref = $<identifier>.lc.substr(0,1);
         my Str @format = $<member>.map({ $_.<identifier>.made ~ ':%v' });
-        my Str @args = $<member>.map({ "$self-ref." ~ $_.<identifier>.made });
+        my Str @args = $<member>.map({
+            my Str $ref = "$self-ref." ~ $_.<identifier>.made;
+            # Need to convert char-arrays into a Go slice, and then convert via string(...) 
+            ($_.<type> eq 'char' && $_.<arraysize>) ?? "string({$ref}[:])" !! $ref;
+        });
 
         return qq:to/END/;
-               func ({$self-ref} {$<identifier>}) String() string \{
+               func ({$self-ref} {$<identifier>.made}) String() string \{
                \treturn fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
                \}
                END
