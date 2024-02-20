@@ -3,6 +3,7 @@
 # This Raku program takes a list of C struct and constant definitions and converts
 # it to valid Go code.
 
+use v6.d;
 #use Grammar::Debugger;
 
 # Not quite C

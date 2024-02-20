@@ -1,5 +1,7 @@
 #!/usr/bin/env raku
 
+use v6.d;
+
 my @tracepoints = gather for $*IN.slurp.split("\n") {
     take $/<tracepoint>.Str if /^SEC.*sys_$<tracepoint>=(<[a..z _]>+)/;
 }
