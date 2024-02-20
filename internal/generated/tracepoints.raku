@@ -1,15 +1,14 @@
 #!/usr/bin/env raku
 
-my @tracepoints = gather {
-    $/<tracepoint>.Str.take
-        if /^SEC.*sys_$<tracepoint>=(<[a..z _]>+)/ for 
-             dir('../c/tracepoints/').map(*.lines).flat;
+my @tracepoints = gather for $*IN.slurp.split("\n") {
+    take $/<tracepoint>.Str if /^SEC.*sys_$<tracepoint>=(<[a..z _]>+)/;
 }
 
 say qq:to/END/;
+// This file was generated - don't change manually!
 package generated
 
-var tracepointList = []string\{
+var TracepointList = []string\{
 \t{@tracepoints.map({ "\"$_\"" }).join("\n\t") }
 \}
 END
