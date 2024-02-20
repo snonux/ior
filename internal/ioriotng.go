@@ -7,13 +7,13 @@ import (
 
 	"ioriotng/internal/debugfs"
 	"ioriotng/internal/flags"
-	"ioriotng/internal/generated"
+	"ioriotng/internal/generated/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
 func attachTracepoints(bpfModule *bpf.Module) error {
-	for _, name := range generated.TracepointList {
+	for _, name := range tracepoints.List {
 		prog, err := bpfModule.GetProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {
 			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)

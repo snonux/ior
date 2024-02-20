@@ -1,7 +1,7 @@
 // This file was generated - don't change manually!
-package generated
+package tracepoints
 
-var TracepointList = []string{
+var List = []string{
 	"enter_close",
 	"exit_close",
 	"enter_openat",

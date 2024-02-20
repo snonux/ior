@@ -8,9 +8,9 @@ my @tracepoints = gather for $*IN.slurp.split("\n") {
 
 say qq:to/END/;
 // This file was generated - don't change manually!
-package generated
+package tracepoints
 
-var TracepointList = []string\{
+var List = []string\{
 \t{@tracepoints.map({ "\"$_\"," }).join("\n\t") }
 \}
 END

@@ -79,10 +79,9 @@ type OpenatEnterEvent struct {
 }
 
 func (ev OpenatEnterEvent) String() string {
-	filename := string(ev.Filename[:])
 	comm := string(ev.Comm[:])
 
-	return fmt.Sprintf("%s Filename:%s Comm:%s", ev.NullEvent.String(), filename, comm)
+	return fmt.Sprintf("%s Filename:%s Comm:%s", ev.NullEvent.String(), string(ev.Filename[:]), comm)
 }
 
 type FlagValues struct {

@@ -8,4 +8,4 @@ types:
 
 .PHONY: tracepoints
 tracepoints:
-	cat ../c/tracepoints/*.c | raku tracepoints.raku > tracepoints.go
+	cat ../c/tracepoints/*.c | raku tracepoints.raku > tracepoints/tracepoints.go
