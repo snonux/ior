@@ -1,12 +1,13 @@
 // This file was generated - don't change manually!
 package types
 
+type OpId int
 const MAX_FILENAME_LENGTH = 256
-const OPENAT_ENTER_OP_ID = 1
-const OPEN_ENTER_OP_ID = 3
-const CLOSE_ENTER_OP_ID = 5
-const WRITE_ENTER_OP_ID = 7
-const WRITEV_ENTER_OP_ID = 9
+const OPENAT_ENTER_OP_ID OpId = 1
+const OPEN_ENTER_OP_ID OpId = 3
+const CLOSE_ENTER_OP_ID OpId = 5
+const WRITE_ENTER_OP_ID OpId = 7
+const WRITEV_ENTER_OP_ID OpId = 9
 
 type NullEvent struct {
 	OpId uint32

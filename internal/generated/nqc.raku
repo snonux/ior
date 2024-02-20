@@ -24,14 +24,30 @@ grammar NQC {
 }
  
 class NQCToGoActions {
+    has Str @.const-types is required;
+
     method TOP($/) {
-        make "// This file was generated - don't change manually!\n" ~
-             "package types\n\n" ~ $<construct>.map(*.made).join('')
+        make "// This file was generated - don't change manually!\n"
+             ~ "package types\n\n"
+             ~ @!const-types.map({ "type {self!const-camel-case($_)} int\n" })
+             ~ $<construct>.map(*.made).join('')
     }
 
     method construct($/) { make $<constant>.made // $<statement>.made // '' }
     method statement($/) { make "\n" ~ $<struct>.made ~ "\n"; }
-    method constant($/) { make 'const ' ~ $<identifier> ~ ' = ' ~ $<number> ~ "\n" }
+
+    method constant($/) {
+        make 'const ' ~ $<identifier> ~ "{self!const-type($/)} = " ~ $<number> ~ "\n"
+    }
+
+    method !const-type($/) returns Str {
+        my $suffix = @!const-types.grep({ $<identifier>.ends-with($_) }).first;
+        $suffix ?? ' ' ~ self!const-camel-case($suffix) !! ''
+    }
+
+    method !const-camel-case(Str $const-name) returns Str {
+        $const-name.lc.split('_').map(*.tc).join('')
+    }
 
     method struct($/) {
         make 'type ' ~ $<identifier>.made ~ " struct \{\n\t" 
@@ -72,4 +88,4 @@ class NQCToGoActions {
     method identifier($/) { make $/.Str.split('_').map(*.tc).join('') }
 }
 
-say NQC.parse($*IN.slurp, :actions(NQCToGoActions)).made;
+say NQC.parse($*IN.slurp, actions => NQCToGoActions.new(const-types => <OP_ID>)).made;
