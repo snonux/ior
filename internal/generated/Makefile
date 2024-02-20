@@ -4,7 +4,7 @@ generate: types tracepoint_list
 
 .PHONY: types
 types:
-	cat ../c/types.h | raku generate.raku nqctogo | tee types/types.go
+	cat ../c/types.h | raku nqc.raku | tee types/types.go
 
 .PHONY: tracepoint_list
 tracepoint_list:
