@@ -34,7 +34,23 @@ class NQCToGoActions {
     method constant($/) { make 'const ' ~ $<identifier> ~ ' = ' ~ $<number> ~ "\n" }
 
     method struct($/) {
-        make 'type ' ~ $<identifier>.made ~ " struct \{\n\t" ~ $<member>.map(*.made).join("\n\t") ~ "\n\}"
+        make 'type ' ~ $<identifier>.made ~ " struct \{\n\t" 
+            ~ $<member>.map(*.made).join("\n\t") 
+            ~ "\n\}\n\n"
+            ~ self!struct-go-string-method($/);
+    }
+
+    # Generate String() method on the Go struct, for pretty printing.
+    method !struct-go-string-method($/) returns Str {
+        my Str $self-ref = $<identifier>.lc.substr(0,1);
+        my Str @format = $<member>.map({ $_.<identifier>.made ~ ':%v' });
+        my Str @args = $<member>.map({ "$self-ref." ~ $_.<identifier>.made });
+
+        return qq:to/END/;
+               func ({$self-ref} {$<identifier>}) String() string \{
+               \treturn fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
+               \}
+               END
     }
 
     method member($/) { make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $<type>.made }
