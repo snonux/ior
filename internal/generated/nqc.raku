@@ -57,4 +57,4 @@ class NQCToGoActions {
     }
 }
 
-say NQC.parse($*IN.slurp, :actions(NQCToGoActions.new)).made;
+say NQC.parse($*IN.slurp, :actions(NQCToGoActions)).made;
