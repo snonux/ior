@@ -10,7 +10,7 @@ use v6.d;
 grammar NQC {
     rule TOP { <construct>* }
     rule construct { <constant> | <statement> | <comment> }
-    rule constant { '#define' <identifier> <number> <-[\n]>+ }
+    rule constant { '#define' <identifier> <number> }
     rule statement { <struct> ';' }
     rule struct { 'struct' <identifier> '{' <member>+ %% ';' '}' }
     rule member { <type> <identifier> <arraysize>? }

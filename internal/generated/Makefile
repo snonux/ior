@@ -4,8 +4,8 @@ generate: types tracepoints
 
 .PHONY: types
 types:
-	cat ../c/types.h | raku nqc.raku > types/types.go
+	cat ../c/types.h | raku nqc.raku | gofmt | goimports > types/types.go
 
 .PHONY: tracepoints
 tracepoints:
-	cat ../c/tracepoints/*.c | raku tracepoints.raku > tracepoints/tracepoints.go
+	cat ../c/tracepoints/*.c | raku tracepoints.raku | gofmt | goimports > tracepoints/tracepoints.go

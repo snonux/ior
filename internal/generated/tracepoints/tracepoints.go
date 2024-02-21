@@ -11,4 +11,3 @@ var List = []string{
 	"enter_write",
 	"exit_write",
 }
-
