@@ -39,36 +39,42 @@ class NQCToGoActions {
     }
 
     method statement($/) {
-        make "\n" ~ $<struct>.made ~ "\n";
+        make "\n" ~ $<struct>.made;
     }
 
     method constant($/) {
         push @!const-names: ~$<identifier>;
         my $const-type = $<identifier>.ends-with('_OP_ID') ?? ' OpId' !! '';
-        make 'const ' ~ $<identifier> ~ $const-type ~ " = " ~ $<number> ~ "\n";
+
+        make qq:to/END/;
+             const {$<identifier>}$const-type = {$<number>}
+             END
     }
 
     method !constant-go-string-method returns Str {
-        return qq:to/END/;
-               type OpId uint32
+        qq:to/END/;
+        type OpId uint32
 
-               func (o OpId) String() string \{
-               \tswitch (o) \{
-               \t{@!const-names.grep(/_OP_ID$/).map({
-                   "case $_:\n" ~ "\t\treturn \"{$_.subst('_OP_ID', '').lc}\""
-               }).join("\n\t")}
-               default:
-               \tpanic(fmt.Sprintf("Unknown OpId: %d", o))
-               \t\}
-               \}
-               END
+        func (o OpId) String() string \{
+            switch (o) \{
+            {@!const-names.grep(/_OP_ID$/).map({
+                "case $_: return \"{$_.subst('_OP_ID', '').lc}\""
+            }).join('; ')}
+            default: panic(fmt.Sprintf("Unknown OpId: %d", o))
+            \}
+        \}
+        END
     }
 
     method struct($/) {
-        make 'type ' ~ $<identifier>.made ~ " struct \{\n\t" 
-            ~ $<member>.map(*.made).join("\n\t") 
-            ~ "\n\}\n\n"
-            ~ self!struct-go-string-method($/);
+        make qq:to/END/;
+             type {$<identifier>.made} struct \{
+                 {$<member>.map(*.made).join('; ')} 
+             \}
+             
+             {self!struct-go-string-method($/)}
+             {($<identifier>.made.ends-with('Event') ?? "\n" ~ self!struct-go-sync-pool($/) !! '')}
+             END
     }
 
     # Generate String() method on the Go struct, for pretty printing.
@@ -82,11 +88,29 @@ class NQCToGoActions {
             ($_.<type> eq 'char' && $_.<arraysize>) ?? "string({$ref}[:])" !! $ref;
         });
 
-        return qq:to/END/;
-               func ({$self-ref} {$<identifier>.made}) String() string \{
-                   return fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
-               \}
-               END
+        qq:to/END/;
+        func ($self-ref {$<identifier>.made}) String() string \{
+            return fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
+        \}
+        END
+    }
+
+    method !struct-go-sync-pool($/) returns Str {
+        my Str $identifier = $/<identifier>.made;
+
+        qq:to/END/;
+        var poolOf{$identifier}s = sync.Pool\{
+            New: func() interface\{\} \{ return &$identifier\{\} \},
+	\}
+
+        func {$identifier}New() *$identifier \{
+            return poolOf{$identifier}s.Get().(*$identifier);
+        \}
+
+        func {$identifier}Recycle(elem *$identifier) \{
+            poolOf{$identifier}s.Put(elem)
+        \}
+        END
     }
 
     method member($/) {

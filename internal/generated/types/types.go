@@ -1,7 +1,10 @@
 // This file was generated - don't change manually!
 package types
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 type OpId uint32
 
@@ -55,6 +58,18 @@ func (n NullEvent) String() string {
 	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v", n.OpId, n.PidTgid, n.Time)
 }
 
+var poolOfNullEvents = sync.Pool{
+	New: func() interface{} { return &NullEvent{} },
+}
+
+func NullEventNew() *NullEvent {
+	return poolOfNullEvents.Get().(*NullEvent)
+}
+
+func NullEventRecycle(elem *NullEvent) {
+	poolOfNullEvents.Put(elem)
+}
+
 type FdEvent struct {
 	OpId    OpId
 	PidTgid uint32
@@ -64,6 +79,18 @@ type FdEvent struct {
 
 func (f FdEvent) String() string {
 	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Fd:%v", f.OpId, f.PidTgid, f.Time, f.Fd)
+}
+
+var poolOfFdEvents = sync.Pool{
+	New: func() interface{} { return &FdEvent{} },
+}
+
+func FdEventNew() *FdEvent {
+	return poolOfFdEvents.Get().(*FdEvent)
+}
+
+func FdEventRecycle(elem *FdEvent) {
+	poolOfFdEvents.Put(elem)
 }
 
 type OpenatEnterEvent struct {
@@ -76,6 +103,18 @@ type OpenatEnterEvent struct {
 
 func (o OpenatEnterEvent) String() string {
 	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Filename:%v Comm:%v", o.OpId, o.PidTgid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
+}
+
+var poolOfOpenatEnterEvents = sync.Pool{
+	New: func() interface{} { return &OpenatEnterEvent{} },
+}
+
+func OpenatEnterEventNew() *OpenatEnterEvent {
+	return poolOfOpenatEnterEvents.Get().(*OpenatEnterEvent)
+}
+
+func OpenatEnterEventRecycle(elem *OpenatEnterEvent) {
+	poolOfOpenatEnterEvents.Put(elem)
 }
 
 type Flags struct {
