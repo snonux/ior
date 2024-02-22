@@ -3,6 +3,8 @@ package internal
 import "C"
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 
 	. "ioriotng/internal/generated/types"
@@ -10,11 +12,30 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
+type openFile struct {
+	fd   int32
+	path string
+}
+
+func (o openFile) String() string {
+	return fmt.Sprintf("(%d) %s", o.fd, o.path)
+}
+
+func binaryCompare(ev *OpenEnterEvent, raw []byte) {
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, *ev); err != nil {
+		panic(err)
+	}
+	bytes := buf.Bytes()
+	fmt.Println("bytes", bytes)
+	fmt.Println("raw  ", raw)
+}
+
 func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 	enterOpen := make(map[uint32]*OpenEnterEvent)
 	enterFd := make(map[uint32]*FdEvent)
-	// To do this, extract the PID from the TID (pid_tid >> 32)
-	// openFiles := make(map[
+
+	openFdMap := make(map[int32]openFile)
 
 	for raw := range ch {
 		switch OpId(raw[0]) {
@@ -22,22 +43,26 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			fallthrough
 		case OPEN_ENTER_OP_ID:
 			ev := NewOpenEnterEvent(raw)
-			enterOpen[ev.Pid] = ev
+			enterOpen[ev.Tid] = ev
 
 		case OPENAT_EXIT_OP_ID:
 			fallthrough
 		case OPEN_EXIT_OP_ID:
 			ev := NewFdEvent(raw)
-			enterEv, ok := enterOpen[ev.Pid]
+			enterEv, ok := enterOpen[ev.Tid]
 			if !ok {
-				fmt.Println("Dropping", ev)
 				ev.Recycle()
 				continue
 			}
+			file := openFile{
+				fd:   ev.Fd,
+				path: string(enterEv.Filename[:]),
+			}
+			openFdMap[ev.Fd] = file
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
-			fmt.Println(duration, "ms", enterEv, ev)
+			fmt.Println(duration, "ms", "opened", file)
 
-			delete(enterOpen, ev.Pid)
+			delete(enterOpen, ev.Tid)
 			ev.Recycle()
 			enterEv.Recycle()
 
@@ -47,24 +72,44 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			fallthrough
 		case WRITEV_ENTER_OP_ID:
 			ev := NewFdEvent(raw)
-			enterFd[ev.Pid] = ev
+			if _, ok := openFdMap[ev.Fd]; !ok {
+				// File open not traced (todo: read from procfs?)
+				ev.Recycle()
+				continue
+			}
+			enterFd[ev.Tid] = ev
 
 		case CLOSE_EXIT_OP_ID:
-			fallthrough
-		case WRITE_EXIT_OP_ID:
-			fallthrough
-		case WRITEV_EXIT_OP_ID:
 			ev := NewNullEvent(raw)
-			enterEv, ok := enterFd[ev.Pid]
+			enterEv, ok := enterFd[ev.Tid]
 			if !ok {
-				fmt.Println("Dropping", ev)
 				ev.Recycle()
 				continue
 			}
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
-			fmt.Println(duration, "ms", enterEv, ev)
+			file, _ := openFdMap[enterEv.Fd]
+			fmt.Println(duration, "ms", "closed", file)
 
-			delete(enterFd, ev.Pid)
+			delete(openFdMap, enterEv.Fd)
+			delete(enterFd, ev.Tid)
+			ev.Recycle()
+			enterEv.Recycle()
+
+		case WRITE_EXIT_OP_ID:
+			fallthrough
+		case WRITEV_EXIT_OP_ID:
+			ev := NewNullEvent(raw)
+			enterEv, ok := enterFd[ev.Tid]
+			if !ok {
+				ev.Recycle()
+				continue
+			}
+			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
+			if file, ok := openFdMap[enterEv.Fd]; ok {
+				fmt.Println(duration, "ms", "wrote", file)
+			}
+
+			delete(enterFd, ev.Tid)
 			ev.Recycle()
 			enterEv.Recycle()
 

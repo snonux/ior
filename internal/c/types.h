@@ -33,9 +33,9 @@ struct fd_event {
 
 struct open_enter_event {
     __u32 op_id; 
+    char filename[MAX_FILENAME_LENGTH];
+    char comm[MAX_PROGNAME_LENGTH];
     __u32 pid;
     __u32 tid;
     __u64 time;
-    char filename[MAX_FILENAME_LENGTH];
-    char comm[MAX_PROGNAME_LENGTH];
 };

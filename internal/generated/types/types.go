@@ -109,15 +109,15 @@ func (f *FdEvent) Recycle() {
 
 type OpenEnterEvent struct {
 	OpId     OpId
+	Filename [MAX_FILENAME_LENGTH]byte
+	Comm     [MAX_PROGNAME_LENGTH]byte
 	Pid      uint32
 	Tid      uint32
 	Time     uint64
-	Filename [MAX_FILENAME_LENGTH]byte
-	Comm     [MAX_PROGNAME_LENGTH]byte
 }
 
 func (o OpenEnterEvent) String() string {
-	return fmt.Sprintf("OpId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.OpId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
+	return fmt.Sprintf("OpId:%v Filename:%v Comm:%v Pid:%v Tid:%v Time:%v", o.OpId, string(o.Filename[:]), string(o.Comm[:]), o.Pid, o.Tid, o.Time)
 }
 
 var poolOfOpenEnterEvents = sync.Pool{
