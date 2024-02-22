@@ -27,6 +27,8 @@ func (o OpId) String() string {
 		return "writev_enter"
 	case WRITEV_EXIT_OP_ID:
 		return "writev_exit"
+	default:
+		panic(fmt.Sprintf("Unknown OpId: %d", o))
 	}
 }
 

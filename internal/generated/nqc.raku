@@ -57,6 +57,8 @@ class NQCToGoActions {
                \t{@!const-names.grep(/_OP_ID$/).map({
                    "case $_:\n" ~ "\t\treturn \"{$_.subst('_OP_ID', '').lc}\""
                }).join("\n\t")}
+               default:
+               \tpanic(fmt.Sprintf("Unknown OpId: %d", o))
                \t\}
                \}
                END
