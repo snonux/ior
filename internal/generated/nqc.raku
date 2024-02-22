@@ -29,9 +29,9 @@ class NQCToGoActions {
 
     method TOP($/) {
         make "// This file was generated - don't change manually!\n"
-             ~ "package types\n\n"
-             ~ self!constant-go-string-method ~ "\n"
-             ~ $<construct>.map(*.made).join('');
+        ~ "package types\n\n"
+        ~ self!constant-go-string-method ~ "\n"
+        ~ $<construct>.map(*.made).join('');
     }
 
     method construct($/) {
@@ -47,8 +47,8 @@ class NQCToGoActions {
         my $const-type = $<identifier>.ends-with('_OP_ID') ?? ' OpId' !! '';
 
         make qq:to/END/;
-             const {$<identifier>}$const-type = {$<number>}
-             END
+        const {$<identifier>}$const-type = {$<number>}
+        END
     }
 
     method !constant-go-string-method returns Str {
@@ -68,13 +68,13 @@ class NQCToGoActions {
 
     method struct($/) {
         make qq:to/END/;
-             type {$<identifier>.made} struct \{
-                 {$<member>.map(*.made).join('; ')} 
-             \}
-             
-             {self!struct-go-string-method($/)}
-             {($<identifier>.made.ends-with('Event') ?? "\n" ~ self!struct-go-sync-pool($/) !! '')}
-             END
+        type {$<identifier>.made} struct \{
+            {$<member>.map(*.made).join('; ')} 
+        \}
+        
+        {self!struct-go-string-method($/)}
+        {($<identifier>.made.ends-with('Event') ?? "\n" ~ self!struct-go-sync-pool($/) !! '')}
+        END
     }
 
     # Generate String() method on the Go struct, for pretty printing.
