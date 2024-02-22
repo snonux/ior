@@ -2,6 +2,8 @@
 package types
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 )
@@ -62,8 +64,13 @@ var poolOfNullEvents = sync.Pool{
 	New: func() interface{} { return &NullEvent{} },
 }
 
-func NewNullEvent() *NullEvent {
-	return poolOfNullEvents.Get().(*NullEvent)
+func NewNullEvent(raw []byte) *NullEvent {
+	ev := poolOfNullEvents.Get().(*NullEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
+		fmt.Println(ev, raw, len(raw), err)
+		panic(raw)
+	}
+	return ev
 }
 
 func RecycleNullEvent(elem *NullEvent) {
@@ -85,8 +92,13 @@ var poolOfFdEvents = sync.Pool{
 	New: func() interface{} { return &FdEvent{} },
 }
 
-func NewFdEvent() *FdEvent {
-	return poolOfFdEvents.Get().(*FdEvent)
+func NewFdEvent(raw []byte) *FdEvent {
+	ev := poolOfFdEvents.Get().(*FdEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
+		fmt.Println(ev, raw, len(raw), err)
+		panic(raw)
+	}
+	return ev
 }
 
 func RecycleFdEvent(elem *FdEvent) {
@@ -109,8 +121,13 @@ var poolOfOpenEnterEvents = sync.Pool{
 	New: func() interface{} { return &OpenEnterEvent{} },
 }
 
-func NewOpenEnterEvent() *OpenEnterEvent {
-	return poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
+func NewOpenEnterEvent(raw []byte) *OpenEnterEvent {
+	ev := poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
+		fmt.Println(ev, raw, len(raw), err)
+		panic(raw)
+	}
+	return ev
 }
 
 func RecycleOpenEnterEvent(elem *OpenEnterEvent) {

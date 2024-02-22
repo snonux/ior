@@ -103,8 +103,13 @@ class NQCToGoActions {
             New: func() interface\{\} \{ return &$identifier\{\} \},
 	\}
 
-        func New{$identifier}() *$identifier \{
-            return poolOf{$identifier}s.Get().(*$identifier);
+        func New{$identifier}(raw []byte) *$identifier \{
+            ev := poolOf{$identifier}s.Get().(*$identifier);
+	    if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil \{
+		fmt.Println(ev, raw, len(raw), err)
+		panic(raw)
+            \}
+	    return ev
         \}
 
         func Recycle{$identifier}(elem *$identifier) \{

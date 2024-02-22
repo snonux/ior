@@ -3,8 +3,6 @@ package internal
 import "C"
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 
 	. "ioriotng/internal/generated/types"
@@ -23,13 +21,13 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 		case OPENAT_ENTER_OP_ID:
 			fallthrough
 		case OPEN_ENTER_OP_ID:
-			ev := readRaw(raw, NewOpenEnterEvent())
+			ev := NewOpenEnterEvent(raw)
 			enterOpen[ev.PidTgid] = ev
 
 		case OPENAT_EXIT_OP_ID:
 			fallthrough
 		case OPEN_EXIT_OP_ID:
-			ev := readRaw(raw, NewFdEvent())
+			ev := NewFdEvent(raw)
 			enterEv, ok := enterOpen[ev.PidTgid]
 			if !ok {
 				fmt.Println("Dropping", ev)
@@ -48,7 +46,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 		case WRITE_ENTER_OP_ID:
 			fallthrough
 		case WRITEV_ENTER_OP_ID:
-			ev := readRaw(raw, NewFdEvent())
+			ev := NewFdEvent(raw)
 			enterFd[ev.PidTgid] = ev
 
 		case CLOSE_EXIT_OP_ID:
@@ -56,7 +54,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 		case WRITE_EXIT_OP_ID:
 			fallthrough
 		case WRITEV_EXIT_OP_ID:
-			ev := readRaw(raw, NewNullEvent())
+			ev := NewNullEvent(raw)
 			enterEv, ok := enterFd[ev.PidTgid]
 			if !ok {
 				fmt.Println("Dropping", ev)
@@ -76,12 +74,4 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 	}
 
 	fmt.Println("Good bye")
-}
-
-func readRaw[T any](raw []byte, ev *T) *T {
-	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-		fmt.Println(ev, raw, len(raw), err)
-		panic(raw)
-	}
-	return ev
 }
