@@ -62,11 +62,11 @@ var poolOfNullEvents = sync.Pool{
 	New: func() interface{} { return &NullEvent{} },
 }
 
-func NullEventNew() *NullEvent {
+func NewNullEvent() *NullEvent {
 	return poolOfNullEvents.Get().(*NullEvent)
 }
 
-func NullEventRecycle(elem *NullEvent) {
+func RecycleNullEvent(elem *NullEvent) {
 	poolOfNullEvents.Put(elem)
 }
 
@@ -85,15 +85,15 @@ var poolOfFdEvents = sync.Pool{
 	New: func() interface{} { return &FdEvent{} },
 }
 
-func FdEventNew() *FdEvent {
+func NewFdEvent() *FdEvent {
 	return poolOfFdEvents.Get().(*FdEvent)
 }
 
-func FdEventRecycle(elem *FdEvent) {
+func RecycleFdEvent(elem *FdEvent) {
 	poolOfFdEvents.Put(elem)
 }
 
-type OpenatEnterEvent struct {
+type OpenEnterEvent struct {
 	OpId     OpId
 	PidTgid  uint32
 	Time     uint64
@@ -101,20 +101,20 @@ type OpenatEnterEvent struct {
 	Comm     [MAX_PROGNAME_LENGTH]byte
 }
 
-func (o OpenatEnterEvent) String() string {
+func (o OpenEnterEvent) String() string {
 	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Filename:%v Comm:%v", o.OpId, o.PidTgid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
 }
 
-var poolOfOpenatEnterEvents = sync.Pool{
-	New: func() interface{} { return &OpenatEnterEvent{} },
+var poolOfOpenEnterEvents = sync.Pool{
+	New: func() interface{} { return &OpenEnterEvent{} },
 }
 
-func OpenatEnterEventNew() *OpenatEnterEvent {
-	return poolOfOpenatEnterEvents.Get().(*OpenatEnterEvent)
+func NewOpenEnterEvent() *OpenEnterEvent {
+	return poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
 }
 
-func OpenatEnterEventRecycle(elem *OpenatEnterEvent) {
-	poolOfOpenatEnterEvents.Put(elem)
+func RecycleOpenEnterEvent(elem *OpenEnterEvent) {
+	poolOfOpenEnterEvents.Put(elem)
 }
 
 type Flags struct {

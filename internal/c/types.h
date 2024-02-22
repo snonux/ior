@@ -29,7 +29,7 @@ struct fd_event {
     __s32 fd;
 };
 
-struct openat_enter_event {
+struct open_enter_event {
     __u32 op_id; 
     __u32 pid_tgid;
     __u64 time;

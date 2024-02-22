@@ -4,7 +4,7 @@ static __always_inline int _handle_enter_open(struct trace_event_raw_sys_enter *
     if (filter())
         return 0;
 
-    struct openat_enter_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct openat_enter_event), 0);
+    struct open_enter_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_enter_event), 0);
     if (!ev)
         return 0;
 

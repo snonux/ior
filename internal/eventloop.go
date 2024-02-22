@@ -7,14 +7,13 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"ioriotng/internal/syncpool"
-	. "ioriotng/internal/types"
+	. "ioriotng/internal/generated/types"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
 func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
-	enterOpen := make(map[uint32]*OpenatEnterEvent)
+	enterOpen := make(map[uint32]*OpenEnterEvent)
 	enterFd := make(map[uint32]*FdEvent)
 	// To do this, extract the PID from the TID (pid_tid >> 32)
 	// openFiles := make(map[
@@ -24,52 +23,52 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 		case OPENAT_ENTER_OP_ID:
 			fallthrough
 		case OPEN_ENTER_OP_ID:
-			ev := readRaw(raw, syncpool.OpenEnterEvent.Get().(*OpenatEnterEvent))
-			enterOpen[ev.PidTGid] = ev
+			ev := readRaw(raw, NewOpenEnterEvent())
+			enterOpen[ev.PidTgid] = ev
 
 		case OPENAT_EXIT_OP_ID:
 			fallthrough
 		case OPEN_EXIT_OP_ID:
-			ev := readRaw(raw, syncpool.FdEvent.Get().(*FdEvent))
-			enterEv, ok := enterOpen[ev.PidTGid]
+			ev := readRaw(raw, NewFdEvent())
+			enterEv, ok := enterOpen[ev.PidTgid]
 			if !ok {
 				fmt.Println("Dropping", ev)
-				syncpool.FdEvent.Put(ev)
+				RecycleFdEvent(ev)
 				continue
 			}
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
-			delete(enterOpen, ev.PidTGid)
-			syncpool.FdEvent.Put(ev)
-			syncpool.OpenEnterEvent.Put(enterEv)
+			delete(enterOpen, ev.PidTgid)
+			RecycleFdEvent(ev)
+			RecycleOpenEnterEvent(enterEv)
 
 		case CLOSE_ENTER_OP_ID:
 			fallthrough
 		case WRITE_ENTER_OP_ID:
 			fallthrough
 		case WRITEV_ENTER_OP_ID:
-			ev := readRaw(raw, syncpool.FdEvent.Get().(*FdEvent))
-			enterFd[ev.PidTGid] = ev
+			ev := readRaw(raw, NewFdEvent())
+			enterFd[ev.PidTgid] = ev
 
 		case CLOSE_EXIT_OP_ID:
 			fallthrough
 		case WRITE_EXIT_OP_ID:
 			fallthrough
 		case WRITEV_EXIT_OP_ID:
-			ev := readRaw(raw, syncpool.NullEvent.Get().(*NullEvent))
-			enterEv, ok := enterFd[ev.PidTGid]
+			ev := readRaw(raw, NewNullEvent())
+			enterEv, ok := enterFd[ev.PidTgid]
 			if !ok {
 				fmt.Println("Dropping", ev)
-				syncpool.NullEvent.Put(ev)
+				RecycleNullEvent(ev)
 				continue
 			}
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
-			delete(enterFd, ev.PidTGid)
-			syncpool.NullEvent.Put(ev)
-			syncpool.FdEvent.Put(enterEv)
+			delete(enterFd, ev.PidTgid)
+			RecycleNullEvent(ev)
+			RecycleFdEvent(enterEv)
 
 		default:
 			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))

@@ -103,11 +103,11 @@ class NQCToGoActions {
             New: func() interface\{\} \{ return &$identifier\{\} \},
 	\}
 
-        func {$identifier}New() *$identifier \{
+        func New{$identifier}() *$identifier \{
             return poolOf{$identifier}s.Get().(*$identifier);
         \}
 
-        func {$identifier}Recycle(elem *$identifier) \{
+        func Recycle{$identifier}(elem *$identifier) \{
             poolOf{$identifier}s.Put(elem)
         \}
         END
