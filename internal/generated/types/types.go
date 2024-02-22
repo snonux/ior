@@ -44,7 +44,7 @@ const WRITEV_ENTER_OP_ID OpId = 9
 const WRITEV_EXIT_OP_ID OpId = 10
 
 type NullEvent struct {
-	OpId    uint32
+	OpId    OpId
 	PidTgid uint32
 	Time    uint64
 }
@@ -54,7 +54,7 @@ func (n NullEvent) String() string {
 }
 
 type FdEvent struct {
-	OpId    uint32
+	OpId    OpId
 	PidTgid uint32
 	Time    uint64
 	Fd      int32
@@ -65,7 +65,7 @@ func (f FdEvent) String() string {
 }
 
 type OpenatEnterEvent struct {
-	OpId     uint32
+	OpId     OpId
 	PidTgid  uint32
 	Time     uint64
 	Filename [MAX_FILENAME_LENGTH]byte

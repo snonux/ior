@@ -88,7 +88,8 @@ class NQCToGoActions {
     }
 
     method member($/) {
-        make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $<type>.made;
+        my Str $type = $<identifier>.made eq 'OpId' ?? 'OpId' !! $<type>.made;
+        make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $type;
     }
 
     method type($/) {
