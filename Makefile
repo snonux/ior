@@ -5,9 +5,7 @@ export GOARCH = amd64
 export CGO_CFLAGS = -I$(LIBBPFGO)/output -I$(LIBBPFGO)/selftest/common
 export CGO_LDFLAGS = -lelf -lzstd $(LIBBPFGO)/output/libbpf.a
 
-all: build run
-
-build: bpfbuild gobuild
+all: bpfbuild gobuild
 
 .PHONY: bpfbuild
 bpfbuild:
@@ -27,7 +25,3 @@ clean:
 	find . -type f -name ioriotng -delete
 	if [ -e ioriotng.bpf.o ]; then rm ioriotng.bpf.o; fi
 	make -C ./internal/c clean
-
-.PHONY: run
-run:
-	sudo ./ioriotng -uid $$(id -u)
