@@ -102,15 +102,15 @@ class NQCToGoActions {
         qq:to/END/;
         var poolOf{$identifier}s = sync.Pool\{
             New: func() interface\{\} \{ return &$identifier\{\} \},
-	\}
+        \}
 
         func New{$identifier}(raw []byte) *$identifier \{
             $self-ref := poolOf{$identifier}s.Get().(*$identifier);
-	    if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, $self-ref); err != nil \{
-		fmt.Println($self-ref, raw, len(raw), err)
-		panic(raw)
+            if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, $self-ref); err != nil \{
+                fmt.Println($self-ref, raw, len(raw), err)
+                panic(raw)
             \}
-	    return $self-ref
+            return $self-ref
         \}
 
         func ($self-ref *$identifier) Recycle() \{
