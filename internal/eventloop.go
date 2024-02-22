@@ -31,15 +31,15 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			enterEv, ok := enterOpen[ev.PidTgid]
 			if !ok {
 				fmt.Println("Dropping", ev)
-				RecycleFdEvent(ev)
+				ev.Recycle()
 				continue
 			}
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
 			delete(enterOpen, ev.PidTgid)
-			RecycleFdEvent(ev)
-			RecycleOpenEnterEvent(enterEv)
+			ev.Recycle()
+			enterEv.Recycle()
 
 		case CLOSE_ENTER_OP_ID:
 			fallthrough
@@ -58,15 +58,15 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			enterEv, ok := enterFd[ev.PidTgid]
 			if !ok {
 				fmt.Println("Dropping", ev)
-				RecycleNullEvent(ev)
+				ev.Recycle()
 				continue
 			}
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
 			delete(enterFd, ev.PidTgid)
-			RecycleNullEvent(ev)
-			RecycleFdEvent(enterEv)
+			ev.Recycle()
+			enterEv.Recycle()
 
 		default:
 			panic(fmt.Sprintf("UNKNOWN Ringbuf data received len:%d raw:%v", len(raw), raw))

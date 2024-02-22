@@ -65,16 +65,16 @@ var poolOfNullEvents = sync.Pool{
 }
 
 func NewNullEvent(raw []byte) *NullEvent {
-	ev := poolOfNullEvents.Get().(*NullEvent)
-	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-		fmt.Println(ev, raw, len(raw), err)
+	n := poolOfNullEvents.Get().(*NullEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, n); err != nil {
+		fmt.Println(n, raw, len(raw), err)
 		panic(raw)
 	}
-	return ev
+	return n
 }
 
-func RecycleNullEvent(elem *NullEvent) {
-	poolOfNullEvents.Put(elem)
+func (n *NullEvent) Recycle() {
+	poolOfNullEvents.Put(n)
 }
 
 type FdEvent struct {
@@ -93,16 +93,16 @@ var poolOfFdEvents = sync.Pool{
 }
 
 func NewFdEvent(raw []byte) *FdEvent {
-	ev := poolOfFdEvents.Get().(*FdEvent)
-	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-		fmt.Println(ev, raw, len(raw), err)
+	f := poolOfFdEvents.Get().(*FdEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
+		fmt.Println(f, raw, len(raw), err)
 		panic(raw)
 	}
-	return ev
+	return f
 }
 
-func RecycleFdEvent(elem *FdEvent) {
-	poolOfFdEvents.Put(elem)
+func (f *FdEvent) Recycle() {
+	poolOfFdEvents.Put(f)
 }
 
 type OpenEnterEvent struct {
@@ -122,16 +122,16 @@ var poolOfOpenEnterEvents = sync.Pool{
 }
 
 func NewOpenEnterEvent(raw []byte) *OpenEnterEvent {
-	ev := poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
-	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil {
-		fmt.Println(ev, raw, len(raw), err)
+	o := poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
+		fmt.Println(o, raw, len(raw), err)
 		panic(raw)
 	}
-	return ev
+	return o
 }
 
-func RecycleOpenEnterEvent(elem *OpenEnterEvent) {
-	poolOfOpenEnterEvents.Put(elem)
+func (o *OpenEnterEvent) Recycle() {
+	poolOfOpenEnterEvents.Put(o)
 }
 
 type Flags struct {

@@ -97,6 +97,7 @@ class NQCToGoActions {
 
     method !struct-go-sync-pool($/) returns Str {
         my Str $identifier = $/<identifier>.made;
+        my Str $self-ref = $identifier.lc.substr(0,1);
 
         qq:to/END/;
         var poolOf{$identifier}s = sync.Pool\{
@@ -104,16 +105,16 @@ class NQCToGoActions {
 	\}
 
         func New{$identifier}(raw []byte) *$identifier \{
-            ev := poolOf{$identifier}s.Get().(*$identifier);
-	    if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, ev); err != nil \{
-		fmt.Println(ev, raw, len(raw), err)
+            $self-ref := poolOf{$identifier}s.Get().(*$identifier);
+	    if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, $self-ref); err != nil \{
+		fmt.Println($self-ref, raw, len(raw), err)
 		panic(raw)
             \}
-	    return ev
+	    return $self-ref
         \}
 
-        func Recycle{$identifier}(elem *$identifier) \{
-            poolOf{$identifier}s.Put(elem)
+        func ($self-ref *$identifier) Recycle() \{
+            poolOf{$identifier}s.Put($self-ref)
         \}
         END
     }
