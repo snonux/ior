@@ -22,31 +22,44 @@ grammar NQC {
     token identifier { <[a..z A..Z 0..9 _]>+ }
     token number { \d+ }
 }
- 
+
 class NQCToGoActions {
-    has Str @.const-types is required;
+    has Str @!const-names;
+    has Bool $!constant-type-set;
 
     method TOP($/) {
         make "// This file was generated - don't change manually!\n"
              ~ "package types\n\n"
-             ~ @!const-types.map({ "type {self!const-camel-case($_)} int\n" })
-             ~ $<construct>.map(*.made).join('')
+             ~ self!constant-go-string-method ~ "\n"
+             ~ $<construct>.map(*.made).join('');
     }
 
-    method construct($/) { make $<constant>.made // $<statement>.made // '' }
-    method statement($/) { make "\n" ~ $<struct>.made ~ "\n"; }
+    method construct($/) {
+        make $<constant>.made // $<statement>.made // '';
+    }
+
+    method statement($/) {
+        make "\n" ~ $<struct>.made ~ "\n";
+    }
 
     method constant($/) {
-        make 'const ' ~ $<identifier> ~ "{self!const-type($/)} = " ~ $<number> ~ "\n"
+        push @!const-names: ~$<identifier>;
+        my $const-type = $<identifier>.ends-with('_OP_ID') ?? ' OpId' !! '';
+        make 'const ' ~ $<identifier> ~ $const-type ~ " = " ~ $<number> ~ "\n";
     }
 
-    method !const-type($/) returns Str {
-        my $suffix = @!const-types.grep({ $<identifier>.ends-with($_) }).first;
-        $suffix ?? ' ' ~ self!const-camel-case($suffix) !! ''
-    }
+    method !constant-go-string-method returns Str {
+        return qq:to/END/;
+               type OpId uint32
 
-    method !const-camel-case(Str $const-name) returns Str {
-        $const-name.lc.split('_').map(*.tc).join('')
+               func (o OpId) String() string \{
+               \tswitch (o) \{
+               \t{@!const-names.grep(/_OP_ID$/).map({
+                   "case $_:\n" ~ "\t\treturn \"{$_.subst('_OP_ID', '').lc}\""
+               }).join("\n\t")}
+               \t\}
+               \}
+               END
     }
 
     method struct($/) {
@@ -60,6 +73,7 @@ class NQCToGoActions {
     method !struct-go-string-method($/) returns Str {
         my Str $self-ref = $<identifier>.lc.substr(0,1);
         my Str @format = $<member>.map({ $_.<identifier>.made ~ ':%v' });
+
         my Str @args = $<member>.map({
             my Str $ref = "$self-ref." ~ $_.<identifier>.made;
             # Need to convert char-arrays into a Go slice, and then convert via string(...) 
@@ -68,12 +82,14 @@ class NQCToGoActions {
 
         return qq:to/END/;
                func ({$self-ref} {$<identifier>.made}) String() string \{
-               \treturn fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
+                   return fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
                \}
                END
     }
 
-    method member($/) { make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $<type>.made }
+    method member($/) {
+        make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $<type>.made;
+    }
 
     method type($/) {
         make do given ~$/ {
@@ -84,8 +100,10 @@ class NQCToGoActions {
         }
     }
 
-    # Convert identifier from snake_case (C) to CamelCase (Go)
-    method identifier($/) { make $/.Str.split('_').map(*.tc).join('') }
+    method identifier($/) {
+        # Convert identifier from snake_case (C) to CamelCase (Go)
+        make $/.Str.split('_').map(*.tc).join('');
+    }
 }
 
-say NQC.parse($*IN.slurp, actions => NQCToGoActions.new(const-types => <OP_ID>)).made;
+say NQC.parse($*IN.slurp, actions => NQCToGoActions.new).made;

@@ -3,7 +3,32 @@ package types
 
 import "fmt"
 
-type OpId int
+type OpId uint32
+
+func (o OpId) String() string {
+	switch o {
+	case OPENAT_ENTER_OP_ID:
+		return "openat_enter"
+	case OPENAT_EXIT_OP_ID:
+		return "openat_exit"
+	case OPEN_ENTER_OP_ID:
+		return "open_enter"
+	case OPEN_EXIT_OP_ID:
+		return "open_exit"
+	case CLOSE_ENTER_OP_ID:
+		return "close_enter"
+	case CLOSE_EXIT_OP_ID:
+		return "close_exit"
+	case WRITE_ENTER_OP_ID:
+		return "write_enter"
+	case WRITE_EXIT_OP_ID:
+		return "write_exit"
+	case WRITEV_ENTER_OP_ID:
+		return "writev_enter"
+	case WRITEV_EXIT_OP_ID:
+		return "writev_exit"
+	}
+}
 
 const MAX_FILENAME_LENGTH = 256
 const MAX_PROGNAME_LENGTH = 16
