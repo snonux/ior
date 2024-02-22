@@ -22,13 +22,13 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			fallthrough
 		case OPEN_ENTER_OP_ID:
 			ev := NewOpenEnterEvent(raw)
-			enterOpen[ev.PidTgid] = ev
+			enterOpen[ev.Pid] = ev
 
 		case OPENAT_EXIT_OP_ID:
 			fallthrough
 		case OPEN_EXIT_OP_ID:
 			ev := NewFdEvent(raw)
-			enterEv, ok := enterOpen[ev.PidTgid]
+			enterEv, ok := enterOpen[ev.Pid]
 			if !ok {
 				fmt.Println("Dropping", ev)
 				ev.Recycle()
@@ -37,7 +37,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
-			delete(enterOpen, ev.PidTgid)
+			delete(enterOpen, ev.Pid)
 			ev.Recycle()
 			enterEv.Recycle()
 
@@ -47,7 +47,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			fallthrough
 		case WRITEV_ENTER_OP_ID:
 			ev := NewFdEvent(raw)
-			enterFd[ev.PidTgid] = ev
+			enterFd[ev.Pid] = ev
 
 		case CLOSE_EXIT_OP_ID:
 			fallthrough
@@ -55,7 +55,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			fallthrough
 		case WRITEV_EXIT_OP_ID:
 			ev := NewNullEvent(raw)
-			enterEv, ok := enterFd[ev.PidTgid]
+			enterEv, ok := enterFd[ev.Pid]
 			if !ok {
 				fmt.Println("Dropping", ev)
 				ev.Recycle()
@@ -64,7 +64,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			fmt.Println(duration, "ms", enterEv, ev)
 
-			delete(enterFd, ev.PidTgid)
+			delete(enterFd, ev.Pid)
 			ev.Recycle()
 			enterEv.Recycle()
 

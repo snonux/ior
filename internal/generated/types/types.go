@@ -51,13 +51,14 @@ const WRITEV_ENTER_OP_ID OpId = 9
 const WRITEV_EXIT_OP_ID OpId = 10
 
 type NullEvent struct {
-	OpId    OpId
-	PidTgid uint32
-	Time    uint64
+	OpId OpId
+	Pid  uint32
+	Tid  uint32
+	Time uint64
 }
 
 func (n NullEvent) String() string {
-	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v", n.OpId, n.PidTgid, n.Time)
+	return fmt.Sprintf("OpId:%v Pid:%v Tid:%v Time:%v", n.OpId, n.Pid, n.Tid, n.Time)
 }
 
 var poolOfNullEvents = sync.Pool{
@@ -78,14 +79,15 @@ func (n *NullEvent) Recycle() {
 }
 
 type FdEvent struct {
-	OpId    OpId
-	PidTgid uint32
-	Time    uint64
-	Fd      int32
+	OpId OpId
+	Pid  uint32
+	Tid  uint32
+	Time uint64
+	Fd   int32
 }
 
 func (f FdEvent) String() string {
-	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Fd:%v", f.OpId, f.PidTgid, f.Time, f.Fd)
+	return fmt.Sprintf("OpId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.OpId, f.Pid, f.Tid, f.Time, f.Fd)
 }
 
 var poolOfFdEvents = sync.Pool{
@@ -107,14 +109,15 @@ func (f *FdEvent) Recycle() {
 
 type OpenEnterEvent struct {
 	OpId     OpId
-	PidTgid  uint32
+	Pid      uint32
+	Tid      uint32
 	Time     uint64
 	Filename [MAX_FILENAME_LENGTH]byte
 	Comm     [MAX_PROGNAME_LENGTH]byte
 }
 
 func (o OpenEnterEvent) String() string {
-	return fmt.Sprintf("OpId:%v PidTgid:%v Time:%v Filename:%v Comm:%v", o.OpId, o.PidTgid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
+	return fmt.Sprintf("OpId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.OpId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
 }
 
 var poolOfOpenEnterEvents = sync.Pool{
@@ -132,12 +135,4 @@ func NewOpenEnterEvent(raw []byte) *OpenEnterEvent {
 
 func (o *OpenEnterEvent) Recycle() {
 	poolOfOpenEnterEvents.Put(o)
-}
-
-type Flags struct {
-	UidFilter uint32
-}
-
-func (f Flags) String() string {
-	return fmt.Sprintf("UidFilter:%v", f.UidFilter)
 }

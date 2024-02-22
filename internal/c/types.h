@@ -18,26 +18,24 @@
 
 struct null_event {
     __u32 op_id;
-    __u32 pid_tgid;
+    __u32 pid;
+    __u32 tid;
     __u64 time;
 };
 
 struct fd_event {
     __u32 op_id;
-    __u32 pid_tgid;
+    __u32 pid;
+    __u32 tid;
     __u64 time;
     __s32 fd;
 };
 
 struct open_enter_event {
     __u32 op_id; 
-    __u32 pid_tgid;
+    __u32 pid;
+    __u32 tid;
     __u64 time;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
 };
-
-struct flags {
-   __u32 uid_filter;
-};
-

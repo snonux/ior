@@ -1,7 +1,8 @@
 //+build ignore
 
 static __always_inline int _handle_enter_open(struct trace_event_raw_sys_enter *ctx, __u32 op_id) {
-    if (filter())
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
         return 0;
 
     struct open_enter_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_enter_event), 0);
@@ -9,7 +10,8 @@ static __always_inline int _handle_enter_open(struct trace_event_raw_sys_enter *
         return 0;
 
     ev->op_id = op_id;
-    ev->pid_tgid = bpf_get_current_pid_tgid();
+    ev->pid = pid;
+    ev->tid = tid;
     ev->time = bpf_ktime_get_ns();
 
     // Reset memory, as structure is re-used (ringbuffer)
@@ -22,7 +24,8 @@ static __always_inline int _handle_enter_open(struct trace_event_raw_sys_enter *
 }
 
 static __always_inline int _handle_exit_open(struct trace_event_raw_sys_exit *ctx, __u32 op_id) {
-    if (filter())
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
         return 0;
 
     struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
@@ -30,7 +33,8 @@ static __always_inline int _handle_exit_open(struct trace_event_raw_sys_exit *ct
         return 0;
 
     ev->op_id = op_id;
-    ev->pid_tgid = bpf_get_current_pid_tgid();
+    ev->pid = pid;
+    ev->tid = tid;
     ev->time = bpf_ktime_get_ns();
     ev->fd = ctx->ret;
 
