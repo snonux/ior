@@ -12,7 +12,7 @@ static __always_inline int _handle_enter_open(struct trace_event_raw_sys_enter *
     ev->op_id = op_id;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns();
+    ev->time = bpf_ktime_get_ns() / 1000;
 
     // Reset memory, as structure is re-used (ringbuffer)
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
@@ -35,7 +35,7 @@ static __always_inline int _handle_exit_open(struct trace_event_raw_sys_exit *ct
     ev->op_id = op_id;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns();
+    ev->time = bpf_ktime_get_ns() / 1000;
     ev->fd = ctx->ret;
 
     bpf_ringbuf_submit(ev, 0);

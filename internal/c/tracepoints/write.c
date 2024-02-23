@@ -13,7 +13,7 @@ int handle_enter_write(struct trace_event_raw_sys_enter *ctx) {
     ev->op_id = WRITE_ENTER_OP_ID;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns();
+    ev->time = bpf_ktime_get_ns() / 1000;
     ev->fd = (int)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -33,7 +33,7 @@ int handle_exit_write(struct trace_event_raw_sys_exit *ctx) {
     ev->op_id = WRITE_EXIT_OP_ID;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns();
+    ev->time = bpf_ktime_get_ns() / 1000;
 
     ev->size = ctx->ret;
     bpf_ringbuf_submit(ev, 0);

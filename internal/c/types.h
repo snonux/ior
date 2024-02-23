@@ -20,14 +20,14 @@ struct null_event {
     __u32 op_id;
     __u32 pid;
     __u32 tid;
-    __u64 time;
+    __u32 time;
 };
 
 struct fd_event {
     __u32 op_id;
     __u32 pid;
     __u32 tid;
-    __u64 time;
+    __u32 time;
     __s32 fd;
 };
 
@@ -35,15 +35,15 @@ struct rw_event {
     __u32 op_id;
     __u32 pid;
     __u32 tid;
-    __u64 time;
-    __s64 size;
+    __u32 time;
+    __u64 size;
 };
 
 struct open_enter_event {
     __u32 op_id; 
-    char filename[MAX_FILENAME_LENGTH];
-    char comm[MAX_PROGNAME_LENGTH];
     __u32 pid;
     __u32 tid;
-    __u64 time;
+    __u32 time;
+    char filename[MAX_FILENAME_LENGTH];
+    char comm[MAX_PROGNAME_LENGTH];
 };

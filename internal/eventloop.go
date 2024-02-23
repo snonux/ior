@@ -59,7 +59,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 				path: string(enterEv.Filename[:]),
 			}
 			openFdMap[ev.Fd] = file
-			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
+			duration := ev.Time - enterEv.Time
 			fmt.Println(duration, "ms", "opened", file)
 
 			delete(enterOpen, ev.Tid)
@@ -86,7 +86,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 				ev.Recycle()
 				continue
 			}
-			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
+			duration := ev.Time - enterEv.Time
 			file, _ := openFdMap[enterEv.Fd]
 			fmt.Println(duration, "ms", "closed", file)
 
@@ -104,7 +104,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 				ev.Recycle()
 				continue
 			}
-			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
+			duration := ev.Time - enterEv.Time
 			if file, ok := openFdMap[enterEv.Fd]; ok {
 				fmt.Println(duration, "ms", "wrote", ev.Size, "bytes", file)
 			}
