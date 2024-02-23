@@ -29,6 +29,5 @@ clean:
 	if [ -e ioriotng.bpf.o ]; then rm ioriotng.bpf.o; fi
 	make -C ./internal/c clean
 
-.PHONY: foo
-foo: clean generate all
-	sudo ./ioriotng --uid $$(id -u)
+.PHONY: world
+world: clean generate all
