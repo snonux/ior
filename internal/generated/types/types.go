@@ -107,6 +107,35 @@ func (f *FdEvent) Recycle() {
 	poolOfFdEvents.Put(f)
 }
 
+type RwEvent struct {
+	OpId OpId
+	Pid  uint32
+	Tid  uint32
+	Time uint64
+	Size int64
+}
+
+func (r RwEvent) String() string {
+	return fmt.Sprintf("OpId:%v Pid:%v Tid:%v Time:%v Size:%v", r.OpId, r.Pid, r.Tid, r.Time, r.Size)
+}
+
+var poolOfRwEvents = sync.Pool{
+	New: func() interface{} { return &RwEvent{} },
+}
+
+func NewRwEvent(raw []byte) *RwEvent {
+	r := poolOfRwEvents.Get().(*RwEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, r); err != nil {
+		fmt.Println(r, raw, len(raw), err)
+		panic(raw)
+	}
+	return r
+}
+
+func (r *RwEvent) Recycle() {
+	poolOfRwEvents.Put(r)
+}
+
 type OpenEnterEvent struct {
 	OpId     OpId
 	Filename [MAX_FILENAME_LENGTH]byte

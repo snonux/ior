@@ -31,6 +31,14 @@ struct fd_event {
     __s32 fd;
 };
 
+struct rw_event {
+    __u32 op_id;
+    __u32 pid;
+    __u32 tid;
+    __u64 time;
+    __s64 size;
+};
+
 struct open_enter_event {
     __u32 op_id; 
     char filename[MAX_FILENAME_LENGTH];

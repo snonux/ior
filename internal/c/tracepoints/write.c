@@ -21,12 +21,12 @@ int handle_enter_write(struct trace_event_raw_sys_enter *ctx) {
 }
 
 SEC("tracepoint/syscalls/sys_exit_write")
-int handle_exit_write(struct trace_event_raw_sys_enter *ctx) {
+int handle_exit_write(struct trace_event_raw_sys_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct rw_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct rw_event), 0);
     if (!ev)
         return 0;
 
@@ -35,6 +35,7 @@ int handle_exit_write(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns();
 
+    ev->size = ctx->ret;
     bpf_ringbuf_submit(ev, 0);
 
     return 0;

@@ -12,12 +12,15 @@ bpfbuild:
 	make -C ./internal/c redo
 	cp -v ./internal/c/ioriotng.bpf.o .
 
+gen: generated
+generate: generated
+
 .PHONY: generated
 generated:
 	make -C ./internal/generated
 
 .PHONY: gobuild
-gobuild: generated
+gobuild:
 	go build -tags netgo -ldflags '-w -extldflags "-static"' -o ioriotng ./cmd/ioriotng/main.go
 
 .PHONY: clean
@@ -25,3 +28,7 @@ clean:
 	find . -type f -name ioriotng -delete
 	if [ -e ioriotng.bpf.o ]; then rm ioriotng.bpf.o; fi
 	make -C ./internal/c clean
+
+.PHONY: foo
+foo: clean generate all
+	sudo ./ioriotng --uid $$(id -u)

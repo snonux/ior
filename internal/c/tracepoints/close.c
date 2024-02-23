@@ -21,7 +21,7 @@ int handle_enter_close(struct trace_event_raw_sys_enter *ctx) {
 }
 
 SEC("tracepoint/syscalls/sys_exit_close")
-int handle_exit_close(struct trace_event_raw_sys_enter *ctx) {
+int handle_exit_close(struct trace_event_raw_sys_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;

@@ -98,7 +98,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 		case WRITE_EXIT_OP_ID:
 			fallthrough
 		case WRITEV_EXIT_OP_ID:
-			ev := NewNullEvent(raw)
+			ev := NewRwEvent(raw)
 			enterEv, ok := enterFd[ev.Tid]
 			if !ok {
 				ev.Recycle()
@@ -106,7 +106,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			}
 			duration := float64(ev.Time-enterEv.Time) / float64(1_000_000)
 			if file, ok := openFdMap[enterEv.Fd]; ok {
-				fmt.Println(duration, "ms", "wrote", file)
+				fmt.Println(duration, "ms", "wrote", ev.Size, "bytes", file)
 			}
 
 			delete(enterFd, ev.Tid)

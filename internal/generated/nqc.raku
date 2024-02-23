@@ -18,7 +18,7 @@ grammar NQC {
     rule single-line-comment { '//' <-[\n]>+ }
     rule multi-line-comment { '/*' .*? '*/' }
     token arraysize { '[' <identifier> ']' }
-    token type { 'char' | '__s32' | '__u32' | '__u64' }
+    token type { 'char' | '__s32' | '__u32' | '__s64' | '__u64' }
     token identifier { <[a..z A..Z 0..9 _]>+ }
     token number { \d+ }
 }
@@ -129,6 +129,7 @@ class NQCToGoActions {
             when 'char' { 'byte' }
             when '__s32' { 'int32' }
             when '__u32' { 'uint32' }
+            when '__s64' { 'int64' }
             when '__u64' { 'uint64' }
         }
     }
