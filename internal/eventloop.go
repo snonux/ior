@@ -60,7 +60,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			}
 			openFdMap[ev.Fd] = file
 			duration := ev.Time - enterEv.Time
-			fmt.Println(duration, "ms", "opened", file)
+			fmt.Println(duration, "μs", "closed", file)
 
 			delete(enterOpen, ev.Tid)
 			ev.Recycle()
@@ -88,7 +88,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			}
 			duration := ev.Time - enterEv.Time
 			file, _ := openFdMap[enterEv.Fd]
-			fmt.Println(duration, "ms", "closed", file)
+			fmt.Println(duration, "μs", "closed", file)
 
 			delete(openFdMap, enterEv.Fd)
 			delete(enterFd, ev.Tid)
@@ -106,7 +106,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			}
 			duration := ev.Time - enterEv.Time
 			if file, ok := openFdMap[enterEv.Fd]; ok {
-				fmt.Println(duration, "ms", "wrote", ev.Size, "bytes", file)
+				fmt.Println(duration, "μs", "wrote", ev.Size, "bytes", file)
 			}
 
 			delete(enterFd, ev.Tid)
