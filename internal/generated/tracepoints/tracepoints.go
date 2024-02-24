@@ -10,4 +10,6 @@ var List = []string{
 	"exit_open",
 	"enter_write",
 	"exit_write",
+	"enter_write",
+	"exit_write",
 }

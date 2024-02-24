@@ -11,6 +11,6 @@ say qq:to/END/;
 package tracepoints
 
 var List = []string\{
-\t{@tracepoints.map({ "\"$_\"," }).join("\n\t") }
+    t{@tracepoints.map({ "\"$_\"," }).join("\n\t") }
 \}
 END
