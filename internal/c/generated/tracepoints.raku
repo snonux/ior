@@ -110,6 +110,8 @@ my Format @formats = gather for SysTraceFormat
     # Check whether one of them (enter or exit) has an fd.
     .grep(*.grep(*.has-fd).elems > 0) -> @_ { .take for @_ }
 
+@formats .= sort(*.id);
+
 say qq:to/END/;
 // Code generated - don't change manually!
 
