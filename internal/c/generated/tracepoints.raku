@@ -105,7 +105,9 @@ class SysTraceFormatActions {
 
 my Format @formats = gather for SysTraceFormat
     .parse($*IN.slurp,:actions(SysTraceFormatActions.new)).made
+    # For each enter there is an exit tracepoint. E.g. sys_enter_open and sys_exit_open
     .classify(*.name.split('_').tail).values
+    # Check whether one of them (enter or exit) has an fd.
     .grep(*.grep(*.has-fd).elems > 0) -> @_ { .take for @_ }
 
 say qq:to/END/;
