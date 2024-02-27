@@ -155,6 +155,14 @@ func (o OpenEnterEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.EventType, o.SyscallId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
 }
 
+func (o *OpenEnterEvent) TID() uint32 {
+	return o.Tid
+}
+
+func (o *OpenEnterEvent) Timestamp() uint32 {
+	return o.Time
+}
+
 var poolOfOpenEnterEvents = sync.Pool{
 	New: func() interface{} { return &OpenEnterEvent{} },
 }
@@ -182,6 +190,14 @@ type NullEvent struct {
 
 func (n NullEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v", n.EventType, n.SyscallId, n.Pid, n.Tid, n.Time)
+}
+
+func (n *NullEvent) TID() uint32 {
+	return n.Tid
+}
+
+func (n *NullEvent) Timestamp() uint32 {
+	return n.Time
 }
 
 var poolOfNullEvents = sync.Pool{
@@ -214,6 +230,14 @@ func (f FdEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.EventType, f.SyscallId, f.Pid, f.Tid, f.Time, f.Fd)
 }
 
+func (f *FdEvent) TID() uint32 {
+	return f.Tid
+}
+
+func (f *FdEvent) Timestamp() uint32 {
+	return f.Time
+}
+
 var poolOfFdEvents = sync.Pool{
 	New: func() interface{} { return &FdEvent{} },
 }
@@ -237,11 +261,19 @@ type RetEvent struct {
 	Pid       uint32
 	Tid       uint32
 	Time      uint32
-	Ret       uint64
+	Ret       int64
 }
 
 func (r RetEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Ret:%v", r.EventType, r.SyscallId, r.Pid, r.Tid, r.Time, r.Ret)
+}
+
+func (r *RetEvent) TID() uint32 {
+	return r.Tid
+}
+
+func (r *RetEvent) Timestamp() uint32 {
+	return r.Time
 }
 
 var poolOfRetEvents = sync.Pool{

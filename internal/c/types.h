@@ -45,5 +45,5 @@ struct ret_event {
     __u32 pid;
     __u32 tid;
     __u32 time;
-    __u64 ret;
+    __s64 ret;
 };

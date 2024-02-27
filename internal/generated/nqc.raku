@@ -73,13 +73,13 @@ class NQCToGoActions {
             {$<member>.map(*.made).join('; ')} 
         \}
         
-        {self!struct-go-string-method($/)}
+        {self!struct-go-methods($/)}
         {($<identifier>.made.ends-with('Event') ?? "\n" ~ self!struct-go-sync-pool($/) !! '')}
         END
     }
 
-    # Generate String() method on the Go struct, for pretty printing.
-    method !struct-go-string-method($/) returns Str {
+    # Generate String() and other methods on the Go struct, for pretty printing.
+    method !struct-go-methods($/) returns Str {
         my Str $self-ref = $<identifier>.lc.substr(0,1);
         my Str @format = $<member>.map({ $_.<identifier>.made ~ ':%v' });
 
@@ -92,6 +92,14 @@ class NQCToGoActions {
         qq:to/END/;
         func ($self-ref {$<identifier>.made}) String() string \{
             return fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
+        \}
+
+        func ($self-ref *{$<identifier>.made}) TID() uint32 \{
+            return $self-ref.Tid
+        \}
+
+        func ($self-ref *{$<identifier>.made}) Timestamp() uint32 \{
+            return $self-ref.Time
         \}
         END
     }
