@@ -3,8 +3,6 @@
 use v6.d;
 #use Grammar::Debugger;
 
-my Str @excluded = <SYS_ENTER_WRITE SYS_EXIT_WRITE>;
-
 grammar SysTraceFormat {
     rule TOP { <wholeformatsection>* }
     rule wholeformatsection { <name> <id> <format> <print-fmt> }

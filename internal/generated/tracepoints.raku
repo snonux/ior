@@ -3,7 +3,7 @@
 use v6.d;
 
 my @tracepoints = gather for $*IN.slurp.split("\n") {
-    take $/<tracepoint>.Str if /^SEC.*sys_$<tracepoint>=(<[a..z _]>+)/;
+    take $/<tracepoint>.Str if /^SEC.*sys_$<tracepoint>=(<[a..z_0..9]>+)/;
 }
 
 say qq:to/END/;
@@ -11,6 +11,6 @@ say qq:to/END/;
 package tracepoints
 
 var List = []string\{
-    {@tracepoints.map({ "\"$_\"," }).join("\n\t") }
+    {@tracepoints.map({ "\"sys_$_\"," }).join("\n\t") }
 \}
 END

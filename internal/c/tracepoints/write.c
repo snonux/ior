@@ -1,7 +1,8 @@
 //+build ignore
 
-SEC("tracepoint/syscalls/sys_enter_write")
-int handle_enter_write(struct trace_event_raw_sys_enter *ctx) {
+// SEC("tracepoint/syscalls/sys_enter_write")
+/*
+int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -19,9 +20,11 @@ int handle_enter_write(struct trace_event_raw_sys_enter *ctx) {
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
+*/
 
-SEC("tracepoint/syscalls/sys_exit_write")
-int handle_exit_write(struct trace_event_raw_sys_exit *ctx) {
+// SEC("tracepoint/syscalls/sys_exit_write")
+/*
+int handle_sys_exit_write(struct trace_event_raw_sys_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -40,3 +43,4 @@ int handle_exit_write(struct trace_event_raw_sys_exit *ctx) {
 
     return 0;
 }
+*/

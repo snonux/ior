@@ -20,10 +20,10 @@ func attachTracepoints(bpfModule *bpf.Module) error {
 		}
 		fmt.Println("Attached prog handle_" + name)
 
-		if _, err = prog.AttachTracepoint("syscalls", fmt.Sprintf("sys_%s", name)); err != nil {
-			return fmt.Errorf("Failed to attach to sys_%s tracepoint: %v", name, err)
+		if _, err = prog.AttachTracepoint("syscalls", name); err != nil {
+			return fmt.Errorf("Failed to attach to %s tracepoint: %v", name, err)
 		}
-		fmt.Println("Attached tracepoint sys_" + name)
+		fmt.Println("Attached tracepoint " + name)
 	}
 
 	return nil

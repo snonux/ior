@@ -5,7 +5,7 @@
 #define SYS_ENTER_OPENAT 3
 #define SYS_EXIT_OPENAT 4
 
-static __always_inline int _handle_enter_open(struct trace_event_raw_sys_enter *ctx, __u32 syscall_id) {
+static __always_inline int _handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx, __u32 syscall_id) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -28,7 +28,7 @@ static __always_inline int _handle_enter_open(struct trace_event_raw_sys_enter *
     return 0;
 }
 
-static __always_inline int _handle_exit_open(struct trace_event_raw_sys_exit *ctx, __u32 syscall_id) {
+static __always_inline int _handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx, __u32 syscall_id) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -49,21 +49,21 @@ static __always_inline int _handle_exit_open(struct trace_event_raw_sys_exit *ct
 }
 
 SEC("tracepoint/syscalls/sys_enter_openat")
-int handle_enter_openat(struct trace_event_raw_sys_enter *ctx) {
-    return _handle_enter_open(ctx, SYS_ENTER_OPENAT);
+int handle_sys_enter_openat(struct trace_event_raw_sys_enter *ctx) {
+    return _handle_sys_enter_open(ctx, SYS_ENTER_OPENAT);
 }
 
 SEC("tracepoint/syscalls/sys_exit_openat")
-int handle_exit_openat(struct trace_event_raw_sys_exit *ctx) {
-    return _handle_exit_open(ctx, SYS_EXIT_OPENAT);
+int handle_sys_exit_openat(struct trace_event_raw_sys_exit *ctx) {
+    return _handle_sys_exit_open(ctx, SYS_EXIT_OPENAT);
 }
 
 SEC("tracepoint/syscalls/sys_enter_open")
-int handle_enter_open(struct trace_event_raw_sys_enter *ctx) {
-    return _handle_enter_open(ctx, SYS_ENTER_OPEN);
+int handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx) {
+    return _handle_sys_enter_open(ctx, SYS_ENTER_OPEN);
 }
 
 SEC("tracepoint/syscalls/sys_exit_open")
-int handle_exit_open(struct trace_event_raw_sys_exit *ctx) {
-    return _handle_exit_open(ctx, SYS_EXIT_OPEN);
+int handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx) {
+    return _handle_sys_exit_open(ctx, SYS_EXIT_OPEN);
 }
