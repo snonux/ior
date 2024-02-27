@@ -17,7 +17,7 @@ generate: generated
 
 .PHONY: generated
 generated:
-	#make -C ./internal/c/generated
+	make -C ./internal/c/generated
 	make -C ./internal/generated
 
 .PHONY: gobuild

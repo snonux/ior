@@ -189,24 +189,24 @@ func (f *FdEvent) Recycle() {
 	poolOfFdEvents.Put(f)
 }
 
-type RwEvent struct {
+type RetEvent struct {
 	SyscallId SyscallId
 	Pid       uint32
 	Tid       uint32
 	Time      uint32
-	Size      uint64
+	Ret       uint64
 }
 
-func (r RwEvent) String() string {
-	return fmt.Sprintf("SyscallId:%v Pid:%v Tid:%v Time:%v Size:%v", r.SyscallId, r.Pid, r.Tid, r.Time, r.Size)
+func (r RetEvent) String() string {
+	return fmt.Sprintf("SyscallId:%v Pid:%v Tid:%v Time:%v Ret:%v", r.SyscallId, r.Pid, r.Tid, r.Time, r.Ret)
 }
 
-var poolOfRwEvents = sync.Pool{
-	New: func() interface{} { return &RwEvent{} },
+var poolOfRetEvents = sync.Pool{
+	New: func() interface{} { return &RetEvent{} },
 }
 
-func NewRwEvent(raw []byte) *RwEvent {
-	r := poolOfRwEvents.Get().(*RwEvent)
+func NewRetEvent(raw []byte) *RetEvent {
+	r := poolOfRetEvents.Get().(*RetEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, r); err != nil {
 		fmt.Println(r, raw, len(raw), err)
 		panic(raw)
@@ -214,8 +214,8 @@ func NewRwEvent(raw []byte) *RwEvent {
 	return r
 }
 
-func (r *RwEvent) Recycle() {
-	poolOfRwEvents.Put(r)
+func (r *RetEvent) Recycle() {
+	poolOfRetEvents.Put(r)
 }
 
 type OpenEnterEvent struct {

@@ -18,12 +18,12 @@ struct fd_event {
     __s32 fd;
 };
 
-struct rw_event {
+struct ret_event {
     __u32 syscall_id;
     __u32 pid;
     __u32 tid;
     __u32 time;
-    __u64 size;
+    __u64 ret;
 };
 
 struct open_enter_event {

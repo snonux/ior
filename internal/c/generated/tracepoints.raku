@@ -36,11 +36,18 @@ class Format {
     has Str $.name is rw;
     has Int $.id is rw;
     has Field @.fields is rw;
+    # file descriptor passed to syscalls.
     has Bool $.has-fd is rw = False;
+    # Syscall returns with a long value (e.g. bytes read/written)
+    has Bool $.has-long-ret is rw = False;
 
     method push(Field $field) {
         push @!fields: $field;
-        $!has-fd = True if ($field.name eq 'fd' && $field.type eq 'unsigned int');
+        if ($field.name eq 'fd' && $field.type eq 'unsigned int') {
+            $!has-fd = True;
+        } elsif ($field.name eq 'ret' && $field.type eq 'long') {
+            $.has-long-ret = True;
+        }
     }
 
     method generate-constant returns Str {
@@ -49,8 +56,11 @@ class Format {
 
     method generate-probe returns Str {
         my \is-enter = $!name.split('_')[1] eq 'enter';
-        my \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter' !! 'trace_event_raw_sys_exit';
-        my \event-struct = is-enter ?? 'fd_event' !! 'null_event';
+        my \is-exit = !is-enter;
+        my \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter'
+                                  !! 'trace_event_raw_sys_exit';
+        my \event-struct = is-enter ?? 'fd_event'
+                                    !! ($!has-long-ret ?? 'ret_event' !! 'null_event');
 
         qq:to/END/;
         SEC("tracepoint/syscalls/{$!name}")
@@ -67,7 +77,8 @@ class Format {
             ev->pid = pid;
             ev->tid = tid;
             ev->time = bpf_ktime_get_ns() / 1000;
-            {is-enter ?? 'ev->fd = (int)ctx->args[0];' !! ''}
+            {is-enter ?? 'ev->fd = (int)ctx->args[0];' 
+                      !! ($!has-long-ret ?? 'ev->ret = ctx->ret;' !! '') }
 
             bpf_ringbuf_submit(ev, 0);
             return 0;
