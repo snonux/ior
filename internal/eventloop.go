@@ -38,16 +38,16 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 	openFdMap := make(map[int32]openFile)
 
 	for raw := range ch {
-		switch OpId(raw[0]) {
-		case OPENAT_ENTER_OP_ID:
+		switch SyscallId(raw[0]) {
+		case SYS_ENTER_OPENAT:
 			fallthrough
-		case OPEN_ENTER_OP_ID:
+		case SYS_ENTER_OPEN:
 			ev := NewOpenEnterEvent(raw)
 			enterOpen[ev.Tid] = ev
 
-		case OPENAT_EXIT_OP_ID:
+		case SYS_EXIT_OPENAT:
 			fallthrough
-		case OPEN_EXIT_OP_ID:
+		case SYS_EXIT_OPEN:
 			ev := NewFdEvent(raw)
 			enterEv, ok := enterOpen[ev.Tid]
 			if !ok {
@@ -66,11 +66,9 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			ev.Recycle()
 			enterEv.Recycle()
 
-		case CLOSE_ENTER_OP_ID:
+		case SYS_ENTER_CLOSE:
 			fallthrough
-		case WRITE_ENTER_OP_ID:
-			fallthrough
-		case WRITEV_ENTER_OP_ID:
+		case SYS_ENTER_WRITE:
 			ev := NewFdEvent(raw)
 			if _, ok := openFdMap[ev.Fd]; !ok {
 				// File open not traced (todo: read from procfs?)
@@ -79,7 +77,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			}
 			enterFd[ev.Tid] = ev
 
-		case CLOSE_EXIT_OP_ID:
+		case SYS_EXIT_CLOSE:
 			ev := NewNullEvent(raw)
 			enterEv, ok := enterFd[ev.Tid]
 			if !ok {
@@ -95,9 +93,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			ev.Recycle()
 			enterEv.Recycle()
 
-		case WRITE_EXIT_OP_ID:
-			fallthrough
-		case WRITEV_EXIT_OP_ID:
+		case SYS_EXIT_WRITE:
 			ev := NewRwEvent(raw)
 			enterEv, ok := enterFd[ev.Tid]
 			if !ok {

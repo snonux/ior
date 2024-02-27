@@ -3,6 +3,8 @@
 use v6.d;
 #use Grammar::Debugger;
 
+my Str @excluded = <SYS_ENTER_WRITE SYS_EXIT_WRITE>;
+
 grammar SysTraceFormat {
     rule TOP { <wholeformatsection>* }
     rule wholeformatsection { <name> <id> <format> <print-fmt> }
@@ -54,7 +56,7 @@ class Format {
 
         qq:to/END/;
         SEC("tracepoint/syscalls/{$!name}")
-        int handle_enter_write(struct {ctx-struct} *ctx) \{
+        int handle_{$!name.lc}(struct {ctx-struct} *ctx) \{
             __u32 pid, tid;
             if (filter(&pid, &tid))
                 return 0;
@@ -63,7 +65,7 @@ class Format {
             if (!ev)
                 return 0;
 
-            ev->op_id = {$!name.uc};
+            ev->syscall_id = {$!name.uc};
             ev->pid = pid;
             ev->tid = tid;
             ev->time = bpf_ktime_get_ns() / 1000;

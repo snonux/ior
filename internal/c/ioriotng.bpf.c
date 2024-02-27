@@ -14,12 +14,13 @@
  */
 #include "filter.c"
 
+// Auto-generated tracepoints.
+#include "generated/tracepoints.c"
+
 // Tracepoints with custom handling.
 #include "tracepoints/open.c"
 #include "tracepoints/close.c"
 #include "tracepoints/write.c"
 
-// More tracepoints, but auto-generated. May lack per-syscall special case handling.
-// #include "generated/tracepoints.c"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

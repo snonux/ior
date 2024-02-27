@@ -44,7 +44,7 @@ class NQCToGoActions {
 
     method constant($/) {
         push @!const-names: ~$<identifier>;
-        my $const-type = $<identifier>.ends-with('_OP_ID') ?? ' OpId' !! '';
+        my $const-type = $<identifier>.starts-with('SYS_') ?? ' SyscallId ' !! '';
 
         make qq:to/END/;
         const {$<identifier>}$const-type = {$<number>}
@@ -53,14 +53,14 @@ class NQCToGoActions {
 
     method !constant-go-string-method returns Str {
         qq:to/END/;
-        type OpId uint32
+        type SyscallId uint32
 
-        func (o OpId) String() string \{
-            switch (o) \{
-            {@!const-names.grep(/_OP_ID$/).map({
-                "case $_: return \"{$_.subst('_OP_ID', '').lc}\""
+        func (s SyscallId) String() string \{
+            switch (s) \{
+            {@!const-names.grep(/^SYS_/).map({
+                "case $_: return \"{$_.subst('SYS_', '').lc}\""
             }).join('; ')}
-            default: panic(fmt.Sprintf("Unknown OpId: %d", o))
+            default: panic(fmt.Sprintf("Unknown SyscallId: %d", s))
             \}
         \}
         END
@@ -120,7 +120,7 @@ class NQCToGoActions {
     }
 
     method member($/) {
-        my Str $type = $<identifier>.made eq 'OpId' ?? 'OpId' !! $<type>.made;
+        my Str $type = $<identifier>.made eq 'SyscallId' ?? 'SyscallId' !! $<type>.made;
         make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $type;
     }
 

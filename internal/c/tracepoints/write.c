@@ -10,7 +10,7 @@ int handle_enter_write(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
-    ev->op_id = WRITE_ENTER_OP_ID;
+    ev->syscall_id = SYS_ENTER_WRITE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -30,7 +30,7 @@ int handle_exit_write(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
-    ev->op_id = WRITE_EXIT_OP_ID;
+    ev->syscall_id = SYS_EXIT_WRITE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
