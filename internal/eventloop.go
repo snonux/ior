@@ -45,6 +45,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 			ev := NewFdEvent(raw)
 			if enterEv, ok := enterEvs[ev.Tid]; ok {
 				fmt.Println(human(enterEv, ev))
+				delete(enterEvs, ev.Tid)
 				enterEv.Recycle()
 			}
 			ev.Recycle()
@@ -68,6 +69,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 
 		if enterEv, ok := enterEvs[exitEv.TID()]; ok {
 			fmt.Println(human(enterEv, exitEv))
+			delete(enterEvs, exitEv.TID())
 			enterEv.Recycle()
 		}
 
