@@ -14,6 +14,7 @@ static __always_inline int _handle_sys_enter_open(struct trace_event_raw_sys_ent
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_OPEN_EVENT;
     ev->syscall_id = syscall_id;
     ev->pid = pid;
     ev->tid = tid;
@@ -37,6 +38,7 @@ static __always_inline int _handle_sys_exit_open(struct trace_event_raw_sys_exit
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_FD_EVENT;
     ev->syscall_id = syscall_id;
     ev->pid = pid;
     ev->tid = tid;

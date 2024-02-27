@@ -8,6 +8,7 @@ import (
 	"sync"
 )
 
+type EventType uint32
 type SyscallId uint32
 
 func (s SyscallId) String() string {
@@ -131,8 +132,48 @@ func (s SyscallId) String() string {
 
 const MAX_FILENAME_LENGTH = 256
 const MAX_PROGNAME_LENGTH = 16
+const ENTER_OPEN_EVENT = 1
+const EXIT_OPEN_EVENT = 2
+const ENTER_NULL_EVENT = 3
+const EXIT_NULL_EVENT = 4
+const ENTER_FD_EVENT = 5
+const EXIT_FD_EVENT = 6
+const ENTER_RET_EVENT = 7
+const EXIT_RET_EVENT = 8
+
+type OpenEnterEvent struct {
+	EventType EventType
+	SyscallId SyscallId
+	Pid       uint32
+	Tid       uint32
+	Time      uint32
+	Filename  [MAX_FILENAME_LENGTH]byte
+	Comm      [MAX_PROGNAME_LENGTH]byte
+}
+
+func (o OpenEnterEvent) String() string {
+	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.EventType, o.SyscallId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
+}
+
+var poolOfOpenEnterEvents = sync.Pool{
+	New: func() interface{} { return &OpenEnterEvent{} },
+}
+
+func NewOpenEnterEvent(raw []byte) *OpenEnterEvent {
+	o := poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
+		fmt.Println(o, raw, len(raw), err)
+		panic(raw)
+	}
+	return o
+}
+
+func (o *OpenEnterEvent) Recycle() {
+	poolOfOpenEnterEvents.Put(o)
+}
 
 type NullEvent struct {
+	EventType EventType
 	SyscallId SyscallId
 	Pid       uint32
 	Tid       uint32
@@ -140,7 +181,7 @@ type NullEvent struct {
 }
 
 func (n NullEvent) String() string {
-	return fmt.Sprintf("SyscallId:%v Pid:%v Tid:%v Time:%v", n.SyscallId, n.Pid, n.Tid, n.Time)
+	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v", n.EventType, n.SyscallId, n.Pid, n.Tid, n.Time)
 }
 
 var poolOfNullEvents = sync.Pool{
@@ -161,6 +202,7 @@ func (n *NullEvent) Recycle() {
 }
 
 type FdEvent struct {
+	EventType EventType
 	SyscallId SyscallId
 	Pid       uint32
 	Tid       uint32
@@ -169,7 +211,7 @@ type FdEvent struct {
 }
 
 func (f FdEvent) String() string {
-	return fmt.Sprintf("SyscallId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.SyscallId, f.Pid, f.Tid, f.Time, f.Fd)
+	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.EventType, f.SyscallId, f.Pid, f.Tid, f.Time, f.Fd)
 }
 
 var poolOfFdEvents = sync.Pool{
@@ -190,6 +232,7 @@ func (f *FdEvent) Recycle() {
 }
 
 type RetEvent struct {
+	EventType EventType
 	SyscallId SyscallId
 	Pid       uint32
 	Tid       uint32
@@ -198,7 +241,7 @@ type RetEvent struct {
 }
 
 func (r RetEvent) String() string {
-	return fmt.Sprintf("SyscallId:%v Pid:%v Tid:%v Time:%v Ret:%v", r.SyscallId, r.Pid, r.Tid, r.Time, r.Ret)
+	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Ret:%v", r.EventType, r.SyscallId, r.Pid, r.Tid, r.Time, r.Ret)
 }
 
 var poolOfRetEvents = sync.Pool{
@@ -216,36 +259,6 @@ func NewRetEvent(raw []byte) *RetEvent {
 
 func (r *RetEvent) Recycle() {
 	poolOfRetEvents.Put(r)
-}
-
-type OpenEnterEvent struct {
-	SyscallId SyscallId
-	Pid       uint32
-	Tid       uint32
-	Time      uint32
-	Filename  [MAX_FILENAME_LENGTH]byte
-	Comm      [MAX_PROGNAME_LENGTH]byte
-}
-
-func (o OpenEnterEvent) String() string {
-	return fmt.Sprintf("SyscallId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.SyscallId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
-}
-
-var poolOfOpenEnterEvents = sync.Pool{
-	New: func() interface{} { return &OpenEnterEvent{} },
-}
-
-func NewOpenEnterEvent(raw []byte) *OpenEnterEvent {
-	o := poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
-	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
-		fmt.Println(o, raw, len(raw), err)
-		panic(raw)
-	}
-	return o
-}
-
-func (o *OpenEnterEvent) Recycle() {
-	poolOfOpenEnterEvents.Put(o)
 }
 
 const SYS_EXIT_CACHESTAT SyscallId = 520

@@ -53,6 +53,7 @@ class NQCToGoActions {
 
     method !constant-go-string-method returns Str {
         qq:to/END/;
+        type EventType uint32
         type SyscallId uint32
 
         func (s SyscallId) String() string \{
@@ -121,6 +122,7 @@ class NQCToGoActions {
 
     method member($/) {
         my Str $type = $<identifier>.made eq 'SyscallId' ?? 'SyscallId' !! $<type>.made;
+        $type = 'EventType' if $<identifier>.made eq 'EventType';
         make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $type;
     }
 

@@ -61,7 +61,6 @@ class Format {
                                   !! 'trace_event_raw_sys_exit';
         my \event-struct = is-enter ?? 'fd_event'
                                     !! ($!has-long-ret ?? 'ret_event' !! 'null_event');
-
         qq:to/END/;
         SEC("tracepoint/syscalls/{$!name}")
         int handle_{$!name.lc}(struct {ctx-struct} *ctx) \{
@@ -73,6 +72,7 @@ class Format {
             if (!ev)
                 return 0;
 
+            ev->event_type = {(is-enter ?? 'ENTER_' !! 'EXIT_') ~ event-struct.uc};
             ev->syscall_id = {$!name.uc};
             ev->pid = pid;
             ev->tid = tid;

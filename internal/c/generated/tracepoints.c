@@ -63,6 +63,7 @@ int handle_sys_exit_cachestat(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_CACHESTAT;
     ev->pid = pid;
     ev->tid = tid;
@@ -83,6 +84,7 @@ int handle_sys_enter_cachestat(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_CACHESTAT;
     ev->pid = pid;
     ev->tid = tid;
@@ -103,6 +105,7 @@ int handle_sys_exit_close_range(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_CLOSE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
@@ -123,6 +126,7 @@ int handle_sys_enter_close_range(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_CLOSE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
@@ -143,6 +147,7 @@ int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_CLOSE;
     ev->pid = pid;
     ev->tid = tid;
@@ -163,6 +168,7 @@ int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_CLOSE;
     ev->pid = pid;
     ev->tid = tid;
@@ -183,6 +189,7 @@ int handle_sys_exit_fchown(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FCHOWN;
     ev->pid = pid;
     ev->tid = tid;
@@ -203,6 +210,7 @@ int handle_sys_enter_fchown(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FCHOWN;
     ev->pid = pid;
     ev->tid = tid;
@@ -223,6 +231,7 @@ int handle_sys_exit_fchmod(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FCHMOD;
     ev->pid = pid;
     ev->tid = tid;
@@ -243,6 +252,7 @@ int handle_sys_enter_fchmod(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FCHMOD;
     ev->pid = pid;
     ev->tid = tid;
@@ -263,6 +273,7 @@ int handle_sys_exit_fchdir(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FCHDIR;
     ev->pid = pid;
     ev->tid = tid;
@@ -283,6 +294,7 @@ int handle_sys_enter_fchdir(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FCHDIR;
     ev->pid = pid;
     ev->tid = tid;
@@ -303,6 +315,7 @@ int handle_sys_exit_ftruncate(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FTRUNCATE;
     ev->pid = pid;
     ev->tid = tid;
@@ -323,6 +336,7 @@ int handle_sys_enter_ftruncate(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FTRUNCATE;
     ev->pid = pid;
     ev->tid = tid;
@@ -343,6 +357,7 @@ int handle_sys_exit_copy_file_range(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_COPY_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
@@ -363,6 +378,7 @@ int handle_sys_enter_copy_file_range(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_COPY_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
@@ -383,6 +399,7 @@ int handle_sys_exit_pwrite64(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_PWRITE64;
     ev->pid = pid;
     ev->tid = tid;
@@ -403,6 +420,7 @@ int handle_sys_enter_pwrite64(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_PWRITE64;
     ev->pid = pid;
     ev->tid = tid;
@@ -423,6 +441,7 @@ int handle_sys_exit_pread64(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_PREAD64;
     ev->pid = pid;
     ev->tid = tid;
@@ -443,6 +462,7 @@ int handle_sys_enter_pread64(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_PREAD64;
     ev->pid = pid;
     ev->tid = tid;
@@ -463,6 +483,7 @@ int handle_sys_exit_write(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_WRITE;
     ev->pid = pid;
     ev->tid = tid;
@@ -483,6 +504,7 @@ int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_WRITE;
     ev->pid = pid;
     ev->tid = tid;
@@ -503,6 +525,7 @@ int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_READ;
     ev->pid = pid;
     ev->tid = tid;
@@ -523,6 +546,7 @@ int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_READ;
     ev->pid = pid;
     ev->tid = tid;
@@ -543,6 +567,7 @@ int handle_sys_exit_lseek(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_LSEEK;
     ev->pid = pid;
     ev->tid = tid;
@@ -563,6 +588,7 @@ int handle_sys_enter_lseek(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_LSEEK;
     ev->pid = pid;
     ev->tid = tid;
@@ -583,6 +609,7 @@ int handle_sys_exit_newfstat(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_NEWFSTAT;
     ev->pid = pid;
     ev->tid = tid;
@@ -603,6 +630,7 @@ int handle_sys_enter_newfstat(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_NEWFSTAT;
     ev->pid = pid;
     ev->tid = tid;
@@ -623,6 +651,7 @@ int handle_sys_exit_fcntl(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FCNTL;
     ev->pid = pid;
     ev->tid = tid;
@@ -643,6 +672,7 @@ int handle_sys_enter_fcntl(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FCNTL;
     ev->pid = pid;
     ev->tid = tid;
@@ -663,6 +693,7 @@ int handle_sys_exit_ioctl(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_IOCTL;
     ev->pid = pid;
     ev->tid = tid;
@@ -683,6 +714,7 @@ int handle_sys_enter_ioctl(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_IOCTL;
     ev->pid = pid;
     ev->tid = tid;
@@ -703,6 +735,7 @@ int handle_sys_exit_getdents64(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_GETDENTS64;
     ev->pid = pid;
     ev->tid = tid;
@@ -723,6 +756,7 @@ int handle_sys_enter_getdents64(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_GETDENTS64;
     ev->pid = pid;
     ev->tid = tid;
@@ -743,6 +777,7 @@ int handle_sys_exit_getdents(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_GETDENTS;
     ev->pid = pid;
     ev->tid = tid;
@@ -763,6 +798,7 @@ int handle_sys_enter_getdents(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_GETDENTS;
     ev->pid = pid;
     ev->tid = tid;
@@ -783,6 +819,7 @@ int handle_sys_exit_sync_file_range(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_SYNC_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
@@ -803,6 +840,7 @@ int handle_sys_enter_sync_file_range(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_SYNC_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
@@ -823,6 +861,7 @@ int handle_sys_exit_fdatasync(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FDATASYNC;
     ev->pid = pid;
     ev->tid = tid;
@@ -843,6 +882,7 @@ int handle_sys_enter_fdatasync(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FDATASYNC;
     ev->pid = pid;
     ev->tid = tid;
@@ -863,6 +903,7 @@ int handle_sys_exit_fsync(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FSYNC;
     ev->pid = pid;
     ev->tid = tid;
@@ -883,6 +924,7 @@ int handle_sys_enter_fsync(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FSYNC;
     ev->pid = pid;
     ev->tid = tid;
@@ -903,6 +945,7 @@ int handle_sys_exit_fstatfs(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FSTATFS;
     ev->pid = pid;
     ev->tid = tid;
@@ -923,6 +966,7 @@ int handle_sys_enter_fstatfs(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FSTATFS;
     ev->pid = pid;
     ev->tid = tid;
@@ -943,6 +987,7 @@ int handle_sys_exit_flock(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_FLOCK;
     ev->pid = pid;
     ev->tid = tid;
@@ -963,6 +1008,7 @@ int handle_sys_enter_flock(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_FLOCK;
     ev->pid = pid;
     ev->tid = tid;
@@ -983,6 +1029,7 @@ int handle_sys_exit_quotactl_fd(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_QUOTACTL_FD;
     ev->pid = pid;
     ev->tid = tid;
@@ -1003,6 +1050,7 @@ int handle_sys_enter_quotactl_fd(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_QUOTACTL_FD;
     ev->pid = pid;
     ev->tid = tid;
@@ -1023,6 +1071,7 @@ int handle_sys_exit_io_uring_register(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
@@ -1043,6 +1092,7 @@ int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
@@ -1063,6 +1113,7 @@ int handle_sys_exit_io_uring_enter(struct trace_event_raw_sys_exit *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = EXIT_RET_EVENT;
     ev->syscall_id = SYS_EXIT_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
@@ -1083,6 +1134,7 @@ int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
     if (!ev)
         return 0;
 
+    ev->event_type = ENTER_FD_EVENT;
     ev->syscall_id = SYS_ENTER_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
