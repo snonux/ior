@@ -5,7 +5,6 @@ import "C"
 import (
 	"fmt"
 
-	"ioriotng/internal/debugfs"
 	"ioriotng/internal/flags"
 	"ioriotng/internal/generated/tracepoints"
 
@@ -21,7 +20,9 @@ func attachTracepoints(bpfModule *bpf.Module) error {
 		fmt.Println("Attached prog handle_" + name)
 
 		if _, err = prog.AttachTracepoint("syscalls", name); err != nil {
-			return fmt.Errorf("Failed to attach to %s tracepoint: %v", name, err)
+			// OK, older Kernel versions may not have this tracepoint!
+			fmt.Println(fmt.Errorf("Failed to attach to %s tracepoint: %v", name, err))
+			continue
 		}
 		fmt.Println("Attached tracepoint " + name)
 	}
@@ -30,9 +31,6 @@ func attachTracepoints(bpfModule *bpf.Module) error {
 }
 
 func Run(flags flags.Flags) {
-	// Print out tracepoints with fd to consider for implementation!
-	fmt.Println(debugfs.TracepointsWithFd())
-
 	bpfModule, err := bpf.NewModuleFromFile("ioriotng.bpf.o")
 	if err != nil {
 		panic(err)
