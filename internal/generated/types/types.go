@@ -130,6 +130,125 @@ func (s SyscallId) String() string {
 	}
 }
 
+func (s SyscallId) Name() string {
+	switch s {
+	case SYS_EXIT_CACHESTAT:
+		return "cachestat"
+	case SYS_ENTER_CACHESTAT:
+		return "cachestat"
+	case SYS_EXIT_CLOSE_RANGE:
+		return "close_range"
+	case SYS_ENTER_CLOSE_RANGE:
+		return "close_range"
+	case SYS_EXIT_CLOSE:
+		return "close"
+	case SYS_ENTER_CLOSE:
+		return "close"
+	case SYS_EXIT_FCHOWN:
+		return "fchown"
+	case SYS_ENTER_FCHOWN:
+		return "fchown"
+	case SYS_EXIT_FCHMOD:
+		return "fchmod"
+	case SYS_ENTER_FCHMOD:
+		return "fchmod"
+	case SYS_EXIT_FCHDIR:
+		return "fchdir"
+	case SYS_ENTER_FCHDIR:
+		return "fchdir"
+	case SYS_EXIT_FTRUNCATE:
+		return "ftruncate"
+	case SYS_ENTER_FTRUNCATE:
+		return "ftruncate"
+	case SYS_EXIT_COPY_FILE_RANGE:
+		return "copy_file_range"
+	case SYS_ENTER_COPY_FILE_RANGE:
+		return "copy_file_range"
+	case SYS_EXIT_PWRITE64:
+		return "pwrite64"
+	case SYS_ENTER_PWRITE64:
+		return "pwrite64"
+	case SYS_EXIT_PREAD64:
+		return "pread64"
+	case SYS_ENTER_PREAD64:
+		return "pread64"
+	case SYS_EXIT_WRITE:
+		return "write"
+	case SYS_ENTER_WRITE:
+		return "write"
+	case SYS_EXIT_READ:
+		return "read"
+	case SYS_ENTER_READ:
+		return "read"
+	case SYS_EXIT_LSEEK:
+		return "lseek"
+	case SYS_ENTER_LSEEK:
+		return "lseek"
+	case SYS_EXIT_NEWFSTAT:
+		return "newfstat"
+	case SYS_ENTER_NEWFSTAT:
+		return "newfstat"
+	case SYS_EXIT_FCNTL:
+		return "fcntl"
+	case SYS_ENTER_FCNTL:
+		return "fcntl"
+	case SYS_EXIT_IOCTL:
+		return "ioctl"
+	case SYS_ENTER_IOCTL:
+		return "ioctl"
+	case SYS_EXIT_GETDENTS64:
+		return "getdents64"
+	case SYS_ENTER_GETDENTS64:
+		return "getdents64"
+	case SYS_EXIT_GETDENTS:
+		return "getdents"
+	case SYS_ENTER_GETDENTS:
+		return "getdents"
+	case SYS_EXIT_SYNC_FILE_RANGE:
+		return "sync_file_range"
+	case SYS_ENTER_SYNC_FILE_RANGE:
+		return "sync_file_range"
+	case SYS_EXIT_FDATASYNC:
+		return "fdatasync"
+	case SYS_ENTER_FDATASYNC:
+		return "fdatasync"
+	case SYS_EXIT_FSYNC:
+		return "fsync"
+	case SYS_ENTER_FSYNC:
+		return "fsync"
+	case SYS_EXIT_FSTATFS:
+		return "fstatfs"
+	case SYS_ENTER_FSTATFS:
+		return "fstatfs"
+	case SYS_EXIT_FLOCK:
+		return "flock"
+	case SYS_ENTER_FLOCK:
+		return "flock"
+	case SYS_EXIT_QUOTACTL_FD:
+		return "quotactl_fd"
+	case SYS_ENTER_QUOTACTL_FD:
+		return "quotactl_fd"
+	case SYS_EXIT_IO_URING_REGISTER:
+		return "io_uring_register"
+	case SYS_ENTER_IO_URING_REGISTER:
+		return "io_uring_register"
+	case SYS_EXIT_IO_URING_ENTER:
+		return "io_uring_enter"
+	case SYS_ENTER_IO_URING_ENTER:
+		return "io_uring_enter"
+	case SYS_ENTER_OPEN:
+		return "open"
+	case SYS_EXIT_OPEN:
+		return "open"
+	case SYS_ENTER_OPENAT:
+		return "openat"
+	case SYS_EXIT_OPENAT:
+		return "openat"
+	default:
+		panic(fmt.Sprintf("Unknown SyscallId: %d", s))
+	}
+}
+
 const MAX_FILENAME_LENGTH = 256
 const MAX_PROGNAME_LENGTH = 16
 const ENTER_OPEN_EVENT = 1
@@ -155,11 +274,23 @@ func (o OpenEnterEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.EventType, o.SyscallId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
 }
 
-func (o *OpenEnterEvent) TID() uint32 {
+func (o *OpenEnterEvent) GetEventType() EventType {
+	return o.EventType
+}
+
+func (o *OpenEnterEvent) GetSyscallId() SyscallId {
+	return o.SyscallId
+}
+
+func (o *OpenEnterEvent) GetPid() uint32 {
+	return o.Pid
+}
+
+func (o *OpenEnterEvent) GetTid() uint32 {
 	return o.Tid
 }
 
-func (o *OpenEnterEvent) Timestamp() uint32 {
+func (o *OpenEnterEvent) GetTime() uint32 {
 	return o.Time
 }
 
@@ -192,11 +323,23 @@ func (n NullEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v", n.EventType, n.SyscallId, n.Pid, n.Tid, n.Time)
 }
 
-func (n *NullEvent) TID() uint32 {
+func (n *NullEvent) GetEventType() EventType {
+	return n.EventType
+}
+
+func (n *NullEvent) GetSyscallId() SyscallId {
+	return n.SyscallId
+}
+
+func (n *NullEvent) GetPid() uint32 {
+	return n.Pid
+}
+
+func (n *NullEvent) GetTid() uint32 {
 	return n.Tid
 }
 
-func (n *NullEvent) Timestamp() uint32 {
+func (n *NullEvent) GetTime() uint32 {
 	return n.Time
 }
 
@@ -230,11 +373,23 @@ func (f FdEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.EventType, f.SyscallId, f.Pid, f.Tid, f.Time, f.Fd)
 }
 
-func (f *FdEvent) TID() uint32 {
+func (f *FdEvent) GetEventType() EventType {
+	return f.EventType
+}
+
+func (f *FdEvent) GetSyscallId() SyscallId {
+	return f.SyscallId
+}
+
+func (f *FdEvent) GetPid() uint32 {
+	return f.Pid
+}
+
+func (f *FdEvent) GetTid() uint32 {
 	return f.Tid
 }
 
-func (f *FdEvent) Timestamp() uint32 {
+func (f *FdEvent) GetTime() uint32 {
 	return f.Time
 }
 
@@ -268,11 +423,23 @@ func (r RetEvent) String() string {
 	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Ret:%v Time:%v", r.EventType, r.SyscallId, r.Pid, r.Tid, r.Ret, r.Time)
 }
 
-func (r *RetEvent) TID() uint32 {
+func (r *RetEvent) GetEventType() EventType {
+	return r.EventType
+}
+
+func (r *RetEvent) GetSyscallId() SyscallId {
+	return r.SyscallId
+}
+
+func (r *RetEvent) GetPid() uint32 {
+	return r.Pid
+}
+
+func (r *RetEvent) GetTid() uint32 {
 	return r.Tid
 }
 
-func (r *RetEvent) Timestamp() uint32 {
+func (r *RetEvent) GetTime() uint32 {
 	return r.Time
 }
 

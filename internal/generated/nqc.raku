@@ -64,6 +64,15 @@ class NQCToGoActions {
             default: panic(fmt.Sprintf("Unknown SyscallId: %d", s))
             \}
         \}
+
+        func (s SyscallId) Name() string \{
+            switch (s) \{
+            {@!const-names.grep(/^SYS_/).map({
+                "case $_: return \"{$_.subst(/'SYS_ENTER_'|'SYS_EXIT_'/, '').lc}\""
+            }).join('; ')}
+            default: panic(fmt.Sprintf("Unknown SyscallId: %d", s))
+            \}
+        \}
         END
     }
 
@@ -94,11 +103,23 @@ class NQCToGoActions {
             return fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
         \}
 
-        func ($self-ref *{$<identifier>.made}) TID() uint32 \{
+        func ($self-ref *{$<identifier>.made}) GetEventType() EventType \{
+            return $self-ref.EventType
+        \}
+
+        func ($self-ref *{$<identifier>.made}) GetSyscallId() SyscallId \{
+            return $self-ref.SyscallId
+        \}
+
+        func ($self-ref *{$<identifier>.made}) GetPid() uint32 \{
+            return $self-ref.Pid
+        \}
+
+        func ($self-ref *{$<identifier>.made}) GetTid() uint32 \{
             return $self-ref.Tid
         \}
 
-        func ($self-ref *{$<identifier>.made}) Timestamp() uint32 \{
+        func ($self-ref *{$<identifier>.made}) GetTime() uint32 \{
             return $self-ref.Time
         \}
         END
