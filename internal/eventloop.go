@@ -62,7 +62,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 		case EXIT_RET_EVENT:
 			exit(NewRetEvent(raw))
 		default:
-			panic(fmt.Sprintf("Unknown event type %s", EventType(raw[0])))
+			panic(fmt.Sprintf("Unhandled event type %s", EventType(raw[0])))
 		}
 	}
 
