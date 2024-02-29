@@ -22,6 +22,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 	evCh := make(chan enterExitEvent)
 	enterEvs := make(map[uint32]enterExitEvent)
 	files := make(map[int32]file)
+	comms := make(map[uint32]string)
 
 	enter := func(enterEv event) {
 		enterEvs[enterEv.GetTid()] = enterExitEvent{
@@ -40,14 +41,18 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 
 		if ev.is(SYS_ENTER_OPENAT, SYS_EXIT_OPENAT) || ev.is(SYS_ENTER_OPEN, SYS_EXIT_OPEN) {
 			openEnterEv := ev.enterEv.(*OpenEnterEvent)
-			fd := ev.exitEv.(*FdEvent).Fd
-			// TODO: Comm can change based on thread. So refactor this to a comms map.
-			file := file{string(openEnterEv.Comm[:]), fd, string(openEnterEv.Filename[:])}
 
+			fd := ev.exitEv.(*FdEvent).Fd
+			file := file{fd, string(openEnterEv.Filename[:])}
 			if fd >= 0 {
 				files[fd] = file
 			}
 			ev.file = file
+
+			comm := string(openEnterEv.Comm[:])
+			comms[openEnterEv.Tid] = comm
+			ev.comm = comm
+
 			evCh <- ev
 			return
 		}
@@ -56,12 +61,14 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			if file_, ok := files[fdEvent.Fd]; ok {
 				ev.file = file_
 			} else {
-				ev.file = file{"?", fdEvent.Fd, "?"}
+				ev.file = file{fdEvent.Fd, "?"}
 			}
 			if ev.is(SYS_ENTER_CLOSE, SYS_EXIT_CLOSE) {
 				delete(files, fdEvent.Fd)
 			}
 		}
+
+		ev.comm, _ = comms[ev.enterEv.GetTid()]
 		evCh <- ev
 	}
 

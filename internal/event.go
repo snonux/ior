@@ -19,6 +19,7 @@ type event interface {
 type enterExitEvent struct {
 	enterEv, exitEv event
 	file            file
+	comm            string
 }
 
 func (e enterExitEvent) is(enterId, exitId SyscallId) bool {
@@ -30,6 +31,9 @@ func (e enterExitEvent) String() string {
 
 	duration := e.exitEv.GetTime() - e.enterEv.GetTime()
 	sb.WriteString(fmt.Sprintf("%08d µs", duration))
+
+	sb.WriteString(" ")
+	sb.WriteString(e.comm)
 
 	sb.WriteString(" ")
 	sb.WriteString(strconv.FormatInt(int64(e.enterEv.GetPid()), 10))
