@@ -10,13 +10,12 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-type openFile struct {
-	fd   int32
-	path string
-}
-
-func (o openFile) String() string {
-	return fmt.Sprintf("(%d) %s", o.fd, o.path)
+func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
+	for ev := range events(rawCh) {
+		fmt.Println(ev)
+		ev.recycle()
+	}
+	fmt.Println("Good bye")
 }
 
 func events(rawCh <-chan []byte) <-chan enterExitEvent {
@@ -63,13 +62,4 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 	}()
 
 	return evCh
-}
-
-func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
-	for ev := range events(rawCh) {
-		fmt.Println(ev.dump())
-		ev.recycle()
-	}
-
-	fmt.Println("Good bye")
 }
