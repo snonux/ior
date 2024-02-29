@@ -19,9 +19,9 @@ func (o openFile) String() string {
 	return fmt.Sprintf("(%d) %s", o.fd, o.path)
 }
 
-func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
-	enterEvs := make(map[uint32]enterExitEvent)
+func events(rawCh <-chan []byte) <-chan enterExitEvent {
 	evCh := make(chan enterExitEvent)
+	enterEvs := make(map[uint32]enterExitEvent)
 
 	enter := func(enterEv event) {
 		enterEvs[enterEv.GetTid()] = enterExitEvent{
@@ -41,29 +41,34 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 	}
 
 	go func() {
-		for ev := range evCh {
-			fmt.Println(ev.dump())
-			ev.recycle()
+		defer close(evCh)
+		for raw := range rawCh {
+			switch EventType(raw[0]) {
+			case ENTER_OPEN_EVENT:
+				enter(NewOpenEnterEvent(raw))
+			case EXIT_OPEN_EVENT:
+				exit(NewFdEvent(raw))
+			case ENTER_FD_EVENT:
+				enter(NewFdEvent(raw))
+			case EXIT_FD_EVENT:
+				exit(NewFdEvent(raw))
+			case EXIT_NULL_EVENT:
+				exit(NewNullEvent(raw))
+			case EXIT_RET_EVENT:
+				exit(NewRetEvent(raw))
+			default:
+				panic(fmt.Sprintf("Unhandled event type %s", EventType(raw[0])))
+			}
 		}
 	}()
 
-	for raw := range ch {
-		switch EventType(raw[0]) {
-		case ENTER_OPEN_EVENT:
-			enter(NewOpenEnterEvent(raw))
-		case EXIT_OPEN_EVENT:
-			exit(NewFdEvent(raw))
-		case ENTER_FD_EVENT:
-			enter(NewFdEvent(raw))
-		case EXIT_FD_EVENT:
-			exit(NewFdEvent(raw))
-		case EXIT_NULL_EVENT:
-			exit(NewNullEvent(raw))
-		case EXIT_RET_EVENT:
-			exit(NewRetEvent(raw))
-		default:
-			panic(fmt.Sprintf("Unhandled event type %s", EventType(raw[0])))
-		}
+	return evCh
+}
+
+func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
+	for ev := range events(rawCh) {
+		fmt.Println(ev.dump())
+		ev.recycle()
 	}
 
 	fmt.Println("Good bye")
