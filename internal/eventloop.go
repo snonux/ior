@@ -26,6 +26,14 @@ type Event interface {
 	Recycle()
 }
 
+type Syscall struct {
+	enterEv, exitEv Event
+}
+
+func (s Syscall) String() string {
+	return ""
+}
+
 func human(enterEv, exitEv Event) string {
 	return fmt.Sprintf("%08d µs %s %s",
 		exitEv.Timestamp()-enterEv.Timestamp(), enterEv, exitEv)

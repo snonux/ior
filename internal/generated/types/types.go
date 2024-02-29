@@ -260,12 +260,12 @@ type RetEvent struct {
 	SyscallId SyscallId
 	Pid       uint32
 	Tid       uint32
-	Time      uint32
 	Ret       int64
+	Time      uint32
 }
 
 func (r RetEvent) String() string {
-	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Ret:%v", r.EventType, r.SyscallId, r.Pid, r.Tid, r.Time, r.Ret)
+	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Ret:%v Time:%v", r.EventType, r.SyscallId, r.Pid, r.Tid, r.Ret, r.Time)
 }
 
 func (r *RetEvent) TID() uint32 {

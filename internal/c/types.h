@@ -44,6 +44,6 @@ struct ret_event {
     __u32 syscall_id;
     __u32 pid;
     __u32 tid;
-    __u32 time;
     __s64 ret;
+    __u32 time;
 };
