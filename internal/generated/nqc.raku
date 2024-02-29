@@ -122,10 +122,6 @@ class NQCToGoActions {
         func ($self-ref *{$<identifier>.made}) GetTime() uint32 \{
             return $self-ref.Time
         \}
-
-        func ($self-ref *{$<identifier>.made}) GetRet() (int64, bool) \{
-            return {$<identifier>.made eq 'RetEvent' ?? "$self-ref.Ret, true" !! '0, false' }
-        \}
         END
     }
 

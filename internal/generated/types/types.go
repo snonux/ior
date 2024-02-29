@@ -294,10 +294,6 @@ func (o *OpenEnterEvent) GetTime() uint32 {
 	return o.Time
 }
 
-func (o *OpenEnterEvent) GetRet() (int64, bool) {
-	return 0, false
-}
-
 var poolOfOpenEnterEvents = sync.Pool{
 	New: func() interface{} { return &OpenEnterEvent{} },
 }
@@ -345,10 +341,6 @@ func (n *NullEvent) GetTid() uint32 {
 
 func (n *NullEvent) GetTime() uint32 {
 	return n.Time
-}
-
-func (n *NullEvent) GetRet() (int64, bool) {
-	return 0, false
 }
 
 var poolOfNullEvents = sync.Pool{
@@ -401,10 +393,6 @@ func (f *FdEvent) GetTime() uint32 {
 	return f.Time
 }
 
-func (f *FdEvent) GetRet() (int64, bool) {
-	return 0, false
-}
-
 var poolOfFdEvents = sync.Pool{
 	New: func() interface{} { return &FdEvent{} },
 }
@@ -453,10 +441,6 @@ func (r *RetEvent) GetTid() uint32 {
 
 func (r *RetEvent) GetTime() uint32 {
 	return r.Time
-}
-
-func (r *RetEvent) GetRet() (int64, bool) {
-	return r.Ret, true
 }
 
 var poolOfRetEvents = sync.Pool{

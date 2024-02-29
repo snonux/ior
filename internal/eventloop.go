@@ -21,6 +21,7 @@ func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
 func events(rawCh <-chan []byte) <-chan enterExitEvent {
 	evCh := make(chan enterExitEvent)
 	enterEvs := make(map[uint32]enterExitEvent)
+	files := make(map[int32]file)
 
 	enter := func(enterEv event) {
 		enterEvs[enterEv.GetTid()] = enterExitEvent{
@@ -36,6 +37,31 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		}
 		delete(enterEvs, exitEv.GetTid())
 		ev.exitEv = exitEv
+
+		if ev.is(SYS_ENTER_OPENAT, SYS_EXIT_OPENAT) || ev.is(SYS_ENTER_OPEN, SYS_EXIT_OPEN) {
+			openEnterEv := ev.enterEv.(*OpenEnterEvent)
+			fd := ev.exitEv.(*FdEvent).Fd
+			file := file{fd, string(openEnterEv.Filename[:])}
+
+			if fd >= 0 {
+				files[fd] = file
+			}
+			ev.comm = string(openEnterEv.Comm[:])
+			ev.file = file
+			return
+		}
+
+		if fdEvent, ok := ev.enterEv.(*FdEvent); ok {
+			if file_, ok := files[fdEvent.Fd]; ok {
+				ev.file = file_
+			} else {
+				ev.file = file{fdEvent.Fd, "?"}
+			}
+			if ev.is(SYS_ENTER_CLOSE, SYS_EXIT_CLOSE) {
+				delete(files, fdEvent.Fd)
+			}
+		}
+
 		evCh <- ev
 	}
 
