@@ -43,6 +43,7 @@ func eventLoop(bpfModule *bpf.Module, ch <-chan []byte) {
 	go func() {
 		for ev := range evCh {
 			fmt.Println(ev.dump())
+			ev.recycle()
 		}
 	}()
 
