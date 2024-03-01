@@ -39,7 +39,15 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		delete(enterEvs, exitEv.GetTid())
 		ev.exitEv = exitEv
 
-		if ev.is(SYS_ENTER_OPENAT, SYS_EXIT_OPENAT) || ev.is(SYS_ENTER_OPEN, SYS_EXIT_OPEN) {
+		// Expect ID one lower, otherwise, doesn't match.
+		if ev.enterEv.GetSyscallId()-1 != ev.exitEv.GetSyscallId() {
+			fmt.Println(fmt.Sprintf("Loss of event (not matching) %v", ev))
+			ev.enterEv.Recycle()
+			exitEv.Recycle()
+			return
+		}
+
+		if ev.is(SYS_ENTER_OPENAT) || ev.is(SYS_ENTER_OPEN) {
 			openEnterEv := ev.enterEv.(*OpenEnterEvent)
 
 			fd := ev.exitEv.(*FdEvent).Fd
@@ -63,7 +71,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			} else {
 				ev.file = file{fdEvent.Fd, "?"}
 			}
-			if ev.is(SYS_ENTER_CLOSE, SYS_EXIT_CLOSE) {
+			if ev.is(SYS_ENTER_CLOSE) {
 				delete(files, fdEvent.Fd)
 			}
 		}

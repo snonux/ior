@@ -117,14 +117,14 @@ func (s SyscallId) String() string {
 		return "exit_io_uring_enter"
 	case SYS_ENTER_IO_URING_ENTER:
 		return "enter_io_uring_enter"
-	case SYS_ENTER_OPEN:
-		return "enter_open"
 	case SYS_EXIT_OPEN:
 		return "exit_open"
-	case SYS_ENTER_OPENAT:
-		return "enter_openat"
+	case SYS_ENTER_OPEN:
+		return "enter_open"
 	case SYS_EXIT_OPENAT:
 		return "exit_openat"
+	case SYS_ENTER_OPENAT:
+		return "enter_openat"
 	default:
 		panic(fmt.Sprintf("Unknown SyscallId: %d", s))
 	}
@@ -236,13 +236,13 @@ func (s SyscallId) Name() string {
 		return "io_uring_enter"
 	case SYS_ENTER_IO_URING_ENTER:
 		return "io_uring_enter"
-	case SYS_ENTER_OPEN:
-		return "open"
 	case SYS_EXIT_OPEN:
 		return "open"
-	case SYS_ENTER_OPENAT:
-		return "openat"
+	case SYS_ENTER_OPEN:
+		return "open"
 	case SYS_EXIT_OPENAT:
+		return "openat"
+	case SYS_ENTER_OPENAT:
 		return "openat"
 	default:
 		panic(fmt.Sprintf("Unknown SyscallId: %d", s))
@@ -512,7 +512,7 @@ const SYS_EXIT_IO_URING_REGISTER SyscallId = 1366
 const SYS_ENTER_IO_URING_REGISTER SyscallId = 1367
 const SYS_EXIT_IO_URING_ENTER SyscallId = 1370
 const SYS_ENTER_IO_URING_ENTER SyscallId = 1371
-const SYS_ENTER_OPEN SyscallId = 1
-const SYS_EXIT_OPEN SyscallId = 2
-const SYS_ENTER_OPENAT SyscallId = 3
-const SYS_EXIT_OPENAT SyscallId = 4
+const SYS_EXIT_OPEN SyscallId = 1
+const SYS_ENTER_OPEN SyscallId = 2
+const SYS_EXIT_OPENAT SyscallId = 3
+const SYS_ENTER_OPENAT SyscallId = 4

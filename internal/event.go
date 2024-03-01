@@ -22,8 +22,8 @@ type enterExitEvent struct {
 	comm            string
 }
 
-func (e enterExitEvent) is(enterId, exitId SyscallId) bool {
-	return enterId == e.enterEv.GetSyscallId() && exitId == e.exitEv.GetSyscallId()
+func (e enterExitEvent) is(id SyscallId) bool {
+	return e.enterEv.GetSyscallId() == id
 }
 
 func (e enterExitEvent) String() string {

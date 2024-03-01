@@ -1,9 +1,9 @@
 //+build ignore
 
-#define SYS_ENTER_OPEN 1
-#define SYS_EXIT_OPEN 2
-#define SYS_ENTER_OPENAT 3
-#define SYS_EXIT_OPENAT 4
+#define SYS_EXIT_OPEN 1
+#define SYS_ENTER_OPEN 2
+#define SYS_EXIT_OPENAT 3
+#define SYS_ENTER_OPENAT 4
 
 static __always_inline int _handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx, __u32 syscall_id) {
     __u32 pid, tid;

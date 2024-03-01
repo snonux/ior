@@ -30,7 +30,7 @@ class NQCToGoActions {
     method TOP($/) {
         make "// This file was generated - don't change manually!\n"
         ~ "package types\n\n"
-        ~ self!constant-go-string-method ~ "\n"
+        ~ self!constant-go-methods ~ "\n"
         ~ $<construct>.map(*.made).join('');
     }
 
@@ -51,7 +51,7 @@ class NQCToGoActions {
         END
     }
 
-    method !constant-go-string-method returns Str {
+    method !constant-go-methods returns Str {
         qq:to/END/;
         type EventType uint32
         type SyscallId uint32
