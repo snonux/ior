@@ -19,9 +19,13 @@ func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
 }
 
 func events(rawCh <-chan []byte) <-chan enterExitEvent {
+	// Channel of events (enter+exit tracepoint results of a syscall).
 	evCh := make(chan enterExitEvent)
+	// Temporally store tracepoints of syscall entering tracepoits (e.g. SYS_ENTER_OPEN).
 	enterEvs := make(map[uint32]enterExitEvent)
+	// Track all open file by file descriptor.
 	files := make(map[int32]file)
+	// Program or thread name of the current Tid.
 	comms := make(map[uint32]string)
 
 	enter := func(enterEv event) {
@@ -39,7 +43,9 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		delete(enterEvs, exitEv.GetTid())
 		ev.exitEv = exitEv
 
-		// Expect ID one lower, otherwise, doesn't match.
+		// Expect ID one lower, otherwise, enter and exit tracepoints
+		// don't match up. E.g.:
+		// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
 		if ev.enterEv.GetSyscallId()-1 != ev.exitEv.GetSyscallId() {
 			fmt.Println(fmt.Sprintf("Loss of event (not matching) %v", ev))
 			ev.enterEv.Recycle()
@@ -47,6 +53,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			return
 		}
 
+		// Handle the opening of a file.
 		if ev.is(SYS_ENTER_OPENAT) || ev.is(SYS_ENTER_OPEN) {
 			openEnterEv := ev.enterEv.(*OpenEnterEvent)
 
@@ -65,6 +72,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			return
 		}
 
+		// Generic handling of any syscall expecting a file descriptor (fd)
 		if fdEvent, ok := ev.enterEv.(*FdEvent); ok {
 			if file_, ok := files[fdEvent.Fd]; ok {
 				ev.file = file_
@@ -80,6 +88,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		evCh <- ev
 	}
 
+	// Deserialise raw byte stream from BPF ringbuffer.
 	go func() {
 		defer close(evCh)
 		for raw := range rawCh {
