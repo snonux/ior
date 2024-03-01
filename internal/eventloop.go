@@ -47,10 +47,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		// don't match up. E.g.:
 		// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
 		if ev.enterEv.GetSyscallId()-1 != ev.exitEv.GetSyscallId() {
-			fmt.Println(fmt.Sprintf("Loss of event (not matching) %v", ev))
-			ev.enterEv.Recycle()
-			exitEv.Recycle()
-			return
+			ev.tracepointMismatch = true
 		}
 
 		// Handle the opening of a file.

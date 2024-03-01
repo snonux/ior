@@ -17,9 +17,10 @@ type event interface {
 }
 
 type enterExitEvent struct {
-	enterEv, exitEv event
-	file            file
-	comm            string
+	enterEv, exitEv    event
+	file               file
+	comm               string
+	tracepointMismatch bool
 }
 
 func (e enterExitEvent) is(id SyscallId) bool {
@@ -28,6 +29,10 @@ func (e enterExitEvent) is(id SyscallId) bool {
 
 func (e enterExitEvent) String() string {
 	var sb strings.Builder
+
+	if e.tracepointMismatch {
+		sb.WriteString("MISMATCH ")
+	}
 
 	duration := e.exitEv.GetTime() - e.enterEv.GetTime()
 	sb.WriteString(fmt.Sprintf("%08d µs", duration))
