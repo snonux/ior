@@ -21,9 +21,9 @@ func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
 func events(rawCh <-chan []byte) <-chan enterExitEvent {
 	// Channel of events (enter+exit tracepoint results of a syscall).
 	evCh := make(chan enterExitEvent)
-	// Temporally store tracepoints of syscall entering tracepoits (e.g. SYS_ENTER_OPEN).
+	// Temp. store of sys_enter tracepoints per Tid.
 	enterEvs := make(map[uint32]enterExitEvent)
-	// Track all open file by file descriptor.
+	// Track all open files by file descriptor.
 	files := make(map[int32]file)
 	// Program or thread name of the current Tid.
 	comms := make(map[uint32]string)
