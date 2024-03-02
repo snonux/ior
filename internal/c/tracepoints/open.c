@@ -5,17 +5,17 @@
 #define SYS_EXIT_OPENAT 3
 #define SYS_ENTER_OPENAT 4
 
-static __always_inline int _handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx, __u32 syscall_id) {
+static __always_inline int _handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx, __u32 trace_id) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct open_enter_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_enter_event), 0);
+    struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
     if (!ev)
         return 0;
 
     ev->event_type = ENTER_OPEN_EVENT;
-    ev->syscall_id = syscall_id;
+    ev->trace_id = trace_id;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -29,7 +29,7 @@ static __always_inline int _handle_sys_enter_open(struct trace_event_raw_sys_ent
     return 0;
 }
 
-static __always_inline int _handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx, __u32 syscall_id) {
+static __always_inline int _handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx, __u32 trace_id) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -39,7 +39,7 @@ static __always_inline int _handle_sys_exit_open(struct trace_event_raw_sys_exit
         return 0;
 
     ev->event_type = EXIT_FD_EVENT;
-    ev->syscall_id = syscall_id;
+    ev->trace_id = trace_id;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;

@@ -14,9 +14,9 @@
 #define ENTER_NAME_EVENT 9
 #define EXIT_NAME_EVENT 10
 
-struct open_enter_event {
+struct open_event {
     __u32 event_type;
-    __u32 syscall_id; 
+    __u32 trace_id; 
     __u32 pid;
     __u32 tid;
     __u32 time;
@@ -26,7 +26,7 @@ struct open_enter_event {
 
 struct null_event {
     __u32 event_type;
-    __u32 syscall_id;
+    __u32 trace_id;
     __u32 pid;
     __u32 tid;
     __u32 time;
@@ -34,7 +34,7 @@ struct null_event {
 
 struct fd_event {
     __u32 event_type;
-    __u32 syscall_id;
+    __u32 trace_id;
     __u32 pid;
     __u32 tid;
     __u32 time;
@@ -43,7 +43,7 @@ struct fd_event {
 
 struct ret_event {
     __u32 event_type;
-    __u32 syscall_id;
+    __u32 trace_id;
     __u32 pid;
     __u32 tid;
     __s64 ret;
@@ -52,7 +52,7 @@ struct ret_event {
 
 struct name_event {
     __u32 event_type;
-    __u32 syscall_id;
+    __u32 trace_id;
     __u32 pid;
     __u32 tid;
     __u32 time;

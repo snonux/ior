@@ -9,7 +9,7 @@ import (
 
 type event interface {
 	String() string
-	GetSyscallId() SyscallId
+	GetTraceId() TraceId
 	GetPid() uint32
 	GetTid() uint32
 	GetTime() uint32
@@ -23,8 +23,8 @@ type enterExitEvent struct {
 	tracepointMismatch bool
 }
 
-func (e enterExitEvent) is(id SyscallId) bool {
-	return e.enterEv.GetSyscallId() == id
+func (e enterExitEvent) is(id TraceId) bool {
+	return e.enterEv.GetTraceId() == id
 }
 
 func (e enterExitEvent) String() string {
@@ -46,7 +46,7 @@ func (e enterExitEvent) String() string {
 	sb.WriteString(strconv.FormatInt(int64(e.enterEv.GetTid()), 10))
 
 	sb.WriteString(" ")
-	sb.WriteString(e.enterEv.GetSyscallId().Name())
+	sb.WriteString(e.enterEv.GetTraceId().Name())
 	if retEv, ok := e.exitEv.(*RetEvent); ok {
 		sb.WriteString(":")
 		sb.WriteString(strconv.FormatInt(int64(retEv.Ret), 10))

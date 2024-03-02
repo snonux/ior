@@ -43,56 +43,54 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		delete(enterEvs, exitEv.GetTid())
 		ev.exitEv = exitEv
 
-		// TODO: Rename SyscallId to TraceId
 		// Expect ID one lower, otherwise, enter and exit tracepoints
 		// don't match up. E.g.:
 		// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
-		if ev.enterEv.GetSyscallId()-1 != ev.exitEv.GetSyscallId() {
+		if ev.enterEv.GetTraceId()-1 != ev.exitEv.GetTraceId() {
 			ev.tracepointMismatch = true
 		}
 
-		// TODO: switch here on type?
-
-		// Handle file open.
-		if ev.is(SYS_ENTER_OPENAT) || ev.is(SYS_ENTER_OPEN) {
-			openEnterEv := ev.enterEv.(*OpenEnterEvent)
+		switch v := ev.enterEv.(type) {
+		case *OpenEvent:
+			openEv := ev.enterEv.(*OpenEvent)
 
 			fd := ev.exitEv.(*FdEvent).Fd
-			file := fdFile{fd, string(openEnterEv.Filename[:])}
+			file := fdFile{fd, string(openEv.Filename[:])}
 			if fd >= 0 {
 				files[fd] = file
 			}
 			ev.file = file
 
-			comm := string(openEnterEv.Comm[:])
-			comms[openEnterEv.Tid] = comm
-			ev.comm = comm
+			comm := string(openEv.Comm[:])
+			comms[openEv.Tid] = comm
 
-			evCh <- ev
-			return
-		}
-
-		// Generic handling of any syscall with newname/oldname arguments
-		if nameEvent, ok := ev.enterEv.(*NameEvent); ok {
+		case *NameEvent:
+			nameEvent := ev.enterEv.(*NameEvent)
 			ev.file = oldnameNewnameFile{
 				oldname: string(nameEvent.Oldname[:]),
 				newname: string(nameEvent.Newname[:]),
 			}
-		}
+			ev.comm, _ = comms[ev.enterEv.GetTid()]
 
-		// Generic handling of any syscall expecting a file descriptor (fd)
-		if fdEvent, ok := ev.enterEv.(*FdEvent); ok {
-			if file_, ok := files[fdEvent.Fd]; ok {
+		case *FdEvent:
+			fd := ev.enterEv.(*FdEvent).Fd
+			if file_, ok := files[fd]; ok {
 				ev.file = file_
+				if ev.is(SYS_ENTER_CLOSE) {
+					delete(files, fd)
+				}
 			} else {
-				ev.file = fdFile{fdEvent.Fd, "?"}
+				ev.file = fdFile{fd, "?"}
 			}
-			if ev.is(SYS_ENTER_CLOSE) {
-				delete(files, fdEvent.Fd)
-			}
+			ev.comm, _ = comms[ev.enterEv.GetTid()]
+
+		case *NullEvent:
+			ev.comm, _ = comms[ev.enterEv.GetTid()]
+
+		default:
+			panic(fmt.Sprintf("unknown type: %v", v))
 		}
 
-		ev.comm, _ = comms[ev.enterEv.GetTid()]
 		evCh <- ev
 	}
 
@@ -102,7 +100,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		for raw := range rawCh {
 			switch EventType(raw[0]) {
 			case ENTER_OPEN_EVENT:
-				enter(NewOpenEnterEvent(raw))
+				enter(NewOpenEvent(raw))
 			case EXIT_OPEN_EVENT:
 				exit(NewFdEvent(raw))
 			case ENTER_FD_EVENT:
@@ -116,7 +114,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			case ENTER_NAME_EVENT:
 				enter(NewNameEvent(raw))
 			default:
-				panic(fmt.Sprintf("Unhandled event type %s", EventType(raw[0])))
+				panic(fmt.Sprintf("unhandled event type %v", EventType(raw[0])))
 			}
 		}
 	}()

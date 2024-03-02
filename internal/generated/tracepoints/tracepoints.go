@@ -1,4 +1,4 @@
-// This file was generated - don't change manually!
+// Code generated - don't change manually!
 package tracepoints
 
 var List = []string{

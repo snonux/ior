@@ -88,7 +88,7 @@ class Format {
                 return 0;
 
             ev->event_type = {(is-enter ?? 'ENTER_' !! 'EXIT_') ~ event-struct.uc};
-            ev->syscall_id = {$!name.uc};
+            ev->trace_id = {$!name.uc};
             ev->pid = pid;
             ev->tid = tid;
             ev->time = bpf_ktime_get_ns() / 1000;

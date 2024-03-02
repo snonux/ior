@@ -28,10 +28,13 @@ class NQCToGoActions {
     has Bool $!constant-type-set;
 
     method TOP($/) {
-        make "// This file was generated - don't change manually!\n"
-        ~ "package types\n\n"
-        ~ self!constant-go-methods ~ "\n"
-        ~ $<construct>.map(*.made).join('');
+        make qq:to/END/;
+        // Code generated - don't change manually!
+        package types
+        
+        {self!constant-go-methods}
+        {$<construct>.map(*.made).join('')}
+        END
     }
 
     method construct($/) {
@@ -44,7 +47,7 @@ class NQCToGoActions {
 
     method constant($/) {
         push @!const-names: ~$<identifier>;
-        my $const-type = $<identifier>.starts-with('SYS_') ?? ' SyscallId ' !! '';
+        my $const-type = $<identifier>.starts-with('SYS_') ?? ' TraceId ' !! '';
 
         make qq:to/END/;
         const {$<identifier>}$const-type = {$<number>}
@@ -54,23 +57,23 @@ class NQCToGoActions {
     method !constant-go-methods returns Str {
         qq:to/END/;
         type EventType uint32
-        type SyscallId uint32
+        type TraceId uint32
 
-        func (s SyscallId) String() string \{
+        func (s TraceId) String() string \{
             switch (s) \{
             {@!const-names.grep(/^SYS_/).map({
                 "case $_: return \"{$_.subst('SYS_', '').lc}\""
             }).join('; ')}
-            default: panic(fmt.Sprintf("Unknown SyscallId: %d", s))
+            default: panic(fmt.Sprintf("Unknown TraceId: %d", s))
             \}
         \}
 
-        func (s SyscallId) Name() string \{
+        func (s TraceId) Name() string \{
             switch (s) \{
             {@!const-names.grep(/^SYS_/).map({
                 "case $_: return \"{$_.subst(/'SYS_ENTER_'|'SYS_EXIT_'/, '').lc}\""
             }).join('; ')}
-            default: panic(fmt.Sprintf("Unknown SyscallId: %d", s))
+            default: panic(fmt.Sprintf("Unknown TraceId: %d", s))
             \}
         \}
         END
@@ -107,8 +110,8 @@ class NQCToGoActions {
             return $self-ref.EventType
         \}
 
-        func ($self-ref *{$<identifier>.made}) GetSyscallId() SyscallId \{
-            return $self-ref.SyscallId
+        func ($self-ref *{$<identifier>.made}) GetTraceId() TraceId \{
+            return $self-ref.TraceId
         \}
 
         func ($self-ref *{$<identifier>.made}) GetPid() uint32 \{
@@ -150,7 +153,7 @@ class NQCToGoActions {
     }
 
     method member($/) {
-        my Str $type = $<identifier>.made eq 'SyscallId' ?? 'SyscallId' !! $<type>.made;
+        my Str $type = $<identifier>.made eq 'TraceId' ?? 'TraceId' !! $<type>.made;
         $type = 'EventType' if $<identifier>.made eq 'EventType';
         make $<identifier>.made ~ ' ' ~ ($<arraysize> // '') ~ $type;
     }

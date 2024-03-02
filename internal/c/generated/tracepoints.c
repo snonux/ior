@@ -78,7 +78,7 @@ int handle_sys_exit_cachestat(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_CACHESTAT;
+    ev->trace_id = SYS_EXIT_CACHESTAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -99,7 +99,7 @@ int handle_sys_enter_cachestat(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_CACHESTAT;
+    ev->trace_id = SYS_ENTER_CACHESTAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -120,7 +120,7 @@ int handle_sys_exit_close_range(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_CLOSE_RANGE;
+    ev->trace_id = SYS_EXIT_CLOSE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -141,7 +141,7 @@ int handle_sys_enter_close_range(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_CLOSE_RANGE;
+    ev->trace_id = SYS_ENTER_CLOSE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -162,7 +162,7 @@ int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_CLOSE;
+    ev->trace_id = SYS_EXIT_CLOSE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -183,7 +183,7 @@ int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_CLOSE;
+    ev->trace_id = SYS_ENTER_CLOSE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -204,7 +204,7 @@ int handle_sys_exit_fchown(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FCHOWN;
+    ev->trace_id = SYS_EXIT_FCHOWN;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -225,7 +225,7 @@ int handle_sys_enter_fchown(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FCHOWN;
+    ev->trace_id = SYS_ENTER_FCHOWN;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -246,7 +246,7 @@ int handle_sys_exit_fchmod(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FCHMOD;
+    ev->trace_id = SYS_EXIT_FCHMOD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -267,7 +267,7 @@ int handle_sys_enter_fchmod(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FCHMOD;
+    ev->trace_id = SYS_ENTER_FCHMOD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -288,7 +288,7 @@ int handle_sys_exit_fchdir(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FCHDIR;
+    ev->trace_id = SYS_EXIT_FCHDIR;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -309,7 +309,7 @@ int handle_sys_enter_fchdir(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FCHDIR;
+    ev->trace_id = SYS_ENTER_FCHDIR;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -330,7 +330,7 @@ int handle_sys_exit_ftruncate(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FTRUNCATE;
+    ev->trace_id = SYS_EXIT_FTRUNCATE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -351,7 +351,7 @@ int handle_sys_enter_ftruncate(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FTRUNCATE;
+    ev->trace_id = SYS_ENTER_FTRUNCATE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -372,7 +372,7 @@ int handle_sys_exit_copy_file_range(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_COPY_FILE_RANGE;
+    ev->trace_id = SYS_EXIT_COPY_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -393,7 +393,7 @@ int handle_sys_enter_copy_file_range(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NULL_EVENT;
-    ev->syscall_id = SYS_ENTER_COPY_FILE_RANGE;
+    ev->trace_id = SYS_ENTER_COPY_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -414,7 +414,7 @@ int handle_sys_exit_pwrite64(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_PWRITE64;
+    ev->trace_id = SYS_EXIT_PWRITE64;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -435,7 +435,7 @@ int handle_sys_enter_pwrite64(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_PWRITE64;
+    ev->trace_id = SYS_ENTER_PWRITE64;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -456,7 +456,7 @@ int handle_sys_exit_pread64(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_PREAD64;
+    ev->trace_id = SYS_EXIT_PREAD64;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -477,7 +477,7 @@ int handle_sys_enter_pread64(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_PREAD64;
+    ev->trace_id = SYS_ENTER_PREAD64;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -498,7 +498,7 @@ int handle_sys_exit_write(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_WRITE;
+    ev->trace_id = SYS_EXIT_WRITE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -519,7 +519,7 @@ int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_WRITE;
+    ev->trace_id = SYS_ENTER_WRITE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -540,7 +540,7 @@ int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_READ;
+    ev->trace_id = SYS_EXIT_READ;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -561,7 +561,7 @@ int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_READ;
+    ev->trace_id = SYS_ENTER_READ;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -582,7 +582,7 @@ int handle_sys_exit_lseek(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_LSEEK;
+    ev->trace_id = SYS_EXIT_LSEEK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -603,7 +603,7 @@ int handle_sys_enter_lseek(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_LSEEK;
+    ev->trace_id = SYS_ENTER_LSEEK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -624,7 +624,7 @@ int handle_sys_exit_newfstat(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_NEWFSTAT;
+    ev->trace_id = SYS_EXIT_NEWFSTAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -645,7 +645,7 @@ int handle_sys_enter_newfstat(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_NEWFSTAT;
+    ev->trace_id = SYS_ENTER_NEWFSTAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -666,7 +666,7 @@ int handle_sys_exit_rename(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_RENAME;
+    ev->trace_id = SYS_EXIT_RENAME;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -687,7 +687,7 @@ int handle_sys_enter_rename(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NAME_EVENT;
-    ev->syscall_id = SYS_ENTER_RENAME;
+    ev->trace_id = SYS_ENTER_RENAME;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -710,7 +710,7 @@ int handle_sys_exit_renameat(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_RENAMEAT;
+    ev->trace_id = SYS_EXIT_RENAMEAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -731,7 +731,7 @@ int handle_sys_enter_renameat(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NAME_EVENT;
-    ev->syscall_id = SYS_ENTER_RENAMEAT;
+    ev->trace_id = SYS_ENTER_RENAMEAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -754,7 +754,7 @@ int handle_sys_exit_renameat2(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_RENAMEAT2;
+    ev->trace_id = SYS_EXIT_RENAMEAT2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -775,7 +775,7 @@ int handle_sys_enter_renameat2(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NAME_EVENT;
-    ev->syscall_id = SYS_ENTER_RENAMEAT2;
+    ev->trace_id = SYS_ENTER_RENAMEAT2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -798,7 +798,7 @@ int handle_sys_exit_link(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_LINK;
+    ev->trace_id = SYS_EXIT_LINK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -819,7 +819,7 @@ int handle_sys_enter_link(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NAME_EVENT;
-    ev->syscall_id = SYS_ENTER_LINK;
+    ev->trace_id = SYS_ENTER_LINK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -842,7 +842,7 @@ int handle_sys_exit_linkat(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_LINKAT;
+    ev->trace_id = SYS_EXIT_LINKAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -863,7 +863,7 @@ int handle_sys_enter_linkat(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NAME_EVENT;
-    ev->syscall_id = SYS_ENTER_LINKAT;
+    ev->trace_id = SYS_ENTER_LINKAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -886,7 +886,7 @@ int handle_sys_exit_symlink(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_SYMLINK;
+    ev->trace_id = SYS_EXIT_SYMLINK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -907,7 +907,7 @@ int handle_sys_enter_symlink(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NAME_EVENT;
-    ev->syscall_id = SYS_ENTER_SYMLINK;
+    ev->trace_id = SYS_ENTER_SYMLINK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -930,7 +930,7 @@ int handle_sys_exit_symlinkat(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_SYMLINKAT;
+    ev->trace_id = SYS_EXIT_SYMLINKAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -951,7 +951,7 @@ int handle_sys_enter_symlinkat(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NAME_EVENT;
-    ev->syscall_id = SYS_ENTER_SYMLINKAT;
+    ev->trace_id = SYS_ENTER_SYMLINKAT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -974,7 +974,7 @@ int handle_sys_exit_fcntl(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FCNTL;
+    ev->trace_id = SYS_EXIT_FCNTL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -995,7 +995,7 @@ int handle_sys_enter_fcntl(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FCNTL;
+    ev->trace_id = SYS_ENTER_FCNTL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1016,7 +1016,7 @@ int handle_sys_exit_ioctl(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_IOCTL;
+    ev->trace_id = SYS_EXIT_IOCTL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1037,7 +1037,7 @@ int handle_sys_enter_ioctl(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_IOCTL;
+    ev->trace_id = SYS_ENTER_IOCTL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1058,7 +1058,7 @@ int handle_sys_exit_getdents64(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_GETDENTS64;
+    ev->trace_id = SYS_EXIT_GETDENTS64;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1079,7 +1079,7 @@ int handle_sys_enter_getdents64(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_GETDENTS64;
+    ev->trace_id = SYS_ENTER_GETDENTS64;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1100,7 +1100,7 @@ int handle_sys_exit_getdents(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_GETDENTS;
+    ev->trace_id = SYS_EXIT_GETDENTS;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1121,7 +1121,7 @@ int handle_sys_enter_getdents(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_GETDENTS;
+    ev->trace_id = SYS_ENTER_GETDENTS;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1142,7 +1142,7 @@ int handle_sys_exit_sync_file_range(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_SYNC_FILE_RANGE;
+    ev->trace_id = SYS_EXIT_SYNC_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1163,7 +1163,7 @@ int handle_sys_enter_sync_file_range(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_NULL_EVENT;
-    ev->syscall_id = SYS_ENTER_SYNC_FILE_RANGE;
+    ev->trace_id = SYS_ENTER_SYNC_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1184,7 +1184,7 @@ int handle_sys_exit_fdatasync(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FDATASYNC;
+    ev->trace_id = SYS_EXIT_FDATASYNC;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1205,7 +1205,7 @@ int handle_sys_enter_fdatasync(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FDATASYNC;
+    ev->trace_id = SYS_ENTER_FDATASYNC;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1226,7 +1226,7 @@ int handle_sys_exit_fsync(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FSYNC;
+    ev->trace_id = SYS_EXIT_FSYNC;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1247,7 +1247,7 @@ int handle_sys_enter_fsync(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FSYNC;
+    ev->trace_id = SYS_ENTER_FSYNC;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1268,7 +1268,7 @@ int handle_sys_exit_fstatfs(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FSTATFS;
+    ev->trace_id = SYS_EXIT_FSTATFS;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1289,7 +1289,7 @@ int handle_sys_enter_fstatfs(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FSTATFS;
+    ev->trace_id = SYS_ENTER_FSTATFS;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1310,7 +1310,7 @@ int handle_sys_exit_flock(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_FLOCK;
+    ev->trace_id = SYS_EXIT_FLOCK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1331,7 +1331,7 @@ int handle_sys_enter_flock(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_FLOCK;
+    ev->trace_id = SYS_ENTER_FLOCK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1352,7 +1352,7 @@ int handle_sys_exit_quotactl_fd(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_QUOTACTL_FD;
+    ev->trace_id = SYS_EXIT_QUOTACTL_FD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1373,7 +1373,7 @@ int handle_sys_enter_quotactl_fd(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_QUOTACTL_FD;
+    ev->trace_id = SYS_ENTER_QUOTACTL_FD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1394,7 +1394,7 @@ int handle_sys_exit_io_uring_register(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_IO_URING_REGISTER;
+    ev->trace_id = SYS_EXIT_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1415,7 +1415,7 @@ int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_IO_URING_REGISTER;
+    ev->trace_id = SYS_ENTER_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1436,7 +1436,7 @@ int handle_sys_exit_io_uring_enter(struct trace_event_raw_sys_exit *ctx) {
         return 0;
 
     ev->event_type = EXIT_RET_EVENT;
-    ev->syscall_id = SYS_EXIT_IO_URING_ENTER;
+    ev->trace_id = SYS_EXIT_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
@@ -1457,7 +1457,7 @@ int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
         return 0;
 
     ev->event_type = ENTER_FD_EVENT;
-    ev->syscall_id = SYS_ENTER_IO_URING_ENTER;
+    ev->trace_id = SYS_ENTER_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;

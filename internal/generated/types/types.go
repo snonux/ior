@@ -1,4 +1,4 @@
-// This file was generated - don't change manually!
+// Code generated - don't change manually!
 package types
 
 import (
@@ -9,9 +9,9 @@ import (
 )
 
 type EventType uint32
-type SyscallId uint32
+type TraceId uint32
 
-func (s SyscallId) String() string {
+func (s TraceId) String() string {
 	switch s {
 	case SYS_EXIT_CACHESTAT:
 		return "exit_cachestat"
@@ -154,11 +154,11 @@ func (s SyscallId) String() string {
 	case SYS_ENTER_OPENAT:
 		return "enter_openat"
 	default:
-		panic(fmt.Sprintf("Unknown SyscallId: %d", s))
+		panic(fmt.Sprintf("Unknown TraceId: %d", s))
 	}
 }
 
-func (s SyscallId) Name() string {
+func (s TraceId) Name() string {
 	switch s {
 	case SYS_EXIT_CACHESTAT:
 		return "cachestat"
@@ -301,7 +301,7 @@ func (s SyscallId) Name() string {
 	case SYS_ENTER_OPENAT:
 		return "openat"
 	default:
-		panic(fmt.Sprintf("Unknown SyscallId: %d", s))
+		panic(fmt.Sprintf("Unknown TraceId: %d", s))
 	}
 }
 
@@ -318,9 +318,9 @@ const EXIT_RET_EVENT = 8
 const ENTER_NAME_EVENT = 9
 const EXIT_NAME_EVENT = 10
 
-type OpenEnterEvent struct {
+type OpenEvent struct {
 	EventType EventType
-	SyscallId SyscallId
+	TraceId   TraceId
 	Pid       uint32
 	Tid       uint32
 	Time      uint32
@@ -328,36 +328,36 @@ type OpenEnterEvent struct {
 	Comm      [MAX_PROGNAME_LENGTH]byte
 }
 
-func (o OpenEnterEvent) String() string {
-	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.EventType, o.SyscallId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
+func (o OpenEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v Filename:%v Comm:%v", o.EventType, o.TraceId, o.Pid, o.Tid, o.Time, string(o.Filename[:]), string(o.Comm[:]))
 }
 
-func (o *OpenEnterEvent) GetEventType() EventType {
+func (o *OpenEvent) GetEventType() EventType {
 	return o.EventType
 }
 
-func (o *OpenEnterEvent) GetSyscallId() SyscallId {
-	return o.SyscallId
+func (o *OpenEvent) GetTraceId() TraceId {
+	return o.TraceId
 }
 
-func (o *OpenEnterEvent) GetPid() uint32 {
+func (o *OpenEvent) GetPid() uint32 {
 	return o.Pid
 }
 
-func (o *OpenEnterEvent) GetTid() uint32 {
+func (o *OpenEvent) GetTid() uint32 {
 	return o.Tid
 }
 
-func (o *OpenEnterEvent) GetTime() uint32 {
+func (o *OpenEvent) GetTime() uint32 {
 	return o.Time
 }
 
-var poolOfOpenEnterEvents = sync.Pool{
-	New: func() interface{} { return &OpenEnterEvent{} },
+var poolOfOpenEvents = sync.Pool{
+	New: func() interface{} { return &OpenEvent{} },
 }
 
-func NewOpenEnterEvent(raw []byte) *OpenEnterEvent {
-	o := poolOfOpenEnterEvents.Get().(*OpenEnterEvent)
+func NewOpenEvent(raw []byte) *OpenEvent {
+	o := poolOfOpenEvents.Get().(*OpenEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
 		fmt.Println(o, raw, len(raw), err)
 		panic(raw)
@@ -365,28 +365,28 @@ func NewOpenEnterEvent(raw []byte) *OpenEnterEvent {
 	return o
 }
 
-func (o *OpenEnterEvent) Recycle() {
-	poolOfOpenEnterEvents.Put(o)
+func (o *OpenEvent) Recycle() {
+	poolOfOpenEvents.Put(o)
 }
 
 type NullEvent struct {
 	EventType EventType
-	SyscallId SyscallId
+	TraceId   TraceId
 	Pid       uint32
 	Tid       uint32
 	Time      uint32
 }
 
 func (n NullEvent) String() string {
-	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v", n.EventType, n.SyscallId, n.Pid, n.Tid, n.Time)
+	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v", n.EventType, n.TraceId, n.Pid, n.Tid, n.Time)
 }
 
 func (n *NullEvent) GetEventType() EventType {
 	return n.EventType
 }
 
-func (n *NullEvent) GetSyscallId() SyscallId {
-	return n.SyscallId
+func (n *NullEvent) GetTraceId() TraceId {
+	return n.TraceId
 }
 
 func (n *NullEvent) GetPid() uint32 {
@@ -420,7 +420,7 @@ func (n *NullEvent) Recycle() {
 
 type FdEvent struct {
 	EventType EventType
-	SyscallId SyscallId
+	TraceId   TraceId
 	Pid       uint32
 	Tid       uint32
 	Time      uint32
@@ -428,15 +428,15 @@ type FdEvent struct {
 }
 
 func (f FdEvent) String() string {
-	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.EventType, f.SyscallId, f.Pid, f.Tid, f.Time, f.Fd)
+	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.EventType, f.TraceId, f.Pid, f.Tid, f.Time, f.Fd)
 }
 
 func (f *FdEvent) GetEventType() EventType {
 	return f.EventType
 }
 
-func (f *FdEvent) GetSyscallId() SyscallId {
-	return f.SyscallId
+func (f *FdEvent) GetTraceId() TraceId {
+	return f.TraceId
 }
 
 func (f *FdEvent) GetPid() uint32 {
@@ -470,7 +470,7 @@ func (f *FdEvent) Recycle() {
 
 type RetEvent struct {
 	EventType EventType
-	SyscallId SyscallId
+	TraceId   TraceId
 	Pid       uint32
 	Tid       uint32
 	Ret       int64
@@ -478,15 +478,15 @@ type RetEvent struct {
 }
 
 func (r RetEvent) String() string {
-	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Ret:%v Time:%v", r.EventType, r.SyscallId, r.Pid, r.Tid, r.Ret, r.Time)
+	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Ret:%v Time:%v", r.EventType, r.TraceId, r.Pid, r.Tid, r.Ret, r.Time)
 }
 
 func (r *RetEvent) GetEventType() EventType {
 	return r.EventType
 }
 
-func (r *RetEvent) GetSyscallId() SyscallId {
-	return r.SyscallId
+func (r *RetEvent) GetTraceId() TraceId {
+	return r.TraceId
 }
 
 func (r *RetEvent) GetPid() uint32 {
@@ -520,7 +520,7 @@ func (r *RetEvent) Recycle() {
 
 type NameEvent struct {
 	EventType EventType
-	SyscallId SyscallId
+	TraceId   TraceId
 	Pid       uint32
 	Tid       uint32
 	Time      uint32
@@ -529,15 +529,15 @@ type NameEvent struct {
 }
 
 func (n NameEvent) String() string {
-	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Oldname:%v Newname:%v", n.EventType, n.SyscallId, n.Pid, n.Tid, n.Time, string(n.Oldname[:]), string(n.Newname[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v Oldname:%v Newname:%v", n.EventType, n.TraceId, n.Pid, n.Tid, n.Time, string(n.Oldname[:]), string(n.Newname[:]))
 }
 
 func (n *NameEvent) GetEventType() EventType {
 	return n.EventType
 }
 
-func (n *NameEvent) GetSyscallId() SyscallId {
-	return n.SyscallId
+func (n *NameEvent) GetTraceId() TraceId {
+	return n.TraceId
 }
 
 func (n *NameEvent) GetPid() uint32 {
@@ -569,73 +569,73 @@ func (n *NameEvent) Recycle() {
 	poolOfNameEvents.Put(n)
 }
 
-const SYS_EXIT_CACHESTAT SyscallId = 520
-const SYS_ENTER_CACHESTAT SyscallId = 521
-const SYS_EXIT_CLOSE_RANGE SyscallId = 692
-const SYS_ENTER_CLOSE_RANGE SyscallId = 693
-const SYS_EXIT_CLOSE SyscallId = 694
-const SYS_ENTER_CLOSE SyscallId = 695
-const SYS_EXIT_FCHOWN SyscallId = 704
-const SYS_ENTER_FCHOWN SyscallId = 705
-const SYS_EXIT_FCHMOD SyscallId = 718
-const SYS_ENTER_FCHMOD SyscallId = 719
-const SYS_EXIT_FCHDIR SyscallId = 722
-const SYS_ENTER_FCHDIR SyscallId = 723
-const SYS_EXIT_FTRUNCATE SyscallId = 734
-const SYS_ENTER_FTRUNCATE SyscallId = 735
-const SYS_EXIT_COPY_FILE_RANGE SyscallId = 738
-const SYS_ENTER_COPY_FILE_RANGE SyscallId = 739
-const SYS_EXIT_PWRITE64 SyscallId = 754
-const SYS_ENTER_PWRITE64 SyscallId = 755
-const SYS_EXIT_PREAD64 SyscallId = 756
-const SYS_ENTER_PREAD64 SyscallId = 757
-const SYS_EXIT_WRITE SyscallId = 758
-const SYS_ENTER_WRITE SyscallId = 759
-const SYS_EXIT_READ SyscallId = 760
-const SYS_ENTER_READ SyscallId = 761
-const SYS_EXIT_LSEEK SyscallId = 762
-const SYS_ENTER_LSEEK SyscallId = 763
-const SYS_EXIT_NEWFSTAT SyscallId = 770
-const SYS_ENTER_NEWFSTAT SyscallId = 771
-const SYS_EXIT_RENAME SyscallId = 786
-const SYS_ENTER_RENAME SyscallId = 787
-const SYS_EXIT_RENAMEAT SyscallId = 788
-const SYS_ENTER_RENAMEAT SyscallId = 789
-const SYS_EXIT_RENAMEAT2 SyscallId = 790
-const SYS_ENTER_RENAMEAT2 SyscallId = 791
-const SYS_EXIT_LINK SyscallId = 792
-const SYS_ENTER_LINK SyscallId = 793
-const SYS_EXIT_LINKAT SyscallId = 794
-const SYS_ENTER_LINKAT SyscallId = 795
-const SYS_EXIT_SYMLINK SyscallId = 796
-const SYS_ENTER_SYMLINK SyscallId = 797
-const SYS_EXIT_SYMLINKAT SyscallId = 798
-const SYS_ENTER_SYMLINKAT SyscallId = 799
-const SYS_EXIT_FCNTL SyscallId = 814
-const SYS_ENTER_FCNTL SyscallId = 815
-const SYS_EXIT_IOCTL SyscallId = 816
-const SYS_ENTER_IOCTL SyscallId = 817
-const SYS_EXIT_GETDENTS64 SyscallId = 818
-const SYS_ENTER_GETDENTS64 SyscallId = 819
-const SYS_EXIT_GETDENTS SyscallId = 820
-const SYS_ENTER_GETDENTS SyscallId = 821
-const SYS_EXIT_SYNC_FILE_RANGE SyscallId = 914
-const SYS_ENTER_SYNC_FILE_RANGE SyscallId = 915
-const SYS_EXIT_FDATASYNC SyscallId = 916
-const SYS_ENTER_FDATASYNC SyscallId = 917
-const SYS_EXIT_FSYNC SyscallId = 918
-const SYS_ENTER_FSYNC SyscallId = 919
-const SYS_EXIT_FSTATFS SyscallId = 936
-const SYS_ENTER_FSTATFS SyscallId = 937
-const SYS_EXIT_FLOCK SyscallId = 1012
-const SYS_ENTER_FLOCK SyscallId = 1013
-const SYS_EXIT_QUOTACTL_FD SyscallId = 1043
-const SYS_ENTER_QUOTACTL_FD SyscallId = 1044
-const SYS_EXIT_IO_URING_REGISTER SyscallId = 1366
-const SYS_ENTER_IO_URING_REGISTER SyscallId = 1367
-const SYS_EXIT_IO_URING_ENTER SyscallId = 1370
-const SYS_ENTER_IO_URING_ENTER SyscallId = 1371
-const SYS_EXIT_OPEN SyscallId = 1
-const SYS_ENTER_OPEN SyscallId = 2
-const SYS_EXIT_OPENAT SyscallId = 3
-const SYS_ENTER_OPENAT SyscallId = 4
+const SYS_EXIT_CACHESTAT TraceId = 520
+const SYS_ENTER_CACHESTAT TraceId = 521
+const SYS_EXIT_CLOSE_RANGE TraceId = 692
+const SYS_ENTER_CLOSE_RANGE TraceId = 693
+const SYS_EXIT_CLOSE TraceId = 694
+const SYS_ENTER_CLOSE TraceId = 695
+const SYS_EXIT_FCHOWN TraceId = 704
+const SYS_ENTER_FCHOWN TraceId = 705
+const SYS_EXIT_FCHMOD TraceId = 718
+const SYS_ENTER_FCHMOD TraceId = 719
+const SYS_EXIT_FCHDIR TraceId = 722
+const SYS_ENTER_FCHDIR TraceId = 723
+const SYS_EXIT_FTRUNCATE TraceId = 734
+const SYS_ENTER_FTRUNCATE TraceId = 735
+const SYS_EXIT_COPY_FILE_RANGE TraceId = 738
+const SYS_ENTER_COPY_FILE_RANGE TraceId = 739
+const SYS_EXIT_PWRITE64 TraceId = 754
+const SYS_ENTER_PWRITE64 TraceId = 755
+const SYS_EXIT_PREAD64 TraceId = 756
+const SYS_ENTER_PREAD64 TraceId = 757
+const SYS_EXIT_WRITE TraceId = 758
+const SYS_ENTER_WRITE TraceId = 759
+const SYS_EXIT_READ TraceId = 760
+const SYS_ENTER_READ TraceId = 761
+const SYS_EXIT_LSEEK TraceId = 762
+const SYS_ENTER_LSEEK TraceId = 763
+const SYS_EXIT_NEWFSTAT TraceId = 770
+const SYS_ENTER_NEWFSTAT TraceId = 771
+const SYS_EXIT_RENAME TraceId = 786
+const SYS_ENTER_RENAME TraceId = 787
+const SYS_EXIT_RENAMEAT TraceId = 788
+const SYS_ENTER_RENAMEAT TraceId = 789
+const SYS_EXIT_RENAMEAT2 TraceId = 790
+const SYS_ENTER_RENAMEAT2 TraceId = 791
+const SYS_EXIT_LINK TraceId = 792
+const SYS_ENTER_LINK TraceId = 793
+const SYS_EXIT_LINKAT TraceId = 794
+const SYS_ENTER_LINKAT TraceId = 795
+const SYS_EXIT_SYMLINK TraceId = 796
+const SYS_ENTER_SYMLINK TraceId = 797
+const SYS_EXIT_SYMLINKAT TraceId = 798
+const SYS_ENTER_SYMLINKAT TraceId = 799
+const SYS_EXIT_FCNTL TraceId = 814
+const SYS_ENTER_FCNTL TraceId = 815
+const SYS_EXIT_IOCTL TraceId = 816
+const SYS_ENTER_IOCTL TraceId = 817
+const SYS_EXIT_GETDENTS64 TraceId = 818
+const SYS_ENTER_GETDENTS64 TraceId = 819
+const SYS_EXIT_GETDENTS TraceId = 820
+const SYS_ENTER_GETDENTS TraceId = 821
+const SYS_EXIT_SYNC_FILE_RANGE TraceId = 914
+const SYS_ENTER_SYNC_FILE_RANGE TraceId = 915
+const SYS_EXIT_FDATASYNC TraceId = 916
+const SYS_ENTER_FDATASYNC TraceId = 917
+const SYS_EXIT_FSYNC TraceId = 918
+const SYS_ENTER_FSYNC TraceId = 919
+const SYS_EXIT_FSTATFS TraceId = 936
+const SYS_ENTER_FSTATFS TraceId = 937
+const SYS_EXIT_FLOCK TraceId = 1012
+const SYS_ENTER_FLOCK TraceId = 1013
+const SYS_EXIT_QUOTACTL_FD TraceId = 1043
+const SYS_ENTER_QUOTACTL_FD TraceId = 1044
+const SYS_EXIT_IO_URING_REGISTER TraceId = 1366
+const SYS_ENTER_IO_URING_REGISTER TraceId = 1367
+const SYS_EXIT_IO_URING_ENTER TraceId = 1370
+const SYS_ENTER_IO_URING_ENTER TraceId = 1371
+const SYS_EXIT_OPEN TraceId = 1
+const SYS_ENTER_OPEN TraceId = 2
+const SYS_EXIT_OPENAT TraceId = 3
+const SYS_ENTER_OPENAT TraceId = 4

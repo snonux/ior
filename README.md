@@ -2,11 +2,9 @@
 
 <img src=assets/ioriotng-small.png align=right />
 
-I/O Riot NG is an experiments with BPF.
+I/O Riot NG is an experiments with BPF. This program traces for synchronous I/O syscalls and then analyses the time taken for each of those syscalls. 
 
 Maybe a spiritual successor of one of my previous projects, I/O Riot https://codeberg.org/snonux/ioriot, the latter was based on SystemTap and C. The NG is based on Go, C and BPF (via libbpfgo).
-
-This program traces for I/O syscalls and then analyses the time taken for each of those syscalls. And also the time between of those syscalls.
 
 ## Fedora
 
