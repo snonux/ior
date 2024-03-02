@@ -71,8 +71,8 @@ class Format {
                          elsif $!has-name {
                            q:to/END/.trim-trailing;
                            __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-                               bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-                               bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+                               bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+                               bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
                            END
                          }
                          else { '' };

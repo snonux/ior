@@ -692,8 +692,8 @@ int handle_sys_enter_rename(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -736,8 +736,8 @@ int handle_sys_enter_renameat(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -780,8 +780,8 @@ int handle_sys_enter_renameat2(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -824,8 +824,8 @@ int handle_sys_enter_link(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -868,8 +868,8 @@ int handle_sys_enter_linkat(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -912,8 +912,8 @@ int handle_sys_enter_symlink(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -956,8 +956,8 @@ int handle_sys_enter_symlinkat(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

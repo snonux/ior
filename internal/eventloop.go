@@ -43,6 +43,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		delete(enterEvs, exitEv.GetTid())
 		ev.exitEv = exitEv
 
+		// TODO: Rename SyscallId to TraceId
 		// Expect ID one lower, otherwise, enter and exit tracepoints
 		// don't match up. E.g.:
 		// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
@@ -50,12 +51,14 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			ev.tracepointMismatch = true
 		}
 
-		// Handle the opening of a file.
+		// TODO: switch here on type?
+
+		// Handle file open.
 		if ev.is(SYS_ENTER_OPENAT) || ev.is(SYS_ENTER_OPEN) {
 			openEnterEv := ev.enterEv.(*OpenEnterEvent)
 
 			fd := ev.exitEv.(*FdEvent).Fd
-			file := file{fd, string(openEnterEv.Filename[:])}
+			file := fdFile{fd, string(openEnterEv.Filename[:])}
 			if fd >= 0 {
 				files[fd] = file
 			}
@@ -69,12 +72,20 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			return
 		}
 
+		// Generic handling of any syscall with newname/oldname arguments
+		if nameEvent, ok := ev.enterEv.(*NameEvent); ok {
+			ev.file = oldnameNewnameFile{
+				oldname: string(nameEvent.Oldname[:]),
+				newname: string(nameEvent.Newname[:]),
+			}
+		}
+
 		// Generic handling of any syscall expecting a file descriptor (fd)
 		if fdEvent, ok := ev.enterEv.(*FdEvent); ok {
 			if file_, ok := files[fdEvent.Fd]; ok {
 				ev.file = file_
 			} else {
-				ev.file = file{fdEvent.Fd, "?"}
+				ev.file = fdFile{fdEvent.Fd, "?"}
 			}
 			if ev.is(SYS_ENTER_CLOSE) {
 				delete(files, fdEvent.Fd)
@@ -102,6 +113,8 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 				exit(NewNullEvent(raw))
 			case EXIT_RET_EVENT:
 				exit(NewRetEvent(raw))
+			case ENTER_NAME_EVENT:
+				enter(NewNameEvent(raw))
 			default:
 				panic(fmt.Sprintf("Unhandled event type %s", EventType(raw[0])))
 			}
