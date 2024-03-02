@@ -69,6 +69,34 @@ func (s SyscallId) String() string {
 		return "exit_newfstat"
 	case SYS_ENTER_NEWFSTAT:
 		return "enter_newfstat"
+	case SYS_EXIT_RENAME:
+		return "exit_rename"
+	case SYS_ENTER_RENAME:
+		return "enter_rename"
+	case SYS_EXIT_RENAMEAT:
+		return "exit_renameat"
+	case SYS_ENTER_RENAMEAT:
+		return "enter_renameat"
+	case SYS_EXIT_RENAMEAT2:
+		return "exit_renameat2"
+	case SYS_ENTER_RENAMEAT2:
+		return "enter_renameat2"
+	case SYS_EXIT_LINK:
+		return "exit_link"
+	case SYS_ENTER_LINK:
+		return "enter_link"
+	case SYS_EXIT_LINKAT:
+		return "exit_linkat"
+	case SYS_ENTER_LINKAT:
+		return "enter_linkat"
+	case SYS_EXIT_SYMLINK:
+		return "exit_symlink"
+	case SYS_ENTER_SYMLINK:
+		return "enter_symlink"
+	case SYS_EXIT_SYMLINKAT:
+		return "exit_symlinkat"
+	case SYS_ENTER_SYMLINKAT:
+		return "enter_symlinkat"
 	case SYS_EXIT_FCNTL:
 		return "exit_fcntl"
 	case SYS_ENTER_FCNTL:
@@ -188,6 +216,34 @@ func (s SyscallId) Name() string {
 		return "newfstat"
 	case SYS_ENTER_NEWFSTAT:
 		return "newfstat"
+	case SYS_EXIT_RENAME:
+		return "rename"
+	case SYS_ENTER_RENAME:
+		return "rename"
+	case SYS_EXIT_RENAMEAT:
+		return "renameat"
+	case SYS_ENTER_RENAMEAT:
+		return "renameat"
+	case SYS_EXIT_RENAMEAT2:
+		return "renameat2"
+	case SYS_ENTER_RENAMEAT2:
+		return "renameat2"
+	case SYS_EXIT_LINK:
+		return "link"
+	case SYS_ENTER_LINK:
+		return "link"
+	case SYS_EXIT_LINKAT:
+		return "linkat"
+	case SYS_ENTER_LINKAT:
+		return "linkat"
+	case SYS_EXIT_SYMLINK:
+		return "symlink"
+	case SYS_ENTER_SYMLINK:
+		return "symlink"
+	case SYS_EXIT_SYMLINKAT:
+		return "symlinkat"
+	case SYS_ENTER_SYMLINKAT:
+		return "symlinkat"
 	case SYS_EXIT_FCNTL:
 		return "fcntl"
 	case SYS_ENTER_FCNTL:
@@ -259,6 +315,8 @@ const ENTER_FD_EVENT = 5
 const EXIT_FD_EVENT = 6
 const ENTER_RET_EVENT = 7
 const EXIT_RET_EVENT = 8
+const ENTER_NAME_EVENT = 9
+const EXIT_NAME_EVENT = 10
 
 type OpenEnterEvent struct {
 	EventType EventType
@@ -460,6 +518,57 @@ func (r *RetEvent) Recycle() {
 	poolOfRetEvents.Put(r)
 }
 
+type NameEvent struct {
+	EventType EventType
+	SyscallId SyscallId
+	Pid       uint32
+	Tid       uint32
+	Time      uint32
+	Oldname   [MAX_FILENAME_LENGTH]byte
+	Newname   [MAX_FILENAME_LENGTH]byte
+}
+
+func (n NameEvent) String() string {
+	return fmt.Sprintf("EventType:%v SyscallId:%v Pid:%v Tid:%v Time:%v Oldname:%v Newname:%v", n.EventType, n.SyscallId, n.Pid, n.Tid, n.Time, string(n.Oldname[:]), string(n.Newname[:]))
+}
+
+func (n *NameEvent) GetEventType() EventType {
+	return n.EventType
+}
+
+func (n *NameEvent) GetSyscallId() SyscallId {
+	return n.SyscallId
+}
+
+func (n *NameEvent) GetPid() uint32 {
+	return n.Pid
+}
+
+func (n *NameEvent) GetTid() uint32 {
+	return n.Tid
+}
+
+func (n *NameEvent) GetTime() uint32 {
+	return n.Time
+}
+
+var poolOfNameEvents = sync.Pool{
+	New: func() interface{} { return &NameEvent{} },
+}
+
+func NewNameEvent(raw []byte) *NameEvent {
+	n := poolOfNameEvents.Get().(*NameEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, n); err != nil {
+		fmt.Println(n, raw, len(raw), err)
+		panic(raw)
+	}
+	return n
+}
+
+func (n *NameEvent) Recycle() {
+	poolOfNameEvents.Put(n)
+}
+
 const SYS_EXIT_CACHESTAT SyscallId = 520
 const SYS_ENTER_CACHESTAT SyscallId = 521
 const SYS_EXIT_CLOSE_RANGE SyscallId = 692
@@ -488,6 +597,20 @@ const SYS_EXIT_LSEEK SyscallId = 762
 const SYS_ENTER_LSEEK SyscallId = 763
 const SYS_EXIT_NEWFSTAT SyscallId = 770
 const SYS_ENTER_NEWFSTAT SyscallId = 771
+const SYS_EXIT_RENAME SyscallId = 786
+const SYS_ENTER_RENAME SyscallId = 787
+const SYS_EXIT_RENAMEAT SyscallId = 788
+const SYS_ENTER_RENAMEAT SyscallId = 789
+const SYS_EXIT_RENAMEAT2 SyscallId = 790
+const SYS_ENTER_RENAMEAT2 SyscallId = 791
+const SYS_EXIT_LINK SyscallId = 792
+const SYS_ENTER_LINK SyscallId = 793
+const SYS_EXIT_LINKAT SyscallId = 794
+const SYS_ENTER_LINKAT SyscallId = 795
+const SYS_EXIT_SYMLINK SyscallId = 796
+const SYS_ENTER_SYMLINK SyscallId = 797
+const SYS_EXIT_SYMLINKAT SyscallId = 798
+const SYS_ENTER_SYMLINKAT SyscallId = 799
 const SYS_EXIT_FCNTL SyscallId = 814
 const SYS_ENTER_FCNTL SyscallId = 815
 const SYS_EXIT_IOCTL SyscallId = 816

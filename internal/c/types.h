@@ -11,6 +11,8 @@
 #define EXIT_FD_EVENT 6
 #define ENTER_RET_EVENT 7
 #define EXIT_RET_EVENT 8
+#define ENTER_NAME_EVENT 9
+#define EXIT_NAME_EVENT 10
 
 struct open_enter_event {
     __u32 event_type;
@@ -46,4 +48,14 @@ struct ret_event {
     __u32 tid;
     __s64 ret;
     __u32 time;
+};
+
+struct name_event {
+    __u32 event_type;
+    __u32 syscall_id;
+    __u32 pid;
+    __u32 tid;
+    __u32 time;
+    char oldname[MAX_FILENAME_LENGTH];
+    char newname[MAX_FILENAME_LENGTH];
 };

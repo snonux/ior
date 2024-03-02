@@ -38,6 +38,8 @@ class Format {
     has Field @.fields is rw;
     # file descriptor passed to syscalls.
     has Bool $.has-fd is rw = False;
+    # Has tracepoint has got oldname and name
+    has Bool $.has-name is rw = False;
     # Syscall returns with a long value (e.g. bytes read/written)
     has Bool $.has-long-ret is rw = False;
 
@@ -45,6 +47,8 @@ class Format {
         push @!fields: $field;
         if ($field.name eq 'fd' && $field.type eq 'unsigned int') {
             $!has-fd = True;
+        } elsif ($field.name eq 'newname' && $field.type eq 'const char *') {
+            $!has-name = True;
         } elsif ($field.name eq 'ret' && $field.type eq 'long') {
             $.has-long-ret = True;
         }
@@ -56,11 +60,22 @@ class Format {
 
     method generate-probe returns Str {
         my \is-enter = $!name.split('_')[1] eq 'enter';
-        my \is-exit = !is-enter;
         my \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter'
                                   !! 'trace_event_raw_sys_exit';
-        my \event-struct = is-enter ?? 'fd_event'
-                                    !! ($!has-long-ret ?? 'ret_event' !! 'null_event');
+        my \event-struct = do if $!has-fd { 'fd_event' }
+                           elsif $!has-long-ret { 'ret_event' }
+                           elsif $!has-name { 'name_event' }
+                           else { 'null_event' };
+        my \extra-data = do if $!has-fd { 'ev->fd = (__s32)ctx->args[0];' }
+                         elsif $!has-long-ret { 'ev->ret = ctx->ret;' }
+                         elsif $!has-name {
+                           q:to/END/.trim-trailing;
+                           __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+                               bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+                               bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+                           END
+                         }
+                         else { '' };
         qq:to/END/;
         SEC("tracepoint/syscalls/{$!name}")
         int handle_{$!name.lc}(struct {ctx-struct} *ctx) \{
@@ -77,8 +92,7 @@ class Format {
             ev->pid = pid;
             ev->tid = tid;
             ev->time = bpf_ktime_get_ns() / 1000;
-            {is-enter ?? 'ev->fd = (int)ctx->args[0];' 
-                      !! ($!has-long-ret ?? 'ev->ret = ctx->ret;' !! '') }
+            {extra-data}
 
             bpf_ringbuf_submit(ev, 0);
             return 0;
@@ -118,8 +132,7 @@ my Format @formats = gather for SysTraceFormat
     .parse($*IN.slurp,:actions(SysTraceFormatActions.new)).made
     # For each enter there is an exit tracepoint. E.g. sys_enter_open and sys_exit_open
     .classify(*.name.split('_').tail).values
-    # Check whether one of them (enter or exit) has an fd.
-    .grep(*.grep(*.has-fd).elems > 0) -> @_ { .take for @_ }
+    .grep({ $_.grep(*.has-fd) || $_.grep(*.has-name) }) -> @_ { .take for @_ }
 
 @formats .= sort(*.id);
 

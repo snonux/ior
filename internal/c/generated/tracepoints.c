@@ -28,6 +28,20 @@
 #define SYS_ENTER_LSEEK 763
 #define SYS_EXIT_NEWFSTAT 770
 #define SYS_ENTER_NEWFSTAT 771
+#define SYS_EXIT_RENAME 786
+#define SYS_ENTER_RENAME 787
+#define SYS_EXIT_RENAMEAT 788
+#define SYS_ENTER_RENAMEAT 789
+#define SYS_EXIT_RENAMEAT2 790
+#define SYS_ENTER_RENAMEAT2 791
+#define SYS_EXIT_LINK 792
+#define SYS_ENTER_LINK 793
+#define SYS_EXIT_LINKAT 794
+#define SYS_ENTER_LINKAT 795
+#define SYS_EXIT_SYMLINK 796
+#define SYS_ENTER_SYMLINK 797
+#define SYS_EXIT_SYMLINKAT 798
+#define SYS_ENTER_SYMLINKAT 799
 #define SYS_EXIT_FCNTL 814
 #define SYS_ENTER_FCNTL 815
 #define SYS_EXIT_IOCTL 816
@@ -89,7 +103,7 @@ int handle_sys_enter_cachestat(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -131,7 +145,7 @@ int handle_sys_enter_close_range(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -173,7 +187,7 @@ int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -215,7 +229,7 @@ int handle_sys_enter_fchown(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -257,7 +271,7 @@ int handle_sys_enter_fchmod(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -299,7 +313,7 @@ int handle_sys_enter_fchdir(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -341,7 +355,7 @@ int handle_sys_enter_ftruncate(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -374,16 +388,16 @@ int handle_sys_enter_copy_file_range(struct trace_event_raw_sys_enter *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_NULL_EVENT;
     ev->syscall_id = SYS_ENTER_COPY_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -425,7 +439,7 @@ int handle_sys_enter_pwrite64(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -467,7 +481,7 @@ int handle_sys_enter_pread64(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -509,7 +523,7 @@ int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -551,7 +565,7 @@ int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -593,7 +607,7 @@ int handle_sys_enter_lseek(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -635,7 +649,315 @@ int handle_sys_enter_newfstat(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_rename")
+int handle_sys_exit_rename(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->syscall_id = SYS_EXIT_RENAME;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->ret = ctx->ret;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_rename")
+int handle_sys_enter_rename(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NAME_EVENT;
+    ev->syscall_id = SYS_ENTER_RENAME;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_renameat")
+int handle_sys_exit_renameat(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->syscall_id = SYS_EXIT_RENAMEAT;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->ret = ctx->ret;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_renameat")
+int handle_sys_enter_renameat(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NAME_EVENT;
+    ev->syscall_id = SYS_ENTER_RENAMEAT;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_renameat2")
+int handle_sys_exit_renameat2(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->syscall_id = SYS_EXIT_RENAMEAT2;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->ret = ctx->ret;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_renameat2")
+int handle_sys_enter_renameat2(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NAME_EVENT;
+    ev->syscall_id = SYS_ENTER_RENAMEAT2;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_link")
+int handle_sys_exit_link(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->syscall_id = SYS_EXIT_LINK;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->ret = ctx->ret;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_link")
+int handle_sys_enter_link(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NAME_EVENT;
+    ev->syscall_id = SYS_ENTER_LINK;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_linkat")
+int handle_sys_exit_linkat(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->syscall_id = SYS_EXIT_LINKAT;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->ret = ctx->ret;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_linkat")
+int handle_sys_enter_linkat(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NAME_EVENT;
+    ev->syscall_id = SYS_ENTER_LINKAT;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_symlink")
+int handle_sys_exit_symlink(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->syscall_id = SYS_EXIT_SYMLINK;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->ret = ctx->ret;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_symlink")
+int handle_sys_enter_symlink(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NAME_EVENT;
+    ev->syscall_id = SYS_ENTER_SYMLINK;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_symlinkat")
+int handle_sys_exit_symlinkat(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->syscall_id = SYS_EXIT_SYMLINKAT;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->ret = ctx->ret;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_symlinkat")
+int handle_sys_enter_symlinkat(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NAME_EVENT;
+    ev->syscall_id = SYS_ENTER_SYMLINKAT;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_ns() / 1000;
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (const char*)ctx->args[0]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (const char*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -677,7 +999,7 @@ int handle_sys_enter_fcntl(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -719,7 +1041,7 @@ int handle_sys_enter_ioctl(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -761,7 +1083,7 @@ int handle_sys_enter_getdents64(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -803,7 +1125,7 @@ int handle_sys_enter_getdents(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -836,16 +1158,16 @@ int handle_sys_enter_sync_file_range(struct trace_event_raw_sys_enter *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_NULL_EVENT;
     ev->syscall_id = SYS_ENTER_SYNC_FILE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -887,7 +1209,7 @@ int handle_sys_enter_fdatasync(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -929,7 +1251,7 @@ int handle_sys_enter_fsync(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -971,7 +1293,7 @@ int handle_sys_enter_fstatfs(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1013,7 +1335,7 @@ int handle_sys_enter_flock(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1055,7 +1377,7 @@ int handle_sys_enter_quotactl_fd(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1097,7 +1419,7 @@ int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1139,7 +1461,7 @@ int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
-    ev->fd = (int)ctx->args[0];
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
