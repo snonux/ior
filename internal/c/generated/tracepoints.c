@@ -1,71 +1,71 @@
 // Code generated - don't change manually!
 
-#define SYS_EXIT_CACHESTAT 520
-#define SYS_ENTER_CACHESTAT 521
-#define SYS_EXIT_CLOSE_RANGE 692
-#define SYS_ENTER_CLOSE_RANGE 693
-#define SYS_EXIT_CLOSE 694
-#define SYS_ENTER_CLOSE 695
-#define SYS_EXIT_FCHOWN 704
-#define SYS_ENTER_FCHOWN 705
-#define SYS_EXIT_FCHMOD 718
-#define SYS_ENTER_FCHMOD 719
-#define SYS_EXIT_FCHDIR 722
-#define SYS_ENTER_FCHDIR 723
-#define SYS_EXIT_FTRUNCATE 734
-#define SYS_ENTER_FTRUNCATE 735
-#define SYS_EXIT_COPY_FILE_RANGE 738
-#define SYS_ENTER_COPY_FILE_RANGE 739
-#define SYS_EXIT_PWRITE64 754
-#define SYS_ENTER_PWRITE64 755
-#define SYS_EXIT_PREAD64 756
-#define SYS_ENTER_PREAD64 757
-#define SYS_EXIT_WRITE 758
-#define SYS_ENTER_WRITE 759
-#define SYS_EXIT_READ 760
-#define SYS_ENTER_READ 761
-#define SYS_EXIT_LSEEK 762
-#define SYS_ENTER_LSEEK 763
-#define SYS_EXIT_NEWFSTAT 770
-#define SYS_ENTER_NEWFSTAT 771
-#define SYS_EXIT_RENAME 786
-#define SYS_ENTER_RENAME 787
-#define SYS_EXIT_RENAMEAT 788
-#define SYS_ENTER_RENAMEAT 789
-#define SYS_EXIT_RENAMEAT2 790
-#define SYS_ENTER_RENAMEAT2 791
-#define SYS_EXIT_LINK 792
-#define SYS_ENTER_LINK 793
-#define SYS_EXIT_LINKAT 794
-#define SYS_ENTER_LINKAT 795
-#define SYS_EXIT_SYMLINK 796
-#define SYS_ENTER_SYMLINK 797
-#define SYS_EXIT_SYMLINKAT 798
-#define SYS_ENTER_SYMLINKAT 799
-#define SYS_EXIT_FCNTL 814
-#define SYS_ENTER_FCNTL 815
-#define SYS_EXIT_IOCTL 816
-#define SYS_ENTER_IOCTL 817
-#define SYS_EXIT_GETDENTS64 818
-#define SYS_ENTER_GETDENTS64 819
-#define SYS_EXIT_GETDENTS 820
-#define SYS_ENTER_GETDENTS 821
-#define SYS_EXIT_SYNC_FILE_RANGE 914
-#define SYS_ENTER_SYNC_FILE_RANGE 915
-#define SYS_EXIT_FDATASYNC 916
-#define SYS_ENTER_FDATASYNC 917
-#define SYS_EXIT_FSYNC 918
-#define SYS_ENTER_FSYNC 919
-#define SYS_EXIT_FSTATFS 936
-#define SYS_ENTER_FSTATFS 937
-#define SYS_EXIT_FLOCK 1012
-#define SYS_ENTER_FLOCK 1013
-#define SYS_EXIT_QUOTACTL_FD 1043
-#define SYS_ENTER_QUOTACTL_FD 1044
-#define SYS_EXIT_IO_URING_REGISTER 1366
-#define SYS_ENTER_IO_URING_REGISTER 1367
-#define SYS_EXIT_IO_URING_ENTER 1370
-#define SYS_ENTER_IO_URING_ENTER 1371
+#define SYS_EXIT_CACHESTAT 527
+#define SYS_ENTER_CACHESTAT 528
+#define SYS_EXIT_CLOSE_RANGE 700
+#define SYS_ENTER_CLOSE_RANGE 701
+#define SYS_EXIT_CLOSE 702
+#define SYS_ENTER_CLOSE 703
+#define SYS_EXIT_FCHOWN 712
+#define SYS_ENTER_FCHOWN 713
+#define SYS_EXIT_FCHMOD 726
+#define SYS_ENTER_FCHMOD 727
+#define SYS_EXIT_FCHDIR 730
+#define SYS_ENTER_FCHDIR 731
+#define SYS_EXIT_FTRUNCATE 742
+#define SYS_ENTER_FTRUNCATE 743
+#define SYS_EXIT_COPY_FILE_RANGE 746
+#define SYS_ENTER_COPY_FILE_RANGE 747
+#define SYS_EXIT_PWRITE64 762
+#define SYS_ENTER_PWRITE64 763
+#define SYS_EXIT_PREAD64 764
+#define SYS_ENTER_PREAD64 765
+#define SYS_EXIT_WRITE 766
+#define SYS_ENTER_WRITE 767
+#define SYS_EXIT_READ 768
+#define SYS_ENTER_READ 769
+#define SYS_EXIT_LSEEK 770
+#define SYS_ENTER_LSEEK 771
+#define SYS_EXIT_NEWFSTAT 778
+#define SYS_ENTER_NEWFSTAT 779
+#define SYS_EXIT_RENAME 794
+#define SYS_ENTER_RENAME 795
+#define SYS_EXIT_RENAMEAT 796
+#define SYS_ENTER_RENAMEAT 797
+#define SYS_EXIT_RENAMEAT2 798
+#define SYS_ENTER_RENAMEAT2 799
+#define SYS_EXIT_LINK 800
+#define SYS_ENTER_LINK 801
+#define SYS_EXIT_LINKAT 802
+#define SYS_ENTER_LINKAT 803
+#define SYS_EXIT_SYMLINK 804
+#define SYS_ENTER_SYMLINK 805
+#define SYS_EXIT_SYMLINKAT 806
+#define SYS_ENTER_SYMLINKAT 807
+#define SYS_EXIT_FCNTL 822
+#define SYS_ENTER_FCNTL 823
+#define SYS_EXIT_IOCTL 824
+#define SYS_ENTER_IOCTL 825
+#define SYS_EXIT_GETDENTS64 826
+#define SYS_ENTER_GETDENTS64 827
+#define SYS_EXIT_GETDENTS 828
+#define SYS_ENTER_GETDENTS 829
+#define SYS_EXIT_SYNC_FILE_RANGE 922
+#define SYS_ENTER_SYNC_FILE_RANGE 923
+#define SYS_EXIT_FDATASYNC 924
+#define SYS_ENTER_FDATASYNC 925
+#define SYS_EXIT_FSYNC 926
+#define SYS_ENTER_FSYNC 927
+#define SYS_EXIT_FSTATFS 944
+#define SYS_ENTER_FSTATFS 945
+#define SYS_EXIT_FLOCK 1020
+#define SYS_ENTER_FLOCK 1021
+#define SYS_EXIT_QUOTACTL_FD 1051
+#define SYS_ENTER_QUOTACTL_FD 1052
+#define SYS_EXIT_IO_URING_REGISTER 1377
+#define SYS_ENTER_IO_URING_REGISTER 1378
+#define SYS_EXIT_IO_URING_ENTER 1381
+#define SYS_ENTER_IO_URING_ENTER 1382
 
 SEC("tracepoint/syscalls/sys_exit_cachestat")
 int handle_sys_exit_cachestat(struct trace_event_raw_sys_exit *ctx) {
@@ -736,8 +736,8 @@ int handle_sys_enter_renameat(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -780,8 +780,8 @@ int handle_sys_enter_renameat2(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -868,8 +868,8 @@ int handle_sys_enter_linkat(struct trace_event_raw_sys_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -957,7 +957,7 @@ int handle_sys_enter_symlinkat(struct trace_event_raw_sys_enter *ctx) {
     ev->time = bpf_ktime_get_ns() / 1000;
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
-    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
+    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[2]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
