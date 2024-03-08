@@ -23,8 +23,13 @@ grammar NQC {
     token number { \d+ }
 }
 
+class Constant {
+    has Str $.name is required;
+    has Int $.value is required;
+}
+
 class NQCToGoActions {
-    has Str @!const-names;
+    has Constant @!constants;
     has Bool $!constant-type-set;
 
     method TOP($/) {
@@ -46,7 +51,7 @@ class NQCToGoActions {
     }
 
     method constant($/) {
-        push @!const-names: ~$<identifier>;
+        push @!constants: Constant.new(:name(~$<identifier>), :value(+$<number>));
         my $const-type = $<identifier>.starts-with('SYS_') ?? ' TraceId ' !! '';
 
         make qq:to/END/;
@@ -59,22 +64,32 @@ class NQCToGoActions {
         type EventType uint32
         type TraceId uint32
 
+        var traceId2String = map[TraceId]string\{
+            {@!constants.grep({ $_.name ~~ /^SYS_/ }).map({
+                "{$_.value}: \"{$_.name.subst('SYS_', '').lc}\""
+            }).join(', ')},
+        \}
+
+        var traceId2Name = map[TraceId]string\{
+            {@!constants.grep({ $_.name ~~ /^SYS_/ }).map({
+                "{$_.value}: \"{$_.name.subst(/'SYS_ENTER_'|'SYS_EXIT_'/, '').lc}\""
+            }).join(', ')},
+        \}
+
         func (s TraceId) String() string \{
-            switch (s) \{
-            {@!const-names.grep(/^SYS_/).map({
-                "case $_: return \"{$_.subst('SYS_', '').lc}\""
-            }).join('; ')}
-            default: panic(fmt.Sprintf("Unknown TraceId: %d", s))
+            str, ok := traceId2String[s]
+            if !ok \{
+                panic(fmt.Sprintf("no string representation for trace ID %d found", s))
             \}
+            return str
         \}
 
         func (s TraceId) Name() string \{
-            switch (s) \{
-            {@!const-names.grep(/^SYS_/).map({
-                "case $_: return \"{$_.subst(/'SYS_ENTER_'|'SYS_EXIT_'/, '').lc}\""
-            }).join('; ')}
-            default: panic(fmt.Sprintf("Unknown TraceId: %d", s))
+            str, ok := traceId2Name[s]
+            if !ok \{
+                panic(fmt.Sprintf("no name for trace ID %d found", s))
             \}
+            return str
         \}
         END
     }
