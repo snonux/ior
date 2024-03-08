@@ -72,6 +72,11 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			}
 			ev.comm, _ = comms[ev.enterEv.GetTid()]
 
+		case *PathEvent:
+			nameEvent := ev.enterEv.(*PathEvent)
+			ev.file = pathnameFile{string(nameEvent.Pathname[:])}
+			ev.comm, _ = comms[ev.enterEv.GetTid()]
+
 		case *FdEvent:
 			fd := ev.enterEv.(*FdEvent).Fd
 			if file_, ok := files[fd]; ok {

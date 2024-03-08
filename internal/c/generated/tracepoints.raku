@@ -45,8 +45,10 @@ class Format {
 
     # file descriptor passed to syscalls.
     has Bool $.has-fd is rw = False;
-    # Has tracepoint has got oldname and name
+    # Tracepoint has oldname/newname
     has Bool $.has-name is rw = False;
+    # Tracepoint has pathname
+    has Bool $.has-path is rw = False;
     # Syscall returns with a long value (e.g. bytes read/written)
     has Bool $.has-long-ret is rw = False;
 
@@ -65,6 +67,8 @@ class Format {
             $!has-fd = True;
         } elsif (field.name eq 'newname' && field.type eq 'const char *') {
             $!has-name = True;
+        } elsif (field.name eq 'pathname' && field.type eq 'const char *') {
+            $!has-path = True;
         } elsif (field.name eq 'ret' && field.type eq 'long') {
             $.has-long-ret = True;
         }
@@ -85,6 +89,7 @@ class Format {
         my \event-struct = do if $!has-fd { 'fd_event' }
                            elsif $!has-long-ret { 'ret_event' }
                            elsif $!has-name { 'name_event' }
+                           elsif $!has-path { 'path_event' }
                            else { 'null_event' };
         my \extra-data = do if $!has-fd { 'ev->fd = (__s32)ctx->args[0];' }
                          elsif $!has-long-ret { 'ev->ret = ctx->ret;' }
@@ -95,6 +100,12 @@ class Format {
                            __builtin_memset(\&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
                                bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[{oldname-index}]);
                                bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[{newname-index}]);
+                           END
+                         } elsif $!has-path {
+                           my Int \pathname-index = self!field-number('pathname');
+                           qq:to/END/.trim-trailing;
+                           __builtin_memset(\&(ev->pathname), 0, sizeof(ev->pathname));
+                               bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[{pathname-index}]);
                            END
                          }
                          else { '' };
@@ -154,7 +165,7 @@ my Format @formats = gather for SysTraceFormat
     .parse($*IN.slurp,:actions(SysTraceFormatActions.new)).made
     # For each enter there is an exit tracepoint. E.g. sys_enter_open and sys_exit_open
     .classify(*.name.split('_').tail).values
-    .grep({ $_.grep(*.has-fd) || $_.grep(*.has-name) }) -> @_ { .take for @_ }
+    .grep({ $_.grep(*.has-fd) || $_.grep(*.has-name) || $_.grep(*.has-path) }) -> @_ { .take for @_ }
 
 @formats .= sort(*.id);
 

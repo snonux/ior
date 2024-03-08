@@ -43,3 +43,16 @@ func (f oldnameNewnameFile) String() string {
 
 	return sb.String()
 }
+
+type pathnameFile struct {
+	pathname string
+}
+
+func (f pathnameFile) String() string {
+	var sb strings.Builder
+
+	sb.WriteString("pathname:")
+	sb.WriteString(f.pathname)
+
+	return sb.String()
+}

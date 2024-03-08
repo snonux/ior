@@ -13,6 +13,8 @@
 #define EXIT_RET_EVENT 8
 #define ENTER_NAME_EVENT 9
 #define EXIT_NAME_EVENT 10
+#define ENTER_PATH_EVENT 11
+#define EXIT_PATH_EVENT 12
 
 struct open_event {
     __u32 event_type;
@@ -58,4 +60,13 @@ struct name_event {
     __u32 time;
     char oldname[MAX_FILENAME_LENGTH];
     char newname[MAX_FILENAME_LENGTH];
+};
+
+struct path_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u32 pid;
+    __u32 tid;
+    __u32 time;
+    char pathname[MAX_FILENAME_LENGTH];
 };
