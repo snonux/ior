@@ -118,6 +118,8 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 				exit(NewRetEvent(raw))
 			case ENTER_NAME_EVENT:
 				enter(NewNameEvent(raw))
+			case ENTER_PATH_EVENT:
+				enter(NewPathEvent(raw))
 			default:
 				panic(fmt.Sprintf("unhandled event type %v", EventType(raw[0])))
 			}
