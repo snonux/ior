@@ -28,85 +28,8 @@ class Constant {
     has Int $.value is required;
 }
 
-class NQCToGoActions {
-    has Constant @!constants;
-    has Bool $!constant-type-set;
-
-    method TOP($/) {
-        make qq:to/END/;
-        // Code generated - don't change manually!
-        package types
-        
-        {self!constant-go-methods}
-        {$<construct>.map(*.made).join('')}
-        END
-    }
-
-    method construct($/) {
-        make $<constant>.made // $<statement>.made // '';
-    }
-
-    method statement($/) {
-        make "\n" ~ $<struct>.made;
-    }
-
-    method constant($/) {
-        push @!constants: Constant.new(:name(~$<identifier>), :value(+$<number>));
-        my $const-type = $<identifier>.starts-with('SYS_') ?? ' TraceId ' !! '';
-
-        make qq:to/END/;
-        const {$<identifier>}$const-type = {$<number>}
-        END
-    }
-
-    method !constant-go-methods returns Str {
-        qq:to/END/;
-        type EventType uint32
-        type TraceId uint32
-
-        var traceId2String = map[TraceId]string\{
-            {@!constants.grep({ $_.name ~~ /^SYS_/ }).map({
-                "{$_.value}: \"{$_.name.subst('SYS_', '').lc}\""
-            }).join(', ')},
-        \}
-
-        var traceId2Name = map[TraceId]string\{
-            {@!constants.grep({ $_.name ~~ /^SYS_/ }).map({
-                "{$_.value}: \"{$_.name.subst(/'SYS_ENTER_'|'SYS_EXIT_'/, '').lc}\""
-            }).join(', ')},
-        \}
-
-        func (s TraceId) String() string \{
-            str, ok := traceId2String[s]
-            if !ok \{
-                panic(fmt.Sprintf("no string representation for trace ID %d found", s))
-            \}
-            return str
-        \}
-
-        func (s TraceId) Name() string \{
-            str, ok := traceId2Name[s]
-            if !ok \{
-                panic(fmt.Sprintf("no name for trace ID %d found", s))
-            \}
-            return str
-        \}
-        END
-    }
-
-    method struct($/) {
-        make qq:to/END/;
-        type {$<identifier>.made} struct \{
-            {$<member>.map(*.made).join('; ')} 
-        \}
-        
-        {self!struct-go-methods($/)}
-        {($<identifier>.made.ends-with('Event') ?? "\n" ~ self!struct-go-sync-pool($/) !! '')}
-        END
-    }
-
-    # Generate String() and other methods on the Go struct, for pretty printing.
-    method !struct-go-methods($/) returns Str {
+role StructGoMethods {
+    method struct-go-methods($/) returns Str {
         my Str $self-ref = $<identifier>.lc.substr(0,1);
         my Str @format = $<member>.map({ $_.<identifier>.made ~ ':%v' });
 
@@ -143,7 +66,7 @@ class NQCToGoActions {
         END
     }
 
-    method !struct-go-sync-pool($/) returns Str {
+    method struct-go-sync-pool($/) returns Str {
         my Str $identifier = $/<identifier>.made;
         my Str $self-ref = $identifier.lc.substr(0,1);
 
@@ -164,6 +87,88 @@ class NQCToGoActions {
         func ($self-ref *$identifier) Recycle() \{
             poolOf{$identifier}s.Put($self-ref)
         \}
+        END
+    }
+}
+
+role ConstantGoMethods {
+    has Constant @!constants;
+
+    method constant-go-methods returns Str {
+        qq:to/END/;
+        type EventType uint32
+        type TraceId uint32
+
+        var traceId2String = map[TraceId]string\{
+            {@!constants.grep({ $_.name ~~ /^SYS_/ }).map({
+                "{$_.value}: \"{$_.name.subst('SYS_', '').lc}\""
+            }).join(', ')},
+        \}
+
+        var traceId2Name = map[TraceId]string\{
+            {@!constants.grep({ $_.name ~~ /^SYS_/ }).map({
+                "{$_.value}: \"{$_.name.subst(/'SYS_ENTER_'|'SYS_EXIT_'/, '').lc}\""
+            }).join(', ')},
+        \}
+
+        func (s TraceId) String() string \{
+            str, ok := traceId2String[s]
+            if !ok \{
+                panic(fmt.Sprintf("no string representation for trace ID %d found", s))
+            \}
+            return str
+        \}
+
+        func (s TraceId) Name() string \{
+            str, ok := traceId2Name[s]
+            if !ok \{
+                panic(fmt.Sprintf("no name for trace ID %d found", s))
+            \}
+            return str
+        \}
+        END
+    }
+
+}
+
+class NQCToGoActions does StructGoMethods does ConstantGoMethods {
+    has Bool $!constant-type-set;
+
+    method TOP($/) {
+        make qq:to/END/;
+        // Code generated - don't change manually!
+        package types
+        
+        {self.constant-go-methods}
+        {$<construct>.map(*.made).join('')}
+        END
+    }
+
+    method construct($/) {
+        make $<constant>.made // $<statement>.made // '';
+    }
+
+    method statement($/) {
+        make "\n" ~ $<struct>.made;
+    }
+
+    method constant($/) {
+        push @!constants: Constant.new(:name(~$<identifier>), :value(+$<number>));
+        my $const-type = $<identifier>.starts-with('SYS_') ?? ' TraceId ' !! '';
+
+        make qq:to/END/;
+        const {$<identifier>}$const-type = {$<number>}
+        END
+    }
+
+    method struct($/) {
+        make qq:to/END/;
+        type {$<identifier>.made} struct \{
+            {$<member>.map(*.made).join('; ')} 
+        \}
+        
+        {self.struct-go-methods($/)}
+        {($<identifier>.made.ends-with('Event') ?? "\n" ~ self.struct-go-sync-pool($/) !! '')}
         END
     }
 
