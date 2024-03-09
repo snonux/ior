@@ -12,6 +12,7 @@ grammar SysTraceFormat {
     rule field { 'field:' <field-elements> }
     rule field-elements { <field-declaration> <field-offset> <field-size> <field-signed> }
     rule field-declaration { <field-type>+ <identifier> ';' }
+
     token field-type { <-[ \t]> }
     token field-offset { 'offset:' <number> ';' }
     token field-size { 'size:' <number> ';' }
@@ -32,13 +33,12 @@ class Field {
 }
 
 role TracepointTemplate {
-    method template(%vals) returns Str {
-        my \is-enter = %vals<name>.split('_')[1] eq 'enter';
-        my \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter'
-                                  !! 'trace_event_raw_sys_exit';
+    method template(%vals --> Str) {
+        my Bool \is-enter = %vals<name>.split('_')[1] eq 'enter';
+        my Str \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter' !! 'trace_event_raw_sys_exit';
         my Str @parts;
 
-        @parts.push: qq:to/END/;
+        @parts.push: qq:to/BPF_C_CODE/;
         SEC("tracepoint/syscalls/{%vals<name>}")
         int handle_{%vals<name>.lc}(struct {ctx-struct} *ctx) \{
             __u32 pid, tid;
@@ -54,96 +54,90 @@ role TracepointTemplate {
             ev->pid = pid;
             ev->tid = tid;
             ev->time = bpf_ktime_get_ns() / 1000;
-        END
+        BPF_C_CODE
 
         @parts.push: %vals<extra> if %vals<extra>:exists;
 
-        @parts.push: qq:to/END/;
+        @parts.push: qq:to/BPF_C_CODE/;
 
             bpf_ringbuf_submit(ev, 0);
             return 0;
         \}
-        END
+        BPF_C_CODE
 
-        @parts.join('');
+        [~] @parts;
     }
 }
 
 class FdTracepoint does TracepointTemplate {
-    method generate-bpf-c-tracepoint(%vals) returns Str {
-        my Str $extra = qq:to/END/;
+    method generate-bpf-c-tracepoint(%vals --> Str) {
+        my Str $extra = qq:to/BPF_C_CODE/;
             ev->fd = (__s32)ctx->args[0];
-        END
+        BPF_C_CODE
         self.template: %vals.append( ( event-struct => 'fd_event', :$extra ).hash );
     }
 }
 
 class NameTracepoint does TracepointTemplate {
-    method generate-bpf-c-tracepoint(%vals) returns Str {
+    method generate-bpf-c-tracepoint(%vals --> Str) {
         my Int \oldname-field-number = %vals<format>.field-number('oldname');
         my Int \newname-field-number = %vals<format>.field-number('newname');
-        my Str $extra = qq:to/END/;
+        my Str $extra = qq:to/BPF_C_CODE/;
             __builtin_memset(\&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
             bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[{oldname-field-number}]);
             bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[{newname-field-number}]);
-        END
+        BPF_C_CODE
         self.template: %vals.append( ( event-struct => 'name_event', :$extra ).hash );
     }
 }
 
 class OpenTracepoint does TracepointTemplate {
-    method generate-bpf-c-tracepoint(%vals) returns Str {
+    method generate-bpf-c-tracepoint(%vals --> Str) {
         my Int \field-number = %vals<format>.field-number('filename');
-        my Str $extra = qq:to/END/;
+        my Str $extra = qq:to/BPF_C_CODE/;
             __builtin_memset(\&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
             bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[{field-number}]);
             bpf_get_current_comm(\&ev->comm, sizeof(ev->comm));
-        END
+        BPF_C_CODE
         self.template: %vals.append( ( event-struct => 'open_event', :$extra ).hash );
     }
 }
 
 class PathnameTracepoint does TracepointTemplate {
-    method generate-bpf-c-tracepoint(%vals) returns Str {
+    method generate-bpf-c-tracepoint(%vals --> Str) {
         my Int \field-number = %vals<format>.field-number('pathname');
-        my Str $extra = qq:to/END/;
+        my Str $extra = qq:to/BPF_C_CODE/;
             __builtin_memset(\&(ev->pathname), 0, sizeof(ev->pathname));
             bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[{field-number}]);
-        END
+        BPF_C_CODE
         self.template: %vals.append( ( event-struct => 'path_event', :$extra ).hash );
     }
 }
 
 class RetTracepoint does TracepointTemplate {
-    method generate-bpf-c-tracepoint(%vals) returns Str {
-        my Str $extra = q:to/END/;
+    method generate-bpf-c-tracepoint(%vals --> Str) {
+        my Str $extra = q:to/BPF_C_CODE/;
             ev->ret = ctx->ret; 
-        END
+        BPF_C_CODE
         self.template: %vals.append( ( event-struct => 'ret_event', :$extra ).hash );
     }
 }
 
 class NullTracepoint does TracepointTemplate {
-    method generate-bpf-c-tracepoint(%vals) returns Str {
+    method generate-bpf-c-tracepoint(%vals --> Str) {
         self.template: %vals.append( ( event-struct => 'null_event' ).hash );
     }
 }
 
 class Format {
-    # Fields not accessible from raw tracepoints.
-    has Field @!internal-fields;
-    # Fields accessible from raw tracepoints.
-    has Field @!external-fields;
-    # Track internal/external field sections.
-    has Bool $!is-external = False;
-
+    has Field @!internal-fields; # Fields not accessible from raw tracepoints.
+    has Field @!external-fields; # Fields accessible from raw tracepoints.
+    has Bool $!is-external = False; # Track internal/external field sections.
     has Str $.name is rw;
     has Int $.id is rw;
-
     has $.format-impl;
 
     method push(Field \field) {
-        # External fields start from this field name.
         $!is-external = True if field.name eq '__syscall_nr'; 
 
         if $!is-external {
@@ -153,18 +147,15 @@ class Format {
             return;
         }
 
-        if (field.name eq 'fd' && field.type eq 'unsigned int') {
-            $!format-impl = FdTracepoint.new;
-        } elsif (field.name eq 'newname' && field.type eq 'const char *') {
-            $!format-impl = NameTracepoint.new;
-        } elsif (field.name eq 'filename' && field.type eq 'const char *') {
-            $!format-impl = OpenTracepoint.new;
-        } elsif (field.name eq 'pathname' && field.type eq 'const char *') {
-            $!format-impl =  PathnameTracepoint.new;
-        } elsif (field.name eq 'ret' && field.type eq 'long') {
-            $!format-impl = RetTracepoint.new;
-        }
+        self.set-format-impl(field.name, field.type);
     }
+
+    multi method set-format-impl('fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
+    multi method set-format-impl('newname', 'const char *') { $!format-impl = NameTracepoint.new }
+    multi method set-format-impl('filename', 'const char *') { $!format-impl = OpenTracepoint.new }
+    multi method set-format-impl('pathname', 'const char *') { $!format-impl = PathnameTracepoint.new }
+    multi method set-format-impl('ret', 'long') { $!format-impl = RetTracepoint.new }
+    multi method set-format-impl($, $) { }
 
     method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
     method generate-bpf-c-tracepoint returns Str { $!format-impl.generate-bpf-c-tracepoint: (format => self, :$!name).hash }
@@ -210,10 +201,10 @@ my Format @formats = gather for
 
 @formats .= sort({ $^b.id cmp $^a.id });
 
-say qq:to/END/;
+say qq:to/BPF_C_CODE/;
 // Code generated - don't change manually!
 
 {@formats.map(*.generate-c-constant).join("\n")}
 
 {@formats.map(*.generate-bpf-c-tracepoint).join("\n")}
-END
+BPF_C_CODE
