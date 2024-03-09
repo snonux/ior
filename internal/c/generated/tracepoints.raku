@@ -1,7 +1,6 @@
 #!/usr/bin/env raku
 
 use v6.d;
-#use Grammar::Debugger;
 
 grammar SysTraceFormat {
     rule TOP { <whole-format-section>* }
@@ -32,6 +31,104 @@ class Field {
     has Bool $.signed is rw;
 }
 
+role TracepointTemplate {
+    method template(%vals) returns Str {
+        my \is-enter = %vals<name>.split('_')[1] eq 'enter';
+        my \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter'
+                                  !! 'trace_event_raw_sys_exit';
+        my Str @parts;
+
+        @parts.push: qq:to/END/;
+        SEC("tracepoint/syscalls/{%vals<name>}")
+        int handle_{%vals<name>.lc}(struct {ctx-struct} *ctx) \{
+            __u32 pid, tid;
+            if (filter(&pid, &tid))
+                return 0;
+
+            struct {%vals<event-struct>} *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct {%vals<event-struct>}), 0);
+            if (!ev)
+                return 0;
+
+            ev->event_type = {(is-enter ?? 'ENTER_' !! 'EXIT_') ~ %vals<event-struct>.uc};
+            ev->trace_id = {%vals<name>.uc};
+            ev->pid = pid;
+            ev->tid = tid;
+            ev->time = bpf_ktime_get_ns() / 1000;
+        END
+
+        @parts.push: %vals<extra> if %vals<extra>:exists;
+
+        @parts.push: qq:to/END/;
+
+            bpf_ringbuf_submit(ev, 0);
+            return 0;
+        \}
+        END
+
+        @parts.join('');
+    }
+}
+
+class FdTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals) returns Str {
+        my Str $extra = qq:to/END/;
+            ev->fd = (__s32)ctx->args[0];
+        END
+        self.template: %vals.append( ( event-struct => 'fd_event', :$extra ).hash );
+    }
+}
+
+class NameTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals) returns Str {
+        my Int \oldname-field-number = %vals<format>.field-number('oldname');
+        my Int \newname-field-number = %vals<format>.field-number('newname');
+        my Str $extra = qq:to/END/;
+            __builtin_memset(\&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+            bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[{oldname-field-number}]);
+            bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[{newname-field-number}]);
+        END
+        self.template: %vals.append( ( event-struct => 'name_event', :$extra ).hash );
+    }
+}
+
+class OpenTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals) returns Str {
+        my Int \field-number = %vals<format>.field-number('filename');
+        my Str $extra = qq:to/END/;
+            __builtin_memset(\&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
+            bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[{field-number}]);
+            bpf_get_current_comm(\&ev->comm, sizeof(ev->comm));
+        END
+        self.template: %vals.append( ( event-struct => 'open_event', :$extra ).hash );
+    }
+}
+
+class PathnameTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals) returns Str {
+        my Int \field-number = %vals<format>.field-number('pathname');
+        my Str $extra = qq:to/END/;
+            __builtin_memset(\&(ev->pathname), 0, sizeof(ev->pathname));
+            bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[{field-number}]);
+        END
+        self.template: %vals.append( ( event-struct => 'path_event', :$extra ).hash );
+    }
+}
+
+class RetTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals) returns Str {
+        my Str $extra = q:to/END/;
+            ev->ret = ctx->ret; 
+        END
+        self.template: %vals.append( ( event-struct => 'ret_event', :$extra ).hash );
+    }
+}
+
+class NullTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals) returns Str {
+        self.template: %vals.append( ( event-struct => 'null_event' ).hash );
+    }
+}
+
 class Format {
     # Fields not accessible from raw tracepoints.
     has Field @!internal-fields;
@@ -43,14 +140,7 @@ class Format {
     has Str $.name is rw;
     has Int $.id is rw;
 
-    # file descriptor passed to syscalls.
-    has Bool $.has-fd is rw = False;
-    # Tracepoint has oldname/newname
-    has Bool $.has-name is rw = False;
-    # Tracepoint has pathname
-    has Bool $.has-path is rw = False;
-    # Syscall returns with a long value (e.g. bytes read/written)
-    has Bool $.has-long-ret is rw = False;
+    has $.format-impl;
 
     method push(Field \field) {
         # External fields start from this field name.
@@ -64,85 +154,36 @@ class Format {
         }
 
         if (field.name eq 'fd' && field.type eq 'unsigned int') {
-            $!has-fd = True;
+            $!format-impl = FdTracepoint.new;
         } elsif (field.name eq 'newname' && field.type eq 'const char *') {
-            $!has-name = True;
+            $!format-impl = NameTracepoint.new;
+        } elsif (field.name eq 'filename' && field.type eq 'const char *') {
+            $!format-impl = OpenTracepoint.new;
         } elsif (field.name eq 'pathname' && field.type eq 'const char *') {
-            $!has-path = True;
+            $!format-impl =  PathnameTracepoint.new;
         } elsif (field.name eq 'ret' && field.type eq 'long') {
-            $.has-long-ret = True;
+            $!format-impl = RetTracepoint.new;
         }
     }
 
-    method !field-number(Str \field-name) {
-        @!external-fields.first(*.name eq field-name, :k) - 1;
-    }
+    method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
+    method generate-bpf-c-tracepoint returns Str { $!format-impl.generate-bpf-c-tracepoint: (format => self, :$!name).hash }
 
-    method generate-constant returns Str {
-        "#define {$!name.uc} {$!id}";
-    }
-
-    method generate-probe returns Str {
-        my \is-enter = $!name.split('_')[1] eq 'enter';
-        my \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter'
-                                  !! 'trace_event_raw_sys_exit';
-        my \event-struct = do if $!has-fd { 'fd_event' }
-                           elsif $!has-long-ret { 'ret_event' }
-                           elsif $!has-name { 'name_event' }
-                           elsif $!has-path { 'path_event' }
-                           else { 'null_event' };
-        my \extra-data = do if $!has-fd { 'ev->fd = (__s32)ctx->args[0];' }
-                         elsif $!has-long-ret { 'ev->ret = ctx->ret;' }
-                         elsif $!has-name {
-                           my Int \oldname-index = self!field-number('oldname');
-                           my Int \newname-index = self!field-number('newname');
-                           qq:to/END/.trim-trailing;
-                           __builtin_memset(\&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
-                               bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[{oldname-index}]);
-                               bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[{newname-index}]);
-                           END
-                         } elsif $!has-path {
-                           my Int \pathname-index = self!field-number('pathname');
-                           qq:to/END/.trim-trailing;
-                           __builtin_memset(\&(ev->pathname), 0, sizeof(ev->pathname));
-                               bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[{pathname-index}]);
-                           END
-                         }
-                         else { '' };
-        qq:to/END/;
-        SEC("tracepoint/syscalls/{$!name}")
-        int handle_{$!name.lc}(struct {ctx-struct} *ctx) \{
-            __u32 pid, tid;
-            if (filter(&pid, &tid))
-                return 0;
-
-            struct {event-struct} *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct {event-struct}), 0);
-            if (!ev)
-                return 0;
-
-            ev->event_type = {(is-enter ?? 'ENTER_' !! 'EXIT_') ~ event-struct.uc};
-            ev->trace_id = {$!name.uc};
-            ev->pid = pid;
-            ev->tid = tid;
-            ev->time = bpf_ktime_get_ns() / 1000;
-            {extra-data}
-
-            bpf_ringbuf_submit(ev, 0);
-            return 0;
-        \}
-        END
-    }
+    method field-number(Str \field-name) { @!external-fields.first(*.name eq field-name, :k) - 1 }
+    method can-generate returns Bool { so $!format-impl.^can('generate-bpf-c-tracepoint') }
+    method enter-reject returns Bool { $!format-impl !~~ any(FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint) }
 }
 
 class SysTraceFormatActions {
-    has Format @!formats;
+    has Hash %!formats;
     has Format $!current-format = Format.new;
     has Field $!current-field = Field.new;
 
-    method TOP($/) { make @!formats }
+    method TOP($/) { make %!formats }
 
     method whole-format-section($/) {
-        push @!formats: $!current-format;
+        my ($, \enter-exit, \what) = $!current-format.name.split('_', 3);
+        %!formats{what}{enter-exit} = $!current-format;
         $!current-format = Format.new;
     }
 
@@ -161,18 +202,18 @@ class SysTraceFormatActions {
     method field-signed($/) { $!current-field.signed = +$/<cbool> == 0 ?? False !! True }
 }
 
-my Format @formats = gather for SysTraceFormat
-    .parse($*IN.slurp,:actions(SysTraceFormatActions.new)).made
-    # For each enter there is an exit tracepoint. E.g. sys_enter_open and sys_exit_open
-    .classify(*.name.split('_').tail).values
-    .grep({ $_.grep(*.has-fd) || $_.grep(*.has-name) || $_.grep(*.has-path) }) -> @_ { .take for @_ }
+my Format @formats = gather for
+    SysTraceFormat.parse($*IN.slurp, actions => SysTraceFormatActions.new).made.values -> %syscall {
+    next if !all(%syscall.values.map(*.can-generate)) or %syscall<enter>.enter-reject;
+    .take for %syscall.values;
+}
 
-@formats .= sort(*.id);
+@formats .= sort({ $^b.id cmp $^a.id });
 
 say qq:to/END/;
 // Code generated - don't change manually!
 
-{@formats.map(*.generate-constant).join("\n")}
+{@formats.map(*.generate-c-constant).join("\n")}
 
-{@formats.map(*.generate-probe).join("\n")}
+{@formats.map(*.generate-bpf-c-tracepoint).join("\n")}
 END

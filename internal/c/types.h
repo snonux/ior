@@ -22,6 +22,7 @@ struct open_event {
     __u32 pid;
     __u32 tid;
     __u32 time;
+    __s32 flags;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
 };

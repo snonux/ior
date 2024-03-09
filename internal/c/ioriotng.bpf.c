@@ -16,8 +16,5 @@
 
 // Auto-generated tracepoints.
 #include "generated/tracepoints.c"
-// Tracepoints with custom handling.
-#include "tracepoints/open.c"
-
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

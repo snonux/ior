@@ -54,7 +54,7 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 		case *OpenEvent:
 			openEv := ev.enterEv.(*OpenEvent)
 
-			fd := ev.exitEv.(*FdEvent).Fd
+			fd := int32(ev.exitEv.(*RetEvent).Ret)
 			file := fdFile{fd, string(openEv.Filename[:])}
 			if fd >= 0 {
 				files[fd] = file
