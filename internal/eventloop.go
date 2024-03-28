@@ -12,26 +12,30 @@ import (
 
 func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
 	for ev := range events(rawCh) {
-		fmt.Println(ev)
-		ev.recycle()
+		fmt.Println(ev.String())
+		if ev.prevPair != nil {
+			// Only recycle the previous event, as the current event is the previous
+			// event of the next event!
+			ev.prevPair.recycle()
+		}
 	}
 	fmt.Println("Good bye")
 }
 
-func events(rawCh <-chan []byte) <-chan enterExitEvent {
+func events(rawCh <-chan []byte) <-chan *eventPair {
 	// Channel of events (enter+exit tracepoint results of a syscall).
-	evCh := make(chan enterExitEvent)
+	evCh := make(chan *eventPair)
 	// Temp. store of sys_enter tracepoints per Tid.
-	enterEvs := make(map[uint32]enterExitEvent)
+	enterEvs := make(map[uint32]*eventPair)
 	// Track all open files by file descriptor.
 	files := make(map[int32]file)
 	// Program or thread name of the current Tid.
 	comms := make(map[uint32]string)
+	// Previous event (to calculate time differences between two events)
+	prevPairs := make(map[uint32]*eventPair)
 
 	enter := func(enterEv event) {
-		enterEvs[enterEv.GetTid()] = enterExitEvent{
-			enterEv: enterEv,
-		}
+		enterEvs[enterEv.GetTid()] = newEventPair(enterEv)
 	}
 
 	exit := func(exitEv event) {
@@ -96,6 +100,9 @@ func events(rawCh <-chan []byte) <-chan enterExitEvent {
 			panic(fmt.Sprintf("unknown type: %v", v))
 		}
 
+		ev.prevPair, _ = prevPairs[ev.enterEv.GetTid()]
+		ev.calculateDurations()
+		prevPairs[ev.enterEv.GetTid()] = ev
 		evCh <- ev
 	}
 

@@ -5,7 +5,12 @@ import (
 	. "ioriotng/internal/generated/types"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+var poolOfEventPairs = sync.Pool{
+	New: func() interface{} { return &eventPair{} },
+}
 
 type event interface {
 	String() string
@@ -16,26 +21,43 @@ type event interface {
 	Recycle()
 }
 
-type enterExitEvent struct {
+// Represents a pair of enter and exit events (e.g. entering the syscall + exiting it)
+type eventPair struct {
 	enterEv, exitEv    event
 	file               file
 	comm               string
+	duration           uint32
 	tracepointMismatch bool
+	// To calculate the time difference from the previoud event.
+	prevPair       *eventPair
+	durationToPrev uint32
 }
 
-func (e enterExitEvent) is(id TraceId) bool {
+func newEventPair(enterEv event) *eventPair {
+	e := poolOfEventPairs.Get().(*eventPair)
+	e.enterEv = enterEv
+	return e
+}
+
+func (e *eventPair) calculateDurations() {
+	e.duration = e.exitEv.GetTime() - e.enterEv.GetTime()
+	if e.prevPair != nil {
+		e.durationToPrev = e.enterEv.GetTime() - e.prevPair.exitEv.GetTime()
+	}
+}
+
+func (e *eventPair) is(id TraceId) bool {
 	return e.enterEv.GetTraceId() == id
 }
 
-func (e enterExitEvent) String() string {
+func (e *eventPair) String() string {
 	var sb strings.Builder
 
 	if e.tracepointMismatch {
 		sb.WriteString("MISMATCH ")
 	}
 
-	duration := e.exitEv.GetTime() - e.enterEv.GetTime()
-	sb.WriteString(fmt.Sprintf("%08d µs", duration))
+	sb.WriteString(fmt.Sprintf("%08dµs %08dµs", e.durationToPrev, e.duration))
 
 	sb.WriteString(" ")
 	sb.WriteString(e.comm)
@@ -58,11 +80,13 @@ func (e enterExitEvent) String() string {
 	return sb.String()
 }
 
-func (e enterExitEvent) dump() string {
+func (e *eventPair) dump() string {
 	return fmt.Sprintf("%v with enterEv(%v) and exitEv(%v)", e, e.enterEv, e.exitEv)
 }
 
-func (e enterExitEvent) recycle() {
+func (e *eventPair) recycle() {
 	e.enterEv.Recycle()
 	e.exitEv.Recycle()
+	e.prevPair = nil
+	poolOfEventPairs.Put(e)
 }
