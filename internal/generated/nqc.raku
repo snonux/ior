@@ -60,7 +60,7 @@ role StructGoMethods {
             return $self-ref.Tid
         \}
 
-        func ($self-ref *{$<identifier>.made}) GetTime() uint32 \{
+        func ($self-ref *{$<identifier>.made}) GetTime() uint64 \{
             return $self-ref.Time
         \}
         END

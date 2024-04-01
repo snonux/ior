@@ -17,7 +17,7 @@ type event interface {
 	GetTraceId() TraceId
 	GetPid() uint32
 	GetTid() uint32
-	GetTime() uint32
+	GetTime() uint64
 	Recycle()
 }
 
@@ -26,11 +26,11 @@ type eventPair struct {
 	enterEv, exitEv    event
 	file               file
 	comm               string
-	duration           uint32
+	duration           uint64
 	tracepointMismatch bool
 	// To calculate the time difference from the previoud event.
 	prevPair       *eventPair
-	durationToPrev uint32
+	durationToPrev uint64
 }
 
 func newEventPair(enterEv event) *eventPair {
@@ -57,7 +57,7 @@ func (e *eventPair) String() string {
 		sb.WriteString("MISMATCH ")
 	}
 
-	sb.WriteString(fmt.Sprintf("%08dµs %08dµs", e.durationToPrev, e.duration))
+	sb.WriteString(fmt.Sprintf("%08dns %08dns", e.durationToPrev, e.duration))
 
 	sb.WriteString(" ")
 	sb.WriteString(e.comm)
@@ -78,6 +78,16 @@ func (e *eventPair) String() string {
 	sb.WriteString(e.file.String())
 
 	return sb.String()
+}
+
+func (e *eventPair) TimeDebugString() string {
+	if e.prevPair == nil {
+		return "no prev event yet"
+	}
+	return fmt.Sprintf("prev %v %v\ncurr %v %v\ndiff %v",
+		e.prevPair.enterEv.GetTime(), e.prevPair.exitEv.GetTime(),
+		e.enterEv.GetTime(), e.exitEv.GetTime(),
+		e.enterEv.GetTime()-e.prevPair.exitEv.GetTime())
 }
 
 func (e *eventPair) dump() string {

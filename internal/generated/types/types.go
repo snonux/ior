@@ -53,16 +53,16 @@ const EXIT_PATH_EVENT = 12
 type OpenEvent struct {
 	EventType EventType
 	TraceId   TraceId
+	Time      uint64
 	Pid       uint32
 	Tid       uint32
-	Time      uint32
 	Flags     int32
 	Filename  [MAX_FILENAME_LENGTH]byte
 	Comm      [MAX_PROGNAME_LENGTH]byte
 }
 
 func (o OpenEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v Flags:%v Filename:%v Comm:%v", o.EventType, o.TraceId, o.Pid, o.Tid, o.Time, o.Flags, string(o.Filename[:]), string(o.Comm[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Filename:%v Comm:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, string(o.Filename[:]), string(o.Comm[:]))
 }
 
 func (o *OpenEvent) GetEventType() EventType {
@@ -81,7 +81,7 @@ func (o *OpenEvent) GetTid() uint32 {
 	return o.Tid
 }
 
-func (o *OpenEvent) GetTime() uint32 {
+func (o *OpenEvent) GetTime() uint64 {
 	return o.Time
 }
 
@@ -105,13 +105,13 @@ func (o *OpenEvent) Recycle() {
 type NullEvent struct {
 	EventType EventType
 	TraceId   TraceId
+	Time      uint64
 	Pid       uint32
 	Tid       uint32
-	Time      uint32
 }
 
 func (n NullEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v", n.EventType, n.TraceId, n.Pid, n.Tid, n.Time)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid)
 }
 
 func (n *NullEvent) GetEventType() EventType {
@@ -130,7 +130,7 @@ func (n *NullEvent) GetTid() uint32 {
 	return n.Tid
 }
 
-func (n *NullEvent) GetTime() uint32 {
+func (n *NullEvent) GetTime() uint64 {
 	return n.Time
 }
 
@@ -154,14 +154,14 @@ func (n *NullEvent) Recycle() {
 type FdEvent struct {
 	EventType EventType
 	TraceId   TraceId
+	Time      uint64
 	Pid       uint32
 	Tid       uint32
-	Time      uint32
 	Fd        int32
 }
 
 func (f FdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v Fd:%v", f.EventType, f.TraceId, f.Pid, f.Tid, f.Time, f.Fd)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd)
 }
 
 func (f *FdEvent) GetEventType() EventType {
@@ -180,7 +180,7 @@ func (f *FdEvent) GetTid() uint32 {
 	return f.Tid
 }
 
-func (f *FdEvent) GetTime() uint32 {
+func (f *FdEvent) GetTime() uint64 {
 	return f.Time
 }
 
@@ -204,14 +204,14 @@ func (f *FdEvent) Recycle() {
 type RetEvent struct {
 	EventType EventType
 	TraceId   TraceId
+	Time      uint64
+	Ret       int64
 	Pid       uint32
 	Tid       uint32
-	Ret       int64
-	Time      uint32
 }
 
 func (r RetEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Ret:%v Time:%v", r.EventType, r.TraceId, r.Pid, r.Tid, r.Ret, r.Time)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Ret:%v Pid:%v Tid:%v", r.EventType, r.TraceId, r.Time, r.Ret, r.Pid, r.Tid)
 }
 
 func (r *RetEvent) GetEventType() EventType {
@@ -230,7 +230,7 @@ func (r *RetEvent) GetTid() uint32 {
 	return r.Tid
 }
 
-func (r *RetEvent) GetTime() uint32 {
+func (r *RetEvent) GetTime() uint64 {
 	return r.Time
 }
 
@@ -254,15 +254,15 @@ func (r *RetEvent) Recycle() {
 type NameEvent struct {
 	EventType EventType
 	TraceId   TraceId
+	Time      uint64
 	Pid       uint32
 	Tid       uint32
-	Time      uint32
 	Oldname   [MAX_FILENAME_LENGTH]byte
 	Newname   [MAX_FILENAME_LENGTH]byte
 }
 
 func (n NameEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v Oldname:%v Newname:%v", n.EventType, n.TraceId, n.Pid, n.Tid, n.Time, string(n.Oldname[:]), string(n.Newname[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Oldname:%v Newname:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid, string(n.Oldname[:]), string(n.Newname[:]))
 }
 
 func (n *NameEvent) GetEventType() EventType {
@@ -281,7 +281,7 @@ func (n *NameEvent) GetTid() uint32 {
 	return n.Tid
 }
 
-func (n *NameEvent) GetTime() uint32 {
+func (n *NameEvent) GetTime() uint64 {
 	return n.Time
 }
 
@@ -305,14 +305,14 @@ func (n *NameEvent) Recycle() {
 type PathEvent struct {
 	EventType EventType
 	TraceId   TraceId
+	Time      uint64
 	Pid       uint32
 	Tid       uint32
-	Time      uint32
 	Pathname  [MAX_FILENAME_LENGTH]byte
 }
 
 func (p PathEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Pid:%v Tid:%v Time:%v Pathname:%v", p.EventType, p.TraceId, p.Pid, p.Tid, p.Time, string(p.Pathname[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Pathname:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, string(p.Pathname[:]))
 }
 
 func (p *PathEvent) GetEventType() EventType {
@@ -331,7 +331,7 @@ func (p *PathEvent) GetTid() uint32 {
 	return p.Tid
 }
 
-func (p *PathEvent) GetTime() uint32 {
+func (p *PathEvent) GetTime() uint64 {
 	return p.Time
 }
 

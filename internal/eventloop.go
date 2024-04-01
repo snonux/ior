@@ -17,6 +17,7 @@ func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
 			// Only recycle the previous event, as the current event is the previous
 			// event of the next event!
 			ev.prevPair.recycle()
+			continue
 		}
 	}
 	fmt.Println("Good bye")
@@ -103,6 +104,7 @@ func events(rawCh <-chan []byte) <-chan *eventPair {
 		ev.prevPair, _ = prevPairs[ev.enterEv.GetTid()]
 		ev.calculateDurations()
 		prevPairs[ev.enterEv.GetTid()] = ev
+		fmt.Println(ev.TimeDebugString())
 		evCh <- ev
 	}
 
@@ -128,7 +130,7 @@ func events(rawCh <-chan []byte) <-chan *eventPair {
 			case ENTER_PATH_EVENT:
 				enter(NewPathEvent(raw))
 			default:
-				panic(fmt.Sprintf("unhandled event type %v", EventType(raw[0])))
+				panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
 			}
 		}
 	}()

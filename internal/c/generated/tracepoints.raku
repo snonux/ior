@@ -53,7 +53,7 @@ role TracepointTemplate {
             ev->trace_id = {%vals<name>.uc};
             ev->pid = pid;
             ev->tid = tid;
-            ev->time = bpf_ktime_get_ns() / 1000;
+            ev->time = bpf_ktime_get_boot_ns();
         BPF_C_CODE
 
         @parts.push: %vals<extra> if %vals<extra>:exists;

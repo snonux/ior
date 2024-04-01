@@ -19,9 +19,9 @@
 struct open_event {
     __u32 event_type;
     __u32 trace_id; 
+    __u64 time;
     __u32 pid;
     __u32 tid;
-    __u32 time;
     __s32 flags;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
@@ -30,35 +30,35 @@ struct open_event {
 struct null_event {
     __u32 event_type;
     __u32 trace_id;
+    __u64 time;
     __u32 pid;
     __u32 tid;
-    __u32 time;
 };
 
 struct fd_event {
     __u32 event_type;
     __u32 trace_id;
+    __u64 time;
     __u32 pid;
     __u32 tid;
-    __u32 time;
     __s32 fd;
 };
 
 struct ret_event {
     __u32 event_type;
     __u32 trace_id;
+    __u64 time;
+    __s64 ret;
     __u32 pid;
     __u32 tid;
-    __s64 ret;
-    __u32 time;
 };
 
 struct name_event {
     __u32 event_type;
     __u32 trace_id;
+    __u64 time;
     __u32 pid;
     __u32 tid;
-    __u32 time;
     char oldname[MAX_FILENAME_LENGTH];
     char newname[MAX_FILENAME_LENGTH];
 };
@@ -66,8 +66,8 @@ struct name_event {
 struct path_event {
     __u32 event_type;
     __u32 trace_id;
+    __u64 time;
     __u32 pid;
     __u32 tid;
-    __u32 time;
     char pathname[MAX_FILENAME_LENGTH];
 };

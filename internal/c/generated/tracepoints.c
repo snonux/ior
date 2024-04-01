@@ -163,7 +163,7 @@ int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -184,7 +184,7 @@ int handle_sys_exit_io_uring_enter(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -205,7 +205,7 @@ int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -226,7 +226,7 @@ int handle_sys_exit_io_uring_register(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -247,7 +247,7 @@ int handle_sys_enter_quotactl_fd(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_QUOTACTL_FD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -268,7 +268,7 @@ int handle_sys_exit_quotactl_fd(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_QUOTACTL_FD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -289,7 +289,7 @@ int handle_sys_enter_flock(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FLOCK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -310,7 +310,7 @@ int handle_sys_exit_flock(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FLOCK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -331,7 +331,7 @@ int handle_sys_enter_fanotify_mark(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FANOTIFY_MARK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[4]);
 
@@ -353,7 +353,7 @@ int handle_sys_exit_fanotify_mark(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FANOTIFY_MARK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -374,7 +374,7 @@ int handle_sys_enter_inotify_add_watch(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_INOTIFY_ADD_WATCH;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);
 
@@ -396,7 +396,7 @@ int handle_sys_exit_inotify_add_watch(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_INOTIFY_ADD_WATCH;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -417,7 +417,7 @@ int handle_sys_enter_statfs(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_STATFS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -439,7 +439,7 @@ int handle_sys_exit_statfs(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_STATFS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -460,7 +460,7 @@ int handle_sys_enter_fstatfs(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FSTATFS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -481,7 +481,7 @@ int handle_sys_exit_fstatfs(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FSTATFS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -502,7 +502,7 @@ int handle_sys_enter_utimensat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_UTIMENSAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -525,7 +525,7 @@ int handle_sys_exit_utimensat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_UTIMENSAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -546,7 +546,7 @@ int handle_sys_enter_futimesat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FUTIMESAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -569,7 +569,7 @@ int handle_sys_exit_futimesat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FUTIMESAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -590,7 +590,7 @@ int handle_sys_enter_fsync(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FSYNC;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -611,7 +611,7 @@ int handle_sys_exit_fsync(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FSYNC;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -632,7 +632,7 @@ int handle_sys_enter_fdatasync(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FDATASYNC;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -653,7 +653,7 @@ int handle_sys_exit_fdatasync(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FDATASYNC;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -674,7 +674,7 @@ int handle_sys_enter_setxattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_SETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -696,7 +696,7 @@ int handle_sys_exit_setxattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_SETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -717,7 +717,7 @@ int handle_sys_enter_lsetxattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LSETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -739,7 +739,7 @@ int handle_sys_exit_lsetxattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LSETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -760,7 +760,7 @@ int handle_sys_enter_getxattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_GETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -782,7 +782,7 @@ int handle_sys_exit_getxattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_GETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -803,7 +803,7 @@ int handle_sys_enter_lgetxattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LGETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -825,7 +825,7 @@ int handle_sys_exit_lgetxattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LGETXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -846,7 +846,7 @@ int handle_sys_enter_listxattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LISTXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -868,7 +868,7 @@ int handle_sys_exit_listxattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LISTXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -889,7 +889,7 @@ int handle_sys_enter_llistxattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LLISTXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -911,7 +911,7 @@ int handle_sys_exit_llistxattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LLISTXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -932,7 +932,7 @@ int handle_sys_enter_removexattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_REMOVEXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -954,7 +954,7 @@ int handle_sys_exit_removexattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_REMOVEXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -975,7 +975,7 @@ int handle_sys_enter_lremovexattr(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LREMOVEXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -997,7 +997,7 @@ int handle_sys_exit_lremovexattr(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LREMOVEXATTR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1018,7 +1018,7 @@ int handle_sys_enter_open_tree(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_OPEN_TREE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -1041,7 +1041,7 @@ int handle_sys_exit_open_tree(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_OPEN_TREE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1062,7 +1062,7 @@ int handle_sys_enter_getdents(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_GETDENTS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -1083,7 +1083,7 @@ int handle_sys_exit_getdents(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_GETDENTS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1104,7 +1104,7 @@ int handle_sys_enter_getdents64(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_GETDENTS64;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -1125,7 +1125,7 @@ int handle_sys_exit_getdents64(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_GETDENTS64;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1146,7 +1146,7 @@ int handle_sys_enter_ioctl(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_IOCTL;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -1167,7 +1167,7 @@ int handle_sys_exit_ioctl(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_IOCTL;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1188,7 +1188,7 @@ int handle_sys_enter_fcntl(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FCNTL;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -1209,7 +1209,7 @@ int handle_sys_exit_fcntl(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FCNTL;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1230,7 +1230,7 @@ int handle_sys_enter_mknodat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_MKNODAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -1253,7 +1253,7 @@ int handle_sys_exit_mknodat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_MKNODAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1274,7 +1274,7 @@ int handle_sys_enter_mknod(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_MKNOD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -1297,7 +1297,7 @@ int handle_sys_exit_mknod(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_MKNOD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1318,7 +1318,7 @@ int handle_sys_enter_mkdirat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_MKDIRAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);
 
@@ -1340,7 +1340,7 @@ int handle_sys_exit_mkdirat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_MKDIRAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1361,7 +1361,7 @@ int handle_sys_enter_mkdir(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_MKDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -1383,7 +1383,7 @@ int handle_sys_exit_mkdir(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_MKDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1404,7 +1404,7 @@ int handle_sys_enter_rmdir(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_RMDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -1426,7 +1426,7 @@ int handle_sys_exit_rmdir(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_RMDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1447,7 +1447,7 @@ int handle_sys_enter_unlinkat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_UNLINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);
 
@@ -1469,7 +1469,7 @@ int handle_sys_exit_unlinkat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_UNLINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1490,7 +1490,7 @@ int handle_sys_enter_unlink(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_UNLINK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -1512,7 +1512,7 @@ int handle_sys_exit_unlink(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_UNLINK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1533,7 +1533,7 @@ int handle_sys_enter_symlinkat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_SYMLINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
     bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[2]);
@@ -1556,7 +1556,7 @@ int handle_sys_exit_symlinkat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_SYMLINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1577,7 +1577,7 @@ int handle_sys_enter_symlink(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_SYMLINK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
     bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
@@ -1600,7 +1600,7 @@ int handle_sys_exit_symlink(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_SYMLINK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1621,7 +1621,7 @@ int handle_sys_enter_linkat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]);
     bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]);
@@ -1644,7 +1644,7 @@ int handle_sys_exit_linkat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1665,7 +1665,7 @@ int handle_sys_enter_link(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LINK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
     bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
@@ -1688,7 +1688,7 @@ int handle_sys_exit_link(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LINK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1709,7 +1709,7 @@ int handle_sys_enter_renameat2(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_RENAMEAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]);
     bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]);
@@ -1732,7 +1732,7 @@ int handle_sys_exit_renameat2(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_RENAMEAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1753,7 +1753,7 @@ int handle_sys_enter_renameat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_RENAMEAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]);
     bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]);
@@ -1776,7 +1776,7 @@ int handle_sys_exit_renameat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_RENAMEAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1797,7 +1797,7 @@ int handle_sys_enter_rename(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_RENAME;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);
     bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);
@@ -1820,7 +1820,7 @@ int handle_sys_exit_rename(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_RENAME;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1841,7 +1841,7 @@ int handle_sys_enter_execve(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_EXECVE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -1864,7 +1864,7 @@ int handle_sys_exit_execve(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_EXECVE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1885,7 +1885,7 @@ int handle_sys_enter_execveat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_EXECVEAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -1908,7 +1908,7 @@ int handle_sys_exit_execveat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_EXECVEAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1929,7 +1929,7 @@ int handle_sys_enter_newstat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_NEWSTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -1952,7 +1952,7 @@ int handle_sys_exit_newstat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_NEWSTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -1973,7 +1973,7 @@ int handle_sys_enter_newlstat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_NEWLSTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -1996,7 +1996,7 @@ int handle_sys_exit_newlstat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_NEWLSTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2017,7 +2017,7 @@ int handle_sys_enter_newfstatat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_NEWFSTATAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2040,7 +2040,7 @@ int handle_sys_exit_newfstatat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_NEWFSTATAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2061,7 +2061,7 @@ int handle_sys_enter_newfstat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_NEWFSTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2082,7 +2082,7 @@ int handle_sys_exit_newfstat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_NEWFSTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2103,7 +2103,7 @@ int handle_sys_enter_readlinkat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_READLINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);
 
@@ -2125,7 +2125,7 @@ int handle_sys_exit_readlinkat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_READLINKAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2146,7 +2146,7 @@ int handle_sys_enter_statx(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_STATX;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2169,7 +2169,7 @@ int handle_sys_exit_statx(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_STATX;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2190,7 +2190,7 @@ int handle_sys_enter_lseek(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LSEEK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2211,7 +2211,7 @@ int handle_sys_exit_lseek(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LSEEK;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2232,7 +2232,7 @@ int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_READ;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2253,7 +2253,7 @@ int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_READ;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2274,7 +2274,7 @@ int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_WRITE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2295,7 +2295,7 @@ int handle_sys_exit_write(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_WRITE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2316,7 +2316,7 @@ int handle_sys_enter_pread64(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_PREAD64;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2337,7 +2337,7 @@ int handle_sys_exit_pread64(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_PREAD64;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2358,7 +2358,7 @@ int handle_sys_enter_pwrite64(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_PWRITE64;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2379,7 +2379,7 @@ int handle_sys_exit_pwrite64(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_PWRITE64;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2400,7 +2400,7 @@ int handle_sys_enter_ftruncate(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FTRUNCATE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2421,7 +2421,7 @@ int handle_sys_exit_ftruncate(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FTRUNCATE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2442,7 +2442,7 @@ int handle_sys_enter_faccessat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FACCESSAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2465,7 +2465,7 @@ int handle_sys_exit_faccessat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FACCESSAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2486,7 +2486,7 @@ int handle_sys_enter_faccessat2(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FACCESSAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2509,7 +2509,7 @@ int handle_sys_exit_faccessat2(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FACCESSAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2530,7 +2530,7 @@ int handle_sys_enter_access(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_ACCESS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2553,7 +2553,7 @@ int handle_sys_exit_access(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_ACCESS;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2574,7 +2574,7 @@ int handle_sys_enter_chdir(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CHDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2597,7 +2597,7 @@ int handle_sys_exit_chdir(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CHDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2618,7 +2618,7 @@ int handle_sys_enter_fchdir(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FCHDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2639,7 +2639,7 @@ int handle_sys_exit_fchdir(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FCHDIR;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2660,7 +2660,7 @@ int handle_sys_enter_chroot(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CHROOT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2683,7 +2683,7 @@ int handle_sys_exit_chroot(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CHROOT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2704,7 +2704,7 @@ int handle_sys_enter_fchmod(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FCHMOD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -2725,7 +2725,7 @@ int handle_sys_exit_fchmod(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FCHMOD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2746,7 +2746,7 @@ int handle_sys_enter_fchmodat2(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FCHMODAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2769,7 +2769,7 @@ int handle_sys_exit_fchmodat2(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FCHMODAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2790,7 +2790,7 @@ int handle_sys_enter_fchmodat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FCHMODAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2813,7 +2813,7 @@ int handle_sys_exit_fchmodat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FCHMODAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2834,7 +2834,7 @@ int handle_sys_enter_chmod(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CHMOD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2857,7 +2857,7 @@ int handle_sys_exit_chmod(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CHMOD;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2878,7 +2878,7 @@ int handle_sys_enter_fchownat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FCHOWNAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2901,7 +2901,7 @@ int handle_sys_exit_fchownat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FCHOWNAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2922,7 +2922,7 @@ int handle_sys_enter_chown(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CHOWN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2945,7 +2945,7 @@ int handle_sys_exit_chown(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CHOWN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -2966,7 +2966,7 @@ int handle_sys_enter_lchown(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_LCHOWN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -2989,7 +2989,7 @@ int handle_sys_exit_lchown(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_LCHOWN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3010,7 +3010,7 @@ int handle_sys_enter_fchown(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_FCHOWN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -3031,7 +3031,7 @@ int handle_sys_exit_fchown(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_FCHOWN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3052,7 +3052,7 @@ int handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_OPEN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -3075,7 +3075,7 @@ int handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_OPEN;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3096,7 +3096,7 @@ int handle_sys_enter_openat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_OPENAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -3119,7 +3119,7 @@ int handle_sys_exit_openat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_OPENAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3140,7 +3140,7 @@ int handle_sys_enter_openat2(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_OPENAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
@@ -3163,7 +3163,7 @@ int handle_sys_exit_openat2(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_OPENAT2;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3184,7 +3184,7 @@ int handle_sys_enter_creat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CREAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
@@ -3206,7 +3206,7 @@ int handle_sys_exit_creat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CREAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3227,7 +3227,7 @@ int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CLOSE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -3248,7 +3248,7 @@ int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CLOSE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3269,7 +3269,7 @@ int handle_sys_enter_close_range(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CLOSE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -3290,7 +3290,7 @@ int handle_sys_exit_close_range(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CLOSE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
@@ -3311,7 +3311,7 @@ int handle_sys_enter_cachestat(struct trace_event_raw_sys_enter *ctx) {
     ev->trace_id = SYS_ENTER_CACHESTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
@@ -3332,7 +3332,7 @@ int handle_sys_exit_cachestat(struct trace_event_raw_sys_exit *ctx) {
     ev->trace_id = SYS_EXIT_CACHESTAT;
     ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_ns() / 1000;
+    ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret; 
 
     bpf_ringbuf_submit(ev, 0);
