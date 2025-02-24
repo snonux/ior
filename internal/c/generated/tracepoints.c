@@ -1,195 +1,153 @@
 // Code generated - don't change manually!
 
-#define SYS_ENTER_IO_URING_ENTER 1382
-#define SYS_EXIT_IO_URING_ENTER 1381
-#define SYS_ENTER_IO_URING_REGISTER 1378
-#define SYS_EXIT_IO_URING_REGISTER 1377
-#define SYS_ENTER_QUOTACTL_FD 1052
-#define SYS_EXIT_QUOTACTL_FD 1051
-#define SYS_ENTER_FLOCK 1021
-#define SYS_EXIT_FLOCK 1020
-#define SYS_ENTER_FANOTIFY_MARK 963
-#define SYS_EXIT_FANOTIFY_MARK 962
-#define SYS_ENTER_INOTIFY_ADD_WATCH 957
-#define SYS_EXIT_INOTIFY_ADD_WATCH 956
-#define SYS_ENTER_STATFS 947
-#define SYS_EXIT_STATFS 946
-#define SYS_ENTER_FSTATFS 945
-#define SYS_EXIT_FSTATFS 944
-#define SYS_ENTER_UTIMENSAT 939
-#define SYS_EXIT_UTIMENSAT 938
-#define SYS_ENTER_FUTIMESAT 937
-#define SYS_EXIT_FUTIMESAT 936
-#define SYS_ENTER_FSYNC 927
-#define SYS_EXIT_FSYNC 926
-#define SYS_ENTER_FDATASYNC 925
-#define SYS_EXIT_FDATASYNC 924
-#define SYS_ENTER_SETXATTR 883
-#define SYS_EXIT_SETXATTR 882
-#define SYS_ENTER_LSETXATTR 881
-#define SYS_EXIT_LSETXATTR 880
-#define SYS_ENTER_GETXATTR 877
-#define SYS_EXIT_GETXATTR 876
-#define SYS_ENTER_LGETXATTR 875
-#define SYS_EXIT_LGETXATTR 874
-#define SYS_ENTER_LISTXATTR 871
-#define SYS_EXIT_LISTXATTR 870
-#define SYS_ENTER_LLISTXATTR 869
-#define SYS_EXIT_LLISTXATTR 868
-#define SYS_ENTER_REMOVEXATTR 865
-#define SYS_EXIT_REMOVEXATTR 864
-#define SYS_ENTER_LREMOVEXATTR 863
-#define SYS_EXIT_LREMOVEXATTR 862
-#define SYS_ENTER_OPEN_TREE 857
-#define SYS_EXIT_OPEN_TREE 856
-#define SYS_ENTER_GETDENTS 829
-#define SYS_EXIT_GETDENTS 828
-#define SYS_ENTER_GETDENTS64 827
-#define SYS_EXIT_GETDENTS64 826
-#define SYS_ENTER_IOCTL 825
-#define SYS_EXIT_IOCTL 824
-#define SYS_ENTER_FCNTL 823
-#define SYS_EXIT_FCNTL 822
-#define SYS_ENTER_MKNODAT 821
-#define SYS_EXIT_MKNODAT 820
-#define SYS_ENTER_MKNOD 819
-#define SYS_EXIT_MKNOD 818
-#define SYS_ENTER_MKDIRAT 817
-#define SYS_EXIT_MKDIRAT 816
-#define SYS_ENTER_MKDIR 815
-#define SYS_EXIT_MKDIR 814
-#define SYS_ENTER_RMDIR 813
-#define SYS_EXIT_RMDIR 812
-#define SYS_ENTER_UNLINKAT 811
-#define SYS_EXIT_UNLINKAT 810
-#define SYS_ENTER_UNLINK 809
-#define SYS_EXIT_UNLINK 808
-#define SYS_ENTER_SYMLINKAT 807
-#define SYS_EXIT_SYMLINKAT 806
-#define SYS_ENTER_SYMLINK 805
-#define SYS_EXIT_SYMLINK 804
-#define SYS_ENTER_LINKAT 803
-#define SYS_EXIT_LINKAT 802
-#define SYS_ENTER_LINK 801
-#define SYS_EXIT_LINK 800
-#define SYS_ENTER_RENAMEAT2 799
-#define SYS_EXIT_RENAMEAT2 798
-#define SYS_ENTER_RENAMEAT 797
-#define SYS_EXIT_RENAMEAT 796
-#define SYS_ENTER_RENAME 795
-#define SYS_EXIT_RENAME 794
-#define SYS_ENTER_EXECVE 789
-#define SYS_EXIT_EXECVE 788
-#define SYS_ENTER_EXECVEAT 787
-#define SYS_EXIT_EXECVEAT 786
-#define SYS_ENTER_NEWSTAT 785
-#define SYS_EXIT_NEWSTAT 784
-#define SYS_ENTER_NEWLSTAT 783
-#define SYS_EXIT_NEWLSTAT 782
-#define SYS_ENTER_NEWFSTATAT 781
-#define SYS_EXIT_NEWFSTATAT 780
-#define SYS_ENTER_NEWFSTAT 779
-#define SYS_EXIT_NEWFSTAT 778
-#define SYS_ENTER_READLINKAT 777
-#define SYS_EXIT_READLINKAT 776
-#define SYS_ENTER_STATX 773
-#define SYS_EXIT_STATX 772
-#define SYS_ENTER_LSEEK 771
-#define SYS_EXIT_LSEEK 770
-#define SYS_ENTER_READ 769
-#define SYS_EXIT_READ 768
-#define SYS_ENTER_WRITE 767
-#define SYS_EXIT_WRITE 766
-#define SYS_ENTER_PREAD64 765
-#define SYS_EXIT_PREAD64 764
-#define SYS_ENTER_PWRITE64 763
-#define SYS_EXIT_PWRITE64 762
-#define SYS_ENTER_FTRUNCATE 743
-#define SYS_EXIT_FTRUNCATE 742
-#define SYS_ENTER_FACCESSAT 739
-#define SYS_EXIT_FACCESSAT 738
-#define SYS_ENTER_FACCESSAT2 737
-#define SYS_EXIT_FACCESSAT2 736
-#define SYS_ENTER_ACCESS 735
-#define SYS_EXIT_ACCESS 734
-#define SYS_ENTER_CHDIR 733
-#define SYS_EXIT_CHDIR 732
-#define SYS_ENTER_FCHDIR 731
-#define SYS_EXIT_FCHDIR 730
-#define SYS_ENTER_CHROOT 729
-#define SYS_EXIT_CHROOT 728
-#define SYS_ENTER_FCHMOD 727
-#define SYS_EXIT_FCHMOD 726
-#define SYS_ENTER_FCHMODAT2 725
-#define SYS_EXIT_FCHMODAT2 724
-#define SYS_ENTER_FCHMODAT 723
-#define SYS_EXIT_FCHMODAT 722
-#define SYS_ENTER_CHMOD 721
-#define SYS_EXIT_CHMOD 720
-#define SYS_ENTER_FCHOWNAT 719
-#define SYS_EXIT_FCHOWNAT 718
-#define SYS_ENTER_CHOWN 717
-#define SYS_EXIT_CHOWN 716
-#define SYS_ENTER_LCHOWN 715
-#define SYS_EXIT_LCHOWN 714
-#define SYS_ENTER_FCHOWN 713
-#define SYS_EXIT_FCHOWN 712
-#define SYS_ENTER_OPEN 711
-#define SYS_EXIT_OPEN 710
-#define SYS_ENTER_OPENAT 709
-#define SYS_EXIT_OPENAT 708
-#define SYS_ENTER_OPENAT2 707
-#define SYS_EXIT_OPENAT2 706
-#define SYS_ENTER_CREAT 705
-#define SYS_EXIT_CREAT 704
-#define SYS_ENTER_CLOSE 703
-#define SYS_EXIT_CLOSE 702
-#define SYS_ENTER_CLOSE_RANGE 701
-#define SYS_EXIT_CLOSE_RANGE 700
-#define SYS_ENTER_CACHESTAT 528
-#define SYS_EXIT_CACHESTAT 527
-
-SEC("tracepoint/syscalls/sys_enter_io_uring_enter")
-int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
-    __u32 pid, tid;
-    if (filter(&pid, &tid))
-        return 0;
-
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
-    if (!ev)
-        return 0;
-
-    ev->event_type = ENTER_FD_EVENT;
-    ev->trace_id = SYS_ENTER_IO_URING_ENTER;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = bpf_ktime_get_boot_ns();
-    ev->fd = (__s32)ctx->args[0];
-
-    bpf_ringbuf_submit(ev, 0);
-    return 0;
-}
-
-SEC("tracepoint/syscalls/sys_exit_io_uring_enter")
-int handle_sys_exit_io_uring_enter(struct trace_event_raw_sys_exit *ctx) {
-    __u32 pid, tid;
-    if (filter(&pid, &tid))
-        return 0;
-
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
-    if (!ev)
-        return 0;
-
-    ev->event_type = EXIT_RET_EVENT;
-    ev->trace_id = SYS_EXIT_IO_URING_ENTER;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = bpf_ktime_get_boot_ns();
-    ev->ret = ctx->ret; 
-
-    bpf_ringbuf_submit(ev, 0);
-    return 0;
-}
+#define SYS_ENTER_IO_URING_REGISTER 1485
+#define SYS_EXIT_IO_URING_REGISTER 1484
+#define SYS_ENTER_IO_URING_ENTER 1466
+#define SYS_EXIT_IO_URING_ENTER 1465
+#define SYS_ENTER_QUOTACTL_FD 1127
+#define SYS_EXIT_QUOTACTL_FD 1126
+#define SYS_ENTER_FLOCK 1096
+#define SYS_EXIT_FLOCK 1095
+#define SYS_ENTER_FANOTIFY_MARK 1038
+#define SYS_EXIT_FANOTIFY_MARK 1037
+#define SYS_ENTER_INOTIFY_ADD_WATCH 1032
+#define SYS_EXIT_INOTIFY_ADD_WATCH 1031
+#define SYS_ENTER_STATFS 1022
+#define SYS_EXIT_STATFS 1021
+#define SYS_ENTER_FSTATFS 1020
+#define SYS_EXIT_FSTATFS 1019
+#define SYS_ENTER_UTIMENSAT 1014
+#define SYS_EXIT_UTIMENSAT 1013
+#define SYS_ENTER_FUTIMESAT 1012
+#define SYS_EXIT_FUTIMESAT 1011
+#define SYS_ENTER_FSYNC 1002
+#define SYS_EXIT_FSYNC 1001
+#define SYS_ENTER_FDATASYNC 1000
+#define SYS_EXIT_FDATASYNC 999
+#define SYS_ENTER_SETXATTR 958
+#define SYS_EXIT_SETXATTR 957
+#define SYS_ENTER_LSETXATTR 956
+#define SYS_EXIT_LSETXATTR 955
+#define SYS_ENTER_GETXATTR 952
+#define SYS_EXIT_GETXATTR 951
+#define SYS_ENTER_LGETXATTR 950
+#define SYS_EXIT_LGETXATTR 949
+#define SYS_ENTER_LISTXATTR 946
+#define SYS_EXIT_LISTXATTR 945
+#define SYS_ENTER_LLISTXATTR 944
+#define SYS_EXIT_LLISTXATTR 943
+#define SYS_ENTER_REMOVEXATTR 940
+#define SYS_EXIT_REMOVEXATTR 939
+#define SYS_ENTER_LREMOVEXATTR 938
+#define SYS_EXIT_LREMOVEXATTR 937
+#define SYS_ENTER_OPEN_TREE 932
+#define SYS_EXIT_OPEN_TREE 931
+#define SYS_ENTER_GETDENTS 900
+#define SYS_EXIT_GETDENTS 899
+#define SYS_ENTER_GETDENTS64 898
+#define SYS_EXIT_GETDENTS64 897
+#define SYS_ENTER_IOCTL 896
+#define SYS_EXIT_IOCTL 895
+#define SYS_ENTER_FCNTL 894
+#define SYS_EXIT_FCNTL 893
+#define SYS_ENTER_MKNODAT 892
+#define SYS_EXIT_MKNODAT 891
+#define SYS_ENTER_MKNOD 890
+#define SYS_EXIT_MKNOD 889
+#define SYS_ENTER_MKDIRAT 888
+#define SYS_EXIT_MKDIRAT 887
+#define SYS_ENTER_MKDIR 886
+#define SYS_EXIT_MKDIR 885
+#define SYS_ENTER_RMDIR 884
+#define SYS_EXIT_RMDIR 883
+#define SYS_ENTER_UNLINKAT 882
+#define SYS_EXIT_UNLINKAT 881
+#define SYS_ENTER_UNLINK 880
+#define SYS_EXIT_UNLINK 879
+#define SYS_ENTER_SYMLINKAT 878
+#define SYS_EXIT_SYMLINKAT 877
+#define SYS_ENTER_SYMLINK 876
+#define SYS_EXIT_SYMLINK 875
+#define SYS_ENTER_LINKAT 874
+#define SYS_EXIT_LINKAT 873
+#define SYS_ENTER_LINK 872
+#define SYS_EXIT_LINK 871
+#define SYS_ENTER_RENAMEAT2 870
+#define SYS_EXIT_RENAMEAT2 869
+#define SYS_ENTER_RENAMEAT 868
+#define SYS_EXIT_RENAMEAT 867
+#define SYS_ENTER_RENAME 866
+#define SYS_EXIT_RENAME 865
+#define SYS_ENTER_EXECVE 860
+#define SYS_EXIT_EXECVE 859
+#define SYS_ENTER_EXECVEAT 858
+#define SYS_EXIT_EXECVEAT 857
+#define SYS_ENTER_NEWSTAT 856
+#define SYS_EXIT_NEWSTAT 855
+#define SYS_ENTER_NEWLSTAT 854
+#define SYS_EXIT_NEWLSTAT 853
+#define SYS_ENTER_NEWFSTATAT 852
+#define SYS_EXIT_NEWFSTATAT 851
+#define SYS_ENTER_NEWFSTAT 850
+#define SYS_EXIT_NEWFSTAT 849
+#define SYS_ENTER_READLINKAT 848
+#define SYS_EXIT_READLINKAT 847
+#define SYS_ENTER_STATX 844
+#define SYS_EXIT_STATX 843
+#define SYS_ENTER_LSEEK 842
+#define SYS_EXIT_LSEEK 841
+#define SYS_ENTER_READ 840
+#define SYS_EXIT_READ 839
+#define SYS_ENTER_WRITE 838
+#define SYS_EXIT_WRITE 837
+#define SYS_ENTER_PREAD64 836
+#define SYS_EXIT_PREAD64 835
+#define SYS_ENTER_PWRITE64 834
+#define SYS_EXIT_PWRITE64 833
+#define SYS_ENTER_FTRUNCATE 814
+#define SYS_EXIT_FTRUNCATE 813
+#define SYS_ENTER_FACCESSAT 810
+#define SYS_EXIT_FACCESSAT 809
+#define SYS_ENTER_FACCESSAT2 808
+#define SYS_EXIT_FACCESSAT2 807
+#define SYS_ENTER_ACCESS 806
+#define SYS_EXIT_ACCESS 805
+#define SYS_ENTER_CHDIR 804
+#define SYS_EXIT_CHDIR 803
+#define SYS_ENTER_FCHDIR 802
+#define SYS_EXIT_FCHDIR 801
+#define SYS_ENTER_CHROOT 800
+#define SYS_EXIT_CHROOT 799
+#define SYS_ENTER_FCHMOD 798
+#define SYS_EXIT_FCHMOD 797
+#define SYS_ENTER_FCHMODAT2 796
+#define SYS_EXIT_FCHMODAT2 795
+#define SYS_ENTER_FCHMODAT 794
+#define SYS_EXIT_FCHMODAT 793
+#define SYS_ENTER_CHMOD 792
+#define SYS_EXIT_CHMOD 791
+#define SYS_ENTER_FCHOWNAT 790
+#define SYS_EXIT_FCHOWNAT 789
+#define SYS_ENTER_CHOWN 788
+#define SYS_EXIT_CHOWN 787
+#define SYS_ENTER_LCHOWN 786
+#define SYS_EXIT_LCHOWN 785
+#define SYS_ENTER_FCHOWN 784
+#define SYS_EXIT_FCHOWN 783
+#define SYS_ENTER_OPEN 782
+#define SYS_EXIT_OPEN 781
+#define SYS_ENTER_OPENAT 780
+#define SYS_EXIT_OPENAT 779
+#define SYS_ENTER_OPENAT2 778
+#define SYS_EXIT_OPENAT2 777
+#define SYS_ENTER_CREAT 776
+#define SYS_EXIT_CREAT 775
+#define SYS_ENTER_CLOSE 774
+#define SYS_EXIT_CLOSE 773
+#define SYS_ENTER_CLOSE_RANGE 772
+#define SYS_EXIT_CLOSE_RANGE 771
+#define SYS_ENTER_CACHESTAT 592
+#define SYS_EXIT_CACHESTAT 591
 
 SEC("tracepoint/syscalls/sys_enter_io_uring_register")
 int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
@@ -224,6 +182,48 @@ int handle_sys_exit_io_uring_register(struct trace_event_raw_sys_exit *ctx) {
 
     ev->event_type = EXIT_RET_EVENT;
     ev->trace_id = SYS_EXIT_IO_URING_REGISTER;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret; 
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_io_uring_enter")
+int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_FD_EVENT;
+    ev->trace_id = SYS_ENTER_IO_URING_ENTER;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_io_uring_enter")
+int handle_sys_exit_io_uring_enter(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->trace_id = SYS_EXIT_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();

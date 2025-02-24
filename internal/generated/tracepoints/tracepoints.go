@@ -2,10 +2,10 @@
 package tracepoints
 
 var List = []string{
-	"sys_enter_io_uring_enter",
-	"sys_exit_io_uring_enter",
 	"sys_enter_io_uring_register",
 	"sys_exit_io_uring_register",
+	"sys_enter_io_uring_enter",
+	"sys_exit_io_uring_enter",
 	"sys_enter_quotactl_fd",
 	"sys_exit_quotactl_fd",
 	"sys_enter_flock",
