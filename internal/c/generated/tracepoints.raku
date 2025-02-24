@@ -200,11 +200,11 @@ BPF_C_CODE
 
 my Format @formats = gather for
     SysTraceFormat.parse($*IN.slurp, actions => SysTraceFormatActions.new).made.values -> %syscall {
+
     if !all(%syscall.values.map(*.can-generate)) {
         say "// Ignoring {%syscall.values.map(*.name).sort} as possibly not file I/O related";
         next;
-    }
-    if %syscall<enter>.enter-reject {
+    } elsif %syscall<enter>.enter-reject {
         say "// Ignoring {%syscall.values.map(*.name).sort} as enter-rejected";
         next;   
     }

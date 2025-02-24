@@ -3,7 +3,7 @@ export CC = clang
 export GOOS = linux
 export GOARCH = amd64
 export CGO_CFLAGS = -I$(LIBBPFGO)/output -I$(LIBBPFGO)/selftest/common
-export CGO_LDFLAGS = -lelf -lzstd $(LIBBPFGO)/output/libbpf.a
+export CGO_LDFLAGS = -lelf -lzstd $(LIBBPFGO)/output/libbpf/libbpf.a
 
 all: bpfbuild gobuild
 
