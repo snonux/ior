@@ -41,6 +41,7 @@ func newEventPair(enterEv event) *eventPair {
 
 func (e *eventPair) calculateDurations() {
 	e.duration = e.exitEv.GetTime() - e.enterEv.GetTime()
+
 	if e.prevPair != nil {
 		e.durationToPrev = e.enterEv.GetTime() - e.prevPair.exitEv.GetTime()
 	}
@@ -78,16 +79,6 @@ func (e *eventPair) String() string {
 	sb.WriteString(e.file.String())
 
 	return sb.String()
-}
-
-func (e *eventPair) TimeDebugString() string {
-	if e.prevPair == nil {
-		return "no prev event yet"
-	}
-	return fmt.Sprintf("prev %v %v\ncurr %v %v\ndiff %v",
-		e.prevPair.enterEv.GetTime(), e.prevPair.exitEv.GetTime(),
-		e.enterEv.GetTime(), e.exitEv.GetTime(),
-		e.enterEv.GetTime()-e.prevPair.exitEv.GetTime())
 }
 
 func (e *eventPair) dump() string {

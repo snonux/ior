@@ -104,7 +104,6 @@ func events(rawCh <-chan []byte) <-chan *eventPair {
 		ev.prevPair, _ = prevPairs[ev.enterEv.GetTid()]
 		ev.calculateDurations()
 		prevPairs[ev.enterEv.GetTid()] = ev
-		fmt.Println(ev.TimeDebugString())
 		evCh <- ev
 	}
 
