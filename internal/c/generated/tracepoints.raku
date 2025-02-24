@@ -2,6 +2,7 @@
 
 use v6.d;
 
+# Grammar to parse  /sys/kernel/tracing/events/syscalls/sys_{enter,exit}_*/format'
 grammar SysTraceFormat {
     rule TOP { <whole-format-section>* }
     rule whole-format-section { <name> <id> <format> <print-fmt> }
@@ -193,16 +194,26 @@ class SysTraceFormatActions {
     method field-signed($/) { $!current-field.signed = +$/<cbool> == 0 ?? False !! True }
 }
 
+say qq:to/BPF_C_CODE/;
+// Code generated - don't change manually!
+BPF_C_CODE
+
 my Format @formats = gather for
     SysTraceFormat.parse($*IN.slurp, actions => SysTraceFormatActions.new).made.values -> %syscall {
-    next if !all(%syscall.values.map(*.can-generate)) or %syscall<enter>.enter-reject;
+    if !all(%syscall.values.map(*.can-generate)) {
+        say "// Ignoring {%syscall.values.map(*.name).sort} as possibly not file I/O related";
+        next;
+    }
+    if %syscall<enter>.enter-reject {
+        say "// Ignoring {%syscall.values.map(*.name).sort} as enter-rejected";
+        next;   
+    }
     .take for %syscall.values;
 }
 
 @formats .= sort({ $^b.id cmp $^a.id });
 
 say qq:to/BPF_C_CODE/;
-// Code generated - don't change manually!
 
 {@formats.map(*.generate-c-constant).join("\n")}
 
