@@ -35,10 +35,12 @@ func events(rawCh <-chan []byte) <-chan *eventPair {
 	// Previous event (to calculate time differences between two events)
 	prevPairs := make(map[uint32]*eventPair)
 
+	// Syscall entered
 	enter := func(enterEv event) {
 		enterEvs[enterEv.GetTid()] = newEventPair(enterEv)
 	}
 
+	// Syscall exited
 	exit := func(exitEv event) {
 		ev, ok := enterEvs[exitEv.GetTid()]
 		if !ok {

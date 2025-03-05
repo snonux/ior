@@ -8,8 +8,20 @@ static __always_inline int filter(__u32 *pid, __u32 *tid) {
     *pid = pid_tgid >> 32;
     *tid = pid_tgid & 0xFFFFFFFF;
 
-    if (*pid == PID_FILTER)
-        return ACCEPT;
+    if (PID_FILTER == *pid) {
+        if (TID_FILTER == *tid) {
+            return ACCEPT;
+        } else if (TID_FILTER == -1) {
+            return ACCEPT;
+        }
+    } else if (PID_FILTER == -1) {
+        if (TID_FILTER == *tid) {
+            return ACCEPT;
+        } else if (TID_FILTER == -1) {
+            return ACCEPT;
+        }
+    }
 
     return FILTER;
 }
+

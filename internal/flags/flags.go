@@ -9,11 +9,13 @@ import (
 
 type Flags struct {
 	PidFilter    int
+	TidFilter    int
 	EventMapSize int
 }
 
 func New() (flags Flags) {
-	flag.IntVar(&flags.PidFilter, "pid", 0, "Filter for processes ID")
+	flag.IntVar(&flags.PidFilter, "pid", -1, "Filter for processes ID")
+	flag.IntVar(&flags.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&flags.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
 	flag.Parse()
 
@@ -21,8 +23,13 @@ func New() (flags Flags) {
 }
 
 func (flags Flags) SetBPF(bpfModule *bpf.Module) error {
+	fmt.Println("Setting PID_FILTER to", flags.PidFilter)
 	if err := bpfModule.InitGlobalVariable("PID_FILTER", uint32(flags.PidFilter)); err != nil {
 		return fmt.Errorf("unable to set up PID_FILTER global variable: %w", err)
+	}
+	fmt.Println("Setting TID_FILTER to", flags.TidFilter)
+	if err := bpfModule.InitGlobalVariable("TID_FILTER", uint32(flags.PidFilter)); err != nil {
+		return fmt.Errorf("unable to set up TID_FILTER global variable: %w", err)
 	}
 	return nil
 }

@@ -4,3 +4,5 @@
 * More filters
 * Output format so that it is compatible with the flamegraph grapher
 * Capture more tracepoints? See comments in tracepoints.c's header.
+* Automatic testing (integration tests)
+* Performance benchmark...

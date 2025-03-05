@@ -54,21 +54,17 @@ func (e *eventPair) is(id TraceId) bool {
 func (e *eventPair) String() string {
 	var sb strings.Builder
 
-	if e.tracepointMismatch {
-		sb.WriteString("MISMATCH ")
-	}
-
 	sb.WriteString(fmt.Sprintf("%08dns %08dns", e.durationToPrev, e.duration))
 
-	sb.WriteString(" ")
+	sb.WriteString(" comm:")
 	sb.WriteString(e.comm)
 
-	sb.WriteString(" ")
+	sb.WriteString(" pidtid:")
 	sb.WriteString(strconv.FormatInt(int64(e.enterEv.GetPid()), 10))
 	sb.WriteString(".")
 	sb.WriteString(strconv.FormatInt(int64(e.enterEv.GetTid()), 10))
 
-	sb.WriteString(" ")
+	sb.WriteString(" name:")
 	sb.WriteString(e.enterEv.GetTraceId().Name())
 	if retEv, ok := e.exitEv.(*RetEvent); ok {
 		sb.WriteString(":")
@@ -78,6 +74,9 @@ func (e *eventPair) String() string {
 	sb.WriteString(" ")
 	sb.WriteString(e.file.String())
 
+	if e.tracepointMismatch {
+		sb.WriteString(" MISMATCH")
+	}
 	return sb.String()
 }
 
