@@ -100,7 +100,7 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 		openEv := ev.enterEv.(*OpenEvent)
 
 		fd := int32(ev.exitEv.(*RetEvent).Ret)
-		file := fdFile{fd, string(openEv.Filename[:])}
+		file := newFdFile(fd, string(openEv.Filename[:]))
 		if fd >= 0 {
 			e.files[fd] = file
 		}
@@ -130,7 +130,7 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 				delete(e.files, fd)
 			}
 		} else {
-			ev.file = fdFile{fd, "?"}
+			ev.file = newFdFileWithPid(fd, ev.enterEv.(*FdEvent).Pid)
 		}
 		ev.comm, _ = e.comms[ev.enterEv.GetTid()]
 

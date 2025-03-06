@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -12,6 +14,17 @@ type file interface {
 type fdFile struct {
 	fd   int32
 	name string
+}
+
+func newFdFile(fd int32, name string) fdFile {
+	return fdFile{fd, name}
+}
+
+func newFdFileWithPid(fd int32, pid uint32) fdFile {
+	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd)); err == nil {
+		return fdFile{fd, linkName}
+	}
+	return fdFile{fd, "?"}
 }
 
 func (f fdFile) String() string {
