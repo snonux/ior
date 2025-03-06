@@ -5,20 +5,21 @@ import "C"
 import (
 	"fmt"
 
+	"ioriotng/internal/flags"
 	. "ioriotng/internal/generated/types"
 )
 
 type eventLoop struct {
-	evCh      chan *eventPair       // Channel of events (enter+exit tracepoint results of a syscall).
+	filter    *eventFilter
 	enterEvs  map[uint32]*eventPair // Temp. store of sys_enter tracepoints per Tid.
 	files     map[int32]file        // Track all open files by file descriptor.
 	comms     map[uint32]string     // Program or thread name of the current Tid.
 	prevPairs map[uint32]*eventPair // Previous event (to calculate time differences between two events)
 }
 
-func newEventLoop() *eventLoop {
+func newEventLoop(flags flags.Flags) *eventLoop {
 	return &eventLoop{
-		evCh:      make(chan *eventPair),
+		filter:    newEventFilter(flags),
 		enterEvs:  make(map[uint32]*eventPair),
 		files:     make(map[int32]file),
 		comms:     make(map[uint32]string),
@@ -39,24 +40,28 @@ func (e *eventLoop) run(rawCh <-chan []byte) {
 	fmt.Println("Good bye")
 }
 
+// Deserialise raw byte stream from BPF ringbuffer.
 func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
-	// Deserialise raw byte stream from BPF ringbuffer.
+	ch := make(chan *eventPair)
+
 	go func() {
-		defer close(e.evCh)
+		defer close(ch)
 		for raw := range rawCh {
 			switch EventType(raw[0]) {
 			case ENTER_OPEN_EVENT:
-				e.syscallEnter(NewOpenEvent(raw))
+				if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
+					e.syscallEnter(ev)
+				}
 			case EXIT_OPEN_EVENT:
-				e.syscallExit(NewFdEvent(raw))
+				e.syscallExit(NewFdEvent(raw), ch)
 			case ENTER_FD_EVENT:
 				e.syscallEnter(NewFdEvent(raw))
 			case EXIT_FD_EVENT:
-				e.syscallExit(NewFdEvent(raw))
+				e.syscallExit(NewFdEvent(raw), ch)
 			case EXIT_NULL_EVENT:
-				e.syscallExit(NewNullEvent(raw))
+				e.syscallExit(NewNullEvent(raw), ch)
 			case EXIT_RET_EVENT:
-				e.syscallExit(NewRetEvent(raw))
+				e.syscallExit(NewRetEvent(raw), ch)
 			case ENTER_NAME_EVENT:
 				e.syscallEnter(NewNameEvent(raw))
 			case ENTER_PATH_EVENT:
@@ -67,14 +72,14 @@ func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
 		}
 	}()
 
-	return e.evCh
+	return ch
 }
 
 func (e *eventLoop) syscallEnter(enterEv event) {
 	e.enterEvs[enterEv.GetTid()] = newEventPair(enterEv)
 }
 
-func (e *eventLoop) syscallExit(exitEv event) {
+func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 	ev, ok := e.enterEvs[exitEv.GetTid()]
 	if !ok {
 		exitEv.Recycle()
@@ -139,5 +144,5 @@ func (e *eventLoop) syscallExit(exitEv event) {
 	ev.prevPair, _ = e.prevPairs[ev.enterEv.GetTid()]
 	ev.calculateDurations()
 	e.prevPairs[ev.enterEv.GetTid()] = ev
-	e.evCh <- ev
+	ch <- ev
 }

@@ -28,6 +28,7 @@ type eventPair struct {
 	comm               string
 	duration           uint64
 	tracepointMismatch bool
+
 	// To calculate the time difference from the previoud event.
 	prevPair       *eventPair
 	durationToPrev uint64
