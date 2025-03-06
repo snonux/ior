@@ -28,7 +28,7 @@ func (flags Flags) SetBPF(bpfModule *bpf.Module) error {
 		return fmt.Errorf("unable to set up PID_FILTER global variable: %w", err)
 	}
 	fmt.Println("Setting TID_FILTER to", flags.TidFilter)
-	if err := bpfModule.InitGlobalVariable("TID_FILTER", uint32(flags.PidFilter)); err != nil {
+	if err := bpfModule.InitGlobalVariable("TID_FILTER", uint32(flags.TidFilter)); err != nil {
 		return fmt.Errorf("unable to set up TID_FILTER global variable: %w", err)
 	}
 	return nil
