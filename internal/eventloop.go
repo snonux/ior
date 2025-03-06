@@ -6,16 +6,32 @@ import (
 	"fmt"
 
 	. "ioriotng/internal/generated/types"
-
-	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
-	for ev := range events(rawCh) {
+type eventLoop struct {
+	evCh      chan *eventPair       // Channel of events (enter+exit tracepoint results of a syscall).
+	enterEvs  map[uint32]*eventPair // Temp. store of sys_enter tracepoints per Tid.
+	files     map[int32]file        // Track all open files by file descriptor.
+	comms     map[uint32]string     // Program or thread name of the current Tid.
+	prevPairs map[uint32]*eventPair // Previous event (to calculate time differences between two events)
+}
+
+func newEventLoop() *eventLoop {
+	return &eventLoop{
+		evCh:      make(chan *eventPair),
+		enterEvs:  make(map[uint32]*eventPair),
+		files:     make(map[int32]file),
+		comms:     make(map[uint32]string),
+		prevPairs: make(map[uint32]*eventPair),
+	}
+}
+
+func (e *eventLoop) run(rawCh <-chan []byte) {
+	fmt.Println(eventStreamHeader)
+	for ev := range e.events(rawCh) {
 		fmt.Println(ev.String())
 		if ev.prevPair != nil {
-			// Only recycle the previous event, as the current event is the previous
-			// event of the next event!
+			// Only recycle the previous event, as the current event is the previous event of the next event!
 			ev.prevPair.recycle()
 			continue
 		}
@@ -23,31 +39,20 @@ func eventLoop(bpfModule *bpf.Module, rawCh <-chan []byte) {
 	fmt.Println("Good bye")
 }
 
-func events(rawCh <-chan []byte) <-chan *eventPair {
-	// Channel of events (enter+exit tracepoint results of a syscall).
-	evCh := make(chan *eventPair)
-	// Temp. store of sys_enter tracepoints per Tid.
-	enterEvs := make(map[uint32]*eventPair)
-	// Track all open files by file descriptor.
-	files := make(map[int32]file)
-	// Program or thread name of the current Tid.
-	comms := make(map[uint32]string)
-	// Previous event (to calculate time differences between two events)
-	prevPairs := make(map[uint32]*eventPair)
-
+func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
 	// Syscall entered
 	enter := func(enterEv event) {
-		enterEvs[enterEv.GetTid()] = newEventPair(enterEv)
+		e.enterEvs[enterEv.GetTid()] = newEventPair(enterEv)
 	}
 
 	// Syscall exited
 	exit := func(exitEv event) {
-		ev, ok := enterEvs[exitEv.GetTid()]
+		ev, ok := e.enterEvs[exitEv.GetTid()]
 		if !ok {
 			exitEv.Recycle()
 			return
 		}
-		delete(enterEvs, exitEv.GetTid())
+		delete(e.enterEvs, exitEv.GetTid())
 		ev.exitEv = exitEv
 
 		// Expect ID one lower, otherwise, enter and exit tracepoints
@@ -64,12 +69,12 @@ func events(rawCh <-chan []byte) <-chan *eventPair {
 			fd := int32(ev.exitEv.(*RetEvent).Ret)
 			file := fdFile{fd, string(openEv.Filename[:])}
 			if fd >= 0 {
-				files[fd] = file
+				e.files[fd] = file
 			}
 			ev.file = file
 
 			comm := string(openEv.Comm[:])
-			comms[openEv.Tid] = comm
+			e.comms[openEv.Tid] = comm
 
 		case *NameEvent:
 			nameEvent := ev.enterEv.(*NameEvent)
@@ -77,41 +82,41 @@ func events(rawCh <-chan []byte) <-chan *eventPair {
 				oldname: string(nameEvent.Oldname[:]),
 				newname: string(nameEvent.Newname[:]),
 			}
-			ev.comm, _ = comms[ev.enterEv.GetTid()]
+			ev.comm, _ = e.comms[ev.enterEv.GetTid()]
 
 		case *PathEvent:
 			nameEvent := ev.enterEv.(*PathEvent)
 			ev.file = pathnameFile{string(nameEvent.Pathname[:])}
-			ev.comm, _ = comms[ev.enterEv.GetTid()]
+			ev.comm, _ = e.comms[ev.enterEv.GetTid()]
 
 		case *FdEvent:
 			fd := ev.enterEv.(*FdEvent).Fd
-			if file_, ok := files[fd]; ok {
+			if file_, ok := e.files[fd]; ok {
 				ev.file = file_
 				if ev.is(SYS_ENTER_CLOSE) {
-					delete(files, fd)
+					delete(e.files, fd)
 				}
 			} else {
 				ev.file = fdFile{fd, "?"}
 			}
-			ev.comm, _ = comms[ev.enterEv.GetTid()]
+			ev.comm, _ = e.comms[ev.enterEv.GetTid()]
 
 		case *NullEvent:
-			ev.comm, _ = comms[ev.enterEv.GetTid()]
+			ev.comm, _ = e.comms[ev.enterEv.GetTid()]
 
 		default:
 			panic(fmt.Sprintf("unknown type: %v", v))
 		}
 
-		ev.prevPair, _ = prevPairs[ev.enterEv.GetTid()]
+		ev.prevPair, _ = e.prevPairs[ev.enterEv.GetTid()]
 		ev.calculateDurations()
-		prevPairs[ev.enterEv.GetTid()] = ev
-		evCh <- ev
+		e.prevPairs[ev.enterEv.GetTid()] = ev
+		e.evCh <- ev
 	}
 
 	// Deserialise raw byte stream from BPF ringbuffer.
 	go func() {
-		defer close(evCh)
+		defer close(e.evCh)
 		for raw := range rawCh {
 			switch EventType(raw[0]) {
 			case ENTER_OPEN_EVENT:
@@ -136,5 +141,5 @@ func events(rawCh <-chan []byte) <-chan *eventPair {
 		}
 	}()
 
-	return evCh
+	return e.evCh
 }

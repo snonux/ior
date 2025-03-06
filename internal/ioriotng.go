@@ -60,7 +60,7 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 	rb.Poll(300)
-	eventLoop(bpfModule, ch)
+	newEventLoop().run(ch)
 
 	fmt.Println("Good bye")
 }

@@ -51,31 +51,34 @@ func (e *eventPair) is(id TraceId) bool {
 	return e.enterEv.GetTraceId() == id
 }
 
+const eventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,notice,file"
+
 func (e *eventPair) String() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("%08dns %08dns", e.durationToPrev, e.duration))
+	sb.WriteString(fmt.Sprintf("%08d,%08d", e.durationToPrev, e.duration))
 
-	sb.WriteString(" comm:")
+	sb.WriteString(",")
 	sb.WriteString(e.comm)
 
-	sb.WriteString(" pidtid:")
+	sb.WriteString(",")
 	sb.WriteString(strconv.FormatInt(int64(e.enterEv.GetPid()), 10))
 	sb.WriteString(".")
 	sb.WriteString(strconv.FormatInt(int64(e.enterEv.GetTid()), 10))
 
-	sb.WriteString(" name:")
+	sb.WriteString(",")
 	sb.WriteString(e.enterEv.GetTraceId().Name())
+
+	sb.WriteString(",")
 	if retEv, ok := e.exitEv.(*RetEvent); ok {
-		sb.WriteString(":")
 		sb.WriteString(strconv.FormatInt(int64(retEv.Ret), 10))
 	}
 
-	sb.WriteString(" ")
+	sb.WriteString(",")
 	sb.WriteString(e.file.String())
 
 	if e.tracepointMismatch {
-		sb.WriteString(" MISMATCH")
+		sb.WriteString(",MISMATCH")
 	}
 	return sb.String()
 }

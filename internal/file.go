@@ -18,12 +18,12 @@ func (f fdFile) String() string {
 	var sb strings.Builder
 
 	if len(f.name) == 0 {
-		sb.WriteString("file:?")
+		sb.WriteString("?")
 	} else {
-		sb.WriteString("file:(")
+		sb.WriteString(f.name)
+		sb.WriteString(" (")
 		sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
 		sb.WriteString(")")
-		sb.WriteString(f.name)
 	}
 
 	return sb.String()
