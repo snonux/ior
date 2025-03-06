@@ -4,6 +4,7 @@ import "C"
 
 import (
 	"fmt"
+	"os"
 
 	"ioriotng/internal/flags"
 	. "ioriotng/internal/generated/types"
@@ -107,6 +108,7 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 		ev.file = file
 
 		comm := string(openEv.Comm[:])
+		// TODO: Filter out all other events not matching comm filter as well when comm filter enabled
 		e.comms[openEv.Tid] = comm
 
 	case *NameEvent:
@@ -115,12 +117,12 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 			oldname: string(nameEvent.Oldname[:]),
 			newname: string(nameEvent.Newname[:]),
 		}
-		ev.comm, _ = e.comms[ev.enterEv.GetTid()]
+		ev.comm = e.comm(ev.enterEv.GetTid())
 
 	case *PathEvent:
 		nameEvent := ev.enterEv.(*PathEvent)
 		ev.file = pathnameFile{string(nameEvent.Pathname[:])}
-		ev.comm, _ = e.comms[ev.enterEv.GetTid()]
+		ev.comm = e.comm(ev.enterEv.GetTid())
 
 	case *FdEvent:
 		fd := ev.enterEv.(*FdEvent).Fd
@@ -132,10 +134,10 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 		} else {
 			ev.file = newFdFileWithPid(fd, ev.enterEv.(*FdEvent).Pid)
 		}
-		ev.comm, _ = e.comms[ev.enterEv.GetTid()]
+		ev.comm = e.comm(ev.enterEv.GetTid())
 
 	case *NullEvent:
-		ev.comm, _ = e.comms[ev.enterEv.GetTid()]
+		ev.comm = e.comm(ev.enterEv.GetTid())
 
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
@@ -145,4 +147,15 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 	ev.calculateDurations()
 	e.prevPairs[ev.enterEv.GetTid()] = ev
 	ch <- ev
+}
+
+func (e *eventLoop) comm(pid uint32) string {
+	if comm, ok := e.comms[pid]; ok {
+		return comm
+	}
+	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
+		e.comms[pid] = linkName
+		return linkName
+	}
+	return ""
 }
