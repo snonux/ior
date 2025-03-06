@@ -77,7 +77,21 @@ func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
 }
 
 func (e *eventLoop) syscallEnter(enterEv event) {
-	e.enterEvs[enterEv.GetTid()] = newEventPair(enterEv)
+	tid := enterEv.GetTid()
+	if !e.filter.commFilterEnable {
+		e.enterEvs[tid] = newEventPair(enterEv)
+		return
+	}
+
+	switch enterEv.(type) {
+	case *OpenEvent:
+		e.enterEvs[tid] = newEventPair(enterEv)
+	default:
+		// Only, when we have a comm name
+		if _, ok := e.comms[tid]; ok {
+			e.enterEvs[tid] = newEventPair(enterEv)
+		}
+	}
 }
 
 func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
@@ -107,9 +121,8 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 		}
 		ev.file = file
 
-		comm := string(openEv.Comm[:])
 		// TODO: Filter out all other events not matching comm filter as well when comm filter enabled
-		e.comms[openEv.Tid] = comm
+		e.comms[openEv.Tid] = string(openEv.Comm[:])
 
 	case *NameEvent:
 		nameEvent := ev.enterEv.(*NameEvent)
@@ -149,12 +162,12 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 	ch <- ev
 }
 
-func (e *eventLoop) comm(pid uint32) string {
-	if comm, ok := e.comms[pid]; ok {
+func (e *eventLoop) comm(tid uint32) string {
+	if comm, ok := e.comms[tid]; ok {
 		return comm
 	}
-	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
-		e.comms[pid] = linkName
+	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid)); err == nil {
+		e.comms[tid] = linkName
 		return linkName
 	}
 	return ""
