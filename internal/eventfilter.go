@@ -25,8 +25,8 @@ func newEventFilter(flags flags.Flags) *eventFilter {
 			panic(fmt.Sprintf("Comm filter's max size is %d", types.MAX_PROGNAME_LENGTH))
 		}
 		ef.commFilterEnable = true
-		copy(ef.commFilterBytes[:], []byte(flags.CommFilter))
 		ef.commFilter = flags.CommFilter
+		copy(ef.commFilterBytes[:], []byte(flags.CommFilter))
 	}
 
 	if flags.PathFilter != "" {
@@ -34,8 +34,8 @@ func newEventFilter(flags flags.Flags) *eventFilter {
 			panic(fmt.Sprintf("Path filter's max size is %d", types.MAX_FILENAME_LENGTH))
 		}
 		ef.pathFilterEnable = true
-		copy(ef.pathFilterBytes[:], []byte(flags.PathFilter))
 		ef.pathFilter = flags.PathFilter
+		copy(ef.pathFilterBytes[:], []byte(flags.PathFilter))
 	}
 
 	return &ef

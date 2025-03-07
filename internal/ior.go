@@ -80,7 +80,7 @@ func Run(flags flags.Flags) {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		fmt.Println("Shutting down...")
+		fmt.Println("Good bye...")
 		if flags.PprofEnable {
 			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
 			pprof.StopCPUProfile()
@@ -90,6 +90,4 @@ func Run(flags flags.Flags) {
 	}()
 
 	newEventLoop(flags).run(ch)
-
-	fmt.Println("Good bye")
 }
