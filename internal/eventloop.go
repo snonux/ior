@@ -5,6 +5,7 @@ import "C"
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"ior/internal/flags"
 	. "ior/internal/generated/types"
@@ -48,7 +49,6 @@ func (e *eventLoop) run(rawCh <-chan []byte) {
 	fmt.Println("Good bye")
 }
 
-// Deserialise raw byte stream from BPF ringbuffer.
 func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
 	ch := make(chan *eventPair)
 
@@ -131,7 +131,6 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 			e.files[fd] = file
 		}
 		ev.file = file
-
 		e.comms[openEv.Tid] = string(openEv.Comm[:])
 
 	case *NameEvent:
@@ -158,9 +157,16 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 			ev.file = newFdFileWithPid(fd, ev.enterEv.(*FdEvent).Pid)
 		}
 		ev.comm = e.comm(ev.enterEv.GetTid())
-
+		if !e.filter.eventPair(ev) {
+			ev.recycle()
+			return
+		}
 	case *NullEvent:
 		ev.comm = e.comm(ev.enterEv.GetTid())
+		if !e.filter.eventPair(ev) {
+			ev.recycle()
+			return
+		}
 
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
@@ -177,6 +183,7 @@ func (e *eventLoop) comm(tid uint32) string {
 		return comm
 	}
 	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid)); err == nil {
+		linkName = filepath.Base(linkName)
 		e.comms[tid] = linkName
 		return linkName
 	}

@@ -9,6 +9,7 @@ import (
 
 type file interface {
 	String() string
+	Name() string
 }
 
 type fdFile struct {
@@ -25,6 +26,10 @@ func newFdFileWithPid(fd int32, pid uint32) fdFile {
 		return fdFile{fd, linkName}
 	}
 	return fdFile{fd, "?"}
+}
+
+func (f fdFile) Name() string {
+	return f.name
 }
 
 func (f fdFile) String() string {
@@ -46,6 +51,10 @@ type oldnameNewnameFile struct {
 	oldname, newname string
 }
 
+func (f oldnameNewnameFile) Name() string {
+	return f.newname
+}
+
 func (f oldnameNewnameFile) String() string {
 	var sb strings.Builder
 
@@ -59,6 +68,10 @@ func (f oldnameNewnameFile) String() string {
 
 type pathnameFile struct {
 	pathname string
+}
+
+func (f pathnameFile) Name() string {
+	return f.pathname
 }
 
 func (f pathnameFile) String() string {
