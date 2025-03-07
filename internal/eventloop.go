@@ -71,9 +71,13 @@ func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
 			case EXIT_RET_EVENT:
 				e.syscallExit(NewRetEvent(raw), ch)
 			case ENTER_NAME_EVENT:
-				e.syscallEnter(NewNameEvent(raw))
+				if ev, ok := e.filter.nameEvent(NewNameEvent(raw)); ok {
+					e.syscallEnter(ev)
+				}
 			case ENTER_PATH_EVENT:
-				e.syscallEnter(NewPathEvent(raw))
+				if ev, ok := e.filter.pathEvent(NewPathEvent(raw)); ok {
+					e.syscallEnter(ev)
+				}
 			default:
 				panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
 			}
