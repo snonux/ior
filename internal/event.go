@@ -2,7 +2,7 @@ package internal
 
 import (
 	"fmt"
-	. "ioriotng/internal/generated/types"
+	. "ior/internal/generated/types"
 	"strconv"
 	"strings"
 	"sync"

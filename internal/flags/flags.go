@@ -12,6 +12,7 @@ type Flags struct {
 	TidFilter    int
 	EventMapSize int
 	CommFilter   string
+	PprofEnable  bool
 }
 
 func New() (flags Flags) {
@@ -19,6 +20,7 @@ func New() (flags Flags) {
 	flag.IntVar(&flags.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&flags.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
 	flag.StringVar(&flags.CommFilter, "comm", "", "Command to filter for")
+	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
 	flag.Parse()
 
 	return flags

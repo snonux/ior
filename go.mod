@@ -1,4 +1,4 @@
-module ioriotng
+module ior
 
 go 1.18
 

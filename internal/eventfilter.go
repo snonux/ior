@@ -2,8 +2,8 @@ package internal
 
 import (
 	"bytes"
-	"ioriotng/internal/flags"
-	"ioriotng/internal/generated/types"
+	"ior/internal/flags"
+	"ior/internal/generated/types"
 )
 
 type eventFilter struct {

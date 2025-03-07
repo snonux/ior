@@ -1,6 +1,6 @@
-# ioriotng
+# I/O Riot NG
 
-<img src=assets/ioriotng-small.png align=right />
+<img src=assets/ior-small.png align=right />
 
 I/O Riot NG is an experiments with BPF. This program traces for synchronous I/O syscalls and then analyses the time taken for each of those syscalls. 
 
@@ -12,7 +12,7 @@ To get this running on Fedora 39, run:
 
 ```shell
 mkdir ~/git
-git clone https://codeberg.org/snonux/ioriotng
+git clone https://codeberg.org/snonux/ior
 git clone https://github.com/aquasecurity/libbpfgo
 sudo dnf install -y golang clang bpftool elfutils-libelf-devel zlib-static glibc-static libzstd-static
 cd libbpfgo

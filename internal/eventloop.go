@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"os"
 
-	"ioriotng/internal/flags"
-	. "ioriotng/internal/generated/types"
+	"ior/internal/flags"
+	. "ior/internal/generated/types"
 )
 
 type eventLoop struct {
+	flags     flags.Flags
 	filter    *eventFilter
 	enterEvs  map[uint32]*eventPair // Temp. store of sys_enter tracepoints per Tid.
 	files     map[int32]file        // Track all open files by file descriptor.
@@ -20,6 +21,7 @@ type eventLoop struct {
 
 func newEventLoop(flags flags.Flags) *eventLoop {
 	return &eventLoop{
+		flags:     flags,
 		filter:    newEventFilter(flags),
 		enterEvs:  make(map[uint32]*eventPair),
 		files:     make(map[int32]file),
@@ -29,9 +31,14 @@ func newEventLoop(flags flags.Flags) *eventLoop {
 }
 
 func (e *eventLoop) run(rawCh <-chan []byte) {
-	fmt.Println(eventStreamHeader)
+	if e.flags.PprofEnable {
+		fmt.Println("Profiling, press Ctrl+C to stop")
+		fmt.Println(eventStreamHeader)
+	}
 	for ev := range e.events(rawCh) {
-		fmt.Println(ev.String())
+		if !e.flags.PprofEnable {
+			fmt.Println(ev.String())
+		}
 		if ev.prevPair != nil {
 			// Only recycle the previous event, as the current event is the previous event of the next event!
 			ev.prevPair.recycle()
@@ -121,7 +128,6 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 		}
 		ev.file = file
 
-		// TODO: Filter out all other events not matching comm filter as well when comm filter enabled
 		e.comms[openEv.Tid] = string(openEv.Comm[:])
 
 	case *NameEvent:

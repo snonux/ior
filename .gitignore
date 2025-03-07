@@ -1,4 +1,4 @@
-ioriotng
+/ioriotng
 /ioriotng.bpf.c
 *.o
 vmlinux.h

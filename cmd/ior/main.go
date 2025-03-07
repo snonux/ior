@@ -1,8 +1,8 @@
 package main
 
 import (
-	"ioriotng/internal"
-	"ioriotng/internal/flags"
+	"ior/internal"
+	"ior/internal/flags"
 )
 
 func main() {

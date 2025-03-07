@@ -10,7 +10,7 @@ all: bpfbuild gobuild
 .PHONY: bpfbuild
 bpfbuild:
 	make -C ./internal/c redo
-	cp -v ./internal/c/ioriotng.bpf.o .
+	cp -v ./internal/c/ior.bpf.o .
 
 gen: generated
 generate: generated
@@ -22,12 +22,12 @@ generated:
 
 .PHONY: gobuild
 gobuild:
-	go build -tags netgo -ldflags '-w -extldflags "-static"' -o ioriotng ./cmd/ioriotng/main.go
+	go build -tags netgo -ldflags '-w -extldflags "-static"' -o ior ./cmd/ior/main.go
 
 .PHONY: clean
 clean:
-	find . -type f -name ioriotng -delete
-	if [ -e ioriotng.bpf.o ]; then rm ioriotng.bpf.o; fi
+	find . -type f -name ior -delete
+	if [ -e ior.bpf.o ]; then rm ior.bpf.o; fi
 	make -C ./internal/c clean
 
 .PHONY: world
