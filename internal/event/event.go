@@ -27,7 +27,7 @@ type Pair struct {
 	EnterEv, ExitEv    Event
 	File               file.File
 	Comm               string
-	duration           uint64
+	Duration           uint64
 	TracepointMismatch bool
 
 	// To calculate the time difference from the previoud event.
@@ -42,7 +42,7 @@ func NewPair(enterEv Event) *Pair {
 }
 
 func (e *Pair) CalculateDurations() {
-	e.duration = e.ExitEv.GetTime() - e.EnterEv.GetTime()
+	e.Duration = e.ExitEv.GetTime() - e.EnterEv.GetTime()
 
 	if e.PrevPair != nil {
 		e.durationToPrev = e.EnterEv.GetTime() - e.PrevPair.ExitEv.GetTime()
@@ -58,7 +58,7 @@ const EventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,not
 func (e *Pair) String() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("%08d,%08d", e.durationToPrev, e.duration))
+	sb.WriteString(fmt.Sprintf("%08d,%08d", e.durationToPrev, e.Duration))
 
 	sb.WriteString(",")
 	sb.WriteString(e.Comm)
@@ -94,4 +94,13 @@ func (e *Pair) Recycle() {
 	e.ExitEv.Recycle()
 	e.PrevPair = nil
 	poolOfEventPairs.Put(e)
+}
+
+// Only recycle the previous event, as the current event is the previous event of the next event!
+// And the previous event is required for calculation of durationToPrev!
+func (e *Pair) RecyclePrev() {
+	if e.PrevPair == nil {
+		return
+	}
+	e.PrevPair.Recycle()
 }

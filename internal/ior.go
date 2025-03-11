@@ -88,6 +88,7 @@ func Run(flags flags.Flags) {
 			pprof.StopCPUProfile()
 			pprof.WriteHeapProfile(memProfile)
 		}
+		loop.stop()
 		fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...)")
 		os.Exit(0)
 	}()
