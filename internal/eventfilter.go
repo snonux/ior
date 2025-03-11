@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"bytes"
 	"fmt"
 	"ior/internal/event"
 	"ior/internal/flags"
@@ -12,10 +11,8 @@ import (
 // TODO: Move to event package
 type eventFilter struct {
 	commFilterEnable bool
-	commFilterBytes  [types.MAX_PROGNAME_LENGTH]byte
 	commFilter       string
 	pathFilterEnable bool
-	pathFilterBytes  [types.MAX_FILENAME_LENGTH]byte
 	pathFilter       string
 }
 
@@ -28,7 +25,6 @@ func newEventFilter(flags flags.Flags) *eventFilter {
 		}
 		ef.commFilterEnable = true
 		ef.commFilter = flags.CommFilter
-		copy(ef.commFilterBytes[:], []byte(flags.CommFilter))
 	}
 
 	if flags.PathFilter != "" {
@@ -37,7 +33,6 @@ func newEventFilter(flags flags.Flags) *eventFilter {
 		}
 		ef.pathFilterEnable = true
 		ef.pathFilter = flags.PathFilter
-		copy(ef.pathFilterBytes[:], []byte(flags.PathFilter))
 	}
 
 	return &ef
@@ -54,10 +49,11 @@ func (ef *eventFilter) eventPair(ev *event.Pair) bool {
 }
 
 func (ef *eventFilter) openEvent(ev *types.OpenEvent) (*types.OpenEvent, bool) {
-	if ef.commFilterEnable && !bytes.Contains(ev.Comm[:], ef.commFilterBytes[:]) {
+	if ef.commFilterEnable && !strings.Contains(string(ev.Comm[:]), ef.commFilter) {
 		return ev, false
 	}
-	if ef.pathFilterEnable && !bytes.Contains(ev.Filename[:], ef.pathFilterBytes[:]) {
+
+	if ef.pathFilterEnable && !strings.Contains(string(ev.Filename[:]), ef.pathFilter) {
 		return ev, false
 	}
 	return ev, true
@@ -65,14 +61,14 @@ func (ef *eventFilter) openEvent(ev *types.OpenEvent) (*types.OpenEvent, bool) {
 
 func (ef *eventFilter) pathEvent(ev *types.PathEvent) (*types.PathEvent, bool) {
 	if ef.pathFilterEnable {
-		return ev, bytes.Contains(ev.Pathname[:], ef.pathFilterBytes[:])
+		return ev, strings.Contains(string(ev.Pathname[:]), ef.pathFilter)
 	}
 	return ev, true
 }
 
 func (ef *eventFilter) nameEvent(ev *types.NameEvent) (*types.NameEvent, bool) {
 	if ef.pathFilterEnable {
-		return ev, bytes.Contains(ev.Oldname[:], ef.pathFilterBytes[:]) || bytes.Contains(ev.Newname[:], ef.pathFilterBytes[:])
+		return ev, strings.Contains(string(ev.Oldname[:]), ef.pathFilter) || strings.Contains(string(ev.Newname[:]), ef.pathFilter)
 	}
 	return ev, true
 }
