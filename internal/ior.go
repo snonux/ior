@@ -76,10 +76,13 @@ func Run(flags flags.Flags) {
 		pprof.StartCPUProfile(cpuProfile)
 	}
 
+	loop := newEventLoop(flags)
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
+		fmt.Println(loop.stats())
 		fmt.Println("Good bye...")
 		if flags.PprofEnable {
 			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
@@ -89,5 +92,5 @@ func Run(flags flags.Flags) {
 		os.Exit(0)
 	}()
 
-	newEventLoop(flags).run(ch)
+	loop.run(ch)
 }

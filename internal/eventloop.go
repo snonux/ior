@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"ior/internal/flags"
 	. "ior/internal/generated/types"
+	"ior/internal/tree"
 )
 
+// TODO: Move in its own package?
 type eventLoop struct {
 	flags     flags.Flags
 	filter    *eventFilter
@@ -18,6 +21,14 @@ type eventLoop struct {
 	files     map[int32]file        // Track all open files by file descriptor.
 	comms     map[uint32]string     // Program or thread name of the current Tid.
 	prevPairs map[uint32]*eventPair // Previous event (to calculate time differences between two events)
+	tree      tree.Tree             // Storing all paths in a tree structure for analysis
+
+	// Statistics
+	numTracepoints          uint
+	numTracepointMismatches uint
+	numSyscalls             uint
+	numSyscallsAfterFilter  uint
+	startTime               time.Time
 }
 
 func newEventLoop(flags flags.Flags) *eventLoop {
@@ -28,10 +39,25 @@ func newEventLoop(flags flags.Flags) *eventLoop {
 		files:     make(map[int32]file),
 		comms:     make(map[uint32]string),
 		prevPairs: make(map[uint32]*eventPair),
+		tree:      tree.New(), // TODO: Implement
 	}
 }
 
+// TODO: Could use the table from the gos project to display the stats here
+func (e *eventLoop) stats() string {
+	duration := time.Since(e.startTime)
+
+	return "Statistics:\n" +
+		fmt.Sprintf("\tduration:%v\n", duration) +
+		fmt.Sprintf("\ttracepoints:%v (%.2f/s) with %d mismatches (%.2f%%)\n", e.numTracepoints, float64(e.numTracepoints)/duration.Seconds(), e.numTracepointMismatches, (float64(e.numTracepointMismatches)/float64(e.numTracepoints))*100) +
+		fmt.Sprintf("\tsyscalls:%d (%.2f/s)\n",
+			e.numSyscalls, float64(e.numSyscalls)/duration.Seconds()) +
+		fmt.Sprintf("\tsyscalls after filter:%d (%.2f/s)\n",
+			e.numSyscallsAfterFilter, float64(e.numSyscallsAfterFilter)/duration.Seconds())
+}
+
 func (e *eventLoop) run(rawCh <-chan []byte) {
+	e.startTime = time.Now()
 	if e.flags.PprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
 		fmt.Println(eventStreamHeader)
@@ -45,8 +71,8 @@ func (e *eventLoop) run(rawCh <-chan []byte) {
 			ev.prevPair.recycle()
 			continue
 		}
+		e.numSyscallsAfterFilter++
 	}
-	fmt.Println("Good bye")
 }
 
 func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
@@ -55,6 +81,7 @@ func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
 	go func() {
 		defer close(ch)
 		for raw := range rawCh {
+			e.numTracepoints++
 			switch EventType(raw[0]) {
 			case ENTER_OPEN_EVENT:
 				if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
@@ -119,6 +146,9 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 	// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
 	if ev.enterEv.GetTraceId()-1 != ev.exitEv.GetTraceId() {
 		ev.tracepointMismatch = true
+		e.numTracepointMismatches++
+	} else {
+		e.numSyscalls++
 	}
 
 	switch v := ev.enterEv.(type) {
