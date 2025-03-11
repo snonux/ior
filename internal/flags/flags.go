@@ -14,6 +14,7 @@ type Flags struct {
 	CommFilter   string
 	PathFilter   string
 	PprofEnable  bool
+	TreeEnable   bool
 }
 
 func New() (flags Flags) {
@@ -23,6 +24,7 @@ func New() (flags Flags) {
 	flag.StringVar(&flags.CommFilter, "comm", "", "Command to filter for")
 	flag.StringVar(&flags.PathFilter, "path", "", "Path to filter for")
 	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
+	flag.BoolVar(&flags.TreeEnable, "tree", false, "Enable tree builder")
 	flag.Parse()
 
 	return flags

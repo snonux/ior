@@ -83,12 +83,12 @@ func Run(flags flags.Flags) {
 	go func() {
 		<-c
 		fmt.Println(loop.stats())
-		fmt.Println("Good bye...")
 		if flags.PprofEnable {
 			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
 			pprof.StopCPUProfile()
 			pprof.WriteHeapProfile(memProfile)
 		}
+		fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...)")
 		os.Exit(0)
 	}()
 

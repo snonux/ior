@@ -1,11 +1,15 @@
 package internal
 
 import (
+	"bytes"
 	"fmt"
+	"ior/internal/event"
 	"ior/internal/flags"
 	"ior/internal/generated/types"
+	"strings"
 )
 
+// TODO: Move to event package
 type eventFilter struct {
 	commFilterEnable bool
 	commFilterBytes  [types.MAX_PROGNAME_LENGTH]byte
@@ -39,36 +43,36 @@ func newEventFilter(flags flags.Flags) *eventFilter {
 	return &ef
 }
 
-func (ef *eventFilter) eventPair(ev *eventPair) bool {
-	// if ef.commFilterEnable && !strings.Contains(ev.comm, ef.commFilter) {
-	// 	return false
-	// }
-	// if ef.pathFilterEnable && !strings.Contains(ev.file.Name(), ef.pathFilter) {
-	// 	return false
-	// }
+func (ef *eventFilter) eventPair(ev *event.Pair) bool {
+	if ef.commFilterEnable && !strings.Contains(ev.Comm, ef.commFilter) {
+		return false
+	}
+	if ef.pathFilterEnable && !strings.Contains(ev.File.Name(), ef.pathFilter) {
+		return false
+	}
 	return true
 }
 
 func (ef *eventFilter) openEvent(ev *types.OpenEvent) (*types.OpenEvent, bool) {
-	// if ef.commFilterEnable && !bytes.Contains(ev.Comm[:], ef.commFilterBytes[:]) {
-	// 	return ev, false
-	// }
-	// if ef.pathFilterEnable && !bytes.Contains(ev.Filename[:], ef.pathFilterBytes[:]) {
-	// 	return ev, false
-	// }
+	if ef.commFilterEnable && !bytes.Contains(ev.Comm[:], ef.commFilterBytes[:]) {
+		return ev, false
+	}
+	if ef.pathFilterEnable && !bytes.Contains(ev.Filename[:], ef.pathFilterBytes[:]) {
+		return ev, false
+	}
 	return ev, true
 }
 
 func (ef *eventFilter) pathEvent(ev *types.PathEvent) (*types.PathEvent, bool) {
-	// if ef.pathFilterEnable {
-	// 	return ev, bytes.Contains(ev.Pathname[:], ef.pathFilterBytes[:])
-	// }
+	if ef.pathFilterEnable {
+		return ev, bytes.Contains(ev.Pathname[:], ef.pathFilterBytes[:])
+	}
 	return ev, true
 }
 
 func (ef *eventFilter) nameEvent(ev *types.NameEvent) (*types.NameEvent, bool) {
-	// if ef.pathFilterEnable {
-	// 	return ev, bytes.Contains(ev.Oldname[:], ef.pathFilterBytes[:]) || bytes.Contains(ev.Newname[:], ef.pathFilterBytes[:])
-	// }
+	if ef.pathFilterEnable {
+		return ev, bytes.Contains(ev.Oldname[:], ef.pathFilterBytes[:]) || bytes.Contains(ev.Newname[:], ef.pathFilterBytes[:])
+	}
 	return ev, true
 }

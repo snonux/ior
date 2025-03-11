@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/flags"
 	. "ior/internal/generated/types"
 	"ior/internal/tree"
@@ -17,11 +19,11 @@ import (
 type eventLoop struct {
 	flags     flags.Flags
 	filter    *eventFilter
-	enterEvs  map[uint32]*eventPair // Temp. store of sys_enter tracepoints per Tid.
-	files     map[int32]file        // Track all open files by file descriptor.
-	comms     map[uint32]string     // Program or thread name of the current Tid.
-	prevPairs map[uint32]*eventPair // Previous event (to calculate time differences between two events)
-	tree      tree.Tree             // Storing all paths in a tree structure for analysis
+	enterEvs  map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
+	files     map[int32]file.File    // Track all open files by file descriptor..
+	comms     map[uint32]string      // Program or thread name of the current Tid.
+	prevPairs map[uint32]*event.Pair // Previous event (to calculate time differences between two events)
+	tree      tree.Tree              // Storing all paths in a tree structure for analysis
 
 	// Statistics
 	numTracepoints          uint
@@ -35,10 +37,10 @@ func newEventLoop(flags flags.Flags) *eventLoop {
 	return &eventLoop{
 		flags:     flags,
 		filter:    newEventFilter(flags),
-		enterEvs:  make(map[uint32]*eventPair),
-		files:     make(map[int32]file),
+		enterEvs:  make(map[uint32]*event.Pair),
+		files:     make(map[int32]file.File),
 		comms:     make(map[uint32]string),
-		prevPairs: make(map[uint32]*eventPair),
+		prevPairs: make(map[uint32]*event.Pair),
 		tree:      tree.New(), // TODO: Implement
 	}
 }
@@ -60,23 +62,27 @@ func (e *eventLoop) run(rawCh <-chan []byte) {
 	e.startTime = time.Now()
 	if e.flags.PprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
-		fmt.Println(eventStreamHeader)
+		fmt.Println(event.EventStreamHeader)
 	}
 	for ev := range e.events(rawCh) {
-		if !e.flags.PprofEnable {
+		switch {
+		case e.flags.TreeEnable:
+			// e.tree.Add(ev)
+		case e.flags.PprofEnable:
+		default:
 			fmt.Println(ev.String())
 		}
-		if ev.prevPair != nil {
+		if ev.PrevPair != nil {
 			// Only recycle the previous event, as the current event is the previous event of the next event!
-			ev.prevPair.recycle()
+			ev.PrevPair.Recycle()
 			continue
 		}
 		e.numSyscallsAfterFilter++
 	}
 }
 
-func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
-	ch := make(chan *eventPair)
+func (e *eventLoop) events(rawCh <-chan []byte) <-chan *event.Pair {
+	ch := make(chan *event.Pair)
 
 	go func() {
 		defer close(ch)
@@ -114,87 +120,87 @@ func (e *eventLoop) events(rawCh <-chan []byte) <-chan *eventPair {
 	return ch
 }
 
-func (e *eventLoop) syscallEnter(enterEv event) {
+func (e *eventLoop) syscallEnter(enterEv event.Event) {
 	tid := enterEv.GetTid()
 	if !e.filter.commFilterEnable {
-		e.enterEvs[tid] = newEventPair(enterEv)
+		e.enterEvs[tid] = event.NewPair(enterEv)
 		return
 	}
 
 	switch enterEv.(type) {
 	case *OpenEvent:
-		e.enterEvs[tid] = newEventPair(enterEv)
+		e.enterEvs[tid] = event.NewPair(enterEv)
 	default:
 		// Only, when we have a comm name
 		if _, ok := e.comms[tid]; ok {
-			e.enterEvs[tid] = newEventPair(enterEv)
+			e.enterEvs[tid] = event.NewPair(enterEv)
 		}
 	}
 }
 
-func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
+func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	ev, ok := e.enterEvs[exitEv.GetTid()]
 	if !ok {
 		exitEv.Recycle()
 		return
 	}
 	delete(e.enterEvs, exitEv.GetTid())
-	ev.exitEv = exitEv
+	ev.ExitEv = exitEv
 
 	// Expect ID one lower, otherwise, enter and exit tracepoints
 	// don't match up. E.g.:
 	// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
-	if ev.enterEv.GetTraceId()-1 != ev.exitEv.GetTraceId() {
-		ev.tracepointMismatch = true
+	if ev.EnterEv.GetTraceId()-1 != ev.ExitEv.GetTraceId() {
+		ev.TracepointMismatch = true
 		e.numTracepointMismatches++
 	} else {
 		e.numSyscalls++
 	}
 
-	switch v := ev.enterEv.(type) {
+	switch v := ev.EnterEv.(type) {
 	case *OpenEvent:
-		openEv := ev.enterEv.(*OpenEvent)
+		openEv := ev.EnterEv.(*OpenEvent)
 
-		fd := int32(ev.exitEv.(*RetEvent).Ret)
-		file := newFdFile(fd, string(openEv.Filename[:]))
+		fd := int32(ev.ExitEv.(*RetEvent).Ret)
+		file := file.NewFd(fd, string(openEv.Filename[:]))
 		if fd >= 0 {
 			e.files[fd] = file
 		}
-		ev.file = file
+		ev.File = file
 		e.comms[openEv.Tid] = string(openEv.Comm[:])
 
 	case *NameEvent:
-		nameEvent := ev.enterEv.(*NameEvent)
-		ev.file = oldnameNewnameFile{
-			oldname: string(nameEvent.Oldname[:]),
-			newname: string(nameEvent.Newname[:]),
+		nameEvent := ev.EnterEv.(*NameEvent)
+		ev.File = file.OldnameNewnameFile{
+			Oldname: string(nameEvent.Oldname[:]),
+			Newname: string(nameEvent.Newname[:]),
 		}
-		ev.comm = e.comm(ev.enterEv.GetTid())
+		ev.Comm = e.comm(ev.EnterEv.GetTid())
 
 	case *PathEvent:
-		nameEvent := ev.enterEv.(*PathEvent)
-		ev.file = pathnameFile{string(nameEvent.Pathname[:])}
-		ev.comm = e.comm(ev.enterEv.GetTid())
+		nameEvent := ev.EnterEv.(*PathEvent)
+		ev.File = file.PathnameFile{string(nameEvent.Pathname[:])}
+		ev.Comm = e.comm(ev.EnterEv.GetTid())
 
 	case *FdEvent:
-		fd := ev.enterEv.(*FdEvent).Fd
+		fd := ev.EnterEv.(*FdEvent).Fd
 		if file_, ok := e.files[fd]; ok {
-			ev.file = file_
-			if ev.is(SYS_ENTER_CLOSE) {
+			ev.File = file_
+			if ev.Is(SYS_ENTER_CLOSE) {
 				delete(e.files, fd)
 			}
 		} else {
-			ev.file = newFdFileWithPid(fd, ev.enterEv.(*FdEvent).Pid)
+			ev.File = file.NewFdWithPid(fd, ev.EnterEv.(*FdEvent).Pid)
 		}
-		ev.comm = e.comm(ev.enterEv.GetTid())
+		ev.Comm = e.comm(ev.EnterEv.GetTid())
 		if !e.filter.eventPair(ev) {
-			ev.recycle()
+			ev.Recycle()
 			return
 		}
 	case *NullEvent:
-		ev.comm = e.comm(ev.enterEv.GetTid())
+		ev.Comm = e.comm(ev.EnterEv.GetTid())
 		if !e.filter.eventPair(ev) {
-			ev.recycle()
+			ev.Recycle()
 			return
 		}
 
@@ -202,9 +208,9 @@ func (e *eventLoop) syscallExit(exitEv event, ch chan<- *eventPair) {
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
 
-	ev.prevPair, _ = e.prevPairs[ev.enterEv.GetTid()]
-	ev.calculateDurations()
-	e.prevPairs[ev.enterEv.GetTid()] = ev
+	ev.PrevPair, _ = e.prevPairs[ev.EnterEv.GetTid()]
+	ev.CalculateDurations()
+	e.prevPairs[ev.EnterEv.GetTid()] = ev
 	ch <- ev
 }
 
