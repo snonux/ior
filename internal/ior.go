@@ -3,6 +3,7 @@ package internal
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -78,9 +79,11 @@ func Run(flags flags.Flags) {
 
 	loop := newEventLoop(flags)
 
+	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
+		defer cancel()
 		<-c
 		fmt.Println(loop.stats())
 		if flags.PprofEnable {
@@ -88,10 +91,8 @@ func Run(flags flags.Flags) {
 			pprof.StopCPUProfile()
 			pprof.WriteHeapProfile(memProfile)
 		}
-		loop.stop()
-		fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...)")
-		os.Exit(0)
 	}()
 
-	loop.run(ch)
+	loop.run(ctx, ch)
+	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...)")
 }

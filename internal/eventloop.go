@@ -3,6 +3,7 @@ package internal
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +25,6 @@ type eventLoop struct {
 	comms     map[uint32]string      // Program or thread name of the current Tid.
 	prevPairs map[uint32]*event.Pair // Previous event (to calculate time differences between two events)
 	tree      tree.Tree              // Storing all paths in a tree structure for analysis
-	done      chan struct{}
 
 	// Statistics
 	numTracepoints          uint
@@ -37,7 +37,6 @@ type eventLoop struct {
 func newEventLoop(flags flags.Flags) *eventLoop {
 	return &eventLoop{
 		flags:     flags,
-		done:      make(chan struct{}),
 		filter:    newEventFilter(flags),
 		enterEvs:  make(map[uint32]*event.Pair),
 		files:     make(map[int32]file.File),
@@ -60,19 +59,11 @@ func (e *eventLoop) stats() string {
 			e.numSyscallsAfterFilter, float64(e.numSyscallsAfterFilter)/duration.Seconds())
 }
 
-func (e *eventLoop) stop() {
-	close(e.done)
-	if e.flags.TreeEnable {
-		fmt.Println("Waiting for tree to finish")
-		<-e.tree.Finished
-	}
-}
-
-func (e *eventLoop) run(rawCh <-chan []byte) {
+func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	var recycle bool
 
 	if e.flags.TreeEnable {
-		e.tree.Start()
+		e.tree.Start(ctx)
 	}
 	if e.flags.PprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
@@ -80,7 +71,7 @@ func (e *eventLoop) run(rawCh <-chan []byte) {
 	}
 
 	e.startTime = time.Now()
-	for ev := range e.events(rawCh) {
+	for ev := range e.events(ctx, rawCh) {
 		switch {
 		case e.flags.TreeEnable:
 			e.tree.Add(ev)
@@ -96,16 +87,21 @@ func (e *eventLoop) run(rawCh <-chan []byte) {
 		}
 		e.numSyscallsAfterFilter++
 	}
+
+	if e.flags.TreeEnable {
+		fmt.Println("Waiting for tree")
+		<-e.tree.Done
+	}
 }
 
-func (e *eventLoop) events(rawCh <-chan []byte) <-chan *event.Pair {
+func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *event.Pair {
 	ch := make(chan *event.Pair)
 
 	go func() {
 		defer close(ch)
 		for raw := range rawCh {
 			select {
-			case <-e.done:
+			case <-ctx.Done():
 				return
 			default:
 			}
