@@ -15,7 +15,7 @@ type counter struct {
 	duration uint64
 }
 
-// Rename to Flamegraph
+// TODO: Profile for CPU usage
 type Flamegraph struct {
 	// Collapsed flamegraph stats collector
 	collapsed map[string]map[types.TraceId]counter

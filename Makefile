@@ -35,5 +35,9 @@ world: clean generate all
 
 .PHONY: flames
 flames:
-	perl ~/git/FlameGraph/flamegraph.pl ior-by-count-flamegraph.collapsed --hash > ior-by-count-flamegraph.svg
-	perl ~/git/FlameGraph/flamegraph.pl ior-by-duration-flamegraph.collapsed --hash > ior-by-duration-flamegraph.svg
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-count-flamegraph.collapsed \
+		--title "I/O Syscall Count" --nametype Path --hash \
+		> ior-by-count-flamegraph.svg
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-duration-flamegraph.collapsed \
+		--title "I/O Syscall Durations" --nametype Path --hash --countname Nanoseconds \
+		> ior-by-duration-flamegraph.svg
