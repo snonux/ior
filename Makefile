@@ -32,3 +32,8 @@ clean:
 
 .PHONY: world
 world: clean generate all
+
+.PHONY: flames
+flames:
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-count-flamegraph.collapsed --hash > ior-by-count-flamegraph.svg
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-duration-flamegraph.collapsed --hash > ior-by-duration-flamegraph.svg

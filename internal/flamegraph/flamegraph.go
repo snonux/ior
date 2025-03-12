@@ -69,10 +69,10 @@ func (f Flamegraph) Add(ev *event.Pair) {
 }
 
 func (f Flamegraph) dump() {
-	f.dumpBy("ior-by-count-collapsed.flamegraph", func(cnt counter) uint64 {
+	f.dumpBy("ior-by-count-flamegraph.collapsed", func(cnt counter) uint64 {
 		return cnt.count
 	})
-	f.dumpBy("ior-by-duration-collapsed.flamegraph", func(cnt counter) uint64 {
+	f.dumpBy("ior-by-duration-flamegraph.collapsed", func(cnt counter) uint64 {
 		return cnt.duration
 	})
 }
