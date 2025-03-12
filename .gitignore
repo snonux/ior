@@ -2,3 +2,6 @@
 /ioriotng.bpf.c
 *.o
 vmlinux.h
+ior.cpuprofile
+ior.memprofile
+palette.map
