@@ -12,19 +12,19 @@ import (
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/flags"
+	"ior/internal/flamegraph"
 	. "ior/internal/generated/types"
-	"ior/internal/tree"
 )
 
 // TODO: Move in its own package?
 type eventLoop struct {
-	flags     flags.Flags
-	filter    *eventFilter
-	enterEvs  map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
-	files     map[int32]file.File    // Track all open files by file descriptor..
-	comms     map[uint32]string      // Program or thread name of the current Tid.
-	prevPairs map[uint32]*event.Pair // Previous event (to calculate time differences between two events)
-	tree      tree.Tree              // Storing all paths in a tree structure for analysis
+	flags      flags.Flags
+	filter     *eventFilter
+	enterEvs   map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
+	files      map[int32]file.File    // Track all open files by file descriptor..
+	comms      map[uint32]string      // Program or thread name of the current Tid.
+	prevPairs  map[uint32]*event.Pair // Previous event (to calculate time differences between two events)
+	flamegraph flamegraph.Flamegraph  // Storing all paths in a map structure for analysis
 
 	// Statistics
 	numTracepoints          uint
@@ -36,13 +36,13 @@ type eventLoop struct {
 
 func newEventLoop(flags flags.Flags) *eventLoop {
 	return &eventLoop{
-		flags:     flags,
-		filter:    newEventFilter(flags),
-		enterEvs:  make(map[uint32]*event.Pair),
-		files:     make(map[int32]file.File),
-		comms:     make(map[uint32]string),
-		prevPairs: make(map[uint32]*event.Pair),
-		tree:      tree.New(), // TODO: Implement
+		flags:      flags,
+		filter:     newEventFilter(flags),
+		enterEvs:   make(map[uint32]*event.Pair),
+		files:      make(map[int32]file.File),
+		comms:      make(map[uint32]string),
+		prevPairs:  make(map[uint32]*event.Pair),
+		flamegraph: flamegraph.New(),
 	}
 }
 
@@ -62,8 +62,8 @@ func (e *eventLoop) stats() string {
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	var recycle bool
 
-	if e.flags.TreeEnable {
-		e.tree.Start(ctx)
+	if e.flags.FlamegraphEnable {
+		e.flamegraph.Start(ctx)
 	}
 	if e.flags.PprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
@@ -73,9 +73,9 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	e.startTime = time.Now()
 	for ev := range e.events(ctx, rawCh) {
 		switch {
-		case e.flags.TreeEnable:
-			e.tree.Add(ev)
-			recycle = false // tree needs to recycle by itself
+		case e.flags.FlamegraphEnable:
+			e.flamegraph.Add(ev)
+			recycle = false // Flamegraph needs to recycle by itself
 		case e.flags.PprofEnable:
 			recycle = true
 		default:
@@ -88,9 +88,9 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		e.numSyscallsAfterFilter++
 	}
 
-	if e.flags.TreeEnable {
-		fmt.Println("Waiting for tree")
-		<-e.tree.Done
+	if e.flags.FlamegraphEnable {
+		fmt.Println("Waiting for flamegraph")
+		<-e.flamegraph.Done
 	}
 }
 
