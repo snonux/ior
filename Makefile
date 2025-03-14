@@ -36,6 +36,21 @@ world: clean generate all
 
 .PHONY: flames
 flames:
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-path-count-flamegraph.collapsed \
+		--title "I/O Syscall Count" --nametype Path --hash \
+		> ior-by-path-count-flamegraph.svg; \
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-path-duration-flamegraph.collapsed \
+		--title "I/O Syscall Durations" --nametype Path --hash --countname Nanoseconds \
+		> ior-by-path-duration-flamegraph.svg; \
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-syscall-count-flamegraph.collapsed \
+		--title "I/O Syscall Count" --nametype Path --hash \
+		> ior-by-syscall-count-flamegraph.svg; \
+	perl ~/git/FlameGraph/flamegraph.pl ior-by-syscall-duration-flamegraph.collapsed \
+		--title "I/O Syscall Durations" --nametype Path --hash --countname Nanoseconds \
+		> ior-by-syscall-duration-flamegraph.svg; \
+
+.PHONY: inferno
+inferno:
 	inferno-flamegraph < ior-by-path-count-flamegraph.collapsed \
 		--title "I/O Syscall Count" --nametype Path --hash \
 		> ior-by-path-count-flamegraph.svg; \
