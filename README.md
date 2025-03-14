@@ -42,3 +42,11 @@ make
 sudo cp -v ./libelf/libelf.a /usr/lib64/
 ```
 
+## Inferno Flamegraphs
+
+We are using Inferno Flamegraphs:  https://github.com/jonhoo/inferno
+
+```sh
+cargo install inferno
+```
+
