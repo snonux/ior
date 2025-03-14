@@ -2,7 +2,7 @@
 
 <img src=assets/ior-small.png />
 
-I/O Riot NG is an experiments with BPF. This program traces for I/O syscalls and then analyses the time taken for each of those syscalls. This is especially useful for drawing FlameGraphs (using https://github.com/brendangregg/FlameGraph) like these:
+I/O Riot NG is an experiments with BPF. This program traces for I/O syscalls and then analyses the time taken for each of those syscalls. This is especially useful for drawing FlameGraphs like these:
 
 <img src=assets/ior-by-count-flamegraph.svg />
 
