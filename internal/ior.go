@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"syscall"
+	"time"
 
 	"ior/internal/flags"
 	"ior/internal/generated/tracepoints"
@@ -79,7 +80,10 @@ func Run(flags flags.Flags) {
 
 	loop := newEventLoop(flags)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	startTime := time.Now()
+	duration := time.Duration(flags.Duration) * time.Second
+	fmt.Println("Probing for", duration)
+	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
@@ -95,5 +99,5 @@ func Run(flags flags.Flags) {
 	}()
 
 	loop.run(ctx, ch)
-	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...)")
+	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", time.Since(startTime))
 }

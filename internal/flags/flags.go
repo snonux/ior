@@ -16,12 +16,14 @@ type Flags struct {
 	PathFilter       string
 	PprofEnable      bool
 	FlamegraphEnable bool
+	Duration         int
 }
 
 func New() (flags Flags) {
 	flag.IntVar(&flags.PidFilter, "pid", -1, "Filter for processes ID")
 	flag.IntVar(&flags.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&flags.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
+	flag.IntVar(&flags.Duration, "duration", 60, "Probe duration in seconds")
 	flag.StringVar(&flags.CommFilter, "comm", "", "Command to filter for")
 	flag.StringVar(&flags.PathFilter, "path", "", "Path to filter for")
 	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
