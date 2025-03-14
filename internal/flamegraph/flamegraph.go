@@ -71,15 +71,21 @@ func (f Flamegraph) Add(ev *event.Pair) {
 }
 
 func (f Flamegraph) dump() {
-	f.dumpBy("ior-by-count-flamegraph.collapsed", func(cnt counter) uint64 {
+	f.dumpBy("ior-by-path-count-flamegraph.collapsed", true, func(cnt counter) uint64 {
 		return cnt.count
 	})
-	f.dumpBy("ior-by-duration-flamegraph.collapsed", func(cnt counter) uint64 {
+	f.dumpBy("ior-by-path-duration-flamegraph.collapsed", true, func(cnt counter) uint64 {
+		return cnt.duration
+	})
+	f.dumpBy("ior-by-syscall-count-flamegraph.collapsed", false, func(cnt counter) uint64 {
+		return cnt.count
+	})
+	f.dumpBy("ior-by-syscall-duration-flamegraph.collapsed", false, func(cnt counter) uint64 {
 		return cnt.duration
 	})
 }
 
-func (f Flamegraph) dumpBy(outfile string, by func(counter) uint64) {
+func (f Flamegraph) dumpBy(outfile string, syscallAtTop bool, by func(counter) uint64) {
 	fmt.Println("Dumping", outfile)
 	file, err := os.Create(outfile)
 	if err != nil {
@@ -99,7 +105,12 @@ func (f Flamegraph) dumpBy(outfile string, by func(counter) uint64) {
 		}
 
 		for traceId, cnt := range value {
-			_, err := fmt.Fprintf(file, "%s;syscall`%s %v\n", sb.String(), traceId.Name(), by(cnt))
+			var err error
+			if syscallAtTop {
+				_, err = fmt.Fprintf(file, "%s;syscall`%s %v\n", sb.String(), traceId.Name(), by(cnt))
+			} else {
+				_, err = fmt.Fprintf(file, "syscall`%s;%s %v\n", traceId.Name(), sb.String(), by(cnt))
+			}
 			if err != nil {
 				panic(err)
 			}
