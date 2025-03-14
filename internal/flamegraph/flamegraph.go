@@ -16,6 +16,7 @@ type counter struct {
 	duration uint64
 }
 
+// TODO: Idea, show time spent between the syscalls (off syscalls) as well, but in a different color
 // TODO: Profile for CPU usage. If too slow, can fan out into multiple maps and
 // then merge at the end the maps.
 type Flamegraph struct {

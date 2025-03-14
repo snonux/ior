@@ -13,27 +13,27 @@ type File interface {
 	Name() string
 }
 
-type FdFile struct {
+type fdFile struct {
 	fd   int32
 	name string
 }
 
-func NewFd(fd int32, name []byte) FdFile {
-	return FdFile{fd, stringValue(name)}
+func NewFd(fd int32, name []byte) fdFile {
+	return fdFile{fd, stringValue(name)}
 }
 
-func NewFdWithPid(fd int32, pid uint32) FdFile {
+func NewFdWithPid(fd int32, pid uint32) fdFile {
 	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd)); err == nil {
-		return FdFile{fd, linkName}
+		return fdFile{fd, linkName}
 	}
-	return FdFile{fd, "?"}
+	return fdFile{fd, "?"}
 }
 
-func (f FdFile) Name() string {
+func (f fdFile) Name() string {
 	return f.name
 }
 
-func (f FdFile) String() string {
+func (f fdFile) String() string {
 	var sb strings.Builder
 
 	if len(f.name) == 0 {
@@ -48,19 +48,19 @@ func (f FdFile) String() string {
 	return sb.String()
 }
 
-type OldnameNewnameFile struct {
+type oldnameNewnameFile struct {
 	Oldname, Newname string
 }
 
-func NewOldnameNewname(oldname, newname []byte) OldnameNewnameFile {
-	return OldnameNewnameFile{stringValue(oldname), stringValue(newname)}
+func NewOldnameNewname(oldname, newname []byte) oldnameNewnameFile {
+	return oldnameNewnameFile{stringValue(oldname), stringValue(newname)}
 }
 
-func (f OldnameNewnameFile) Name() string {
+func (f oldnameNewnameFile) Name() string {
 	return f.Newname
 }
 
-func (f OldnameNewnameFile) String() string {
+func (f oldnameNewnameFile) String() string {
 	var sb strings.Builder
 
 	sb.WriteString("old:")
@@ -71,19 +71,19 @@ func (f OldnameNewnameFile) String() string {
 	return sb.String()
 }
 
-type PathnameFile struct {
+type pathnameFile struct {
 	Pathname string
 }
 
-func NewPathname(pathname []byte) PathnameFile {
-	return PathnameFile{stringValue(pathname)}
+func NewPathname(pathname []byte) pathnameFile {
+	return pathnameFile{stringValue(pathname)}
 }
 
-func (f PathnameFile) Name() string {
+func (f pathnameFile) Name() string {
 	return f.Pathname
 }
 
-func (f PathnameFile) String() string {
+func (f pathnameFile) String() string {
 	var sb strings.Builder
 
 	sb.WriteString("pathname:")
@@ -92,7 +92,8 @@ func (f PathnameFile) String() string {
 	return sb.String()
 }
 
+// As data comes in from arrays, converted to slices, there will be null-bytes at the end..
 func stringValue(byteStr []byte) string {
-	// TODO: Hopefully, this won't cause a panic when the filename is as long as the array itself
+	// TODO: Hopefully, this won't cause a panic when the filename is as long as the array itself. Unit test this!
 	return string(byteStr[:bytes.IndexByte(byteStr, 0)])
 }
