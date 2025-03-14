@@ -82,17 +82,20 @@ func Run(flags flags.Flags) {
 	}
 
 	loop := newEventLoop(flags)
-
-	startTime := time.Now()
 	duration := time.Duration(flags.Duration) * time.Second
 	fmt.Println("Probing for", duration)
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		defer cancel()
 		<-c
+		cancel()
+	}()
+
+	go func() {
+		<-ctx.Done()
 		fmt.Println(loop.stats())
 		if flags.PprofEnable {
 			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
@@ -102,7 +105,9 @@ func Run(flags flags.Flags) {
 		}
 	}()
 
+	startTime := time.Now()
 	loop.run(ctx, ch)
+	totalDuration := time.Since(startTime)
 	<-pprofDone
-	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", time.Since(startTime))
+	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
 }
