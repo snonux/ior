@@ -7,6 +7,7 @@ import (
 	"ior/internal/generated/types"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,8 +19,6 @@ type counter struct {
 // TODO: Profile for CPU usage. If too slow, can fan out into multiple maps and
 // then merge at the end the maps.
 type Flamegraph struct {
-	// TODO: Keep al lthe individual files at the leaf in a map as well.
-	// And when dumped, only dump the N "highest" and summarize the other ones.
 	collapsed map[string]map[types.TraceId]counter
 	inCh      chan *event.Pair
 	Done      chan struct{}
@@ -74,21 +73,28 @@ func (f Flamegraph) Add(ev *event.Pair) {
 }
 
 func (f Flamegraph) dump() {
-	f.dumpBy("ior-by-path-count-flamegraph.collapsed", true, func(cnt counter) uint64 {
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	go f.dumpBy(&wg, "ior-by-path-count-flamegraph.collapsed", true, func(cnt counter) uint64 {
 		return cnt.count
 	})
-	f.dumpBy("ior-by-path-duration-flamegraph.collapsed", true, func(cnt counter) uint64 {
+	go f.dumpBy(&wg, "ior-by-path-duration-flamegraph.collapsed", true, func(cnt counter) uint64 {
 		return cnt.duration
 	})
-	f.dumpBy("ior-by-syscall-count-flamegraph.collapsed", false, func(cnt counter) uint64 {
+	go f.dumpBy(&wg, "ior-by-syscall-count-flamegraph.collapsed", false, func(cnt counter) uint64 {
 		return cnt.count
 	})
-	f.dumpBy("ior-by-syscall-duration-flamegraph.collapsed", false, func(cnt counter) uint64 {
+	go f.dumpBy(&wg, "ior-by-syscall-duration-flamegraph.collapsed", false, func(cnt counter) uint64 {
 		return cnt.duration
 	})
+
+	wg.Wait()
 }
 
-func (f Flamegraph) dumpBy(outfile string, syscallAtTop bool, by func(counter) uint64) {
+func (f Flamegraph) dumpBy(wg *sync.WaitGroup, outfile string, syscallAtTop bool, by func(counter) uint64) {
+	defer wg.Done()
+
 	fmt.Println("Dumping", outfile)
 	file, err := os.Create(outfile)
 	if err != nil {
@@ -105,7 +111,6 @@ func (f Flamegraph) dumpBy(outfile string, syscallAtTop bool, by func(counter) u
 				sb.WriteString("/")
 			}
 			sb.WriteString(part)
-			fmt.Println("DEBUG part", i, part, len(part))
 		}
 
 		for traceId, cnt := range value {

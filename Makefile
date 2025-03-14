@@ -37,10 +37,10 @@ world: clean generate all
 .PHONY: flames
 flames:
 	perl ~/git/FlameGraph/flamegraph.pl ior-by-path-count-flamegraph.collapsed \
-		--title "I/O Syscall Count" --nametype Path --hash \
+		--title "I/O Syscall Count" --nametype Path --hash --inverted \
 		> ior-by-path-count-flamegraph.svg; \
 	perl ~/git/FlameGraph/flamegraph.pl ior-by-path-duration-flamegraph.collapsed \
-		--title "I/O Syscall Durations" --nametype Path --hash --countname Nanoseconds \
+		--title "I/O Syscall Durations" --nametype Path --hash --countname Nanoseconds --inverted \
 		> ior-by-path-duration-flamegraph.svg; \
 	perl ~/git/FlameGraph/flamegraph.pl ior-by-syscall-count-flamegraph.collapsed \
 		--title "I/O Syscall Count" --nametype Path --hash \
@@ -52,10 +52,10 @@ flames:
 .PHONY: inferno
 inferno:
 	inferno-flamegraph < ior-by-path-count-flamegraph.collapsed \
-		--title "I/O Syscall Count" --nametype Path --hash \
+		--title "I/O Syscall Count" --nametype Path --hash --inverted \
 		> ior-by-path-count-flamegraph.svg; \
 	inferno-flamegraph < ior-by-path-duration-flamegraph.collapsed \
-		--title "I/O Syscall Durations" --nametype Path --hash --countname Nanoseconds \
+		--title "I/O Syscall Durations" --nametype Path --hash --countname Nanoseconds --inverted \
 		> ior-by-path-duration-flamegraph.svg; \
 	inferno-flamegraph < ior-by-syscall-count-flamegraph.collapsed \
 		--title "I/O Syscall Count" --nametype Path --hash \

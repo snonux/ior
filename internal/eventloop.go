@@ -3,7 +3,6 @@ package internal
 import "C"
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -181,9 +180,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		fd := int32(ev.ExitEv.(*RetEvent).Ret)
 		// It's from an array, so only create string from array until first 0 byte
 		// TODO: This could speed up the path filter as well
-		// TODO: Hopefully, this won't cause a panic when the filename is as long as the array itself
-		filePath := string(openEv.Filename[:bytes.IndexByte(openEv.Filename[:], 0)])
-		file := file.NewFd(fd, filePath)
+		file := file.NewFd(fd, openEv.Filename[:])
 		if fd >= 0 {
 			e.files[fd] = file
 		}
@@ -192,15 +189,12 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 
 	case *NameEvent:
 		nameEvent := ev.EnterEv.(*NameEvent)
-		ev.File = file.OldnameNewnameFile{
-			Oldname: string(nameEvent.Oldname[:]),
-			Newname: string(nameEvent.Newname[:]),
-		}
+		ev.File = file.NewOldnameNewname(nameEvent.Oldname[:], nameEvent.Newname[:])
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
 
 	case *PathEvent:
 		nameEvent := ev.EnterEv.(*PathEvent)
-		ev.File = file.PathnameFile{Pathname: string(nameEvent.Pathname[:])}
+		ev.File = file.NewPathname(nameEvent.Pathname[:])
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
 
 	case *FdEvent:

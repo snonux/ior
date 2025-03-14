@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strconv"
@@ -17,8 +18,8 @@ type FdFile struct {
 	name string
 }
 
-func NewFd(fd int32, name string) FdFile {
-	return FdFile{fd, name}
+func NewFd(fd int32, name []byte) FdFile {
+	return FdFile{fd, stringValue(name)}
 }
 
 func NewFdWithPid(fd int32, pid uint32) FdFile {
@@ -51,6 +52,10 @@ type OldnameNewnameFile struct {
 	Oldname, Newname string
 }
 
+func NewOldnameNewname(oldname, newname []byte) OldnameNewnameFile {
+	return OldnameNewnameFile{stringValue(oldname), stringValue(newname)}
+}
+
 func (f OldnameNewnameFile) Name() string {
 	return f.Newname
 }
@@ -70,6 +75,10 @@ type PathnameFile struct {
 	Pathname string
 }
 
+func NewPathname(pathname []byte) PathnameFile {
+	return PathnameFile{stringValue(pathname)}
+}
+
 func (f PathnameFile) Name() string {
 	return f.Pathname
 }
@@ -81,4 +90,9 @@ func (f PathnameFile) String() string {
 	sb.WriteString(f.Pathname)
 
 	return sb.String()
+}
+
+func stringValue(byteStr []byte) string {
+	// TODO: Hopefully, this won't cause a panic when the filename is as long as the array itself
+	return string(byteStr[:bytes.IndexByte(byteStr, 0)])
 }
