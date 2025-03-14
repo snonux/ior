@@ -61,6 +61,7 @@ func (e *eventLoop) stats() string {
 
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	if e.flags.FlamegraphEnable {
+		fmt.Println("Collecting flame graph stats, press Ctrl+C to stop")
 		e.flamegraph.Start(ctx)
 	}
 	if e.flags.PprofEnable {

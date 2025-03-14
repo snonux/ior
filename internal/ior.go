@@ -67,6 +67,7 @@ func Run(flags flags.Flags) {
 	}
 	rb.Poll(300)
 
+	pprofDone := make(chan struct{})
 	var cpuProfile, memProfile *os.File
 	if flags.PprofEnable {
 		if cpuProfile, err = os.Create("ior.cpuprofile"); err != nil {
@@ -76,6 +77,8 @@ func Run(flags flags.Flags) {
 			panic(err)
 		}
 		pprof.StartCPUProfile(cpuProfile)
+	} else {
+		close(pprofDone)
 	}
 
 	loop := newEventLoop(flags)
@@ -95,9 +98,11 @@ func Run(flags flags.Flags) {
 			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
 			pprof.StopCPUProfile()
 			pprof.WriteHeapProfile(memProfile)
+			close(pprofDone)
 		}
 	}()
 
 	loop.run(ctx, ch)
+	<-pprofDone
 	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", time.Since(startTime))
 }
