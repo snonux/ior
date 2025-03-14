@@ -15,9 +15,11 @@ type counter struct {
 	duration uint64
 }
 
-// TODO: Profile for CPU usage
+// TODO: Profile for CPU usage. If too slow, can fan out into multiple maps and
+// then merge at the end the maps.
 type Flamegraph struct {
-	// Collapsed flamegraph stats collector
+	// TODO: Keep al lthe individual files at the leaf in a map as well.
+	// And when dumped, only dump the N "highest" and summarize the other ones.
 	collapsed map[string]map[types.TraceId]counter
 	inCh      chan *event.Pair
 	Done      chan struct{}
@@ -97,7 +99,7 @@ func (f Flamegraph) dumpBy(outfile string, by func(counter) uint64) {
 		}
 
 		for traceId, cnt := range value {
-			_, err := fmt.Fprintf(file, "%s;syscall`%s %v\n", sb.String(), traceId, by(cnt))
+			_, err := fmt.Fprintf(file, "%s;syscall`%s %v\n", sb.String(), traceId.Name(), by(cnt))
 			if err != nil {
 				panic(err)
 			}

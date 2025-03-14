@@ -7,6 +7,7 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
+// TODO: Filter by syscall (tracepoint names)
 type Flags struct {
 	PidFilter        int
 	TidFilter        int

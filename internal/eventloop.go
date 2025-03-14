@@ -60,13 +60,13 @@ func (e *eventLoop) stats() string {
 }
 
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
-	var recycle bool
-
 	if e.flags.FlamegraphEnable {
 		e.flamegraph.Start(ctx)
 	}
 	if e.flags.PprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
+	}
+	if !e.flags.FlamegraphEnable && !e.flags.PprofEnable {
 		fmt.Println(event.EventStreamHeader)
 	}
 
@@ -75,14 +75,10 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		switch {
 		case e.flags.FlamegraphEnable:
 			e.flamegraph.Add(ev)
-			recycle = false // Flamegraph needs to recycle by itself
 		case e.flags.PprofEnable:
-			recycle = true
+			ev.RecyclePrev()
 		default:
-			recycle = true
 			fmt.Println(ev.String())
-		}
-		if recycle {
 			ev.RecyclePrev()
 		}
 		e.numSyscallsAfterFilter++
