@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 )
 
 type counter struct {
@@ -55,11 +56,12 @@ func (f Flamegraph) Start(ctx context.Context) {
 			default:
 				select {
 				case <-ctx.Done():
+					defer close(f.Done)
 					fmt.Println("Flamegraph processed last event")
 					f.dump()
-					close(f.Done)
 					return
 				default:
+					time.Sleep(time.Millisecond * 10)
 				}
 			}
 		}

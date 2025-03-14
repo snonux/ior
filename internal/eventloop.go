@@ -195,7 +195,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 
 	case *PathEvent:
 		nameEvent := ev.EnterEv.(*PathEvent)
-		ev.File = file.PathnameFile{string(nameEvent.Pathname[:])}
+		ev.File = file.PathnameFile{Pathname: string(nameEvent.Pathname[:])}
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
 
 	case *FdEvent:
