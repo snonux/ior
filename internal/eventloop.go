@@ -3,6 +3,7 @@ package internal
 import "C"
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -178,7 +179,11 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		openEv := ev.EnterEv.(*OpenEvent)
 
 		fd := int32(ev.ExitEv.(*RetEvent).Ret)
-		file := file.NewFd(fd, string(openEv.Filename[:]))
+		// It's from an array, so only create string from array until first 0 byte
+		// TODO: This could speed up the path filter as well
+		// TODO: Hopefully, this won't cause a panic when the filename is as long as the array itself
+		filePath := string(openEv.Filename[:bytes.IndexByte(openEv.Filename[:], 0)])
+		file := file.NewFd(fd, filePath)
 		if fd >= 0 {
 			e.files[fd] = file
 		}

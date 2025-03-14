@@ -18,6 +18,8 @@ type counter struct {
 // TODO: Profile for CPU usage. If too slow, can fan out into multiple maps and
 // then merge at the end the maps.
 type Flamegraph struct {
+	// TODO: Keep al lthe individual files at the leaf in a map as well.
+	// And when dumped, only dump the N "highest" and summarize the other ones.
 	collapsed map[string]map[types.TraceId]counter
 	inCh      chan *event.Pair
 	Done      chan struct{}
@@ -36,6 +38,7 @@ func (f Flamegraph) Start(ctx context.Context) {
 		for {
 			select {
 			case ev := <-f.inCh:
+				// filePath := path.Dir(ev.File.Name())
 				filePath := ev.File.Name()
 				pathMap, ok := f.collapsed[filePath]
 				if !ok {
@@ -50,6 +53,7 @@ func (f Flamegraph) Start(ctx context.Context) {
 
 				f.collapsed[filePath] = pathMap
 				ev.RecyclePrev()
+
 			default:
 				select {
 				case <-ctx.Done():
@@ -101,6 +105,7 @@ func (f Flamegraph) dumpBy(outfile string, syscallAtTop bool, by func(counter) u
 				sb.WriteString("/")
 			}
 			sb.WriteString(part)
+			fmt.Println("DEBUG part", i, part, len(part))
 		}
 
 		for traceId, cnt := range value {
