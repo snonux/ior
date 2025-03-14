@@ -2,18 +2,14 @@
 
 * Target OS is Rocky 9 and not Rocky 8 (can use a bhyve VM)
 * More filters
-  * By directory
-  * By directory sub-match
-  * By regex match of whole path
   * By syscall
-* Output format so that it is compatible with the flamegraph grapher
 * Capture more tracepoints? See comments in tracepoints.c's header.
 * Automatic testing (integration tests)
 * Performance benchmark...
 
 ## FlameGraphs
 
-What format? What to visualize on the stack axis?
+More ideas
 
 ```
 user;cmd_name;pid;tid;syscall_name count

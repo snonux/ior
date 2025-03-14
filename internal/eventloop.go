@@ -75,7 +75,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	for ev := range e.events(ctx, rawCh) {
 		switch {
 		case e.flags.FlamegraphEnable:
-			e.flamegraph.Add(ev)
+			e.flamegraph.Ch <- ev
 		case e.flags.PprofEnable:
 			ev.RecyclePrev()
 		default:

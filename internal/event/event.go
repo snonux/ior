@@ -13,6 +13,7 @@ var poolOfEventPairs = sync.Pool{
 	New: func() interface{} { return &Pair{} },
 }
 
+// TODO: A way to get the open flags? Trace them as well? sync vs non-sync?
 type Event interface {
 	String() string
 	GetTraceId() TraceId

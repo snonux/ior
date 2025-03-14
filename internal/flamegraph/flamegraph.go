@@ -16,19 +16,20 @@ type counter struct {
 	duration uint64
 }
 
+// TODO: Add Command in path! Make it configurable? comm/syscall/path, or path/syscall/comm, etc...
 // TODO: Idea, show time spent between the syscalls (off syscalls) as well, but in a different color
 // TODO: Profile for CPU usage. If too slow, can fan out into multiple maps and
 // then merge at the end the maps.
 type Flamegraph struct {
 	collapsed map[string]map[types.TraceId]counter
-	inCh      chan *event.Pair
+	Ch        chan *event.Pair
 	Done      chan struct{}
 }
 
 func New() Flamegraph {
 	return Flamegraph{
 		collapsed: make(map[string]map[types.TraceId]counter),
-		inCh:      make(chan *event.Pair, 4096),
+		Ch:        make(chan *event.Pair, 4096),
 		Done:      make(chan struct{}),
 	}
 }
@@ -37,8 +38,7 @@ func (f Flamegraph) Start(ctx context.Context) {
 	go func() {
 		for {
 			select {
-			case ev := <-f.inCh:
-				// filePath := path.Dir(ev.File.Name())
+			case ev := <-f.Ch:
 				filePath := ev.File.Name()
 				pathMap, ok := f.collapsed[filePath]
 				if !ok {
@@ -59,7 +59,7 @@ func (f Flamegraph) Start(ctx context.Context) {
 				case <-ctx.Done():
 					defer close(f.Done)
 					fmt.Println("Flamegraph processed last event")
-					f.dump()
+					f.dumpCollapsed()
 					return
 				default:
 					time.Sleep(time.Millisecond * 10)
@@ -69,11 +69,7 @@ func (f Flamegraph) Start(ctx context.Context) {
 	}()
 }
 
-func (f Flamegraph) Add(ev *event.Pair) {
-	f.inCh <- ev
-}
-
-func (f Flamegraph) dump() {
+func (f Flamegraph) dumpCollapsed() {
 	var wg sync.WaitGroup
 	wg.Add(4)
 
