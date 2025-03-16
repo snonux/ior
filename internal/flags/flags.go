@@ -3,21 +3,23 @@ package flags
 import (
 	"flag"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
 type Flags struct {
-	PidFilter        int
-	TidFilter        int
-	EventMapSize     int
-	CommFilter       string
-	PathFilter       string
-	PprofEnable      bool
-	FlamegraphEnable bool
-	Duration         int
-	TracepointNames  map[string]struct{}
+	PidFilter           int
+	TidFilter           int
+	EventMapSize        int
+	CommFilter          string
+	PathFilter          string
+	PprofEnable         bool
+	FlamegraphEnable    bool
+	Duration            int
+	TracepointsToAttach []*regexp.Regexp
 }
 
 func New() (flags Flags) {
@@ -32,15 +34,31 @@ func New() (flags Flags) {
 	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
 	flag.BoolVar(&flags.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 
-	tracepointNames := flag.String("tracepoints", "", "Comma separated list of tracepoints (empty: trace all)")
+	tracepointNames := flag.String("tracepoints", "", "Comma separated list regexes for tracepoints to load")
 	flag.Parse()
 
-	flags.TracepointNames = make(map[string]struct{}, len(*tracepointNames))
 	for _, name := range strings.Split(*tracepointNames, ",") {
-		flags.TracepointNames[name] = struct{}{}
+		re, err := regexp.Compile(name)
+		if err != nil {
+			fmt.Println("Unable to compile regex", name, ": ", err)
+			os.Exit(2)
+		}
+		flags.TracepointsToAttach = append(flags.TracepointsToAttach, re)
 	}
 
 	return flags
+}
+
+func (flags Flags) AttachTracepoint(tracepointName string) bool {
+	if len(flags.TracepointsToAttach) == 0 {
+		return true
+	}
+	for _, re := range flags.TracepointsToAttach {
+		if re.MatchString(tracepointName) {
+			return true
+		}
+	}
+	return false
 }
 
 func (flags Flags) SetBPF(bpfModule *bpf.Module) error {

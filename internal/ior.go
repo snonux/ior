@@ -17,27 +17,25 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-func attachTracepoints(bpfModule *bpf.Module, tracepointNames map[string]struct{}) error {
-	attachAll := len(tracepointNames) == 0
-
+func attachTracepoints(flags flags.Flags, bpfModule *bpf.Module) error {
 	for _, name := range tracepoints.List {
-		if _, ok := tracepointNames[name]; !ok && !attachAll {
-			// Not attaching tracepoint
+		if !flags.AttachTracepoint(name) {
 			continue
 		}
+		fmt.Println("Attaching tracepoint", name)
 
 		prog, err := bpfModule.GetProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {
 			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)
 		}
-		fmt.Println("Attached prog handle_" + name)
+		fmt.Println("Attached prog handle_", name)
 
 		if _, err = prog.AttachTracepoint("syscalls", name); err != nil {
 			// OK, older Kernel versions may not have this tracepoint!
-			fmt.Println(fmt.Errorf("Failed to attach to %s tracepoint: %v", name, err))
+			fmt.Printf("Failed to attach to %s tracepoint: %v, kernel version may be too old, skipping", name, err)
 			continue
 		}
-		fmt.Println("Attached tracepoint " + name)
+		fmt.Println("Attached tracepoint ", name)
 	}
 
 	return nil
@@ -62,7 +60,7 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 
-	if err := attachTracepoints(bpfModule, flags.TracepointNames); err != nil {
+	if err := attachTracepoints(flags, bpfModule); err != nil {
 		panic(err)
 	}
 
