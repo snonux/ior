@@ -2,6 +2,8 @@
 
 use v6.d;
 
+# TODO: Also add sys_enter_open_by_handler_at
+ 
 # Grammar to parse  /sys/kernel/tracing/events/syscalls/sys_{enter,exit}_*/format'
 grammar SysTraceFormat {
     rule TOP { <whole-format-section>* }
@@ -94,11 +96,13 @@ class NameTracepoint does TracepointTemplate {
 
 class OpenTracepoint does TracepointTemplate {
     method generate-bpf-c-tracepoint(%vals --> Str) {
-        my Int \field-number = %vals<format>.field-number('filename');
+        my Int \filename-field-number = %vals<format>.field-number('filename');
+        my Int \flags-field-number = %vals<format>.field-number('flags');
         my Str $extra = qq:to/BPF_C_CODE/;
             __builtin_memset(\&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-            bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[{field-number}]);
+            bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[{filename-field-number}]);
             bpf_get_current_comm(\&ev->comm, sizeof(ev->comm));
+            ev->flags = {flags-field-number > -1 ?? ('ctx->args[' ~ flags-field-number ~ '];') !! '-1; // TODO'}
         BPF_C_CODE
         self.template: %vals.append( ( event-struct => 'open_event', :$extra ).hash );
     }
@@ -161,7 +165,7 @@ class Format {
     method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
     method generate-bpf-c-tracepoint returns Str { $!format-impl.generate-bpf-c-tracepoint: (format => self, :$!name).hash }
 
-    method field-number(Str \field-name) { @!external-fields.first(*.name eq field-name, :k) - 1 }
+    method field-number(Str \field-name) { @!external-fields.first(*.name eq field-name, :k) // 0 - 1 }
     method can-generate returns Bool { so $!format-impl.^can('generate-bpf-c-tracepoint') }
     method enter-reject returns Bool { $!format-impl !~~ any(FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint) }
 }

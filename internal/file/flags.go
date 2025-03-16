@@ -2,6 +2,7 @@ package file
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 )
@@ -17,6 +18,9 @@ type tuple struct {
 }
 
 var flagsToHuman = []tuple{
+	{syscall.O_RDONLY, "O_RDONLY"},
+	{syscall.O_WRONLY, "O_WRONLY"},
+	{syscall.O_RDWR, "O_RDWR"},
 	{syscall.O_ACCMODE, "O_ACCMODE"},
 	{syscall.O_APPEND, "O_APPEND"},
 	{syscall.O_ASYNC, "O_ASYNC"},
@@ -30,11 +34,8 @@ var flagsToHuman = []tuple{
 	{syscall.O_NOCTTY, "O_NOCTTY"},
 	{syscall.O_NOFOLLOW, "O_NOFOLLOW"},
 	{syscall.O_NONBLOCK, "O_NONBLOCK"},
-	{syscall.O_RDONLY, "O_RDONLY"},
-	{syscall.O_RDWR, "O_RDWR"},
 	{syscall.O_SYNC, "O_SYNC"},
 	{syscall.O_TRUNC, "O_TRUNC"},
-	{syscall.O_WRONLY, "O_WRONLY"},
 }
 
 func flagsToStr(flags int32) string {
@@ -47,7 +48,11 @@ func flagsToStr(flags int32) string {
 }
 
 func flagsToStrs(flags int32) (result []string) {
-	for _, toHuman := range flagsToHuman {
+	if int(flags)&(os.O_WRONLY|os.O_RDWR) == 0 {
+		// Must be read only then
+		result = append(result, "O_RDONLY")
+	}
+	for _, toHuman := range flagsToHuman[1:] {
 		if int(flags)&toHuman.syscallNr == toHuman.syscallNr {
 			result = append(result, toHuman.str)
 		}
