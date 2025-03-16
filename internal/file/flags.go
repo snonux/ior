@@ -1,6 +1,7 @@
 package file
 
 import (
+	"fmt"
 	"strings"
 	"syscall"
 )
@@ -10,25 +11,30 @@ import (
 // Maybe need new BPF type and pass through the ring
 var flagsToHumanCache = map[int32]string{-1: "O_?"}
 
-var flagsToHuman = map[int]string{
-	syscall.O_ACCMODE:   "O_ACCMODE",
-	syscall.O_APPEND:    "O_APPEND",
-	syscall.O_ASYNC:     "O_ASYNC",
-	syscall.O_CLOEXEC:   "O_CLOEXEC",
-	syscall.O_CREAT:     "O_CREAT",
-	syscall.O_DIRECT:    "O_DIRECT",
-	syscall.O_DIRECTORY: "O_DIRECTORY",
-	syscall.O_DSYNC:     "O_DSYNC",
-	syscall.O_EXCL:      "O_EXCL",
-	syscall.O_NOATIME:   "O_NOATIME",
-	syscall.O_NOCTTY:    "O_NOCTTY",
-	syscall.O_NOFOLLOW:  "O_NOFOLLOW",
-	syscall.O_NONBLOCK:  "O_NONBLOCK",
-	syscall.O_RDONLY:    "O_RDONLY",
-	syscall.O_RDWR:      "O_RDWR",
-	syscall.O_SYNC:      "O_SYNC",
-	syscall.O_TRUNC:     "O_TRUNC",
-	syscall.O_WRONLY:    "O_WRONLY",
+type tuple struct {
+	syscallNr int
+	str       string
+}
+
+var flagsToHuman = []tuple{
+	{syscall.O_ACCMODE, "O_ACCMODE"},
+	{syscall.O_APPEND, "O_APPEND"},
+	{syscall.O_ASYNC, "O_ASYNC"},
+	{syscall.O_CLOEXEC, "O_CLOEXEC"},
+	{syscall.O_CREAT, "O_CREAT"},
+	{syscall.O_DIRECT, "O_DIRECT"},
+	{syscall.O_DIRECTORY, "O_DIRECTORY"},
+	{syscall.O_DSYNC, "O_DSYNC"},
+	{syscall.O_EXCL, "O_EXCL"},
+	{syscall.O_NOATIME, "O_NOATIME"},
+	{syscall.O_NOCTTY, "O_NOCTTY"},
+	{syscall.O_NOFOLLOW, "O_NOFOLLOW"},
+	{syscall.O_NONBLOCK, "O_NONBLOCK"},
+	{syscall.O_RDONLY, "O_RDONLY"},
+	{syscall.O_RDWR, "O_RDWR"},
+	{syscall.O_SYNC, "O_SYNC"},
+	{syscall.O_TRUNC, "O_TRUNC"},
+	{syscall.O_WRONLY, "O_WRONLY"},
 }
 
 func flagsToStr(flags int32) string {
@@ -36,18 +42,18 @@ func flagsToStr(flags int32) string {
 		return str
 	}
 	str := strings.Join(flagsToStrs(flags), "|")
-	flagsToHumanCache[flags] = str
+	flagsToHumanCache[flags] = fmt.Sprintf("%O=>%s", flags, str)
 	return str
 }
 
 func flagsToStrs(flags int32) (result []string) {
-	for flag, name := range flagsToHuman {
-		if int(flags)&flag == flag {
-			result = append(result, name)
+	for _, toHuman := range flagsToHuman {
+		if int(flags)&toHuman.syscallNr == toHuman.syscallNr {
+			result = append(result, toHuman.str)
 		}
 	}
 	if len(result) == 0 {
-		result = append(result, "O_RDONLY")
+		result = append(result, "non=>O_RDONLY")
 	}
 	return
 }
