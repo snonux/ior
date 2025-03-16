@@ -5,6 +5,11 @@ import (
 	"syscall"
 )
 
+// TODO: syscalls fcntl and dup3 and many more can also manipulate open flags
+// Check the tracepoint formates for 'flags'
+// Maybe need new BPF type and pass through the ring
+var flagsToHumanCache = map[int32]string{-1: "O_?"}
+
 var flagsToHuman = map[int]string{
 	syscall.O_ACCMODE:   "O_ACCMODE",
 	syscall.O_APPEND:    "O_APPEND",
@@ -26,11 +31,16 @@ var flagsToHuman = map[int]string{
 	syscall.O_WRONLY:    "O_WRONLY",
 }
 
-func FlagsToStr(flags int32) string {
-	return strings.Join(FlagsToStrs(flags), "|")
+func flagsToStr(flags int32) string {
+	if str, ok := flagsToHumanCache[flags]; ok {
+		return str
+	}
+	str := strings.Join(flagsToStrs(flags), "|")
+	flagsToHumanCache[flags] = str
+	return str
 }
 
-func FlagsToStrs(flags int32) (result []string) {
+func flagsToStrs(flags int32) (result []string) {
 	for flag, name := range flagsToHuman {
 		if int(flags)&flag == flag {
 			result = append(result, name)

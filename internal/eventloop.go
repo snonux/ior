@@ -16,7 +16,6 @@ import (
 	. "ior/internal/generated/types"
 )
 
-// TODO: Move in its own package?
 type eventLoop struct {
 	flags      flags.Flags
 	filter     *eventFilter
@@ -150,6 +149,7 @@ func (e *eventLoop) syscallEnter(enterEv event.Event) {
 		// Only, when we have a comm name
 		if _, ok := e.comms[tid]; ok {
 			e.enterEvs[tid] = event.NewPair(enterEv)
+			// TODO } else { .... what if not? }
 		}
 	}
 }
@@ -180,7 +180,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		fd := int32(ev.ExitEv.(*RetEvent).Ret)
 		// It's from an array, so only create string from array until first 0 byte
 		// TODO: This could speed up the path filter as well
-		file := file.NewFd(fd, openEv.Filename[:])
+		file := file.NewFd(fd, openEv.Filename[:], v.Flags)
 		if fd >= 0 {
 			e.files[fd] = file
 		}

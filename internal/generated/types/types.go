@@ -1,4 +1,5 @@
 // Code generated - don't change manually!
+// TODO: Rename all generate files to *_generated.go, and don't keep them in a generated directory anymore
 package types
 
 import (
@@ -95,7 +96,6 @@ func NewOpenEvent(raw []byte) *OpenEvent {
 		fmt.Println(o, raw, len(raw), err)
 		panic(raw)
 	}
-	fmt.Println("DEBUG, ", o)
 	return o
 }
 

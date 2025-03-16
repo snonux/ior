@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -11,26 +12,51 @@ import (
 type File interface {
 	String() string
 	Name() string
+	Flags() string
 }
 
 type fdFile struct {
-	fd   int32
-	name string
+	fd    int32
+	name  string
+	flags int32
 }
 
-func NewFd(fd int32, name []byte) fdFile {
-	return fdFile{fd, stringValue(name)}
+func NewFd(fd int32, name []byte, flags int32) fdFile {
+	return fdFile{fd, stringValue(name), flags}
 }
 
 func NewFdWithPid(fd int32, pid uint32) fdFile {
-	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd)); err == nil {
-		return fdFile{fd, linkName}
+	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
+	if err != nil {
+		return fdFile{fd, "?", -1}
 	}
-	return fdFile{fd, "?"}
+	flags, _ := readFlagsFromFdInfo(fd, pid)
+	return fdFile{fd, linkName, flags}
+}
+
+func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
+	if err != nil {
+		return -1, err
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "flags:") {
+			flagsStr := strings.Fields(line)[1]
+			flags, err := strconv.ParseUint(flagsStr, 8, 32)
+			return int32(flags), err
+		}
+	}
+	return -1, scanner.Err()
 }
 
 func (f fdFile) Name() string {
 	return f.name
+}
+
+func (f fdFile) Flags() string {
+	return flagsToStr(f.flags)
 }
 
 func (f fdFile) String() string {
@@ -42,6 +68,8 @@ func (f fdFile) String() string {
 		sb.WriteString(f.name)
 		sb.WriteString(" (")
 		sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
+		sb.WriteString(",")
+		sb.WriteString(f.Flags())
 		sb.WriteString(")")
 	}
 
@@ -60,6 +88,10 @@ func (f oldnameNewnameFile) Name() string {
 	return f.Newname
 }
 
+func (f oldnameNewnameFile) Flags() string {
+	return ""
+}
+
 func (f oldnameNewnameFile) String() string {
 	var sb strings.Builder
 
@@ -67,6 +99,9 @@ func (f oldnameNewnameFile) String() string {
 	sb.WriteString(f.Oldname)
 	sb.WriteString(" ->new:")
 	sb.WriteString(f.Newname)
+	sb.WriteString(" (")
+	sb.WriteString(f.Flags())
+	sb.WriteString(")")
 
 	return sb.String()
 }
@@ -83,11 +118,18 @@ func (f pathnameFile) Name() string {
 	return f.Pathname
 }
 
+func (f pathnameFile) Flags() string {
+	return ""
+}
+
 func (f pathnameFile) String() string {
 	var sb strings.Builder
 
 	sb.WriteString("pathname:")
 	sb.WriteString(f.Pathname)
+	sb.WriteString(" (")
+	sb.WriteString(f.Flags())
+	sb.WriteString(")")
 
 	return sb.String()
 }
