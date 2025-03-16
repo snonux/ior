@@ -102,7 +102,7 @@ class OpenTracepoint does TracepointTemplate {
             __builtin_memset(\&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
             bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[{filename-field-number}]);
             bpf_get_current_comm(\&ev->comm, sizeof(ev->comm));
-            ev->flags = {flags-field-number > -1 ?? ('ctx->args[' ~ flags-field-number ~ '];') !! '-1; // TODO'}
+            ev->flags = {flags-field-number > -1 ?? ('ctx->args[' ~ flags-field-number ~ '];') !! '-1; // Probably OK'}
         BPF_C_CODE
         self.template: %vals.append( ( event-struct => 'open_event', :$extra ).hash );
     }
@@ -155,6 +155,8 @@ class Format {
         self.set-format-impl(field.name, field.type);
     }
 
+    # TODO: implement FcntlTracepoint (as it can change open flags)
+    # TODO: implement Dup3Tracepoint (as it can change open flags)
     multi method set-format-impl('fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
     multi method set-format-impl('newname', 'const char *') { $!format-impl = NameTracepoint.new }
     multi method set-format-impl('filename', 'const char *') { $!format-impl = OpenTracepoint.new }
