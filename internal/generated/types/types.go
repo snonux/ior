@@ -1,5 +1,4 @@
 // Code generated - don't change manually!
-// TODO: Rename all generate files to *_generated.go, and don't keep them in a generated directory anymore
 package types
 
 import (

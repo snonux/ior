@@ -13,12 +13,12 @@ bpfbuild:
 	make -C ./internal/c redo
 	cp -v ./internal/c/ior.bpf.o .
 
-gen: generated
-generate: generated
+gen: generate
+generate: generate
 
-.PHONY: generated
-generated:
-	make -C ./internal/c/generated
+.PHONY: generate
+generate:
+	make -C ./internal/c generate
 	make -C ./internal/generated
 
 .PHONY: gobuild

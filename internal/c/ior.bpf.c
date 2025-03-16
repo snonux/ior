@@ -15,6 +15,6 @@
 #include "filter.c"
 
 // Auto-generated tracepoints.
-#include "generated/tracepoints.c"
+#include "generated_tracepoints.c"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
