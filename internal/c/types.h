@@ -22,7 +22,7 @@ struct open_event {
     __u64 time;
     __u32 pid;
     __u32 tid;
-    __s32 flags;
+    __s32 flags; // TODO: Not yet captured in the tracepoints!? Also dup3 and fcntl can change flags after the fact!
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
 };
