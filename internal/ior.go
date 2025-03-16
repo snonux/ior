@@ -17,8 +17,15 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-func attachTracepoints(bpfModule *bpf.Module) error {
+func attachTracepoints(bpfModule *bpf.Module, tracepointNames map[string]struct{}) error {
+	attachAll := len(tracepointNames) == 0
+
 	for _, name := range tracepoints.List {
+		if _, ok := tracepointNames[name]; !ok && !attachAll {
+			// Not attaching tracepoint
+			continue
+		}
+
 		prog, err := bpfModule.GetProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {
 			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)
@@ -55,7 +62,7 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 
-	if err := attachTracepoints(bpfModule); err != nil {
+	if err := attachTracepoints(bpfModule, flags.TracepointNames); err != nil {
 		panic(err)
 	}
 

@@ -3,11 +3,11 @@ package flags
 import (
 	"flag"
 	"fmt"
+	"strings"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-// TODO: Filter by syscall (tracepoint names)
 type Flags struct {
 	PidFilter        int
 	TidFilter        int
@@ -17,6 +17,7 @@ type Flags struct {
 	PprofEnable      bool
 	FlamegraphEnable bool
 	Duration         int
+	TracepointNames  map[string]struct{}
 }
 
 func New() (flags Flags) {
@@ -24,11 +25,20 @@ func New() (flags Flags) {
 	flag.IntVar(&flags.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&flags.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
 	flag.IntVar(&flags.Duration, "duration", 60, "Probe duration in seconds")
+
 	flag.StringVar(&flags.CommFilter, "comm", "", "Command to filter for")
 	flag.StringVar(&flags.PathFilter, "path", "", "Path to filter for")
+
 	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
 	flag.BoolVar(&flags.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
+
+	tracepointNames := flag.String("tracepoints", "", "Comma separated list of tracepoints (empty: trace all)")
 	flag.Parse()
+
+	flags.TracepointNames = make(map[string]struct{}, len(*tracepointNames))
+	for _, name := range strings.Split(*tracepointNames, ",") {
+		flags.TracepointNames[name] = struct{}{}
+	}
 
 	return flags
 }
