@@ -95,6 +95,7 @@ func NewOpenEvent(raw []byte) *OpenEvent {
 		fmt.Println(o, raw, len(raw), err)
 		panic(raw)
 	}
+	fmt.Println("DEBUG, ", o)
 	return o
 }
 
