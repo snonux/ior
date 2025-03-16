@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"ior/internal/flags"
-	"ior/internal/generated/tracepoints"
+	"ior/internal/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )

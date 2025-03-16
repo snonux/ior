@@ -3,7 +3,7 @@ package event
 import (
 	"fmt"
 	"ior/internal/file"
-	. "ior/internal/generated/types"
+	. "ior/internal/types"
 	"strconv"
 	"strings"
 	"sync"

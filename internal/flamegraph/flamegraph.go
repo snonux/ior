@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"ior/internal/event"
-	"ior/internal/generated/types"
+	"ior/internal/types"
 	"os"
 	"strings"
 	"sync"

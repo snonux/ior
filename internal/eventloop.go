@@ -13,7 +13,7 @@ import (
 	"ior/internal/file"
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
-	. "ior/internal/generated/types"
+	. "ior/internal/types"
 )
 
 type eventLoop struct {

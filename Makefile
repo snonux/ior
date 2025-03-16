@@ -19,7 +19,8 @@ generate: generate
 .PHONY: generate
 generate:
 	make -C ./internal/c generate
-	make -C ./internal/generated
+	make -C ./internal/tracepoints generate
+	make -C ./internal/types generate
 
 .PHONY: gobuild
 gobuild:

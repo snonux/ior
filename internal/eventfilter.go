@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"ior/internal/event"
 	"ior/internal/flags"
-	"ior/internal/generated/types"
+	"ior/internal/types"
 	"strings"
 )
 
