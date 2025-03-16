@@ -26,9 +26,9 @@ generate: generate_tracepoints
 .PHONY: generate_tracepoints
 generate_tracepoints:
 	sudo sh -c 'cat /sys/kernel/tracing/events/syscalls/sys_{enter,exit}_*/format' \
-		| raku generate_tracepoints.raku > ./generated_tracepoints.c
+		| raku generate_tracepoints_c.raku > ./generated_tracepoints.c
 
 .PHONY: generate_tracepoints_stdout
 generate_tracepoints_stdout:
 	sudo sh -c 'cat /sys/kernel/tracing/events/syscalls/sys_{enter,exit}_*/format' \
-		| raku generate_tracepoints.raku
+		| raku generate_tracepoints_c.raku
