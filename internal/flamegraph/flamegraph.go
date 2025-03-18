@@ -4,122 +4,48 @@ import (
 	"context"
 	"fmt"
 	"ior/internal/event"
-	"ior/internal/types"
-	"os"
-	"strings"
+	"runtime"
 	"sync"
-	"time"
 )
-
-type counter struct {
-	count    uint64
-	duration uint64
-}
 
 // TODO: Add Command in path! Make it configurable? comm/syscall/path, or path/syscall/comm, etc...
 // TODO: Idea, show time spent between the syscalls (off syscalls) as well, but in a different color
-// TODO: Profile for CPU usage. If too slow, can fan out into multiple maps and
-// then merge at the end the maps.
 type Flamegraph struct {
-	collapsed map[string]map[types.TraceId]counter
-	Ch        chan *event.Pair
-	Done      chan struct{}
+	Ch      chan *event.Pair
+	Done    chan struct{}
+	workers []worker
 }
 
 func New() Flamegraph {
-	return Flamegraph{
-		collapsed: make(map[string]map[types.TraceId]counter),
-		Ch:        make(chan *event.Pair, 4096),
-		Done:      make(chan struct{}),
+	f := Flamegraph{
+		Ch:   make(chan *event.Pair, 4096),
+		Done: make(chan struct{}),
 	}
+	for range runtime.NumCPU() / 2 {
+		f.workers = append(f.workers, newWorker())
+	}
+	return f
 }
 
 func (f Flamegraph) Start(ctx context.Context) {
 	go func() {
-		for {
-			select {
-			case ev := <-f.Ch:
-				filePath := ev.File.Name()
-				pathMap, ok := f.collapsed[filePath]
-				if !ok {
-					pathMap = make(map[types.TraceId]counter)
-				}
+		defer close(f.Done)
+		var wg sync.WaitGroup
+		wg.Add(len(f.workers))
 
-				traceId := ev.EnterEv.GetTraceId()
-				cnt := pathMap[traceId]
-				cnt.count++
-				cnt.duration += ev.Duration
-				pathMap[traceId] = cnt
+		for i, worker := range f.workers {
+			fmt.Println("Starting flamegraph worker", i)
+			go worker.run(ctx, &wg, f.Ch)
+		}
+		wg.Wait()
 
-				f.collapsed[filePath] = pathMap
-				ev.RecyclePrev()
-
-			default:
-				select {
-				case <-ctx.Done():
-					defer close(f.Done)
-					fmt.Println("Flamegraph processed last event")
-					f.dumpCollapsed()
-					return
-				default:
-					time.Sleep(time.Millisecond * 10)
-				}
+		collapsed := f.workers[0].collapsed
+		if len(f.workers) > 1 {
+			for i, c := range f.workers[1:] {
+				fmt.Println("Worker", i+1, "merged", collapsed.merge(c.collapsed),
+					"counters =>", len(collapsed), "total counters")
 			}
 		}
+		collapsed.dump()
 	}()
-}
-
-func (f Flamegraph) dumpCollapsed() {
-	var wg sync.WaitGroup
-	wg.Add(4)
-
-	go f.dumpBy(&wg, "ior-by-path-count-flamegraph.collapsed", true, func(cnt counter) uint64 {
-		return cnt.count
-	})
-	go f.dumpBy(&wg, "ior-by-path-duration-flamegraph.collapsed", true, func(cnt counter) uint64 {
-		return cnt.duration
-	})
-	go f.dumpBy(&wg, "ior-by-syscall-count-flamegraph.collapsed", false, func(cnt counter) uint64 {
-		return cnt.count
-	})
-	go f.dumpBy(&wg, "ior-by-syscall-duration-flamegraph.collapsed", false, func(cnt counter) uint64 {
-		return cnt.duration
-	})
-
-	wg.Wait()
-}
-
-func (f Flamegraph) dumpBy(wg *sync.WaitGroup, outfile string, syscallAtTop bool, by func(counter) uint64) {
-	defer wg.Done()
-
-	fmt.Println("Dumping", outfile)
-	file, err := os.Create(outfile)
-	if err != nil {
-		panic(err)
-	}
-	defer file.Close()
-
-	for path, value := range f.collapsed {
-		var sb strings.Builder
-
-		for i, part := range strings.Split(path, "/") {
-			if i > 1 {
-				sb.WriteString(";")
-				sb.WriteString("/")
-			}
-			sb.WriteString(part)
-		}
-
-		for traceId, cnt := range value {
-			var err error
-			if syscallAtTop {
-				_, err = fmt.Fprintf(file, "%s;syscall`%s %v\n", sb.String(), traceId.Name(), by(cnt))
-			} else {
-				_, err = fmt.Fprintf(file, "syscall`%s;%s %v\n", traceId.Name(), sb.String(), by(cnt))
-			}
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
 }
