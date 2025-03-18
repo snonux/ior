@@ -21,7 +21,11 @@ func New() Flamegraph {
 		Ch:   make(chan *event.Pair, 4096),
 		Done: make(chan struct{}),
 	}
-	for range runtime.NumCPU() / 2 {
+	numWorkers := runtime.NumCPU() / 4
+	if numWorkers == 0 {
+		numWorkers = 1
+	}
+	for range numWorkers {
 		f.workers = append(f.workers, newWorker())
 	}
 	return f

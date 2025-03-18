@@ -25,6 +25,8 @@ generate:
 .PHONY: gobuild
 gobuild:
 	$(GO) build -tags netgo -ldflags '-w -extldflags "-static"' -o ior ./cmd/ior/main.go
+gobuild_race:
+	$(GO) build -tags netgo -ldflags '-w -extldflags "-static"' -race -o ior ./cmd/ior/main.go
 
 .PHONY: clean
 clean:
@@ -69,3 +71,4 @@ inferno:
 prof:
 	$(GO) tool pprof -pdf ./ior ior.cpuprofile > cpuprofile.pdf && evince cpuprofile.pdf &
 	$(GO) tool pprof -pdf ./ior ior.memprofile > memprofile.pdf && evince memprofile.pdf &
+	
