@@ -31,6 +31,7 @@ type eventLoop struct {
 	numSyscalls             uint
 	numSyscallsAfterFilter  uint
 	startTime               time.Time
+	done                    chan struct{}
 }
 
 func newEventLoop(flags flags.Flags) *eventLoop {
@@ -42,11 +43,13 @@ func newEventLoop(flags flags.Flags) *eventLoop {
 		comms:      make(map[uint32]string),
 		prevPairs:  make(map[uint32]*event.Pair),
 		flamegraph: flamegraph.New(),
+		done:       make(chan struct{}),
 	}
 }
 
 // TODO: Could use the table from the gos project to display the stats here
 func (e *eventLoop) stats() string {
+	<-e.done
 	duration := time.Since(e.startTime)
 
 	return "Statistics:\n" +
@@ -59,6 +62,8 @@ func (e *eventLoop) stats() string {
 }
 
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
+	defer close(e.done)
+
 	if e.flags.FlamegraphEnable {
 		fmt.Println("Collecting flame graph stats, press Ctrl+C to stop")
 		e.flamegraph.Start(ctx)
@@ -95,6 +100,7 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 
 	go func() {
 		defer close(ch)
+
 		for raw := range rawCh {
 			select {
 			case <-ctx.Done():
