@@ -91,11 +91,12 @@ func Run(flags flags.Flags) {
 	fmt.Println("Probing for", duration)
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		<-c
+		<-signalCh
+		fmt.Println("Received signal, shutting down...")
 		cancel()
 	}()
 

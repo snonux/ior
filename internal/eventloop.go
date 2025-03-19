@@ -47,8 +47,8 @@ func newEventLoop(flags flags.Flags) *eventLoop {
 	}
 }
 
-// TODO: Could use the table from the gos project to display the stats here
 func (e *eventLoop) stats() string {
+	fmt.Println("Waiting for staps to be ready")
 	<-e.done
 	duration := time.Since(e.startTime)
 
@@ -101,44 +101,52 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 	go func() {
 		defer close(ch)
 
-		for raw := range rawCh {
+		for {
 			select {
-			case <-ctx.Done():
-				return
+			case raw := <-rawCh:
+				e.processRawEvent(raw, ch)
 			default:
-			}
-
-			e.numTracepoints++
-			switch EventType(raw[0]) {
-			case ENTER_OPEN_EVENT:
-				if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
-					e.syscallEnter(ev)
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					time.Sleep(time.Millisecond * 10)
 				}
-			case EXIT_OPEN_EVENT:
-				e.syscallExit(NewFdEvent(raw), ch)
-			case ENTER_FD_EVENT:
-				e.syscallEnter(NewFdEvent(raw))
-			case EXIT_FD_EVENT:
-				e.syscallExit(NewFdEvent(raw), ch)
-			case EXIT_NULL_EVENT:
-				e.syscallExit(NewNullEvent(raw), ch)
-			case EXIT_RET_EVENT:
-				e.syscallExit(NewRetEvent(raw), ch)
-			case ENTER_NAME_EVENT:
-				if ev, ok := e.filter.nameEvent(NewNameEvent(raw)); ok {
-					e.syscallEnter(ev)
-				}
-			case ENTER_PATH_EVENT:
-				if ev, ok := e.filter.pathEvent(NewPathEvent(raw)); ok {
-					e.syscallEnter(ev)
-				}
-			default:
-				panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
 			}
 		}
 	}()
 
 	return ch
+}
+
+func (e *eventLoop) processRawEvent(raw []byte, ch chan *event.Pair) {
+	e.numTracepoints++
+	switch EventType(raw[0]) {
+	case ENTER_OPEN_EVENT:
+		if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
+			e.syscallEnter(ev)
+		}
+	case EXIT_OPEN_EVENT:
+		e.syscallExit(NewFdEvent(raw), ch)
+	case ENTER_FD_EVENT:
+		e.syscallEnter(NewFdEvent(raw))
+	case EXIT_FD_EVENT:
+		e.syscallExit(NewFdEvent(raw), ch)
+	case EXIT_NULL_EVENT:
+		e.syscallExit(NewNullEvent(raw), ch)
+	case EXIT_RET_EVENT:
+		e.syscallExit(NewRetEvent(raw), ch)
+	case ENTER_NAME_EVENT:
+		if ev, ok := e.filter.nameEvent(NewNameEvent(raw)); ok {
+			e.syscallEnter(ev)
+		}
+	case ENTER_PATH_EVENT:
+		if ev, ok := e.filter.pathEvent(NewPathEvent(raw)); ok {
+			e.syscallEnter(ev)
+		}
+	default:
+		panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
+	}
 }
 
 func (e *eventLoop) syscallEnter(enterEv event.Event) {

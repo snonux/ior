@@ -37,7 +37,6 @@ func (w worker) run(ctx context.Context, wg *sync.WaitGroup, ch <-chan *event.Pa
 			pathMap[traceId] = cnt
 
 			w.collapsed[filePath] = pathMap
-			// TODO: Enable Go race detector
 			ev.Recycle()
 
 		default:

@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-// TODO: Move to event package?
 type eventFilter struct {
 	commFilterEnable bool
 	commFilter       string
