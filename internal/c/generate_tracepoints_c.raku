@@ -167,7 +167,7 @@ class Format {
     method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
     method generate-bpf-c-tracepoint returns Str { $!format-impl.generate-bpf-c-tracepoint: (format => self, :$!name).hash }
 
-    method field-number(Str \field-name) { @!external-fields.first(*.name eq field-name, :k) // 0 - 1 }
+    method field-number(Str \field-name) { (@!external-fields.first(*.name eq field-name, :k) // 0) - 1 }
     method can-generate returns Bool { so $!format-impl.^can('generate-bpf-c-tracepoint') }
     method enter-reject returns Bool { $!format-impl !~~ any(FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint) }
 }
