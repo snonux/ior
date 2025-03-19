@@ -119,7 +119,7 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 	return ch
 }
 
-func (e *eventLoop) processRawEvent(raw []byte, ch chan *event.Pair) {
+func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	e.numTracepoints++
 	switch EventType(raw[0]) {
 	case ENTER_OPEN_EVENT:

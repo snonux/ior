@@ -62,7 +62,9 @@ func (c collapsed) dump() {
 func (c collapsed) dumpBy(wg *sync.WaitGroup, outfile string, syscallAtTop bool, by func(counter) uint64) {
 	defer wg.Done()
 
+	defer fmt.Println("Dumping done")
 	fmt.Println("Dumping", outfile)
+
 	file, err := os.Create(outfile)
 	if err != nil {
 		panic(err)
