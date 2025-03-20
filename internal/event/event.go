@@ -24,11 +24,10 @@ type Event interface {
 
 // Represents a pair of enter and exit events (e.g. entering the syscall + exiting it)
 type Pair struct {
-	EnterEv, ExitEv    Event
-	File               file.File
-	Comm               string
-	Duration           uint64
-	TracepointMismatch bool
+	EnterEv, ExitEv Event
+	File            file.File
+	Comm            string
+	Duration        uint64
 
 	// To calculate the time difference from the previoud event.
 	PrevPair       *Pair
@@ -79,9 +78,6 @@ func (e *Pair) String() string {
 	sb.WriteString(",")
 	sb.WriteString(e.File.String())
 
-	if e.TracepointMismatch {
-		sb.WriteString(",MISMATCH")
-	}
 	return sb.String()
 }
 
@@ -93,7 +89,6 @@ func (e *Pair) Recycle() {
 	e.EnterEv.Recycle()
 	e.ExitEv.Recycle()
 	e.PrevPair = nil
-	e.TracepointMismatch = false
 	poolOfEventPairs.Put(e)
 }
 

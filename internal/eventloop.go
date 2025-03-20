@@ -150,7 +150,6 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 }
 
 func (e *eventLoop) syscallEnter(enterEv event.Event) {
-	// fmt.Println("DEBUG enterEv", enterEv)
 	tid := enterEv.GetTid()
 	if !e.filter.commFilterEnable {
 		e.enterEvs[tid] = event.NewPair(enterEv)
@@ -177,18 +176,15 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	}
 	delete(e.enterEvs, exitEv.GetTid())
 	ev.ExitEv = exitEv
-	// fmt.Println("DEBUG exitEv", exitEv)
+	e.numSyscalls++
 
 	// Expect ID one lower, otherwise, enter and exit tracepoints
 	// don't match up. E.g.:
 	// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
 	if ev.EnterEv.GetTraceId()-1 != ev.ExitEv.GetTraceId() {
-		// fmt.Println("Mismatch DEBUG", ev.EnterEv, "<!>", ev.ExitEv)
-		// os.Exit(2)
-		ev.TracepointMismatch = true
 		e.numTracepointMismatches++
-	} else {
-		e.numSyscalls++
+		ev.Recycle()
+		return
 	}
 
 	switch v := ev.EnterEv.(type) {
