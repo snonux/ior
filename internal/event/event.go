@@ -93,6 +93,7 @@ func (e *Pair) Recycle() {
 	e.EnterEv.Recycle()
 	e.ExitEv.Recycle()
 	e.PrevPair = nil
+	e.TracepointMismatch = false
 	poolOfEventPairs.Put(e)
 }
 
