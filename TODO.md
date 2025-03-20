@@ -1,12 +1,5 @@
 # TODO's
 
-* Target OS is Rocky 9 and not Rocky 8 (can use a bhyve VM)
-* More filters
-  * By syscall
-* Capture more tracepoints? See comments in tracepoints.c's header.
-* Automatic testing (integration tests)
-* Performance benchmark...
-
 ## FlameGraphs
 
 More ideas

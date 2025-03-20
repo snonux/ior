@@ -192,8 +192,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		openEv := ev.EnterEv.(*OpenEvent)
 
 		fd := int32(ev.ExitEv.(*RetEvent).Ret)
-		// It's from an array, so only create string from array until first 0 byte
-		// TODO: This could speed up the path filter as well
 		file := file.NewFd(fd, openEv.Filename[:], v.Flags)
 		if fd >= 0 {
 			e.files[fd] = file
