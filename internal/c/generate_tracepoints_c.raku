@@ -166,18 +166,18 @@ class Format {
             return;
         }
 
-        self.set-format-impl(field.name, field.type);
+        self.set-format-impl($.name, field.name, field.type) unless $!format-impl;
     }
 
-    # TODO: implement FcntlTracepoint (as it can change open flags)
+    # TODO: Finish to implement FcntlTracepoint (as it can change open flags)
     # TODO: implement Dup3Tracepoint (as it can change open flags)
-    multi method set-format-impl('fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
-    multi method set-format-impl('newname', 'const char *') { $!format-impl = NameTracepoint.new }
-    multi method set-format-impl('filename', 'const char *') { $!format-impl = OpenTracepoint.new }
-    multi method set-format-impl('pathname', 'const char *') { $!format-impl = PathnameTracepoint.new }
-    multi method set-format-impl('ret', 'long') { $!format-impl = RetTracepoint.new }
-    multi method set-format-impl('cmd', 'unsigned int') { $!format-impl = FcntlTracepoint.new }
-    multi method set-format-impl($, $) { }
+    multi method set-format-impl($, 'fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
+    multi method set-format-impl($, 'newname', 'const char *') { $!format-impl = NameTracepoint.new }
+    multi method set-format-impl($, 'filename', 'const char *') { $!format-impl = OpenTracepoint.new }
+    multi method set-format-impl($, 'pathname', 'const char *') { $!format-impl = PathnameTracepoint.new }
+    multi method set-format-impl($, 'ret', 'long') { $!format-impl = RetTracepoint.new }
+    multi method set-format-impl('sys_enter_fcntl', $, $) { $!format-impl = FcntlTracepoint.new }
+    multi method set-format-impl($, $, $) { }
 
     method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
     method generate-bpf-c-tracepoint returns Str { $!format-impl.generate-bpf-c-tracepoint: (format => self, :$!name).hash }
