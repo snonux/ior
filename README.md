@@ -1,4 +1,4 @@
-# I/O Riot NG
+# I/O Riot NG (aka ior)
 
 <img src=assets/ior-small.png />
 
@@ -7,6 +7,8 @@ I/O Riot NG is an experiments with BPF. This program traces for I/O syscalls and
 <img src=assets/ior-by-count-flamegraph.svg />
 
 Maybe this is a spiritual successor of one of my previous projects, I/O Riot https://codeberg.org/snonux/ioriot, the latter was based on SystemTap and C. The NG is based on Go, C and BPF (via libbpfgo).
+
+This works only on Linux!
 
 ## Fedora
 
