@@ -249,16 +249,18 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			ev.File = file.NewFdWithPid(fd, v.Pid)
 		}
 		switch v.Cmd {
-		case syscall.F_SETFD:
+		case syscall.F_SETFL:
 			fdFile, ok := ev.File.(file.FdFile)
 			if !ok {
 				panic("expected a file.FdFile")
 			}
-			fdFile.Flags = int32(v.Arg)
+			fmt.Println("DEBUG BEFORE", fdFile.FlagsString())
+			// fcntl(2)
+			canChange := syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
+			fdFile.Flags |= (int32(v.Arg) & int32(canChange))
 			ev.File = fdFile
 			e.files[fd] = fdFile
-		case syscall.F_SETFL:
-			fmt.Println("TODO: F_SETFL with fcntl not yet implememented")
+			fmt.Println("DEBUG AFTER", fdFile.FlagsString())
 		case syscall.F_DUPFD:
 			fmt.Println("TODO: F_DUPFD with fcntl not yet implememented")
 		case syscall.F_DUPFD_CLOEXEC:
