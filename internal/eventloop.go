@@ -14,9 +14,11 @@ import (
 	"ior/internal/file"
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
+	"ior/internal/types"
 	. "ior/internal/types"
 )
 
+// TOOD: read and write syscalls: can also collect amount of bytes!
 type eventLoop struct {
 	flags      flags.Flags
 	filter     *eventFilter
@@ -230,12 +232,14 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			ev.Recycle()
 			return
 		}
+
 	case *NullEvent:
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
 		if !e.filter.eventPair(ev) {
 			ev.Recycle()
 			return
 		}
+
 	case *FcntlEvent:
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
 		fd := int32(v.Fd)
@@ -248,6 +252,16 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			ev.Recycle()
 			return
 		}
+
+		retEvent, ok := exitEv.(*types.RetEvent)
+		if !ok {
+			panic("expected *types.RetEvent")
+		}
+		// Syscall returned -1, nothing was changed with the fd
+		if retEvent.Ret == -1 {
+			break
+		}
+
 		switch v.Cmd {
 		case syscall.F_SETFL:
 			fdFile, ok := ev.File.(file.FdFile)
@@ -264,6 +278,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		case syscall.F_DUPFD_CLOEXEC:
 			fmt.Println("TODO: F_DUPFD_CLOEXEC with fcntl not yet implememented")
 		}
+
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
@@ -271,6 +286,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	// TODO: implement dup syscall
 	// TODO: implement dup2 syscall
 	// TODO: implement dup3 syscall
+	// TODO: Yes, on Linux, when you use the `fork` syscall to create a subprocess, the child process shares the same file descriptors as the parent process. If the child process changes the file modes of these open file descriptors (e.g., by using `fcntl` or similar system calls), those changes will be reflected in the parent process as well, since they reference the same underlying file table entries.
 
 	ev.PrevPair, _ = e.prevPairs[ev.EnterEv.GetTid()]
 	ev.CalculateDurations()
