@@ -134,6 +134,20 @@ class NullTracepoint does TracepointTemplate {
     }
 }
 
+class FcntlTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals --> Str) {
+        my Int \fd-field-number = %vals<format>.field-number('fd');
+        my Int \cmd-field-number = %vals<format>.field-number('cmd');
+        my Int \arg-field-number = %vals<format>.field-number('arg');
+        my Str $extra = qq:to/BPF_C_CODE/;
+            ev->fd = {'ctx->args[' ~ fd-field-number ~ ']'};
+            ev->cmd = {'ctx->args[' ~ cmd-field-number ~ ']'};
+            ev->arg = {'ctx->args[' ~ arg-field-number ~ ']'};
+        BPF_C_CODE
+        self.template: %vals.append( ( event-struct => 'fcntl_event', :$extra ).hash );
+    }
+}
+
 class Format {
     has Field @!internal-fields; # Fields not accessible from raw tracepoints.
     has Field @!external-fields; # Fields accessible from raw tracepoints.
@@ -162,6 +176,7 @@ class Format {
     multi method set-format-impl('filename', 'const char *') { $!format-impl = OpenTracepoint.new }
     multi method set-format-impl('pathname', 'const char *') { $!format-impl = PathnameTracepoint.new }
     multi method set-format-impl('ret', 'long') { $!format-impl = RetTracepoint.new }
+    multi method set-format-impl('cmd', 'unsigned int') { $!format-impl = FcntlTracepoint.new }
     multi method set-format-impl($, $) { }
 
     method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
@@ -169,7 +184,10 @@ class Format {
 
     method field-number(Str \field-name) { (@!external-fields.first(*.name eq field-name, :k) // 0) - 1 }
     method can-generate returns Bool { so $!format-impl.^can('generate-bpf-c-tracepoint') }
-    method enter-reject returns Bool { $!format-impl !~~ any(FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint) }
+
+    method enter-reject returns Bool { $!format-impl !~~ any(
+        FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint, FcntlTracepoint
+    ) }
 }
 
 class SysTraceFormatActions {
