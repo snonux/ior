@@ -15,6 +15,8 @@
 #define EXIT_NAME_EVENT 10
 #define ENTER_PATH_EVENT 11
 #define EXIT_PATH_EVENT 12
+#define ENTER_FCNTL_EVENT 13
+#define EXIT_FCNTL_EVENT 14
 
 struct open_event {
     __u32 event_type;
@@ -70,4 +72,15 @@ struct path_event {
     __u32 pid;
     __u32 tid;
     char pathname[MAX_FILENAME_LENGTH];
+};
+
+struct fcntl_event {
+    __u32 event_type;
+    __u32 trace_id; 
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u32 fd;
+    __u32 cmd;
+    __u64 arg;
 };

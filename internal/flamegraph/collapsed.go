@@ -18,6 +18,11 @@ func (c *counter) merge(other counter) {
 	c.duration += other.duration
 }
 
+// TODO: make it generic, generate multiple trace points
+// path, traceid (syscall name), comm, pid, tid
+// traceid, path is by default set in this order
+// store an intermediate format which then can be converted to the others...
+// e.g.    path / traceid / comm / pid / tid / counter
 type collapsed map[string]map[types.TraceId]counter
 
 // TODO: Unit test this
