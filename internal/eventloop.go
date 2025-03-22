@@ -104,6 +104,9 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 		for {
 			select {
 			case raw := <-rawCh:
+				if len(raw) == 0 {
+					continue
+				}
 				e.processRawEvent(raw, ch)
 			default:
 				select {
@@ -144,6 +147,8 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 		if ev, ok := e.filter.pathEvent(NewPathEvent(raw)); ok {
 			e.syscallEnter(ev)
 		}
+	case ENTER_FCNTL_EVENT:
+		e.syscallEnter(NewFcntlEvent(raw))
 	default:
 		panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
 	}
@@ -217,7 +222,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 				delete(e.files, fd)
 			}
 		} else {
-			ev.File = file.NewFdWithPid(fd, ev.EnterEv.(*FdEvent).Pid)
+			ev.File = file.NewFdWithPid(fd, v.Pid)
 		}
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
 		if !e.filter.eventPair(ev) {
@@ -230,6 +235,19 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			ev.Recycle()
 			return
 		}
+	case *FcntlEvent:
+		ev.Comm = e.comm(ev.EnterEv.GetTid())
+		if !e.filter.eventPair(ev) {
+			ev.Recycle()
+			return
+		}
+		fd := int32(v.Fd)
+		if file_, ok := e.files[fd]; ok {
+			ev.File = file_
+		} else {
+			ev.File = file.NewFdWithPid(fd, v.Pid)
+		}
+		// TODO: Implement more details here (e.g. changing the file open flags)
 
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
