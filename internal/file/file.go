@@ -12,26 +12,26 @@ import (
 type File interface {
 	String() string
 	Name() string
-	Flags() string
+	FlagsString() string
 }
 
-type fdFile struct {
+type FdFile struct {
 	fd    int32
 	name  string
-	flags int32
+	Flags int32
 }
 
-func NewFd(fd int32, name []byte, flags int32) fdFile {
-	return fdFile{fd, stringValue(name), flags}
+func NewFd(fd int32, name []byte, flags int32) FdFile {
+	return FdFile{fd, stringValue(name), flags}
 }
 
-func NewFdWithPid(fd int32, pid uint32) fdFile {
+func NewFdWithPid(fd int32, pid uint32) FdFile {
 	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
 	if err != nil {
-		return fdFile{fd, "?", -1}
+		return FdFile{fd, "?", -1}
 	}
 	flags, _ := readFlagsFromFdInfo(fd, pid)
-	return fdFile{fd, linkName, flags}
+	return FdFile{fd, linkName, flags}
 }
 
 func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
@@ -51,15 +51,15 @@ func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
 	return -1, scanner.Err()
 }
 
-func (f fdFile) Name() string {
+func (f FdFile) Name() string {
 	return f.name
 }
 
-func (f fdFile) Flags() string {
-	return flagsToStr(f.flags)
+func (f FdFile) FlagsString() string {
+	return flagsToStr(f.Flags)
 }
 
-func (f fdFile) String() string {
+func (f FdFile) String() string {
 	var sb strings.Builder
 
 	if len(f.name) == 0 {
@@ -69,7 +69,7 @@ func (f fdFile) String() string {
 		sb.WriteString(" (")
 		sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
 		sb.WriteString(",")
-		sb.WriteString(f.Flags())
+		sb.WriteString(f.FlagsString())
 		sb.WriteString(")")
 	}
 
@@ -88,7 +88,7 @@ func (f oldnameNewnameFile) Name() string {
 	return f.Newname
 }
 
-func (f oldnameNewnameFile) Flags() string {
+func (f oldnameNewnameFile) FlagsString() string {
 	return ""
 }
 
@@ -100,7 +100,7 @@ func (f oldnameNewnameFile) String() string {
 	sb.WriteString(" ->new:")
 	sb.WriteString(f.Newname)
 	sb.WriteString(" (")
-	sb.WriteString(f.Flags())
+	sb.WriteString(f.FlagsString())
 	sb.WriteString(")")
 
 	return sb.String()
@@ -118,7 +118,7 @@ func (f pathnameFile) Name() string {
 	return f.Pathname
 }
 
-func (f pathnameFile) Flags() string {
+func (f pathnameFile) FlagsString() string {
 	return ""
 }
 
@@ -128,7 +128,7 @@ func (f pathnameFile) String() string {
 	sb.WriteString("pathname:")
 	sb.WriteString(f.Pathname)
 	sb.WriteString(" (")
-	sb.WriteString(f.Flags())
+	sb.WriteString(f.FlagsString())
 	sb.WriteString(")")
 
 	return sb.String()

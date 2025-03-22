@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"ior/internal/event"
@@ -247,11 +248,29 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		} else {
 			ev.File = file.NewFdWithPid(fd, v.Pid)
 		}
-		// TODO: Implement more details here (e.g. changing the file open flags)
-
+		switch v.Cmd {
+		case syscall.F_SETFD:
+			fdFile, ok := ev.File.(file.FdFile)
+			if !ok {
+				panic("expected a file.FdFile")
+			}
+			fdFile.Flags = int32(v.Arg)
+			ev.File = fdFile
+			e.files[fd] = fdFile
+		case syscall.F_SETFL:
+			fmt.Println("TODO: F_SETFL with fcntl not yet implememented")
+		case syscall.F_DUPFD:
+			fmt.Println("TODO: F_DUPFD with fcntl not yet implememented")
+		case syscall.F_DUPFD_CLOEXEC:
+			fmt.Println("TODO: F_DUPFD_CLOEXEC with fcntl not yet implememented")
+		}
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
+	// TODO: implement flock syscall
+	// TODO: implement dup syscall
+	// TODO: implement dup2 syscall
+	// TODO: implement dup3 syscall
 
 	ev.PrevPair, _ = e.prevPairs[ev.EnterEv.GetTid()]
 	ev.CalculateDurations()
