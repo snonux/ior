@@ -155,6 +155,5 @@ func (f pathnameFile) String() string {
 
 // As data comes in from arrays, converted to slices, there will be null-bytes at the end..
 func stringValue(byteStr []byte) string {
-	// TODO: Hopefully, this won't cause a panic when the filename is as long as the array itself. Unit test this!
 	return string(byteStr[:bytes.IndexByte(byteStr, 0)])
 }
