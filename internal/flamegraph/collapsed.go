@@ -23,6 +23,7 @@ func (c *counter) merge(other counter) {
 // traceid, path is by default set in this order
 // store an intermediate format which then can be converted to the others...
 // e.g.    path ¶ traceid ¶ comm ¶ pid ¶ tid ¶ flags ¶ counter
+// counter can also have bytes (for reads and writes)
 type collapsed map[string]map[types.TraceId]counter
 
 // TODO: Unit test this
