@@ -171,7 +171,9 @@ func (e *eventLoop) syscallEnter(enterEv event.Event) {
 		// Only, when we have a comm name
 		if _, ok := e.comms[tid]; ok {
 			e.enterEvs[tid] = event.NewPair(enterEv)
-			// TODO } else { .... what if not? }
+		} else {
+			// Probably not an issue.
+			fmt.Println("WARN: No comm name for", enterEv, "process probably already vanished?")
 		}
 	}
 }

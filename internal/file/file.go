@@ -16,22 +16,38 @@ type File interface {
 }
 
 type FdFile struct {
-	fd    int32
-	name  string
-	Flags int32
+	fd              int32
+	name            string
+	Flags           int32
+	flagsFromFdInfo bool
 }
 
 func NewFd(fd int32, name []byte, flags int32) FdFile {
-	return FdFile{fd, stringValue(name), flags}
+	return FdFile{
+		fd:    fd,
+		name:  stringValue(name),
+		Flags: flags,
+	}
 }
 
 func NewFdWithPid(fd int32, pid uint32) FdFile {
 	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
 	if err != nil {
-		return FdFile{fd, "?", -1}
+		return FdFile{
+			fd:              fd,
+			name:            "?",
+			Flags:           -1,
+			flagsFromFdInfo: true,
+		}
 	}
+
 	flags, _ := readFlagsFromFdInfo(fd, pid)
-	return FdFile{fd, linkName, flags}
+	return FdFile{
+		fd:              fd,
+		name:            linkName,
+		Flags:           flags,
+		flagsFromFdInfo: true,
+	}
 }
 
 func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
@@ -71,6 +87,9 @@ func (f FdFile) String() string {
 		sb.WriteString(",")
 		sb.WriteString(f.FlagsString())
 		sb.WriteString(")")
+		if f.flagsFromFdInfo {
+			sb.WriteString(" flags from fd info")
+		}
 	}
 
 	return sb.String()
