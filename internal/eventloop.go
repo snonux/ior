@@ -266,9 +266,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		if !ok {
 			panic("expected a file.FdFile")
 		}
-		if fdFile.Flags == -1 {
-			fmt.Println("DEBUG flags is -1", fdFile)
-		}
 
 		// See fcntl(2) for implementation details
 		switch v.Cmd {

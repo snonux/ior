@@ -19,49 +19,54 @@ type FdFile struct {
 	fd              int32
 	name            string
 	Flags           int32
-	flagsFromFdInfo bool
+	flagsFromProcFS bool
+	unknownFlags    bool
 }
 
 func NewFd(fd int32, name []byte, flags int32) FdFile {
-	return FdFile{
+	f := FdFile{
 		fd:    fd,
 		name:  stringValue(name),
 		Flags: flags,
 	}
+	if f.Flags == -1 {
+		// TODO: newfstatat is not an open syscall! change code generator!
+		panic(fmt.Sprintf("DEBUG with -1 flags: %v", f))
+	}
+	return f
 }
 
-func NewFdWithPid(fd int32, pid uint32) FdFile {
-	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
+func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
+	var err error
+
+	procPath := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
+	f.name, err = os.Readlink(procPath)
 	if err != nil {
-		fmt.Println("DEBUG", err)
-		return FdFile{
-			fd:              fd,
-			name:            "?",
-			Flags:           -1,
-			flagsFromFdInfo: true,
-		}
+		// fmt.Println("DEBUGXXX", procPath)
+		f.name = ""
 	}
 
-	flags, _ := readFlagsFromFdInfo(fd, pid)
-	return FdFile{
-		fd:              fd,
-		name:            linkName,
-		Flags:           flags,
-		flagsFromFdInfo: true,
+	f.Flags, err = readFlagsFromFdInfo(fd, pid)
+	if err != nil {
+		f.unknownFlags = true
+		f.Flags = 0
+	} else {
+		f.flagsFromProcFS = true
 	}
+
+	return f
 }
 
 func (f FdFile) Dup(fd int32) FdFile {
 	duppedFd := f
 	duppedFd.fd = fd
-	duppedFd.flagsFromFdInfo = false
 	return duppedFd
 }
 
 func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
 	if err != nil {
-		return -1, err
+		return 0, err
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
@@ -72,7 +77,7 @@ func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
 			return int32(flags), err
 		}
 	}
-	return -1, scanner.Err()
+	return 0, scanner.Err()
 }
 
 func (f FdFile) Name() string {
@@ -80,25 +85,33 @@ func (f FdFile) Name() string {
 }
 
 func (f FdFile) FlagsString() string {
-	return flagsToStr(f.Flags)
+	var sb strings.Builder
+
+	if f.unknownFlags {
+		sb.WriteString("U:") // Unknown
+	}
+	if f.flagsFromProcFS {
+		sb.WriteString("P:") // ProcFS
+	}
+
+	flagsToStr(&sb, f.Flags)
+	return sb.String()
 }
 
 func (f FdFile) String() string {
 	var sb strings.Builder
 
 	if len(f.name) == 0 {
-		sb.WriteString("?")
+		sb.WriteString("E:") // Emtpy string
 	} else {
 		sb.WriteString(f.name)
-		sb.WriteString(" (")
-		sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
-		sb.WriteString(",")
-		sb.WriteString(f.FlagsString())
-		sb.WriteString(")")
-		if f.flagsFromFdInfo {
-			sb.WriteString(" flags from fd info")
-		}
+		sb.WriteString(" ")
 	}
+	sb.WriteString("(")
+	sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
+	sb.WriteString(",")
+	sb.WriteString(f.FlagsString())
+	sb.WriteString(")")
 
 	return sb.String()
 }
