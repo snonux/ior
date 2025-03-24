@@ -51,7 +51,7 @@ func newEventLoop(flags flags.Flags) *eventLoop {
 }
 
 func (e *eventLoop) stats() string {
-	fmt.Println("Waiting for staps to be ready")
+	fmt.Println("Waiting for stats to be ready")
 	<-e.done
 	duration := time.Since(e.startTime)
 
@@ -111,13 +111,11 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 					continue
 				}
 				e.processRawEvent(raw, ch)
+			case <-ctx.Done():
+				fmt.Println("Stopping event loop")
+				return
 			default:
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					time.Sleep(time.Millisecond * 10)
-				}
+				time.Sleep(time.Millisecond * 10)
 			}
 		}
 	}()
@@ -264,21 +262,27 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			break
 		}
 
+		fdFile, ok := ev.File.(file.FdFile)
+		if !ok {
+			panic("expected a file.FdFile")
+		}
+
+		// See fcntl(2) for implementation details
 		switch v.Cmd {
 		case syscall.F_SETFL:
-			fdFile, ok := ev.File.(file.FdFile)
-			if !ok {
-				panic("expected a file.FdFile")
-			}
-			// fcntl(2)
+			fmt.Println("DEBUG", fdFile)
 			canChange := syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-			fdFile.Flags |= (int32(v.Arg) & int32(canChange))
+			*fdFile.Flags |= (int32(v.Arg) & int32(canChange))
 			ev.File = fdFile
 			e.files[fd] = fdFile
 		case syscall.F_DUPFD:
-			fmt.Println("TODO: F_DUPFD with fcntl not yet implememented")
+			newFd := int32(retEvent.Ret)
+			e.files[newFd] = fdFile.Dup(newFd)
 		case syscall.F_DUPFD_CLOEXEC:
-			fmt.Println("TODO: F_DUPFD_CLOEXEC with fcntl not yet implememented")
+			newFd := int32(retEvent.Ret)
+			duppedFd := fdFile.Dup(newFd)
+			*duppedFd.Flags |= syscall.O_CLOEXEC
+			e.files[newFd] = duppedFd
 		}
 
 	default:
