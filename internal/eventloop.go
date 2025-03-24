@@ -201,6 +201,11 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 
 		fd := int32(ev.ExitEv.(*RetEvent).Ret)
 		file := file.NewFd(fd, openEv.Filename[:], v.Flags)
+		if file.Flags == -1 {
+			// Issue here is that some open_event's aren't really open_event's
+			// need to double check all tracepoints
+			fmt.Println("DEBUG with -1 flags", openEv, file)
+		}
 		if fd >= 0 {
 			e.files[fd] = file
 		}
@@ -287,7 +292,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
-	// TODO: implement flock syscall
 	// TODO: implement dup syscall
 	// TODO: implement dup2 syscall
 	// TODO: implement dup3 syscall
@@ -302,11 +306,10 @@ func (e *eventLoop) comm(tid uint32) string {
 	if comm, ok := e.comms[tid]; ok {
 		return comm
 	}
-	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid))
-	if err != nil {
-		return "U:comm"
+	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid)); err == nil {
+		linkName = filepath.Base(linkName)
+		e.comms[tid] = linkName
+		return linkName
 	}
-	linkName = filepath.Base(linkName)
-	e.comms[tid] = linkName
-	return linkName
+	return ""
 }
