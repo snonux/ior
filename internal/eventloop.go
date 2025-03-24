@@ -266,13 +266,15 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		if !ok {
 			panic("expected a file.FdFile")
 		}
+		if fdFile.Flags == -1 {
+			fmt.Println("DEBUG flags is -1", fdFile)
+		}
 
 		// See fcntl(2) for implementation details
 		switch v.Cmd {
 		case syscall.F_SETFL:
-			fmt.Println("DEBUG", fdFile)
 			canChange := syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-			*fdFile.Flags |= (int32(v.Arg) & int32(canChange))
+			fdFile.Flags |= (int32(v.Arg) & int32(canChange))
 			ev.File = fdFile
 			e.files[fd] = fdFile
 		case syscall.F_DUPFD:
@@ -281,7 +283,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		case syscall.F_DUPFD_CLOEXEC:
 			newFd := int32(retEvent.Ret)
 			duppedFd := fdFile.Dup(newFd)
-			*duppedFd.Flags |= syscall.O_CLOEXEC
+			duppedFd.Flags |= syscall.O_CLOEXEC
 			e.files[newFd] = duppedFd
 		}
 
@@ -292,7 +294,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	// TODO: implement dup syscall
 	// TODO: implement dup2 syscall
 	// TODO: implement dup3 syscall
-	// TODO: Yes, on Linux, when you use the `fork` syscall to create a subprocess, the child process shares the same file descriptors as the parent process. If the child process changes the file modes of these open file descriptors (e.g., by using `fcntl` or similar system calls), those changes will be reflected in the parent process as well, since they reference the same underlying file table entries.
 
 	ev.PrevPair, _ = e.prevPairs[ev.EnterEv.GetTid()]
 	ev.CalculateDurations()

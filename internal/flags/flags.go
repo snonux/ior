@@ -62,14 +62,21 @@ func (flags Flags) AttachTracepoint(tracepointName string) bool {
 }
 
 func (flags Flags) SetBPF(bpfModule *bpf.Module) error {
+	// Ignore `ior` process itself from the filter
+	if err := bpfModule.InitGlobalVariable("IOR_PID_FILTER", uint32(os.Getpid())); err != nil {
+		return fmt.Errorf("unable set IOR_PID_FILTER: %w", err)
+	}
+
 	fmt.Println("Setting PID_FILTER to", flags.PidFilter)
 	if err := bpfModule.InitGlobalVariable("PID_FILTER", uint32(flags.PidFilter)); err != nil {
 		return fmt.Errorf("unable to set up PID_FILTER global variable: %w", err)
 	}
+
 	fmt.Println("Setting TID_FILTER to", flags.TidFilter)
 	if err := bpfModule.InitGlobalVariable("TID_FILTER", uint32(flags.TidFilter)); err != nil {
 		return fmt.Errorf("unable to set up TID_FILTER global variable: %w", err)
 	}
+
 	return nil
 }
 

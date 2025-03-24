@@ -18,7 +18,7 @@ type File interface {
 type FdFile struct {
 	fd              int32
 	name            string
-	Flags           *int32 // TODO: This must be a pointer as via dup(2) - means, we need to synchronise access as well .. use atomicint
+	Flags           int32
 	flagsFromFdInfo bool
 }
 
@@ -26,7 +26,7 @@ func NewFd(fd int32, name []byte, flags int32) FdFile {
 	return FdFile{
 		fd:    fd,
 		name:  stringValue(name),
-		Flags: &flags,
+		Flags: flags,
 	}
 }
 
@@ -34,11 +34,10 @@ func NewFdWithPid(fd int32, pid uint32) FdFile {
 	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
 	if err != nil {
 		fmt.Println("DEBUG", err)
-		var unknownFlags int32 = -1
 		return FdFile{
 			fd:              fd,
 			name:            "?",
-			Flags:           &unknownFlags, // Unknown flags at this point
+			Flags:           -1,
 			flagsFromFdInfo: true,
 		}
 	}
@@ -47,7 +46,7 @@ func NewFdWithPid(fd int32, pid uint32) FdFile {
 	return FdFile{
 		fd:              fd,
 		name:            linkName,
-		Flags:           &flags,
+		Flags:           flags,
 		flagsFromFdInfo: true,
 	}
 }
@@ -81,11 +80,7 @@ func (f FdFile) Name() string {
 }
 
 func (f FdFile) FlagsString() string {
-	var flags int32 = -1
-	if f.Flags != nil {
-		flags = *f.Flags
-	}
-	return flagsToStr(flags)
+	return flagsToStr(f.Flags)
 }
 
 func (f FdFile) String() string {
