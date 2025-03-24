@@ -35,7 +35,7 @@ clean:
 	make -C ./internal/c clean
 
 .PHONY: world
-world: clean generate all
+world: clean generate test all
 
 .PHONY: flames
 flames:
@@ -71,4 +71,8 @@ inferno:
 prof:
 	$(GO) tool pprof -pdf ./ior ior.cpuprofile > cpuprofile.pdf && evince cpuprofile.pdf &
 	$(GO) tool pprof -pdf ./ior ior.memprofile > memprofile.pdf && evince memprofile.pdf &
-	
+
+.PHONY: test
+test:
+	$(GO) clean -testcache
+	$(GO) test ./... -v		
