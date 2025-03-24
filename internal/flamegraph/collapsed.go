@@ -26,7 +26,6 @@ func (c *counter) merge(other counter) {
 // counter can also have bytes (for reads and writes)
 type collapsed map[string]map[types.TraceId]counter
 
-// TODO: Unit test this
 func (c collapsed) merge(other collapsed) (merged int) {
 	for k, v := range other {
 		if _, ok := c[k]; !ok {

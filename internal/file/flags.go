@@ -7,10 +7,7 @@ import (
 	"syscall"
 )
 
-// TODO: syscalls fcntl and dup3 and many more can also manipulate open flags
-// Check the tracepoint formates for 'flags'
-// Maybe need new BPF type and pass through the ring
-var flagsToHumanCache = map[int32]string{-1: "O_?"}
+var flagsToHumanCache = map[int32]string{}
 
 type tuple struct {
 	syscallNr int
@@ -38,13 +35,14 @@ var flagsToHuman = []tuple{
 	{syscall.O_TRUNC, "O_TRUNC"},
 }
 
-func flagsToStr(flags int32) string {
+func flagsToStr(sb *strings.Builder, flags int32) {
 	if str, ok := flagsToHumanCache[flags]; ok {
-		return str
+		sb.WriteString(str)
+		return
 	}
 	str := strings.Join(flagsToStrs(flags), "|")
 	flagsToHumanCache[flags] = fmt.Sprintf("%O=>%s", flags, str)
-	return str
+	sb.WriteString(str)
 }
 
 func flagsToStrs(flags int32) (result []string) {
