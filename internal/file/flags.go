@@ -48,6 +48,7 @@ func flagsToStr(flags int32) string {
 }
 
 func flagsToStrs(flags int32) (result []string) {
+
 	if int(flags)&(os.O_WRONLY|os.O_RDWR) == 0 {
 		// Must be read only then
 		result = append(result, "O_RDONLY")
