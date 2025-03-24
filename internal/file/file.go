@@ -33,10 +33,12 @@ func NewFd(fd int32, name []byte, flags int32) FdFile {
 func NewFdWithPid(fd int32, pid uint32) FdFile {
 	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
 	if err != nil {
+		fmt.Println("DEBUG", err)
+		var unknownFlags int32 = -1
 		return FdFile{
 			fd:              fd,
 			name:            "?",
-			Flags:           nil, // Unknown flags at this point
+			Flags:           &unknownFlags, // Unknown flags at this point
 			flagsFromFdInfo: true,
 		}
 	}
