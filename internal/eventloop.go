@@ -262,21 +262,26 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			break
 		}
 
+		fdFile, ok := ev.File.(file.FdFile)
+		if !ok {
+			panic("expected a file.FdFile")
+		}
+
+		// See fcntl(2) for implementation details
 		switch v.Cmd {
 		case syscall.F_SETFL:
-			fdFile, ok := ev.File.(file.FdFile)
-			if !ok {
-				panic("expected a file.FdFile")
-			}
-			// fcntl(2)
 			canChange := syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-			fdFile.Flags |= (int32(v.Arg) & int32(canChange))
+			*fdFile.Flags |= (int32(v.Arg) & int32(canChange))
 			ev.File = fdFile
 			e.files[fd] = fdFile
 		case syscall.F_DUPFD:
-			fmt.Println("TODO: F_DUPFD with fcntl not yet implememented")
+			// TODO: Re-read dup(2), maybe they don't share the same open flags?
+			newFd := int32(retEvent.Ret)
+			e.files[newFd] = fdFile.Dup(newFd)
 		case syscall.F_DUPFD_CLOEXEC:
-			fmt.Println("TODO: F_DUPFD_CLOEXEC with fcntl not yet implememented")
+			newFd := int32(retEvent.Ret)
+			e.files[newFd] = fdFile.Dup(newFd) // Also set O_CLOEXEC
+			fmt.Println("TODO: F_DUPFD_CLOEXEC with fcntl not yet fully implememented")
 		}
 
 	default:
