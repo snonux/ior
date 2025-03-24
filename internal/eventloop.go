@@ -51,7 +51,7 @@ func newEventLoop(flags flags.Flags) *eventLoop {
 }
 
 func (e *eventLoop) stats() string {
-	fmt.Println("Waiting for staps to be ready")
+	fmt.Println("Waiting for stats to be ready")
 	<-e.done
 	duration := time.Since(e.startTime)
 
@@ -111,13 +111,11 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 					continue
 				}
 				e.processRawEvent(raw, ch)
+			case <-ctx.Done():
+				fmt.Println("Stopping event loop")
+				return
 			default:
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					time.Sleep(time.Millisecond * 10)
-				}
+				time.Sleep(time.Millisecond * 10)
 			}
 		}
 	}()
