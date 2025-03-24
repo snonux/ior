@@ -2,7 +2,13 @@
 
 use v6.d;
 
+# TODO: check for the *stat* family sysalls, there might be more not yet traced, e.g. ones with pathnames. Check also all other syscalls whether they are I/O or not. Make this script to alert when there is a new uncaptured syscall tracepoint!
 # TODO: Also add sys_enter_open_by_handler_at
+# TODO: Keep track of which tracepoint is what kind of event (e.g. open_event)
+# and then keep track of it, so we know wen new syscalls come that they are categorized
+# correctly! check all existing events whether they make sense, especially there are some
+# open_event's wich should not be open events like newfstatat.?
+# TOOD: creat is an open_event?
  
 # Grammar to parse  /sys/kernel/tracing/events/syscalls/sys_{enter,exit}_*/format'
 grammar SysTraceFormat {
@@ -42,6 +48,7 @@ role TracepointTemplate {
         my Str @parts;
 
         @parts.push: qq:to/BPF_C_CODE/;
+        // {%vals<name>.lc} is a {%vals<event-struct>}
         SEC("tracepoint/syscalls/{%vals<name>}")
         int handle_{%vals<name>.lc}(struct {ctx-struct} *ctx) \{
             __u32 pid, tid;
@@ -169,14 +176,12 @@ class Format {
         self.set-format-impl($.name, field.name, field.type) unless $!format-impl;
     }
 
-    # TODO: Finish to implement FcntlTracepoint (as it can change open flags)
-    # TODO: implement Dup3Tracepoint (as it can change open flags)
+    multi method set-format-impl('sys_enter_fcntl', $, $) { $!format-impl = FcntlTracepoint.new }
     multi method set-format-impl($, 'fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
     multi method set-format-impl($, 'newname', 'const char *') { $!format-impl = NameTracepoint.new }
     multi method set-format-impl($, 'filename', 'const char *') { $!format-impl = OpenTracepoint.new }
     multi method set-format-impl($, 'pathname', 'const char *') { $!format-impl = PathnameTracepoint.new }
     multi method set-format-impl($, 'ret', 'long') { $!format-impl = RetTracepoint.new }
-    multi method set-format-impl('sys_enter_fcntl', $, $) { $!format-impl = FcntlTracepoint.new }
     multi method set-format-impl($, $, $) { }
 
     method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
