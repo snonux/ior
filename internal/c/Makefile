@@ -27,6 +27,7 @@ generate: generate_tracepoints
 generate_tracepoints:
 	sudo sh -c 'cat /sys/kernel/tracing/events/syscalls/sys_{enter,exit}_*/format' \
 		| raku generate_tracepoints_c.raku > ./generated_tracepoints.c
+	grep '^/ is a' ./generated_tracepoints.c
 
 .PHONY: generate_tracepoints_stdout
 generate_tracepoints_stdout:
