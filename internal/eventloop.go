@@ -275,13 +275,13 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			ev.File = fdFile
 			e.files[fd] = fdFile
 		case syscall.F_DUPFD:
-			// TODO: Re-read dup(2), maybe they don't share the same open flags?
 			newFd := int32(retEvent.Ret)
 			e.files[newFd] = fdFile.Dup(newFd)
 		case syscall.F_DUPFD_CLOEXEC:
 			newFd := int32(retEvent.Ret)
-			e.files[newFd] = fdFile.Dup(newFd) // Also set O_CLOEXEC
-			fmt.Println("TODO: F_DUPFD_CLOEXEC with fcntl not yet fully implememented")
+			duppedFd := fdFile.Dup(newFd)
+			*duppedFd.Flags |= syscall.O_CLOEXEC
+			e.files[newFd] = duppedFd
 		}
 
 	default:
