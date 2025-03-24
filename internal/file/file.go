@@ -84,35 +84,37 @@ func (f FdFile) Name() string {
 	return f.name
 }
 
-func (f FdFile) FlagsString() string {
-	var sb strings.Builder
-
-	if f.unknownFlags {
-		sb.WriteString("U:") // Unknown
-	}
-	if f.flagsFromProcFS {
-		sb.WriteString("P:") // ProcFS
-	}
-
-	flagsToStr(&sb, f.Flags)
-	return sb.String()
-}
-
 func (f FdFile) String() string {
 	var sb strings.Builder
 
 	if len(f.name) == 0 {
-		sb.WriteString("E:") // Emtpy string
+		sb.WriteString("E:name") // Emtpy name string
 	} else {
 		sb.WriteString(f.name)
-		sb.WriteString(" ")
 	}
-	sb.WriteString("(")
+	sb.WriteString(" (")
 	sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
 	sb.WriteString(",")
 	sb.WriteString(f.FlagsString())
 	sb.WriteString(")")
 
+	return sb.String()
+}
+
+func (f FdFile) FlagsString() string {
+	var sb strings.Builder
+
+	if f.unknownFlags {
+		sb.WriteString("U") // Unknown
+	}
+	if f.flagsFromProcFS {
+		sb.WriteString("P") // ProcFS
+	}
+	if f.unknownFlags || f.flagsFromProcFS {
+		sb.WriteString(":flags") // ProcFS
+	}
+
+	flagsToStr(&sb, f.Flags)
 	return sb.String()
 }
 
