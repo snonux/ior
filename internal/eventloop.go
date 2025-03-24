@@ -302,10 +302,11 @@ func (e *eventLoop) comm(tid uint32) string {
 	if comm, ok := e.comms[tid]; ok {
 		return comm
 	}
-	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid)); err == nil {
-		linkName = filepath.Base(linkName)
-		e.comms[tid] = linkName
-		return linkName
+	linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid))
+	if err != nil {
+		return "U:comm"
 	}
-	return ""
+	linkName = filepath.Base(linkName)
+	e.comms[tid] = linkName
+	return linkName
 }
