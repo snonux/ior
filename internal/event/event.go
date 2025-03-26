@@ -76,7 +76,11 @@ func (e *Pair) String() string {
 	}
 
 	sb.WriteString(",")
-	sb.WriteString(e.File.String())
+	if e.File == nil {
+		sb.WriteString("N:file")
+	} else {
+		sb.WriteString(e.File.String())
+	}
 
 	return sb.String()
 }

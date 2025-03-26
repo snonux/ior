@@ -125,6 +125,7 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 
 func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	e.numTracepoints++
+	// TODO: Would a map be faster than a big switch-case statement?
 	switch EventType(raw[0]) {
 	case ENTER_OPEN_EVENT:
 		if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
@@ -136,6 +137,8 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 		e.syscallEnter(NewFdEvent(raw))
 	case EXIT_FD_EVENT:
 		e.syscallExit(NewFdEvent(raw), ch)
+	case ENTER_NULL_EVENT:
+		e.syscallEnter(NewNullEvent(raw))
 	case EXIT_NULL_EVENT:
 		e.syscallExit(NewNullEvent(raw), ch)
 	case EXIT_RET_EVENT:

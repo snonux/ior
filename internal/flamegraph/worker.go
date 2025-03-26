@@ -24,7 +24,12 @@ func (w worker) run(ctx context.Context, wg *sync.WaitGroup, ch <-chan *event.Pa
 	for {
 		select {
 		case ev := <-ch:
-			filePath := ev.File.Name()
+			var filePath string
+			if ev.File == nil {
+				filePath = "N:file"
+			} else {
+				filePath = ev.File.Name()
+			}
 			pathMap, ok := w.collapsed[filePath]
 			if !ok {
 				pathMap = make(map[types.TraceId]counter)
