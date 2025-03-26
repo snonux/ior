@@ -292,9 +292,22 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
+	// TODO: implement sync(2)
 	// TODO: implement dup syscall
 	// TODO: implement dup2 syscall
 	// TODO: implement dup3 syscall
+	// TODO: implement readlink syscall
+	// TODO: implement readv(2)
+	// TODO: implement copy_file_range
+	// TODO: open_by_handle_at
+	// TODO: name_to_handle_at
+	// TODO: mmap, msync...
+	// TODO: getcwd?
+	// TODO: syslog(2) for auditd debugging
+	// TODO: truncate
+	// TODO: sync_file_range
+	// TODO: readahead
+	// TODO: fallocate
 
 	ev.PrevPair, _ = e.prevPairs[ev.EnterEv.GetTid()]
 	ev.CalculateDurations()
