@@ -91,7 +91,7 @@ func (f FdFile) String() string {
 	} else {
 		sb.WriteString(f.name)
 	}
-	sb.WriteString(" (")
+	sb.WriteString("%(")
 	sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
 	sb.WriteString(",")
 	sb.WriteString(f.FlagsString())
@@ -140,7 +140,7 @@ func (f oldnameNewnameFile) String() string {
 	sb.WriteString(f.Oldname)
 	sb.WriteString(" ->new:")
 	sb.WriteString(f.Newname)
-	sb.WriteString(" (")
+	sb.WriteString("%(")
 	sb.WriteString(f.FlagsString())
 	sb.WriteString(")")
 
@@ -168,7 +168,7 @@ func (f pathnameFile) String() string {
 
 	sb.WriteString("pathname:")
 	sb.WriteString(f.Pathname)
-	sb.WriteString(" (")
+	sb.WriteString("%(")
 	sb.WriteString(f.FlagsString())
 	sb.WriteString(")")
 
