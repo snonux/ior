@@ -192,6 +192,7 @@ class Format {
     multi method set-format-impl($, 'fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
     multi method set-format-impl($, 'newname', 'const char *') { $!format-impl = NameTracepoint.new }
     multi method set-format-impl($, 'pathname', 'const char *') { $!format-impl = PathnameTracepoint.new('pathname') }
+    multi method set-format-impl($, 'path', 'const char *') { $!format-impl = PathnameTracepoint.new('path') }
     multi method set-format-impl($, 'filename', 'const char *') { $!format-impl = PathnameTracepoint.new('filename') }
     multi method set-format-impl($, 'ret', 'long') { $!format-impl = RetTracepoint.new }
 

@@ -62,7 +62,7 @@ func (e *Pair) String() string {
 	sb.WriteString(",")
 	sb.WriteString(e.Comm)
 
-	sb.WriteString(",")
+	sb.WriteString("@")
 	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetPid()), 10))
 	sb.WriteString(".")
 	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetTid()), 10))
@@ -70,7 +70,7 @@ func (e *Pair) String() string {
 	sb.WriteString(",")
 	sb.WriteString(e.EnterEv.GetTraceId().Name())
 
-	sb.WriteString(",")
+	sb.WriteString("=>")
 	if retEv, ok := e.ExitEv.(*RetEvent); ok {
 		sb.WriteString(strconv.FormatInt(int64(retEv.Ret), 10))
 	}
