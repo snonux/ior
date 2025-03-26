@@ -48,6 +48,7 @@ role TracepointTemplate {
         my Str @parts;
 
         @parts.push: qq:to/BPF_C_CODE/;
+        /// {%vals<name>.lc} is a struct {%vals<event-struct>}
         SEC("tracepoint/syscalls/{%vals<name>}")
         int handle_{%vals<name>.lc}(struct {ctx-struct} *ctx) \{
             __u32 pid, tid;
@@ -194,6 +195,9 @@ class Format {
     multi method set-format-impl($, 'filename', 'const char *') { $!format-impl = PathnameTracepoint.new('filename') }
     multi method set-format-impl($, 'ret', 'long') { $!format-impl = RetTracepoint.new }
 
+    # Async I/O, at least capture the count and the durations
+    multi method set-format-impl(Str $s where /^sys_enter_io_/, $, $) { $!format-impl = NullTracepoint.new }
+
     # All remaining tracepoints are ignored
     multi method set-format-impl($, $, $) { }
 
@@ -204,7 +208,7 @@ class Format {
     method can-generate returns Bool { so $!format-impl.^can('generate-bpf-c-tracepoint') }
 
     method enter-reject returns Bool { $!format-impl !~~ any(
-        FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint, FcntlTracepoint
+        FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint, FcntlTracepoint, NullTracepoint
     ) }
 }
 
@@ -244,10 +248,10 @@ my Format @formats = gather for
     SysTraceFormat.parse($*IN.slurp, actions => SysTraceFormatActions.new).made.values -> %syscall {
 
     if !all(%syscall.values.map(*.can-generate)) {
-        say "// Ignoring {%syscall.values.map(*.name).sort} as possibly not file I/O related";
+        say "/// Ignoring {%syscall.values.map(*.name).sort} as possibly not file I/O related";
         next;
     } elsif %syscall<enter>.enter-reject {
-        say "// Ignoring {%syscall.values.map(*.name).sort} as enter-rejected";
+        say "/// Ignoring {%syscall.values.map(*.name).sort} as enter-rejected";
         next;   
     }
 

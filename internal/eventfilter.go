@@ -41,7 +41,7 @@ func (ef *eventFilter) eventPair(ev *event.Pair) bool {
 	if ef.commFilterEnable && !strings.Contains(ev.Comm, ef.commFilter) {
 		return false
 	}
-	if ef.pathFilterEnable && !strings.Contains(ev.File.Name(), ef.pathFilter) {
+	if ef.pathFilterEnable && (ev.File == nil || !strings.Contains(ev.File.Name(), ef.pathFilter)) {
 		return false
 	}
 	return true
