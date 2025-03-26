@@ -48,7 +48,6 @@ role TracepointTemplate {
         my Str @parts;
 
         @parts.push: qq:to/BPF_C_CODE/;
-        // {%vals<name>.lc} is a {%vals<event-struct>}
         SEC("tracepoint/syscalls/{%vals<name>}")
         int handle_{%vals<name>.lc}(struct {ctx-struct} *ctx) \{
             __u32 pid, tid;
@@ -116,8 +115,11 @@ class OpenTracepoint does TracepointTemplate {
 }
 
 class PathnameTracepoint does TracepointTemplate {
+    has Str $.field-name is required;
+    submethod new (Str $field-name) { self.bless: :$field-name }
+    
     method generate-bpf-c-tracepoint(%vals --> Str) {
-        my Int \field-number = %vals<format>.field-number('pathname');
+        my Int \field-number = %vals<format>.field-number($.field-name);
         my Str $extra = qq:to/BPF_C_CODE/;
             __builtin_memset(\&(ev->pathname), 0, sizeof(ev->pathname));
             bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[{field-number}]);
@@ -176,12 +178,23 @@ class Format {
         self.set-format-impl($.name, field.name, field.type) unless $!format-impl;
     }
 
+
+    # Explicitly map some tracepoints
+    multi method set-format-impl(Str $s where /^sys_enter.*open.*/, 'filename', 'const char *') { $!format-impl = OpenTracepoint.new }
     multi method set-format-impl('sys_enter_fcntl', $, $) { $!format-impl = FcntlTracepoint.new }
+
+    # Tracepoints to ignore
+    multi method set-format-impl(Str $s where /^sys_enter_mknod/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_execve/, $, $) { }
+
+    # Tracepoint groups by arguments
     multi method set-format-impl($, 'fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
     multi method set-format-impl($, 'newname', 'const char *') { $!format-impl = NameTracepoint.new }
-    multi method set-format-impl($, 'filename', 'const char *') { $!format-impl = OpenTracepoint.new }
-    multi method set-format-impl($, 'pathname', 'const char *') { $!format-impl = PathnameTracepoint.new }
+    multi method set-format-impl($, 'pathname', 'const char *') { $!format-impl = PathnameTracepoint.new('pathname') }
+    multi method set-format-impl($, 'filename', 'const char *') { $!format-impl = PathnameTracepoint.new('filename') }
     multi method set-format-impl($, 'ret', 'long') { $!format-impl = RetTracepoint.new }
+
+    # All remaining tracepoints are ignored
     multi method set-format-impl($, $, $) { }
 
     method generate-c-constant returns Str { "#define {$!name.uc} {$!id}" }
@@ -237,6 +250,7 @@ my Format @formats = gather for
         say "// Ignoring {%syscall.values.map(*.name).sort} as enter-rejected";
         next;   
     }
+
     .take for %syscall.values;
 }
 
