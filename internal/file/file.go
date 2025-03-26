@@ -30,7 +30,6 @@ func NewFd(fd int32, name []byte, flags int32) FdFile {
 		Flags: flags,
 	}
 	if f.Flags == -1 {
-		// TODO: newfstatat is not an open syscall! change code generator!
 		panic(fmt.Sprintf("DEBUG with -1 flags: %v", f))
 	}
 	return f
