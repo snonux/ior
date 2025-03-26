@@ -125,7 +125,7 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 
 func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	e.numTracepoints++
-	// TODO: Would a map be faster than a big switch-case statement?
+	// TODO: Would a map be faster than a big switch-case statement? Write a benchmark.
 	switch EventType(raw[0]) {
 	case ENTER_OPEN_EVENT:
 		if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
@@ -295,7 +295,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
-	// TODO: implement sync(2)
 	// TODO: implement dup syscall
 	// TODO: implement dup2 syscall
 	// TODO: implement dup3 syscall
@@ -311,6 +310,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	// TODO: sync_file_range
 	// TODO: readahead
 	// TODO: fallocate
+	// TODO: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html (already captured but without FDs)
 
 	ev.PrevPair, _ = e.prevPairs[ev.EnterEv.GetTid()]
 	ev.CalculateDurations()
