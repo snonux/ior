@@ -36,6 +36,8 @@ var List = []string{
 	"sys_exit_utimensat",
 	"sys_enter_futimesat",
 	"sys_exit_futimesat",
+	"sys_enter_sync",
+	"sys_exit_sync",
 	"sys_enter_fsync",
 	"sys_exit_fsync",
 	"sys_enter_fdatasync",

@@ -196,6 +196,7 @@ class Format {
     multi method set-format-impl($, 'ret', 'long') { $!format-impl = RetTracepoint.new }
 
     # Async I/O, at least capture the count and the durations
+    multi method set-format-impl('sys_enter_sync', $, $) { $!format-impl = NullTracepoint.new }
     multi method set-format-impl(Str $s where /^sys_enter_io_/, $, $) { $!format-impl = NullTracepoint.new }
 
     # All remaining tracepoints are ignored
