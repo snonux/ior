@@ -57,9 +57,9 @@ func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
 }
 
 func (f FdFile) Dup(fd int32) FdFile {
-	duppedFd := f
-	duppedFd.fd = fd
-	return duppedFd
+	dupFd := f
+	dupFd.fd = fd
+	return dupFd
 }
 
 func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {

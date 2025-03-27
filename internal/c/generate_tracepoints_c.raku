@@ -4,10 +4,6 @@ use v6.d;
 
 # TODO: check for the *stat* family sysalls, there might be more not yet traced, e.g. ones with pathnames. Check also all other syscalls whether they are I/O or not. Make this script to alert when there is a new uncaptured syscall tracepoint!
 # TODO: Also add sys_enter_open_by_handler_at
-# TODO: Keep track of which tracepoint is what kind of event (e.g. open_event)
-# and then keep track of it, so we know wen new syscalls come that they are categorized
-# correctly! check all existing events whether they make sense, especially there are some
-# open_event's wich should not be open events like newfstatat.?
 # TOOD: creat is an open_event?
  
 # Grammar to parse  /sys/kernel/tracing/events/syscalls/sys_{enter,exit}_*/format'
@@ -176,25 +172,26 @@ class Format {
             return;
         }
 
-        self.set-format-impl($.name, field.name, field.type) unless $!format-impl;
+        self.set-format-impl($.name, field.type, field.name) unless $!format-impl;
     }
 
 
     # Explicitly map some tracepoints
-    multi method set-format-impl(Str $s where /^sys_enter.*open.*/, 'filename', 'const char *') { $!format-impl = OpenTracepoint.new }
+    multi method set-format-impl(Str $s where /^sys_enter.*open.*/, 'const char *', 'filename') { $!format-impl = OpenTracepoint.new }
     multi method set-format-impl('sys_enter_fcntl', $, $) { $!format-impl = FcntlTracepoint.new }
+    multi method set-format-impl('sys_enter_dup', 'unsigned int', 'fildes') { $!format-impl = FdTracepoint.new }
 
     # Tracepoints to ignore
     multi method set-format-impl(Str $s where /^sys_enter_mknod/, $, $) { }
     multi method set-format-impl(Str $s where /^sys_enter_execve/, $, $) { }
 
     # Tracepoint groups by arguments
-    multi method set-format-impl($, 'fd', 'unsigned int') { $!format-impl = FdTracepoint.new }
-    multi method set-format-impl($, 'newname', 'const char *') { $!format-impl = NameTracepoint.new }
-    multi method set-format-impl($, 'pathname', 'const char *') { $!format-impl = PathnameTracepoint.new('pathname') }
-    multi method set-format-impl($, 'path', 'const char *') { $!format-impl = PathnameTracepoint.new('path') }
-    multi method set-format-impl($, 'filename', 'const char *') { $!format-impl = PathnameTracepoint.new('filename') }
-    multi method set-format-impl($, 'ret', 'long') { $!format-impl = RetTracepoint.new }
+    multi method set-format-impl($, 'unsigned int', 'fd') { $!format-impl = FdTracepoint.new }
+    multi method set-format-impl($, 'const char *', 'newname') { $!format-impl = NameTracepoint.new }
+    multi method set-format-impl($, 'const char *', 'pathname') { $!format-impl = PathnameTracepoint.new('pathname') }
+    multi method set-format-impl($, 'const char *', 'path') { $!format-impl = PathnameTracepoint.new('path') }
+    multi method set-format-impl($, 'const char *', 'filename') { $!format-impl = PathnameTracepoint.new('filename') }
+    multi method set-format-impl($, 'long', 'ret') { $!format-impl = RetTracepoint.new }
 
     # Async I/O, at least capture the count and the durations
     multi method set-format-impl('sys_enter_sync', $, $) { $!format-impl = NullTracepoint.new }
