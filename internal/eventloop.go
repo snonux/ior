@@ -198,6 +198,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		return
 	}
 
+	// TODO: Benchmark, is a map faster than this large switch statement?
 	switch v := ev.EnterEv.(type) {
 	case *OpenEvent:
 		openEv := ev.EnterEv.(*OpenEvent)
@@ -239,6 +240,15 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		if !e.filter.eventPair(ev) {
 			ev.Recycle()
 			return
+		}
+		if ev.Is(SYS_ENTER_DUP) {
+			fdFile, ok := ev.File.(file.FdFile)
+			if !ok {
+				panic("expected a file.FdFile")
+			}
+			// Duplicating fd
+			newFd := int32(ev.ExitEv.(*RetEvent).Ret)
+			e.files[newFd] = fdFile.Dup(newFd)
 		}
 
 	case *NullEvent:
