@@ -241,7 +241,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			ev.Recycle()
 			return
 		}
-		if ev.Is(SYS_ENTER_DUP) {
+		if ev.Is(SYS_ENTER_DUP) || ev.Is(SYS_ENTER_DUP2) {
 			fdFile, ok := ev.File.(file.FdFile)
 			if !ok {
 				panic("expected a file.FdFile")
@@ -305,7 +305,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
-	// TODO: implement dup syscall
 	// TODO: implement dup2 syscall
 	// TODO: implement dup3 syscall
 	// TODO: implement readv(2)

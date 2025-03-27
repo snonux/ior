@@ -74,6 +74,8 @@ var List = []string{
 	"sys_exit_mount_setattr",
 	"sys_enter_close_range",
 	"sys_exit_close_range",
+	"sys_enter_dup2",
+	"sys_exit_dup2",
 	"sys_enter_dup",
 	"sys_exit_dup",
 	"sys_enter_getdents",

@@ -180,6 +180,7 @@ class Format {
     multi method set-format-impl(Str $s where /^sys_enter.*open.*/, 'const char *', 'filename') { $!format-impl = OpenTracepoint.new }
     multi method set-format-impl('sys_enter_fcntl', $, $) { $!format-impl = FcntlTracepoint.new }
     multi method set-format-impl('sys_enter_dup', 'unsigned int', 'fildes') { $!format-impl = FdTracepoint.new }
+    multi method set-format-impl('sys_enter_dup2', 'unsigned int', 'oldfd') { $!format-impl = FdTracepoint.new }
 
     # Tracepoints to ignore
     multi method set-format-impl(Str $s where /^sys_enter_mknod/, $, $) { }
