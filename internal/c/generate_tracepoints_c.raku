@@ -188,6 +188,7 @@ class Format {
 
     # Tracepoint groups by arguments
     multi method set-format-impl($, 'unsigned int', 'fd') { $!format-impl = FdTracepoint.new }
+    multi method set-format-impl($, 'unsigned long', 'fd') { $!format-impl = FdTracepoint.new }
     multi method set-format-impl($, 'const char *', 'newname') { $!format-impl = NameTracepoint.new }
     multi method set-format-impl($, 'const char *', 'pathname') { $!format-impl = PathnameTracepoint.new('pathname') }
     multi method set-format-impl($, 'const char *', 'path') { $!format-impl = PathnameTracepoint.new('path') }
