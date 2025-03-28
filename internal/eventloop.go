@@ -208,18 +208,11 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	switch v := ev.EnterEv.(type) {
 	case *OpenEvent:
 		openEv := ev.EnterEv.(*OpenEvent)
-
-		fd := int32(ev.ExitEv.(*RetEvent).Ret)
-		file := file.NewFd(fd, openEv.Filename[:], v.Flags)
-		if file.Flags == -1 {
-			// Issue here is that some open_event's aren't really open_event's
-			// need to double check all tracepoints
-			fmt.Println("DEBUG with -1 flags", openEv, file)
-		}
-		if fd >= 0 {
+		if fd := int32(ev.ExitEv.(*RetEvent).Ret); fd >= 0 {
+			file := file.NewFd(fd, openEv.Filename[:], v.Flags)
 			e.files[fd] = file
+			ev.File = file
 		}
-		ev.File = file
 		e.comms[openEv.Tid] = string(openEv.Comm[:])
 
 	case *NameEvent:
@@ -229,7 +222,16 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 
 	case *PathEvent:
 		nameEvent := ev.EnterEv.(*PathEvent)
-		ev.File = file.NewPathname(nameEvent.Pathname[:])
+		if ev.Is(SYS_ENTER_CREAT) {
+			if fd := int32(ev.ExitEv.(*RetEvent).Ret); fd >= 0 {
+				file := file.NewFd(fd, nameEvent.Pathname[:],
+					syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
+				e.files[fd] = file
+				ev.File = file
+			}
+		} else {
+			ev.File = file.NewPathname(nameEvent.Pathname[:])
+		}
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
 
 	case *FdEvent:
