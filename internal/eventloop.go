@@ -55,13 +55,19 @@ func (e *eventLoop) stats() string {
 	<-e.done
 	duration := time.Since(e.startTime)
 
-	return "Statistics:\n" +
-		fmt.Sprintf("\tduration:%v\n", duration) +
-		fmt.Sprintf("\ttracepoints:%v (%.2f/s) with %d mismatches (%.2f%%)\n", e.numTracepoints, float64(e.numTracepoints)/duration.Seconds(), e.numTracepointMismatches, (float64(e.numTracepointMismatches)/float64(e.numTracepoints))*100) +
-		fmt.Sprintf("\tsyscalls:%d (%.2f/s)\n",
-			e.numSyscalls, float64(e.numSyscalls)/duration.Seconds()) +
-		fmt.Sprintf("\tsyscalls after filter:%d (%.2f/s)\n",
-			e.numSyscallsAfterFilter, float64(e.numSyscallsAfterFilter)/duration.Seconds())
+	stats := fmt.Sprintf(
+		"Statistics:\n"+
+			"\tduration: %v\n"+
+			"\ttracepoints: %v (%.2f/s) with %d mismatches (%.2f%%)\n"+
+			"\tsyscalls: %d (%.2f/s)\n"+
+			"\tsyscalls after filter: %d (%.2f/s)\n",
+		duration,
+		e.numTracepoints, float64(e.numTracepoints)/duration.Seconds(), e.numTracepointMismatches, (float64(e.numTracepointMismatches)/float64(e.numTracepoints))*100,
+		e.numSyscalls, float64(e.numSyscalls)/duration.Seconds(),
+		e.numSyscallsAfterFilter, float64(e.numSyscallsAfterFilter)/duration.Seconds(),
+	)
+
+	return stats
 }
 
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
@@ -305,9 +311,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
-	// TODO: implement dup2 syscall
 	// TODO: implement dup3 syscall
-	// TODO: implement readv(2)
 	// TODO: implement copy_file_range
 	// TODO: open_by_handle_at
 	// TODO: name_to_handle_at
