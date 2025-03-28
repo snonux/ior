@@ -174,6 +174,23 @@ class Format {
         self.set-format-impl($.name, field.type, field.name) unless $!format-impl;
     }
 
+    # Tracepoints to ignore
+    multi method set-format-impl(Str $s where /^sys_enter_mknod/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_execve/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_accept/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_listen/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_epoll/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_.*recv/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_.*send/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_.*sock/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_.*inotify/, $, $) { }
+    multi method set-format-impl(Str $s where /^sys_enter_.*pidfd/, $, $) { }
+    multi method set-format-impl('sys_enter_bind', $, $) { }
+    multi method set-format-impl('sys_enter_setns', $, $) { }
+    multi method set-format-impl('sys_enter_shutdown', $, $) { }
+    multi method set-format-impl('sys_enter_connect', $, $) { }
+    multi method set-format-impl('sys_enter_fanotify_init', $, $) { }
+    multi method set-format-impl('sys_enter_getpeername', $, $) { }
 
     # Explicitly map some tracepoints
     multi method set-format-impl(Str $s where /^sys_enter.*open.*/, 'const char *', 'filename') { $!format-impl = OpenTracepoint.new }
@@ -181,13 +198,10 @@ class Format {
     multi method set-format-impl('sys_enter_dup', 'unsigned int', 'fildes') { $!format-impl = FdTracepoint.new }
     multi method set-format-impl('sys_enter_dup2', 'unsigned int', 'oldfd') { $!format-impl = FdTracepoint.new }
 
-    # Tracepoints to ignore
-    multi method set-format-impl(Str $s where /^sys_enter_mknod/, $, $) { }
-    multi method set-format-impl(Str $s where /^sys_enter_execve/, $, $) { }
-
     # Tracepoint groups by arguments
-    multi method set-format-impl($, 'unsigned int', 'fd') { $!format-impl = FdTracepoint.new }
-    multi method set-format-impl($, 'unsigned long', 'fd') { $!format-impl = FdTracepoint.new }
+    multi method set-format-impl($, Str $type where { $_ eq 'unsigned int' || $_ eq 'unsigned long' || $_ eq 'int' }, 'fd') { 
+        $!format-impl = FdTracepoint.new 
+    }
     multi method set-format-impl($, 'const char *', 'newname') { $!format-impl = NameTracepoint.new }
     multi method set-format-impl($, 'const char *', 'pathname') { $!format-impl = PathnameTracepoint.new('pathname') }
     multi method set-format-impl($, 'const char *', 'path') { $!format-impl = PathnameTracepoint.new('path') }

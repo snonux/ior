@@ -5,3 +5,4 @@ vmlinux.h
 ior.cpuprofile
 ior.memprofile
 palette.map
+./helix-gpt.log
