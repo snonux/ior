@@ -2,7 +2,6 @@
 
 use v6.d;
 
-# TODO: check for the *stat* family sysalls, there might be more not yet traced, e.g. ones with pathnames. Check also all other syscalls whether they are I/O or not. Make this script to alert when there is a new uncaptured syscall tracepoint!
 # TODO: Also add sys_enter_open_by_handler_at
 # TOOD: creat is an open_event?
  
