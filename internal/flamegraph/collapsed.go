@@ -13,7 +13,7 @@ type counter struct {
 	duration uint64
 }
 
-func (c *counter) merge(other counter) {
+func (c *counter) add(other counter) {
 	c.count += other.count
 	c.duration += other.duration
 }
@@ -33,7 +33,7 @@ func (c collapsed) merge(other collapsed) (merged int) {
 		}
 		for traceId, cnt := range v {
 			if existingCnt, ok := c[k][traceId]; ok {
-				existingCnt.merge(cnt)
+				existingCnt.add(cnt)
 				merged++
 				c[k][traceId] = existingCnt
 				continue
