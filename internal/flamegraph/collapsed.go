@@ -8,28 +8,23 @@ import (
 	"sync"
 )
 
-type counter struct {
+type collapsedCounter struct {
 	count    uint64
 	duration uint64
 }
 
-func (c *counter) add(other counter) {
+func (c *collapsedCounter) add(other collapsedCounter) {
 	c.count += other.count
 	c.duration += other.duration
 }
 
-// TODO: make it generic, generate multiple trace points
-// path, traceid (syscall name), comm, pid, tid
-// traceid, path is by default set in this order
-// store an intermediate format which then can be converted to the others...
-// e.g.    path ¶ traceid ¶ comm ¶ pid ¶ tid ¶ flags ¶ counter
-// counter can also have bytes (for reads and writes)
-type collapsed map[string]map[types.TraceId]counter
+// TODO: Clean up all code commented with COLLAPSED once collapsed here retired.
+type collapsed map[string]map[types.TraceId]collapsedCounter
 
 func (c collapsed) merge(other collapsed) (merged int) {
 	for k, v := range other {
 		if _, ok := c[k]; !ok {
-			c[k] = make(map[types.TraceId]counter)
+			c[k] = make(map[types.TraceId]collapsedCounter)
 		}
 		for traceId, cnt := range v {
 			if existingCnt, ok := c[k][traceId]; ok {
@@ -48,23 +43,23 @@ func (c collapsed) dump() {
 	var wg sync.WaitGroup
 	wg.Add(4)
 
-	go c.dumpBy(&wg, "ior-by-path-count-flamegraph.collapsed", true, func(cnt counter) uint64 {
+	go c.dumpBy(&wg, "ior-by-path-count-flamegraph.collapsed", true, func(cnt collapsedCounter) uint64 {
 		return cnt.count
 	})
-	go c.dumpBy(&wg, "ior-by-path-duration-flamegraph.collapsed", true, func(cnt counter) uint64 {
+	go c.dumpBy(&wg, "ior-by-path-duration-flamegraph.collapsed", true, func(cnt collapsedCounter) uint64 {
 		return cnt.duration
 	})
-	go c.dumpBy(&wg, "ior-by-syscall-count-flamegraph.collapsed", false, func(cnt counter) uint64 {
+	go c.dumpBy(&wg, "ior-by-syscall-count-flamegraph.collapsed", false, func(cnt collapsedCounter) uint64 {
 		return cnt.count
 	})
-	go c.dumpBy(&wg, "ior-by-syscall-duration-flamegraph.collapsed", false, func(cnt counter) uint64 {
+	go c.dumpBy(&wg, "ior-by-syscall-duration-flamegraph.collapsed", false, func(cnt collapsedCounter) uint64 {
 		return cnt.duration
 	})
 
 	wg.Wait()
 }
 
-func (c collapsed) dumpBy(wg *sync.WaitGroup, outfile string, syscallAtTop bool, by func(counter) uint64) {
+func (c collapsed) dumpBy(wg *sync.WaitGroup, outfile string, syscallAtTop bool, by func(collapsedCounter) uint64) {
 	defer wg.Done()
 
 	defer fmt.Println("Dumping done")

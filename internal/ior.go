@@ -21,7 +21,7 @@ import (
 // TODO: Integration tests, write C or Cgo code to simulate I/O?
 func attachTracepoints(flags flags.Flags, bpfModule *bpf.Module) error {
 	for _, name := range tracepoints.List {
-		if !flags.AttachTracepoint(name) {
+		if !flags.ShouldIAttachTracepoint(name) {
 			continue
 		}
 		fmt.Println("Attaching tracepoint", name)
