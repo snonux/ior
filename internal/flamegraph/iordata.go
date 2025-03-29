@@ -21,7 +21,6 @@ type flagsType = string
 type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]counter
 
 type iorData struct {
-	flags flags.Flags
 	paths pathMap
 }
 
@@ -29,11 +28,8 @@ type iorData struct {
 // TODO: Name flag for iorData (outfile format: hostname-name-timestamp.ior.zst)
 // TODO: Output path for iorData flag
 // TODO: Add helper to convert .ior data file to collapsed format
-func newIorData(flags flags.Flags) iorData {
-	return iorData{
-		flags: flags,
-		paths: make(pathMap),
-	}
+func newIorData() iorData {
+	return iorData{paths: make(pathMap)}
 }
 
 // TODO: Unit test
@@ -100,7 +96,7 @@ func (iod iorData) commit() error {
 		panic(err)
 	}
 
-	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, iod.flags.FlamegraphName,
+	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flags.Get().FlamegraphName,
 		time.Now().Format("2006-01-02_15:04:05"))
 	file, err := os.Create(filename)
 	if err != nil {
@@ -108,10 +104,7 @@ func (iod iorData) commit() error {
 	}
 	defer file.Close()
 
-	encoder, err := zstd.NewWriter(file)
-	if err != nil {
-		return err
-	}
+	encoder := zstd.NewWriter(file)
 	defer encoder.Close()
 
 	jsonEncoder := json.NewEncoder(encoder)

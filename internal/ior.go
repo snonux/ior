@@ -19,9 +19,9 @@ import (
 
 // TODO: Generally, write unit tests
 // TODO: Integration tests, write C or Cgo code to simulate I/O?
-func attachTracepoints(flags flags.Flags, bpfModule *bpf.Module) error {
+func attachTracepoints(bpfModule *bpf.Module) error {
 	for _, name := range tracepoints.List {
-		if !flags.ShouldIAttachTracepoint(name) {
+		if !flags.Get().ShouldIAttachTracepoint(name) {
 			continue
 		}
 		fmt.Println("Attaching tracepoint", name)
@@ -43,18 +43,18 @@ func attachTracepoints(flags flags.Flags, bpfModule *bpf.Module) error {
 	return nil
 }
 
-func Run(flags flags.Flags) {
+func Run() {
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
 		panic(err)
 	}
 	defer bpfModule.Close()
 
-	if err := flags.ResizeBPFMaps(bpfModule); err != nil {
+	if err := flags.Get().ResizeBPFMaps(bpfModule); err != nil {
 		panic(err)
 	}
 
-	if err := flags.SetBPF(bpfModule); err != nil {
+	if err := flags.Get().SetBPF(bpfModule); err != nil {
 		panic(err)
 	}
 
@@ -62,7 +62,7 @@ func Run(flags flags.Flags) {
 		panic(err)
 	}
 
-	if err := attachTracepoints(flags, bpfModule); err != nil {
+	if err := attachTracepoints(bpfModule); err != nil {
 		panic(err)
 	}
 
@@ -76,7 +76,7 @@ func Run(flags flags.Flags) {
 
 	pprofDone := make(chan struct{})
 	var cpuProfile, memProfile *os.File
-	if flags.PprofEnable {
+	if flags.Get().PprofEnable {
 		if cpuProfile, err = os.Create("ior.cpuprofile"); err != nil {
 			panic(err)
 		}
@@ -88,8 +88,8 @@ func Run(flags flags.Flags) {
 		close(pprofDone)
 	}
 
-	loop := newEventLoop(flags)
-	duration := time.Duration(flags.Duration) * time.Second
+	loop := newEventLoop()
+	duration := time.Duration(flags.Get().Duration) * time.Second
 	fmt.Println("Probing for", duration)
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 
@@ -105,7 +105,7 @@ func Run(flags flags.Flags) {
 	go func() {
 		<-ctx.Done()
 		fmt.Println(loop.stats())
-		if flags.PprofEnable {
+		if flags.Get().PprofEnable {
 			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
 			pprof.StopCPUProfile()
 			pprof.WriteHeapProfile(memProfile)

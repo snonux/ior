@@ -15,23 +15,23 @@ type eventFilter struct {
 	pathFilter       string
 }
 
-func newEventFilter(flags flags.Flags) *eventFilter {
+func newEventFilter() *eventFilter {
 	var ef eventFilter
 
-	if flags.CommFilter != "" {
-		if len(flags.CommFilter) > types.MAX_FILENAME_LENGTH {
+	if flags.Get().CommFilter != "" {
+		if len(flags.Get().CommFilter) > types.MAX_FILENAME_LENGTH {
 			panic(fmt.Sprintf("Comm filter's max size is %d", types.MAX_PROGNAME_LENGTH))
 		}
 		ef.commFilterEnable = true
-		ef.commFilter = flags.CommFilter
+		ef.commFilter = flags.Get().CommFilter
 	}
 
-	if flags.PathFilter != "" {
-		if len(flags.PathFilter) > types.MAX_FILENAME_LENGTH {
+	if flags.Get().PathFilter != "" {
+		if len(flags.Get().PathFilter) > types.MAX_FILENAME_LENGTH {
 			panic(fmt.Sprintf("Path filter's max size is %d", types.MAX_FILENAME_LENGTH))
 		}
 		ef.pathFilterEnable = true
-		ef.pathFilter = flags.PathFilter
+		ef.pathFilter = flags.Get().PathFilter
 	}
 
 	return &ef

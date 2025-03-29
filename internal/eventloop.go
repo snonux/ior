@@ -20,7 +20,6 @@ import (
 
 // TOOD: read and write syscalls: can also collect amount of bytes!
 type eventLoop struct {
-	flags         flags.Flags
 	filter        *eventFilter
 	enterEvs      map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
 	files         map[int32]file.File    // Track all open files by file descriptor..
@@ -37,15 +36,14 @@ type eventLoop struct {
 	done                    chan struct{}
 }
 
-func newEventLoop(flags flags.Flags) *eventLoop {
+func newEventLoop() *eventLoop {
 	return &eventLoop{
-		flags:         flags,
-		filter:        newEventFilter(flags),
+		filter:        newEventFilter(),
 		enterEvs:      make(map[uint32]*event.Pair),
 		files:         make(map[int32]file.File),
 		comms:         make(map[uint32]string),
 		prevPairTimes: make(map[uint32]uint64),
-		flamegraph:    flamegraph.New(flags),
+		flamegraph:    flamegraph.New(),
 		done:          make(chan struct{}),
 	}
 }
@@ -73,23 +71,23 @@ func (e *eventLoop) stats() string {
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 
-	if e.flags.FlamegraphEnable {
+	if flags.Get().FlamegraphEnable {
 		fmt.Println("Collecting flame graph stats, press Ctrl+C to stop")
 		e.flamegraph.Start(ctx)
 	}
-	if e.flags.PprofEnable {
+	if flags.Get().PprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
 	}
-	if !e.flags.FlamegraphEnable && !e.flags.PprofEnable {
+	if !flags.Get().FlamegraphEnable && !flags.Get().PprofEnable {
 		fmt.Println(event.EventStreamHeader)
 	}
 
 	e.startTime = time.Now()
 	for ev := range e.events(ctx, rawCh) {
 		switch {
-		case e.flags.FlamegraphEnable:
+		case flags.Get().FlamegraphEnable:
 			e.flamegraph.Ch <- ev
-		case e.flags.PprofEnable:
+		case flags.Get().PprofEnable:
 			ev.Recycle()
 		default:
 			fmt.Println(ev.String())
@@ -98,7 +96,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		e.numSyscallsAfterFilter++
 	}
 
-	if e.flags.FlamegraphEnable {
+	if flags.Get().FlamegraphEnable {
 		fmt.Println("Waiting for flamegraph")
 		<-e.flamegraph.Done
 	}

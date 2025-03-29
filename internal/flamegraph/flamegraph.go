@@ -18,7 +18,7 @@ type Flamegraph struct {
 	workers []worker
 }
 
-func New(flags flags.Flags) Flamegraph {
+func New() Flamegraph {
 	f := Flamegraph{
 		Ch:   make(chan *event.Pair, 4096),
 		Done: make(chan struct{}),
@@ -41,7 +41,7 @@ func (f Flamegraph) Start(ctx context.Context) {
 
 		for i, worker := range f.workers {
 			fmt.Println("Starting flamegraph worker", i)
-			if f.flags.FlamegraphName == "" { // Empty string means: old style collapsed
+			if flags.Get().FlamegraphName == "" { // Empty string means: old style collapsed
 				go worker.runCollapsed(ctx, &wg, f.Ch)
 			} else {
 				go worker.run(ctx, &wg, f.Ch)
