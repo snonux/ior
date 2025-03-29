@@ -11,15 +11,16 @@ import (
 )
 
 type Flags struct {
-	PidFilter           int
-	TidFilter           int
-	EventMapSize        int
-	CommFilter          string
-	PathFilter          string
-	PprofEnable         bool
-	FlamegraphEnable    bool
-	Duration            int
-	TracepointsToAttach []*regexp.Regexp
+	PidFilter            int
+	TidFilter            int
+	EventMapSize         int
+	CommFilter           string
+	PathFilter           string
+	PprofEnable          bool
+	FlamegraphEnable     bool
+	Duration             int
+	TracepointsToAttach  []*regexp.Regexp
+	TracepointsToExclude []*regexp.Regexp
 }
 
 func New() (flags Flags) {
@@ -34,22 +35,34 @@ func New() (flags Flags) {
 	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
 	flag.BoolVar(&flags.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 
-	tracepointNames := flag.String("tracepoints", "", "Comma separated list regexes for tracepoints to load")
+	tracepointsToAttach := flag.String("tps", "", "Comma separated list regexes for tracepoints to load")
+	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 	flag.Parse()
 
-	for _, name := range strings.Split(*tracepointNames, ",") {
+	flags.TracepointsToAttach = extractTracepointFlags(tracepointsToAttach)
+	flags.TracepointsToExclude = extractTracepointFlags(tracepointsToExclude)
+
+	return flags
+}
+
+func extractTracepointFlags(tracepoints *string) (regexes []*regexp.Regexp) {
+	for _, name := range strings.Split(*tracepoints, ",") {
 		re, err := regexp.Compile(name)
 		if err != nil {
 			fmt.Println("Unable to compile regex", name, ": ", err)
 			os.Exit(2)
 		}
-		flags.TracepointsToAttach = append(flags.TracepointsToAttach, re)
+		regexes = append(regexes, re)
 	}
-
-	return flags
+	return regexes
 }
 
 func (flags Flags) AttachTracepoint(tracepointName string) bool {
+	for _, re := range flags.TracepointsToExclude {
+		if re.MatchString(tracepointName) {
+			return false
+		}
+	}
 	if len(flags.TracepointsToAttach) == 0 {
 		return true
 	}
