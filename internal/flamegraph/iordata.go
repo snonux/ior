@@ -4,14 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"ior/internal/event"
+	"ior/internal/flags"
 	"ior/internal/types"
 	"os"
 	"time"
+
+	"github.com/DataDog/zstd"
 )
 
-const fileSuffix = ".ior"
-
-// e.g.    pathType ¶ traceid ¶ comm ¶ pid ¶ tid ¶ flags ¶ counter
 type pathType = string
 type traceIdType = types.TraceId
 type commType = string
@@ -19,14 +19,24 @@ type pidType = uint32
 type tidType = uint32
 type flagsType = string
 type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]counter
-type iorData struct{ paths pathMap }
+
+type iorData struct {
+	flags flags.Flags
+	paths pathMap
+}
 
 // TODO: Flag to enable iorData
 // TODO: Name flag for iorData (outfile format: hostname-name-timestamp.ior.zst)
 // TODO: Output path for iorData flag
 // TODO: Add helper to convert .ior data file to collapsed format
-func newIorData() iorData { return iorData{paths: make(pathMap)} }
+func newIorData(flags flags.Flags) iorData {
+	return iorData{
+		flags: flags,
+		paths: make(pathMap),
+	}
+}
 
+// TODO: Unit test
 func (iod iorData) add(ev *event.Pair) {
 	// type Pair struct {
 	// 	EnterEv, ExitEv Event
@@ -38,15 +48,16 @@ func (iod iorData) add(ev *event.Pair) {
 	//	PrevPair       *Pair
 	//	durationToPrev uint64
 	//	}
-	// TODO: Add duration to prev to counter
 	cnt := counter{
-		count:    1,
-		duration: ev.Duration,
+		count:          1,
+		duration:       ev.Duration,
+		durationToPrev: ev.DurationToPrev,
 	}
 	iod.addPath(ev.File.Name(), ev.EnterEv.GetTraceId(), ev.Comm,
 		ev.EnterEv.GetPid(), ev.EnterEv.GetTid(), ev.File.FlagsString(), cnt)
 }
 
+// TODO: Unit test
 func (iod iorData) addPath(path pathType, traceId traceIdType, comm commType,
 	pid pidType, tid tidType, flags flagsType, addCnt counter) {
 
@@ -84,18 +95,25 @@ func (iod iorData) addPath(path pathType, traceId traceIdType, comm commType,
 }
 
 func (iod iorData) commit() error {
-	currentTime := time.Now().Format("2006-01-02_15:04:05")
 	hostname, err := os.Hostname()
 	if err != nil {
 		panic(err)
 	}
-	filename := fmt.Sprintf("%s-%s.%s", hostname, currentTime, fileSuffix)
+
+	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, iod.flags.FlamegraphName,
+		time.Now().Format("2006-01-02_15:04:05"))
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(iod.paths)
+	encoder, err := zstd.NewWriter(file)
+	if err != nil {
+		return err
+	}
+	defer encoder.Close()
+
+	jsonEncoder := json.NewEncoder(encoder)
+	return jsonEncoder.Encode(iod.paths)
 }

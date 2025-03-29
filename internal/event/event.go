@@ -30,7 +30,7 @@ type Pair struct {
 	Duration        uint64
 
 	// To calculate the time difference from the previoud event.
-	durationToPrev uint64
+	DurationToPrev uint64
 }
 
 func NewPair(enterEv Event) *Pair {
@@ -42,7 +42,7 @@ func NewPair(enterEv Event) *Pair {
 func (e *Pair) CalculateDurations(prevPairTime uint64) {
 	e.Duration = e.ExitEv.GetTime() - e.EnterEv.GetTime()
 	if prevPairTime > 0 {
-		e.durationToPrev = e.EnterEv.GetTime() - prevPairTime
+		e.DurationToPrev = e.EnterEv.GetTime() - prevPairTime
 	}
 }
 
@@ -55,7 +55,7 @@ const EventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,not
 func (e *Pair) String() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("%08d,%08d", e.durationToPrev, e.Duration))
+	sb.WriteString(fmt.Sprintf("%08d,%08d", e.DurationToPrev, e.Duration))
 
 	sb.WriteString(",")
 	sb.WriteString(e.Comm)
@@ -90,6 +90,6 @@ func (e *Pair) Dump() string {
 func (e *Pair) Recycle() {
 	e.EnterEv.Recycle()
 	e.ExitEv.Recycle()
-	e.durationToPrev = 0
+	e.DurationToPrev = 0
 	poolOfEventPairs.Put(e)
 }
