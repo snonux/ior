@@ -10,5 +10,6 @@ func main() {
 	if runtime.GOOS != "linux" {
 		panic("Unsupported OS")
 	}
-	internal.Run(flags.New())
+	flags.Parse()
+	internal.Run()
 }

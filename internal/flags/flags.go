@@ -6,9 +6,17 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
+
+var singleton Flags
+var once sync.Once
+
+func Get() Flags {
+	return singleton
+}
 
 type Flags struct {
 	PidFilter    int
@@ -28,29 +36,32 @@ type Flags struct {
 	FlamegraphName   string // If set, enables new style iorData output, TODO: remove comment once old style collapsed format is retired
 }
 
-func New() (flags Flags) {
-	flag.IntVar(&flags.PidFilter, "pid", -1, "Filter for processes ID")
-	flag.IntVar(&flags.TidFilter, "tid", -1, "Filter for thread ID")
-	flag.IntVar(&flags.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
-	flag.IntVar(&flags.Duration, "duration", 60, "Probe duration in seconds")
+func Parse() {
+	once.Do(func() {
+		parse()
+	})
+}
 
-	flag.StringVar(&flags.CommFilter, "comm", "", "Command to filter for")
-	flag.StringVar(&flags.PathFilter, "path", "", "Path to filter for")
+func parse() {
+	flag.IntVar(&singleton.PidFilter, "pid", -1, "Filter for processes ID")
+	flag.IntVar(&singleton.TidFilter, "tid", -1, "Filter for thread ID")
+	flag.IntVar(&singleton.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
+	flag.IntVar(&singleton.Duration, "duration", 60, "Probe duration in seconds")
 
-	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
+	flag.StringVar(&singleton.CommFilter, "comm", "", "Command to filter for")
+	flag.StringVar(&singleton.PathFilter, "path", "", "Path to filter for")
+
+	flag.BoolVar(&singleton.PprofEnable, "pprof", false, "Enable profiling")
 
 	tracepointsToAttach := flag.String("tps", "", "Comma separated list regexes for tracepoints to load")
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
-	flag.BoolVar(&flags.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
-	flag.StringVar(&flags.FlamegraphName, "name", "", "Name of the flamegraph data output")
-
+	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
+	flag.StringVar(&singleton.FlamegraphName, "name", "", "Name of the flamegraph data output")
 	flag.Parse()
 
-	flags.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
-	flags.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
-
-	return flags
+	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
+	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
 }
 
 func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp) {
