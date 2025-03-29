@@ -17,16 +17,13 @@ type commType = string
 type pidType = uint32
 type tidType = uint32
 type flagsType = int32
-
 type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]counter
+type iorData struct{ paths pathMap }
 
-type iorData struct {
-	paths pathMap
-}
-
-func newIorData() iorData {
-	return iorData{paths: make(pathMap)}
-}
+# TODO: Flag to enable iorData
+# TODO: Name flag for iorData
+# TODO: Output path for iorData flag
+func newIorData() iorData { return iorData{paths: make(pathMap)} }
 
 func (id iorData) addPath(path pathType, traceId traceIdType, comm commType, pid pidType, tid tidType, flags flagsType, cnt counter) {
 	if _, ok := id.paths[path]; !ok {

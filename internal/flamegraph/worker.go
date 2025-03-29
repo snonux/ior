@@ -10,14 +10,14 @@ import (
 
 type worker struct {
 	collapsed collapsed
-	data      iorData
+	id        iorData
 	done      chan struct{}
 }
 
 func newWorker() worker {
 	return worker{
 		collapsed: make(collapsed), // TODO: Retire
-		data:      newIorData(),    // TODO: Implement fully
+		id:        newIorData(),    // TODO: Implement fully
 	}
 }
 
