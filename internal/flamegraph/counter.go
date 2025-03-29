@@ -4,6 +4,7 @@ type counter struct {
 	count          uint64
 	duration       uint64
 	durationToPrev uint64
+	// bytes uint64 TODO implement
 }
 
 func (c counter) add(other counter) counter {

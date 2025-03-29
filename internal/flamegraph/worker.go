@@ -17,7 +17,7 @@ type worker struct {
 func newWorker() worker {
 	return worker{
 		collapsed: make(collapsed), // COLLAPSED: Retire ocne newIorData implemented
-		iod:       newIorData(),
+		iod:       newIorData(),    // TODO: make flags global, so i don't have to pass them through the whole code base
 	}
 }
 
