@@ -20,13 +20,13 @@ import (
 
 // TOOD: read and write syscalls: can also collect amount of bytes!
 type eventLoop struct {
-	flags      flags.Flags
-	filter     *eventFilter
-	enterEvs   map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
-	files      map[int32]file.File    // Track all open files by file descriptor..
-	comms      map[uint32]string      // Program or thread name of the current Tid.
-	prevPairs  map[uint32]*event.Pair // Previous event (to calculate time differences between two events)
-	flamegraph flamegraph.Flamegraph  // Storing all paths in a map structure for analysis
+	flags         flags.Flags
+	filter        *eventFilter
+	enterEvs      map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
+	files         map[int32]file.File    // Track all open files by file descriptor..
+	comms         map[uint32]string      // Program or thread name of the current Tid.
+	prevPairTimes map[uint32]uint64      // Previous event's time (to calculate time differences between two events)
+	flamegraph    flamegraph.Flamegraph  // Storing all paths in a map structure for analysis
 
 	// Statistics
 	numTracepoints          uint
@@ -39,14 +39,14 @@ type eventLoop struct {
 
 func newEventLoop(flags flags.Flags) *eventLoop {
 	return &eventLoop{
-		flags:      flags,
-		filter:     newEventFilter(flags),
-		enterEvs:   make(map[uint32]*event.Pair),
-		files:      make(map[int32]file.File),
-		comms:      make(map[uint32]string),
-		prevPairs:  make(map[uint32]*event.Pair),
-		flamegraph: flamegraph.New(),
-		done:       make(chan struct{}),
+		flags:         flags,
+		filter:        newEventFilter(flags),
+		enterEvs:      make(map[uint32]*event.Pair),
+		files:         make(map[int32]file.File),
+		comms:         make(map[uint32]string),
+		prevPairTimes: make(map[uint32]uint64),
+		flamegraph:    flamegraph.New(flags),
+		done:          make(chan struct{}),
 	}
 }
 
@@ -90,10 +90,10 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		case e.flags.FlamegraphEnable:
 			e.flamegraph.Ch <- ev
 		case e.flags.PprofEnable:
-			ev.RecyclePrev()
+			ev.Recycle()
 		default:
 			fmt.Println(ev.String())
-			ev.RecyclePrev()
+			ev.Recycle()
 		}
 		e.numSyscallsAfterFilter++
 	}
@@ -325,9 +325,9 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	// TODO: fallocate
 	// TODO: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html (already captured but without FDs)
 
-	ev.PrevPair, _ = e.prevPairs[ev.EnterEv.GetTid()]
-	ev.CalculateDurations()
-	e.prevPairs[ev.EnterEv.GetTid()] = ev
+	prevPairTime, _ := e.prevPairTimes[ev.EnterEv.GetTid()]
+	ev.CalculateDurations(prevPairTime)
+	e.prevPairTimes[ev.EnterEv.GetTid()] = ev.ExitEv.GetTime()
 	ch <- ev
 }
 

@@ -30,7 +30,6 @@ type Pair struct {
 	Duration        uint64
 
 	// To calculate the time difference from the previoud event.
-	PrevPair       *Pair
 	durationToPrev uint64
 }
 
@@ -40,11 +39,10 @@ func NewPair(enterEv Event) *Pair {
 	return e
 }
 
-func (e *Pair) CalculateDurations() {
+func (e *Pair) CalculateDurations(prevPairTime uint64) {
 	e.Duration = e.ExitEv.GetTime() - e.EnterEv.GetTime()
-
-	if e.PrevPair != nil {
-		e.durationToPrev = e.EnterEv.GetTime() - e.PrevPair.ExitEv.GetTime()
+	if prevPairTime > 0 {
+		e.durationToPrev = e.EnterEv.GetTime() - prevPairTime
 	}
 }
 
@@ -92,15 +90,6 @@ func (e *Pair) Dump() string {
 func (e *Pair) Recycle() {
 	e.EnterEv.Recycle()
 	e.ExitEv.Recycle()
-	e.PrevPair = nil
+	e.durationToPrev = 0
 	poolOfEventPairs.Put(e)
-}
-
-// Only recycle the previous event, as the current event is the previous event of the next event!
-// And the previous event is required for calculation of durationToPrev!
-func (e *Pair) RecyclePrev() {
-	if e.PrevPair == nil {
-		return
-	}
-	e.PrevPair.Recycle()
 }

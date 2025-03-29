@@ -11,16 +11,21 @@ import (
 )
 
 type Flags struct {
-	PidFilter            int
-	TidFilter            int
-	EventMapSize         int
-	CommFilter           string
-	PathFilter           string
-	PprofEnable          bool
-	FlamegraphEnable     bool
-	Duration             int
+	PidFilter    int
+	TidFilter    int
+	EventMapSize int
+	CommFilter   string
+	PathFilter   string
+	PprofEnable  bool
+	Duration     int
+
+	// Tracepints flags
 	TracepointsToAttach  []*regexp.Regexp
 	TracepointsToExclude []*regexp.Regexp
+
+	// Flamegraph flags
+	FlamegraphEnable bool
+	FlamegraphName   string // If set, enables new style iorData output, TODO: remove comment once old style collapsed format is retired
 }
 
 func New() (flags Flags) {
@@ -33,20 +38,26 @@ func New() (flags Flags) {
 	flag.StringVar(&flags.PathFilter, "path", "", "Path to filter for")
 
 	flag.BoolVar(&flags.PprofEnable, "pprof", false, "Enable profiling")
-	flag.BoolVar(&flags.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 
 	tracepointsToAttach := flag.String("tps", "", "Comma separated list regexes for tracepoints to load")
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
+
+	flag.BoolVar(&flags.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
+	flag.StringVar(&flags.FlamegraphName, "name", "", "Name of the flamegraph data output")
+
 	flag.Parse()
 
-	flags.TracepointsToAttach = extractTracepointFlags(tracepointsToAttach)
-	flags.TracepointsToExclude = extractTracepointFlags(tracepointsToExclude)
+	flags.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
+	flags.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
 
 	return flags
 }
 
-func extractTracepointFlags(tracepoints *string) (regexes []*regexp.Regexp) {
-	for _, name := range strings.Split(*tracepoints, ",") {
+func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp) {
+	if len(tracepoints) == 0 {
+		return regexes
+	}
+	for _, name := range strings.Split(tracepoints, ",") {
 		re, err := regexp.Compile(name)
 		if err != nil {
 			fmt.Println("Unable to compile regex", name, ": ", err)
@@ -57,20 +68,25 @@ func extractTracepointFlags(tracepoints *string) (regexes []*regexp.Regexp) {
 	return regexes
 }
 
-func (flags Flags) AttachTracepoint(tracepointName string) bool {
+func (flags Flags) ShouldIAttachTracepoint(tracepointName string) bool {
 	for _, re := range flags.TracepointsToExclude {
 		if re.MatchString(tracepointName) {
+			fmt.Println("Not attaching", tracepointName, "as excluded")
 			return false
 		}
 	}
 	if len(flags.TracepointsToAttach) == 0 {
+		fmt.Println("Attaching", tracepointName, "as none are explicitly incluced")
 		return true
 	}
 	for _, re := range flags.TracepointsToAttach {
 		if re.MatchString(tracepointName) {
+			fmt.Println("Attaching", tracepointName, "as included")
 			return true
 		}
 	}
+
+	fmt.Println("Not attaching", tracepointName, "as not includedd")
 	return false
 }
 
