@@ -319,8 +319,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	// TODO: getcwd?
 	// TODO: syslog(2) for auditd debugging
 	// TODO: sync_file_range
-	// TODO: readahead
-	// TODO: fallocate
 	// TODO: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html (already captured but without FDs)
 
 	prevPairTime, _ := e.prevPairTimes[ev.EnterEv.GetTid()]
