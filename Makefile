@@ -75,4 +75,8 @@ prof:
 .PHONY: test
 test:
 	$(GO) clean -testcache
-	$(GO) test ./... -v		
+	$(GO) test ./... -v
+
+.PHONY: bench
+bench:
+	$(GO) test ./... -v -bench=. -run xxx
