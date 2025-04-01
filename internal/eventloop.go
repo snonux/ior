@@ -317,7 +317,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	// TODO: name_to_handle_at
 	// TODO: mmap, msync...
 	// TODO: getcwd?
-	// TODO: syslog(2) for auditd debugging
 	// TODO: sync_file_range
 	// TODO: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html (already captured but without FDs)
 

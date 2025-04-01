@@ -43,34 +43,34 @@ func attachTracepoints(bpfModule *bpf.Module) error {
 	return nil
 }
 
-func Run() {
+func Run() error {
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer bpfModule.Close()
 
 	if err := flags.Get().ResizeBPFMaps(bpfModule); err != nil {
-		panic(err)
+		return err
 	}
 
 	if err := flags.Get().SetBPF(bpfModule); err != nil {
-		panic(err)
+		return err
 	}
 
 	if err := bpfModule.BPFLoadObject(); err != nil {
-		panic(err)
+		return err
 	}
 
 	if err := attachTracepoints(bpfModule); err != nil {
-		panic(err)
+		return err
 	}
 
 	// 4096 channel size, minimises event drops
 	ch := make(chan []byte, 4096)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	rb.Poll(300)
 
@@ -78,10 +78,10 @@ func Run() {
 	var cpuProfile, memProfile *os.File
 	if flags.Get().PprofEnable {
 		if cpuProfile, err = os.Create("ior.cpuprofile"); err != nil {
-			panic(err)
+			return err
 		}
 		if memProfile, err = os.Create("ior.memprofile"); err != nil {
-			panic(err)
+			return err
 		}
 		pprof.StartCPUProfile(cpuProfile)
 	} else {
@@ -118,4 +118,5 @@ func Run() {
 	totalDuration := time.Since(startTime)
 	<-pprofDone
 	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
+	return nil
 }
