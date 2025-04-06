@@ -53,7 +53,6 @@ func (iod iorData) add(ev *event.Pair) {
 		ev.EnterEv.GetPid(), ev.EnterEv.GetTid(), ev.File.FlagsString(), cnt)
 }
 
-// TODO: Unit test
 func (iod iorData) addPath(path pathType, traceId traceIdType, comm commType,
 	pid pidType, tid tidType, flags flagsType, addCnt counter) {
 
@@ -88,6 +87,38 @@ func (iod iorData) addPath(path pathType, traceId traceIdType, comm commType,
 	} else {
 		iod.paths[path][traceId][comm][pid][tid][flags] = cnt.add(addCnt)
 	}
+}
+
+func (iod iorData) merge(other iorData) iorData {
+	for path, traceIdMap := range other.paths {
+		if _, ok := iod.paths[path]; !ok {
+			iod.paths[path] = make(map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]counter)
+		}
+		for traceId, commMap := range traceIdMap {
+			if _, ok := iod.paths[path][traceId]; !ok {
+				iod.paths[path][traceId] = make(map[commType]map[pidType]map[tidType]map[flagsType]counter)
+			}
+			for comm, pidMap := range commMap {
+				if _, ok := iod.paths[path][traceId][comm]; !ok {
+					iod.paths[path][traceId][comm] = make(map[pidType]map[tidType]map[flagsType]counter)
+				}
+				for pid, tidMap := range pidMap {
+					if _, ok := iod.paths[path][traceId][comm][pid]; !ok {
+						iod.paths[path][traceId][comm][pid] = make(map[tidType]map[flagsType]counter)
+					}
+					for tid, flagsMap := range tidMap {
+						if _, ok := iod.paths[path][traceId][comm][pid][tid]; !ok {
+							iod.paths[path][traceId][comm][pid][tid] = make(map[flagsType]counter)
+						}
+						for flags, cnt := range flagsMap {
+							iod.addPath(path, traceId, comm, pid, tid, flags, cnt)
+						}
+					}
+				}
+			}
+		}
+	}
+	return iod
 }
 
 func (iod iorData) commit() error {
