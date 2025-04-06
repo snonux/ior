@@ -12,24 +12,23 @@ import (
 type File interface {
 	String() string
 	Name() string
-	FlagsString() string
+	Flags() Flags
 }
 
 type FdFile struct {
 	fd              int32
 	name            string
-	Flags           int32
+	flags           Flags
 	flagsFromProcFS bool
-	unknownFlags    bool
 }
 
 func NewFd(fd int32, name []byte, flags int32) FdFile {
 	f := FdFile{
 		fd:    fd,
 		name:  stringValue(name),
-		Flags: flags,
+		flags: Flags(flags),
 	}
-	if f.Flags == -1 {
+	if f.flags == -1 {
 		panic(fmt.Sprintf("DEBUG with -1 flags: %v", f))
 	}
 	return f
@@ -41,17 +40,11 @@ func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
 	procPath := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
 	f.name, err = os.Readlink(procPath)
 	if err != nil {
-		// fmt.Println("DEBUGXXX", procPath)
 		f.name = ""
 	}
 
-	f.Flags, err = readFlagsFromFdInfo(fd, pid)
-	if err != nil {
-		f.unknownFlags = true
-		f.Flags = 0
-	} else {
-		f.flagsFromProcFS = true
-	}
+	f.flags, _ = readFlagsFromFdInfo(fd, pid)
+	f.flagsFromProcFS = true
 
 	return f
 }
@@ -62,10 +55,17 @@ func (f FdFile) Dup(fd int32) FdFile {
 	return dupFd
 }
 
-func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
+func (f FdFile) DupAddFlags(fd, flags int32) FdFile {
+	dupFd := f
+	dupFd.fd = fd
+	dupFd.flags = Flags(int32(dupFd.flags) | flags)
+	return dupFd
+}
+
+func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
 	if err != nil {
-		return 0, err
+		return unknownFlag, err
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
@@ -73,10 +73,10 @@ func readFlagsFromFdInfo(fd int32, pid uint32) (int32, error) {
 		if strings.HasPrefix(line, "flags:") {
 			flagsStr := strings.Fields(line)[1]
 			flags, err := strconv.ParseUint(flagsStr, 8, 32)
-			return int32(flags), err
+			return Flags(flags), err
 		}
 	}
-	return 0, scanner.Err()
+	return unknownFlag, scanner.Err()
 }
 
 func (f FdFile) Name() string {
@@ -94,27 +94,18 @@ func (f FdFile) String() string {
 	sb.WriteString("%(")
 	sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
 	sb.WriteString(",")
-	sb.WriteString(f.FlagsString())
+	sb.WriteString(f.Flags().String())
 	sb.WriteString(")")
 
 	return sb.String()
 }
 
-func (f FdFile) FlagsString() string {
-	var sb strings.Builder
+func (f FdFile) Flags() Flags {
+	return f.flags
+}
 
-	if f.unknownFlags {
-		sb.WriteString("U") // Unknown
-	}
-	if f.flagsFromProcFS {
-		sb.WriteString("P") // ProcFS
-	}
-	if f.unknownFlags || f.flagsFromProcFS {
-		sb.WriteString(":flags") // ProcFS
-	}
-
-	flagsToStr(&sb, f.Flags)
-	return sb.String()
+func (f *FdFile) AddFlags(flags int32) {
+	f.flags = Flags(int32(f.flags) | flags)
 }
 
 type oldnameNewnameFile struct {
@@ -129,8 +120,8 @@ func (f oldnameNewnameFile) Name() string {
 	return f.Newname
 }
 
-func (f oldnameNewnameFile) FlagsString() string {
-	return ""
+func (f oldnameNewnameFile) Flags() Flags {
+	return unknownFlag
 }
 
 func (f oldnameNewnameFile) String() string {
@@ -141,7 +132,7 @@ func (f oldnameNewnameFile) String() string {
 	sb.WriteString(" ->new:")
 	sb.WriteString(f.Newname)
 	sb.WriteString("%(")
-	sb.WriteString(f.FlagsString())
+	sb.WriteString(f.Flags().String())
 	sb.WriteString(")")
 
 	return sb.String()
@@ -159,8 +150,8 @@ func (f pathnameFile) Name() string {
 	return f.Pathname
 }
 
-func (f pathnameFile) FlagsString() string {
-	return ""
+func (f pathnameFile) Flags() Flags {
+	return unknownFlag
 }
 
 func (f pathnameFile) String() string {
@@ -169,7 +160,7 @@ func (f pathnameFile) String() string {
 	sb.WriteString("pathname:")
 	sb.WriteString(f.Pathname)
 	sb.WriteString("%(")
-	sb.WriteString(f.FlagsString())
+	sb.WriteString(f.Flags().String())
 	sb.WriteString(")")
 
 	return sb.String()

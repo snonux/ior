@@ -1,13 +1,15 @@
 package file
 
 import (
-	"fmt"
 	"os"
 	"strings"
 	"syscall"
 )
 
-var flagsToHumanCache = map[int32]string{}
+type Flags int32
+
+var flagsToHumanCache = map[Flags]string{}
+var unknownFlag = Flags(-1)
 
 type tuple struct {
 	syscallNr int
@@ -15,6 +17,7 @@ type tuple struct {
 }
 
 var flagsToHuman = []tuple{
+	{-1, "O_NONE"},
 	{syscall.O_RDONLY, "O_RDONLY"},
 	{syscall.O_WRONLY, "O_WRONLY"},
 	{syscall.O_RDWR, "O_RDWR"},
@@ -35,29 +38,45 @@ var flagsToHuman = []tuple{
 	{syscall.O_TRUNC, "O_TRUNC"},
 }
 
-func flagsToStr(sb *strings.Builder, flags int32) {
-	if str, ok := flagsToHumanCache[flags]; ok {
+func (f Flags) Is(flag int) bool {
+	if f == unknownFlag {
+		return false
+	}
+	if int(f)&flag == flag {
+		return true
+	}
+	return false
+}
+
+func (f Flags) BuildString(sb *strings.Builder) {
+	if str, ok := flagsToHumanCache[f]; ok {
 		sb.WriteString(str)
 		return
 	}
-	str := strings.Join(flagsToStrs(flags), "|")
-	flagsToHumanCache[flags] = fmt.Sprintf("%O=>%s", flags, str)
+	str := f.String()
+	flagsToHumanCache[f] = str
 	sb.WriteString(str)
 }
 
-func flagsToStrs(flags int32) (result []string) {
+func (f Flags) String() string {
+	var strs []string
 
-	if int(flags)&(os.O_WRONLY|os.O_RDWR) == 0 {
+	if f == -1 {
+		return "O_NONE"
+	}
+
+	if int(f)&(os.O_WRONLY|os.O_RDWR) == 0 {
 		// Must be read only then
-		result = append(result, "O_RDONLY")
+		strs = append(strs, "O_RDONLY")
 	}
 	for _, toHuman := range flagsToHuman[1:] {
-		if int(flags)&toHuman.syscallNr == toHuman.syscallNr {
-			result = append(result, toHuman.str)
+		if int(f)&toHuman.syscallNr == toHuman.syscallNr {
+			strs = append(strs, toHuman.str)
 		}
 	}
-	if len(result) == 0 {
-		result = append(result, "non=>O_RDONLY")
+	if len(strs) == 0 {
+		strs = append(strs, "O_RDONLY")
 	}
-	return
+
+	return strings.Join(strs, "|")
 }
