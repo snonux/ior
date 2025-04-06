@@ -301,8 +301,9 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			e.files[newFd] = fdFile.Dup(newFd)
 		case syscall.F_DUPFD_CLOEXEC:
 			newFd := int32(retEvent.Ret)
-			duppedFd := fdFile.DupAddFlags(newFd, syscall.O_CLOEXEC)
-			e.files[newFd] = duppedFd
+			duppedFdFile := fdFile.Dup(newFd)
+			duppedFdFile.AddFlags(syscall.O_CLOEXEC)
+			e.files[newFd] = duppedFdFile
 		}
 
 	default:

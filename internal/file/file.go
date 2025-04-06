@@ -55,13 +55,6 @@ func (f FdFile) Dup(fd int32) FdFile {
 	return dupFd
 }
 
-func (f FdFile) DupAddFlags(fd, flags int32) FdFile {
-	dupFd := f
-	dupFd.fd = fd
-	dupFd.flags = Flags(int32(dupFd.flags) | flags)
-	return dupFd
-}
-
 func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
 	if err != nil {
