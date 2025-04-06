@@ -1,16 +1,19 @@
 package flamegraph
 
 import (
-	"encoding/json"
 	"fmt"
 	"ior/internal/event"
 	"ior/internal/flags"
 	"ior/internal/types"
+	"iter"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/DataDog/zstd"
 )
+
+const recordSeparator = " ␞ "
 
 type pathType = string
 type traceIdType = types.TraceId
@@ -123,6 +126,37 @@ func (iod iorData) commit() error {
 	encoder := zstd.NewWriter(file)
 	defer encoder.Close()
 
-	jsonEncoder := json.NewEncoder(encoder)
-	return jsonEncoder.Encode(iod.paths)
+	// Write the data to a .txt file one line one entry and with a separator ␞, don't use JSON
+	return nil
+}
+
+func (iod iorData) lines() iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for path, traceIdMap := range iod.paths {
+			for traceId, commMap := range traceIdMap {
+				for comm, pidMap := range commMap {
+					for pid, tidMap := range pidMap {
+						for tid, flagsMap := range tidMap {
+							for flags, cnt := range flagsMap {
+								joinedStr := strings.Join([]string{
+									path,
+									traceId.String(),
+									comm,
+									fmt.Sprint(pid),
+									fmt.Sprint(tid),
+									flags,
+									fmt.Sprintf("%d %d %d %d", cnt.count, cnt.duration, cnt.durationToPrev, cnt.bytes),
+								},
+									recordSeparator)
+								if !yield(joinedStr) {
+									// Stop iteration if yield returns false
+									return
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
