@@ -28,9 +28,7 @@ type Pair struct {
 	File            file.File
 	Comm            string
 	Duration        uint64
-
-	// To calculate the time difference from the previoud event.
-	DurationToPrev uint64
+	DurationToPrev  uint64
 }
 
 func NewPair(enterEv Event) *Pair {
@@ -81,6 +79,20 @@ func (e *Pair) String() string {
 	}
 
 	return sb.String()
+}
+
+func (e *Pair) FlagsString() string {
+	if e.File == nil {
+		return "N:flags"
+	}
+	return e.File.FlagsString()
+}
+
+func (e *Pair) FileName() string {
+	if e.File == nil {
+		return "N:file"
+	}
+	return e.File.Name()
 }
 
 func (e *Pair) Dump() string {

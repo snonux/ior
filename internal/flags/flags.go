@@ -33,7 +33,7 @@ type Flags struct {
 
 	// Flamegraph flags
 	FlamegraphEnable bool
-	FlamegraphName   string // If set, enables new style iorData output, TODO: remove comment once old style collapsed format is retired
+	FlamegraphName   string
 }
 
 func Parse() {
@@ -57,7 +57,7 @@ func parse() {
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
-	flag.StringVar(&singleton.FlamegraphName, "name", "", "Name of the flamegraph data output")
+	flag.StringVar(&singleton.FlamegraphName, "name", "foo", "Name of the flamegraph data output")
 	flag.Parse()
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
