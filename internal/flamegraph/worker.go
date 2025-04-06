@@ -2,7 +2,6 @@ package flamegraph
 
 import (
 	"context"
-	"fmt"
 	"ior/internal/event"
 	"sync"
 	"time"
@@ -23,7 +22,6 @@ func (w worker) run(ctx context.Context, wg *sync.WaitGroup, ch <-chan *event.Pa
 	for {
 		select {
 		case ev := <-ch:
-			fmt.Println("worker got event", ev)
 			w.iod.add(ev)
 			ev.Recycle()
 

@@ -3,9 +3,11 @@ package flamegraph
 import (
 	"fmt"
 	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/flags"
 	"ior/internal/types"
 	"iter"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -20,7 +22,7 @@ type traceIdType = types.TraceId
 type commType = string
 type pidType = uint32
 type tidType = uint32
-type flagsType = string
+type flagsType = file.Flags
 type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]counter
 
 type iorData struct {
@@ -37,7 +39,7 @@ func newIorData() iorData {
 func (iod iorData) add(ev *event.Pair) {
 	cnt := counter{count: 1, duration: ev.Duration, durationToPrev: ev.DurationToPrev}
 	iod.addPath(ev.FileName(), ev.EnterEv.GetTraceId(), ev.Comm, ev.EnterEv.GetPid(),
-		ev.EnterEv.GetTid(), ev.FlagsString(), cnt)
+		ev.EnterEv.GetTid(), ev.Flags(), cnt)
 }
 
 func (iod iorData) addPath(path pathType, traceId traceIdType, comm commType,
@@ -116,8 +118,10 @@ func (iod iorData) commit() error {
 
 	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flags.Get().FlamegraphName,
 		time.Now().Format("2006-01-02_15:04:05"))
+	log.Println("Writing", filename)
+	tmpFilename := fmt.Sprintf("%s.tmp", filename)
 
-	file, err := os.Create(filename)
+	file, err := os.Create(tmpFilename)
 	if err != nil {
 		return err
 	}
@@ -126,8 +130,13 @@ func (iod iorData) commit() error {
 	encoder := zstd.NewWriter(file)
 	defer encoder.Close()
 
-	// Write the data to a .txt file one line one entry and with a separator ␞, don't use JSON
-	return nil
+	for line := range iod.lines() {
+		if _, err := encoder.Write([]byte(line + "\n")); err != nil {
+			return err
+		}
+	}
+
+	return os.Rename(tmpFilename, filename)
 }
 
 func (iod iorData) lines() iter.Seq[string] {
@@ -144,7 +153,7 @@ func (iod iorData) lines() iter.Seq[string] {
 									comm,
 									fmt.Sprint(pid),
 									fmt.Sprint(tid),
-									flags,
+									flags.String(),
 									fmt.Sprintf("%d %d %d %d", cnt.count, cnt.duration, cnt.durationToPrev, cnt.bytes),
 								},
 									recordSeparator)

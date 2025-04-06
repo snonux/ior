@@ -293,7 +293,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		switch v.Cmd {
 		case syscall.F_SETFL:
 			canChange := syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-			fdFile.Flags |= (int32(v.Arg) & int32(canChange))
+			fdFile.AddFlags((int32(v.Arg) & int32(canChange)))
 			ev.File = fdFile
 			e.files[fd] = fdFile
 		case syscall.F_DUPFD:
@@ -301,8 +301,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			e.files[newFd] = fdFile.Dup(newFd)
 		case syscall.F_DUPFD_CLOEXEC:
 			newFd := int32(retEvent.Ret)
-			duppedFd := fdFile.Dup(newFd)
-			duppedFd.Flags |= syscall.O_CLOEXEC
+			duppedFd := fdFile.DupAddFlags(newFd, syscall.O_CLOEXEC)
 			e.files[newFd] = duppedFd
 		}
 

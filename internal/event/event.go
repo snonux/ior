@@ -81,11 +81,11 @@ func (e *Pair) String() string {
 	return sb.String()
 }
 
-func (e *Pair) FlagsString() string {
+func (e *Pair) Flags() file.Flags {
 	if e.File == nil {
-		return "N:flags"
+		return file.Flags(0)
 	}
-	return e.File.FlagsString()
+	return e.File.Flags()
 }
 
 func (e *Pair) FileName() string {

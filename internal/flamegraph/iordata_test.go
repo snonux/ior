@@ -2,6 +2,7 @@ package flamegraph
 
 import (
 	"ior/internal/types"
+	"syscall"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestAddPath(t *testing.T) {
 	comm := commType("testComm")
 	pid := pidType(1234)
 	tid := tidType(5678)
-	flags := flagsType("O_RDWR")
+	flags := flagsType(syscall.O_RDONLY)
 	cnt1 := counter{count: 1, duration: 1000, durationToPrev: 100}
 
 	iod.addPath(path, traceId, comm, pid, tid, flags, cnt1)
@@ -31,8 +32,8 @@ func TestAddPath(t *testing.T) {
 }
 
 func TestMerge(t *testing.T) {
-	rdwrFlag := flagsType("O_RDWR")
-	roFlag := flagsType("O_RDONLY")
+	rdwrFlag := flagsType(syscall.O_RDWR)
+	roFlag := flagsType(syscall.O_RDONLY)
 	traceId := types.SYS_ENTER_OPENAT
 
 	// Initialize two iorData instances with sample data
@@ -71,8 +72,8 @@ func TestMerge(t *testing.T) {
 		if len(merged.paths) != 2 {
 			t.Errorf("Expected 2 paths, got %d", len(merged.paths))
 		}
-		if merged.paths["path1"][traceId]["comm1"][100][1000][flagsType("O_RDWR")].count != 10 {
-			t.Errorf("Expected counter 10, got %d", merged.paths["path1"][1]["comm1"][100][1000][flagsType("O_RDWR")].count)
+		if merged.paths["path1"][traceId]["comm1"][100][1000][roFlag].count != 10 {
+			t.Errorf("Expected counter 10, got %d", merged.paths["path1"][1]["comm1"][100][1000][rdwrFlag].count)
 		}
 		if merged.paths["path2"][traceId]["comm2"][101][1000][roFlag].count != 60 {
 			t.Errorf("Expected counter 60, got %d", merged.paths["path2"][1]["comm2"][101][1000][roFlag].count)
@@ -88,7 +89,6 @@ func TestMerge(t *testing.T) {
 		var lines []string
 
 		for line := range merged.lines() {
-			t.Log(line)
 			lines = append(lines, line)
 		}
 
