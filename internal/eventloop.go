@@ -201,7 +201,6 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		return
 	}
 
-	// TODO: Benchmark, is a map faster than this large switch statement?
 	switch v := ev.EnterEv.(type) {
 	case *OpenEvent:
 		openEv := ev.EnterEv.(*OpenEvent)
