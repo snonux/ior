@@ -24,7 +24,6 @@ type iorData struct {
 	paths pathMap
 }
 
-// TODO: Flag to enable iorData
 // TODO: Name flag for iorData (outfile format: hostname-name-timestamp.ior.zst)
 // TODO: Output path for iorData flag
 // TODO: Add helper to convert .ior data file to collapsed format
@@ -32,25 +31,10 @@ func newIorData() iorData {
 	return iorData{paths: make(pathMap)}
 }
 
-// TODO: Unit test
 func (iod iorData) add(ev *event.Pair) {
-	// type Pair struct {
-	// 	EnterEv, ExitEv Event
-	// 	File            file.File
-	// 	Comm            string
-	// 	Duration        uint64
-
-	//	// To calculate the time difference from the previoud event.
-	//	PrevPair       *Pair
-	//	durationToPrev uint64
-	//	}
-	cnt := counter{
-		count:          1,
-		duration:       ev.Duration,
-		durationToPrev: ev.DurationToPrev,
-	}
-	iod.addPath(ev.File.Name(), ev.EnterEv.GetTraceId(), ev.Comm,
-		ev.EnterEv.GetPid(), ev.EnterEv.GetTid(), ev.File.FlagsString(), cnt)
+	cnt := counter{count: 1, duration: ev.Duration, durationToPrev: ev.DurationToPrev}
+	iod.addPath(ev.FileName(), ev.EnterEv.GetTraceId(), ev.Comm, ev.EnterEv.GetPid(),
+		ev.EnterEv.GetTid(), ev.FlagsString(), cnt)
 }
 
 func (iod iorData) addPath(path pathType, traceId traceIdType, comm commType,
@@ -129,6 +113,7 @@ func (iod iorData) commit() error {
 
 	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flags.Get().FlamegraphName,
 		time.Now().Format("2006-01-02_15:04:05"))
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return err

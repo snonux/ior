@@ -4,6 +4,10 @@ import (
 	"testing"
 )
 
+func TestAdd(t *testring.T) {
+
+}
+
 func TestAddPath(t *testing.T) {
 	iod := newIorData()
 	path := pathType("testPath")

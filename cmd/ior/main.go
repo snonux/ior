@@ -1,8 +1,8 @@
 package main
 
 import (
-	"flag"
 	"ior/internal"
+	"ior/internal/flags"
 	"log"
 	"runtime"
 )
@@ -13,13 +13,12 @@ func main() {
 	if runtime.GOOS != "linux" {
 		log.Fatal("Unsupported OS")
 	}
-	
+
 	// Parse command-line flags
-	flag.Parse()
-	
+	flags.Parse()
+
 	// Run the internal logic of the application
 	if err := internal.Run(); err != nil {
 		log.Fatalf("Failed to run: %v", err)
 	}
 }
-

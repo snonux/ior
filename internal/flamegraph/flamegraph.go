@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"ior/internal/event"
 	"ior/internal/flags"
+	"log"
 	"runtime"
 	"sync"
 )
@@ -41,24 +42,19 @@ func (f Flamegraph) Start(ctx context.Context) {
 
 		for i, worker := range f.workers {
 			fmt.Println("Starting flamegraph worker", i)
-			if flags.Get().FlamegraphName == "" { // Empty string means: old style collapsed
-				go worker.runCollapsed(ctx, &wg, f.Ch)
-			} else {
-				go worker.run(ctx, &wg, f.Ch)
-			}
+			go worker.run(ctx, &wg, f.Ch)
 		}
 		wg.Wait()
 
-		// COLLAPSED: Will be removed, once migrated to iorData
-		if f.flags.FlamegraphName == "" { // Empty string means: old style collapsed
-			collapsed := f.workers[0].collapsed
-			if len(f.workers) > 1 {
-				for i, c := range f.workers[1:] {
-					fmt.Println("Worker", i+1, "merged", collapsed.merge(c.collapsed),
-						"counters =>", len(collapsed), "total counters")
-				}
+		iod := f.workers[0].iod
+		if len(f.workers) > 1 {
+			for i, w := range f.workers[1:] {
+				iod = iod.merge(w.iod)
+				fmt.Println("Worker", i+1, "merged")
 			}
-			collapsed.dump()
+		}
+		if err := iod.commit(); err != nil {
+			log.Fatal(err)
 		}
 	}()
 }
