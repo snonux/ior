@@ -292,7 +292,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		// See fcntl(2) for implementation details
 		switch v.Cmd {
 		case syscall.F_SETFL:
-			canChange := syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
+			const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
 			fdFile.AddFlags((int32(v.Arg) & int32(canChange)))
 			ev.File = fdFile
 			e.files[fd] = fdFile
