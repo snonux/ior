@@ -36,9 +36,15 @@ func newIorData() iorData {
 	return iorData{paths: make(pathMap)}
 }
 
+func cloneString(s string) string {
+	// Clone the string by creating a new string with the same content
+	// This is a workaround to avoid using unsafe package
+	return string([]byte(s))
+}
+
 func (iod iorData) add(ev *event.Pair) {
 	cnt := counter{count: 1, duration: ev.Duration, durationToPrev: ev.DurationToPrev}
-	iod.addPath(ev.FileName(), ev.EnterEv.GetTraceId(), ev.Comm, ev.EnterEv.GetPid(),
+	iod.addPath(ev.FileName(), ev.EnterEv.GetTraceId(), string(ev.Comm), ev.EnterEv.GetPid(),
 		ev.EnterEv.GetTid(), ev.Flags(), cnt)
 }
 
