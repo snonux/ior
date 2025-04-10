@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -13,6 +14,14 @@ import (
 
 var singleton Flags
 var once sync.Once
+
+var validCollapsedFields = []string{
+	"path",
+	"comm",
+	"tracepoint",
+	"pid", "tid",
+	"count",
+}
 
 func Get() Flags {
 	return singleton
@@ -34,6 +43,10 @@ type Flags struct {
 	// Flamegraph flags
 	FlamegraphEnable bool
 	FlamegraphName   string
+
+	// To convert ior data into collapsed format
+	IorDataFile     string
+	CollapsedFields []string
 }
 
 func Parse() {
@@ -58,10 +71,26 @@ func parse() {
 
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 	flag.StringVar(&singleton.FlamegraphName, "name", "foo", "Name of the flamegraph data output")
+
+	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into collapsed format")
+	fields := flag.String("fields", "", "Comma separated list of fields to collapse")
 	flag.Parse()
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
 	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
+
+	if *fields == "" {
+		singleton.CollapsedFields = []string{"path", "tracepoint", "count"}
+	} else {
+		singleton.CollapsedFields = strings.Split(*fields, ",")
+	}
+
+	for _, field := range singleton.CollapsedFields {
+		if !slices.Contains(validCollapsedFields, field) {
+			fmt.Println("Invalid field for collapse:", field)
+			os.Exit(2)
+		}
+	}
 }
 
 func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp) {

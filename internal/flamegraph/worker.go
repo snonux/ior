@@ -22,7 +22,7 @@ func (w worker) run(ctx context.Context, wg *sync.WaitGroup, ch <-chan *event.Pa
 	for {
 		select {
 		case ev := <-ch:
-			w.iod.add(ev)
+			w.iod.addEventPair(ev)
 			ev.Recycle()
 
 		default:
