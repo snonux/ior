@@ -46,12 +46,22 @@ func attachTracepoints(bpfModule *bpf.Module) error {
 
 func Run() error {
 	iorFile := flags.Get().IorDataFile
+	var noTraceRun bool
 
 	if iorFile != "" {
+		noTraceRun = true
 		collapsed := flamegraph.NewCollapsed(iorFile, flags.Get().CollapsedFields, flags.Get().CountField)
-		return collapsed.Write(iorFile)
+		collapsedFile, err := collapsed.Write(iorFile)
+		if err != nil {
+			return err
+		}
+
+		flamegraph.NewTool(collapsedFile)
 	}
 
+	if noTraceRun {
+		return nil
+	}
 	return runTrace()
 }
 
