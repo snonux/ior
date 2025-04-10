@@ -2,41 +2,53 @@ package flamegraph
 
 import (
 	"fmt"
+	"io"
 	"ior/internal/flags"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/DataDog/zstd"
 )
 
 type Tool struct {
-	collapsedFile string
-	inverted      bool
+	flamegraphTool string
+	args           []string
+	outFile        string
 }
 
-func NewTool(collapsedFile string) Tool {
-	return Tool{
-		collapsedFile: collapsedFile,
-	}
-}
-
-func (t Tool) WriteSVG() error {
-	// TODO: Dynamically fill
-	// args := []string{t.collapsedFile, "--nametype", "Path", "--hash"}
-	args := []string{t.collapsedFile, "--hash"}
-
-	if t.inverted {
-		args = append(args, "--inverted")
+func NewTool(collapsedFile string) (Tool, error) {
+	if strings.HasSuffix(collapsedFile, ".zst") {
+		var err error
+		collapsedFile, err = decompress(collapsedFile)
+		if err != nil {
+			return Tool{}, err
+		}
 	}
 
-	args = append(args, "--title")
-	args = append(args, fmt.Sprintf("I/O Traces (%s by %s)",
+	t := Tool{
+		flamegraphTool: flags.Get().FlamegraphTool,
+		args:           []string{collapsedFile, "--hash"},
+		outFile:        strings.TrimSuffix(collapsedFile, ".collapsed") + ".svg",
+	}
+
+	t.args = append(t.args, "--title")
+	t.args = append(t.args, fmt.Sprintf("I/O Traces (%s by %s)",
 		strings.Join(flags.Get().CollapsedFields, ","), flags.Get().CountField,
 	))
 
-	cmd := exec.Command(flags.Get().FlamegraphTool, args...)
+	return t, nil
+}
 
-	outFile := strings.TrimSuffix(t.collapsedFile, ".collapsed") + ".svg"
-	outFd, err := os.Create(outFile)
+func (t Tool) WriteSVG() error {
+	if _, err := os.Stat(t.outFile); err == nil {
+		fmt.Println(t.outFile, "already exists!")
+		return nil
+	}
+	cmd := exec.Command(t.flamegraphTool, t.args...)
+	fmt.Println("Running", cmd)
+
+	outFd, err := os.Create(t.outFile)
 	if err != nil {
 		return err
 	}
@@ -50,4 +62,30 @@ func (t Tool) WriteSVG() error {
 	}
 
 	return nil
+}
+
+func decompress(compressedFile string) (string, error) {
+	decompressedFile := strings.TrimSuffix(compressedFile, ".zst")
+
+	file, err := os.Open(compressedFile)
+	if err != nil {
+		return decompressedFile, err
+	}
+	defer file.Close()
+
+	decoder := zstd.NewReader(file)
+	defer decoder.Close()
+
+	decompressedFd, err := os.Create(decompressedFile)
+	if err != nil {
+		return decompressedFile, err
+	}
+	defer decompressedFd.Close()
+
+	_, err = io.Copy(decompressedFd, decoder)
+	if err != nil {
+		return decompressedFile, err
+	}
+
+	return decompressedFile, nil
 }

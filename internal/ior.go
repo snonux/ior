@@ -56,7 +56,13 @@ func Run() error {
 			return err
 		}
 
-		flamegraph.NewTool(collapsedFile)
+		tool, err := flamegraph.NewTool(collapsedFile)
+		if err != nil {
+			return err
+		}
+		if err := tool.WriteSVG(); err != nil {
+			return err
+		}
 	}
 
 	if noTraceRun {
