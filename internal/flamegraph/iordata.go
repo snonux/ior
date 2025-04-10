@@ -198,7 +198,7 @@ type iterRecord struct {
 func (ir iterRecord) StringByName(name string) string {
 	switch name {
 	case "path":
-		return ir.path
+		return strings.Join(strings.Split(ir.path, "/"), ";/")
 	case "comm":
 		return ir.comm
 	case "tracepoint":
@@ -209,14 +209,6 @@ func (ir iterRecord) StringByName(name string) string {
 		return fmt.Sprint(ir.tid)
 	case "flags":
 		return ir.flags.String()
-	case "count":
-		return fmt.Sprint(ir.cnt.Count)
-	case "duration":
-		return fmt.Sprint(ir.cnt.Duration)
-	case "durationToPrev":
-		return fmt.Sprint(ir.cnt.DurationToPrev)
-	case "bytes":
-		return fmt.Sprint(ir.cnt.Bytes)
 	default:
 		panic(fmt.Sprintln("No", name, "in record"))
 	}
