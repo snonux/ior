@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ior/internal/flags"
+	"ior/internal/flamegraph"
 	"ior/internal/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -44,6 +45,16 @@ func attachTracepoints(bpfModule *bpf.Module) error {
 }
 
 func Run() error {
+	iorFile := flags.Get().IorDataFile
+
+	if iorFile != "" {
+		return flamegraph.NewCollapsed(iorFile, flags.Get().CollapsedFields).Generate(iorFile)
+	}
+
+	return runTrace()
+}
+
+func runTrace() error {
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
 		return err

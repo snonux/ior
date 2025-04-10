@@ -25,7 +25,7 @@ type eventLoop struct {
 	files         map[int32]file.File    // Track all open files by file descriptor..
 	comms         map[uint32]string      // Program or thread name of the current Tid.
 	prevPairTimes map[uint32]uint64      // Previous event's time (to calculate time differences between two events)
-	flamegraph    flamegraph.Flamegraph  // Storing all paths in a map structure for analysis
+	flamegraph    flamegraph.IorDataCollector  // Storing all paths in a map structure for analysis
 
 	// Statistics
 	numTracepoints          uint

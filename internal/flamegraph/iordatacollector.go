@@ -5,22 +5,21 @@ import (
 	"fmt"
 	"ior/internal/event"
 	"ior/internal/flags"
-	"log"
+	"os"
 	"runtime"
 	"sync"
 )
 
-// TODO: Add Command in path! Make it configurable? comm/syscall/path, or path/syscall/comm, etc...
 // TODO: Idea, show time spent between the syscalls (off syscalls) as well, but in a different color
-type Flamegraph struct {
+type IorDataCollector struct {
 	flags   flags.Flags
 	Ch      chan *event.Pair
 	Done    chan struct{}
 	workers []worker
 }
 
-func New() Flamegraph {
-	f := Flamegraph{
+func New() IorDataCollector {
+	f := IorDataCollector{
 		Ch:   make(chan *event.Pair, 4096),
 		Done: make(chan struct{}),
 	}
@@ -34,7 +33,7 @@ func New() Flamegraph {
 	return f
 }
 
-func (f Flamegraph) Start(ctx context.Context) {
+func (f IorDataCollector) Start(ctx context.Context) {
 	go func() {
 		defer close(f.Done)
 		var wg sync.WaitGroup
@@ -53,8 +52,9 @@ func (f Flamegraph) Start(ctx context.Context) {
 				fmt.Println("Worker", i+1, "merged")
 			}
 		}
-		if err := iod.commit(); err != nil {
-			log.Fatal(err)
+		if err := iod.serializeToFile(); err != nil {
+			fmt.Println(err)
+			os.Exit(2)
 		}
 	}()
 }
