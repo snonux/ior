@@ -18,7 +18,6 @@ func NewCollapsed(iorFile string, fields []string, countField string) Collapsed 
 	return Collapsed{iorFile: iorFile, fields: fields, countField: countField}
 }
 
-// TODO: Write into collapsed.zst (zstd compressed) file
 func (c Collapsed) Write(iorDataFile string) (string, error) {
 	outFile := fmt.Sprintf("%s.%s-by-%s.collapsed.zst",
 		strings.TrimSuffix(iorDataFile, ".ior.zst"),
