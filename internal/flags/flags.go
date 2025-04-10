@@ -91,7 +91,7 @@ func parse() {
 
 	// https://github.com/brendangregg/FlameGraph
 	flag.StringVar(&singleton.FlamegraphTool, "flamegraphTool",
-		os.Getenv("HOME")+"/git/FlameGraph/flamegraph.pl", "Path to the flamegraph tool")
+		os.Getenv("HOME")+"/git/FlameGraph/flamegraph.pl", "Path to the flamegraph tool (e.g. flamegraph.pl or inferno-flamegraph)")
 	flag.Parse()
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
