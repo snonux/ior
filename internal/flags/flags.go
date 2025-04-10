@@ -21,6 +21,9 @@ var validCollapsedFields = []string{
 	"tracepoint",
 	"pid",
 	"tid",
+}
+
+var validCollapsedCounts = []string{
 	"count",
 	"duration",
 	"durationToPrev",
@@ -51,6 +54,7 @@ type Flags struct {
 	// To convert ior data into collapsed format
 	IorDataFile     string
 	CollapsedFields []string
+	CountField      string
 }
 
 func Parse() {
@@ -79,6 +83,8 @@ func parse() {
 	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into collapsed format")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
+	flag.StringVar(&singleton.CountField, "count", "count",
+		fmt.Sprintf("Count field to collaps, valid are: %v", validCollapsedCounts))
 	flag.Parse()
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
