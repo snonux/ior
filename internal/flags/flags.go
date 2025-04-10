@@ -19,8 +19,12 @@ var validCollapsedFields = []string{
 	"path",
 	"comm",
 	"tracepoint",
-	"pid", "tid",
+	"pid",
+	"tid",
 	"count",
+	"duration",
+	"durationToPrev",
+	"bytes",
 }
 
 func Get() Flags {
@@ -73,7 +77,8 @@ func parse() {
 	flag.StringVar(&singleton.FlamegraphName, "name", "foo", "Name of the flamegraph data output")
 
 	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into collapsed format")
-	fields := flag.String("fields", "", "Comma separated list of fields to collapse")
+	fields := flag.String("fields", "",
+		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
 	flag.Parse()
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)

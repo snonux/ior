@@ -34,6 +34,14 @@ func newIorData() iorData {
 	return iorData{paths: make(pathMap)}
 }
 
+func newIorDataFromFile(filename string) (iorData, error) {
+	iod := newIorData()
+	if err := iod.loadFromFile(filename); err != nil {
+		return iorData{}, err
+	}
+	return iod, nil
+}
+
 func cloneString(s string) string {
 	// Clone the string by creating a new string with the same content
 	// This is a workaround to avoid using unsafe package
@@ -164,37 +172,6 @@ func (iod iorData) loadFromFile(filename string) error {
 	return iod.deserialize(&buffer)
 }
 
-func (iod iorData) lines() iter.Seq[string] {
-	return func(yield func(string) bool) {
-		for path, traceIdMap := range iod.paths {
-			for traceId, commMap := range traceIdMap {
-				for comm, pidMap := range commMap {
-					for pid, tidMap := range pidMap {
-						for tid, flagsMap := range tidMap {
-							for flags, cnt := range flagsMap {
-								joinedStr := strings.Join([]string{
-									path,
-									traceId.String(),
-									comm,
-									fmt.Sprint(pid),
-									fmt.Sprint(tid),
-									flags.String(),
-									fmt.Sprintf("%d %d %d %d", cnt.Count, cnt.Duration, cnt.DurationToPrev, cnt.Bytes),
-								},
-									" --- ")
-								if !yield(joinedStr) {
-									// Stop iteration if yield returns false
-									return
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
 func (iod iorData) serialize() ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -205,4 +182,72 @@ func (iod iorData) serialize() ([]byte, error) {
 func (iod *iorData) deserialize(buf *bytes.Buffer) error {
 	dec := gob.NewDecoder(buf)
 	return dec.Decode(&iod.paths)
+}
+
+// Record returned by the iterator
+type iterRecord struct {
+	path    pathType
+	traceId traceIdType
+	comm    commType
+	pid     pidType
+	tid     tidType
+	flags   flagsType
+	cnt     Counter
+}
+
+func (ir iterRecord) StringByName(name string) string {
+	switch name {
+	case "path":
+		return ir.path
+	case "comm":
+		return ir.comm
+	case "tracepoint":
+		return ir.traceId.String()
+	case "pid":
+		return fmt.Sprint(ir.pid)
+	case "tid":
+		return fmt.Sprint(ir.tid)
+	case "flags":
+		return ir.flags.String()
+	case "count":
+		return fmt.Sprint(ir.cnt.Count)
+	case "duration":
+		return fmt.Sprint(ir.cnt.Duration)
+	case "durationToPrev":
+		return fmt.Sprint(ir.cnt.DurationToPrev)
+	case "bytes":
+		return fmt.Sprint(ir.cnt.Bytes)
+	default:
+		panic(fmt.Sprintln("No", name, "in record"))
+	}
+}
+
+func (iod iorData) iter() iter.Seq[iterRecord] {
+	return func(yield func(iterRecord) bool) {
+		for path, traceIdMap := range iod.paths {
+			for traceId, commMap := range traceIdMap {
+				for comm, pidMap := range commMap {
+					for pid, tidMap := range pidMap {
+						for tid, flagsMap := range tidMap {
+							for flags, cnt := range flagsMap {
+								record := iterRecord{
+									path:    path,
+									traceId: traceId,
+									comm:    comm,
+									pid:     pid,
+									tid:     tid,
+									flags:   flags,
+									cnt:     cnt,
+								}
+								if !yield(record) {
+									// Stop iteration if yield returns false
+									return
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
