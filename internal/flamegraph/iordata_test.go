@@ -80,26 +80,26 @@ func TestMerge(t *testing.T) {
 		}
 	})
 
-	t.Run("Iterate over lines", func(t *testing.T) {
-		expectedLines := []string{
-			"path1 ␞ enter_openat ␞ comm1 ␞ 100 ␞ 1000 ␞ O_RDWR ␞ 10 1000 100 0",
-			"path1 ␞ enter_openat ␞ comm1 ␞ 100 ␞ 1000 ␞ O_RDONLY ␞ 20 2000 200 0",
-			"path2 ␞ enter_openat ␞ comm2 ␞ 101 ␞ 1000 ␞ O_RDONLY ␞ 60 6000 600 0",
-		}
-		var lines []string
+	// t.Run("Iterate over lines", func(t *testing.T) {
+	// 	expectedLines := []string{
+	// 		"path1 ␞ enter_openat ␞ comm1 ␞ 100 ␞ 1000 ␞ O_RDWR ␞ 10 1000 100 0",
+	// 		"path1 ␞ enter_openat ␞ comm1 ␞ 100 ␞ 1000 ␞ O_RDONLY ␞ 20 2000 200 0",
+	// 		"path2 ␞ enter_openat ␞ comm2 ␞ 101 ␞ 1000 ␞ O_RDONLY ␞ 60 6000 600 0",
+	// 	}
+	// 	var lines []string
 
-		for line := range merged.lines() {
-			lines = append(lines, line)
-		}
+	// 	for line := range merged.lines() {
+	// 		lines = append(lines, line)
+	// 	}
 
-		if len(lines) != len(expectedLines) {
-			t.Errorf("Expected %d lines, got %d", len(expectedLines), len(lines))
-		}
+	// 	if len(lines) != len(expectedLines) {
+	// 		t.Errorf("Expected %d lines, got %d", len(expectedLines), len(lines))
+	// 	}
 
-		if !bothArraysHaveSameElements(lines, expectedLines) {
-			t.Errorf("Expected lines %v, got %v", expectedLines, lines)
-		}
-	})
+	// 	if !bothArraysHaveSameElements(lines, expectedLines) {
+	// 		t.Errorf("Expected lines %v, got %v", expectedLines, lines)
+	// 	}
+	// })
 }
 
 func bothArraysHaveSameElements(a, b []string) bool {

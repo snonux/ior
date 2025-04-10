@@ -49,7 +49,7 @@ func Run() error {
 
 	if iorFile != "" {
 		collapsed := flamegraph.NewCollapsed(iorFile, flags.Get().CollapsedFields, flags.Get().CountField)
-		return collapsed.Generate(iorFile)
+		return collapsed.Write(iorFile)
 	}
 
 	return runTrace()

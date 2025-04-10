@@ -21,7 +21,6 @@ func (c Counter) add(other Counter) Counter {
 }
 
 func (c Counter) ValueByName(name string) uint64 {
-	// Convert the numbers to strings here
 	switch name {
 	case "count":
 		return c.Count

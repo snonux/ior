@@ -55,6 +55,9 @@ type Flags struct {
 	IorDataFile     string
 	CollapsedFields []string
 	CountField      string
+
+	// To generate the Flamegraph SVGs
+	FlamegraphTool string
 }
 
 func Parse() {
@@ -78,13 +81,17 @@ func parse() {
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
-	flag.StringVar(&singleton.FlamegraphName, "name", "foo", "Name of the flamegraph data output")
+	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
 
 	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into collapsed format")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
 	flag.StringVar(&singleton.CountField, "count", "count",
 		fmt.Sprintf("Count field to collaps, valid are: %v", validCollapsedCounts))
+
+	// https://github.com/brendangregg/FlameGraph
+	flag.StringVar(&singleton.FlamegraphTool, "flamegraphTool",
+		os.Getenv("HOME")+"/git/FlameGraph/flamegraph.pl", "Path to the flamegraph tool")
 	flag.Parse()
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
@@ -101,6 +108,11 @@ func parse() {
 			fmt.Println("Invalid field for collapse:", field)
 			os.Exit(2)
 		}
+	}
+
+	if !slices.Contains(validCollapsedCounts, singleton.CountField) {
+		fmt.Println("Invalid count field:", singleton.CountField)
+		os.Exit(2)
 	}
 }
 
