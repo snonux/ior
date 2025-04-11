@@ -99,7 +99,7 @@ func parse() {
 	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
 
 	if *fields == "" {
-		singleton.CollapsedFields = []string{"path", "tracepoint", "count"}
+		singleton.CollapsedFields = []string{"pid", "path", "tracepoint"}
 	} else {
 		singleton.CollapsedFields = strings.Split(*fields, ",")
 	}
