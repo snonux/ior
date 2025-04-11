@@ -61,7 +61,7 @@ func (c Collapsed) Write(iorDataFile string) (string, error) {
 		for _, fieldName := range c.fields {
 			fieldValues = append(fieldValues, record.StringByName(fieldName))
 		}
-		writer.Write([]byte(fmt.Sprintf("%s = %d\n",
+		writer.Write([]byte(fmt.Sprintf("%s %d\n",
 			strings.Join(fieldValues, ";"),
 			record.cnt.ValueByName(c.countField),
 		)))
