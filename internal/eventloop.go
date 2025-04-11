@@ -254,7 +254,9 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			}
 			// Duplicating fd
 			newFd := int32(ev.ExitEv.(*RetEvent).Ret)
-			e.files[newFd] = fdFile.Dup(newFd)
+			if newFd != -1 {
+				e.files[newFd] = fdFile.Dup(newFd)
+			}
 		}
 
 	case *Dup3Event:
@@ -276,9 +278,11 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			panic("expected a file.FdFile")
 		}
 		newFd := int32(ev.ExitEv.(*RetEvent).Ret)
-		duppedFdFile := fdFile.Dup(newFd)
-		duppedFdFile.AddFlags(dup3Event.Flags & syscall.O_CLOEXEC)
-		e.files[newFd] = duppedFdFile
+		if newFd != -1 {
+			duppedFdFile := fdFile.Dup(newFd)
+			duppedFdFile.AddFlags(dup3Event.Flags & syscall.O_CLOEXEC)
+			e.files[newFd] = duppedFdFile
+		}
 
 	case *NullEvent:
 		ev.Comm = e.comm(ev.EnterEv.GetTid())
