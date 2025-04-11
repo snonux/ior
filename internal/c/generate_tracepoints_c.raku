@@ -83,6 +83,16 @@ class FdTracepoint does TracepointTemplate {
     }
 }
 
+class Dup3Tracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals --> Str) {
+        my Str $extra = qq:to/BPF_C_CODE/;
+            ev->fd = (__s32)ctx->args[0];
+            ev->flags = (__s32)ctx->args[2];
+        BPF_C_CODE
+        self.template: %vals.append( ( event-struct => 'dup3_event', :$extra ).hash );
+    }
+}
+
 class NameTracepoint does TracepointTemplate {
     method generate-bpf-c-tracepoint(%vals --> Str) {
         my Int \oldname-field-number = %vals<format>.field-number('oldname');
@@ -197,6 +207,7 @@ class Format {
     multi method set-format-impl('sys_enter_fcntl', $, $) { $!format-impl = FcntlTracepoint.new }
     multi method set-format-impl('sys_enter_dup', 'unsigned int', 'fildes') { $!format-impl = FdTracepoint.new }
     multi method set-format-impl('sys_enter_dup2', 'unsigned int', 'oldfd') { $!format-impl = FdTracepoint.new }
+    multi method set-format-impl('sys_enter_dup3', 'unsigned int', 'oldfd') { $!format-impl = Dup3Tracepoint.new }
 
     # Tracepoint groups by arguments
     multi method set-format-impl($, Str $type where { $_ eq 'unsigned int' || $_ eq 'unsigned long' || $_ eq 'int' }, 'fd') { 
@@ -223,7 +234,7 @@ class Format {
     method can-generate returns Bool { so $!format-impl.^can('generate-bpf-c-tracepoint') }
 
     method enter-reject returns Bool { $!format-impl !~~ any(
-        FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint, FcntlTracepoint, NullTracepoint
+        FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint, FcntlTracepoint, NullTracepoint, Dup3Tracepoint
     ) }
 }
 

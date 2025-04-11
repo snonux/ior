@@ -21,11 +21,11 @@ import (
 // TOOD: read and write syscalls: can also collect amount of bytes!
 type eventLoop struct {
 	filter        *eventFilter
-	enterEvs      map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
-	files         map[int32]file.File    // Track all open files by file descriptor..
-	comms         map[uint32]string      // Program or thread name of the current Tid.
-	prevPairTimes map[uint32]uint64      // Previous event's time (to calculate time differences between two events)
-	flamegraph    flamegraph.IorDataCollector  // Storing all paths in a map structure for analysis
+	enterEvs      map[uint32]*event.Pair      // Temp. store of sys_enter tracepoints per Tid.
+	files         map[int32]file.File         // Track all open files by file descriptor..
+	comms         map[uint32]string           // Program or thread name of the current Tid.
+	prevPairTimes map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
+	flamegraph    flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
 
 	// Statistics
 	numTracepoints          uint
@@ -156,6 +156,8 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 		}
 	case ENTER_FCNTL_EVENT:
 		e.syscallEnter(NewFcntlEvent(raw))
+	case ENTER_DUP3_EVENT:
+		e.syscallEnter(NewDup3Event(raw))
 	default:
 		panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
 	}
@@ -254,6 +256,29 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			newFd := int32(ev.ExitEv.(*RetEvent).Ret)
 			e.files[newFd] = fdFile.Dup(newFd)
 		}
+
+	case *Dup3Event:
+		dup3Event := ev.EnterEv.(*Dup3Event)
+		fd := int32(dup3Event.Fd)
+		if file_, ok := e.files[fd]; ok {
+			ev.File = file_
+		} else {
+			ev.File = file.NewFdWithPid(fd, v.Pid)
+		}
+		ev.Comm = e.comm(ev.EnterEv.GetTid())
+		if !e.filter.eventPair(ev) {
+			ev.Recycle()
+			return
+		}
+		// Duplicating fd
+		fdFile, ok := ev.File.(file.FdFile)
+		if !ok {
+			panic("expected a file.FdFile")
+		}
+		newFd := int32(ev.ExitEv.(*RetEvent).Ret)
+		duppedFdFile := fdFile.Dup(newFd)
+		duppedFdFile.AddFlags(dup3Event.Flags & syscall.O_CLOEXEC)
+		e.files[newFd] = duppedFdFile
 
 	case *NullEvent:
 		ev.Comm = e.comm(ev.EnterEv.GetTid())

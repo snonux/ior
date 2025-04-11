@@ -17,6 +17,8 @@
 #define EXIT_PATH_EVENT 12
 #define ENTER_FCNTL_EVENT 13
 #define EXIT_FCNTL_EVENT 14
+#define ENTER_DUP3_EVENT 15
+#define EXIT_DUP3_EVENT 16
 
 struct open_event {
     __u32 event_type;
@@ -83,4 +85,15 @@ struct fcntl_event {
     __u32 fd;
     __u32 cmd;
     __u64 arg;
+};
+
+// dup and dup2 are just fd_events, but dup3 also has the additional flags
+struct dup3_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd;
+    __s32 flags;
 };
