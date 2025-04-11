@@ -84,6 +84,16 @@ role StructGoMethods {
             return $self-ref
         \}
 
+        
+        func ($self-ref *$identifier) Bytes() ([]byte, error) \{
+        	buf := new(bytes.Buffer)
+        	err := binary.Write(buf, binary.LittleEndian, $self-ref)
+        	if err != nil \{
+        		return nil, err
+        	\}
+        	return buf.Bytes(), nil
+        \}
+
         func ($self-ref *$identifier) Recycle() \{
             poolOf{$identifier}s.Put($self-ref)
         \}

@@ -102,6 +102,15 @@ func NewOpenEvent(raw []byte) *OpenEvent {
 	return o
 }
 
+func (o *OpenEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, o)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (o *OpenEvent) Recycle() {
 	poolOfOpenEvents.Put(o)
 }
@@ -149,6 +158,15 @@ func NewNullEvent(raw []byte) *NullEvent {
 		panic(raw)
 	}
 	return n
+}
+
+func (n *NullEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, n)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (n *NullEvent) Recycle() {
@@ -201,6 +219,15 @@ func NewFdEvent(raw []byte) *FdEvent {
 	return f
 }
 
+func (f *FdEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (f *FdEvent) Recycle() {
 	poolOfFdEvents.Put(f)
 }
@@ -249,6 +276,15 @@ func NewRetEvent(raw []byte) *RetEvent {
 		panic(raw)
 	}
 	return r
+}
+
+func (r *RetEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, r)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (r *RetEvent) Recycle() {
@@ -302,6 +338,15 @@ func NewNameEvent(raw []byte) *NameEvent {
 	return n
 }
 
+func (n *NameEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, n)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (n *NameEvent) Recycle() {
 	poolOfNameEvents.Put(n)
 }
@@ -350,6 +395,15 @@ func NewPathEvent(raw []byte) *PathEvent {
 		panic(raw)
 	}
 	return p
+}
+
+func (p *PathEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, p)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (p *PathEvent) Recycle() {
@@ -402,6 +456,15 @@ func NewFcntlEvent(raw []byte) *FcntlEvent {
 		panic(raw)
 	}
 	return f
+}
+
+func (f *FcntlEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (f *FcntlEvent) Recycle() {
