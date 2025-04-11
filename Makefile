@@ -40,7 +40,9 @@ mrproper: clean
 	find . -type f -name \*.collapsed -delete		
 	find . -type f -name \*.svg -delete		
 	find . -type f -name \*profile -delete		
+	find . -type f -name \*.pdf -delete		
 	find . -type f -name \*.tmp -delete		
+	find . -type f -name palete.map -delete		
 
 .PHONY: world
 world: clean generate test all
