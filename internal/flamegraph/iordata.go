@@ -26,8 +26,10 @@ type tidType = uint32
 type flagsType = file.Flags
 type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]Counter
 
+// iorData is a structure that holds data related to I/O operations.
+// It contains a map of paths, which is used to manage and store path-related information.
 type iorData struct {
-	paths pathMap // Make sure this field is accessible from outside
+	paths pathMap // paths is a map that stores path-related data. Note: This field is currently unexported.
 }
 
 func newIorData() iorData {
