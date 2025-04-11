@@ -6,3 +6,6 @@ ior.cpuprofile
 ior.memprofile
 palette.map
 ./helix-gpt.log
+perltidy.ERR
+*.new
+*.tmp
