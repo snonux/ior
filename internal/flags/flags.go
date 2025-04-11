@@ -21,6 +21,7 @@ var validCollapsedFields = []string{
 	"tracepoint",
 	"pid",
 	"tid",
+	"flags",
 }
 
 var validCollapsedCounts = []string{
