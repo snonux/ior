@@ -11,10 +11,13 @@ import (
 	"github.com/DataDog/zstd"
 )
 
+// Tool represents a utility for generating flamegraphs.
+// It contains the path to the flamegraph tool, the arguments to be passed to it,
+// and the output file where the generated flamegraph will be stored.
 type Tool struct {
-	flamegraphTool string
-	args           []string
-	outFile        string
+	flamegraphTool string   // Path to the flamegraph tool executable.
+	args           []string // Arguments to be passed to the flamegraph tool.
+	outFile        string   // Path to the output file where the flamegraph will be saved.
 }
 
 func NewTool(collapsedFile string) (Tool, error) {

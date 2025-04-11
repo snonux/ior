@@ -8,10 +8,16 @@ import (
 	"github.com/DataDog/zstd"
 )
 
+// Collapsed represents a structure used to process and store information
+// related to a collapsed flamegraph. It includes the following fields:
+//   - iorFile: The path to the input/output report file.
+//   - fields: A list of field names used in the flamegraph processing.
+//   - countField: The name of the field that represents the count or weight
+//     in the flamegraph data.
 type Collapsed struct {
-	iorFile    string
-	fields     []string
-	countField string
+	iorFile    string   // Path to the input/output report file.
+	fields     []string // List of field names used in processing.
+	countField string   // Field name representing the count or weight.
 }
 
 func NewCollapsed(iorFile string, fields []string, countField string) Collapsed {
