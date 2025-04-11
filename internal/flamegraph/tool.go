@@ -44,6 +44,8 @@ func NewTool(collapsedFile string) (Tool, error) {
 }
 
 func (t Tool) WriteSVG() error {
+	defer deleteFileIfEmpty(t.outFile)
+
 	if _, err := os.Stat(t.outFile); err == nil {
 		fmt.Println(t.outFile, "already exists!")
 		return nil
@@ -91,4 +93,18 @@ func decompress(compressedFile string) (string, error) {
 	}
 
 	return decompressedFile, nil
+}
+
+func deleteFileIfEmpty(file string) error {
+	if _, err := os.Stat(file); err == nil {
+		fileInfo, err := os.Stat(file)
+		if err != nil {
+			return err
+		}
+		if fileInfo.Size() == 0 {
+			fmt.Println("Deleting", file, "as it is empty")
+			return os.Remove(file)
+		}
+	}
+	return nil
 }
