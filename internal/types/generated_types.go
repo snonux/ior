@@ -455,6 +455,15 @@ func NewDup3Event(raw []byte) *Dup3Event {
 	return d
 }
 
+func (d *Dup3Event) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, d)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (d *Dup3Event) Recycle() {
 	poolOfDup3Events.Put(d)
 }
