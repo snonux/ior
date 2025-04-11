@@ -69,7 +69,7 @@ func (f Flags) String() string {
 		// Must be read only then
 		strs = append(strs, "O_RDONLY")
 	}
-	for _, toHuman := range flagsToHuman[1:] {
+	for _, toHuman := range flagsToHuman[2:] {
 		if int(f)&toHuman.syscallNr == toHuman.syscallNr {
 			strs = append(strs, toHuman.str)
 		}

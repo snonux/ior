@@ -36,10 +36,11 @@ clean:
 
 .PHONY: mrproper
 mrproper: clean
-	find . -type f -name \*.ior.zst -delete		
+	find . -type f -name \*.zst -delete		
 	find . -type f -name \*.collapsed -delete		
 	find . -type f -name \*.svg -delete		
-	find . -type f -name \*.profile -delete		
+	find . -type f -name \*profile -delete		
+	find . -type f -name \*.tmp -delete		
 
 .PHONY: world
 world: clean generate test all
