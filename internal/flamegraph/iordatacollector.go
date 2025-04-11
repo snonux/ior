@@ -10,7 +10,6 @@ import (
 	"sync"
 )
 
-// TODO: Idea, show time spent between the syscalls (off syscalls) as well, but in a different color
 type IorDataCollector struct {
 	flags   flags.Flags
 	Ch      chan *event.Pair
