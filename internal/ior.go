@@ -45,6 +45,7 @@ func attachTracepoints(bpfModule *bpf.Module) error {
 }
 
 func Run() error {
+	flags.PrintVersion()
 	iorFile := flags.Get().IorDataFile
 	var noTraceRun bool
 
