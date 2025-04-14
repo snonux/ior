@@ -68,6 +68,8 @@ func Parse() {
 }
 
 func parse() {
+	version := flag.Bool("version", false, "Print version")
+
 	flag.IntVar(&singleton.PidFilter, "pid", -1, "Filter for processes ID")
 	flag.IntVar(&singleton.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&singleton.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
@@ -94,6 +96,11 @@ func parse() {
 	flag.StringVar(&singleton.FlamegraphTool, "flamegraphTool",
 		os.Getenv("HOME")+"/git/FlameGraph/flamegraph.pl", "Path to the flamegraph tool (e.g. flamegraph.pl or inferno-flamegraph)")
 	flag.Parse()
+
+	if *version {
+		PrintVersion()
+		os.Exit(0)
+	}
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
 	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
