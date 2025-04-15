@@ -5,6 +5,7 @@ export GOARCH = amd64
 export CGO_CFLAGS = -I$(LIBBPFGO)/output -I$(LIBBPFGO)/selftest/common
 export CGO_LDFLAGS = -lelf -lzstd $(LIBBPFGO)/output/libbpf/libbpf.a
 export GO ?= go
+export TEST_NAME ?= TestEventloop
 
 all: bpfbuild gobuild
 
@@ -56,6 +57,11 @@ prof:
 test:
 	$(GO) clean -testcache
 	$(GO) test ./... -v
+
+.PHONY: test_specific
+test_specific:
+	$(GO) clean -testcache
+	$(GO) test ./... -run ^$(TEST_NAME)$$ -v
 
 .PHONY: bench
 bench:

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"testing"
 	"time"
 
 	"ior/internal/event"
@@ -26,6 +27,7 @@ type eventLoop struct {
 	comms         map[uint32]string           // Program or thread name of the current Tid.
 	prevPairTimes map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
 	flamegraph    flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
+	printCb       func(ev *event.Pair)        // Callback to print the event
 
 	// Statistics
 	numTracepoints          uint
@@ -43,6 +45,7 @@ func newEventLoop() *eventLoop {
 		files:         make(map[int32]file.File),
 		comms:         make(map[uint32]string),
 		prevPairTimes: make(map[uint32]uint64),
+		printCb:       func(ev *event.Pair) { fmt.Println(ev); ev.Recycle() },
 		flamegraph:    flamegraph.New(),
 		done:          make(chan struct{}),
 	}
@@ -68,6 +71,8 @@ func (e *eventLoop) stats() string {
 	return stats
 }
 
+var T *testing.T
+
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 
@@ -90,8 +95,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		case flags.Get().PprofEnable:
 			ev.Recycle()
 		default:
-			fmt.Println(ev.String())
-			ev.Recycle()
+			e.printCb(ev)
 		}
 		e.numSyscallsAfterFilter++
 	}
@@ -110,7 +114,10 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 
 		for {
 			select {
-			case raw := <-rawCh:
+			case raw, ok := <-rawCh:
+				if !ok {
+					return
+				}
 				if len(raw) == 0 {
 					continue
 				}
@@ -164,6 +171,7 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 }
 
 func (e *eventLoop) syscallEnter(enterEv event.Event) {
+	T.Log("syscallenter", enterEv)
 	tid := enterEv.GetTid()
 	if !e.filter.commFilterEnable {
 		e.enterEvs[tid] = event.NewPair(enterEv)
@@ -185,6 +193,7 @@ func (e *eventLoop) syscallEnter(enterEv event.Event) {
 }
 
 func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
+	T.Log("syscall exit", exitEv)
 	ev, ok := e.enterEvs[exitEv.GetTid()]
 	if !ok {
 		exitEv.Recycle()
