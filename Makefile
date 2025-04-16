@@ -63,6 +63,11 @@ test_specific:
 	$(GO) clean -testcache
 	$(GO) test ./... -run ^$(TEST_NAME)$$ -v
 
+.PHONY: test_foo
+test_foo:
+	$(GO) clean -testcache
+	$(GO) test ./internal/types -v
+
 .PHONY: bench
 bench:
 	$(GO) test ./... -v -bench=. -run xxx
