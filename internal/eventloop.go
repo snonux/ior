@@ -26,7 +26,7 @@ type eventLoop struct {
 	comms         map[uint32]string           // Program or thread name of the current Tid.
 	prevPairTimes map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
 	flamegraph    flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
-	printCb       func(ev *event.Pair)        // Callback to print the event
+	printCb       func(ep *event.Pair)        // Callback to print the event
 
 	// Statistics
 	numTracepoints          uint
@@ -44,7 +44,7 @@ func newEventLoop() *eventLoop {
 		files:         make(map[int32]file.File),
 		comms:         make(map[uint32]string),
 		prevPairTimes: make(map[uint32]uint64),
-		printCb:       func(ev *event.Pair) { fmt.Println(ev); ev.Recycle() },
+		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		flamegraph:    flamegraph.New(),
 		done:          make(chan struct{}),
 	}
@@ -85,14 +85,14 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	}
 
 	e.startTime = time.Now()
-	for ev := range e.events(ctx, rawCh) {
+	for ep := range e.events(ctx, rawCh) {
 		switch {
 		case flags.Get().FlamegraphEnable:
-			e.flamegraph.Ch <- ev
+			e.flamegraph.Ch <- ep
 		case flags.Get().PprofEnable:
-			ev.Recycle()
+			ep.Recycle()
 		default:
-			e.printCb(ev)
+			e.printCb(ep)
 		}
 		e.numSyscallsAfterFilter++
 	}
@@ -136,38 +136,38 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	switch EventType(raw[0]) {
 	case ENTER_OPEN_EVENT:
 		if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
-			e.syscallEnter(ev)
+			e.tracepointEntered(ev)
 		}
 	case EXIT_OPEN_EVENT:
-		e.syscallExit(NewRetEvent(raw), ch)
+		e.tracepointExited(NewRetEvent(raw), ch)
 	case ENTER_FD_EVENT:
-		e.syscallEnter(NewFdEvent(raw))
+		e.tracepointEntered(NewFdEvent(raw))
 	case EXIT_FD_EVENT:
-		e.syscallExit(NewFdEvent(raw), ch)
+		e.tracepointExited(NewFdEvent(raw), ch)
 	case ENTER_NULL_EVENT:
-		e.syscallEnter(NewNullEvent(raw))
+		e.tracepointEntered(NewNullEvent(raw))
 	case EXIT_NULL_EVENT:
-		e.syscallExit(NewNullEvent(raw), ch)
+		e.tracepointExited(NewNullEvent(raw), ch)
 	case EXIT_RET_EVENT:
-		e.syscallExit(NewRetEvent(raw), ch)
+		e.tracepointExited(NewRetEvent(raw), ch)
 	case ENTER_NAME_EVENT:
 		if ev, ok := e.filter.nameEvent(NewNameEvent(raw)); ok {
-			e.syscallEnter(ev)
+			e.tracepointEntered(ev)
 		}
 	case ENTER_PATH_EVENT:
 		if ev, ok := e.filter.pathEvent(NewPathEvent(raw)); ok {
-			e.syscallEnter(ev)
+			e.tracepointEntered(ev)
 		}
 	case ENTER_FCNTL_EVENT:
-		e.syscallEnter(NewFcntlEvent(raw))
+		e.tracepointEntered(NewFcntlEvent(raw))
 	case ENTER_DUP3_EVENT:
-		e.syscallEnter(NewDup3Event(raw))
+		e.tracepointEntered(NewDup3Event(raw))
 	default:
 		panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
 	}
 }
 
-func (e *eventLoop) syscallEnter(enterEv event.Event) {
+func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	tid := enterEv.GetTid()
 	if !e.filter.commFilterEnable {
 		e.enterEvs[tid] = event.NewPair(enterEv)
@@ -188,123 +188,131 @@ func (e *eventLoop) syscallEnter(enterEv event.Event) {
 	}
 }
 
-func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
-	ev, ok := e.enterEvs[exitEv.GetTid()]
+func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) {
+	ep, ok := e.enterEvs[exitEv.GetTid()]
 	if !ok {
 		exitEv.Recycle()
 		return
 	}
 	delete(e.enterEvs, exitEv.GetTid())
-	ev.ExitEv = exitEv
+	ep.ExitEv = exitEv
 	e.numSyscalls++
 
 	// Expect ID one lower, otherwise, enter and exit tracepoints
 	// don't match up. E.g.:
 	// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
-	if ev.EnterEv.GetTraceId()-1 != ev.ExitEv.GetTraceId() {
+	if ep.EnterEv.GetTraceId()-1 != ep.ExitEv.GetTraceId() {
 		e.numTracepointMismatches++
-		ev.Recycle()
+		ep.Recycle()
 		return
 	}
 
-	switch v := ev.EnterEv.(type) {
+	switch v := ep.EnterEv.(type) {
 	case *OpenEvent:
-		openEv := ev.EnterEv.(*OpenEvent)
-		if fd := int32(ev.ExitEv.(*RetEvent).Ret); fd >= 0 {
+		openEv := ep.EnterEv.(*OpenEvent)
+		comm := file.StringValue(openEv.Comm[:])
+		if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
 			file := file.NewFd(fd, openEv.Filename[:], v.Flags)
 			e.files[fd] = file
-			ev.File = file
+			ep.File = file
+			ep.Comm = comm
 		}
-		e.comms[openEv.Tid] = string(openEv.Comm[:])
+		e.comms[openEv.Tid] = comm
 
+	// TODO: Unit test this
 	case *NameEvent:
-		nameEvent := ev.EnterEv.(*NameEvent)
-		ev.File = file.NewOldnameNewname(nameEvent.Oldname[:], nameEvent.Newname[:])
-		ev.Comm = e.comm(ev.EnterEv.GetTid())
+		nameEvent := ep.EnterEv.(*NameEvent)
+		ep.File = file.NewOldnameNewname(nameEvent.Oldname[:], nameEvent.Newname[:])
+		ep.Comm = e.comm(ep.EnterEv.GetTid())
 
+	// TODO: Unit test this
 	case *PathEvent:
-		nameEvent := ev.EnterEv.(*PathEvent)
-		if ev.Is(SYS_ENTER_CREAT) {
-			if fd := int32(ev.ExitEv.(*RetEvent).Ret); fd >= 0 {
+		nameEvent := ep.EnterEv.(*PathEvent)
+		if ep.Is(SYS_ENTER_CREAT) {
+			if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
 				file := file.NewFd(fd, nameEvent.Pathname[:],
 					syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
 				e.files[fd] = file
-				ev.File = file
+				ep.File = file
 			}
 		} else {
-			ev.File = file.NewPathname(nameEvent.Pathname[:])
+			ep.File = file.NewPathname(nameEvent.Pathname[:])
 		}
-		ev.Comm = e.comm(ev.EnterEv.GetTid())
+		ep.Comm = e.comm(ep.EnterEv.GetTid())
 
+	// TODO: Unit test this
 	case *FdEvent:
-		fd := ev.EnterEv.(*FdEvent).Fd
+		fd := ep.EnterEv.(*FdEvent).Fd
 		if file_, ok := e.files[fd]; ok {
-			ev.File = file_
-			if ev.Is(SYS_ENTER_CLOSE) {
+			ep.File = file_
+			if ep.Is(SYS_ENTER_CLOSE) {
 				delete(e.files, fd)
 			}
 		} else {
-			ev.File = file.NewFdWithPid(fd, v.Pid)
+			ep.File = file.NewFdWithPid(fd, v.Pid)
 		}
-		ev.Comm = e.comm(ev.EnterEv.GetTid())
-		if !e.filter.eventPair(ev) {
-			ev.Recycle()
+		ep.Comm = e.comm(ep.EnterEv.GetTid())
+		if !e.filter.eventPair(ep) {
+			ep.Recycle()
 			return
 		}
-		if ev.Is(SYS_ENTER_DUP) || ev.Is(SYS_ENTER_DUP2) {
-			fdFile, ok := ev.File.(file.FdFile)
+		if ep.Is(SYS_ENTER_DUP) || ep.Is(SYS_ENTER_DUP2) {
+			fdFile, ok := ep.File.(file.FdFile)
 			if !ok {
 				panic("expected a file.FdFile")
 			}
 			// Duplicating fd
-			newFd := int32(ev.ExitEv.(*RetEvent).Ret)
+			newFd := int32(ep.ExitEv.(*RetEvent).Ret)
 			if newFd != -1 {
 				e.files[newFd] = fdFile.Dup(newFd)
 			}
 		}
 
+	// TODO: Unit test this
 	case *Dup3Event:
-		dup3Event := ev.EnterEv.(*Dup3Event)
+		dup3Event := ep.EnterEv.(*Dup3Event)
 		fd := int32(dup3Event.Fd)
 		if file_, ok := e.files[fd]; ok {
-			ev.File = file_
+			ep.File = file_
 		} else {
-			ev.File = file.NewFdWithPid(fd, v.Pid)
+			ep.File = file.NewFdWithPid(fd, v.Pid)
 		}
-		ev.Comm = e.comm(ev.EnterEv.GetTid())
-		if !e.filter.eventPair(ev) {
-			ev.Recycle()
+		ep.Comm = e.comm(ep.EnterEv.GetTid())
+		if !e.filter.eventPair(ep) {
+			ep.Recycle()
 			return
 		}
 		// Duplicating fd
-		fdFile, ok := ev.File.(file.FdFile)
+		fdFile, ok := ep.File.(file.FdFile)
 		if !ok {
 			panic("expected a file.FdFile")
 		}
-		newFd := int32(ev.ExitEv.(*RetEvent).Ret)
+		newFd := int32(ep.ExitEv.(*RetEvent).Ret)
 		if newFd != -1 {
 			duppedFdFile := fdFile.Dup(newFd)
 			duppedFdFile.AddFlags(dup3Event.Flags & syscall.O_CLOEXEC)
 			e.files[newFd] = duppedFdFile
 		}
 
+	// TODO: Unit test this
 	case *NullEvent:
-		ev.Comm = e.comm(ev.EnterEv.GetTid())
-		if !e.filter.eventPair(ev) {
-			ev.Recycle()
+		ep.Comm = e.comm(ep.EnterEv.GetTid())
+		if !e.filter.eventPair(ep) {
+			ep.Recycle()
 			return
 		}
 
+	// TODO: Unit test this
 	case *FcntlEvent:
-		ev.Comm = e.comm(ev.EnterEv.GetTid())
+		ep.Comm = e.comm(ep.EnterEv.GetTid())
 		fd := int32(v.Fd)
 		if file_, ok := e.files[fd]; ok {
-			ev.File = file_
+			ep.File = file_
 		} else {
-			ev.File = file.NewFdWithPid(fd, v.Pid)
+			ep.File = file.NewFdWithPid(fd, v.Pid)
 		}
-		if !e.filter.eventPair(ev) {
-			ev.Recycle()
+		if !e.filter.eventPair(ep) {
+			ep.Recycle()
 			return
 		}
 
@@ -317,7 +325,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 			break
 		}
 
-		fdFile, ok := ev.File.(file.FdFile)
+		fdFile, ok := ep.File.(file.FdFile)
 		if !ok {
 			panic("expected a file.FdFile")
 		}
@@ -327,7 +335,7 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 		case syscall.F_SETFL:
 			const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
 			fdFile.AddFlags((int32(v.Arg) & int32(canChange)))
-			ev.File = fdFile
+			ep.File = fdFile
 			e.files[fd] = fdFile
 		case syscall.F_DUPFD:
 			newFd := int32(retEvent.Ret)
@@ -351,10 +359,10 @@ func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
 	// TODO: sync_file_range
 	// TODO: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html (already captured but without FDs)
 
-	prevPairTime, _ := e.prevPairTimes[ev.EnterEv.GetTid()]
-	ev.CalculateDurations(prevPairTime)
-	e.prevPairTimes[ev.EnterEv.GetTid()] = ev.ExitEv.GetTime()
-	ch <- ev
+	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]
+	ep.CalculateDurations(prevPairTime)
+	e.prevPairTimes[ep.EnterEv.GetTid()] = ep.ExitEv.GetTime()
+	ch <- ep
 }
 
 func (e *eventLoop) comm(tid uint32) string {
