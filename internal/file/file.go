@@ -25,7 +25,7 @@ type FdFile struct {
 func NewFd(fd int32, name []byte, flags int32) FdFile {
 	f := FdFile{
 		fd:    fd,
-		name:  stringValue(name),
+		name:  StringValue(name),
 		flags: Flags(flags),
 	}
 	if f.flags == -1 {
@@ -106,7 +106,7 @@ type oldnameNewnameFile struct {
 }
 
 func NewOldnameNewname(oldname, newname []byte) oldnameNewnameFile {
-	return oldnameNewnameFile{stringValue(oldname), stringValue(newname)}
+	return oldnameNewnameFile{StringValue(oldname), StringValue(newname)}
 }
 
 func (f oldnameNewnameFile) Name() string {
@@ -136,7 +136,7 @@ type pathnameFile struct {
 }
 
 func NewPathname(pathname []byte) pathnameFile {
-	return pathnameFile{stringValue(pathname)}
+	return pathnameFile{StringValue(pathname)}
 }
 
 func (f pathnameFile) Name() string {
@@ -160,6 +160,6 @@ func (f pathnameFile) String() string {
 }
 
 // As data comes in from arrays, converted to slices, there will be null-bytes at the end..
-func stringValue(byteStr []byte) string {
+func StringValue(byteStr []byte) string {
 	return string(byteStr[:bytes.IndexByte(byteStr, 0)])
 }
