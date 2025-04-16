@@ -21,13 +21,10 @@ func TestEventloop(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	inCh := make(chan []byte)
 	outCh := make(chan *event.Pair)
-	defer func() {
-		cancel()
-		close(inCh)
-		close(outCh)
-	}()
 
 	ev := newEventLoop()
 	ev.printCb = func(ev *event.Pair) { outCh <- ev }
@@ -59,7 +56,7 @@ func makeOpenEventTestData1(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterOpenEvent(t)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
-	_, exitEvBytes := makeExitOpenEvent(t)
+	exitEv, exitEvBytes := makeExitOpenEvent(t)
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, ep *event.Pair) {
@@ -67,6 +64,11 @@ func makeOpenEventTestData1(t *testing.T) (td testData) {
 			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
 			return
 		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+			return
+		}
+
 		filenameA := ep.FileName()
 		filenameB := types.StringValue(enterEv.Filename[:])
 		if filenameA != filenameB {

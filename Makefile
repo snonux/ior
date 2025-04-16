@@ -66,7 +66,7 @@ test_specific:
 .PHONY: test_foo
 test_foo:
 	$(GO) clean -testcache
-	$(GO) test ./internal/types -v
+	$(GO) test ./internal/ -v
 
 .PHONY: bench
 bench:
