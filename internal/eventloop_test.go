@@ -57,38 +57,28 @@ func addOpenFileTest1(t *testing.T, inCh chan<- []byte, validateCh chan<- valida
 	inCh <- exitEvBytes
 	inCh <- exitEvBytes // Should be discarded by the event loop automatically
 
-	// Define the validation function and send it to the validateCh channel
-	validate := func(t *testing.T, ev *event.Pair) {
-		if ev.EnterEv.GetTraceId() != enterEv.TraceId {
-			t.Errorf("Expected TraceId '%v' but got '%v'", enterEv.TraceId, ev.EnterEv.GetTraceId())
-		}
-		t.Log(fmt.Sprintf("Event pair '%v' appears fine", ev))
-	}
-	validateCh <- validate
-}
-
-func addOpenFileTest2(t *testing.T, inCh chan<- []byte, validateCh chan<- validateFunc) {
-	enterEv, enterEvBytes := makeEnterOpenEvent(t)
-	_, exitEvBytes := makeExitOpenEvent(t)
-	inCh <- enterEvBytes
-	inCh <- enterEvBytes
-	inCh <- exitEvBytes
-
-	// Define the validation function and send it to the validateCh channel
-	validate := func(t *testing.T, ev *event.Pair) {
-		if ev.EnterEv.GetTraceId() != enterEv.TraceId {
-			t.Errorf("Expected TraceId '%v' but got '%v'", enterEv.TraceId, ev.EnterEv.GetTraceId())
+	validateCh <- func(t *testing.T, ep *event.Pair) {
+		if ep.EnterEv.GetTraceId() != enterEv.TraceId {
+			t.Errorf("Expected TraceId '%v' but got '%v'", enterEv.TraceId, ep.EnterEv.GetTraceId())
 			return
 		}
-		filenameA := ev.FileName()
+		filenameA := ep.FileName()
 		filenameB := file.StringValue(enterEv.Filename[:])
 		if filenameA != filenameB {
 			t.Errorf("Expected file name '%v' but got '%v'", filenameB, filenameA)
 			return
 		}
-		t.Log(fmt.Sprintf("Event pair '%v' appears fine", ev))
+		comm := file.StringValue(enterEv.Comm[:])
+		if ep.Comm != comm {
+			t.Errorf("Expected comm name '%v' but got '%v'", comm, ep.Comm)
+			return
+		}
+		t.Log(fmt.Sprintf("Event pair '%v' appears fine", ep))
 	}
-	validateCh <- validate
+}
+
+func addOpenFileTest2(t *testing.T, inCh chan<- []byte, validateCh chan<- validateFunc) {
+
 }
 
 func makeEnterOpenEvent(t *testing.T) (types.OpenEvent, []byte) {
