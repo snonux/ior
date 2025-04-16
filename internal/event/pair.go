@@ -15,6 +15,7 @@ type Pair struct {
 	Comm            string
 	Duration        uint64
 	DurationToPrev  uint64
+	Equals          bool
 }
 
 func NewPair(enterEv Event) *Pair {

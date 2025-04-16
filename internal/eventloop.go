@@ -210,7 +210,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	switch v := ep.EnterEv.(type) {
 	case *OpenEvent:
 		openEv := ep.EnterEv.(*OpenEvent)
-		comm := file.StringValue(openEv.Comm[:])
+		comm := types.StringValue(openEv.Comm[:])
 		if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
 			file := file.NewFd(fd, openEv.Filename[:], v.Flags)
 			e.files[fd] = file

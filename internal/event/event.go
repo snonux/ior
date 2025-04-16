@@ -15,5 +15,6 @@ type Event interface {
 	GetPid() uint32
 	GetTid() uint32
 	GetTime() uint64
+	Equals(other any) bool
 	Recycle()
 }

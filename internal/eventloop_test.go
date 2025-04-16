@@ -4,32 +4,30 @@ import (
 	"context"
 	"fmt"
 	"ior/internal/event"
-	"ior/internal/file"
 	"ior/internal/types"
 	"syscall"
 	"testing"
 )
 
-type validateFunc func(t *testing.T, ev *event.Pair)
-
 type testData struct {
-	rawTracepoints [][]byte       // All the raw tracepoints sent to the event loop
-	validates      []validateFunc // Validation functions to check the event pairs
+	rawTracepoints [][]byte                             // All the raw tracepoints sent to the event loop
+	validates      []func(t *testing.T, ev *event.Pair) // Validation functions to be called on the event loop output
 }
 
 func TestEventloop(t *testing.T) {
 	testTable := map[string]testData{
-		"OpenEventTest": makeOpenEventTestData(t),
+		"OpenEventTest1": makeOpenEventTestData1(t),
+		"OpenEventTest2": makeOpenEventTestData2(t),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	inCh := make(chan []byte)
-	defer close(inCh)
-
 	outCh := make(chan *event.Pair)
-	defer close(outCh)
+	defer func() {
+		cancel()
+		close(inCh)
+		close(outCh)
+	}()
 
 	ev := newEventLoop()
 	ev.printCb = func(ev *event.Pair) { outCh <- ev }
@@ -39,11 +37,14 @@ func TestEventloop(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			go func() {
 				for _, raw := range td.rawTracepoints {
+					t.Log("Sending raw tracepoint", raw, "simulating BPF sending this")
 					inCh <- raw
 				}
 			}()
 			for _, validate := range td.validates {
-				validate(t, <-outCh)
+				ep := <-outCh
+				t.Log("Received", ep)
+				validate(t, ep)
 			}
 			select {
 			case x := <-outCh:
@@ -54,7 +55,7 @@ func TestEventloop(t *testing.T) {
 	}
 }
 
-func makeOpenEventTestData(t *testing.T) (td testData) {
+func makeOpenEventTestData1(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterOpenEvent(t)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
@@ -62,23 +63,35 @@ func makeOpenEventTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, ep *event.Pair) {
-		if ep.EnterEv.GetTraceId() != enterEv.TraceId {
-			t.Errorf("Expected TraceId '%v' but got '%v'", enterEv.TraceId, ep.EnterEv.GetTraceId())
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
 			return
 		}
 		filenameA := ep.FileName()
-		filenameB := file.StringValue(enterEv.Filename[:])
+		filenameB := types.StringValue(enterEv.Filename[:])
 		if filenameA != filenameB {
 			t.Errorf("Expected file name '%v' but got '%v'", filenameB, filenameA)
 			return
 		}
-		comm := file.StringValue(enterEv.Comm[:])
+		comm := types.StringValue(enterEv.Comm[:])
 		if ep.Comm != comm {
 			t.Errorf("Expected comm name '%v' but got '%v'", comm, ep.Comm)
 			return
 		}
 		t.Log(fmt.Sprintf("Event pair '%v' appears fine", ep))
 	})
+
+	return td
+}
+func makeOpenEventTestData2(t *testing.T) (td testData) {
+	// Almost the same, but with duplicates
+	td1 := makeOpenEventTestData1(t)
+	td.rawTracepoints = append(td.rawTracepoints, td1.rawTracepoints[1]) // Will be ignored by the event loop
+	td.rawTracepoints = append(td.rawTracepoints, td1.rawTracepoints[0]) // Will be used by the event loop
+	td.rawTracepoints = append(td.rawTracepoints, td1.rawTracepoints[0]) // Will be ignored by the event loop
+	td.rawTracepoints = append(td.rawTracepoints, td1.rawTracepoints[1]) // Will be used by the event loop
+	td.rawTracepoints = append(td.rawTracepoints, td1.rawTracepoints[1]) // Will be ignored by the event loop
+	td.validates = td1.validates
 
 	return td
 }

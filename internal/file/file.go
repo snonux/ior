@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"ior/internal/types"
 	"os"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ type FdFile struct {
 func NewFd(fd int32, name []byte, flags int32) FdFile {
 	f := FdFile{
 		fd:    fd,
-		name:  StringValue(name),
+		name:  types.StringValue(name),
 		flags: Flags(flags),
 	}
 	if f.flags == -1 {
@@ -106,7 +107,7 @@ type oldnameNewnameFile struct {
 }
 
 func NewOldnameNewname(oldname, newname []byte) oldnameNewnameFile {
-	return oldnameNewnameFile{StringValue(oldname), StringValue(newname)}
+	return oldnameNewnameFile{types.StringValue(oldname), types.StringValue(newname)}
 }
 
 func (f oldnameNewnameFile) Name() string {
@@ -136,7 +137,7 @@ type pathnameFile struct {
 }
 
 func NewPathname(pathname []byte) pathnameFile {
-	return pathnameFile{StringValue(pathname)}
+	return pathnameFile{types.StringValue(pathname)}
 }
 
 func (f pathnameFile) Name() string {
@@ -157,9 +158,4 @@ func (f pathnameFile) String() string {
 	sb.WriteString(")")
 
 	return sb.String()
-}
-
-// As data comes in from arrays, converted to slices, there will be null-bytes at the end..
-func StringValue(byteStr []byte) string {
-	return string(byteStr[:bytes.IndexByte(byteStr, 0)])
 }
