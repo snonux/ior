@@ -117,7 +117,7 @@ func runTrace() error {
 		close(pprofDone)
 	}
 
-	loop := newEventLoop()
+	el := newEventLoop()
 	duration := time.Duration(flags.Get().Duration) * time.Second
 	fmt.Println("Probing for", duration)
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
@@ -133,7 +133,7 @@ func runTrace() error {
 
 	go func() {
 		<-ctx.Done()
-		fmt.Println(loop.stats())
+		fmt.Println(el.stats())
 		if flags.Get().PprofEnable {
 			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
 			pprof.StopCPUProfile()
@@ -143,7 +143,7 @@ func runTrace() error {
 	}()
 
 	startTime := time.Now()
-	loop.run(ctx, ch)
+	el.run(ctx, ch)
 	totalDuration := time.Since(startTime)
 	<-pprofDone
 	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
