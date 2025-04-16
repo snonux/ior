@@ -69,6 +69,14 @@ func (o OpenEvent) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Filename:%v Comm:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, string(o.Filename[:]), string(o.Comm[:]))
 }
 
+func (o OpenEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*OpenEvent)
+	if !ok {
+		return false
+	}
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags && o.Filename == otherConcrete.Filename && o.Comm == otherConcrete.Comm
+}
+
 func (o *OpenEvent) GetEventType() EventType {
 	return o.EventType
 }
@@ -125,6 +133,14 @@ type NullEvent struct {
 
 func (n NullEvent) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid)
+}
+
+func (n NullEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*NullEvent)
+	if !ok {
+		return false
+	}
+	return n.EventType == otherConcrete.EventType && n.TraceId == otherConcrete.TraceId && n.Time == otherConcrete.Time && n.Pid == otherConcrete.Pid && n.Tid == otherConcrete.Tid
 }
 
 func (n *NullEvent) GetEventType() EventType {
@@ -186,6 +202,14 @@ func (f FdEvent) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd)
 }
 
+func (f FdEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*FdEvent)
+	if !ok {
+		return false
+	}
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd
+}
+
 func (f *FdEvent) GetEventType() EventType {
 	return f.EventType
 }
@@ -243,6 +267,14 @@ type RetEvent struct {
 
 func (r RetEvent) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Ret:%v Pid:%v Tid:%v", r.EventType, r.TraceId, r.Time, r.Ret, r.Pid, r.Tid)
+}
+
+func (r RetEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*RetEvent)
+	if !ok {
+		return false
+	}
+	return r.EventType == otherConcrete.EventType && r.TraceId == otherConcrete.TraceId && r.Time == otherConcrete.Time && r.Ret == otherConcrete.Ret && r.Pid == otherConcrete.Pid && r.Tid == otherConcrete.Tid
 }
 
 func (r *RetEvent) GetEventType() EventType {
@@ -305,6 +337,14 @@ func (n NameEvent) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Oldname:%v Newname:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid, string(n.Oldname[:]), string(n.Newname[:]))
 }
 
+func (n NameEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*NameEvent)
+	if !ok {
+		return false
+	}
+	return n.EventType == otherConcrete.EventType && n.TraceId == otherConcrete.TraceId && n.Time == otherConcrete.Time && n.Pid == otherConcrete.Pid && n.Tid == otherConcrete.Tid && n.Oldname == otherConcrete.Oldname && n.Newname == otherConcrete.Newname
+}
+
 func (n *NameEvent) GetEventType() EventType {
 	return n.EventType
 }
@@ -362,6 +402,14 @@ type PathEvent struct {
 
 func (p PathEvent) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Pathname:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, string(p.Pathname[:]))
+}
+
+func (p PathEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*PathEvent)
+	if !ok {
+		return false
+	}
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Pathname == otherConcrete.Pathname
 }
 
 func (p *PathEvent) GetEventType() EventType {
@@ -425,6 +473,14 @@ func (f FcntlEvent) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Cmd:%v Arg:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Cmd, f.Arg)
 }
 
+func (f FcntlEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*FcntlEvent)
+	if !ok {
+		return false
+	}
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.Cmd == otherConcrete.Cmd && f.Arg == otherConcrete.Arg
+}
+
 func (f *FcntlEvent) GetEventType() EventType {
 	return f.EventType
 }
@@ -483,6 +539,14 @@ type Dup3Event struct {
 
 func (d Dup3Event) String() string {
 	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Flags:%v", d.EventType, d.TraceId, d.Time, d.Pid, d.Tid, d.Fd, d.Flags)
+}
+
+func (d Dup3Event) Equals(other any) bool {
+	otherConcrete, ok := other.(*Dup3Event)
+	if !ok {
+		return false
+	}
+	return d.EventType == otherConcrete.EventType && d.TraceId == otherConcrete.TraceId && d.Time == otherConcrete.Time && d.Pid == otherConcrete.Pid && d.Tid == otherConcrete.Tid && d.Fd == otherConcrete.Fd && d.Flags == otherConcrete.Flags
 }
 
 func (d *Dup3Event) GetEventType() EventType {

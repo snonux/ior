@@ -39,9 +39,20 @@ role StructGoMethods {
             ($_.<type> eq 'char' && $_.<arraysize>) ?? "string({$ref}[:])" !! $ref;
         });
 
+
         qq:to/END/;
         func ($self-ref {$<identifier>.made}) String() string \{
             return fmt.Sprintf("{@format.join(' ')}", {@args.join(', ')})
+        \}
+
+        func ($self-ref {$<identifier>.made}) Equals(other any) bool \{
+            otherConcrete, ok := other.(*{$<identifier>.made})
+            if !ok \{
+                return false
+            \}
+            return {$<member>.map({ $_.<identifier>.made }).map({
+                "$self-ref.$_ == otherConcrete.$_"
+            }).join(' && ') }
         \}
 
         func ($self-ref *{$<identifier>.made}) GetEventType() EventType \{
@@ -148,7 +159,7 @@ class NQCToGoActions does StructGoMethods does ConstantGoMethods {
         make qq:to/END/;
         // Code generated - don't change manually!
         package types
-        
+
         {self.constant-go-methods}
         {$<construct>.map(*.made).join('')}
         END
