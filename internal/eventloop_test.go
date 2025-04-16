@@ -2,29 +2,40 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"ior/internal/event"
 	"ior/internal/types"
 	"syscall"
 	"testing"
 )
 
-// TODO: Finish this test
-func TestEventloop(t *testing.T) {
-	T = t
+type validateFunc func(t *testing.T, ev *event.Pair)
 
+func TestEventloop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	inCh := make(chan []byte)
-	outCh := make(chan *event.Pair, 2)
+	outCh := make(chan *event.Pair)
+	validateCh := make(chan validateFunc)
 
 	go func() {
 		defer close(inCh)
-		sendOpenFileTracepoints(t, inCh)
+		defer close(validateCh)
+
+		enterEv, exitEv, validate := openFileTestdata(t)
+		inCh <- enterEv
+		inCh <- exitEv
+		validateCh <- validate
 	}()
 
 	go func() {
 		for ev := range outCh {
-			t.Log("Received", ev)
+			t.Run(ev.EnterEv.String(), func(t *testing.T) {
+				t.Log("Received", ev)
+				validate := <-validateCh
+				validate(t, ev)
+			})
 		}
 	}()
 
@@ -36,39 +47,47 @@ func TestEventloop(t *testing.T) {
 	ev.run(ctx, inCh)
 }
 
-func sendOpenFileTracepoints(t *testing.T, ch chan<- []byte) {
-	enterOpenEvent := types.OpenEvent{
+func openFileTestdata(t *testing.T) (enterEvBytes, exitEvBytes []byte, validate validateFunc) {
+	enterEv := types.OpenEvent{
 		EventType: types.ENTER_OPEN_EVENT,
 		TraceId:   types.SYS_ENTER_OPENAT,
 		Time:      123456789,
 		Pid:       10,
-		Tid:       10,
+		Tid:       11,
 		Flags:     syscall.O_RDWR,
 		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
 		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
 	}
-	copy(enterOpenEvent.Filename[:], "testfile.txt")
-	copy(enterOpenEvent.Comm[:], "testcomm")
+	copy(enterEv.Filename[:], "testfile.txt")
+	copy(enterEv.Comm[:], "testcomm")
 
-	bytes, err := enterOpenEvent.Bytes()
+	var err error
+
+	enterEvBytes, err = enterEv.Bytes()
 	if err != nil {
 		t.Error(err)
 	}
-	t.Log("Sending", enterOpenEvent, bytes)
-	ch <- bytes
 
-	exitOpenEvent := types.RetEvent{
+	exitEv := types.RetEvent{
 		EventType: types.EXIT_OPEN_EVENT,
 		TraceId:   types.SYS_EXIT_OPENAT,
 		Time:      123456789,
 		Ret:       42,
 		Pid:       10,
-		Tid:       10,
+		Tid:       11,
 	}
-	bytes, err = exitOpenEvent.Bytes()
+	exitEvBytes, err = exitEv.Bytes()
 	if err != nil {
 		t.Error(err)
+
 	}
-	t.Log("Sending", exitOpenEvent, bytes)
-	ch <- bytes
+
+	validate = func(t *testing.T, ev *event.Pair) {
+		if ev.EnterEv.GetTraceId() != enterEv.TraceId {
+			t.Errorf("Expected TraceId '%v' but got '%v'", enterEv.TraceId, ev.EnterEv.GetTraceId())
+		}
+		t.Log(fmt.Sprintf("Event pair '%v' appears fine", ev))
+	}
+
+	return
 }

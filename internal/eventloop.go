@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-	"testing"
 	"time"
 
 	"ior/internal/event"
@@ -70,8 +69,6 @@ func (e *eventLoop) stats() string {
 
 	return stats
 }
-
-var T *testing.T
 
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
@@ -142,7 +139,7 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 			e.syscallEnter(ev)
 		}
 	case EXIT_OPEN_EVENT:
-		e.syscallExit(NewFdEvent(raw), ch)
+		e.syscallExit(NewRetEvent(raw), ch)
 	case ENTER_FD_EVENT:
 		e.syscallEnter(NewFdEvent(raw))
 	case EXIT_FD_EVENT:
@@ -171,7 +168,6 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 }
 
 func (e *eventLoop) syscallEnter(enterEv event.Event) {
-	T.Log("syscallenter", enterEv)
 	tid := enterEv.GetTid()
 	if !e.filter.commFilterEnable {
 		e.enterEvs[tid] = event.NewPair(enterEv)
@@ -193,7 +189,6 @@ func (e *eventLoop) syscallEnter(enterEv event.Event) {
 }
 
 func (e *eventLoop) syscallExit(exitEv event.Event, ch chan<- *event.Pair) {
-	T.Log("syscall exit", exitEv)
 	ev, ok := e.enterEvs[exitEv.GetTid()]
 	if !ok {
 		exitEv.Recycle()
