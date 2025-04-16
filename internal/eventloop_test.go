@@ -12,52 +12,56 @@ import (
 
 type validateFunc func(t *testing.T, ev *event.Pair)
 
+type testData struct {
+	rawTracepoints [][]byte       // All the raw tracepoints sent to the event loop
+	validates      []validateFunc // Validation functions to check the event pairs
+}
+
 func TestEventloop(t *testing.T) {
+	testTable := map[string]testData{
+		"OpenEventTest": makeOpenEventTestData(t),
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	inCh := make(chan []byte)
+	defer close(inCh)
+
 	outCh := make(chan *event.Pair)
-	validateCh := make(chan validateFunc)
-
-	go func() {
-		defer close(inCh)
-		defer close(validateCh)
-
-		addTests(t, inCh, validateCh)
-	}()
-
-	go func() {
-		for ev := range outCh {
-			t.Run(ev.EnterEv.String(), func(t *testing.T) {
-				t.Log("Received", ev)
-				validate := <-validateCh
-				validate(t, ev)
-			})
-		}
-	}()
+	defer close(outCh)
 
 	ev := newEventLoop()
-	ev.printCb = func(ev *event.Pair) {
-		outCh <- ev
+	ev.printCb = func(ev *event.Pair) { outCh <- ev }
+	go ev.run(ctx, inCh)
+
+	for testName, td := range testTable {
+		t.Run(testName, func(t *testing.T) {
+			go func() {
+				for _, raw := range td.rawTracepoints {
+					inCh <- raw
+				}
+			}()
+			for _, validate := range td.validates {
+				validate(t, <-outCh)
+			}
+			select {
+			case x := <-outCh:
+				t.Errorf("Expected no more events but got '%v'", x)
+			default:
+			}
+		})
 	}
-	ev.run(ctx, inCh)
 }
 
-func addTests(t *testing.T, inCh chan []byte, validateCh chan validateFunc) {
-	addOpenFileTest1(t, inCh, validateCh)
-	addOpenFileTest2(t, inCh, validateCh)
-}
-
-func addOpenFileTest1(t *testing.T, inCh chan<- []byte, validateCh chan<- validateFunc) {
+func makeOpenEventTestData(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterOpenEvent(t)
-	inCh <- enterEvBytes // Should be discarded by the event loop automatically
-	inCh <- enterEvBytes
-	_, exitEvBytes := makeExitOpenEvent(t)
-	inCh <- exitEvBytes
-	inCh <- exitEvBytes // Should be discarded by the event loop automatically
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
-	validateCh <- func(t *testing.T, ep *event.Pair) {
+	_, exitEvBytes := makeExitOpenEvent(t)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, ep *event.Pair) {
 		if ep.EnterEv.GetTraceId() != enterEv.TraceId {
 			t.Errorf("Expected TraceId '%v' but got '%v'", enterEv.TraceId, ep.EnterEv.GetTraceId())
 			return
@@ -74,11 +78,9 @@ func addOpenFileTest1(t *testing.T, inCh chan<- []byte, validateCh chan<- valida
 			return
 		}
 		t.Log(fmt.Sprintf("Event pair '%v' appears fine", ep))
-	}
-}
+	})
 
-func addOpenFileTest2(t *testing.T, inCh chan<- []byte, validateCh chan<- validateFunc) {
-
+	return td
 }
 
 func makeEnterOpenEvent(t *testing.T) (types.OpenEvent, []byte) {
