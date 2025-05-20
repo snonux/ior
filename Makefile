@@ -56,17 +56,17 @@ prof:
 .PHONY: test
 test:
 	$(GO) clean -testcache
-	$(GO) test ./... -v
+	$(GO) test ./... -v -failfast
 
 .PHONY: test_specific
 test_specific:
 	$(GO) clean -testcache
-	$(GO) test ./... -run ^$(TEST_NAME)$$ -v
+	$(GO) test ./... -run ^$(TEST_NAME)$$ -v -failfast
 
 .PHONY: test_foo
 test_foo:
 	$(GO) clean -testcache
-	$(GO) test ./internal/ -v
+	$(GO) test ./internal/ -v -failfast
 
 .PHONY: bench
 bench:
