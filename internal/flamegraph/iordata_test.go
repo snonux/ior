@@ -35,8 +35,7 @@ func TestMerge(t *testing.T) {
 	rdwrFlag := flagsType(syscall.O_RDWR)
 	roFlag := flagsType(syscall.O_RDONLY)
 	traceId := types.SYS_ENTER_OPENAT
-
-	// Initialize two iorData instances with sample data
+	// Initialize iorData instances with sample data
 	iod1 := iorData{paths: pathMap{
 		"path1": {traceId: {"comm1": {100: {1000: {rdwrFlag: Counter{
 			Count:          10,
@@ -62,17 +61,18 @@ func TestMerge(t *testing.T) {
 			DurationToPrev: 400,
 		}}}}}}}}
 
-	// Merge iod2 into iod1
-	t.Log(iod1)
-	t.Log(iod2)
+	t.Log("iod1", iod1)
+	t.Log("iod2", iod2)
+	t.Log("iod3", iod3)
+	t.Log("iod4", iod4)
 	merged := iod1.merge(iod2).merge(iod3).merge(iod4)
-	t.Log(merged)
+	t.Log("merged", merged)
 
 	t.Run("Merged correctly", func(t *testing.T) {
 		if len(merged.paths) != 2 {
 			t.Errorf("Expected 2 paths, got %d", len(merged.paths))
 		}
-		if merged.paths["path1"][traceId]["comm1"][100][1000][roFlag].Count != 10 {
+		if merged.paths["path1"][traceId]["comm1"][100][1000][rdwrFlag].Count != 10 {
 			t.Errorf("Expected counter 10, got %d", merged.paths["path1"][1]["comm1"][100][1000][rdwrFlag].Count)
 		}
 		if merged.paths["path2"][traceId]["comm2"][101][1000][roFlag].Count != 60 {
