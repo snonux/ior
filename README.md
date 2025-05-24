@@ -12,7 +12,7 @@ This works only on Linux!
 
 ## Fedora
 
-To get this running on Fedora 39, run:
+To get this running on Fedora 42, run:
 
 ```shell
 mkdir ~/git
@@ -27,7 +27,6 @@ make libbpfgo-static
 Need libelf static, which isn't in any repos. So we need to compile it ourselves.
 
 ```
-sudo dnf groupinstall "Development Tools"
 sudo dnf install rpmdevtools dnf-utils
 dnf download --source elfutils-libelf
 rpm -ivh elfutils-*.src.rpm
