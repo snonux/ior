@@ -58,15 +58,10 @@ test:
 	$(GO) clean -testcache
 	$(GO) test ./... -v -failfast
 
-.PHONY: test_specific
-test_specific:
+.PHONY: test_with_name
+test_with_name:
 	$(GO) clean -testcache
 	$(GO) test ./... -run ^$(TEST_NAME)$$ -v -failfast
-
-.PHONY: test_foo
-test_foo:
-	$(GO) clean -testcache
-	$(GO) test ./internal/ -v -failfast
 
 .PHONY: bench
 bench:
