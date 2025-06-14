@@ -29,3 +29,8 @@ Consider:
 * File base path or mount point or device name
 * Filename?
 * Time spent between syscalls?
+
+## Other
+
+* More ways to transfer file descriptors between processes: pidfd_getfd https://biriukov.dev/docs/fd-pipe-session-terminal/1-file-descriptor-and-open-file-description/
+
