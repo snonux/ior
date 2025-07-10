@@ -100,6 +100,8 @@ func TestEventloop(t *testing.T) {
 			// Special checks for edge case tests
 			switch testName {
 			case "EnterOnlyTest":
+				// Give time for events to be processed
+				time.Sleep(20 * time.Millisecond)
 				// Verify enter events are still pending
 				// Only the OpenEvent is guaranteed to be stored (FdEvent requires comm name)
 				verifyEnterEventPending(t, el, defaultTid)
