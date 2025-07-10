@@ -24,7 +24,7 @@
 
 ### NullEvent Syscalls
 - [x] Add test case for sync syscall
-- [ ] Add test case for io_uring_setup syscall
+- [x] Add test case for io_uring_setup syscall
 
 ### Dup3Event Syscalls
 - [x] Add test case for dup3 syscall
@@ -32,10 +32,10 @@
 ## Advanced Test Cases
 
 ### File Descriptor Lifecycle
-- [ ] Test that fd from openat is properly tracked in subsequent read/write/close operations
-- [ ] Test dup/dup2/dup3 creating new file descriptors
-- [ ] Test close removing fd from tracking
-- [ ] Test multiple file descriptors being tracked simultaneously
+- [x] Test that fd from openat is properly tracked in subsequent read/write/close operations
+- [x] Test dup/dup2/dup3 creating new file descriptors
+- [x] Test close removing fd from tracking
+- [x] Test multiple file descriptors being tracked simultaneously
 
 ### Edge Cases
 - [ ] Test missing enter events (only exit event received)
