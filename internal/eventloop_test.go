@@ -2,7 +2,10 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/flamegraph"
 	"ior/internal/types"
 	"syscall"
 	"testing"
@@ -784,6 +787,34 @@ func verifyNoEnterEventPending(t *testing.T, el *eventLoop, tid uint32) {
 func verifyMismatchCount(t *testing.T, el *eventLoop, expectedCount uint) {
 	if el.numTracepointMismatches != expectedCount {
 		t.Errorf("Expected %d tracepoint mismatches but got %d", expectedCount, el.numTracepointMismatches)
+	}
+}
+
+// Helper functions for filter testing
+func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
+	el := &eventLoop{
+		filter: &eventFilter{
+			commFilterEnable: commFilter != "",
+			commFilter:       commFilter,
+			pathFilterEnable: pathFilter != "",
+			pathFilter:       pathFilter,
+		},
+		enterEvs:      make(map[uint32]*event.Pair),
+		files:         make(map[int32]file.File),
+		comms:         make(map[uint32]string),
+		prevPairTimes: make(map[uint32]uint64),
+		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
+		flamegraph:    flamegraph.New(),
+		done:          make(chan struct{}),
+	}
+	return el
+}
+
+func verifyCommName(t *testing.T, el *eventLoop, tid uint32, expectedComm string) {
+	if comm, ok := el.comms[tid]; !ok {
+		t.Errorf("Expected comm name for tid %d but it wasn't found", tid)
+	} else if comm != expectedComm {
+		t.Errorf("Expected comm name '%s' for tid %d but got '%s'", expectedComm, tid, comm)
 	}
 }
 
