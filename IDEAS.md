@@ -33,4 +33,4 @@ Consider:
 ## Other
 
 * More ways to transfer file descriptors between processes: pidfd_getfd https://biriukov.dev/docs/fd-pipe-session-terminal/1-file-descriptor-and-open-file-description/
-
+* Trace for ALL syscalls and only count the count and times .... thats for another mode
