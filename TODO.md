@@ -8,26 +8,26 @@
 ## Remaining Test Cases
 
 ### FdEvent Syscalls
-- [ ] Add test case for fsync syscall
-- [ ] Add test case for ftruncate syscall
+- [x] Add test case for fsync syscall
+- [x] Add test case for ftruncate syscall
 
 ### PathEvent Syscalls  
-- [ ] Add test case for unlink syscall
-- [ ] Add test case for creat syscall
-- [ ] Add test case for stat syscall
-- [ ] Add test case for access syscall
+- [x] Add test case for unlink syscall
+- [x] Add test case for creat syscall
+- [x] Add test case for stat syscall
+- [x] Add test case for access syscall
 
 ### NameEvent Syscalls
-- [ ] Add test case for rename syscall
-- [ ] Add test case for link syscall
-- [ ] Add test case for symlink syscall
+- [x] Add test case for rename syscall
+- [x] Add test case for link syscall
+- [x] Add test case for symlink syscall
 
 ### NullEvent Syscalls
-- [ ] Add test case for sync syscall
+- [x] Add test case for sync syscall
 - [ ] Add test case for io_uring_setup syscall
 
 ### Dup3Event Syscalls
-- [ ] Add test case for dup3 syscall
+- [x] Add test case for dup3 syscall
 
 ## Advanced Test Cases
 
