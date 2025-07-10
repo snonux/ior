@@ -38,11 +38,11 @@
 - [x] Test multiple file descriptors being tracked simultaneously
 
 ### Edge Cases
-- [ ] Test missing enter events (only exit event received)
-- [ ] Test missing exit events (only enter event received)
-- [ ] Test mismatched enter/exit pairs
-- [ ] Test out-of-order events
-- [ ] Test events from different threads/processes
+- [x] Test missing enter events (only exit event received)
+- [x] Test missing exit events (only enter event received)
+- [x] Test mismatched enter/exit pairs
+- [x] Test out-of-order events
+- [x] Test events from different threads/processes
 
 ### Filtering and Comm Tracking
 - [ ] Test that comm names are properly propagated across syscalls

@@ -6,6 +6,7 @@ import (
 	"ior/internal/types"
 	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -51,24 +52,33 @@ func TestEventloop(t *testing.T) {
 		"FdLifecycleTest": makeFdLifecycleTestData(t),
 		"FdDupTest": makeFdDupTestData(t),
 		"MultipleFdsTest": makeMultipleFdsTestData(t),
+		// Edge case tests
+		"ExitOnlyTest": makeExitOnlyEventTestData(t),
+		"EnterOnlyTest": makeEnterOnlyEventTestData(t),
+		"MismatchedPairTest": makeMismatchedPairEventTestData(t),
+		"OutOfOrderTest": makeOutOfOrderEventTestData(t),
+		"CrossThreadTest": makeCrossThreadEventTestData(t),
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	inCh := make(chan []byte)
-	outCh := make(chan *event.Pair)
-
-	el := newEventLoop()
-	el.printCb = func(ev *event.Pair) { outCh <- ev }
-	go el.run(ctx, inCh)
 
 	for testName, td := range testTable {
 		t.Run(testName, func(t *testing.T) {
+			// Create a fresh eventloop for each test
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			inCh := make(chan []byte)
+			outCh := make(chan *event.Pair)
+
+			el := newEventLoop()
+			el.printCb = func(ev *event.Pair) { outCh <- ev }
+			go el.run(ctx, inCh)
+
 			go func() {
 				for _, raw := range td.rawTracepoints {
 					t.Log("Sending raw tracepoint", raw, "simulating BPF sending this")
 					inCh <- raw
+					// Small delay to simulate real BPF event timing
+					time.Sleep(time.Microsecond)
 				}
 			}()
 			for _, validate := range td.validates {
@@ -76,10 +86,27 @@ func TestEventloop(t *testing.T) {
 				t.Log("Received", ep)
 				validate(t, el, ep)
 			}
+			// Give a small delay to ensure any unexpected events would have arrived
+			time.Sleep(10 * time.Millisecond)
 			select {
 			case x := <-outCh:
 				t.Errorf("Expected no more events but got '%v'", x)
 			default:
+			}
+			
+			// Special checks for edge case tests
+			switch testName {
+			case "EnterOnlyTest":
+				// Verify enter events are still pending
+				// Only the OpenEvent is guaranteed to be stored (FdEvent requires comm name)
+				verifyEnterEventPending(t, el, defaultTid)
+			case "MismatchedPairTest":
+				// Give time for all events to be processed
+				time.Sleep(50 * time.Millisecond)
+				// Verify mismatch counter was incremented
+				if el.numTracepointMismatches < 2 {
+					t.Errorf("Expected at least 2 tracepoint mismatches but got %d", el.numTracepointMismatches)
+				}
 			}
 		})
 	}
@@ -732,6 +759,34 @@ func verifyFdNotTracked(t *testing.T, el *eventLoop, fd int32) {
 	}
 }
 
+// Helper functions for edge case tests
+func verifyNoEventOutput(t *testing.T, outCh <-chan *event.Pair, timeout time.Duration) {
+	select {
+	case ev := <-outCh:
+		t.Errorf("Expected no event output but got: %v", ev)
+	case <-time.After(timeout):
+		// Good, no output as expected
+	}
+}
+
+func verifyEnterEventPending(t *testing.T, el *eventLoop, tid uint32) {
+	if _, ok := el.enterEvs[tid]; !ok {
+		t.Errorf("Expected enter event for tid %d to be pending but it wasn't found", tid)
+	}
+}
+
+func verifyNoEnterEventPending(t *testing.T, el *eventLoop, tid uint32) {
+	if _, ok := el.enterEvs[tid]; ok {
+		t.Errorf("Expected no enter event for tid %d but one was found", tid)
+	}
+}
+
+func verifyMismatchCount(t *testing.T, el *eventLoop, expectedCount uint) {
+	if el.numTracepointMismatches != expectedCount {
+		t.Errorf("Expected %d tracepoint mismatches but got %d", expectedCount, el.numTracepointMismatches)
+	}
+}
+
 // Test open→read→write→close lifecycle
 func makeFdLifecycleTestData(t *testing.T) (td testData) {
 	fd := int32(42)
@@ -1063,6 +1118,188 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 		verifyFdNotTracked(t, el, fd1)
 		verifyFdNotTracked(t, el, fd2)
 		verifyFdNotTracked(t, el, fd3)
+	})
+	
+	return td
+}
+
+// Test exit event without corresponding enter event
+func makeExitOnlyEventTestData(t *testing.T) (td testData) {
+	// Test with FdEvent - send only exit event
+	fd := int32(99)
+	_, exitFdBytes := makeExitFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_EXIT_READ)
+	td.rawTracepoints = append(td.rawTracepoints, exitFdBytes)
+	
+	// Test with RetEvent - send only exit event for open
+	_, exitOpenBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	td.rawTracepoints = append(td.rawTracepoints, exitOpenBytes)
+	
+	// No validates - we expect no output
+	// The test framework will verify no events are produced
+	
+	return td
+}
+
+// Test enter event without corresponding exit event
+func makeEnterOnlyEventTestData(t *testing.T) (td testData) {
+	// Test with OpenEvent - send only enter event
+	_, enterOpenBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	td.rawTracepoints = append(td.rawTracepoints, enterOpenBytes)
+	
+	// Test with FdEvent - send only enter event  
+	// Note: This event will not be stored in enterEvs unless comm filter is disabled
+	// or the tid already has a comm name established
+	_, enterFdBytes := makeEnterFdEvent(t, defaulTime+100, defaultPid, defaultTid+1, 50, types.SYS_ENTER_READ)
+	td.rawTracepoints = append(td.rawTracepoints, enterFdBytes)
+	
+	// No output expected, but OpenEvent should remain in enterEvs map
+	// FdEvent may not be stored due to comm filter requirements
+	
+	return td
+}
+
+// Test mismatched enter/exit trace IDs
+func makeMismatchedPairEventTestData(t *testing.T) (td testData) {
+	// Send enter for READ but exit for WRITE (mismatched)
+	fd := int32(60)
+	_, enterReadBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_READ)
+	td.rawTracepoints = append(td.rawTracepoints, enterReadBytes)
+	
+	// Wrong exit type
+	_, exitWriteBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_WRITE)
+	td.rawTracepoints = append(td.rawTracepoints, exitWriteBytes)
+	
+	// No output expected due to mismatch
+	
+	// Send enter OPEN but exit with wrong trace ID
+	_, enterOpenBytes := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid+1)
+	td.rawTracepoints = append(td.rawTracepoints, enterOpenBytes)
+	
+	// Create a malformed exit event with wrong trace ID
+	exitEv := types.RetEvent{
+		EventType: types.EXIT_OPEN_EVENT,
+		TraceId:   types.SYS_EXIT_READ, // Wrong! Should be SYS_EXIT_OPENAT
+		Time:      defaulTime + 300,
+		Ret:       42,
+		Pid:       defaultPid,
+		Tid:       defaultTid + 1,
+	}
+	exitBytes, err := exitEv.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, exitBytes)
+	
+	// No output expected due to trace ID mismatch
+	
+	return td
+}
+
+// Test out-of-order events
+func makeOutOfOrderEventTestData(t *testing.T) (td testData) {
+	// Send exit before enter for same tid
+	fd := int32(70)
+	_, exitBytes := makeExitFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_EXIT_READ)
+	td.rawTracepoints = append(td.rawTracepoints, exitBytes)
+	
+	_, enterBytes := makeEnterFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_ENTER_READ)
+	td.rawTracepoints = append(td.rawTracepoints, enterBytes)
+	
+	// No output expected - exit came before enter
+	
+	// Send multiple enters before exit (only last should match)
+	_, enter1Bytes := makeEnterFdEvent(t, defaulTime+200, defaultPid, defaultTid+1, fd, types.SYS_ENTER_WRITE)
+	td.rawTracepoints = append(td.rawTracepoints, enter1Bytes)
+	
+	_, enter2Bytes := makeEnterFdEvent(t, defaulTime+300, defaultPid, defaultTid+1, fd, types.SYS_ENTER_WRITE)
+	td.rawTracepoints = append(td.rawTracepoints, enter2Bytes)
+	
+	_, exit2Bytes := makeExitFdEvent(t, defaulTime+400, defaultPid, defaultTid+1, fd, types.SYS_EXIT_WRITE)
+	td.rawTracepoints = append(td.rawTracepoints, exit2Bytes)
+	
+	// Should get one output for the second enter/exit pair
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if ep.EnterEv.GetTime() != defaulTime+300 {
+			t.Errorf("Expected the second enter event to match, but got time %d", ep.EnterEv.GetTime())
+		}
+	})
+	
+	return td
+}
+
+// Test cross-thread event handling
+func makeCrossThreadEventTestData(t *testing.T) (td testData) {
+	tidA := uint32(100)
+	tidB := uint32(200)
+	
+	// Send enter from thread A
+	enterA := types.OpenEvent{
+		EventType: types.ENTER_OPEN_EVENT,
+		TraceId:   types.SYS_ENTER_OPENAT,
+		Time:      defaulTime,
+		Pid:       defaultPid,
+		Tid:       tidA,
+		Flags:     syscall.O_RDWR,
+		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
+		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
+	}
+	copy(enterA.Filename[:], "fileA.txt")
+	copy(enterA.Comm[:], "testcomm")
+	enterABytes, err := enterA.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, enterABytes)
+	
+	// Send enter from thread B
+	enterB := types.OpenEvent{
+		EventType: types.ENTER_OPEN_EVENT,
+		TraceId:   types.SYS_ENTER_OPENAT,
+		Time:      defaulTime + 100,
+		Pid:       defaultPid,
+		Tid:       tidB,
+		Flags:     syscall.O_RDWR,
+		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
+		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
+	}
+	copy(enterB.Filename[:], "fileB.txt")
+	copy(enterB.Comm[:], "testcomm")
+	enterBBytes, err := enterB.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, enterBBytes)
+	
+	// Send exit for thread B first
+	exitB, exitBBytes := makeExitOpenEvent(t, defaulTime+200, defaultPid, tidB)
+	exitB.Ret = 43
+	exitBBytes, _ = exitB.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, exitBBytes)
+	
+	// Validate thread B event
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if ep.EnterEv.GetTid() != tidB {
+			t.Errorf("Expected event from thread B (tid %d) but got tid %d", tidB, ep.EnterEv.GetTid())
+		}
+		if ep.FileName() != "fileB.txt" {
+			t.Errorf("Expected fileB.txt but got %s", ep.FileName())
+		}
+	})
+	
+	// Send exit for thread A
+	exitA, exitABytes := makeExitOpenEvent(t, defaulTime+300, defaultPid, tidA)
+	exitA.Ret = 42
+	exitABytes, _ = exitA.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, exitABytes)
+	
+	// Validate thread A event
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if ep.EnterEv.GetTid() != tidA {
+			t.Errorf("Expected event from thread A (tid %d) but got tid %d", tidA, ep.EnterEv.GetTid())
+		}
+		if ep.FileName() != "fileA.txt" {
+			t.Errorf("Expected fileA.txt but got %s", ep.FileName())
+		}
 	})
 	
 	return td
