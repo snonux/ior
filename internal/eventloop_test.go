@@ -26,6 +26,12 @@ func TestEventloop(t *testing.T) {
 		"OpenEventTest1": makeOpenEventTestData1(t),
 		"OpenEventTest2": makeOpenEventTestData2(t),
 		"OpenEventTest3": makeOpenEventTestData3(t),
+		// FdEvent tests
+		"ReadEventTest":     makeReadEventTestData(t),
+		"WriteEventTest":    makeWriteEventTestData(t),
+		"CloseEventTest":    makeCloseEventTestData(t),
+		// PathEvent tests
+		"MkdirEventTest":  makeMkdirEventTestData(t),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,4 +178,164 @@ func makeExitOpenEvent(t *testing.T, time uint64, pid, tid uint32) (types.RetEve
 		t.Error(err)
 	}
 	return ev, bytes
+}
+
+// Helper functions for FdEvent
+func makeEnterFdEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, traceId types.TraceId) (types.FdEvent, []byte) {
+	ev := types.FdEvent{
+		EventType: types.ENTER_FD_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Fd:        fd,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+func makeExitFdEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, traceId types.TraceId) (types.FdEvent, []byte) {
+	ev := types.FdEvent{
+		EventType: types.EXIT_FD_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Fd:        fd,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+// Helper function to create exit RetEvent
+func makeExitRetEvent(t *testing.T, time uint64, pid, tid uint32, traceId types.TraceId, ret int64) (types.RetEvent, []byte) {
+	ev := types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Ret:       ret,
+		Pid:       pid,
+		Tid:       tid,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+// Test data functions for FdEvent syscalls
+func makeReadEventTestData(t *testing.T) (td testData) {
+	fd := int32(42) // Assume file descriptor 42
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_READ)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_READ)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+func makeWriteEventTestData(t *testing.T) (td testData) {
+	fd := int32(43) 
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_WRITE)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_WRITE)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+func makeCloseEventTestData(t *testing.T) (td testData) {
+	fd := int32(44)
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_CLOSE)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_CLOSE)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+// Helper functions for PathEvent
+func makeEnterPathEvent(t *testing.T, time uint64, pid, tid uint32, pathname string, traceId types.TraceId) (types.PathEvent, []byte) {
+	ev := types.PathEvent{
+		EventType: types.ENTER_PATH_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Pathname:  [types.MAX_FILENAME_LENGTH]byte{},
+	}
+	copy(ev.Pathname[:], pathname)
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+// Test data functions for PathEvent syscalls
+func makeMkdirEventTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/testdir"
+	enterEv, enterEvBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_MKDIR)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_MKDIR, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		filenameA := types.StringValue(enterEv.Pathname[:])
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != filenameA {
+			t.Errorf("Expected file name '%v' but got '%v'", filenameA, ep.File.Name())
+		}
+	})
+
+	return td
 }
