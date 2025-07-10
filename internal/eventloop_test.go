@@ -30,8 +30,22 @@ func TestEventloop(t *testing.T) {
 		"ReadEventTest":     makeReadEventTestData(t),
 		"WriteEventTest":    makeWriteEventTestData(t),
 		"CloseEventTest":    makeCloseEventTestData(t),
+		"FsyncEventTest":    makeFsyncEventTestData(t),
+		"FtruncateEventTest": makeFtruncateEventTestData(t),
 		// PathEvent tests
 		"MkdirEventTest":  makeMkdirEventTestData(t),
+		"UnlinkEventTest": makeUnlinkEventTestData(t),
+		"CreatEventTest":  makeCreatEventTestData(t),
+		"StatEventTest":   makeStatEventTestData(t),
+		"AccessEventTest": makeAccessEventTestData(t),
+		// NameEvent tests
+		"RenameEventTest":  makeRenameEventTestData(t),
+		"LinkEventTest":    makeLinkEventTestData(t),
+		"SymlinkEventTest": makeSymlinkEventTestData(t),
+		// NullEvent tests
+		"SyncEventTest": makeSyncEventTestData(t),
+		// Dup3Event tests
+		"Dup3EventTest": makeDup3EventTestData(t),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -294,6 +308,46 @@ func makeCloseEventTestData(t *testing.T) (td testData) {
 	return td
 }
 
+func makeFsyncEventTestData(t *testing.T) (td testData) {
+	fd := int32(45)
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_FSYNC)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_FSYNC)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+func makeFtruncateEventTestData(t *testing.T) (td testData) {
+	fd := int32(46)
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_FTRUNCATE)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_FTRUNCATE)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
 // Helper functions for PathEvent
 func makeEnterPathEvent(t *testing.T, time uint64, pid, tid uint32, pathname string, traceId types.TraceId) (types.PathEvent, []byte) {
 	ev := types.PathEvent{
@@ -407,6 +461,229 @@ func makeMkdirEventTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected file to be set")
 		} else if ep.File.Name() != filenameA {
 			t.Errorf("Expected file name '%v' but got '%v'", filenameA, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeUnlinkEventTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/testfile.txt"
+	enterEv, enterEvBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_UNLINK)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_UNLINK, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		filenameA := types.StringValue(enterEv.Pathname[:])
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != filenameA {
+			t.Errorf("Expected file name '%v' but got '%v'", filenameA, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeCreatEventTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/newfile.txt"
+	enterEv, enterEvBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_CREAT)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_CREAT, 47) // fd = 47
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		// For creat, we expect the file to be tracked with the returned fd
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		}
+	})
+
+	return td
+}
+
+func makeStatEventTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/existingfile.txt"
+	enterEv, enterEvBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_NEWSTAT)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_NEWSTAT, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		filenameA := types.StringValue(enterEv.Pathname[:])
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != filenameA {
+			t.Errorf("Expected file name '%v' but got '%v'", filenameA, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeAccessEventTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/checkfile.txt"
+	enterEv, enterEvBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_ACCESS)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_ACCESS, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		filenameA := types.StringValue(enterEv.Pathname[:])
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != filenameA {
+			t.Errorf("Expected file name '%v' but got '%v'", filenameA, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+// Test data functions for NameEvent syscalls
+func makeRenameEventTestData(t *testing.T) (td testData) {
+	oldname := "/tmp/oldfile.txt"
+	newname := "/tmp/newfile.txt"
+	enterEv, enterEvBytes := makeEnterNameEvent(t, defaulTime, defaultPid, defaultTid, oldname, newname, types.SYS_ENTER_RENAME)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_RENAME, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != newname {
+			t.Errorf("Expected file name '%v' but got '%v'", newname, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeLinkEventTestData(t *testing.T) (td testData) {
+	oldname := "/tmp/original.txt"
+	newname := "/tmp/hardlink.txt"
+	enterEv, enterEvBytes := makeEnterNameEvent(t, defaulTime, defaultPid, defaultTid, oldname, newname, types.SYS_ENTER_LINK)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_LINK, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != newname {
+			t.Errorf("Expected file name '%v' but got '%v'", newname, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeSymlinkEventTestData(t *testing.T) (td testData) {
+	oldname := "/tmp/target.txt"
+	newname := "/tmp/symlink.txt"
+	enterEv, enterEvBytes := makeEnterNameEvent(t, defaulTime, defaultPid, defaultTid, oldname, newname, types.SYS_ENTER_SYMLINK)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_SYMLINK, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != newname {
+			t.Errorf("Expected file name '%v' but got '%v'", newname, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+// Test data functions for NullEvent syscalls
+func makeSyncEventTestData(t *testing.T) (td testData) {
+	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_SYNC)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitNullEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_SYNC)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+// Test data functions for Dup3Event syscalls
+func makeDup3EventTestData(t *testing.T) (td testData) {
+	oldFd := int32(49)
+	enterEv, enterEvBytes := makeEnterDup3Event(t, defaulTime, defaultPid, defaultTid, oldFd, syscall.O_CLOEXEC)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	newFd := int32(50)
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_DUP3, int64(newFd))
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
 	})
 
