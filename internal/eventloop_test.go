@@ -313,6 +313,79 @@ func makeEnterPathEvent(t *testing.T, time uint64, pid, tid uint32, pathname str
 	return ev, bytes
 }
 
+// Helper functions for NameEvent
+func makeEnterNameEvent(t *testing.T, time uint64, pid, tid uint32, oldname, newname string, traceId types.TraceId) (types.NameEvent, []byte) {
+	ev := types.NameEvent{
+		EventType: types.ENTER_NAME_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Oldname:   [types.MAX_FILENAME_LENGTH]byte{},
+		Newname:   [types.MAX_FILENAME_LENGTH]byte{},
+	}
+	copy(ev.Oldname[:], oldname)
+	copy(ev.Newname[:], newname)
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+// Helper functions for NullEvent
+func makeEnterNullEvent(t *testing.T, time uint64, pid, tid uint32, traceId types.TraceId) (types.NullEvent, []byte) {
+	ev := types.NullEvent{
+		EventType: types.ENTER_NULL_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+func makeExitNullEvent(t *testing.T, time uint64, pid, tid uint32, traceId types.TraceId) (types.NullEvent, []byte) {
+	ev := types.NullEvent{
+		EventType: types.EXIT_NULL_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+// Helper functions for Dup3Event
+func makeEnterDup3Event(t *testing.T, time uint64, pid, tid uint32, fd int32, flags int32) (types.Dup3Event, []byte) {
+	ev := types.Dup3Event{
+		EventType: types.ENTER_DUP3_EVENT,
+		TraceId:   types.SYS_ENTER_DUP3,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Fd:        fd,
+		Flags:     flags,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
 // Test data functions for PathEvent syscalls
 func makeMkdirEventTestData(t *testing.T) (td testData) {
 	pathname := "/tmp/testdir"
