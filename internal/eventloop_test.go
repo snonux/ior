@@ -44,6 +44,7 @@ func TestEventloop(t *testing.T) {
 		"SymlinkEventTest": makeSymlinkEventTestData(t),
 		// NullEvent tests
 		"SyncEventTest": makeSyncEventTestData(t),
+		"IoUringSetupEventTest": makeIoUringSetupEventTestData(t),
 		// Dup3Event tests
 		"Dup3EventTest": makeDup3EventTestData(t),
 	}
@@ -654,6 +655,26 @@ func makeSyncEventTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	exitEv, exitEvBytes := makeExitNullEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_SYNC)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
+	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	// io_uring_setup returns a file descriptor on success
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_SETUP, 48) // fd = 48
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
