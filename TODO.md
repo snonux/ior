@@ -1,50 +1,73 @@
-# TODO - Eventloop Test Coverage
+# TODO - I/O Riot NG Development Tasks
 
-## Remaining Helper Functions
-- [x] Create helper functions for NameEvent (makeEnterNameEvent/makeExitNameEvent)
-- [x] Create helper functions for NullEvent (makeEnterNullEvent/makeExitNullEvent)  
-- [x] Create helper functions for Dup3Event (makeEnterDup3Event/makeExitDup3Event)
+## High Priority (Core functionality)
 
-## Remaining Test Cases
+### 1. Add unit test for FcntlEvent handling
+- Test F_SETFL flag modification
+- Test F_DUPFD file descriptor duplication  
+- Test F_DUPFD_CLOEXEC with O_CLOEXEC flag
+- Location: internal/eventloop.go:305
 
-### FdEvent Syscalls
-- [x] Add test case for fsync syscall
-- [x] Add test case for ftruncate syscall
+### 2. Implement byte count tracking for read/write syscalls
+- Track number of bytes read/written in each I/O operation
+- Add to flamegraph statistics
+- Location: internal/flamegraph/counter.go:11
 
-### PathEvent Syscalls  
-- [x] Add test case for unlink syscall
-- [x] Add test case for creat syscall
-- [x] Add test case for stat syscall
-- [x] Add test case for access syscall
+## Medium Priority (Additional syscalls)
 
-### NameEvent Syscalls
-- [x] Add test case for rename syscall
-- [x] Add test case for link syscall
-- [x] Add test case for symlink syscall
+### 3. Implement copy_file_range syscall
+- Capture source and destination file descriptors
+- Track byte count copied
+- Location: internal/eventloop.go:353
 
-### NullEvent Syscalls
-- [x] Add test case for sync syscall
-- [x] Add test case for io_uring_setup syscall
+### 4. Implement mmap/msync syscalls
+- Track memory-mapped file operations
+- Capture file descriptor and memory addresses
+- Location: internal/eventloop.go:356
 
-### Dup3Event Syscalls
-- [x] Add test case for dup3 syscall
+### 5. Implement sync_file_range syscall
+- Capture file descriptor and range parameters
+- Track selective file synchronization
+- Location: internal/eventloop.go:358
 
-## Advanced Test Cases
+## Low Priority (Less common syscalls)
 
-### File Descriptor Lifecycle
-- [x] Test that fd from openat is properly tracked in subsequent read/write/close operations
-- [x] Test dup/dup2/dup3 creating new file descriptors
-- [x] Test close removing fd from tracking
-- [x] Test multiple file descriptors being tracked simultaneously
+### 6. Implement open_by_handle_at syscall
+- Handle file access by handle
+- Location: internal/eventloop.go:354
 
-### Edge Cases
-- [x] Test missing enter events (only exit event received)
-- [x] Test missing exit events (only enter event received)
-- [x] Test mismatched enter/exit pairs
-- [x] Test out-of-order events
-- [x] Test events from different threads/processes
+### 7. Implement name_to_handle_at syscall  
+- Convert pathname to handle
+- Location: internal/eventloop.go:355
 
-### Filtering and Comm Tracking
-- [x] Test that comm names are properly propagated across syscalls
-- [x] Test filter behavior for each event type
-- [x] Test comm filter enable/disable functionality
+### 8. Implement getcwd syscall
+- Track current working directory queries
+- Location: internal/eventloop.go:357
+
+### 9. Add sys_enter_open_by_handle_at to BPF
+- Update BPF tracepoint generation
+- Location: internal/c/generate_tracepoints_c.raku:5
+
+### 10. Enhance io_uring_enter capture with FD tracking
+- Currently captured but without file descriptor context
+- Location: internal/eventloop.go:359
+
+## General Improvements
+
+### 11. Write comprehensive unit tests
+- Increase overall test coverage
+- Location: internal/ior.go:21
+
+### 12. Write integration tests
+- Use C/Cgo to simulate real I/O operations
+- Test end-to-end functionality
+- Location: internal/ior.go:22
+
+## Completed Tasks ✓
+
+All previously listed test cases have been implemented:
+- Helper functions for all event types
+- Test cases for all basic syscalls
+- File descriptor lifecycle tests
+- Edge case handling tests
+- Filtering and comm tracking tests

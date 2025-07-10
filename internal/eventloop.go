@@ -219,13 +219,11 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		}
 		e.comms[openEv.Tid] = comm
 
-	// TODO: Unit test this
 	case *NameEvent:
 		nameEvent := ep.EnterEv.(*NameEvent)
 		ep.File = file.NewOldnameNewname(nameEvent.Oldname[:], nameEvent.Newname[:])
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 
-	// TODO: Unit test this
 	case *PathEvent:
 		nameEvent := ep.EnterEv.(*PathEvent)
 		if ep.Is(SYS_ENTER_CREAT) {
@@ -240,7 +238,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		}
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 
-	// TODO: Unit test this
 	case *FdEvent:
 		fd := ep.EnterEv.(*FdEvent).Fd
 		if file_, ok := e.files[fd]; ok {
@@ -268,7 +265,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 			}
 		}
 
-	// TODO: Unit test this
 	case *Dup3Event:
 		dup3Event := ep.EnterEv.(*Dup3Event)
 		fd := int32(dup3Event.Fd)
@@ -294,7 +290,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 			e.files[newFd] = duppedFdFile
 		}
 
-	// TODO: Unit test this
 	case *NullEvent:
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 		if !e.filter.eventPair(ep) {
