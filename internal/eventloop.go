@@ -350,7 +350,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
-	// TODO: implement dup3 syscall
 	// TODO: implement copy_file_range
 	// TODO: open_by_handle_at
 	// TODO: name_to_handle_at
