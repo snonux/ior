@@ -45,6 +45,6 @@
 - [x] Test events from different threads/processes
 
 ### Filtering and Comm Tracking
-- [ ] Test that comm names are properly propagated across syscalls
-- [ ] Test filter behavior for each event type
-- [ ] Test comm filter enable/disable functionality
+- [x] Test that comm names are properly propagated across syscalls
+- [x] Test filter behavior for each event type
+- [x] Test comm filter enable/disable functionality
