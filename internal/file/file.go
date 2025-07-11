@@ -38,6 +38,7 @@ func NewFd(fd int32, name []byte, flags int32) FdFile {
 func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
 	var err error
 
+	f.fd = fd
 	procPath := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
 	f.name, err = os.Readlink(procPath)
 	if err != nil {
