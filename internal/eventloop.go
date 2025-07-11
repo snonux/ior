@@ -329,7 +329,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		switch v.Cmd {
 		case syscall.F_SETFL:
 			const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-			fdFile.AddFlags((int32(v.Arg) & int32(canChange)))
+			fdFile.SetFlags((int32(v.Arg) & int32(canChange)))
 			ep.File = fdFile
 			e.files[fd] = fdFile
 		case syscall.F_DUPFD:
