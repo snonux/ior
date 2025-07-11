@@ -324,6 +324,7 @@ sys_enter_newstat is a struct path_event
 sys_enter_openat2 is a struct open_event
 sys_enter_openat is a struct open_event
 sys_enter_open is a struct open_event
+sys_enter_open_tree_attr is a struct open_event
 sys_enter_open_tree is a struct open_event
 sys_enter_pread64 is a struct fd_event
 sys_enter_preadv2 is a struct fd_event
@@ -432,6 +433,7 @@ sys_exit_newstat is a struct ret_event
 sys_exit_openat2 is a struct ret_event
 sys_exit_openat is a struct ret_event
 sys_exit_open is a struct ret_event
+sys_exit_open_tree_attr is a struct ret_event
 sys_exit_open_tree is a struct ret_event
 sys_exit_pread64 is a struct ret_event
 sys_exit_preadv2 is a struct ret_event

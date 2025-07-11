@@ -20,6 +20,10 @@
 #define ENTER_DUP3_EVENT 15
 #define EXIT_DUP3_EVENT 16
 
+#define OTHER_CLASSIFIED 0
+#define READ_CLASSIFIED 1
+#define WRITE_CLASSIFIED 2
+
 struct open_event {
     __u32 event_type;
     __u32 trace_id; 
@@ -55,6 +59,7 @@ struct ret_event {
     __s64 ret;
     __u32 pid;
     __u32 tid;
+    __u32 ret_type;
 };
 
 struct name_event {
