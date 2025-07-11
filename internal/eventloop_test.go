@@ -52,11 +52,11 @@ func TestEventloop(t *testing.T) {
 		"Dup3WithCloexecTest": makeDup3WithCloexecTestData(t),
 		"Dup2Test":            makeDup2TestData(t),
 		// FcntlEvent tests
-		"FcntlSetFlagsTest":      makeFcntlSetFlagsTestData(t),
-		"FcntlDupfdTest":         makeFcntlDupfdTestData(t),
-		"FcntlDupfdCloexecTest":  makeFcntlDupfdCloexecTestData(t),
-		"FcntlErrorTest":         makeFcntlErrorTestData(t),
-		"FcntlInvalidFdTest":     makeFcntlInvalidFdTestData(t),
+		"FcntlSetFlagsTest":     makeFcntlSetFlagsTestData(t),
+		"FcntlDupfdTest":        makeFcntlDupfdTestData(t),
+		"FcntlDupfdCloexecTest": makeFcntlDupfdCloexecTestData(t),
+		"FcntlErrorTest":        makeFcntlErrorTestData(t),
+		"FcntlInvalidFdTest":    makeFcntlInvalidFdTestData(t),
 		// FD Lifecycle tests
 		"FdLifecycleTest": makeFdLifecycleTestData(t),
 		"FdDupTest":       makeFdDupTestData(t),
@@ -1000,8 +1000,8 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 	// TODO: Investigate why this test is failing - temporarily disabled
 	// The test fails with panic "expected a file.FdFile" during fcntl event processing
 	// Returning empty test data to skip this test case
-	return td
-	
+	// return td
+
 	fd := uint32(60)
 	filename := "fcntl_setfl_test.txt"
 
@@ -1021,7 +1021,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, int32(fd), filename)
 	})
 
-	// Step 2: Call fcntl F_SETFL to add O_NONBLOCK and O_APPEND flags
+	// // Step 2: Call fcntl F_SETFL to add O_NONBLOCK and O_APPEND flags
 	const newFlags = syscall.O_NONBLOCK | syscall.O_APPEND
 	fcntlEnterEv, fcntlEnterBytes := makeEnterFcntlEvent(t, defaulTime+200, defaultPid, defaultTid, fd, syscall.F_SETFL, uint64(newFlags))
 	td.rawTracepoints = append(td.rawTracepoints, fcntlEnterBytes)
@@ -1479,7 +1479,7 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 	// Step 2: Open a real file
 	realFd := uint32(66)
 	filename := "fcntl_invalid_test.txt"
-	
+
 	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
 	openEnterBytes, _ = openEnterEv.Bytes()

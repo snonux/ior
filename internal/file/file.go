@@ -99,6 +99,10 @@ func (f FdFile) Flags() Flags {
 	return f.flags
 }
 
+func (f *FdFile) SetFlags(flags int32) {
+	f.flags = Flags(flags)
+}
+
 func (f *FdFile) AddFlags(flags int32) {
 	f.flags = Flags(int32(f.flags) | flags)
 }
