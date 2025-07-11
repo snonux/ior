@@ -21,6 +21,12 @@ type Pair struct {
 func NewPair(enterEv Event) *Pair {
 	e := poolOfEventPairs.Get().(*Pair)
 	e.EnterEv = enterEv
+	e.ExitEv = nil
+	e.File = nil
+	e.Comm = ""
+	e.Duration = 0
+	e.DurationToPrev = 0
+	e.Equals = false
 	return e
 }
 
@@ -89,6 +95,10 @@ func (e *Pair) Dump() string {
 func (e *Pair) Recycle() {
 	e.EnterEv.Recycle()
 	e.ExitEv.Recycle()
+	e.File = nil
+	e.Comm = ""
+	e.Duration = 0
 	e.DurationToPrev = 0
+	e.Equals = false
 	poolOfEventPairs.Put(e)
 }
