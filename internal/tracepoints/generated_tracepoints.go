@@ -86,6 +86,8 @@ var List = []string{
 	"sys_exit_open_tree",
 	"sys_enter_mount_setattr",
 	"sys_exit_mount_setattr",
+	"sys_enter_open_tree_attr",
+	"sys_exit_open_tree_attr",
 	"sys_enter_close_range",
 	"sys_exit_close_range",
 	"sys_enter_dup3",
