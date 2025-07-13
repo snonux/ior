@@ -20,9 +20,10 @@
 #define ENTER_DUP3_EVENT 15
 #define EXIT_DUP3_EVENT 16
 
-#define OTHER_CLASSIFIED 0
+#define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
 #define WRITE_CLASSIFIED 2
+#define TRANSFER_CLASSIFIED 3
 
 struct open_event {
     __u32 event_type;
