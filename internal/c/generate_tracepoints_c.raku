@@ -94,6 +94,15 @@ class Dup3Tracepoint does TracepointTemplate {
     }
 }
 
+class OpenByHandleAtTracepoint does TracepointTemplate {
+    method generate-bpf-c-tracepoint(%vals --> Str) {
+        my Str $extra = qq:to/BPF_C_CODE/;
+            ev->flags = (__s32)ctx->args[2];
+        BPF_C_CODE
+        self.template: %vals.append( ( event-struct => 'open_by_handle_at_event', :$extra ).hash );
+    }
+}
+
 class NameTracepoint does TracepointTemplate {
     method generate-bpf-c-tracepoint(%vals --> Str) {
         my Int \oldname-field-number = %vals<format>.field-number('oldname');
@@ -248,6 +257,9 @@ class Format {
     multi method set-format-impl('sys_enter_connect', $, $) { }
     multi method set-format-impl('sys_enter_fanotify_init', $, $) { }
     multi method set-format-impl('sys_enter_getpeername', $, $) { }
+    multi method set-format-impl('sys_enter_name_to_handle_at', $, $) { $!format-impl = PathnameTracepoint.new('pathname') }
+    multi method set-format-impl('sys_enter_open_by_handle_at', $, $) { $!format-impl = OpenByHandleAtTracepoint.new }
+
 
     # Explicitly map some tracepoints
     multi method set-format-impl(Str $s where /^sys_enter.*open.*/, 'const char *', 'filename') { $!format-impl = OpenTracepoint.new }
@@ -281,7 +293,7 @@ class Format {
     method can-generate returns Bool { so $!format-impl.^can('generate-bpf-c-tracepoint') }
 
     method enter-reject returns Bool { $!format-impl !~~ any(
-        FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint, FcntlTracepoint, NullTracepoint, Dup3Tracepoint
+        FdTracepoint, NameTracepoint, OpenTracepoint, PathnameTracepoint, FcntlTracepoint, NullTracepoint, Dup3Tracepoint, OpenByHandleAtTracepoint
     ) }
 }
 

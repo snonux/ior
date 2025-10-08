@@ -12,11 +12,11 @@ type EventType uint32
 type TraceId uint32
 
 var traceId2String = map[TraceId]string{
-	1505: "enter_io_uring_register", 1504: "exit_io_uring_register", 1486: "enter_io_uring_enter", 1485: "exit_io_uring_enter", 1484: "enter_io_uring_setup", 1483: "exit_io_uring_setup", 1145: "enter_quotactl_fd", 1144: "exit_quotactl_fd", 1114: "enter_flock", 1113: "exit_flock", 1100: "enter_io_setup", 1099: "exit_io_setup", 1098: "enter_io_destroy", 1097: "exit_io_destroy", 1096: "enter_io_submit", 1095: "exit_io_submit", 1094: "enter_io_cancel", 1093: "exit_io_cancel", 1092: "enter_io_getevents", 1091: "exit_io_getevents", 1090: "enter_io_pgetevents", 1089: "exit_io_pgetevents", 1058: "enter_fanotify_mark", 1057: "exit_fanotify_mark", 1046: "enter_fspick", 1045: "exit_fspick", 1044: "enter_fsconfig", 1043: "exit_fsconfig", 1042: "enter_statfs", 1041: "exit_statfs", 1040: "enter_fstatfs", 1039: "exit_fstatfs", 1034: "enter_utimensat", 1033: "exit_utimensat", 1032: "enter_futimesat", 1031: "exit_futimesat", 1026: "enter_sync", 1025: "exit_sync", 1024: "enter_syncfs", 1023: "exit_syncfs", 1022: "enter_fsync", 1021: "exit_fsync", 1020: "enter_fdatasync", 1019: "exit_fdatasync", 1018: "enter_sync_file_range", 1017: "exit_sync_file_range", 1016: "enter_vmsplice", 1015: "exit_vmsplice", 978: "enter_setxattrat", 977: "exit_setxattrat", 976: "enter_setxattr", 975: "exit_setxattr", 974: "enter_lsetxattr", 973: "exit_lsetxattr", 972: "enter_fsetxattr", 971: "exit_fsetxattr", 970: "enter_getxattrat", 969: "exit_getxattrat", 968: "enter_getxattr", 967: "exit_getxattr", 966: "enter_lgetxattr", 965: "exit_lgetxattr", 964: "enter_fgetxattr", 963: "exit_fgetxattr", 962: "enter_listxattrat", 961: "exit_listxattrat", 960: "enter_listxattr", 959: "exit_listxattr", 958: "enter_llistxattr", 957: "exit_llistxattr", 956: "enter_flistxattr", 955: "exit_flistxattr", 954: "enter_removexattrat", 953: "exit_removexattrat", 952: "enter_removexattr", 951: "exit_removexattr", 950: "enter_lremovexattr", 949: "exit_lremovexattr", 948: "enter_fremovexattr", 947: "exit_fremovexattr", 944: "enter_open_tree", 943: "exit_open_tree", 934: "enter_mount_setattr", 933: "exit_mount_setattr", 932: "enter_open_tree_attr", 931: "exit_open_tree_attr", 924: "enter_close_range", 923: "exit_close_range", 922: "enter_dup3", 921: "exit_dup3", 920: "enter_dup2", 919: "exit_dup2", 918: "enter_dup", 917: "exit_dup", 904: "enter_getdents", 903: "exit_getdents", 902: "enter_getdents64", 901: "exit_getdents64", 900: "enter_ioctl", 899: "exit_ioctl", 898: "enter_fcntl", 897: "exit_fcntl", 892: "enter_mkdirat", 891: "exit_mkdirat", 890: "enter_mkdir", 889: "exit_mkdir", 888: "enter_rmdir", 887: "exit_rmdir", 886: "enter_unlinkat", 885: "exit_unlinkat", 884: "enter_unlink", 883: "exit_unlink", 882: "enter_symlinkat", 881: "exit_symlinkat", 880: "enter_symlink", 879: "exit_symlink", 878: "enter_linkat", 877: "exit_linkat", 876: "enter_link", 875: "exit_link", 874: "enter_renameat2", 873: "exit_renameat2", 872: "enter_renameat", 871: "exit_renameat", 870: "enter_rename", 869: "exit_rename", 860: "enter_newstat", 859: "exit_newstat", 858: "enter_newlstat", 857: "exit_newlstat", 856: "enter_newfstatat", 855: "exit_newfstatat", 854: "enter_newfstat", 853: "exit_newfstat", 852: "enter_readlinkat", 851: "exit_readlinkat", 850: "enter_readlink", 849: "exit_readlink", 848: "enter_statx", 847: "exit_statx", 846: "enter_lseek", 845: "exit_lseek", 844: "enter_read", 843: "exit_read", 842: "enter_write", 841: "exit_write", 840: "enter_pread64", 839: "exit_pread64", 838: "enter_pwrite64", 837: "exit_pwrite64", 836: "enter_readv", 835: "exit_readv", 834: "enter_writev", 833: "exit_writev", 832: "enter_preadv", 831: "exit_preadv", 830: "enter_preadv2", 829: "exit_preadv2", 828: "enter_pwritev", 827: "exit_pwritev", 826: "enter_pwritev2", 825: "exit_pwritev2", 820: "enter_truncate", 819: "exit_truncate", 818: "enter_ftruncate", 817: "exit_ftruncate", 816: "enter_fallocate", 815: "exit_fallocate", 814: "enter_faccessat", 813: "exit_faccessat", 812: "enter_faccessat2", 811: "exit_faccessat2", 810: "enter_access", 809: "exit_access", 808: "enter_chdir", 807: "exit_chdir", 806: "enter_fchdir", 805: "exit_fchdir", 804: "enter_chroot", 803: "exit_chroot", 802: "enter_fchmod", 801: "exit_fchmod", 800: "enter_fchmodat2", 799: "exit_fchmodat2", 798: "enter_fchmodat", 797: "exit_fchmodat", 796: "enter_chmod", 795: "exit_chmod", 794: "enter_fchownat", 793: "exit_fchownat", 792: "enter_chown", 791: "exit_chown", 790: "enter_lchown", 789: "exit_lchown", 788: "enter_fchown", 787: "exit_fchown", 786: "enter_open", 785: "exit_open", 784: "enter_openat", 783: "exit_openat", 782: "enter_openat2", 781: "exit_openat2", 780: "enter_creat", 779: "exit_creat", 778: "enter_close", 777: "exit_close", 615: "enter_readahead", 614: "exit_readahead", 613: "enter_fadvise64", 612: "exit_fadvise64", 594: "enter_cachestat", 593: "exit_cachestat", 405: "enter_finit_module", 404: "exit_finit_module", 347: "enter_syslog", 346: "exit_syslog", 100: "enter_mmap", 99: "exit_mmap",
+	1505: "enter_io_uring_register", 1504: "exit_io_uring_register", 1486: "enter_io_uring_enter", 1485: "exit_io_uring_enter", 1484: "enter_io_uring_setup", 1483: "exit_io_uring_setup", 1145: "enter_quotactl_fd", 1144: "exit_quotactl_fd", 1130: "enter_name_to_handle_at", 1129: "exit_name_to_handle_at", 1128: "enter_open_by_handle_at", 1127: "exit_open_by_handle_at", 1114: "enter_flock", 1113: "exit_flock", 1100: "enter_io_setup", 1099: "exit_io_setup", 1098: "enter_io_destroy", 1097: "exit_io_destroy", 1096: "enter_io_submit", 1095: "exit_io_submit", 1094: "enter_io_cancel", 1093: "exit_io_cancel", 1092: "enter_io_getevents", 1091: "exit_io_getevents", 1090: "enter_io_pgetevents", 1089: "exit_io_pgetevents", 1058: "enter_fanotify_mark", 1057: "exit_fanotify_mark", 1046: "enter_fspick", 1045: "exit_fspick", 1044: "enter_fsconfig", 1043: "exit_fsconfig", 1042: "enter_statfs", 1041: "exit_statfs", 1040: "enter_fstatfs", 1039: "exit_fstatfs", 1034: "enter_utimensat", 1033: "exit_utimensat", 1032: "enter_futimesat", 1031: "exit_futimesat", 1026: "enter_sync", 1025: "exit_sync", 1024: "enter_syncfs", 1023: "exit_syncfs", 1022: "enter_fsync", 1021: "exit_fsync", 1020: "enter_fdatasync", 1019: "exit_fdatasync", 1018: "enter_sync_file_range", 1017: "exit_sync_file_range", 1016: "enter_vmsplice", 1015: "exit_vmsplice", 978: "enter_setxattrat", 977: "exit_setxattrat", 976: "enter_setxattr", 975: "exit_setxattr", 974: "enter_lsetxattr", 973: "exit_lsetxattr", 972: "enter_fsetxattr", 971: "exit_fsetxattr", 970: "enter_getxattrat", 969: "exit_getxattrat", 968: "enter_getxattr", 967: "exit_getxattr", 966: "enter_lgetxattr", 965: "exit_lgetxattr", 964: "enter_fgetxattr", 963: "exit_fgetxattr", 962: "enter_listxattrat", 961: "exit_listxattrat", 960: "enter_listxattr", 959: "exit_listxattr", 958: "enter_llistxattr", 957: "exit_llistxattr", 956: "enter_flistxattr", 955: "exit_flistxattr", 954: "enter_removexattrat", 953: "exit_removexattrat", 952: "enter_removexattr", 951: "exit_removexattr", 950: "enter_lremovexattr", 949: "exit_lremovexattr", 948: "enter_fremovexattr", 947: "exit_fremovexattr", 944: "enter_open_tree", 943: "exit_open_tree", 934: "enter_mount_setattr", 933: "exit_mount_setattr", 932: "enter_open_tree_attr", 931: "exit_open_tree_attr", 924: "enter_close_range", 923: "exit_close_range", 922: "enter_dup3", 921: "exit_dup3", 920: "enter_dup2", 919: "exit_dup2", 918: "enter_dup", 917: "exit_dup", 904: "enter_getdents", 903: "exit_getdents", 902: "enter_getdents64", 901: "exit_getdents64", 900: "enter_ioctl", 899: "exit_ioctl", 898: "enter_fcntl", 897: "exit_fcntl", 892: "enter_mkdirat", 891: "exit_mkdirat", 890: "enter_mkdir", 889: "exit_mkdir", 888: "enter_rmdir", 887: "exit_rmdir", 886: "enter_unlinkat", 885: "exit_unlinkat", 884: "enter_unlink", 883: "exit_unlink", 882: "enter_symlinkat", 881: "exit_symlinkat", 880: "enter_symlink", 879: "exit_symlink", 878: "enter_linkat", 877: "exit_linkat", 876: "enter_link", 875: "exit_link", 874: "enter_renameat2", 873: "exit_renameat2", 872: "enter_renameat", 871: "exit_renameat", 870: "enter_rename", 869: "exit_rename", 860: "enter_newstat", 859: "exit_newstat", 858: "enter_newlstat", 857: "exit_newlstat", 856: "enter_newfstatat", 855: "exit_newfstatat", 854: "enter_newfstat", 853: "exit_newfstat", 852: "enter_readlinkat", 851: "exit_readlinkat", 850: "enter_readlink", 849: "exit_readlink", 848: "enter_statx", 847: "exit_statx", 846: "enter_lseek", 845: "exit_lseek", 844: "enter_read", 843: "exit_read", 842: "enter_write", 841: "exit_write", 840: "enter_pread64", 839: "exit_pread64", 838: "enter_pwrite64", 837: "exit_pwrite64", 836: "enter_readv", 835: "exit_readv", 834: "enter_writev", 833: "exit_writev", 832: "enter_preadv", 831: "exit_preadv", 830: "enter_preadv2", 829: "exit_preadv2", 828: "enter_pwritev", 827: "exit_pwritev", 826: "enter_pwritev2", 825: "exit_pwritev2", 820: "enter_truncate", 819: "exit_truncate", 818: "enter_ftruncate", 817: "exit_ftruncate", 816: "enter_fallocate", 815: "exit_fallocate", 814: "enter_faccessat", 813: "exit_faccessat", 812: "enter_faccessat2", 811: "exit_faccessat2", 810: "enter_access", 809: "exit_access", 808: "enter_chdir", 807: "exit_chdir", 806: "enter_fchdir", 805: "exit_fchdir", 804: "enter_chroot", 803: "exit_chroot", 802: "enter_fchmod", 801: "exit_fchmod", 800: "enter_fchmodat2", 799: "exit_fchmodat2", 798: "enter_fchmodat", 797: "exit_fchmodat", 796: "enter_chmod", 795: "exit_chmod", 794: "enter_fchownat", 793: "exit_fchownat", 792: "enter_chown", 791: "exit_chown", 790: "enter_lchown", 789: "exit_lchown", 788: "enter_fchown", 787: "exit_fchown", 786: "enter_open", 785: "exit_open", 784: "enter_openat", 783: "exit_openat", 782: "enter_openat2", 781: "exit_openat2", 780: "enter_creat", 779: "exit_creat", 778: "enter_close", 777: "exit_close", 615: "enter_readahead", 614: "exit_readahead", 613: "enter_fadvise64", 612: "exit_fadvise64", 594: "enter_cachestat", 593: "exit_cachestat", 405: "enter_finit_module", 404: "exit_finit_module", 347: "enter_syslog", 346: "exit_syslog", 100: "enter_mmap", 99: "exit_mmap",
 }
 
 var traceId2Name = map[TraceId]string{
-	1505: "io_uring_register", 1504: "io_uring_register", 1486: "io_uring_enter", 1485: "io_uring_enter", 1484: "io_uring_setup", 1483: "io_uring_setup", 1145: "quotactl_fd", 1144: "quotactl_fd", 1114: "flock", 1113: "flock", 1100: "io_setup", 1099: "io_setup", 1098: "io_destroy", 1097: "io_destroy", 1096: "io_submit", 1095: "io_submit", 1094: "io_cancel", 1093: "io_cancel", 1092: "io_getevents", 1091: "io_getevents", 1090: "io_pgetevents", 1089: "io_pgetevents", 1058: "fanotify_mark", 1057: "fanotify_mark", 1046: "fspick", 1045: "fspick", 1044: "fsconfig", 1043: "fsconfig", 1042: "statfs", 1041: "statfs", 1040: "fstatfs", 1039: "fstatfs", 1034: "utimensat", 1033: "utimensat", 1032: "futimesat", 1031: "futimesat", 1026: "sync", 1025: "sync", 1024: "syncfs", 1023: "syncfs", 1022: "fsync", 1021: "fsync", 1020: "fdatasync", 1019: "fdatasync", 1018: "sync_file_range", 1017: "sync_file_range", 1016: "vmsplice", 1015: "vmsplice", 978: "setxattrat", 977: "setxattrat", 976: "setxattr", 975: "setxattr", 974: "lsetxattr", 973: "lsetxattr", 972: "fsetxattr", 971: "fsetxattr", 970: "getxattrat", 969: "getxattrat", 968: "getxattr", 967: "getxattr", 966: "lgetxattr", 965: "lgetxattr", 964: "fgetxattr", 963: "fgetxattr", 962: "listxattrat", 961: "listxattrat", 960: "listxattr", 959: "listxattr", 958: "llistxattr", 957: "llistxattr", 956: "flistxattr", 955: "flistxattr", 954: "removexattrat", 953: "removexattrat", 952: "removexattr", 951: "removexattr", 950: "lremovexattr", 949: "lremovexattr", 948: "fremovexattr", 947: "fremovexattr", 944: "open_tree", 943: "open_tree", 934: "mount_setattr", 933: "mount_setattr", 932: "open_tree_attr", 931: "open_tree_attr", 924: "close_range", 923: "close_range", 922: "dup3", 921: "dup3", 920: "dup2", 919: "dup2", 918: "dup", 917: "dup", 904: "getdents", 903: "getdents", 902: "getdents64", 901: "getdents64", 900: "ioctl", 899: "ioctl", 898: "fcntl", 897: "fcntl", 892: "mkdirat", 891: "mkdirat", 890: "mkdir", 889: "mkdir", 888: "rmdir", 887: "rmdir", 886: "unlinkat", 885: "unlinkat", 884: "unlink", 883: "unlink", 882: "symlinkat", 881: "symlinkat", 880: "symlink", 879: "symlink", 878: "linkat", 877: "linkat", 876: "link", 875: "link", 874: "renameat2", 873: "renameat2", 872: "renameat", 871: "renameat", 870: "rename", 869: "rename", 860: "newstat", 859: "newstat", 858: "newlstat", 857: "newlstat", 856: "newfstatat", 855: "newfstatat", 854: "newfstat", 853: "newfstat", 852: "readlinkat", 851: "readlinkat", 850: "readlink", 849: "readlink", 848: "statx", 847: "statx", 846: "lseek", 845: "lseek", 844: "read", 843: "read", 842: "write", 841: "write", 840: "pread64", 839: "pread64", 838: "pwrite64", 837: "pwrite64", 836: "readv", 835: "readv", 834: "writev", 833: "writev", 832: "preadv", 831: "preadv", 830: "preadv2", 829: "preadv2", 828: "pwritev", 827: "pwritev", 826: "pwritev2", 825: "pwritev2", 820: "truncate", 819: "truncate", 818: "ftruncate", 817: "ftruncate", 816: "fallocate", 815: "fallocate", 814: "faccessat", 813: "faccessat", 812: "faccessat2", 811: "faccessat2", 810: "access", 809: "access", 808: "chdir", 807: "chdir", 806: "fchdir", 805: "fchdir", 804: "chroot", 803: "chroot", 802: "fchmod", 801: "fchmod", 800: "fchmodat2", 799: "fchmodat2", 798: "fchmodat", 797: "fchmodat", 796: "chmod", 795: "chmod", 794: "fchownat", 793: "fchownat", 792: "chown", 791: "chown", 790: "lchown", 789: "lchown", 788: "fchown", 787: "fchown", 786: "open", 785: "open", 784: "openat", 783: "openat", 782: "openat2", 781: "openat2", 780: "creat", 779: "creat", 778: "close", 777: "close", 615: "readahead", 614: "readahead", 613: "fadvise64", 612: "fadvise64", 594: "cachestat", 593: "cachestat", 405: "finit_module", 404: "finit_module", 347: "syslog", 346: "syslog", 100: "mmap", 99: "mmap",
+	1505: "io_uring_register", 1504: "io_uring_register", 1486: "io_uring_enter", 1485: "io_uring_enter", 1484: "io_uring_setup", 1483: "io_uring_setup", 1145: "quotactl_fd", 1144: "quotactl_fd", 1130: "name_to_handle_at", 1129: "name_to_handle_at", 1128: "open_by_handle_at", 1127: "open_by_handle_at", 1114: "flock", 1113: "flock", 1100: "io_setup", 1099: "io_setup", 1098: "io_destroy", 1097: "io_destroy", 1096: "io_submit", 1095: "io_submit", 1094: "io_cancel", 1093: "io_cancel", 1092: "io_getevents", 1091: "io_getevents", 1090: "io_pgetevents", 1089: "io_pgetevents", 1058: "fanotify_mark", 1057: "fanotify_mark", 1046: "fspick", 1045: "fspick", 1044: "fsconfig", 1043: "fsconfig", 1042: "statfs", 1041: "statfs", 1040: "fstatfs", 1039: "fstatfs", 1034: "utimensat", 1033: "utimensat", 1032: "futimesat", 1031: "futimesat", 1026: "sync", 1025: "sync", 1024: "syncfs", 1023: "syncfs", 1022: "fsync", 1021: "fsync", 1020: "fdatasync", 1019: "fdatasync", 1018: "sync_file_range", 1017: "sync_file_range", 1016: "vmsplice", 1015: "vmsplice", 978: "setxattrat", 977: "setxattrat", 976: "setxattr", 975: "setxattr", 974: "lsetxattr", 973: "lsetxattr", 972: "fsetxattr", 971: "fsetxattr", 970: "getxattrat", 969: "getxattrat", 968: "getxattr", 967: "getxattr", 966: "lgetxattr", 965: "lgetxattr", 964: "fgetxattr", 963: "fgetxattr", 962: "listxattrat", 961: "listxattrat", 960: "listxattr", 959: "listxattr", 958: "llistxattr", 957: "llistxattr", 956: "flistxattr", 955: "flistxattr", 954: "removexattrat", 953: "removexattrat", 952: "removexattr", 951: "removexattr", 950: "lremovexattr", 949: "lremovexattr", 948: "fremovexattr", 947: "fremovexattr", 944: "open_tree", 943: "open_tree", 934: "mount_setattr", 933: "mount_setattr", 932: "open_tree_attr", 931: "open_tree_attr", 924: "close_range", 923: "close_range", 922: "dup3", 921: "dup3", 920: "dup2", 919: "dup2", 918: "dup", 917: "dup", 904: "getdents", 903: "getdents", 902: "getdents64", 901: "getdents64", 900: "ioctl", 899: "ioctl", 898: "fcntl", 897: "fcntl", 892: "mkdirat", 891: "mkdirat", 890: "mkdir", 889: "mkdir", 888: "rmdir", 887: "rmdir", 886: "unlinkat", 885: "unlinkat", 884: "unlink", 883: "unlink", 882: "symlinkat", 881: "symlinkat", 880: "symlink", 879: "symlink", 878: "linkat", 877: "linkat", 876: "link", 875: "link", 874: "renameat2", 873: "renameat2", 872: "renameat", 871: "renameat", 870: "rename", 869: "rename", 860: "newstat", 859: "newstat", 858: "newlstat", 857: "newlstat", 856: "newfstatat", 855: "newfstatat", 854: "newfstat", 853: "newfstat", 852: "readlinkat", 851: "readlinkat", 850: "readlink", 849: "readlink", 848: "statx", 847: "statx", 846: "lseek", 845: "lseek", 844: "read", 843: "read", 842: "write", 841: "write", 840: "pread64", 839: "pread64", 838: "pwrite64", 837: "pwrite64", 836: "readv", 835: "readv", 834: "writev", 833: "writev", 832: "preadv", 831: "preadv", 830: "preadv2", 829: "preadv2", 828: "pwritev", 827: "pwritev", 826: "pwritev2", 825: "pwritev2", 820: "truncate", 819: "truncate", 818: "ftruncate", 817: "ftruncate", 816: "fallocate", 815: "fallocate", 814: "faccessat", 813: "faccessat", 812: "faccessat2", 811: "faccessat2", 810: "access", 809: "access", 808: "chdir", 807: "chdir", 806: "fchdir", 805: "fchdir", 804: "chroot", 803: "chroot", 802: "fchmod", 801: "fchmod", 800: "fchmodat2", 799: "fchmodat2", 798: "fchmodat", 797: "fchmodat", 796: "chmod", 795: "chmod", 794: "fchownat", 793: "fchownat", 792: "chown", 791: "chown", 790: "lchown", 789: "lchown", 788: "fchown", 787: "fchown", 786: "open", 785: "open", 784: "openat", 783: "openat", 782: "openat2", 781: "openat2", 780: "creat", 779: "creat", 778: "close", 777: "close", 615: "readahead", 614: "readahead", 613: "fadvise64", 612: "fadvise64", 594: "cachestat", 593: "cachestat", 405: "finit_module", 404: "finit_module", 347: "syslog", 346: "syslog", 100: "mmap", 99: "mmap",
 }
 
 func (s TraceId) String() string {
@@ -53,6 +53,8 @@ const ENTER_FCNTL_EVENT = 13
 const EXIT_FCNTL_EVENT = 14
 const ENTER_DUP3_EVENT = 15
 const EXIT_DUP3_EVENT = 16
+const ENTER_OPEN_BY_HANDLE_AT_EVENT = 17
+const EXIT_OPEN_BY_HANDLE_AT_EVENT = 18
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -600,6 +602,73 @@ func (d *Dup3Event) Recycle() {
 	poolOfDup3Events.Put(d)
 }
 
+type OpenByHandleAtEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Flags     int32
+}
+
+func (o OpenByHandleAtEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags)
+}
+
+func (o OpenByHandleAtEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*OpenByHandleAtEvent)
+	if !ok {
+		return false
+	}
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags
+}
+
+func (o *OpenByHandleAtEvent) GetEventType() EventType {
+	return o.EventType
+}
+
+func (o *OpenByHandleAtEvent) GetTraceId() TraceId {
+	return o.TraceId
+}
+
+func (o *OpenByHandleAtEvent) GetPid() uint32 {
+	return o.Pid
+}
+
+func (o *OpenByHandleAtEvent) GetTid() uint32 {
+	return o.Tid
+}
+
+func (o *OpenByHandleAtEvent) GetTime() uint64 {
+	return o.Time
+}
+
+var poolOfOpenByHandleAtEvents = sync.Pool{
+	New: func() interface{} { return &OpenByHandleAtEvent{} },
+}
+
+func NewOpenByHandleAtEvent(raw []byte) *OpenByHandleAtEvent {
+	o := poolOfOpenByHandleAtEvents.Get().(*OpenByHandleAtEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
+		fmt.Println(o, raw, len(raw), err)
+		panic(raw)
+	}
+	return o
+}
+
+func (o *OpenByHandleAtEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, o)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (o *OpenByHandleAtEvent) Recycle() {
+	poolOfOpenByHandleAtEvents.Put(o)
+}
+
 const SYS_ENTER_IO_URING_REGISTER TraceId = 1505
 const SYS_EXIT_IO_URING_REGISTER TraceId = 1504
 const SYS_ENTER_IO_URING_ENTER TraceId = 1486
@@ -608,6 +677,10 @@ const SYS_ENTER_IO_URING_SETUP TraceId = 1484
 const SYS_EXIT_IO_URING_SETUP TraceId = 1483
 const SYS_ENTER_QUOTACTL_FD TraceId = 1145
 const SYS_EXIT_QUOTACTL_FD TraceId = 1144
+const SYS_ENTER_NAME_TO_HANDLE_AT TraceId = 1130
+const SYS_EXIT_NAME_TO_HANDLE_AT TraceId = 1129
+const SYS_ENTER_OPEN_BY_HANDLE_AT TraceId = 1128
+const SYS_EXIT_OPEN_BY_HANDLE_AT TraceId = 1127
 const SYS_ENTER_FLOCK TraceId = 1114
 const SYS_EXIT_FLOCK TraceId = 1113
 const SYS_ENTER_IO_SETUP TraceId = 1100
