@@ -19,6 +19,8 @@
 #define EXIT_FCNTL_EVENT 14
 #define ENTER_DUP3_EVENT 15
 #define EXIT_DUP3_EVENT 16
+#define ENTER_OPEN_BY_HANDLE_AT_EVENT 17
+#define EXIT_OPEN_BY_HANDLE_AT_EVENT 18
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -101,5 +103,14 @@ struct dup3_event {
     __u32 pid;
     __u32 tid;
     __s32 fd;
+    __s32 flags;
+};
+
+struct open_by_handle_at_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
     __s32 flags;
 };

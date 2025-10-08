@@ -22,6 +22,7 @@ import (
 type eventLoop struct {
 	filter        *eventFilter
 	enterEvs      map[uint32]*event.Pair      // Temp. store of sys_enter tracepoints per Tid.
+	pendingHandles map[uint32]string           // map of TID to pathname from name_to_handle_at
 	files         map[int32]file.File         // Track all open files by file descriptor..
 	comms         map[uint32]string           // Program or thread name of the current Tid.
 	prevPairTimes map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
@@ -41,6 +42,7 @@ func newEventLoop() *eventLoop {
 	return &eventLoop{
 		filter:        newEventFilter(),
 		enterEvs:      make(map[uint32]*event.Pair),
+		pendingHandles: make(map[uint32]string),
 		files:         make(map[int32]file.File),
 		comms:         make(map[uint32]string),
 		prevPairTimes: make(map[uint32]uint64),
@@ -160,6 +162,8 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 		}
 	case ENTER_FCNTL_EVENT:
 		e.tracepointEntered(NewFcntlEvent(raw))
+	case ENTER_OPEN_BY_HANDLE_AT_EVENT:
+		e.tracepointEntered(NewOpenByHandleAtEvent(raw))
 	case ENTER_DUP3_EVENT:
 		e.tracepointEntered(NewDup3Event(raw))
 	default:
@@ -225,6 +229,14 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 
 	case *PathEvent:
+		if ep.Is(SYS_ENTER_NAME_TO_HANDLE_AT) {
+			pathEv := ep.EnterEv.(*PathEvent)
+			pathname := types.StringValue(pathEv.Pathname[:])
+			e.pendingHandles[ep.EnterEv.GetTid()] = pathname
+			ep.Recycle()
+			return
+		}
+
 		nameEvent := ep.EnterEv.(*PathEvent)
 		if ep.Is(SYS_ENTER_CREAT) {
 			if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
@@ -288,6 +300,32 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 			duppedFdFile := fdFile.Dup(newFd)
 			duppedFdFile.AddFlags(dup3Event.Flags & syscall.O_CLOEXEC)
 			e.files[newFd] = duppedFdFile
+		}
+
+	case *OpenByHandleAtEvent:
+		tid := ep.EnterEv.GetTid()
+		pathname, ok := e.pendingHandles[tid]
+		if !ok {
+			ep.Recycle()
+			return
+		}
+		delete(e.pendingHandles, tid)
+
+		retEvent, ok := ep.ExitEv.(*RetEvent)
+		if !ok {
+			panic("expected *types.RetEvent for open_by_handle_at exit")
+		}
+
+		if fd := int32(retEvent.Ret); fd >= 0 {
+			openByHandleEv := ep.EnterEv.(*OpenByHandleAtEvent)
+
+			file := file.NewFd(fd, []byte(pathname), openByHandleEv.Flags)
+			e.files[fd] = file
+			ep.File = file
+			ep.Comm = e.comm(tid)
+		} else {
+			ep.Recycle()
+			return
 		}
 
 	case *NullEvent:
