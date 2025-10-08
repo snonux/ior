@@ -138,19 +138,26 @@ role TracepointClassification {
     method classify-tracepoint(Str \name --> Str) { self.classify: name.subst(/^SYS_EXIT_/, '').lc }
 
     # TODO: Use patterh matching, e.g. pread.*, evwrite.*..
-    multi method classify('getdents64' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('fgetxattr' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('flistxattr' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('getdents' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('getdents64' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('getxattr' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('lgetxattr' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('listxattr' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('llistxattr' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('pread64' --> Str) { 'READ_CLASSIFIED' }
-    multi method classify('preadv2' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('preadv' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('preadv2' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('process_vm_readv' --> Str) { 'READ_CLASSIFIED' }
-    multi method classify('readlinkat' --> Str) { 'READ_CLASSIFIED' }
-    multi method classify('readlink' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('read' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('readlink' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('readlinkat' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('readv' --> Str) { 'READ_CLASSIFIED' }
-    multi method classify('recvfrom' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('recvmmsg' --> Str) { 'READ_CLASSIFIED' }
     multi method classify('recvmsg' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('recvfrom' --> Str) { 'READ_CLASSIFIED' }
+    multi method classify('syslog' --> Str) { 'READ_CLASSIFIED' }
 
     multi method classify('copy_file_range' --> Str) { 'TRANSFER_CLASSIFIED' }
     multi method classify('sendfile64' --> Str) { 'TRANSFER_CLASSIFIED' }
@@ -160,13 +167,13 @@ role TracepointClassification {
 
     multi method classify('process_vm_writev' --> Str) { 'WRITE_CLASSIFIED' }
     multi method classify('pwrite64' --> Str) { 'WRITE_CLASSIFIED' }
-    multi method classify('pwritev2' --> Str) { 'WRITE_CLASSIFIED' }
     multi method classify('pwritev' --> Str) { 'WRITE_CLASSIFIED' }
+    multi method classify('pwritev2' --> Str) { 'WRITE_CLASSIFIED' }
     multi method classify('sendmmsg' --> Str) { 'WRITE_CLASSIFIED' }
     multi method classify('sendmsg' --> Str) { 'WRITE_CLASSIFIED' }
     multi method classify('sendto' --> Str) { 'WRITE_CLASSIFIED' }
-    multi method classify('writev' --> Str) { 'WRITE_CLASSIFIED' }
     multi method classify('write' --> Str) { 'WRITE_CLASSIFIED' }
+    multi method classify('writev' --> Str) { 'WRITE_CLASSIFIED' }
 
     multi method classify($ --> Str) { 'UNCLASSIFIED' }
 }
