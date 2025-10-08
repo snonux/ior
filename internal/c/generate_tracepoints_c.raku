@@ -40,10 +40,11 @@ role TracepointTemplate {
     method template(%vals --> Str) {
         my Bool \is-enter = %vals<name>.split('_')[1] eq 'enter';
         my Str \ctx-struct = is-enter ?? 'trace_event_raw_sys_enter' !! 'trace_event_raw_sys_exit';
+        my Str \event-struct-comment = %vals<event-struct-comment> // %vals<event-struct>;
         my Str @parts;
 
         @parts.push: qq:to/BPF_C_CODE/;
-        /// {%vals<name>.lc} is a struct {%vals<event-struct>}
+        /// {%vals<name>.lc} is a struct {event-struct-comment}
         SEC("tracepoint/syscalls/{%vals<name>}")
         int handle_{%vals<name>.lc}(struct {ctx-struct} *ctx) \{
             __u32 pid, tid;
@@ -135,7 +136,7 @@ class PathnameTracepoint does TracepointTemplate {
 }
 
 role TracepointClassification {
-    method classify-tracepoint(Str \name --> Str) { self.classify: name.subst(/^SYS_EXIT_/, '').lc }
+    method classify-tracepoint(Str \name --> Str) { self.classify: name.subst(/^sys_exit_/, '', :i).lc }
 
     # TODO: Use patterh matching, e.g. pread.*, evwrite.*..
     multi method classify('fgetxattr' --> Str) { 'READ_CLASSIFIED' }
@@ -180,11 +181,12 @@ role TracepointClassification {
 
 class RetTracepoint does TracepointTemplate does TracepointClassification {
     method generate-bpf-c-tracepoint(%vals --> Str) {
+        my $classification = self.classify-tracepoint(%vals<name>);
         my Str $extra = qq:to/BPF_C_CODE/;
             ev->ret = ctx->ret;
-            ev->ret_type = {self.classify-tracepoint: %vals<name>};
+            ev->ret_type = {$classification};
         BPF_C_CODE
-        self.template: %vals.append( ( event-struct => 'ret_event', :$extra ).hash );
+        self.template: %vals.append( ( event-struct => "ret_event", event-struct-comment => "ret_event ($classification)", :$extra ).hash );
     }
 }
 
