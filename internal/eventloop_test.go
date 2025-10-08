@@ -2,12 +2,13 @@ package internal
 
 import (
 	"context"
-	"ior/internal/event"
-	"ior/internal/file"
-	"ior/internal/types"
 	"syscall"
 	"testing"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 )
 
 const (
@@ -997,11 +998,6 @@ func verifyCommName(t *testing.T, el *eventLoop, tid uint32, expectedComm string
 
 // Test fcntl F_SETFL flag modification
 func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
-	// TODO: Investigate why this test is failing - temporarily disabled
-	// The test fails with panic "expected a file.FdFile" during fcntl event processing
-	// Returning empty test data to skip this test case
-	// return td
-
 	fd := uint32(60)
 	filename := "fcntl_setfl_test.txt"
 

@@ -297,7 +297,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 			return
 		}
 
-	// TODO: Unit test this
 	case *FcntlEvent:
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 		fd := int32(v.Fd)

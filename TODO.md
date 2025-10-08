@@ -2,12 +2,6 @@
 
 ## High Priority (Core functionality)
 
-### 1. Add unit test for FcntlEvent handling
-- Test F_SETFL flag modification
-- Test F_DUPFD file descriptor duplication  
-- Test F_DUPFD_CLOEXEC with O_CLOEXEC flag
-- Location: internal/eventloop.go:305
-
 ### 2. Implement byte count tracking for read/write syscalls
 - Track number of bytes read/written in each I/O operation
 - Add to flamegraph statistics
