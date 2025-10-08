@@ -361,112 +361,112 @@ sys_enter_utimensat is a struct path_event
 sys_enter_vmsplice is a struct fd_event
 sys_enter_write is a struct fd_event
 sys_enter_writev is a struct fd_event
-sys_exit_access is a struct ret_event
-sys_exit_cachestat is a struct ret_event
-sys_exit_chdir is a struct ret_event
-sys_exit_chmod is a struct ret_event
-sys_exit_chown is a struct ret_event
-sys_exit_chroot is a struct ret_event
-sys_exit_close is a struct ret_event
-sys_exit_close_range is a struct ret_event
-sys_exit_creat is a struct ret_event
-sys_exit_dup2 is a struct ret_event
-sys_exit_dup3 is a struct ret_event
-sys_exit_dup is a struct ret_event
-sys_exit_faccessat2 is a struct ret_event
-sys_exit_faccessat is a struct ret_event
-sys_exit_fadvise64 is a struct ret_event
-sys_exit_fallocate is a struct ret_event
-sys_exit_fanotify_mark is a struct ret_event
-sys_exit_fchdir is a struct ret_event
-sys_exit_fchmodat2 is a struct ret_event
-sys_exit_fchmodat is a struct ret_event
-sys_exit_fchmod is a struct ret_event
-sys_exit_fchownat is a struct ret_event
-sys_exit_fchown is a struct ret_event
-sys_exit_fcntl is a struct ret_event
-sys_exit_fdatasync is a struct ret_event
-sys_exit_fgetxattr is a struct ret_event
-sys_exit_finit_module is a struct ret_event
-sys_exit_flistxattr is a struct ret_event
-sys_exit_flock is a struct ret_event
-sys_exit_fremovexattr is a struct ret_event
-sys_exit_fsconfig is a struct ret_event
-sys_exit_fsetxattr is a struct ret_event
-sys_exit_fspick is a struct ret_event
-sys_exit_fstatfs is a struct ret_event
-sys_exit_fsync is a struct ret_event
-sys_exit_ftruncate is a struct ret_event
-sys_exit_futimesat is a struct ret_event
-sys_exit_getdents64 is a struct ret_event
-sys_exit_getdents is a struct ret_event
-sys_exit_getxattrat is a struct ret_event
-sys_exit_getxattr is a struct ret_event
-sys_exit_io_cancel is a struct ret_event
-sys_exit_ioctl is a struct ret_event
-sys_exit_io_destroy is a struct ret_event
-sys_exit_io_getevents is a struct ret_event
-sys_exit_io_pgetevents is a struct ret_event
-sys_exit_io_setup is a struct ret_event
-sys_exit_io_submit is a struct ret_event
-sys_exit_io_uring_enter is a struct ret_event
-sys_exit_io_uring_register is a struct ret_event
-sys_exit_io_uring_setup is a struct ret_event
-sys_exit_lchown is a struct ret_event
-sys_exit_lgetxattr is a struct ret_event
-sys_exit_linkat is a struct ret_event
-sys_exit_link is a struct ret_event
-sys_exit_listxattrat is a struct ret_event
-sys_exit_listxattr is a struct ret_event
-sys_exit_llistxattr is a struct ret_event
-sys_exit_lremovexattr is a struct ret_event
-sys_exit_lseek is a struct ret_event
-sys_exit_lsetxattr is a struct ret_event
-sys_exit_mkdirat is a struct ret_event
-sys_exit_mkdir is a struct ret_event
-sys_exit_mmap is a struct ret_event
-sys_exit_mount_setattr is a struct ret_event
-sys_exit_newfstatat is a struct ret_event
-sys_exit_newfstat is a struct ret_event
-sys_exit_newlstat is a struct ret_event
-sys_exit_newstat is a struct ret_event
-sys_exit_openat2 is a struct ret_event
-sys_exit_openat is a struct ret_event
-sys_exit_open is a struct ret_event
-sys_exit_open_tree_attr is a struct ret_event
-sys_exit_open_tree is a struct ret_event
-sys_exit_pread64 is a struct ret_event
-sys_exit_preadv2 is a struct ret_event
-sys_exit_preadv is a struct ret_event
-sys_exit_pwrite64 is a struct ret_event
-sys_exit_pwritev2 is a struct ret_event
-sys_exit_pwritev is a struct ret_event
-sys_exit_quotactl_fd is a struct ret_event
-sys_exit_readahead is a struct ret_event
-sys_exit_read is a struct ret_event
-sys_exit_readlinkat is a struct ret_event
-sys_exit_readlink is a struct ret_event
-sys_exit_readv is a struct ret_event
-sys_exit_removexattrat is a struct ret_event
-sys_exit_removexattr is a struct ret_event
-sys_exit_renameat2 is a struct ret_event
-sys_exit_renameat is a struct ret_event
-sys_exit_rename is a struct ret_event
-sys_exit_rmdir is a struct ret_event
-sys_exit_setxattrat is a struct ret_event
-sys_exit_setxattr is a struct ret_event
-sys_exit_statfs is a struct ret_event
-sys_exit_statx is a struct ret_event
-sys_exit_symlinkat is a struct ret_event
-sys_exit_symlink is a struct ret_event
-sys_exit_sync_file_range is a struct ret_event
-sys_exit_syncfs is a struct ret_event
-sys_exit_sync is a struct ret_event
-sys_exit_syslog is a struct ret_event
-sys_exit_truncate is a struct ret_event
-sys_exit_unlinkat is a struct ret_event
-sys_exit_unlink is a struct ret_event
-sys_exit_utimensat is a struct ret_event
-sys_exit_vmsplice is a struct ret_event
-sys_exit_write is a struct ret_event
-sys_exit_writev is a struct ret_event
+sys_exit_access is a struct ret_event (UNCLASSIFIED)
+sys_exit_cachestat is a struct ret_event (UNCLASSIFIED)
+sys_exit_chdir is a struct ret_event (UNCLASSIFIED)
+sys_exit_chmod is a struct ret_event (UNCLASSIFIED)
+sys_exit_chown is a struct ret_event (UNCLASSIFIED)
+sys_exit_chroot is a struct ret_event (UNCLASSIFIED)
+sys_exit_close is a struct ret_event (UNCLASSIFIED)
+sys_exit_close_range is a struct ret_event (UNCLASSIFIED)
+sys_exit_creat is a struct ret_event (UNCLASSIFIED)
+sys_exit_dup2 is a struct ret_event (UNCLASSIFIED)
+sys_exit_dup3 is a struct ret_event (UNCLASSIFIED)
+sys_exit_dup is a struct ret_event (UNCLASSIFIED)
+sys_exit_faccessat2 is a struct ret_event (UNCLASSIFIED)
+sys_exit_faccessat is a struct ret_event (UNCLASSIFIED)
+sys_exit_fadvise64 is a struct ret_event (UNCLASSIFIED)
+sys_exit_fallocate is a struct ret_event (UNCLASSIFIED)
+sys_exit_fanotify_mark is a struct ret_event (UNCLASSIFIED)
+sys_exit_fchdir is a struct ret_event (UNCLASSIFIED)
+sys_exit_fchmodat2 is a struct ret_event (UNCLASSIFIED)
+sys_exit_fchmodat is a struct ret_event (UNCLASSIFIED)
+sys_exit_fchmod is a struct ret_event (UNCLASSIFIED)
+sys_exit_fchownat is a struct ret_event (UNCLASSIFIED)
+sys_exit_fchown is a struct ret_event (UNCLASSIFIED)
+sys_exit_fcntl is a struct ret_event (UNCLASSIFIED)
+sys_exit_fdatasync is a struct ret_event (UNCLASSIFIED)
+sys_exit_fgetxattr is a struct ret_event (READ_CLASSIFIED)
+sys_exit_finit_module is a struct ret_event (UNCLASSIFIED)
+sys_exit_flistxattr is a struct ret_event (READ_CLASSIFIED)
+sys_exit_flock is a struct ret_event (UNCLASSIFIED)
+sys_exit_fremovexattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_fsconfig is a struct ret_event (UNCLASSIFIED)
+sys_exit_fsetxattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_fspick is a struct ret_event (UNCLASSIFIED)
+sys_exit_fstatfs is a struct ret_event (UNCLASSIFIED)
+sys_exit_fsync is a struct ret_event (UNCLASSIFIED)
+sys_exit_ftruncate is a struct ret_event (UNCLASSIFIED)
+sys_exit_futimesat is a struct ret_event (UNCLASSIFIED)
+sys_exit_getdents64 is a struct ret_event (READ_CLASSIFIED)
+sys_exit_getdents is a struct ret_event (READ_CLASSIFIED)
+sys_exit_getxattrat is a struct ret_event (UNCLASSIFIED)
+sys_exit_getxattr is a struct ret_event (READ_CLASSIFIED)
+sys_exit_io_cancel is a struct ret_event (UNCLASSIFIED)
+sys_exit_ioctl is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_destroy is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_getevents is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_pgetevents is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_setup is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_submit is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_uring_enter is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_uring_register is a struct ret_event (UNCLASSIFIED)
+sys_exit_io_uring_setup is a struct ret_event (UNCLASSIFIED)
+sys_exit_lchown is a struct ret_event (UNCLASSIFIED)
+sys_exit_lgetxattr is a struct ret_event (READ_CLASSIFIED)
+sys_exit_linkat is a struct ret_event (UNCLASSIFIED)
+sys_exit_link is a struct ret_event (UNCLASSIFIED)
+sys_exit_listxattrat is a struct ret_event (UNCLASSIFIED)
+sys_exit_listxattr is a struct ret_event (READ_CLASSIFIED)
+sys_exit_llistxattr is a struct ret_event (READ_CLASSIFIED)
+sys_exit_lremovexattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_lseek is a struct ret_event (UNCLASSIFIED)
+sys_exit_lsetxattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_mkdirat is a struct ret_event (UNCLASSIFIED)
+sys_exit_mkdir is a struct ret_event (UNCLASSIFIED)
+sys_exit_mmap is a struct ret_event (UNCLASSIFIED)
+sys_exit_mount_setattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_newfstatat is a struct ret_event (UNCLASSIFIED)
+sys_exit_newfstat is a struct ret_event (UNCLASSIFIED)
+sys_exit_newlstat is a struct ret_event (UNCLASSIFIED)
+sys_exit_newstat is a struct ret_event (UNCLASSIFIED)
+sys_exit_openat2 is a struct ret_event (UNCLASSIFIED)
+sys_exit_openat is a struct ret_event (UNCLASSIFIED)
+sys_exit_open is a struct ret_event (UNCLASSIFIED)
+sys_exit_open_tree_attr is a struct ret_event (UNCLASSIFIED)
+sys_exit_open_tree is a struct ret_event (UNCLASSIFIED)
+sys_exit_pread64 is a struct ret_event (READ_CLASSIFIED)
+sys_exit_preadv2 is a struct ret_event (READ_CLASSIFIED)
+sys_exit_preadv is a struct ret_event (READ_CLASSIFIED)
+sys_exit_pwrite64 is a struct ret_event (WRITE_CLASSIFIED)
+sys_exit_pwritev2 is a struct ret_event (WRITE_CLASSIFIED)
+sys_exit_pwritev is a struct ret_event (WRITE_CLASSIFIED)
+sys_exit_quotactl_fd is a struct ret_event (UNCLASSIFIED)
+sys_exit_readahead is a struct ret_event (UNCLASSIFIED)
+sys_exit_read is a struct ret_event (READ_CLASSIFIED)
+sys_exit_readlinkat is a struct ret_event (READ_CLASSIFIED)
+sys_exit_readlink is a struct ret_event (READ_CLASSIFIED)
+sys_exit_readv is a struct ret_event (READ_CLASSIFIED)
+sys_exit_removexattrat is a struct ret_event (UNCLASSIFIED)
+sys_exit_removexattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_renameat2 is a struct ret_event (UNCLASSIFIED)
+sys_exit_renameat is a struct ret_event (UNCLASSIFIED)
+sys_exit_rename is a struct ret_event (UNCLASSIFIED)
+sys_exit_rmdir is a struct ret_event (UNCLASSIFIED)
+sys_exit_setxattrat is a struct ret_event (UNCLASSIFIED)
+sys_exit_setxattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_statfs is a struct ret_event (UNCLASSIFIED)
+sys_exit_statx is a struct ret_event (UNCLASSIFIED)
+sys_exit_symlinkat is a struct ret_event (UNCLASSIFIED)
+sys_exit_symlink is a struct ret_event (UNCLASSIFIED)
+sys_exit_sync_file_range is a struct ret_event (UNCLASSIFIED)
+sys_exit_syncfs is a struct ret_event (UNCLASSIFIED)
+sys_exit_sync is a struct ret_event (UNCLASSIFIED)
+sys_exit_syslog is a struct ret_event (READ_CLASSIFIED)
+sys_exit_truncate is a struct ret_event (UNCLASSIFIED)
+sys_exit_unlinkat is a struct ret_event (UNCLASSIFIED)
+sys_exit_unlink is a struct ret_event (UNCLASSIFIED)
+sys_exit_utimensat is a struct ret_event (UNCLASSIFIED)
+sys_exit_vmsplice is a struct ret_event (TRANSFER_CLASSIFIED)
+sys_exit_write is a struct ret_event (WRITE_CLASSIFIED)
+sys_exit_writev is a struct ret_event (WRITE_CLASSIFIED)
