@@ -58,6 +58,7 @@ func TestEventloop(t *testing.T) {
 		"FcntlDupfdCloexecTest": makeFcntlDupfdCloexecTestData(t),
 		"FcntlErrorTest":        makeFcntlErrorTestData(t),
 		"FcntlInvalidFdTest":    makeFcntlInvalidFdTestData(t),
+		"NameToHandleAtTest":    makeNameToHandleAtTestData(t),
 		// FD Lifecycle tests
 		"FdLifecycleTest": makeFdLifecycleTestData(t),
 		"FdDupTest":       makeFdDupTestData(t),
@@ -1518,6 +1519,67 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 
 		// The closed fd should not be tracked and no new fd should be created
 		verifyFdNotTracked(t, el, int32(realFd))
+	})
+
+	return td
+}
+
+func makeEnterOpenByHandleAtEvent(t *testing.T, time uint64, pid, tid uint32, flags int32) (types.OpenByHandleAtEvent, []byte) {
+	ev := types.OpenByHandleAtEvent{
+		EventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT,
+		TraceId:   types.SYS_ENTER_OPEN_BY_HANDLE_AT,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Flags:     flags,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+func makeNameToHandleAtTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/handle_test.txt"
+	fd := int32(70)
+
+	// Step 1: name_to_handle_at syscall
+	_, enterNameBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
+	td.rawTracepoints = append(td.rawTracepoints, enterNameBytes)
+
+	_, exitNameBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitNameBytes)
+
+	// Step 2: open_by_handle_at syscall
+	_, enterOpenBytes := makeEnterOpenByHandleAtEvent(t, defaulTime+200, defaultPid, defaultTid, syscall.O_RDWR)
+	td.rawTracepoints = append(td.rawTracepoints, enterOpenBytes)
+
+	exitOpenEv, exitOpenBytes := makeExitRetEvent(t, defaulTime+300, defaultPid, defaultTid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
+	td.rawTracepoints = append(td.rawTracepoints, exitOpenBytes)
+
+	// Validate that the two syscalls are correlated and result in a single open event
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if ep.EnterEv.GetTraceId() != types.SYS_ENTER_OPEN_BY_HANDLE_AT {
+			t.Errorf("Expected enter event to be SYS_ENTER_OPEN_BY_HANDLE_AT, but got %v", ep.EnterEv.GetTraceId())
+		}
+		if !exitOpenEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected exit event '%v' but got '%v'", exitOpenEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() != pathname {
+			t.Errorf("Expected file name '%v' but got '%v'", pathname, ep.File.Name())
+		}
+
+		// Verify that the fd is now tracked
+		verifyFileDescriptor(t, el, fd, pathname)
+
+		// Verify that the pending handle has been consumed
+		if _, ok := el.pendingHandles[defaultTid]; ok {
+			t.Errorf("Expected pending handle for tid %d to be consumed", defaultTid)
+		}
 	})
 
 	return td
