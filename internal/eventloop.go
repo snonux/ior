@@ -216,7 +216,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		openEv := ep.EnterEv.(*OpenEvent)
 		comm := types.StringValue(openEv.Comm[:])
 		if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
-			file := file.NewFd(fd, openEv.Filename[:], v.Flags)
+			file := file.NewFd(fd, types.StringValue(openEv.Filename[:]), v.Flags)
 			e.files[fd] = file
 			ep.File = file
 			ep.Comm = comm
@@ -240,7 +240,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		nameEvent := ep.EnterEv.(*PathEvent)
 		if ep.Is(SYS_ENTER_CREAT) {
 			if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
-				file := file.NewFd(fd, nameEvent.Pathname[:],
+				file := file.NewFd(fd, types.StringValue(nameEvent.Pathname[:]),
 					syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
 				e.files[fd] = file
 				ep.File = file
@@ -319,7 +319,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		if fd := int32(retEvent.Ret); fd >= 0 {
 			openByHandleEv := ep.EnterEv.(*OpenByHandleAtEvent)
 
-			file := file.NewFd(fd, []byte(pathname), openByHandleEv.Flags)
+			file := file.NewFd(fd, pathname, openByHandleEv.Flags)
 			e.files[fd] = file
 			ep.File = file
 			ep.Comm = e.comm(tid)

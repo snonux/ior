@@ -23,10 +23,10 @@ type FdFile struct {
 	flagsFromProcFS bool
 }
 
-func NewFd(fd int32, name []byte, flags int32) FdFile {
+func NewFd(fd int32, name string, flags int32) FdFile {
 	f := FdFile{
 		fd:    fd,
-		name:  types.StringValue(name),
+		name:  name,
 		flags: Flags(flags),
 	}
 	if f.flags == -1 {
