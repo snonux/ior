@@ -24,15 +24,15 @@ type FdFile struct {
 }
 
 func NewFd(fd int32, name string, flags int32) FdFile {
-	f := FdFile{
-		fd:    fd,
-		name:  name,
-		flags: Flags(flags),
-	}
-	if f.flags == -1 {
-		panic(fmt.Sprintf("DEBUG with -1 flags: %v", f))
-	}
-	return f
+        f := FdFile{
+                fd:    fd,
+                name:  name,
+                flags: Flags(flags),
+        }
+        if f.flags == -1 {
+                f.flags = unknownFlag
+        }
+        return f
 }
 
 func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
