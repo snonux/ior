@@ -123,6 +123,7 @@ Ignoring sys_enter_msync sys_exit_msync as possibly not file I/O related
 Ignoring sys_enter_munlockall sys_exit_munlockall as possibly not file I/O related
 Ignoring sys_enter_munlock sys_exit_munlock as possibly not file I/O related
 Ignoring sys_enter_munmap sys_exit_munmap as possibly not file I/O related
+Ignoring sys_enter_name_to_handle_at sys_exit_name_to_handle_at as possibly not file I/O related
 Ignoring sys_enter_nanosleep sys_exit_nanosleep as possibly not file I/O related
 Ignoring sys_enter_newuname sys_exit_newuname as possibly not file I/O related
 Ignoring sys_enter_pause sys_exit_pause as possibly not file I/O related
@@ -241,6 +242,7 @@ Ignoring sys_enter_tkill sys_exit_tkill as possibly not file I/O related
 Ignoring sys_enter_umask sys_exit_umask as possibly not file I/O related
 Ignoring sys_enter_umount sys_exit_umount as possibly not file I/O related
 Ignoring sys_enter_unshare sys_exit_unshare as possibly not file I/O related
+Ignoring sys_enter_uprobe sys_exit_uprobe as possibly not file I/O related
 Ignoring sys_enter_uretprobe sys_exit_uretprobe as possibly not file I/O related
 Ignoring sys_enter_userfaultfd sys_exit_userfaultfd as possibly not file I/O related
 Ignoring sys_enter_ustat sys_exit_ustat as possibly not file I/O related
@@ -276,6 +278,8 @@ sys_enter_fchown is a struct fd_event
 sys_enter_fcntl is a struct fcntl_event
 sys_enter_fdatasync is a struct fd_event
 sys_enter_fgetxattr is a struct fd_event
+sys_enter_file_getattr is a struct path_event
+sys_enter_file_setattr is a struct path_event
 sys_enter_finit_module is a struct fd_event
 sys_enter_flistxattr is a struct fd_event
 sys_enter_flock is a struct fd_event
@@ -315,7 +319,6 @@ sys_enter_mkdirat is a struct path_event
 sys_enter_mkdir is a struct path_event
 sys_enter_mmap is a struct fd_event
 sys_enter_mount_setattr is a struct path_event
-sys_enter_name_to_handle_at is a struct path_event
 sys_enter_newfstatat is a struct path_event
 sys_enter_newfstat is a struct fd_event
 sys_enter_newlstat is a struct path_event
@@ -387,6 +390,8 @@ sys_exit_fchown is a struct ret_event (UNCLASSIFIED)
 sys_exit_fcntl is a struct ret_event (UNCLASSIFIED)
 sys_exit_fdatasync is a struct ret_event (UNCLASSIFIED)
 sys_exit_fgetxattr is a struct ret_event (READ_CLASSIFIED)
+sys_exit_file_getattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_file_setattr is a struct ret_event (UNCLASSIFIED)
 sys_exit_finit_module is a struct ret_event (UNCLASSIFIED)
 sys_exit_flistxattr is a struct ret_event (READ_CLASSIFIED)
 sys_exit_flock is a struct ret_event (UNCLASSIFIED)
@@ -426,7 +431,6 @@ sys_exit_mkdirat is a struct ret_event (UNCLASSIFIED)
 sys_exit_mkdir is a struct ret_event (UNCLASSIFIED)
 sys_exit_mmap is a struct ret_event (UNCLASSIFIED)
 sys_exit_mount_setattr is a struct ret_event (UNCLASSIFIED)
-sys_exit_name_to_handle_at is a struct ret_event (UNCLASSIFIED)
 sys_exit_newfstatat is a struct ret_event (UNCLASSIFIED)
 sys_exit_newfstat is a struct ret_event (UNCLASSIFIED)
 sys_exit_newlstat is a struct ret_event (UNCLASSIFIED)

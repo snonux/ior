@@ -18,6 +18,8 @@ import (
 	. "ior/internal/types"
 )
 
+const sysEnterNameToHandleAtName = "name_to_handle_at"
+
 // TOOD: read and write syscalls: can also collect amount of bytes!
 type eventLoop struct {
 	filter        *eventFilter
@@ -229,7 +231,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 
 	case *PathEvent:
-		if ep.Is(SYS_ENTER_NAME_TO_HANDLE_AT) {
+		if ep.EnterEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
 			pathEv := ep.EnterEv.(*PathEvent)
 			pathname := types.StringValue(pathEv.Pathname[:])
 			e.pendingHandles[ep.EnterEv.GetTid()] = pathname
