@@ -12,39 +12,39 @@
 ### 3. Implement copy_file_range syscall
 - Capture source and destination file descriptors
 - Track byte count copied
-- Location: internal/eventloop.go:353
+- Location: internal/eventloop.go:412
 
 ### 4. Implement mmap/msync syscalls
 - Track memory-mapped file operations
 - Capture file descriptor and memory addresses
-- Location: internal/eventloop.go:356
+- Location: internal/eventloop.go:415
 
 ### 5. Implement sync_file_range syscall
 - Capture file descriptor and range parameters
 - Track selective file synchronization
-- Location: internal/eventloop.go:358
+- Location: internal/eventloop.go:417
 
 ## Low Priority (Less common syscalls)
 
 ### 6. Implement open_by_handle_at syscall
 - Handle file access by handle
-- Location: internal/eventloop.go:354
+- Location: internal/eventloop.go:413
 
 ### 7. Implement name_to_handle_at syscall  
 - Convert pathname to handle
-- Location: internal/eventloop.go:355
+- Location: internal/eventloop.go:414
 
 ### 8. Implement getcwd syscall
 - Track current working directory queries
-- Location: internal/eventloop.go:357
+- Location: internal/eventloop.go:416
 
 ### 9. Add sys_enter_open_by_handle_at to BPF
 - Update BPF tracepoint generation
-- Location: internal/c/generate_tracepoints_c.raku:5
+- Location: internal/generate/bpfhandler.go
 
 ### 10. Enhance io_uring_enter capture with FD tracking
 - Currently captured but without file descriptor context
-- Location: internal/eventloop.go:359
+- Location: internal/eventloop.go:418
 
 ## General Improvements
 
