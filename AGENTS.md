@@ -10,7 +10,7 @@ This file provides guidance to AI coding assistants working with the I/O Riot NG
 mage all          # Build everything (BPF objects and Go binary)
 mage test         # Run all tests
 TEST_NAME=TestEventloop mage testWithName  # Run specific test
-go test ./internal/event -v                # Run tests for specific package
+go test ./internal -v                      # Run tests for internal package
 mage generate     # Generate code (required after modifying tracepoint definitions)
 mage bench        # Run benchmarks
 mage clean        # Clean build artifacts
