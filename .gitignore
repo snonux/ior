@@ -9,3 +9,4 @@ palette.map
 perltidy.ERR
 *.new
 *.tmp
+/ior
