@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/magefile/mage/mg"
@@ -22,10 +23,12 @@ import (
 
 const (
 	binaryName           = "ior"
+	workloadBinaryName   = "ioworkload"
 	defaultLibbpfgoPath  = "../libbpfgo"
 	bpfSourcePath        = "internal/c/ior.bpf.c"
 	bpfObjectPath        = "internal/c/ior.bpf.o"
 	bpfOutputPath        = "ior.bpf.o"
+	workloadSourcePath   = "./integrationtests/cmd/ioworkload"
 	tracepointsCPath     = "internal/c/generated_tracepoints.c"
 	tracepointsResult    = "internal/c/generated_tracepoints_result.txt"
 	tracepointsResultNew = "internal/c/generated_tracepoints_result.txt.new"
@@ -191,6 +194,9 @@ func Clean() error {
 	if err := removeFilesByName(binaryName); err != nil {
 		return err
 	}
+	if err := removeFilesByPath(workloadBinaryName); err != nil {
+		return err
+	}
 	if err := removeFilesByPath(bpfOutputPath); err != nil {
 		return err
 	}
@@ -232,6 +238,19 @@ func World() error {
 	}
 	fmt.Println("World: done.")
 	return nil
+}
+
+// IntegrationTest builds everything and runs integration tests with sudo.
+func IntegrationTest() error {
+	mg.SerialDeps(All)
+	fmt.Println("Building ioworkload binary...")
+	if err := sh.RunV("go", "build", "-o", workloadBinaryName, workloadSourcePath); err != nil {
+		return fmt.Errorf("build ioworkload: %w", err)
+	}
+	fmt.Println("Running integration tests (requires root)...")
+	env := goEnv()
+	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
+	return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-v", "-failfast", "-count=1")
 }
 
 // Prof generates CPU and memory profiling PDFs.
@@ -408,6 +427,33 @@ func sudoOutput(cmd string, args ...string) (string, error) {
 		return sh.Output(cmd, args...)
 	}
 	return sh.Output("sudo", append([]string{cmd}, args...)...)
+}
+
+func sudoRunWithEnv(env map[string]string, cmd string, args ...string) error {
+	if os.Geteuid() == 0 {
+		return sh.RunWithV(env, cmd, args...)
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	sudoArgs := make([]string, 0, 1+len(keys)+1+len(args))
+	sudoArgs = append(sudoArgs, "env")
+	for _, k := range keys {
+		sudoArgs = append(sudoArgs, k+"="+env[k])
+	}
+	sudoArgs = append(sudoArgs, cmd)
+	sudoArgs = append(sudoArgs, args...)
+	return sh.RunV("sudo", sudoArgs...)
+}
+
+func forwardEnv(env map[string]string, keys ...string) {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			env[k] = v
+		}
+	}
 }
 
 func writeTracepointsResult(output string, strict bool) error {
