@@ -11,6 +11,7 @@ import (
 
 // scenarios maps scenario names to their execution functions.
 var scenarios = map[string]func() error{
+	"crash":               crash,
 	"open-basic":          openBasic,
 	"open-creat":          openCreat,
 	"open-by-handle-at":   openByHandleAt,
@@ -1575,4 +1576,10 @@ func ioUringSetupRing(entries uint32) (int, error) {
 		return 0, fmt.Errorf("io_uring_setup: %w", errno)
 	}
 	return int(fd), nil
+}
+
+// crash simulates a workload that fails with a non-zero exit code.
+// Used to verify the test harness handles workload failures gracefully.
+func crash() error {
+	return fmt.Errorf("intentional crash for testing")
 }
