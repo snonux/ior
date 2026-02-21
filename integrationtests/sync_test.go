@@ -44,3 +44,33 @@ func TestSyncSyncFileRange(t *testing.T) {
 		},
 	})
 }
+
+func TestSyncFsyncEbadf(t *testing.T) {
+	runScenario(t, "sync-fsync-ebadf", []ExpectedEvent{
+		{
+			Tracepoint: "enter_fsync",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
+
+func TestSyncFdatasyncEbadf(t *testing.T) {
+	runScenario(t, "sync-fdatasync-ebadf", []ExpectedEvent{
+		{
+			Tracepoint: "enter_fdatasync",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
+
+func TestSyncFileRangeEbadf(t *testing.T) {
+	runScenario(t, "sync-file-range-ebadf", []ExpectedEvent{
+		{
+			Tracepoint: "enter_sync_file_range",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}

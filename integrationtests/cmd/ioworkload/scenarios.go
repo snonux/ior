@@ -79,10 +79,13 @@ var scenarios = map[string]func() error{
 	"stat-enoent":          statEnoent,
 	"stat-access-enoent":   statAccessEnoent,
 	"stat-fstat-ebadf":     statFstatEbadf,
-	"sync-basic":            syncBasic,
-	"sync-fdatasync":        syncFdatasync,
-	"sync-sync":             syncSync,
-	"sync-sync-file-range":  syncSyncFileRange,
+	"sync-basic":                 syncBasic,
+	"sync-fdatasync":             syncFdatasync,
+	"sync-sync":                  syncSync,
+	"sync-sync-file-range":       syncSyncFileRange,
+	"sync-fsync-ebadf":           syncFsyncEbadf,
+	"sync-fdatasync-ebadf":       syncFdatasyncEbadf,
+	"sync-file-range-ebadf":      syncFileRangeEbadf,
 	"truncate-basic":      truncateBasic,
 	"truncate-ftruncate":  truncateFtruncate,
 	"iouring-setup":       iouringSetup,
@@ -2144,6 +2147,36 @@ func syncSyncFileRange() error {
 		return fmt.Errorf("write: %w", err)
 	}
 	return syscall.SyncFileRange(fd, 0, int64(len(data)), 0)
+}
+
+// syncFsyncEbadf calls fsync on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_fsync tracepoint.
+func syncFsyncEbadf() error {
+	_, _, errno := syscall.Syscall(syscall.SYS_FSYNC, 99999, 0, 0)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but fsync succeeded")
+	}
+	return nil
+}
+
+// syncFdatasyncEbadf calls fdatasync on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_fdatasync tracepoint.
+func syncFdatasyncEbadf() error {
+	_, _, errno := syscall.Syscall(syscall.SYS_FDATASYNC, 99999, 0, 0)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but fdatasync succeeded")
+	}
+	return nil
+}
+
+// syncFileRangeEbadf calls sync_file_range on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_sync_file_range tracepoint.
+func syncFileRangeEbadf() error {
+	_, _, errno := syscall.Syscall6(syscall.SYS_SYNC_FILE_RANGE, 99999, 0, 0, 0, 0, 0)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but sync_file_range succeeded")
+	}
+	return nil
 }
 
 // truncateBasic opens a file, writes data, then truncates it via
