@@ -33,6 +33,8 @@ func TestEventloop(t *testing.T) {
 		"ReadEventTest":      makeReadEventTestData(t),
 		"WriteEventTest":     makeWriteEventTestData(t),
 		"CloseEventTest":     makeCloseEventTestData(t),
+		"CloseRangeEventTest": makeCloseRangeEventTestData(t),
+		"CloseRangeFailureTest": makeCloseRangeFailureTestData(t),
 		"FsyncEventTest":     makeFsyncEventTestData(t),
 		"FtruncateEventTest": makeFtruncateEventTestData(t),
 		// PathEvent tests
@@ -348,6 +350,158 @@ func makeCloseEventTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
+	})
+
+	return td
+}
+
+func makeCloseRangeEventTestData(t *testing.T) (td testData) {
+	fd1 := int32(41)
+	fd2 := int32(42)
+	fd3 := int32(43)
+	filename1 := "close_range_1.txt"
+	filename2 := "close_range_2.txt"
+	filename3 := "close_range_3.txt"
+
+	openEnterEv1, openEnterBytes1 := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	copy(openEnterEv1.Filename[:], filename1)
+	openEnterBytes1, _ = openEnterEv1.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes1)
+
+	openExitEv1, openExitBytes1 := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv1.Ret = int64(fd1)
+	openExitBytes1, _ = openExitEv1.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes1)
+
+	openEnterEv2, openEnterBytes2 := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
+	copy(openEnterEv2.Filename[:], filename2)
+	openEnterBytes2, _ = openEnterEv2.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes2)
+
+	openExitEv2, openExitBytes2 := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
+	openExitEv2.Ret = int64(fd2)
+	openExitBytes2, _ = openExitEv2.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes2)
+
+	openEnterEv3, openEnterBytes3 := makeEnterOpenEvent(t, defaulTime+400, defaultPid, defaultTid)
+	copy(openEnterEv3.Filename[:], filename3)
+	openEnterBytes3, _ = openEnterEv3.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes3)
+
+	openExitEv3, openExitBytes3 := makeExitOpenEvent(t, defaulTime+500, defaultPid, defaultTid)
+	openExitEv3.Ret = int64(fd3)
+	openExitBytes3, _ = openExitEv3.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes3)
+
+	enterCloseRange, enterCloseRangeBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, defaultTid, fd2, types.SYS_ENTER_CLOSE_RANGE)
+	td.rawTracepoints = append(td.rawTracepoints, enterCloseRangeBytes)
+
+	exitCloseRange, exitCloseRangeBytes := makeExitRetEvent(t, defaulTime+700, defaultPid, defaultTid, types.SYS_EXIT_CLOSE_RANGE, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitCloseRangeBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !openEnterEv1.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", openEnterEv1, ep.EnterEv)
+		}
+		if !openExitEv1.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", openExitEv1, ep.ExitEv)
+		}
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !openEnterEv2.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", openEnterEv2, ep.EnterEv)
+		}
+		if !openExitEv2.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", openExitEv2, ep.ExitEv)
+		}
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !openEnterEv3.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", openEnterEv3, ep.EnterEv)
+		}
+		if !openExitEv3.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", openExitEv3, ep.ExitEv)
+		}
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterCloseRange.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterCloseRange, ep.EnterEv)
+		}
+		if !exitCloseRange.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitCloseRange, ep.ExitEv)
+		}
+
+		verifyFileDescriptor(t, el, fd1, filename1)
+		verifyFdNotTracked(t, el, fd2)
+		verifyFdNotTracked(t, el, fd3)
+	})
+
+	return td
+}
+
+func makeCloseRangeFailureTestData(t *testing.T) (td testData) {
+	fd1 := int32(41)
+	fd2 := int32(42)
+	filename1 := "close_range_fail_1.txt"
+	filename2 := "close_range_fail_2.txt"
+
+	openEnterEv1, openEnterBytes1 := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	copy(openEnterEv1.Filename[:], filename1)
+	openEnterBytes1, _ = openEnterEv1.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes1)
+
+	openExitEv1, openExitBytes1 := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv1.Ret = int64(fd1)
+	openExitBytes1, _ = openExitEv1.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes1)
+
+	openEnterEv2, openEnterBytes2 := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
+	copy(openEnterEv2.Filename[:], filename2)
+	openEnterBytes2, _ = openEnterEv2.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes2)
+
+	openExitEv2, openExitBytes2 := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
+	openExitEv2.Ret = int64(fd2)
+	openExitBytes2, _ = openExitEv2.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes2)
+
+	enterCloseRange, enterCloseRangeBytes := makeEnterFdEvent(t, defaulTime+400, defaultPid, defaultTid, fd1, types.SYS_ENTER_CLOSE_RANGE)
+	td.rawTracepoints = append(td.rawTracepoints, enterCloseRangeBytes)
+
+	exitCloseRange, exitCloseRangeBytes := makeExitRetEvent(t, defaulTime+500, defaultPid, defaultTid, types.SYS_EXIT_CLOSE_RANGE, -1)
+	td.rawTracepoints = append(td.rawTracepoints, exitCloseRangeBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !openEnterEv1.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", openEnterEv1, ep.EnterEv)
+		}
+		if !openExitEv1.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", openExitEv1, ep.ExitEv)
+		}
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !openEnterEv2.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", openEnterEv2, ep.EnterEv)
+		}
+		if !openExitEv2.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", openExitEv2, ep.ExitEv)
+		}
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterCloseRange.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterCloseRange, ep.EnterEv)
+		}
+		if !exitCloseRange.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitCloseRange, ep.ExitEv)
+		}
+
+		verifyFileDescriptor(t, el, fd1, filename1)
+		verifyFileDescriptor(t, el, fd2, filename2)
 	})
 
 	return td
