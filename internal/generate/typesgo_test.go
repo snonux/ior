@@ -255,3 +255,72 @@ func TestGenerateTypesGoPackageDecl(t *testing.T) {
 		t.Errorf("unexpected package header: %s", output[:80])
 	}
 }
+
+func TestSnakeToCamelEmpty(t *testing.T) {
+	if got := snakeToCamel(""); got != "" {
+		t.Errorf("snakeToCamel(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestSnakeToCamelLeadingUnderscore(t *testing.T) {
+	got := snakeToCamel("__u32")
+	if got != "U32" {
+		t.Errorf("snakeToCamel(\"__u32\") = %q, want \"U32\"", got)
+	}
+}
+
+func TestCTypeToGoTypeUnknown(t *testing.T) {
+	if got := cTypeToGoType("some_custom_type"); got != "some_custom_type" {
+		t.Errorf("cTypeToGoType(\"some_custom_type\") = %q, want \"some_custom_type\"", got)
+	}
+}
+
+func TestParseMemberInvalid(t *testing.T) {
+	tests := []string{
+		"not a valid member line",
+		"too many words here that do not match",
+		"",
+		";;;",
+	}
+	for _, input := range tests {
+		_, ok := parseMember(input)
+		if ok {
+			t.Errorf("parseMember(%q) returned ok=true, want false", input)
+		}
+	}
+}
+
+func TestParseDefineInvalid(t *testing.T) {
+	tests := []string{
+		"#define ONLY_NAME",
+		"#define",
+		"",
+	}
+	for _, input := range tests {
+		_, ok := parseDefine(input)
+		if ok {
+			t.Errorf("parseDefine(%q) returned ok=true, want false", input)
+		}
+	}
+}
+
+func TestAddTypesImportsNoImport(t *testing.T) {
+	code := "package types\n\nconst FOO = 1\n"
+	got := AddTypesImports(code)
+	if got != code {
+		t.Errorf("AddTypesImports should not modify code without fmt/sync/binary usage, got:\n%s", got)
+	}
+}
+
+func TestParseCTypesInputEmpty(t *testing.T) {
+	structs, constants, err := ParseCTypesInput(strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(structs) != 0 {
+		t.Errorf("expected 0 structs, got %d", len(structs))
+	}
+	if len(constants) != 0 {
+		t.Errorf("expected 0 constants, got %d", len(constants))
+	}
+}

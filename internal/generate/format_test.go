@@ -172,3 +172,43 @@ func TestParseFormatError(t *testing.T) {
 		t.Error("expected error for field without name")
 	}
 }
+
+func TestParseFormatEmptyInput(t *testing.T) {
+	formats, err := ParseFormats(strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(formats) != 0 {
+		t.Errorf("expected 0 formats, got %d", len(formats))
+	}
+}
+
+func TestParseFormatIDWithoutName(t *testing.T) {
+	_, err := ParseFormats(strings.NewReader("ID: 123\n"))
+	if err == nil {
+		t.Error("expected error for ID without preceding name")
+	}
+}
+
+func TestParseFormatInvalidID(t *testing.T) {
+	input := "name: sys_enter_test\nID: notanumber\n"
+	_, err := ParseFormats(strings.NewReader(input))
+	if err == nil {
+		t.Error("expected error for non-numeric ID")
+	}
+}
+
+func TestParseFieldNotEnoughParts(t *testing.T) {
+	input := "name: sys_enter_test\nID: 100\nfield:unsigned int fd;	offset:16\n"
+	_, err := ParseFormats(strings.NewReader(input))
+	if err == nil {
+		t.Error("expected error for field with fewer than 4 semicolons")
+	}
+}
+
+func TestSplitDeclarationEmpty(t *testing.T) {
+	typePart, namePart := splitDeclaration("")
+	if typePart != "" || namePart != "" {
+		t.Errorf("splitDeclaration(\"\") = (%q, %q), want (\"\", \"\")", typePart, namePart)
+	}
+}

@@ -90,3 +90,32 @@ func TestExtractTracepointsPackageHeader(t *testing.T) {
 		t.Errorf("unexpected header: %s", output[:60])
 	}
 }
+
+func TestExtractTracepointsMalformedSEC(t *testing.T) {
+	input := `SEC("tracepoint/not_matching_pattern")
+int handle_something(struct trace_event_raw_sys_enter *ctx) {
+    return 0;
+}
+SEC("some/garbage")
+`
+	output, err := ExtractTracepoints(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(output, `"sys_`) {
+		t.Error("malformed SEC lines should not produce tracepoints")
+	}
+	requireContains(t, output, "var List = []string{")
+}
+
+func TestExtractTracepointsNoSECLines(t *testing.T) {
+	input := "// just a comment\n/* another comment */\nint foo() { return 0; }\n"
+	output, err := ExtractTracepoints(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	requireContains(t, output, "var List = []string{")
+	if strings.Contains(output, `"sys_`) {
+		t.Error("input with no SEC lines should produce empty list")
+	}
+}
