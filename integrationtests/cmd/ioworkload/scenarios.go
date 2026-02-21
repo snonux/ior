@@ -19,11 +19,15 @@ var scenarios = map[string]func() error{
 	"open-enoent":         openEnoent,
 	"open-rdonly-write":   openRdonlyWrite,
 	"open-pid-filter":     openPidFilter,
-	"readwrite-basic":   readwriteBasic,
-	"readwrite-pread":   readwritePread,
-	"readwrite-pwrite":  readwritePwrite,
-	"readwrite-readv":   readwriteReadv,
-	"readwrite-writev":  readwriteWritev,
+	"readwrite-basic":          readwriteBasic,
+	"readwrite-pread":          readwritePread,
+	"readwrite-pwrite":         readwritePwrite,
+	"readwrite-readv":          readwriteReadv,
+	"readwrite-writev":         readwriteWritev,
+	"readwrite-wronly-read":    readwriteWronlyRead,
+	"readwrite-rdonly-write":   readwriteRdonlyWrite,
+	"readwrite-pread-invalid":  readwritePreadInvalid,
+	"readwrite-pwrite-invalid": readwritePwriteInvalid,
 	"close-basic":     closeBasic,
 	"close-range":     closeRange,
 	"dup-basic":       dupBasic,
@@ -330,6 +334,114 @@ func readwriteWritev() error {
 	runtime.KeepAlive(buf2)
 	if errno != 0 {
 		return fmt.Errorf("writev: %w", errno)
+	}
+	return nil
+}
+
+// readwriteWronlyRead opens a file O_WRONLY, then attempts to read from it.
+// The read fails with EBADF, but ior should capture the enter_read tracepoint
+// because arguments are read on syscall entry before the kernel returns an error.
+func readwriteWronlyRead() error {
+	dir, cleanup, err := makeTempDir("readwrite-wronly-read")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "wronlyfile.txt")
+	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	buf := make([]byte, 16)
+	_, err = syscall.Read(fd, buf)
+	if err == nil {
+		return fmt.Errorf("expected read from wronly fd to fail")
+	}
+	return nil
+}
+
+// readwriteRdonlyWrite opens a file O_RDONLY, then attempts to write to it.
+// The write fails with EBADF, but ior should capture the enter_write tracepoint
+// because arguments are read on syscall entry before the kernel returns an error.
+func readwriteRdonlyWrite() error {
+	dir, cleanup, err := makeTempDir("readwrite-rdonly-write")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "rdonlywritefile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	syscall.Close(fd)
+
+	fd, err = syscall.Open(path, syscall.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open rdonly: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	_, err = syscall.Write(fd, []byte("should fail"))
+	if err == nil {
+		return fmt.Errorf("expected write to rdonly fd to fail")
+	}
+	return nil
+}
+
+// readwritePreadInvalid calls pread64 with a negative offset (-1).
+// The syscall fails with EINVAL, but ior should capture the enter_pread64
+// tracepoint because arguments are read on syscall entry.
+func readwritePreadInvalid() error {
+	dir, cleanup, err := makeTempDir("readwrite-pread-invalid")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "preadinvalid.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("some data")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	buf := make([]byte, 16)
+	_, err = syscall.Pread(fd, buf, -1)
+	if err == nil {
+		return fmt.Errorf("expected pread with negative offset to fail")
+	}
+	return nil
+}
+
+// readwritePwriteInvalid calls pwrite64 with a negative offset (-1).
+// The syscall fails with EINVAL, but ior should capture the enter_pwrite64
+// tracepoint because arguments are read on syscall entry.
+func readwritePwriteInvalid() error {
+	dir, cleanup, err := makeTempDir("readwrite-pwrite-invalid")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "pwriteinvalid.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	_, err = syscall.Pwrite(fd, []byte("should fail"), -1)
+	if err == nil {
+		return fmt.Errorf("expected pwrite with negative offset to fail")
 	}
 	return nil
 }
