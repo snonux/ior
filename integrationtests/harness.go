@@ -13,7 +13,7 @@ import (
 
 const (
 	workloadStartupTimeout = 5 * time.Second
-	iorShutdownGrace       = 3 * time.Second
+	iorShutdownGrace       = 30 * time.Second
 )
 
 // TestHarness orchestrates integration tests by starting an ior trace
@@ -109,6 +109,11 @@ func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 }
 
 func (h *TestHarness) startIor(pid int, scenario string, duration int) (*exec.Cmd, error) {
+	bpfLink := filepath.Join(h.OutputDir, "ior.bpf.o")
+	if err := os.Symlink(h.BpfObject, bpfLink); err != nil {
+		return nil, fmt.Errorf("symlink bpf object: %w", err)
+	}
+
 	cmd := exec.Command(h.IorBinary,
 		"-pid", strconv.Itoa(pid),
 		"-flamegraph",

@@ -39,13 +39,21 @@ func AssertEventsPresent(t *testing.T, result TestResult, expected []ExpectedEve
 }
 
 // AssertNoUnexpectedComm verifies all records have the expected comm name.
-// Fails fast on the first mismatch and reports the total count of unexpected records.
+// Records with empty comm are skipped because BPF may capture events before
+// the process name is set in the task struct.
 func AssertNoUnexpectedComm(t *testing.T, result TestResult, expectedComm string) {
 	t.Helper()
 	var count int
 	for _, rec := range result.Records {
+		if rec.Comm == "" {
+			continue
+		}
 		if rec.Comm != expectedComm {
 			count++
+			if count <= 5 {
+				t.Logf("unexpected comm %q (pid=%d tracepoint=%s path=%q)",
+					rec.Comm, rec.Pid, rec.TraceID.String(), rec.Path)
+			}
 		}
 	}
 	if count > 0 {
@@ -62,6 +70,10 @@ func AssertNoUnexpectedPID(t *testing.T, result TestResult, expectedPID int) {
 	for _, rec := range result.Records {
 		if rec.Pid != pid {
 			count++
+			if count <= 5 {
+				t.Logf("unexpected PID %d (tracepoint=%s path=%q comm=%q)",
+					rec.Pid, rec.TraceID.String(), rec.Path, rec.Comm)
+			}
 		}
 	}
 	if count > 0 {
