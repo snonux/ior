@@ -487,6 +487,12 @@ func makeCloseRangeEventTestData(t *testing.T) (td testData) {
 		if !exitCloseRange.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitCloseRange, ep.ExitEv)
 		}
+		// close_range's fd is the first fd in the range (fd2); its path must resolve
+		if ep.File == nil {
+			t.Errorf("Expected file to be set for close_range event")
+		} else if ep.File.Name() != filename2 {
+			t.Errorf("Expected file name '%v' but got '%v'", filename2, ep.File.Name())
+		}
 
 		verifyFileDescriptor(t, el, fd1, filename1)
 		verifyFdNotTracked(t, el, fd2)

@@ -258,6 +258,14 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 	case *FdEvent:
 		fd := ep.EnterEv.(*FdEvent).Fd
+		if file_, ok := e.files[fd]; ok {
+			ep.File = file_
+			if ep.Is(SYS_ENTER_CLOSE) {
+				delete(e.files, fd)
+			}
+		} else {
+			ep.File = file.NewFdWithPid(fd, v.Pid)
+		}
 		if ep.Is(SYS_ENTER_CLOSE_RANGE) {
 			// close_range provides (first, last), but fd_event only carries the first
 			// argument, so we approximate by closing all tracked fds >= first.
@@ -269,14 +277,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 					}
 				}
 			}
-		}
-		if file_, ok := e.files[fd]; ok {
-			ep.File = file_
-			if ep.Is(SYS_ENTER_CLOSE) {
-				delete(e.files, fd)
-			}
-		} else {
-			ep.File = file.NewFdWithPid(fd, v.Pid)
 		}
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 		if !e.filter.eventPair(ep) {
