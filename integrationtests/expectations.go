@@ -81,6 +81,26 @@ func AssertNoUnexpectedPID(t *testing.T, result TestResult, expectedPID int) {
 	}
 }
 
+// AssertEventsAbsent verifies that none of the specified events appear in the test result.
+// Each ExpectedEvent must have at least one filter field set to avoid accidentally
+// matching all records.
+func AssertEventsAbsent(t *testing.T, result TestResult, absent []ExpectedEvent) {
+	t.Helper()
+	for _, exp := range absent {
+		if exp.PathContains == "" && exp.Tracepoint == "" && exp.Comm == "" {
+			t.Errorf("AssertEventsAbsent: ExpectedEvent must have at least one filter field set: %+v", exp)
+			continue
+		}
+		for _, rec := range result.Records {
+			if matchesExpectation(rec, exp) {
+				t.Errorf("event should be absent but was found: %+v (path=%q tracepoint=%s comm=%q)",
+					exp, rec.Path, rec.TraceID.String(), rec.Comm)
+				break
+			}
+		}
+	}
+}
+
 func matchesExpectation(rec flamegraph.IterRecord, exp ExpectedEvent) bool {
 	if exp.PathContains != "" && !strings.Contains(rec.Path, exp.PathContains) {
 		return false

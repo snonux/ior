@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"syscall"
@@ -15,6 +16,9 @@ var scenarios = map[string]func() error{
 	"open-basic":          openBasic,
 	"open-creat":          openCreat,
 	"open-by-handle-at":   openByHandleAt,
+	"open-enoent":         openEnoent,
+	"open-rdonly-write":   openRdonlyWrite,
+	"open-pid-filter":     openPidFilter,
 	"readwrite-basic":   readwriteBasic,
 	"readwrite-pread":   readwritePread,
 	"readwrite-pwrite":  readwritePwrite,
@@ -106,6 +110,82 @@ func openCreat() error {
 		return fmt.Errorf("creat: %w", errno)
 	}
 	return syscall.Close(int(fd))
+}
+
+// openEnoent attempts to open a nonexistent file path. The openat syscall
+// returns ENOENT, but ior should still capture the enter_openat tracepoint
+// because the filename is read on entry before the syscall executes.
+func openEnoent() error {
+	dir, cleanup, err := makeTempDir("open-enoent")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "nonexistent", "enoentfile.txt")
+	_, err = syscall.Open(path, syscall.O_RDONLY, 0)
+	if err == nil {
+		return fmt.Errorf("expected ENOENT, but open succeeded")
+	}
+	return nil
+}
+
+// openRdonlyWrite opens a file O_RDONLY, then attempts to write to it.
+// The write fails with EBADF, but ior should capture both the openat
+// tracepoint and the write tracepoint.
+func openRdonlyWrite() error {
+	dir, cleanup, err := makeTempDir("open-rdonly-write")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "rdonlyfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	syscall.Close(fd)
+
+	fd, err = syscall.Open(path, syscall.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open rdonly: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	_, err = syscall.Write(fd, []byte("should fail"))
+	if err == nil {
+		return fmt.Errorf("expected write to rdonly fd to fail")
+	}
+	return nil
+}
+
+// openPidFilter spawns a child process that performs file I/O. Since ior
+// filters by the workload PID, the child's I/O should NOT appear in results.
+// The parent also performs its own open so the test can verify positive and
+// negative expectations simultaneously.
+func openPidFilter() error {
+	dir, cleanup, err := makeTempDir("open-pid-filter")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// Parent opens a file (should be captured by ior).
+	parentPath := filepath.Join(dir, "parentfile.txt")
+	fd, err := syscall.Open(parentPath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("parent open: %w", err)
+	}
+	syscall.Close(fd)
+
+	// Spawn a child process that creates a file with a distinctive name.
+	childPath := filepath.Join(dir, "childfile.txt")
+	cmd := exec.Command("touch", childPath)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("child touch: %w", err)
+	}
+	return nil
 }
 
 // readwriteBasic opens a file, writes data, seeks to start, reads it back.
