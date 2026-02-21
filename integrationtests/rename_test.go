@@ -34,3 +34,25 @@ func TestRenameRenameat2(t *testing.T) {
 		},
 	})
 }
+
+func TestRenameEnoent(t *testing.T) {
+	runScenario(t, "rename-enoent", []ExpectedEvent{
+		{
+			PathContains: "rename-enoent-missing.txt",
+			Tracepoint:   "enter_rename",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestRenameNoreplace(t *testing.T) {
+	runScenario(t, "rename-noreplace", []ExpectedEvent{
+		{
+			PathContains: "noreplace-dst.txt",
+			Tracepoint:   "enter_renameat2",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
