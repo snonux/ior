@@ -52,8 +52,11 @@ var scenarios = map[string]func() error{
 	"link-basic":      linkBasic,
 	"link-linkat":     linkLinkat,
 	"link-symlinkat":  linkSymlinkat,
-	"link-readlinkat": linkReadlinkat,
-	"unlink-basic":    unlinkBasic,
+	"link-readlinkat":        linkReadlinkat,
+	"link-enoent":            linkEnoent,
+	"link-symlink-eexist":    linkSymlinkEexist,
+	"link-readlinkat-einval": linkReadlinkatEinval,
+	"unlink-basic":           unlinkBasic,
 	"unlink-unlinkat": unlinkUnlinkat,
 	"unlink-rmdir":    unlinkRmdir,
 	"dir-basic":       dirBasic,
@@ -1316,6 +1319,131 @@ func linkReadlinkat() error {
 	runtime.KeepAlive(buf)
 	if errno != 0 {
 		return fmt.Errorf("readlinkat: %w", errno)
+	}
+	return nil
+}
+
+// linkEnoent attempts to hard link a nonexistent source via raw SYS_LINK.
+// The syscall fails with ENOENT, but ior captures the enter_link tracepoint
+// because arguments are read on syscall entry.
+func linkEnoent() error {
+	dir, cleanup, err := makeTempDir("link-enoent")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	srcPath := filepath.Join(dir, "link-enoent-missing.txt")
+	dstPath := filepath.Join(dir, "link-enoent-dst.txt")
+
+	srcBytes, err := syscall.BytePtrFromString(srcPath)
+	if err != nil {
+		return fmt.Errorf("src path bytes: %w", err)
+	}
+	dstBytes, err := syscall.BytePtrFromString(dstPath)
+	if err != nil {
+		return fmt.Errorf("dst path bytes: %w", err)
+	}
+
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_LINK,
+		uintptr(unsafe.Pointer(srcBytes)),
+		uintptr(unsafe.Pointer(dstBytes)),
+		0,
+	)
+	runtime.KeepAlive(srcBytes)
+	runtime.KeepAlive(dstBytes)
+	if errno == 0 {
+		return fmt.Errorf("expected ENOENT, but link succeeded")
+	}
+	return nil
+}
+
+// linkSymlinkEexist creates a regular file, then attempts to create a symlink
+// at the same path via raw SYS_SYMLINK. The syscall fails with EEXIST because
+// the link path already exists, but ior captures the enter_symlink tracepoint.
+func linkSymlinkEexist() error {
+	dir, cleanup, err := makeTempDir("link-symlink-eexist")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	existingPath := filepath.Join(dir, "symlink-eexist.txt")
+	fd, err := syscall.Open(existingPath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+
+	targetBytes, err := syscall.BytePtrFromString("/tmp/dummy-target")
+	if err != nil {
+		return fmt.Errorf("target bytes: %w", err)
+	}
+	linkBytes, err := syscall.BytePtrFromString(existingPath)
+	if err != nil {
+		return fmt.Errorf("link path bytes: %w", err)
+	}
+
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_SYMLINK,
+		uintptr(unsafe.Pointer(targetBytes)),
+		uintptr(unsafe.Pointer(linkBytes)),
+		0,
+	)
+	runtime.KeepAlive(targetBytes)
+	runtime.KeepAlive(linkBytes)
+	if errno == 0 {
+		return fmt.Errorf("expected EEXIST, but symlink succeeded")
+	}
+	return nil
+}
+
+// linkReadlinkatEinval creates a regular file and calls readlinkat(2) on it.
+// The syscall fails with EINVAL because the path is not a symlink, but ior
+// captures the enter_readlinkat tracepoint on syscall entry.
+func linkReadlinkatEinval() error {
+	dir, cleanup, err := makeTempDir("link-readlinkat-einval")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	regularFile := "readlinkat-einval.txt"
+	regularPath := filepath.Join(dir, regularFile)
+	fd, err := syscall.Open(regularPath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+
+	dirFD, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open dir: %w", err)
+	}
+	defer syscall.Close(dirFD)
+
+	nameBytes, err := syscall.BytePtrFromString(regularFile)
+	if err != nil {
+		return fmt.Errorf("name bytes: %w", err)
+	}
+	buf := make([]byte, 256)
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS_READLINKAT,
+		uintptr(dirFD),
+		uintptr(unsafe.Pointer(nameBytes)),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(len(buf)),
+		0, 0,
+	)
+	runtime.KeepAlive(nameBytes)
+	runtime.KeepAlive(buf)
+	if errno == 0 {
+		return fmt.Errorf("expected EINVAL, but readlinkat succeeded")
 	}
 	return nil
 }

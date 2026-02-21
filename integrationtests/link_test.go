@@ -57,3 +57,36 @@ func TestLinkReadlinkat(t *testing.T) {
 		},
 	})
 }
+
+func TestLinkEnoent(t *testing.T) {
+	runScenario(t, "link-enoent", []ExpectedEvent{
+		{
+			PathContains: "link-enoent-missing.txt",
+			Tracepoint:   "enter_link",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestLinkSymlinkEexist(t *testing.T) {
+	runScenario(t, "link-symlink-eexist", []ExpectedEvent{
+		{
+			PathContains: "symlink-eexist.txt",
+			Tracepoint:   "enter_symlink",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestLinkReadlinkatEinval(t *testing.T) {
+	runScenario(t, "link-readlinkat-einval", []ExpectedEvent{
+		{
+			PathContains: "readlinkat-einval.txt",
+			Tracepoint:   "enter_readlinkat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
