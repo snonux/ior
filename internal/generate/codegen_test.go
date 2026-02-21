@@ -129,6 +129,26 @@ func TestGenerateNullHandler(t *testing.T) {
 	}
 }
 
+func TestGenerateIoUringEnterHandler(t *testing.T) {
+	output := generateFromPair(t, FormatIoUringEnter, FormatExitIoUringEnter)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_enter")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_ENTER;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+}
+
+func TestGenerateIoUringRegisterHandler(t *testing.T) {
+	output := generateFromPair(t, FormatIoUringRegister, FormatExitIoUringRegister)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_register")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_REGISTER;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+}
+
 func TestGenerateDup3Handler(t *testing.T) {
 	output := generateFromPair(t, FormatDup3, FormatExitDup3)
 
@@ -144,6 +164,16 @@ func TestGenerateOpenByHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "struct open_by_handle_at_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_BY_HANDLE_AT_EVENT;")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
+}
+
+func TestGenerateNameToHandleAtHandler(t *testing.T) {
+	output := generateFromPair(t, FormatNameToHandleAt, FormatExitNameToHandleAt)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_name_to_handle_at")`)
+	requireContains(t, output, "struct path_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_NAME_TO_HANDLE_AT;")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
 }
 
 func TestGenerateIgnoredComment(t *testing.T) {

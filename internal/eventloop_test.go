@@ -51,6 +51,8 @@ func TestEventloop(t *testing.T) {
 		"SyncEventTest":         makeSyncEventTestData(t),
 		"IoUringSetupEventTest": makeIoUringSetupEventTestData(t),
 		"IoUringSetupFailureTest": makeIoUringSetupFailureTestData(t),
+		"IoUringEnterEventTest": makeIoUringEnterEventTestData(t),
+		"IoUringRegisterEventTest": makeIoUringRegisterEventTestData(t),
 		// Dup3Event tests
 		"Dup3EventTest":       makeDup3EventTestData(t),
 		"Dup3WithCloexecTest": makeDup3WithCloexecTestData(t),
@@ -62,6 +64,7 @@ func TestEventloop(t *testing.T) {
 		"FcntlErrorTest":        makeFcntlErrorTestData(t),
 		"FcntlInvalidFdTest":    makeFcntlInvalidFdTestData(t),
 		"NameToHandleAtTest":    makeNameToHandleAtTestData(t),
+		"NameToHandleAtFailureTest": makeNameToHandleAtFailureTestData(t),
 		// FD Lifecycle tests
 		"FdLifecycleTest": makeFdLifecycleTestData(t),
 		"FdDupTest":       makeFdDupTestData(t),
@@ -939,6 +942,58 @@ func makeIoUringSetupFailureTestData(t *testing.T) (td testData) {
 	return td
 }
 
+func makeIoUringEnterEventTestData(t *testing.T) (td testData) {
+	fd := int32(52)
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_IO_URING_ENTER)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_ENTER, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected io_uring_enter to have a file")
+		}
+		if _, ok := el.files[fd]; ok {
+			t.Errorf("Expected io_uring_enter to not track fd %d", fd)
+		}
+	})
+
+	return td
+}
+
+func makeIoUringRegisterEventTestData(t *testing.T) (td testData) {
+	fd := int32(53)
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_IO_URING_REGISTER)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_REGISTER, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected io_uring_register to have a file")
+		}
+		if _, ok := el.files[fd]; ok {
+			t.Errorf("Expected io_uring_register to not track fd %d", fd)
+		}
+	})
+
+	return td
+}
+
 // Test data functions for Dup3Event syscalls
 func makeDup3EventTestData(t *testing.T) (td testData) {
 	oldFd := int32(49)
@@ -1766,6 +1821,43 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 		// Verify that the pending handle has been consumed
 		if _, ok := el.pendingHandles[defaultTid]; ok {
 			t.Errorf("Expected pending handle for tid %d to be consumed", defaultTid)
+		}
+	})
+
+	return td
+}
+
+func makeNameToHandleAtFailureTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/handle_failure.txt"
+
+	_, enterNameBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
+	td.rawTracepoints = append(td.rawTracepoints, enterNameBytes)
+
+	_, exitNameBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_NAME_TO_HANDLE_AT, -1)
+	td.rawTracepoints = append(td.rawTracepoints, exitNameBytes)
+
+	fd := int32(71)
+	_, enterOpenBytes := makeEnterOpenByHandleAtEvent(t, defaulTime+200, defaultPid, defaultTid, syscall.O_RDWR)
+	td.rawTracepoints = append(td.rawTracepoints, enterOpenBytes)
+
+	exitOpenEv, exitOpenBytes := makeExitRetEvent(t, defaulTime+300, defaultPid, defaultTid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
+	td.rawTracepoints = append(td.rawTracepoints, exitOpenBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if ep.EnterEv.GetTraceId() != types.SYS_ENTER_OPEN_BY_HANDLE_AT {
+			t.Errorf("Expected enter event to be SYS_ENTER_OPEN_BY_HANDLE_AT, but got %v", ep.EnterEv.GetTraceId())
+		}
+		if !exitOpenEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected exit event '%v' but got '%v'", exitOpenEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected file to be set")
+		} else if ep.File.Name() == pathname {
+			t.Errorf("Expected open_by_handle_at to not use failed name_to_handle_at path")
+		}
+
+		if _, ok := el.pendingHandles[defaultTid]; ok {
+			t.Errorf("Expected no pending handle for tid %d after failure", defaultTid)
 		}
 	})
 

@@ -28,7 +28,7 @@ const (
 
 type ClassificationResult struct {
 	Kind          TracepointKind
-	PathnameField string // for KindPathname: "pathname", "path", or "filename"
+	PathnameField string // for KindPathname: "pathname", "path", "filename", or "name"
 }
 
 // ClassifyFormat determines the tracepoint kind for a parsed format section.
@@ -103,6 +103,10 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 	switch name {
 	case "sys_enter_open_by_handle_at":
 		return ClassificationResult{Kind: KindOpenByHandleAt}, true
+	case "sys_enter_io_uring_enter":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_io_uring_register":
+		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_fcntl":
 		return ClassificationResult{Kind: KindFcntl}, true
 	case "sys_enter_syslog":
@@ -131,6 +135,10 @@ func classifyNameAndField(name, fieldType, fieldName string) (ClassificationResu
 	case "sys_enter_dup3":
 		if fieldType == "unsigned int" && fieldName == "oldfd" {
 			return ClassificationResult{Kind: KindDup3}, true
+		}
+	case "sys_enter_name_to_handle_at":
+		if fieldType == "const char *" && fieldName == "name" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
 		}
 	}
 

@@ -136,6 +136,16 @@ func TestClassifyOpenByHandleAt(t *testing.T) {
 	}
 }
 
+func TestClassifyNameToHandleAt(t *testing.T) {
+	r := classifyFromData(t, FormatNameToHandleAt)
+	if r.Kind != KindPathname {
+		t.Errorf("name_to_handle_at: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "name" {
+		t.Errorf("name_to_handle_at: PathnameField = %q, want name", r.PathnameField)
+	}
+}
+
 func TestClassifyNullSync(t *testing.T) {
 	r := classifyFromData(t, FormatSync)
 	if r.Kind != KindNull {
@@ -152,8 +162,15 @@ func TestClassifyNullSyslog(t *testing.T) {
 
 func TestClassifyNullIoUring(t *testing.T) {
 	r := classifyFromData(t, FormatIoUringEnter)
-	if r.Kind != KindNull {
-		t.Errorf("io_uring_enter: got kind %d, want KindNull", r.Kind)
+	if r.Kind != KindFd {
+		t.Errorf("io_uring_enter: got kind %d, want KindFd", r.Kind)
+	}
+}
+
+func TestClassifyIoUringRegister(t *testing.T) {
+	r := classifyFromData(t, FormatIoUringRegister)
+	if r.Kind != KindFd {
+		t.Errorf("io_uring_register: got kind %d, want KindFd", r.Kind)
 	}
 }
 
@@ -282,7 +299,9 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"sync", FormatSync, FormatExitSync, KindNull},
 		{"syslog", FormatSyslog, FormatExitSyslog, KindNull},
 		{"open_by_handle_at", FormatOpenByHandleAt, FormatExitOpenByHandleAt, KindOpenByHandleAt},
-		{"io_uring_enter", FormatIoUringEnter, FormatExitIoUringEnter, KindNull},
+		{"name_to_handle_at", FormatNameToHandleAt, FormatExitNameToHandleAt, KindPathname},
+		{"io_uring_enter", FormatIoUringEnter, FormatExitIoUringEnter, KindFd},
+		{"io_uring_register", FormatIoUringRegister, FormatExitIoUringRegister, KindFd},
 		{"pread64", FormatPread64, FormatExitPread64, KindFd},
 		{"symlink", FormatSymlink, FormatExitSymlink, KindName},
 	}
