@@ -52,7 +52,8 @@ var scenarios = map[string]func() error{
 	"sync-fdatasync":        syncFdatasync,
 	"sync-sync":             syncSync,
 	"sync-sync-file-range":  syncSyncFileRange,
-	"truncate-basic":        truncateBasic,
+	"truncate-basic":      truncateBasic,
+	"truncate-ftruncate":  truncateFtruncate,
 }
 
 func makeTempDir(prefix string) (string, func(), error) {
@@ -1338,7 +1339,8 @@ func syncSyncFileRange() error {
 	return syscall.SyncFileRange(fd, 0, int64(len(data)), 0)
 }
 
-// truncateBasic opens a file, writes data, and truncates it.
+// truncateBasic opens a file, writes data, then truncates it via
+// syscall.Truncate which uses SYS_TRUNCATE directly on amd64 (path-based).
 func truncateBasic() error {
 	dir, cleanup, err := makeTempDir("truncate-basic")
 	if err != nil {
@@ -1351,9 +1353,33 @@ func truncateBasic() error {
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
-	defer syscall.Close(fd)
 
 	if _, err := syscall.Write(fd, []byte("truncate this content")); err != nil {
+		syscall.Close(fd)
+		return fmt.Errorf("write: %w", err)
+	}
+	syscall.Close(fd)
+
+	return syscall.Truncate(path, 5)
+}
+
+// truncateFtruncate opens a file, writes data, then truncates it via
+// syscall.Ftruncate which uses SYS_FTRUNCATE directly on amd64 (fd-based).
+func truncateFtruncate() error {
+	dir, cleanup, err := makeTempDir("truncate-ftruncate")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "ftruncfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("ftruncate this content")); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	return syscall.Ftruncate(fd, 5)
