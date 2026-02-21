@@ -7,26 +7,26 @@ This file provides guidance to AI coding assistants working with the I/O Riot NG
 **Prerequisites**: Ensure libbpfgo is cloned at `../libbpfgo` relative to this repository.
 
 ```bash
-make all          # Build everything (BPF objects and Go binary)  
-make test         # Run all tests
-make test_with_name TEST_NAME=TestEventloop  # Run specific test
-go test ./internal/event -v                  # Run tests for specific package
-make generate     # Generate code (required after modifying tracepoint definitions)
-make bench        # Run benchmarks
-make clean        # Clean build artifacts
+mage all          # Build everything (BPF objects and Go binary)
+mage test         # Run all tests
+TEST_NAME=TestEventloop mage testWithName  # Run specific test
+go test ./internal/event -v                # Run tests for specific package
+mage generate     # Generate code (required after modifying tracepoint definitions)
+mage bench        # Run benchmarks
+mage clean        # Clean build artifacts
 ```
 
 ## Code Generation
 
-**Run `make generate` before building when tracepoint definitions change!**
+**Run `mage generate` before building when tracepoint definitions change!**
 
-A Go program (`cmd/generate/`) generates code from Linux kernel tracepoint data:
+A Mage target generates code from Linux kernel tracepoint data:
 
 ```bash
-make generate                    # Generate all code (C and Go)
-make -C internal/c generate      # Generate C tracepoint handlers from /sys/kernel/tracing
-make -C internal/types generate  # Generate Go types from C structs 
-make -C internal/tracepoints generate  # Generate Go tracepoint list
+mage generate              # Generate all code (C and Go)
+mage generateTracepointsC  # Generate C tracepoint handlers from /sys/kernel/tracing
+mage generateTypesGo       # Generate Go types from C structs
+mage generateTracepointsGo # Generate Go tracepoint list
 ```
 
 Generated files (do not edit manually):
@@ -35,7 +35,6 @@ Generated files (do not edit manually):
 - `internal/tracepoints/generated_tracepoints.go` - List of available syscall tracepoints
 
 Generator source code:
-- `cmd/generate/main.go` - Entry point with subcommands: `tracepoints-c`, `tracepoints-go`, `types-go`
 - `internal/generate/` - Parser, classifier, and code generation logic
 
 ## Architecture

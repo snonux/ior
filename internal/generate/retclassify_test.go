@@ -1,0 +1,59 @@
+package generate
+
+import "testing"
+
+func TestClassifyRetRead(t *testing.T) {
+	reads := []string{
+		"fgetxattr", "flistxattr", "getdents", "getdents64", "getxattr",
+		"lgetxattr", "listxattr", "llistxattr", "pread64", "preadv",
+		"preadv2", "process_vm_readv", "read", "readlink", "readlinkat",
+		"readv", "recvmmsg", "recvmsg", "recvfrom", "syslog",
+	}
+	for _, name := range reads {
+		if got := ClassifyRet("sys_exit_" + name); got != ReadClassified {
+			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want READ_CLASSIFIED", name, got)
+		}
+	}
+}
+
+func TestClassifyRetWrite(t *testing.T) {
+	writes := []string{
+		"process_vm_writev", "pwrite64", "pwritev", "pwritev2",
+		"sendmmsg", "sendmsg", "sendto", "write", "writev",
+	}
+	for _, name := range writes {
+		if got := ClassifyRet("sys_exit_" + name); got != WriteClassified {
+			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want WRITE_CLASSIFIED", name, got)
+		}
+	}
+}
+
+func TestClassifyRetTransfer(t *testing.T) {
+	transfers := []string{
+		"copy_file_range", "sendfile64", "splice", "tee", "vmsplice",
+	}
+	for _, name := range transfers {
+		if got := ClassifyRet("sys_exit_" + name); got != TransferClassified {
+			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want TRANSFER_CLASSIFIED", name, got)
+		}
+	}
+}
+
+func TestClassifyRetUnclassified(t *testing.T) {
+	unclassified := []string{
+		"openat", "close", "rename", "unlink", "fcntl", "dup", "dup2", "dup3",
+		"mkdir", "rmdir", "chmod", "chown", "chdir", "stat", "lseek",
+		"truncate", "fallocate", "mmap", "fsync", "flock",
+	}
+	for _, name := range unclassified {
+		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
+			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want UNCLASSIFIED", name, got)
+		}
+	}
+}
+
+func TestClassifyRetCaseInsensitive(t *testing.T) {
+	if got := ClassifyRet("sys_exit_READ"); got != ReadClassified {
+		t.Errorf("ClassifyRet(sys_exit_READ) = %q, want READ_CLASSIFIED", got)
+	}
+}
