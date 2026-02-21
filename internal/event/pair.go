@@ -15,6 +15,7 @@ type Pair struct {
 	Comm            string
 	Duration        uint64
 	DurationToPrev  uint64
+	Bytes           uint64 // Number of bytes transferred (read/write/transfer syscalls only)
 	Equals          bool
 }
 
@@ -26,6 +27,7 @@ func NewPair(enterEv Event) *Pair {
 	e.Comm = ""
 	e.Duration = 0
 	e.DurationToPrev = 0
+	e.Bytes = 0
 	e.Equals = false
 	return e
 }
@@ -99,6 +101,7 @@ func (e *Pair) Recycle() {
 	e.Comm = ""
 	e.Duration = 0
 	e.DurationToPrev = 0
+	e.Bytes = 0
 	e.Equals = false
 	poolOfEventPairs.Put(e)
 }

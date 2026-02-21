@@ -30,13 +30,13 @@ func TestEventloop(t *testing.T) {
 		"OpenEventTest2": makeOpenEventTestData2(t),
 		"OpenEventTest3": makeOpenEventTestData3(t),
 		// FdEvent tests
-		"ReadEventTest":      makeReadEventTestData(t),
-		"WriteEventTest":     makeWriteEventTestData(t),
-		"CloseEventTest":     makeCloseEventTestData(t),
-		"CloseRangeEventTest": makeCloseRangeEventTestData(t),
+		"ReadEventTest":         makeReadEventTestData(t),
+		"WriteEventTest":        makeWriteEventTestData(t),
+		"CloseEventTest":        makeCloseEventTestData(t),
+		"CloseRangeEventTest":   makeCloseRangeEventTestData(t),
 		"CloseRangeFailureTest": makeCloseRangeFailureTestData(t),
-		"FsyncEventTest":     makeFsyncEventTestData(t),
-		"FtruncateEventTest": makeFtruncateEventTestData(t),
+		"FsyncEventTest":        makeFsyncEventTestData(t),
+		"FtruncateEventTest":    makeFtruncateEventTestData(t),
 		// PathEvent tests
 		"MkdirEventTest":  makeMkdirEventTestData(t),
 		"UnlinkEventTest": makeUnlinkEventTestData(t),
@@ -48,22 +48,22 @@ func TestEventloop(t *testing.T) {
 		"LinkEventTest":    makeLinkEventTestData(t),
 		"SymlinkEventTest": makeSymlinkEventTestData(t),
 		// NullEvent tests
-		"SyncEventTest":         makeSyncEventTestData(t),
-		"IoUringSetupEventTest": makeIoUringSetupEventTestData(t),
-		"IoUringSetupFailureTest": makeIoUringSetupFailureTestData(t),
-		"IoUringEnterEventTest": makeIoUringEnterEventTestData(t),
+		"SyncEventTest":            makeSyncEventTestData(t),
+		"IoUringSetupEventTest":    makeIoUringSetupEventTestData(t),
+		"IoUringSetupFailureTest":  makeIoUringSetupFailureTestData(t),
+		"IoUringEnterEventTest":    makeIoUringEnterEventTestData(t),
 		"IoUringRegisterEventTest": makeIoUringRegisterEventTestData(t),
 		// Dup3Event tests
 		"Dup3EventTest":       makeDup3EventTestData(t),
 		"Dup3WithCloexecTest": makeDup3WithCloexecTestData(t),
 		"Dup2Test":            makeDup2TestData(t),
 		// FcntlEvent tests
-		"FcntlSetFlagsTest":     makeFcntlSetFlagsTestData(t),
-		"FcntlDupfdTest":        makeFcntlDupfdTestData(t),
-		"FcntlDupfdCloexecTest": makeFcntlDupfdCloexecTestData(t),
-		"FcntlErrorTest":        makeFcntlErrorTestData(t),
-		"FcntlInvalidFdTest":    makeFcntlInvalidFdTestData(t),
-		"NameToHandleAtTest":    makeNameToHandleAtTestData(t),
+		"FcntlSetFlagsTest":         makeFcntlSetFlagsTestData(t),
+		"FcntlDupfdTest":            makeFcntlDupfdTestData(t),
+		"FcntlDupfdCloexecTest":     makeFcntlDupfdCloexecTestData(t),
+		"FcntlErrorTest":            makeFcntlErrorTestData(t),
+		"FcntlInvalidFdTest":        makeFcntlInvalidFdTestData(t),
+		"NameToHandleAtTest":        makeNameToHandleAtTestData(t),
 		"NameToHandleAtFailureTest": makeNameToHandleAtFailureTestData(t),
 		// FD Lifecycle tests
 		"FdLifecycleTest": makeFdLifecycleTestData(t),
@@ -304,15 +304,40 @@ func makeReadEventTestData(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_READ)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
-	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_READ)
+	retBytes := int64(128)
+	_, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_READ)
+	retEvent := types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_READ,
+		Time:      defaulTime + 100,
+		Ret:       retBytes,
+		Pid:       defaultPid,
+		Tid:       defaultTid,
+		RetType:   types.READ_CLASSIFIED,
+	}
+	retEventBytes, err := retEvent.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitEvBytes = retEventBytes
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		if !enterEv.Equals(ep.EnterEv) {
 			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
 		}
-		if !exitEv.Equals(ep.ExitEv) {
-			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		if !retEvent.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", retEvent, ep.ExitEv)
+		}
+		retEv, ok := ep.ExitEv.(*types.RetEvent)
+		if !ok {
+			t.Fatalf("Expected exit event to be *types.RetEvent")
+		}
+		if retEv.Ret != retBytes {
+			t.Errorf("Expected ret bytes %d but got %d", retBytes, retEv.Ret)
+		}
+		if ep.Bytes != uint64(retBytes) {
+			t.Errorf("Expected bytes %d but got %d", retBytes, ep.Bytes)
 		}
 	})
 
@@ -324,15 +349,40 @@ func makeWriteEventTestData(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_WRITE)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
-	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_WRITE)
+	retBytes := int64(256)
+	_, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_WRITE)
+	retEvent := types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_WRITE,
+		Time:      defaulTime + 100,
+		Ret:       retBytes,
+		Pid:       defaultPid,
+		Tid:       defaultTid,
+		RetType:   types.WRITE_CLASSIFIED,
+	}
+	retEventBytes, err := retEvent.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitEvBytes = retEventBytes
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		if !enterEv.Equals(ep.EnterEv) {
 			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
 		}
-		if !exitEv.Equals(ep.ExitEv) {
-			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		if !retEvent.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", retEvent, ep.ExitEv)
+		}
+		retEv, ok := ep.ExitEv.(*types.RetEvent)
+		if !ok {
+			t.Fatalf("Expected exit event to be *types.RetEvent")
+		}
+		if retEv.Ret != retBytes {
+			t.Errorf("Expected ret bytes %d but got %d", retBytes, retEv.Ret)
+		}
+		if ep.Bytes != uint64(retBytes) {
+			t.Errorf("Expected bytes %d but got %d", retBytes, ep.Bytes)
 		}
 	})
 

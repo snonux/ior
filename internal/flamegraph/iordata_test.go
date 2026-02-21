@@ -14,14 +14,14 @@ func TestAddPath(t *testing.T) {
 	pid := pidType(1234)
 	tid := tidType(5678)
 	flags := flagsType(syscall.O_RDONLY)
-	cnt1 := Counter{Count: 1, Duration: 1000, DurationToPrev: 100}
+	cnt1 := Counter{Count: 1, Duration: 1000, DurationToPrev: 100, Bytes: 64}
 
 	iod.add(path, traceId, comm, pid, tid, flags, cnt1)
 
 	if iod.paths[path][traceId][comm][pid][tid][flags] != cnt1 {
 		t.Errorf("Expected counter %v, got %v", cnt1, iod.paths[path][traceId][comm][pid][tid][flags])
 	}
-	cnt2 := Counter{Count: 2, Duration: 2000, DurationToPrev: 200}
+	cnt2 := Counter{Count: 2, Duration: 2000, DurationToPrev: 200, Bytes: 128}
 
 	iod.add(path, traceId, comm, pid, tid, flags, cnt2)
 
@@ -41,24 +41,28 @@ func TestMerge(t *testing.T) {
 			Count:          10,
 			Duration:       1000,
 			DurationToPrev: 100,
+			Bytes:          64,
 		}}}}}}}}
 	iod2 := iorData{paths: pathMap{
 		"path1": {traceId: {"comm1": {100: {1000: {roFlag: Counter{
 			Count:          20,
 			Duration:       2000,
 			DurationToPrev: 200,
+			Bytes:          128,
 		}}}}}}}}
 	iod3 := iorData{paths: pathMap{
 		"path2": {traceId: {"comm2": {101: {1000: {roFlag: Counter{
 			Count:          20,
 			Duration:       2000,
 			DurationToPrev: 200,
+			Bytes:          128,
 		}}}}}}}}
 	iod4 := iorData{paths: pathMap{
 		"path2": {traceId: {"comm2": {101: {1000: {roFlag: Counter{
 			Count:          40,
 			Duration:       4000,
 			DurationToPrev: 400,
+			Bytes:          256,
 		}}}}}}}}
 
 	t.Log("iod1", iod1)
@@ -77,6 +81,9 @@ func TestMerge(t *testing.T) {
 		}
 		if merged.paths["path2"][traceId]["comm2"][101][1000][roFlag].Count != 60 {
 			t.Errorf("Expected counter 60, got %d", merged.paths["path2"][1]["comm2"][101][1000][roFlag].Count)
+		}
+		if merged.paths["path2"][traceId]["comm2"][101][1000][roFlag].Bytes != 384 {
+			t.Errorf("Expected bytes 384, got %d", merged.paths["path2"][1]["comm2"][101][1000][roFlag].Bytes)
 		}
 	})
 

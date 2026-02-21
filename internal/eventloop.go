@@ -20,16 +20,15 @@ import (
 
 const sysEnterNameToHandleAtName = "name_to_handle_at"
 
-// TOOD: read and write syscalls: can also collect amount of bytes!
 type eventLoop struct {
-	filter        *eventFilter
-	enterEvs      map[uint32]*event.Pair      // Temp. store of sys_enter tracepoints per Tid.
+	filter         *eventFilter
+	enterEvs       map[uint32]*event.Pair      // Temp. store of sys_enter tracepoints per Tid.
 	pendingHandles map[uint32]string           // map of TID to pathname from name_to_handle_at
-	files         map[int32]file.File         // Track all open files by file descriptor..
-	comms         map[uint32]string           // Program or thread name of the current Tid.
-	prevPairTimes map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
-	flamegraph    flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
-	printCb       func(ep *event.Pair)        // Callback to print the event
+	files          map[int32]file.File         // Track all open files by file descriptor..
+	comms          map[uint32]string           // Program or thread name of the current Tid.
+	prevPairTimes  map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
+	flamegraph     flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
+	printCb        func(ep *event.Pair)        // Callback to print the event
 
 	// Statistics
 	numTracepoints          uint
@@ -42,15 +41,15 @@ type eventLoop struct {
 
 func newEventLoop() *eventLoop {
 	return &eventLoop{
-		filter:        newEventFilter(),
-		enterEvs:      make(map[uint32]*event.Pair),
+		filter:         newEventFilter(),
+		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
-		files:         make(map[int32]file.File),
-		comms:         make(map[uint32]string),
-		prevPairTimes: make(map[uint32]uint64),
-		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		flamegraph:    flamegraph.New(),
-		done:          make(chan struct{}),
+		files:          make(map[int32]file.File),
+		comms:          make(map[uint32]string),
+		prevPairTimes:  make(map[uint32]uint64),
+		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
+		flamegraph:     flamegraph.New(),
+		done:           make(chan struct{}),
 	}
 }
 
@@ -296,6 +295,10 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 			}
 		}
 
+		if retEv, ok := ep.ExitEv.(*RetEvent); ok {
+			ep.Bytes = bytesFromRet(retEv)
+		}
+
 	case *Dup3Event:
 		dup3Event := ep.EnterEv.(*Dup3Event)
 		fd := int32(dup3Event.Fd)
@@ -436,4 +439,18 @@ func (e *eventLoop) comm(tid uint32) string {
 		return linkName
 	}
 	return ""
+}
+
+// bytesFromRet extracts the number of bytes transferred from a RetEvent.
+// Returns 0 for nil events, errors (Ret <= 0), or unclassified syscalls.
+func bytesFromRet(retEv *types.RetEvent) uint64 {
+	if retEv == nil || retEv.Ret <= 0 {
+		return 0
+	}
+	switch retEv.RetType {
+	case types.READ_CLASSIFIED, types.WRITE_CLASSIFIED, types.TRANSFER_CLASSIFIED:
+		return uint64(retEv.Ret)
+	default:
+		return 0
+	}
 }
