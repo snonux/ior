@@ -1,4 +1,5 @@
 /ioriotng
+/ioworkload
 /ioriotng.bpf.c
 *.o
 vmlinux.h
