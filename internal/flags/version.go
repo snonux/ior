@@ -1,13 +1,17 @@
 package flags
 
-const version = `v0.0.0`
+import "fmt"
 
-const asciiBanner = ` ___   _____    ___ _     _   
-|_ _| / / _ \  | _ (_)___| |_ 
- | | / / (_) | |   / / _ \  _|
-|___/_/ \___/  |_|_\_\___/\__| NG
-               ` + version
+// Version is the current application version.
+const Version = "v0.0.0"
 
+const asciiBannerTemplate = ` ___   _____    ___ _     _
+|_ _| / / _ \  | _ (_)___| |_ 
+ | | / / (_) | |   / / _ \  _|
+|___/_/ \___/  |_|_\_\___/\__| NG
+               %s`
+
+// PrintVersion prints the banner with the current version.
 func PrintVersion() {
-	println(asciiBanner)
+	fmt.Printf(asciiBannerTemplate+"\n", Version)
 }

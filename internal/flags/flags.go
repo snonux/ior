@@ -17,25 +17,25 @@ var (
 	once      sync.Once
 )
 
-var validCollapsedFields = []string{
-	"path",
-	"comm",
-	"tracepoint",
-	"pid",
-	"tid",
-	"flags",
-}
+const flamegraphToolDefault = "$HOME/git/FlameGraph/flamegraph.pl"
 
-var validCollapsedCounts = []string{
-	"count",
-	"duration",
-	"durationToPrev",
-	"bytes",
-}
+var (
+	validCollapsedFields = []string{
+		"path",
+		"comm",
+		"tracepoint",
+		"pid",
+		"tid",
+		"flags",
+	}
 
-func Get() Flags {
-	return singleton
-}
+	validCollapsedCounts = []string{
+		"count",
+		"duration",
+		"durationToPrev",
+		"bytes",
+	}
+)
 
 type Flags struct {
 	PidFilter    int
@@ -63,6 +63,10 @@ type Flags struct {
 	FlamegraphTool string
 }
 
+func Get() Flags {
+	return singleton
+}
+
 func Parse() {
 	once.Do(func() {
 		parse()
@@ -70,8 +74,6 @@ func Parse() {
 }
 
 func parse() {
-	version := flag.Bool("version", false, "Print version")
-
 	flag.IntVar(&singleton.PidFilter, "pid", -1, "Filter for processes ID")
 	flag.IntVar(&singleton.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&singleton.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
@@ -96,12 +98,11 @@ func parse() {
 
 	// https://github.com/brendangregg/FlameGraph
 	flag.StringVar(&singleton.FlamegraphTool, "flamegraphTool",
-		os.Getenv("HOME")+"/git/FlameGraph/flamegraph.pl", "Path to the flamegraph tool (e.g. flamegraph.pl or inferno-flamegraph)")
+		"", "Path to the flamegraph tool (e.g. flamegraph.pl or inferno-flamegraph)")
 	flag.Parse()
 
-	if *version {
-		PrintVersion()
-		os.Exit(0)
+	if singleton.FlamegraphTool == "" {
+		singleton.FlamegraphTool = flamegraphToolDefault
 	}
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
