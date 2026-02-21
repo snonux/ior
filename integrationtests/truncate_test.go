@@ -23,3 +23,24 @@ func TestTruncateFtruncate(t *testing.T) {
 		},
 	})
 }
+
+func TestTruncateEnoent(t *testing.T) {
+	runScenario(t, "truncate-enoent", []ExpectedEvent{
+		{
+			PathContains: "truncate-enoent-missing.txt",
+			Tracepoint:   "enter_truncate",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestTruncateFtruncateEbadf(t *testing.T) {
+	runScenario(t, "truncate-ftruncate-ebadf", []ExpectedEvent{
+		{
+			Tracepoint: "enter_ftruncate",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}

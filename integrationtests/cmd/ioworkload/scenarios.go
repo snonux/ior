@@ -86,8 +86,10 @@ var scenarios = map[string]func() error{
 	"sync-fsync-ebadf":           syncFsyncEbadf,
 	"sync-fdatasync-ebadf":       syncFdatasyncEbadf,
 	"sync-file-range-ebadf":      syncFileRangeEbadf,
-	"truncate-basic":      truncateBasic,
-	"truncate-ftruncate":  truncateFtruncate,
+	"truncate-basic":          truncateBasic,
+	"truncate-ftruncate":      truncateFtruncate,
+	"truncate-enoent":         truncateEnoent,
+	"truncate-ftruncate-ebadf": truncateFtruncateEbadf,
 	"iouring-setup":       iouringSetup,
 	"iouring-enter":       iouringEnter,
 	"iouring-register":    iouringRegister,
@@ -2223,6 +2225,40 @@ func truncateFtruncate() error {
 		return fmt.Errorf("write: %w", err)
 	}
 	return syscall.Ftruncate(fd, 5)
+}
+
+// truncateEnoent attempts to truncate a nonexistent file via raw SYS_TRUNCATE.
+// The syscall fails with ENOENT, but ior captures the enter_truncate
+// tracepoint because the path is read on entry.
+func truncateEnoent() error {
+	dir, cleanup, err := makeTempDir("truncate-enoent")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "truncate-enoent-missing.txt")
+	pathBytes, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+	_, _, errno := syscall.Syscall(syscall.SYS_TRUNCATE, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
+	runtime.KeepAlive(pathBytes)
+	if errno == 0 {
+		return fmt.Errorf("expected ENOENT, but truncate succeeded")
+	}
+	return nil
+}
+
+// truncateFtruncateEbadf calls raw SYS_FTRUNCATE on an invalid fd (99999).
+// The syscall fails with EBADF, but ior captures the enter_ftruncate
+// tracepoint because it is recorded on syscall entry.
+func truncateFtruncateEbadf() error {
+	_, _, errno := syscall.Syscall(syscall.SYS_FTRUNCATE, 99999, 0, 0)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but ftruncate succeeded")
+	}
+	return nil
 }
 
 // openByHandleAt creates a file, resolves its handle via name_to_handle_at,
