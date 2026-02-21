@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	"ior/internal"
-	"ior/internal/flags"
 	"os"
 	"runtime"
+
+	"ior/internal"
+	"ior/internal/flags"
 )
 
 // main is the entry point for the application. It checks if the OS is Linux,
