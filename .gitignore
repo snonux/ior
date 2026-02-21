@@ -10,3 +10,4 @@ perltidy.ERR
 *.new
 *.tmp
 /ior
+/.cursor/
