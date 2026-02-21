@@ -23,3 +23,39 @@ func TestCloseRange(t *testing.T) {
 		},
 	})
 }
+
+func TestCloseInvalidFd(t *testing.T) {
+	runScenario(t, "close-invalid-fd", []ExpectedEvent{
+		{
+			Tracepoint: "enter_close",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
+
+func TestCloseDoubleClose(t *testing.T) {
+	runScenario(t, "close-double-close", []ExpectedEvent{
+		{
+			PathContains: "doubleclosefile.txt",
+			Tracepoint:   "enter_close",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+		{
+			Tracepoint: "enter_close",
+			Comm:       "ioworkload",
+			MinCount:   2,
+		},
+	})
+}
+
+func TestCloseRangeEmpty(t *testing.T) {
+	runScenario(t, "close-range-empty", []ExpectedEvent{
+		{
+			Tracepoint: "enter_close_range",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
