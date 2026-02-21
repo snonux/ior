@@ -10,4 +10,8 @@ perltidy.ERR
 *.new
 *.tmp
 /ior
+*.ior.zst
+*.collapsed
+*.collapsed.zst
+*.svg
 /.cursor/
