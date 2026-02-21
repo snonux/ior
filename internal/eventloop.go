@@ -306,13 +306,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 	case *OpenByHandleAtEvent:
 		tid := ep.EnterEv.GetTid()
-		pathname, ok := e.pendingHandles[tid]
-		if !ok {
-			ep.Recycle()
-			return
-		}
-		delete(e.pendingHandles, tid)
-
 		retEvent, ok := ep.ExitEv.(*RetEvent)
 		if !ok {
 			panic("expected *types.RetEvent for open_by_handle_at exit")
@@ -320,10 +313,19 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 		if fd := int32(retEvent.Ret); fd >= 0 {
 			openByHandleEv := ep.EnterEv.(*OpenByHandleAtEvent)
-
-			file := file.NewFd(fd, pathname, openByHandleEv.Flags)
-			e.files[fd] = file
-			ep.File = file
+			if pathname, ok := e.pendingHandles[tid]; ok {
+				delete(e.pendingHandles, tid)
+				file := file.NewFd(fd, pathname, openByHandleEv.Flags)
+				e.files[fd] = file
+				ep.File = file
+			} else {
+				fdFile := file.NewFdWithPid(fd, v.Pid)
+				if fdFile.Flags() == file.Flags(-1) {
+					fdFile.SetFlags(openByHandleEv.Flags)
+				}
+				e.files[fd] = fdFile
+				ep.File = fdFile
+			}
 			ep.Comm = e.comm(tid)
 		} else {
 			ep.Recycle()
