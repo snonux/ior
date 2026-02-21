@@ -47,6 +47,8 @@ var scenarios = map[string]func() error{
 	"rename-basic":         renameBasic,
 	"rename-renameat":      renameRenameat,
 	"rename-renameat2":     renameRenameat2,
+	"rename-enoent":        renameEnoent,
+	"rename-noreplace":     renameNoreplace,
 	"link-basic":      linkBasic,
 	"link-linkat":     linkLinkat,
 	"link-symlinkat":  linkSymlinkat,
@@ -971,6 +973,99 @@ func renameRenameat2() error {
 	runtime.KeepAlive(newBytes)
 	if errno != 0 {
 		return fmt.Errorf("renameat2: %w", errno)
+	}
+	return nil
+}
+
+// renameEnoent attempts to rename a nonexistent file via raw SYS_RENAME.
+// The syscall fails with ENOENT, but ior captures the tracepoint on entry.
+func renameEnoent() error {
+	dir, cleanup, err := makeTempDir("rename-enoent")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	oldPath := filepath.Join(dir, "rename-enoent-missing.txt")
+	newPath := filepath.Join(dir, "rename-enoent-new.txt")
+
+	oldBytes, err := syscall.BytePtrFromString(oldPath)
+	if err != nil {
+		return fmt.Errorf("old path bytes: %w", err)
+	}
+	newBytes, err := syscall.BytePtrFromString(newPath)
+	if err != nil {
+		return fmt.Errorf("new path bytes: %w", err)
+	}
+
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_RENAME,
+		uintptr(unsafe.Pointer(oldBytes)),
+		uintptr(unsafe.Pointer(newBytes)),
+		0,
+	)
+	runtime.KeepAlive(oldBytes)
+	runtime.KeepAlive(newBytes)
+	if errno == 0 {
+		return fmt.Errorf("expected ENOENT, but rename succeeded")
+	}
+	return nil
+}
+
+const renameNoreplaceFlag = 1 // RENAME_NOREPLACE
+
+// renameNoreplace creates two files, then attempts renameat2 with
+// RENAME_NOREPLACE. Because the target already exists, the syscall fails
+// with EEXIST, but ior captures the tracepoint on entry.
+func renameNoreplace() error {
+	dir, cleanup, err := makeTempDir("rename-noreplace")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	srcName := "noreplace-src.txt"
+	dstName := "noreplace-dst.txt"
+
+	for _, name := range []string{srcName, dstName} {
+		path := filepath.Join(dir, name)
+		fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", name, err)
+		}
+		if err := syscall.Close(fd); err != nil {
+			return fmt.Errorf("close %s: %w", name, err)
+		}
+	}
+
+	dirFD, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open dir: %w", err)
+	}
+	defer syscall.Close(dirFD)
+
+	srcBytes, err := syscall.BytePtrFromString(srcName)
+	if err != nil {
+		return fmt.Errorf("src name bytes: %w", err)
+	}
+	dstBytes, err := syscall.BytePtrFromString(dstName)
+	if err != nil {
+		return fmt.Errorf("dst name bytes: %w", err)
+	}
+
+	_, _, errno := syscall.Syscall6(
+		sysRenameat2,
+		uintptr(dirFD),
+		uintptr(unsafe.Pointer(srcBytes)),
+		uintptr(dirFD),
+		uintptr(unsafe.Pointer(dstBytes)),
+		renameNoreplaceFlag,
+		0,
+	)
+	runtime.KeepAlive(srcBytes)
+	runtime.KeepAlive(dstBytes)
+	if errno == 0 {
+		return fmt.Errorf("expected EEXIST, but renameat2 NOREPLACE succeeded")
 	}
 	return nil
 }
