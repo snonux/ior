@@ -111,7 +111,7 @@ func parse() {
 	// disabledTracepoints is a list of tracepoints that should not be attached due to wider isses.
 	// Here, the BPF programs wouldn't load otherwise due to CO-RE issues.
 	// TODO: Try out once in a while whether it works again with newer kernel versions.
-	furtherExcludes := []string{".*_name_to_handle_at", ".*_open_by_handle_at"}
+	furtherExcludes := []string{".*_name_to_handle_at"}
 	for _, exclude := range furtherExcludes {
 		fmt.Println("WARNING: Hard-excluding ", exclude)
 		singleton.TracepointsToExclude = append(singleton.TracepointsToExclude, regexp.MustCompile(exclude))
