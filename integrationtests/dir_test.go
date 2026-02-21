@@ -45,3 +45,35 @@ func TestDirGetdents(t *testing.T) {
 		},
 	})
 }
+
+func TestDirMkdirEexist(t *testing.T) {
+	runScenario(t, "dir-mkdir-eexist", []ExpectedEvent{
+		{
+			PathContains: "mkdir-eexist-subdir",
+			Tracepoint:   "enter_mkdir",
+			Comm:         "ioworkload",
+			MinCount:     2,
+		},
+	})
+}
+
+func TestDirChdirEnoent(t *testing.T) {
+	runScenario(t, "dir-chdir-enoent", []ExpectedEvent{
+		{
+			PathContains: "chdir-enoent-missing",
+			Tracepoint:   "enter_chdir",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestDirGetdentsEbadf(t *testing.T) {
+	runScenario(t, "dir-getdents-ebadf", []ExpectedEvent{
+		{
+			Tracepoint: "enter_getdents64",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
