@@ -10,6 +10,8 @@ var List = []string{
 	"sys_exit_io_uring_setup",
 	"sys_enter_quotactl_fd",
 	"sys_exit_quotactl_fd",
+	"sys_enter_name_to_handle_at",
+	"sys_exit_name_to_handle_at",
 	"sys_enter_open_by_handle_at",
 	"sys_exit_open_by_handle_at",
 	"sys_enter_flock",

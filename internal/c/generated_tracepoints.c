@@ -125,7 +125,6 @@
 /// Ignoring sys_enter_munlockall sys_exit_munlockall as possibly not file I/O related
 /// Ignoring sys_enter_munlock sys_exit_munlock as possibly not file I/O related
 /// Ignoring sys_enter_munmap sys_exit_munmap as possibly not file I/O related
-/// Ignoring sys_enter_name_to_handle_at sys_exit_name_to_handle_at as possibly not file I/O related
 /// Ignoring sys_enter_nanosleep sys_exit_nanosleep as possibly not file I/O related
 /// Ignoring sys_enter_newuname sys_exit_newuname as possibly not file I/O related
 /// Ignoring sys_enter_pause sys_exit_pause as possibly not file I/O related
@@ -263,6 +262,8 @@
 #define SYS_EXIT_IO_URING_SETUP 1493
 #define SYS_ENTER_QUOTACTL_FD 1151
 #define SYS_EXIT_QUOTACTL_FD 1150
+#define SYS_ENTER_NAME_TO_HANDLE_AT 1135
+#define SYS_EXIT_NAME_TO_HANDLE_AT 1134
 #define SYS_ENTER_OPEN_BY_HANDLE_AT 1133
 #define SYS_EXIT_OPEN_BY_HANDLE_AT 1132
 #define SYS_ENTER_FLOCK 1119
@@ -480,22 +481,23 @@
 #define SYS_ENTER_MMAP 100
 #define SYS_EXIT_MMAP 99
 
-/// sys_enter_io_uring_register is a struct null_event
+/// sys_enter_io_uring_register is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_io_uring_register")
 int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -524,22 +526,23 @@ int handle_sys_exit_io_uring_register(struct trace_event_raw_sys_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_io_uring_enter is a struct null_event
+/// sys_enter_io_uring_enter is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_io_uring_enter")
 int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -647,6 +650,52 @@ int handle_sys_exit_quotactl_fd(struct trace_event_raw_sys_exit *ctx) {
 
     ev->event_type = EXIT_RET_EVENT;
     ev->trace_id = SYS_EXIT_QUOTACTL_FD;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = UNCLASSIFIED;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_enter_name_to_handle_at is a struct path_event
+SEC("tracepoint/syscalls/sys_enter_name_to_handle_at")
+int handle_sys_enter_name_to_handle_at(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_PATH_EVENT;
+    ev->trace_id = SYS_ENTER_NAME_TO_HANDLE_AT;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_exit_name_to_handle_at is a struct ret_event (UNCLASSIFIED)
+SEC("tracepoint/syscalls/sys_exit_name_to_handle_at")
+int handle_sys_exit_name_to_handle_at(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->trace_id = SYS_EXIT_NAME_TO_HANDLE_AT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();

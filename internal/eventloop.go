@@ -232,6 +232,11 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 	case *PathEvent:
 		if ep.EnterEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
+			retEv, ok := ep.ExitEv.(*types.RetEvent)
+			if !ok || retEv.Ret < 0 {
+				ep.Recycle()
+				return
+			}
 			pathEv := ep.EnterEv.(*PathEvent)
 			pathname := types.StringValue(pathEv.Pathname[:])
 			e.pendingHandles[ep.EnterEv.GetTid()] = pathname
@@ -411,11 +416,9 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	}
 	// TODO: implement copy_file_range
 	// TODO: open_by_handle_at
-	// TODO: name_to_handle_at
 	// TODO: mmap, msync...
 	// TODO: getcwd?
 	// TODO: sync_file_range
-	// TODO: io_uring_enter/io_uring_register are captured without fd arguments.
 
 	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]
 	ep.CalculateDurations(prevPairTime)

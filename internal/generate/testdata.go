@@ -362,10 +362,10 @@ print fmt: "0x%lx", REC->ret
 const FormatOpenByHandleAt = `name: sys_enter_open_by_handle_at
 ID: 1133
 format:
-	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
-	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
-	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
-	field:int common_pid;	offset:4;	size:4;	signed:1;
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
 
 	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
 	field:int mountdirfd;	offset:16;	size:8;	signed:0;
@@ -375,13 +375,31 @@ format:
 print fmt: "mountdirfd: 0x%08lx, handle: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->mountdirfd)), ((unsigned long)(REC->handle)), ((unsigned long)(REC->flags))
 `
 
+const FormatNameToHandleAt = `name: sys_enter_name_to_handle_at
+ID: 1135
+format:
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
+
+	field:int __syscall_nr;		offset:8;		size:4; signed:1;
+	field:int dfd;		offset:16;		size:8; signed:0;
+	field:const char * name;		offset:24;		size:8; signed:0;
+	field:struct file_handle * handle;		offset:32;		size:8; signed:0;
+	field:void * mnt_id;		offset:40;		size:8; signed:0;
+	field:int flag;		offset:48;		size:8; signed:0;
+
+print fmt: "dfd: 0x%08lx, name: 0x%08lx, handle: 0x%08lx, mnt_id: 0x%08lx, flag: 0x%08lx", ((unsigned long)(REC->dfd)), ((unsigned long)(REC->name)), ((unsigned long)(REC->handle)), ((unsigned long)(REC->mnt_id)), ((unsigned long)(REC->flag))
+`
+
 const FormatExitOpenByHandleAt = `name: sys_exit_open_by_handle_at
 ID: 1132
 format:
-	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
-	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
-	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
-	field:int common_pid;	offset:4;	size:4;	signed:1;
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
 
 	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
 	field:long ret;	offset:16;	size:8;	signed:1;
@@ -389,23 +407,68 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatExitNameToHandleAt = `name: sys_exit_name_to_handle_at
+ID: 1134
+format:
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
+
+	field:int __syscall_nr;		offset:8;		size:4; signed:1;
+	field:long ret;		offset:16;		size:8; signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatIoUringEnter = `name: sys_enter_io_uring_enter
 ID: 1496
 format:
-	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
-	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
-	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
-	field:int common_pid;	offset:4;	size:4;	signed:1;
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
 
-	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
-	field:unsigned int fd;	offset:16;	size:8;	signed:0;
-	field:u32 to_submit;	offset:24;	size:8;	signed:0;
-	field:u32 min_complete;	offset:32;	size:8;	signed:0;
-	field:u32 flags;	offset:40;	size:8;	signed:0;
-	field:const void * argp;	offset:48;	size:8;	signed:0;
-	field:size_t argsz;	offset:56;	size:8;	signed:0;
+	field:int __syscall_nr;		offset:8;		size:4; signed:1;
+	field:unsigned int fd;		offset:16;		size:8; signed:0;
+	field:u32 to_submit;		offset:24;		size:8; signed:0;
+	field:u32 min_complete;		offset:32;		size:8; signed:0;
+	field:u32 flags;		offset:40;		size:8; signed:0;
+	field:const void * argp;		offset:48;		size:8; signed:0;
+	field:size_t argsz;		offset:56;		size:8; signed:0;
 
 print fmt: "fd: 0x%08lx, to_submit: 0x%08lx, min_complete: 0x%08lx, flags: 0x%08lx, argp: 0x%08lx, argsz: 0x%08lx", ((unsigned long)(REC->fd)), ((unsigned long)(REC->to_submit)), ((unsigned long)(REC->min_complete)), ((unsigned long)(REC->flags)), ((unsigned long)(REC->argp)), ((unsigned long)(REC->argsz))
+`
+
+const FormatIoUringRegister = `name: sys_enter_io_uring_register
+ID: 1515
+format:
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
+
+	field:int __syscall_nr;		offset:8;		size:4; signed:1;
+	field:unsigned int fd;		offset:16;		size:8; signed:0;
+	field:unsigned int opcode;		offset:24;		size:8; signed:0;
+	field:void * arg;		offset:32;		size:8; signed:0;
+	field:unsigned int nr_args;		offset:40;		size:8; signed:0;
+
+print fmt: "fd: 0x%08lx, opcode: 0x%08lx, arg: 0x%08lx, nr_args: 0x%08lx", ((unsigned long)(REC->fd)), ((unsigned long)(REC->opcode)), ((unsigned long)(REC->arg)), ((unsigned long)(REC->nr_args))
+`
+
+const FormatExitIoUringRegister = `name: sys_exit_io_uring_register
+ID: 1514
+format:
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
+
+	field:int __syscall_nr;		offset:8;		size:4; signed:1;
+	field:long ret;		offset:16;		size:8; signed:1;
+
+print fmt: "0x%lx", REC->ret
 `
 
 const FormatExitIoUringEnter = `name: sys_exit_io_uring_enter
