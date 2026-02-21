@@ -59,11 +59,15 @@ func (c Collapsed) Write(iorDataFile string) (string, error) {
 	for record := range iod.iter() {
 		var fieldValues []string
 		for _, fieldName := range c.fields {
-			fieldValues = append(fieldValues, record.StringByName(fieldName))
+			v, err := record.StringByName(fieldName)
+			if err != nil {
+				return outFile, fmt.Errorf("field %s: %w", fieldName, err)
+			}
+			fieldValues = append(fieldValues, v)
 		}
 		writer.Write([]byte(fmt.Sprintf("%s %d\n",
 			strings.Join(fieldValues, ";"),
-			record.cnt.ValueByName(c.countField),
+			record.Cnt.ValueByName(c.countField),
 		)))
 	}
 	writer.Flush()

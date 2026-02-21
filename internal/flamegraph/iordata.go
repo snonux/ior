@@ -44,6 +44,15 @@ func newIorDataFromFile(filename string) (iorData, error) {
 	return iod, nil
 }
 
+// LoadFromFile loads an .ior.zst file and returns an iterator over all records.
+func LoadFromFile(filename string) (iter.Seq[IterRecord], error) {
+	iod, err := newIorDataFromFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("load ior data from %s: %w", filename, err)
+	}
+	return iod.iter(), nil
+}
+
 func cloneString(s string) string {
 	// Clone the string by creating a new string with the same content
 	// This is a workaround to avoid using unsafe package
@@ -186,55 +195,56 @@ func (iod *iorData) deserialize(buf *bytes.Buffer) error {
 	return dec.Decode(&iod.paths)
 }
 
-// Record returned by the iterator
-type iterRecord struct {
-	path    pathType
-	traceId traceIdType
-	comm    commType
-	pid     pidType
-	tid     tidType
-	flags   flagsType
-	cnt     Counter
+// IterRecord is a single record returned by the iterator.
+type IterRecord struct {
+	Path    string
+	TraceID types.TraceId
+	Comm    string
+	Pid     uint32
+	Tid     uint32
+	Flags   file.Flags
+	Cnt     Counter
 }
 
-func (ir iterRecord) StringByName(name string) string {
+// StringByName returns the string representation of a field by name.
+// Returns an error if the field name is not recognized.
+func (ir IterRecord) StringByName(name string) (string, error) {
 	switch name {
 	case "path":
-		return strings.Join(strings.Split(ir.path, "/"), ";/")
+		return strings.Join(strings.Split(ir.Path, "/"), ";/"), nil
 	case "comm":
-		return ir.comm
+		return ir.Comm, nil
 	case "tracepoint":
-		return ir.traceId.String()
+		return ir.TraceID.String(), nil
 	case "pid":
-		return fmt.Sprint(ir.pid)
+		return fmt.Sprint(ir.Pid), nil
 	case "tid":
-		return fmt.Sprint(ir.tid)
+		return fmt.Sprint(ir.Tid), nil
 	case "flags":
-		return ir.flags.String()
+		return ir.Flags.String(), nil
 	default:
-		panic(fmt.Sprintln("No", name, "in record"))
+		return "", fmt.Errorf("unknown field %q in record", name)
 	}
 }
 
-func (iod iorData) iter() iter.Seq[iterRecord] {
-	return func(yield func(iterRecord) bool) {
+func (iod iorData) iter() iter.Seq[IterRecord] {
+	return func(yield func(IterRecord) bool) {
 		for path, traceIdMap := range iod.paths {
 			for traceId, commMap := range traceIdMap {
 				for comm, pidMap := range commMap {
 					for pid, tidMap := range pidMap {
 						for tid, flagsMap := range tidMap {
 							for flags, cnt := range flagsMap {
-								record := iterRecord{
-									path:    path,
-									traceId: traceId,
-									comm:    comm,
-									pid:     pid,
-									tid:     tid,
-									flags:   flags,
-									cnt:     cnt,
+								record := IterRecord{
+									Path:    path,
+									TraceID: traceId,
+									Comm:    comm,
+									Pid:     pid,
+									Tid:     tid,
+									Flags:   flags,
+									Cnt:     cnt,
 								}
 								if !yield(record) {
-									// Stop iteration if yield returns false
 									return
 								}
 							}
