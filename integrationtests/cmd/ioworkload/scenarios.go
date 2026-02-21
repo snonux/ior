@@ -62,10 +62,13 @@ var scenarios = map[string]func() error{
 	"unlink-enoent":          unlinkEnoent,
 	"unlink-rmdir-notempty":  unlinkRmdirNotempty,
 	"unlink-unlinkat-enoent": unlinkUnlinkatEnoent,
-	"dir-basic":       dirBasic,
-	"dir-mkdirat":     dirMkdirat,
-	"dir-chdir":       dirChdir,
-	"dir-getdents":    dirGetdents,
+	"dir-basic":            dirBasic,
+	"dir-mkdirat":          dirMkdirat,
+	"dir-chdir":            dirChdir,
+	"dir-getdents":         dirGetdents,
+	"dir-mkdir-eexist":     dirMkdirEexist,
+	"dir-chdir-enoent":     dirChdirEnoent,
+	"dir-getdents-ebadf":   dirGetdentsEbadf,
 	"stat-basic":      statBasic,
 	"stat-fstat":      statFstat,
 	"stat-lstat":      statLstat,
@@ -1728,6 +1731,77 @@ func dirGetdents() error {
 	runtime.KeepAlive(buf)
 	if errno != 0 {
 		return fmt.Errorf("getdents64: %w", errno)
+	}
+	return nil
+}
+
+// dirMkdirEexist attempts to create a directory that already exists via raw
+// SYS_MKDIR. The syscall fails with EEXIST, but ior captures the tracepoint
+// on entry.
+func dirMkdirEexist() error {
+	dir, cleanup, err := makeTempDir("dir-mkdir-eexist")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	subDir := filepath.Join(dir, "mkdir-eexist-subdir")
+	pathBytes, err := syscall.BytePtrFromString(subDir)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+
+	// Create the directory first so the second attempt fails.
+	_, _, errno := syscall.Syscall(syscall.SYS_MKDIR, uintptr(unsafe.Pointer(pathBytes)), 0o755, 0)
+	runtime.KeepAlive(pathBytes)
+	if errno != 0 {
+		return fmt.Errorf("first mkdir: %w", errno)
+	}
+
+	// Second mkdir on the same path should fail with EEXIST.
+	pathBytes2, err := syscall.BytePtrFromString(subDir)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+	_, _, errno = syscall.Syscall(syscall.SYS_MKDIR, uintptr(unsafe.Pointer(pathBytes2)), 0o755, 0)
+	runtime.KeepAlive(pathBytes2)
+	if errno == 0 {
+		return fmt.Errorf("expected EEXIST, but mkdir succeeded")
+	}
+	return nil
+}
+
+// dirChdirEnoent attempts to change to a nonexistent directory via raw
+// SYS_CHDIR. The syscall fails with ENOENT, but ior captures the tracepoint
+// on entry.
+func dirChdirEnoent() error {
+	dir, cleanup, err := makeTempDir("dir-chdir-enoent")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	badPath := filepath.Join(dir, "chdir-enoent-missing")
+	pathBytes, err := syscall.BytePtrFromString(badPath)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+	_, _, errno := syscall.Syscall(syscall.SYS_CHDIR, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
+	runtime.KeepAlive(pathBytes)
+	if errno == 0 {
+		return fmt.Errorf("expected ENOENT, but chdir succeeded")
+	}
+	return nil
+}
+
+// dirGetdentsEbadf calls getdents64(2) with an invalid file descriptor.
+// The syscall fails with EBADF, but ior captures the tracepoint on entry.
+func dirGetdentsEbadf() error {
+	buf := make([]byte, 4096)
+	_, _, errno := syscall.Syscall(syscall.SYS_GETDENTS64, uintptr(9999), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	runtime.KeepAlive(buf)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but getdents64 succeeded")
 	}
 	return nil
 }
