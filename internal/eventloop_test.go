@@ -50,6 +50,7 @@ func TestEventloop(t *testing.T) {
 		// NullEvent tests
 		"SyncEventTest":         makeSyncEventTestData(t),
 		"IoUringSetupEventTest": makeIoUringSetupEventTestData(t),
+		"IoUringSetupFailureTest": makeIoUringSetupFailureTestData(t),
 		// Dup3Event tests
 		"Dup3EventTest":       makeDup3EventTestData(t),
 		"Dup3WithCloexecTest": makeDup3WithCloexecTestData(t),
@@ -900,6 +901,38 @@ func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
 		}
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Errorf("Expected io_uring fd to be tracked")
+		}
+		if _, ok := el.files[48]; !ok {
+			t.Errorf("Expected io_uring fd 48 to be tracked")
+		}
+	})
+
+	return td
+}
+
+func makeIoUringSetupFailureTestData(t *testing.T) (td testData) {
+	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	// io_uring_setup returns -1 on failure
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_SETUP, -1)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File != nil {
+			t.Errorf("Expected io_uring_setup failure to have no file tracked")
+		}
+		if len(el.files) != 0 {
+			t.Errorf("Expected no fds to be tracked after io_uring_setup failure")
 		}
 	})
 
