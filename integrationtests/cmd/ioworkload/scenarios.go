@@ -76,6 +76,9 @@ var scenarios = map[string]func() error{
 	"stat-statx":      statStatx,
 	"stat-access":     statAccess,
 	"stat-faccessat":  statFaccessat,
+	"stat-enoent":          statEnoent,
+	"stat-access-enoent":   statAccessEnoent,
+	"stat-fstat-ebadf":     statFstatEbadf,
 	"sync-basic":            syncBasic,
 	"sync-fdatasync":        syncFdatasync,
 	"sync-sync":             syncSync,
@@ -2005,6 +2008,69 @@ func statFaccessat() error {
 
 	if err := syscall.Faccessat(atFDCwd, path, uint32(rOK), 0); err != nil {
 		return fmt.Errorf("faccessat: %w", err)
+	}
+	return nil
+}
+
+// statEnoent attempts to stat a nonexistent file via raw SYS_STAT.
+// The syscall fails with ENOENT, but ior captures the enter_newstat
+// tracepoint because the filename is read on entry.
+func statEnoent() error {
+	dir, cleanup, err := makeTempDir("stat-enoent")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "stat-enoent-missing.txt")
+	pathBytes, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+	var stat syscall.Stat_t
+	_, _, errno := syscall.Syscall(syscall.SYS_STAT, uintptr(unsafe.Pointer(pathBytes)), uintptr(unsafe.Pointer(&stat)), 0)
+	runtime.KeepAlive(pathBytes)
+	runtime.KeepAlive(&stat)
+	if errno == 0 {
+		return fmt.Errorf("expected ENOENT, but stat succeeded")
+	}
+	return nil
+}
+
+// statAccessEnoent attempts to check access on a nonexistent file via raw
+// SYS_ACCESS. The syscall fails with ENOENT, but ior captures the
+// enter_access tracepoint because the path is read on entry.
+// We use ENOENT instead of EACCES because integration tests run as root,
+// which bypasses DAC permission checks.
+func statAccessEnoent() error {
+	dir, cleanup, err := makeTempDir("stat-access-enoent")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "access-enoent-missing.txt")
+	pathBytes, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+	_, _, errno := syscall.Syscall(syscall.SYS_ACCESS, uintptr(unsafe.Pointer(pathBytes)), rOK, 0)
+	runtime.KeepAlive(pathBytes)
+	if errno == 0 {
+		return fmt.Errorf("expected ENOENT, but access succeeded")
+	}
+	return nil
+}
+
+// statFstatEbadf calls raw SYS_FSTAT on an invalid fd (99999).
+// The syscall fails with EBADF, but ior captures the enter_newfstat
+// tracepoint because it is recorded on syscall entry.
+func statFstatEbadf() error {
+	var stat syscall.Stat_t
+	_, _, errno := syscall.Syscall(syscall.SYS_FSTAT, 99999, uintptr(unsafe.Pointer(&stat)), 0)
+	runtime.KeepAlive(&stat)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but fstat succeeded")
 	}
 	return nil
 }

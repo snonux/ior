@@ -78,3 +78,35 @@ func TestStatFaccessat(t *testing.T) {
 		},
 	})
 }
+
+func TestStatEnoent(t *testing.T) {
+	runScenario(t, "stat-enoent", []ExpectedEvent{
+		{
+			PathContains: "stat-enoent-missing.txt",
+			Tracepoint:   "enter_newstat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestStatAccessEnoent(t *testing.T) {
+	runScenario(t, "stat-access-enoent", []ExpectedEvent{
+		{
+			PathContains: "access-enoent-missing.txt",
+			Tracepoint:   "enter_access",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestStatFstatEbadf(t *testing.T) {
+	runScenario(t, "stat-fstat-ebadf", []ExpectedEvent{
+		{
+			Tracepoint: "enter_newfstat",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
