@@ -3,6 +3,7 @@ package integrationtests
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,7 @@ func (h *TestHarness) Run(scenario string, duration int) (TestResult, int, error
 		return TestResult{}, workloadPID, err
 	}
 
-	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, duration)
+	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, duration, iorShutdownGrace)
 
 	if iorErr != nil {
 		return TestResult{}, workloadPID, fmt.Errorf("ior: %w", iorErr)
@@ -92,6 +93,8 @@ func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 		} else {
 			errCh <- fmt.Errorf("workload produced no output")
 		}
+		// Drain remaining pipe data so cmd.Wait() does not block.
+		io.Copy(io.Discard, stdout) //nolint:errcheck
 	}()
 
 	select {
@@ -132,14 +135,14 @@ func (h *TestHarness) startIor(pid int, scenario string, duration int) (*exec.Cm
 
 // waitBoth waits for both the workload and ior commands concurrently.
 // If ior does not finish within duration + grace period, it is killed.
-func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int) (workloadErr, iorErr error) {
+func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int, grace time.Duration) (workloadErr, iorErr error) {
 	workloadDone := make(chan error, 1)
 	iorDone := make(chan error, 1)
 
 	go func() { workloadDone <- workloadCmd.Wait() }()
 	go func() { iorDone <- iorCmd.Wait() }()
 
-	timeout := time.After(time.Duration(duration)*time.Second + iorShutdownGrace)
+	timeout := time.After(time.Duration(duration)*time.Second + grace)
 
 	for workloadDone != nil || iorDone != nil {
 		select {

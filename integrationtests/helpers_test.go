@@ -36,6 +36,16 @@ func absPath(t *testing.T, rel string) string {
 	return p
 }
 
+// writeScript creates an executable shell script in dir and returns its path.
+func writeScript(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+content+"\n"), 0o755); err != nil {
+		t.Fatalf("write script %s: %v", name, err)
+	}
+	return path
+}
+
 func runScenario(t *testing.T, scenario string, expected []ExpectedEvent) {
 	t.Helper()
 	h := newTestHarness(t)
