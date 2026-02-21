@@ -34,3 +34,24 @@ func TestFcntlDupfdCloexec(t *testing.T) {
 		},
 	})
 }
+
+func TestFcntlInvalidFd(t *testing.T) {
+	runScenario(t, "fcntl-invalid-fd", []ExpectedEvent{
+		{
+			Tracepoint: "enter_fcntl",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
+
+func TestFcntlDupfdMax(t *testing.T) {
+	runScenario(t, "fcntl-dupfd-max", []ExpectedEvent{
+		{
+			PathContains: "fcntldupfdmaxfile.txt",
+			Tracepoint:   "enter_fcntl",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
