@@ -6,3 +6,5 @@ require (
 	github.com/DataDog/zstd v1.5.7
 	github.com/aquasecurity/libbpfgo v0.6.0-libbpf-1.3.0.20240111220235-90dbffffbdab
 )
+
+require github.com/magefile/mage v1.15.0 // indirect
