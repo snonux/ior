@@ -20,7 +20,7 @@ make clean        # Clean build artifacts
 
 **Run `make generate` before building when tracepoint definitions change!**
 
-Three Raku scripts generate code from Linux kernel tracepoint data:
+A Go program (`cmd/generate/`) generates code from Linux kernel tracepoint data:
 
 ```bash
 make generate                    # Generate all code (C and Go)
@@ -33,6 +33,10 @@ Generated files (do not edit manually):
 - `internal/c/generated_tracepoints.c` - BPF C handlers for syscall tracepoints
 - `internal/types/generated_types.go` - Go structs matching C structs + type mappings
 - `internal/tracepoints/generated_tracepoints.go` - List of available syscall tracepoints
+
+Generator source code:
+- `cmd/generate/main.go` - Entry point with subcommands: `tracepoints-c`, `tracepoints-go`, `types-go`
+- `internal/generate/` - Parser, classifier, and code generation logic
 
 ## Architecture
 
