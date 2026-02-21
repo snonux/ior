@@ -51,7 +51,7 @@ func cloneString(s string) string {
 }
 
 func (iod iorData) addEventPair(ev *event.Pair) {
-	cnt := Counter{Count: 1, Duration: ev.Duration, DurationToPrev: ev.DurationToPrev}
+	cnt := Counter{Count: 1, Duration: ev.Duration, DurationToPrev: ev.DurationToPrev, Bytes: ev.Bytes}
 	iod.add(ev.FileName(), ev.EnterEv.GetTraceId(), strings.TrimSpace(ev.Comm), ev.EnterEv.GetPid(),
 		ev.EnterEv.GetTid(), ev.Flags(), cnt)
 }

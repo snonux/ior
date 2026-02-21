@@ -8,7 +8,7 @@ type Counter struct {
 	Count          uint64
 	Duration       uint64
 	DurationToPrev uint64
-	Bytes          uint64 // TODO: implement
+	Bytes          uint64 // Bytes transferred (only set for read/write/transfer syscalls)
 }
 
 func (c Counter) add(other Counter) Counter {
