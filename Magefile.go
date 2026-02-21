@@ -203,7 +203,7 @@ func Clean() error {
 // Mrproper removes build artifacts and generated output files.
 func Mrproper() error {
 	mg.SerialDeps(Clean)
-	patterns := []string{"*.zst", "*.collapsed", "*.svg", "*profile", "*.pdf", "*.tmp", "palete.map"}
+	patterns := []string{"*.zst", "*.collapsed", "*.svg", "*profile", "*.pdf", "*.tmp", "palette.map"}
 	for _, pattern := range patterns {
 		if err := removeFilesByGlob(pattern); err != nil {
 			return err
