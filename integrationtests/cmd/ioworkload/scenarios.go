@@ -90,9 +90,11 @@ var scenarios = map[string]func() error{
 	"truncate-ftruncate":      truncateFtruncate,
 	"truncate-enoent":         truncateEnoent,
 	"truncate-ftruncate-ebadf": truncateFtruncateEbadf,
-	"iouring-setup":       iouringSetup,
-	"iouring-enter":       iouringEnter,
-	"iouring-register":    iouringRegister,
+	"iouring-setup":          iouringSetup,
+	"iouring-enter":          iouringEnter,
+	"iouring-register":       iouringRegister,
+	"iouring-enter-ebadf":    iouringEnterEbadf,
+	"iouring-register-ebadf": iouringRegisterEbadf,
 }
 
 func makeTempDir(prefix string) (string, func(), error) {
@@ -2430,6 +2432,41 @@ func iouringRegister() error {
 	runtime.KeepAlive(probeBuf)
 	if errno != 0 {
 		return fmt.Errorf("io_uring_register: %w", errno)
+	}
+	return nil
+}
+
+// iouringEnterEbadf calls io_uring_enter on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_io_uring_enter tracepoint.
+func iouringEnterEbadf() error {
+	_, _, errno := syscall.Syscall6(
+		sysIoUringEnter,
+		99999, // invalid fd
+		0,     // to_submit
+		0,     // min_complete
+		0,     // flags
+		0,     // sig
+		0,     // sz
+	)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but io_uring_enter succeeded")
+	}
+	return nil
+}
+
+// iouringRegisterEbadf calls io_uring_register on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_io_uring_register tracepoint.
+func iouringRegisterEbadf() error {
+	_, _, errno := syscall.Syscall6(
+		sysIoUringRegister,
+		99999,             // invalid fd
+		ioringRegisterProbe,
+		0,                 // arg (NULL)
+		0,                 // nr_args
+		0, 0,
+	)
+	if errno == 0 {
+		return fmt.Errorf("expected EBADF, but io_uring_register succeeded")
 	}
 	return nil
 }
