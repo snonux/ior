@@ -28,8 +28,11 @@ var scenarios = map[string]func() error{
 	"readwrite-rdonly-write":   readwriteRdonlyWrite,
 	"readwrite-pread-invalid":  readwritePreadInvalid,
 	"readwrite-pwrite-invalid": readwritePwriteInvalid,
-	"close-basic":     closeBasic,
-	"close-range":     closeRange,
+	"close-basic":            closeBasic,
+	"close-range":            closeRange,
+	"close-invalid-fd":       closeInvalidFd,
+	"close-double-close":     closeDoubleClose,
+	"close-range-empty":      closeRangeEmpty,
 	"dup-basic":       dupBasic,
 	"dup-dup2":        dupDup2,
 	"dup-dup3":        dupDup3,
@@ -503,6 +506,55 @@ func closeRange() error {
 }
 
 const sysCloseRange = 436
+
+// closeInvalidFd attempts to close a very high fd number that is not open.
+// The close fails with EBADF, but ior should capture the enter_close tracepoint
+// because arguments are read on syscall entry before the kernel returns an error.
+func closeInvalidFd() error {
+	err := syscall.Close(99999)
+	if err == nil {
+		return fmt.Errorf("expected close of invalid fd to fail")
+	}
+	return nil
+}
+
+// closeDoubleClose opens a file, closes it normally, then closes the same fd again.
+// The second close fails with EBADF, but ior should capture both enter_close
+// tracepoints because arguments are read on syscall entry.
+func closeDoubleClose() error {
+	dir, cleanup, err := makeTempDir("close-double-close")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "doubleclosefile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("first close: %w", err)
+	}
+
+	err = syscall.Close(fd)
+	if err == nil {
+		return fmt.Errorf("expected second close of same fd to fail")
+	}
+	return nil
+}
+
+// closeRangeEmpty calls close_range(2) with a range of very high fd numbers
+// (9000–9999) where no fds are open. The syscall succeeds (empty range is valid),
+// and ior should capture the enter_close_range tracepoint.
+func closeRangeEmpty() error {
+	_, _, errno := syscall.Syscall(sysCloseRange, 9000, 9999, 0)
+	if errno != 0 {
+		return fmt.Errorf("close_range: %w", errno)
+	}
+	return nil
+}
 
 // dupBasic opens a file, dups the fd, writes via the dup, closes both.
 func dupBasic() error {
