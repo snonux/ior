@@ -341,6 +341,35 @@ func TestClassifySyscallPairIgnored(t *testing.T) {
 	}
 }
 
+func TestClassifyFormatNoExternalFields(t *testing.T) {
+	f := &Format{
+		Name:           "sys_enter_test",
+		ID:             999,
+		ExternalFields: nil,
+	}
+	r := ClassifyFormat(f)
+	if r.Kind != KindNone {
+		t.Errorf("ClassifyFormat with empty ExternalFields: got kind %d, want KindNone", r.Kind)
+	}
+}
+
+func TestIsFdTypeNonMatch(t *testing.T) {
+	nonFdTypes := []string{
+		"const char *",
+		"long",
+		"size_t",
+		"pid_t",
+		"umode_t",
+		"char *",
+		"void *",
+	}
+	for _, typ := range nonFdTypes {
+		if isFdType(typ) {
+			t.Errorf("isFdType(%q) = true, want false", typ)
+		}
+	}
+}
+
 func mustParseAll(t *testing.T, data string) []Format {
 	t.Helper()
 	formats, err := ParseFormats(strings.NewReader(data))

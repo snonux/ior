@@ -63,6 +63,99 @@ func TestSerialization(t *testing.T) {
 
 }
 
+func TestStringValueAllZeros(t *testing.T) {
+	data := make([]byte, MAX_FILENAME_LENGTH)
+	result := StringValue(data)
+	assertEquals(t, "", result)
+	t.Log("StringValue with all-zero bytes returns empty string")
+}
+
+func TestStringValueNoNullTerminator(t *testing.T) {
+	data := make([]byte, MAX_FILENAME_LENGTH)
+	for i := range data {
+		data[i] = 'A'
+	}
+	result := StringValue(data)
+	assertEquals(t, MAX_FILENAME_LENGTH, len(result))
+	for i := range result {
+		assertEquals(t, byte('A'), result[i])
+	}
+	t.Log("StringValue with no null terminator returns full content")
+}
+
+func TestFdEventSerialization(t *testing.T) {
+	fdEv1 := FdEvent{
+		EventType: ENTER_FD_EVENT,
+		TraceId:   SYS_ENTER_READ,
+		Time:      987654321,
+		Pid:       20,
+		Tid:       21,
+		Fd:        3,
+	}
+	bytes, err := fdEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	fdEv2 := NewFdEvent(bytes)
+
+	assertEquals(t, fdEv1.EventType, fdEv2.EventType)
+	assertEquals(t, fdEv1.TraceId, fdEv2.TraceId)
+	assertEquals(t, fdEv1.Time, fdEv2.Time)
+	assertEquals(t, fdEv1.Pid, fdEv2.Pid)
+	assertEquals(t, fdEv1.Tid, fdEv2.Tid)
+	assertEquals(t, fdEv1.Fd, fdEv2.Fd)
+	t.Log("FdEvent could be serialized correctly")
+}
+
+func TestNullEventSerialization(t *testing.T) {
+	nullEv1 := NullEvent{
+		EventType: ENTER_NULL_EVENT,
+		TraceId:   SYS_ENTER_SYNC,
+		Time:      111222333,
+		Pid:       30,
+		Tid:       31,
+	}
+	bytes, err := nullEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	nullEv2 := NewNullEvent(bytes)
+
+	assertEquals(t, nullEv1.EventType, nullEv2.EventType)
+	assertEquals(t, nullEv1.TraceId, nullEv2.TraceId)
+	assertEquals(t, nullEv1.Time, nullEv2.Time)
+	assertEquals(t, nullEv1.Pid, nullEv2.Pid)
+	assertEquals(t, nullEv1.Tid, nullEv2.Tid)
+	t.Log("NullEvent could be serialized correctly")
+}
+
+func TestEqualsDifferentTypes(t *testing.T) {
+	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
+	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}
+	fdEv := FdEvent{EventType: ENTER_FD_EVENT, TraceId: SYS_ENTER_READ, Time: 1, Pid: 1, Tid: 1, Fd: 1}
+	retEv := RetEvent{EventType: EXIT_OPEN_EVENT, TraceId: SYS_EXIT_OPENAT, Time: 1, Pid: 1, Tid: 1}
+
+	assertEquals(t, false, openEv.Equals(&nullEv))
+	assertEquals(t, false, openEv.Equals(&fdEv))
+	assertEquals(t, false, nullEv.Equals(&openEv))
+	assertEquals(t, false, fdEv.Equals(&retEv))
+	assertEquals(t, false, retEv.Equals(&openEv))
+	t.Log("Equals returns false for different event types")
+}
+
+func TestEqualsDifferentValues(t *testing.T) {
+	fdEv1 := FdEvent{EventType: ENTER_FD_EVENT, TraceId: SYS_ENTER_READ, Time: 1, Pid: 1, Tid: 1, Fd: 3}
+	fdEv2 := FdEvent{EventType: ENTER_FD_EVENT, TraceId: SYS_ENTER_READ, Time: 1, Pid: 1, Tid: 1, Fd: 5}
+
+	assertEquals(t, false, fdEv1.Equals(&fdEv2))
+
+	nullEv1 := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 100, Pid: 1, Tid: 1}
+	nullEv2 := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 200, Pid: 1, Tid: 1}
+
+	assertEquals(t, false, nullEv1.Equals(&nullEv2))
+	t.Log("Equals returns false for same type but different values")
+}
+
 func assertEquals[T comparable](t *testing.T, a, b T) {
 	if a != b {
 		t.Errorf("Expected %v, got %v", a, b)

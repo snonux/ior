@@ -285,6 +285,41 @@ func TestEnterReject(t *testing.T) {
 	}
 }
 
+func TestEventStructNameUnknown(t *testing.T) {
+	if got := eventStructName(TracepointKind(999)); got != "unknown_event" {
+		t.Errorf("eventStructName(999) = %q, want \"unknown_event\"", got)
+	}
+}
+
+func TestEventTypeConstantUnknown(t *testing.T) {
+	if got := eventTypeConstant(TracepointKind(999), true); got != "ENTER_UNKNOWN_EVENT" {
+		t.Errorf("eventTypeConstant(999, true) = %q, want \"ENTER_UNKNOWN_EVENT\"", got)
+	}
+	if got := eventTypeConstant(TracepointKind(999), false); got != "EXIT_UNKNOWN_EVENT" {
+		t.Errorf("eventTypeConstant(999, false) = %q, want \"EXIT_UNKNOWN_EVENT\"", got)
+	}
+}
+
+func TestGroupBySyscallInvalid(t *testing.T) {
+	formats := []Format{
+		{Name: "tooshort", ID: 1},
+		{Name: "also_short", ID: 2},
+	}
+	output := GenerateTracepointsC(formats)
+	if strings.Contains(output, "SEC(") {
+		t.Error("formats with fewer than 3 name parts should not produce SEC handlers")
+	}
+}
+
+func TestClassifySyscallNoExit(t *testing.T) {
+	formats := mustParseAll(t, FormatRead)
+	output := GenerateTracepointsC(formats)
+	requireContains(t, output, "Ignoring")
+	if strings.Contains(output, "SEC(") {
+		t.Error("syscall with only enter and no exit should be ignored")
+	}
+}
+
 func requireContains(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
