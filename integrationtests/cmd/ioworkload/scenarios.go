@@ -85,7 +85,9 @@ func openBasic() error {
 	return syscall.Close(fd)
 }
 
-// openCreat uses the creat syscall to create a file.
+// openCreat creates a file via raw SYS_CREAT.
+// Go's syscall.Creat wraps Open which delegates to openat on amd64,
+// so we use the raw syscall to actually exercise the creat tracepoint.
 func openCreat() error {
 	dir, cleanup, err := makeTempDir("open-creat")
 	if err != nil {
@@ -94,11 +96,16 @@ func openCreat() error {
 	defer cleanup()
 
 	path := filepath.Join(dir, "creatfile.txt")
-	fd, err := syscall.Creat(path, 0o644)
+	pathBytes, err := syscall.BytePtrFromString(path)
 	if err != nil {
-		return fmt.Errorf("creat: %w", err)
+		return fmt.Errorf("path bytes: %w", err)
 	}
-	return syscall.Close(fd)
+	fd, _, errno := syscall.Syscall(syscall.SYS_CREAT, uintptr(unsafe.Pointer(pathBytes)), 0o644, 0)
+	runtime.KeepAlive(pathBytes)
+	if errno != 0 {
+		return fmt.Errorf("creat: %w", errno)
+	}
+	return syscall.Close(int(fd))
 }
 
 // readwriteBasic opens a file, writes data, seeks to start, reads it back.
