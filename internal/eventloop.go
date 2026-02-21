@@ -345,6 +345,17 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		}
 
 	case *NullEvent:
+		if ep.Is(SYS_ENTER_IO_URING_SETUP) {
+			retEvent, ok := exitEv.(*types.RetEvent)
+			if !ok {
+				panic("expected *types.RetEvent")
+			}
+			if fd := int32(retEvent.Ret); fd >= 0 {
+				fdFile := file.NewFdWithPid(fd, v.Pid)
+				e.files[fd] = fdFile
+				ep.File = fdFile
+			}
+		}
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 		if !e.filter.eventPair(ep) {
 			ep.Recycle()
@@ -404,7 +415,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	// TODO: mmap, msync...
 	// TODO: getcwd?
 	// TODO: sync_file_range
-	// TODO: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html (already captured but without FDs)
+	// TODO: io_uring_enter/io_uring_register are captured without fd arguments.
 
 	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]
 	ep.CalculateDurations(prevPairTime)
