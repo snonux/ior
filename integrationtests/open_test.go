@@ -17,7 +17,7 @@ func TestOpenCreat(t *testing.T) {
 	runScenario(t, "open-creat", []ExpectedEvent{
 		{
 			PathContains: "creatfile.txt",
-			Tracepoint:   "enter_openat",
+			Tracepoint:   "enter_creat",
 			Comm:         "ioworkload",
 			MinCount:     1,
 		},
