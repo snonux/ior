@@ -62,3 +62,47 @@ func TestReadwriteWritev(t *testing.T) {
 		},
 	})
 }
+
+func TestReadwriteWronlyRead(t *testing.T) {
+	runScenario(t, "readwrite-wronly-read", []ExpectedEvent{
+		{
+			PathContains: "wronlyfile.txt",
+			Tracepoint:   "enter_read",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestReadwriteRdonlyWrite(t *testing.T) {
+	runScenario(t, "readwrite-rdonly-write", []ExpectedEvent{
+		{
+			PathContains: "rdonlywritefile.txt",
+			Tracepoint:   "enter_write",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestReadwritePreadInvalid(t *testing.T) {
+	runScenario(t, "readwrite-pread-invalid", []ExpectedEvent{
+		{
+			PathContains: "preadinvalid.txt",
+			Tracepoint:   "enter_pread64",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+func TestReadwritePwriteInvalid(t *testing.T) {
+	runScenario(t, "readwrite-pwrite-invalid", []ExpectedEvent{
+		{
+			PathContains: "pwriteinvalid.txt",
+			Tracepoint:   "enter_pwrite64",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
