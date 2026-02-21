@@ -174,19 +174,36 @@ func TestLoadTestResultMultipleRecordsSamePath(t *testing.T) {
 		t.Fatalf("got %d records, want 2", len(result.Records))
 	}
 
-	// Verify both tracepoints present under the same path.
-	traceIDs := make(map[types.TraceId]bool)
+	// Build lookup by TraceID since both records share the same path.
+	byTraceID := make(map[types.TraceId]flamegraph.IterRecord, len(result.Records))
 	for _, rec := range result.Records {
-		if rec.Path != "/tmp/shared.txt" {
-			t.Errorf("unexpected path %q", rec.Path)
+		byTraceID[rec.TraceID] = rec
+	}
+
+	for _, want := range input {
+		got, ok := byTraceID[want.TraceID]
+		if !ok {
+			t.Errorf("record with TraceID %v not found", want.TraceID)
+			continue
 		}
-		traceIDs[rec.TraceID] = true
-	}
-	if !traceIDs[types.SYS_ENTER_READ] {
-		t.Error("missing SYS_ENTER_READ record")
-	}
-	if !traceIDs[types.SYS_ENTER_WRITE] {
-		t.Error("missing SYS_ENTER_WRITE record")
+		if got.Path != want.Path {
+			t.Errorf("TraceID %v: Path = %q, want %q", want.TraceID, got.Path, want.Path)
+		}
+		if got.Comm != want.Comm {
+			t.Errorf("TraceID %v: Comm = %q, want %q", want.TraceID, got.Comm, want.Comm)
+		}
+		if got.Pid != want.Pid {
+			t.Errorf("TraceID %v: Pid = %d, want %d", want.TraceID, got.Pid, want.Pid)
+		}
+		if got.Tid != want.Tid {
+			t.Errorf("TraceID %v: Tid = %d, want %d", want.TraceID, got.Tid, want.Tid)
+		}
+		if got.Flags != want.Flags {
+			t.Errorf("TraceID %v: Flags = %v, want %v", want.TraceID, got.Flags, want.Flags)
+		}
+		if got.Cnt != want.Cnt {
+			t.Errorf("TraceID %v: Cnt = %+v, want %+v", want.TraceID, got.Cnt, want.Cnt)
+		}
 	}
 }
 
@@ -221,12 +238,29 @@ func TestLoadTestResultInvalidData(t *testing.T) {
 		t.Fatalf("create file: %v", err)
 	}
 	w := zstd.NewWriter(f)
-	w.Write([]byte("this is not gob data"))
+	if _, err := w.Write([]byte("this is not gob data")); err != nil {
+		t.Fatalf("zstd write: %v", err)
+	}
 	w.Close()
 	f.Close()
 
 	_, err = LoadTestResult(filePath)
 	if err == nil {
 		t.Fatal("expected error for invalid gob data, got nil")
+	}
+}
+
+func TestLoadTestResultCorruptZstd(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "corrupt.ior.zst")
+
+	// Write raw bytes that are not valid zstd.
+	if err := os.WriteFile(filePath, []byte("not zstd at all"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	_, err := LoadTestResult(filePath)
+	if err == nil {
+		t.Fatal("expected error for corrupt zstd data, got nil")
 	}
 }
