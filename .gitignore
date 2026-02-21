@@ -15,3 +15,4 @@ perltidy.ERR
 *.collapsed.zst
 *.svg
 /.cursor/
+REVIEW-COMMENTS.md
