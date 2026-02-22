@@ -121,7 +121,6 @@
 /// Ignoring sys_enter_msgget sys_exit_msgget as possibly not file I/O related
 /// Ignoring sys_enter_msgrcv sys_exit_msgrcv as possibly not file I/O related
 /// Ignoring sys_enter_msgsnd sys_exit_msgsnd as possibly not file I/O related
-/// Ignoring sys_enter_msync sys_exit_msync as possibly not file I/O related
 /// Ignoring sys_enter_munlock sys_exit_munlock as possibly not file I/O related
 /// Ignoring sys_enter_munlockall sys_exit_munlockall as possibly not file I/O related
 /// Ignoring sys_enter_munmap sys_exit_munmap as possibly not file I/O related
@@ -468,6 +467,8 @@
 #define SYS_EXIT_CREAT 779
 #define SYS_ENTER_CLOSE 778
 #define SYS_EXIT_CLOSE 777
+#define SYS_ENTER_MSYNC 707
+#define SYS_EXIT_MSYNC 706
 #define SYS_ENTER_READAHEAD 613
 #define SYS_EXIT_READAHEAD 612
 #define SYS_ENTER_FADVISE64 611
@@ -5355,6 +5356,50 @@ int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
 
     ev->event_type = EXIT_RET_EVENT;
     ev->trace_id = SYS_EXIT_CLOSE;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = UNCLASSIFIED;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_enter_msync is a struct null_event
+SEC("tracepoint/syscalls/sys_enter_msync")
+int handle_sys_enter_msync(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NULL_EVENT;
+    ev->trace_id = SYS_ENTER_MSYNC;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_exit_msync is a struct ret_event (UNCLASSIFIED)
+SEC("tracepoint/syscalls/sys_exit_msync")
+int handle_sys_exit_msync(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->trace_id = SYS_EXIT_MSYNC;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();

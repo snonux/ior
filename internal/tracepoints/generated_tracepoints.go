@@ -216,6 +216,8 @@ var List = []string{
 	"sys_exit_creat",
 	"sys_enter_close",
 	"sys_exit_close",
+	"sys_enter_msync",
+	"sys_exit_msync",
 	"sys_enter_readahead",
 	"sys_exit_readahead",
 	"sys_enter_fadvise64",

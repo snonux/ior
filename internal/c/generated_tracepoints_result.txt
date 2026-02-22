@@ -119,7 +119,6 @@ Ignoring sys_enter_msgctl sys_exit_msgctl as possibly not file I/O related
 Ignoring sys_enter_msgget sys_exit_msgget as possibly not file I/O related
 Ignoring sys_enter_msgrcv sys_exit_msgrcv as possibly not file I/O related
 Ignoring sys_enter_msgsnd sys_exit_msgsnd as possibly not file I/O related
-Ignoring sys_enter_msync sys_exit_msync as possibly not file I/O related
 Ignoring sys_enter_munlock sys_exit_munlock as possibly not file I/O related
 Ignoring sys_enter_munlockall sys_exit_munlockall as possibly not file I/O related
 Ignoring sys_enter_munmap sys_exit_munmap as possibly not file I/O related
@@ -318,6 +317,7 @@ sys_enter_mkdir is a struct path_event
 sys_enter_mkdirat is a struct path_event
 sys_enter_mmap is a struct fd_event
 sys_enter_mount_setattr is a struct path_event
+sys_enter_msync is a struct null_event
 sys_enter_name_to_handle_at is a struct path_event
 sys_enter_newfstat is a struct fd_event
 sys_enter_newfstatat is a struct path_event
@@ -431,6 +431,7 @@ sys_exit_mkdir is a struct ret_event (UNCLASSIFIED)
 sys_exit_mkdirat is a struct ret_event (UNCLASSIFIED)
 sys_exit_mmap is a struct ret_event (UNCLASSIFIED)
 sys_exit_mount_setattr is a struct ret_event (UNCLASSIFIED)
+sys_exit_msync is a struct ret_event (UNCLASSIFIED)
 sys_exit_name_to_handle_at is a struct ret_event (UNCLASSIFIED)
 sys_exit_newfstat is a struct ret_event (UNCLASSIFIED)
 sys_exit_newfstatat is a struct ret_event (UNCLASSIFIED)

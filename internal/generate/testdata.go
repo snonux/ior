@@ -152,6 +152,36 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatMsync = `name: sys_enter_msync
+ID: 1029
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned long start;	offset:16;	size:8;	signed:0;
+	field:size_t len;	offset:24;	size:8;	signed:0;
+	field:int flags;	offset:32;	size:8;	signed:0;
+
+print fmt: "start: 0x%08lx, len: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->start)), ((unsigned long)(REC->len)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitMsync = `name: sys_exit_msync
+ID: 1028
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatRename = `name: sys_enter_rename
 ID: 870
 format:

@@ -272,6 +272,7 @@ func TestShouldNotIgnore(t *testing.T) {
 	noIgnore := []string{
 		"sys_enter_read", "sys_enter_write", "sys_enter_openat",
 		"sys_enter_close", "sys_enter_rename", "sys_enter_unlink",
+		"sys_enter_msync",
 		"sys_exit_read", "sys_exit_openat",
 	}
 	for _, name := range noIgnore {
@@ -297,6 +298,7 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"dup3", FormatDup3, FormatExitDup3, KindDup3},
 		{"fcntl", FormatFcntl, FormatExitFcntl, KindFcntl},
 		{"sync", FormatSync, FormatExitSync, KindNull},
+		{"msync", FormatMsync, FormatExitMsync, KindNull},
 		{"syslog", FormatSyslog, FormatExitSyslog, KindNull},
 		{"open_by_handle_at", FormatOpenByHandleAt, FormatExitOpenByHandleAt, KindOpenByHandleAt},
 		{"name_to_handle_at", FormatNameToHandleAt, FormatExitNameToHandleAt, KindPathname},
