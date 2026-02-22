@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/format"
@@ -102,9 +103,13 @@ func TestWithName() error {
 		fmt.Println("Running integration test", testName, "(requires root)...")
 		env := goEnv()
 		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH")
-		return runWithHeartbeat(15*time.Second, "Integration test still running...", func() error {
-			return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-run", "^"+testName+"$", "-v", "-failfast", "-count=1")
-		})
+		return runGoTestWithProgress(env,
+			"./integrationtests/...",
+			"-run", "^"+testName+"$",
+			"-failfast",
+			"-count=1",
+			"-json",
+		)
 	}
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-run", "^"+testName+"$", "-v", "-failfast")
 }
@@ -266,9 +271,12 @@ func IntegrationTest() error {
 	fmt.Println("Running integration tests (requires root)...")
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
-	return runWithHeartbeat(15*time.Second, "Integration tests still running...", func() error {
-		return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-v", "-failfast", "-count=1")
-	})
+	return runGoTestWithProgress(env,
+		"./integrationtests/...",
+		"-failfast",
+		"-count=1",
+		"-json",
+	)
 }
 
 func buildWorkloadBinary() error {
@@ -539,23 +547,128 @@ func sortLinesWithLocale(lines []string) (string, error) {
 	return string(output), nil
 }
 
-func runWithHeartbeat(interval time.Duration, message string, fn func() error) error {
+type goTestEvent struct {
+	Action  string `json:"Action"`
+	Package string `json:"Package"`
+	Test    string `json:"Test"`
+	Output  string `json:"Output"`
+}
+
+func runGoTestWithProgress(env map[string]string, args ...string) error {
+	cmdArgs := append([]string{"test"}, args...)
+
+	var cmd *exec.Cmd
+	if os.Geteuid() == 0 {
+		cmd = exec.Command("go", cmdArgs...)
+		cmd.Env = append(os.Environ(), envToList(env)...)
+	} else {
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		sudoArgs := make([]string, 0, 1+len(keys)+1+len(cmdArgs))
+		sudoArgs = append(sudoArgs, "env")
+		for _, k := range keys {
+			sudoArgs = append(sudoArgs, k+"="+env[k])
+		}
+		sudoArgs = append(sudoArgs, "go")
+		sudoArgs = append(sudoArgs, cmdArgs...)
+		cmd = exec.Command("sudo", sudoArgs...)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	running := map[string]time.Time{}
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
 	done := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				fmt.Println(message)
+				if len(running) == 0 {
+					fmt.Println("Integration tests still running... waiting for next test event")
+					continue
+				}
+				names := make([]string, 0, len(running))
+				for k := range running {
+					names = append(names, k)
+				}
+				slices.Sort(names)
+				fmt.Println("Integration tests running:", strings.Join(names, ", "))
 			}
 		}
 	}()
-	err := fn()
+
+	go func() {
+		_, _ = io.Copy(os.Stderr, stderr)
+	}()
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var ev goTestEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			fmt.Println(string(line))
+			continue
+		}
+		if ev.Test == "" {
+			continue
+		}
+		key := ev.Package + "/" + ev.Test
+		switch ev.Action {
+		case "run":
+			running[key] = time.Now()
+			fmt.Println("RUN ", key)
+		case "pass":
+			delete(running, key)
+			fmt.Println("PASS", key)
+		case "fail":
+			delete(running, key)
+			fmt.Println("FAIL", key)
+		case "skip":
+			delete(running, key)
+			fmt.Println("SKIP", key)
+		case "output":
+			msg := strings.TrimSpace(ev.Output)
+			if msg != "" {
+				fmt.Println("LOG ", key, "-", msg)
+			}
+		}
+	}
 	close(done)
-	return err
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return cmd.Wait()
+}
+
+func envToList(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(env))
+	for k, v := range env {
+		out = append(out, k+"="+v)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func isIntegrationTest(testName string) (bool, error) {
