@@ -77,6 +77,29 @@ func syncSyncFileRange() error {
 	return syscall.SyncFileRange(fd, 0, int64(len(data)), 0)
 }
 
+// syncSyncFileRangeToEOF calls sync_file_range(2) with nbytes=0.
+// Per sync_file_range(2), nbytes=0 means "sync from offset through end-of-file".
+func syncSyncFileRangeToEOF() error {
+	dir, cleanup, err := makeTempDir("sync-sync-file-range-to-eof")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "syncrangeeoffile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("sync file range to eof")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	return syscall.SyncFileRange(fd, 0, 0, 0)
+}
+
 // syncFsyncEbadf calls fsync on an invalid fd.
 // The syscall fails with EBADF, but ior captures the enter_fsync tracepoint.
 func syncFsyncEbadf() error {

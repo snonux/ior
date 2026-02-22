@@ -5,6 +5,7 @@ This file provides guidance to AI coding assistants working with the I/O Riot NG
 ## Build/Test Commands
 
 **Prerequisites**: Ensure libbpfgo is cloned at `../libbpfgo` relative to this repository.
+If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), run `mage world` first. It bootstraps generation/dependencies and is the preferred first troubleshooting step before retrying `mage test` or `go test`.
 
 ```bash
 mage all          # Build everything (BPF objects and Go binary)
