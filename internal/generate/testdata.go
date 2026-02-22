@@ -182,6 +182,39 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatCopyFileRange = `name: sys_enter_copy_file_range
+ID: 736
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int fd_in;	offset:16;	size:8;	signed:0;
+	field:loff_t * off_in;	offset:24;	size:8;	signed:0;
+	field:int fd_out;	offset:32;	size:8;	signed:0;
+	field:loff_t * off_out;	offset:40;	size:8;	signed:0;
+	field:size_t len;	offset:48;	size:8;	signed:0;
+	field:unsigned int flags;	offset:56;	size:8;	signed:0;
+
+print fmt: "fd_in: 0x%08lx, off_in: 0x%08lx, fd_out: 0x%08lx, off_out: 0x%08lx, len: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->fd_in)), ((unsigned long)(REC->off_in)), ((unsigned long)(REC->fd_out)), ((unsigned long)(REC->off_out)), ((unsigned long)(REC->len)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitCopyFileRange = `name: sys_exit_copy_file_range
+ID: 735
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatRename = `name: sys_enter_rename
 ID: 870
 format:

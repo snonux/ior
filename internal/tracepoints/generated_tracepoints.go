@@ -172,6 +172,8 @@ var List = []string{
 	"sys_exit_pwritev",
 	"sys_enter_pwritev2",
 	"sys_exit_pwritev2",
+	"sys_enter_copy_file_range",
+	"sys_exit_copy_file_range",
 	"sys_enter_truncate",
 	"sys_exit_truncate",
 	"sys_enter_ftruncate",

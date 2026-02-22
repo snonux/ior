@@ -18,7 +18,6 @@ Ignoring sys_enter_clock_settime sys_exit_clock_settime as possibly not file I/O
 Ignoring sys_enter_clone sys_exit_clone as possibly not file I/O related
 Ignoring sys_enter_clone3 sys_exit_clone3 as possibly not file I/O related
 Ignoring sys_enter_connect sys_exit_connect as possibly not file I/O related
-Ignoring sys_enter_copy_file_range sys_exit_copy_file_range as possibly not file I/O related
 Ignoring sys_enter_delete_module sys_exit_delete_module as possibly not file I/O related
 Ignoring sys_enter_epoll_create sys_exit_epoll_create as possibly not file I/O related
 Ignoring sys_enter_epoll_create1 sys_exit_epoll_create1 as possibly not file I/O related
@@ -258,6 +257,7 @@ sys_enter_chown is a struct path_event
 sys_enter_chroot is a struct path_event
 sys_enter_close is a struct fd_event
 sys_enter_close_range is a struct fd_event
+sys_enter_copy_file_range is a struct fd_event
 sys_enter_creat is a struct path_event
 sys_enter_dup is a struct fd_event
 sys_enter_dup2 is a struct fd_event
@@ -372,6 +372,7 @@ sys_exit_chown is a struct ret_event (UNCLASSIFIED)
 sys_exit_chroot is a struct ret_event (UNCLASSIFIED)
 sys_exit_close is a struct ret_event (UNCLASSIFIED)
 sys_exit_close_range is a struct ret_event (UNCLASSIFIED)
+sys_exit_copy_file_range is a struct ret_event (TRANSFER_CLASSIFIED)
 sys_exit_creat is a struct ret_event (UNCLASSIFIED)
 sys_exit_dup is a struct ret_event (UNCLASSIFIED)
 sys_exit_dup2 is a struct ret_event (UNCLASSIFIED)

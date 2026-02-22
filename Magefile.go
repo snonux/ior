@@ -89,6 +89,20 @@ func TestWithName() error {
 	if testName == "" {
 		testName = "TestEventloop"
 	}
+	isIntegration, err := isIntegrationTest(testName)
+	if err != nil {
+		return err
+	}
+	if isIntegration {
+		mg.SerialDeps(All)
+		if err := buildWorkloadBinary(); err != nil {
+			return err
+		}
+		fmt.Println("Running integration test", testName, "(requires root)...")
+		env := goEnv()
+		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH")
+		return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-run", "^"+testName+"$", "-v", "-failfast", "-count=1")
+	}
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-run", "^"+testName+"$", "-v", "-failfast")
 }
 
@@ -243,14 +257,21 @@ func World() error {
 // IntegrationTest builds everything and runs integration tests with sudo.
 func IntegrationTest() error {
 	mg.SerialDeps(All)
-	fmt.Println("Building ioworkload binary...")
-	if err := sh.RunV("go", "build", "-o", workloadBinaryName, workloadSourcePath); err != nil {
-		return fmt.Errorf("build ioworkload: %w", err)
+	if err := buildWorkloadBinary(); err != nil {
+		return err
 	}
 	fmt.Println("Running integration tests (requires root)...")
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
 	return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-v", "-failfast", "-count=1")
+}
+
+func buildWorkloadBinary() error {
+	fmt.Println("Building ioworkload binary...")
+	if err := sh.RunWithV(goEnv(), "go", "build", "-o", workloadBinaryName, workloadSourcePath); err != nil {
+		return fmt.Errorf("build ioworkload: %w", err)
+	}
+	return nil
 }
 
 // Prof generates CPU and memory profiling PDFs.
@@ -511,4 +532,17 @@ func sortLinesWithLocale(lines []string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
+}
+
+func isIntegrationTest(testName string) (bool, error) {
+	out, err := sh.OutputWith(goEnv(), "go", "test", "./integrationtests/...", "-list", ".")
+	if err != nil {
+		return false, fmt.Errorf("list integration tests: %w", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == testName {
+			return true, nil
+		}
+	}
+	return false, nil
 }

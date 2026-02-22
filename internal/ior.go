@@ -18,22 +18,53 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-// TODO: Generally, write unit tests
-// TODO: Integration tests, write C or Cgo code to simulate I/O?
+type tracepointProgram interface {
+	attachTracepoint(category, name string) error
+}
+
+type tracepointModule interface {
+	getProgram(progName string) (tracepointProgram, error)
+}
+
+type libbpfTracepointProgram struct {
+	prog *bpf.BPFProg
+}
+
+func (p libbpfTracepointProgram) attachTracepoint(category, name string) error {
+	_, err := p.prog.AttachTracepoint(category, name)
+	return err
+}
+
+type libbpfTracepointModule struct {
+	module *bpf.Module
+}
+
+func (m libbpfTracepointModule) getProgram(progName string) (tracepointProgram, error) {
+	prog, err := m.module.GetProgram(progName)
+	if err != nil {
+		return nil, err
+	}
+	return libbpfTracepointProgram{prog: prog}, nil
+}
+
 func attachTracepoints(bpfModule *bpf.Module) error {
-	for _, name := range tracepoints.List {
-		if !flags.Get().ShouldIAttachTracepoint(name) {
+	return attachTracepointsWith(libbpfTracepointModule{module: bpfModule}, flags.Get().ShouldIAttachTracepoint, tracepoints.List)
+}
+
+func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bool, tracepointNames []string) error {
+	for _, name := range tracepointNames {
+		if !shouldAttach(name) {
 			continue
 		}
 		fmt.Println("Attaching tracepoint", name)
 
-		prog, err := bpfModule.GetProgram(fmt.Sprintf("handle_%s", name))
+		prog, err := module.getProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {
 			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)
 		}
 		fmt.Println("Attached prog handle_", name)
 
-		if _, err = prog.AttachTracepoint("syscalls", name); err != nil {
+		if err = prog.attachTracepoint("syscalls", name); err != nil {
 			// OK, older Kernel versions may not have this tracepoint!
 			fmt.Printf("Failed to attach to %s tracepoint: %v, kernel version may be too old, skipping", name, err)
 			continue

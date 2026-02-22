@@ -20,7 +20,6 @@
 /// Ignoring sys_enter_clone sys_exit_clone as possibly not file I/O related
 /// Ignoring sys_enter_clone3 sys_exit_clone3 as possibly not file I/O related
 /// Ignoring sys_enter_connect sys_exit_connect as possibly not file I/O related
-/// Ignoring sys_enter_copy_file_range sys_exit_copy_file_range as possibly not file I/O related
 /// Ignoring sys_enter_delete_module sys_exit_delete_module as possibly not file I/O related
 /// Ignoring sys_enter_epoll_create sys_exit_epoll_create as possibly not file I/O related
 /// Ignoring sys_enter_epoll_create1 sys_exit_epoll_create1 as possibly not file I/O related
@@ -423,6 +422,8 @@
 #define SYS_EXIT_PWRITEV 827
 #define SYS_ENTER_PWRITEV2 826
 #define SYS_EXIT_PWRITEV2 825
+#define SYS_ENTER_COPY_FILE_RANGE 822
+#define SYS_EXIT_COPY_FILE_RANGE 821
 #define SYS_ENTER_TRUNCATE 820
 #define SYS_EXIT_TRUNCATE 819
 #define SYS_ENTER_FTRUNCATE 818
@@ -4349,6 +4350,51 @@ int handle_sys_exit_pwritev2(struct trace_event_raw_sys_exit *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_enter_copy_file_range is a struct fd_event
+SEC("tracepoint/syscalls/sys_enter_copy_file_range")
+int handle_sys_enter_copy_file_range(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_FD_EVENT;
+    ev->trace_id = SYS_ENTER_COPY_FILE_RANGE;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_exit_copy_file_range is a struct ret_event (TRANSFER_CLASSIFIED)
+SEC("tracepoint/syscalls/sys_exit_copy_file_range")
+int handle_sys_exit_copy_file_range(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->trace_id = SYS_EXIT_COPY_FILE_RANGE;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = TRANSFER_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
