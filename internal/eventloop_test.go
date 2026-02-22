@@ -30,13 +30,14 @@ func TestEventloop(t *testing.T) {
 		"OpenEventTest2": makeOpenEventTestData2(t),
 		"OpenEventTest3": makeOpenEventTestData3(t),
 		// FdEvent tests
-		"ReadEventTest":         makeReadEventTestData(t),
-		"WriteEventTest":        makeWriteEventTestData(t),
-		"CloseEventTest":        makeCloseEventTestData(t),
-		"CloseRangeEventTest":   makeCloseRangeEventTestData(t),
-		"CloseRangeFailureTest": makeCloseRangeFailureTestData(t),
-		"FsyncEventTest":        makeFsyncEventTestData(t),
-		"FtruncateEventTest":    makeFtruncateEventTestData(t),
+		"ReadEventTest":          makeReadEventTestData(t),
+		"WriteEventTest":         makeWriteEventTestData(t),
+		"CloseEventTest":         makeCloseEventTestData(t),
+		"CloseRangeEventTest":    makeCloseRangeEventTestData(t),
+		"CloseRangeFailureTest":  makeCloseRangeFailureTestData(t),
+		"FsyncEventTest":         makeFsyncEventTestData(t),
+		"SyncFileRangeEventTest": makeSyncFileRangeEventTestData(t),
+		"FtruncateEventTest":     makeFtruncateEventTestData(t),
 		// PathEvent tests
 		"MkdirEventTest":  makeMkdirEventTestData(t),
 		"UnlinkEventTest": makeUnlinkEventTestData(t),
@@ -581,6 +582,61 @@ func makeFsyncEventTestData(t *testing.T) (td testData) {
 		}
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+func makeSyncFileRangeEventTestData(t *testing.T) (td testData) {
+	fd := int32(47)
+	filename := "sync_file_range_test.txt"
+
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	copy(openEnterEv.Filename[:], filename)
+	openEnterBytes, err := openEnterEv.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
+
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv.Ret = int64(fd)
+	openExitBytes, err := openExitEv.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
+
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime+200, defaultPid, defaultTid, fd, types.SYS_ENTER_SYNC_FILE_RANGE)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+300, defaultPid, defaultTid, types.SYS_EXIT_SYNC_FILE_RANGE, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !openEnterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", openEnterEv, ep.EnterEv)
+		}
+		if !openExitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", openExitEv, ep.ExitEv)
+		}
+		verifyFileDescriptor(t, el, fd, filename)
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		verifyFileDescriptor(t, el, fd, filename)
+		if ep.File == nil {
+			t.Fatalf("Expected file metadata for sync_file_range event")
+		}
+		if ep.File.Name() != filename {
+			t.Errorf("Expected sync_file_range file name '%s' but got '%s'", filename, ep.File.Name())
 		}
 	})
 

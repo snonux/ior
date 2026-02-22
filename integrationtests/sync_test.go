@@ -45,6 +45,17 @@ func TestSyncSyncFileRange(t *testing.T) {
 	})
 }
 
+func TestSyncSyncFileRangeToEOF(t *testing.T) {
+	runScenario(t, "sync-sync-file-range-to-eof", []ExpectedEvent{
+		{
+			PathContains: "syncrangeeoffile.txt",
+			Tracepoint:   "enter_sync_file_range",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
 func TestSyncFsyncEbadf(t *testing.T) {
 	runScenario(t, "sync-fsync-ebadf", []ExpectedEvent{
 		{
