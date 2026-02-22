@@ -107,6 +107,7 @@ func TestWithName() error {
 			"./integrationtests/...",
 			"-run", "^"+testName+"$",
 			"-failfast",
+			"-timeout=30m",
 			"-count=1",
 			"-json",
 		)
@@ -274,6 +275,7 @@ func IntegrationTest() error {
 	return runGoTestWithProgress(env,
 		"./integrationtests/...",
 		"-failfast",
+		"-timeout=30m",
 		"-count=1",
 		"-json",
 	)
