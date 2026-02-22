@@ -647,7 +647,7 @@ func runGoTestWithProgress(env map[string]string, args ...string) error {
 			fmt.Println("SKIP", key)
 		case "output":
 			msg := strings.TrimSpace(ev.Output)
-			if msg != "" {
+			if msg != "" && shouldPrintTestLog(msg) {
 				fmt.Println("LOG ", key, "-", msg)
 			}
 		}
@@ -669,6 +669,24 @@ func envToList(env map[string]string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+func shouldPrintTestLog(msg string) bool {
+	// Drop high-volume attach/debug noise from ior startup in integration tests.
+	noisePrefixes := []string{
+		"ShouldIAttachTracepoint called with ",
+		"Attaching tracepoint ",
+		"Attached prog handle_ ",
+		"Attached tracepoint",
+		"Attaching sys_",
+		"Not attaching sys_",
+	}
+	for _, p := range noisePrefixes {
+		if strings.HasPrefix(msg, p) {
+			return false
+		}
+	}
+	return true
 }
 
 func isIntegrationTest(testName string) (bool, error) {
