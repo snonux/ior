@@ -40,7 +40,7 @@ type eventLoop struct {
 }
 
 func newEventLoop() *eventLoop {
-	return &eventLoop{
+	el := &eventLoop{
 		filter:         newEventFilter(),
 		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
@@ -51,6 +51,28 @@ func newEventLoop() *eventLoop {
 		flamegraph:     flamegraph.New(),
 		done:           make(chan struct{}),
 	}
+	el.seedTrackedPidComm()
+	return el
+}
+
+func (e *eventLoop) seedTrackedPidComm() {
+	pid := flags.Get().PidFilter
+	if pid <= 0 {
+		return
+	}
+	commPath := fmt.Sprintf("/proc/%d/comm", pid)
+	data, err := os.ReadFile(commPath)
+	if err != nil {
+		return
+	}
+	comm := string(data)
+	if len(comm) > 0 && comm[len(comm)-1] == '\n' {
+		comm = comm[:len(comm)-1]
+	}
+	if comm == "" {
+		return
+	}
+	e.comms[uint32(pid)] = comm
 }
 
 func (e *eventLoop) stats() string {
@@ -174,6 +196,10 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 
 func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	tid := enterEv.GetTid()
+	// Cache comm as early as possible to reduce races for short-lived processes.
+	if _, ok := e.comms[tid]; !ok {
+		_ = e.comm(tid)
+	}
 	if !e.filter.commFilterEnable {
 		e.enterEvs[tid] = event.NewPair(enterEv)
 		return
@@ -426,6 +452,17 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 func (e *eventLoop) comm(tid uint32) string {
 	if comm, ok := e.comms[tid]; ok {
 		return comm
+	}
+	commPath := fmt.Sprintf("/proc/%d/comm", tid)
+	if data, err := os.ReadFile(commPath); err == nil {
+		comm := string(data)
+		if len(comm) > 0 && comm[len(comm)-1] == '\n' {
+			comm = comm[:len(comm)-1]
+		}
+		if comm != "" {
+			e.comms[tid] = comm
+			return comm
+		}
 	}
 	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid)); err == nil {
 		linkName = filepath.Base(linkName)
