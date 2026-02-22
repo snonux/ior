@@ -37,6 +37,7 @@ func TestEventloop(t *testing.T) {
 		"CloseRangeFailureTest":  makeCloseRangeFailureTestData(t),
 		"FsyncEventTest":         makeFsyncEventTestData(t),
 		"SyncFileRangeEventTest": makeSyncFileRangeEventTestData(t),
+		"CopyFileRangeEventTest": makeCopyFileRangeEventTestData(t),
 		"MmapEventTest":          makeMmapEventTestData(t),
 		"MsyncEventTest":         makeMsyncEventTestData(t),
 		"FtruncateEventTest":     makeFtruncateEventTestData(t),
@@ -639,6 +640,98 @@ func makeSyncFileRangeEventTestData(t *testing.T) (td testData) {
 		}
 		if ep.File.Name() != filename {
 			t.Errorf("Expected sync_file_range file name '%s' but got '%s'", filename, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeCopyFileRangeEventTestData(t *testing.T) (td testData) {
+	srcFd := int32(49)
+	dstFd := int32(50)
+	srcName := "copy_file_range_src.txt"
+	dstName := "copy_file_range_dst.txt"
+	copiedBytes := int64(21)
+
+	srcOpenEnter, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	copy(srcOpenEnter.Filename[:], srcName)
+	srcOpenEnterBytes, err := srcOpenEnter.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, srcOpenEnterBytes)
+
+	srcOpenExit, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	srcOpenExit.Ret = int64(srcFd)
+	srcOpenExitBytes, err := srcOpenExit.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, srcOpenExitBytes)
+
+	dstOpenEnter, _ := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
+	copy(dstOpenEnter.Filename[:], dstName)
+	dstOpenEnterBytes, err := dstOpenEnter.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, dstOpenEnterBytes)
+
+	dstOpenExit, _ := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
+	dstOpenExit.Ret = int64(dstFd)
+	dstOpenExitBytes, err := dstOpenExit.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, dstOpenExitBytes)
+
+	copyEnter, copyEnterBytes := makeEnterFdEvent(t, defaulTime+400, defaultPid, defaultTid, srcFd, types.SYS_ENTER_COPY_FILE_RANGE)
+	td.rawTracepoints = append(td.rawTracepoints, copyEnterBytes)
+
+	copyExit := types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_COPY_FILE_RANGE,
+		Time:      defaulTime + 500,
+		Ret:       copiedBytes,
+		Pid:       defaultPid,
+		Tid:       defaultTid,
+		RetType:   types.TRANSFER_CLASSIFIED,
+	}
+	copyExitBytes, err := copyExit.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, copyExitBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !srcOpenEnter.Equals(ep.EnterEv) || !srcOpenExit.Equals(ep.ExitEv) {
+			t.Errorf("unexpected src open event pair: %v", ep)
+		}
+		verifyFileDescriptor(t, el, srcFd, srcName)
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !dstOpenEnter.Equals(ep.EnterEv) || !dstOpenExit.Equals(ep.ExitEv) {
+			t.Errorf("unexpected dst open event pair: %v", ep)
+		}
+		verifyFileDescriptor(t, el, dstFd, dstName)
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !copyEnter.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", copyEnter, ep.EnterEv)
+		}
+		if !copyExit.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", copyExit, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Fatalf("Expected copy_file_range event to carry source file metadata")
+		}
+		if ep.File.Name() != srcName {
+			t.Errorf("Expected source file '%s' but got '%s'", srcName, ep.File.Name())
+		}
+		if ep.Bytes != uint64(copiedBytes) {
+			t.Errorf("Expected copied bytes %d but got %d", copiedBytes, ep.Bytes)
 		}
 	})
 

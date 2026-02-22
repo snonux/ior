@@ -30,12 +30,17 @@ type TestHarness struct {
 // binary, reads its PID from stdout, launches ior with a PID filter, waits
 // for both to finish, and parses the resulting .ior.zst file.
 func (h *TestHarness) Run(scenario string, duration int) (TestResult, int, error) {
+	return h.RunWithIorArgs(scenario, duration, nil)
+}
+
+// RunWithIorArgs behaves like Run but forwards additional args to ior.
+func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs []string) (TestResult, int, error) {
 	workloadCmd, workloadPID, err := h.startWorkload(scenario)
 	if err != nil {
 		return TestResult{}, 0, err
 	}
 
-	iorCmd, err := h.startIor(workloadPID, scenario, duration)
+	iorCmd, err := h.startIor(workloadPID, scenario, duration, extraIorArgs)
 	if err != nil {
 		workloadCmd.Process.Kill()
 		workloadCmd.Wait()
@@ -111,18 +116,20 @@ func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 	}
 }
 
-func (h *TestHarness) startIor(pid int, scenario string, duration int) (*exec.Cmd, error) {
+func (h *TestHarness) startIor(pid int, scenario string, duration int, extraArgs []string) (*exec.Cmd, error) {
 	bpfLink := filepath.Join(h.OutputDir, "ior.bpf.o")
 	if err := os.Symlink(h.BpfObject, bpfLink); err != nil {
 		return nil, fmt.Errorf("symlink bpf object: %w", err)
 	}
 
-	cmd := exec.Command(h.IorBinary,
+	args := []string{
 		"-pid", strconv.Itoa(pid),
 		"-flamegraph",
 		"-name", scenario,
 		"-duration", strconv.Itoa(duration),
-	)
+	}
+	args = append(args, extraArgs...)
+	cmd := exec.Command(h.IorBinary, args...)
 	cmd.Dir = h.OutputDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -417,10 +417,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	default:
 		panic(fmt.Sprintf("unknown type: %v", v))
 	}
-	// TODO: implement copy_file_range
-	// TODO: open_by_handle_at
-	// TODO: getcwd?
-
 	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]
 	ep.CalculateDurations(prevPairTime)
 	e.prevPairTimes[ep.EnterEv.GetTid()] = ep.ExitEv.GetTime()

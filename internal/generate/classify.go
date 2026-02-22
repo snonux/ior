@@ -142,6 +142,10 @@ func classifyNameAndField(name, fieldType, fieldName string) (ClassificationResu
 		if fieldType == "const char *" && fieldName == "name" {
 			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
 		}
+	case "sys_enter_copy_file_range":
+		if isFdType(fieldType) && fieldName == "fd_in" {
+			return ClassificationResult{Kind: KindFd}, true
+		}
 	}
 
 	if strings.HasPrefix(name, "sys_enter") &&
