@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
@@ -101,7 +102,9 @@ func TestWithName() error {
 		fmt.Println("Running integration test", testName, "(requires root)...")
 		env := goEnv()
 		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH")
-		return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-run", "^"+testName+"$", "-v", "-failfast", "-count=1")
+		return runWithHeartbeat(15*time.Second, "Integration test still running...", func() error {
+			return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-run", "^"+testName+"$", "-v", "-failfast", "-count=1")
+		})
 	}
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-run", "^"+testName+"$", "-v", "-failfast")
 }
@@ -263,7 +266,9 @@ func IntegrationTest() error {
 	fmt.Println("Running integration tests (requires root)...")
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
-	return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-v", "-failfast", "-count=1")
+	return runWithHeartbeat(15*time.Second, "Integration tests still running...", func() error {
+		return sudoRunWithEnv(env, "go", "test", "./integrationtests/...", "-v", "-failfast", "-count=1")
+	})
 }
 
 func buildWorkloadBinary() error {
@@ -532,6 +537,25 @@ func sortLinesWithLocale(lines []string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
+}
+
+func runWithHeartbeat(interval time.Duration, message string, fn func() error) error {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				fmt.Println(message)
+			}
+		}
+	}()
+	err := fn()
+	close(done)
+	return err
 }
 
 func isIntegrationTest(testName string) (bool, error) {
