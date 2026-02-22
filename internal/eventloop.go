@@ -419,7 +419,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	}
 	// TODO: implement copy_file_range
 	// TODO: open_by_handle_at
-	// TODO: mmap, msync...
 	// TODO: getcwd?
 
 	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]

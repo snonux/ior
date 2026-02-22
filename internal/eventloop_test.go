@@ -37,6 +37,8 @@ func TestEventloop(t *testing.T) {
 		"CloseRangeFailureTest":  makeCloseRangeFailureTestData(t),
 		"FsyncEventTest":         makeFsyncEventTestData(t),
 		"SyncFileRangeEventTest": makeSyncFileRangeEventTestData(t),
+		"MmapEventTest":          makeMmapEventTestData(t),
+		"MsyncEventTest":         makeMsyncEventTestData(t),
 		"FtruncateEventTest":     makeFtruncateEventTestData(t),
 		// PathEvent tests
 		"MkdirEventTest":  makeMkdirEventTestData(t),
@@ -637,6 +639,83 @@ func makeSyncFileRangeEventTestData(t *testing.T) (td testData) {
 		}
 		if ep.File.Name() != filename {
 			t.Errorf("Expected sync_file_range file name '%s' but got '%s'", filename, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeMmapEventTestData(t *testing.T) (td testData) {
+	fd := int32(48)
+	filename := "mmap_test.txt"
+
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	copy(openEnterEv.Filename[:], filename)
+	openEnterBytes, err := openEnterEv.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
+
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv.Ret = int64(fd)
+	openExitBytes, err := openExitEv.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
+
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime+200, defaultPid, defaultTid, fd, types.SYS_ENTER_MMAP)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	const fakeMappedAddr = int64(0x70000000)
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+300, defaultPid, defaultTid, types.SYS_EXIT_MMAP, fakeMappedAddr)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !openEnterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", openEnterEv, ep.EnterEv)
+		}
+		if !openExitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", openExitEv, ep.ExitEv)
+		}
+		verifyFileDescriptor(t, el, fd, filename)
+	})
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Fatalf("Expected file metadata for mmap event")
+		}
+		if ep.File.Name() != filename {
+			t.Errorf("Expected mmap file name '%s' but got '%s'", filename, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makeMsyncEventTestData(t *testing.T) (td testData) {
+	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_MSYNC)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_MSYNC, 0)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File != nil {
+			t.Errorf("Expected msync event to not carry file metadata, got %v", ep.File)
 		}
 	})
 
