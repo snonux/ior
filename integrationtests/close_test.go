@@ -28,6 +28,7 @@ func TestCloseInvalidFd(t *testing.T) {
 	runScenario(t, "close-invalid-fd", []ExpectedEvent{
 		{
 			Tracepoint: "enter_close",
+			Comm:       "ioworkload",
 			MinCount:   1,
 		},
 	})

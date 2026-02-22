@@ -672,14 +672,43 @@ func envToList(env map[string]string) []string {
 }
 
 func shouldPrintTestLog(msg string) bool {
+	// Always keep error/failure lines.
+	if strings.Contains(msg, "--- FAIL:") ||
+		strings.Contains(msg, " FAIL ") ||
+		strings.Contains(msg, "panic:") ||
+		strings.Contains(strings.ToLower(msg), "error") ||
+		strings.Contains(strings.ToLower(msg), "expected event not found") {
+		return true
+	}
+
 	// Drop high-volume attach/debug noise from ior startup in integration tests.
 	noisePrefixes := []string{
+		"=== RUN",
+		"___",
+		"|_ _|",
+		"| |",
+		"|___",
+		"v0.0.0",
+		"libbpf:",
 		"ShouldIAttachTracepoint called with ",
 		"Attaching tracepoint ",
 		"Attached prog handle_ ",
 		"Attached tracepoint",
 		"Attaching sys_",
 		"Not attaching sys_",
+		"Collecting flame graph stats",
+		"Starting flamegraph worker",
+		"Waiting for stats to be ready",
+		"Stopping event loop",
+		"Waiting for flamegraph",
+		"Worker ",
+		"Writing ",
+		"Good bye...",
+		"Statistics:",
+		"duration:",
+		"tracepoints:",
+		"syscalls:",
+		"syscalls after filter:",
 	}
 	for _, p := range noisePrefixes {
 		if strings.HasPrefix(msg, p) {

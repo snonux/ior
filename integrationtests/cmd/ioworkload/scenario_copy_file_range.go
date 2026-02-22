@@ -37,6 +37,9 @@ func copyFileRangeBasic() error {
 	if _, err := syscall.Write(srcFd, data); err != nil {
 		return fmt.Errorf("write source: %w", err)
 	}
+	if _, err := syscall.Seek(srcFd, 0, 0); err != nil {
+		return fmt.Errorf("seek source: %w", err)
+	}
 
 	n, _, errno := syscall.Syscall6(uintptr(sysCopyFileRange), uintptr(srcFd), 0, uintptr(dstFd), 0, uintptr(len(data)), 0)
 	if errno != 0 {
