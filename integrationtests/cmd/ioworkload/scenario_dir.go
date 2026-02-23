@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -80,6 +81,35 @@ func dirChdir() error {
 	if err := syscall.Chdir(dir); err != nil {
 		return fmt.Errorf("chdir: %w", err)
 	}
+	return nil
+}
+
+// dirGetcwd changes into a temp directory and calls getcwd(2) directly.
+func dirGetcwd() error {
+	origDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+
+	dir, cleanup, err := makeTempDir("dir-getcwd")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	defer syscall.Chdir(origDir)
+
+	if err := syscall.Chdir(dir); err != nil {
+		return fmt.Errorf("chdir: %w", err)
+	}
+
+	buf := make([]byte, 4096)
+	_, _, errno := syscall.Syscall(syscall.SYS_GETCWD, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0)
+	runtime.KeepAlive(buf)
+	if errno != 0 {
+		return fmt.Errorf("getcwd: %w", errno)
+	}
+	// Keep cwd unchanged long enough for ior to process enter/exit pairing.
+	time.Sleep(300 * time.Millisecond)
 	return nil
 }
 

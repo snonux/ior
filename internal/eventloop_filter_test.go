@@ -108,8 +108,9 @@ func makeCommPropagationTestData(t *testing.T) (td testData) {
 		}
 	})
 
-	// Step 4: Different thread without open should not have comm name
-	differentTid := tid + 100
+	// Step 4: Different thread without open should not have comm name.
+	// Use a very large TID to avoid collisions with real /proc entries on CI/hosts.
+	differentTid := uint32(4000000000)
 	_, diffReadEnterBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, differentTid, fd, types.SYS_ENTER_READ)
 	td.rawTracepoints = append(td.rawTracepoints, diffReadEnterBytes)
 

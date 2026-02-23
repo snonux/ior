@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"os"
 	"syscall"
 	"testing"
 	"time"
@@ -26,9 +27,9 @@ type testData struct {
 
 func TestEventloop(t *testing.T) {
 	testTable := map[string]testData{
-		"OpenEventTest1": makeOpenEventTestData1(t),
-		"OpenEventTest2": makeOpenEventTestData2(t),
-		"OpenEventTest3": makeOpenEventTestData3(t),
+		"OpenEventTest1":       makeOpenEventTestData1(t),
+		"OpenEventTest2":       makeOpenEventTestData2(t),
+		"OpenEventTest3":       makeOpenEventTestData3(t),
 		"OpenEventFailureTest": makeOpenEventFailureTestData(t),
 		// FdEvent tests
 		"ReadEventTest":          makeReadEventTestData(t),
@@ -54,6 +55,7 @@ func TestEventloop(t *testing.T) {
 		"SymlinkEventTest": makeSymlinkEventTestData(t),
 		// NullEvent tests
 		"SyncEventTest":            makeSyncEventTestData(t),
+		"GetcwdEventTest":          makeGetcwdEventTestData(t),
 		"IoUringSetupEventTest":    makeIoUringSetupEventTestData(t),
 		"IoUringSetupFailureTest":  makeIoUringSetupFailureTestData(t),
 		"IoUringEnterEventTest":    makeIoUringEnterEventTestData(t),
@@ -1199,6 +1201,38 @@ func makeSyncEventTestData(t *testing.T) (td testData) {
 		}
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+func makeGetcwdEventTestData(t *testing.T) (td testData) {
+	pid := uint32(os.Getpid())
+	tid := uint32(os.Getpid())
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, pid, tid, types.SYS_ENTER_GETCWD)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, pid, tid, types.SYS_EXIT_GETCWD, 1)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, _ *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Fatalf("Expected getcwd to attach a pathname")
+		}
+		if got := ep.File.Name(); got != cwd {
+			t.Errorf("Expected cwd '%v' but got '%v'", cwd, got)
 		}
 	})
 

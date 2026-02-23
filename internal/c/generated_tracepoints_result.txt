@@ -43,7 +43,6 @@ Ignoring sys_enter_futex_wake sys_exit_futex_wake as possibly not file I/O relat
 Ignoring sys_enter_get_mempolicy sys_exit_get_mempolicy as possibly not file I/O related
 Ignoring sys_enter_get_robust_list sys_exit_get_robust_list as possibly not file I/O related
 Ignoring sys_enter_getcpu sys_exit_getcpu as possibly not file I/O related
-Ignoring sys_enter_getcwd sys_exit_getcwd as possibly not file I/O related
 Ignoring sys_enter_getegid sys_exit_getegid as possibly not file I/O related
 Ignoring sys_enter_geteuid sys_exit_geteuid as possibly not file I/O related
 Ignoring sys_enter_getgid sys_exit_getgid as possibly not file I/O related
@@ -289,6 +288,7 @@ sys_enter_fstatfs is a struct fd_event
 sys_enter_fsync is a struct fd_event
 sys_enter_ftruncate is a struct fd_event
 sys_enter_futimesat is a struct path_event
+sys_enter_getcwd is a struct null_event
 sys_enter_getdents is a struct fd_event
 sys_enter_getdents64 is a struct fd_event
 sys_enter_getxattr is a struct path_event
@@ -404,6 +404,7 @@ sys_exit_fstatfs is a struct ret_event (UNCLASSIFIED)
 sys_exit_fsync is a struct ret_event (UNCLASSIFIED)
 sys_exit_ftruncate is a struct ret_event (UNCLASSIFIED)
 sys_exit_futimesat is a struct ret_event (UNCLASSIFIED)
+sys_exit_getcwd is a struct ret_event (UNCLASSIFIED)
 sys_exit_getdents is a struct ret_event (READ_CLASSIFIED)
 sys_exit_getdents64 is a struct ret_event (READ_CLASSIFIED)
 sys_exit_getxattr is a struct ret_event (READ_CLASSIFIED)

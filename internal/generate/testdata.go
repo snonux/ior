@@ -425,6 +425,35 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatGetcwd = `name: sys_enter_getcwd
+ID: 795
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:char * buf;	offset:16;	size:8;	signed:0;
+	field:unsigned long size;	offset:24;	size:8;	signed:0;
+
+print fmt: "buf: 0x%08lx, size: 0x%08lx", ((unsigned long)(REC->buf)), ((unsigned long)(REC->size))
+`
+
+const FormatExitGetcwd = `name: sys_exit_getcwd
+ID: 794
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatSyslog = `name: sys_enter_syslog
 ID: 347
 format:

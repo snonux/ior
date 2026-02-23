@@ -115,6 +115,8 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_msync":
 		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getcwd":
+		return ClassificationResult{Kind: KindNull}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true
