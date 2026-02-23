@@ -33,8 +33,11 @@ func NewPair(enterEv Event) *Pair {
 }
 
 func (e *Pair) CalculateDurations(prevPairTime uint64) {
+	// Duration is syscall runtime: exit(current) - enter(current).
 	e.Duration = e.ExitEv.GetTime() - e.EnterEv.GetTime()
 	if prevPairTime > 0 {
+		// DurationToPrev is the inter-syscall gap on the same TID:
+		// enter(current) - exit(previous).
 		e.DurationToPrev = e.EnterEv.GetTime() - prevPairTime
 	}
 }
