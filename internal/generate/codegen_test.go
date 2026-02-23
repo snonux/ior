@@ -149,6 +149,16 @@ func TestGenerateIoUringRegisterHandler(t *testing.T) {
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 }
 
+func TestGenerateMmapHandlerUsesFdArgumentIndex(t *testing.T) {
+	output := generateFromPair(t, FormatMmap, FormatExitMmap)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mmap")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MMAP;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[4];")
+}
+
 func TestGenerateDup3Handler(t *testing.T) {
 	output := generateFromPair(t, FormatDup3, FormatExitDup3)
 

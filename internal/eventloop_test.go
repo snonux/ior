@@ -29,6 +29,7 @@ func TestEventloop(t *testing.T) {
 		"OpenEventTest1": makeOpenEventTestData1(t),
 		"OpenEventTest2": makeOpenEventTestData2(t),
 		"OpenEventTest3": makeOpenEventTestData3(t),
+		"OpenEventFailureTest": makeOpenEventFailureTestData(t),
 		// FdEvent tests
 		"ReadEventTest":          makeReadEventTestData(t),
 		"WriteEventTest":         makeWriteEventTestData(t),
@@ -205,6 +206,36 @@ func makeOpenEventTestData3(t *testing.T) (td testData) {
 		}
 		if !exitEv2.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv2, ep.ExitEv)
+		}
+	})
+
+	return td
+}
+
+func makeOpenEventFailureTestData(t *testing.T) (td testData) {
+	enterEv, enterEvBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	exitEv.Ret = -2
+	exitEvBytes, _ = exitEv.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, _ *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Fatalf("Expected file to be set for failed open")
+		}
+		if got, want := ep.FileName(), types.StringValue(enterEv.Filename[:]); got != want {
+			t.Errorf("Expected file name '%v' but got '%v'", want, got)
+		}
+		if got, want := ep.Comm, types.StringValue(enterEv.Comm[:]); got != want {
+			t.Errorf("Expected comm '%v' but got '%v'", want, got)
 		}
 	})
 

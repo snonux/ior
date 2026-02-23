@@ -84,9 +84,12 @@ func TestOpenPidFilter(t *testing.T) {
 	})
 
 	// Child's file should NOT be captured (different PID).
+	// Scope to openat so parent cleanup unlink/rmdir operations on childfile
+	// do not create false positives.
 	AssertEventsAbsent(t, result, []ExpectedEvent{
 		{
 			PathContains: "childfile.txt",
+			Tracepoint:   "enter_openat",
 		},
 	})
 }

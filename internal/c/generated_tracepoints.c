@@ -5696,7 +5696,7 @@ int handle_sys_enter_mmap(struct trace_event_raw_sys_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd = (__s32)ctx->args[4];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

@@ -242,11 +242,14 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	case *OpenEvent:
 		openEv := ep.EnterEv.(*OpenEvent)
 		comm := types.StringValue(openEv.Comm[:])
+		ep.Comm = comm
 		if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
 			file := file.NewFd(fd, types.StringValue(openEv.Filename[:]), v.Flags)
 			e.files[fd] = file
 			ep.File = file
-			ep.Comm = comm
+		} else {
+			// Keep path information for failed opens so error scenarios remain observable.
+			ep.File = file.NewPathname(openEv.Filename[:])
 		}
 		e.comms[openEv.Tid] = comm
 

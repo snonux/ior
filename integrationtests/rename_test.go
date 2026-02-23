@@ -38,7 +38,7 @@ func TestRenameRenameat2(t *testing.T) {
 func TestRenameEnoent(t *testing.T) {
 	runScenario(t, "rename-enoent", []ExpectedEvent{
 		{
-			PathContains: "rename-enoent-missing.txt",
+			PathContains: "rename-enoent-new.txt",
 			Tracepoint:   "enter_rename",
 			Comm:         "ioworkload",
 			MinCount:     1,
