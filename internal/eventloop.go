@@ -323,6 +323,17 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 				e.files[newFd] = fdFile.Dup(newFd)
 			}
 		}
+		if ep.Is(SYS_ENTER_PIDFD_GETFD) {
+			retEv, ok := ep.ExitEv.(*RetEvent)
+			if !ok {
+				panic("expected *types.RetEvent")
+			}
+			if newFd := int32(retEv.Ret); newFd >= 0 {
+				transferredFile := file.NewFdWithPid(newFd, v.Pid)
+				e.files[newFd] = transferredFile
+				ep.File = transferredFile
+			}
+		}
 
 		if retEv, ok := ep.ExitEv.(*RetEvent); ok {
 			ep.Bytes = bytesFromRet(retEv)
