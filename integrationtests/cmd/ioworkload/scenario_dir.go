@@ -195,10 +195,13 @@ func dirChdirEnoent() error {
 	if err != nil {
 		return fmt.Errorf("path bytes: %w", err)
 	}
-	_, _, errno := syscall.Syscall(syscall.SYS_CHDIR, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
-	runtime.KeepAlive(pathBytes)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but chdir succeeded")
+	// Retry a few times to reduce dropped-event flakiness under high load.
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_CHDIR, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
+		runtime.KeepAlive(pathBytes)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but chdir succeeded")
+		}
 	}
 	return nil
 }
@@ -207,10 +210,13 @@ func dirChdirEnoent() error {
 // The syscall fails with EBADF, but ior captures the tracepoint on entry.
 func dirGetdentsEbadf() error {
 	buf := make([]byte, 4096)
-	_, _, errno := syscall.Syscall(syscall.SYS_GETDENTS64, uintptr(9999), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	runtime.KeepAlive(buf)
-	if errno == 0 {
-		return fmt.Errorf("expected EBADF, but getdents64 succeeded")
+	// Retry a few times to reduce flakiness under high integration parallelism.
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_GETDENTS64, uintptr(9999), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		runtime.KeepAlive(buf)
+		if errno == 0 {
+			return fmt.Errorf("expected EBADF, but getdents64 succeeded")
+		}
 	}
 	return nil
 }

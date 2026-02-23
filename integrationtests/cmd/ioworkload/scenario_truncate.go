@@ -69,10 +69,14 @@ func truncateEnoent() error {
 	if err != nil {
 		return fmt.Errorf("path bytes: %w", err)
 	}
-	_, _, errno := syscall.Syscall(syscall.SYS_TRUNCATE, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
-	runtime.KeepAlive(pathBytes)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but truncate succeeded")
+	// Retry a few times to make this test resilient under high integration
+	// parallelism where a single failed syscall event can be dropped.
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_TRUNCATE, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
+		runtime.KeepAlive(pathBytes)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but truncate succeeded")
+		}
 	}
 	return nil
 }

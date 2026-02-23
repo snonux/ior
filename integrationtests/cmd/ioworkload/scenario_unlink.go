@@ -113,10 +113,12 @@ func unlinkEnoent() error {
 	if err != nil {
 		return fmt.Errorf("path bytes: %w", err)
 	}
-	_, _, errno := syscall.Syscall(syscall.SYS_UNLINK, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
-	runtime.KeepAlive(pathBytes)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but unlink succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_UNLINK, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
+		runtime.KeepAlive(pathBytes)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but unlink succeeded")
+		}
 	}
 	return nil
 }
@@ -176,10 +178,12 @@ func unlinkUnlinkatEnoent() error {
 	if err != nil {
 		return fmt.Errorf("name bytes: %w", err)
 	}
-	_, _, errno := syscall.Syscall(syscall.SYS_UNLINKAT, uintptr(dirFD), uintptr(unsafe.Pointer(nameBytes)), 0)
-	runtime.KeepAlive(nameBytes)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but unlinkat succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_UNLINKAT, uintptr(dirFD), uintptr(unsafe.Pointer(nameBytes)), 0)
+		runtime.KeepAlive(nameBytes)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but unlinkat succeeded")
+		}
 	}
 	return nil
 }

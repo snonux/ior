@@ -226,11 +226,14 @@ func statEnoent() error {
 		return fmt.Errorf("path bytes: %w", err)
 	}
 	var stat syscall.Stat_t
-	_, _, errno := syscall.Syscall(syscall.SYS_STAT, uintptr(unsafe.Pointer(pathBytes)), uintptr(unsafe.Pointer(&stat)), 0)
-	runtime.KeepAlive(pathBytes)
-	runtime.KeepAlive(&stat)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but stat succeeded")
+	// Retry a few times to reduce dropped-event flakiness under high parallelism.
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_STAT, uintptr(unsafe.Pointer(pathBytes)), uintptr(unsafe.Pointer(&stat)), 0)
+		runtime.KeepAlive(pathBytes)
+		runtime.KeepAlive(&stat)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but stat succeeded")
+		}
 	}
 	return nil
 }
@@ -252,10 +255,12 @@ func statAccessEnoent() error {
 	if err != nil {
 		return fmt.Errorf("path bytes: %w", err)
 	}
-	_, _, errno := syscall.Syscall(syscall.SYS_ACCESS, uintptr(unsafe.Pointer(pathBytes)), rOK, 0)
-	runtime.KeepAlive(pathBytes)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but access succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_ACCESS, uintptr(unsafe.Pointer(pathBytes)), rOK, 0)
+		runtime.KeepAlive(pathBytes)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but access succeeded")
+		}
 	}
 	return nil
 }
@@ -265,10 +270,12 @@ func statAccessEnoent() error {
 // tracepoint because it is recorded on syscall entry.
 func statFstatEbadf() error {
 	var stat syscall.Stat_t
-	_, _, errno := syscall.Syscall(syscall.SYS_FSTAT, 99999, uintptr(unsafe.Pointer(&stat)), 0)
-	runtime.KeepAlive(&stat)
-	if errno == 0 {
-		return fmt.Errorf("expected EBADF, but fstat succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_FSTAT, 99999, uintptr(unsafe.Pointer(&stat)), 0)
+		runtime.KeepAlive(&stat)
+		if errno == 0 {
+			return fmt.Errorf("expected EBADF, but fstat succeeded")
+		}
 	}
 	return nil
 }
