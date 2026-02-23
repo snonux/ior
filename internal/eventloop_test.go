@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -40,6 +41,8 @@ func TestEventloop(t *testing.T) {
 		"FsyncEventTest":         makeFsyncEventTestData(t),
 		"SyncFileRangeEventTest": makeSyncFileRangeEventTestData(t),
 		"CopyFileRangeEventTest": makeCopyFileRangeEventTestData(t),
+		"PidfdGetfdEventTest":    makePidfdGetfdEventTestData(t),
+		"PidfdGetfdFailureTest":  makePidfdGetfdFailureTestData(t),
 		"MmapEventTest":          makeMmapEventTestData(t),
 		"MsyncEventTest":         makeMsyncEventTestData(t),
 		"FtruncateEventTest":     makeFtruncateEventTestData(t),
@@ -673,6 +676,67 @@ func makeSyncFileRangeEventTestData(t *testing.T) (td testData) {
 		}
 		if ep.File.Name() != filename {
 			t.Errorf("Expected sync_file_range file name '%s' but got '%s'", filename, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+func makePidfdGetfdEventTestData(t *testing.T) (td testData) {
+	pid := uint32(os.Getpid())
+	tid := uint32(os.Getpid())
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pidfd-getfd-source.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("open source file: %v", err)
+	}
+	t.Cleanup(func() { syscall.Close(fd) })
+
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, pid, tid, 9999, types.SYS_ENTER_PIDFD_GETFD)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, pid, tid, types.SYS_EXIT_PIDFD_GETFD, int64(fd))
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File == nil {
+			t.Fatalf("Expected pidfd_getfd to attach returned file")
+		}
+		if got, want := ep.File.Name(), path; got != want {
+			t.Errorf("Expected transferred file '%v' but got '%v'", want, got)
+		}
+		if _, ok := el.files[int32(fd)]; !ok {
+			t.Errorf("Expected transferred fd %d to be tracked", fd)
+		}
+	})
+
+	return td
+}
+
+func makePidfdGetfdFailureTestData(t *testing.T) (td testData) {
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, 9999, types.SYS_ENTER_PIDFD_GETFD)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_PIDFD_GETFD, -1)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if _, ok := el.files[9999]; ok {
+			t.Errorf("Expected no tracked fd for failed pidfd_getfd")
 		}
 	})
 
