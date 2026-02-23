@@ -127,7 +127,6 @@
 /// Ignoring sys_enter_pause sys_exit_pause as possibly not file I/O related
 /// Ignoring sys_enter_perf_event_open sys_exit_perf_event_open as possibly not file I/O related
 /// Ignoring sys_enter_personality sys_exit_personality as possibly not file I/O related
-/// Ignoring sys_enter_pidfd_getfd sys_exit_pidfd_getfd as possibly not file I/O related
 /// Ignoring sys_enter_pidfd_open sys_exit_pidfd_open as possibly not file I/O related
 /// Ignoring sys_enter_pidfd_send_signal sys_exit_pidfd_send_signal as possibly not file I/O related
 /// Ignoring sys_enter_pipe sys_exit_pipe as possibly not file I/O related
@@ -481,6 +480,8 @@
 #define SYS_EXIT_FINIT_MODULE 402
 #define SYS_ENTER_SYSLOG 347
 #define SYS_EXIT_SYSLOG 346
+#define SYS_ENTER_PIDFD_GETFD 271
+#define SYS_EXIT_PIDFD_GETFD 270
 #define SYS_ENTER_MMAP 100
 #define SYS_EXIT_MMAP 99
 
@@ -5720,6 +5721,51 @@ int handle_sys_exit_syslog(struct trace_event_raw_sys_exit *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_enter_pidfd_getfd is a struct fd_event
+SEC("tracepoint/syscalls/sys_enter_pidfd_getfd")
+int handle_sys_enter_pidfd_getfd(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_FD_EVENT;
+    ev->trace_id = SYS_ENTER_PIDFD_GETFD;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_exit_pidfd_getfd is a struct ret_event (UNCLASSIFIED)
+SEC("tracepoint/syscalls/sys_exit_pidfd_getfd")
+int handle_sys_exit_pidfd_getfd(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->trace_id = SYS_EXIT_PIDFD_GETFD;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

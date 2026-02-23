@@ -232,6 +232,8 @@ var List = []string{
 	"sys_exit_finit_module",
 	"sys_enter_syslog",
 	"sys_exit_syslog",
+	"sys_enter_pidfd_getfd",
+	"sys_exit_pidfd_getfd",
 	"sys_enter_mmap",
 	"sys_exit_mmap",
 }

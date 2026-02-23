@@ -78,7 +78,7 @@ func shouldIgnore(name string) bool {
 	}
 
 	if strings.HasPrefix(name, "sys_enter_") {
-		containsIgnores := []string{"recv", "send", "sock", "inotify", "pidfd"}
+		containsIgnores := []string{"recv", "send", "sock", "inotify"}
 		for _, sub := range containsIgnores {
 			if strings.Contains(name, sub) {
 				return true

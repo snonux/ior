@@ -24,6 +24,15 @@ func TestGenerateFdHandler(t *testing.T) {
 	requireContains(t, output, "#define SYS_ENTER_READ 844")
 }
 
+func TestGeneratePidfdGetfdHandlerUsesPidfdArgument(t *testing.T) {
+	output := generateFromPair(t, FormatPidfdGetfd, FormatExitPidfdGetfd)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_pidfd_getfd")`)
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_PIDFD_GETFD;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+}
+
 func TestGenerateOpenHandler(t *testing.T) {
 	output := generateFromPair(t, FormatOpenat, FormatExitOpenat)
 
@@ -230,9 +239,9 @@ func TestGenerateHandlerStructure(t *testing.T) {
 func TestGenerateAllEventTypes(t *testing.T) {
 	// Verify every event type constant appears correctly
 	tests := []struct {
-		kind    TracepointKind
-		enter   string
-		exit    string
+		kind  TracepointKind
+		enter string
+		exit  string
 	}{
 		{KindFd, "ENTER_FD_EVENT", "EXIT_FD_EVENT"},
 		{KindOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},

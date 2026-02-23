@@ -59,6 +59,9 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 
 	switch tp.Classification.Kind {
 	case KindFd:
+		if f.Name == "sys_enter_pidfd_getfd" {
+			return "    ev->fd = (__s32)ctx->args[0];\n"
+		}
 		fdIdx := f.FieldNumber("fd")
 		if fdIdx >= 0 {
 			return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdIdx)
