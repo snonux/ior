@@ -92,6 +92,8 @@ var scenarios = map[string]func() error{
 	"truncate-ftruncate":          truncateFtruncate,
 	"truncate-enoent":             truncateEnoent,
 	"truncate-ftruncate-ebadf":    truncateFtruncateEbadf,
+	"pidfd-getfd-success":         pidfdGetfdSuccess,
+	"pidfd-getfd-failure":         pidfdGetfdFailure,
 	"iouring-setup":               iouringSetup,
 	"iouring-enter":               iouringEnter,
 	"iouring-register":            iouringRegister,
