@@ -16,7 +16,7 @@ mage integrationTest
 ```
 
 This builds everything (ior, ioworkload) and runs integration tests in parallel.
-Default parallelism is half of available CPU cores (minimum `1`).
+Default parallelism is `NumCPU * 2` (minimum `1`).
 
 Tests automatically skip with `t.Skip` when not running as root.
 
