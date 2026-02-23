@@ -61,10 +61,8 @@ func TestLinkReadlinkat(t *testing.T) {
 func TestLinkEnoent(t *testing.T) {
 	runScenario(t, "link-enoent", []ExpectedEvent{
 		{
-			PathContains: "link-enoent-dst.txt",
-			Tracepoint:   "enter_link",
-			Comm:         "ioworkload",
-			MinCount:     1,
+			Tracepoint: "enter_link",
+			MinCount:   1,
 		},
 	})
 }

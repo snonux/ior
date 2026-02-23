@@ -67,6 +67,7 @@ func TestOpenRdonlyWrite(t *testing.T) {
 }
 
 func TestOpenPidFilter(t *testing.T) {
+	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	result, pid, err := h.Run("open-pid-filter", defaultDuration)
 	if err != nil {
@@ -98,6 +99,7 @@ func TestOpenPidFilter(t *testing.T) {
 }
 
 func TestOpenDurationGap(t *testing.T) {
+	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	result, pid, err := h.Run("open-duration-gap", defaultDuration)
 	if err != nil {
@@ -114,7 +116,7 @@ func TestOpenDurationGap(t *testing.T) {
 		if !strings.Contains(rec.TraceID.String(), "enter_openat") {
 			continue
 		}
-		if !strings.Contains(rec.Path, "gap-second.txt") {
+		if !strings.Contains(rec.Path, "gap-shared.txt") {
 			continue
 		}
 		if rec.Cnt.DurationToPrev < minGapNs {
@@ -123,5 +125,5 @@ func TestOpenDurationGap(t *testing.T) {
 		return
 	}
 
-	t.Fatalf("did not find second openat record for gap-second.txt")
+	t.Fatalf("did not find openat record for gap-shared.txt")
 }

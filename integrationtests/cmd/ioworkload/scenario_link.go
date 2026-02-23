@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -212,17 +213,22 @@ func linkEnoent() error {
 		return fmt.Errorf("dst path bytes: %w", err)
 	}
 
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_LINK,
-		uintptr(unsafe.Pointer(srcBytes)),
-		uintptr(unsafe.Pointer(dstBytes)),
-		0,
-	)
+	// Issue the same failing syscall a few times to make capture robust even
+	// under heavy parallel integration load.
+	for i := 0; i < 3; i++ {
+		_, _, errno := syscall.Syscall(
+			syscall.SYS_LINK,
+			uintptr(unsafe.Pointer(srcBytes)),
+			uintptr(unsafe.Pointer(dstBytes)),
+			0,
+		)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but link succeeded")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	runtime.KeepAlive(srcBytes)
 	runtime.KeepAlive(dstBytes)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but link succeeded")
-	}
 	return nil
 }
 
