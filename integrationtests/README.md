@@ -19,6 +19,18 @@ This builds everything (ior, ioworkload) and runs the test suite with `sudo`.
 
 Tests automatically skip with `t.Skip` when not running as root.
 
+To opt into parallel scenario execution:
+
+```bash
+mage integrationTestParallel
+```
+
+Tune parallelism by setting `INTEGRATION_PARALLEL` (default `8`), for example:
+
+```bash
+INTEGRATION_PARALLEL=4 mage integrationTestParallel
+```
+
 ## Structure
 
 - `cmd/ioworkload/` — Standalone binary performing known I/O patterns
