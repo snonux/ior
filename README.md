@@ -10,6 +10,19 @@ Maybe this is a spiritual successor of one of my previous projects, I/O Riot htt
 
 This works only on Linux!
 
+## Timing Semantics
+
+Each reported event pair has two timing counters:
+
+- `durationNs`: syscall runtime on the same thread (`exit(current) - enter(current)`).
+- `durationToPrevNs`: inter-syscall gap on the same thread (`enter(current) - exit(previous)`).
+
+Important details:
+
+- `durationToPrevNs` is tracked per `tid` (thread), not globally across all threads.
+- The first observed syscall pair for a thread has `durationToPrevNs = 0` because there is no prior exit timestamp.
+- `durationToPrevNs` is attributed to the current syscall pair (the one whose `enter` closes the gap).
+
 ## Fedora
 
 To get this running on Fedora 42, run:
@@ -50,4 +63,3 @@ We are using Inferno Flamegraphs:  https://github.com/jonhoo/inferno
 ```sh
 cargo install inferno
 ```
-
