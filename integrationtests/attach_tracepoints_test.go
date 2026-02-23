@@ -3,6 +3,7 @@ package integrationtests
 import "testing"
 
 func TestAttachTracepointsIncludeFilter(t *testing.T) {
+	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 
 	// Only load openat tracepoints so write events from the workload are not captured.
@@ -33,6 +34,7 @@ func TestAttachTracepointsIncludeFilter(t *testing.T) {
 }
 
 func TestAttachTracepointsExcludeByInclusion(t *testing.T) {
+	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 
 	// Negative case: include only write tracepoints; openat must not be captured.

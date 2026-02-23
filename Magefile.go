@@ -13,7 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,7 +41,6 @@ const (
 	typesHeaderPath      = "internal/c/types.h"
 	VMLINUXPath          = "internal/c/vmlinux.h"
 	integrationParallel  = "INTEGRATION_PARALLEL"
-	integrationParallelN = "8"
 	integrationParallelE = "IOR_INTEGRATION_PARALLEL"
 )
 
@@ -266,49 +267,77 @@ func World() error {
 	return nil
 }
 
-// IntegrationTest builds everything and runs integration tests with sudo.
+// IntegrationTest builds everything and runs integration tests in parallel.
 func IntegrationTest() error {
-	mg.SerialDeps(All)
-	if err := buildWorkloadBinary(); err != nil {
-		return err
-	}
-	fmt.Println("Running integration tests (requires root)...")
-	env := goEnv()
-	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
-	return runGoTestWithProgress(env,
-		"./integrationtests/...",
-		"-failfast",
-		"-timeout=30m",
-		"-count=1",
-		"-json",
-	)
+	return runIntegrationTests(true)
+}
+
+// IntegrationTestSerial builds everything and runs integration tests serially.
+func IntegrationTestSerial() error {
+	return runIntegrationTests(false)
 }
 
 // IntegrationTestParallel builds everything and runs integration tests in parallel.
-// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: 8).
+// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: NumCPU/2, minimum 1).
 func IntegrationTestParallel() error {
+	return runIntegrationTests(true)
+}
+
+func runIntegrationTests(parallel bool) error {
 	mg.SerialDeps(All)
 	if err := buildWorkloadBinary(); err != nil {
 		return err
 	}
-	fmt.Println("Running integration tests in parallel (requires root)...")
+
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
-	env[integrationParallelE] = "1"
 
-	parallel := os.Getenv(integrationParallel)
-	if parallel == "" {
-		parallel = integrationParallelN
+	timeout := "30m"
+	if !parallel {
+		timeout = "90m"
 	}
 
-	return runGoTestWithProgress(env,
+	args := []string{
 		"./integrationtests/...",
 		"-failfast",
-		"-timeout=30m",
+		"-timeout=" + timeout,
 		"-count=1",
-		"-parallel", parallel,
-		"-json",
-	)
+	}
+
+	if parallel {
+		parallelism, err := resolveIntegrationParallelism()
+		if err != nil {
+			return err
+		}
+		env[integrationParallelE] = "1"
+		fmt.Printf("Running integration tests in parallel (requires root, parallel=%d)...\n", parallelism)
+		args = append(args, "-parallel", strconv.Itoa(parallelism))
+	} else {
+		fmt.Println("Running integration tests serially (requires root)...")
+	}
+
+	args = append(args, "-json")
+	return runGoTestWithProgress(env, args...)
+}
+
+func resolveIntegrationParallelism() (int, error) {
+	parallel := strings.TrimSpace(os.Getenv(integrationParallel))
+	if parallel == "" {
+		n := runtime.NumCPU() / 2
+		if n < 1 {
+			n = 1
+		}
+		return n, nil
+	}
+
+	n, err := strconv.Atoi(parallel)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s=%q: %w", integrationParallel, parallel, err)
+	}
+	if n < 1 {
+		return 0, fmt.Errorf("%s must be >= 1, got %d", integrationParallel, n)
+	}
+	return n, nil
 }
 
 func buildWorkloadBinary() error {

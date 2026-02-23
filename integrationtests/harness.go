@@ -146,8 +146,10 @@ func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int, grace time.Duration) 
 	workloadDone := make(chan error, 1)
 	iorDone := make(chan error, 1)
 
-	go func() { workloadDone <- workloadCmd.Wait() }()
-	go func() { iorDone <- iorCmd.Wait() }()
+	// Pass channels as parameters so subsequent nil assignments in this
+	// function do not affect the goroutines' send targets.
+	go func(ch chan error) { ch <- workloadCmd.Wait() }(workloadDone)
+	go func(ch chan error) { ch <- iorCmd.Wait() }(iorDone)
 
 	timeout := time.After(time.Duration(duration)*time.Second + grace)
 

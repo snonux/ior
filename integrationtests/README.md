@@ -15,20 +15,21 @@ harness asserts the captured `.ior.zst` output matches expectations.
 mage integrationTest
 ```
 
-This builds everything (ior, ioworkload) and runs the test suite with `sudo`.
+This builds everything (ior, ioworkload) and runs integration tests in parallel.
+Default parallelism is half of available CPU cores (minimum `1`).
 
 Tests automatically skip with `t.Skip` when not running as root.
 
-To opt into parallel scenario execution:
+To run serially (useful for debugging/flaky triage):
 
 ```bash
-mage integrationTestParallel
+mage integrationTestSerial
 ```
 
-Tune parallelism by setting `INTEGRATION_PARALLEL` (default `8`), for example:
+Tune parallelism by setting `INTEGRATION_PARALLEL`, for example:
 
 ```bash
-INTEGRATION_PARALLEL=4 mage integrationTestParallel
+INTEGRATION_PARALLEL=4 mage integrationTest
 ```
 
 ## Structure
