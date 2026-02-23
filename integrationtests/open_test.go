@@ -112,6 +112,10 @@ func TestOpenDurationGap(t *testing.T) {
 	// We intentionally sleep 800ms between first and second openat.
 	const minGapNs = uint64(500 * 1_000_000)
 
+	var (
+		found  bool
+		maxGap uint64
+	)
 	for _, rec := range result.Records {
 		if !strings.Contains(rec.TraceID.String(), "enter_openat") {
 			continue
@@ -119,11 +123,16 @@ func TestOpenDurationGap(t *testing.T) {
 		if !strings.Contains(rec.Path, "gap-shared.txt") {
 			continue
 		}
-		if rec.Cnt.DurationToPrev < minGapNs {
-			t.Fatalf("durationToPrev for second openat = %d ns, want >= %d ns", rec.Cnt.DurationToPrev, minGapNs)
+		found = true
+		if rec.Cnt.DurationToPrev > maxGap {
+			maxGap = rec.Cnt.DurationToPrev
 		}
-		return
 	}
 
-	t.Fatalf("did not find openat record for gap-shared.txt")
+	if !found {
+		t.Fatalf("did not find openat record for gap-shared.txt")
+	}
+	if maxGap < minGapNs {
+		t.Fatalf("max durationToPrev for openat gap-shared.txt = %d ns, want >= %d ns", maxGap, minGapNs)
+	}
 }

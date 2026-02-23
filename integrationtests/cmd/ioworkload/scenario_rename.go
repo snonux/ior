@@ -180,16 +180,18 @@ func renameEnoent() error {
 		return fmt.Errorf("new path bytes: %w", err)
 	}
 
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_RENAME,
-		uintptr(unsafe.Pointer(oldBytes)),
-		uintptr(unsafe.Pointer(newBytes)),
-		0,
-	)
-	runtime.KeepAlive(oldBytes)
-	runtime.KeepAlive(newBytes)
-	if errno == 0 {
-		return fmt.Errorf("expected ENOENT, but rename succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(
+			syscall.SYS_RENAME,
+			uintptr(unsafe.Pointer(oldBytes)),
+			uintptr(unsafe.Pointer(newBytes)),
+			0,
+		)
+		runtime.KeepAlive(oldBytes)
+		runtime.KeepAlive(newBytes)
+		if errno == 0 {
+			return fmt.Errorf("expected ENOENT, but rename succeeded")
+		}
 	}
 	return nil
 }

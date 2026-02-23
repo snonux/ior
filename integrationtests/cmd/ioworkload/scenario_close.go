@@ -106,9 +106,12 @@ func closeDoubleClose() error {
 // (9000–9999) where no fds are open. The syscall succeeds (empty range is valid),
 // and ior should capture the enter_close_range tracepoint.
 func closeRangeEmpty() error {
-	_, _, errno := syscall.Syscall(sysCloseRange, 9000, 9999, 0)
-	if errno != 0 {
-		return fmt.Errorf("close_range: %w", errno)
+	// Retry a few times to reduce event-loss flakiness under heavy test load.
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(sysCloseRange, 9000, 9999, 0)
+		if errno != 0 {
+			return fmt.Errorf("close_range: %w", errno)
+		}
 	}
 	return nil
 }

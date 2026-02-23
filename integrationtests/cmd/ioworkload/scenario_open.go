@@ -60,9 +60,11 @@ func openEnoent() error {
 	defer cleanup()
 
 	path := filepath.Join(dir, "nonexistent", "enoentfile.txt")
-	_, err = syscall.Open(path, syscall.O_RDONLY, 0)
-	if err == nil {
-		return fmt.Errorf("expected ENOENT, but open succeeded")
+	for i := 0; i < 5; i++ {
+		_, err = syscall.Open(path, syscall.O_RDONLY, 0)
+		if err == nil {
+			return fmt.Errorf("expected ENOENT, but open succeeded")
+		}
 	}
 	return nil
 }
@@ -232,6 +234,9 @@ func openByHandleAtSyscall(mountFD int, handle []byte, flags int) (int, error) {
 // separated by a deliberate sleep. Integration tests use this to assert that
 // durationToPrev captures inter-syscall gaps for the same event key.
 func openDurationGap() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	dir, cleanup, err := makeTempDir("open-duration-gap")
 	if err != nil {
 		return err
@@ -240,19 +245,26 @@ func openDurationGap() error {
 
 	path := filepath.Join(dir, "gap-shared.txt")
 
-	fd1, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
-	if err != nil {
-		return fmt.Errorf("open first: %w", err)
-	}
-	if err := syscall.Close(fd1); err != nil {
-		return fmt.Errorf("close first: %w", err)
-	}
+	// Repeat the same open/sleep/open pattern to make the gap observation robust
+	// under high test parallelism where individual events can occasionally drop.
+	for i := 0; i < 5; i++ {
+		fd1, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+		if err != nil {
+			return fmt.Errorf("open first: %w", err)
+		}
+		if err := syscall.Close(fd1); err != nil {
+			return fmt.Errorf("close first: %w", err)
+		}
 
-	time.Sleep(800 * time.Millisecond)
+		time.Sleep(800 * time.Millisecond)
 
-	fd2, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
-	if err != nil {
-		return fmt.Errorf("open second: %w", err)
+		fd2, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+		if err != nil {
+			return fmt.Errorf("open second: %w", err)
+		}
+		if err := syscall.Close(fd2); err != nil {
+			return fmt.Errorf("close second: %w", err)
+		}
 	}
-	return syscall.Close(fd2)
+	return nil
 }

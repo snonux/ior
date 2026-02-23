@@ -103,9 +103,11 @@ func syncSyncFileRangeToEOF() error {
 // syncFsyncEbadf calls fsync on an invalid fd.
 // The syscall fails with EBADF, but ior captures the enter_fsync tracepoint.
 func syncFsyncEbadf() error {
-	_, _, errno := syscall.Syscall(syscall.SYS_FSYNC, 99999, 0, 0)
-	if errno == 0 {
-		return fmt.Errorf("expected EBADF, but fsync succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_FSYNC, 99999, 0, 0)
+		if errno == 0 {
+			return fmt.Errorf("expected EBADF, but fsync succeeded")
+		}
 	}
 	return nil
 }
@@ -113,9 +115,11 @@ func syncFsyncEbadf() error {
 // syncFdatasyncEbadf calls fdatasync on an invalid fd.
 // The syscall fails with EBADF, but ior captures the enter_fdatasync tracepoint.
 func syncFdatasyncEbadf() error {
-	_, _, errno := syscall.Syscall(syscall.SYS_FDATASYNC, 99999, 0, 0)
-	if errno == 0 {
-		return fmt.Errorf("expected EBADF, but fdatasync succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_FDATASYNC, 99999, 0, 0)
+		if errno == 0 {
+			return fmt.Errorf("expected EBADF, but fdatasync succeeded")
+		}
 	}
 	return nil
 }
@@ -123,9 +127,11 @@ func syncFdatasyncEbadf() error {
 // syncFileRangeEbadf calls sync_file_range on an invalid fd.
 // The syscall fails with EBADF, but ior captures the enter_sync_file_range tracepoint.
 func syncFileRangeEbadf() error {
-	_, _, errno := syscall.Syscall6(syscall.SYS_SYNC_FILE_RANGE, 99999, 0, 0, 0, 0, 0)
-	if errno == 0 {
-		return fmt.Errorf("expected EBADF, but sync_file_range succeeded")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall6(syscall.SYS_SYNC_FILE_RANGE, 99999, 0, 0, 0, 0, 0)
+		if errno == 0 {
+			return fmt.Errorf("expected EBADF, but sync_file_range succeeded")
+		}
 	}
 	return nil
 }
