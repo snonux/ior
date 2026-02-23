@@ -11,6 +11,7 @@ var scenarios = map[string]func() error{
 	"open-basic":                  openBasic,
 	"open-creat":                  openCreat,
 	"open-by-handle-at":           openByHandleAt,
+	"open-duration-gap":           openDurationGap,
 	"open-enoent":                 openEnoent,
 	"open-rdonly-write":           openRdonlyWrite,
 	"open-pid-filter":             openPidFilter,
