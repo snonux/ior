@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -225,4 +226,32 @@ func openByHandleAtSyscall(mountFD int, handle []byte, flags int) (int, error) {
 		return 0, fmt.Errorf("syscall: %w", errno)
 	}
 	return int(fd), nil
+}
+
+// openDurationGap creates two openat syscalls separated by a deliberate sleep.
+// Integration tests use this to assert durationToPrev captures inter-syscall gaps.
+func openDurationGap() error {
+	dir, cleanup, err := makeTempDir("open-duration-gap")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	first := filepath.Join(dir, "gap-first.txt")
+	fd1, err := syscall.Open(first, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open first: %w", err)
+	}
+	if err := syscall.Close(fd1); err != nil {
+		return fmt.Errorf("close first: %w", err)
+	}
+
+	time.Sleep(800 * time.Millisecond)
+
+	second := filepath.Join(dir, "gap-second.txt")
+	fd2, err := syscall.Open(second, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open second: %w", err)
+	}
+	return syscall.Close(fd2)
 }

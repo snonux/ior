@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestOpenBasic(t *testing.T) {
 	runScenario(t, "open-basic", []ExpectedEvent{
@@ -92,4 +95,33 @@ func TestOpenPidFilter(t *testing.T) {
 			Tracepoint:   "enter_openat",
 		},
 	})
+}
+
+func TestOpenDurationGap(t *testing.T) {
+	h := newTestHarness(t)
+	result, pid, err := h.Run("open-duration-gap", defaultDuration)
+	if err != nil {
+		t.Fatalf("run scenario open-duration-gap: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+
+	// We intentionally sleep 800ms between first and second openat.
+	const minGapNs = uint64(500 * 1_000_000)
+
+	for _, rec := range result.Records {
+		if !strings.Contains(rec.TraceID.String(), "enter_openat") {
+			continue
+		}
+		if !strings.Contains(rec.Path, "gap-second.txt") {
+			continue
+		}
+		if rec.Cnt.DurationToPrev < minGapNs {
+			t.Fatalf("durationToPrev for second openat = %d ns, want >= %d ns", rec.Cnt.DurationToPrev, minGapNs)
+		}
+		return
+	}
+
+	t.Fatalf("did not find second openat record for gap-second.txt")
 }
