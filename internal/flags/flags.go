@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -15,6 +16,7 @@ import (
 var (
 	singleton Flags
 	once      sync.Once
+	pidFilter atomic.Int64
 )
 
 const flamegraphToolDefault = "$HOME/git/FlameGraph/flamegraph.pl"
@@ -64,7 +66,14 @@ type Flags struct {
 }
 
 func Get() Flags {
-	return singleton
+	out := singleton
+	out.PidFilter = int(pidFilter.Load())
+	return out
+}
+
+// SetPidFilter updates the active PID filter used for subsequent tracing runs.
+func SetPidFilter(pid int) {
+	pidFilter.Store(int64(pid))
 }
 
 func Parse() {
@@ -100,6 +109,7 @@ func parse() {
 	flag.StringVar(&singleton.FlamegraphTool, "flamegraphTool",
 		"", "Path to the flamegraph tool (e.g. flamegraph.pl or inferno-flamegraph)")
 	flag.Parse()
+	pidFilter.Store(int64(singleton.PidFilter))
 
 	if singleton.FlamegraphTool == "" {
 		singleton.FlamegraphTool = flamegraphToolDefault

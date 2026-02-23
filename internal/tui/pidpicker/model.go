@@ -2,7 +2,7 @@ package pidpicker
 
 import (
 	"fmt"
-	"ior/internal/tui"
+	"ior/internal/tui/messages"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -12,6 +12,37 @@ import (
 )
 
 const allPIDsLabel = "All PIDs"
+
+// KeyMap defines picker-specific key bindings.
+type KeyMap struct {
+	Enter   key.Binding
+	Esc     key.Binding
+	Refresh key.Binding
+}
+
+// DefaultKeyMap returns picker defaults.
+func DefaultKeyMap() KeyMap {
+	return KeyMap{
+		Enter:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
+		Esc:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+	}
+}
+
+func (k KeyMap) PickerShortHelp() []key.Binding {
+	return []key.Binding{k.Enter, k.Refresh, k.Esc}
+}
+
+var (
+	screenStyle  = lipgloss.NewStyle()
+	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	helpBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("246")).
+			BorderTop(true).
+			BorderForeground(lipgloss.Color("238"))
+	highlightStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("222"))
+	errorStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
+)
 
 type processesLoadedMsg struct {
 	processes []ProcessInfo
@@ -26,17 +57,17 @@ type Model struct {
 	selectedIndex int
 	width         int
 	height        int
-	keys          tui.KeyMap
+	keys          KeyMap
 	lastErr       error
 }
 
 // New creates a PID picker model with default shared key bindings.
 func New() Model {
-	return NewWithKeys(tui.Keys)
+	return NewWithKeys(DefaultKeyMap())
 }
 
 // NewWithKeys creates a PID picker model with the provided key bindings.
-func NewWithKeys(keys tui.KeyMap) Model {
+func NewWithKeys(keys KeyMap) Model {
 	input := textinput.New()
 	input.Prompt = "Filter: "
 	input.Placeholder = "pid, comm, or cmdline"
@@ -117,16 +148,16 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) emitSelection() tea.Cmd {
 	if m.selectedIndex <= 0 {
-		return func() tea.Msg { return tui.PidSelectedMsg{Pid: 0} }
+		return func() tea.Msg { return messages.PidSelectedMsg{Pid: 0} }
 	}
 
 	idx := m.selectedIndex - 1
 	if idx < 0 || idx >= len(m.filtered) {
-		return func() tea.Msg { return tui.PidSelectedMsg{Pid: 0} }
+		return func() tea.Msg { return messages.PidSelectedMsg{Pid: 0} }
 	}
 
 	pid := m.filtered[idx].Pid
-	return func() tea.Msg { return tui.PidSelectedMsg{Pid: pid} }
+	return func() tea.Msg { return messages.PidSelectedMsg{Pid: pid} }
 }
 
 func (m *Model) applyFilter() {
@@ -175,7 +206,7 @@ func cloneProcesses(in []ProcessInfo) []ProcessInfo {
 // View renders the PID picker with filter input, list, and help bar.
 func (m Model) View() string {
 	var b strings.Builder
-	b.WriteString(tui.HeaderStyle.Render("Select PID"))
+	b.WriteString(headerStyle.Render("Select PID"))
 	b.WriteString("\n")
 	b.WriteString(m.input.View())
 	b.WriteString("\n\n")
@@ -185,12 +216,12 @@ func (m Model) View() string {
 
 	if m.lastErr != nil {
 		b.WriteString("\n")
-		b.WriteString(tui.ErrorStyle.Render("scan error: " + m.lastErr.Error()))
+		b.WriteString(errorStyle.Render("scan error: " + m.lastErr.Error()))
 	}
 
 	b.WriteString("\n")
-	b.WriteString(tui.HelpBarStyle.Render(renderHelp(m.keys.PickerShortHelp())))
-	return tui.ScreenStyle.Render(b.String())
+	b.WriteString(helpBarStyle.Render(renderHelp(m.keys.PickerShortHelp())))
+	return screenStyle.Render(b.String())
 }
 
 func (m Model) renderRows() string {
@@ -221,7 +252,7 @@ func (m Model) renderRow(index int, label string) string {
 	style := lipgloss.NewStyle()
 	if index == m.selectedIndex {
 		prefix = "> "
-		style = tui.HighlightStyle
+		style = highlightStyle
 	}
 	return style.Render(prefix + label)
 }

@@ -1,7 +1,7 @@
 package pidpicker
 
 import (
-	"ior/internal/tui"
+	"ior/internal/tui/messages"
 	"strings"
 	"testing"
 
@@ -9,7 +9,7 @@ import (
 )
 
 func TestApplyFilterByPIDCommAndCmdline(t *testing.T) {
-	m := NewWithKeys(tui.DefaultKeyMap())
+	m := NewWithKeys(DefaultKeyMap())
 	m.processes = []ProcessInfo{
 		{Pid: 100, Comm: "bash", Cmdline: "bash -l"},
 		{Pid: 200, Comm: "sshd", Cmdline: "/usr/sbin/sshd -D"},
@@ -35,14 +35,14 @@ func TestApplyFilterByPIDCommAndCmdline(t *testing.T) {
 }
 
 func TestEnterEmitsAllPIDsAndSelectedPID(t *testing.T) {
-	m := NewWithKeys(tui.DefaultKeyMap())
+	m := NewWithKeys(DefaultKeyMap())
 	m.processes = []ProcessInfo{{Pid: 7, Comm: "vim"}, {Pid: 9, Comm: "top"}}
 	m.applyFilter()
 
 	modelAny, cmdAny := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = modelAny
 	msgAny := cmdAny()
-	pidAny, ok := msgAny.(tui.PidSelectedMsg)
+	pidAny, ok := msgAny.(messages.PidSelectedMsg)
 	if !ok {
 		t.Fatalf("expected PidSelectedMsg for all-pids selection, got %T", msgAny)
 	}
@@ -54,7 +54,7 @@ func TestEnterEmitsAllPIDsAndSelectedPID(t *testing.T) {
 	modelOne, cmdOne := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = modelOne
 	msgOne := cmdOne()
-	pidOne, ok := msgOne.(tui.PidSelectedMsg)
+	pidOne, ok := msgOne.(messages.PidSelectedMsg)
 	if !ok {
 		t.Fatalf("expected PidSelectedMsg for concrete selection, got %T", msgOne)
 	}
@@ -64,7 +64,7 @@ func TestEnterEmitsAllPIDsAndSelectedPID(t *testing.T) {
 }
 
 func TestEscQuitsAndRefreshTriggersScan(t *testing.T) {
-	m := NewWithKeys(tui.DefaultKeyMap())
+	m := NewWithKeys(DefaultKeyMap())
 
 	_, escCmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if escCmd == nil {
@@ -84,7 +84,7 @@ func TestEscQuitsAndRefreshTriggersScan(t *testing.T) {
 }
 
 func TestRuneRDoesNotTriggerRefreshWhileFilterFocused(t *testing.T) {
-	m := NewWithKeys(tui.DefaultKeyMap())
+	m := NewWithKeys(DefaultKeyMap())
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	if cmd == nil {
@@ -98,7 +98,7 @@ func TestRuneRDoesNotTriggerRefreshWhileFilterFocused(t *testing.T) {
 }
 
 func TestRenderRowsKeepsSelectionVisible(t *testing.T) {
-	m := NewWithKeys(tui.DefaultKeyMap())
+	m := NewWithKeys(DefaultKeyMap())
 	m.height = 8 // visible rows == 2
 	m.processes = []ProcessInfo{
 		{Pid: 1, Comm: "p1"},
