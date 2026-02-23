@@ -35,6 +35,17 @@ func TestDirChdir(t *testing.T) {
 	})
 }
 
+func TestDirGetcwd(t *testing.T) {
+	runScenario(t, "dir-getcwd", []ExpectedEvent{
+		{
+			PathContains: "dir-getcwd",
+			Tracepoint:   "enter_getcwd",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
 func TestDirGetdents(t *testing.T) {
 	runScenario(t, "dir-getdents", []ExpectedEvent{
 		{

@@ -42,6 +42,8 @@ var List = []string{
 	"sys_exit_statfs",
 	"sys_enter_fstatfs",
 	"sys_exit_fstatfs",
+	"sys_enter_getcwd",
+	"sys_exit_getcwd",
 	"sys_enter_utimensat",
 	"sys_exit_utimensat",
 	"sys_enter_futimesat",

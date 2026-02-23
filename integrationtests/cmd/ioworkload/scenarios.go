@@ -60,6 +60,7 @@ var scenarios = map[string]func() error{
 	"dir-basic":                   dirBasic,
 	"dir-mkdirat":                 dirMkdirat,
 	"dir-chdir":                   dirChdir,
+	"dir-getcwd":                  dirGetcwd,
 	"dir-getdents":                dirGetdents,
 	"dir-mkdir-eexist":            dirMkdirEexist,
 	"dir-chdir-enoent":            dirChdirEnoent,

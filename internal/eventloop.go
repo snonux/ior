@@ -393,6 +393,17 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 				ep.File = fdFile
 			}
 		}
+		if ep.Is(SYS_ENTER_GETCWD) {
+			retEvent, ok := ep.ExitEv.(*types.RetEvent)
+			if !ok {
+				panic("expected *types.RetEvent")
+			}
+			if retEvent.Ret > 0 {
+				if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", ep.EnterEv.GetTid())); err == nil {
+					ep.File = file.NewPathname([]byte(cwd))
+				}
+			}
+		}
 		ep.Comm = e.comm(ep.EnterEv.GetTid())
 		if !e.filter.eventPair(ep) {
 			ep.Recycle()

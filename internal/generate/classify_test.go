@@ -160,6 +160,13 @@ func TestClassifyNullSyslog(t *testing.T) {
 	}
 }
 
+func TestClassifyNullGetcwd(t *testing.T) {
+	r := classifyFromData(t, FormatGetcwd)
+	if r.Kind != KindNull {
+		t.Errorf("getcwd: got kind %d, want KindNull", r.Kind)
+	}
+}
+
 func TestClassifyNullIoUring(t *testing.T) {
 	r := classifyFromData(t, FormatIoUringEnter)
 	if r.Kind != KindFd {
@@ -300,6 +307,7 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"fcntl", FormatFcntl, FormatExitFcntl, KindFcntl},
 		{"sync", FormatSync, FormatExitSync, KindNull},
 		{"msync", FormatMsync, FormatExitMsync, KindNull},
+		{"getcwd", FormatGetcwd, FormatExitGetcwd, KindNull},
 		{"copy_file_range", FormatCopyFileRange, FormatExitCopyFileRange, KindFd},
 		{"syslog", FormatSyslog, FormatExitSyslog, KindNull},
 		{"open_by_handle_at", FormatOpenByHandleAt, FormatExitOpenByHandleAt, KindOpenByHandleAt},

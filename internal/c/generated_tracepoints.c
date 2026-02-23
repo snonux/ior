@@ -45,7 +45,6 @@
 /// Ignoring sys_enter_get_mempolicy sys_exit_get_mempolicy as possibly not file I/O related
 /// Ignoring sys_enter_get_robust_list sys_exit_get_robust_list as possibly not file I/O related
 /// Ignoring sys_enter_getcpu sys_exit_getcpu as possibly not file I/O related
-/// Ignoring sys_enter_getcwd sys_exit_getcwd as possibly not file I/O related
 /// Ignoring sys_enter_getegid sys_exit_getegid as possibly not file I/O related
 /// Ignoring sys_enter_geteuid sys_exit_geteuid as possibly not file I/O related
 /// Ignoring sys_enter_getgid sys_exit_getgid as possibly not file I/O related
@@ -292,6 +291,8 @@
 #define SYS_EXIT_STATFS 1042
 #define SYS_ENTER_FSTATFS 1041
 #define SYS_EXIT_FSTATFS 1040
+#define SYS_ENTER_GETCWD 1037
+#define SYS_EXIT_GETCWD 1036
 #define SYS_ENTER_UTIMENSAT 1035
 #define SYS_EXIT_UTIMENSAT 1034
 #define SYS_ENTER_FUTIMESAT 1033
@@ -1372,6 +1373,50 @@ int handle_sys_exit_fstatfs(struct trace_event_raw_sys_exit *ctx) {
 
     ev->event_type = EXIT_RET_EVENT;
     ev->trace_id = SYS_EXIT_FSTATFS;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = UNCLASSIFIED;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_enter_getcwd is a struct null_event
+SEC("tracepoint/syscalls/sys_enter_getcwd")
+int handle_sys_enter_getcwd(struct trace_event_raw_sys_enter *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = ENTER_NULL_EVENT;
+    ev->trace_id = SYS_ENTER_GETCWD;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+/// sys_exit_getcwd is a struct ret_event (UNCLASSIFIED)
+SEC("tracepoint/syscalls/sys_exit_getcwd")
+int handle_sys_exit_getcwd(struct trace_event_raw_sys_exit *ctx) {
+    __u32 pid, tid;
+    if (filter(&pid, &tid))
+        return 0;
+
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    if (!ev)
+        return 0;
+
+    ev->event_type = EXIT_RET_EVENT;
+    ev->trace_id = SYS_EXIT_GETCWD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
