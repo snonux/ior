@@ -39,6 +39,13 @@ func TestClassifyFdWrite(t *testing.T) {
 	}
 }
 
+func TestClassifyFdPidfdGetfd(t *testing.T) {
+	r := classifyFromData(t, FormatPidfdGetfd)
+	if r.Kind != KindFd {
+		t.Errorf("pidfd_getfd: got kind %d, want KindFd", r.Kind)
+	}
+}
+
 func TestClassifyOpenOpenat(t *testing.T) {
 	r := classifyFromData(t, FormatOpenat)
 	if r.Kind != KindOpen {
@@ -264,7 +271,6 @@ func TestShouldIgnorePatterns(t *testing.T) {
 		"sys_enter_sendto", "sys_enter_sendmsg", "sys_enter_sendmmsg",
 		"sys_enter_socket", "sys_enter_socketpair", "sys_enter_getsockname",
 		"sys_enter_inotify_init", "sys_enter_inotify_add_watch",
-		"sys_enter_pidfd_open", "sys_enter_pidfd_getfd",
 		"sys_enter_bind", "sys_enter_setns", "sys_enter_shutdown",
 		"sys_enter_connect", "sys_enter_fanotify_init", "sys_enter_getpeername",
 	}
@@ -281,6 +287,7 @@ func TestShouldNotIgnore(t *testing.T) {
 		"sys_enter_close", "sys_enter_rename", "sys_enter_unlink",
 		"sys_enter_copy_file_range",
 		"sys_enter_msync",
+		"sys_enter_pidfd_getfd",
 		"sys_exit_read", "sys_exit_openat",
 	}
 	for _, name := range noIgnore {
@@ -308,6 +315,7 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"sync", FormatSync, FormatExitSync, KindNull},
 		{"msync", FormatMsync, FormatExitMsync, KindNull},
 		{"getcwd", FormatGetcwd, FormatExitGetcwd, KindNull},
+		{"pidfd_getfd", FormatPidfdGetfd, FormatExitPidfdGetfd, KindFd},
 		{"copy_file_range", FormatCopyFileRange, FormatExitCopyFileRange, KindFd},
 		{"syslog", FormatSyslog, FormatExitSyslog, KindNull},
 		{"open_by_handle_at", FormatOpenByHandleAt, FormatExitOpenByHandleAt, KindOpenByHandleAt},
