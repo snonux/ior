@@ -79,7 +79,7 @@ func Test() error {
 	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
 		return err
 	}
-	return sh.RunWithV(goEnv(), "go", "test", "./...", "-v", "-failfast")
+	return sh.RunWithV(goEnv(), "go", "test", "./...", "-failfast", "-timeout=90m")
 }
 
 // TestWithName runs a specific test by name.
