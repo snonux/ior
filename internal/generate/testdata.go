@@ -168,6 +168,39 @@ format:
 print fmt: "start: 0x%08lx, len: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->start)), ((unsigned long)(REC->len)), ((unsigned long)(REC->flags))
 `
 
+const FormatMmap = `name: sys_enter_mmap
+ID: 100
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned long addr;	offset:16;	size:8;	signed:0;
+	field:unsigned long len;	offset:24;	size:8;	signed:0;
+	field:unsigned long prot;	offset:32;	size:8;	signed:0;
+	field:unsigned long flags;	offset:40;	size:8;	signed:0;
+	field:unsigned long fd;	offset:48;	size:8;	signed:0;
+	field:unsigned long off;	offset:56;	size:8;	signed:0;
+
+print fmt: "addr: 0x%08lx, len: 0x%08lx, prot: 0x%08lx, flags: 0x%08lx, fd: 0x%08lx, off: 0x%08lx", ((unsigned long)(REC->addr)), ((unsigned long)(REC->len)), ((unsigned long)(REC->prot)), ((unsigned long)(REC->flags)), ((unsigned long)(REC->fd)), ((unsigned long)(REC->off))
+`
+
+const FormatExitMmap = `name: sys_exit_mmap
+ID: 99
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatExitMsync = `name: sys_exit_msync
 ID: 1028
 format:

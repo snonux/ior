@@ -59,6 +59,10 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 
 	switch tp.Classification.Kind {
 	case KindFd:
+		fdIdx := f.FieldNumber("fd")
+		if fdIdx >= 0 {
+			return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdIdx)
+		}
 		return "    ev->fd = (__s32)ctx->args[0];\n"
 
 	case KindDup3:
