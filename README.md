@@ -22,6 +22,7 @@ Important details:
 - `durationToPrevNs` is tracked per `tid` (thread), not globally across all threads.
 - The first observed syscall pair for a thread has `durationToPrevNs = 0` because there is no prior exit timestamp.
 - `durationToPrevNs` is attributed to the current syscall pair (the one whose `enter` closes the gap).
+- There is no separate "idle" pseudo-event bucket; use the `durationToPrev` count field when collapsed/aggregated output should emphasize inter-syscall time.
 
 ## Fedora
 
