@@ -108,10 +108,10 @@ func parse() {
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
 	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
 
-	// disabledTracepoints is a list of tracepoints that should not be attached due to wider isses.
-	// Here, the BPF programs wouldn't load otherwise due to CO-RE issues.
-	// Re-evaluate periodically on newer kernels.
-	// Add back "._open_by_handle_at" or ".*_name_to_handle_at" here if tracepoints cause CO-RE issues.
+	// Keep this list empty by default.
+	// As of February 23, 2026, open_by_handle_at and name_to_handle_at were
+	// re-evaluated on newer kernels and do not require CO-RE-based exclusions.
+	// If future kernels regress, add targeted exclusions here.
 
 	if *fields == "" {
 		singleton.CollapsedFields = []string{"pid", "path", "tracepoint"}
