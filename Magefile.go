@@ -278,7 +278,7 @@ func IntegrationTestSerial() error {
 }
 
 // IntegrationTestParallel builds everything and runs integration tests in parallel.
-// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: NumCPU/2, minimum 1).
+// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: NumCPU*2, minimum 1).
 func IntegrationTestParallel() error {
 	return runIntegrationTests(true)
 }
@@ -323,7 +323,7 @@ func runIntegrationTests(parallel bool) error {
 func resolveIntegrationParallelism() (int, error) {
 	parallel := strings.TrimSpace(os.Getenv(integrationParallel))
 	if parallel == "" {
-		n := runtime.NumCPU() / 2
+		n := runtime.NumCPU() * 2
 		if n < 1 {
 			n = 1
 		}
