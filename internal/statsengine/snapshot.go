@@ -2,6 +2,7 @@ package statsengine
 
 import (
 	"ior/internal/types"
+	"slices"
 	"time"
 )
 
@@ -44,13 +45,13 @@ type Snapshot struct {
 	GapTrend        Trend
 	ThroughputTrend Trend
 
-	LatencySeriesNs   []float64
-	GapSeriesNs       []float64
-	ThroughputSeriesB []float64
+	latencySeriesNs   []float64
+	gapSeriesNs       []float64
+	throughputSeriesB []float64
 
-	Syscalls  []SyscallSnapshot
-	Files     []FileSnapshot
-	Processes []ProcessSnapshot
+	syscalls  []SyscallSnapshot
+	files     []FileSnapshot
+	processes []ProcessSnapshot
 
 	LatencyHistogram HistogramSnapshot
 	GapHistogram     HistogramSnapshot
@@ -109,5 +110,81 @@ type HistogramBucketSnapshot struct {
 // HistogramSnapshot is an immutable histogram view at snapshot time.
 type HistogramSnapshot struct {
 	Total   uint64
-	Buckets []HistogramBucketSnapshot
+	buckets []HistogramBucketSnapshot
+}
+
+// NewSnapshot creates a snapshot while defensively copying all slice-backed
+// inputs so callers cannot mutate shared snapshot state.
+func NewSnapshot(
+	latencySeriesNs []float64,
+	gapSeriesNs []float64,
+	throughputSeriesB []float64,
+	syscalls []SyscallSnapshot,
+	files []FileSnapshot,
+	processes []ProcessSnapshot,
+	latencyHistogram HistogramSnapshot,
+	gapHistogram HistogramSnapshot,
+) Snapshot {
+	return Snapshot{
+		latencySeriesNs:   slices.Clone(latencySeriesNs),
+		gapSeriesNs:       slices.Clone(gapSeriesNs),
+		throughputSeriesB: slices.Clone(throughputSeriesB),
+		syscalls:          slices.Clone(syscalls),
+		files:             slices.Clone(files),
+		processes:         slices.Clone(processes),
+		LatencyHistogram:  latencyHistogram.Clone(),
+		GapHistogram:      gapHistogram.Clone(),
+	}
+}
+
+// NewHistogramSnapshot creates an immutable histogram snapshot by copying
+// bucket storage.
+func NewHistogramSnapshot(total uint64, buckets []HistogramBucketSnapshot) HistogramSnapshot {
+	return HistogramSnapshot{
+		Total:   total,
+		buckets: slices.Clone(buckets),
+	}
+}
+
+// Clone returns a deep copy of the histogram snapshot.
+func (h HistogramSnapshot) Clone() HistogramSnapshot {
+	return HistogramSnapshot{
+		Total:   h.Total,
+		buckets: slices.Clone(h.buckets),
+	}
+}
+
+// LatencySeriesNs returns a defensive copy of latency sparkline samples.
+func (s Snapshot) LatencySeriesNs() []float64 {
+	return slices.Clone(s.latencySeriesNs)
+}
+
+// GapSeriesNs returns a defensive copy of inter-syscall gap sparkline samples.
+func (s Snapshot) GapSeriesNs() []float64 {
+	return slices.Clone(s.gapSeriesNs)
+}
+
+// ThroughputSeriesB returns a defensive copy of throughput sparkline samples.
+func (s Snapshot) ThroughputSeriesB() []float64 {
+	return slices.Clone(s.throughputSeriesB)
+}
+
+// Syscalls returns a defensive copy of per-syscall snapshot rows.
+func (s Snapshot) Syscalls() []SyscallSnapshot {
+	return slices.Clone(s.syscalls)
+}
+
+// Files returns a defensive copy of per-file snapshot rows.
+func (s Snapshot) Files() []FileSnapshot {
+	return slices.Clone(s.files)
+}
+
+// Processes returns a defensive copy of per-process snapshot rows.
+func (s Snapshot) Processes() []ProcessSnapshot {
+	return slices.Clone(s.processes)
+}
+
+// Buckets returns a defensive copy of histogram buckets.
+func (h HistogramSnapshot) Buckets() []HistogramBucketSnapshot {
+	return slices.Clone(h.buckets)
 }
