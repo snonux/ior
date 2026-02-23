@@ -11,6 +11,7 @@ const (
 	workloadBinaryDefault = "../ioworkload"
 	bpfObjectDefault      = "../ior.bpf.o"
 	defaultDuration       = 10
+	parallelEnvVar        = "IOR_INTEGRATION_PARALLEL"
 )
 
 func newTestHarness(t *testing.T) TestHarness {
@@ -48,6 +49,7 @@ func writeScript(t *testing.T, dir, name, content string) string {
 
 func runScenario(t *testing.T, scenario string, expected []ExpectedEvent) {
 	t.Helper()
+	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	result, pid, err := h.Run(scenario, defaultDuration)
 	if err != nil {
@@ -57,4 +59,11 @@ func runScenario(t *testing.T, scenario string, expected []ExpectedEvent) {
 	AssertNoUnexpectedPID(t, result, pid)
 	AssertNoUnexpectedComm(t, result, "ioworkload")
 	AssertEventsPresent(t, result, expected)
+}
+
+func enableParallelIfRequested(t *testing.T) {
+	t.Helper()
+	if os.Getenv(parallelEnvVar) == "1" {
+		t.Parallel()
+	}
 }

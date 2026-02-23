@@ -38,6 +38,9 @@ const (
 	typesGoPath          = "internal/types/generated_types.go"
 	typesHeaderPath      = "internal/c/types.h"
 	VMLINUXPath          = "internal/c/vmlinux.h"
+	integrationParallel  = "INTEGRATION_PARALLEL"
+	integrationParallelN = "8"
+	integrationParallelE = "IOR_INTEGRATION_PARALLEL"
 )
 
 // Default builds the project.
@@ -277,6 +280,33 @@ func IntegrationTest() error {
 		"-failfast",
 		"-timeout=30m",
 		"-count=1",
+		"-json",
+	)
+}
+
+// IntegrationTestParallel builds everything and runs integration tests in parallel.
+// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: 8).
+func IntegrationTestParallel() error {
+	mg.SerialDeps(All)
+	if err := buildWorkloadBinary(); err != nil {
+		return err
+	}
+	fmt.Println("Running integration tests in parallel (requires root)...")
+	env := goEnv()
+	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
+	env[integrationParallelE] = "1"
+
+	parallel := os.Getenv(integrationParallel)
+	if parallel == "" {
+		parallel = integrationParallelN
+	}
+
+	return runGoTestWithProgress(env,
+		"./integrationtests/...",
+		"-failfast",
+		"-timeout=30m",
+		"-count=1",
+		"-parallel", parallel,
 		"-json",
 	)
 }
