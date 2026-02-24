@@ -325,7 +325,12 @@ func runIntegrationTests(parallel bool) error {
 func resolveIntegrationParallelism() (int, error) {
 	parallel := strings.TrimSpace(os.Getenv(integrationParallel))
 	if parallel == "" {
-		n := runtime.NumCPU() * 2
+		// Conservative default for stability: high per-test process fan-out can
+		// cause missed first events under heavy load.
+		n := runtime.NumCPU()
+		if n > 2 {
+			n = 2
+		}
 		if n < 1 {
 			n = 1
 		}
