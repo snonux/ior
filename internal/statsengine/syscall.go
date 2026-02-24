@@ -10,6 +10,7 @@ import (
 )
 
 const syscallReservoirSampleCapDefault = 10_000
+const syscallPercentileRecomputeStepDefault = 256
 
 type syscallAccumulator struct {
 	byID      map[types.TraceId]*syscallStats
@@ -30,18 +31,26 @@ type syscallStats struct {
 
 	seenLatencies uint64
 	samples       []uint64
+
+	sampleVersion         uint64
+	lastPercentileVersion uint64
+	cachedP50             uint64
+	cachedP95             uint64
+	cachedP99             uint64
 }
 
 type syscallSnapshotInput struct {
-	traceID       types.TraceId
-	name          string
-	count         uint64
-	errorCount    uint64
-	totalBytes    uint64
-	totalLatency  uint64
-	minLatency    uint64
-	maxLatency    uint64
-	sortedSamples []uint64
+	traceID      types.TraceId
+	name         string
+	count        uint64
+	errorCount   uint64
+	totalBytes   uint64
+	totalLatency uint64
+	minLatency   uint64
+	maxLatency   uint64
+	p50Latency   uint64
+	p95Latency   uint64
+	p99Latency   uint64
 }
 
 func newSyscallAccumulator() *syscallAccumulator {
@@ -101,18 +110,19 @@ func (a *syscallAccumulator) snapshotInputs() []syscallSnapshotInput {
 
 	inputs := make([]syscallSnapshotInput, 0, len(a.byID))
 	for _, stats := range a.byID {
-		sorted := append([]uint64(nil), stats.samples...)
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		stats.ensurePercentiles()
 		inputs = append(inputs, syscallSnapshotInput{
-			traceID:       stats.traceID,
-			name:          stats.name,
-			count:         stats.count,
-			errorCount:    stats.errorCount,
-			totalBytes:    stats.totalBytes,
-			totalLatency:  stats.totalLatency,
-			minLatency:    stats.minLatency,
-			maxLatency:    stats.maxLatency,
-			sortedSamples: sorted,
+			traceID:      stats.traceID,
+			name:         stats.name,
+			count:        stats.count,
+			errorCount:   stats.errorCount,
+			totalBytes:   stats.totalBytes,
+			totalLatency: stats.totalLatency,
+			minLatency:   stats.minLatency,
+			maxLatency:   stats.maxLatency,
+			p50Latency:   stats.cachedP50,
+			p95Latency:   stats.cachedP95,
+			p99Latency:   stats.cachedP99,
 		})
 	}
 	return inputs
@@ -146,6 +156,7 @@ func (s *syscallStats) addSample(duration uint64, cap int, rng *rand.Rand) {
 	s.seenLatencies++
 	if len(s.samples) < cap {
 		s.samples = append(s.samples, duration)
+		s.sampleVersion++
 		return
 	}
 
@@ -154,6 +165,28 @@ func (s *syscallStats) addSample(duration uint64, cap int, rng *rand.Rand) {
 		return
 	}
 	s.samples[idx] = duration
+	s.sampleVersion++
+}
+
+func (s *syscallStats) ensurePercentiles() {
+	if s.lastPercentileVersion == s.sampleVersion {
+		return
+	}
+	if s.lastPercentileVersion != 0 && s.sampleVersion-s.lastPercentileVersion < syscallPercentileRecomputeStepDefault {
+		return
+	}
+	if len(s.samples) == 0 {
+		s.cachedP50, s.cachedP95, s.cachedP99 = 0, 0, 0
+		s.lastPercentileVersion = s.sampleVersion
+		return
+	}
+
+	sorted := append([]uint64(nil), s.samples...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	s.cachedP50 = samplePercentile(sorted, 0.50)
+	s.cachedP95 = samplePercentile(sorted, 0.95)
+	s.cachedP99 = samplePercentile(sorted, 0.99)
+	s.lastPercentileVersion = s.sampleVersion
 }
 
 func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
@@ -167,9 +200,9 @@ func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
 		LatencyMinNs:  s.minLatency,
 		LatencyMaxNs:  s.maxLatency,
 		LatencyMeanNs: float64(s.totalLatency) / float64(maxU64(s.count, 1)),
-		LatencyP50Ns:  samplePercentile(s.sortedSamples, 0.50),
-		LatencyP95Ns:  samplePercentile(s.sortedSamples, 0.95),
-		LatencyP99Ns:  samplePercentile(s.sortedSamples, 0.99),
+		LatencyP50Ns:  s.p50Latency,
+		LatencyP95Ns:  s.p95Latency,
+		LatencyP99Ns:  s.p99Latency,
 	}
 }
 
