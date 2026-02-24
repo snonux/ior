@@ -10,12 +10,14 @@ import (
 	tuiexport "ior/internal/tui/export"
 	"ior/internal/tui/pidpicker"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Screen identifies the currently active TUI screen.
@@ -85,6 +87,7 @@ type Model struct {
 	attaching bool
 	spin      spinner.Model
 	lastErr   error
+	showHelp  bool
 
 	startTrace TraceStarter
 	traceStop  context.CancelFunc
@@ -138,6 +141,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.stopTrace()
 			return m, tea.Quit
+		}
+		if !m.exporter.Visible() && key.Matches(msg, m.keys.Help) {
+			m.showHelp = !m.showHelp
+			return m, nil
+		}
+		if !m.exporter.Visible() && m.showHelp && key.Matches(msg, m.keys.Esc) {
+			m.showHelp = false
+			return m, nil
+		}
+		if !m.exporter.Visible() && m.showHelp {
+			return m, nil
 		}
 		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() {
 			m.exporter = m.exporter.Open()
@@ -264,11 +278,17 @@ func (m Model) View() string {
 		if m.exporter.Visible() {
 			return m.exporter.View(m.width, m.height) + "\n" + base
 		}
+		if m.showHelp {
+			return renderHelpOverlay(m.width, m.height, [][]key.Binding{m.keys.PickerShortHelp()}) + "\n" + base
+		}
 		return base
 	case ScreenDashboard:
 		base := m.dashboard.View()
 		if m.exporter.Visible() {
 			return m.exporter.View(m.width, m.height) + "\n" + base
+		}
+		if m.showHelp {
+			return renderHelpOverlay(m.width, m.height, m.keys.DashboardFullHelp()) + "\n" + base
 		}
 		return base
 	default:
@@ -406,4 +426,30 @@ func snapValueF(snap *statsengine.Snapshot, get func(*statsengine.Snapshot) floa
 
 func exportFlamegraph() (string, error) {
 	return "", errors.New("flamegraph export is not yet available in TUI mode")
+}
+
+func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 24
+	}
+
+	lines := []string{"Help"}
+	for _, group := range groups {
+		parts := make([]string, 0, len(group))
+		for _, binding := range group {
+			h := binding.Help()
+			parts = append(parts, fmt.Sprintf("%s %s", h.Key, h.Desc))
+		}
+		lines = append(lines, strings.Join(parts, " • "))
+	}
+	lines = append(lines, "", "Esc/? close")
+
+	box := PanelStyle.Copy().
+		Width(72).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }

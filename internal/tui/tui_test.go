@@ -229,3 +229,89 @@ func TestRunExportCmdCSVWritesFile(t *testing.T) {
 		t.Fatalf("expected CSV file to exist: %v", err)
 	}
 }
+
+func TestHelpKeyTogglesOverlay(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	if m.showHelp {
+		t.Fatalf("expected help hidden by default")
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated := next.(Model)
+	if !updated.showHelp {
+		t.Fatalf("expected help to be shown after ?")
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated = next.(Model)
+	if updated.showHelp {
+		t.Fatalf("expected help to toggle off after second ?")
+	}
+}
+
+func TestViewShowsHelpOverlay(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.showHelp = true
+	m.width = 100
+	m.height = 30
+
+	out := m.View()
+	if !strings.Contains(out, "Help") {
+		t.Fatalf("expected help title in overlay")
+	}
+	if !strings.Contains(out, "tab next tab") {
+		t.Fatalf("expected keybinding text in overlay")
+	}
+}
+
+func TestHelpOverlayBlocksUnderlyingActions(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.showHelp = true
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated := next.(Model)
+	if updated.exporter.Visible() {
+		t.Fatalf("expected export modal to stay closed while help overlay is active")
+	}
+}
+
+func TestHelpOverlayUsesPickerBindingsOnPickerScreen(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenPIDPicker
+	m.showHelp = true
+	m.width = 100
+	m.height = 30
+
+	out := m.View()
+	if !strings.Contains(out, "enter select") || !strings.Contains(out, "r refresh") {
+		t.Fatalf("expected picker shortcuts in help overlay")
+	}
+	if strings.Contains(out, "e export") {
+		t.Fatalf("did not expect dashboard-only shortcut in picker help overlay")
+	}
+}
+
+func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated := next.(Model)
+	if !updated.exporter.Visible() {
+		t.Fatalf("expected export modal to open")
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated = next.(Model)
+	if updated.showHelp {
+		t.Fatalf("did not expect hidden help flag while export modal is open")
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated = next.(Model)
+	if updated.exporter.Visible() {
+		t.Fatalf("expected esc to close export modal")
+	}
+}
