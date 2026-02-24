@@ -26,14 +26,21 @@ type tidType = uint32
 type flagsType = file.Flags
 type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]Counter
 
-// iorData is a structure that holds data related to I/O operations.
-// It contains a map of paths, which is used to manage and store path-related information.
+type recordKey struct {
+	Path    pathType
+	TraceID traceIdType
+	Comm    commType
+	Pid     pidType
+	Tid     tidType
+	Flags   flagsType
+}
+
 type iorData struct {
-	paths pathMap // paths is a map that stores path-related data. Note: This field is currently unexported.
+	records map[recordKey]Counter
 }
 
 func newIorData() iorData {
-	return iorData{paths: make(pathMap)}
+	return iorData{records: make(map[recordKey]Counter)}
 }
 
 func newIorDataFromFile(filename string) (iorData, error) {
@@ -68,67 +75,25 @@ func (iod iorData) addEventPair(ev *event.Pair) {
 func (iod iorData) add(path pathType, traceId traceIdType, comm commType,
 	pid pidType, tid tidType, flags flagsType, addCnt Counter) {
 
-	pathMap, ok := iod.paths[path]
-	if !ok {
-		pathMap = make(map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]Counter)
-		iod.paths[path] = pathMap
+	key := recordKey{
+		Path:    path,
+		TraceID: traceId,
+		Comm:    comm,
+		Pid:     pid,
+		Tid:     tid,
+		Flags:   flags,
 	}
-	traceIdMap, ok := iod.paths[path][traceId]
+	cnt, ok := iod.records[key]
 	if !ok {
-		traceIdMap = make(map[commType]map[pidType]map[tidType]map[flagsType]Counter)
-		iod.paths[path][traceId] = traceIdMap
+		iod.records[key] = addCnt
+		return
 	}
-	commMap, ok := iod.paths[path][traceId][comm]
-	if !ok {
-		commMap = make(map[pidType]map[tidType]map[flagsType]Counter)
-		iod.paths[path][traceId][comm] = commMap
-	}
-	pidMap, ok := iod.paths[path][traceId][comm][pid]
-	if !ok {
-		pidMap = make(map[tidType]map[flagsType]Counter)
-		iod.paths[path][traceId][comm][pid] = pidMap
-	}
-	tidMap, ok := iod.paths[path][traceId][comm][pid][tid]
-	if !ok {
-		tidMap = make(map[flagsType]Counter)
-		iod.paths[path][traceId][comm][pid][tid] = tidMap
-	}
-	cnt, ok := iod.paths[path][traceId][comm][pid][tid][flags]
-	if !ok {
-		iod.paths[path][traceId][comm][pid][tid][flags] = addCnt
-	} else {
-		iod.paths[path][traceId][comm][pid][tid][flags] = cnt.add(addCnt)
-	}
+	iod.records[key] = cnt.add(addCnt)
 }
 
 func (iod iorData) merge(other iorData) iorData {
-	for path, traceIdMap := range other.paths {
-		if _, ok := iod.paths[path]; !ok {
-			iod.paths[path] = make(map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]Counter)
-		}
-		for traceId, commMap := range traceIdMap {
-			if _, ok := iod.paths[path][traceId]; !ok {
-				iod.paths[path][traceId] = make(map[commType]map[pidType]map[tidType]map[flagsType]Counter)
-			}
-			for comm, pidMap := range commMap {
-				if _, ok := iod.paths[path][traceId][comm]; !ok {
-					iod.paths[path][traceId][comm] = make(map[pidType]map[tidType]map[flagsType]Counter)
-				}
-				for pid, tidMap := range pidMap {
-					if _, ok := iod.paths[path][traceId][comm][pid]; !ok {
-						iod.paths[path][traceId][comm][pid] = make(map[tidType]map[flagsType]Counter)
-					}
-					for tid, flagsMap := range tidMap {
-						if _, ok := iod.paths[path][traceId][comm][pid][tid]; !ok {
-							iod.paths[path][traceId][comm][pid][tid] = make(map[flagsType]Counter)
-						}
-						for flags, cnt := range flagsMap {
-							iod.add(path, traceId, comm, pid, tid, flags, cnt)
-						}
-					}
-				}
-			}
-		}
+	for key, cnt := range other.records {
+		iod.add(key.Path, key.TraceID, key.Comm, key.Pid, key.Tid, key.Flags, cnt)
 	}
 	return iod
 }
@@ -165,7 +130,7 @@ func (iod iorData) serializeToFile() error {
 	return os.Rename(tmpFilename, filename)
 }
 
-func (iod iorData) loadFromFile(filename string) error {
+func (iod *iorData) loadFromFile(filename string) error {
 	file, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -186,13 +151,42 @@ func (iod iorData) loadFromFile(filename string) error {
 func (iod iorData) serialize() ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
-	err := enc.Encode(iod.paths)
+	err := enc.Encode(iod.records)
 	return buf.Bytes(), err
 }
 
 func (iod *iorData) deserialize(buf *bytes.Buffer) error {
-	dec := gob.NewDecoder(buf)
-	return dec.Decode(&iod.paths)
+	raw := append([]byte(nil), buf.Bytes()...)
+	dec := gob.NewDecoder(bytes.NewReader(raw))
+	var records map[recordKey]Counter
+	if err := dec.Decode(&records); err == nil && len(records) > 0 {
+		iod.records = records
+		return nil
+	}
+
+	var legacy pathMap
+	if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&legacy); err != nil {
+		return err
+	}
+
+	iod.records = make(map[recordKey]Counter)
+	for path, traceIDMap := range legacy {
+		for traceID, commMap := range traceIDMap {
+			for comm, pidMap := range commMap {
+				for pid, tidMap := range pidMap {
+					for tid, flagsMap := range tidMap {
+						for f, cnt := range flagsMap {
+							iod.add(path, traceID, comm, pid, tid, f, cnt)
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(iod.records) == 0 && records != nil {
+		iod.records = records
+	}
+	return nil
 }
 
 // IterRecord is a single record returned by the iterator.
@@ -229,28 +223,18 @@ func (ir IterRecord) StringByName(name string) (string, error) {
 
 func (iod iorData) iter() iter.Seq[IterRecord] {
 	return func(yield func(IterRecord) bool) {
-		for path, traceIdMap := range iod.paths {
-			for traceId, commMap := range traceIdMap {
-				for comm, pidMap := range commMap {
-					for pid, tidMap := range pidMap {
-						for tid, flagsMap := range tidMap {
-							for flags, cnt := range flagsMap {
-								record := IterRecord{
-									Path:    path,
-									TraceID: traceId,
-									Comm:    comm,
-									Pid:     pid,
-									Tid:     tid,
-									Flags:   flags,
-									Cnt:     cnt,
-								}
-								if !yield(record) {
-									return
-								}
-							}
-						}
-					}
-				}
+		for key, cnt := range iod.records {
+			record := IterRecord{
+				Path:    key.Path,
+				TraceID: key.TraceID,
+				Comm:    key.Comm,
+				Pid:     key.Pid,
+				Tid:     key.Tid,
+				Flags:   key.Flags,
+				Cnt:     cnt,
+			}
+			if !yield(record) {
+				return
 			}
 		}
 	}
