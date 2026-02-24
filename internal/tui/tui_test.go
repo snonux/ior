@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"ior/internal/statsengine"
 	"strings"
 	"testing"
 	"time"
@@ -162,5 +163,29 @@ func TestQuitInvokesTraceStop(t *testing.T) {
 	case <-done:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatalf("expected stopTrace to be invoked on quit")
+	}
+}
+
+type fakeDashboardSource struct {
+	snap *statsengine.Snapshot
+}
+
+func (f fakeDashboardSource) Snapshot() *statsengine.Snapshot {
+	return f.snap
+}
+
+func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
+	orig := getDashboardSnapshotSource()
+	defer SetDashboardSnapshotSource(orig)
+
+	SetDashboardSnapshotSource(nil)
+	d := newDashboardModel(nil)
+
+	want := &statsengine.Snapshot{TotalSyscalls: 77}
+	SetDashboardSnapshotSource(fakeDashboardSource{snap: want})
+
+	d.refresh()
+	if d.latest != want {
+		t.Fatalf("expected dashboard refresh to bind and use latest global source")
 	}
 }

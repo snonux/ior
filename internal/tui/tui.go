@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"ior/internal/flags"
+	"ior/internal/statsengine"
 	"ior/internal/tui/pidpicker"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -25,6 +28,30 @@ const (
 // TraceStarter starts tracing and returns when startup succeeds or fails.
 // Long-lived tracing work should continue in background goroutines.
 type TraceStarter func(context.Context) error
+
+type snapshotSource interface {
+	Snapshot() *statsengine.Snapshot
+}
+
+type dashboardTickMsg struct{}
+
+var dashboardSourceState struct {
+	mu     sync.RWMutex
+	source snapshotSource
+}
+
+// SetDashboardSnapshotSource sets the snapshot source used by dashboard mode.
+func SetDashboardSnapshotSource(source snapshotSource) {
+	dashboardSourceState.mu.Lock()
+	dashboardSourceState.source = source
+	dashboardSourceState.mu.Unlock()
+}
+
+func getDashboardSnapshotSource() snapshotSource {
+	dashboardSourceState.mu.RLock()
+	defer dashboardSourceState.mu.RUnlock()
+	return dashboardSourceState.source
+}
 
 // Run starts the TUI program in alternate screen mode.
 func Run() error {
@@ -70,7 +97,7 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 	model := Model{
 		screen:     ScreenPIDPicker,
 		pidPicker:  pidpicker.New(),
-		dashboard:  newDashboardModel(),
+		dashboard:  newDashboardModel(getDashboardSnapshotSource()),
 		keys:       Keys,
 		spin:       spin,
 		startTrace: startTrace,
@@ -111,11 +138,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePidSelected(msg)
 	case TracingStartedMsg:
 		m.attaching = false
-		return m, nil
+		return m, dashboardTickCmd()
 	case TracingErrorMsg:
 		m.attaching = false
 		m.lastErr = msg.Err
 		return m, nil
+	case dashboardTickMsg:
+		m.dashboard.refresh()
+		return m, dashboardTickCmd()
 	}
 
 	if m.attaching {
@@ -216,10 +246,15 @@ func (m Model) View() string {
 
 type dashboardModel struct {
 	selectedPID int
+	source      snapshotSource
+	latest      *statsengine.Snapshot
 }
 
-func newDashboardModel() dashboardModel {
-	return dashboardModel{selectedPID: -1}
+func newDashboardModel(source snapshotSource) dashboardModel {
+	return dashboardModel{
+		selectedPID: -1,
+		source:      source,
+	}
 }
 
 func (d dashboardModel) Init() tea.Cmd {
@@ -231,8 +266,27 @@ func (d dashboardModel) Update(tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (d dashboardModel) View() string {
+	if d.latest != nil {
+		return PanelStyle.Render(
+			fmt.Sprintf("Dashboard (%d syscalls, %.1f/s)", d.latest.TotalSyscalls, d.latest.SyscallRatePerSec),
+		)
+	}
 	if d.selectedPID > 0 {
 		return PanelStyle.Render(fmt.Sprintf("Dashboard (PID %d)", d.selectedPID))
 	}
 	return PanelStyle.Render("Dashboard (All PIDs)")
+}
+
+func (d *dashboardModel) refresh() {
+	if source := getDashboardSnapshotSource(); source != nil {
+		d.source = source
+	}
+	if d.source == nil {
+		return
+	}
+	d.latest = d.source.Snapshot()
+}
+
+func dashboardTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return dashboardTickMsg{} })
 }
