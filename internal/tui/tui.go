@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"ior/internal/flags"
 	"ior/internal/statsengine"
+	dashboardui "ior/internal/tui/dashboard"
 	tuiexport "ior/internal/tui/export"
 	"ior/internal/tui/pidpicker"
 	"os"
@@ -37,8 +38,6 @@ type TraceStarter func(context.Context) error
 type snapshotSource interface {
 	Snapshot() *statsengine.Snapshot
 }
-
-type dashboardTickMsg struct{}
 
 var dashboardSourceState struct {
 	mu     sync.RWMutex
@@ -75,7 +74,7 @@ func RunWithTraceStarter(starter TraceStarter) error {
 type Model struct {
 	screen    Screen
 	pidPicker pidpicker.Model
-	dashboard dashboardModel
+	dashboard dashboardui.Model
 	exporter  tuiexport.Model
 
 	keys KeyMap
@@ -104,7 +103,7 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 	model := Model{
 		screen:     ScreenPIDPicker,
 		pidPicker:  pidpicker.New(),
-		dashboard:  newDashboardModel(getDashboardSnapshotSource()),
+		dashboard:  dashboardui.NewModel(lateBoundDashboardSource{}),
 		exporter:   tuiexport.NewModel(),
 		keys:       Keys,
 		spin:       spin,
@@ -113,7 +112,6 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 
 	if initialPID > 0 {
 		flags.SetPidFilter(initialPID)
-		model.dashboard.selectedPID = initialPID
 		model.screen = ScreenDashboard
 		model.attaching = true
 	}
@@ -158,7 +156,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case tuiexport.RequestMsg:
-		return m, runExportCmd(msg.Option, m.dashboard.latest)
+		return m, runExportCmd(msg.Option, m.dashboard.LatestSnapshot())
 	case tuiexport.CompletedMsg:
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
@@ -171,14 +169,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePidSelected(msg)
 	case TracingStartedMsg:
 		m.attaching = false
-		return m, dashboardTickCmd()
+		return m, m.dashboard.Init()
 	case TracingErrorMsg:
 		m.attaching = false
 		m.lastErr = msg.Err
 		return m, nil
-	case dashboardTickMsg:
-		m.dashboard.refresh()
-		return m, dashboardTickCmd()
 	}
 
 	if m.attaching {
@@ -203,7 +198,7 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case ScreenDashboard:
 		next, cmd := m.dashboard.Update(msg)
-		m.dashboard = next.(dashboardModel)
+		m.dashboard = next.(dashboardui.Model)
 		return m, cmd
 	default:
 		return m, nil
@@ -214,7 +209,6 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	m.stopTrace()
 	flags.SetPidFilter(pid)
-	m.dashboard.selectedPID = pid
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -296,53 +290,6 @@ func (m Model) View() string {
 	}
 }
 
-type dashboardModel struct {
-	selectedPID int
-	source      snapshotSource
-	latest      *statsengine.Snapshot
-}
-
-func newDashboardModel(source snapshotSource) dashboardModel {
-	return dashboardModel{
-		selectedPID: -1,
-		source:      source,
-	}
-}
-
-func (d dashboardModel) Init() tea.Cmd {
-	return nil
-}
-
-func (d dashboardModel) Update(tea.Msg) (tea.Model, tea.Cmd) {
-	return d, nil
-}
-
-func (d dashboardModel) View() string {
-	if d.latest != nil {
-		return PanelStyle.Render(
-			fmt.Sprintf("Dashboard (%d syscalls, %.1f/s)", d.latest.TotalSyscalls, d.latest.SyscallRatePerSec),
-		)
-	}
-	if d.selectedPID > 0 {
-		return PanelStyle.Render(fmt.Sprintf("Dashboard (PID %d)", d.selectedPID))
-	}
-	return PanelStyle.Render("Dashboard (All PIDs)")
-}
-
-func (d *dashboardModel) refresh() {
-	if source := getDashboardSnapshotSource(); source != nil {
-		d.source = source
-	}
-	if d.source == nil {
-		return
-	}
-	d.latest = d.source.Snapshot()
-}
-
-func dashboardTickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return dashboardTickMsg{} })
-}
-
 func runExportCmd(option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
 	return func() tea.Msg {
 		switch option {
@@ -362,6 +309,16 @@ func runExportCmd(option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
 			return tuiexport.FailedMsg{Err: errors.New("unknown export option")}
 		}
 	}
+}
+
+type lateBoundDashboardSource struct{}
+
+func (lateBoundDashboardSource) Snapshot() *statsengine.Snapshot {
+	source := getDashboardSnapshotSource()
+	if source == nil {
+		return nil
+	}
+	return source.Snapshot()
 }
 
 func exportSnapshotCSV(snap *statsengine.Snapshot) (string, error) {

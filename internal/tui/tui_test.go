@@ -62,9 +62,7 @@ func TestPidSelectedAllSetsNoFilter(t *testing.T) {
 	if got := flags.Get().PidFilter; got != -1 {
 		t.Fatalf("expected pid filter -1 for all pids, got %d", got)
 	}
-	if updated.dashboard.selectedPID != -1 {
-		t.Fatalf("expected dashboard selected pid -1, got %d", updated.dashboard.selectedPID)
-	}
+	_ = updated
 }
 
 func TestTracingErrorMessageClearsAttachingState(t *testing.T) {
@@ -182,14 +180,14 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	defer SetDashboardSnapshotSource(orig)
 
 	SetDashboardSnapshotSource(nil)
-	d := newDashboardModel(nil)
+	source := lateBoundDashboardSource{}
 
 	want := &statsengine.Snapshot{TotalSyscalls: 77}
 	SetDashboardSnapshotSource(fakeDashboardSource{snap: want})
 
-	d.refresh()
-	if d.latest != want {
-		t.Fatalf("expected dashboard refresh to bind and use latest global source")
+	got := source.Snapshot()
+	if got != want {
+		t.Fatalf("expected late-bound source to use latest global source")
 	}
 }
 
@@ -313,5 +311,32 @@ func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
 	updated = next.(Model)
 	if updated.exporter.Visible() {
 		t.Fatalf("expected esc to close export modal")
+	}
+}
+
+func TestDashboardTabKeysChangeActiveView(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	out := m.View()
+	if !strings.Contains(out, "Overview: waiting for stats") {
+		t.Fatalf("expected overview waiting view by default")
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	updated := next.(Model)
+	out = updated.View()
+	if !strings.Contains(out, "Syscalls: waiting for stats") {
+		t.Fatalf("expected syscalls waiting view after pressing 2")
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = next.(Model)
+	out = updated.View()
+	if !strings.Contains(out, "Files: waiting for stats") {
+		t.Fatalf("expected files waiting view after tab")
 	}
 }

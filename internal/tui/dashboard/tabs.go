@@ -1,7 +1,7 @@
 package dashboard
 
 import (
-	"ior/internal/tui"
+	common "ior/internal/tui/common"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -80,9 +80,9 @@ func renderTabBar(active Tab, width int) string {
 	for _, tab := range allTabs {
 		label := tab.String()
 		if tab == active {
-			parts = append(parts, tui.TabActiveStyle.Render(label))
+			parts = append(parts, common.TabActiveStyle.Render(label))
 		} else {
-			parts = append(parts, tui.TabInactiveStyle.Render(label))
+			parts = append(parts, common.TabInactiveStyle.Render(label))
 		}
 	}
 
@@ -93,11 +93,11 @@ func renderTabBar(active Tab, width int) string {
 	return lipgloss.NewStyle().Width(width).Render(bar)
 }
 
-func renderHelpBar(keys tui.KeyMap) string {
+func renderHelpBar(keys common.KeyMap) string {
 	parts := make([]string, 0, len(keys.DashboardShortHelp()))
 	for _, binding := range keys.DashboardShortHelp() {
 		help := binding.Help()
 		parts = append(parts, help.Key+" "+help.Desc)
 	}
-	return tui.HelpBarStyle.Render(strings.Join(parts, " • "))
+	return common.HelpBarStyle.Render(strings.Join(parts, " • "))
 }

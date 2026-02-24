@@ -57,28 +57,35 @@ func (m libbpfTracepointModule) getProgram(progName string) (tracepointProgram, 
 }
 
 func attachTracepoints(bpfModule *bpf.Module) error {
-	return attachTracepointsWith(libbpfTracepointModule{module: bpfModule}, flags.Get().ShouldIAttachTracepoint, tracepoints.List)
+	return attachTracepointsWith(libbpfTracepointModule{module: bpfModule}, flags.Get().ShouldIAttachTracepoint, tracepoints.List, true)
 }
 
-func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bool, tracepointNames []string) error {
+func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bool, tracepointNames []string, verbose bool) error {
+	logln := func(...any) {}
+	logf := func(string, ...any) {}
+	if verbose {
+		logln = func(args ...any) { _, _ = fmt.Println(args...) }
+		logf = func(format string, args ...any) { _, _ = fmt.Printf(format, args...) }
+	}
+
 	for _, name := range tracepointNames {
 		if !shouldAttach(name) {
 			continue
 		}
-		fmt.Println("Attaching tracepoint", name)
+		logln("Attaching tracepoint", name)
 
 		prog, err := module.getProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {
 			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)
 		}
-		fmt.Println("Attached prog handle_", name)
+		logln("Attached prog handle_", name)
 
 		if err = prog.attachTracepoint("syscalls", name); err != nil {
 			// OK, older Kernel versions may not have this tracepoint!
-			fmt.Printf("Failed to attach to %s tracepoint: %v, kernel version may be too old, skipping", name, err)
+			logf("Failed to attach to %s tracepoint: %v, kernel version may be too old, skipping", name, err)
 			continue
 		}
-		fmt.Println("Attached tracepoint ", name)
+		logln("Attached tracepoint ", name)
 	}
 
 	return nil
@@ -128,6 +135,10 @@ func tuiTraceStarterFromRunTrace(
 	startTrace func(context.Context, chan<- struct{}, func(*eventLoop)) error,
 ) tui.TraceStarter {
 	return func(ctx context.Context) error {
+		bpf.SetLoggerCbs(bpf.Callbacks{
+			Log: func(int, string) {},
+		})
+
 		engine := statsengine.NewEngine(64)
 		tui.SetDashboardSnapshotSource(engine)
 
@@ -160,6 +171,12 @@ func runTrace() error {
 }
 
 func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, configure func(*eventLoop)) error {
+	verbose := started == nil
+	logln := func(...any) {}
+	if verbose {
+		logln = func(args ...any) { _, _ = fmt.Println(args...) }
+	}
+
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
 		return err
@@ -178,7 +195,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 		return err
 	}
 
-	if err := attachTracepoints(bpfModule); err != nil {
+	if err := attachTracepointsWith(libbpfTracepointModule{module: bpfModule}, flags.Get().ShouldIAttachTracepoint, tracepoints.List, verbose); err != nil {
 		return err
 	}
 
@@ -211,7 +228,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 		configure(el)
 	}
 	duration := time.Duration(flags.Get().Duration) * time.Second
-	fmt.Println("Probing for", duration)
+	logln("Probing for", duration)
 	ctx, cancel := context.WithTimeout(parentCtx, duration)
 	defer cancel()
 
@@ -222,7 +239,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	go func() {
 		select {
 		case <-signalCh:
-			fmt.Println("Received signal, shutting down...")
+			logln("Received signal, shutting down...")
 			cancel()
 		case <-ctx.Done():
 			return
@@ -231,9 +248,11 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 
 	go func() {
 		<-ctx.Done()
-		fmt.Println(el.stats())
+		if verbose {
+			fmt.Println(el.stats())
+		}
 		if flags.Get().PprofEnable {
-			fmt.Println("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
+			logln("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
 			pprof.StopCPUProfile()
 			pprof.WriteHeapProfile(memProfile)
 			close(pprofDone)
@@ -244,7 +263,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	el.run(ctx, ch)
 	totalDuration := time.Since(startTime)
 	<-pprofDone
-	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
+	logln("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
 	return nil
 }
 
