@@ -23,12 +23,17 @@ func NewNativeSVG(fields []string, countField string) NativeSVG {
 	}
 }
 
-func (n NativeSVG) WriteSVGFromFile(iorDataFile string) (string, error) {
-	outFile := fmt.Sprintf("%s.%s-by-%s.svg",
+func (n NativeSVG) WriteSVGFromFile(iorDataFile string) (outFile string, err error) {
+	outFile = fmt.Sprintf("%s.%s-by-%s.svg",
 		strings.TrimSuffix(iorDataFile, ".ior.zst"),
 		strings.Join(n.fields, ":"),
 		n.countField,
 	)
+	defer func() {
+		if err != nil {
+			_ = os.Remove(outFile)
+		}
+	}()
 
 	iod, err := newIorDataFromFile(iorDataFile)
 	if err != nil {
