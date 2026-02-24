@@ -106,6 +106,43 @@ func TestSyscallAccumulatorZeroElapsedRate(t *testing.T) {
 	}
 }
 
+func TestSyscallAccumulatorPercentilesRecomputeAfterThreshold(t *testing.T) {
+	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewSource(11)))
+	traceID := types.SYS_ENTER_READ
+
+	for i := 1; i <= 1000; i++ {
+		acc.Add(newPair(traceID, uint64(i), 0, 0))
+	}
+	_ = acc.Snapshot(1 * time.Second)
+
+	stats := acc.byID[traceID]
+	if stats == nil {
+		t.Fatalf("expected syscall stats")
+	}
+	initialVersion := stats.lastPercentileVersion
+	initialP50 := stats.cachedP50
+	if initialVersion == 0 {
+		t.Fatalf("expected initial percentile computation")
+	}
+
+	acc.Add(newPair(traceID, 50000, 0, 0))
+	_ = acc.Snapshot(1 * time.Second)
+	if stats.lastPercentileVersion != initialVersion {
+		t.Fatalf("expected percentile recompute to be deferred; got %d want %d", stats.lastPercentileVersion, initialVersion)
+	}
+	if stats.cachedP50 != initialP50 {
+		t.Fatalf("expected cached p50 to remain unchanged before threshold")
+	}
+
+	for i := 0; i < syscallPercentileRecomputeStepDefault; i++ {
+		acc.Add(newPair(traceID, uint64(60000+i), 0, 0))
+	}
+	_ = acc.Snapshot(1 * time.Second)
+	if stats.lastPercentileVersion != stats.sampleVersion {
+		t.Fatalf("expected percentile recompute after threshold, last=%d sample=%d", stats.lastPercentileVersion, stats.sampleVersion)
+	}
+}
+
 func newPair(traceID types.TraceId, duration uint64, bytes uint64, ret int64) *event.Pair {
 	return &event.Pair{
 		EnterEv:  &types.RetEvent{TraceId: traceID},
