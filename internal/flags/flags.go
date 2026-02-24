@@ -21,8 +21,6 @@ var (
 	pidFilter atomic.Int64
 )
 
-const flamegraphToolDefault = ""
-
 var (
 	validCollapsedFields = []string{
 		"path",
@@ -60,13 +58,10 @@ type Flags struct {
 	FlamegraphName   string
 	TUIExportEnable  bool
 
-	// To convert ior data into collapsed format
+	// To convert ior data into native SVG format
 	IorDataFile     string
 	CollapsedFields []string
 	CountField      string
-
-	// To generate the Flamegraph SVGs
-	FlamegraphTool string
 }
 
 func Get() Flags {
@@ -110,21 +105,13 @@ func parse() {
 	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
 	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
 
-	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into collapsed format")
+	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into native SVG flamegraph")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
 	flag.StringVar(&singleton.CountField, "count", "count",
-		fmt.Sprintf("Count field to collaps, valid are: %v", validCollapsedCounts))
-
-	// https://github.com/brendangregg/FlameGraph
-	flag.StringVar(&singleton.FlamegraphTool, "flamegraphTool",
-		"", "Path to the flamegraph tool (e.g. flamegraph.pl or inferno-flamegraph)")
+		fmt.Sprintf("Count field to collapse, valid are: %v", validCollapsedCounts))
 	flag.Parse()
 	pidFilter.Store(int64(singleton.PidFilter))
-
-	if singleton.FlamegraphTool == "" {
-		singleton.FlamegraphTool = flamegraphToolDefault
-	}
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
 	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
