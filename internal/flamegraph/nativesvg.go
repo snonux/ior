@@ -23,7 +23,7 @@ func NewNativeSVG(fields []string, countField string) NativeSVG {
 	}
 }
 
-func (n NativeSVG) WriteSVGFromFile(iorDataFile string) error {
+func (n NativeSVG) WriteSVGFromFile(iorDataFile string) (string, error) {
 	outFile := fmt.Sprintf("%s.%s-by-%s.svg",
 		strings.TrimSuffix(iorDataFile, ".ior.zst"),
 		strings.Join(n.fields, ":"),
@@ -32,16 +32,19 @@ func (n NativeSVG) WriteSVGFromFile(iorDataFile string) error {
 
 	iod, err := newIorDataFromFile(iorDataFile)
 	if err != nil {
-		return fmt.Errorf("read ior data: %w", err)
+		return outFile, fmt.Errorf("read ior data: %w", err)
 	}
 
 	fd, err := os.Create(outFile)
 	if err != nil {
-		return fmt.Errorf("create output %s: %w", outFile, err)
+		return outFile, fmt.Errorf("create output %s: %w", outFile, err)
 	}
 	defer fd.Close()
 
-	return n.WriteSVGFromIter(iod.iter(), fd)
+	if err := n.WriteSVGFromIter(iod.iter(), fd); err != nil {
+		return outFile, err
+	}
+	return outFile, nil
 }
 
 func (n NativeSVG) WriteSVGFromIter(records iter.Seq[IterRecord], w io.Writer) error {
