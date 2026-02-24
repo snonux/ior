@@ -3,7 +3,6 @@ package dashboard
 import (
 	"fmt"
 	"ior/internal/statsengine"
-	"sort"
 	"strconv"
 	"time"
 
@@ -51,16 +50,8 @@ func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset 
 }
 
 func syscallRows(syscalls []statsengine.SyscallSnapshot) []table.Row {
-	ordered := append([]statsengine.SyscallSnapshot(nil), syscalls...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].Count == ordered[j].Count {
-			return ordered[i].Name < ordered[j].Name
-		}
-		return ordered[i].Count > ordered[j].Count
-	})
-
-	rows := make([]table.Row, 0, len(ordered))
-	for _, s := range ordered {
+	rows := make([]table.Row, 0, len(syscalls))
+	for _, s := range syscalls {
 		rows = append(rows, table.Row{
 			s.Name,
 			strconv.FormatUint(s.Count, 10),
