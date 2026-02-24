@@ -17,9 +17,14 @@ var (
 	singleton = Flags{
 		TUIExportEnable: true,
 	}
-	once      sync.Once
-	pidFilter atomic.Int64
+	once            sync.Once
+	pidFilter       atomic.Int64
+	tuiExportEnable atomic.Bool
 )
+
+func init() {
+	tuiExportEnable.Store(true)
+}
 
 var (
 	validCollapsedFields = []string{
@@ -67,6 +72,7 @@ type Flags struct {
 func Get() Flags {
 	out := singleton
 	out.PidFilter = int(pidFilter.Load())
+	out.TUIExportEnable = tuiExportEnable.Load()
 	return out
 }
 
@@ -77,7 +83,7 @@ func SetPidFilter(pid int) {
 
 // SetTUIExportEnable toggles TUI snapshot export file writing.
 func SetTUIExportEnable(enabled bool) {
-	singleton.TUIExportEnable = enabled
+	tuiExportEnable.Store(enabled)
 }
 
 func Parse() {
@@ -112,6 +118,7 @@ func parse() {
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCollapsedCounts))
 	flag.Parse()
 	pidFilter.Store(int64(singleton.PidFilter))
+	tuiExportEnable.Store(singleton.TUIExportEnable)
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
 	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
