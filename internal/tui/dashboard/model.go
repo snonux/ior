@@ -75,6 +75,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 	case messages.StatsTickMsg:
 		m.latest = msg.Snap
+		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
+		m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
+		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -86,7 +89,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.activeTab == TabSyscalls {
 		switch msg.String() {
 		case "down", "j":
-			m.syscallsOffset++
+			if m.syscallsOffset < m.maxSyscallsRows()-1 {
+				m.syscallsOffset++
+			}
 			return m, nil
 		case "up", "k":
 			if m.syscallsOffset > 0 {
@@ -98,7 +103,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.activeTab == TabProcesses {
 		switch msg.String() {
 		case "down", "j":
-			m.processesOffset++
+			if m.processesOffset < m.maxProcessesRows()-1 {
+				m.processesOffset++
+			}
 			return m, nil
 		case "up", "k":
 			if m.processesOffset > 0 {
@@ -110,7 +117,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.activeTab == TabFiles {
 		switch msg.String() {
 		case "down", "j":
-			m.filesOffset++
+			if m.filesOffset < m.maxFilesRows()-1 {
+				m.filesOffset++
+			}
 			return m, nil
 		case "up", "k":
 			if m.filesOffset > 0 {
@@ -137,8 +146,32 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activeTab = TabLatency
 	case key.Matches(msg, m.keys.Six):
 		m.activeTab = TabGaps
+	case key.Matches(msg, m.keys.Refresh):
+		snap := m.snapshot()
+		return m, func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 	}
 	return m, nil
+}
+
+func (m Model) maxSyscallsRows() int {
+	if m.latest == nil {
+		return 0
+	}
+	return m.latest.SyscallsCount()
+}
+
+func (m Model) maxFilesRows() int {
+	if m.latest == nil {
+		return 0
+	}
+	return m.latest.FilesCount()
+}
+
+func (m Model) maxProcessesRows() int {
+	if m.latest == nil {
+		return 0
+	}
+	return m.latest.ProcessesCount()
 }
 
 func (m Model) snapshot() *statsengine.Snapshot {
@@ -171,9 +204,6 @@ func tickCmd(d time.Duration) tea.Cmd {
 }
 
 func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscallsOffset, filesOffset, processesOffset int) string {
-	_ = width
-	_ = height
-
 	if snap == nil {
 		return common.PanelStyle.Render(tab.String() + ": waiting for stats...")
 	}

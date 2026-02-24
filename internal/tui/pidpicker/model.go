@@ -2,6 +2,7 @@ package pidpicker
 
 import (
 	"fmt"
+	common "ior/internal/tui/common"
 	"ior/internal/tui/messages"
 	"strings"
 
@@ -34,14 +35,11 @@ func (k KeyMap) PickerShortHelp() []key.Binding {
 }
 
 var (
-	screenStyle  = lipgloss.NewStyle()
-	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
-	helpBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("246")).
-			BorderTop(true).
-			BorderForeground(lipgloss.Color("238"))
-	highlightStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("222"))
-	errorStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
+	screenStyle    = common.ScreenStyle
+	headerStyle    = common.HeaderStyle
+	helpBarStyle   = common.HelpBarStyle
+	highlightStyle = common.HighlightStyle
+	errorStyle     = common.ErrorStyle
 )
 
 type processesLoadedMsg struct {

@@ -46,6 +46,8 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 func TestSyscallsTabScrollsWithJK(t *testing.T) {
 	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}, {Name: "write", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	model := next.(Model)
@@ -63,6 +65,8 @@ func TestSyscallsTabScrollsWithJK(t *testing.T) {
 func TestProcessesTabScrollsWithJK(t *testing.T) {
 	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{{PID: 1}, {PID: 2}}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	model := next.(Model)
@@ -80,6 +84,8 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 func TestFilesTabScrollsWithJK(t *testing.T) {
 	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{{Path: "/a"}, {Path: "/b"}}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	model := next.(Model)
@@ -91,6 +97,40 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 	model = next.(Model)
 	if model.filesOffset != 0 {
 		t.Fatalf("expected files offset 0 after k, got %d", model.filesOffset)
+	}
+}
+
+func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
+	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}, {Name: "write", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	for i := 0; i < 50; i++ {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = next.(Model)
+	}
+	if m.syscallsOffset != 1 {
+		t.Fatalf("expected bounded offset 1, got %d", m.syscallsOffset)
+	}
+}
+
+func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
+	snap := &statsengine.Snapshot{TotalSyscalls: 13}
+	engine := &fakeSnapshotSource{snap: snap}
+	m := NewModelWithConfig(engine, 250, common.DefaultKeyMap())
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_ = next
+	if cmd == nil {
+		t.Fatalf("expected refresh command")
+	}
+	msg := cmd()
+	stats, ok := msg.(messages.StatsTickMsg)
+	if !ok {
+		t.Fatalf("expected StatsTickMsg from refresh key command, got %T", msg)
+	}
+	if stats.Snap != snap {
+		t.Fatalf("expected refreshed snapshot from engine")
 	}
 }
 

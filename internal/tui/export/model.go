@@ -13,8 +13,7 @@ import (
 type Option int
 
 const (
-	OptionFlamegraph Option = iota
-	OptionCSV
+	OptionCSV Option = iota
 	OptionCancel
 )
 

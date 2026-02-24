@@ -6,6 +6,8 @@ import (
 	common "ior/internal/tui/common"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
@@ -19,7 +21,7 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	box2 := renderBytesBox(snap, boxWidth)
 	box3 := renderErrorBox(snap, boxWidth)
 
-	row := strings.Join([]string{box1, box2, box3}, "\n")
+	row := lipgloss.JoinHorizontal(lipgloss.Top, box1, box2, box3)
 	trends := fmt.Sprintf(
 		"Trends: latency %s  gap %s  throughput %s",
 		trendWithArrow(snap.LatencyTrend),
@@ -28,6 +30,7 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	)
 
 	latencySpark := "Latency: " + renderSparkline(snap.LatencySeriesNs(), sparklineWidth(width))
+	gapSpark := "Gap: " + renderSparkline(snap.GapSeriesNs(), sparklineWidth(width))
 	throughputSpark := "Throughput: " + renderSparkline(snap.ThroughputSeriesB(), sparklineWidth(width))
 	topSyscalls := "Top syscalls: " + summarizeTopSyscalls(snap)
 	topFiles := "Top files: " + summarizeTopFiles(snap)
@@ -40,6 +43,7 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 			row,
 			common.HighlightStyle.Render(trends),
 			common.PanelStyle.Render(latencySpark),
+			common.PanelStyle.Render(gapSpark),
 			common.PanelStyle.Render(throughputSpark),
 			common.PanelStyle.Render(topSyscalls),
 			common.PanelStyle.Render(topFiles),
@@ -52,11 +56,16 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 }
 
 func renderSyscallBox(snap *statsengine.Snapshot, width int) string {
+	generatedAt := "n/a"
+	if !snap.GeneratedAt.IsZero() {
+		generatedAt = snap.GeneratedAt.Format("15:04:05")
+	}
 	content := fmt.Sprintf(
-		"Elapsed: %s\nSyscalls: %d\nRate: %.1f/s",
+		"Elapsed: %s\nSyscalls: %d\nRate: %.1f/s\nSnapshot: %s",
 		formatElapsed(snap.Elapsed),
 		snap.TotalSyscalls,
 		snap.SyscallRatePerSec,
+		generatedAt,
 	)
 	return common.PanelStyle.Width(width).Render(content)
 }
@@ -77,10 +86,12 @@ func renderErrorBox(snap *statsengine.Snapshot, width int) string {
 		errPercent = float64(snap.TotalErrors) / float64(snap.TotalSyscalls) * 100
 	}
 	content := fmt.Sprintf(
-		"Errors: %d\nError rate: %.2f%%\nLatency mean: %.0fns",
+		"Errors: %d\nError rate: %.2f%%\nError/s: %.2f\nLatency mean: %.0fns\nGap mean: %.0fns",
 		snap.TotalErrors,
 		errPercent,
+		snap.ErrorRatePerSec,
 		snap.LatencyMeanNs,
+		snap.GapMeanNs,
 	)
 	return common.PanelStyle.Width(width).Render(content)
 }
