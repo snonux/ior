@@ -115,6 +115,35 @@ func TestProcessAccumulatorNilInputs(t *testing.T) {
 	}
 }
 
+func TestProcessAccumulatorCompactsHighCardinality(t *testing.T) {
+	acc := newProcessAccumulatorWithLimits(2, 4)
+
+	for i := 0; i < 5; i++ {
+		acc.Add(newProcessPair(10, "hot-a", 10, 1))
+	}
+	for i := 0; i < 4; i++ {
+		acc.Add(newProcessPair(20, "hot-b", 10, 1))
+	}
+	acc.Add(newProcessPair(1, "cold-1", 10, 1))
+	acc.Add(newProcessPair(2, "cold-2", 10, 1))
+	acc.Add(newProcessPair(3, "cold-3", 10, 1))
+
+	if got := len(acc.byPID); got != 2 {
+		t.Fatalf("expected compaction to keep topN processes, got %d entries", got)
+	}
+	if acc.byPID[10] == nil || acc.byPID[20] == nil {
+		t.Fatalf("expected hot pids to survive compaction")
+	}
+
+	snap := acc.Snapshot(time.Second)
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 rows after compaction, got %d", len(snap))
+	}
+	if snap[0].PID != 10 || snap[1].PID != 20 {
+		t.Fatalf("unexpected rank order after compaction: %+v", snap)
+	}
+}
+
 func newProcessPair(pid uint32, comm string, duration uint64, bytes uint64) *event.Pair {
 	return &event.Pair{
 		EnterEv:  &types.RetEvent{Pid: pid},

@@ -74,7 +74,7 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 		startedAt:        now(),
 		syscalls:         newSyscallAccumulator(),
 		files:            newFileRankerWithConfig(topN),
-		processes:        newProcessAccumulator(),
+		processes:        newProcessAccumulatorWithConfig(topN),
 		latencyHist:      newHistogram(),
 		gapHist:          newHistogram(),
 		latencySeries:    newRingTimeSeries(),
