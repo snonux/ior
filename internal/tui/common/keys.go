@@ -45,14 +45,25 @@ func DefaultKeyMap() KeyMap {
 
 // DashboardShortHelp returns compact bindings for dashboard help bars.
 func (k KeyMap) DashboardShortHelp() []key.Binding {
-	return []key.Binding{k.Tab, k.ShiftTab, k.Export, k.Help, k.Quit}
+	bindings := []key.Binding{k.Tab, k.ShiftTab}
+	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
+		bindings = append(bindings, k.Export)
+	}
+	bindings = append(bindings, k.Help, k.Quit)
+	return bindings
 }
 
 // DashboardFullHelp returns grouped bindings for dashboard overlays.
 func (k KeyMap) DashboardFullHelp() [][]key.Binding {
+	controls := []key.Binding{k.Tab, k.ShiftTab}
+	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
+		controls = append(controls, k.Export)
+	}
+	controls = append(controls, k.Refresh, k.Help, k.Quit)
+
 	return [][]key.Binding{
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},
-		{k.Tab, k.ShiftTab, k.Export, k.Refresh, k.Help, k.Quit},
+		controls,
 		{
 			key.NewBinding(key.WithKeys("left/right"), key.WithHelp("left/right", "tab")),
 			key.NewBinding(key.WithKeys("h/l"), key.WithHelp("h/l", "tab")),

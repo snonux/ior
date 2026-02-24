@@ -192,6 +192,9 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 }
 
 func TestExportKeyOpensModalOnDashboard(t *testing.T) {
+	flags.SetTUIExportEnable(true)
+	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
+
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
@@ -200,6 +203,21 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open on e key")
+	}
+}
+
+func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
+	flags.SetTUIExportEnable(false)
+	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated := next.(Model)
+	if updated.exporter.Visible() {
+		t.Fatalf("expected export modal to remain closed when export is disabled")
 	}
 }
 
@@ -292,6 +310,9 @@ func TestHelpOverlayUsesPickerBindingsOnPickerScreen(t *testing.T) {
 }
 
 func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
+	flags.SetTUIExportEnable(true)
+	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
+
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 
@@ -311,6 +332,22 @@ func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
 	updated = next.(Model)
 	if updated.exporter.Visible() {
 		t.Fatalf("expected esc to close export modal")
+	}
+}
+
+func TestHelpOverlayHidesExportBindingWhenExportDisabled(t *testing.T) {
+	flags.SetTUIExportEnable(false)
+	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.showHelp = true
+	m.width = 100
+	m.height = 30
+
+	out := m.View()
+	if strings.Contains(out, "e export") {
+		t.Fatalf("did not expect export shortcut in help overlay when export is disabled")
 	}
 }
 
