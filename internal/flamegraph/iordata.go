@@ -118,12 +118,11 @@ func (iod iorData) serializeToFile() error {
 	encoder := zstd.NewWriter(file)
 	defer encoder.Close()
 
-	bytes, err := iod.serialize()
-	if err != nil {
+	gobEncoder := gob.NewEncoder(encoder)
+	if err := gobEncoder.Encode(iod.records); err != nil {
 		return err
 	}
-
-	if _, err := encoder.Write(bytes); err != nil {
+	if err := encoder.Flush(); err != nil {
 		return err
 	}
 
