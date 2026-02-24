@@ -14,7 +14,9 @@ import (
 )
 
 var (
-	singleton Flags
+	singleton = Flags{
+		TUIExportEnable: true,
+	}
 	once      sync.Once
 	pidFilter atomic.Int64
 )
@@ -56,6 +58,7 @@ type Flags struct {
 	PlainMode        bool
 	FlamegraphEnable bool
 	FlamegraphName   string
+	TUIExportEnable  bool
 
 	// To convert ior data into collapsed format
 	IorDataFile     string
@@ -75,6 +78,11 @@ func Get() Flags {
 // SetPidFilter updates the active PID filter used for subsequent tracing runs.
 func SetPidFilter(pid int) {
 	pidFilter.Store(int64(pid))
+}
+
+// SetTUIExportEnable toggles TUI snapshot export file writing.
+func SetTUIExportEnable(enabled bool) {
+	singleton.TUIExportEnable = enabled
 }
 
 func Parse() {
@@ -100,6 +108,7 @@ func parse() {
 	flag.BoolVar(&singleton.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
+	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
 
 	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into collapsed format")
 	fields := flag.String("fields", "",

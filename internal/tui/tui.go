@@ -99,13 +99,17 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 	if startTrace == nil {
 		startTrace = defaultTraceStarter
 	}
+	keys := Keys
+	if !flags.Get().TUIExportEnable {
+		keys.Export = key.NewBinding()
+	}
 
 	model := Model{
 		screen:     ScreenPIDPicker,
 		pidPicker:  pidpicker.New(),
-		dashboard:  dashboardui.NewModel(lateBoundDashboardSource{}),
+		dashboard:  dashboardui.NewModelWithConfig(lateBoundDashboardSource{}, 1000, keys),
 		exporter:   tuiexport.NewModel(),
-		keys:       Keys,
+		keys:       keys,
 		spin:       spin,
 		startTrace: startTrace,
 	}
@@ -151,7 +155,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.exporter.Visible() && m.showHelp {
 			return m, nil
 		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() {
+		if flags.Get().TUIExportEnable && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() {
 			m.exporter = m.exporter.Open()
 			return m, nil
 		}
@@ -299,6 +303,9 @@ func (m Model) View() string {
 
 func runExportCmd(option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
 	return func() tea.Msg {
+		if !flags.Get().TUIExportEnable {
+			return tuiexport.FailedMsg{Err: errors.New("tui export is disabled by -tuiExport=false")}
+		}
 		switch option {
 		case tuiexport.OptionCSV:
 			path, err := exportSnapshotCSV(snap)
