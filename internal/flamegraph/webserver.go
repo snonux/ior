@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// ServeSVG starts a small HTTP server that serves a single flamegraph SVG.
+//
+// It prints a URL of the form http://HOSTNAME:PORT/abs/path/to.svg and blocks until
+// the user presses Ctrl+C or the process receives SIGTERM, at which point the server
+// is shut down gracefully.
 func ServeSVG(svgFile string) error {
 	absPath, err := filepath.Abs(svgFile)
 	if err != nil {

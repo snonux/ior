@@ -8,7 +8,16 @@ import (
 	"strings"
 )
 
-// Represents a pair of enter and exit events (e.g. entering the syscall + exiting it)
+// Pair represents a matched syscall enter/exit pair together with derived metadata.
+//
+// Timing semantics for Duration (durationNs) and DurationToPrev (durationToPrevNs),
+// mirroring the README:
+//   - Duration is the syscall runtime on the same thread: exit(current) - enter(current).
+//   - DurationToPrev is the inter-syscall gap on the same thread: enter(current) - exit(previous).
+//   - DurationToPrev is tracked per TID; the first observed Pair for a TID has DurationToPrev == 0.
+//   - The inter-syscall gap is attributed to the current Pair (the one whose enter closes the gap).
+//   - There is no separate "idle" pseudo-event bucket; aggregated views should use DurationToPrev
+//     when they want to emphasize inter-syscall time.
 type Pair struct {
 	EnterEv, ExitEv Event
 	File            file.File
