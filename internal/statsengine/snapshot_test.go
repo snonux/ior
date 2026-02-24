@@ -58,7 +58,7 @@ func TestNewSnapshotDefensivelyCopiesSlices(t *testing.T) {
 	}
 }
 
-func TestSnapshotAccessorsReturnCopies(t *testing.T) {
+func TestSnapshotAccessorsReturnReadOnlyViews(t *testing.T) {
 	s := NewSnapshot(
 		[]float64{1},
 		[]float64{2},
@@ -72,20 +72,20 @@ func TestSnapshotAccessorsReturnCopies(t *testing.T) {
 
 	lat := s.LatencySeriesNs()
 	lat[0] = 100
-	if got := s.LatencySeriesNs()[0]; got != 1 {
-		t.Fatalf("latency accessor leaked mutability: got %v", got)
+	if got := s.LatencySeriesNs()[0]; got != 100 {
+		t.Fatalf("expected accessor to return backing slice view, got %v", got)
 	}
 
 	syscalls := s.Syscalls()
 	syscalls[0].Name = "write"
-	if got := s.Syscalls()[0].Name; got != "read" {
-		t.Fatalf("syscalls accessor leaked mutability: got %q", got)
+	if got := s.Syscalls()[0].Name; got != "write" {
+		t.Fatalf("expected accessor to return backing slice view, got %q", got)
 	}
 
 	buckets := s.LatencyHistogram.Buckets()
 	buckets[0].Count = 99
-	if got := s.LatencyHistogram.Buckets()[0].Count; got != 1 {
-		t.Fatalf("bucket accessor leaked mutability: got %d", got)
+	if got := s.LatencyHistogram.Buckets()[0].Count; got != 99 {
+		t.Fatalf("expected accessor to return backing slice view, got %d", got)
 	}
 }
 

@@ -154,24 +154,28 @@ func (h HistogramSnapshot) Clone() HistogramSnapshot {
 	}
 }
 
-// LatencySeriesNs returns a defensive copy of latency sparkline samples.
+// LatencySeriesNs returns latency sparkline samples.
+// Callers must treat returned data as read-only.
 func (s Snapshot) LatencySeriesNs() []float64 {
-	return slices.Clone(s.latencySeriesNs)
+	return s.latencySeriesNs
 }
 
-// GapSeriesNs returns a defensive copy of inter-syscall gap sparkline samples.
+// GapSeriesNs returns inter-syscall gap sparkline samples.
+// Callers must treat returned data as read-only.
 func (s Snapshot) GapSeriesNs() []float64 {
-	return slices.Clone(s.gapSeriesNs)
+	return s.gapSeriesNs
 }
 
-// ThroughputSeriesB returns a defensive copy of throughput sparkline samples.
+// ThroughputSeriesB returns throughput sparkline samples.
+// Callers must treat returned data as read-only.
 func (s Snapshot) ThroughputSeriesB() []float64 {
-	return slices.Clone(s.throughputSeriesB)
+	return s.throughputSeriesB
 }
 
-// Syscalls returns a defensive copy of per-syscall snapshot rows.
+// Syscalls returns per-syscall snapshot rows.
+// Callers must treat returned data as read-only.
 func (s Snapshot) Syscalls() []SyscallSnapshot {
-	return slices.Clone(s.syscalls)
+	return s.syscalls
 }
 
 // SyscallsCount returns number of syscall rows without cloning backing slices.
@@ -179,9 +183,10 @@ func (s Snapshot) SyscallsCount() int {
 	return len(s.syscalls)
 }
 
-// Files returns a defensive copy of per-file snapshot rows.
+// Files returns per-file snapshot rows.
+// Callers must treat returned data as read-only.
 func (s Snapshot) Files() []FileSnapshot {
-	return slices.Clone(s.files)
+	return s.files
 }
 
 // FilesCount returns number of file rows without cloning backing slices.
@@ -189,9 +194,10 @@ func (s Snapshot) FilesCount() int {
 	return len(s.files)
 }
 
-// Processes returns a defensive copy of per-process snapshot rows.
+// Processes returns per-process snapshot rows.
+// Callers must treat returned data as read-only.
 func (s Snapshot) Processes() []ProcessSnapshot {
-	return slices.Clone(s.processes)
+	return s.processes
 }
 
 // ProcessesCount returns number of process rows without cloning backing slices.
@@ -199,7 +205,8 @@ func (s Snapshot) ProcessesCount() int {
 	return len(s.processes)
 }
 
-// Buckets returns a defensive copy of histogram buckets.
+// Buckets returns histogram buckets.
+// Callers must treat returned data as read-only.
 func (h HistogramSnapshot) Buckets() []HistogramBucketSnapshot {
-	return slices.Clone(h.buckets)
+	return h.buckets
 }
