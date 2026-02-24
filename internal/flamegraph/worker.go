@@ -4,7 +4,6 @@ import (
 	"context"
 	"ior/internal/event"
 	"sync"
-	"time"
 )
 
 type worker struct {
@@ -21,17 +20,14 @@ func (w worker) run(ctx context.Context, wg *sync.WaitGroup, ch <-chan *event.Pa
 
 	for {
 		select {
-		case ev := <-ch:
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
 			w.iod.addEventPair(ev)
 			ev.Recycle()
-
-		default:
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				time.Sleep(time.Millisecond * 10)
-			}
+		case <-ctx.Done():
+			return
 		}
 	}
 }
