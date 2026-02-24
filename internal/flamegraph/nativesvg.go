@@ -1,0 +1,74 @@
+package flamegraph
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"iter"
+)
+
+type NativeSVG struct {
+	fields     []string
+	countField string
+	config     SVGConfig
+}
+
+func NewNativeSVG(fields []string, countField string) NativeSVG {
+	return NativeSVG{
+		fields:     fields,
+		countField: countField,
+		config:     defaultSVGConfig(),
+	}
+}
+
+func (n NativeSVG) WriteSVGFromFile(iorDataFile string) error {
+	outFile := fmt.Sprintf("%s.%s-by-%s.svg",
+		strings.TrimSuffix(iorDataFile, ".ior.zst"),
+		strings.Join(n.fields, ":"),
+		n.countField,
+	)
+
+	iod, err := newIorDataFromFile(iorDataFile)
+	if err != nil {
+		return fmt.Errorf("read ior data: %w", err)
+	}
+
+	fd, err := os.Create(outFile)
+	if err != nil {
+		return fmt.Errorf("create output %s: %w", outFile, err)
+	}
+	defer fd.Close()
+
+	return n.WriteSVGFromIter(iod.iter(), fd)
+}
+
+func (n NativeSVG) WriteSVGFromIter(records iter.Seq[IterRecord], w io.Writer) error {
+	tr := newTrie()
+	for record := range records {
+		frames, err := n.recordFrames(record)
+		if err != nil {
+			return err
+		}
+		tr.add(frames, record.Cnt.ValueByName(n.countField))
+	}
+	tr.computeTotals()
+	return WriteSVG(w, tr, n.config)
+}
+
+func (n NativeSVG) recordFrames(record IterRecord) ([]string, error) {
+	var frames []string
+	for _, fieldName := range n.fields {
+		value, err := record.StringByName(fieldName)
+		if err != nil {
+			return nil, fmt.Errorf("field %s: %w", fieldName, err)
+		}
+		for _, part := range strings.Split(value, ";") {
+			if part != "" {
+				frames = append(frames, part)
+			}
+		}
+	}
+	return frames, nil
+}

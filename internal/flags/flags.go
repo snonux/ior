@@ -21,7 +21,7 @@ var (
 	pidFilter atomic.Int64
 )
 
-const flamegraphToolDefault = "$HOME/git/FlameGraph/flamegraph.pl"
+const flamegraphToolDefault = ""
 
 var (
 	validCollapsedFields = []string{

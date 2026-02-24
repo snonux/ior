@@ -99,18 +99,25 @@ func Run() error {
 
 	if iorFile != "" {
 		noTraceRun = true
-		collapsed := flamegraph.NewCollapsed(iorFile, cfg.CollapsedFields, cfg.CountField)
-		collapsedFile, err := collapsed.Write(iorFile)
-		if err != nil {
-			return err
-		}
+		if cfg.FlamegraphTool != "" {
+			collapsed := flamegraph.NewCollapsed(iorFile, cfg.CollapsedFields, cfg.CountField)
+			collapsedFile, err := collapsed.Write(iorFile)
+			if err != nil {
+				return err
+			}
 
-		tool, err := flamegraph.NewTool(collapsedFile)
-		if err != nil {
-			return err
-		}
-		if err := tool.WriteSVG(); err != nil {
-			return err
+			tool, err := flamegraph.NewTool(collapsedFile)
+			if err != nil {
+				return err
+			}
+			if err := tool.WriteSVG(); err != nil {
+				return err
+			}
+		} else {
+			native := flamegraph.NewNativeSVG(cfg.CollapsedFields, cfg.CountField)
+			if err := native.WriteSVGFromFile(iorFile); err != nil {
+				return err
+			}
 		}
 	}
 
