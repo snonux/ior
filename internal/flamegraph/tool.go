@@ -69,6 +69,10 @@ func (t Tool) WriteSVG() error {
 	return nil
 }
 
+func (t Tool) OutFile() string {
+	return t.outFile
+}
+
 func decompress(compressedFile string) (string, error) {
 	decompressedFile := strings.TrimSuffix(compressedFile, ".zst")
 

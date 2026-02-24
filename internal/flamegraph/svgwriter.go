@@ -68,7 +68,7 @@ func writeSVGHeader(bw *bufio.Writer, cfg SVGConfig, height int) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(bw, `<g class="controls"><text x="10" y="42" onclick="fgSearch()">Search</text><text x="80" y="42" onclick="fgResetSearch()">Reset Search</text><text x="190" y="42" onclick="fgResetZoom()">Reset Zoom</text><text id="fg-info" x="320" y="42"></text></g>`+"\n")
+	_, err = fmt.Fprintf(bw, `<g class="controls"><text x="10" y="42" onclick="fgSearch()">Search</text><text x="80" y="42" onclick="fgResetSearch()">Reset Search</text><text x="190" y="42" onclick="fgUndoZoom()">Undo Zoom</text><text x="280" y="42" onclick="fgResetZoom()">Reset Zoom</text><text id="fg-info" x="390" y="42"></text></g>`+"\n")
 	return err
 }
 
@@ -113,11 +113,14 @@ func writeFrame(bw *bufio.Writer, name, title, fill string, x, y, w, h float64, 
 		svgEscape(title), x, y, w, h, fill); err != nil {
 		return err
 	}
-	if w > float64(fontSize*2) {
-		_, err = fmt.Fprintf(bw, `<text x="%.3f" y="%.3f">%s</text>`+"\n", x+3, y+float64(fontSize), svgEscape(name))
-		if err != nil {
-			return err
-		}
+	labelStyle := ""
+	if w <= float64(fontSize*2) {
+		labelStyle = ` style="display:none"`
+	}
+	_, err = fmt.Fprintf(bw, `<text x="%.3f" y="%.3f"%s>%s</text>`+"\n",
+		x+3, y+float64(fontSize), labelStyle, svgEscape(name))
+	if err != nil {
+		return err
 	}
 	_, err = fmt.Fprintln(bw, "</g>")
 	return err
@@ -139,6 +142,7 @@ func flamegraphCSS(cfg SVGConfig) string {
 .controls text { font-size: %dpx; font-family: monospace; cursor: pointer; fill: #444; }
 .frame text { font-size: %dpx; font-family: monospace; pointer-events: none; fill: #111; }
 .frame rect { stroke: rgba(0,0,0,0.18); stroke-width: 0.5; }
+.title, .controls text, .frame text { user-select: none; -webkit-user-select: none; }
 `, cfg.FontSize+2, cfg.FontSize, cfg.FontSize-1)
 }
 
