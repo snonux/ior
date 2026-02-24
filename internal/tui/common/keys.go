@@ -65,10 +65,10 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},
 		controls,
 		{
-			key.NewBinding(key.WithKeys("left/right"), key.WithHelp("left/right", "tab")),
-			key.NewBinding(key.WithKeys("h/l"), key.WithHelp("h/l", "tab")),
-			key.NewBinding(key.WithKeys("j/k"), key.WithHelp("j/k", "scroll")),
-			key.NewBinding(key.WithKeys("up/down"), key.WithHelp("up/down", "scroll")),
+			helpTextBinding("left/right", "tab"),
+			helpTextBinding("h/l", "tab"),
+			helpTextBinding("j/k", "scroll"),
+			helpTextBinding("up/down", "scroll"),
 		},
 	}
 }
@@ -76,4 +76,8 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 // PickerShortHelp returns compact bindings for the PID picker.
 func (k KeyMap) PickerShortHelp() []key.Binding {
 	return []key.Binding{k.Enter, k.Refresh, k.Esc}
+}
+
+func helpTextBinding(keyText, desc string) key.Binding {
+	return key.NewBinding(key.WithHelp(keyText, desc))
 }
