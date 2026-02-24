@@ -28,7 +28,12 @@ type TraceStarter func(context.Context) error
 
 // Run starts the TUI program in alternate screen mode.
 func Run() error {
-	model := NewModel(flags.Get().PidFilter, defaultTraceStarter)
+	return RunWithTraceStarter(defaultTraceStarter)
+}
+
+// RunWithTraceStarter starts the TUI program with a custom trace starter.
+func RunWithTraceStarter(starter TraceStarter) error {
+	model := NewModel(flags.Get().PidFilter, starter)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	_, err := program.Run()
 	return err
