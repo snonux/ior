@@ -3,9 +3,11 @@ package flamegraph
 import (
 	"bufio"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"io"
 	"strings"
+	"sync"
 )
 
 var svgEscaper = strings.NewReplacer(
@@ -15,6 +17,12 @@ var svgEscaper = strings.NewReplacer(
 	`"`, "&quot;",
 	"'", "&apos;",
 )
+
+var fnv32aPool = sync.Pool{
+	New: func() any {
+		return fnv.New32a()
+	},
+}
 
 type SVGConfig struct {
 	Title       string
@@ -135,9 +143,11 @@ func writeFrame(bw *bufio.Writer, name, title, fill string, x, y, w, h float64, 
 }
 
 func frameColor(name string) string {
-	hasher := fnv.New32a()
-	_, _ = hasher.Write([]byte(name))
+	hasher := fnv32aPool.Get().(hash.Hash32)
+	hasher.Reset()
+	_, _ = io.WriteString(hasher, name)
 	h := hasher.Sum32()
+	fnv32aPool.Put(hasher)
 	r := 200 + int(h%35)
 	g := 80 + int((h>>8)%120)
 	b := 40 + int((h>>16)%90)
