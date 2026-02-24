@@ -55,7 +55,7 @@ func TestCleanupOutputDirContainsOnlyExpectedFiles(t *testing.T) {
 
 	workloadBin := writeScript(t, tmpDir, "workload", `echo $$`)
 	iorBin := writeScript(t, tmpDir, "ior",
-		`touch test.ior.zst test.collapsed.zst test.svg`)
+		`touch test.ior.zst test.svg`)
 
 	h := TestHarness{
 		IorBinary:      iorBin,
@@ -80,7 +80,6 @@ func TestCleanupOutputDirContainsOnlyExpectedFiles(t *testing.T) {
 	for _, e := range entries {
 		name := e.Name()
 		validSuffix := strings.HasSuffix(name, ".ior.zst") ||
-			strings.HasSuffix(name, ".collapsed.zst") ||
 			strings.HasSuffix(name, ".svg") ||
 			name == "ior.bpf.o" // symlink created by startIor
 		if !validSuffix {
@@ -204,7 +203,6 @@ func TestCleanupNoArtifactsOutsideOutputDir(t *testing.T) {
 	}
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".ior.zst") ||
-			strings.HasSuffix(e.Name(), ".collapsed.zst") ||
 			strings.HasSuffix(e.Name(), ".svg") {
 			t.Errorf("artifact leaked to script dir: %s", e.Name())
 		}

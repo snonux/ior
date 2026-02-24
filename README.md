@@ -22,7 +22,7 @@ Important details:
 - `durationToPrevNs` is tracked per `tid` (thread), not globally across all threads.
 - The first observed syscall pair for a thread has `durationToPrevNs = 0` because there is no prior exit timestamp.
 - `durationToPrevNs` is attributed to the current syscall pair (the one whose `enter` closes the gap).
-- There is no separate "idle" pseudo-event bucket; use the `durationToPrev` count field when collapsed/aggregated output should emphasize inter-syscall time.
+- There is no separate "idle" pseudo-event bucket; use the `durationToPrev` count field when aggregated flamegraph output should emphasize inter-syscall time.
 
 ## Fedora
 
@@ -57,10 +57,16 @@ make
 sudo cp -v ./libelf/libelf.a /usr/lib64/
 ```
 
-## Inferno Flamegraphs
+## Native Flamegraph Generation
 
-We are using Inferno Flamegraphs:  https://github.com/jonhoo/inferno
+Flamegraphs are generated natively by `ior` from `.ior.zst` data files; no external flamegraph tool is required.
 
 ```sh
-cargo install inferno
+./ior -ior=trace.ior.zst -fields=pid,path,tracepoint -count=count
+```
+
+This generates an SVG and starts an embedded web server. The terminal prints a URL like:
+
+```text
+Flamegraph available at http://HOSTNAME:PORT/abs/path/to.svg
 ```
