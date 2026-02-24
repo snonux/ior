@@ -174,14 +174,29 @@ func (s Snapshot) Syscalls() []SyscallSnapshot {
 	return slices.Clone(s.syscalls)
 }
 
+// SyscallsCount returns number of syscall rows without cloning backing slices.
+func (s Snapshot) SyscallsCount() int {
+	return len(s.syscalls)
+}
+
 // Files returns a defensive copy of per-file snapshot rows.
 func (s Snapshot) Files() []FileSnapshot {
 	return slices.Clone(s.files)
 }
 
+// FilesCount returns number of file rows without cloning backing slices.
+func (s Snapshot) FilesCount() int {
+	return len(s.files)
+}
+
 // Processes returns a defensive copy of per-process snapshot rows.
 func (s Snapshot) Processes() []ProcessSnapshot {
 	return slices.Clone(s.processes)
+}
+
+// ProcessesCount returns number of process rows without cloning backing slices.
+func (s Snapshot) ProcessesCount() int {
+	return len(s.processes)
 }
 
 // Buckets returns a defensive copy of histogram buckets.

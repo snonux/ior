@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	common "ior/internal/tui/common"
 	"strings"
 
@@ -77,8 +78,8 @@ func tabIndex(tab Tab) int {
 
 func renderTabBar(active Tab, width int) string {
 	parts := make([]string, 0, len(allTabs))
-	for _, tab := range allTabs {
-		label := tab.String()
+	for i, tab := range allTabs {
+		label := fmt.Sprintf("%d:%s", i+1, tab.String())
 		if tab == active {
 			parts = append(parts, common.TabActiveStyle.Render(label))
 		} else {

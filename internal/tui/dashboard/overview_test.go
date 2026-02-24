@@ -31,6 +31,7 @@ func TestRenderOverviewIncludesCoreMetrics(t *testing.T) {
 		"Errors:",
 		"Trends:",
 		"Latency:",
+		"Gap:",
 		"Throughput:",
 		"Top syscalls:",
 		"Top files:",

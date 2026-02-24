@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"ior/internal/statsengine"
 	"strconv"
 
@@ -37,8 +38,9 @@ func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int
 	)
 	tbl.SetHeight(syscallTableHeight(height))
 	tbl.SetWidth(tableWidth(width))
-	tbl.SetCursor(clampOffset(offset, len(rows)))
-	return tbl.View()
+	cursor := clampOffset(offset, len(rows))
+	tbl.SetCursor(cursor)
+	return tbl.View() + fmt.Sprintf("\nRow %d/%d", cursor+1, len(rows))
 }
 
 func fileRows(files []statsengine.FileSnapshot) []table.Row {

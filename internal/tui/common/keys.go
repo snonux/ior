@@ -52,7 +52,11 @@ func (k KeyMap) DashboardShortHelp() []key.Binding {
 func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},
-		{k.Tab, k.ShiftTab, k.Export, k.Help, k.Quit},
+		{k.Tab, k.ShiftTab, k.Export, k.Refresh, k.Help, k.Quit},
+		{
+			key.NewBinding(key.WithKeys("j/k"), key.WithHelp("j/k", "scroll")),
+			key.NewBinding(key.WithKeys("up/down"), key.WithHelp("up/down", "scroll")),
+		},
 	}
 }
 
