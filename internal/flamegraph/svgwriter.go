@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+var svgEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+	"'", "&apos;",
+)
+
 type SVGConfig struct {
 	Title       string
 	Width       int
@@ -147,12 +155,5 @@ func flamegraphCSS(cfg SVGConfig) string {
 }
 
 func svgEscape(s string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-		"'", "&apos;",
-	)
-	return replacer.Replace(s)
+	return svgEscaper.Replace(s)
 }
