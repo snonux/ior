@@ -24,6 +24,11 @@ var fnv32aPool = sync.Pool{
 	},
 }
 
+// SVGConfig controls the layout and styling of generated flamegraph SVGs.
+//
+// Width is the virtual canvas width in pixels, FrameHeight is the height of each
+// stack frame row, FontSize is the base font size, and MinWidthPx controls the
+// minimum rendered width for a frame (smaller frames are skipped to avoid noise).
 type SVGConfig struct {
 	Title       string
 	Width       int
@@ -42,6 +47,11 @@ func defaultSVGConfig() SVGConfig {
 	}
 }
 
+// WriteSVG renders a flamegraph trie into an interactive SVG document.
+//
+// The output is a self-contained SVG that includes embedded CSS and JavaScript
+// for zoom, search, and highlighting, and is designed to be served directly to
+// a browser (for example via ServeSVG) without any external assets.
 func WriteSVG(w io.Writer, t *trie, cfg SVGConfig) error {
 	if cfg.Width <= 0 || cfg.FrameHeight <= 0 || cfg.FontSize <= 0 || cfg.MinWidthPx <= 0 {
 		cfg = defaultSVGConfig()

@@ -91,6 +91,12 @@ func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bo
 	return nil
 }
 
+// Run is the main entry point for the ior binary.
+//
+// When -ior=<trace.ior.zst> is provided it reads the compressed trace data, generates
+// a native flamegraph SVG (using the selected fields and count metric) and then serves
+// it via an embedded HTTP server. Without -ior, Run either executes trace mode or
+// starts the TUI, depending on the active flags.
 func Run() error {
 	flags.PrintVersion()
 	cfg := flags.Get()
