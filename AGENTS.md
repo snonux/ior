@@ -12,9 +12,12 @@ mage all          # Build everything (BPF objects and Go binary)
 mage test         # Run all tests
 TEST_NAME=TestEventloop mage testWithName  # Run specific test
 go test ./internal -v                      # Run tests for internal package
+mage integrationTest                       # Build + run integration tests (default parallelism is capped)
+INTEGRATION_PARALLEL=1 mage integrationTest  # Force serial integration tests
 mage generate     # Generate code (required after modifying tracepoint definitions)
 mage bench        # Run benchmarks
 mage clean        # Clean build artifacts
+mage world        # Clean + generate + test + build (recommended reset path)
 ```
 
 ## Code Generation
@@ -46,6 +49,15 @@ Generator source code:
 - **TUI package**: `/internal/tui/` contains top-level Bubble Tea orchestration (`tui.go`), shared key map (`keys.go`), and styles (`styles.go`).
 - **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (overview/syscalls/files/processes/latency/gaps) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
+
+## TUI Behavior
+
+- **Default mode** is TUI (`-plain` disables TUI and prints CSV rows to stdout).
+- **TUI trace flow** ingests events into the in-memory stats engine; it does **not** continuously write trace rows to disk.
+- **File output in TUI** is explicit export only (`e`), writing `ior-snapshot-<timestamp>.csv` in the current directory.
+- **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI snapshot file export at runtime.
+- **Tab navigation** supports `tab/shift+tab`, numeric keys `1..6`, and directional keys `left/right` and `h/l`.
+- **When export is disabled**, export key hints are hidden from dashboard help and `e` does not open export modal.
 
 ## Code Style
 
