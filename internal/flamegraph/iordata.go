@@ -140,11 +140,23 @@ func (iod *iorData) loadFromFile(filename string) error {
 	decoder := zstd.NewReader(file)
 	defer decoder.Close()
 
+	var records map[recordKey]Counter
+	if err := gob.NewDecoder(decoder).Decode(&records); err == nil && len(records) > 0 {
+		iod.records = records
+		return nil
+	}
+
+	// Fallback path for legacy payloads and empty-map ambiguity.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	decoder = zstd.NewReader(file)
+	defer decoder.Close()
+
 	var buffer bytes.Buffer
 	if _, err = io.Copy(&buffer, decoder); err != nil {
 		return err
 	}
-
 	return iod.deserialize(&buffer)
 }
 
