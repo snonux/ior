@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"fmt"
 	"ior/internal/statsengine"
 	"ior/internal/tui"
 	"ior/internal/tui/messages"
@@ -34,6 +33,7 @@ type Model struct {
 	refreshEvery    time.Duration
 	keys            tui.KeyMap
 	syscallsOffset  int
+	filesOffset     int
 	processesOffset int
 }
 
@@ -107,6 +107,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.activeTab == TabFiles {
+		switch msg.String() {
+		case "down", "j":
+			m.filesOffset++
+			return m, nil
+		case "up", "k":
+			if m.filesOffset > 0 {
+				m.filesOffset--
+			}
+			return m, nil
+		}
+	}
 
 	switch {
 	case key.Matches(msg, m.keys.Tab):
@@ -141,7 +153,7 @@ func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, m.width))
 	b.WriteString("\n")
-	b.WriteString(renderActiveTab(m.activeTab, m.latest, m.width, m.height, m.syscallsOffset, m.processesOffset))
+	b.WriteString(renderActiveTab(m.activeTab, m.latest, m.width, m.height, m.syscallsOffset, m.filesOffset, m.processesOffset))
 	b.WriteString("\n")
 	b.WriteString(renderHelpBar(m.keys))
 	return tui.ScreenStyle.Render(b.String())
@@ -151,7 +163,7 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscallsOffset, processesOffset int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscallsOffset, filesOffset, processesOffset int) string {
 	_ = width
 	_ = height
 
@@ -165,7 +177,7 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscall
 	case TabSyscalls:
 		return renderSyscallsWithOffset(snap, width, height, syscallsOffset)
 	case TabFiles:
-		return tui.PanelStyle.Render(fmt.Sprintf("Files: %d rows", len(snap.Files())))
+		return renderFilesWithOffset(snap, width, height, filesOffset)
 	case TabProcesses:
 		return renderProcessesWithOffset(snap, width, height, processesOffset)
 	case TabLatency:
