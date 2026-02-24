@@ -314,6 +314,21 @@ func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
 	}
 }
 
+func TestExportModalStillAllowsDashboardStatsUpdates(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.exporter = m.exporter.Open()
+
+	snap := &statsengine.Snapshot{TotalSyscalls: 99}
+	next, _ := m.Update(StatsTickMsg{Snap: snap})
+	updated := next.(Model)
+
+	if got := updated.dashboard.LatestSnapshot(); got != snap {
+		t.Fatalf("expected dashboard snapshot update while export modal visible")
+	}
+}
+
 func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard

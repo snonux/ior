@@ -182,9 +182,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if m.exporter.Visible() {
+		var dashboardCmd tea.Cmd
+		// Keep dashboard refresh/data flow alive while export modal is open.
+		if _, isKey := msg.(tea.KeyMsg); !isKey && m.screen == ScreenDashboard {
+			next, cmd := m.dashboard.Update(msg)
+			m.dashboard = next.(dashboardui.Model)
+			dashboardCmd = cmd
+		}
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
-		return m, cmd
+		return m, tea.Batch(dashboardCmd, cmd)
 	}
 
 	return m.updateActiveModel(msg)
