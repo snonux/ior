@@ -134,7 +134,7 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height int) str
 
 	switch tab {
 	case TabOverview:
-		return tui.PanelStyle.Render(fmt.Sprintf("Overview: %d syscalls", snap.TotalSyscalls))
+		return renderOverview(snap, width, height)
 	case TabSyscalls:
 		return tui.PanelStyle.Render(fmt.Sprintf("Syscalls: %d rows", len(snap.Syscalls())))
 	case TabFiles:
