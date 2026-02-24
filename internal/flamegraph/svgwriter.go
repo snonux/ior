@@ -120,25 +120,22 @@ func renderFrames(bw *bufio.Writer, node *trieNode, rootTotal uint64, cfg SVGCon
 }
 
 func writeFrame(bw *bufio.Writer, name, title, fill string, x, y, w, h float64, depth, fontSize int) error {
-	_, err := fmt.Fprintf(bw, `<g class="frame" data-name="%s" data-x="%.3f" data-w="%.3f" data-depth="%d" data-base-fill="%s">`+"\n",
-		svgEscape(name), x, w, depth, fill)
-	if err != nil {
-		return err
-	}
-	if _, err = fmt.Fprintf(bw, `<title>%s</title><rect x="%.3f" y="%.3f" width="%.3f" height="%.3f" fill="%s"/>`+"\n",
-		svgEscape(title), x, y, w, h, fill); err != nil {
-		return err
-	}
+	textStyle := ""
 	labelStyle := ""
 	if w <= float64(fontSize*2) {
 		labelStyle = ` style="display:none"`
 	}
-	_, err = fmt.Fprintf(bw, `<text x="%.3f" y="%.3f"%s>%s</text>`+"\n",
-		x+3, y+float64(fontSize), labelStyle, svgEscape(name))
-	if err != nil {
-		return err
+	if labelStyle != "" {
+		textStyle = labelStyle
 	}
-	_, err = fmt.Fprintln(bw, "</g>")
+	_, err := fmt.Fprintf(bw, `<g class="frame" data-name="%s" data-x="%.3f" data-w="%.3f" data-depth="%d" data-base-fill="%s">
+<title>%s</title><rect x="%.3f" y="%.3f" width="%.3f" height="%.3f" fill="%s"/>
+<text x="%.3f" y="%.3f"%s>%s</text>
+</g>
+`,
+		svgEscape(name), x, w, depth, fill,
+		svgEscape(title), x, y, w, h, fill,
+		x+3, y+float64(fontSize), textStyle, svgEscape(name))
 	return err
 }
 
