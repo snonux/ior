@@ -1,0 +1,132 @@
+package dashboard
+
+import (
+	"fmt"
+	"ior/internal/statsengine"
+	"sort"
+	"strconv"
+	"time"
+
+	"github.com/charmbracelet/bubbles/table"
+)
+
+func renderSyscalls(snap *statsengine.Snapshot, width, height int) string {
+	return renderSyscallsWithOffset(snap, width, height, 0)
+}
+
+func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset int) string {
+	if snap == nil {
+		return "Syscalls: waiting for stats..."
+	}
+
+	rows := syscallRows(snap.Syscalls())
+	if len(rows) == 0 {
+		return "Syscalls: no data"
+	}
+
+	columns := []table.Column{
+		{Title: "Syscall", Width: 16},
+		{Title: "Count", Width: 8},
+		{Title: "Rate/s", Width: 8},
+		{Title: "Avg", Width: 9},
+		{Title: "Min", Width: 9},
+		{Title: "Max", Width: 9},
+		{Title: "p50", Width: 9},
+		{Title: "p95", Width: 9},
+		{Title: "p99", Width: 9},
+		{Title: "Bytes", Width: 10},
+		{Title: "Errors", Width: 8},
+	}
+
+	tbl := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+	)
+	tbl.SetHeight(syscallTableHeight(height))
+	tbl.SetWidth(tableWidth(width))
+	tbl.SetCursor(clampOffset(offset, len(rows)))
+	return tbl.View()
+}
+
+func syscallRows(syscalls []statsengine.SyscallSnapshot) []table.Row {
+	ordered := append([]statsengine.SyscallSnapshot(nil), syscalls...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Count == ordered[j].Count {
+			return ordered[i].Name < ordered[j].Name
+		}
+		return ordered[i].Count > ordered[j].Count
+	})
+
+	rows := make([]table.Row, 0, len(ordered))
+	for _, s := range ordered {
+		rows = append(rows, table.Row{
+			s.Name,
+			strconv.FormatUint(s.Count, 10),
+			fmt.Sprintf("%.1f", s.RatePerSec),
+			formatDurationNs(s.LatencyMeanNs),
+			formatDurationUintNs(s.LatencyMinNs),
+			formatDurationUintNs(s.LatencyMaxNs),
+			formatDurationUintNs(s.LatencyP50Ns),
+			formatDurationUintNs(s.LatencyP95Ns),
+			formatDurationUintNs(s.LatencyP99Ns),
+			formatBytes(float64(s.Bytes)),
+			strconv.FormatUint(s.Errors, 10),
+		})
+	}
+	return rows
+}
+
+func formatDurationUintNs(v uint64) string {
+	return formatDurationNs(float64(v))
+}
+
+func formatDurationNs(v float64) string {
+	if v < 1000 {
+		return fmt.Sprintf("%.0fns", v)
+	}
+	us := v / 1000
+	if us < 1000 {
+		return fmt.Sprintf("%.1fµs", us)
+	}
+	ms := us / 1000
+	if ms < 1000 {
+		return fmt.Sprintf("%.1fms", ms)
+	}
+	s := ms / 1000
+	return (time.Duration(s * float64(time.Second))).String()
+}
+
+func syscallTableHeight(height int) int {
+	if height <= 0 {
+		return 10
+	}
+	h := height - 6
+	if h < 5 {
+		return 5
+	}
+	return h
+}
+
+func tableWidth(width int) int {
+	if width <= 0 {
+		return 80
+	}
+	if width < 60 {
+		return 60
+	}
+	return width
+}
+
+func clampOffset(offset, size int) int {
+	if size == 0 {
+		return 0
+	}
+	if offset < 0 {
+		return 0
+	}
+	if offset >= size {
+		return size - 1
+	}
+	return offset
+}

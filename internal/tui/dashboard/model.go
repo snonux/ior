@@ -31,8 +31,9 @@ type Model struct {
 	width  int
 	height int
 
-	refreshEvery time.Duration
-	keys         tui.KeyMap
+	refreshEvery   time.Duration
+	keys           tui.KeyMap
+	syscallsOffset int
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
@@ -81,6 +82,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.activeTab == TabSyscalls {
+		switch msg.String() {
+		case "down", "j":
+			m.syscallsOffset++
+			return m, nil
+		case "up", "k":
+			if m.syscallsOffset > 0 {
+				m.syscallsOffset--
+			}
+			return m, nil
+		}
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.Tab):
 		m.activeTab = nextTab(m.activeTab)
@@ -114,7 +128,7 @@ func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, m.width))
 	b.WriteString("\n")
-	b.WriteString(renderActiveTab(m.activeTab, m.latest, m.width, m.height))
+	b.WriteString(renderActiveTab(m.activeTab, m.latest, m.width, m.height, m.syscallsOffset))
 	b.WriteString("\n")
 	b.WriteString(renderHelpBar(m.keys))
 	return tui.ScreenStyle.Render(b.String())
@@ -124,7 +138,7 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscallsOffset int) string {
 	_ = width
 	_ = height
 
@@ -136,7 +150,7 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height int) str
 	case TabOverview:
 		return renderOverview(snap, width, height)
 	case TabSyscalls:
-		return tui.PanelStyle.Render(fmt.Sprintf("Syscalls: %d rows", len(snap.Syscalls())))
+		return renderSyscallsWithOffset(snap, width, height, syscallsOffset)
 	case TabFiles:
 		return tui.PanelStyle.Render(fmt.Sprintf("Files: %d rows", len(snap.Files())))
 	case TabProcesses:
