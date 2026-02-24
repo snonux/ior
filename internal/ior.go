@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"ior/internal/event"
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
+	"ior/internal/statsengine"
 	"ior/internal/tracepoints"
 	"ior/internal/tui"
 
@@ -122,13 +124,23 @@ func shouldRunTraceMode(cfg flags.Flags) bool {
 	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.PprofEnable
 }
 
-func tuiTraceStarterFromRunTrace(startTrace func(context.Context, chan<- struct{}) error) tui.TraceStarter {
+func tuiTraceStarterFromRunTrace(
+	startTrace func(context.Context, chan<- struct{}, func(*eventLoop)) error,
+) tui.TraceStarter {
 	return func(ctx context.Context) error {
+		engine := statsengine.NewEngine(64)
+		tui.SetDashboardSnapshotSource(engine)
+
 		startedCh := make(chan struct{})
 		errCh := make(chan error, 1)
 
 		go func() {
-			errCh <- startTrace(ctx, startedCh)
+			errCh <- startTrace(ctx, startedCh, func(el *eventLoop) {
+				el.printCb = func(ep *event.Pair) {
+					engine.Ingest(ep)
+					ep.Recycle()
+				}
+			})
 			close(errCh)
 		}()
 
@@ -144,10 +156,10 @@ func tuiTraceStarterFromRunTrace(startTrace func(context.Context, chan<- struct{
 }
 
 func runTrace() error {
-	return runTraceWithContext(context.Background(), nil)
+	return runTraceWithContext(context.Background(), nil, nil)
 }
 
-func runTraceWithContext(parentCtx context.Context, started chan<- struct{}) error {
+func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, configure func(*eventLoop)) error {
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
 		return err
@@ -195,6 +207,9 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}) err
 	signalTraceStarted(started)
 
 	el := newEventLoop()
+	if configure != nil {
+		configure(el)
+	}
 	duration := time.Duration(flags.Get().Duration) * time.Second
 	fmt.Println("Probing for", duration)
 	ctx, cancel := context.WithTimeout(parentCtx, duration)

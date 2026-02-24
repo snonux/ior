@@ -76,7 +76,10 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	}()
 
 	traceDone := make(chan struct{}, 1)
-	runTraceWithContextFn = func(_ context.Context, started chan<- struct{}) error {
+	runTraceWithContextFn = func(_ context.Context, started chan<- struct{}, configure func(*eventLoop)) error {
+		if configure != nil {
+			configure(&eventLoop{})
+		}
 		close(started)
 		traceDone <- struct{}{}
 		return nil
@@ -110,9 +113,9 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 }
 
 func TestTuiTraceStarterFromRunTracePropagatesError(t *testing.T) {
-	starter := tuiTraceStarterFromRunTrace(func(context.Context, chan<- struct{}) error {
-		return errors.New("startup failed")
-	})
+	starter := tuiTraceStarterFromRunTrace(
+		func(context.Context, chan<- struct{}, func(*eventLoop)) error { return errors.New("startup failed") },
+	)
 
 	err := starter(context.Background())
 	if err == nil || err.Error() != "startup failed" {
@@ -121,10 +124,12 @@ func TestTuiTraceStarterFromRunTracePropagatesError(t *testing.T) {
 }
 
 func TestTuiTraceStarterFromRunTraceRespectsCancel(t *testing.T) {
-	starter := tuiTraceStarterFromRunTrace(func(ctx context.Context, _ chan<- struct{}) error {
-		<-ctx.Done()
-		return ctx.Err()
-	})
+	starter := tuiTraceStarterFromRunTrace(
+		func(ctx context.Context, _ chan<- struct{}, _ func(*eventLoop)) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
