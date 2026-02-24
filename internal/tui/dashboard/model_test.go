@@ -1,0 +1,99 @@
+package dashboard
+
+import (
+	"strings"
+	"testing"
+
+	"ior/internal/statsengine"
+	"ior/internal/tui"
+	"ior/internal/tui/messages"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+type fakeSnapshotSource struct {
+	snapshots int
+	snap      *statsengine.Snapshot
+}
+
+func (f *fakeSnapshotSource) Snapshot() *statsengine.Snapshot {
+	f.snapshots++
+	return f.snap
+}
+
+func TestKeySwitchingChangesActiveTab(t *testing.T) {
+	m := NewModelWithConfig(nil, 250, tui.DefaultKeyMap())
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	model := next.(Model)
+	if model.activeTab != TabSyscalls {
+		t.Fatalf("expected syscalls tab, got %v", model.activeTab)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = next.(Model)
+	if model.activeTab != TabFiles {
+		t.Fatalf("expected next tab to be files, got %v", model.activeTab)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model = next.(Model)
+	if model.activeTab != TabSyscalls {
+		t.Fatalf("expected previous tab to be syscalls, got %v", model.activeTab)
+	}
+}
+
+func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
+	snap := &statsengine.Snapshot{TotalSyscalls: 9}
+	engine := &fakeSnapshotSource{snap: snap}
+	m := NewModelWithConfig(engine, 100, tui.DefaultKeyMap())
+
+	next, cmd := m.Update(refreshTickMsg{})
+	if cmd == nil {
+		t.Fatalf("expected tick command batch")
+	}
+	if engine.snapshots != 1 {
+		t.Fatalf("expected one snapshot call, got %d", engine.snapshots)
+	}
+
+	msg := cmd()
+	switch v := msg.(type) {
+	case tea.BatchMsg:
+		var sawStats bool
+		for _, c := range v {
+			out := c()
+			if stats, ok := out.(messages.StatsTickMsg); ok && stats.Snap == snap {
+				sawStats = true
+			}
+		}
+		if !sawStats {
+			t.Fatalf("expected StatsTickMsg in batch output")
+		}
+	default:
+		t.Fatalf("expected batch message, got %T", msg)
+	}
+
+	_ = next
+}
+
+func TestStatsTickMsgUpdatesLatestSnapshot(t *testing.T) {
+	snap := &statsengine.Snapshot{TotalSyscalls: 11}
+	m := NewModel(nil)
+
+	next, _ := m.Update(messages.StatsTickMsg{Snap: snap})
+	model := next.(Model)
+	if model.latest != snap {
+		t.Fatalf("expected latest snapshot to be updated")
+	}
+}
+
+func TestViewRendersTabBarAndHelp(t *testing.T) {
+	m := NewModelWithConfig(nil, 1000, tui.DefaultKeyMap())
+	out := m.View()
+	if !strings.Contains(out, "Overview") {
+		t.Fatalf("expected overview label in view")
+	}
+	if !strings.Contains(out, "tab next tab") {
+		t.Fatalf("expected help bar text in view")
+	}
+}
