@@ -77,6 +77,23 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 	}
 }
 
+func TestFilesTabScrollsWithJK(t *testing.T) {
+	m := NewModelWithConfig(nil, 250, tui.DefaultKeyMap())
+	m.activeTab = TabFiles
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model := next.(Model)
+	if model.filesOffset != 1 {
+		t.Fatalf("expected files offset 1 after j, got %d", model.filesOffset)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	model = next.(Model)
+	if model.filesOffset != 0 {
+		t.Fatalf("expected files offset 0 after k, got %d", model.filesOffset)
+	}
+}
+
 func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 9}
 	engine := &fakeSnapshotSource{snap: snap}
