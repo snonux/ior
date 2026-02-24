@@ -17,3 +17,4 @@ perltidy.ERR
 *.svg
 /.cursor/
 REVIEW-COMMENTS.md
+/.serena/
