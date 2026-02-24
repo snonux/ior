@@ -86,56 +86,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "right", "l":
-		m.activeTab = nextTab(m.activeTab)
-		return m, nil
-	case "left", "h":
-		m.activeTab = prevTab(m.activeTab)
+	keyStr := msg.String()
+	if m.handleArrowTabKey(keyStr) {
 		return m, nil
 	}
-
-	if m.activeTab == TabSyscalls {
-		switch msg.String() {
-		case "down", "j":
-			if m.syscallsOffset < m.maxSyscallsRows()-1 {
-				m.syscallsOffset++
-			}
-			return m, nil
-		case "up", "k":
-			if m.syscallsOffset > 0 {
-				m.syscallsOffset--
-			}
-			return m, nil
-		}
-	}
-	if m.activeTab == TabProcesses {
-		switch msg.String() {
-		case "down", "j":
-			if m.processesOffset < m.maxProcessesRows()-1 {
-				m.processesOffset++
-			}
-			return m, nil
-		case "up", "k":
-			if m.processesOffset > 0 {
-				m.processesOffset--
-			}
-			return m, nil
-		}
-	}
-	if m.activeTab == TabFiles {
-		switch msg.String() {
-		case "down", "j":
-			if m.filesOffset < m.maxFilesRows()-1 {
-				m.filesOffset++
-			}
-			return m, nil
-		case "up", "k":
-			if m.filesOffset > 0 {
-				m.filesOffset--
-			}
-			return m, nil
-		}
+	if m.handleScrollKey(keyStr) {
+		return m, nil
 	}
 
 	switch {
@@ -160,6 +116,49 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 	}
 	return m, nil
+}
+
+func (m *Model) handleArrowTabKey(keyStr string) bool {
+	switch keyStr {
+	case "right", "l":
+		m.activeTab = nextTab(m.activeTab)
+		return true
+	case "left", "h":
+		m.activeTab = prevTab(m.activeTab)
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) handleScrollKey(keyStr string) bool {
+	switch m.activeTab {
+	case TabSyscalls:
+		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows())
+	case TabFiles:
+		return scrollOffset(keyStr, &m.filesOffset, m.maxFilesRows())
+	case TabProcesses:
+		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows())
+	default:
+		return false
+	}
+}
+
+func scrollOffset(keyStr string, offset *int, maxRows int) bool {
+	switch keyStr {
+	case "down", "j":
+		if *offset < maxRows-1 {
+			*offset++
+		}
+		return true
+	case "up", "k":
+		if *offset > 0 {
+			*offset--
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func (m Model) maxSyscallsRows() int {
