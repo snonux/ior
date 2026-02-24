@@ -210,13 +210,15 @@ func dirChdirEnoent() error {
 // The syscall fails with EBADF, but ior captures the tracepoint on entry.
 func dirGetdentsEbadf() error {
 	buf := make([]byte, 4096)
-	// Retry a few times to reduce flakiness under high integration parallelism.
-	for i := 0; i < 5; i++ {
+	// Keep issuing the syscall for a short window so ior has enough time to
+	// attach under high parallel integration load.
+	for i := 0; i < 40; i++ {
 		_, _, errno := syscall.Syscall(syscall.SYS_GETDENTS64, uintptr(9999), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 		runtime.KeepAlive(buf)
 		if errno == 0 {
 			return fmt.Errorf("expected EBADF, but getdents64 succeeded")
 		}
+		time.Sleep(25 * time.Millisecond)
 	}
 	return nil
 }

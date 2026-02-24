@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -86,6 +87,8 @@ func unlinkRmdir() error {
 	if err := syscall.Mkdir(subDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
+	// Give ior a brief attach window before the one-shot rmdir syscall.
+	time.Sleep(300 * time.Millisecond)
 
 	pathBytes, err := syscall.BytePtrFromString(subDir)
 	if err != nil {
