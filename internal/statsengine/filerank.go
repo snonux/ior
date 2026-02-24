@@ -26,6 +26,15 @@ type fileRankStats struct {
 	heapIndex    int
 }
 
+type fileSnapshotInput struct {
+	path         string
+	accesses     uint64
+	bytesRead    uint64
+	bytesWritten uint64
+	totalLatency uint64
+	maxLatency   uint64
+}
+
 type fileRankHeap []*fileRankStats
 
 func newFileRanker() *fileRanker {
@@ -87,18 +96,38 @@ func (r *fileRanker) Snapshot() []FileSnapshot {
 		return nil
 	}
 
-	out := make([]FileSnapshot, 0, len(r.topHeap))
-	for _, stats := range r.topHeap {
-		out = append(out, stats.snapshot())
-	}
+	return buildFileSnapshots(r.snapshotInputs())
+}
 
+func (r *fileRanker) snapshotInputs() []fileSnapshotInput {
+	if r == nil {
+		return nil
+	}
+	inputs := make([]fileSnapshotInput, 0, len(r.topHeap))
+	for _, stats := range r.topHeap {
+		inputs = append(inputs, fileSnapshotInput{
+			path:         stats.path,
+			accesses:     stats.accesses,
+			bytesRead:    stats.bytesRead,
+			bytesWritten: stats.bytesWritten,
+			totalLatency: stats.totalLatency,
+			maxLatency:   stats.maxLatency,
+		})
+	}
+	return inputs
+}
+
+func buildFileSnapshots(inputs []fileSnapshotInput) []FileSnapshot {
+	out := make([]FileSnapshot, 0, len(inputs))
+	for _, in := range inputs {
+		out = append(out, in.toSnapshot())
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Accesses != out[j].Accesses {
 			return out[i].Accesses > out[j].Accesses
 		}
 		return out[i].Path < out[j].Path
 	})
-
 	return out
 }
 
@@ -153,7 +182,7 @@ func (r *fileRanker) compactIfNeeded() {
 	r.byPath = kept
 }
 
-func (s *fileRankStats) snapshot() FileSnapshot {
+func (s fileSnapshotInput) toSnapshot() FileSnapshot {
 	avg := 0.0
 	if s.accesses > 0 {
 		avg = float64(s.totalLatency) / float64(s.accesses)

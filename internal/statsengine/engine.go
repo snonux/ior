@@ -35,6 +35,30 @@ type Engine struct {
 	throughputSeries *ringTimeSeries
 }
 
+type snapshotInputs struct {
+	now       time.Time
+	startedAt time.Time
+
+	totalSyscalls   uint64
+	totalErrors     uint64
+	totalBytes      uint64
+	totalReadBytes  uint64
+	totalWriteBytes uint64
+	totalLatency    uint64
+	totalGap        uint64
+
+	latencySeries    []float64
+	gapSeries        []float64
+	throughputSeries []float64
+
+	syscalls  []syscallSnapshotInput
+	files     []fileSnapshotInput
+	processes []processSnapshotInput
+
+	latencyHist histogramSnapshotInput
+	gapHist     histogramSnapshotInput
+}
+
 // NewEngine creates a new stats engine.
 func NewEngine(topN int) *Engine {
 	return newEngineWithClock(topN, time.Now)
@@ -112,41 +136,55 @@ func (e *Engine) Snapshot() *Snapshot {
 	}
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	in := snapshotInputs{
+		now:              e.now(),
+		startedAt:        e.startedAt,
+		totalSyscalls:    e.totalSyscalls,
+		totalErrors:      e.totalErrors,
+		totalBytes:       e.totalBytes,
+		totalReadBytes:   e.totalReadBytes,
+		totalWriteBytes:  e.totalWriteBytes,
+		totalLatency:     e.totalLatency,
+		totalGap:         e.totalGap,
+		latencySeries:    e.latencySeries.Values(),
+		gapSeries:        e.gapSeries.Values(),
+		throughputSeries: e.throughputSeries.Values(),
+		syscalls:         e.syscalls.snapshotInputs(),
+		files:            e.files.snapshotInputs(),
+		processes:        e.processes.snapshotInputs(),
+		latencyHist:      e.latencyHist.snapshotInputs(),
+		gapHist:          e.gapHist.snapshotInputs(),
+	}
+	e.mu.Unlock()
 
-	now := e.now()
-	elapsed := nonNegativeDuration(now.Sub(e.startedAt))
+	elapsed := nonNegativeDuration(in.now.Sub(in.startedAt))
 	rateDiv := elapsed.Seconds()
 
-	latencySeries := e.latencySeries.Values()
-	gapSeries := e.gapSeries.Values()
-	throughputSeries := e.throughputSeries.Values()
-
 	snapshot := NewSnapshot(
-		latencySeries,
-		gapSeries,
-		throughputSeries,
-		e.syscalls.Snapshot(elapsed),
-		e.files.Snapshot(),
-		e.processes.Snapshot(elapsed),
-		e.latencyHist.Snapshot(),
-		e.gapHist.Snapshot(),
+		in.latencySeries,
+		in.gapSeries,
+		in.throughputSeries,
+		buildSyscallSnapshots(in.syscalls, elapsed),
+		buildFileSnapshots(in.files),
+		buildProcessSnapshots(in.processes, elapsed),
+		buildHistogramSnapshot(in.latencyHist),
+		buildHistogramSnapshot(in.gapHist),
 	)
 
-	snapshot.GeneratedAt = now
+	snapshot.GeneratedAt = in.now
 	snapshot.Elapsed = elapsed
-	snapshot.TotalSyscalls = e.totalSyscalls
-	snapshot.TotalErrors = e.totalErrors
-	snapshot.TotalBytes = e.totalBytes
-	snapshot.SyscallRatePerSec = safeRate(e.totalSyscalls, rateDiv)
-	snapshot.ErrorRatePerSec = safeRate(e.totalErrors, rateDiv)
-	snapshot.ReadBytesPerSec = safeRate(e.totalReadBytes, rateDiv)
-	snapshot.WriteBytesPerSec = safeRate(e.totalWriteBytes, rateDiv)
-	snapshot.LatencyMeanNs = safeMean(e.totalLatency, e.totalSyscalls)
-	snapshot.GapMeanNs = safeMean(e.totalGap, e.totalSyscalls)
-	snapshot.LatencyTrend = detectTrend(latencySeries)
-	snapshot.GapTrend = detectTrend(gapSeries)
-	snapshot.ThroughputTrend = detectTrend(throughputSeries)
+	snapshot.TotalSyscalls = in.totalSyscalls
+	snapshot.TotalErrors = in.totalErrors
+	snapshot.TotalBytes = in.totalBytes
+	snapshot.SyscallRatePerSec = safeRate(in.totalSyscalls, rateDiv)
+	snapshot.ErrorRatePerSec = safeRate(in.totalErrors, rateDiv)
+	snapshot.ReadBytesPerSec = safeRate(in.totalReadBytes, rateDiv)
+	snapshot.WriteBytesPerSec = safeRate(in.totalWriteBytes, rateDiv)
+	snapshot.LatencyMeanNs = safeMean(in.totalLatency, in.totalSyscalls)
+	snapshot.GapMeanNs = safeMean(in.totalGap, in.totalSyscalls)
+	snapshot.LatencyTrend = detectTrend(in.latencySeries)
+	snapshot.GapTrend = detectTrend(in.gapSeries)
+	snapshot.ThroughputTrend = detectTrend(in.throughputSeries)
 
 	return &snapshot
 }

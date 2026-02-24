@@ -18,6 +18,14 @@ type processStats struct {
 	totalLatency uint64
 }
 
+type processSnapshotInput struct {
+	pid          uint32
+	comm         string
+	count        uint64
+	totalBytes   uint64
+	totalLatency uint64
+}
+
 func newProcessAccumulator() *processAccumulator {
 	return &processAccumulator{byPID: make(map[uint32]*processStats)}
 }
@@ -53,12 +61,33 @@ func (a *processAccumulator) Snapshot(elapsed time.Duration) []ProcessSnapshot {
 		return nil
 	}
 
-	rateDiv := elapsed.Seconds()
-	result := make([]ProcessSnapshot, 0, len(a.byPID))
-	for _, stats := range a.byPID {
-		result = append(result, stats.toSnapshot(rateDiv))
+	return buildProcessSnapshots(a.snapshotInputs(), elapsed)
+}
+
+func (a *processAccumulator) snapshotInputs() []processSnapshotInput {
+	if a == nil {
+		return nil
 	}
 
+	inputs := make([]processSnapshotInput, 0, len(a.byPID))
+	for _, stats := range a.byPID {
+		inputs = append(inputs, processSnapshotInput{
+			pid:          stats.pid,
+			comm:         stats.comm,
+			count:        stats.count,
+			totalBytes:   stats.totalBytes,
+			totalLatency: stats.totalLatency,
+		})
+	}
+	return inputs
+}
+
+func buildProcessSnapshots(inputs []processSnapshotInput, elapsed time.Duration) []ProcessSnapshot {
+	rateDiv := elapsed.Seconds()
+	result := make([]ProcessSnapshot, 0, len(inputs))
+	for _, in := range inputs {
+		result = append(result, in.toSnapshot(rateDiv))
+	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Syscalls != result[j].Syscalls {
 			return result[i].Syscalls > result[j].Syscalls
@@ -68,11 +97,10 @@ func (a *processAccumulator) Snapshot(elapsed time.Duration) []ProcessSnapshot {
 		}
 		return result[i].PID < result[j].PID
 	})
-
 	return result
 }
 
-func (s *processStats) toSnapshot(rateDiv float64) ProcessSnapshot {
+func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
 	avg := 0.0
 	if s.count > 0 {
 		avg = float64(s.totalLatency) / float64(s.count)
