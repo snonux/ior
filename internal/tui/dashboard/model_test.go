@@ -60,6 +60,23 @@ func TestSyscallsTabScrollsWithJK(t *testing.T) {
 	}
 }
 
+func TestProcessesTabScrollsWithJK(t *testing.T) {
+	m := NewModelWithConfig(nil, 250, tui.DefaultKeyMap())
+	m.activeTab = TabProcesses
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model := next.(Model)
+	if model.processesOffset != 1 {
+		t.Fatalf("expected processes offset 1 after j, got %d", model.processesOffset)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	model = next.(Model)
+	if model.processesOffset != 0 {
+		t.Fatalf("expected processes offset 0 after k, got %d", model.processesOffset)
+	}
+}
+
 func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 9}
 	engine := &fakeSnapshotSource{snap: snap}
