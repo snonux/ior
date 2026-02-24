@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"ior/internal/statsengine"
-	"ior/internal/tui"
+	common "ior/internal/tui/common"
 	"ior/internal/tui/messages"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,7 +22,7 @@ func (f *fakeSnapshotSource) Snapshot() *statsengine.Snapshot {
 }
 
 func TestKeySwitchingChangesActiveTab(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, tui.DefaultKeyMap())
+	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	model := next.(Model)
@@ -44,7 +44,7 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 }
 
 func TestSyscallsTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, tui.DefaultKeyMap())
+	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
@@ -61,7 +61,7 @@ func TestSyscallsTabScrollsWithJK(t *testing.T) {
 }
 
 func TestProcessesTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, tui.DefaultKeyMap())
+	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
@@ -78,7 +78,7 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 }
 
 func TestFilesTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, tui.DefaultKeyMap())
+	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
@@ -97,7 +97,7 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 9}
 	engine := &fakeSnapshotSource{snap: snap}
-	m := NewModelWithConfig(engine, 100, tui.DefaultKeyMap())
+	m := NewModelWithConfig(engine, 100, common.DefaultKeyMap())
 
 	next, cmd := m.Update(refreshTickMsg{})
 	if cmd == nil {
@@ -139,10 +139,13 @@ func TestStatsTickMsgUpdatesLatestSnapshot(t *testing.T) {
 }
 
 func TestViewRendersTabBarAndHelp(t *testing.T) {
-	m := NewModelWithConfig(nil, 1000, tui.DefaultKeyMap())
+	m := NewModelWithConfig(nil, 1000, common.DefaultKeyMap())
 	out := m.View()
 	if !strings.Contains(out, "Overview") {
 		t.Fatalf("expected overview label in view")
+	}
+	if !strings.Contains(out, "Press ? for help") {
+		t.Fatalf("expected inline help hint in view")
 	}
 	if !strings.Contains(out, "tab next tab") {
 		t.Fatalf("expected help bar text in view")

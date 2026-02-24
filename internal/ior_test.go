@@ -44,7 +44,7 @@ func TestAttachTracepointsWithSkipsFilteredTracepoints(t *testing.T) {
 
 	err := attachTracepointsWith(module, func(tracepoint string) bool {
 		return tracepoint == "sys_enter_read"
-	}, []string{"sys_enter_read", "sys_enter_write"})
+	}, []string{"sys_enter_read", "sys_enter_write"}, false)
 	if err != nil {
 		t.Fatalf("attachTracepointsWith returned error: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestAttachTracepointsWithReturnsErrorWhenProgramMissing(t *testing.T) {
 		},
 	}
 
-	err := attachTracepointsWith(module, func(string) bool { return true }, []string{"sys_enter_read"})
+	err := attachTracepointsWith(module, func(string) bool { return true }, []string{"sys_enter_read"}, false)
 	if err == nil {
 		t.Fatal("attachTracepointsWith returned nil error, want non-nil")
 	}
@@ -87,7 +87,7 @@ func TestAttachTracepointsWithAttachFailureContinues(t *testing.T) {
 		getProgramErrs: map[string]error{},
 	}
 
-	err := attachTracepointsWith(module, func(string) bool { return true }, []string{"sys_enter_read", "sys_enter_write"})
+	err := attachTracepointsWith(module, func(string) bool { return true }, []string{"sys_enter_read", "sys_enter_write"}, false)
 	if err != nil {
 		t.Fatalf("attachTracepointsWith returned error: %v", err)
 	}

@@ -3,7 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"ior/internal/statsengine"
-	"ior/internal/tui"
+	common "ior/internal/tui/common"
 	"strings"
 	"time"
 )
@@ -11,7 +11,7 @@ import (
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	_ = height
 	if snap == nil {
-		return tui.PanelStyle.Render("Overview: waiting for stats...")
+		return common.PanelStyle.Render("Overview: waiting for stats...")
 	}
 
 	boxWidth := summaryBoxWidth(width)
@@ -30,14 +30,22 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	latencySpark := "Latency: " + renderSparkline(snap.LatencySeriesNs(), sparklineWidth(width))
 	throughputSpark := "Throughput: " + renderSparkline(snap.ThroughputSeriesB(), sparklineWidth(width))
 	topSyscalls := "Top syscalls: " + summarizeTopSyscalls(snap)
+	topFiles := "Top files: " + summarizeTopFiles(snap)
+	topProcesses := "Top processes: " + summarizeTopProcesses(snap)
+	latencyHist := "Latency buckets: " + summarizeHistogramBrief(snap.LatencyHistogram)
+	gapHist := "Gap buckets: " + summarizeHistogramBrief(snap.GapHistogram)
 
 	return strings.Join(
 		[]string{
 			row,
-			tui.HighlightStyle.Render(trends),
-			tui.PanelStyle.Render(latencySpark),
-			tui.PanelStyle.Render(throughputSpark),
-			tui.PanelStyle.Render(topSyscalls),
+			common.HighlightStyle.Render(trends),
+			common.PanelStyle.Render(latencySpark),
+			common.PanelStyle.Render(throughputSpark),
+			common.PanelStyle.Render(topSyscalls),
+			common.PanelStyle.Render(topFiles),
+			common.PanelStyle.Render(topProcesses),
+			common.PanelStyle.Render(latencyHist),
+			common.PanelStyle.Render(gapHist),
 		},
 		"\n",
 	)
@@ -50,7 +58,7 @@ func renderSyscallBox(snap *statsengine.Snapshot, width int) string {
 		snap.TotalSyscalls,
 		snap.SyscallRatePerSec,
 	)
-	return tui.PanelStyle.Width(width).Render(content)
+	return common.PanelStyle.Width(width).Render(content)
 }
 
 func renderBytesBox(snap *statsengine.Snapshot, width int) string {
@@ -60,7 +68,7 @@ func renderBytesBox(snap *statsengine.Snapshot, width int) string {
 		formatBytes(snap.WriteBytesPerSec),
 		formatBytes(float64(snap.TotalBytes)),
 	)
-	return tui.PanelStyle.Width(width).Render(content)
+	return common.PanelStyle.Width(width).Render(content)
 }
 
 func renderErrorBox(snap *statsengine.Snapshot, width int) string {
@@ -74,7 +82,7 @@ func renderErrorBox(snap *statsengine.Snapshot, width int) string {
 		errPercent,
 		snap.LatencyMeanNs,
 	)
-	return tui.PanelStyle.Width(width).Render(content)
+	return common.PanelStyle.Width(width).Render(content)
 }
 
 func trendWithArrow(trend statsengine.Trend) string {
@@ -104,6 +112,74 @@ func summarizeTopSyscalls(snap *statsengine.Snapshot) string {
 		parts = append(parts, fmt.Sprintf("%s(%d)", syscall.Name, syscall.Count))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func summarizeTopFiles(snap *statsengine.Snapshot) string {
+	files := snap.Files()
+	if len(files) == 0 {
+		return "none"
+	}
+
+	limit := 3
+	if len(files) < limit {
+		limit = len(files)
+	}
+
+	parts := make([]string, 0, limit)
+	for _, f := range files[:limit] {
+		parts = append(parts, fmt.Sprintf("%s(%d)", trimPathTail(f.Path, 24), f.Accesses))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func summarizeTopProcesses(snap *statsengine.Snapshot) string {
+	processes := snap.Processes()
+	if len(processes) == 0 {
+		return "none"
+	}
+
+	limit := 3
+	if len(processes) < limit {
+		limit = len(processes)
+	}
+
+	parts := make([]string, 0, limit)
+	for _, p := range processes[:limit] {
+		parts = append(parts, fmt.Sprintf("%s/%d(%d)", p.Comm, p.PID, p.Syscalls))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func summarizeHistogramBrief(hist statsengine.HistogramSnapshot) string {
+	buckets := hist.Buckets()
+	if len(buckets) == 0 || hist.Total == 0 {
+		return "none"
+	}
+
+	parts := make([]string, 0, 3)
+	for _, b := range buckets {
+		if b.Count == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d", b.Label, b.Count))
+		if len(parts) == 3 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func trimPathTail(path string, max int) string {
+	if len(path) <= max {
+		return path
+	}
+	if max <= 3 {
+		return path[len(path)-max:]
+	}
+	return "..." + path[len(path)-max+3:]
 }
 
 func formatElapsed(elapsed time.Duration) string {

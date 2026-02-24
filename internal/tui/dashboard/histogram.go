@@ -3,7 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"ior/internal/statsengine"
-	"ior/internal/tui"
+	common "ior/internal/tui/common"
 	"math"
 	"strconv"
 	"strings"
@@ -11,28 +11,28 @@ import (
 
 func renderLatencyTab(snap *statsengine.Snapshot, width, height int) string {
 	if snap == nil {
-		return tui.PanelStyle.Render("Latency: waiting for stats...")
+		return common.PanelStyle.Render("Latency: waiting for stats...")
 	}
 
 	hist := renderHistogram(snap.LatencyHistogram, "Latency Histogram", width, height)
-	spark := tui.PanelStyle.Render("Latency sparkline: " + renderSparkline(snap.LatencySeriesNs(), sparklineWidth(width)))
+	spark := common.PanelStyle.Render("Latency sparkline: " + renderSparkline(snap.LatencySeriesNs(), sparklineWidth(width)))
 	return strings.Join([]string{hist, spark}, "\n")
 }
 
 func renderGapsTab(snap *statsengine.Snapshot, width, height int) string {
 	if snap == nil {
-		return tui.PanelStyle.Render("Gaps: waiting for stats...")
+		return common.PanelStyle.Render("Gaps: waiting for stats...")
 	}
 
 	hist := renderHistogram(snap.GapHistogram, "Gap Histogram", width, height)
-	spark := tui.PanelStyle.Render("Gap sparkline: " + renderSparkline(snap.GapSeriesNs(), sparklineWidth(width)))
+	spark := common.PanelStyle.Render("Gap sparkline: " + renderSparkline(snap.GapSeriesNs(), sparklineWidth(width)))
 	return strings.Join([]string{hist, spark}, "\n")
 }
 
 func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, height int) string {
 	buckets := hist.Buckets()
 	if len(buckets) == 0 {
-		return tui.PanelStyle.Render(title + ": no data")
+		return common.PanelStyle.Render(title + ": no data")
 	}
 
 	if width <= 0 {
@@ -77,7 +77,7 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 	}
 	lines = append(lines, "Scale: █▓▒░")
 
-	return tui.PanelStyle.Render(strings.Join(lines, "\n"))
+	return common.PanelStyle.Render(strings.Join(lines, "\n"))
 }
 
 func renderHistogramBar(count, maxCount uint64, width int) string {

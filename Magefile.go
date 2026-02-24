@@ -51,19 +51,21 @@ func Default() {
 
 // Build compiles the binary.
 func Build() error {
+	mg.Deps(BpfBuild)
 	return sh.RunWithV(goEnv(), "go", "build", "-tags", "netgo", "-ldflags", "-w -extldflags \"-static\"",
 		"-o", binaryName, "./cmd/ior/main.go")
 }
 
 // GoBuildRace compiles the binary with the race detector enabled.
 func GoBuildRace() error {
+	mg.Deps(BpfBuild)
 	return sh.RunWithV(goEnv(), "go", "build", "-tags", "netgo", "-ldflags", "-w -extldflags \"-static\"",
 		"-race", "-o", binaryName, "./cmd/ior/main.go")
 }
 
 // All builds the BPF object and the Go binary.
 func All() error {
-	mg.SerialDeps(BpfBuild, Build)
+	mg.SerialDeps(Build)
 	return nil
 }
 

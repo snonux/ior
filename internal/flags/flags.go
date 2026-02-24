@@ -160,25 +160,20 @@ func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp) {
 }
 
 func (flags Flags) ShouldIAttachTracepoint(tracepointName string) bool {
-	fmt.Println("ShouldIAttachTracepoint called with", tracepointName)
 	for _, re := range flags.TracepointsToExclude {
 		if re.MatchString(tracepointName) {
-			fmt.Println("Not attaching", tracepointName, "as excluded")
 			return false
 		}
 	}
 	if len(flags.TracepointsToAttach) == 0 {
-		fmt.Println("Attaching", tracepointName, "as none are explicitly incluced")
 		return true
 	}
 	for _, re := range flags.TracepointsToAttach {
 		if re.MatchString(tracepointName) {
-			fmt.Println("Attaching", tracepointName, "as included")
 			return true
 		}
 	}
 
-	fmt.Println("Not attaching", tracepointName, "as not includedd")
 	return false
 }
 
@@ -188,12 +183,10 @@ func (flags Flags) SetBPF(bpfModule *bpf.Module) error {
 		return fmt.Errorf("unable set IOR_PID_FILTER: %w", err)
 	}
 
-	fmt.Println("Setting PID_FILTER to", flags.PidFilter)
 	if err := bpfModule.InitGlobalVariable("PID_FILTER", uint32(flags.PidFilter)); err != nil {
 		return fmt.Errorf("unable to set up PID_FILTER global variable: %w", err)
 	}
 
-	fmt.Println("Setting TID_FILTER to", flags.TidFilter)
 	if err := bpfModule.InitGlobalVariable("TID_FILTER", uint32(flags.TidFilter)); err != nil {
 		return fmt.Errorf("unable to set up TID_FILTER global variable: %w", err)
 	}

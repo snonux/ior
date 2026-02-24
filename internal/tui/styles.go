@@ -1,61 +1,40 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import common "ior/internal/tui/common"
 
 var (
 	// Palette colors shared across the TUI package.
-	ColorBackground = lipgloss.Color("235")
-	ColorPanel      = lipgloss.Color("238")
-	ColorPrimary    = lipgloss.Color("75")
-	ColorAccent     = lipgloss.Color("222")
-	ColorMuted      = lipgloss.Color("246")
-	ColorText       = lipgloss.Color("255")
-	ColorDanger     = lipgloss.Color("203")
+	ColorBackground = common.ColorBackground
+	ColorPanel      = common.ColorPanel
+	ColorPrimary    = common.ColorPrimary
+	ColorAccent     = common.ColorAccent
+	ColorMuted      = common.ColorMuted
+	ColorText       = common.ColorText
+	ColorDanger     = common.ColorDanger
 )
 
 var (
 	// ScreenStyle is the base style for full-screen models.
-	ScreenStyle = lipgloss.NewStyle().
-			Foreground(ColorText).
-			Background(ColorBackground)
+	ScreenStyle = common.ScreenStyle
 
 	// HeaderStyle is used by top-level titles and screen headers.
-	HeaderStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorPrimary)
+	HeaderStyle = common.HeaderStyle
 
 	// TabActiveStyle is applied to the currently-selected tab.
-	TabActiveStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorBackground).
-			Background(ColorPrimary).
-			Padding(0, 1)
+	TabActiveStyle = common.TabActiveStyle
 
 	// TabInactiveStyle is applied to non-selected tabs.
-	TabInactiveStyle = lipgloss.NewStyle().
-				Foreground(ColorMuted).
-				Background(ColorPanel).
-				Padding(0, 1)
+	TabInactiveStyle = common.TabInactiveStyle
 
 	// PanelStyle is used for boxed sections.
-	PanelStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(ColorPanel).
-			Padding(0, 1)
+	PanelStyle = common.PanelStyle
 
 	// HelpBarStyle is used for keybinding hints at the bottom.
-	HelpBarStyle = lipgloss.NewStyle().
-			Foreground(ColorMuted).
-			BorderTop(true).
-			BorderForeground(ColorPanel)
+	HelpBarStyle = common.HelpBarStyle
 
 	// HighlightStyle emphasizes inline values.
-	HighlightStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorAccent)
+	HighlightStyle = common.HighlightStyle
 
 	// ErrorStyle is used for fatal or warning messages.
-	ErrorStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorDanger)
+	ErrorStyle = common.ErrorStyle
 )

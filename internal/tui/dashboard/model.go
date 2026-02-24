@@ -2,7 +2,7 @@ package dashboard
 
 import (
 	"ior/internal/statsengine"
-	"ior/internal/tui"
+	common "ior/internal/tui/common"
 	"ior/internal/tui/messages"
 	"strings"
 	"time"
@@ -31,7 +31,7 @@ type Model struct {
 	height int
 
 	refreshEvery    time.Duration
-	keys            tui.KeyMap
+	keys            common.KeyMap
 	syscallsOffset  int
 	filesOffset     int
 	processesOffset int
@@ -39,11 +39,11 @@ type Model struct {
 
 // NewModel creates a dashboard model with default refresh cadence.
 func NewModel(engine SnapshotSource) Model {
-	return NewModelWithConfig(engine, defaultRefreshMs, tui.Keys)
+	return NewModelWithConfig(engine, defaultRefreshMs, common.Keys)
 }
 
 // NewModelWithConfig creates a dashboard model with explicit refresh and keys.
-func NewModelWithConfig(engine SnapshotSource, refreshMs int, keys tui.KeyMap) Model {
+func NewModelWithConfig(engine SnapshotSource, refreshMs int, keys common.KeyMap) Model {
 	if refreshMs <= 0 {
 		refreshMs = defaultRefreshMs
 	}
@@ -148,6 +148,11 @@ func (m Model) snapshot() *statsengine.Snapshot {
 	return m.engine.Snapshot()
 }
 
+// LatestSnapshot returns the most recently received snapshot.
+func (m Model) LatestSnapshot() *statsengine.Snapshot {
+	return m.latest
+}
+
 // View renders the tab bar, active tab scaffold, and help bar.
 func (m Model) View() string {
 	var b strings.Builder
@@ -155,8 +160,10 @@ func (m Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(renderActiveTab(m.activeTab, m.latest, m.width, m.height, m.syscallsOffset, m.filesOffset, m.processesOffset))
 	b.WriteString("\n")
+	b.WriteString(common.HighlightStyle.Render("Press ? for help"))
+	b.WriteString("\n")
 	b.WriteString(renderHelpBar(m.keys))
-	return tui.ScreenStyle.Render(b.String())
+	return common.ScreenStyle.Render(b.String())
 }
 
 func tickCmd(d time.Duration) tea.Cmd {
@@ -168,7 +175,7 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscall
 	_ = height
 
 	if snap == nil {
-		return tui.PanelStyle.Render(tab.String() + ": waiting for stats...")
+		return common.PanelStyle.Render(tab.String() + ": waiting for stats...")
 	}
 
 	switch tab {
@@ -185,6 +192,6 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscall
 	case TabGaps:
 		return renderGapsTab(snap, width, height)
 	default:
-		return tui.PanelStyle.Render("Unknown tab")
+		return common.PanelStyle.Render("Unknown tab")
 	}
 }

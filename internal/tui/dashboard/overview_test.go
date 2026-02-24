@@ -33,6 +33,10 @@ func TestRenderOverviewIncludesCoreMetrics(t *testing.T) {
 		"Latency:",
 		"Throughput:",
 		"Top syscalls:",
+		"Top files:",
+		"Top processes:",
+		"Latency buckets:",
+		"Gap buckets:",
 	} {
 		if !strings.Contains(out, token) {
 			t.Fatalf("expected token %q in overview output", token)
@@ -64,5 +68,28 @@ func TestRenderOverviewWithoutSnapshot(t *testing.T) {
 	out := renderOverview(nil, 80, 24)
 	if !strings.Contains(out, "waiting for stats") {
 		t.Fatalf("expected waiting placeholder, got %q", out)
+	}
+}
+
+func TestOverviewSummariesIncludeFilesProcessesAndHistograms(t *testing.T) {
+	snap := statsengine.NewSnapshot(
+		nil, nil, nil,
+		[]statsengine.SyscallSnapshot{{Name: "read", Count: 2}},
+		[]statsengine.FileSnapshot{{Path: "/tmp/very/long/path/file.log", Accesses: 4}},
+		[]statsengine.ProcessSnapshot{{PID: 12, Comm: "proc", Syscalls: 7}},
+		statsengine.NewHistogramSnapshot(3, []statsengine.HistogramBucketSnapshot{
+			{Label: "[0,1us)", Count: 2},
+			{Label: "[1us,10us)", Count: 1},
+		}),
+		statsengine.NewHistogramSnapshot(1, []statsengine.HistogramBucketSnapshot{
+			{Label: "[10us,100us)", Count: 1},
+		}),
+	)
+
+	out := renderOverview(&snap, 120, 40)
+	for _, token := range []string{"Top files:", "Top processes:", "Latency buckets:", "Gap buckets:"} {
+		if !strings.Contains(out, token) {
+			t.Fatalf("expected %q in overview output", token)
+		}
 	}
 }
