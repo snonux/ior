@@ -100,8 +100,11 @@ func TestWriteSVGInvalidConfigFallsBack(t *testing.T) {
 	cfg := SVGConfig{Title: "x", Width: 0, FrameHeight: 0, FontSize: 0, MinWidthPx: 0}
 	svg := renderSVGForTest(t, tr, cfg)
 
-	if !strings.Contains(svg, `width="1200"`) {
-		t.Fatalf("expected fallback width, got: %s", svg)
+	if !strings.Contains(svg, `width="100%"`) {
+		t.Fatalf("expected responsive svg width, got: %s", svg)
+	}
+	if !strings.Contains(svg, `viewBox="0 0 1200 `) {
+		t.Fatalf("expected fallback viewBox width, got: %s", svg)
 	}
 	if !strings.Contains(svg, "I/O Flame Graph") {
 		t.Fatalf("expected fallback title, got: %s", svg)
