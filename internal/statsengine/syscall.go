@@ -32,6 +32,18 @@ type syscallStats struct {
 	samples       []uint64
 }
 
+type syscallSnapshotInput struct {
+	traceID       types.TraceId
+	name          string
+	count         uint64
+	errorCount    uint64
+	totalBytes    uint64
+	totalLatency  uint64
+	minLatency    uint64
+	maxLatency    uint64
+	sortedSamples []uint64
+}
+
 func newSyscallAccumulator() *syscallAccumulator {
 	return newSyscallAccumulatorWithConfig(syscallReservoirSampleCapDefault, rand.New(rand.NewSource(time.Now().UnixNano())))
 }
@@ -79,19 +91,45 @@ func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 		return nil
 	}
 
-	rateDiv := elapsed.Seconds()
-	result := make([]SyscallSnapshot, 0, len(a.byID))
-	for _, stats := range a.byID {
-		result = append(result, stats.toSnapshot(rateDiv))
+	return buildSyscallSnapshots(a.snapshotInputs(), elapsed)
+}
+
+func (a *syscallAccumulator) snapshotInputs() []syscallSnapshotInput {
+	if a == nil {
+		return nil
 	}
 
+	inputs := make([]syscallSnapshotInput, 0, len(a.byID))
+	for _, stats := range a.byID {
+		sorted := append([]uint64(nil), stats.samples...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		inputs = append(inputs, syscallSnapshotInput{
+			traceID:       stats.traceID,
+			name:          stats.name,
+			count:         stats.count,
+			errorCount:    stats.errorCount,
+			totalBytes:    stats.totalBytes,
+			totalLatency:  stats.totalLatency,
+			minLatency:    stats.minLatency,
+			maxLatency:    stats.maxLatency,
+			sortedSamples: sorted,
+		})
+	}
+	return inputs
+}
+
+func buildSyscallSnapshots(inputs []syscallSnapshotInput, elapsed time.Duration) []SyscallSnapshot {
+	rateDiv := elapsed.Seconds()
+	result := make([]SyscallSnapshot, 0, len(inputs))
+	for _, in := range inputs {
+		result = append(result, in.toSnapshot(rateDiv))
+	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Count != result[j].Count {
 			return result[i].Count > result[j].Count
 		}
 		return result[i].Name < result[j].Name
 	})
-
 	return result
 }
 
@@ -118,12 +156,7 @@ func (s *syscallStats) addSample(duration uint64, cap int, rng *rand.Rand) {
 	s.samples[idx] = duration
 }
 
-func (s *syscallStats) toSnapshot(rateDiv float64) SyscallSnapshot {
-	sortedSamples := append([]uint64(nil), s.samples...)
-	sort.Slice(sortedSamples, func(i, j int) bool {
-		return sortedSamples[i] < sortedSamples[j]
-	})
-
+func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
 	return SyscallSnapshot{
 		TraceID:       s.traceID,
 		Name:          s.name,
@@ -134,9 +167,9 @@ func (s *syscallStats) toSnapshot(rateDiv float64) SyscallSnapshot {
 		LatencyMinNs:  s.minLatency,
 		LatencyMaxNs:  s.maxLatency,
 		LatencyMeanNs: float64(s.totalLatency) / float64(maxU64(s.count, 1)),
-		LatencyP50Ns:  samplePercentile(sortedSamples, 0.50),
-		LatencyP95Ns:  samplePercentile(sortedSamples, 0.95),
-		LatencyP99Ns:  samplePercentile(sortedSamples, 0.99),
+		LatencyP50Ns:  samplePercentile(s.sortedSamples, 0.50),
+		LatencyP95Ns:  samplePercentile(s.sortedSamples, 0.95),
+		LatencyP99Ns:  samplePercentile(s.sortedSamples, 0.99),
 	}
 }
 

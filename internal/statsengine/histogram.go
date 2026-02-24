@@ -7,6 +7,11 @@ type histogram struct {
 	total  uint64
 }
 
+type histogramSnapshotInput struct {
+	counts [histogramBucketCount]uint64
+	total  uint64
+}
+
 var histogramBoundariesNs = [histogramBucketCount - 1]uint64{
 	1_000,
 	10_000,
@@ -47,6 +52,20 @@ func (h *histogram) Snapshot() HistogramSnapshot {
 		return NewHistogramSnapshot(0, nil)
 	}
 
+	return buildHistogramSnapshot(h.snapshotInputs())
+}
+
+func (h *histogram) snapshotInputs() histogramSnapshotInput {
+	if h == nil {
+		return histogramSnapshotInput{}
+	}
+	return histogramSnapshotInput{
+		counts: h.counts,
+		total:  h.total,
+	}
+}
+
+func buildHistogramSnapshot(in histogramSnapshotInput) HistogramSnapshot {
 	buckets := make([]HistogramBucketSnapshot, 0, histogramBucketCount)
 	for i := 0; i < histogramBucketCount; i++ {
 		lower, upper := histogramBucketRange(i)
@@ -54,11 +73,11 @@ func (h *histogram) Snapshot() HistogramSnapshot {
 			Label:   histogramLabels[i],
 			LowerNs: lower,
 			UpperNs: upper,
-			Count:   h.counts[i],
+			Count:   in.counts[i],
 		})
 	}
 
-	return NewHistogramSnapshot(h.total, buckets)
+	return NewHistogramSnapshot(in.total, buckets)
 }
 
 func histogramBucketIndex(durationNs uint64) int {
