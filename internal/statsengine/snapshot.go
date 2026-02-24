@@ -183,6 +183,12 @@ func (s Snapshot) SyscallsCount() int {
 	return len(s.syscalls)
 }
 
+// TopNSyscalls returns at most n per-syscall rows in ranking order.
+// Callers must treat returned data as read-only.
+func (s Snapshot) TopNSyscalls(n int) []SyscallSnapshot {
+	return topNSyscalls(s.syscalls, n)
+}
+
 // Files returns per-file snapshot rows.
 // Callers must treat returned data as read-only.
 func (s Snapshot) Files() []FileSnapshot {
@@ -192,6 +198,12 @@ func (s Snapshot) Files() []FileSnapshot {
 // FilesCount returns number of file rows without cloning backing slices.
 func (s Snapshot) FilesCount() int {
 	return len(s.files)
+}
+
+// TopNFiles returns at most n file rows in ranking order.
+// Callers must treat returned data as read-only.
+func (s Snapshot) TopNFiles(n int) []FileSnapshot {
+	return topNFiles(s.files, n)
 }
 
 // Processes returns per-process snapshot rows.
@@ -205,8 +217,44 @@ func (s Snapshot) ProcessesCount() int {
 	return len(s.processes)
 }
 
+// TopNProcesses returns at most n process rows in ranking order.
+// Callers must treat returned data as read-only.
+func (s Snapshot) TopNProcesses(n int) []ProcessSnapshot {
+	return topNProcesses(s.processes, n)
+}
+
 // Buckets returns histogram buckets.
 // Callers must treat returned data as read-only.
 func (h HistogramSnapshot) Buckets() []HistogramBucketSnapshot {
 	return h.buckets
+}
+
+func topNSyscalls(rows []SyscallSnapshot, n int) []SyscallSnapshot {
+	if n <= 0 || len(rows) == 0 {
+		return nil
+	}
+	if n > len(rows) {
+		n = len(rows)
+	}
+	return rows[:n:n]
+}
+
+func topNFiles(rows []FileSnapshot, n int) []FileSnapshot {
+	if n <= 0 || len(rows) == 0 {
+		return nil
+	}
+	if n > len(rows) {
+		n = len(rows)
+	}
+	return rows[:n:n]
+}
+
+func topNProcesses(rows []ProcessSnapshot, n int) []ProcessSnapshot {
+	if n <= 0 || len(rows) == 0 {
+		return nil
+	}
+	if n > len(rows) {
+		n = len(rows)
+	}
+	return rows[:n:n]
 }

@@ -103,3 +103,26 @@ func TestNilAccessorsRemainNil(t *testing.T) {
 		t.Fatalf("expected nil buckets, got %#v", got)
 	}
 }
+
+func TestTopNAccessors(t *testing.T) {
+	s := NewSnapshot(
+		nil,
+		nil,
+		nil,
+		[]SyscallSnapshot{{Name: "a"}, {Name: "b"}, {Name: "c"}},
+		[]FileSnapshot{{Path: "/a"}, {Path: "/b"}},
+		[]ProcessSnapshot{{PID: 1}, {PID: 2}, {PID: 3}},
+		HistogramSnapshot{},
+		HistogramSnapshot{},
+	)
+
+	if got := s.TopNSyscalls(2); len(got) != 2 {
+		t.Fatalf("expected 2 top syscalls, got %d", len(got))
+	}
+	if got := s.TopNFiles(10); len(got) != 2 {
+		t.Fatalf("expected all files when n exceeds len, got %d", len(got))
+	}
+	if got := s.TopNProcesses(0); got != nil {
+		t.Fatalf("expected nil when n<=0, got %#v", got)
+	}
+}
