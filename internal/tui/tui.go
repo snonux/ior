@@ -2,11 +2,14 @@ package tui
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"ior/internal/flags"
 	"ior/internal/statsengine"
+	tuiexport "ior/internal/tui/export"
 	"ior/internal/tui/pidpicker"
+	"os"
 	"sync"
 	"time"
 
@@ -71,6 +74,7 @@ type Model struct {
 	screen    Screen
 	pidPicker pidpicker.Model
 	dashboard dashboardModel
+	exporter  tuiexport.Model
 
 	keys KeyMap
 
@@ -98,6 +102,7 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 		screen:     ScreenPIDPicker,
 		pidPicker:  pidpicker.New(),
 		dashboard:  newDashboardModel(getDashboardSnapshotSource()),
+		exporter:   tuiexport.NewModel(),
 		keys:       Keys,
 		spin:       spin,
 		startTrace: startTrace,
@@ -134,6 +139,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stopTrace()
 			return m, tea.Quit
 		}
+		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() {
+			m.exporter = m.exporter.Open()
+			return m, nil
+		}
+	case tuiexport.RequestMsg:
+		return m, runExportCmd(msg.Option, m.dashboard.latest)
+	case tuiexport.CompletedMsg:
+		var cmd tea.Cmd
+		m.exporter, cmd = m.exporter.Update(msg)
+		return m, cmd
+	case tuiexport.FailedMsg:
+		var cmd tea.Cmd
+		m.exporter, cmd = m.exporter.Update(msg)
+		return m, cmd
 	case PidSelectedMsg:
 		return m.handlePidSelected(msg)
 	case TracingStartedMsg:
@@ -151,6 +170,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.attaching {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+	}
+	if m.exporter.Visible() {
+		var cmd tea.Cmd
+		m.exporter, cmd = m.exporter.Update(msg)
 		return m, cmd
 	}
 
@@ -236,9 +260,17 @@ func (m Model) View() string {
 
 	switch m.screen {
 	case ScreenPIDPicker:
-		return m.pidPicker.View()
+		base := m.pidPicker.View()
+		if m.exporter.Visible() {
+			return m.exporter.View(m.width, m.height) + "\n" + base
+		}
+		return base
 	case ScreenDashboard:
-		return m.dashboard.View()
+		base := m.dashboard.View()
+		if m.exporter.Visible() {
+			return m.exporter.View(m.width, m.height) + "\n" + base
+		}
+		return base
 	default:
 		return ""
 	}
@@ -289,4 +321,89 @@ func (d *dashboardModel) refresh() {
 
 func dashboardTickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return dashboardTickMsg{} })
+}
+
+func runExportCmd(option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
+	return func() tea.Msg {
+		switch option {
+		case tuiexport.OptionCSV:
+			path, err := exportSnapshotCSV(snap)
+			if err != nil {
+				return tuiexport.FailedMsg{Err: err}
+			}
+			return tuiexport.CompletedMsg{Path: path}
+		case tuiexport.OptionFlamegraph:
+			path, err := exportFlamegraph()
+			if err != nil {
+				return tuiexport.FailedMsg{Err: err}
+			}
+			return tuiexport.CompletedMsg{Path: path}
+		default:
+			return tuiexport.FailedMsg{Err: errors.New("unknown export option")}
+		}
+	}
+}
+
+func exportSnapshotCSV(snap *statsengine.Snapshot) (string, error) {
+	filename := fmt.Sprintf("ior-snapshot-%s.csv", time.Now().Format("20060102-150405"))
+	f, err := os.Create(filename)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+
+	rows := [][]string{
+		{"section", "name", "value1", "value2", "value3"},
+		{"summary", "totals", fmt.Sprint(snapValue(snap, func(s *statsengine.Snapshot) uint64 { return s.TotalSyscalls })), fmt.Sprint(snapValue(snap, func(s *statsengine.Snapshot) uint64 { return s.TotalErrors })), fmt.Sprint(snapValue(snap, func(s *statsengine.Snapshot) uint64 { return s.TotalBytes }))},
+		{"summary", "rates_per_sec", fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.SyscallRatePerSec })), fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.ReadBytesPerSec })), fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.WriteBytesPerSec }))},
+	}
+	for _, row := range rows {
+		if err := w.Write(row); err != nil {
+			return "", err
+		}
+	}
+
+	if snap != nil {
+		for _, s := range snap.Syscalls() {
+			if err := w.Write([]string{"syscall", s.Name, fmt.Sprint(s.Count), fmt.Sprintf("%.2f", s.RatePerSec), fmt.Sprint(s.Bytes)}); err != nil {
+				return "", err
+			}
+		}
+		for _, r := range snap.Files() {
+			if err := w.Write([]string{"file", r.Path, fmt.Sprint(r.Accesses), fmt.Sprint(r.BytesRead), fmt.Sprint(r.BytesWritten)}); err != nil {
+				return "", err
+			}
+		}
+		for _, p := range snap.Processes() {
+			if err := w.Write([]string{"process", fmt.Sprint(p.PID), fmt.Sprint(p.Syscalls), fmt.Sprintf("%.2f", p.RatePerSec), fmt.Sprint(p.Bytes)}); err != nil {
+				return "", err
+			}
+		}
+	}
+
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return "", err
+	}
+	return filename, nil
+}
+
+func snapValue(snap *statsengine.Snapshot, get func(*statsengine.Snapshot) uint64) uint64 {
+	if snap == nil {
+		return 0
+	}
+	return get(snap)
+}
+
+func snapValueF(snap *statsengine.Snapshot, get func(*statsengine.Snapshot) float64) float64 {
+	if snap == nil {
+		return 0
+	}
+	return get(snap)
+}
+
+func exportFlamegraph() (string, error) {
+	return "", errors.New("flamegraph export is not yet available in TUI mode")
 }

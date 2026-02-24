@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"ior/internal/statsengine"
+	tuiexport "ior/internal/tui/export"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +190,42 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	d.refresh()
 	if d.latest != want {
 		t.Fatalf("expected dashboard refresh to bind and use latest global source")
+	}
+}
+
+func TestExportKeyOpensModalOnDashboard(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	updated := next.(Model)
+	if !updated.exporter.Visible() {
+		t.Fatalf("expected export modal to open on e key")
+	}
+}
+
+func TestRunExportCmdCSVWritesFile(t *testing.T) {
+	dir := t.TempDir()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+
+	snap := &statsengine.Snapshot{TotalSyscalls: 1}
+	msg := runExportCmd(tuiexport.OptionCSV, snap)()
+	done, ok := msg.(tuiexport.CompletedMsg)
+	if !ok {
+		t.Fatalf("expected CompletedMsg, got %T", msg)
+	}
+	if done.Path == "" {
+		t.Fatalf("expected export path")
+	}
+	if _, err := os.Stat(filepath.Join(dir, done.Path)); err != nil {
+		t.Fatalf("expected CSV file to exist: %v", err)
 	}
 }
