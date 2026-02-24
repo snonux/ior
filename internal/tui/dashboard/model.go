@@ -169,9 +169,9 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscall
 	case TabProcesses:
 		return renderProcessesWithOffset(snap, width, height, processesOffset)
 	case TabLatency:
-		return tui.PanelStyle.Render("Latency histogram")
+		return renderLatencyTab(snap, width, height)
 	case TabGaps:
-		return tui.PanelStyle.Render("Gap histogram")
+		return renderGapsTab(snap, width, height)
 	default:
 		return tui.PanelStyle.Render("Unknown tab")
 	}
