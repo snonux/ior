@@ -22,7 +22,7 @@ func TestRenderFilesIncludesHeaders(t *testing.T) {
 	)
 
 	out := renderFiles(&snap, 120, 30)
-	for _, token := range []string{"Path", "Accesses", "Bytes Read", "Bytes Written", "Avg Latency", "Max Latency", "app.log"} {
+	for _, token := range []string{"Path", "Accesses", "Read", "Write", "Avg Latency", "Max Latency", "app.log"} {
 		if !strings.Contains(out, token) {
 			t.Fatalf("expected token %q in files table output", token)
 		}

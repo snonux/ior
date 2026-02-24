@@ -86,6 +86,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "right", "l":
+		m.activeTab = nextTab(m.activeTab)
+		return m, nil
+	case "left", "h":
+		m.activeTab = prevTab(m.activeTab)
+		return m, nil
+	}
+
 	if m.activeTab == TabSyscalls {
 		switch msg.String() {
 		case "down", "j":

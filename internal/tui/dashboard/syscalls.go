@@ -18,9 +18,36 @@ func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset 
 		return "Syscalls: waiting for stats..."
 	}
 
-	rows := syscallRows(snap.Syscalls())
+	columns, rows := syscallTableData(snap.Syscalls(), width)
 	if len(rows) == 0 {
 		return "Syscalls: no data"
+	}
+
+	tbl := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+	)
+	tbl.SetHeight(syscallTableHeight(height))
+	tbl.SetWidth(tableWidth(width))
+	cursor := clampOffset(offset, len(rows))
+	tbl.SetCursor(cursor)
+	return tbl.View() + fmt.Sprintf("\nRow %d/%d", cursor+1, len(rows))
+}
+
+func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]table.Column, []table.Row) {
+	if width < 140 {
+		columns := []table.Column{
+			{Title: "Syscall", Width: 14},
+			{Title: "Count", Width: 6},
+			{Title: "Rate/s", Width: 7},
+			{Title: "Avg", Width: 8},
+			{Title: "p95", Width: 8},
+			{Title: "p99", Width: 8},
+			{Title: "Bytes", Width: 8},
+			{Title: "Errors", Width: 6},
+		}
+		return columns, syscallRowsCompact(syscalls)
 	}
 
 	columns := []table.Column{
@@ -36,20 +63,10 @@ func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset 
 		{Title: "Bytes", Width: 10},
 		{Title: "Errors", Width: 8},
 	}
-
-	tbl := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-	)
-	tbl.SetHeight(syscallTableHeight(height))
-	tbl.SetWidth(tableWidth(width))
-	cursor := clampOffset(offset, len(rows))
-	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d", cursor+1, len(rows))
+	return columns, syscallRowsFull(syscalls)
 }
 
-func syscallRows(syscalls []statsengine.SyscallSnapshot) []table.Row {
+func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) []table.Row {
 	rows := make([]table.Row, 0, len(syscalls))
 	for _, s := range syscalls {
 		rows = append(rows, table.Row{
@@ -60,6 +77,23 @@ func syscallRows(syscalls []statsengine.SyscallSnapshot) []table.Row {
 			formatDurationUintNs(s.LatencyMinNs),
 			formatDurationUintNs(s.LatencyMaxNs),
 			formatDurationUintNs(s.LatencyP50Ns),
+			formatDurationUintNs(s.LatencyP95Ns),
+			formatDurationUintNs(s.LatencyP99Ns),
+			formatBytes(float64(s.Bytes)),
+			strconv.FormatUint(s.Errors, 10),
+		})
+	}
+	return rows
+}
+
+func syscallRowsCompact(syscalls []statsengine.SyscallSnapshot) []table.Row {
+	rows := make([]table.Row, 0, len(syscalls))
+	for _, s := range syscalls {
+		rows = append(rows, table.Row{
+			s.Name,
+			strconv.FormatUint(s.Count, 10),
+			fmt.Sprintf("%.1f", s.RatePerSec),
+			formatDurationNs(s.LatencyMeanNs),
 			formatDurationUintNs(s.LatencyP95Ns),
 			formatDurationUintNs(s.LatencyP99Ns),
 			formatBytes(float64(s.Bytes)),

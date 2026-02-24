@@ -20,7 +20,7 @@ func TestRenderSyscallsIncludesHeaders(t *testing.T) {
 	)
 
 	out := renderSyscalls(&snap, 120, 30)
-	for _, token := range []string{"Syscall", "Count", "Rate/s", "p95", "Errors"} {
+	for _, token := range []string{"Syscall", "Count", "Rate/s", "p95", "p99", "Bytes", "Errors"} {
 		if !strings.Contains(out, token) {
 			t.Fatalf("expected token %q in syscall table view", token)
 		}

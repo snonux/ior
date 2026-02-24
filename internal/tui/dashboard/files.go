@@ -24,11 +24,11 @@ func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int
 
 	columns := []table.Column{
 		{Title: "Path", Width: filePathWidth(width)},
-		{Title: "Accesses", Width: 10},
-		{Title: "Bytes Read", Width: 12},
-		{Title: "Bytes Written", Width: 14},
-		{Title: "Avg Latency", Width: 12},
-		{Title: "Max Latency", Width: 12},
+		{Title: "Accesses", Width: 8},
+		{Title: "Read", Width: 9},
+		{Title: "Write", Width: 9},
+		{Title: "Avg Latency", Width: 11},
+		{Title: "Max Latency", Width: 11},
 	}
 
 	tbl := table.New(
@@ -60,14 +60,16 @@ func fileRows(files []statsengine.FileSnapshot) []table.Row {
 
 func filePathWidth(width int) int {
 	if width <= 0 {
-		return 48
+		return 24
 	}
-	w := width - 66
-	if w < 20 {
-		return 20
+	// Reserve enough room for non-path columns and table separators so
+	// latency columns remain visible even on narrower terminals.
+	w := width - 70
+	if w < 14 {
+		return 14
 	}
-	if w > 72 {
-		return 72
+	if w > 52 {
+		return 52
 	}
 	return w
 }
