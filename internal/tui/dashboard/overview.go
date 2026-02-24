@@ -108,54 +108,36 @@ func trendWithArrow(trend statsengine.Trend) string {
 }
 
 func summarizeTopSyscalls(snap *statsengine.Snapshot) string {
-	syscalls := snap.Syscalls()
+	syscalls := snap.TopNSyscalls(3)
 	if len(syscalls) == 0 {
 		return "none"
 	}
-
-	limit := 3
-	if len(syscalls) < limit {
-		limit = len(syscalls)
-	}
-
-	parts := make([]string, 0, limit)
-	for _, syscall := range syscalls[:limit] {
+	parts := make([]string, 0, len(syscalls))
+	for _, syscall := range syscalls {
 		parts = append(parts, fmt.Sprintf("%s(%d)", syscall.Name, syscall.Count))
 	}
 	return strings.Join(parts, ", ")
 }
 
 func summarizeTopFiles(snap *statsengine.Snapshot) string {
-	files := snap.Files()
+	files := snap.TopNFiles(3)
 	if len(files) == 0 {
 		return "none"
 	}
-
-	limit := 3
-	if len(files) < limit {
-		limit = len(files)
-	}
-
-	parts := make([]string, 0, limit)
-	for _, f := range files[:limit] {
+	parts := make([]string, 0, len(files))
+	for _, f := range files {
 		parts = append(parts, fmt.Sprintf("%s(%d)", trimPathTail(f.Path, 24), f.Accesses))
 	}
 	return strings.Join(parts, ", ")
 }
 
 func summarizeTopProcesses(snap *statsengine.Snapshot) string {
-	processes := snap.Processes()
+	processes := snap.TopNProcesses(3)
 	if len(processes) == 0 {
 		return "none"
 	}
-
-	limit := 3
-	if len(processes) < limit {
-		limit = len(processes)
-	}
-
-	parts := make([]string, 0, limit)
-	for _, p := range processes[:limit] {
+	parts := make([]string, 0, len(processes))
+	for _, p := range processes {
 		parts = append(parts, fmt.Sprintf("%s/%d(%d)", p.Comm, p.PID, p.Syscalls))
 	}
 	return strings.Join(parts, ", ")
