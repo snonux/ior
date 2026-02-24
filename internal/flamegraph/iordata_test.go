@@ -7,6 +7,19 @@ import (
 	"testing"
 )
 
+func counterAt(iod iorData, path pathType, traceID traceIdType, comm commType, pid pidType, tid tidType, flags flagsType) (Counter, bool) {
+	key := recordKey{
+		Path:    path,
+		TraceID: traceID,
+		Comm:    comm,
+		Pid:     pid,
+		Tid:     tid,
+		Flags:   flags,
+	}
+	cnt, ok := iod.records[key]
+	return cnt, ok
+}
+
 func TestAddPath(t *testing.T) {
 	iod := newIorData()
 	path := pathType("testPath")
@@ -19,16 +32,18 @@ func TestAddPath(t *testing.T) {
 
 	iod.add(path, traceId, comm, pid, tid, flags, cnt1)
 
-	if iod.paths[path][traceId][comm][pid][tid][flags] != cnt1 {
-		t.Errorf("Expected counter %v, got %v", cnt1, iod.paths[path][traceId][comm][pid][tid][flags])
+	gotCnt, ok := counterAt(iod, path, traceId, comm, pid, tid, flags)
+	if !ok || gotCnt != cnt1 {
+		t.Errorf("Expected counter %v, got %v (ok=%v)", cnt1, gotCnt, ok)
 	}
 	cnt2 := Counter{Count: 2, Duration: 2000, DurationToPrev: 200, Bytes: 128}
 
 	iod.add(path, traceId, comm, pid, tid, flags, cnt2)
 
 	resultCnt := cnt1.add(cnt2)
-	if iod.paths[path][traceId][comm][pid][tid][flags] != resultCnt {
-		t.Errorf("Expected counter %v, got %v", resultCnt, iod.paths[path][traceId][comm][pid][tid][flags])
+	gotCnt, ok = counterAt(iod, path, traceId, comm, pid, tid, flags)
+	if !ok || gotCnt != resultCnt {
+		t.Errorf("Expected counter %v, got %v (ok=%v)", resultCnt, gotCnt, ok)
 	}
 }
 
@@ -37,34 +52,34 @@ func TestMerge(t *testing.T) {
 	roFlag := flagsType(syscall.O_RDONLY)
 	traceId := types.SYS_ENTER_OPENAT
 	// Initialize iorData instances with sample data
-	iod1 := iorData{paths: pathMap{
-		"path1": {traceId: {"comm1": {100: {1000: {rdwrFlag: Counter{
-			Count:          10,
-			Duration:       1000,
-			DurationToPrev: 100,
-			Bytes:          64,
-		}}}}}}}}
-	iod2 := iorData{paths: pathMap{
-		"path1": {traceId: {"comm1": {100: {1000: {roFlag: Counter{
-			Count:          20,
-			Duration:       2000,
-			DurationToPrev: 200,
-			Bytes:          128,
-		}}}}}}}}
-	iod3 := iorData{paths: pathMap{
-		"path2": {traceId: {"comm2": {101: {1000: {roFlag: Counter{
-			Count:          20,
-			Duration:       2000,
-			DurationToPrev: 200,
-			Bytes:          128,
-		}}}}}}}}
-	iod4 := iorData{paths: pathMap{
-		"path2": {traceId: {"comm2": {101: {1000: {roFlag: Counter{
-			Count:          40,
-			Duration:       4000,
-			DurationToPrev: 400,
-			Bytes:          256,
-		}}}}}}}}
+	iod1 := newIorData()
+	iod1.add("path1", traceId, "comm1", 100, 1000, rdwrFlag, Counter{
+		Count:          10,
+		Duration:       1000,
+		DurationToPrev: 100,
+		Bytes:          64,
+	})
+	iod2 := newIorData()
+	iod2.add("path1", traceId, "comm1", 100, 1000, roFlag, Counter{
+		Count:          20,
+		Duration:       2000,
+		DurationToPrev: 200,
+		Bytes:          128,
+	})
+	iod3 := newIorData()
+	iod3.add("path2", traceId, "comm2", 101, 1000, roFlag, Counter{
+		Count:          20,
+		Duration:       2000,
+		DurationToPrev: 200,
+		Bytes:          128,
+	})
+	iod4 := newIorData()
+	iod4.add("path2", traceId, "comm2", 101, 1000, roFlag, Counter{
+		Count:          40,
+		Duration:       4000,
+		DurationToPrev: 400,
+		Bytes:          256,
+	})
 
 	t.Log("iod1", iod1)
 	t.Log("iod2", iod2)
@@ -74,17 +89,17 @@ func TestMerge(t *testing.T) {
 	t.Log("merged", merged)
 
 	t.Run("Merged correctly", func(t *testing.T) {
-		if len(merged.paths) != 2 {
-			t.Errorf("Expected 2 paths, got %d", len(merged.paths))
+		if len(merged.records) != 3 {
+			t.Errorf("Expected 3 aggregated records, got %d", len(merged.records))
 		}
-		if merged.paths["path1"][traceId]["comm1"][100][1000][rdwrFlag].Count != 10 {
-			t.Errorf("Expected counter 10, got %d", merged.paths["path1"][1]["comm1"][100][1000][rdwrFlag].Count)
+		if cnt, _ := counterAt(merged, "path1", traceId, "comm1", 100, 1000, rdwrFlag); cnt.Count != 10 {
+			t.Errorf("Expected counter 10, got %d", cnt.Count)
 		}
-		if merged.paths["path2"][traceId]["comm2"][101][1000][roFlag].Count != 60 {
-			t.Errorf("Expected counter 60, got %d", merged.paths["path2"][1]["comm2"][101][1000][roFlag].Count)
+		if cnt, _ := counterAt(merged, "path2", traceId, "comm2", 101, 1000, roFlag); cnt.Count != 60 {
+			t.Errorf("Expected counter 60, got %d", cnt.Count)
 		}
-		if merged.paths["path2"][traceId]["comm2"][101][1000][roFlag].Bytes != 384 {
-			t.Errorf("Expected bytes 384, got %d", merged.paths["path2"][1]["comm2"][101][1000][roFlag].Bytes)
+		if cnt, _ := counterAt(merged, "path2", traceId, "comm2", 101, 1000, roFlag); cnt.Bytes != 384 {
+			t.Errorf("Expected bytes 384, got %d", cnt.Bytes)
 		}
 	})
 
@@ -168,22 +183,24 @@ func TestMergeEmpty(t *testing.T) {
 	traceId := types.SYS_ENTER_OPENAT
 	roFlag := flagsType(syscall.O_RDONLY)
 
-	iod := iorData{paths: pathMap{
-		"path1": {traceId: {"comm1": {100: {1000: {roFlag: Counter{
-			Count:          10,
-			Duration:       1000,
-			DurationToPrev: 100,
-			Bytes:          64,
-		}}}}}},
-	}}
+	iod := newIorData()
+	iod.add("path1", traceId, "comm1", 100, 1000, roFlag, Counter{
+		Count:          10,
+		Duration:       1000,
+		DurationToPrev: 100,
+		Bytes:          64,
+	})
 
 	empty := newIorData()
 	merged := iod.merge(empty)
 
-	if len(merged.paths) != 1 {
-		t.Errorf("Expected 1 path, got %d", len(merged.paths))
+	if len(merged.records) != 1 {
+		t.Errorf("Expected 1 record, got %d", len(merged.records))
 	}
-	cnt := merged.paths["path1"][traceId]["comm1"][100][1000][roFlag]
+	cnt, ok := counterAt(merged, "path1", traceId, "comm1", 100, 1000, roFlag)
+	if !ok {
+		t.Fatal("Expected merged counter to exist")
+	}
 	if cnt.Count != 10 || cnt.Duration != 1000 || cnt.DurationToPrev != 100 || cnt.Bytes != 64 {
 		t.Errorf("Expected original counter preserved, got %v", cnt)
 	}
@@ -201,7 +218,7 @@ func TestAddZeroCounter(t *testing.T) {
 
 	iod.add(path, traceId, comm, pid, tid, flags, zero)
 
-	cnt, ok := iod.paths[path][traceId][comm][pid][tid][flags]
+	cnt, ok := counterAt(iod, path, traceId, comm, pid, tid, flags)
 	if !ok {
 		t.Fatal("Expected entry to exist for zero counter")
 	}
@@ -215,20 +232,19 @@ func TestSerializeDeserializeRoundTrip(t *testing.T) {
 	rdwrFlag := flagsType(syscall.O_RDWR)
 	roFlag := flagsType(syscall.O_RDONLY)
 
-	original := iorData{paths: pathMap{
-		"path1": {traceId: {"comm1": {100: {1000: {rdwrFlag: Counter{
-			Count:          10,
-			Duration:       1000,
-			DurationToPrev: 100,
-			Bytes:          64,
-		}}}}}},
-		"path2": {traceId: {"comm2": {200: {2000: {roFlag: Counter{
-			Count:          20,
-			Duration:       2000,
-			DurationToPrev: 200,
-			Bytes:          128,
-		}}}}}},
-	}}
+	original := newIorData()
+	original.add("path1", traceId, "comm1", 100, 1000, rdwrFlag, Counter{
+		Count:          10,
+		Duration:       1000,
+		DurationToPrev: 100,
+		Bytes:          64,
+	})
+	original.add("path2", traceId, "comm2", 200, 2000, roFlag, Counter{
+		Count:          20,
+		Duration:       2000,
+		DurationToPrev: 200,
+		Bytes:          128,
+	})
 
 	data, err := original.serialize()
 	if err != nil {
@@ -240,16 +256,22 @@ func TestSerializeDeserializeRoundTrip(t *testing.T) {
 		t.Fatalf("deserialize failed: %v", err)
 	}
 
-	if len(restored.paths) != len(original.paths) {
-		t.Fatalf("Expected %d paths, got %d", len(original.paths), len(restored.paths))
+	if len(restored.records) != len(original.records) {
+		t.Fatalf("Expected %d records, got %d", len(original.records), len(restored.records))
 	}
 
-	cnt1 := restored.paths["path1"][traceId]["comm1"][100][1000][rdwrFlag]
+	cnt1, ok := counterAt(restored, "path1", traceId, "comm1", 100, 1000, rdwrFlag)
+	if !ok {
+		t.Fatal("Expected path1 counter to exist")
+	}
 	if cnt1.Count != 10 || cnt1.Duration != 1000 || cnt1.DurationToPrev != 100 || cnt1.Bytes != 64 {
 		t.Errorf("path1 counter mismatch: %v", cnt1)
 	}
 
-	cnt2 := restored.paths["path2"][traceId]["comm2"][200][2000][roFlag]
+	cnt2, ok := counterAt(restored, "path2", traceId, "comm2", 200, 2000, roFlag)
+	if !ok {
+		t.Fatal("Expected path2 counter to exist")
+	}
 	if cnt2.Count != 20 || cnt2.Duration != 2000 || cnt2.DurationToPrev != 200 || cnt2.Bytes != 128 {
 		t.Errorf("path2 counter mismatch: %v", cnt2)
 	}
