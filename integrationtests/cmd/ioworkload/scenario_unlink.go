@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
@@ -83,21 +82,23 @@ func unlinkRmdir() error {
 	}
 	defer cleanup()
 
-	subDir := filepath.Join(dir, "rmdir-me")
-	if err := syscall.Mkdir(subDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
-	}
-	// Give ior a brief attach window before the one-shot rmdir syscall.
-	time.Sleep(300 * time.Millisecond)
+	// Retry with fresh paths to avoid a single one-shot syscall that can race
+	// tracepoint attach during parallel integration test startup.
+	for i := 0; i < 5; i++ {
+		subDir := filepath.Join(dir, fmt.Sprintf("rmdir-me-%d", i))
+		if err := syscall.Mkdir(subDir, 0o755); err != nil {
+			return fmt.Errorf("mkdir: %w", err)
+		}
 
-	pathBytes, err := syscall.BytePtrFromString(subDir)
-	if err != nil {
-		return fmt.Errorf("path bytes: %w", err)
-	}
-	_, _, errno := syscall.Syscall(syscall.SYS_RMDIR, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
-	runtime.KeepAlive(pathBytes)
-	if errno != 0 {
-		return fmt.Errorf("rmdir: %w", errno)
+		pathBytes, err := syscall.BytePtrFromString(subDir)
+		if err != nil {
+			return fmt.Errorf("path bytes: %w", err)
+		}
+		_, _, errno := syscall.Syscall(syscall.SYS_RMDIR, uintptr(unsafe.Pointer(pathBytes)), 0, 0)
+		runtime.KeepAlive(pathBytes)
+		if errno != 0 {
+			return fmt.Errorf("rmdir: %w", errno)
+		}
 	}
 	return nil
 }

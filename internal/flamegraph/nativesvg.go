@@ -3,10 +3,9 @@ package flamegraph
 import (
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"strings"
-
-	"iter"
 )
 
 type NativeSVG struct {
@@ -54,19 +53,21 @@ func (n NativeSVG) WriteSVGFromFile(iorDataFile string) (outFile string, err err
 
 func (n NativeSVG) WriteSVGFromIter(records iter.Seq[IterRecord], w io.Writer) error {
 	tr := newTrie()
+	var framesBuf []string
 	for record := range records {
-		frames, err := n.recordFrames(record)
+		frames, err := n.recordFrames(record, framesBuf)
 		if err != nil {
 			return err
 		}
+		framesBuf = frames
 		tr.add(frames, record.Cnt.ValueByName(n.countField))
 	}
 	tr.computeTotals()
 	return WriteSVG(w, tr, n.config)
 }
 
-func (n NativeSVG) recordFrames(record IterRecord) ([]string, error) {
-	var frames []string
+func (n NativeSVG) recordFrames(record IterRecord, framesBuf []string) ([]string, error) {
+	frames := framesBuf[:0]
 	for _, fieldName := range n.fields {
 		value, err := record.StringByName(fieldName)
 		if err != nil {
