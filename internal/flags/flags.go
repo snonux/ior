@@ -53,6 +53,7 @@ type Flags struct {
 	TracepointsToExclude []*regexp.Regexp
 
 	// Flamegraph flags
+	PlainMode        bool
 	FlamegraphEnable bool
 	FlamegraphName   string
 
@@ -96,6 +97,7 @@ func parse() {
 	tracepointsToAttach := flag.String("tps", "", "Comma separated list regexes for tracepoints to load")
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
+	flag.BoolVar(&singleton.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
 

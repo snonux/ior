@@ -14,6 +14,7 @@ import (
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
 	"ior/internal/tracepoints"
+	"ior/internal/tui"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -21,6 +22,12 @@ import (
 type tracepointProgram interface {
 	attachTracepoint(category, name string) error
 }
+
+var (
+	runTraceFn            = runTrace
+	runTraceWithContextFn = runTraceWithContext
+	runTUIFn              = tui.RunWithTraceStarter
+)
 
 type tracepointModule interface {
 	getProgram(progName string) (tracepointProgram, error)
@@ -77,12 +84,13 @@ func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bo
 
 func Run() error {
 	flags.PrintVersion()
-	iorFile := flags.Get().IorDataFile
+	cfg := flags.Get()
+	iorFile := cfg.IorDataFile
 	var noTraceRun bool
 
 	if iorFile != "" {
 		noTraceRun = true
-		collapsed := flamegraph.NewCollapsed(iorFile, flags.Get().CollapsedFields, flags.Get().CountField)
+		collapsed := flamegraph.NewCollapsed(iorFile, cfg.CollapsedFields, cfg.CountField)
 		collapsedFile, err := collapsed.Write(iorFile)
 		if err != nil {
 			return err
@@ -100,10 +108,46 @@ func Run() error {
 	if noTraceRun {
 		return nil
 	}
-	return runTrace()
+	return dispatchRun(cfg)
+}
+
+func dispatchRun(cfg flags.Flags) error {
+	if shouldRunTraceMode(cfg) {
+		return runTraceFn()
+	}
+	return runTUIFn(tuiTraceStarterFromRunTrace(runTraceWithContextFn))
+}
+
+func shouldRunTraceMode(cfg flags.Flags) bool {
+	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.PprofEnable
+}
+
+func tuiTraceStarterFromRunTrace(startTrace func(context.Context, chan<- struct{}) error) tui.TraceStarter {
+	return func(ctx context.Context) error {
+		startedCh := make(chan struct{})
+		errCh := make(chan error, 1)
+
+		go func() {
+			errCh <- startTrace(ctx, startedCh)
+			close(errCh)
+		}()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-startedCh:
+			return nil
+		case err := <-errCh:
+			return err
+		}
+	}
 }
 
 func runTrace() error {
+	return runTraceWithContext(context.Background(), nil)
+}
+
+func runTraceWithContext(parentCtx context.Context, started chan<- struct{}) error {
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
 		return err
@@ -148,18 +192,26 @@ func runTrace() error {
 		close(pprofDone)
 	}
 
+	signalTraceStarted(started)
+
 	el := newEventLoop()
 	duration := time.Duration(flags.Get().Duration) * time.Second
 	fmt.Println("Probing for", duration)
-	ctx, cancel := context.WithTimeout(context.Background(), duration)
+	ctx, cancel := context.WithTimeout(parentCtx, duration)
+	defer cancel()
 
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signalCh)
 
 	go func() {
-		<-signalCh
-		fmt.Println("Received signal, shutting down...")
-		cancel()
+		select {
+		case <-signalCh:
+			fmt.Println("Received signal, shutting down...")
+			cancel()
+		case <-ctx.Done():
+			return
+		}
 	}()
 
 	go func() {
@@ -179,4 +231,11 @@ func runTrace() error {
 	<-pprofDone
 	fmt.Println("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
 	return nil
+}
+
+func signalTraceStarted(started chan<- struct{}) {
+	if started == nil {
+		return
+	}
+	close(started)
 }
