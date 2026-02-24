@@ -67,8 +67,8 @@ func WriteSVG(w io.Writer, t *trie, cfg SVGConfig) error {
 }
 
 func writeSVGHeader(bw *bufio.Writer, cfg SVGConfig, height int) error {
-	_, err := fmt.Fprintf(bw, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d">`+"\n",
-		cfg.Width, height, cfg.Width, height)
+	_, err := fmt.Fprintf(bw, `<svg xmlns="http://www.w3.org/2000/svg" width="100%%" height="%d" viewBox="0 0 %d %d" preserveAspectRatio="xMinYMin meet">`+"\n",
+		height, cfg.Width, height)
 	if err != nil {
 		return err
 	}
