@@ -3,6 +3,7 @@ package dashboard
 import (
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
+	"ior/internal/tui/eventstream"
 	"ior/internal/tui/messages"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 )
 
 const defaultRefreshMs = 1000
+const streamRefreshMs = 200
 
 // SnapshotSource is the dashboard data source.
 type SnapshotSource interface {
@@ -19,6 +21,7 @@ type SnapshotSource interface {
 }
 
 type refreshTickMsg struct{}
+type streamTickMsg struct{}
 
 // Model is the dashboard tab framework model.
 type Model struct {
@@ -35,15 +38,16 @@ type Model struct {
 	syscallsOffset  int
 	filesOffset     int
 	processesOffset int
+	streamModel     eventstream.Model
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
-func NewModel(engine SnapshotSource) Model {
-	return NewModelWithConfig(engine, defaultRefreshMs, common.Keys)
+func NewModel(engine SnapshotSource, streamSource *eventstream.RingBuffer) Model {
+	return NewModelWithConfig(engine, streamSource, defaultRefreshMs, common.Keys)
 }
 
 // NewModelWithConfig creates a dashboard model with explicit refresh and keys.
-func NewModelWithConfig(engine SnapshotSource, refreshMs int, keys common.KeyMap) Model {
+func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuffer, refreshMs int, keys common.KeyMap) Model {
 	if refreshMs <= 0 {
 		refreshMs = defaultRefreshMs
 	}
@@ -52,6 +56,7 @@ func NewModelWithConfig(engine SnapshotSource, refreshMs int, keys common.KeyMap
 		engine:       engine,
 		refreshEvery: time.Duration(refreshMs) * time.Millisecond,
 		keys:         keys,
+		streamModel:  eventstream.NewModel(streamSource),
 	}
 }
 
@@ -73,11 +78,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tickCmd(m.refreshEvery),
 			func() tea.Msg { return messages.StatsTickMsg{Snap: snap} },
 		)
+	case streamTickMsg:
+		if m.activeTab != TabStream {
+			return m, nil
+		}
+		m.streamModel.Refresh()
+		return m, streamTickCmd()
 	case messages.StatsTickMsg:
 		m.latest = msg.Snap
 		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
 		m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
 		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
+		m.streamModel.Refresh()
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -86,36 +98,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	prevActiveTab := m.activeTab
+	var cmd tea.Cmd
 	keyStr := msg.String()
-	if m.handleArrowTabKey(keyStr) {
-		return m, nil
-	}
-	if m.handleScrollKey(keyStr) {
-		return m, nil
-	}
+	handled := m.handleArrowTabKey(keyStr) || m.handleScrollKey(keyStr)
 
-	switch {
-	case key.Matches(msg, m.keys.Tab):
-		m.activeTab = nextTab(m.activeTab)
-	case key.Matches(msg, m.keys.ShiftTab):
-		m.activeTab = prevTab(m.activeTab)
-	case key.Matches(msg, m.keys.One):
-		m.activeTab = TabOverview
-	case key.Matches(msg, m.keys.Two):
-		m.activeTab = TabSyscalls
-	case key.Matches(msg, m.keys.Three):
-		m.activeTab = TabFiles
-	case key.Matches(msg, m.keys.Four):
-		m.activeTab = TabProcesses
-	case key.Matches(msg, m.keys.Five):
-		m.activeTab = TabLatency
-	case key.Matches(msg, m.keys.Six):
-		m.activeTab = TabGaps
-	case key.Matches(msg, m.keys.Refresh):
-		snap := m.snapshot()
-		return m, func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
+	if !handled {
+		switch {
+		case key.Matches(msg, m.keys.Tab):
+			m.activeTab = nextTab(m.activeTab)
+			handled = true
+		case key.Matches(msg, m.keys.ShiftTab):
+			m.activeTab = prevTab(m.activeTab)
+			handled = true
+		case key.Matches(msg, m.keys.One):
+			m.activeTab = TabOverview
+			handled = true
+		case key.Matches(msg, m.keys.Two):
+			m.activeTab = TabSyscalls
+			handled = true
+		case key.Matches(msg, m.keys.Three):
+			m.activeTab = TabFiles
+			handled = true
+		case key.Matches(msg, m.keys.Four):
+			m.activeTab = TabProcesses
+			handled = true
+		case key.Matches(msg, m.keys.Five):
+			m.activeTab = TabLatency
+			handled = true
+		case key.Matches(msg, m.keys.Six):
+			m.activeTab = TabGaps
+			handled = true
+		case key.Matches(msg, m.keys.Seven):
+			m.activeTab = TabStream
+			handled = true
+		case key.Matches(msg, m.keys.Refresh):
+			snap := m.snapshot()
+			cmd = func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
+			handled = true
+		}
 	}
-	return m, nil
+	if !handled {
+		return m, nil
+	}
+	if prevActiveTab != TabStream && m.activeTab == TabStream {
+		if cmd == nil {
+			return m, streamTickCmd()
+		}
+		return m, tea.Batch(cmd, streamTickCmd())
+	}
+	return m, cmd
 }
 
 func (m *Model) handleArrowTabKey(keyStr string) bool {
@@ -139,6 +171,8 @@ func (m *Model) handleScrollKey(keyStr string) bool {
 		return scrollOffset(keyStr, &m.filesOffset, m.maxFilesRows())
 	case TabProcesses:
 		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows())
+	case TabStream:
+		return m.streamModel.HandleKey(keyStr)
 	default:
 		return false
 	}
@@ -199,7 +233,7 @@ func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, m.width))
 	b.WriteString("\n")
-	b.WriteString(renderActiveTab(m.activeTab, m.latest, m.width, m.height, m.syscallsOffset, m.filesOffset, m.processesOffset))
+	b.WriteString(renderActiveTab(m.activeTab, m.latest, &m.streamModel, m.width, m.height, m.syscallsOffset, m.filesOffset, m.processesOffset))
 	b.WriteString("\n")
 	b.WriteString(common.HighlightStyle.Render("Press ? for help"))
 	b.WriteString("\n")
@@ -211,7 +245,14 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscallsOffset, filesOffset, processesOffset int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, width, height, syscallsOffset, filesOffset, processesOffset int) string {
+	if tab == TabStream {
+		if streamModel == nil {
+			return common.PanelStyle.Render("Stream: waiting for source...")
+		}
+		return streamModel.View(width, height)
+	}
+
 	if snap == nil {
 		return common.PanelStyle.Render(tab.String() + ": waiting for stats...")
 	}
@@ -232,4 +273,8 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, width, height, syscall
 	default:
 		return common.PanelStyle.Render("Unknown tab")
 	}
+}
+
+func streamTickCmd() tea.Cmd {
+	return tea.Tick(streamRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return streamTickMsg{} })
 }
