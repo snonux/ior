@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
@@ -18,6 +19,14 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+type fakeProbeManager struct {
+	states []probemanager.ProbeState
+}
+
+func (f fakeProbeManager) States() []probemanager.ProbeState { return f.states }
+func (f fakeProbeManager) Toggle(string) error               { return nil }
+func (f fakeProbeManager) ActiveCount() (int, int)           { return len(f.states), len(f.states) }
 
 func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	flags.SetPidFilter(-1)
@@ -450,5 +459,25 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 	out = updated.View()
 	if !strings.Contains(out, "Files: waiting for stats") {
 		t.Fatalf("expected files waiting view after tab")
+	}
+}
+
+func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
+	SetProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
+	t.Cleanup(func() { SetProbeManager(nil) })
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+	m.probeModal = m.probeModal.Open()
+
+	out := m.View()
+	if !strings.Contains(out, "Probes (") {
+		t.Fatalf("expected probe modal content, got %q", out)
+	}
+	if strings.Contains(out, "Overview: waiting for stats") {
+		t.Fatalf("expected probe modal to render as standalone view, got stacked dashboard content")
 	}
 }
