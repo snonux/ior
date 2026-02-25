@@ -174,7 +174,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.exporter.Visible() && m.showHelp {
 			return m, nil
 		}
-		if flags.Get().TUIExportEnable && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() {
+		if flags.Get().TUIExportEnable && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
 			m.exporter = m.exporter.Open()
 			return m, nil
 		}
@@ -192,6 +192,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePidSelected(msg)
 	case TracingStartedMsg:
 		m.attaching = false
+		m.dashboard.SetStreamSource(getEventStreamSource())
 		return m, m.dashboard.Init()
 	case TracingErrorMsg:
 		m.attaching = false
@@ -289,32 +290,32 @@ func (m Model) View() string {
 
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return ScreenStyle.Render(PanelStyle.Render(line))
+		return placeToViewport(m.width, m.height, ScreenStyle.Render(PanelStyle.Render(line)))
 	}
 
 	if m.lastErr != nil {
-		return ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))
+		return placeToViewport(m.width, m.height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error())))
 	}
 
 	switch m.screen {
 	case ScreenPIDPicker:
 		base := m.pidPicker.View()
 		if m.exporter.Visible() {
-			return m.exporter.View(m.width, m.height) + "\n" + base
+			return placeToViewport(m.width, m.height, m.exporter.View(m.width, m.height)+"\n"+base)
 		}
 		if m.showHelp {
-			return renderHelpOverlay(m.width, m.height, [][]key.Binding{m.keys.PickerShortHelp()}) + "\n" + base
+			return placeToViewport(m.width, m.height, renderHelpOverlay(m.width, m.height, [][]key.Binding{m.keys.PickerShortHelp()})+"\n"+base)
 		}
-		return base
+		return placeToViewport(m.width, m.height, base)
 	case ScreenDashboard:
 		base := m.dashboard.View()
 		if m.exporter.Visible() {
-			return m.exporter.View(m.width, m.height) + "\n" + base
+			return placeToViewport(m.width, m.height, m.exporter.View(m.width, m.height)+"\n"+base)
 		}
 		if m.showHelp {
-			return renderHelpOverlay(m.width, m.height, m.keys.DashboardFullHelp()) + "\n" + base
+			return placeToViewport(m.width, m.height, renderHelpOverlay(m.width, m.height, m.keys.DashboardFullHelp())+"\n"+base)
 		}
-		return base
+		return placeToViewport(m.width, m.height, base)
 	default:
 		return ""
 	}
@@ -470,4 +471,11 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func placeToViewport(width, height int, content string) string {
+	if width <= 0 || height <= 0 {
+		return content
+	}
+	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
 }

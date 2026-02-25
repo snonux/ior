@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"ior/internal/statsengine"
+	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
+	"ior/internal/tui/messages"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,6 +193,33 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	}
 }
 
+func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
+	orig := getEventStreamSource()
+	defer SetEventStreamSource(orig)
+
+	rb := eventstream.NewRingBuffer()
+	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 1, TID: 1})
+	SetEventStreamSource(rb)
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = true
+
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(Model)
+
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	m = next.(Model)
+	next, _ = m.Update(messages.StatsTickMsg{})
+	m = next.(Model)
+
+	if !strings.Contains(m.View(), "read") {
+		t.Fatalf("expected stream tab to render rebound stream event")
+	}
+}
+
 func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	flags.SetTUIExportEnable(true)
 	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
@@ -218,6 +247,37 @@ func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
 	updated := next.(Model)
 	if updated.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed when export is disabled")
+	}
+}
+
+func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
+	flags.SetTUIExportEnable(true)
+	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	for _, r := range []rune{'o', 'p', 'e'} {
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+
+	if m.exporter.Visible() {
+		t.Fatalf("expected export modal to remain closed while stream filter modal handles typing")
+	}
+	if !strings.Contains(m.View(), "syscall~ope") {
+		t.Fatalf("expected typed syscall filter to be applied")
 	}
 }
 
