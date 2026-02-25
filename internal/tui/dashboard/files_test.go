@@ -56,3 +56,53 @@ func TestFilePathWidthExpandsOnWideTerminal(t *testing.T) {
 		t.Fatalf("expected wide path column to use remaining space, got %d", got)
 	}
 }
+
+func TestAggregateFilesByDir(t *testing.T) {
+	files := []statsengine.FileSnapshot{
+		{Path: "/var/log/a.log", Accesses: 10, BytesRead: 100, BytesWritten: 40, AvgLatencyNs: 100, MaxLatencyNs: 300},
+		{Path: "/var/log/b.log", Accesses: 20, BytesRead: 200, BytesWritten: 60, AvgLatencyNs: 200, MaxLatencyNs: 500},
+		{Path: "/tmp/c.log", Accesses: 5, BytesRead: 50, BytesWritten: 10, AvgLatencyNs: 1000, MaxLatencyNs: 1200},
+	}
+
+	got := aggregateFilesByDir(files)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 grouped dirs, got %d", len(got))
+	}
+
+	// Sorted by accesses desc, then directory asc.
+	if got[0].Dir != "/var/log" {
+		t.Fatalf("expected first dir /var/log, got %q", got[0].Dir)
+	}
+	if got[0].Accesses != 30 || got[0].BytesRead != 300 || got[0].BytesWritten != 100 {
+		t.Fatalf("unexpected aggregated counters for /var/log: %+v", got[0])
+	}
+	if got[0].FileCount != 2 {
+		t.Fatalf("expected file count 2 for /var/log, got %d", got[0].FileCount)
+	}
+	if got[0].MaxLatencyNs != 500 {
+		t.Fatalf("expected max latency 500 for /var/log, got %d", got[0].MaxLatencyNs)
+	}
+	// Weighted average: (100*10 + 200*20) / 30 = 166.666...
+	if got[0].AvgLatencyNs < 166.6 || got[0].AvgLatencyNs > 166.7 {
+		t.Fatalf("unexpected weighted avg latency for /var/log: %f", got[0].AvgLatencyNs)
+	}
+
+	if got[1].Dir != "/tmp" || got[1].Accesses != 5 || got[1].FileCount != 1 {
+		t.Fatalf("unexpected second grouped dir: %+v", got[1])
+	}
+}
+
+func TestAggregateFilesByDirEmpty(t *testing.T) {
+	if got := aggregateFilesByDir(nil); len(got) != 0 {
+		t.Fatalf("expected empty result for nil input, got %d entries", len(got))
+	}
+	if got := aggregateFilesByDir([]statsengine.FileSnapshot{}); len(got) != 0 {
+		t.Fatalf("expected empty result for empty input, got %d entries", len(got))
+	}
+}
+
+func TestDirPathWidthAccountsForFilesColumn(t *testing.T) {
+	if got := dirPathWidth(180); got != filePathWidth(180)-6 {
+		t.Fatalf("expected dirPathWidth to reserve 6 extra chars, got dir=%d file=%d", got, filePathWidth(180))
+	}
+}
