@@ -14,6 +14,7 @@ import (
 	"ior/internal/event"
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
+	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	"ior/internal/tracepoints"
 	"ior/internal/tui"
@@ -23,7 +24,11 @@ import (
 )
 
 type tracepointProgram interface {
-	attachTracepoint(category, name string) error
+	attachTracepoint(category, name string) (tracepointLink, error)
+}
+
+type tracepointLink interface {
+	Destroy() error
 }
 
 var (
@@ -40,9 +45,12 @@ type libbpfTracepointProgram struct {
 	prog *bpf.BPFProg
 }
 
-func (p libbpfTracepointProgram) attachTracepoint(category, name string) error {
-	_, err := p.prog.AttachTracepoint(category, name)
-	return err
+func (p libbpfTracepointProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
+	return p.prog.AttachTracepoint(category, name)
+}
+
+func (p libbpfTracepointProgram) attachTracepoint(category, name string) (tracepointLink, error) {
+	return p.AttachTracepoint(category, name)
 }
 
 type libbpfTracepointModule struct {
@@ -50,6 +58,14 @@ type libbpfTracepointModule struct {
 }
 
 func (m libbpfTracepointModule) getProgram(progName string) (tracepointProgram, error) {
+	prog, err := m.module.GetProgram(progName)
+	if err != nil {
+		return nil, err
+	}
+	return libbpfTracepointProgram{prog: prog}, nil
+}
+
+func (m libbpfTracepointModule) GetProgram(progName string) (probemanager.Program, error) {
 	prog, err := m.module.GetProgram(progName)
 	if err != nil {
 		return nil, err
@@ -81,7 +97,7 @@ func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bo
 		}
 		logln("Attached prog handle_", name)
 
-		if err = prog.attachTracepoint("syscalls", name); err != nil {
+		if _, err = prog.attachTracepoint("syscalls", name); err != nil {
 			// OK, older Kernel versions may not have this tracepoint!
 			logf("Failed to attach to %s tracepoint: %v, kernel version may be too old, skipping", name, err)
 			continue
@@ -210,7 +226,9 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 		return err
 	}
 
-	if err := attachTracepointsWith(libbpfTracepointModule{module: bpfModule}, flags.Get().ShouldIAttachTracepoint, tracepoints.List, verbose); err != nil {
+	mgr := probemanager.NewManager(libbpfTracepointModule{module: bpfModule})
+	defer mgr.Close()
+	if err := mgr.AttachAll(flags.Get().ShouldIAttachTracepoint, tracepoints.List); err != nil {
 		return err
 	}
 

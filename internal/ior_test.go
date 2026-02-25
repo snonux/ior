@@ -11,9 +11,16 @@ type fakeTracepointProgram struct {
 	attachErr   error
 }
 
-func (p *fakeTracepointProgram) attachTracepoint(_, _ string) error {
+type fakeTracepointLink struct{}
+
+func (fakeTracepointLink) Destroy() error { return nil }
+
+func (p *fakeTracepointProgram) attachTracepoint(_, _ string) (tracepointLink, error) {
 	p.attachCalls++
-	return p.attachErr
+	if p.attachErr != nil {
+		return nil, p.attachErr
+	}
+	return fakeTracepointLink{}, nil
 }
 
 type fakeTracepointModule struct {
