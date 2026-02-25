@@ -17,6 +17,7 @@ import (
 	"ior/internal/statsengine"
 	"ior/internal/tracepoints"
 	"ior/internal/tui"
+	"ior/internal/tui/eventstream"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -142,7 +143,9 @@ func tuiTraceStarterFromRunTrace(
 		})
 
 		engine := statsengine.NewEngine(64)
+		streamBuf := eventstream.NewRingBuffer()
 		tui.SetDashboardSnapshotSource(engine)
+		tui.SetEventStreamSource(streamBuf)
 
 		startedCh := make(chan struct{})
 		errCh := make(chan error, 1)
@@ -151,6 +154,7 @@ func tuiTraceStarterFromRunTrace(
 			errCh <- startTrace(ctx, startedCh, func(el *eventLoop) {
 				el.printCb = func(ep *event.Pair) {
 					engine.Ingest(ep)
+					streamBuf.Push(eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep))
 					ep.Recycle()
 				}
 			})
