@@ -231,6 +231,8 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	if err := mgr.AttachAll(flags.Get().ShouldIAttachTracepoint, tracepoints.List); err != nil {
 		return err
 	}
+	tui.SetProbeManager(mgr)
+	defer tui.SetProbeManager(nil)
 
 	// 4096 channel size, minimises event drops
 	ch := make(chan []byte, 4096)

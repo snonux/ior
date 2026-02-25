@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"ior/internal/flags"
+	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	dashboardui "ior/internal/tui/dashboard"
@@ -41,6 +42,13 @@ type snapshotSource interface {
 	Snapshot() *statsengine.Snapshot
 }
 
+// ProbeManager exposes runtime probe controls to TUI layers.
+type ProbeManager interface {
+	States() []probemanager.ProbeState
+	Toggle(syscall string) error
+	ActiveCount() (int, int)
+}
+
 var dashboardSourceState struct {
 	mu     sync.RWMutex
 	source snapshotSource
@@ -49,6 +57,11 @@ var dashboardSourceState struct {
 var eventStreamSourceState struct {
 	mu     sync.RWMutex
 	source *eventstream.RingBuffer
+}
+
+var probeManagerState struct {
+	mu      sync.RWMutex
+	manager ProbeManager
 }
 
 // SetDashboardSnapshotSource sets the snapshot source used by dashboard mode.
@@ -65,6 +78,13 @@ func SetEventStreamSource(source *eventstream.RingBuffer) {
 	eventStreamSourceState.mu.Unlock()
 }
 
+// SetProbeManager sets the probe manager used by TUI probe controls.
+func SetProbeManager(manager ProbeManager) {
+	probeManagerState.mu.Lock()
+	probeManagerState.manager = manager
+	probeManagerState.mu.Unlock()
+}
+
 func getDashboardSnapshotSource() snapshotSource {
 	dashboardSourceState.mu.RLock()
 	defer dashboardSourceState.mu.RUnlock()
@@ -75,6 +95,12 @@ func getEventStreamSource() *eventstream.RingBuffer {
 	eventStreamSourceState.mu.RLock()
 	defer eventStreamSourceState.mu.RUnlock()
 	return eventStreamSourceState.source
+}
+
+func getProbeManager() ProbeManager {
+	probeManagerState.mu.RLock()
+	defer probeManagerState.mu.RUnlock()
+	return probeManagerState.manager
 }
 
 // Run starts the TUI program in alternate screen mode.
