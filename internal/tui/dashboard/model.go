@@ -90,6 +90,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.latest = msg.Snap
 		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
 		m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
+		m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRows())
 		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 		m.streamModel.Refresh()
 		return m, nil
