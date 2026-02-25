@@ -151,3 +151,35 @@ func TestManagerAttachAllReturnsProgramError(t *testing.T) {
 		t.Fatalf("expected state to capture attach error, got %+v", states)
 	}
 }
+
+func TestManagerAttachAllPicksUpNewTracepointsOnLaterCall(t *testing.T) {
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_read":  {},
+			"handle_sys_exit_read":   {},
+			"handle_sys_enter_write": {},
+			"handle_sys_exit_write":  {},
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+
+	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"}); err != nil {
+		t.Fatalf("AttachAll(read) returned error: %v", err)
+	}
+	states := mgr.States()
+	if len(states) != 1 || states[0].Syscall != "read" {
+		t.Fatalf("expected only read after first call, got %+v", states)
+	}
+
+	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read", "sys_enter_write", "sys_exit_write"}); err != nil {
+		t.Fatalf("AttachAll(read+write) returned error: %v", err)
+	}
+	states = mgr.States()
+	if len(states) != 2 {
+		t.Fatalf("expected new syscall to appear after second call, got %+v", states)
+	}
+	if states[0].Syscall != "read" || states[1].Syscall != "write" {
+		t.Fatalf("unexpected syscall ordering/content: %+v", states)
+	}
+}
