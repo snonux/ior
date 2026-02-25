@@ -257,6 +257,27 @@ func TestStatsTickMsgUpdatesLatestSnapshot(t *testing.T) {
 	}
 }
 
+func TestStatsTickClampsGroupedFilesOffset(t *testing.T) {
+	snap := statsengine.NewSnapshot(
+		nil,
+		nil,
+		nil,
+		nil,
+		[]statsengine.FileSnapshot{{Path: "/a/f1"}, {Path: "/a/f2"}},
+		nil,
+		statsengine.HistogramSnapshot{},
+		statsengine.HistogramSnapshot{},
+	)
+	m := NewModel(nil, nil)
+	m.filesDirOffset = 10
+
+	next, _ := m.Update(messages.StatsTickMsg{Snap: &snap})
+	model := next.(Model)
+	if model.filesDirOffset != 0 {
+		t.Fatalf("expected grouped files offset clamped to 0, got %d", model.filesDirOffset)
+	}
+}
+
 func TestViewRendersTabBarAndHelp(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
 	out := m.View()
