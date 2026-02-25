@@ -114,6 +114,37 @@ func TestManagerDetachDestroysLinks(t *testing.T) {
 	}
 }
 
+func TestManagerDetachFailureKeepsActiveStateForUndetachedLink(t *testing.T) {
+	enter := &fakeLink{err: errors.New("destroy failed")}
+	exit := &fakeLink{}
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": {link: enter},
+			"handle_sys_exit_close":  {link: exit},
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}); err != nil {
+		t.Fatalf("AttachAll returned error: %v", err)
+	}
+
+	err := mgr.Detach("close")
+	if err == nil {
+		t.Fatalf("expected detach error")
+	}
+	states := mgr.States()
+	if len(states) != 1 {
+		t.Fatalf("expected one state, got %+v", states)
+	}
+	if !states[0].Active {
+		t.Fatalf("expected probe to remain active when one link failed to detach")
+	}
+	if states[0].Error == "" {
+		t.Fatalf("expected error to be recorded after detach failure")
+	}
+}
+
 func TestManagerClosePreventsFurtherOperations(t *testing.T) {
 	attacher := &fakeAttacher{
 		programs: map[string]*fakeProgram{

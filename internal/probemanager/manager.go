@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -179,25 +180,44 @@ func (m *Manager) Detach(syscall string) error {
 	}
 	enterLink := entry.enterLink
 	exitLink := entry.exitLink
-	entry.enterLink = nil
-	entry.exitLink = nil
-	entry.active = false
 	m.mu.Unlock()
 
+	var errs []string
+	enterErr := error(nil)
 	if enterLink != nil {
 		if err := enterLink.Destroy(); err != nil {
-			m.setLastError(syscall, fmt.Errorf("detach enter %s: %w", syscall, err))
-			return err
+			enterErr = err
+			errs = append(errs, fmt.Sprintf("detach enter %s: %v", syscall, err))
 		}
 	}
+	exitErr := error(nil)
 	if exitLink != nil {
 		if err := exitLink.Destroy(); err != nil {
-			m.setLastError(syscall, fmt.Errorf("detach exit %s: %w", syscall, err))
-			return err
+			exitErr = err
+			errs = append(errs, fmt.Sprintf("detach exit %s: %v", syscall, err))
 		}
 	}
-	m.setLastError(syscall, nil)
-	return nil
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, err = m.entryLocked(syscall)
+	if err != nil {
+		return err
+	}
+	if enterErr == nil {
+		entry.enterLink = nil
+	}
+	if exitErr == nil {
+		entry.exitLink = nil
+	}
+	entry.active = entry.enterLink != nil || entry.exitLink != nil
+	if len(errs) == 0 {
+		entry.lastErr = nil
+		return nil
+	}
+	combined := errors.New(strings.Join(errs, "; "))
+	entry.lastErr = combined
+	return combined
 }
 
 func (m *Manager) States() []ProbeState {
