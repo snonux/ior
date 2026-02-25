@@ -1,0 +1,353 @@
+package probemanager
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+)
+
+// Link abstracts an attached tracepoint link.
+type Link interface {
+	Destroy() error
+}
+
+// Program abstracts a loadable BPF program that can attach to a tracepoint.
+type Program interface {
+	AttachTracepoint(category, name string) (Link, error)
+}
+
+// Attacher resolves BPF programs by name.
+type Attacher interface {
+	GetProgram(name string) (Program, error)
+}
+
+// ProbeState is an immutable view used by callers/UI.
+type ProbeState struct {
+	Syscall string
+	Active  bool
+	Error   string
+}
+
+type probeEntry struct {
+	syscall string
+	enterTP string
+	exitTP  string
+
+	enterLink Link
+	exitLink  Link
+
+	active  bool
+	lastErr error
+}
+
+// Manager tracks probe attach/detach state for grouped syscall tracepoints.
+type Manager struct {
+	mu       sync.Mutex
+	attacher Attacher
+	probes   map[string]*probeEntry
+	closed   bool
+}
+
+func NewManager(attacher Attacher) *Manager {
+	return &Manager{
+		attacher: attacher,
+		probes:   make(map[string]*probeEntry),
+	}
+}
+
+func (m *Manager) Register(syscall string, pair TracepointPair) {
+	if m == nil || syscall == "" {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.probes[syscall]
+	if !ok {
+		entry = &probeEntry{syscall: syscall}
+		m.probes[syscall] = entry
+	}
+	entry.enterTP = pair.Enter
+	entry.exitTP = pair.Exit
+}
+
+func (m *Manager) AttachAll(shouldAttach func(string) bool, tpNames []string) error {
+	if m == nil {
+		return errors.New("probe manager is nil")
+	}
+	if shouldAttach == nil {
+		shouldAttach = func(string) bool { return true }
+	}
+
+	groups := GroupTracepoints(tpNames)
+	for syscall, pair := range groups {
+		m.Register(syscall, pair)
+		if !shouldAttach(pair.Enter) && !shouldAttach(pair.Exit) {
+			continue
+		}
+		if err := m.Attach(syscall); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) Toggle(syscall string) error {
+	if m == nil {
+		return errors.New("probe manager is nil")
+	}
+	if syscall == "" {
+		return errors.New("syscall is required")
+	}
+
+	m.mu.Lock()
+	entry, err := m.entryLocked(syscall)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	active := entry.active
+	m.mu.Unlock()
+
+	if active {
+		return m.Detach(syscall)
+	}
+	return m.Attach(syscall)
+}
+
+func (m *Manager) Attach(syscall string) error {
+	if syscall == "" {
+		return errors.New("syscall is required")
+	}
+
+	m.mu.Lock()
+	entry, err := m.entryLocked(syscall)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if entry.active {
+		m.mu.Unlock()
+		return nil
+	}
+
+	enterTP := entry.enterTP
+	exitTP := entry.exitTP
+	attacher := m.attacher
+	m.mu.Unlock()
+
+	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, err = m.entryLocked(syscall)
+	if err != nil {
+		if enterLink != nil {
+			_ = enterLink.Destroy()
+		}
+		if exitLink != nil {
+			_ = exitLink.Destroy()
+		}
+		return err
+	}
+
+	if attachErr != nil {
+		entry.lastErr = attachErr
+		entry.active = entry.enterLink != nil || entry.exitLink != nil
+		return attachErr
+	}
+
+	entry.enterLink = enterLink
+	entry.exitLink = exitLink
+	entry.lastErr = nil
+	entry.active = enterLink != nil || exitLink != nil
+	return nil
+}
+
+func (m *Manager) Detach(syscall string) error {
+	if syscall == "" {
+		return errors.New("syscall is required")
+	}
+
+	m.mu.Lock()
+	entry, err := m.entryLocked(syscall)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	enterLink := entry.enterLink
+	exitLink := entry.exitLink
+	entry.enterLink = nil
+	entry.exitLink = nil
+	entry.active = false
+	m.mu.Unlock()
+
+	if enterLink != nil {
+		if err := enterLink.Destroy(); err != nil {
+			m.setLastError(syscall, fmt.Errorf("detach enter %s: %w", syscall, err))
+			return err
+		}
+	}
+	if exitLink != nil {
+		if err := exitLink.Destroy(); err != nil {
+			m.setLastError(syscall, fmt.Errorf("detach exit %s: %w", syscall, err))
+			return err
+		}
+	}
+	m.setLastError(syscall, nil)
+	return nil
+}
+
+func (m *Manager) States() []ProbeState {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]ProbeState, 0, len(m.probes))
+	for syscall, entry := range m.probes {
+		state := ProbeState{
+			Syscall: syscall,
+			Active:  entry.active,
+		}
+		if entry.lastErr != nil {
+			state.Error = entry.lastErr.Error()
+		}
+		out = append(out, state)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Syscall < out[j].Syscall })
+	return out
+}
+
+func (m *Manager) ActiveCount() (active, total int) {
+	if m == nil {
+		return 0, 0
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	total = len(m.probes)
+	for _, entry := range m.probes {
+		if entry.active {
+			active++
+		}
+	}
+	return active, total
+}
+
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	type pairLinks struct {
+		syscall   string
+		enterLink Link
+		exitLink  Link
+	}
+	links := make([]pairLinks, 0, len(m.probes))
+	for syscall, entry := range m.probes {
+		links = append(links, pairLinks{
+			syscall:   syscall,
+			enterLink: entry.enterLink,
+			exitLink:  entry.exitLink,
+		})
+		entry.enterLink = nil
+		entry.exitLink = nil
+		entry.active = false
+		entry.lastErr = nil
+	}
+	m.closed = true
+	m.mu.Unlock()
+
+	var firstErr error
+	for _, l := range links {
+		var errForSyscall error
+		if l.enterLink != nil {
+			if err := l.enterLink.Destroy(); err != nil {
+				errForSyscall = err
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		if l.exitLink != nil {
+			if err := l.exitLink.Destroy(); err != nil {
+				if errForSyscall == nil {
+					errForSyscall = err
+				}
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		m.setLastError(l.syscall, errForSyscall)
+	}
+	return firstErr
+}
+
+func (m *Manager) entryLocked(syscall string) (*probeEntry, error) {
+	if m.closed {
+		return nil, errors.New("probe manager is closed")
+	}
+	if m.attacher == nil {
+		return nil, errors.New("probe manager has no attacher")
+	}
+	entry, ok := m.probes[syscall]
+	if !ok {
+		return nil, fmt.Errorf("unknown syscall %q", syscall)
+	}
+	return entry, nil
+}
+
+func (m *Manager) setLastError(syscall string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.probes[syscall]
+	if !ok {
+		return
+	}
+	entry.lastErr = err
+}
+
+func attachPair(attacher Attacher, enterTP, exitTP string) (Link, Link, error) {
+	enterLink, err := attachOne(attacher, enterTP)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	exitLink, err := attachOne(attacher, exitTP)
+	if err != nil {
+		if enterLink != nil {
+			_ = enterLink.Destroy()
+		}
+		return nil, nil, err
+	}
+	return enterLink, exitLink, nil
+}
+
+func attachOne(attacher Attacher, tracepoint string) (Link, error) {
+	if tracepoint == "" {
+		return nil, nil
+	}
+	progName := "handle_" + tracepoint
+	prog, err := attacher.GetProgram(progName)
+	if err != nil {
+		return nil, fmt.Errorf("get program %s: %w", progName, err)
+	}
+	link, err := prog.AttachTracepoint("syscalls", tracepoint)
+	if err != nil {
+		return nil, fmt.Errorf("attach %s: %w", tracepoint, err)
+	}
+	return link, nil
+}
