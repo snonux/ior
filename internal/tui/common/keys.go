@@ -13,6 +13,7 @@ type KeyMap struct {
 	Five     key.Binding
 	Six      key.Binding
 	Seven    key.Binding
+	DirGroup key.Binding
 	Export   key.Binding
 	Quit     key.Binding
 	Help     key.Binding
@@ -36,6 +37,7 @@ func DefaultKeyMap() KeyMap {
 		Five:     key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "lat+gaps")),
 		Six:      key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "stream")),
 		Seven:    key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "stream")),
+		DirGroup: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dir group")),
 		Export:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
@@ -61,7 +63,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
 		controls = append(controls, k.Export)
 	}
-	controls = append(controls, k.Refresh, k.Help, k.Quit)
+	controls = append(controls, k.DirGroup, k.Refresh, k.Help, k.Quit)
 
 	return [][]key.Binding{
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},
