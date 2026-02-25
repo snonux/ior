@@ -13,6 +13,7 @@ import (
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
 	"ior/internal/tui/pidpicker"
+	"ior/internal/tui/probes"
 	"os"
 	"strings"
 	"sync"
@@ -118,10 +119,11 @@ func RunWithTraceStarter(starter TraceStarter) error {
 
 // Model is the top-level Bubble Tea model that routes between PID picker and dashboard.
 type Model struct {
-	screen    Screen
-	pidPicker pidpicker.Model
-	dashboard dashboardui.Model
-	exporter  tuiexport.Model
+	screen     Screen
+	pidPicker  pidpicker.Model
+	dashboard  dashboardui.Model
+	exporter   tuiexport.Model
+	probeModal probes.Model
 
 	keys KeyMap
 
@@ -155,6 +157,7 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 		pidPicker:  pidpicker.New(),
 		dashboard:  dashboardui.NewModelWithConfig(lateBoundDashboardSource{}, getEventStreamSource(), 1000, keys),
 		exporter:   tuiexport.NewModel(),
+		probeModal: probes.NewModel(getProbeManager()),
 		keys:       keys,
 		spin:       spin,
 		startTrace: startTrace,
@@ -198,19 +201,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stopTrace()
 			return m, tea.Quit
 		}
-		if !m.exporter.Visible() && key.Matches(msg, m.keys.Help) {
+		if !m.exporter.Visible() && !m.probeModal.Visible() && key.Matches(msg, m.keys.Help) {
 			m.showHelp = !m.showHelp
 			return m, nil
 		}
-		if !m.exporter.Visible() && m.showHelp && key.Matches(msg, m.keys.Esc) {
+		if !m.exporter.Visible() && !m.probeModal.Visible() && m.showHelp && key.Matches(msg, m.keys.Esc) {
 			m.showHelp = false
 			return m, nil
 		}
-		if !m.exporter.Visible() && m.showHelp {
+		if !m.exporter.Visible() && !m.probeModal.Visible() && m.showHelp {
 			return m, nil
 		}
-		if flags.Get().TUIExportEnable && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+		if flags.Get().TUIExportEnable && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
 			m.exporter = m.exporter.Open()
+			return m, nil
+		}
+		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Probes) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+			m.probeModal = probes.NewModel(getProbeManager()).Open()
 			return m, nil
 		}
 	case tuiexport.RequestMsg:
@@ -222,6 +229,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tuiexport.FailedMsg:
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
+		return m, cmd
+	case probes.ProbeToggledMsg:
+		var cmd tea.Cmd
+		m.probeModal, cmd = m.probeModal.Update(msg)
 		return m, cmd
 	case PidSelectedMsg:
 		return m.handlePidSelected(msg)
@@ -239,6 +250,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
+	}
+	if m.probeModal.Visible() {
+		var dashboardCmd tea.Cmd
+		// Keep dashboard refresh/data flow alive while probe modal is open.
+		if _, isKey := msg.(tea.KeyMsg); !isKey && m.screen == ScreenDashboard {
+			next, cmd := m.dashboard.Update(msg)
+			m.dashboard = next.(dashboardui.Model)
+			dashboardCmd = cmd
+		}
+		var cmd tea.Cmd
+		m.probeModal, cmd = m.probeModal.Update(msg)
+		return m, tea.Batch(dashboardCmd, cmd)
 	}
 	if m.exporter.Visible() {
 		var dashboardCmd tea.Cmd
@@ -346,6 +369,9 @@ func (m Model) View() string {
 		return placeToViewport(width, height, base)
 	case ScreenDashboard:
 		base := m.dashboard.View()
+		if m.probeModal.Visible() {
+			return placeToViewport(width, height, m.probeModal.View(width, height)+"\n"+base)
+		}
 		if m.exporter.Visible() {
 			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
 		}
