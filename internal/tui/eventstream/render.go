@@ -94,30 +94,38 @@ func computeColumnLayout(width int) columnLayout {
 		width = 100
 	}
 
-	gap := 8
-	latency := 9
-	comm := 14
-	pidTid := 12
-	syscall := 11
-	ret := 6
-	bytes := 10
+	// Keep non-file columns compact so file paths can use most of the row.
+	gap := 7
+	latency := 8
+	comm := 10
+	pidTid := 10
+	syscall := 9
+	ret := 5
+	bytes := 8
 	fixed := gap + latency + comm + pidTid + syscall + ret + bytes + 7
 	file := width - fixed
-	if file >= 18 {
+	if file >= 28 {
+		// On wider terminals, give a little more room back to descriptive columns.
+		if width >= 140 {
+			comm = 12
+			syscall = 11
+			pidTid = 11
+			fixed = gap + latency + comm + pidTid + syscall + ret + bytes + 7
+			file = width - fixed
+		}
 		return columnLayout{gap: gap, latency: latency, comm: comm, pidTid: pidTid, syscall: syscall, ret: ret, bytes: bytes, file: file}
 	}
 
-	if width < 90 {
-		comm = 10
-		syscall = 9
-	} else {
-		comm = 12
-		syscall = 10
-	}
+	// Very narrow widths: compress further but keep file column readable.
+	comm = 8
+	pidTid = 9
+	syscall = 8
+	ret = 4
+	bytes = 7
 	fixed = gap + latency + comm + pidTid + syscall + ret + bytes + 7
 	file = width - fixed
-	if file < 8 {
-		file = 8
+	if file < 12 {
+		file = 12
 	}
 	return columnLayout{gap: gap, latency: latency, comm: comm, pidTid: pidTid, syscall: syscall, ret: ret, bytes: bytes, file: file}
 }

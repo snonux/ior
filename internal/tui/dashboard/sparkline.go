@@ -11,8 +11,10 @@ func renderSparkline(data []float64, width int) string {
 
 	samples := sampleForWidth(data, width)
 	min, max := minMax(samples)
+	line := ""
 	if min == max {
-		return repeatRune('▄', len(samples))
+		line = repeatRune('▄', len(samples))
+		return line + "\n" + line
 	}
 
 	out := make([]rune, len(samples))
@@ -28,7 +30,8 @@ func renderSparkline(data []float64, width int) string {
 		}
 		out[i] = sparkChars[idx]
 	}
-	return string(out)
+	line = string(out)
+	return line + "\n" + line
 }
 
 func sampleForWidth(data []float64, width int) []float64 {

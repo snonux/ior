@@ -214,8 +214,5 @@ func sparklineWidth(width int) int {
 	if w < 8 {
 		return 8
 	}
-	if w > 80 {
-		return 80
-	}
 	return w
 }

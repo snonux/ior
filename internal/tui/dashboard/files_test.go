@@ -49,3 +49,10 @@ func TestTruncatePathMiddle(t *testing.T) {
 		t.Fatalf("expected head and tail preservation, got %q", got)
 	}
 }
+
+func TestFilePathWidthExpandsOnWideTerminal(t *testing.T) {
+	got := filePathWidth(180)
+	if got <= 80 {
+		t.Fatalf("expected wide path column to use remaining space, got %d", got)
+	}
+}

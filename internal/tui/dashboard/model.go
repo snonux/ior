@@ -127,7 +127,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activeTab = TabLatency
 			handled = true
 		case key.Matches(msg, m.keys.Six):
-			m.activeTab = TabGaps
+			m.activeTab = TabStream
 			handled = true
 		case key.Matches(msg, m.keys.Seven):
 			m.activeTab = TabStream
@@ -278,9 +278,7 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 	case TabProcesses:
 		return renderProcessesWithOffset(snap, width, height, processesOffset)
 	case TabLatency:
-		return renderLatencyTab(snap, width, height)
-	case TabGaps:
-		return renderGapsTab(snap, width, height)
+		return renderLatencyGapsTab(snap, width, height)
 	default:
 		return common.PanelStyle.Render("Unknown tab")
 	}
