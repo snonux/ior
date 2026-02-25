@@ -3,6 +3,8 @@ package eventstream
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestRenderStatusAndFilterLines(t *testing.T) {
@@ -98,5 +100,27 @@ func TestComputeColumnLayoutGivesFileMoreSpace(t *testing.T) {
 	cols := computeColumnLayout(120)
 	if cols.file < 55 {
 		t.Fatalf("expected file column to get most width, got %d", cols.file)
+	}
+}
+
+func TestRenderStreamTableFitsRequestedWidth(t *testing.T) {
+	out := RenderStreamTable(80, false, 1, 1, 1, 10000, Filter{}, []StreamEvent{
+		{
+			Syscall:    "read",
+			Comm:       "worker",
+			PID:        1,
+			TID:        2,
+			DurationNs: 2000,
+			GapNs:      100,
+			Bytes:      64,
+			FileName:   "/very/long/path/that/should/be/truncated/for/narrow/views/file.log",
+			RetVal:     1,
+		},
+	})
+
+	for _, line := range strings.Split(out, "\n") {
+		if lipgloss.Width(line) > 80 {
+			t.Fatalf("line exceeds width 80: %d %q", lipgloss.Width(line), line)
+		}
 	}
 }

@@ -36,6 +36,17 @@ func NewModel(source *RingBuffer) Model {
 	}
 }
 
+// SetViewport updates the render/scroll viewport dimensions used for
+// max-scroll and page-step calculations during key handling.
+func (m *Model) SetViewport(width, height int) {
+	if width > 0 {
+		m.width = width
+	}
+	if height > 0 {
+		m.height = height
+	}
+}
+
 // SetSource updates the backing ring buffer and refreshes visible rows.
 func (m *Model) SetSource(source *RingBuffer) {
 	m.source = source
@@ -45,6 +56,11 @@ func (m *Model) SetSource(source *RingBuffer) {
 // FilterModalVisible reports whether the filter modal is currently open.
 func (m Model) FilterModalVisible() bool {
 	return m.filterModal.Visible()
+}
+
+// Paused reports whether stream refresh is currently paused.
+func (m Model) Paused() bool {
+	return m.paused
 }
 
 func (m *Model) HandleKey(keyStr string) bool {
@@ -66,10 +82,12 @@ func (m *Model) HandleKey(keyStr string) bool {
 	case " ", "space":
 		m.paused = !m.paused
 		if !m.paused {
+			// Resuming should return to live-tail behavior immediately.
+			m.autoScroll = true
 			m.Refresh()
 		}
 		return true
-	case "f":
+	case "f", "F":
 		m.pauseBeforeFilter = m.paused
 		m.paused = true
 		m.filterModal = m.filterModal.Open(m.filter)
@@ -87,22 +105,42 @@ func (m *Model) HandleKey(keyStr string) bool {
 		m.applyFilter()
 		return true
 	case "j", "down":
-		if m.scrollOffset < m.maxScrollOffset() {
-			m.scrollOffset++
-		}
-		if m.scrollOffset < m.maxScrollOffset() {
-			m.autoScroll = false
-		}
+		m.scrollByLines(1)
 		return true
 	case "k", "up":
-		if m.scrollOffset > 0 {
-			m.scrollOffset--
-		}
-		m.autoScroll = false
+		m.scrollByLines(-1)
+		return true
+	case "pgdown", "pgdn", "pagedown":
+		m.scrollByLines(m.pageStep())
+		return true
+	case "pgup", "pageup":
+		m.scrollByLines(-m.pageStep())
 		return true
 	default:
 		return false
 	}
+}
+
+// HandleTeaKey handles stream keys based on Bubble Tea key message types first,
+// then falls back to string matching for rune-driven shortcuts.
+func (m *Model) HandleTeaKey(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyUp:
+		return m.HandleKey("up")
+	case tea.KeyDown:
+		return m.HandleKey("down")
+	case tea.KeyPgUp:
+		return m.HandleKey("pgup")
+	case tea.KeyPgDown:
+		return m.HandleKey("pgdown")
+	case tea.KeySpace:
+		return m.HandleKey("space")
+	case tea.KeyRunes:
+		if len(msg.Runes) == 1 {
+			return m.HandleKey(string(msg.Runes[0]))
+		}
+	}
+	return m.HandleKey(msg.String())
 }
 
 func (m *Model) View(width, height int) string {
@@ -196,6 +234,34 @@ func (m *Model) visibleRows() int {
 		return 1
 	}
 	return rows
+}
+
+func (m *Model) pageStep() int {
+	rows := m.visibleRows()
+	if rows <= 1 {
+		return 1
+	}
+	return rows - 1
+}
+
+func (m *Model) scrollByLines(delta int) {
+	if delta == 0 {
+		return
+	}
+	max := m.maxScrollOffset()
+	next := m.scrollOffset + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > max {
+		next = max
+	}
+	if next != m.scrollOffset {
+		m.scrollOffset = next
+	}
+	if m.scrollOffset < max {
+		m.autoScroll = false
+	}
 }
 
 func keyMsgFromString(keyStr string) tea.KeyMsg {

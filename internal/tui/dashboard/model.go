@@ -73,6 +73,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.streamModel.SetViewport(msg.Width, msg.Height)
 		return m, nil
 	case refreshTickMsg:
 		snap := m.snapshot()
@@ -104,7 +105,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	var cmd tea.Cmd
 	keyStr := msg.String()
-	handled := m.handleArrowTabKey(keyStr) || m.handleScrollKey(keyStr)
+	handled := m.handleArrowTabKey(keyStr) || m.handleScrollKey(msg)
+	if handled && m.activeTab == TabStream && (keyStr == " " || keyStr == "space") && !m.streamModel.Paused() {
+		cmd = streamTickCmd()
+	}
 
 	if !handled {
 		switch {
@@ -171,7 +175,8 @@ func (m *Model) handleArrowTabKey(keyStr string) bool {
 	}
 }
 
-func (m *Model) handleScrollKey(keyStr string) bool {
+func (m *Model) handleScrollKey(msg tea.KeyMsg) bool {
+	keyStr := msg.String()
 	switch m.activeTab {
 	case TabSyscalls:
 		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows())
@@ -183,7 +188,9 @@ func (m *Model) handleScrollKey(keyStr string) bool {
 	case TabProcesses:
 		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows())
 	case TabStream:
-		return m.streamModel.HandleKey(keyStr)
+		streamWidth, streamHeight := common.EffectiveViewport(m.width, m.height)
+		m.streamModel.SetViewport(streamWidth, streamHeight)
+		return m.streamModel.HandleTeaKey(msg)
 	default:
 		return false
 	}

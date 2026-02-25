@@ -12,6 +12,7 @@ import (
 	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
+	"ior/internal/tui/messages"
 	"ior/internal/tui/pidpicker"
 	"ior/internal/tui/probes"
 	"os"
@@ -102,6 +103,21 @@ func getProbeManager() ProbeManager {
 	probeManagerState.mu.RLock()
 	defer probeManagerState.mu.RUnlock()
 	return probeManagerState.manager
+}
+
+func resetDashboardSnapshotSource() *statsengine.Snapshot {
+	src := getDashboardSnapshotSource()
+	if src == nil {
+		return nil
+	}
+	if resettable, ok := src.(interface {
+		Reset()
+		Snapshot() *statsengine.Snapshot
+	}); ok {
+		resettable.Reset()
+		return resettable.Snapshot()
+	}
+	return nil
 }
 
 // Run starts the TUI program in alternate screen mode.
@@ -233,6 +249,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case probes.ProbeToggledMsg:
 		var cmd tea.Cmd
 		m.probeModal, cmd = m.probeModal.Update(msg)
+		if snap := resetDashboardSnapshotSource(); snap != nil {
+			next, dashboardCmd := m.dashboard.Update(messages.StatsTickMsg{Snap: snap})
+			m.dashboard = next.(dashboardui.Model)
+			return m, tea.Batch(dashboardCmd, cmd)
+		}
 		return m, cmd
 	case PidSelectedMsg:
 		return m.handlePidSelected(msg)

@@ -260,6 +260,22 @@ func (m *Manager) ActiveCount() (active, total int) {
 	return active, total
 }
 
+// IsActive reports whether the syscall probe is currently active.
+func (m *Manager) IsActive(syscall string) bool {
+	if m == nil || syscall == "" {
+		return false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.probes[syscall]
+	if !ok {
+		return false
+	}
+	return entry.active
+}
+
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil

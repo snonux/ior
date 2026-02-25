@@ -62,6 +62,76 @@ func TestModelScrollClamp(t *testing.T) {
 	}
 }
 
+func TestModelPageScrollWithPgUpPgDown(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 12 // visibleRows=4, pageStep=3
+	pushEvents(rb, 30)
+	m.Refresh()
+	m.HandleKey("g")
+
+	if !m.HandleKey("pgdown") {
+		t.Fatalf("pgdown should be handled")
+	}
+	if m.scrollOffset != 3 {
+		t.Fatalf("expected page down to move by 3, got %d", m.scrollOffset)
+	}
+
+	if !m.HandleKey("pagedown") {
+		t.Fatalf("pagedown should be handled")
+	}
+	if m.scrollOffset != 6 {
+		t.Fatalf("expected pagedown alias to move by 3, got %d", m.scrollOffset)
+	}
+
+	if !m.HandleKey("pgup") {
+		t.Fatalf("pgup should be handled")
+	}
+	if m.scrollOffset != 3 {
+		t.Fatalf("expected page up to move up by 3, got %d", m.scrollOffset)
+	}
+	if !m.HandleKey("pageup") {
+		t.Fatalf("pageup should be handled")
+	}
+	if m.scrollOffset != 0 {
+		t.Fatalf("expected pageup alias to return to top, got %d", m.scrollOffset)
+	}
+}
+
+func TestModelArrowAndJKScroll(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 12
+	pushEvents(rb, 30)
+	m.Refresh()
+	m.HandleKey("g")
+
+	if !m.HandleKey("down") {
+		t.Fatalf("down should be handled")
+	}
+	if m.scrollOffset != 1 {
+		t.Fatalf("expected down to increment offset, got %d", m.scrollOffset)
+	}
+	if !m.HandleKey("j") {
+		t.Fatalf("j should be handled")
+	}
+	if m.scrollOffset != 2 {
+		t.Fatalf("expected j to increment offset, got %d", m.scrollOffset)
+	}
+	if !m.HandleKey("up") {
+		t.Fatalf("up should be handled")
+	}
+	if m.scrollOffset != 1 {
+		t.Fatalf("expected up to decrement offset, got %d", m.scrollOffset)
+	}
+	if !m.HandleKey("k") {
+		t.Fatalf("k should be handled")
+	}
+	if m.scrollOffset != 0 {
+		t.Fatalf("expected k to decrement offset, got %d", m.scrollOffset)
+	}
+}
+
 func TestModelFilterReducesVisibleRows(t *testing.T) {
 	rb := NewRingBuffer()
 	m := NewModel(rb)
@@ -168,5 +238,72 @@ func TestFilterModalTemporarilyPausesAndRestoresState(t *testing.T) {
 	}
 	if !m.paused {
 		t.Fatalf("expected paused state preserved after modal close")
+	}
+}
+
+func TestUnpauseRestoresLiveTailAndRefresh(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 10
+	pushEvents(rb, 20)
+	m.Refresh()
+
+	// Move off tail, then pause.
+	m.HandleKey("g")
+	if m.autoScroll {
+		t.Fatalf("expected autoScroll disabled at top")
+	}
+	m.HandleKey("space")
+	if !m.paused {
+		t.Fatalf("expected paused")
+	}
+
+	// New events arrive while paused.
+	pushEvents(rb, 5)
+	m.Refresh()
+
+	// Resume: should auto-tail and refresh immediately.
+	m.HandleKey("space")
+	if m.paused {
+		t.Fatalf("expected unpaused")
+	}
+	if !m.autoScroll {
+		t.Fatalf("expected autoScroll restored on resume")
+	}
+	if m.scrollOffset != m.maxScrollOffset() {
+		t.Fatalf("expected tail offset after resume, got offset=%d max=%d", m.scrollOffset, m.maxScrollOffset())
+	}
+}
+
+func TestPausedScrollWithJKAndPageKeys(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 20
+	pushEvents(rb, 100)
+	m.Refresh()
+	if !m.HandleKey("space") {
+		t.Fatalf("space should toggle pause")
+	}
+	before := rowNumber(m.scrollOffset, len(m.filtered))
+	if !m.HandleKey("k") {
+		t.Fatalf("k should be handled while paused")
+	}
+	afterK := rowNumber(m.scrollOffset, len(m.filtered))
+	if afterK >= before {
+		t.Fatalf("expected k to scroll up while paused: before=%d after=%d", before, afterK)
+	}
+	if !m.HandleKey("pgup") {
+		t.Fatalf("pgup should be handled while paused")
+	}
+	afterPgUp := rowNumber(m.scrollOffset, len(m.filtered))
+	if afterPgUp >= afterK {
+		t.Fatalf("expected pgup to scroll up while paused: afterK=%d afterPgUp=%d", afterK, afterPgUp)
+	}
+	if !m.HandleKey("pgdown") {
+		t.Fatalf("pgdown should be handled while paused")
+	}
+	afterPgDown := rowNumber(m.scrollOffset, len(m.filtered))
+	if afterPgDown <= afterPgUp {
+		t.Fatalf("expected pgdown to scroll down while paused: afterPgUp=%d afterPgDown=%d", afterPgUp, afterPgDown)
 	}
 }

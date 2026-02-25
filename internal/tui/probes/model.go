@@ -117,9 +117,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 			return m, toggleCmd(m.manager, selected)
 		case "a":
-			return m, bulkToggleCmd(m.manager, m.filtered(), false)
+			return m, bulkToggleCmd(m.manager, m.probes, false)
 		case "n":
-			return m, bulkToggleCmd(m.manager, m.filtered(), true)
+			return m, bulkToggleCmd(m.manager, m.probes, true)
 		}
 	}
 	return m, nil
