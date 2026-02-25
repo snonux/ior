@@ -370,7 +370,7 @@ func (m Model) View() string {
 	case ScreenDashboard:
 		base := m.dashboard.View()
 		if m.probeModal.Visible() {
-			return placeToViewport(width, height, m.probeModal.View(width, height)+"\n"+base)
+			return placeToViewport(width, height, m.probeModal.View(width, height))
 		}
 		if m.exporter.Visible() {
 			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
