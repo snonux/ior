@@ -175,6 +175,9 @@ func (m *Model) handleScrollKey(keyStr string) bool {
 	case TabSyscalls:
 		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows())
 	case TabFiles:
+		if m.filesDirGrouped {
+			return scrollOffset(keyStr, &m.filesDirOffset, m.maxFilesDirRows())
+		}
 		return scrollOffset(keyStr, &m.filesOffset, m.maxFilesRows())
 	case TabProcesses:
 		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows())
@@ -214,6 +217,13 @@ func (m Model) maxFilesRows() int {
 		return 0
 	}
 	return m.latest.FilesCount()
+}
+
+func (m Model) maxFilesDirRows() int {
+	if m.latest == nil {
+		return 0
+	}
+	return len(aggregateFilesByDir(m.latest.Files()))
 }
 
 func (m Model) maxProcessesRows() int {

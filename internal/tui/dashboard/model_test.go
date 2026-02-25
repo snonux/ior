@@ -140,6 +140,27 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 	}
 }
 
+func TestFilesTabGroupedScrollUsesDirectoryOffset(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.filesDirGrouped = true
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/a/f1"},
+		{Path: "/a/f2"},
+		{Path: "/b/f3"},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model := next.(Model)
+	if model.filesDirOffset != 1 {
+		t.Fatalf("expected grouped dir offset 1 after j, got %d", model.filesDirOffset)
+	}
+	if model.filesOffset != 0 {
+		t.Fatalf("expected flat files offset unchanged, got %d", model.filesOffset)
+	}
+}
+
 func TestDirGroupKeyTogglesOnlyOnFilesTab(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles
