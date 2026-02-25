@@ -29,9 +29,9 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 		trendWithArrow(snap.ThroughputTrend),
 	)
 
-	latencySpark := "Latency: " + renderSparkline(snap.LatencySeriesNs(), sparklineWidth(width))
-	gapSpark := "Gap: " + renderSparkline(snap.GapSeriesNs(), sparklineWidth(width))
-	throughputSpark := "Throughput: " + renderSparkline(snap.ThroughputSeriesB(), sparklineWidth(width))
+	latencySpark := renderLabeledSparkline("Latency:", snap.LatencySeriesNs(), sparklineWidth(width))
+	gapSpark := renderLabeledSparkline("Gap:", snap.GapSeriesNs(), sparklineWidth(width))
+	throughputSpark := renderLabeledSparkline("Throughput:", snap.ThroughputSeriesB(), sparklineWidth(width))
 	topSyscalls := "Top syscalls: " + summarizeTopSyscalls(snap)
 	topFiles := "Top files: " + summarizeTopFiles(snap)
 	topProcesses := "Top processes: " + summarizeTopProcesses(snap)
