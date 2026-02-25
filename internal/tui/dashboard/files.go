@@ -17,18 +17,19 @@ func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int
 		return "Files: waiting for stats..."
 	}
 
-	rows := fileRows(snap.Files())
+	pathWidth := filePathWidth(width)
+	rows := fileRows(snap.Files(), pathWidth)
 	if len(rows) == 0 {
 		return "Files: no data"
 	}
 
 	columns := []table.Column{
-		{Title: "Path", Width: filePathWidth(width)},
 		{Title: "Accesses", Width: 8},
 		{Title: "Read", Width: 9},
 		{Title: "Write", Width: 9},
 		{Title: "Avg Latency", Width: 11},
 		{Title: "Max Latency", Width: 11},
+		{Title: "Path", Width: pathWidth},
 	}
 
 	tbl := table.New(
@@ -43,16 +44,16 @@ func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int
 	return tbl.View() + fmt.Sprintf("\nRow %d/%d", cursor+1, len(rows))
 }
 
-func fileRows(files []statsengine.FileSnapshot) []table.Row {
+func fileRows(files []statsengine.FileSnapshot, pathWidth int) []table.Row {
 	rows := make([]table.Row, 0, len(files))
 	for _, f := range files {
 		rows = append(rows, table.Row{
-			truncatePathMiddle(f.Path, 48),
 			strconv.FormatUint(f.Accesses, 10),
 			formatBytes(float64(f.BytesRead)),
 			formatBytes(float64(f.BytesWritten)),
 			formatDurationNs(f.AvgLatencyNs),
 			formatDurationUintNs(f.MaxLatencyNs),
+			truncatePathMiddle(f.Path, pathWidth),
 		})
 	}
 	return rows
@@ -62,14 +63,11 @@ func filePathWidth(width int) int {
 	if width <= 0 {
 		return 24
 	}
-	// Reserve enough room for non-path columns and table separators so
-	// latency columns remain visible even on narrower terminals.
-	w := width - 70
+	// Keep fixed metrics visible and let path consume the remaining space.
+	// Fixed columns sum to 48 chars; reserve extra for separators/padding.
+	w := width - 58
 	if w < 14 {
 		return 14
-	}
-	if w > 52 {
-		return 52
 	}
 	return w
 }

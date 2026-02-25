@@ -29,6 +29,15 @@ func renderGapsTab(snap *statsengine.Snapshot, width, height int) string {
 	return strings.Join([]string{hist, spark}, "\n")
 }
 
+func renderLatencyGapsTab(snap *statsengine.Snapshot, width, height int) string {
+	if snap == nil {
+		return common.PanelStyle.Render("Latency+Gaps: waiting for stats...")
+	}
+	lat := renderLatencyTab(snap, width, height)
+	gap := renderGapsTab(snap, width, height)
+	return strings.Join([]string{lat, gap}, "\n")
+}
+
 func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, height int) string {
 	buckets := hist.Buckets()
 	if len(buckets) == 0 {

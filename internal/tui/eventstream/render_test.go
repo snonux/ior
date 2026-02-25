@@ -93,3 +93,10 @@ func TestRenderEventRowIsSingleLineWithControlCharsAndLongValues(t *testing.T) {
 		t.Fatalf("expected truncation ellipsis in narrow row, got %q", row)
 	}
 }
+
+func TestComputeColumnLayoutGivesFileMoreSpace(t *testing.T) {
+	cols := computeColumnLayout(120)
+	if cols.file < 55 {
+		t.Fatalf("expected file column to get most width, got %d", cols.file)
+	}
+}

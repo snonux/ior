@@ -47,6 +47,12 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 	if model.activeTab != TabStream {
 		t.Fatalf("expected stream tab on key 7, got %v", model.activeTab)
 	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	model = next.(Model)
+	if model.activeTab != TabStream {
+		t.Fatalf("expected stream tab on key 6, got %v", model.activeTab)
+	}
 }
 
 func TestArrowAndViKeysCycleTabs(t *testing.T) {

@@ -33,8 +33,8 @@ func DefaultKeyMap() KeyMap {
 		Two:      key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "syscalls")),
 		Three:    key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "files")),
 		Four:     key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "processes")),
-		Five:     key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "latency")),
-		Six:      key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "gaps")),
+		Five:     key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "lat+gaps")),
+		Six:      key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "stream")),
 		Seven:    key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "stream")),
 		Export:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
@@ -64,7 +64,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	controls = append(controls, k.Refresh, k.Help, k.Quit)
 
 	return [][]key.Binding{
-		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},
+		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},
 		controls,
 		{
 			helpTextBinding("left/right", "tab"),
