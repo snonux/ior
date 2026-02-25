@@ -55,7 +55,40 @@ func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int
 	tbl.SetWidth(tableWidth(width))
 	cursor := clampOffset(offset, len(rows))
 	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d", cursor+1, len(rows))
+	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:dirs]", cursor+1, len(rows))
+}
+
+func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset int) string {
+	if snap == nil {
+		return "Files (dirs): waiting for stats..."
+	}
+
+	pathWidth := dirPathWidth(width)
+	rows := dirRows(aggregateFilesByDir(snap.Files()), pathWidth)
+	if len(rows) == 0 {
+		return "Files (dirs): no data"
+	}
+
+	columns := []table.Column{
+		{Title: "Accesses", Width: 8},
+		{Title: "Read", Width: 9},
+		{Title: "Write", Width: 9},
+		{Title: "Avg Latency", Width: 11},
+		{Title: "Max Latency", Width: 11},
+		{Title: "Files", Width: 5},
+		{Title: "Directory", Width: pathWidth},
+	}
+
+	tbl := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+	)
+	tbl.SetHeight(syscallTableHeight(height))
+	tbl.SetWidth(tableWidth(width))
+	cursor := clampOffset(offset, len(rows))
+	tbl.SetCursor(cursor)
+	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:files]", cursor+1, len(rows))
 }
 
 func fileRows(files []statsengine.FileSnapshot, pathWidth int) []table.Row {
@@ -80,6 +113,18 @@ func filePathWidth(width int) int {
 	// Keep fixed metrics visible and let path consume the remaining space.
 	// Fixed columns sum to 48 chars; reserve extra for separators/padding.
 	w := width - 58
+	if w < 14 {
+		return 14
+	}
+	return w
+}
+
+func dirPathWidth(width int) int {
+	if width <= 0 {
+		return 24
+	}
+	// Directory view adds a 5-char Files column (+1 spacing), so reserve 6 more.
+	w := width - 64
 	if w < 14 {
 		return 14
 	}
@@ -139,4 +184,20 @@ func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
 		return out[i].Dir < out[j].Dir
 	})
 	return out
+}
+
+func dirRows(dirs []DirSnapshot, pathWidth int) []table.Row {
+	rows := make([]table.Row, 0, len(dirs))
+	for _, d := range dirs {
+		rows = append(rows, table.Row{
+			strconv.FormatUint(d.Accesses, 10),
+			formatBytes(float64(d.BytesRead)),
+			formatBytes(float64(d.BytesWritten)),
+			formatDurationNs(d.AvgLatencyNs),
+			formatDurationUintNs(d.MaxLatencyNs),
+			strconv.FormatUint(d.FileCount, 10),
+			truncatePathMiddle(d.Dir, pathWidth),
+		})
+	}
+	return rows
 }
