@@ -138,6 +138,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			snap := m.snapshot()
 			cmd = func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 			handled = true
+		case key.Matches(msg, m.keys.DirGroup):
+			if m.activeTab == TabFiles {
+				m.filesDirGrouped = !m.filesDirGrouped
+				handled = true
+			}
 		}
 	}
 	if !handled {
