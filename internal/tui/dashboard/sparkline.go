@@ -1,8 +1,9 @@
 package dashboard
 
 import "math"
+import "strings"
 
-var sparkChars = []rune("▁▂▃▄▅▆▇█")
+var sparkRowChars = []rune(" ▁▂▃▄▅▆▇█")
 
 func renderSparkline(data []float64, width int) string {
 	if len(data) == 0 || width <= 0 {
@@ -11,27 +12,51 @@ func renderSparkline(data []float64, width int) string {
 
 	samples := sampleForWidth(data, width)
 	min, max := minMax(samples)
-	line := ""
 	if min == max {
-		line = repeatRune('▄', len(samples))
-		return line + "\n" + line
+		top := repeatRune(' ', len(samples))
+		bottom := repeatRune('█', len(samples))
+		return top + "\n" + bottom
 	}
 
-	out := make([]rune, len(samples))
-	scale := float64(len(sparkChars) - 1)
+	top := make([]rune, len(samples))
+	bottom := make([]rune, len(samples))
+	scale := 16.0
 	denom := max - min
 	for i, value := range samples {
-		idx := int(math.Round((value - min) / denom * scale))
-		if idx < 0 {
-			idx = 0
+		level := int(math.Round((value - min) / denom * scale))
+		if level < 0 {
+			level = 0
 		}
-		if idx >= len(sparkChars) {
-			idx = len(sparkChars) - 1
+		if level > 16 {
+			level = 16
 		}
-		out[i] = sparkChars[idx]
+
+		topLevel := level - 8
+		if topLevel < 0 {
+			topLevel = 0
+		}
+		bottomLevel := level
+		if bottomLevel > 8 {
+			bottomLevel = 8
+		}
+
+		top[i] = sparkRowChars[topLevel]
+		bottom[i] = sparkRowChars[bottomLevel]
 	}
-	line = string(out)
-	return line + "\n" + line
+	return string(top) + "\n" + string(bottom)
+}
+
+func renderLabeledSparkline(label string, data []float64, width int) string {
+	spark := renderSparkline(data, width)
+	if spark == "" {
+		return label
+	}
+	lines := strings.Split(spark, "\n")
+	if len(lines) == 1 {
+		return label + " " + lines[0]
+	}
+	pad := repeatRune(' ', len([]rune(label))+1)
+	return label + " " + lines[0] + "\n" + pad + lines[1]
 }
 
 func sampleForWidth(data []float64, width int) []float64 {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"ior/internal/flags"
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
@@ -144,10 +145,18 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 
 // Init initializes the active child model and optional tracing startup command.
 func (m Model) Init() tea.Cmd {
+	sizeCmd := initialWindowSizeCmd()
 	if m.screen == ScreenDashboard && m.attaching {
-		return tea.Batch(m.spin.Tick, m.beginTraceCmd())
+		return tea.Batch(sizeCmd, tea.WindowSize(), m.spin.Tick, m.beginTraceCmd())
 	}
-	return m.pidPicker.Init()
+	return tea.Batch(sizeCmd, tea.WindowSize(), m.pidPicker.Init())
+}
+
+func initialWindowSizeCmd() tea.Cmd {
+	return func() tea.Msg {
+		width, height := common.EffectiveViewport(0, 0)
+		return tea.WindowSizeMsg{Width: width, Height: height}
+	}
 }
 
 // Update routes messages, transitions screens, and manages tracing startup state.
@@ -288,34 +297,36 @@ func (m Model) View() string {
 		return ""
 	}
 
+	width, height := common.EffectiveViewport(m.width, m.height)
+
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return placeToViewport(m.width, m.height, ScreenStyle.Render(PanelStyle.Render(line)))
+		return placeToViewport(width, height, ScreenStyle.Render(PanelStyle.Render(line)))
 	}
 
 	if m.lastErr != nil {
-		return placeToViewport(m.width, m.height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error())))
+		return placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error())))
 	}
 
 	switch m.screen {
 	case ScreenPIDPicker:
 		base := m.pidPicker.View()
 		if m.exporter.Visible() {
-			return placeToViewport(m.width, m.height, m.exporter.View(m.width, m.height)+"\n"+base)
+			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
 		}
 		if m.showHelp {
-			return placeToViewport(m.width, m.height, renderHelpOverlay(m.width, m.height, [][]key.Binding{m.keys.PickerShortHelp()})+"\n"+base)
+			return placeToViewport(width, height, renderHelpOverlay(width, height, [][]key.Binding{m.keys.PickerShortHelp()})+"\n"+base)
 		}
-		return placeToViewport(m.width, m.height, base)
+		return placeToViewport(width, height, base)
 	case ScreenDashboard:
 		base := m.dashboard.View()
 		if m.exporter.Visible() {
-			return placeToViewport(m.width, m.height, m.exporter.View(m.width, m.height)+"\n"+base)
+			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
 		}
 		if m.showHelp {
-			return placeToViewport(m.width, m.height, renderHelpOverlay(m.width, m.height, m.keys.DashboardFullHelp())+"\n"+base)
+			return placeToViewport(width, height, renderHelpOverlay(width, height, m.keys.DashboardFullHelp())+"\n"+base)
 		}
-		return placeToViewport(m.width, m.height, base)
+		return placeToViewport(width, height, base)
 	default:
 		return ""
 	}

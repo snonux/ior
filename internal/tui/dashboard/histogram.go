@@ -15,7 +15,7 @@ func renderLatencyTab(snap *statsengine.Snapshot, width, height int) string {
 	}
 
 	hist := renderHistogram(snap.LatencyHistogram, "Latency Histogram", width, height)
-	spark := common.PanelStyle.Render("Latency sparkline: " + renderSparkline(snap.LatencySeriesNs(), sparklineWidth(width)))
+	spark := common.PanelStyle.Render(renderLabeledSparkline("Latency sparkline:", snap.LatencySeriesNs(), sparklineWidth(width)))
 	return strings.Join([]string{hist, spark}, "\n")
 }
 
@@ -25,7 +25,7 @@ func renderGapsTab(snap *statsengine.Snapshot, width, height int) string {
 	}
 
 	hist := renderHistogram(snap.GapHistogram, "Gap Histogram", width, height)
-	spark := common.PanelStyle.Render("Gap sparkline: " + renderSparkline(snap.GapSeriesNs(), sparklineWidth(width)))
+	spark := common.PanelStyle.Render(renderLabeledSparkline("Gap sparkline:", snap.GapSeriesNs(), sparklineWidth(width)))
 	return strings.Join([]string{hist, spark}, "\n")
 }
 

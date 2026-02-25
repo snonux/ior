@@ -241,10 +241,12 @@ func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
 
 // View renders the tab bar, active tab scaffold, and help bar.
 func (m Model) View() string {
+	width, height := common.EffectiveViewport(m.width, m.height)
+
 	var b strings.Builder
-	b.WriteString(renderTabBar(m.activeTab, m.width))
+	b.WriteString(renderTabBar(m.activeTab, width))
 	b.WriteString("\n")
-	b.WriteString(renderActiveTab(m.activeTab, m.latest, &m.streamModel, m.width, m.height, m.syscallsOffset, m.filesOffset, m.processesOffset))
+	b.WriteString(renderActiveTab(m.activeTab, m.latest, &m.streamModel, width, height, m.syscallsOffset, m.filesOffset, m.processesOffset))
 	b.WriteString("\n")
 	b.WriteString(common.HighlightStyle.Render("Press ? for help"))
 	b.WriteString("\n")

@@ -16,28 +16,50 @@ func TestRenderSparklineEmptyOrInvalidWidth(t *testing.T) {
 
 func TestRenderSparklineSingleValue(t *testing.T) {
 	got := renderSparkline([]float64{10}, 8)
-	if got != "▄" {
-		t.Fatalf("expected single mid-bar rune, got %q", got)
+	if got != " \n█" {
+		t.Fatalf("expected two-line constant sparkline, got %q", got)
 	}
 }
 
 func TestRenderSparklineAllEqualValues(t *testing.T) {
 	got := renderSparkline([]float64{5, 5, 5, 5}, 4)
-	if got != "▄▄▄▄" {
-		t.Fatalf("expected flat sparkline, got %q", got)
+	if got != "    \n████" {
+		t.Fatalf("expected two-line flat sparkline, got %q", got)
 	}
 }
 
 func TestRenderSparklineRespectsWidthTruncation(t *testing.T) {
 	got := renderSparkline([]float64{1, 2, 3, 4, 5, 6, 7, 8}, 4)
-	if len([]rune(got)) != 4 {
-		t.Fatalf("expected 4 runes, got %q", got)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %q", got)
+	}
+	if len([]rune(lines[0])) != 4 || len([]rune(lines[1])) != 4 {
+		t.Fatalf("expected 4 runes per line, got %q", got)
 	}
 }
 
 func TestRenderSparklineSpansLowToHigh(t *testing.T) {
 	got := renderSparkline([]float64{0, 10}, 2)
-	if !strings.Contains(got, "▁") || !strings.Contains(got, "█") {
-		t.Fatalf("expected low/high bars, got %q", got)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %q", got)
+	}
+	if !strings.Contains(got, "█") {
+		t.Fatalf("expected high bar, got %q", got)
+	}
+}
+
+func TestRenderLabeledSparklineAlignsSecondRow(t *testing.T) {
+	got := renderLabeledSparkline("Latency:", []float64{0, 10}, 2)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %q", got)
+	}
+	if !strings.HasPrefix(lines[0], "Latency: ") {
+		t.Fatalf("expected label prefix on first row, got %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "         ") {
+		t.Fatalf("expected padding on second row to align sparkline, got %q", lines[1])
 	}
 }
