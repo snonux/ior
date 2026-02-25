@@ -264,7 +264,18 @@ func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, width))
 	b.WriteString("\n")
-	b.WriteString(renderActiveTab(m.activeTab, m.latest, &m.streamModel, width, height, m.syscallsOffset, m.filesOffset, m.processesOffset))
+	b.WriteString(renderActiveTab(
+		m.activeTab,
+		m.latest,
+		&m.streamModel,
+		width,
+		height,
+		m.syscallsOffset,
+		m.filesOffset,
+		m.filesDirGrouped,
+		m.filesDirOffset,
+		m.processesOffset,
+	))
 	b.WriteString("\n")
 	b.WriteString(common.HighlightStyle.Render("Press ? for help"))
 	b.WriteString("\n")
@@ -276,7 +287,7 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, width, height, syscallsOffset, filesOffset, processesOffset int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, width, height, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
 	if tab == TabStream {
 		if streamModel == nil {
 			return common.PanelStyle.Render("Stream: waiting for source...")
@@ -294,6 +305,9 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 	case TabSyscalls:
 		return renderSyscallsWithOffset(snap, width, height, syscallsOffset)
 	case TabFiles:
+		if filesDirGrouped {
+			return renderFilesDirGrouped(snap, width, height, filesDirOffset)
+		}
 		return renderFilesWithOffset(snap, width, height, filesOffset)
 	case TabProcesses:
 		return renderProcessesWithOffset(snap, width, height, processesOffset)

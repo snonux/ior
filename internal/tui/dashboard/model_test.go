@@ -291,3 +291,17 @@ func TestViewRendersTabBarAndHelp(t *testing.T) {
 		t.Fatalf("expected help bar text in view")
 	}
 }
+
+func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
+	snap := statsengine.NewSnapshot(
+		nil, nil, nil, nil,
+		[]statsengine.FileSnapshot{{Path: "/tmp/a.log", Accesses: 2}},
+		nil,
+		statsengine.HistogramSnapshot{},
+		statsengine.HistogramSnapshot{},
+	)
+	out := renderActiveTab(TabFiles, &snap, nil, 120, 30, 0, 0, true, 0, 0)
+	if !strings.Contains(out, "Directory") {
+		t.Fatalf("expected grouped directory files view header, got %q", out)
+	}
+}
