@@ -8,6 +8,7 @@ import (
 	"ior/internal/flags"
 	"ior/internal/statsengine"
 	dashboardui "ior/internal/tui/dashboard"
+	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
 	"ior/internal/tui/pidpicker"
 	"os"
@@ -44,6 +45,11 @@ var dashboardSourceState struct {
 	source snapshotSource
 }
 
+var eventStreamSourceState struct {
+	mu     sync.RWMutex
+	source *eventstream.RingBuffer
+}
+
 // SetDashboardSnapshotSource sets the snapshot source used by dashboard mode.
 func SetDashboardSnapshotSource(source snapshotSource) {
 	dashboardSourceState.mu.Lock()
@@ -51,10 +57,23 @@ func SetDashboardSnapshotSource(source snapshotSource) {
 	dashboardSourceState.mu.Unlock()
 }
 
+// SetEventStreamSource sets the event stream source used by dashboard mode.
+func SetEventStreamSource(source *eventstream.RingBuffer) {
+	eventStreamSourceState.mu.Lock()
+	eventStreamSourceState.source = source
+	eventStreamSourceState.mu.Unlock()
+}
+
 func getDashboardSnapshotSource() snapshotSource {
 	dashboardSourceState.mu.RLock()
 	defer dashboardSourceState.mu.RUnlock()
 	return dashboardSourceState.source
+}
+
+func getEventStreamSource() *eventstream.RingBuffer {
+	eventStreamSourceState.mu.RLock()
+	defer eventStreamSourceState.mu.RUnlock()
+	return eventStreamSourceState.source
 }
 
 // Run starts the TUI program in alternate screen mode.
@@ -327,6 +346,12 @@ func (lateBoundDashboardSource) Snapshot() *statsengine.Snapshot {
 		return nil
 	}
 	return source.Snapshot()
+}
+
+type lateBoundEventStreamSource struct{}
+
+func (lateBoundEventStreamSource) Source() *eventstream.RingBuffer {
+	return getEventStreamSource()
 }
 
 func exportSnapshotCSV(snap *statsengine.Snapshot) (string, error) {
