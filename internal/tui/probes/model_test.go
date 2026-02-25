@@ -78,3 +78,44 @@ func TestToggleEmitsProbeToggledMsg(t *testing.T) {
 	}
 	_ = next
 }
+
+func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
+	fm := &fakeManager{
+		states: []probemanager.ProbeState{
+			{Syscall: "read", Active: true},
+			{Syscall: "write", Active: true},
+			{Syscall: "openat", Active: true},
+		},
+	}
+	m := NewModel(fm).Open()
+	m.search = "read"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cmd == nil {
+		t.Fatalf("expected bulk off command")
+	}
+	msg := cmd()
+	if toggled, ok := msg.(ProbeToggledMsg); !ok || toggled.Err != nil {
+		t.Fatalf("unexpected bulk off msg: %#v", msg)
+	}
+	if len(fm.toggles) != 3 {
+		t.Fatalf("expected all probes toggled off despite filter, got toggles=%+v", fm.toggles)
+	}
+
+	// Re-open with all inactive and filtered search still present; "a" should
+	// toggle all probes back on.
+	m = NewModel(fm).Open()
+	m.search = "read"
+	fm.toggles = nil
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd == nil {
+		t.Fatalf("expected bulk on command")
+	}
+	msg = cmd()
+	if toggled, ok := msg.(ProbeToggledMsg); !ok || toggled.Err != nil {
+		t.Fatalf("unexpected bulk on msg: %#v", msg)
+	}
+	if len(fm.toggles) != 3 {
+		t.Fatalf("expected all probes toggled on despite filter, got toggles=%+v", fm.toggles)
+	}
+}

@@ -16,6 +16,7 @@ type Engine struct {
 
 	now       func() time.Time
 	startedAt time.Time
+	topN      int
 
 	totalSyscalls   uint64
 	totalErrors     uint64
@@ -72,6 +73,7 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 	return &Engine{
 		now:              now,
 		startedAt:        now(),
+		topN:             topN,
 		syscalls:         newSyscallAccumulator(),
 		files:            newFileRankerWithConfig(topN),
 		processes:        newProcessAccumulatorWithConfig(topN),
@@ -81,6 +83,33 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 		gapSeries:        newRingTimeSeries(),
 		throughputSeries: newRingTimeSeries(),
 	}
+}
+
+// Reset clears all accumulated stats and restarts series baselines.
+func (e *Engine) Reset() {
+	if e == nil {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.startedAt = e.now()
+	e.totalSyscalls = 0
+	e.totalErrors = 0
+	e.totalBytes = 0
+	e.totalReadBytes = 0
+	e.totalWriteBytes = 0
+	e.totalLatency = 0
+	e.totalGap = 0
+	e.syscalls = newSyscallAccumulator()
+	e.files = newFileRankerWithConfig(e.topN)
+	e.processes = newProcessAccumulatorWithConfig(e.topN)
+	e.latencyHist = newHistogram()
+	e.gapHist = newHistogram()
+	e.latencySeries = newRingTimeSeries()
+	e.gapSeries = newRingTimeSeries()
+	e.throughputSeries = newRingTimeSeries()
 }
 
 // Ingest updates all aggregates for one event pair.

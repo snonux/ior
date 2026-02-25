@@ -214,3 +214,29 @@ func TestManagerAttachAllPicksUpNewTracepointsOnLaterCall(t *testing.T) {
 		t.Fatalf("unexpected syscall ordering/content: %+v", states)
 	}
 }
+
+func TestManagerIsActiveReflectsCurrentState(t *testing.T) {
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_read": {},
+			"handle_sys_exit_read":  {},
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"}); err != nil {
+		t.Fatalf("AttachAll returned error: %v", err)
+	}
+	if !mgr.IsActive("read") {
+		t.Fatalf("expected read to be active")
+	}
+	if err := mgr.Detach("read"); err != nil {
+		t.Fatalf("Detach returned error: %v", err)
+	}
+	if mgr.IsActive("read") {
+		t.Fatalf("expected read to be inactive after detach")
+	}
+	if mgr.IsActive("does_not_exist") {
+		t.Fatalf("expected unknown syscall to be inactive")
+	}
+}

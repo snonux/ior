@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"ior/internal/flags"
+	"ior/internal/tui/probes"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -186,6 +187,20 @@ func (f fakeDashboardSource) Snapshot() *statsengine.Snapshot {
 	return f.snap
 }
 
+type fakeResettableDashboardSource struct {
+	snap       *statsengine.Snapshot
+	resetCalls int
+}
+
+func (f *fakeResettableDashboardSource) Snapshot() *statsengine.Snapshot {
+	return f.snap
+}
+
+func (f *fakeResettableDashboardSource) Reset() {
+	f.resetCalls++
+	f.snap = &statsengine.Snapshot{TotalSyscalls: 0}
+}
+
 func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	orig := getDashboardSnapshotSource()
 	defer SetDashboardSnapshotSource(orig)
@@ -199,6 +214,28 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	got := source.Snapshot()
 	if got != want {
 		t.Fatalf("expected late-bound source to use latest global source")
+	}
+}
+
+func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
+	src := &fakeResettableDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
+	SetDashboardSnapshotSource(src)
+	t.Cleanup(func() { SetDashboardSnapshotSource(nil) })
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
+
+	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "read"})
+	updated := next.(Model)
+
+	if src.resetCalls != 1 {
+		t.Fatalf("expected one reset call, got %d", src.resetCalls)
+	}
+	snap := updated.dashboard.LatestSnapshot()
+	if snap == nil || snap.TotalSyscalls != 0 {
+		t.Fatalf("expected dashboard snapshot refreshed from reset source, got %+v", snap)
 	}
 }
 

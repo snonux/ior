@@ -262,6 +262,16 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	if configure != nil {
 		configure(el)
 	}
+	origPrintCb := el.printCb
+	el.printCb = func(ep *event.Pair) {
+		if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
+			ep.Recycle()
+			return
+		}
+		if origPrintCb != nil {
+			origPrintCb(ep)
+		}
+	}
 	duration := time.Duration(flags.Get().Duration) * time.Second
 	logln("Probing for", duration)
 	ctx, cancel := context.WithTimeout(parentCtx, duration)

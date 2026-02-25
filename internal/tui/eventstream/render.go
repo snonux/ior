@@ -32,7 +32,7 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 		lines = append(lines, renderEventRow(ev, contentWidth))
 	}
 
-	return common.PanelStyle.Width(width).Render(strings.Join(lines, "\n"))
+	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
 }
 
 func renderStatusLine(paused bool, totalCount, filteredCount, bufferLen, bufferCap int) string {

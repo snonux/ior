@@ -1,11 +1,15 @@
 package dashboard
 
 import (
+	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
+	"ior/internal/tui/eventstream"
 	"ior/internal/tui/messages"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -159,6 +163,87 @@ func TestFilesTabGroupedScrollUsesDirectoryOffset(t *testing.T) {
 	if model.filesOffset != 0 {
 		t.Fatalf("expected flat files offset unchanged, got %d", model.filesOffset)
 	}
+}
+
+func TestStreamSpaceUnpauseSchedulesStreamTick(t *testing.T) {
+	rb := eventstream.NewRingBuffer()
+	m := NewModelWithConfig(nil, rb, 250, common.DefaultKeyMap())
+	m.activeTab = TabStream
+	m.streamModel.HandleKey("space") // pause
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	_ = next
+	if cmd == nil {
+		t.Fatalf("expected stream tick command when unpausing stream")
+	}
+}
+
+func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
+	rb := eventstream.NewRingBuffer()
+	for i := 0; i < 300; i++ {
+		rb.Push(eventstream.StreamEvent{
+			Seq:      uint64(i + 1),
+			Syscall:  "read",
+			Comm:     "proc",
+			PID:      1000,
+			TID:      uint32(2000 + i),
+			FileName: fmt.Sprintf("/tmp/file-%03d", i),
+		})
+	}
+
+	m := NewModelWithConfig(nil, rb, 250, common.DefaultKeyMap())
+	m.activeTab = TabStream
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
+
+	m.streamModel.Refresh()
+	_ = m.View()
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace}) // pause
+	m = next.(Model)
+	before := rowFromStreamView(t, m.View())
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = next.(Model)
+	afterK := rowFromStreamView(t, m.View())
+	if afterK >= before {
+		t.Fatalf("expected k to scroll up while paused: before=%d afterK=%d", before, afterK)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	afterDown := rowFromStreamView(t, m.View())
+	if afterDown <= afterK {
+		t.Fatalf("expected down arrow to scroll down while paused: afterK=%d afterDown=%d", afterK, afterDown)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(Model)
+	afterPgUp := rowFromStreamView(t, m.View())
+	if afterPgUp >= afterDown {
+		t.Fatalf("expected pgup to scroll up while paused: afterDown=%d afterPgUp=%d", afterDown, afterPgUp)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(Model)
+	afterPgDown := rowFromStreamView(t, m.View())
+	if afterPgDown <= afterPgUp {
+		t.Fatalf("expected pgdown to scroll down while paused: afterPgUp=%d afterPgDown=%d", afterPgUp, afterPgDown)
+	}
+}
+
+func rowFromStreamView(t *testing.T, view string) int {
+	t.Helper()
+	re := regexp.MustCompile(`Row ([0-9]+)/([0-9]+)`)
+	m := re.FindStringSubmatch(view)
+	if len(m) != 3 {
+		t.Fatalf("stream row status not found in view")
+	}
+	row, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("invalid row value %q: %v", m[1], err)
+	}
+	return row
 }
 
 func TestDirGroupKeyTogglesOnlyOnFilesTab(t *testing.T) {
