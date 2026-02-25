@@ -228,6 +228,17 @@ func (m Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
 }
 
+// BlocksGlobalShortcuts reports whether modal UI in the active tab should
+// suppress top-level shortcuts (for example global export key handling).
+func (m Model) BlocksGlobalShortcuts() bool {
+	return m.activeTab == TabStream && m.streamModel.FilterModalVisible()
+}
+
+// SetStreamSource updates the live stream source used by the stream tab.
+func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
+	m.streamModel.SetSource(source)
+}
+
 // View renders the tab bar, active tab scaffold, and help bar.
 func (m Model) View() string {
 	var b strings.Builder

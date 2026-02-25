@@ -17,6 +17,9 @@ type Model struct {
 	filterModal FilterModal
 
 	paused bool
+	// pauseBeforeFilter keeps the pre-modal pause state so opening the filter
+	// can pause refresh temporarily without losing the user's prior state.
+	pauseBeforeFilter bool
 
 	scrollOffset int
 	autoScroll   bool
@@ -33,13 +36,28 @@ func NewModel(source *RingBuffer) Model {
 	}
 }
 
+// SetSource updates the backing ring buffer and refreshes visible rows.
+func (m *Model) SetSource(source *RingBuffer) {
+	m.source = source
+	m.Refresh()
+}
+
+// FilterModalVisible reports whether the filter modal is currently open.
+func (m Model) FilterModalVisible() bool {
+	return m.filterModal.Visible()
+}
+
 func (m *Model) HandleKey(keyStr string) bool {
 	if m.filterModal.Visible() {
 		wasVisible := m.filterModal.Visible()
 		m.filterModal = m.filterModal.Update(keyMsgFromString(keyStr))
 		if wasVisible && !m.filterModal.Visible() {
 			m.filter = m.filterModal.Filter()
+			m.paused = m.pauseBeforeFilter
 			m.applyFilter()
+			if !m.paused {
+				m.Refresh()
+			}
 		}
 		return true
 	}
@@ -52,6 +70,8 @@ func (m *Model) HandleKey(keyStr string) bool {
 		}
 		return true
 	case "f":
+		m.pauseBeforeFilter = m.paused
+		m.paused = true
 		m.filterModal = m.filterModal.Open(m.filter)
 		return true
 	case "G":
@@ -113,7 +133,9 @@ func (m *Model) View(width, height int) string {
 	out := base + "\n" + status
 
 	if m.filterModal.Visible() {
-		return m.filterModal.View(width, height) + "\n" + out
+		// While editing filters, show a dedicated modal screen to avoid
+		// visual mixing with the live stream table underneath.
+		return m.filterModal.View(width, height)
 	}
 	return out
 }

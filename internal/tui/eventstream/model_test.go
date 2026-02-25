@@ -122,3 +122,51 @@ func TestModelHandleKeyRouting(t *testing.T) {
 		t.Fatalf("modal should close on esc")
 	}
 }
+
+func TestFilterModalTemporarilyPausesAndRestoresState(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 20
+	pushEvents(rb, 4)
+	m.Refresh()
+
+	if m.paused {
+		t.Fatalf("expected model to start unpaused")
+	}
+	if !m.HandleKey("f") {
+		t.Fatalf("f should be handled")
+	}
+	if !m.paused {
+		t.Fatalf("expected model paused while filter modal is open")
+	}
+	if !m.filterModal.Visible() {
+		t.Fatalf("expected filter modal visible after f")
+	}
+	if !m.HandleKey("esc") {
+		t.Fatalf("esc should be routed to filter modal")
+	}
+	if m.filterModal.Visible() {
+		t.Fatalf("expected filter modal closed after esc")
+	}
+	if m.paused {
+		t.Fatalf("expected pause state restored to unpaused after modal close")
+	}
+
+	// If the user was already paused before opening the filter modal,
+	// that pause state should remain after closing.
+	if !m.HandleKey("space") {
+		t.Fatalf("space should toggle pause")
+	}
+	if !m.paused {
+		t.Fatalf("expected paused=true after space")
+	}
+	if !m.HandleKey("f") {
+		t.Fatalf("f should be handled while paused")
+	}
+	if !m.HandleKey("esc") {
+		t.Fatalf("esc should close modal")
+	}
+	if !m.paused {
+		t.Fatalf("expected paused state preserved after modal close")
+	}
+}
