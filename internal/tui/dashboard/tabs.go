@@ -24,6 +24,8 @@ const (
 	TabLatency
 	// TabGaps is the inter-syscall gap tab.
 	TabGaps
+	// TabStream is the live event stream tab.
+	TabStream
 )
 
 var allTabs = []Tab{
@@ -33,6 +35,7 @@ var allTabs = []Tab{
 	TabProcesses,
 	TabLatency,
 	TabGaps,
+	TabStream,
 }
 
 func (t Tab) String() string {
@@ -49,6 +52,8 @@ func (t Tab) String() string {
 		return "Latency"
 	case TabGaps:
 		return "Gaps"
+	case TabStream:
+		return "Stream"
 	default:
 		return "Unknown"
 	}

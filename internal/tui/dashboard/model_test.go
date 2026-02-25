@@ -22,7 +22,7 @@ func (f *fakeSnapshotSource) Snapshot() *statsengine.Snapshot {
 }
 
 func TestKeySwitchingChangesActiveTab(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	model := next.(Model)
@@ -41,10 +41,16 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 	if model.activeTab != TabSyscalls {
 		t.Fatalf("expected previous tab to be syscalls, got %v", model.activeTab)
 	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	model = next.(Model)
+	if model.activeTab != TabStream {
+		t.Fatalf("expected stream tab on key 7, got %v", model.activeTab)
+	}
 }
 
 func TestArrowAndViKeysCycleTabs(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	model := next.(Model)
@@ -72,7 +78,7 @@ func TestArrowAndViKeysCycleTabs(t *testing.T) {
 }
 
 func TestSyscallsTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}, {Name: "write", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -91,7 +97,7 @@ func TestSyscallsTabScrollsWithJK(t *testing.T) {
 }
 
 func TestProcessesTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{{PID: 1}, {PID: 2}}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -110,7 +116,7 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 }
 
 func TestFilesTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{{Path: "/a"}, {Path: "/b"}}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -129,7 +135,7 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 }
 
 func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
-	m := NewModelWithConfig(nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}, {Name: "write", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -146,7 +152,7 @@ func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
 func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 13}
 	engine := &fakeSnapshotSource{snap: snap}
-	m := NewModelWithConfig(engine, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	_ = next
 	if cmd == nil {
@@ -165,7 +171,7 @@ func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 9}
 	engine := &fakeSnapshotSource{snap: snap}
-	m := NewModelWithConfig(engine, 100, common.DefaultKeyMap())
+	m := NewModelWithConfig(engine, nil, 100, common.DefaultKeyMap())
 
 	next, cmd := m.Update(refreshTickMsg{})
 	if cmd == nil {
@@ -197,7 +203,7 @@ func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 
 func TestStatsTickMsgUpdatesLatestSnapshot(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 11}
-	m := NewModel(nil)
+	m := NewModel(nil, nil)
 
 	next, _ := m.Update(messages.StatsTickMsg{Snap: snap})
 	model := next.(Model)
@@ -207,7 +213,7 @@ func TestStatsTickMsgUpdatesLatestSnapshot(t *testing.T) {
 }
 
 func TestViewRendersTabBarAndHelp(t *testing.T) {
-	m := NewModelWithConfig(nil, 1000, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
 	out := m.View()
 	if !strings.Contains(out, "Overview") {
 		t.Fatalf("expected overview label in view")

@@ -126,7 +126,7 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 	model := Model{
 		screen:     ScreenPIDPicker,
 		pidPicker:  pidpicker.New(),
-		dashboard:  dashboardui.NewModelWithConfig(lateBoundDashboardSource{}, 1000, keys),
+		dashboard:  dashboardui.NewModelWithConfig(lateBoundDashboardSource{}, getEventStreamSource(), 1000, keys),
 		exporter:   tuiexport.NewModel(),
 		keys:       keys,
 		spin:       spin,
