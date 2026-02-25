@@ -146,18 +146,27 @@ func tuiTraceStarterFromRunTrace(
 		streamBuf := eventstream.NewRingBuffer()
 		tui.SetDashboardSnapshotSource(engine)
 		tui.SetEventStreamSource(streamBuf)
+		streamEvents := make(chan eventstream.StreamEvent, 4096)
+
+		go func() {
+			for ev := range streamEvents {
+				streamBuf.Push(ev)
+			}
+		}()
 
 		startedCh := make(chan struct{})
 		errCh := make(chan error, 1)
 
 		go func() {
-			errCh <- startTrace(ctx, startedCh, func(el *eventLoop) {
+			err := startTrace(ctx, startedCh, func(el *eventLoop) {
 				el.printCb = func(ep *event.Pair) {
 					engine.Ingest(ep)
-					streamBuf.Push(eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep))
+					streamEvents <- eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep)
 					ep.Recycle()
 				}
 			})
+			close(streamEvents)
+			errCh <- err
 			close(errCh)
 		}()
 
