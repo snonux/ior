@@ -160,15 +160,47 @@ func (e *Engine) Snapshot() *Snapshot {
 	elapsed := nonNegativeDuration(in.now.Sub(in.startedAt))
 	rateDiv := elapsed.Seconds()
 
+	var (
+		syscallsSnap    []SyscallSnapshot
+		filesSnap       []FileSnapshot
+		processesSnap   []ProcessSnapshot
+		latencyHistSnap HistogramSnapshot
+		gapHistSnap     HistogramSnapshot
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		syscallsSnap = buildSyscallSnapshots(in.syscalls, elapsed)
+	}()
+	go func() {
+		defer wg.Done()
+		filesSnap = buildFileSnapshots(in.files)
+	}()
+	go func() {
+		defer wg.Done()
+		processesSnap = buildProcessSnapshots(in.processes, elapsed)
+	}()
+	go func() {
+		defer wg.Done()
+		latencyHistSnap = buildHistogramSnapshot(in.latencyHist)
+	}()
+	go func() {
+		defer wg.Done()
+		gapHistSnap = buildHistogramSnapshot(in.gapHist)
+	}()
+	wg.Wait()
+
 	snapshot := NewSnapshot(
 		in.latencySeries,
 		in.gapSeries,
 		in.throughputSeries,
-		buildSyscallSnapshots(in.syscalls, elapsed),
-		buildFileSnapshots(in.files),
-		buildProcessSnapshots(in.processes, elapsed),
-		buildHistogramSnapshot(in.latencyHist),
-		buildHistogramSnapshot(in.gapHist),
+		syscallsSnap,
+		filesSnap,
+		processesSnap,
+		latencyHistSnap,
+		gapHistSnap,
 	)
 
 	snapshot.GeneratedAt = in.now
