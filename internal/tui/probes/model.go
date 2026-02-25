@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"ior/internal/probemanager"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -266,7 +267,7 @@ func (m Model) View(width, height int) string {
 		}
 		line := fmt.Sprintf("%s%s %-24s", prefix, check, p.Syscall)
 		if p.Error != "" {
-			line += " ! " + p.Error
+			line += " ! " + truncateText(sanitizeOneLine(p.Error), 28)
 		}
 		lines = append(lines, line)
 	}
@@ -312,4 +313,25 @@ func bulkToggleCmd(manager Manager, probes []probemanager.ProbeState, sourceActi
 		}
 		return ProbeToggledMsg{Err: firstErr}
 	}
+}
+
+func sanitizeOneLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return s
+}
+
+func truncateText(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	runes := []rune(s)
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
 }
