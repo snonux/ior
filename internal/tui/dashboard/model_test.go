@@ -140,6 +140,24 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 	}
 }
 
+func TestDirGroupKeyTogglesOnlyOnFilesTab(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model := next.(Model)
+	if !model.filesDirGrouped {
+		t.Fatalf("expected filesDirGrouped to toggle on files tab")
+	}
+
+	model.activeTab = TabOverview
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = next.(Model)
+	if !model.filesDirGrouped {
+		t.Fatalf("expected filesDirGrouped unchanged outside files tab")
+	}
+}
+
 func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
