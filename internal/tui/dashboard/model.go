@@ -37,6 +37,8 @@ type Model struct {
 	keys            common.KeyMap
 	syscallsOffset  int
 	filesOffset     int
+	filesDirGrouped bool
+	filesDirOffset  int
 	processesOffset int
 	streamModel     eventstream.Model
 }
