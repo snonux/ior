@@ -3,10 +3,24 @@ package dashboard
 import (
 	"fmt"
 	"ior/internal/statsengine"
+	"path/filepath"
+	"sort"
 	"strconv"
 
 	"github.com/charmbracelet/bubbles/table"
 )
+
+type DirSnapshot struct {
+	Dir string
+
+	Accesses     uint64
+	BytesRead    uint64
+	BytesWritten uint64
+
+	AvgLatencyNs float64
+	MaxLatencyNs uint64
+	FileCount    uint64
+}
 
 func renderFiles(snap *statsengine.Snapshot, width, height int) string {
 	return renderFilesWithOffset(snap, width, height, 0)
@@ -86,4 +100,43 @@ func truncatePathMiddle(path string, limit int) string {
 		return path[:limit]
 	}
 	return path[:head] + "..." + path[len(path)-tail:]
+}
+
+func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
+	if len(files) == 0 {
+		return nil
+	}
+
+	dirs := make(map[string]DirSnapshot, len(files))
+	weightedLatency := make(map[string]float64, len(files))
+	for _, f := range files {
+		dir := filepath.Dir(f.Path)
+		s := dirs[dir]
+		s.Dir = dir
+		s.Accesses += f.Accesses
+		s.BytesRead += f.BytesRead
+		s.BytesWritten += f.BytesWritten
+		if f.MaxLatencyNs > s.MaxLatencyNs {
+			s.MaxLatencyNs = f.MaxLatencyNs
+		}
+		s.FileCount++
+		weightedLatency[dir] += f.AvgLatencyNs * float64(f.Accesses)
+		dirs[dir] = s
+	}
+
+	out := make([]DirSnapshot, 0, len(dirs))
+	for dir, s := range dirs {
+		if s.Accesses > 0 {
+			s.AvgLatencyNs = weightedLatency[dir] / float64(s.Accesses)
+		}
+		out = append(out, s)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Accesses != out[j].Accesses {
+			return out[i].Accesses > out[j].Accesses
+		}
+		return out[i].Dir < out[j].Dir
+	})
+	return out
 }
