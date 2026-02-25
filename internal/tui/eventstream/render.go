@@ -22,13 +22,14 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 	if width <= 0 {
 		width = 100
 	}
+	contentWidth := panelContentWidth(width)
 
 	lines := make([]string, 0, len(events)+3)
 	lines = append(lines, renderStatusLine(paused, totalCount, filteredCount, bufferLen, bufferCap))
 	lines = append(lines, renderFilterLine(filter))
-	lines = append(lines, renderColumnHeader(width))
+	lines = append(lines, renderColumnHeader(contentWidth))
 	for _, ev := range events {
-		lines = append(lines, renderEventRow(ev, width))
+		lines = append(lines, renderEventRow(ev, contentWidth))
 	}
 
 	return common.PanelStyle.Width(width).Render(strings.Join(lines, "\n"))
@@ -72,15 +73,15 @@ func renderColumnHeader(width int) string {
 func renderEventRow(ev StreamEvent, width int) string {
 	cols := computeColumnLayout(width)
 	pidTid := fmt.Sprintf("%d.%d", ev.PID, ev.TID)
-	row := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*d %-*d %s",
-		cols.gap, formatDurationNs(ev.GapNs),
-		cols.latency, formatDurationNs(ev.DurationNs),
-		cols.comm, truncateMiddle(ev.Comm, cols.comm),
-		cols.pidTid, truncateMiddle(pidTid, cols.pidTid),
-		cols.syscall, truncateMiddle(ev.Syscall, cols.syscall),
-		cols.ret, ev.RetVal,
-		cols.bytes, ev.Bytes,
-		truncateMiddle(ev.FileName, cols.file),
+	row := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %-*s %s",
+		cols.gap, fitCell(formatDurationNs(ev.GapNs), cols.gap),
+		cols.latency, fitCell(formatDurationNs(ev.DurationNs), cols.latency),
+		cols.comm, fitCell(ev.Comm, cols.comm),
+		cols.pidTid, fitCell(pidTid, cols.pidTid),
+		cols.syscall, fitCell(ev.Syscall, cols.syscall),
+		cols.ret, fitCell(strconv.FormatInt(ev.RetVal, 10), cols.ret),
+		cols.bytes, fitCell(strconv.FormatUint(ev.Bytes, 10), cols.bytes),
+		fitCell(ev.FileName, cols.file),
 	)
 	if ev.IsError {
 		return common.ErrorStyle.Render(row)
@@ -154,4 +155,25 @@ func truncateMiddle(path string, limit int) string {
 		return path[:limit]
 	}
 	return path[:head] + "..." + path[len(path)-tail:]
+}
+
+func fitCell(s string, width int) string {
+	return truncateMiddle(sanitizeOneLine(s), width)
+}
+
+func sanitizeOneLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return s
+}
+
+func panelContentWidth(width int) int {
+	// common.PanelStyle uses 1-char border on each side and 1-char horizontal
+	// padding on each side: subtract 4 from total width for content.
+	inner := width - 4
+	if inner < 20 {
+		return 20
+	}
+	return inner
 }

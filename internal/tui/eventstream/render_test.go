@@ -71,3 +71,25 @@ func TestFormatDurationNs(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderEventRowIsSingleLineWithControlCharsAndLongValues(t *testing.T) {
+	ev := StreamEvent{
+		Syscall:    "very_very_long_syscall_name_that_would_otherwise_overflow",
+		Comm:       "cmd\twith\tcontrols",
+		PID:        1234567,
+		TID:        7654321,
+		DurationNs: 123456789012345,
+		GapNs:      9988776655443322,
+		Bytes:      18446744073709551615,
+		FileName:   "/very/long/path/with/newline\nand\ttabs/that/should/not/wrap",
+		RetVal:     -9223372036854775808,
+	}
+
+	row := renderEventRow(ev, 80)
+	if strings.Contains(row, "\n") || strings.Contains(row, "\r") || strings.Contains(row, "\t") {
+		t.Fatalf("expected a sanitized single-line row, got %q", row)
+	}
+	if !strings.Contains(row, "...") {
+		t.Fatalf("expected truncation ellipsis in narrow row, got %q", row)
+	}
+}
