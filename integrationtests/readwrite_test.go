@@ -2,6 +2,7 @@ package integrationtests
 
 import "testing"
 
+// TODO: Also test how much bytes were read and writen
 func TestReadwriteBasic(t *testing.T) {
 	runScenario(t, "readwrite-basic", []ExpectedEvent{
 		{
