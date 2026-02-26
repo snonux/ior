@@ -129,6 +129,14 @@ func renderHelpBar(keys common.KeyMap, width int) string {
 	return common.HelpBarStyle.Width(width).Render(text)
 }
 
+func renderHelpHint(width int) string {
+	hint := "press H for help"
+	if width > 0 && width < 90 {
+		return hint
+	}
+	return common.HelpBarStyle.Width(width).Render(hint)
+}
+
 func wrapHelpLines(parts []string, width int) (string, string) {
 	if len(parts) == 0 {
 		return "", ""

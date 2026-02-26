@@ -496,8 +496,8 @@ func TestViewShowsDashboardWithoutHelpOverlay(t *testing.T) {
 	m.height = 30
 
 	out := m.View()
-	if !strings.Contains(out, "tab next tab") {
-		t.Fatalf("expected status/help bar keybinding text in dashboard")
+	if !strings.Contains(out, "press H for help") {
+		t.Fatalf("expected bottom help hint in dashboard")
 	}
 }
 
@@ -548,7 +548,7 @@ func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
 	m.height = 30
 
 	out := m.View()
-	if strings.Contains(out, "e export") {
+	if strings.Contains(out, "e snapshot export") {
 		t.Fatalf("did not expect export shortcut in status bar when export is disabled")
 	}
 }
