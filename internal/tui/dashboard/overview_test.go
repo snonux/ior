@@ -129,3 +129,38 @@ func TestRenderOverviewSparklineHasSafetyMargin(t *testing.T) {
 		t.Fatalf("expected sparkline width <= %d with safety margin, got %d", max, got)
 	}
 }
+
+func TestRenderOverviewSparklineCapsWidth(t *testing.T) {
+	out := renderOverviewSparkline("Latency:", make([]float64, 120), 400)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2-line sparkline, got %q", out)
+	}
+	if got := lipgloss.Width(lines[0]) - len("Latency: "); got > sparklineMaxWidth {
+		t.Fatalf("expected capped sparkline width <= %d, got %d", sparklineMaxWidth, got)
+	}
+}
+
+func TestRenderOverviewSparklineAlignedUsesSameSparkStartColumn(t *testing.T) {
+	const panelInner = 80
+	labelWidth := maxLabelWidth("Latency:", "Gap:", "Throughput:")
+	lat := renderOverviewSparklineAligned("Latency:", []float64{1, 2, 3}, panelInner, labelWidth)
+	gap := renderOverviewSparklineAligned("Gap:", []float64{1, 2, 3}, panelInner, labelWidth)
+	thr := renderOverviewSparklineAligned("Throughput:", []float64{1, 2, 3}, panelInner, labelWidth)
+
+	latTop := strings.Split(lat, "\n")[0]
+	gapTop := strings.Split(gap, "\n")[0]
+	thrTop := strings.Split(thr, "\n")[0]
+
+	prefix := strings.Repeat(" ", labelWidth-len("Latency:"))
+	if !strings.HasPrefix(latTop, "Latency:"+prefix+" ") {
+		t.Fatalf("unexpected latency prefix: %q", latTop)
+	}
+	prefix = strings.Repeat(" ", labelWidth-len("Gap:"))
+	if !strings.HasPrefix(gapTop, "Gap:"+prefix+" ") {
+		t.Fatalf("unexpected gap prefix: %q", gapTop)
+	}
+	if !strings.HasPrefix(thrTop, "Throughput: ") {
+		t.Fatalf("unexpected throughput prefix: %q", thrTop)
+	}
+}
