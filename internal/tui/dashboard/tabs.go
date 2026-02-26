@@ -113,16 +113,21 @@ func renderTabBar(active Tab, width int) string {
 }
 
 func renderHelpBar(keys common.KeyMap, width int) string {
-	parts := make([]string, 0, len(keys.DashboardStatusHelp()))
-	for _, binding := range keys.DashboardStatusHelp() {
-		help := binding.Help()
-		parts = append(parts, help.Key+" "+help.Desc)
+	sections := keys.DashboardStatusHelpSections()
+	lines := make([]string, 0, len(sections))
+	for _, section := range sections {
+		parts := make([]string, 0, len(section.Bindings))
+		for _, binding := range section.Bindings {
+			help := binding.Help()
+			parts = append(parts, help.Key+" "+help.Desc)
+		}
+		line := section.Title + ": " + strings.Join(parts, " • ")
+		if width > 0 {
+			line = truncatePlain(line, width)
+		}
+		lines = append(lines, line)
 	}
-	line1, line2 := wrapHelpLines(parts, width)
-	text := line1
-	if line2 != "" {
-		text += "\n" + line2
-	}
+	text := strings.Join(lines, "\n")
 	if width > 0 && width < 90 {
 		return text
 	}

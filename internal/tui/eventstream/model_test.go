@@ -680,6 +680,66 @@ func TestPausedOpenLastExportQueuesRequest(t *testing.T) {
 	}
 }
 
+func TestRegexSearchForwardBackwardAndRepeat(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "alpha", PID: 10, TID: 100, Syscall: "read", FileName: "/tmp/a"})
+	rb.Push(StreamEvent{Seq: 2, Comm: "beta", PID: 11, TID: 110, Syscall: "write", FileName: "/tmp/b"})
+	rb.Push(StreamEvent{Seq: 3, Comm: "gamma", PID: 12, TID: 120, Syscall: "open", FileName: "/tmp/c"})
+	rb.Push(StreamEvent{Seq: 4, Comm: "beta", PID: 13, TID: 130, Syscall: "close", FileName: "/tmp/d"})
+
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	_ = m.HandleKey("space")
+	m.moveSelectionTo(0)
+
+	if !m.HandleKey("/") {
+		t.Fatalf("/ should open search modal")
+	}
+	if !m.searchModal.Visible() {
+		t.Fatalf("expected search modal visible")
+	}
+	if !m.HandleKey("b") || !m.HandleKey("e") || !m.HandleKey("t") || !m.HandleKey("a") {
+		t.Fatalf("expected term typing keys handled")
+	}
+	if !m.HandleKey("enter") {
+		t.Fatalf("enter should submit search")
+	}
+	if m.selectedIdx != 1 {
+		t.Fatalf("expected first forward beta hit at idx 1, got %d", m.selectedIdx)
+	}
+	if m.searchDirection != SearchForward {
+		t.Fatalf("expected search direction forward")
+	}
+
+	if !m.HandleKey("n") {
+		t.Fatalf("n should jump to next hit")
+	}
+	if m.selectedIdx != 3 {
+		t.Fatalf("expected next forward beta hit at idx 3, got %d", m.selectedIdx)
+	}
+
+	if !m.HandleKey("N") {
+		t.Fatalf("N should jump opposite direction")
+	}
+	if m.selectedIdx != 1 {
+		t.Fatalf("expected opposite-direction beta hit at idx 1, got %d", m.selectedIdx)
+	}
+
+	if !m.HandleKey("?") {
+		t.Fatalf("? should open backward search modal")
+	}
+	if !m.HandleKey("enter") {
+		t.Fatalf("enter should submit backward search")
+	}
+	if m.selectedIdx != 3 {
+		t.Fatalf("expected backward beta hit at idx 3, got %d", m.selectedIdx)
+	}
+	if m.searchDirection != SearchBackward {
+		t.Fatalf("expected search direction backward")
+	}
+}
+
 func readCSVRecords(t *testing.T, path string) [][]string {
 	t.Helper()
 	f, err := os.Open(path)

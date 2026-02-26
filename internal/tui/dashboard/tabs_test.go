@@ -42,7 +42,13 @@ func TestRenderTabBarSmallWidthUsesSingleLine(t *testing.T) {
 func TestRenderHelpBarSmallWidthCanWrapToTwoLines(t *testing.T) {
 	out := renderHelpBar(common.DefaultKeyMap(), 70)
 	lines := strings.Split(out, "\n")
-	if len(lines) < 1 || len(lines) > 2 {
-		t.Fatalf("expected one or two help bar lines at width 70, got %d lines", len(lines))
+	if len(lines) != 2 {
+		t.Fatalf("expected exactly two section lines at width 70, got %d lines", len(lines))
+	}
+	if !strings.Contains(lines[0], "Global:") {
+		t.Fatalf("expected Global section line, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "Dashboard:") {
+		t.Fatalf("expected Dashboard section line, got %q", lines[1])
 	}
 }

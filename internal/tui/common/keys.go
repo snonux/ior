@@ -2,6 +2,12 @@ package common
 
 import "github.com/charmbracelet/bubbles/key"
 
+// HelpSection groups related key bindings under a shared heading.
+type HelpSection struct {
+	Title    string
+	Bindings []key.Binding
+}
+
 // KeyMap groups all key bindings shared by TUI screens.
 type KeyMap struct {
 	Tab       key.Binding
@@ -53,32 +59,62 @@ func DefaultKeyMap() KeyMap {
 
 // DashboardStatusHelp returns expanded bindings for dashboard status bars.
 func (k KeyMap) DashboardStatusHelp() []key.Binding {
-	bindings := []key.Binding{k.Tab, k.ShiftTab, k.One, k.Two, k.Three, k.Four, k.Five, k.Six}
-	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
-		bindings = append(bindings, k.Export)
+	sections := k.DashboardStatusHelpSections()
+	total := 0
+	for _, section := range sections {
+		total += len(section.Bindings)
 	}
-	bindings = append(bindings,
-		helpTextBinding("x", "stream export"),
-		helpTextBinding("X", "stream export as"),
-		helpTextBinding("E", "stream open last"),
-		helpTextBinding("esc", "stream undo filter"),
-		k.DirGroup,
+	bindings := make([]key.Binding, 0, total)
+	for _, section := range sections {
+		bindings = append(bindings, section.Bindings...)
+	}
+	return bindings
+}
+
+// DashboardStatusHelpSections returns grouped bindings for dashboard status bars.
+func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
+	global := []key.Binding{
+		helpTextBinding("H", "toggle help"),
+		k.Tab,
+		k.ShiftTab,
+		k.One,
+		k.Two,
+		k.Three,
+		k.Four,
+		k.Five,
+		k.Six,
 		k.SelectPID,
 		k.SelectTID,
 		k.Probes,
 		k.Refresh,
 		k.Quit,
+	}
+	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
+		global = append(global, k.Export)
+	}
+	dashboard := []key.Binding{
+		k.DirGroup,
 		helpTextBinding("space", "stream pause"),
 		helpTextBinding("f", "stream filter"),
 		helpTextBinding("g/G", "stream top/tail"),
 		helpTextBinding("c", "stream clear"),
 		helpTextBinding("enter", "stream add filter"),
+		helpTextBinding("esc", "stream undo filter"),
 		helpTextBinding("left/right", "stream col"),
 		helpTextBinding("h/l", "stream col"),
 		helpTextBinding("j/k", "scroll"),
 		helpTextBinding("up/down", "scroll"),
-	)
-	return bindings
+		helpTextBinding("/,?", "stream regex search"),
+		helpTextBinding("n/N", "stream search next/prev"),
+		helpTextBinding("x", "stream export"),
+		helpTextBinding("X", "stream export as"),
+		helpTextBinding("E", "stream open last"),
+	}
+
+	return []HelpSection{
+		{Title: "Global", Bindings: global},
+		{Title: "Dashboard", Bindings: dashboard},
+	}
 }
 
 // DashboardFullHelp returns grouped bindings for dashboard overlays.
@@ -106,6 +142,8 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 			helpTextBinding("x", "stream export"),
 			helpTextBinding("X", "stream export as"),
 			helpTextBinding("E", "stream open last"),
+			helpTextBinding("/,?", "stream regex search"),
+			helpTextBinding("n/N", "stream search next/prev"),
 		},
 	}
 }
