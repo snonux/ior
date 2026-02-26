@@ -117,3 +117,15 @@ func TestRenderOverviewDoesNotOverflowWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderOverviewSparklineHasSafetyMargin(t *testing.T) {
+	const panelInner = 80
+	out := renderOverviewSparkline("Latency:", []float64{1, 2, 3, 4, 5}, panelInner)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2-line sparkline, got %q", out)
+	}
+	if got, max := lipgloss.Width(lines[0]), panelInner-sparklineSafetyMargin; got > max {
+		t.Fatalf("expected sparkline width <= %d with safety margin, got %d", max, got)
+	}
+}
