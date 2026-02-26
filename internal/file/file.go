@@ -14,6 +14,7 @@ type File interface {
 	String() string
 	Name() string
 	Flags() Flags
+	FD() int32
 }
 
 type FdFile struct {
@@ -24,15 +25,15 @@ type FdFile struct {
 }
 
 func NewFd(fd int32, name string, flags int32) FdFile {
-        f := FdFile{
-                fd:    fd,
-                name:  name,
-                flags: Flags(flags),
-        }
-        if f.flags == -1 {
-                f.flags = unknownFlag
-        }
-        return f
+	f := FdFile{
+		fd:    fd,
+		name:  name,
+		flags: Flags(flags),
+	}
+	if f.flags == -1 {
+		f.flags = unknownFlag
+	}
+	return f
 }
 
 func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
@@ -99,6 +100,10 @@ func (f FdFile) Flags() Flags {
 	return f.flags
 }
 
+func (f FdFile) FD() int32 {
+	return f.fd
+}
+
 func (f *FdFile) SetFlags(flags int32) {
 	f.flags = Flags(flags)
 }
@@ -121,6 +126,10 @@ func (f oldnameNewnameFile) Name() string {
 
 func (f oldnameNewnameFile) Flags() Flags {
 	return unknownFlag
+}
+
+func (f oldnameNewnameFile) FD() int32 {
+	return -1
 }
 
 func (f oldnameNewnameFile) String() string {
@@ -151,6 +160,10 @@ func (f pathnameFile) Name() string {
 
 func (f pathnameFile) Flags() Flags {
 	return unknownFlag
+}
+
+func (f pathnameFile) FD() int32 {
+	return -1
 }
 
 func (f pathnameFile) String() string {

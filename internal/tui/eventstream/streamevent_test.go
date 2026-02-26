@@ -41,6 +41,9 @@ func TestNewStreamEventPopulatesFields(t *testing.T) {
 	if got.DurationNs != 66 || got.GapNs != 19 || got.Bytes != 512 {
 		t.Fatalf("DurationNs/GapNs/Bytes = %d/%d/%d, want 66/19/512", got.DurationNs, got.GapNs, got.Bytes)
 	}
+	if got.FD != 7 {
+		t.Fatalf("FD = %d, want 7", got.FD)
+	}
 	if got.RetVal != -2 {
 		t.Fatalf("RetVal = %d, want -2", got.RetVal)
 	}
@@ -69,6 +72,9 @@ func TestNewStreamEventCopiesBeforeRecycle(t *testing.T) {
 	if got.RetVal != 8 || got.IsError {
 		t.Fatalf("RetVal/IsError = %d/%v, want 8/false", got.RetVal, got.IsError)
 	}
+	if got.FD != 3 {
+		t.Fatalf("FD = %d, want 3", got.FD)
+	}
 }
 
 func TestNewStreamEventWithoutRetEvent(t *testing.T) {
@@ -83,5 +89,8 @@ func TestNewStreamEventWithoutRetEvent(t *testing.T) {
 	}
 	if got.IsError {
 		t.Fatalf("IsError = true, want false")
+	}
+	if got.FD != UnknownFD {
+		t.Fatalf("FD = %d, want %d", got.FD, UnknownFD)
 	}
 }

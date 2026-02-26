@@ -102,6 +102,17 @@ func (e *Pair) FileName() string {
 	return e.File.Name()
 }
 
+func (e *Pair) FileDescriptor() (int32, bool) {
+	if e.File == nil {
+		return 0, false
+	}
+	fd := e.File.FD()
+	if fd < 0 {
+		return 0, false
+	}
+	return fd, true
+}
+
 func (e *Pair) Dump() string {
 	return fmt.Sprintf("%v with enterEv(%v) and exitEv(%v)", e, e.EnterEv, e.ExitEv)
 }
