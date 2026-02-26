@@ -33,6 +33,7 @@ type Filter struct {
 	File       *StringFilter
 	PID        *NumericFilter
 	TID        *NumericFilter
+	FD         *NumericFilter
 	LatencyNs  *NumericFilter
 	GapNs      *NumericFilter
 	Bytes      *NumericFilter
@@ -62,6 +63,9 @@ func (f Filter) Matches(ev *StreamEvent) bool {
 	if !matchNumeric(f.TID, int64(ev.TID)) {
 		return false
 	}
+	if !matchNumeric(f.FD, int64(ev.FD)) {
+		return false
+	}
 	if !matchNumeric(f.LatencyNs, int64(ev.DurationNs)) {
 		return false
 	}
@@ -86,7 +90,7 @@ func (f Filter) IsActive() bool {
 			return true
 		}
 	}
-	for _, nf := range []*NumericFilter{f.PID, f.TID, f.LatencyNs, f.GapNs, f.Bytes, f.RetVal} {
+	for _, nf := range []*NumericFilter{f.PID, f.TID, f.FD, f.LatencyNs, f.GapNs, f.Bytes, f.RetVal} {
 		if nf != nil {
 			return true
 		}
@@ -104,6 +108,7 @@ func (f Filter) Summary() string {
 	parts = appendStringSummary(parts, "file", f.File)
 	parts = appendNumericSummary(parts, "pid", f.PID, false)
 	parts = appendNumericSummary(parts, "tid", f.TID, false)
+	parts = appendNumericSummary(parts, "fd", f.FD, false)
 	parts = appendNumericSummary(parts, "latency", f.LatencyNs, true)
 	parts = appendNumericSummary(parts, "gap", f.GapNs, true)
 	parts = appendNumericSummary(parts, "bytes", f.Bytes, false)

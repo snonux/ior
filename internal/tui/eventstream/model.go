@@ -7,7 +7,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const streamColumnCount = 10
+const (
+	streamColGap = iota
+	streamColLatency
+	streamColComm
+	streamColPID
+	streamColTID
+	streamColSyscall
+	streamColFD
+	streamColRet
+	streamColBytes
+	streamColFile
+	streamColumnCount
+)
 
 type Model struct {
 	source *RingBuffer
@@ -23,11 +35,13 @@ type Model struct {
 	// can pause refresh temporarily without losing the user's prior state.
 	pauseBeforeFilter bool
 
-	scrollOffset int
-	autoScroll   bool
-	selectedIdx  int
-	selectedCol  int
-	fdTraceView  fdTraceViewState
+	scrollOffset      int
+	autoScroll        bool
+	selectedIdx       int
+	selectedCol       int
+	fdTraceView       fdTraceViewState
+	filterStack       []Filter
+	filterActionStack []string
 
 	width  int
 	height int
@@ -84,6 +98,8 @@ func (m *Model) HandleKey(keyStr string) bool {
 		m.filterModal = m.filterModal.Update(keyMsgFromString(keyStr))
 		if wasVisible && !m.filterModal.Visible() {
 			m.filter = m.filterModal.Filter()
+			m.filterStack = nil
+			m.filterActionStack = nil
 			m.paused = m.pauseBeforeFilter
 			m.applyFilter()
 			if !m.paused {
@@ -131,7 +147,7 @@ func (m *Model) HandleKey(keyStr string) bool {
 	switch keyStr {
 	case "enter":
 		if m.paused {
-			return m.openFDTraceView()
+			return m.applyFilterFromSelectedCell()
 		}
 		return false
 	case " ", "space":
@@ -170,6 +186,8 @@ func (m *Model) HandleKey(keyStr string) bool {
 		return true
 	case "c":
 		m.filter = Filter{}
+		m.filterStack = nil
+		m.filterActionStack = nil
 		m.applyFilter()
 		return true
 	case "j", "down":
@@ -212,6 +230,11 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.scrollByLines(-m.pageStep())
 		}
 		return true
+	case "esc":
+		if m.paused {
+			return m.popFilter()
+		}
+		return false
 	default:
 		return false
 	}
@@ -285,9 +308,12 @@ func (m *Model) View(width, height int) string {
 	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx, selectedCol)
 	status := fmt.Sprintf("Row %d/%d | space:pause f:filter G:tail g:top c:clear j/k:scroll", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | enter:fd-trace space:pause f:filter G:tail g:top c:clear j/k:row h/l:col", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount)
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | enter:add-filter esc:undo(%d) space:pause f:filter G:tail g:top c:clear j/k:row h/l:col", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount, len(m.filterStack))
 	}
 	out := base + "\n" + status
+	if len(m.filterActionStack) > 0 {
+		out += "\n" + "Stack: " + strings.Join(m.filterActionStack, " | ")
+	}
 
 	if m.filterModal.Visible() {
 		// While editing filters, show a dedicated modal screen to avoid
@@ -516,6 +542,125 @@ func (m *Model) moveSelectedColBy(delta int) {
 	}
 	m.ensureSelectedCol()
 	m.selectedCol = clamp(m.selectedCol+delta, 0, streamColumnCount-1)
+}
+
+func (m *Model) applyFilterFromSelectedCell() bool {
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
+		return false
+	}
+	ev := m.filtered[m.selectedIdx]
+	targetSeq := ev.Seq
+	next := cloneFilter(m.filter)
+	action := ""
+
+	switch m.selectedCol {
+	case streamColGap:
+		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
+		action = fmt.Sprintf("gap>=%dns", ev.GapNs)
+	case streamColLatency:
+		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
+		action = fmt.Sprintf("latency>=%dns", ev.DurationNs)
+	case streamColComm:
+		next.Comm = &StringFilter{Pattern: ev.Comm}
+		action = fmt.Sprintf("comm~%s", ev.Comm)
+	case streamColPID:
+		next.PID = &NumericFilter{Op: OpEq, Value: int64(ev.PID)}
+		action = fmt.Sprintf("pid=%d", ev.PID)
+	case streamColTID:
+		next.TID = &NumericFilter{Op: OpEq, Value: int64(ev.TID)}
+		action = fmt.Sprintf("tid=%d", ev.TID)
+	case streamColSyscall:
+		next.Syscall = &StringFilter{Pattern: ev.Syscall}
+		action = fmt.Sprintf("syscall~%s", ev.Syscall)
+	case streamColFD:
+		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
+		action = fmt.Sprintf("fd=%d", ev.FD)
+	case streamColRet:
+		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
+		action = fmt.Sprintf("ret=%d", ev.RetVal)
+	case streamColBytes:
+		next.Bytes = &NumericFilter{Op: OpEq, Value: int64(ev.Bytes)}
+		action = fmt.Sprintf("bytes=%d", ev.Bytes)
+	case streamColFile:
+		next.File = &StringFilter{Pattern: ev.FileName}
+		action = fmt.Sprintf("file~%s", ev.FileName)
+	default:
+		return false
+	}
+
+	m.filterStack = append(m.filterStack, cloneFilter(m.filter))
+	m.filterActionStack = append(m.filterActionStack, action)
+	m.filter = next
+	m.applyFilter()
+	m.restoreSelectionBySeq(targetSeq)
+	return true
+}
+
+func (m *Model) popFilter() bool {
+	if len(m.filterStack) == 0 {
+		return false
+	}
+	targetSeq := m.currentSelectedSeq()
+	last := m.filterStack[len(m.filterStack)-1]
+	m.filterStack = m.filterStack[:len(m.filterStack)-1]
+	if len(m.filterActionStack) > 0 {
+		m.filterActionStack = m.filterActionStack[:len(m.filterActionStack)-1]
+	}
+	m.filter = cloneFilter(last)
+	m.applyFilter()
+	m.restoreSelectionBySeq(targetSeq)
+	return true
+}
+
+func (m *Model) currentSelectedSeq() uint64 {
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
+		return 0
+	}
+	return m.filtered[m.selectedIdx].Seq
+}
+
+func (m *Model) restoreSelectionBySeq(seq uint64) {
+	if !m.paused || seq == 0 || len(m.filtered) == 0 {
+		return
+	}
+	for i := range m.filtered {
+		if m.filtered[i].Seq == seq {
+			m.selectedIdx = i
+			m.centerSelection()
+			return
+		}
+	}
+}
+
+func cloneFilter(in Filter) Filter {
+	out := in
+	out.Syscall = cloneStringFilter(in.Syscall)
+	out.Comm = cloneStringFilter(in.Comm)
+	out.File = cloneStringFilter(in.File)
+	out.PID = cloneNumericFilter(in.PID)
+	out.TID = cloneNumericFilter(in.TID)
+	out.FD = cloneNumericFilter(in.FD)
+	out.LatencyNs = cloneNumericFilter(in.LatencyNs)
+	out.GapNs = cloneNumericFilter(in.GapNs)
+	out.Bytes = cloneNumericFilter(in.Bytes)
+	out.RetVal = cloneNumericFilter(in.RetVal)
+	return out
+}
+
+func cloneStringFilter(in *StringFilter) *StringFilter {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func cloneNumericFilter(in *NumericFilter) *NumericFilter {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func (m *Model) clampSelection() {
