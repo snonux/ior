@@ -385,7 +385,7 @@ func (m Model) View() string {
 			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
 		}
 		if m.showHelp {
-			return placeToViewport(width, height, renderHelpOverlay(width, height, [][]key.Binding{m.keys.PickerShortHelp()})+"\n"+base)
+			return placeToViewport(width, height, renderHelpOverlay(width, height, [][]key.Binding{m.keys.PickerShortHelp()}))
 		}
 		return placeToViewport(width, height, base)
 	case ScreenDashboard:
@@ -397,7 +397,7 @@ func (m Model) View() string {
 			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
 		}
 		if m.showHelp {
-			return placeToViewport(width, height, renderHelpOverlay(width, height, m.keys.DashboardFullHelp())+"\n"+base)
+			return placeToViewport(width, height, renderHelpOverlay(width, height, m.keys.DashboardFullHelp()))
 		}
 		return placeToViewport(width, height, base)
 	default:
@@ -550,8 +550,16 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 	}
 	lines = append(lines, "", "Esc/? close")
 
+	boxWidth := width - 6
+	if boxWidth > 110 {
+		boxWidth = 110
+	}
+	if boxWidth < 72 {
+		boxWidth = 72
+	}
+
 	box := PanelStyle.Copy().
-		Width(72).
+		Width(boxWidth).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
