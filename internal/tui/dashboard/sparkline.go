@@ -39,9 +39,6 @@ func renderSparkline(data []float64, width int) string {
 		if bottomLevel > 8 {
 			bottomLevel = 8
 		}
-		if bottomLevel == 0 {
-			bottomLevel = 1
-		}
 
 		col := i
 		top[col] = sparkRowChars[topLevel]
