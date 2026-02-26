@@ -102,6 +102,7 @@ func (e *Pair) FileName() string {
 	return e.File.Name()
 }
 
+// FileDescriptor returns the associated file descriptor when available.
 func (e *Pair) FileDescriptor() (int32, bool) {
 	if e.File == nil {
 		return 0, false
