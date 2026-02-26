@@ -90,6 +90,8 @@ func (m *Model) HandleKey(keyStr string) bool {
 	}
 	if m.fdTraceView.visible {
 		switch keyStr {
+		case "enter", " ", "space":
+			return true
 		case "j", "down":
 			m.scrollFDTraceByLines(1)
 			return true

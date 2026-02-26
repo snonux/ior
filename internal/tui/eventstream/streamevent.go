@@ -21,6 +21,7 @@ type StreamEvent struct {
 	FD         int32
 }
 
+// UnknownFD marks events that are not associated with a file descriptor.
 const UnknownFD int32 = -1
 
 func NewStreamEvent(seq uint64, pair *event.Pair) StreamEvent {
