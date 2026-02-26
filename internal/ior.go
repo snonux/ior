@@ -272,9 +272,17 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 			origPrintCb(ep)
 		}
 	}
-	duration := time.Duration(flags.Get().Duration) * time.Second
-	logln("Probing for", duration)
-	ctx, cancel := context.WithTimeout(parentCtx, duration)
+	cfg := flags.Get()
+	ctx := parentCtx
+	cancel := func() {}
+	if shouldAutoStopByDuration(cfg) {
+		duration := time.Duration(cfg.Duration) * time.Second
+		logln("Probing for", duration)
+		ctx, cancel = context.WithTimeout(parentCtx, duration)
+	} else {
+		logln("Probing until stopped...")
+		ctx, cancel = context.WithCancel(parentCtx)
+	}
 	defer cancel()
 
 	signalCh := make(chan os.Signal, 1)
@@ -317,4 +325,8 @@ func signalTraceStarted(started chan<- struct{}) {
 		return
 	}
 	close(started)
+}
+
+func shouldAutoStopByDuration(cfg flags.Flags) bool {
+	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.PprofEnable
 }

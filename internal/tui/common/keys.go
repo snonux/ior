@@ -68,6 +68,9 @@ func (k KeyMap) DashboardStatusHelp() []key.Binding {
 		helpTextBinding("h/l", "stream col"),
 		helpTextBinding("j/k", "scroll"),
 		helpTextBinding("up/down", "scroll"),
+		helpTextBinding("x", "stream export"),
+		helpTextBinding("X", "stream export as"),
+		helpTextBinding("E", "stream open last"),
 	)
 	return bindings
 }
@@ -88,6 +91,9 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 			helpTextBinding("h/l", "stream col"),
 			helpTextBinding("j/k", "scroll"),
 			helpTextBinding("up/down", "scroll"),
+			helpTextBinding("x", "stream export"),
+			helpTextBinding("X", "stream export as"),
+			helpTextBinding("E", "stream open last"),
 		},
 	}
 }

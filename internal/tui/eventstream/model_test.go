@@ -1,6 +1,8 @@
 package eventstream
 
 import (
+	"encoding/csv"
+	"os"
 	"strings"
 	"testing"
 )
@@ -582,4 +584,113 @@ func TestPausedEnterCanFilterByFDColumn(t *testing.T) {
 	if len(m.filtered) != 3 {
 		t.Fatalf("expected 3 rows with fd=3, got %d", len(m.filtered))
 	}
+}
+
+func TestPausedQuickExportWritesFilteredRows(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "firefox", PID: 10, TID: 100, Syscall: "read", FileName: "/a"})
+	rb.Push(StreamEvent{Seq: 2, Comm: "bash", PID: 11, TID: 200, Syscall: "write", FileName: "/b"})
+	rb.Push(StreamEvent{Seq: 3, Comm: "firefox", PID: 12, TID: 300, Syscall: "open", FileName: "/c"})
+
+	m := NewModel(rb)
+	m.height = 20
+	m.setExportDirForTest(t.TempDir())
+	m.Refresh()
+	if !m.HandleKey("space") {
+		t.Fatalf("space should pause")
+	}
+
+	m.selectedIdx = 0
+	m.selectedCol = streamColComm
+	if !m.HandleKey("enter") {
+		t.Fatalf("enter should apply comm filter")
+	}
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected 2 filtered rows before export, got %d", len(m.filtered))
+	}
+
+	if !m.HandleKey("x") {
+		t.Fatalf("x should quick-export while paused")
+	}
+	if m.lastExportPath == "" {
+		t.Fatalf("expected last export path to be set")
+	}
+	records := readCSVRecords(t, m.lastExportPath)
+	if len(records) != 3 {
+		t.Fatalf("expected header + 2 rows in export, got %d records", len(records))
+	}
+	if records[1][4] != "firefox" || records[2][4] != "firefox" {
+		t.Fatalf("expected only firefox rows exported, got %q and %q", records[1][4], records[2][4])
+	}
+}
+
+func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
+	m := NewModel(rb)
+	m.height = 20
+	m.setExportDirForTest(t.TempDir())
+	m.Refresh()
+	_ = m.HandleKey("space")
+
+	if !m.HandleKey("X") {
+		t.Fatalf("X should open export modal while paused")
+	}
+	if !m.exportModal.Visible() {
+		t.Fatalf("expected export modal visible")
+	}
+	// Replace default value fully and submit.
+	m.exportModal = m.exportModal.Open("custom-name")
+	if !m.HandleKey("enter") {
+		t.Fatalf("enter should submit export modal")
+	}
+	if m.exportModal.Visible() {
+		t.Fatalf("expected export modal closed after submit")
+	}
+	if !strings.HasSuffix(m.lastExportPath, "custom-name.csv") {
+		t.Fatalf("expected custom-name.csv export path, got %q", m.lastExportPath)
+	}
+	if _, err := os.Stat(m.lastExportPath); err != nil {
+		t.Fatalf("expected exported file to exist: %v", err)
+	}
+}
+
+func TestPausedOpenLastExportQueuesRequest(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
+	m := NewModel(rb)
+	m.height = 20
+	m.setExportDirForTest(t.TempDir())
+	m.Refresh()
+	_ = m.HandleKey("space")
+	_ = m.HandleKey("x")
+
+	if !m.HandleKey("E") {
+		t.Fatalf("E should queue opening last export while paused")
+	}
+	path, ok := m.ConsumeOpenEditorRequest()
+	if !ok {
+		t.Fatalf("expected queued open-editor request")
+	}
+	if path != m.lastExportPath {
+		t.Fatalf("expected opened path %q, got %q", m.lastExportPath, path)
+	}
+	if _, ok := m.ConsumeOpenEditorRequest(); ok {
+		t.Fatalf("expected request to be consumed once")
+	}
+}
+
+func readCSVRecords(t *testing.T, path string) [][]string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open csv: %v", err)
+	}
+	defer f.Close()
+	r := csv.NewReader(f)
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("read csv: %v", err)
+	}
+	return records
 }
