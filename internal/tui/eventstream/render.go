@@ -15,6 +15,7 @@ type columnLayout struct {
 	comm    int
 	pidTid  int
 	syscall int
+	fd      int
 	ret     int
 	bytes   int
 	file    int
@@ -42,6 +43,23 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
 }
 
+func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events []StreamEvent) string {
+	if width <= 0 {
+		width = 100
+	}
+	contentWidth := panelContentWidth(width)
+
+	lines := make([]string, 0, len(events)+3)
+	lines = append(lines, common.HeaderStyle.Render("FD Trace (ring snapshot)"))
+	lines = append(lines, fmt.Sprintf("PID:%d FD:%d matched:%d", pid, fd, totalCount))
+	lines = append(lines, renderColumnHeader(contentWidth))
+	for _, ev := range events {
+		lines = append(lines, renderEventRow(ev, contentWidth, false))
+	}
+
+	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
+}
+
 func renderStatusLine(paused bool, totalCount, filteredCount, bufferLen, bufferCap int) string {
 	state := common.HighlightStyle.Render("LIVE")
 	if paused {
@@ -64,12 +82,13 @@ func renderFilterLine(filter Filter) string {
 
 func renderColumnHeader(width int) string {
 	cols := computeColumnLayout(width)
-	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %-*s %s",
+	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %s",
 		cols.gap, "Gap",
 		cols.latency, "Latency",
 		cols.comm, "Comm",
 		cols.pidTid, "PID.TID",
 		cols.syscall, "Syscall",
+		cols.fd, "FD",
 		cols.ret, "Ret",
 		cols.bytes, "Bytes",
 		"File",
@@ -80,12 +99,17 @@ func renderColumnHeader(width int) string {
 func renderEventRow(ev StreamEvent, width int, selected bool) string {
 	cols := computeColumnLayout(width)
 	pidTid := fmt.Sprintf("%d.%d", ev.PID, ev.TID)
-	row := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %-*s %s",
+	fd := "-"
+	if ev.FD >= 0 {
+		fd = strconv.FormatInt(int64(ev.FD), 10)
+	}
+	row := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %s",
 		cols.gap, fitCell(formatDurationNs(ev.GapNs), cols.gap),
 		cols.latency, fitCell(formatDurationNs(ev.DurationNs), cols.latency),
 		cols.comm, fitCell(ev.Comm, cols.comm),
 		cols.pidTid, fitCell(pidTid, cols.pidTid),
 		cols.syscall, fitCell(ev.Syscall, cols.syscall),
+		cols.fd, fitCell(fd, cols.fd),
 		cols.ret, fitCell(strconv.FormatInt(ev.RetVal, 10), cols.ret),
 		cols.bytes, fitCell(strconv.FormatUint(ev.Bytes, 10), cols.bytes),
 		fitCell(ev.FileName, cols.file),
@@ -110,9 +134,10 @@ func computeColumnLayout(width int) columnLayout {
 	comm := 10
 	pidTid := 10
 	syscall := 9
+	fd := 4
 	ret := 5
 	bytes := 8
-	fixed := gap + latency + comm + pidTid + syscall + ret + bytes + 7
+	fixed := gap + latency + comm + pidTid + syscall + fd + ret + bytes + 8
 	file := width - fixed
 	if file >= 28 {
 		// On wider terminals, give a little more room back to descriptive columns.
@@ -120,24 +145,25 @@ func computeColumnLayout(width int) columnLayout {
 			comm = 12
 			syscall = 11
 			pidTid = 11
-			fixed = gap + latency + comm + pidTid + syscall + ret + bytes + 7
+			fixed = gap + latency + comm + pidTid + syscall + fd + ret + bytes + 8
 			file = width - fixed
 		}
-		return columnLayout{gap: gap, latency: latency, comm: comm, pidTid: pidTid, syscall: syscall, ret: ret, bytes: bytes, file: file}
+		return columnLayout{gap: gap, latency: latency, comm: comm, pidTid: pidTid, syscall: syscall, fd: fd, ret: ret, bytes: bytes, file: file}
 	}
 
 	// Very narrow widths: compress further but keep file column readable.
 	comm = 8
 	pidTid = 9
 	syscall = 8
+	fd = 3
 	ret = 4
 	bytes = 7
-	fixed = gap + latency + comm + pidTid + syscall + ret + bytes + 7
+	fixed = gap + latency + comm + pidTid + syscall + fd + ret + bytes + 8
 	file = width - fixed
 	if file < 12 {
 		file = 12
 	}
-	return columnLayout{gap: gap, latency: latency, comm: comm, pidTid: pidTid, syscall: syscall, ret: ret, bytes: bytes, file: file}
+	return columnLayout{gap: gap, latency: latency, comm: comm, pidTid: pidTid, syscall: syscall, fd: fd, ret: ret, bytes: bytes, file: file}
 }
 
 func formatDurationNs(v uint64) string {

@@ -24,9 +24,18 @@ type Model struct {
 	scrollOffset int
 	autoScroll   bool
 	selectedIdx  int
+	fdTraceView  fdTraceViewState
 
 	width  int
 	height int
+}
+
+type fdTraceViewState struct {
+	visible bool
+	pid     uint32
+	fd      int32
+	events  []StreamEvent
+	offset  int
 }
 
 func NewModel(source *RingBuffer) Model {
@@ -79,8 +88,42 @@ func (m *Model) HandleKey(keyStr string) bool {
 		}
 		return true
 	}
+	if m.fdTraceView.visible {
+		switch keyStr {
+		case "j", "down":
+			m.scrollFDTraceByLines(1)
+			return true
+		case "k", "up":
+			m.scrollFDTraceByLines(-1)
+			return true
+		case "pgdown", "pgdn", "pagedown":
+			m.scrollFDTraceByLines(m.pageStep())
+			return true
+		case "pgup", "pageup":
+			m.scrollFDTraceByLines(-m.pageStep())
+			return true
+		case "g":
+			m.fdTraceView.offset = 0
+			return true
+		case "G":
+			m.fdTraceView.offset = m.maxFDTraceOffset()
+			return true
+		case "esc", "q":
+			m.fdTraceView.visible = false
+			m.fdTraceView.events = nil
+			m.fdTraceView.offset = 0
+			return true
+		default:
+			return false
+		}
+	}
 
 	switch keyStr {
+	case "enter":
+		if m.paused {
+			return m.openFDTraceView()
+		}
+		return false
 	case " ", "space":
 		m.paused = !m.paused
 		if !m.paused {
@@ -165,6 +208,10 @@ func (m *Model) HandleTeaKey(msg tea.KeyMsg) bool {
 		return m.HandleKey("pgdown")
 	case tea.KeySpace:
 		return m.HandleKey("space")
+	case tea.KeyEsc:
+		return m.HandleKey("esc")
+	case tea.KeyEnter:
+		return m.HandleKey("enter")
 	case tea.KeyRunes:
 		if len(msg.Runes) == 1 {
 			return m.HandleKey(string(msg.Runes[0]))
@@ -182,6 +229,10 @@ func (m *Model) View(width, height int) string {
 	}
 	m.width = width
 	m.height = height
+
+	if m.fdTraceView.visible {
+		return m.viewFDTrace(width)
+	}
 
 	rows := m.visibleRows()
 	start := clamp(m.scrollOffset, 0, m.maxScrollOffset())
@@ -203,7 +254,7 @@ func (m *Model) View(width, height int) string {
 	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx)
 	status := fmt.Sprintf("Row %d/%d | space:pause f:filter G:tail g:top c:clear j/k:scroll", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d | space:pause f:filter G:tail g:top c:clear j/k:select", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered))
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d | enter:fd-trace space:pause f:filter G:tail g:top c:clear j/k:select", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered))
 	}
 	out := base + "\n" + status
 
@@ -305,6 +356,75 @@ func (m *Model) scrollByLines(delta int) {
 	if m.scrollOffset < max {
 		m.autoScroll = false
 	}
+}
+
+func (m *Model) openFDTraceView() bool {
+	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
+		return false
+	}
+	selected := m.filtered[m.selectedIdx]
+	if selected.FD < 0 {
+		return false
+	}
+
+	snapshot := m.allEvents
+	if m.source != nil {
+		snapshot = m.source.Snapshot()
+	}
+
+	matches := make([]StreamEvent, 0, len(snapshot))
+	for i := range snapshot {
+		ev := snapshot[i]
+		if ev.PID == selected.PID && ev.FD == selected.FD {
+			matches = append(matches, ev)
+		}
+	}
+	if len(matches) == 0 {
+		return false
+	}
+
+	m.fdTraceView.visible = true
+	m.fdTraceView.pid = selected.PID
+	m.fdTraceView.fd = selected.FD
+	m.fdTraceView.events = matches
+	m.fdTraceView.offset = 0
+	return true
+}
+
+func (m *Model) viewFDTrace(width int) string {
+	rows := m.visibleRows()
+	start := clamp(m.fdTraceView.offset, 0, m.maxFDTraceOffset())
+	end := start + rows
+	if end > len(m.fdTraceView.events) {
+		end = len(m.fdTraceView.events)
+	}
+	visible := m.fdTraceView.events[start:end]
+	base := RenderFDTraceTable(width, m.fdTraceView.pid, m.fdTraceView.fd, len(m.fdTraceView.events), visible)
+	status := fmt.Sprintf("FD Trace Row %d/%d | esc:back j/k:scroll", rowNumber(start, len(m.fdTraceView.events)), len(m.fdTraceView.events))
+	return base + "\n" + status
+}
+
+func (m *Model) maxFDTraceOffset() int {
+	rows := m.visibleRows()
+	if len(m.fdTraceView.events) <= rows {
+		return 0
+	}
+	return len(m.fdTraceView.events) - rows
+}
+
+func (m *Model) scrollFDTraceByLines(delta int) {
+	if delta == 0 {
+		return
+	}
+	max := m.maxFDTraceOffset()
+	next := m.fdTraceView.offset + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > max {
+		next = max
+	}
+	m.fdTraceView.offset = next
 }
 
 func (m *Model) moveSelectionBy(delta int) {

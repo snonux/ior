@@ -1,6 +1,9 @@
 package eventstream
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func pushEvents(rb *RingBuffer, count int) {
 	for i := 0; i < count; i++ {
@@ -16,6 +19,7 @@ func pushEvents(rb *RingBuffer, count int) {
 			FileName:   "/tmp/file",
 			RetVal:     int64(i),
 			IsError:    i%3 == 0,
+			FD:         UnknownFD,
 		})
 	}
 }
@@ -366,5 +370,66 @@ func TestPausedSelectionMovesAndRecentersWithJKAndArrows(t *testing.T) {
 	}
 	if m.scrollOffset != clamp(m.selectedIdx-mid, 0, m.maxScrollOffset()) {
 		t.Fatalf("expected centered viewport after up")
+	}
+}
+
+func TestPausedEnterOpensFDTraceViewScopedByPIDAndFD(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, FD: 3, Syscall: "read", FileName: "/a"})
+	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, FD: 3, Syscall: "write", FileName: "/a"}) // same pid/fd, different tid
+	rb.Push(StreamEvent{Seq: 3, PID: 10, TID: 103, FD: 4, Syscall: "read", FileName: "/b"})  // different fd
+	rb.Push(StreamEvent{Seq: 4, PID: 11, TID: 104, FD: 3, Syscall: "read", FileName: "/c"})  // different pid
+
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	if !m.HandleKey("space") {
+		t.Fatalf("space should pause")
+	}
+
+	// Pick the first row (pid=10, fd=3).
+	m.selectedIdx = 0
+	if !m.HandleKey("enter") {
+		t.Fatalf("enter should open fd trace view")
+	}
+	if !m.fdTraceView.visible {
+		t.Fatalf("expected fd trace view visible")
+	}
+	if m.fdTraceView.pid != 10 || m.fdTraceView.fd != 3 {
+		t.Fatalf("expected pid/fd 10/3, got %d/%d", m.fdTraceView.pid, m.fdTraceView.fd)
+	}
+	if len(m.fdTraceView.events) != 2 {
+		t.Fatalf("expected 2 matching events, got %d", len(m.fdTraceView.events))
+	}
+	for _, ev := range m.fdTraceView.events {
+		if ev.PID != 10 || ev.FD != 3 {
+			t.Fatalf("unexpected event in fd trace view: pid=%d fd=%d", ev.PID, ev.FD)
+		}
+	}
+}
+
+func TestFDTraceViewRendersAndClosesOnEsc(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, FD: 5, Syscall: "read", FileName: "/x"})
+	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, FD: 5, Syscall: "write", FileName: "/x"})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	_ = m.HandleKey("space")
+	m.selectedIdx = 0
+	_ = m.HandleKey("enter")
+
+	view := m.View(120, 24)
+	if !strings.Contains(view, "FD Trace (ring snapshot)") {
+		t.Fatalf("expected fd trace header in view")
+	}
+	if !strings.Contains(view, "PID:10 FD:5 matched:2") {
+		t.Fatalf("expected pid/fd summary in fd trace view")
+	}
+	if !m.HandleKey("esc") {
+		t.Fatalf("esc should close fd trace view")
+	}
+	if m.fdTraceView.visible {
+		t.Fatalf("expected fd trace view closed")
 	}
 }

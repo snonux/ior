@@ -18,7 +18,10 @@ type StreamEvent struct {
 	Bytes      uint64
 	RetVal     int64
 	IsError    bool
+	FD         int32
 }
+
+const UnknownFD int32 = -1
 
 func NewStreamEvent(seq uint64, pair *event.Pair) StreamEvent {
 	e := StreamEvent{
@@ -32,6 +35,10 @@ func NewStreamEvent(seq uint64, pair *event.Pair) StreamEvent {
 		DurationNs: pair.Duration,
 		GapNs:      pair.DurationToPrev,
 		Bytes:      pair.Bytes,
+		FD:         UnknownFD,
+	}
+	if fd, ok := pair.FileDescriptor(); ok {
+		e.FD = fd
 	}
 
 	if retEv, ok := pair.ExitEv.(*types.RetEvent); ok {
