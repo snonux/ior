@@ -49,6 +49,11 @@ func writeScript(t *testing.T, dir, name, content string) string {
 
 func runScenario(t *testing.T, scenario string, expected []ExpectedEvent) {
 	t.Helper()
+	runScenarioResult(t, scenario, expected)
+}
+
+func runScenarioResult(t *testing.T, scenario string, expected []ExpectedEvent) (TestResult, int) {
+	t.Helper()
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	result, pid, err := h.Run(scenario, defaultDuration)
@@ -59,6 +64,7 @@ func runScenario(t *testing.T, scenario string, expected []ExpectedEvent) {
 	AssertNoUnexpectedPID(t, result, pid)
 	AssertNoUnexpectedComm(t, result, "ioworkload")
 	AssertEventsPresent(t, result, expected)
+	return result, pid
 }
 
 func enableParallelIfRequested(t *testing.T) {
