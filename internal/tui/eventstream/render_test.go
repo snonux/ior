@@ -10,7 +10,7 @@ import (
 func TestRenderStatusAndFilterLines(t *testing.T) {
 	events := []StreamEvent{{Syscall: "read", Comm: "nginx", PID: 1, TID: 2, DurationNs: 1200, GapNs: 300, Bytes: 64, FileName: "/tmp/a", RetVal: 64}}
 	f := Filter{Syscall: &StringFilter{Pattern: "read"}, PID: &NumericFilter{Op: OpEq, Value: 1}}
-	out := RenderStreamTable(120, false, 100, 1, 100, 10000, f, events, -1)
+	out := RenderStreamTable(120, false, 100, 1, 100, 10000, f, events, -1, -1)
 
 	for _, want := range []string{"LIVE", "total:100", "filtered:1", "buffer:100/10000", "Filter:", "syscall~read", "pid=1"} {
 		if !strings.Contains(out, want) {
@@ -21,7 +21,7 @@ func TestRenderStatusAndFilterLines(t *testing.T) {
 
 func TestRenderPausedAndErrorRow(t *testing.T) {
 	events := []StreamEvent{{Syscall: "write", Comm: "worker", PID: 1, TID: 2, DurationNs: 1000000, GapNs: 5000, Bytes: 32, FileName: "/tmp/b", RetVal: -1, IsError: true}}
-	out := RenderStreamTable(120, true, 10, 1, 10, 10000, Filter{}, events, -1)
+	out := RenderStreamTable(120, true, 10, 1, 10, 10000, Filter{}, events, -1, -1)
 
 	if !strings.Contains(out, "PAUSED") {
 		t.Fatalf("expected PAUSED indicator\n%s", out)
@@ -36,7 +36,7 @@ func TestRenderPausedAndErrorRow(t *testing.T) {
 
 func TestRenderShowsFDWhenPresent(t *testing.T) {
 	events := []StreamEvent{{Syscall: "read", Comm: "worker", PID: 1, TID: 2, FD: 9, DurationNs: 10, GapNs: 1, Bytes: 8, FileName: "/tmp/b", RetVal: 8}}
-	out := RenderStreamTable(120, false, 1, 1, 1, 10000, Filter{}, events, -1)
+	out := RenderStreamTable(120, false, 1, 1, 1, 10000, Filter{}, events, -1, -1)
 	if !strings.Contains(out, "FD") || !strings.Contains(out, " 9 ") {
 		t.Fatalf("expected FD column/value in output\n%s", out)
 	}
@@ -54,9 +54,9 @@ func TestRenderHeaderAndTruncate(t *testing.T) {
 		FileName:   "/very/long/path/that/should/be/truncated/for/narrow/views/file.log",
 		RetVal:     1,
 	}}
-	out := RenderStreamTable(80, false, 1, 1, 1, 10000, Filter{}, events, -1)
+	out := RenderStreamTable(80, false, 1, 1, 1, 10000, Filter{}, events, -1, -1)
 
-	for _, col := range []string{"Gap", "Latency", "Comm", "PID.TID", "Syscall", "FD", "Ret", "Bytes", "File"} {
+	for _, col := range []string{"Gap", "Latency", "Comm", "PID", "TID", "Syscall", "FD", "Ret", "Bytes", "File"} {
 		if !strings.Contains(out, col) {
 			t.Fatalf("missing column %q\n%s", col, out)
 		}
@@ -95,7 +95,7 @@ func TestRenderEventRowIsSingleLineWithControlCharsAndLongValues(t *testing.T) {
 		RetVal:     -9223372036854775808,
 	}
 
-	row := renderEventRow(ev, 80, false)
+	row := renderEventRow(ev, 80, false, -1)
 	if strings.Contains(row, "\n") || strings.Contains(row, "\r") || strings.Contains(row, "\t") {
 		t.Fatalf("expected a sanitized single-line row, got %q", row)
 	}
@@ -106,7 +106,7 @@ func TestRenderEventRowIsSingleLineWithControlCharsAndLongValues(t *testing.T) {
 
 func TestComputeColumnLayoutGivesFileMoreSpace(t *testing.T) {
 	cols := computeColumnLayout(120)
-	if cols.file < 50 {
+	if cols.file < 44 {
 		t.Fatalf("expected file column to get most width, got %d", cols.file)
 	}
 }
@@ -124,7 +124,7 @@ func TestRenderStreamTableFitsRequestedWidth(t *testing.T) {
 			FileName:   "/very/long/path/that/should/be/truncated/for/narrow/views/file.log",
 			RetVal:     1,
 		},
-	}, -1)
+	}, -1, -1)
 
 	for _, line := range strings.Split(out, "\n") {
 		if lipgloss.Width(line) > 80 {

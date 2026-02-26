@@ -59,31 +59,31 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 	}
 }
 
-func TestArrowAndViKeysCycleTabs(t *testing.T) {
+func TestArrowAndViKeysDoNotCycleTabs(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	model := next.(Model)
-	if model.activeTab != TabSyscalls {
-		t.Fatalf("expected right arrow to move to syscalls, got %v", model.activeTab)
+	if model.activeTab != TabOverview {
+		t.Fatalf("expected right arrow not to change tabs, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	model = next.(Model)
-	if model.activeTab != TabFiles {
-		t.Fatalf("expected l to move to files, got %v", model.activeTab)
+	if model.activeTab != TabOverview {
+		t.Fatalf("expected l not to change tabs, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	model = next.(Model)
-	if model.activeTab != TabSyscalls {
-		t.Fatalf("expected left arrow to move back to syscalls, got %v", model.activeTab)
+	if model.activeTab != TabOverview {
+		t.Fatalf("expected left arrow not to change tabs, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	model = next.(Model)
 	if model.activeTab != TabOverview {
-		t.Fatalf("expected h to move back to overview, got %v", model.activeTab)
+		t.Fatalf("expected h not to change tabs, got %v", model.activeTab)
 	}
 }
 

@@ -64,8 +64,8 @@ func (k KeyMap) DashboardStatusHelp() []key.Binding {
 		k.Probes,
 		k.Refresh,
 		k.Quit,
-		helpTextBinding("left/right", "tab"),
-		helpTextBinding("h/l", "tab"),
+		helpTextBinding("left/right", "stream col"),
+		helpTextBinding("h/l", "stream col"),
 		helpTextBinding("j/k", "scroll"),
 		helpTextBinding("up/down", "scroll"),
 	)
@@ -84,8 +84,8 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},
 		controls,
 		{
-			helpTextBinding("left/right", "tab"),
-			helpTextBinding("h/l", "tab"),
+			helpTextBinding("left/right", "stream col"),
+			helpTextBinding("h/l", "stream col"),
 			helpTextBinding("j/k", "scroll"),
 			helpTextBinding("up/down", "scroll"),
 		},
