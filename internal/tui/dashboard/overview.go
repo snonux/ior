@@ -220,7 +220,7 @@ func summaryBoxInnerWidth(width int) int {
 }
 
 func renderOverviewSparkline(label string, data []float64, panelInner int) string {
-	w := panelInner - utf8.RuneCountInString(label) - 1
+	w := panelInner - utf8.RuneCountInString(label) - 1 - sparklineSafetyMargin
 	if w < 8 {
 		w = 8
 	}
