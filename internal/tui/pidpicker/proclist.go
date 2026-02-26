@@ -9,18 +9,30 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ProcessInfo is the metadata shown in the PID picker list.
 type ProcessInfo struct {
-	Pid     int
-	Comm    string
-	Cmdline string
+	Pid       int
+	ParentPID int
+	Comm      string
+	Cmdline   string
 }
 
 // ScanProcesses returns process metadata from /proc.
 func ScanProcesses() ([]ProcessInfo, error) {
 	return scanProcessesFrom("/proc")
+}
+
+// ScanThreads returns thread metadata from /proc/<pid>/task for one process.
+func ScanThreads(pid int) ([]ProcessInfo, error) {
+	return scanThreadsFrom("/proc", pid)
+}
+
+// ScanAllThreads returns thread metadata from /proc/*/task.
+func ScanAllThreads() ([]ProcessInfo, error) {
+	return scanAllThreadsFrom("/proc")
 }
 
 func scanProcessesFrom(procRoot string) ([]ProcessInfo, error) {
@@ -72,9 +84,10 @@ func readProcessInfo(procRoot string, entry fs.DirEntry) (ProcessInfo, bool) {
 	}
 
 	return ProcessInfo{
-		Pid:     pid,
-		Comm:    comm,
-		Cmdline: normalizeCmdline(cmdlineData),
+		Pid:       pid,
+		ParentPID: pid,
+		Comm:      comm,
+		Cmdline:   normalizeCmdline(cmdlineData),
 	}, true
 }
 
@@ -111,4 +124,108 @@ func normalizeCmdline(raw []byte) string {
 		out = append(out, string(part))
 	}
 	return strings.Join(out, " ")
+}
+
+func scanThreadsFrom(procRoot string, pid int) ([]ProcessInfo, error) {
+	taskRoot := filepath.Join(procRoot, strconv.Itoa(pid), "task")
+	entries, err := os.ReadDir(taskRoot)
+	if err != nil {
+		return nil, fmt.Errorf("read task root %q: %w", taskRoot, err)
+	}
+
+	cmdlineData, _ := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cmdline"))
+	cmdline := normalizeCmdline(cmdlineData)
+
+	threads := make([]ProcessInfo, 0, len(entries))
+	for _, entry := range entries {
+		thread, ok := readThreadInfo(taskRoot, entry, cmdline)
+		if !ok {
+			continue
+		}
+		threads = append(threads, thread)
+	}
+
+	sort.Slice(threads, func(i, j int) bool {
+		return threads[i].Pid < threads[j].Pid
+	})
+	return threads, nil
+}
+
+func readThreadInfo(taskRoot string, entry fs.DirEntry, cmdline string) (ProcessInfo, bool) {
+	if !entry.IsDir() {
+		return ProcessInfo{}, false
+	}
+
+	tid, err := strconv.Atoi(entry.Name())
+	if err != nil {
+		return ProcessInfo{}, false
+	}
+
+	commPath := filepath.Join(taskRoot, entry.Name(), "comm")
+	commData, err := os.ReadFile(commPath)
+	if err != nil {
+		return ProcessInfo{}, false
+	}
+	comm := strings.TrimSpace(string(commData))
+	if comm == "" {
+		return ProcessInfo{}, false
+	}
+
+	return ProcessInfo{
+		Pid:       tid,
+		ParentPID: extractPIDFromPath(taskRoot),
+		Comm:      comm,
+		Cmdline:   cmdline,
+	}, true
+}
+
+func scanAllThreadsFrom(procRoot string) ([]ProcessInfo, error) {
+	processes, err := scanProcessesFrom(procRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	threads := make([]ProcessInfo, 0, len(processes)*8)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+
+	for _, p := range processes {
+		pid := p.Pid
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			perProc, err := scanThreadsFrom(procRoot, pid)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			threads = append(threads, perProc...)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	sort.Slice(threads, func(i, j int) bool {
+		if threads[i].Pid == threads[j].Pid {
+			return threads[i].ParentPID < threads[j].ParentPID
+		}
+		return threads[i].Pid < threads[j].Pid
+	})
+	return threads, nil
+}
+
+func extractPIDFromPath(taskRoot string) int {
+	parts := strings.Split(filepath.Clean(taskRoot), string(os.PathSeparator))
+	if len(parts) < 2 {
+		return -1
+	}
+	pid, err := strconv.Atoi(parts[len(parts)-2])
+	if err != nil {
+		return -1
+	}
+	return pid
 }

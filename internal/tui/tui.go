@@ -150,7 +150,6 @@ type Model struct {
 	attaching bool
 	spin      spinner.Model
 	lastErr   error
-	showHelp  bool
 
 	startTrace TraceStarter
 	traceStop  context.CancelFunc
@@ -217,17 +216,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stopTrace()
 			return m, tea.Quit
 		}
-		if !m.exporter.Visible() && !m.probeModal.Visible() && key.Matches(msg, m.keys.Help) {
-			m.showHelp = !m.showHelp
-			return m, nil
-		}
-		if !m.exporter.Visible() && !m.probeModal.Visible() && m.showHelp && key.Matches(msg, m.keys.Esc) {
-			m.showHelp = false
-			return m, nil
-		}
-		if !m.exporter.Visible() && !m.probeModal.Visible() && m.showHelp {
-			return m, nil
-		}
 		if flags.Get().TUIExportEnable && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
 			m.exporter = m.exporter.Open()
 			return m, nil
@@ -238,6 +226,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
 			return m.reselectPID()
+		}
+		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectTID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+			return m.reselectTID()
 		}
 	case tuiexport.RequestMsg:
 		return m, runExportCmd(msg.Option, m.dashboard.LatestSnapshot())
@@ -260,6 +251,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case PidSelectedMsg:
 		return m.handlePidSelected(msg)
+	case TidSelectedMsg:
+		return m.handleTidSelected(msg)
 	case TracingStartedMsg:
 		m.attaching = false
 		m.dashboard.SetStreamSource(getEventStreamSource())
@@ -322,6 +315,22 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	m.stopTrace()
 	flags.SetPidFilter(pid)
+	flags.SetTidFilter(-1)
+	m.screen = ScreenDashboard
+	m.attaching = true
+	m.lastErr = nil
+	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+}
+
+func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
+	tid := selectedPIDFilter(msg.Tid)
+	pid := flags.Get().PidFilter
+	if msg.Pid > 0 {
+		pid = msg.Pid
+	}
+	m.stopTrace()
+	flags.SetPidFilter(pid)
+	flags.SetTidFilter(tid)
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -333,10 +342,30 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 	m.screen = ScreenPIDPicker
 	m.attaching = false
 	m.lastErr = nil
-	m.showHelp = false
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(getProbeManager())
 	m.pidPicker = pidpicker.New()
+
+	var sizeCmd tea.Cmd
+	if m.width > 0 && m.height > 0 {
+		msg := tea.WindowSizeMsg{Width: m.width, Height: m.height}
+		next, cmd := m.pidPicker.Update(msg)
+		m.pidPicker = next.(pidpicker.Model)
+		sizeCmd = cmd
+	}
+	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
+}
+
+func (m Model) reselectTID() (tea.Model, tea.Cmd) {
+	pid := flags.Get().PidFilter
+
+	m.stopTrace()
+	m.screen = ScreenPIDPicker
+	m.attaching = false
+	m.lastErr = nil
+	m.exporter = tuiexport.NewModel()
+	m.probeModal = probes.NewModel(getProbeManager())
+	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap())
 
 	var sizeCmd tea.Cmd
 	if m.width > 0 && m.height > 0 {
@@ -407,9 +436,6 @@ func (m Model) View() string {
 		if m.exporter.Visible() {
 			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
 		}
-		if m.showHelp {
-			return placeToViewport(width, height, renderHelpOverlay(width, height, [][]key.Binding{m.keys.PickerShortHelp()}))
-		}
 		return placeToViewport(width, height, base)
 	case ScreenDashboard:
 		base := m.dashboard.View()
@@ -418,9 +444,6 @@ func (m Model) View() string {
 		}
 		if m.exporter.Visible() {
 			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
-		}
-		if m.showHelp {
-			return placeToViewport(width, height, renderHelpOverlay(width, height, m.keys.DashboardFullHelp()))
 		}
 		return placeToViewport(width, height, base)
 	default:

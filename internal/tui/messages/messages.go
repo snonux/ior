@@ -7,6 +7,12 @@ type PidSelectedMsg struct {
 	Pid int
 }
 
+// TidSelectedMsg is emitted when the user selects a TID from the thread table.
+type TidSelectedMsg struct {
+	Pid int
+	Tid int
+}
+
 // StatsTickMsg carries a fresh immutable snapshot from the stats engine.
 type StatsTickMsg struct {
 	Snap *statsengine.Snapshot

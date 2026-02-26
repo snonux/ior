@@ -105,7 +105,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	if flags.Get().PprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
 	}
-	if !flags.Get().FlamegraphEnable && !flags.Get().PprofEnable {
+	if flags.Get().PlainMode && !flags.Get().FlamegraphEnable && !flags.Get().PprofEnable {
 		fmt.Println(event.EventStreamHeader)
 	}
 

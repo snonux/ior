@@ -19,10 +19,13 @@ var (
 	}
 	once            sync.Once
 	pidFilter       atomic.Int64
+	tidFilter       atomic.Int64
 	tuiExportEnable atomic.Bool
 )
 
 func init() {
+	pidFilter.Store(-1)
+	tidFilter.Store(-1)
 	tuiExportEnable.Store(true)
 }
 
@@ -72,6 +75,7 @@ type Flags struct {
 func Get() Flags {
 	out := singleton
 	out.PidFilter = int(pidFilter.Load())
+	out.TidFilter = int(tidFilter.Load())
 	out.TUIExportEnable = tuiExportEnable.Load()
 	return out
 }
@@ -79,6 +83,11 @@ func Get() Flags {
 // SetPidFilter updates the active PID filter used for subsequent tracing runs.
 func SetPidFilter(pid int) {
 	pidFilter.Store(int64(pid))
+}
+
+// SetTidFilter updates the active TID filter used for subsequent tracing runs.
+func SetTidFilter(tid int) {
+	tidFilter.Store(int64(tid))
 }
 
 // SetTUIExportEnable toggles TUI snapshot export file writing.
@@ -118,6 +127,7 @@ func parse() {
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCollapsedCounts))
 	flag.Parse()
 	pidFilter.Store(int64(singleton.PidFilter))
+	tidFilter.Store(int64(singleton.TidFilter))
 	tuiExportEnable.Store(singleton.TUIExportEnable)
 
 	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)

@@ -13,6 +13,14 @@ import (
 )
 
 const allPIDsLabel = "All PIDs"
+const allTIDsLabel = "All TIDs"
+
+type PickerMode int
+
+const (
+	PickerModePID PickerMode = iota
+	PickerModeTID
+)
 
 // KeyMap defines picker-specific key bindings.
 type KeyMap struct {
@@ -53,6 +61,8 @@ type Model struct {
 	processes     []ProcessInfo
 	filtered      []ProcessInfo
 	selectedIndex int
+	mode          PickerMode
+	targetPID     int
 	width         int
 	height        int
 	keys          KeyMap
@@ -61,11 +71,16 @@ type Model struct {
 
 // New creates a PID picker model with default shared key bindings.
 func New() Model {
-	return NewWithKeys(DefaultKeyMap())
+	return NewPIDWithKeys(DefaultKeyMap())
 }
 
 // NewWithKeys creates a PID picker model with the provided key bindings.
 func NewWithKeys(keys KeyMap) Model {
+	return NewPIDWithKeys(keys)
+}
+
+// NewPIDWithKeys creates a PID picker model with the provided key bindings.
+func NewPIDWithKeys(keys KeyMap) Model {
 	input := textinput.New()
 	input.Prompt = "Filter: "
 	input.Placeholder = "pid, comm, or cmdline"
@@ -74,15 +89,26 @@ func NewWithKeys(keys KeyMap) Model {
 	input.Width = 40
 
 	return Model{
-		input:    input,
-		keys:     keys,
-		filtered: []ProcessInfo{},
+		input:     input,
+		keys:      keys,
+		filtered:  []ProcessInfo{},
+		mode:      PickerModePID,
+		targetPID: -1,
 	}
+}
+
+// NewTIDWithKeys creates a TID picker model scoped to one PID.
+func NewTIDWithKeys(targetPID int, keys KeyMap) Model {
+	m := NewPIDWithKeys(keys)
+	m.mode = PickerModeTID
+	m.targetPID = targetPID
+	m.input.Placeholder = "tid, comm, or cmdline"
+	return m
 }
 
 // Init starts the initial process scan.
 func (m Model) Init() tea.Cmd {
-	return scanProcessesCmd
+	return m.scanCmd()
 }
 
 // Update handles key presses and async process-scan responses.
@@ -113,7 +139,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Esc):
 		return m, tea.Quit
 	case msg.Type == tea.KeyCtrlR:
-		return m, scanProcessesCmd
+		return m, m.scanCmd()
 	case key.Matches(msg, m.keys.Enter):
 		return m, m.emitSelection()
 	case msg.Type == tea.KeyUp:
@@ -133,7 +159,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if msg.Type == tea.KeyRunes && !m.input.Focused() {
 		if key.Matches(msg, m.keys.Refresh) {
-			return m, scanProcessesCmd
+			return m, m.scanCmd()
 		}
 		m.input.Focus()
 	}
@@ -145,6 +171,18 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) emitSelection() tea.Cmd {
+	if m.mode == PickerModeTID {
+		if m.selectedIndex <= 0 {
+			return func() tea.Msg { return messages.TidSelectedMsg{Pid: 0, Tid: 0} }
+		}
+		idx := m.selectedIndex - 1
+		if idx < 0 || idx >= len(m.filtered) {
+			return func() tea.Msg { return messages.TidSelectedMsg{Pid: 0, Tid: 0} }
+		}
+		thread := m.filtered[idx]
+		return func() tea.Msg { return messages.TidSelectedMsg{Pid: thread.ParentPID, Tid: thread.Pid} }
+	}
+
 	if m.selectedIndex <= 0 {
 		return func() tea.Msg { return messages.PidSelectedMsg{Pid: 0} }
 	}
@@ -204,7 +242,15 @@ func cloneProcesses(in []ProcessInfo) []ProcessInfo {
 // View renders the PID picker with filter input, list, and help bar.
 func (m Model) View() string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("Select PID"))
+	if m.mode == PickerModeTID {
+		if m.targetPID > 0 {
+			b.WriteString(headerStyle.Render(fmt.Sprintf("Select TID for PID %d", m.targetPID)))
+		} else {
+			b.WriteString(headerStyle.Render("Select TID"))
+		}
+	} else {
+		b.WriteString(headerStyle.Render("Select PID"))
+	}
 	b.WriteString("\n")
 	b.WriteString(m.input.View())
 	b.WriteString("\n\n")
@@ -224,7 +270,11 @@ func (m Model) View() string {
 
 func (m Model) renderRows() string {
 	lines := make([]string, 0, len(m.filtered)+1)
-	lines = append(lines, m.renderRow(0, allPIDsLabel))
+	allLabel := allPIDsLabel
+	if m.mode == PickerModeTID {
+		allLabel = allTIDsLabel
+	}
+	lines = append(lines, m.renderRow(0, allLabel))
 	for i, process := range m.filtered {
 		label := formatProcess(process)
 		lines = append(lines, m.renderRow(i+1, label))
@@ -284,6 +334,28 @@ func scanProcessesCmd() tea.Msg {
 	}
 }
 
+func (m Model) scanCmd() tea.Cmd {
+	if m.mode == PickerModeTID {
+		if m.targetPID <= 0 {
+			return func() tea.Msg {
+				processes, err := ScanAllThreads()
+				return processesLoadedMsg{
+					processes: processes,
+					err:       err,
+				}
+			}
+		}
+		return func() tea.Msg {
+			processes, err := ScanThreads(m.targetPID)
+			return processesLoadedMsg{
+				processes: processes,
+				err:       err,
+			}
+		}
+	}
+	return scanProcessesCmd
+}
+
 func clamp(v, min, max int) int {
 	if v < min {
 		return min
@@ -295,6 +367,12 @@ func clamp(v, min, max int) int {
 }
 
 func formatProcess(process ProcessInfo) string {
+	if process.ParentPID > 0 && process.ParentPID != process.Pid {
+		if process.Cmdline == "" {
+			return fmt.Sprintf("%d (pid:%d)  %s", process.Pid, process.ParentPID, process.Comm)
+		}
+		return fmt.Sprintf("%d (pid:%d)  %s  %s", process.Pid, process.ParentPID, process.Comm, process.Cmdline)
+	}
 	if process.Cmdline == "" {
 		return fmt.Sprintf("%d  %s", process.Pid, process.Comm)
 	}

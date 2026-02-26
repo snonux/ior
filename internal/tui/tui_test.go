@@ -31,6 +31,7 @@ func (f fakeProbeManager) ActiveCount() (int, int)           { return len(f.stat
 
 func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	flags.SetPidFilter(-1)
+	flags.SetTidFilter(99)
 	m := NewModel(-1, func(context.Context) error { return nil })
 
 	next, cmd := m.Update(PidSelectedMsg{Pid: 42})
@@ -47,6 +48,9 @@ func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	}
 	if got := flags.Get().PidFilter; got != 42 {
 		t.Fatalf("expected pid filter 42, got %d", got)
+	}
+	if got := flags.Get().TidFilter; got != -1 {
+		t.Fatalf("expected tid filter reset to -1, got %d", got)
 	}
 }
 
@@ -290,7 +294,7 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	updated := next.(Model)
 
 	if !stopped {
@@ -307,6 +311,101 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatalf("expected picker init command when returning to picker")
+	}
+}
+
+func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
+	flags.SetPidFilter(-1)
+	flags.SetTidFilter(-1)
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	updated := next.(Model)
+	if !stopped {
+		t.Fatalf("expected tracing stop before tid reselect")
+	}
+	if updated.screen != ScreenPIDPicker {
+		t.Fatalf("expected picker screen, got %v", updated.screen)
+	}
+	if cmd == nil {
+		t.Fatalf("expected picker init command")
+	}
+}
+
+func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
+	flags.SetPidFilter(1234)
+	flags.SetTidFilter(-1)
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	updated := next.(Model)
+	if !stopped {
+		t.Fatalf("expected tracing stop before tid reselect")
+	}
+	if updated.screen != ScreenPIDPicker {
+		t.Fatalf("expected picker screen, got %v", updated.screen)
+	}
+	if cmd == nil {
+		t.Fatalf("expected picker init command")
+	}
+}
+
+func TestTidSelectedTransitionsToDashboardAndSetsTIDFilter(t *testing.T) {
+	flags.SetPidFilter(2222)
+	flags.SetTidFilter(-1)
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	next, cmd := m.Update(TidSelectedMsg{Pid: 0, Tid: 3333})
+	if cmd == nil {
+		t.Fatalf("expected tracing start command")
+	}
+	updated := next.(Model)
+	if updated.screen != ScreenDashboard {
+		t.Fatalf("expected dashboard screen, got %v", updated.screen)
+	}
+	if !updated.attaching {
+		t.Fatalf("expected attaching state to be true")
+	}
+	if got := flags.Get().TidFilter; got != 3333 {
+		t.Fatalf("expected tid filter 3333, got %d", got)
+	}
+	if got := flags.Get().PidFilter; got != 2222 {
+		t.Fatalf("expected pid filter to remain 2222, got %d", got)
+	}
+}
+
+func TestTidSelectedFromAllPIDModeSetsOwningPID(t *testing.T) {
+	flags.SetPidFilter(-1)
+	flags.SetTidFilter(-1)
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	next, cmd := m.Update(TidSelectedMsg{Pid: 4444, Tid: 5555})
+	if cmd == nil {
+		t.Fatalf("expected tracing start command")
+	}
+	updated := next.(Model)
+	if updated.screen != ScreenDashboard {
+		t.Fatalf("expected dashboard screen, got %v", updated.screen)
+	}
+	if got := flags.Get().PidFilter; got != 4444 {
+		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", got)
+	}
+	if got := flags.Get().TidFilter; got != 5555 {
+		t.Fatalf("expected tid filter 5555, got %d", got)
 	}
 }
 
@@ -381,76 +480,39 @@ func TestRunExportCmdCSVWritesFile(t *testing.T) {
 	}
 }
 
-func TestHelpKeyTogglesOverlay(t *testing.T) {
+func TestHelpKeyDoesNotToggleOverlay(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
-	if m.showHelp {
-		t.Fatalf("expected help hidden by default")
-	}
-
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	updated := next.(Model)
-	if !updated.showHelp {
-		t.Fatalf("expected help to be shown after ?")
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	updated = next.(Model)
-	if updated.showHelp {
-		t.Fatalf("expected help to toggle off after second ?")
+	if updated.screen != ScreenPIDPicker {
+		t.Fatalf("expected ? to have no effect, got screen %v", updated.screen)
 	}
 }
 
-func TestViewShowsHelpOverlay(t *testing.T) {
+func TestViewShowsDashboardWithoutHelpOverlay(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
-	m.showHelp = true
 	m.width = 100
 	m.height = 30
 
 	out := m.View()
-	if !strings.Contains(out, "Help") {
-		t.Fatalf("expected help title in overlay")
-	}
 	if !strings.Contains(out, "tab next tab") {
-		t.Fatalf("expected keybinding text in overlay")
-	}
-	if strings.Contains(out, "Overview: waiting for stats") {
-		t.Fatalf("expected help overlay to render without stacking dashboard content")
+		t.Fatalf("expected status/help bar keybinding text in dashboard")
 	}
 }
 
-func TestHelpOverlayBlocksUnderlyingActions(t *testing.T) {
+func TestQuestionMarkDoesNotBlockUnderlyingActions(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
-	m.showHelp = true
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	updated := next.(Model)
-	if updated.exporter.Visible() {
-		t.Fatalf("expected export modal to stay closed while help overlay is active")
+	if !updated.exporter.Visible() {
+		t.Fatalf("expected export modal to open; ? overlay is removed")
 	}
 }
 
-func TestHelpOverlayUsesPickerBindingsOnPickerScreen(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
-	m.screen = ScreenPIDPicker
-	m.showHelp = true
-	m.width = 100
-	m.height = 30
-
-	out := m.View()
-	if !strings.Contains(out, "enter select") || !strings.Contains(out, "r refresh") {
-		t.Fatalf("expected picker shortcuts in help overlay")
-	}
-	if strings.Contains(out, "e export") {
-		t.Fatalf("did not expect dashboard-only shortcut in picker help overlay")
-	}
-	if strings.Contains(out, "Select PID to trace") {
-		t.Fatalf("expected help overlay to render without stacking picker content")
-	}
-}
-
-func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
+func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
 	flags.SetTUIExportEnable(true)
 	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
 
@@ -465,8 +527,8 @@ func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	updated = next.(Model)
-	if updated.showHelp {
-		t.Fatalf("did not expect hidden help flag while export modal is open")
+	if !updated.exporter.Visible() {
+		t.Fatalf("expected export modal to remain open after ? key")
 	}
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -476,19 +538,18 @@ func TestHelpToggleDoesNotBreakExportModalInput(t *testing.T) {
 	}
 }
 
-func TestHelpOverlayHidesExportBindingWhenExportDisabled(t *testing.T) {
+func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
 	flags.SetTUIExportEnable(false)
 	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
 
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
-	m.showHelp = true
 	m.width = 100
 	m.height = 30
 
 	out := m.View()
 	if strings.Contains(out, "e export") {
-		t.Fatalf("did not expect export shortcut in help overlay when export is disabled")
+		t.Fatalf("did not expect export shortcut in status bar when export is disabled")
 	}
 }
 

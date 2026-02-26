@@ -369,9 +369,6 @@ func TestViewRendersTabBarAndHelp(t *testing.T) {
 	if !strings.Contains(out, "Overview") {
 		t.Fatalf("expected overview label in view")
 	}
-	if !strings.Contains(out, "Press ? for help") {
-		t.Fatalf("expected inline help hint in view")
-	}
 	if !strings.Contains(out, "tab next tab") {
 		t.Fatalf("expected help bar text in view")
 	}
@@ -408,7 +405,7 @@ func TestStreamTabViewKeepsTabAndHelpChromeVisible(t *testing.T) {
 	if !strings.Contains(out, "1:Overview") {
 		t.Fatalf("expected tab bar to remain visible in stream view")
 	}
-	if !strings.Contains(out, "Press ? for help") {
-		t.Fatalf("expected help hint to remain visible in stream view")
+	if !strings.Contains(out, "tab next tab") {
+		t.Fatalf("expected help bar to remain visible in stream view")
 	}
 }

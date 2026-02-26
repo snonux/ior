@@ -5,6 +5,9 @@ import "ior/internal/tui/messages"
 // PidSelectedMsg is emitted when the user selects a PID from the process table.
 type PidSelectedMsg = messages.PidSelectedMsg
 
+// TidSelectedMsg is emitted when the user selects a TID from the thread table.
+type TidSelectedMsg = messages.TidSelectedMsg
+
 // StatsTickMsg carries a fresh immutable snapshot from the stats engine.
 type StatsTickMsg = messages.StatsTickMsg
 

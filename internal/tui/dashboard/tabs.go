@@ -113,19 +113,53 @@ func renderTabBar(active Tab, width int) string {
 }
 
 func renderHelpBar(keys common.KeyMap, width int) string {
-	parts := make([]string, 0, len(keys.DashboardShortHelp()))
-	for _, binding := range keys.DashboardShortHelp() {
+	parts := make([]string, 0, len(keys.DashboardStatusHelp()))
+	for _, binding := range keys.DashboardStatusHelp() {
 		help := binding.Help()
 		parts = append(parts, help.Key+" "+help.Desc)
 	}
-	text := strings.Join(parts, " • ")
-	if width > 0 {
-		text = truncatePlain(text, width)
+	line1, line2 := wrapHelpLines(parts, width)
+	text := line1
+	if line2 != "" {
+		text += "\n" + line2
 	}
 	if width > 0 && width < 90 {
 		return text
 	}
 	return common.HelpBarStyle.Width(width).Render(text)
+}
+
+func wrapHelpLines(parts []string, width int) (string, string) {
+	if len(parts) == 0 {
+		return "", ""
+	}
+	if width <= 0 {
+		return strings.Join(parts, " • "), ""
+	}
+	max := width
+	lines := []string{"", ""}
+	line := 0
+	for _, part := range parts {
+		token := part
+		if lines[line] != "" {
+			token = " • " + part
+		}
+		if utf8.RuneCountInString(lines[line]+token) <= max {
+			lines[line] += token
+			continue
+		}
+		if line == 0 {
+			line = 1
+			if utf8.RuneCountInString(part) <= max {
+				lines[line] = part
+			}
+			continue
+		}
+		break
+	}
+	lines[0] = truncatePlain(lines[0], max)
+	lines[1] = truncatePlain(lines[1], max)
+	return lines[0], lines[1]
 }
 
 func tabLabel(tab Tab, short bool) string {
