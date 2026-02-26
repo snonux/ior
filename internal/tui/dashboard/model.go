@@ -45,6 +45,7 @@ type Model struct {
 	filesDirOffset  int
 	processesOffset int
 	streamModel     eventstream.Model
+	showHelp        bool
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
@@ -115,6 +116,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	var cmd tea.Cmd
 	keyStr := msg.String()
+	if keyStr == "H" {
+		m.showHelp = !m.showHelp
+		return m, nil
+	}
 	handled, scrollCmd := m.handleScrollKey(msg)
 	if scrollCmd != nil {
 		cmd = scrollCmd
@@ -299,7 +304,11 @@ func (m Model) View() string {
 		m.processesOffset,
 	))
 	b.WriteString("\n")
-	b.WriteString(renderHelpBar(m.keys, width))
+	if m.showHelp {
+		b.WriteString(renderHelpBar(m.keys, width))
+	} else {
+		b.WriteString(renderHelpHint(width))
+	}
 	return common.ScreenStyle.Render(b.String())
 }
 

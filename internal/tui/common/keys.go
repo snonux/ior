@@ -43,7 +43,7 @@ func DefaultKeyMap() KeyMap {
 		SelectPID: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "select pid")),
 		SelectTID: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "select tid")),
 		Probes:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "probes")),
-		Export:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export")),
+		Export:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "snapshot export")),
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Enter:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Esc:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
@@ -58,6 +58,10 @@ func (k KeyMap) DashboardStatusHelp() []key.Binding {
 		bindings = append(bindings, k.Export)
 	}
 	bindings = append(bindings,
+		helpTextBinding("x", "stream export"),
+		helpTextBinding("X", "stream export as"),
+		helpTextBinding("E", "stream open last"),
+		helpTextBinding("esc", "stream undo filter"),
 		k.DirGroup,
 		k.SelectPID,
 		k.SelectTID,
@@ -69,14 +73,10 @@ func (k KeyMap) DashboardStatusHelp() []key.Binding {
 		helpTextBinding("g/G", "stream top/tail"),
 		helpTextBinding("c", "stream clear"),
 		helpTextBinding("enter", "stream add filter"),
-		helpTextBinding("esc", "stream undo filter"),
 		helpTextBinding("left/right", "stream col"),
 		helpTextBinding("h/l", "stream col"),
 		helpTextBinding("j/k", "scroll"),
 		helpTextBinding("up/down", "scroll"),
-		helpTextBinding("x", "stream export"),
-		helpTextBinding("X", "stream export as"),
-		helpTextBinding("E", "stream open last"),
 	)
 	return bindings
 }

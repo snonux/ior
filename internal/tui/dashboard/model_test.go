@@ -369,8 +369,11 @@ func TestViewRendersTabBarAndHelp(t *testing.T) {
 	if !strings.Contains(out, "Overview") {
 		t.Fatalf("expected overview label in view")
 	}
-	if !strings.Contains(out, "tab next tab") {
-		t.Fatalf("expected help bar text in view")
+	if !strings.Contains(out, "press H for help") {
+		t.Fatalf("expected help hint text in view")
+	}
+	if strings.Contains(out, "tab next tab") {
+		t.Fatalf("did not expect expanded help bar by default")
 	}
 }
 
@@ -405,7 +408,29 @@ func TestStreamTabViewKeepsTabAndHelpChromeVisible(t *testing.T) {
 	if !strings.Contains(out, "1:Overview") {
 		t.Fatalf("expected tab bar to remain visible in stream view")
 	}
+	if !strings.Contains(out, "press H for help") {
+		t.Fatalf("expected help hint to remain visible in stream view")
+	}
+}
+
+func TestHelpToggleWithH(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
+	out := m.View()
+	if !strings.Contains(out, "press H for help") {
+		t.Fatalf("expected default help hint")
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'H'}})
+	m = next.(Model)
+	out = m.View()
 	if !strings.Contains(out, "tab next tab") {
-		t.Fatalf("expected help bar to remain visible in stream view")
+		t.Fatalf("expected expanded help after pressing h")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'H'}})
+	m = next.(Model)
+	out = m.View()
+	if !strings.Contains(out, "press H for help") {
+		t.Fatalf("expected help hint after pressing h again")
 	}
 }
