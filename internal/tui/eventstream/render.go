@@ -5,6 +5,8 @@ import (
 	"ior/internal/tui/common"
 	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 type columnLayout struct {
@@ -18,7 +20,12 @@ type columnLayout struct {
 	file    int
 }
 
-func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, events []StreamEvent) string {
+var selectedRowStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(common.ColorBackground).
+	Background(common.ColorPrimary)
+
+func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, events []StreamEvent, selectedVisibleIdx int) string {
 	if width <= 0 {
 		width = 100
 	}
@@ -28,8 +35,8 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 	lines = append(lines, renderStatusLine(paused, totalCount, filteredCount, bufferLen, bufferCap))
 	lines = append(lines, renderFilterLine(filter))
 	lines = append(lines, renderColumnHeader(contentWidth))
-	for _, ev := range events {
-		lines = append(lines, renderEventRow(ev, contentWidth))
+	for i, ev := range events {
+		lines = append(lines, renderEventRow(ev, contentWidth, i == selectedVisibleIdx))
 	}
 
 	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
@@ -70,7 +77,7 @@ func renderColumnHeader(width int) string {
 	return common.HelpBarStyle.Render(header)
 }
 
-func renderEventRow(ev StreamEvent, width int) string {
+func renderEventRow(ev StreamEvent, width int, selected bool) string {
 	cols := computeColumnLayout(width)
 	pidTid := fmt.Sprintf("%d.%d", ev.PID, ev.TID)
 	row := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %-*s %s",
@@ -83,6 +90,9 @@ func renderEventRow(ev StreamEvent, width int) string {
 		cols.bytes, fitCell(strconv.FormatUint(ev.Bytes, 10), cols.bytes),
 		fitCell(ev.FileName, cols.file),
 	)
+	if selected {
+		return selectedRowStyle.Render(row)
+	}
 	if ev.IsError {
 		return common.ErrorStyle.Render(row)
 	}
