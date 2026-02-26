@@ -281,6 +281,35 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	}
 }
 
+func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated := next.(Model)
+
+	if !stopped {
+		t.Fatalf("expected active tracing to be stopped before returning to picker")
+	}
+	if updated.screen != ScreenPIDPicker {
+		t.Fatalf("expected PID picker screen, got %v", updated.screen)
+	}
+	if updated.attaching {
+		t.Fatalf("expected attaching=false on picker screen")
+	}
+	if updated.traceStop != nil {
+		t.Fatalf("expected traceStop to be cleared after stopping")
+	}
+	if cmd == nil {
+		t.Fatalf("expected picker init command when returning to picker")
+	}
+}
+
 func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
 	flags.SetTUIExportEnable(false)
 	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
