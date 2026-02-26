@@ -373,6 +373,47 @@ func TestPausedSelectionMovesAndRecentersWithJKAndArrows(t *testing.T) {
 	}
 }
 
+func TestPausedSelectionMovesAcrossColumnsWithLeftRightAndHL(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 20
+	pushEvents(rb, 100)
+	m.Refresh()
+
+	if !m.HandleKey("space") {
+		t.Fatalf("space should toggle pause")
+	}
+	startCol := m.selectedCol
+	startRow := m.selectedIdx
+
+	if !m.HandleKey("right") {
+		t.Fatalf("right should be handled while paused")
+	}
+	if m.selectedCol != startCol+1 {
+		t.Fatalf("expected selected col +1 after right, got %d->%d", startCol, m.selectedCol)
+	}
+	if m.selectedIdx != startRow {
+		t.Fatalf("expected selected row unchanged after right, got %d->%d", startRow, m.selectedIdx)
+	}
+
+	if !m.HandleKey("l") {
+		t.Fatalf("l should be handled while paused")
+	}
+	if m.selectedCol != startCol+2 {
+		t.Fatalf("expected selected col +2 after l, got %d", m.selectedCol)
+	}
+
+	if !m.HandleKey("left") {
+		t.Fatalf("left should be handled while paused")
+	}
+	if !m.HandleKey("h") {
+		t.Fatalf("h should be handled while paused")
+	}
+	if m.selectedCol != startCol {
+		t.Fatalf("expected selected col back to start, got %d", m.selectedCol)
+	}
+}
+
 func TestPausedEnterOpensFDTraceViewScopedByPIDAndFD(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, FD: 3, Syscall: "read", FileName: "/a"})

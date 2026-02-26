@@ -107,7 +107,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	var cmd tea.Cmd
 	keyStr := msg.String()
-	handled := m.handleArrowTabKey(keyStr) || m.handleScrollKey(msg)
+	handled := m.handleScrollKey(msg)
 	if handled && m.activeTab == TabStream && (keyStr == " " || keyStr == "space") && !m.streamModel.Paused() {
 		cmd = streamTickCmd()
 	}
@@ -162,19 +162,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, streamTickCmd())
 	}
 	return m, cmd
-}
-
-func (m *Model) handleArrowTabKey(keyStr string) bool {
-	switch keyStr {
-	case "right", "l":
-		m.activeTab = nextTab(m.activeTab)
-		return true
-	case "left", "h":
-		m.activeTab = prevTab(m.activeTab)
-		return true
-	default:
-		return false
-	}
 }
 
 func (m *Model) handleScrollKey(msg tea.KeyMsg) bool {

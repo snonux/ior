@@ -7,6 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const streamColumnCount = 10
+
 type Model struct {
 	source *RingBuffer
 
@@ -24,6 +26,7 @@ type Model struct {
 	scrollOffset int
 	autoScroll   bool
 	selectedIdx  int
+	selectedCol  int
 	fdTraceView  fdTraceViewState
 
 	width  int
@@ -44,6 +47,7 @@ func NewModel(source *RingBuffer) Model {
 		filterModal: NewFilterModal(),
 		autoScroll:  true,
 		selectedIdx: -1,
+		selectedCol: 0,
 	}
 }
 
@@ -98,6 +102,10 @@ func (m *Model) HandleKey(keyStr string) bool {
 		case "k", "up":
 			m.scrollFDTraceByLines(-1)
 			return true
+		case "left", "h":
+			return true
+		case "right", "l":
+			return true
 		case "pgdown", "pgdn", "pagedown":
 			m.scrollFDTraceByLines(m.pageStep())
 			return true
@@ -135,6 +143,7 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.Refresh()
 		} else {
 			m.ensureSelection()
+			m.ensureSelectedCol()
 			m.centerSelection()
 		}
 		return true
@@ -177,6 +186,18 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.scrollByLines(-1)
 		}
 		return true
+	case "left", "h":
+		if m.paused {
+			m.moveSelectedColBy(-1)
+			return true
+		}
+		return false
+	case "right", "l":
+		if m.paused {
+			m.moveSelectedColBy(1)
+			return true
+		}
+		return false
 	case "pgdown", "pgdn", "pagedown":
 		if m.paused {
 			m.moveSelectionBy(m.pageStep())
@@ -200,6 +221,10 @@ func (m *Model) HandleKey(keyStr string) bool {
 // then falls back to string matching for rune-driven shortcuts.
 func (m *Model) HandleTeaKey(msg tea.KeyMsg) bool {
 	switch msg.Type {
+	case tea.KeyLeft:
+		return m.HandleKey("left")
+	case tea.KeyRight:
+		return m.HandleKey("right")
 	case tea.KeyUp:
 		return m.HandleKey("up")
 	case tea.KeyDown:
@@ -253,10 +278,14 @@ func (m *Model) View(width, height int) string {
 		bufferLen = m.source.Len()
 	}
 
-	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx)
+	selectedCol := -1
+	if m.paused && selectedVisibleIdx >= 0 {
+		selectedCol = m.selectedCol
+	}
+	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx, selectedCol)
 	status := fmt.Sprintf("Row %d/%d | space:pause f:filter G:tail g:top c:clear j/k:scroll", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d | enter:fd-trace space:pause f:filter G:tail g:top c:clear j/k:select", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered))
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | enter:fd-trace space:pause f:filter G:tail g:top c:clear j/k:row h/l:col", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount)
 	}
 	out := base + "\n" + status
 
@@ -309,6 +338,7 @@ func (m *Model) applyFilter() {
 	m.clampSelection()
 	if m.paused {
 		m.ensureSelection()
+		m.ensureSelectedCol()
 		m.centerSelection()
 	}
 }
@@ -435,6 +465,7 @@ func (m *Model) moveSelectionBy(delta int) {
 		return
 	}
 	m.ensureSelection()
+	m.ensureSelectedCol()
 	m.moveSelectionTo(m.selectedIdx + delta)
 }
 
@@ -444,6 +475,7 @@ func (m *Model) moveSelectionTo(idx int) {
 		return
 	}
 	m.selectedIdx = clamp(idx, 0, len(m.filtered)-1)
+	m.ensureSelectedCol()
 	m.centerSelection()
 }
 
@@ -467,6 +499,23 @@ func (m *Model) ensureSelection() {
 	}
 	mid := m.visibleRows() / 2
 	m.selectedIdx = clamp(m.scrollOffset+mid, 0, len(m.filtered)-1)
+}
+
+func (m *Model) ensureSelectedCol() {
+	if m.selectedCol < 0 {
+		m.selectedCol = 0
+	}
+	if m.selectedCol >= streamColumnCount {
+		m.selectedCol = streamColumnCount - 1
+	}
+}
+
+func (m *Model) moveSelectedColBy(delta int) {
+	if delta == 0 {
+		return
+	}
+	m.ensureSelectedCol()
+	m.selectedCol = clamp(m.selectedCol+delta, 0, streamColumnCount-1)
 }
 
 func (m *Model) clampSelection() {
