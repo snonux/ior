@@ -307,3 +307,64 @@ func TestPausedScrollWithJKAndPageKeys(t *testing.T) {
 		t.Fatalf("expected pgdown to scroll down while paused: afterPgUp=%d afterPgDown=%d", afterPgUp, afterPgDown)
 	}
 }
+
+func TestPausedSelectionInitializesNearMiddleAndCenters(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 20 // visibleRows = 12
+	pushEvents(rb, 100)
+	m.Refresh()
+
+	if !m.HandleKey("space") {
+		t.Fatalf("space should toggle pause")
+	}
+	if !m.paused {
+		t.Fatalf("expected paused state")
+	}
+	if m.selectedIdx < 0 {
+		t.Fatalf("expected selected index while paused")
+	}
+
+	mid := m.visibleRows() / 2
+	wantOffset := clamp(m.selectedIdx-mid, 0, m.maxScrollOffset())
+	if m.scrollOffset != wantOffset {
+		t.Fatalf("expected centered offset %d, got %d", wantOffset, m.scrollOffset)
+	}
+}
+
+func TestPausedSelectionMovesAndRecentersWithJKAndArrows(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	m.height = 20 // visibleRows = 12
+	pushEvents(rb, 100)
+	m.Refresh()
+
+	if !m.HandleKey("g") {
+		t.Fatalf("g should be handled")
+	}
+	if !m.HandleKey("space") {
+		t.Fatalf("space should toggle pause")
+	}
+	startSel := m.selectedIdx
+
+	if !m.HandleKey("j") {
+		t.Fatalf("j should be handled while paused")
+	}
+	if m.selectedIdx != startSel+1 {
+		t.Fatalf("expected selected index +1 after j, got %d->%d", startSel, m.selectedIdx)
+	}
+	mid := m.visibleRows() / 2
+	if m.scrollOffset != clamp(m.selectedIdx-mid, 0, m.maxScrollOffset()) {
+		t.Fatalf("expected centered viewport after j")
+	}
+
+	if !m.HandleKey("up") {
+		t.Fatalf("up should be handled while paused")
+	}
+	if m.selectedIdx != startSel {
+		t.Fatalf("expected selected index back to start after up, got %d", m.selectedIdx)
+	}
+	if m.scrollOffset != clamp(m.selectedIdx-mid, 0, m.maxScrollOffset()) {
+		t.Fatalf("expected centered viewport after up")
+	}
+}

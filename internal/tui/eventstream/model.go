@@ -23,6 +23,7 @@ type Model struct {
 
 	scrollOffset int
 	autoScroll   bool
+	selectedIdx  int
 
 	width  int
 	height int
@@ -33,6 +34,7 @@ func NewModel(source *RingBuffer) Model {
 		source:      source,
 		filterModal: NewFilterModal(),
 		autoScroll:  true,
+		selectedIdx: -1,
 	}
 }
 
@@ -84,7 +86,11 @@ func (m *Model) HandleKey(keyStr string) bool {
 		if !m.paused {
 			// Resuming should return to live-tail behavior immediately.
 			m.autoScroll = true
+			m.selectedIdx = -1
 			m.Refresh()
+		} else {
+			m.ensureSelection()
+			m.centerSelection()
 		}
 		return true
 	case "f", "F":
@@ -93,28 +99,52 @@ func (m *Model) HandleKey(keyStr string) bool {
 		m.filterModal = m.filterModal.Open(m.filter)
 		return true
 	case "G":
-		m.autoScroll = true
-		m.scrollOffset = m.maxScrollOffset()
+		if m.paused {
+			m.moveSelectionTo(len(m.filtered) - 1)
+		} else {
+			m.autoScroll = true
+			m.scrollOffset = m.maxScrollOffset()
+		}
 		return true
 	case "g":
-		m.autoScroll = false
-		m.scrollOffset = 0
+		if m.paused {
+			m.moveSelectionTo(0)
+		} else {
+			m.autoScroll = false
+			m.scrollOffset = 0
+		}
 		return true
 	case "c":
 		m.filter = Filter{}
 		m.applyFilter()
 		return true
 	case "j", "down":
-		m.scrollByLines(1)
+		if m.paused {
+			m.moveSelectionBy(1)
+		} else {
+			m.scrollByLines(1)
+		}
 		return true
 	case "k", "up":
-		m.scrollByLines(-1)
+		if m.paused {
+			m.moveSelectionBy(-1)
+		} else {
+			m.scrollByLines(-1)
+		}
 		return true
 	case "pgdown", "pgdn", "pagedown":
-		m.scrollByLines(m.pageStep())
+		if m.paused {
+			m.moveSelectionBy(m.pageStep())
+		} else {
+			m.scrollByLines(m.pageStep())
+		}
 		return true
 	case "pgup", "pageup":
-		m.scrollByLines(-m.pageStep())
+		if m.paused {
+			m.moveSelectionBy(-m.pageStep())
+		} else {
+			m.scrollByLines(-m.pageStep())
+		}
 		return true
 	default:
 		return false
@@ -160,14 +190,21 @@ func (m *Model) View(width, height int) string {
 		end = len(m.filtered)
 	}
 	visible := m.filtered[start:end]
+	selectedVisibleIdx := -1
+	if m.paused && m.selectedIdx >= start && m.selectedIdx < end {
+		selectedVisibleIdx = m.selectedIdx - start
+	}
 
 	bufferLen := 0
 	if m.source != nil {
 		bufferLen = m.source.Len()
 	}
 
-	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible)
+	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx)
 	status := fmt.Sprintf("Row %d/%d | space:pause f:filter G:tail g:top c:clear j/k:scroll", rowNumber(start, len(m.filtered)), len(m.filtered))
+	if m.paused && m.selectedIdx >= 0 {
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d | space:pause f:filter G:tail g:top c:clear j/k:select", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered))
+	}
 	out := base + "\n" + status
 
 	if m.filterModal.Visible() {
@@ -197,6 +234,7 @@ func (m *Model) applyFilter() {
 	if len(m.allEvents) == 0 {
 		m.filtered = []StreamEvent{}
 		m.scrollOffset = 0
+		m.selectedIdx = -1
 		return
 	}
 
@@ -214,6 +252,11 @@ func (m *Model) applyFilter() {
 		m.scrollOffset = max
 	} else {
 		m.scrollOffset = clamp(m.scrollOffset, 0, max)
+	}
+	m.clampSelection()
+	if m.paused {
+		m.ensureSelection()
+		m.centerSelection()
 	}
 }
 
@@ -262,6 +305,57 @@ func (m *Model) scrollByLines(delta int) {
 	if m.scrollOffset < max {
 		m.autoScroll = false
 	}
+}
+
+func (m *Model) moveSelectionBy(delta int) {
+	if len(m.filtered) == 0 {
+		m.selectedIdx = -1
+		return
+	}
+	m.ensureSelection()
+	m.moveSelectionTo(m.selectedIdx + delta)
+}
+
+func (m *Model) moveSelectionTo(idx int) {
+	if len(m.filtered) == 0 {
+		m.selectedIdx = -1
+		return
+	}
+	m.selectedIdx = clamp(idx, 0, len(m.filtered)-1)
+	m.centerSelection()
+}
+
+func (m *Model) centerSelection() {
+	if len(m.filtered) == 0 || m.selectedIdx < 0 {
+		return
+	}
+	m.autoScroll = false
+	mid := m.visibleRows() / 2
+	target := m.selectedIdx - mid
+	m.scrollOffset = clamp(target, 0, m.maxScrollOffset())
+}
+
+func (m *Model) ensureSelection() {
+	if len(m.filtered) == 0 {
+		m.selectedIdx = -1
+		return
+	}
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.filtered) {
+		return
+	}
+	mid := m.visibleRows() / 2
+	m.selectedIdx = clamp(m.scrollOffset+mid, 0, len(m.filtered)-1)
+}
+
+func (m *Model) clampSelection() {
+	if len(m.filtered) == 0 {
+		m.selectedIdx = -1
+		return
+	}
+	if m.selectedIdx < 0 {
+		return
+	}
+	m.selectedIdx = clamp(m.selectedIdx, 0, len(m.filtered)-1)
 }
 
 func keyMsgFromString(keyStr string) tea.KeyMsg {
