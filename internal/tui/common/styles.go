@@ -16,8 +16,7 @@ var (
 var (
 	// ScreenStyle is the base style for full-screen models.
 	ScreenStyle = lipgloss.NewStyle().
-			Foreground(ColorText).
-			Background(ColorBackground)
+			Foreground(ColorText)
 
 	// HeaderStyle is used by top-level titles and screen headers.
 	HeaderStyle = lipgloss.NewStyle().
@@ -34,7 +33,6 @@ var (
 	// TabInactiveStyle is applied to non-selected tabs.
 	TabInactiveStyle = lipgloss.NewStyle().
 				Foreground(ColorMuted).
-				Background(ColorPanel).
 				Padding(0, 1)
 
 	// PanelStyle is used for boxed sections.

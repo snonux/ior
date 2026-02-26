@@ -16,7 +16,7 @@ func TestRenderSparklineEmptyOrInvalidWidth(t *testing.T) {
 
 func TestRenderSparklineSingleValue(t *testing.T) {
 	got := renderSparkline([]float64{10}, 8)
-	if got != "        \n       █" {
+	if got != "        \n████████" {
 		t.Fatalf("expected two-line constant sparkline, got %q", got)
 	}
 }
@@ -28,14 +28,14 @@ func TestRenderSparklineAllEqualValues(t *testing.T) {
 	}
 }
 
-func TestRenderSparklineRightAlignsShortHistory(t *testing.T) {
+func TestRenderSparklineStretchesShortHistoryToWidth(t *testing.T) {
 	got := renderSparkline([]float64{1, 2, 3}, 6)
 	lines := strings.Split(got, "\n")
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %q", got)
 	}
-	if !strings.HasPrefix(lines[1], "   ") {
-		t.Fatalf("expected left padding for short history, got %q", lines[1])
+	if strings.HasPrefix(lines[1], "   ") {
+		t.Fatalf("expected short history to fill width, got %q", lines[1])
 	}
 }
 

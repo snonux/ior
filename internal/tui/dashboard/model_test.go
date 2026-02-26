@@ -390,3 +390,25 @@ func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
 		t.Fatalf("expected grouped directory files view header, got %q", out)
 	}
 }
+
+func TestStreamTabViewKeepsTabAndHelpChromeVisible(t *testing.T) {
+	rb := eventstream.NewRingBuffer()
+	for i := 0; i < 200; i++ {
+		rb.Push(eventstream.StreamEvent{Syscall: "read"})
+	}
+
+	m := NewModelWithConfig(nil, rb, 1000, common.DefaultKeyMap())
+	m.activeTab = TabStream
+	m.width = 120
+	m.height = 30
+	m.streamModel.SetSource(rb)
+	m.streamModel.Refresh()
+
+	out := m.View()
+	if !strings.Contains(out, "1:Overview") {
+		t.Fatalf("expected tab bar to remain visible in stream view")
+	}
+	if !strings.Contains(out, "Press ? for help") {
+		t.Fatalf("expected help hint to remain visible in stream view")
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"ior/internal/statsengine"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestRenderHistogramNoBuckets(t *testing.T) {
@@ -72,5 +74,34 @@ func TestRenderHistogramTruncatesForSmallHeight(t *testing.T) {
 	}
 	if strings.Contains(out, "[1us,10us)") || strings.Contains(out, "[10us,100us)") {
 		t.Fatalf("expected histogram rows to be truncated for small height: %q", out)
+	}
+}
+
+func TestRenderLatencyGapsTabDoesNotOverflowWidth(t *testing.T) {
+	snap := statsengine.NewSnapshot(
+		[]float64{10, 20, 15, 30, 18, 35},
+		[]float64{2, 4, 3, 5, 7, 6},
+		nil,
+		nil,
+		nil,
+		nil,
+		statsengine.NewHistogramSnapshot(6, []statsengine.HistogramBucketSnapshot{
+			{Label: "[0,1us)", Count: 1},
+			{Label: "[1us,10us)", Count: 2},
+			{Label: "[10us,100us)", Count: 3},
+		}),
+		statsengine.NewHistogramSnapshot(6, []statsengine.HistogramBucketSnapshot{
+			{Label: "[0,1us)", Count: 1},
+			{Label: "[1us,10us)", Count: 2},
+			{Label: "[10us,100us)", Count: 3},
+		}),
+	)
+
+	const width = 100
+	out := renderLatencyGapsTab(&snap, width, 24)
+	for _, line := range strings.Split(out, "\n") {
+		if lipgloss.Width(line) > width {
+			t.Fatalf("latency/gaps line exceeds width %d: got %d in %q", width, lipgloss.Width(line), line)
+		}
 	}
 }

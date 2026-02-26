@@ -14,6 +14,7 @@ import (
 
 const defaultRefreshMs = 1000
 const streamRefreshMs = 200
+const streamChromeRows = 4
 
 // SnapshotSource is the dashboard data source.
 type SnapshotSource interface {
@@ -73,7 +74,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.streamModel.SetViewport(msg.Width, msg.Height)
+		streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
+		m.streamModel.SetViewport(streamWidth, streamHeight)
 		return m, nil
 	case refreshTickMsg:
 		snap := m.snapshot()
@@ -188,7 +190,7 @@ func (m *Model) handleScrollKey(msg tea.KeyMsg) bool {
 	case TabProcesses:
 		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows())
 	case TabStream:
-		streamWidth, streamHeight := common.EffectiveViewport(m.width, m.height)
+		streamWidth, streamHeight := streamViewport(m.width, m.height)
 		m.streamModel.SetViewport(streamWidth, streamHeight)
 		return m.streamModel.HandleTeaKey(msg)
 	default:
@@ -267,6 +269,10 @@ func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
 // View renders the tab bar, active tab scaffold, and help bar.
 func (m Model) View() string {
 	width, height := common.EffectiveViewport(m.width, m.height)
+	activeHeight := height
+	if m.activeTab == TabStream {
+		_, activeHeight = streamViewport(width, height)
+	}
 
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, width))
@@ -276,7 +282,7 @@ func (m Model) View() string {
 		m.latest,
 		&m.streamModel,
 		width,
-		height,
+		activeHeight,
 		m.syscallsOffset,
 		m.filesOffset,
 		m.filesDirGrouped,
@@ -286,7 +292,7 @@ func (m Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(common.HighlightStyle.Render("Press ? for help"))
 	b.WriteString("\n")
-	b.WriteString(renderHelpBar(m.keys))
+	b.WriteString(renderHelpBar(m.keys, width))
 	return common.ScreenStyle.Render(b.String())
 }
 
@@ -327,4 +333,13 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 
 func streamTickCmd() tea.Cmd {
 	return tea.Tick(streamRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return streamTickMsg{} })
+}
+
+func streamViewport(width, height int) (int, int) {
+	width, height = common.EffectiveViewport(width, height)
+	height -= streamChromeRows
+	if height < 1 {
+		height = 1
+	}
+	return width, height
 }

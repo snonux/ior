@@ -11,23 +11,15 @@ func renderSparkline(data []float64, width int) string {
 	}
 
 	samples := sampleForWidth(data, width)
-	leftPad := 0
-	if len(samples) < width {
-		leftPad = width - len(samples)
-	}
 	min, max := minMax(samples)
 	if min == max {
 		top := repeatRune(' ', width)
-		bottom := repeatRune(' ', leftPad) + repeatRune('█', len(samples))
+		bottom := repeatRune('█', width)
 		return top + "\n" + bottom
 	}
 
 	top := make([]rune, width)
 	bottom := make([]rune, width)
-	for i := 0; i < leftPad; i++ {
-		top[i] = ' '
-		bottom[i] = ' '
-	}
 	scale := 16.0
 	denom := max - min
 	for i, value := range samples {
@@ -51,7 +43,7 @@ func renderSparkline(data []float64, width int) string {
 			bottomLevel = 1
 		}
 
-		col := leftPad + i
+		col := i
 		top[col] = sparkRowChars[topLevel]
 		bottom[col] = sparkRowChars[bottomLevel]
 	}
@@ -72,11 +64,15 @@ func renderLabeledSparkline(label string, data []float64, width int) string {
 }
 
 func sampleForWidth(data []float64, width int) []float64 {
-	if width >= len(data) {
-		return append([]float64(nil), data...)
-	}
 	if width == 1 {
 		return []float64{data[len(data)-1]}
+	}
+	if len(data) == 1 {
+		out := make([]float64, width)
+		for i := range out {
+			out[i] = data[0]
+		}
+		return out
 	}
 
 	last := len(data) - 1
