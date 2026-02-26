@@ -414,12 +414,155 @@ func TestPausedSelectionMovesAcrossColumnsWithLeftRightAndHL(t *testing.T) {
 	}
 }
 
-func TestPausedEnterOpensFDTraceViewScopedByPIDAndFD(t *testing.T) {
+func TestPausedEnterAddsStackableFiltersAndEscUndoes(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, Comm: "firefox", Syscall: "read", FD: 5, RetVal: 10, Bytes: 10, GapNs: 50, DurationNs: 100, FileName: "/a"})
+	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, Comm: "firefox", Syscall: "write", FD: 6, RetVal: 11, Bytes: 11, GapNs: 51, DurationNs: 101, FileName: "/b"})
+	rb.Push(StreamEvent{Seq: 3, PID: 11, TID: 201, Comm: "bash", Syscall: "read", FD: 7, RetVal: 12, Bytes: 12, GapNs: 52, DurationNs: 102, FileName: "/c"})
+
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	if !m.HandleKey("space") {
+		t.Fatalf("space should toggle pause")
+	}
+
+	m.selectedIdx = 0
+	m.selectedCol = streamColComm
+	if !m.HandleKey("enter") {
+		t.Fatalf("enter should add filter from selected comm cell")
+	}
+	if m.filter.Comm == nil || m.filter.Comm.Pattern != "firefox" {
+		t.Fatalf("expected comm filter firefox, got %+v", m.filter.Comm)
+	}
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected 2 rows after comm filter, got %d", len(m.filtered))
+	}
+	if len(m.filterStack) != 1 {
+		t.Fatalf("expected filter stack len 1, got %d", len(m.filterStack))
+	}
+	if got := m.View(120, 24); !strings.Contains(got, "Stack: comm~firefox") {
+		t.Fatalf("expected stack status line with comm filter, got:\n%s", got)
+	}
+
+	m.selectedIdx = 1
+	m.selectedCol = streamColTID
+	if !m.HandleKey("enter") {
+		t.Fatalf("enter should add filter from selected tid cell")
+	}
+	if m.filter.TID == nil || m.filter.TID.Value != 102 {
+		t.Fatalf("expected tid filter 102, got %+v", m.filter.TID)
+	}
+	if m.filter.Comm == nil || m.filter.Comm.Pattern != "firefox" {
+		t.Fatalf("expected comm filter preserved, got %+v", m.filter.Comm)
+	}
+	if len(m.filtered) != 1 {
+		t.Fatalf("expected 1 row after comm+tid filters, got %d", len(m.filtered))
+	}
+
+	if !m.HandleKey("esc") {
+		t.Fatalf("esc should undo last filter")
+	}
+	if m.filter.TID != nil {
+		t.Fatalf("expected tid filter cleared after undo")
+	}
+	if m.filter.Comm == nil || m.filter.Comm.Pattern != "firefox" {
+		t.Fatalf("expected comm filter kept after first undo")
+	}
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected 2 rows after undo tid filter, got %d", len(m.filtered))
+	}
+
+	if !m.HandleKey("esc") {
+		t.Fatalf("esc should undo previous filter")
+	}
+	if m.filter.IsActive() {
+		t.Fatalf("expected no active filters after second undo, got summary=%q", m.filter.Summary())
+	}
+	if len(m.filtered) != 3 {
+		t.Fatalf("expected all rows after second undo, got %d", len(m.filtered))
+	}
+	if got := m.View(120, 24); strings.Contains(got, "Stack:") {
+		t.Fatalf("did not expect stack status line after all undos, got:\n%s", got)
+	}
+}
+
+func TestPausedEnterCanFilterLatencyAndGapColumns(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a", DurationNs: 100, GapNs: 5})
+	rb.Push(StreamEvent{Seq: 2, PID: 1, TID: 2, Comm: "b", DurationNs: 200, GapNs: 6})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	_ = m.HandleKey("space")
+
+	m.selectedIdx = 0
+	m.selectedCol = streamColLatency
+	if !m.HandleKey("enter") {
+		t.Fatalf("expected enter to filter by latency")
+	}
+	if m.filter.LatencyNs == nil || m.filter.LatencyNs.Op != OpGte || m.filter.LatencyNs.Value != 100 {
+		t.Fatalf("expected latency filter >=100ns, got %+v", m.filter.LatencyNs)
+	}
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected both rows after latency >=100 filter, got %d", len(m.filtered))
+	}
+
+	m.selectedCol = streamColGap
+	if !m.HandleKey("enter") {
+		t.Fatalf("expected enter to filter by gap")
+	}
+	if m.filter.GapNs == nil || m.filter.GapNs.Op != OpGte || m.filter.GapNs.Value != 5 {
+		t.Fatalf("expected gap filter >=5ns, got %+v", m.filter.GapNs)
+	}
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected both rows after gap >=5 filter, got %d", len(m.filtered))
+	}
+}
+
+func TestPausedEnterKeepsSelectedRowCenteredAfterFilter(t *testing.T) {
+	rb := NewRingBuffer()
+	for i := 0; i < 300; i++ {
+		comm := "other"
+		if i >= 90 && i <= 210 {
+			comm = "match"
+		}
+		rb.Push(StreamEvent{
+			Seq:      uint64(i + 1),
+			PID:      1000,
+			TID:      uint32(2000 + i),
+			Comm:     comm,
+			Syscall:  "read",
+			FileName: "/tmp/f",
+		})
+	}
+
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	_ = m.HandleKey("space")
+	m.moveSelectionTo(150)
+	before := m.selectedIdx - m.scrollOffset
+	if before < 4 || before > 8 {
+		t.Fatalf("expected initial selected row near middle, got relative idx %d", before)
+	}
+
+	m.selectedCol = streamColComm
+	if !m.HandleKey("enter") {
+		t.Fatalf("expected enter to apply filter")
+	}
+	after := m.selectedIdx - m.scrollOffset
+	if after < 4 || after > 8 {
+		t.Fatalf("expected selected row to stay near middle after filter, got relative idx %d", after)
+	}
+}
+
+func TestPausedEnterCanFilterByFDColumn(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, FD: 3, Syscall: "read", FileName: "/a"})
-	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, FD: 3, Syscall: "write", FileName: "/a"}) // same pid/fd, different tid
-	rb.Push(StreamEvent{Seq: 3, PID: 10, TID: 103, FD: 4, Syscall: "read", FileName: "/b"})  // different fd
-	rb.Push(StreamEvent{Seq: 4, PID: 11, TID: 104, FD: 3, Syscall: "read", FileName: "/c"})  // different pid
+	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, FD: 3, Syscall: "write", FileName: "/a"})
+	rb.Push(StreamEvent{Seq: 3, PID: 10, TID: 103, FD: 4, Syscall: "read", FileName: "/b"})
+	rb.Push(StreamEvent{Seq: 4, PID: 11, TID: 104, FD: 3, Syscall: "read", FileName: "/c"})
 
 	m := NewModel(rb)
 	m.height = 20
@@ -428,49 +571,15 @@ func TestPausedEnterOpensFDTraceViewScopedByPIDAndFD(t *testing.T) {
 		t.Fatalf("space should pause")
 	}
 
-	// Pick the first row (pid=10, fd=3).
 	m.selectedIdx = 0
+	m.selectedCol = streamColFD
 	if !m.HandleKey("enter") {
-		t.Fatalf("enter should open fd trace view")
+		t.Fatalf("enter should add fd filter")
 	}
-	if !m.fdTraceView.visible {
-		t.Fatalf("expected fd trace view visible")
+	if m.filter.FD == nil || m.filter.FD.Value != 3 {
+		t.Fatalf("expected fd filter 3, got %+v", m.filter.FD)
 	}
-	if m.fdTraceView.pid != 10 || m.fdTraceView.fd != 3 {
-		t.Fatalf("expected pid/fd 10/3, got %d/%d", m.fdTraceView.pid, m.fdTraceView.fd)
-	}
-	if len(m.fdTraceView.events) != 2 {
-		t.Fatalf("expected 2 matching events, got %d", len(m.fdTraceView.events))
-	}
-	for _, ev := range m.fdTraceView.events {
-		if ev.PID != 10 || ev.FD != 3 {
-			t.Fatalf("unexpected event in fd trace view: pid=%d fd=%d", ev.PID, ev.FD)
-		}
-	}
-}
-
-func TestFDTraceViewRendersAndClosesOnEsc(t *testing.T) {
-	rb := NewRingBuffer()
-	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, FD: 5, Syscall: "read", FileName: "/x"})
-	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, FD: 5, Syscall: "write", FileName: "/x"})
-	m := NewModel(rb)
-	m.height = 20
-	m.Refresh()
-	_ = m.HandleKey("space")
-	m.selectedIdx = 0
-	_ = m.HandleKey("enter")
-
-	view := m.View(120, 24)
-	if !strings.Contains(view, "FD Trace (ring snapshot)") {
-		t.Fatalf("expected fd trace header in view")
-	}
-	if !strings.Contains(view, "PID:10 FD:5 matched:2") {
-		t.Fatalf("expected pid/fd summary in fd trace view")
-	}
-	if !m.HandleKey("esc") {
-		t.Fatalf("esc should close fd trace view")
-	}
-	if m.fdTraceView.visible {
-		t.Fatalf("expected fd trace view closed")
+	if len(m.filtered) != 3 {
+		t.Fatalf("expected 3 rows with fd=3, got %d", len(m.filtered))
 	}
 }
