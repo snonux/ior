@@ -42,6 +42,11 @@ type Model struct {
 	fdTraceView       fdTraceViewState
 	filterStack       []Filter
 	filterActionStack []string
+	exportModal       ExportModal
+	lastExportPath    string
+	pendingOpenPath   string
+	statusMessage     string
+	exportDir         string
 
 	width  int
 	height int
@@ -59,9 +64,11 @@ func NewModel(source *RingBuffer) Model {
 	return Model{
 		source:      source,
 		filterModal: NewFilterModal(),
+		exportModal: NewExportModal(),
 		autoScroll:  true,
 		selectedIdx: -1,
 		selectedCol: 0,
+		exportDir:   ".",
 	}
 }
 
@@ -87,12 +94,36 @@ func (m Model) FilterModalVisible() bool {
 	return m.filterModal.Visible()
 }
 
+// ExportModalVisible reports whether the stream export modal is currently open.
+func (m Model) ExportModalVisible() bool {
+	return m.exportModal.Visible()
+}
+
 // Paused reports whether stream refresh is currently paused.
 func (m Model) Paused() bool {
 	return m.paused
 }
 
 func (m *Model) HandleKey(keyStr string) bool {
+	if m.exportModal.Visible() {
+		m.statusMessage = ""
+		var (
+			filename string
+			submit   bool
+		)
+		m.exportModal, filename, submit = m.exportModal.Update(keyMsgFromString(keyStr))
+		if !submit {
+			return true
+		}
+		path, err := m.exportFilteredToCSV(filename)
+		if err != nil {
+			m.statusMessage = fmt.Sprintf("Export failed: %v", err)
+			return true
+		}
+		m.lastExportPath = path
+		m.statusMessage = "Exported: " + path
+		return true
+	}
 	if m.filterModal.Visible() {
 		wasVisible := m.filterModal.Visible()
 		m.filterModal = m.filterModal.Update(keyMsgFromString(keyStr))
@@ -150,6 +181,38 @@ func (m *Model) HandleKey(keyStr string) bool {
 			return m.applyFilterFromSelectedCell()
 		}
 		return false
+	case "x":
+		if !m.paused {
+			return false
+		}
+		m.statusMessage = ""
+		path, err := m.exportFilteredToCSV(defaultStreamExportFilename())
+		if err != nil {
+			m.statusMessage = fmt.Sprintf("Export failed: %v", err)
+			return true
+		}
+		m.lastExportPath = path
+		m.statusMessage = "Exported: " + path
+		return true
+	case "X":
+		if !m.paused {
+			return false
+		}
+		m.statusMessage = ""
+		m.exportModal = m.exportModal.Open(defaultStreamExportFilename())
+		return true
+	case "E":
+		if !m.paused {
+			return false
+		}
+		m.statusMessage = ""
+		if m.lastExportPath == "" {
+			m.statusMessage = "No stream export yet"
+			return true
+		}
+		m.pendingOpenPath = m.lastExportPath
+		m.statusMessage = "Opening in editor: " + m.lastExportPath
+		return true
 	case " ", "space":
 		m.paused = !m.paused
 		if !m.paused {
@@ -308,17 +371,23 @@ func (m *Model) View(width, height int) string {
 	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx, selectedCol)
 	status := fmt.Sprintf("Row %d/%d | space:pause f:filter G:tail g:top c:clear j/k:scroll", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | enter:add-filter esc:undo(%d) space:pause f:filter G:tail g:top c:clear j/k:row h/l:col", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount, len(m.filterStack))
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | enter:add-filter esc:undo(%d) x:export X:export-as E:open-last space:pause f:filter G:tail g:top c:clear j/k:row h/l:col", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount, len(m.filterStack))
 	}
 	out := base + "\n" + status
 	if len(m.filterActionStack) > 0 {
 		out += "\n" + "Stack: " + strings.Join(m.filterActionStack, " | ")
+	}
+	if m.statusMessage != "" {
+		out += "\n" + m.statusMessage
 	}
 
 	if m.filterModal.Visible() {
 		// While editing filters, show a dedicated modal screen to avoid
 		// visual mixing with the live stream table underneath.
 		return m.filterModal.View(width, height)
+	}
+	if m.exportModal.Visible() {
+		return m.exportModal.View(width, height)
 	}
 	return out
 }
@@ -718,6 +787,25 @@ func clamp(v, min, max int) int {
 
 func (m *Model) setFilterForTest(f Filter) {
 	m.filter = f
+}
+
+func (m *Model) setExportDirForTest(dir string) {
+	m.exportDir = dir
+}
+
+// ConsumeOpenEditorRequest returns the pending editor-open path once.
+func (m *Model) ConsumeOpenEditorRequest() (string, bool) {
+	if m.pendingOpenPath == "" {
+		return "", false
+	}
+	path := m.pendingOpenPath
+	m.pendingOpenPath = ""
+	return path, true
+}
+
+// SetStatusMessage updates the stream footer status line.
+func (m *Model) SetStatusMessage(message string) {
+	m.statusMessage = message
 }
 
 func (m *Model) dumpVisibleForTest() string {

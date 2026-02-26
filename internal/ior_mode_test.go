@@ -36,6 +36,31 @@ func TestShouldRunTraceMode(t *testing.T) {
 	}
 }
 
+func TestShouldAutoStopByDuration(t *testing.T) {
+	base := flags.Flags{}
+	if shouldAutoStopByDuration(base) {
+		t.Fatalf("expected default TUI mode not to auto-stop by duration")
+	}
+
+	withPlain := base
+	withPlain.PlainMode = true
+	if !shouldAutoStopByDuration(withPlain) {
+		t.Fatalf("expected plain mode to auto-stop by duration")
+	}
+
+	withFlamegraph := base
+	withFlamegraph.FlamegraphEnable = true
+	if !shouldAutoStopByDuration(withFlamegraph) {
+		t.Fatalf("expected flamegraph mode to auto-stop by duration")
+	}
+
+	withPprof := base
+	withPprof.PprofEnable = true
+	if !shouldAutoStopByDuration(withPprof) {
+		t.Fatalf("expected pprof mode to auto-stop by duration")
+	}
+}
+
 func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 	origRunTrace := runTraceFn
 	origRunTUI := runTUIFn

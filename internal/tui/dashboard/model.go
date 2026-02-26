@@ -23,6 +23,9 @@ type SnapshotSource interface {
 
 type refreshTickMsg struct{}
 type streamTickMsg struct{}
+type streamEditorDoneMsg struct {
+	err error
+}
 
 // Model is the dashboard tab framework model.
 type Model struct {
@@ -99,6 +102,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case streamEditorDoneMsg:
+		if msg.err != nil {
+			m.streamModel.SetStatusMessage("Open failed: " + msg.err.Error())
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -107,7 +115,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	var cmd tea.Cmd
 	keyStr := msg.String()
-	handled := m.handleScrollKey(msg)
+	handled, scrollCmd := m.handleScrollKey(msg)
+	if scrollCmd != nil {
+		cmd = scrollCmd
+	}
 	if handled && m.activeTab == TabStream && (keyStr == " " || keyStr == "space") && !m.streamModel.Paused() {
 		cmd = streamTickCmd()
 	}
@@ -164,24 +175,35 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) handleScrollKey(msg tea.KeyMsg) bool {
+func (m *Model) handleScrollKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	switch m.activeTab {
 	case TabSyscalls:
-		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows())
+		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows()), nil
 	case TabFiles:
 		if m.filesDirGrouped {
-			return scrollOffset(keyStr, &m.filesDirOffset, m.maxFilesDirRows())
+			return scrollOffset(keyStr, &m.filesDirOffset, m.maxFilesDirRows()), nil
 		}
-		return scrollOffset(keyStr, &m.filesOffset, m.maxFilesRows())
+		return scrollOffset(keyStr, &m.filesOffset, m.maxFilesRows()), nil
 	case TabProcesses:
-		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows())
+		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows()), nil
 	case TabStream:
 		streamWidth, streamHeight := streamViewport(m.width, m.height)
 		m.streamModel.SetViewport(streamWidth, streamHeight)
-		return m.streamModel.HandleTeaKey(msg)
+		handled := m.streamModel.HandleTeaKey(msg)
+		if path, ok := m.streamModel.ConsumeOpenEditorRequest(); ok {
+			editorCmd, err := eventstream.EditorCommandForPath(path)
+			if err != nil {
+				m.streamModel.SetStatusMessage("Open failed: " + err.Error())
+				return true, nil
+			}
+			return true, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
+				return streamEditorDoneMsg{err: err}
+			})
+		}
+		return handled, nil
 	default:
-		return false
+		return false, nil
 	}
 }
 
@@ -245,7 +267,7 @@ func (m Model) LatestSnapshot() *statsengine.Snapshot {
 // BlocksGlobalShortcuts reports whether modal UI in the active tab should
 // suppress top-level shortcuts (for example global export key handling).
 func (m Model) BlocksGlobalShortcuts() bool {
-	return m.activeTab == TabStream && m.streamModel.FilterModalVisible()
+	return m.activeTab == TabStream && (m.streamModel.FilterModalVisible() || m.streamModel.ExportModalVisible())
 }
 
 // SetStreamSource updates the live stream source used by the stream tab.
