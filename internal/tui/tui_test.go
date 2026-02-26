@@ -385,6 +385,9 @@ func TestViewShowsHelpOverlay(t *testing.T) {
 	if !strings.Contains(out, "tab next tab") {
 		t.Fatalf("expected keybinding text in overlay")
 	}
+	if strings.Contains(out, "Overview: waiting for stats") {
+		t.Fatalf("expected help overlay to render without stacking dashboard content")
+	}
 }
 
 func TestHelpOverlayBlocksUnderlyingActions(t *testing.T) {
@@ -412,6 +415,9 @@ func TestHelpOverlayUsesPickerBindingsOnPickerScreen(t *testing.T) {
 	}
 	if strings.Contains(out, "e export") {
 		t.Fatalf("did not expect dashboard-only shortcut in picker help overlay")
+	}
+	if strings.Contains(out, "Select PID to trace") {
+		t.Fatalf("expected help overlay to render without stacking picker content")
 	}
 }
 
