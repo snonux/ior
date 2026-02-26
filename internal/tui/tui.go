@@ -236,6 +236,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.probeModal = probes.NewModel(getProbeManager()).Open()
 			return m, nil
 		}
+		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+			return m.reselectPID()
+		}
 	case tuiexport.RequestMsg:
 		return m, runExportCmd(msg.Option, m.dashboard.LatestSnapshot())
 	case tuiexport.CompletedMsg:
@@ -323,6 +326,26 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.attaching = true
 	m.lastErr = nil
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+}
+
+func (m Model) reselectPID() (tea.Model, tea.Cmd) {
+	m.stopTrace()
+	m.screen = ScreenPIDPicker
+	m.attaching = false
+	m.lastErr = nil
+	m.showHelp = false
+	m.exporter = tuiexport.NewModel()
+	m.probeModal = probes.NewModel(getProbeManager())
+	m.pidPicker = pidpicker.New()
+
+	var sizeCmd tea.Cmd
+	if m.width > 0 && m.height > 0 {
+		msg := tea.WindowSizeMsg{Width: m.width, Height: m.height}
+		next, cmd := m.pidPicker.Update(msg)
+		m.pidPicker = next.(pidpicker.Model)
+		sizeCmd = cmd
+	}
+	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
 }
 
 func selectedPIDFilter(pid int) int {

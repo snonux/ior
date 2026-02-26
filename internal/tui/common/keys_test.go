@@ -13,6 +13,11 @@ func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 	if probesHelp.Key != "p" || probesHelp.Desc != "probes" {
 		t.Fatalf("unexpected probes binding help: key=%q desc=%q", probesHelp.Key, probesHelp.Desc)
 	}
+
+	selectHelp := keys.SelectPID.Help()
+	if selectHelp.Key != "s" || selectHelp.Desc != "select pid" {
+		t.Fatalf("unexpected select pid binding help: key=%q desc=%q", selectHelp.Key, selectHelp.Desc)
+	}
 }
 
 func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
@@ -44,6 +49,18 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected probes binding in dashboard full help controls")
+	}
+
+	found = false
+	for _, binding := range groups[1] {
+		help := binding.Help()
+		if help.Key == "s" && help.Desc == "select pid" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected select pid binding in dashboard full help controls")
 	}
 }
 
