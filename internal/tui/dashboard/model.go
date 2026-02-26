@@ -290,8 +290,6 @@ func (m Model) View() string {
 		m.processesOffset,
 	))
 	b.WriteString("\n")
-	b.WriteString(common.HighlightStyle.Render("Press ? for help"))
-	b.WriteString("\n")
 	b.WriteString(renderHelpBar(m.keys, width))
 	return common.ScreenStyle.Render(b.String())
 }

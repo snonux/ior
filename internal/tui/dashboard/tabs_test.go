@@ -39,10 +39,10 @@ func TestRenderTabBarSmallWidthUsesSingleLine(t *testing.T) {
 	}
 }
 
-func TestRenderHelpBarSmallWidthUsesSingleLine(t *testing.T) {
+func TestRenderHelpBarSmallWidthCanWrapToTwoLines(t *testing.T) {
 	out := renderHelpBar(common.DefaultKeyMap(), 70)
 	lines := strings.Split(out, "\n")
-	if len(lines) != 1 {
-		t.Fatalf("expected single-line help bar at width 70, got %d lines", len(lines))
+	if len(lines) < 1 || len(lines) > 2 {
+		t.Fatalf("expected one or two help bar lines at width 70, got %d lines", len(lines))
 	}
 }

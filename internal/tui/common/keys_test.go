@@ -10,13 +10,18 @@ func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 	}
 
 	probesHelp := keys.Probes.Help()
-	if probesHelp.Key != "p" || probesHelp.Desc != "probes" {
+	if probesHelp.Key != "o" || probesHelp.Desc != "probes" {
 		t.Fatalf("unexpected probes binding help: key=%q desc=%q", probesHelp.Key, probesHelp.Desc)
 	}
 
 	selectHelp := keys.SelectPID.Help()
-	if selectHelp.Key != "s" || selectHelp.Desc != "select pid" {
+	if selectHelp.Key != "p" || selectHelp.Desc != "select pid" {
 		t.Fatalf("unexpected select pid binding help: key=%q desc=%q", selectHelp.Key, selectHelp.Desc)
+	}
+
+	selectTIDHelp := keys.SelectTID.Help()
+	if selectTIDHelp.Key != "t" || selectTIDHelp.Desc != "select tid" {
+		t.Fatalf("unexpected select tid binding help: key=%q desc=%q", selectTIDHelp.Key, selectTIDHelp.Desc)
 	}
 }
 
@@ -42,7 +47,7 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	found = false
 	for _, binding := range groups[1] {
 		help := binding.Help()
-		if help.Key == "p" && help.Desc == "probes" {
+		if help.Key == "o" && help.Desc == "probes" {
 			found = true
 			break
 		}
@@ -54,7 +59,7 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	found = false
 	for _, binding := range groups[1] {
 		help := binding.Help()
-		if help.Key == "s" && help.Desc == "select pid" {
+		if help.Key == "p" && help.Desc == "select pid" {
 			found = true
 			break
 		}
@@ -62,20 +67,38 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	if !found {
 		t.Fatalf("expected select pid binding in dashboard full help controls")
 	}
-}
 
-func TestDashboardShortHelpIncludesProbesBinding(t *testing.T) {
-	keys := DefaultKeyMap()
-	short := keys.DashboardShortHelp()
-	found := false
-	for _, binding := range short {
+	found = false
+	for _, binding := range groups[1] {
 		help := binding.Help()
-		if help.Key == "p" && help.Desc == "probes" {
+		if help.Key == "t" && help.Desc == "select tid" {
 			found = true
 			break
 		}
 	}
 	if !found {
+		t.Fatalf("expected select tid binding in dashboard full help controls")
+	}
+}
+
+func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
+	keys := DefaultKeyMap()
+	short := keys.DashboardStatusHelp()
+	found := false
+	foundSelectTID := false
+	for _, binding := range short {
+		help := binding.Help()
+		if help.Key == "o" && help.Desc == "probes" {
+			found = true
+		}
+		if help.Key == "t" && help.Desc == "select tid" {
+			foundSelectTID = true
+		}
+	}
+	if !found {
 		t.Fatalf("expected probes binding in dashboard short help")
+	}
+	if !foundSelectTID {
+		t.Fatalf("expected select tid binding in dashboard short help")
 	}
 }

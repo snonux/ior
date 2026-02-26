@@ -15,10 +15,10 @@ type KeyMap struct {
 	Seven     key.Binding
 	DirGroup  key.Binding
 	SelectPID key.Binding
+	SelectTID key.Binding
 	Probes    key.Binding
 	Export    key.Binding
 	Quit      key.Binding
-	Help      key.Binding
 	Enter     key.Binding
 	Esc       key.Binding
 	Refresh   key.Binding
@@ -40,24 +40,35 @@ func DefaultKeyMap() KeyMap {
 		Six:       key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "stream")),
 		Seven:     key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "stream")),
 		DirGroup:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dir group")),
-		SelectPID: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "select pid")),
-		Probes:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "probes")),
+		SelectPID: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "select pid")),
+		SelectTID: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "select tid")),
+		Probes:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "probes")),
 		Export:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export")),
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Enter:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Esc:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		Refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 	}
 }
 
-// DashboardShortHelp returns compact bindings for dashboard help bars.
-func (k KeyMap) DashboardShortHelp() []key.Binding {
-	bindings := []key.Binding{k.Tab, k.ShiftTab}
+// DashboardStatusHelp returns expanded bindings for dashboard status bars.
+func (k KeyMap) DashboardStatusHelp() []key.Binding {
+	bindings := []key.Binding{k.Tab, k.ShiftTab, k.One, k.Two, k.Three, k.Four, k.Five, k.Six}
 	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
 		bindings = append(bindings, k.Export)
 	}
-	bindings = append(bindings, k.SelectPID, k.Probes, k.Help, k.Quit)
+	bindings = append(bindings,
+		k.DirGroup,
+		k.SelectPID,
+		k.SelectTID,
+		k.Probes,
+		k.Refresh,
+		k.Quit,
+		helpTextBinding("left/right", "tab"),
+		helpTextBinding("h/l", "tab"),
+		helpTextBinding("j/k", "scroll"),
+		helpTextBinding("up/down", "scroll"),
+	)
 	return bindings
 }
 
@@ -67,7 +78,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
 		controls = append(controls, k.Export)
 	}
-	controls = append(controls, k.DirGroup, k.SelectPID, k.Probes, k.Refresh, k.Help, k.Quit)
+	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Refresh, k.Quit)
 
 	return [][]key.Binding{
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},

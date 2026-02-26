@@ -25,6 +25,9 @@ func TestScanProcessesFrom(t *testing.T) {
 	if processes[0].Pid != 12 || processes[0].Comm != "bash" || processes[0].Cmdline != "bash -l" {
 		t.Fatalf("unexpected first process: %+v", processes[0])
 	}
+	if processes[0].ParentPID != 12 {
+		t.Fatalf("expected first process parent pid=12, got %d", processes[0].ParentPID)
+	}
 	if processes[1].Pid != 99 || processes[1].Comm != "sshd" || processes[1].Cmdline != "" {
 		t.Fatalf("unexpected second process: %+v", processes[1])
 	}
@@ -53,6 +56,46 @@ func TestNormalizeCmdline(t *testing.T) {
 
 	if normalizeCmdline(nil) != "" {
 		t.Fatalf("expected empty cmdline for nil bytes")
+	}
+}
+
+func TestScanThreadsFrom(t *testing.T) {
+	root := t.TempDir()
+	procDir := filepath.Join(root, "12")
+	if err := os.MkdirAll(filepath.Join(procDir, "task", "12"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(procDir, "task", "120"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(procDir, "cmdline"), []byte("bash\x00-l\x00"), 0o644); err != nil {
+		t.Fatalf("write cmdline: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(procDir, "task", "12", "comm"), []byte("bash-main\n"), 0o644); err != nil {
+		t.Fatalf("write comm: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(procDir, "task", "120", "comm"), []byte("bash-worker\n"), 0o644); err != nil {
+		t.Fatalf("write comm: %v", err)
+	}
+
+	threads, err := scanThreadsFrom(root, 12)
+	if err != nil {
+		t.Fatalf("scanThreadsFrom returned error: %v", err)
+	}
+	if len(threads) != 2 {
+		t.Fatalf("expected 2 threads, got %d", len(threads))
+	}
+	if threads[0].Pid != 12 || threads[0].Comm != "bash-main" || threads[0].Cmdline != "bash -l" {
+		t.Fatalf("unexpected first thread: %+v", threads[0])
+	}
+	if threads[0].ParentPID != 12 {
+		t.Fatalf("unexpected first thread parent pid: %d", threads[0].ParentPID)
+	}
+	if threads[1].Pid != 120 || threads[1].Comm != "bash-worker" || threads[1].Cmdline != "bash -l" {
+		t.Fatalf("unexpected second thread: %+v", threads[1])
+	}
+	if threads[1].ParentPID != 12 {
+		t.Fatalf("unexpected second thread parent pid: %d", threads[1].ParentPID)
 	}
 }
 

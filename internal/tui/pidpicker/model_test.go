@@ -63,6 +63,44 @@ func TestEnterEmitsAllPIDsAndSelectedPID(t *testing.T) {
 	}
 }
 
+func TestEnterEmitsAllTIDsAndSelectedTIDInTIDMode(t *testing.T) {
+	m := NewTIDWithKeys(42, DefaultKeyMap())
+	m.processes = []ProcessInfo{
+		{Pid: 7001, ParentPID: 42, Comm: "main"},
+		{Pid: 7002, ParentPID: 42, Comm: "worker"},
+	}
+	m.applyFilter()
+
+	modelAny, cmdAny := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = modelAny
+	msgAny := cmdAny()
+	tidAny, ok := msgAny.(messages.TidSelectedMsg)
+	if !ok {
+		t.Fatalf("expected TidSelectedMsg for all-tids selection, got %T", msgAny)
+	}
+	if tidAny.Tid != 0 {
+		t.Fatalf("expected all-tids to emit tid 0, got %d", tidAny.Tid)
+	}
+	if tidAny.Pid != 0 {
+		t.Fatalf("expected all-tids to emit pid 0, got %d", tidAny.Pid)
+	}
+
+	m.selectedIndex = 2
+	modelOne, cmdOne := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = modelOne
+	msgOne := cmdOne()
+	tidOne, ok := msgOne.(messages.TidSelectedMsg)
+	if !ok {
+		t.Fatalf("expected TidSelectedMsg for concrete selection, got %T", msgOne)
+	}
+	if tidOne.Tid != 7002 {
+		t.Fatalf("expected selected tid 7002, got %d", tidOne.Tid)
+	}
+	if tidOne.Pid != 42 {
+		t.Fatalf("expected selected pid 42, got %d", tidOne.Pid)
+	}
+}
+
 func TestEscQuitsAndRefreshTriggersScan(t *testing.T) {
 	m := NewWithKeys(DefaultKeyMap())
 
