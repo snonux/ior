@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"ior/internal/statsengine"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestRenderOverviewIncludesCoreMetrics(t *testing.T) {
@@ -91,6 +93,27 @@ func TestOverviewSummariesIncludeFilesProcessesAndHistograms(t *testing.T) {
 	for _, token := range []string{"Top files:", "Top processes:", "Latency buckets:", "Gap buckets:"} {
 		if !strings.Contains(out, token) {
 			t.Fatalf("expected %q in overview output", token)
+		}
+	}
+}
+
+func TestRenderOverviewDoesNotOverflowWidth(t *testing.T) {
+	snap := statsengine.NewSnapshot(
+		[]float64{10, 20, 15, 30, 18, 35, 40},
+		[]float64{2, 4, 3, 5, 7, 6, 8},
+		[]float64{1024, 2048, 4096, 2048, 1024},
+		[]statsengine.SyscallSnapshot{{Name: "read", Count: 20}},
+		[]statsengine.FileSnapshot{{Path: "/tmp/very/long/path/to/file.log", Accesses: 10}},
+		[]statsengine.ProcessSnapshot{{PID: 42, Comm: "proc", Syscalls: 30}},
+		statsengine.HistogramSnapshot{},
+		statsengine.HistogramSnapshot{},
+	)
+
+	const width = 120
+	out := renderOverview(&snap, width, 30)
+	for _, line := range strings.Split(out, "\n") {
+		if lipgloss.Width(line) > width {
+			t.Fatalf("overview line exceeds width %d: got %d in %q", width, lipgloss.Width(line), line)
 		}
 	}
 }

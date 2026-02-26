@@ -3,6 +3,8 @@ package dashboard
 import (
 	"strings"
 	"testing"
+
+	common "ior/internal/tui/common"
 )
 
 func TestTabNavigationWraps(t *testing.T) {
@@ -18,10 +20,29 @@ func TestTabNavigationWraps(t *testing.T) {
 }
 
 func TestRenderTabBarContainsLabels(t *testing.T) {
-	out := renderTabBar(TabOverview, 80)
+	out := renderTabBar(TabOverview, 100)
 	for _, label := range []string{"Overview", "Syscalls", "Files", "Processes", "Latency+Gaps", "Stream"} {
 		if !strings.Contains(out, label) {
 			t.Fatalf("expected tab label %q in tab bar", label)
 		}
+	}
+}
+
+func TestRenderTabBarSmallWidthUsesSingleLine(t *testing.T) {
+	out := renderTabBar(TabOverview, 70)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected single-line tab bar at width 70, got %d lines", len(lines))
+	}
+	if strings.Contains(out, "6:Strea") {
+		t.Fatalf("tab label should not be wrapped/split in small width output")
+	}
+}
+
+func TestRenderHelpBarSmallWidthUsesSingleLine(t *testing.T) {
+	out := renderHelpBar(common.DefaultKeyMap(), 70)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected single-line help bar at width 70, got %d lines", len(lines))
 	}
 }

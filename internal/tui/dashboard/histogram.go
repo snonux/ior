@@ -14,8 +14,11 @@ func renderLatencyTab(snap *statsengine.Snapshot, width, height int) string {
 		return common.PanelStyle.Render("Latency: waiting for stats...")
 	}
 
+	panelInner := panelInnerWidth(width)
 	hist := renderHistogram(snap.LatencyHistogram, "Latency Histogram", width, height)
-	spark := common.PanelStyle.Render(renderLabeledSparkline("Latency sparkline:", snap.LatencySeriesNs(), sparklineWidth(width)))
+	spark := common.PanelStyle.Width(panelInner).Render(
+		renderOverviewSparkline("Latency sparkline:", snap.LatencySeriesNs(), panelInner),
+	)
 	return strings.Join([]string{hist, spark}, "\n")
 }
 
@@ -24,8 +27,11 @@ func renderGapsTab(snap *statsengine.Snapshot, width, height int) string {
 		return common.PanelStyle.Render("Gaps: waiting for stats...")
 	}
 
+	panelInner := panelInnerWidth(width)
 	hist := renderHistogram(snap.GapHistogram, "Gap Histogram", width, height)
-	spark := common.PanelStyle.Render(renderLabeledSparkline("Gap sparkline:", snap.GapSeriesNs(), sparklineWidth(width)))
+	spark := common.PanelStyle.Width(panelInner).Render(
+		renderOverviewSparkline("Gap sparkline:", snap.GapSeriesNs(), panelInner),
+	)
 	return strings.Join([]string{hist, spark}, "\n")
 }
 
@@ -47,6 +53,7 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 	if width <= 0 {
 		width = 80
 	}
+	panelInner := panelInnerWidth(width)
 
 	if height > 0 {
 		maxRows := height - 3
@@ -73,7 +80,7 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 		}
 	}
 
-	barWidth := width - labelWidth - countWidth - 10
+	barWidth := panelInner - labelWidth - countWidth - 6
 	if barWidth < 8 {
 		barWidth = 8
 	}
@@ -86,7 +93,7 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 	}
 	lines = append(lines, "Scale: █▓▒░")
 
-	return common.PanelStyle.Render(strings.Join(lines, "\n"))
+	return common.PanelStyle.Width(panelInner).Render(strings.Join(lines, "\n"))
 }
 
 func renderHistogramBar(count, maxCount uint64, width int) string {
