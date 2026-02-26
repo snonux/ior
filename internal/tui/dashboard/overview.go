@@ -34,9 +34,10 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	)
 
 	panelInner := panelInnerWidth(width)
-	latencySpark := renderOverviewSparkline("Latency:", snap.LatencySeriesNs(), panelInner)
-	gapSpark := renderOverviewSparkline("Gap:", snap.GapSeriesNs(), panelInner)
-	throughputSpark := renderOverviewSparkline("Throughput:", snap.ThroughputSeriesB(), panelInner)
+	labelWidth := maxLabelWidth("Latency:", "Gap:", "Throughput:")
+	latencySpark := renderOverviewSparklineAligned("Latency:", snap.LatencySeriesNs(), panelInner, labelWidth)
+	gapSpark := renderOverviewSparklineAligned("Gap:", snap.GapSeriesNs(), panelInner, labelWidth)
+	throughputSpark := renderOverviewSparklineAligned("Throughput:", snap.ThroughputSeriesB(), panelInner, labelWidth)
 	topSyscalls := "Top syscalls: " + summarizeTopSyscalls(snap)
 	topFiles := "Top files: " + summarizeTopFiles(snap)
 	topProcesses := "Top processes: " + summarizeTopProcesses(snap)
@@ -221,10 +222,44 @@ func summaryBoxInnerWidth(width int) int {
 
 func renderOverviewSparkline(label string, data []float64, panelInner int) string {
 	w := panelInner - utf8.RuneCountInString(label) - 1 - sparklineSafetyMargin
+	if w > sparklineMaxWidth {
+		w = sparklineMaxWidth
+	}
 	if w < 8 {
 		w = 8
 	}
 	return renderLabeledSparkline(label, data, w)
+}
+
+func renderOverviewSparklineAligned(label string, data []float64, panelInner int, labelWidth int) string {
+	paddedLabel := padLabelRight(label, labelWidth)
+	w := panelInner - labelWidth - 1 - sparklineSafetyMargin
+	if w > sparklineMaxWidth {
+		w = sparklineMaxWidth
+	}
+	if w < 8 {
+		w = 8
+	}
+	return renderLabeledSparkline(paddedLabel, data, w)
+}
+
+func maxLabelWidth(labels ...string) int {
+	max := 0
+	for _, label := range labels {
+		w := utf8.RuneCountInString(label)
+		if w > max {
+			max = w
+		}
+	}
+	return max
+}
+
+func padLabelRight(label string, width int) string {
+	pad := width - utf8.RuneCountInString(label)
+	if pad <= 0 {
+		return label
+	}
+	return label + strings.Repeat(" ", pad)
 }
 
 func panelInnerWidth(width int) int {
