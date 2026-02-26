@@ -2,6 +2,8 @@ package eventstream
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -43,6 +45,10 @@ type Model struct {
 	filterStack       []Filter
 	filterActionStack []string
 	exportModal       ExportModal
+	searchModal       SearchModal
+	searchPattern     string
+	searchRegex       *regexp.Regexp
+	searchDirection   SearchDirection
 	lastExportPath    string
 	pendingOpenPath   string
 	statusMessage     string
@@ -50,6 +56,8 @@ type Model struct {
 
 	width  int
 	height int
+
+	showFooter bool
 }
 
 type fdTraceViewState struct {
@@ -65,10 +73,12 @@ func NewModel(source *RingBuffer) Model {
 		source:      source,
 		filterModal: NewFilterModal(),
 		exportModal: NewExportModal(),
+		searchModal: NewSearchModal(),
 		autoScroll:  true,
 		selectedIdx: -1,
 		selectedCol: 0,
 		exportDir:   ".",
+		showFooter:  true,
 	}
 }
 
@@ -81,6 +91,11 @@ func (m *Model) SetViewport(width, height int) {
 	if height > 0 {
 		m.height = height
 	}
+}
+
+// SetFooterVisible controls whether stream footer/status lines are shown.
+func (m *Model) SetFooterVisible(visible bool) {
+	m.showFooter = visible
 }
 
 // SetSource updates the backing ring buffer and refreshes visible rows.
@@ -99,12 +114,29 @@ func (m Model) ExportModalVisible() bool {
 	return m.exportModal.Visible()
 }
 
+// SearchModalVisible reports whether the stream search modal is currently open.
+func (m Model) SearchModalVisible() bool {
+	return m.searchModal.Visible()
+}
+
 // Paused reports whether stream refresh is currently paused.
 func (m Model) Paused() bool {
 	return m.paused
 }
 
 func (m *Model) HandleKey(keyStr string) bool {
+	if m.searchModal.Visible() {
+		m.statusMessage = ""
+		var (
+			term   string
+			submit bool
+		)
+		m.searchModal, term, submit = m.searchModal.Update(keyMsgFromString(keyStr))
+		if !submit {
+			return true
+		}
+		return m.submitSearch(term, m.searchModal.Direction())
+	}
 	if m.exportModal.Visible() {
 		m.statusMessage = ""
 		var (
@@ -176,11 +208,27 @@ func (m *Model) HandleKey(keyStr string) bool {
 	}
 
 	switch keyStr {
+	case "/":
+		m.openSearch(SearchForward)
+		return true
+	case "?":
+		m.openSearch(SearchBackward)
+		return true
 	case "enter":
 		if m.paused {
 			return m.applyFilterFromSelectedCell()
 		}
 		return false
+	case "n":
+		if m.searchRegex == nil {
+			return false
+		}
+		return m.jumpSearch(m.searchDirection)
+	case "N":
+		if m.searchRegex == nil {
+			return false
+		}
+		return m.jumpSearch(-m.searchDirection)
 	case "x":
 		if !m.paused {
 			return false
@@ -369,9 +417,22 @@ func (m *Model) View(width, height int) string {
 		selectedCol = m.selectedCol
 	}
 	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx, selectedCol)
-	status := fmt.Sprintf("Row %d/%d | space:pause f:filter G:tail g:top c:clear j/k:scroll", rowNumber(start, len(m.filtered)), len(m.filtered))
+	if !m.showFooter {
+		if m.filterModal.Visible() {
+			return m.filterModal.View(width, height)
+		}
+		if m.exportModal.Visible() {
+			return m.exportModal.View(width, height)
+		}
+		if m.searchModal.Visible() {
+			return m.searchModal.View(width, height)
+		}
+		return base
+	}
+
+	status := fmt.Sprintf("Row %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | enter:add-filter esc:undo(%d) x:export X:export-as E:open-last space:pause f:filter G:tail g:top c:clear j/k:row h/l:col", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount, len(m.filterStack))
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Filters %d", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount, len(m.filterStack))
 	}
 	out := base + "\n" + status
 	if len(m.filterActionStack) > 0 {
@@ -388,6 +449,9 @@ func (m *Model) View(width, height int) string {
 	}
 	if m.exportModal.Visible() {
 		return m.exportModal.View(width, height)
+	}
+	if m.searchModal.Visible() {
+		return m.searchModal.View(width, height)
 	}
 	return out
 }
@@ -806,6 +870,95 @@ func (m *Model) ConsumeOpenEditorRequest() (string, bool) {
 // SetStatusMessage updates the stream footer status line.
 func (m *Model) SetStatusMessage(message string) {
 	m.statusMessage = message
+}
+
+func (m *Model) openSearch(direction SearchDirection) {
+	m.paused = true
+	m.ensureSelection()
+	m.ensureSelectedCol()
+	m.centerSelection()
+	m.searchModal = m.searchModal.Open(direction, m.searchPattern)
+}
+
+func (m *Model) submitSearch(term string, direction SearchDirection) bool {
+	re, err := regexp.Compile(term)
+	if err != nil {
+		m.statusMessage = fmt.Sprintf("Invalid regex: %v", err)
+		return true
+	}
+	m.searchPattern = term
+	m.searchRegex = re
+	m.searchDirection = direction
+	return m.jumpSearch(direction)
+}
+
+func (m *Model) jumpSearch(direction SearchDirection) bool {
+	if m.searchRegex == nil {
+		return false
+	}
+	if len(m.filtered) == 0 {
+		m.statusMessage = "Search: no rows"
+		return true
+	}
+	start := m.selectedIdx
+	if start < 0 || start >= len(m.filtered) {
+		if direction == SearchForward {
+			start = -1
+		} else {
+			start = len(m.filtered)
+		}
+	}
+	next := m.findMatch(start, direction)
+	if next < 0 {
+		m.statusMessage = fmt.Sprintf("No match: %q", m.searchPattern)
+		return true
+	}
+	m.moveSelectionTo(next)
+	prefix := "/"
+	if direction == SearchBackward {
+		prefix = "?"
+	}
+	m.statusMessage = fmt.Sprintf("%s%s @ row %d/%d", prefix, m.searchPattern, next+1, len(m.filtered))
+	return true
+}
+
+func (m *Model) findMatch(start int, direction SearchDirection) int {
+	n := len(m.filtered)
+	if n == 0 {
+		return -1
+	}
+	step := int(direction)
+	for offset := 1; offset <= n; offset++ {
+		idx := (start + step*offset + n) % n
+		if streamEventMatchesRegex(m.filtered[idx], m.searchRegex) {
+			return idx
+		}
+	}
+	return -1
+}
+
+func streamEventMatchesRegex(ev StreamEvent, re *regexp.Regexp) bool {
+	if re == nil {
+		return false
+	}
+	if re.MatchString(ev.Syscall) || re.MatchString(ev.Comm) || re.MatchString(ev.FileName) {
+		return true
+	}
+	if re.MatchString(strconv.FormatUint(ev.Seq, 10)) ||
+		re.MatchString(strconv.FormatUint(ev.TimeNs, 10)) ||
+		re.MatchString(strconv.FormatUint(uint64(ev.PID), 10)) ||
+		re.MatchString(strconv.FormatUint(uint64(ev.TID), 10)) ||
+		re.MatchString(strconv.FormatInt(int64(ev.FD), 10)) ||
+		re.MatchString(strconv.FormatInt(ev.RetVal, 10)) ||
+		re.MatchString(strconv.FormatUint(ev.Bytes, 10)) ||
+		re.MatchString(strconv.FormatUint(ev.GapNs, 10)) ||
+		re.MatchString(strconv.FormatUint(ev.DurationNs, 10)) {
+		return true
+	}
+	if ev.IsError && re.MatchString("error") {
+		return true
+	}
+	return false
 }
 
 func (m *Model) dumpVisibleForTest() string {
