@@ -60,9 +60,11 @@ sudo cp -v ./libelf/libelf.a /usr/lib64/
 ## Native Flamegraph Generation
 
 Flamegraphs are generated natively by `ior` from `.ior.zst` data files; no external flamegraph tool is required.
+When `-fields` is omitted, the default stack order is `comm,path,tracepoint` (bottom to top).
+To change grouping order, pass `-fields` explicitly in the desired order.
 
 ```sh
-./ior -ior=trace.ior.zst -fields=pid,path,tracepoint -count=count
+./ior -ior=trace.ior.zst -fields=comm,path,tracepoint -count=count
 ```
 
 This generates an SVG and starts an embedded web server. The terminal prints a URL like:

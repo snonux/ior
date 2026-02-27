@@ -144,7 +144,7 @@ func parse() {
 	// If future kernels regress, add targeted exclusions here.
 
 	if *fields == "" {
-		singleton.CollapsedFields = []string{"pid", "path", "tracepoint"}
+		singleton.CollapsedFields = []string{"comm", "path", "tracepoint"}
 	} else {
 		singleton.CollapsedFields = strings.Split(*fields, ",")
 	}
