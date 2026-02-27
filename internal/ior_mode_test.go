@@ -68,8 +68,8 @@ func TestShouldAutoStopByDuration(t *testing.T) {
 
 	withLive := base
 	withLive.LiveFlamegraph = true
-	if shouldAutoStopByDuration(withLive) {
-		t.Fatalf("expected live mode not to auto-stop by duration")
+	if !shouldAutoStopByDuration(withLive) {
+		t.Fatalf("expected live mode to auto-stop by duration")
 	}
 }
 
@@ -146,6 +146,44 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	case <-traceDone:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatalf("expected starter to launch runTraceWithContextFn")
+	}
+}
+
+func TestDispatchRunRejectsLiveAndFlamegraph(t *testing.T) {
+	origRunTrace := runTraceFn
+	origRunTUI := runTUIFn
+	defer func() {
+		runTraceFn = origRunTrace
+		runTUIFn = origRunTUI
+	}()
+
+	runTraceFn = func() error {
+		t.Fatalf("runTraceFn should not be called for invalid flag combos")
+		return nil
+	}
+	runTUIFn = func(tui.TraceStarter) error {
+		t.Fatalf("runTUIFn should not be called for invalid flag combos")
+		return nil
+	}
+
+	cfg := flags.Flags{LiveFlamegraph: true, FlamegraphEnable: true}
+	err := dispatchRun(cfg)
+	if err == nil {
+		t.Fatalf("expected error for -live with -flamegraph")
+	}
+	if err.Error() != "-live and -flamegraph are mutually exclusive" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunTraceWithContextRequiresRoot(t *testing.T) {
+	origGetEUID := getEUID
+	defer func() { getEUID = origGetEUID }()
+
+	getEUID = func() int { return 1000 }
+	err := runTraceWithContext(context.Background(), nil, nil)
+	if !errors.Is(err, errRootPrivilegesRequired) {
+		t.Fatalf("expected root-required error, got %v", err)
 	}
 }
 

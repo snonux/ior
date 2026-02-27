@@ -2,11 +2,13 @@ package flamegraph
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -130,6 +132,35 @@ func TestHandleSSEDelayedClientLargeTrieGetsValidSnapshot(t *testing.T) {
 	}
 }
 
+func TestServeLivePrintsURLAndStopsOnCancel(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	output := captureStdout(t, func() {
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- ServeLive(ctx, lt, 5*time.Millisecond)
+		}()
+
+		time.Sleep(40 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("ServeLive returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for ServeLive to return")
+		}
+	})
+
+	if !strings.Contains(output, "Live flamegraph available at http://") {
+		t.Fatalf("expected live URL in output, got %q", output)
+	}
+}
+
 func connectSSE(t *testing.T, url string) *http.Response {
 	t.Helper()
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -195,4 +226,31 @@ func decodeSSESnapshot(t *testing.T, data string) trieSnapshot {
 		t.Fatalf("invalid snapshot json: %v", err)
 	}
 	return snap
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	outCh := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, reader)
+		outCh <- b.String()
+	}()
+
+	fn()
+
+	_ = writer.Close()
+	out := <-outCh
+	_ = reader.Close()
+	return out
 }
