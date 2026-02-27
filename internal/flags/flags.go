@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -63,6 +64,8 @@ type Flags struct {
 	// Flamegraph flags
 	PlainMode        bool
 	FlamegraphEnable bool
+	LiveFlamegraph   bool
+	LiveInterval     time.Duration
 	FlamegraphName   string
 	TUIExportEnable  bool
 
@@ -117,6 +120,8 @@ func parse() {
 
 	flag.BoolVar(&singleton.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
+	flag.BoolVar(&singleton.LiveFlamegraph, "live", false, "Enable live flamegraph mode")
+	flag.DurationVar(&singleton.LiveInterval, "live-interval", time.Second, "Live flamegraph refresh interval")
 	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
 	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
 
