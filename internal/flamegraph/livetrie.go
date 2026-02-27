@@ -1,7 +1,9 @@
 package flamegraph
 
 import (
+	"ior/internal/event"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -55,7 +57,54 @@ func (lt *LiveTrie) addLocked(frames []string, value uint64) {
 	}
 }
 
+// Ingest adds one event pair into the live trie and recycles the pair.
+func (lt *LiveTrie) Ingest(ep *event.Pair) {
+	record := eventPairToRecord(ep)
+	frames := lt.buildFrames(record)
+	value := record.Cnt.ValueByName(lt.countField)
+
+	lt.mu.Lock()
+	lt.addLocked(frames, value)
+	lt.version.Add(1)
+	lt.mu.Unlock()
+
+	ep.Recycle()
+}
+
 // Version returns the current ingest version of the trie.
 func (lt *LiveTrie) Version() uint64 {
 	return lt.version.Load()
+}
+
+func eventPairToRecord(ep *event.Pair) IterRecord {
+	return IterRecord{
+		Path:    ep.FileName(),
+		TraceID: ep.EnterEv.GetTraceId(),
+		Comm:    strings.TrimSpace(ep.Comm),
+		Pid:     ep.EnterEv.GetPid(),
+		Tid:     ep.EnterEv.GetTid(),
+		Flags:   ep.Flags(),
+		Cnt: Counter{
+			Count:          1,
+			Duration:       ep.Duration,
+			DurationToPrev: ep.DurationToPrev,
+			Bytes:          ep.Bytes,
+		},
+	}
+}
+
+func (lt *LiveTrie) buildFrames(record IterRecord) []string {
+	frames := make([]string, 0, len(lt.fields))
+	for _, fieldName := range lt.fields {
+		value, err := record.StringByName(fieldName)
+		if err != nil {
+			continue
+		}
+		for _, part := range strings.Split(value, ";") {
+			if part != "" {
+				frames = append(frames, part)
+			}
+		}
+	}
+	return frames
 }
