@@ -116,15 +116,92 @@ const liveHTML = `<!doctype html>
 
   <script>
     (function () {
-      var paused = false;
+      var fg = {
+        paused: false,
+        cfg: {
+          width: 1200,
+          frameHeight: 16,
+          fontSize: 12,
+          minWidthPx: 1.0
+        }
+      };
+
+      function fgFrameColor(name) {
+        var bytes = new TextEncoder().encode(name || "");
+        var h = 2166136261 >>> 0;
+        for (var i = 0; i < bytes.length; i++) {
+          h ^= bytes[i];
+          h = Math.imul(h, 16777619) >>> 0;
+        }
+        var r = 200 + (h % 35);
+        var g = 80 + ((h >>> 8) % 120);
+        var b = 40 + ((h >>> 16) % 90);
+        return "rgb(" + r + "," + g + "," + b + ")";
+      }
+
+      function fgMaxDepth(node, depth) {
+        if (!node || !Array.isArray(node.c) || node.c.length === 0) {
+          return depth;
+        }
+        var maxDepth = depth;
+        for (var i = 0; i < node.c.length; i++) {
+          var childDepth = fgMaxDepth(node.c[i], depth + 1);
+          if (childDepth > maxDepth) {
+            maxDepth = childDepth;
+          }
+        }
+        return maxDepth;
+      }
+
+      function fgBuildFrames(node, rootTotal, x, depth, canvasHeight, isRoot, out) {
+        if (!node || rootTotal <= 0) {
+          return;
+        }
+        if (!isRoot) {
+          var w = fg.cfg.width * (Number(node.t || 0) / Number(rootTotal));
+          if (w < fg.cfg.minWidthPx) {
+            return;
+          }
+          var y = canvasHeight - ((depth + 1) * fg.cfg.frameHeight);
+          var total = Number(node.t || 0);
+          var pct = 100 * total / Number(rootTotal);
+          out.push({
+            name: node.n || "",
+            x: x,
+            y: y,
+            w: w,
+            h: fg.cfg.frameHeight - 1,
+            depth: depth,
+            total: total,
+            pct: pct,
+            fill: fgFrameColor(node.n || "")
+          });
+        }
+
+        var cursor = x;
+        var children = Array.isArray(node.c) ? node.c : [];
+        for (var i = 0; i < children.length; i++) {
+          var child = children[i];
+          var childTotal = Number(child.t || 0);
+          var childWidth = fg.cfg.width * (childTotal / Number(rootTotal));
+          fgBuildFrames(child, rootTotal, cursor, depth + 1, canvasHeight, false, out);
+          cursor += childWidth;
+        }
+      }
+
       var pauseBtn = document.getElementById("btn-pause");
       var status = document.getElementById("status");
       pauseBtn.addEventListener("click", function () {
-        paused = !paused;
-        document.body.classList.toggle("paused", paused);
-        pauseBtn.textContent = paused ? "Resume" : "Pause";
-        status.textContent = paused ? "PAUSED" : "LIVE";
+        fg.paused = !fg.paused;
+        document.body.classList.toggle("paused", fg.paused);
+        pauseBtn.textContent = fg.paused ? "Resume" : "Pause";
+        status.textContent = fg.paused ? "PAUSED" : "LIVE";
       });
+
+      window.fgFrameColor = fgFrameColor;
+      window.fgBuildFrames = fgBuildFrames;
+      window.fgMaxDepth = fgMaxDepth;
+      window.liveFlamegraphState = fg;
     })();
   </script>
 </body>
