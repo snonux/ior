@@ -4,6 +4,7 @@ import "C"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -35,6 +36,9 @@ var (
 	runTraceFn            = runTrace
 	runTraceWithContextFn = runTraceWithContext
 	runTUIFn              = tui.RunWithTraceStarter
+	getEUID               = os.Geteuid
+
+	errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
 )
 
 type tracepointModule interface {
@@ -140,10 +144,20 @@ func Run() error {
 }
 
 func dispatchRun(cfg flags.Flags) error {
+	if err := validateRunConfig(cfg); err != nil {
+		return err
+	}
 	if shouldRunTraceMode(cfg) {
 		return runTraceFn()
 	}
 	return runTUIFn(tuiTraceStarterFromRunTrace(runTraceWithContextFn))
+}
+
+func validateRunConfig(cfg flags.Flags) error {
+	if cfg.LiveFlamegraph && cfg.FlamegraphEnable {
+		return errors.New("-live and -flamegraph are mutually exclusive")
+	}
+	return nil
 }
 
 func shouldRunTraceMode(cfg flags.Flags) bool {
@@ -202,6 +216,10 @@ func runTrace() error {
 }
 
 func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, configure func(*eventLoop)) error {
+	if getEUID() != 0 {
+		return errRootPrivilegesRequired
+	}
+
 	verbose := started == nil
 	logln := func(...any) {}
 	if verbose {
@@ -328,5 +346,5 @@ func signalTraceStarted(started chan<- struct{}) {
 }
 
 func shouldAutoStopByDuration(cfg flags.Flags) bool {
-	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.PprofEnable
+	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph || cfg.PprofEnable
 }
