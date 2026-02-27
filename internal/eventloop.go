@@ -28,7 +28,8 @@ type eventLoop struct {
 	comms          map[uint32]string           // Program or thread name of the current Tid.
 	prevPairTimes  map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
 	flamegraph     flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
-	printCb        func(ep *event.Pair)        // Callback to print the event
+	liveTrie       *flamegraph.LiveTrie
+	printCb        func(ep *event.Pair) // Callback to print the event
 
 	// Statistics
 	numTracepoints          uint
@@ -40,6 +41,7 @@ type eventLoop struct {
 }
 
 func newEventLoop() *eventLoop {
+	cfg := flags.Get()
 	el := &eventLoop{
 		filter:         newEventFilter(),
 		enterEvs:       make(map[uint32]*event.Pair),
@@ -50,6 +52,9 @@ func newEventLoop() *eventLoop {
 		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		flamegraph:     flamegraph.New(),
 		done:           make(chan struct{}),
+	}
+	if cfg.LiveFlamegraph {
+		el.liveTrie = flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
 	}
 	el.seedTrackedPidComm()
 	return el
@@ -98,6 +103,15 @@ func (e *eventLoop) stats() string {
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 
+	if e.liveTrie != nil {
+		fmt.Println("Starting live flamegraph server")
+		go func() {
+			if err := flamegraph.ServeLive(ctx, e.liveTrie, flags.Get().LiveInterval); err != nil && ctx.Err() == nil {
+				fmt.Println("Live flamegraph server error:", err)
+			}
+		}()
+	}
+
 	if flags.Get().FlamegraphEnable {
 		fmt.Println("Collecting flame graph stats, press Ctrl+C to stop")
 		e.flamegraph.Start(ctx)
@@ -114,6 +128,8 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		switch {
 		case flags.Get().FlamegraphEnable:
 			e.flamegraph.Ch <- ep
+		case e.liveTrie != nil:
+			e.liveTrie.Ingest(ep)
 		case flags.Get().PprofEnable:
 			ep.Recycle()
 		default:
