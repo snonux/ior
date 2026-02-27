@@ -554,7 +554,21 @@ const liveHTML = `<!doctype html>
         };
       }
 
+      function fgIsTextEntryTarget(target) {
+        if (!target) {
+          return false;
+        }
+        if (target.isContentEditable) {
+          return true;
+        }
+        var tag = (target.tagName || '').toUpperCase();
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      }
+
       function fgHandleKeydown(ev) {
+        if (fgIsTextEntryTarget(ev.target)) {
+          return;
+        }
         if (ev.key === ' ' || ev.code === 'Space') {
           ev.preventDefault();
           fgTogglePause();
