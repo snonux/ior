@@ -109,6 +109,7 @@ const liveHTML = `<!doctype html>
     <button id="btn-reset-search" type="button">Reset Search</button>
     <button id="btn-undo-zoom" type="button">Undo Zoom</button>
     <button id="btn-reset-zoom" type="button">Reset Zoom</button>
+    <button id="btn-reset-baseline" type="button">Reset Baseline</button>
     <span id="status">LIVE</span>
   </div>
 
@@ -118,6 +119,7 @@ const liveHTML = `<!doctype html>
     (function () {
       var fg = {
         paused: false,
+        resetting: false,
         pendingData: null,
         searchQuery: '',
         zoomStack: [],
@@ -133,6 +135,7 @@ const liveHTML = `<!doctype html>
         resetSearchBtn: document.getElementById('btn-reset-search'),
         undoZoomBtn: document.getElementById('btn-undo-zoom'),
         resetZoomBtn: document.getElementById('btn-reset-zoom'),
+        resetBaselineBtn: document.getElementById('btn-reset-baseline'),
         cfg: {
           width: 1200,
           frameHeight: 16,
@@ -465,6 +468,39 @@ const liveHTML = `<!doctype html>
         }
       }
 
+      function fgClearLocalState() {
+        fg.pendingData = null;
+        fg.searchQuery = '';
+        fg.zoomStack = [];
+        fg.zoomRange = null;
+      }
+
+      function fgResetBaseline() {
+        if (fg.resetting) {
+          return;
+        }
+        fg.resetting = true;
+        fgSetStatus('resetting baseline...');
+        fetch('/reset', { method: 'POST' })
+          .then(function (resp) {
+            if (!resp.ok) {
+              throw new Error('reset failed');
+            }
+            return resp.text();
+          })
+          .then(function (payload) {
+            fgClearLocalState();
+            fgProcessUpdate(payload);
+            fgSetStatus('baseline reset');
+          })
+          .catch(function () {
+            fgSetStatus('reset failed');
+          })
+          .then(function () {
+            fg.resetting = false;
+          });
+      }
+
       function fgBindFrameEvents() {
         for (var i = 0; i < fg.frames.length; i++) {
           fg.frames[i].addEventListener('mouseenter', function () { fgHover(this); });
@@ -579,6 +615,11 @@ const liveHTML = `<!doctype html>
           fgSearch();
           return;
         }
+        if (ev.key === 'r' || ev.key === 'R') {
+          ev.preventDefault();
+          fgResetBaseline();
+          return;
+        }
         if (ev.key === 'Escape') {
           ev.preventDefault();
           fgResetZoom();
@@ -591,6 +632,7 @@ const liveHTML = `<!doctype html>
       fg.resetSearchBtn.addEventListener('click', fgResetSearch);
       fg.undoZoomBtn.addEventListener('click', fgUndoZoom);
       fg.resetZoomBtn.addEventListener('click', fgResetZoom);
+      fg.resetBaselineBtn.addEventListener('click', fgResetBaseline);
       document.addEventListener('keydown', fgHandleKeydown);
 
       fgSetStatus('');
@@ -608,6 +650,7 @@ const liveHTML = `<!doctype html>
       window.fgSearch = fgSearch;
       window.fgResetSearch = fgResetSearch;
       window.fgTogglePause = fgTogglePause;
+      window.fgResetBaseline = fgResetBaseline;
       window.liveFlamegraphState = fg;
     })();
   </script>

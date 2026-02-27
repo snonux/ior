@@ -12,6 +12,7 @@ func ServeLive(ctx context.Context, lt *LiveTrie, interval time.Duration) error 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleLivePage())
 	mux.HandleFunc("/events", handleSSE(lt, interval))
+	mux.HandleFunc("/reset", handleReset(lt))
 	srv := &http.Server{Handler: mux}
 
 	listener, err := listenRandomPort()
@@ -93,6 +94,21 @@ func handleSSE(lt *LiveTrie, interval time.Duration) http.HandlerFunc {
 				}
 			}
 		}
+	}
+}
+
+func handleReset(lt *LiveTrie) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		lt.Reset()
+		payload, _ := lt.SnapshotJSON()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(payload)
 	}
 }
 

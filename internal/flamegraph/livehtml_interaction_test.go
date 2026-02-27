@@ -32,6 +32,13 @@ type pauseKeyboardResult struct {
 	TypingIgnoresShortcuts bool `json:"typingIgnoresShortcuts"`
 }
 
+type resetBaselineResult struct {
+	HotkeyPrevented    bool `json:"hotkeyPrevented"`
+	HotkeyResetApplied bool `json:"hotkeyResetApplied"`
+	ButtonResetApplied bool `json:"buttonResetApplied"`
+	ResetCallsValid    bool `json:"resetCallsValid"`
+}
+
 func TestLiveHTMLJSZoomSearchStatePreservedAcrossUpdates(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not available")
@@ -287,6 +294,94 @@ console.log(JSON.stringify({
 	}
 }
 
+func TestLiveHTMLJSResetBaselineHotkeyAndButton(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available")
+	}
+
+	snippet := `
+const fg = liveFlamegraphState;
+const keydown = __docListeners["keydown"];
+
+function keyEvent(key, code, target) {
+  let prevented = false;
+  keydown({
+    key: key,
+    code: code,
+    target: target || { tagName: "BODY", isContentEditable: false },
+    preventDefault: function(){ prevented = true; }
+  });
+  return prevented;
+}
+
+const frame = makeFrame("needle", "needle", 1, 0, 1200);
+fg.frames = [frame];
+fg.rootWidth = 1200;
+fgZoom(frame);
+prompt = function(){ return "needle"; };
+fgSearch();
+
+const resetPayload = "{\"n\":\"\",\"v\":0,\"t\":0}";
+const resetCalls = [];
+fetch = function(url, opts) {
+  resetCalls.push({
+    url: url,
+    method: (opts && opts.method) || "GET"
+  });
+  return Promise.resolve({
+    ok: true,
+    text: function() { return Promise.resolve(resetPayload); }
+  });
+};
+
+const hotkeyPrevented = keyEvent("r", "KeyR");
+
+setTimeout(function() {
+  const hotkeyResetApplied = fg.zoomRange === null && fg.searchQuery === "" && fg.frames.length === 0;
+
+  const frame2 = makeFrame("again", "again", 1, 0, 1200);
+  fg.frames = [frame2];
+  fg.rootWidth = 1200;
+  fgZoom(frame2);
+  fg.searchQuery = "again";
+  document.getElementById("btn-reset-baseline").listeners.click();
+
+  setTimeout(function() {
+    const buttonResetApplied = fg.zoomRange === null && fg.searchQuery === "" && fg.frames.length === 0;
+    const resetCallsValid = resetCalls.length === 2 &&
+      resetCalls[0].url === "/reset" && resetCalls[0].method === "POST" &&
+      resetCalls[1].url === "/reset" && resetCalls[1].method === "POST";
+
+    console.log(JSON.stringify({
+      hotkeyPrevented,
+      hotkeyResetApplied,
+      buttonResetApplied,
+      resetCallsValid
+    }));
+  }, 0);
+}, 0);
+`
+
+	out := runLiveHTMLNodeSnippet(t, snippet)
+	var got resetBaselineResult
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode node result: %v\nraw:\n%s", err, out)
+	}
+
+	if !got.HotkeyPrevented {
+		t.Fatalf("expected reset hotkey to prevent default browser handling")
+	}
+	if !got.HotkeyResetApplied {
+		t.Fatalf("expected 'r' hotkey to reset baseline and clear UI state")
+	}
+	if !got.ButtonResetApplied {
+		t.Fatalf("expected Reset Baseline button to clear UI state")
+	}
+	if !got.ResetCallsValid {
+		t.Fatalf("expected reset interactions to POST /reset")
+	}
+}
+
 func runLiveHTMLNodeSnippet(t *testing.T, snippet string) string {
 	t.Helper()
 
@@ -374,7 +469,7 @@ function makeFrame(name, path, depth, x, w) {
 }
 
 const elements = {};
-["flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom"].forEach((id) => {
+["flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
   elements[id] = makeElement(id);
 });
 elements["body"] = makeElement("body");

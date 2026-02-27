@@ -71,6 +71,28 @@ This generates an SVG and starts an embedded web server. The terminal prints a U
 Flamegraph available at http://HOSTNAME:PORT/abs/path/to.svg
 ```
 
+## Live Flamegraph Mode
+
+Run live mode (requires root privileges):
+
+```sh
+sudo ./ior -live -pid <PID> -live-interval 200ms -duration 300
+```
+
+The terminal prints a URL like:
+
+```text
+Live flamegraph available at http://HOSTNAME:PORT/
+```
+
+Live controls:
+
+- `Space`: pause/resume incoming updates.
+- `/`: search frame labels.
+- `Escape`: reset zoom and search highlighting.
+- `r`: reset baseline (clears all live aggregated stats on the server and restarts from zero).
+- `Reset Baseline` button: same behavior as `r`.
+
 ## TUI Hotkeys
 
 The TUI has two key scopes:

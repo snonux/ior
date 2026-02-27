@@ -82,6 +82,22 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	ep.Recycle()
 }
 
+// Reset clears the trie so live snapshots start from a new baseline.
+func (lt *LiveTrie) Reset() {
+	lt.mu.Lock()
+	lt.root = &trieNode{
+		childMap: make(map[string]*trieNode),
+	}
+	lt.maxDepth = 0
+	lt.version.Add(1)
+	lt.mu.Unlock()
+
+	lt.cacheMu.Lock()
+	lt.cacheVersion = 0
+	lt.cacheJSON = nil
+	lt.cacheMu.Unlock()
+}
+
 // Version returns the current ingest version of the trie.
 func (lt *LiveTrie) Version() uint64 {
 	return lt.version.Load()
