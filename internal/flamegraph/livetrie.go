@@ -1,12 +1,23 @@
 package flamegraph
 
 import (
+	"encoding/json"
 	"ior/internal/event"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 )
+
+const liveTrieMinFraction = 0.001
+
+type trieSnapshot struct {
+	Name     string          `json:"n"`
+	Value    uint64          `json:"v"`
+	Total    uint64          `json:"t"`
+	Children []*trieSnapshot `json:"c,omitempty"`
+}
 
 // LiveTrie is a thread-safe, append-only trie used for live flamegraph snapshots.
 type LiveTrie struct {
@@ -76,6 +87,36 @@ func (lt *LiveTrie) Version() uint64 {
 	return lt.version.Load()
 }
 
+// SnapshotJSON returns a compact JSON snapshot for the current trie version.
+func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
+	version := lt.Version()
+	lt.cacheMu.Lock()
+	if lt.cacheVersion == version && lt.cacheJSON != nil {
+		cached := slices.Clone(lt.cacheJSON)
+		lt.cacheMu.Unlock()
+		return cached, version
+	}
+	lt.cacheMu.Unlock()
+
+	lt.mu.RLock()
+	version = lt.version.Load()
+	rootTotal := subtreeTotal(lt.root)
+	snapshot := buildSnapshot(lt.root, 0, liveTrieMinFraction, rootTotal)
+	lt.mu.RUnlock()
+
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return []byte(`{}`), version
+	}
+
+	lt.cacheMu.Lock()
+	lt.cacheVersion = version
+	lt.cacheJSON = slices.Clone(payload)
+	lt.cacheMu.Unlock()
+
+	return payload, version
+}
+
 func eventPairToRecord(ep *event.Pair) IterRecord {
 	return IterRecord{
 		Path:    ep.FileName(),
@@ -107,4 +148,48 @@ func (lt *LiveTrie) buildFrames(record IterRecord) []string {
 		}
 	}
 	return frames
+}
+
+func subtreeTotal(node *trieNode) uint64 {
+	total := node.value
+	for _, child := range node.children {
+		total += subtreeTotal(child)
+	}
+	return total
+}
+
+func buildSnapshot(node *trieNode, depth int, minFraction float64, rootTotal uint64) *trieSnapshot {
+	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal)
+	return snapshot
+}
+
+func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64) (*trieSnapshot, uint64) {
+	total := node.value
+	children := slices.Clone(node.children)
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].name < children[j].name
+	})
+
+	childSnapshots := make([]*trieSnapshot, 0, len(children))
+	for _, child := range children {
+		childSnapshot, childTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal)
+		total += childTotal
+		if childSnapshot != nil {
+			childSnapshots = append(childSnapshots, childSnapshot)
+		}
+	}
+
+	if depth > 0 && rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction {
+		return nil, total
+	}
+
+	snapshot := &trieSnapshot{
+		Name:  node.name,
+		Value: node.value,
+		Total: total,
+	}
+	if len(childSnapshots) > 0 {
+		snapshot.Children = childSnapshots
+	}
+	return snapshot, total
 }
