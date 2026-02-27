@@ -74,3 +74,17 @@ func TestParseLiveDefaults(t *testing.T) {
 		t.Fatalf("default live interval = %v, want %v", cfg.LiveInterval, time.Second)
 	}
 }
+
+func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
+	cfg := parseForTest(t)
+
+	want := []string{"comm", "path", "tracepoint"}
+	if len(cfg.CollapsedFields) != len(want) {
+		t.Fatalf("default collapsed fields len = %d, want %d", len(cfg.CollapsedFields), len(want))
+	}
+	for i := range want {
+		if cfg.CollapsedFields[i] != want[i] {
+			t.Fatalf("default collapsed fields[%d] = %q, want %q", i, cfg.CollapsedFields[i], want[i])
+		}
+	}
+}

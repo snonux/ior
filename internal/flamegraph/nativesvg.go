@@ -12,7 +12,7 @@ import (
 //
 // Flamegraphs are generated natively by ior from .ior.zst data files; no external
 // flamegraph tool is required. The CLI typically drives this via the -ior flag,
-// which reads trace data, aggregates it into a trie of stack frames (e.g. pid,path,tracepoint)
+// which reads trace data, aggregates it into a trie of stack frames (e.g. comm,path,tracepoint)
 // and renders a self-contained SVG that can be viewed in a browser.
 type NativeSVG struct {
 	fields     []string
