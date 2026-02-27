@@ -34,6 +34,7 @@ type pauseKeyboardResult struct {
 
 type resetBaselineResult struct {
 	HotkeyPrevented    bool `json:"hotkeyPrevented"`
+	ShiftHotkeyIgnored bool `json:"shiftHotkeyIgnored"`
 	HotkeyResetApplied bool `json:"hotkeyResetApplied"`
 	ButtonResetApplied bool `json:"buttonResetApplied"`
 	ResetCallsValid    bool `json:"resetCallsValid"`
@@ -335,6 +336,8 @@ fetch = function(url, opts) {
 };
 
 const hotkeyPrevented = keyEvent("r", "KeyR");
+const shiftHotkeyPrevented = keyEvent("R", "KeyR");
+const shiftHotkeyIgnored = !shiftHotkeyPrevented && resetCalls.length === 1;
 
 setTimeout(function() {
   const hotkeyResetApplied = fg.zoomRange === null && fg.searchQuery === "" && fg.frames.length === 0;
@@ -354,6 +357,7 @@ setTimeout(function() {
 
     console.log(JSON.stringify({
       hotkeyPrevented,
+      shiftHotkeyIgnored,
       hotkeyResetApplied,
       buttonResetApplied,
       resetCallsValid
@@ -370,6 +374,9 @@ setTimeout(function() {
 
 	if !got.HotkeyPrevented {
 		t.Fatalf("expected reset hotkey to prevent default browser handling")
+	}
+	if !got.ShiftHotkeyIgnored {
+		t.Fatalf("expected uppercase 'R' to be ignored for baseline reset")
 	}
 	if !got.HotkeyResetApplied {
 		t.Fatalf("expected 'r' hotkey to reset baseline and clear UI state")
@@ -401,6 +408,7 @@ function makeElement(id) {
     classList: { toggle: function(){}, add: function(){}, remove: function(){} },
     listeners: {},
     addEventListener: function(event, cb) { this.listeners[event] = cb; },
+    getBoundingClientRect: function() { return { height: id === "controls" ? 56 : 0 }; },
     setAttribute: function(k, v) { this.attrs[k] = String(v); },
     getAttribute: function(k) { return this.attrs[k] || ""; },
     querySelectorAll: function() { return []; },
@@ -469,7 +477,7 @@ function makeFrame(name, path, depth, x, w) {
 }
 
 const elements = {};
-["flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
+["controls", "flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
   elements[id] = makeElement(id);
 });
 elements["body"] = makeElement("body");

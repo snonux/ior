@@ -25,6 +25,7 @@ type liveJSResult struct {
 	ViewBox        string            `json:"viewBox"`
 	TallViewBox    string            `json:"tallViewBox"`
 	TallHeight     string            `json:"tallHeight"`
+	PrunedMaxEnd   float64           `json:"prunedMaxEnd"`
 	SingleCount    int               `json:"singleCount"`
 	DeepMaxDepth   int               `json:"deepMaxDepth"`
 	WideFrameCount int               `json:"wideFrameCount"`
@@ -77,11 +78,14 @@ func TestLiveHTMLJSRenderingParity(t *testing.T) {
 	if got.ViewBox != "0 0 1200 128" {
 		t.Fatalf("viewBox = %q, want %q", got.ViewBox, "0 0 1200 128")
 	}
-	if got.TallViewBox != "0 0 1200 844" {
-		t.Fatalf("tall viewBox = %q, want %q", got.TallViewBox, "0 0 1200 844")
+	if got.TallViewBox != "0 0 1600 844" {
+		t.Fatalf("tall viewBox = %q, want %q", got.TallViewBox, "0 0 1600 844")
 	}
 	if got.TallHeight != "844px" {
 		t.Fatalf("tall style height = %q, want %q", got.TallHeight, "844px")
+	}
+	if diff(got.PrunedMaxEnd, 1600) > 0.01 {
+		t.Fatalf("pruned max end = %f, want 1600", got.PrunedMaxEnd)
 	}
 
 	if got.SingleCount != 1 {
@@ -186,7 +190,7 @@ const knownTree = {
 const maxDepth = fgMaxDepth(knownTree, 0);
 const canvasHeight = (liveFlamegraphState.cfg.frameHeight * (maxDepth + 1)) + 80;
 const knownFramesRaw = [];
-fgBuildFrames(knownTree, knownTree.t, 0, 0, canvasHeight, true, knownFramesRaw, "");
+fgBuildFrames(knownTree, knownTree.t, 0, 1200, 0, canvasHeight, true, knownFramesRaw, "");
 const knownFrames = knownFramesRaw.map((f) => ({
   name: f.name,
   x: Number(f.x.toFixed(3)),
@@ -200,6 +204,7 @@ fgRender(knownTree);
 const svgHTML = elements["flamegraph"].innerHTML;
 const viewBox = elements["flamegraph"].attrs["viewBox"] || "";
 
+window.innerWidth = 1600;
 window.innerHeight = 900;
 fgRender(knownTree);
 const tallViewBox = elements["flamegraph"].attrs["viewBox"] || "";
@@ -208,7 +213,7 @@ const tallHeight = elements["flamegraph"].style.height || "";
 const singleTree = { n: "", v: 0, t: 1, c: [{ n: "only", v: 1, t: 1 }] };
 const singleFrames = [];
 const singleCanvas = (liveFlamegraphState.cfg.frameHeight * (fgMaxDepth(singleTree, 0) + 1)) + 80;
-fgBuildFrames(singleTree, singleTree.t, 0, 0, singleCanvas, true, singleFrames, "");
+fgBuildFrames(singleTree, singleTree.t, 0, 1200, 0, singleCanvas, true, singleFrames, "");
 
 let deepTree = { n: "", v: 0, t: 1, c: [] };
 let cursor = deepTree;
@@ -226,7 +231,29 @@ for (let i = 0; i < 1000; i++) {
 const wideTree = { n: "", v: 0, t: 1000, c: wideChildren };
 const wideCanvas = (liveFlamegraphState.cfg.frameHeight * (fgMaxDepth(wideTree, 0) + 1)) + 80;
 const wideFrames = [];
-fgBuildFrames(wideTree, wideTree.t, 0, 0, wideCanvas, true, wideFrames, "");
+fgBuildFrames(wideTree, wideTree.t, 0, 1200, 0, wideCanvas, true, wideFrames, "");
+
+const prunedTree = {
+  n: "",
+  v: 0,
+  t: 100,
+  c: [
+    { n: "A", v: 0, t: 60 },
+    { n: "B", v: 0, t: 20 }
+  ]
+};
+fgRender(prunedTree);
+const prunedHTML = elements["flamegraph"].innerHTML;
+const prunedMatches = prunedHTML.match(/data-x=\"([0-9.]+)\" data-w=\"([0-9.]+)\"/g) || [];
+let prunedMaxEnd = 0;
+for (const m of prunedMatches) {
+  const parts = m.match(/data-x=\"([0-9.]+)\" data-w=\"([0-9.]+)\"/);
+  if (!parts) continue;
+  const end = Number(parts[1]) + Number(parts[2]);
+  if (end > prunedMaxEnd) {
+    prunedMaxEnd = end;
+  }
+}
 
 console.log(JSON.stringify({
   colors,
@@ -235,6 +262,7 @@ console.log(JSON.stringify({
   viewBox,
   tallViewBox,
   tallHeight,
+  prunedMaxEnd,
   singleCount: singleFrames.length,
   deepMaxDepth,
   wideFrameCount: wideFrames.length,
