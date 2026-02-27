@@ -47,6 +47,11 @@ func defaultSVGConfig() SVGConfig {
 	}
 }
 
+// DefaultSVGConfig returns the default SVG configuration values.
+func DefaultSVGConfig() SVGConfig {
+	return defaultSVGConfig()
+}
+
 // WriteSVG renders a flamegraph trie into an interactive SVG document.
 //
 // The output is a self-contained SVG that includes embedded CSS and JavaScript
