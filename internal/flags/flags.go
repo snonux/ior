@@ -121,7 +121,7 @@ func parse() {
 	flag.BoolVar(&singleton.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 	flag.BoolVar(&singleton.LiveFlamegraph, "live", false, "Enable live flamegraph mode")
-	flag.DurationVar(&singleton.LiveInterval, "live-interval", time.Second, "Live flamegraph refresh interval")
+	flag.DurationVar(&singleton.LiveInterval, "live-interval", 200*time.Millisecond, "Live flamegraph refresh interval")
 	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
 	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
 
