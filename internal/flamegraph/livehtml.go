@@ -119,11 +119,20 @@ const liveHTML = `<!doctype html>
       var fg = {
         paused: false,
         pendingData: null,
-        zoomRange: null,
         searchQuery: '',
+        zoomStack: [],
+        zoomRange: null,
+        frames: [],
+        rootWidth: 0,
+        matchColor: 'rgb(220,30,70)',
         eventSource: null,
         svg: document.getElementById('flamegraph'),
         status: document.getElementById('status'),
+        pauseBtn: document.getElementById('btn-pause'),
+        searchBtn: document.getElementById('btn-search'),
+        resetSearchBtn: document.getElementById('btn-reset-search'),
+        undoZoomBtn: document.getElementById('btn-undo-zoom'),
+        resetZoomBtn: document.getElementById('btn-reset-zoom'),
         cfg: {
           width: 1200,
           frameHeight: 16,
@@ -133,7 +142,7 @@ const liveHTML = `<!doctype html>
       };
 
       function fgFrameColor(name) {
-        var bytes = new TextEncoder().encode(name || "");
+        var bytes = new TextEncoder().encode(name || '');
         var h = 2166136261 >>> 0;
         for (var i = 0; i < bytes.length; i++) {
           h ^= bytes[i];
@@ -142,7 +151,7 @@ const liveHTML = `<!doctype html>
         var r = 200 + (h % 35);
         var g = 80 + ((h >>> 8) % 120);
         var b = 40 + ((h >>> 16) % 90);
-        return "rgb(" + r + "," + g + "," + b + ")";
+        return 'rgb(' + r + ',' + g + ',' + b + ')';
       }
 
       function fgMaxDepth(node, depth) {
@@ -159,20 +168,24 @@ const liveHTML = `<!doctype html>
         return maxDepth;
       }
 
-      function fgBuildFrames(node, rootTotal, x, depth, canvasHeight, isRoot, out) {
+      function fgBuildFrames(node, rootTotal, x, depth, canvasHeight, isRoot, out, path) {
         if (!node || rootTotal <= 0) {
           return;
         }
+        var currentPath = path || '';
         if (!isRoot) {
           var w = fg.cfg.width * (Number(node.t || 0) / Number(rootTotal));
           if (w < fg.cfg.minWidthPx) {
             return;
           }
+          var name = node.n || '';
+          currentPath = currentPath ? (currentPath + '\u001f' + name) : name;
           var y = canvasHeight - ((depth + 1) * fg.cfg.frameHeight);
           var total = Number(node.t || 0);
           var pct = 100 * total / Number(rootTotal);
           out.push({
-            name: node.n || "",
+            name: name,
+            path: currentPath,
             x: x,
             y: y,
             w: w,
@@ -180,17 +193,15 @@ const liveHTML = `<!doctype html>
             depth: depth,
             total: total,
             pct: pct,
-            fill: fgFrameColor(node.n || "")
+            fill: fgFrameColor(name)
           });
         }
-
         var cursor = x;
         var children = Array.isArray(node.c) ? node.c : [];
         for (var i = 0; i < children.length; i++) {
           var child = children[i];
-          var childTotal = Number(child.t || 0);
-          var childWidth = fg.cfg.width * (childTotal / Number(rootTotal));
-          fgBuildFrames(child, rootTotal, cursor, depth + 1, canvasHeight, false, out);
+          var childWidth = fg.cfg.width * (Number(child.t || 0) / Number(rootTotal));
+          fgBuildFrames(child, rootTotal, cursor, depth + 1, canvasHeight, false, out, currentPath);
           cursor += childWidth;
         }
       }
@@ -204,66 +215,247 @@ const liveHTML = `<!doctype html>
           .replace(/'/g, '&apos;');
       }
 
-      function fgApplySearch() {
-        if (!fg.searchQuery) {
+      function fgSetStatus(suffix) {
+        var prefix = fg.paused ? 'PAUSED' : 'LIVE';
+        fg.status.textContent = suffix ? (prefix + ' | ' + suffix) : prefix;
+      }
+
+      function fgHover(frame) {
+        var title = frame.querySelector('title');
+        fgSetStatus(title ? title.textContent : '');
+      }
+
+      function fgDetectRootWidth() {
+        var maxEnd = 0;
+        for (var i = 0; i < fg.frames.length; i++) {
+          var x = Number(fg.frames[i].dataset.x || '0');
+          var w = Number(fg.frames[i].dataset.w || '0');
+          if (x + w > maxEnd) {
+            maxEnd = x + w;
+          }
+        }
+        return maxEnd;
+      }
+
+      function fgSnapshotOriginalGeometry(frame) {
+        var rect = frame.querySelector('rect');
+        var text = frame.querySelector('text');
+        frame.dataset.ox = frame.dataset.x || '0';
+        frame.dataset.ow = frame.dataset.w || '0';
+        if (rect) {
+          rect.dataset.ox = rect.getAttribute('x') || '0';
+          rect.dataset.ow = rect.getAttribute('width') || '0';
+        }
+        if (text) {
+          text.dataset.ox = text.getAttribute('x') || '0';
+          text.dataset.hidden = text.style.display === 'none' ? '1' : '0';
+          text.dataset.full = text.textContent || frame.dataset.name || '';
+        }
+      }
+
+      function fgOriginalX(frame) {
+        return Number(frame.dataset.ox || frame.dataset.x || '0');
+      }
+
+      function fgOriginalW(frame) {
+        return Number(frame.dataset.ow || frame.dataset.w || '0');
+      }
+
+      function fgFitLabel(text, width) {
+        var full = text.dataset.full || text.textContent || '';
+        var maxChars = Math.floor((width - 6) / 7);
+        if (maxChars < 3) {
+          text.style.display = 'none';
+          text.textContent = full;
           return;
         }
-        var query = fg.searchQuery.toLowerCase();
-        var frames = fg.svg.querySelectorAll('.frame');
-        for (var i = 0; i < frames.length; i++) {
-          var frame = frames[i];
-          if (String(frame.getAttribute('data-name') || '').toLowerCase().indexOf(query) < 0) {
-            continue;
-          }
-          var rect = frame.querySelector('rect');
-          if (rect) {
-            rect.setAttribute('fill', 'rgb(220,30,70)');
+        text.style.display = '';
+        if (full.length <= maxChars) {
+          text.textContent = full;
+          return;
+        }
+        text.textContent = full.slice(0, maxChars - 1) + '...';
+      }
+
+      function fgSetFrameGeometry(frame, x, w) {
+        var rect = frame.querySelector('rect');
+        var text = frame.querySelector('text');
+        if (rect) {
+          rect.setAttribute('x', String(x));
+          rect.setAttribute('width', String(w));
+        }
+        if (text) {
+          text.setAttribute('x', String(x + 3));
+          fgFitLabel(text, w);
+        }
+      }
+
+      function fgRestoreFrameGeometry(frame) {
+        var rect = frame.querySelector('rect');
+        var text = frame.querySelector('text');
+        if (rect) {
+          rect.setAttribute('x', rect.dataset.ox || '0');
+          rect.setAttribute('width', rect.dataset.ow || '0');
+        }
+        if (text) {
+          text.setAttribute('x', text.dataset.ox || '0');
+          if (text.dataset.hidden === '1') {
+            text.style.display = 'none';
+            text.textContent = text.dataset.full || '';
+          } else {
+            fgFitLabel(text, Number(rect ? (rect.dataset.ow || '0') : '0'));
           }
         }
+      }
+
+      function fgZoom(frame) {
+        var width = fgOriginalW(frame);
+        if (width <= 0) {
+          return;
+        }
+        if (fg.zoomRange) {
+          fg.zoomStack.push(fg.zoomRange);
+        }
+        fg.zoomRange = {
+          x: fgOriginalX(frame),
+          w: width,
+          depth: Number(frame.dataset.depth || '0'),
+          path: frame.dataset.path || ''
+        };
+        fgApplyZoom();
       }
 
       function fgApplyZoom() {
         if (!fg.zoomRange) {
+          for (var i = 0; i < fg.frames.length; i++) {
+            fgRestoreFrameGeometry(fg.frames[i]);
+            fg.frames[i].style.display = '';
+          }
           return;
         }
-        var frames = fg.svg.querySelectorAll('.frame');
-        for (var i = 0; i < frames.length; i++) {
-          var frame = frames[i];
-          if (frame.getAttribute('data-name') !== fg.zoomRange.name) {
+        var x = fg.zoomRange.x;
+        var end = x + fg.zoomRange.w;
+        var width = fg.zoomRange.w;
+        var minDepth = fg.zoomRange.depth;
+        var scale = fg.rootWidth > 0 ? fg.rootWidth / width : 1;
+        var eps = 1e-6;
+        for (var i = 0; i < fg.frames.length; i++) {
+          var frame = fg.frames[i];
+          var ox = fgOriginalX(frame);
+          var ow = fgOriginalW(frame);
+          var depth = Number(frame.dataset.depth || '0');
+          var inRange = (ox >= x - eps) && (ox + ow <= end + eps);
+          var isAncestor = depth < minDepth && ox <= x + eps && ox + ow >= end - eps;
+          if (isAncestor || (depth >= minDepth && inRange)) {
+            if (isAncestor) {
+              fgSetFrameGeometry(frame, 0, fg.rootWidth);
+            } else {
+              fgSetFrameGeometry(frame, (ox - x) * scale, ow * scale);
+            }
+            frame.style.display = '';
+          } else {
+            frame.style.display = 'none';
+          }
+        }
+      }
+
+      function fgUndoZoom() {
+        if (fg.zoomStack.length === 0) {
+          fgResetZoom();
+          return;
+        }
+        fg.zoomRange = fg.zoomStack.pop();
+        fgApplyZoom();
+      }
+
+      function fgResetZoom() {
+        fg.zoomStack = [];
+        fg.zoomRange = null;
+        fgApplyZoom();
+      }
+
+      function fgResetSearch() {
+        for (var i = 0; i < fg.frames.length; i++) {
+          var rect = fg.frames[i].querySelector('rect');
+          if (!rect) {
             continue;
           }
-          frame.classList.add('zoom-target');
-          break;
+          rect.setAttribute('fill', fg.frames[i].dataset.baseFill || '');
+        }
+      }
+
+      function fgApplySearch() {
+        fgResetSearch();
+        if (!fg.searchQuery) {
+          return;
+        }
+        var query = fg.searchQuery.toLowerCase();
+        for (var i = 0; i < fg.frames.length; i++) {
+          var name = (fg.frames[i].dataset.name || '').toLowerCase();
+          if (name.indexOf(query) < 0) {
+            continue;
+          }
+          var rect = fg.frames[i].querySelector('rect');
+          if (rect) {
+            rect.setAttribute('fill', fg.matchColor);
+          }
+        }
+      }
+
+      function fgSearch() {
+        var query = window.prompt('Search frame substring:', fg.searchQuery || '');
+        if (query === null) {
+          return;
+        }
+        fg.searchQuery = query.trim();
+        fgApplySearch();
+      }
+
+      function fgTogglePause() {
+        fg.paused = !fg.paused;
+        document.body.classList.toggle('paused', fg.paused);
+        fg.pauseBtn.textContent = fg.paused ? 'Resume' : 'Pause';
+        fgSetStatus('');
+        if (!fg.paused && fg.pendingData) {
+          var pending = fg.pendingData;
+          fg.pendingData = null;
+          requestAnimationFrame(function () {
+            fgProcessUpdate(pending);
+          });
         }
       }
 
       function fgBindFrameEvents() {
-        var frames = fg.svg.querySelectorAll('.frame');
-        for (var i = 0; i < frames.length; i++) {
-          frames[i].addEventListener('mouseenter', function () {
-            var name = this.getAttribute('data-name') || '';
-            fg.status.textContent = fg.paused ? 'PAUSED | ' + name : 'LIVE | ' + name;
+        for (var i = 0; i < fg.frames.length; i++) {
+          fg.frames[i].addEventListener('mouseenter', function () { fgHover(this); });
+          fg.frames[i].addEventListener('mouseleave', function () { fgSetStatus(''); });
+          fg.frames[i].addEventListener('click', function (ev) {
+            if (ev.detail > 1) {
+              return;
+            }
+            ev.stopPropagation();
+            fgZoom(ev.currentTarget);
           });
-          frames[i].addEventListener('mouseleave', function () {
-            fg.status.textContent = fg.paused ? 'PAUSED' : 'LIVE';
-          });
-          frames[i].addEventListener('click', function () {
-            fg.zoomRange = { name: this.getAttribute('data-name') || '' };
-            fgApplyZoom();
+          fg.frames[i].addEventListener('dblclick', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            fgResetZoom();
           });
         }
       }
 
       function fgRender(treeData) {
         if (!treeData || Number(treeData.t || 0) <= 0) {
+          fg.frames = [];
           fg.svg.innerHTML = '';
+          fgSetStatus('');
           return;
         }
         var rootTotal = Number(treeData.t || 0);
         var maxDepth = fgMaxDepth(treeData, 0);
         var canvasHeight = (fg.cfg.frameHeight * (maxDepth + 1)) + 80;
         var frames = [];
-        fgBuildFrames(treeData, rootTotal, 0, 0, canvasHeight, true, frames);
+        fgBuildFrames(treeData, rootTotal, 0, 0, canvasHeight, true, frames, '');
 
         var parts = [];
         parts.push('<text class="title" x="10" y="22">I/O Flame Graph (Live)</text>');
@@ -271,9 +463,9 @@ const liveHTML = `<!doctype html>
           var frame = frames[i];
           var textStyle = frame.w <= (fg.cfg.fontSize * 2) ? ' style="display:none"' : '';
           var title = fgEscape(frame.name + ' (' + frame.total + ', ' + frame.pct.toFixed(2) + '%)');
-          parts.push('<g class="frame" data-name="' + fgEscape(frame.name) + '" data-x="' + frame.x.toFixed(3) +
-            '" data-w="' + frame.w.toFixed(3) + '" data-depth="' + frame.depth +
-            '" data-base-fill="' + frame.fill + '">');
+          parts.push('<g class="frame" data-name="' + fgEscape(frame.name) + '" data-path="' + fgEscape(frame.path) +
+            '" data-x="' + frame.x.toFixed(3) + '" data-w="' + frame.w.toFixed(3) +
+            '" data-depth="' + frame.depth + '" data-base-fill="' + frame.fill + '">');
           parts.push('<title>' + title + '</title>');
           parts.push('<rect x="' + frame.x.toFixed(3) + '" y="' + frame.y.toFixed(3) + '" width="' + frame.w.toFixed(3) +
             '" height="' + frame.h.toFixed(3) + '" fill="' + frame.fill + '"></rect>');
@@ -285,6 +477,11 @@ const liveHTML = `<!doctype html>
         fg.svg.setAttribute('viewBox', '0 0 ' + fg.cfg.width + ' ' + canvasHeight);
         fg.svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
         fg.svg.innerHTML = parts.join('');
+        fg.frames = Array.prototype.slice.call(fg.svg.querySelectorAll('g.frame'));
+        fg.rootWidth = fgDetectRootWidth();
+        for (var j = 0; j < fg.frames.length; j++) {
+          fgSnapshotOriginalGeometry(fg.frames[j]);
+        }
         fgBindFrameEvents();
       }
 
@@ -293,7 +490,7 @@ const liveHTML = `<!doctype html>
         try {
           treeData = JSON.parse(jsonStr);
         } catch (err) {
-          fg.status.textContent = 'LIVE | parse error';
+          fgSetStatus('parse error');
           return;
         }
         fgRender(treeData);
@@ -313,45 +510,36 @@ const liveHTML = `<!doctype html>
           });
         };
         fg.eventSource.onerror = function () {
-          fg.status.textContent = fg.paused ? 'PAUSED' : 'LIVE | stream error';
+          fgSetStatus('stream error');
         };
       }
 
-      var pauseBtn = document.getElementById("btn-pause");
-      var searchBtn = document.getElementById("btn-search");
-      var resetSearchBtn = document.getElementById("btn-reset-search");
-      pauseBtn.addEventListener("click", function () {
-        fg.paused = !fg.paused;
-        document.body.classList.toggle("paused", fg.paused);
-        pauseBtn.textContent = fg.paused ? "Resume" : "Pause";
-        fg.status.textContent = fg.paused ? "PAUSED" : "LIVE";
-        if (!fg.paused && fg.pendingData) {
-          var pending = fg.pendingData;
-          fg.pendingData = null;
-          requestAnimationFrame(function () {
-            fgProcessUpdate(pending);
-          });
-        }
-      });
-      searchBtn.addEventListener('click', function () {
-        var query = window.prompt('Search frame substring:', fg.searchQuery || '');
-        if (query === null) {
+      function fgHandleKeydown(ev) {
+        if (ev.key === ' ' || ev.code === 'Space') {
+          ev.preventDefault();
+          fgTogglePause();
           return;
         }
-        fg.searchQuery = query;
-        fgApplySearch();
-      });
-      resetSearchBtn.addEventListener('click', function () {
-        fg.searchQuery = '';
-        var rects = fg.svg.querySelectorAll('.frame rect');
-        for (var i = 0; i < rects.length; i++) {
-          var baseFill = rects[i].parentElement.getAttribute('data-base-fill');
-          if (baseFill) {
-            rects[i].setAttribute('fill', baseFill);
-          }
+        if (ev.key === '/') {
+          ev.preventDefault();
+          fgSearch();
+          return;
         }
-      });
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          fgResetZoom();
+          fgResetSearch();
+        }
+      }
 
+      fg.pauseBtn.addEventListener('click', fgTogglePause);
+      fg.searchBtn.addEventListener('click', fgSearch);
+      fg.resetSearchBtn.addEventListener('click', fgResetSearch);
+      fg.undoZoomBtn.addEventListener('click', fgUndoZoom);
+      fg.resetZoomBtn.addEventListener('click', fgResetZoom);
+      document.addEventListener('keydown', fgHandleKeydown);
+
+      fgSetStatus('');
       fgConnect();
 
       window.fgFrameColor = fgFrameColor;
@@ -359,6 +547,13 @@ const liveHTML = `<!doctype html>
       window.fgMaxDepth = fgMaxDepth;
       window.fgRender = fgRender;
       window.fgProcessUpdate = fgProcessUpdate;
+      window.fgZoom = fgZoom;
+      window.fgApplyZoom = fgApplyZoom;
+      window.fgUndoZoom = fgUndoZoom;
+      window.fgResetZoom = fgResetZoom;
+      window.fgSearch = fgSearch;
+      window.fgResetSearch = fgResetSearch;
+      window.fgTogglePause = fgTogglePause;
       window.liveFlamegraphState = fg;
     })();
   </script>
