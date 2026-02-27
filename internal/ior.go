@@ -147,7 +147,7 @@ func dispatchRun(cfg flags.Flags) error {
 }
 
 func shouldRunTraceMode(cfg flags.Flags) bool {
-	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.PprofEnable
+	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph || cfg.PprofEnable
 }
 
 func tuiTraceStarterFromRunTrace(

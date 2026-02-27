@@ -34,6 +34,12 @@ func TestShouldRunTraceMode(t *testing.T) {
 	if !shouldRunTraceMode(withPprof) {
 		t.Fatalf("expected pprof mode to use trace mode")
 	}
+
+	withLive := base
+	withLive.LiveFlamegraph = true
+	if !shouldRunTraceMode(withLive) {
+		t.Fatalf("expected live mode to use trace mode")
+	}
 }
 
 func TestShouldAutoStopByDuration(t *testing.T) {
@@ -58,6 +64,12 @@ func TestShouldAutoStopByDuration(t *testing.T) {
 	withPprof.PprofEnable = true
 	if !shouldAutoStopByDuration(withPprof) {
 		t.Fatalf("expected pprof mode to auto-stop by duration")
+	}
+
+	withLive := base
+	withLive.LiveFlamegraph = true
+	if shouldAutoStopByDuration(withLive) {
+		t.Fatalf("expected live mode not to auto-stop by duration")
 	}
 }
 
