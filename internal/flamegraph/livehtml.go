@@ -73,6 +73,7 @@ const liveHTML = `<!doctype html>
     #flamegraph {
       display: block;
       width: 100%;
+      height: calc(100vh - 56px);
       min-height: calc(100vh - 56px);
       background: transparent;
     }
@@ -120,6 +121,7 @@ const liveHTML = `<!doctype html>
       var fg = {
         paused: false,
         resetting: false,
+        lastTreeData: null,
         pendingData: null,
         searchQuery: '',
         zoomStack: [],
@@ -137,6 +139,7 @@ const liveHTML = `<!doctype html>
         resetZoomBtn: document.getElementById('btn-reset-zoom'),
         resetBaselineBtn: document.getElementById('btn-reset-baseline'),
         cfg: {
+          baseFrameHeight: 16,
           width: 1200,
           frameHeight: 16,
           fontSize: 12,
@@ -169,6 +172,46 @@ const liveHTML = `<!doctype html>
           }
         }
         return maxDepth;
+      }
+
+      function fgDefaultCanvasHeight(maxDepth) {
+        return (fg.cfg.baseFrameHeight * (maxDepth + 1)) + 80;
+      }
+
+      function fgViewportLayout(maxDepth) {
+        var rows = Math.max(maxDepth + 1, 1);
+        var defaultCanvasHeight = fgDefaultCanvasHeight(maxDepth);
+        var viewportHeight = Number(window.innerHeight || 0);
+        if (viewportHeight <= 0) {
+          return {
+            frameHeight: fg.cfg.baseFrameHeight,
+            canvasHeight: defaultCanvasHeight
+          };
+        }
+
+        var controls = document.getElementById('controls');
+        var controlsHeight = 56;
+        if (controls && typeof controls.getBoundingClientRect === 'function') {
+          controlsHeight = Number(controls.getBoundingClientRect().height || controlsHeight);
+        }
+
+        var availableHeight = viewportHeight - controlsHeight;
+        if (availableHeight <= 0) {
+          return {
+            frameHeight: fg.cfg.baseFrameHeight,
+            canvasHeight: defaultCanvasHeight
+          };
+        }
+
+        var canvasHeight = Math.max(defaultCanvasHeight, availableHeight);
+        var frameHeight = (canvasHeight - 80) / rows;
+        if (frameHeight < fg.cfg.baseFrameHeight) {
+          frameHeight = fg.cfg.baseFrameHeight;
+        }
+        return {
+          frameHeight: frameHeight,
+          canvasHeight: canvasHeight
+        };
       }
 
       function fgBuildFrames(node, rootTotal, x, depth, canvasHeight, isRoot, out, path) {
@@ -522,6 +565,9 @@ const liveHTML = `<!doctype html>
 
       function fgRender(treeData) {
         if (!treeData || Number(treeData.t || 0) <= 0) {
+          var emptyLayout = fgViewportLayout(0);
+          fg.cfg.frameHeight = emptyLayout.frameHeight;
+          fg.svg.style.height = String(emptyLayout.canvasHeight) + 'px';
           fg.frames = [];
           fg.svg.innerHTML = '';
           fgSetStatus('');
@@ -529,7 +575,9 @@ const liveHTML = `<!doctype html>
         }
         var rootTotal = Number(treeData.t || 0);
         var maxDepth = fgMaxDepth(treeData, 0);
-        var canvasHeight = (fg.cfg.frameHeight * (maxDepth + 1)) + 80;
+        var layout = fgViewportLayout(maxDepth);
+        fg.cfg.frameHeight = layout.frameHeight;
+        var canvasHeight = layout.canvasHeight;
         var frames = [];
         fgBuildFrames(treeData, rootTotal, 0, 0, canvasHeight, true, frames, '');
 
@@ -552,6 +600,7 @@ const liveHTML = `<!doctype html>
 
         fg.svg.setAttribute('viewBox', '0 0 ' + fg.cfg.width + ' ' + canvasHeight);
         fg.svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+        fg.svg.style.height = String(canvasHeight) + 'px';
         fg.svg.innerHTML = parts.join('');
         fg.frames = Array.prototype.slice.call(fg.svg.querySelectorAll('g.frame'));
         fg.rootWidth = fgDetectRootWidth();
@@ -569,6 +618,7 @@ const liveHTML = `<!doctype html>
           fgSetStatus('parse error');
           return;
         }
+        fg.lastTreeData = treeData;
         fgRender(treeData);
         fgApplyZoom();
         fgApplySearch();
@@ -588,6 +638,17 @@ const liveHTML = `<!doctype html>
         fg.eventSource.onerror = function () {
           fgSetStatus('stream error');
         };
+      }
+
+      function fgHandleResize() {
+        if (!fg.lastTreeData) {
+          return;
+        }
+        requestAnimationFrame(function () {
+          fgRender(fg.lastTreeData);
+          fgApplyZoom();
+          fgApplySearch();
+        });
       }
 
       function fgIsTextEntryTarget(target) {
@@ -634,6 +695,7 @@ const liveHTML = `<!doctype html>
       fg.resetZoomBtn.addEventListener('click', fgResetZoom);
       fg.resetBaselineBtn.addEventListener('click', fgResetBaseline);
       document.addEventListener('keydown', fgHandleKeydown);
+      window.addEventListener('resize', fgHandleResize);
 
       fgSetStatus('');
       fgConnect();

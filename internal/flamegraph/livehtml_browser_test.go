@@ -23,6 +23,8 @@ type liveJSResult struct {
 	KnownFrames    []jsFrame         `json:"knownFrames"`
 	SVGHTML        string            `json:"svgHTML"`
 	ViewBox        string            `json:"viewBox"`
+	TallViewBox    string            `json:"tallViewBox"`
+	TallHeight     string            `json:"tallHeight"`
 	SingleCount    int               `json:"singleCount"`
 	DeepMaxDepth   int               `json:"deepMaxDepth"`
 	WideFrameCount int               `json:"wideFrameCount"`
@@ -74,6 +76,12 @@ func TestLiveHTMLJSRenderingParity(t *testing.T) {
 	}
 	if got.ViewBox != "0 0 1200 128" {
 		t.Fatalf("viewBox = %q, want %q", got.ViewBox, "0 0 1200 128")
+	}
+	if got.TallViewBox != "0 0 1200 844" {
+		t.Fatalf("tall viewBox = %q, want %q", got.TallViewBox, "0 0 1200 844")
+	}
+	if got.TallHeight != "844px" {
+		t.Fatalf("tall style height = %q, want %q", got.TallHeight, "844px")
 	}
 
 	if got.SingleCount != 1 {
@@ -127,6 +135,7 @@ function makeElement(id) {
     attrs: {},
     classList: { toggle: function(){}, add: function(){}, remove: function(){} },
     addEventListener: function(){},
+    getBoundingClientRect: function() { return { height: id === "controls" ? 56 : 0 }; },
     setAttribute: function(k, v) { this.attrs[k] = String(v); },
     getAttribute: function(k) { return this.attrs[k] || ""; },
     querySelectorAll: function() { return []; },
@@ -135,7 +144,7 @@ function makeElement(id) {
 }
 
 const elements = {};
-["flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
+["controls", "flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
   elements[id] = makeElement(id);
 });
 elements["body"] = makeElement("body");
@@ -191,6 +200,11 @@ fgRender(knownTree);
 const svgHTML = elements["flamegraph"].innerHTML;
 const viewBox = elements["flamegraph"].attrs["viewBox"] || "";
 
+window.innerHeight = 900;
+fgRender(knownTree);
+const tallViewBox = elements["flamegraph"].attrs["viewBox"] || "";
+const tallHeight = elements["flamegraph"].style.height || "";
+
 const singleTree = { n: "", v: 0, t: 1, c: [{ n: "only", v: 1, t: 1 }] };
 const singleFrames = [];
 const singleCanvas = (liveFlamegraphState.cfg.frameHeight * (fgMaxDepth(singleTree, 0) + 1)) + 80;
@@ -219,6 +233,8 @@ console.log(JSON.stringify({
   knownFrames,
   svgHTML,
   viewBox,
+  tallViewBox,
+  tallHeight,
   singleCount: singleFrames.length,
   deepMaxDepth,
   wideFrameCount: wideFrames.length,
