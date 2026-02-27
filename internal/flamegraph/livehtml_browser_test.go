@@ -135,7 +135,7 @@ function makeElement(id) {
 }
 
 const elements = {};
-["flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom"].forEach((id) => {
+["flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
   elements[id] = makeElement(id);
 });
 elements["body"] = makeElement("body");

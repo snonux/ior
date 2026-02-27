@@ -60,6 +60,33 @@ func TestLiveTrieVersionIncrementsPerIngest(t *testing.T) {
 	}
 }
 
+func TestLiveTrieResetClearsDataAndAdvancesVersion(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
+	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 1, 1, 1))
+
+	before := lt.Version()
+	if before == 0 {
+		t.Fatalf("expected non-zero version before reset")
+	}
+
+	lt.Reset()
+	if got := lt.Version(); got != before+1 {
+		t.Fatalf("version after reset = %d, want %d", got, before+1)
+	}
+
+	snap := decodeLiveSnapshot(t, lt)
+	if snap.Total != 0 {
+		t.Fatalf("snapshot total after reset = %d, want 0", snap.Total)
+	}
+
+	lt.Ingest(newTestPair("svc", 42, 1003, "/tmp/c", 1, 1, 1))
+	next := decodeLiveSnapshot(t, lt)
+	if next.Total != 1 {
+		t.Fatalf("snapshot total after new baseline ingest = %d, want 1", next.Total)
+	}
+}
+
 func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))

@@ -132,6 +132,53 @@ func TestHandleSSEDelayedClientLargeTrieGetsValidSnapshot(t *testing.T) {
 	}
 }
 
+func TestHandleResetRequiresPost(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	req := httptest.NewRequest(http.MethodGet, "/reset", nil)
+	rec := httptest.NewRecorder()
+
+	handleReset(lt).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if allow := rec.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("allow = %q, want %q", allow, http.MethodPost)
+	}
+}
+
+func TestHandleResetClearsTrieAndReturnsEmptySnapshot(t *testing.T) {
+	lt := NewLiveTrie([]string{"path"}, "count")
+	lt.Ingest(newTestPair("reset", 1, 1001, "/tmp/a", 1, 1, 1))
+	lt.Ingest(newTestPair("reset", 1, 1002, "/tmp/b", 1, 1, 1))
+	if before := decodeLiveSnapshot(t, lt); before.Total == 0 {
+		t.Fatalf("expected non-empty trie before reset")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/reset", nil)
+	rec := httptest.NewRecorder()
+	handleReset(lt).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if ctype := rec.Header().Get("Content-Type"); !strings.Contains(ctype, "application/json") {
+		t.Fatalf("content-type = %q, want application/json", ctype)
+	}
+	var snap trieSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("decode reset snapshot: %v", err)
+	}
+	if snap.Total != 0 {
+		t.Fatalf("reset snapshot total = %d, want 0", snap.Total)
+	}
+
+	after := decodeLiveSnapshot(t, lt)
+	if after.Total != 0 {
+		t.Fatalf("trie total after reset = %d, want 0", after.Total)
+	}
+}
+
 func TestServeLivePrintsURLAndStopsOnCancel(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	ctx, cancel := context.WithCancel(context.Background())
