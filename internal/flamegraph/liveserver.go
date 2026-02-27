@@ -71,7 +71,7 @@ func handleSSE(lt *LiveTrie, interval time.Duration) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 
-		lastVersion, err := sendSnapshot(w, flusher, lt, 0)
+		lastVersion, err := sendSnapshot(w, flusher, lt, ^uint64(0))
 		if err != nil {
 			return
 		}
