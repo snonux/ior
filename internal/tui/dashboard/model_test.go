@@ -193,6 +193,7 @@ func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
 
 	m := NewModelWithConfig(nil, rb, 250, common.DefaultKeyMap())
 	m.activeTab = TabStream
+	m.showHelp = true
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = next.(Model)
 
