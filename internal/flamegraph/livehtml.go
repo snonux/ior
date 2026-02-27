@@ -325,6 +325,45 @@ const liveHTML = `<!doctype html>
         fgApplyZoom();
       }
 
+      function fgFindFrameByPath(path) {
+        for (var i = 0; i < fg.frames.length; i++) {
+          if ((fg.frames[i].dataset.path || '') === path) {
+            return fg.frames[i];
+          }
+        }
+        return null;
+      }
+
+      function fgRefreshZoomRange() {
+        if (!fg.zoomRange || !fg.zoomRange.path) {
+          return;
+        }
+        var candidatePath = fg.zoomRange.path;
+        var match = null;
+        while (candidatePath) {
+          match = fgFindFrameByPath(candidatePath);
+          if (match) {
+            break;
+          }
+          var cut = candidatePath.lastIndexOf('\u001f');
+          if (cut < 0) {
+            break;
+          }
+          candidatePath = candidatePath.slice(0, cut);
+        }
+        if (!match) {
+          return;
+        }
+        var width = fgOriginalW(match);
+        if (width <= 0) {
+          return;
+        }
+        fg.zoomRange.path = match.dataset.path || candidatePath;
+        fg.zoomRange.x = fgOriginalX(match);
+        fg.zoomRange.w = width;
+        fg.zoomRange.depth = Number(match.dataset.depth || String(fg.zoomRange.depth || 0));
+      }
+
       function fgApplyZoom() {
         if (!fg.zoomRange) {
           for (var i = 0; i < fg.frames.length; i++) {
@@ -333,6 +372,7 @@ const liveHTML = `<!doctype html>
           }
           return;
         }
+        fgRefreshZoomRange();
         var x = fg.zoomRange.x;
         var end = x + fg.zoomRange.w;
         var width = fg.zoomRange.w;
