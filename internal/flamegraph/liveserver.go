@@ -68,7 +68,7 @@ func handleSSE(lt *LiveTrie, interval time.Duration) http.HandlerFunc {
 			return
 		}
 		if interval <= 0 {
-			interval = time.Second
+			interval = 200 * time.Millisecond
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")

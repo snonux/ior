@@ -70,8 +70,8 @@ func TestParseLiveDefaults(t *testing.T) {
 	if cfg.LiveFlamegraph {
 		t.Fatalf("expected live mode disabled by default")
 	}
-	if cfg.LiveInterval != time.Second {
-		t.Fatalf("default live interval = %v, want %v", cfg.LiveInterval, time.Second)
+	if cfg.LiveInterval != 200*time.Millisecond {
+		t.Fatalf("default live interval = %v, want %v", cfg.LiveInterval, 200*time.Millisecond)
 	}
 }
 
