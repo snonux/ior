@@ -94,6 +94,7 @@ Live controls:
 - `Escape`: reset zoom and search highlighting.
 - `r`: reset baseline (clears all live aggregated stats on the server and restarts from zero).
 - `Reset Baseline` button: same behavior as `r`.
+- `Order: ...` toggle button: cycles stack order presets on the fly and re-baselines live aggregation for the new order.
 
 ## TUI Hotkeys
 

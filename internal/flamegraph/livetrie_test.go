@@ -87,6 +87,44 @@ func TestLiveTrieResetClearsDataAndAdvancesVersion(t *testing.T) {
 	}
 }
 
+func TestLiveTrieReconfigureChangesOrderAndResets(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
+
+	if err := lt.Reconfigure([]string{"path", "comm"}); err != nil {
+		t.Fatalf("reconfigure: %v", err)
+	}
+	if got := lt.Fields(); len(got) != 2 || got[0] != "path" || got[1] != "comm" {
+		t.Fatalf("fields after reconfigure = %v, want [path comm]", got)
+	}
+
+	empty := decodeLiveSnapshot(t, lt)
+	if empty.Total != 0 {
+		t.Fatalf("snapshot total after reconfigure = %d, want 0", empty.Total)
+	}
+
+	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/a", 1, 1, 1))
+	snap := decodeLiveSnapshot(t, lt)
+	findSnapshotPath(t, &snap, "/tmp", "/a", "svc")
+}
+
+func TestLiveTrieReconfigureRejectsInvalidFields(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+
+	cases := [][]string{
+		nil,
+		{},
+		{"comm", "comm"},
+		{"comm", ""},
+		{"comm", "bogus"},
+	}
+	for _, tc := range cases {
+		if err := lt.Reconfigure(tc); err == nil {
+			t.Fatalf("expected error for fields=%v", tc)
+		}
+	}
+}
+
 func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))

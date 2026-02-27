@@ -148,7 +148,7 @@ function makeElement(id) {
 }
 
 const elements = {};
-["controls", "flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
+["controls", "flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline", "btn-toggle-order"].forEach((id) => {
   elements[id] = makeElement(id);
 });
 elements["body"] = makeElement("body");
@@ -163,6 +163,13 @@ global.document = {
 };
 global.window = global;
 global.prompt = function(){ return ""; };
+global.fetch = function() {
+  return Promise.resolve({
+    ok: true,
+    json: function() { return Promise.resolve({ fields: ["comm", "path", "tracepoint"], snapshot: { n: "", v: 0, t: 0 } }); },
+    text: function() { return Promise.resolve("{\"n\":\"\",\"v\":0,\"t\":0}"); }
+  });
+};
 global.requestAnimationFrame = function(cb){ cb(); };
 global.EventSource = function() {
   this.onmessage = null;
