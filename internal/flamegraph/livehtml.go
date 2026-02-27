@@ -139,6 +139,7 @@ const liveHTML = `<!doctype html>
         resetZoomBtn: document.getElementById('btn-reset-zoom'),
         resetBaselineBtn: document.getElementById('btn-reset-baseline'),
         cfg: {
+          baseWidth: 1200,
           baseFrameHeight: 16,
           width: 1200,
           frameHeight: 16,
@@ -181,9 +182,17 @@ const liveHTML = `<!doctype html>
       function fgViewportLayout(maxDepth) {
         var rows = Math.max(maxDepth + 1, 1);
         var defaultCanvasHeight = fgDefaultCanvasHeight(maxDepth);
+        var viewportWidth = Number(window.innerWidth || 0);
+        if (viewportWidth <= 0 && document && document.documentElement) {
+          viewportWidth = Number(document.documentElement.clientWidth || 0);
+        }
+        if (viewportWidth <= 0) {
+          viewportWidth = fg.cfg.baseWidth;
+        }
         var viewportHeight = Number(window.innerHeight || 0);
         if (viewportHeight <= 0) {
           return {
+            width: viewportWidth,
             frameHeight: fg.cfg.baseFrameHeight,
             canvasHeight: defaultCanvasHeight
           };
@@ -198,6 +207,7 @@ const liveHTML = `<!doctype html>
         var availableHeight = viewportHeight - controlsHeight;
         if (availableHeight <= 0) {
           return {
+            width: viewportWidth,
             frameHeight: fg.cfg.baseFrameHeight,
             canvasHeight: defaultCanvasHeight
           };
@@ -209,18 +219,31 @@ const liveHTML = `<!doctype html>
           frameHeight = fg.cfg.baseFrameHeight;
         }
         return {
+          width: viewportWidth,
           frameHeight: frameHeight,
           canvasHeight: canvasHeight
         };
       }
 
-      function fgBuildFrames(node, rootTotal, x, depth, canvasHeight, isRoot, out, path) {
-        if (!node || rootTotal <= 0) {
+      function fgVisibleChildrenTotal(node) {
+        var children = Array.isArray(node && node.c) ? node.c : [];
+        var total = 0;
+        for (var i = 0; i < children.length; i++) {
+          total += Number(children[i].t || 0);
+        }
+        if (total > 0) {
+          return total;
+        }
+        return Number(node && node.t || 0);
+      }
+
+      function fgBuildFrames(node, rootTotal, x, width, depth, canvasHeight, isRoot, out, path) {
+        if (!node || rootTotal <= 0 || width <= 0) {
           return;
         }
         var currentPath = path || '';
         if (!isRoot) {
-          var w = fg.cfg.width * (Number(node.t || 0) / Number(rootTotal));
+          var w = width;
           if (w < fg.cfg.minWidthPx) {
             return;
           }
@@ -244,10 +267,18 @@ const liveHTML = `<!doctype html>
         }
         var cursor = x;
         var children = Array.isArray(node.c) ? node.c : [];
+        var childrenTotal = fgVisibleChildrenTotal(node);
+        if (childrenTotal <= 0) {
+          return;
+        }
         for (var i = 0; i < children.length; i++) {
           var child = children[i];
-          var childWidth = fg.cfg.width * (Number(child.t || 0) / Number(rootTotal));
-          fgBuildFrames(child, rootTotal, cursor, depth + 1, canvasHeight, false, out, currentPath);
+          var childTotal = Number(child.t || 0);
+          if (childTotal <= 0) {
+            continue;
+          }
+          var childWidth = width * (childTotal / childrenTotal);
+          fgBuildFrames(child, rootTotal, cursor, childWidth, depth + 1, canvasHeight, false, out, currentPath);
           cursor += childWidth;
         }
       }
@@ -564,22 +595,28 @@ const liveHTML = `<!doctype html>
       }
 
       function fgRender(treeData) {
+        var maxDepth = fgMaxDepth(treeData, 0);
+        var layout = fgViewportLayout(maxDepth);
+        fg.cfg.width = layout.width;
+        fg.cfg.frameHeight = layout.frameHeight;
+
         if (!treeData || Number(treeData.t || 0) <= 0) {
-          var emptyLayout = fgViewportLayout(0);
-          fg.cfg.frameHeight = emptyLayout.frameHeight;
-          fg.svg.style.height = String(emptyLayout.canvasHeight) + 'px';
+          fg.svg.style.height = String(layout.canvasHeight) + 'px';
+          fg.svg.setAttribute('viewBox', '0 0 ' + fg.cfg.width + ' ' + layout.canvasHeight);
+          fg.svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
           fg.frames = [];
           fg.svg.innerHTML = '';
           fgSetStatus('');
           return;
         }
-        var rootTotal = Number(treeData.t || 0);
-        var maxDepth = fgMaxDepth(treeData, 0);
-        var layout = fgViewportLayout(maxDepth);
-        fg.cfg.frameHeight = layout.frameHeight;
+
+        var rootTotal = fgVisibleChildrenTotal(treeData);
+        if (rootTotal <= 0) {
+          rootTotal = Number(treeData.t || 0);
+        }
         var canvasHeight = layout.canvasHeight;
         var frames = [];
-        fgBuildFrames(treeData, rootTotal, 0, 0, canvasHeight, true, frames, '');
+        fgBuildFrames(treeData, rootTotal, 0, fg.cfg.width, 0, canvasHeight, true, frames, '');
 
         var parts = [];
         parts.push('<text class="title" x="10" y="22">I/O Flame Graph (Live)</text>');
@@ -676,7 +713,7 @@ const liveHTML = `<!doctype html>
           fgSearch();
           return;
         }
-        if (ev.key === 'r' || ev.key === 'R') {
+        if (ev.key === 'r') {
           ev.preventDefault();
           fgResetBaseline();
           return;
