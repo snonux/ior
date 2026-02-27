@@ -20,6 +20,18 @@ type zoomSearchStateResult struct {
 	PauseUnpauseKeeps  bool   `json:"pauseUnpauseKeeps"`
 }
 
+type pauseKeyboardResult struct {
+	PausedBySpace          bool `json:"pausedBySpace"`
+	NoUpdateWhilePaused    bool `json:"noUpdateWhilePaused"`
+	ZoomSearchWhilePaused  bool `json:"zoomSearchWhilePaused"`
+	UnpauseRendersLatest   bool `json:"unpauseRendersLatest"`
+	RapidToggleStable      bool `json:"rapidToggleStable"`
+	SlashSearchWorks       bool `json:"slashSearchWorks"`
+	EscapeResets           bool `json:"escapeResets"`
+	ButtonMatchesKeyboard  bool `json:"buttonMatchesKeyboard"`
+	TypingIgnoresShortcuts bool `json:"typingIgnoresShortcuts"`
+}
+
 func TestLiveHTMLJSZoomSearchStatePreservedAcrossUpdates(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not available")
@@ -112,6 +124,166 @@ console.log(JSON.stringify({
 	}
 	if !got.PauseUnpauseKeeps {
 		t.Fatalf("expected pause/unpause to preserve zoom state")
+	}
+}
+
+func TestLiveHTMLJSPauseResumeAndKeyboard(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available")
+	}
+
+	snippet := `
+const fg = liveFlamegraphState;
+const keydown = __docListeners["keydown"];
+
+function keyEvent(key, code, target) {
+  let prevented = false;
+  keydown({
+    key: key,
+    code: code,
+    target: target || { tagName: "BODY", isContentEditable: false },
+    preventDefault: function(){ prevented = true; }
+  });
+  return prevented;
+}
+
+let promptCalls = 0;
+prompt = function(_msg, prev) {
+  promptCalls++;
+  return prev || "needle";
+};
+
+const pausePayload = "{\"n\":\"\",\"v\":0,\"t\":10,\"c\":[{\"n\":\"latest\",\"v\":10,\"t\":10}]}";
+const beforeHTML = fg.svg.innerHTML;
+const pausedBySpacePrevented = keyEvent(" ", "Space");
+const pausedBySpace = pausedBySpacePrevented && fg.paused && fg.pauseBtn.textContent === "Resume" && fg.status.textContent.indexOf("PAUSED") === 0;
+
+fg.eventSource.onmessage({ data: pausePayload });
+const noUpdateWhilePaused = fg.pendingData === pausePayload && fg.svg.innerHTML === beforeHTML;
+
+const pausedFrame = makeFrame("needle", "needle", 1, 0, 1200);
+fg.frames = [pausedFrame];
+fg.rootWidth = 1200;
+fgZoom(pausedFrame);
+prompt = function(_msg, prev) {
+  promptCalls++;
+  return prev || "needle";
+};
+fgSearch();
+const zoomSearchWhilePaused = fg.zoomRange && fg.zoomRange.path === "needle" &&
+  pausedFrame.querySelector("rect").getAttribute("fill") === fg.matchColor;
+
+const resumedBySpacePrevented = keyEvent(" ", "Space");
+const unpauseRendersLatest = resumedBySpacePrevented && !fg.paused && fg.pendingData === null &&
+  fg.pauseBtn.textContent === "Pause" && fg.svg.innerHTML.indexOf('data-name="latest"') >= 0;
+
+let rapidToggleStable = true;
+for (let i = 0; i < 20; i++) {
+  try {
+    fgTogglePause();
+  } catch (err) {
+    rapidToggleStable = false;
+  }
+}
+if (fg.paused) {
+  fgTogglePause();
+}
+rapidToggleStable = rapidToggleStable && !fg.paused && fg.pauseBtn.textContent === "Pause";
+
+promptCalls = 0;
+prompt = function() {
+  promptCalls++;
+  return "slash";
+};
+const slashPrevented = keyEvent("/", "Slash");
+const slashSearchWorks = slashPrevented && promptCalls === 1 && fg.searchQuery === "slash";
+
+const escFrame = makeFrame("slash", "slash", 1, 0, 1200);
+fg.frames = [escFrame];
+fg.rootWidth = 1200;
+fgZoom(escFrame);
+fgSearch();
+const escapePrevented = keyEvent("Escape", "Escape");
+const escapeResets = escapePrevented && fg.zoomRange === null &&
+  escFrame.querySelector("rect").getAttribute("fill") === escFrame.dataset.baseFill;
+
+let buttonPromptCalls = 0;
+prompt = function() {
+  buttonPromptCalls++;
+  return "button";
+};
+document.getElementById("btn-pause").listeners.click();
+const pauseViaButton = fg.paused && fg.pauseBtn.textContent === "Resume";
+document.getElementById("btn-pause").listeners.click();
+const resumeViaButton = !fg.paused && fg.pauseBtn.textContent === "Pause";
+document.getElementById("btn-search").listeners.click();
+const searchViaButton = buttonPromptCalls === 1 && fg.searchQuery === "button";
+
+const btnFrame = makeFrame("button", "button", 1, 0, 1200);
+fg.frames = [btnFrame];
+fg.rootWidth = 1200;
+fgZoom(btnFrame);
+document.getElementById("btn-reset-search").listeners.click();
+document.getElementById("btn-reset-zoom").listeners.click();
+const resetViaButton = fg.zoomRange === null &&
+  btnFrame.querySelector("rect").getAttribute("fill") === btnFrame.dataset.baseFill;
+const buttonMatchesKeyboard = pauseViaButton && resumeViaButton && searchViaButton && resetViaButton;
+
+const typingTarget = { tagName: "INPUT", isContentEditable: false };
+fg.searchQuery = "typed";
+fg.zoomRange = { path: "typed", x: 0, w: 1200, depth: 1 };
+promptCalls = 0;
+const typingSpacePrevented = keyEvent(" ", "Space", typingTarget);
+const typingSlashPrevented = keyEvent("/", "Slash", typingTarget);
+const typingEscapePrevented = keyEvent("Escape", "Escape", typingTarget);
+const typingIgnoresShortcuts = !typingSpacePrevented && !typingSlashPrevented && !typingEscapePrevented &&
+  !fg.paused && promptCalls === 0 && fg.zoomRange !== null && fg.searchQuery === "typed";
+
+console.log(JSON.stringify({
+  pausedBySpace,
+  noUpdateWhilePaused,
+  zoomSearchWhilePaused,
+  unpauseRendersLatest,
+  rapidToggleStable,
+  slashSearchWorks,
+  escapeResets,
+  buttonMatchesKeyboard,
+  typingIgnoresShortcuts
+}));
+`
+
+	out := runLiveHTMLNodeSnippet(t, snippet)
+	var got pauseKeyboardResult
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode node result: %v\nraw:\n%s", err, out)
+	}
+
+	if !got.PausedBySpace {
+		t.Fatalf("expected Space shortcut to pause and update status/button state")
+	}
+	if !got.NoUpdateWhilePaused {
+		t.Fatalf("expected stream updates to queue while paused without rerendering")
+	}
+	if !got.ZoomSearchWhilePaused {
+		t.Fatalf("expected zoom and search to work while paused")
+	}
+	if !got.UnpauseRendersLatest {
+		t.Fatalf("expected unpause to render latest queued update immediately")
+	}
+	if !got.RapidToggleStable {
+		t.Fatalf("expected rapid pause/unpause toggles to remain stable")
+	}
+	if !got.SlashSearchWorks {
+		t.Fatalf("expected '/' shortcut to open search flow")
+	}
+	if !got.EscapeResets {
+		t.Fatalf("expected Escape shortcut to reset zoom/search highlighting")
+	}
+	if !got.ButtonMatchesKeyboard {
+		t.Fatalf("expected button actions to match keyboard behavior")
+	}
+	if !got.TypingIgnoresShortcuts {
+		t.Fatalf("expected keyboard shortcuts to be ignored while typing in an input")
 	}
 }
 
