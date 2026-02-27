@@ -2,6 +2,7 @@ package flamegraph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -13,6 +14,7 @@ func ServeLive(ctx context.Context, lt *LiveTrie, interval time.Duration) error 
 	mux.HandleFunc("/", handleLivePage())
 	mux.HandleFunc("/events", handleSSE(lt, interval))
 	mux.HandleFunc("/reset", handleReset(lt))
+	mux.HandleFunc("/order", handleOrder(lt))
 	srv := &http.Server{Handler: mux}
 
 	listener, err := listenRandomPort()
@@ -109,6 +111,44 @@ func handleReset(lt *LiveTrie) http.HandlerFunc {
 		payload, _ := lt.SnapshotJSON()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(payload)
+	}
+}
+
+type orderRequest struct {
+	Fields []string `json:"fields"`
+}
+
+type orderResponse struct {
+	Fields   []string        `json:"fields"`
+	Snapshot json.RawMessage `json:"snapshot,omitempty"`
+}
+
+func handleOrder(lt *LiveTrie) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(orderResponse{Fields: lt.Fields()})
+		case http.MethodPost:
+			var req orderRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid json body", http.StatusBadRequest)
+				return
+			}
+			if err := lt.Reconfigure(req.Fields); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			snap, _ := lt.SnapshotJSON()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(orderResponse{
+				Fields:   lt.Fields(),
+				Snapshot: snap,
+			})
+		default:
+			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 

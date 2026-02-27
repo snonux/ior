@@ -179,6 +179,83 @@ func TestHandleResetClearsTrieAndReturnsEmptySnapshot(t *testing.T) {
 	}
 }
 
+func TestHandleOrderGetReturnsCurrentFields(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	req := httptest.NewRequest(http.MethodGet, "/order", nil)
+	rec := httptest.NewRecorder()
+	handleOrder(lt).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp orderResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if strings.Join(resp.Fields, ",") != "comm,path,tracepoint" {
+		t.Fatalf("fields = %v, want [comm path tracepoint]", resp.Fields)
+	}
+}
+
+func TestHandleOrderPostReconfiguresAndResets(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
+
+	req := httptest.NewRequest(http.MethodPost, "/order", strings.NewReader(`{"fields":["path","tracepoint","comm"]}`))
+	rec := httptest.NewRecorder()
+	handleOrder(lt).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp orderResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if strings.Join(resp.Fields, ",") != "path,tracepoint,comm" {
+		t.Fatalf("fields = %v, want [path tracepoint comm]", resp.Fields)
+	}
+	var snap trieSnapshot
+	if err := json.Unmarshal(resp.Snapshot, &snap); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snap.Total != 0 {
+		t.Fatalf("snapshot total after reconfigure = %d, want 0", snap.Total)
+	}
+}
+
+func TestHandleOrderPostRejectsInvalidRequest(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+
+	req := httptest.NewRequest(http.MethodPost, "/order", strings.NewReader(`{"fields":["comm","bogus"]}`))
+	rec := httptest.NewRecorder()
+	handleOrder(lt).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/order", strings.NewReader(`{"fields":[}`))
+	rec = httptest.NewRecorder()
+	handleOrder(lt).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleOrderRequiresGetOrPost(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	req := httptest.NewRequest(http.MethodPut, "/order", nil)
+	rec := httptest.NewRecorder()
+	handleOrder(lt).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if allow := rec.Header().Get("Allow"); allow != http.MethodGet+", "+http.MethodPost {
+		t.Fatalf("allow = %q, want %q", allow, http.MethodGet+", "+http.MethodPost)
+	}
+}
+
 func TestServeLivePrintsURLAndStopsOnCancel(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	ctx, cancel := context.WithCancel(context.Background())

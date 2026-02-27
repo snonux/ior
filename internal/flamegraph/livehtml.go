@@ -57,6 +57,11 @@ const liveHTML = `<!doctype html>
       background: var(--fg-btn-hover);
     }
 
+    #controls .order-toggle {
+      min-width: 220px;
+      text-align: left;
+    }
+
     #status {
       margin-left: 8px;
       font-size: 12px;
@@ -111,6 +116,7 @@ const liveHTML = `<!doctype html>
     <button id="btn-undo-zoom" type="button">Undo Zoom</button>
     <button id="btn-reset-zoom" type="button">Reset Zoom</button>
     <button id="btn-reset-baseline" type="button">Reset Baseline</button>
+    <button id="btn-toggle-order" class="order-toggle" type="button">Order: comm > path > tracepoint</button>
     <span id="status">LIVE</span>
   </div>
 
@@ -138,6 +144,14 @@ const liveHTML = `<!doctype html>
         undoZoomBtn: document.getElementById('btn-undo-zoom'),
         resetZoomBtn: document.getElementById('btn-reset-zoom'),
         resetBaselineBtn: document.getElementById('btn-reset-baseline'),
+        toggleOrderBtn: document.getElementById('btn-toggle-order'),
+        orderPresets: [
+          'comm,path,tracepoint',
+          'path,tracepoint,comm',
+          'tracepoint,comm,path',
+          'pid,path,tracepoint'
+        ],
+        orderIndex: 0,
         cfg: {
           baseWidth: 1200,
           baseFrameHeight: 16,
@@ -295,6 +309,27 @@ const liveHTML = `<!doctype html>
       function fgSetStatus(suffix) {
         var prefix = fg.paused ? 'PAUSED' : 'LIVE';
         fg.status.textContent = suffix ? (prefix + ' | ' + suffix) : prefix;
+      }
+
+      function fgOrderLabel(csv) {
+        return String(csv || '').split(',').join(' > ');
+      }
+
+      function fgOrderFields(csv) {
+        return String(csv || '').split(',').filter(function (s) { return s; });
+      }
+
+      function fgSetOrderIndexByCSV(csv) {
+        for (var i = 0; i < fg.orderPresets.length; i++) {
+          if (fg.orderPresets[i] === csv) {
+            fg.orderIndex = i;
+            return;
+          }
+        }
+      }
+
+      function fgUpdateOrderButton() {
+        fg.toggleOrderBtn.textContent = 'Order: ' + fgOrderLabel(fg.orderPresets[fg.orderIndex] || '');
       }
 
       function fgHover(frame) {
@@ -661,6 +696,51 @@ const liveHTML = `<!doctype html>
         fgApplySearch();
       }
 
+      function fgApplyOrder(csv, expectedIndex) {
+        if (fg.resetting) {
+          return;
+        }
+        fg.resetting = true;
+        fgSetStatus('changing order...');
+        fetch('/order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: fgOrderFields(csv) })
+        })
+          .then(function (resp) {
+            if (!resp.ok) {
+              throw new Error('order change failed');
+            }
+            return resp.json();
+          })
+          .then(function (payload) {
+            fg.orderIndex = expectedIndex;
+            if (payload && Array.isArray(payload.fields)) {
+              fgSetOrderIndexByCSV(payload.fields.join(','));
+            }
+            fgUpdateOrderButton();
+            fgClearLocalState();
+            if (payload && payload.snapshot) {
+              fg.lastTreeData = payload.snapshot;
+              fgRender(payload.snapshot);
+            } else {
+              fgProcessUpdate('{"n":"","v":0,"t":0}');
+            }
+            fgSetStatus('order: ' + fgOrderLabel(fg.orderPresets[fg.orderIndex] || csv));
+          })
+          .catch(function () {
+            fgSetStatus('order change failed');
+          })
+          .then(function () {
+            fg.resetting = false;
+          });
+      }
+
+      function fgToggleOrder() {
+        var nextIndex = (fg.orderIndex + 1) % fg.orderPresets.length;
+        fgApplyOrder(fg.orderPresets[nextIndex], nextIndex);
+      }
+
       function fgConnect() {
         fg.eventSource = new EventSource('/events');
         fg.eventSource.onmessage = function (e) {
@@ -731,9 +811,11 @@ const liveHTML = `<!doctype html>
       fg.undoZoomBtn.addEventListener('click', fgUndoZoom);
       fg.resetZoomBtn.addEventListener('click', fgResetZoom);
       fg.resetBaselineBtn.addEventListener('click', fgResetBaseline);
+      fg.toggleOrderBtn.addEventListener('click', fgToggleOrder);
       document.addEventListener('keydown', fgHandleKeydown);
       window.addEventListener('resize', fgHandleResize);
 
+      fgUpdateOrderButton();
       fgSetStatus('');
       fgConnect();
 
@@ -750,6 +832,7 @@ const liveHTML = `<!doctype html>
       window.fgResetSearch = fgResetSearch;
       window.fgTogglePause = fgTogglePause;
       window.fgResetBaseline = fgResetBaseline;
+      window.fgToggleOrder = fgToggleOrder;
       window.liveFlamegraphState = fg;
     })();
   </script>

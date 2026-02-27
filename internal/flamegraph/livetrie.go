@@ -2,6 +2,7 @@ package flamegraph
 
 import (
 	"encoding/json"
+	"fmt"
 	"ior/internal/event"
 	"slices"
 	"sort"
@@ -68,13 +69,28 @@ func (lt *LiveTrie) addLocked(frames []string, value uint64) {
 	}
 }
 
+func (lt *LiveTrie) resetLocked() {
+	lt.root = &trieNode{
+		childMap: make(map[string]*trieNode),
+	}
+	lt.maxDepth = 0
+	lt.version.Add(1)
+}
+
+func (lt *LiveTrie) invalidateCache() {
+	lt.cacheMu.Lock()
+	lt.cacheVersion = 0
+	lt.cacheJSON = nil
+	lt.cacheMu.Unlock()
+}
+
 // Ingest adds one event pair into the live trie and recycles the pair.
 func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	record := eventPairToRecord(ep)
-	frames := lt.buildFrames(record)
 	value := record.Cnt.ValueByName(lt.countField)
 
 	lt.mu.Lock()
+	frames := lt.buildFrames(record)
 	lt.addLocked(frames, value)
 	lt.version.Add(1)
 	lt.mu.Unlock()
@@ -85,17 +101,32 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 // Reset clears the trie so live snapshots start from a new baseline.
 func (lt *LiveTrie) Reset() {
 	lt.mu.Lock()
-	lt.root = &trieNode{
-		childMap: make(map[string]*trieNode),
-	}
-	lt.maxDepth = 0
-	lt.version.Add(1)
+	lt.resetLocked()
 	lt.mu.Unlock()
+	lt.invalidateCache()
+}
 
-	lt.cacheMu.Lock()
-	lt.cacheVersion = 0
-	lt.cacheJSON = nil
-	lt.cacheMu.Unlock()
+// Fields returns the currently configured frame fields in stack order.
+func (lt *LiveTrie) Fields() []string {
+	lt.mu.RLock()
+	out := slices.Clone(lt.fields)
+	lt.mu.RUnlock()
+	return out
+}
+
+// Reconfigure changes frame fields and clears accumulated data for a new baseline.
+func (lt *LiveTrie) Reconfigure(fields []string) error {
+	normalized, err := normalizeLiveTrieFields(fields)
+	if err != nil {
+		return err
+	}
+
+	lt.mu.Lock()
+	lt.fields = slices.Clone(normalized)
+	lt.resetLocked()
+	lt.mu.Unlock()
+	lt.invalidateCache()
+	return nil
 }
 
 // Version returns the current ingest version of the trie.
@@ -164,6 +195,39 @@ func (lt *LiveTrie) buildFrames(record IterRecord) []string {
 		}
 	}
 	return frames
+}
+
+func normalizeLiveTrieFields(fields []string) ([]string, error) {
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("fields cannot be empty")
+	}
+
+	normalized := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, raw := range fields {
+		field := strings.TrimSpace(raw)
+		if field == "" {
+			return nil, fmt.Errorf("fields cannot contain empty values")
+		}
+		if !isLiveTrieField(field) {
+			return nil, fmt.Errorf("invalid field %q", field)
+		}
+		if _, exists := seen[field]; exists {
+			return nil, fmt.Errorf("duplicate field %q", field)
+		}
+		seen[field] = struct{}{}
+		normalized = append(normalized, field)
+	}
+	return normalized, nil
+}
+
+func isLiveTrieField(field string) bool {
+	switch field {
+	case "path", "comm", "tracepoint", "pid", "tid", "flags":
+		return true
+	default:
+		return false
+	}
 }
 
 func subtreeTotal(node *trieNode) uint64 {

@@ -40,6 +40,12 @@ type resetBaselineResult struct {
 	ResetCallsValid    bool `json:"resetCallsValid"`
 }
 
+type orderToggleResult struct {
+	OrderButtonUpdated bool `json:"orderButtonUpdated"`
+	OrderCallValid     bool `json:"orderCallValid"`
+	OrderSnapshotShown bool `json:"orderSnapshotShown"`
+}
+
 func TestLiveHTMLJSZoomSearchStatePreservedAcrossUpdates(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not available")
@@ -389,6 +395,78 @@ setTimeout(function() {
 	}
 }
 
+func TestLiveHTMLJSOrderToggle(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available")
+	}
+
+	snippet := `
+const fg = liveFlamegraphState;
+const orderCalls = [];
+fetch = function(url, opts) {
+  orderCalls.push({
+    url: url,
+    method: (opts && opts.method) || "GET",
+    body: (opts && opts.body) || ""
+  });
+  return Promise.resolve({
+    ok: true,
+    json: function() {
+      return Promise.resolve({
+        fields: ["path", "tracepoint", "comm"],
+        snapshot: {
+          n: "",
+          v: 0,
+          t: 1,
+          c: [{ n: "/tmp", v: 1, t: 1 }]
+        }
+      });
+    }
+  });
+};
+
+document.getElementById("btn-toggle-order").listeners.click();
+
+setTimeout(function() {
+  const orderButtonUpdated = document.getElementById("btn-toggle-order").textContent.indexOf("path > tracepoint > comm") >= 0;
+  const orderSnapshotShown = fg.svg.innerHTML.indexOf('data-name="/tmp"') >= 0;
+  const req = orderCalls[0] || {};
+  let bodyFields = [];
+  try {
+    bodyFields = JSON.parse(req.body || "{}").fields || [];
+  } catch (err) {
+    bodyFields = [];
+  }
+  const orderCallValid = orderCalls.length === 1 &&
+    req.url === "/order" &&
+    req.method === "POST" &&
+    JSON.stringify(bodyFields) === JSON.stringify(["path", "tracepoint", "comm"]);
+
+  console.log(JSON.stringify({
+    orderButtonUpdated,
+    orderCallValid,
+    orderSnapshotShown
+  }));
+}, 0);
+`
+
+	out := runLiveHTMLNodeSnippet(t, snippet)
+	var got orderToggleResult
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode node result: %v\nraw:\n%s", err, out)
+	}
+
+	if !got.OrderButtonUpdated {
+		t.Fatalf("expected toggle button label to update to next order")
+	}
+	if !got.OrderCallValid {
+		t.Fatalf("expected toggle to POST /order with next preset fields")
+	}
+	if !got.OrderSnapshotShown {
+		t.Fatalf("expected returned order snapshot to render immediately")
+	}
+}
+
 func runLiveHTMLNodeSnippet(t *testing.T, snippet string) string {
 	t.Helper()
 
@@ -477,7 +555,7 @@ function makeFrame(name, path, depth, x, w) {
 }
 
 const elements = {};
-["controls", "flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline"].forEach((id) => {
+["controls", "flamegraph", "status", "btn-pause", "btn-search", "btn-reset-search", "btn-undo-zoom", "btn-reset-zoom", "btn-reset-baseline", "btn-toggle-order"].forEach((id) => {
   elements[id] = makeElement(id);
 });
 elements["body"] = makeElement("body");
@@ -493,6 +571,13 @@ global.document = {
 };
 global.window = global;
 global.prompt = function(){ return ""; };
+global.fetch = function() {
+  return Promise.resolve({
+    ok: true,
+    json: function() { return Promise.resolve({ fields: ["comm", "path", "tracepoint"], snapshot: { n: "", v: 0, t: 0 } }); },
+    text: function() { return Promise.resolve("{\"n\":\"\",\"v\":0,\"t\":0}"); }
+  });
+};
 global.requestAnimationFrame = function(cb){ cb(); };
 global.EventSource = function() {
   this.onmessage = null;
