@@ -210,6 +210,7 @@ func newEventLoop(cfg eventLoopConfig) *eventLoop {
 	if cfg.liveFlamegraph {
 		el.liveTrie = flamegraph.NewLiveTrie(cfg.collapsedFields, cfg.countField)
 	}
+	el.configureOutputCallback()
 	el.seedTrackedPidComm()
 	return el
 }
@@ -236,6 +237,23 @@ func (e *eventLoop) commState() *commResolver {
 		e.commResolver = newCommResolver(e.comms)
 	}
 	return e.commResolver
+}
+
+func (e *eventLoop) configureOutputCallback() {
+	switch {
+	case e.cfg.flamegraphEnable:
+		e.printCb = func(ep *event.Pair) {
+			e.flamegraph.Ch <- ep
+		}
+	case e.liveTrie != nil:
+		e.printCb = func(ep *event.Pair) {
+			e.liveTrie.Ingest(ep)
+		}
+	case e.cfg.pprofEnable:
+		e.printCb = func(ep *event.Pair) {
+			ep.Recycle()
+		}
+	}
 }
 
 func (e *eventLoop) stats() string {
@@ -282,17 +300,11 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	}
 
 	e.startTime = time.Now()
+	if e.printCb == nil {
+		e.printCb = func(ep *event.Pair) { ep.Recycle() }
+	}
 	for ep := range e.events(ctx, rawCh) {
-		switch {
-		case e.cfg.flamegraphEnable:
-			e.flamegraph.Ch <- ep
-		case e.liveTrie != nil:
-			e.liveTrie.Ingest(ep)
-		case e.cfg.pprofEnable:
-			ep.Recycle()
-		default:
-			e.printCb(ep)
-		}
+		e.printCb(ep)
 		e.numSyscallsAfterFilter++
 	}
 
