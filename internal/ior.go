@@ -215,6 +215,21 @@ func runTrace() error {
 	return runTraceWithContext(context.Background(), nil, nil)
 }
 
+func newEventLoopConfig(cfg flags.Flags) eventLoopConfig {
+	fields := make([]string, len(cfg.CollapsedFields))
+	copy(fields, cfg.CollapsedFields)
+	return eventLoopConfig{
+		pidFilter:        cfg.PidFilter,
+		liveFlamegraph:   cfg.LiveFlamegraph,
+		liveInterval:     cfg.LiveInterval,
+		collapsedFields:  fields,
+		countField:       cfg.CountField,
+		flamegraphEnable: cfg.FlamegraphEnable,
+		pprofEnable:      cfg.PprofEnable,
+		plainMode:        cfg.PlainMode,
+	}
+}
+
 func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, configure func(*eventLoop)) error {
 	if getEUID() != 0 {
 		return errRootPrivilegesRequired
@@ -225,6 +240,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	if verbose {
 		logln = func(args ...any) { _, _ = fmt.Println(args...) }
 	}
+	cfg := flags.Get()
 
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
@@ -232,11 +248,11 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	}
 	defer bpfModule.Close()
 
-	if err := flags.Get().ResizeBPFMaps(bpfModule); err != nil {
+	if err := cfg.ResizeBPFMaps(bpfModule); err != nil {
 		return err
 	}
 
-	if err := flags.Get().SetBPF(bpfModule); err != nil {
+	if err := cfg.SetBPF(bpfModule); err != nil {
 		return err
 	}
 
@@ -246,7 +262,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 
 	mgr := probemanager.NewManager(libbpfTracepointModule{module: bpfModule})
 	defer mgr.Close()
-	if err := mgr.AttachAll(flags.Get().ShouldIAttachTracepoint, tracepoints.List); err != nil {
+	if err := mgr.AttachAll(cfg.ShouldIAttachTracepoint, tracepoints.List); err != nil {
 		return err
 	}
 	tui.SetProbeManager(mgr)
@@ -262,7 +278,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 
 	pprofDone := make(chan struct{})
 	var cpuProfile, memProfile *os.File
-	if flags.Get().PprofEnable {
+	if cfg.PprofEnable {
 		if cpuProfile, err = os.Create("ior.cpuprofile"); err != nil {
 			return err
 		}
@@ -276,7 +292,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 
 	signalTraceStarted(started)
 
-	el := newEventLoop()
+	el := newEventLoop(newEventLoopConfig(cfg))
 	if configure != nil {
 		configure(el)
 	}
@@ -290,7 +306,6 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 			origPrintCb(ep)
 		}
 	}
-	cfg := flags.Get()
 	ctx := parentCtx
 	cancel := func() {}
 	if shouldAutoStopByDuration(cfg) {
@@ -322,7 +337,7 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 		if verbose {
 			fmt.Println(el.stats())
 		}
-		if flags.Get().PprofEnable {
+		if cfg.PprofEnable {
 			logln("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
 			pprof.StopCPUProfile()
 			pprof.WriteHeapProfile(memProfile)
