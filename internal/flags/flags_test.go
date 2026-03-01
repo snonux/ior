@@ -4,18 +4,20 @@ import (
 	"flag"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-func parseForTest(t *testing.T, args ...string) Flags {
+func parseForTest(t *testing.T, args ...string) (Flags, error) {
 	t.Helper()
 
 	oldCommandLine := flag.CommandLine
 	oldArgs := os.Args
 	oldSingleton := singleton
 	oldOnce := once
+	oldParseErr := parseErr
 	oldPID := pidFilter.Load()
 	oldTID := tidFilter.Load()
 	oldTUIExport := tuiExportEnable.Load()
@@ -27,11 +29,12 @@ func parseForTest(t *testing.T, args ...string) Flags {
 
 	singleton = Flags{TUIExportEnable: true}
 	once = sync.Once{}
+	parseErr = nil
 	pidFilter.Store(-1)
 	tidFilter.Store(-1)
 	tuiExportEnable.Store(true)
 
-	parse()
+	err := parse()
 	cfg := singleton
 
 	t.Cleanup(func() {
@@ -39,16 +42,20 @@ func parseForTest(t *testing.T, args ...string) Flags {
 		os.Args = oldArgs
 		singleton = oldSingleton
 		once = oldOnce
+		parseErr = oldParseErr
 		pidFilter.Store(oldPID)
 		tidFilter.Store(oldTID)
 		tuiExportEnable.Store(oldTUIExport)
 	})
 
-	return cfg
+	return cfg, err
 }
 
 func TestParseLiveFlagsAndInterval(t *testing.T) {
-	cfg := parseForTest(t, "-live", "-live-interval", "200ms", "-pid", "1234")
+	cfg, err := parseForTest(t, "-live", "-live-interval", "200ms", "-pid", "1234")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
 
 	if !cfg.LiveFlamegraph {
 		t.Fatalf("expected -live to enable live mode")
@@ -65,7 +72,10 @@ func TestParseLiveFlagsAndInterval(t *testing.T) {
 }
 
 func TestParseLiveDefaults(t *testing.T) {
-	cfg := parseForTest(t)
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
 
 	if cfg.LiveFlamegraph {
 		t.Fatalf("expected live mode disabled by default")
@@ -76,7 +86,10 @@ func TestParseLiveDefaults(t *testing.T) {
 }
 
 func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
-	cfg := parseForTest(t)
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
 
 	want := []string{"comm", "path", "tracepoint"}
 	if len(cfg.CollapsedFields) != len(want) {
@@ -86,5 +99,35 @@ func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 		if cfg.CollapsedFields[i] != want[i] {
 			t.Fatalf("default collapsed fields[%d] = %q, want %q", i, cfg.CollapsedFields[i], want[i])
 		}
+	}
+}
+
+func TestParseInvalidCollapsedFieldReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-fields", "comm,invalid")
+	if err == nil {
+		t.Fatalf("expected parse error for invalid collapsed field")
+	}
+	if !strings.Contains(err.Error(), "invalid field for collapse: invalid") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseInvalidCountFieldReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-count", "invalid")
+	if err == nil {
+		t.Fatalf("expected parse error for invalid count field")
+	}
+	if !strings.Contains(err.Error(), "invalid count field: invalid") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseInvalidTracepointRegexReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-tps", "[")
+	if err == nil {
+		t.Fatalf("expected parse error for invalid tracepoint regex")
+	}
+	if !strings.Contains(err.Error(), "unable to compile regex") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

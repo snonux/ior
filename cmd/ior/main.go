@@ -18,7 +18,10 @@ func main() {
 	}
 
 	// Parse command-line flags
-	flags.Parse()
+	if err := flags.Parse(); err != nil {
+		fmt.Printf("Failed to parse flags: %v\n", err)
+		os.Exit(2)
+	}
 
 	// Run the internal logic of the application
 	if err := internal.Run(); err != nil {
