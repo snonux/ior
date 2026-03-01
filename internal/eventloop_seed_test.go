@@ -7,37 +7,42 @@ import (
 
 func TestSeedTrackedPidCommCachesTrackedPidComm(t *testing.T) {
 	pid := uint32(os.Getpid())
+	want := resolveCommFromProc(pid)
+	if want == "" {
+		t.Fatalf("expected comm for pid %d", pid)
+	}
+
 	el := &eventLoop{
 		cfg: eventLoopConfig{
 			pidFilter: int(pid),
 		},
-		comms: make(map[uint32]string),
+		comms:              make(map[uint32]string),
+		pendingCommLookups: make(map[uint32]struct{}),
 	}
-
-	want := el.comm(pid)
-	if want == "" {
-		t.Fatalf("expected comm for pid %d", pid)
-	}
-	delete(el.comms, pid)
 
 	el.seedTrackedPidComm()
 
-	if got := el.comms[pid]; got != want {
+	got, ok := el.cachedComm(pid)
+	if !ok {
+		t.Fatalf("expected pid %d to be seeded", pid)
+	}
+	if got != want {
 		t.Fatalf("seeded comm = %q, want %q", got, want)
 	}
 }
 
-func TestSeedTrackedPidCommSkipsWhenPidFilterDisabled(t *testing.T) {
+func TestSeedTrackedPidCommSeedsCurrentProcessWhenPidFilterDisabled(t *testing.T) {
 	el := &eventLoop{
 		cfg: eventLoopConfig{
 			pidFilter: -1,
 		},
-		comms: make(map[uint32]string),
+		comms:              make(map[uint32]string),
+		pendingCommLookups: make(map[uint32]struct{}),
 	}
 
 	el.seedTrackedPidComm()
 
-	if len(el.comms) != 0 {
-		t.Fatalf("expected no comms to be seeded when pid filter is disabled")
+	if _, ok := el.cachedComm(uint32(os.Getpid())); !ok {
+		t.Fatalf("expected current process pid to be seeded")
 	}
 }

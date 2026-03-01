@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,13 +39,16 @@ type eventLoop struct {
 	pendingHandles map[uint32]string      // map of TID to pathname from name_to_handle_at
 	files          map[int32]file.File    // Track all open files by file descriptor..
 	comms          map[uint32]string      // Program or thread name of the current Tid.
-	prevPairTimes  map[uint32]uint64      // Previous event's time (to calculate time differences between two events)
-	rawHandlers    map[EventType]rawEventHandler
-	flamegraph     flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
-	liveTrie       *flamegraph.LiveTrie
-	printCb        func(ep *event.Pair) // Callback to print the event
-	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
-	cfg            eventLoopConfig
+	commsMu        sync.RWMutex
+	// pendingCommLookups deduplicates async /proc comm lookups by TID.
+	pendingCommLookups map[uint32]struct{}
+	prevPairTimes      map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
+	rawHandlers        map[EventType]rawEventHandler
+	flamegraph         flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
+	liveTrie           *flamegraph.LiveTrie
+	printCb            func(ep *event.Pair) // Callback to print the event
+	warningCb          func(message string) // Optional callback for non-fatal event processing warnings
+	cfg                eventLoopConfig
 
 	// Statistics
 	numTracepoints          uint
@@ -57,17 +61,18 @@ type eventLoop struct {
 
 func newEventLoop(cfg eventLoopConfig) *eventLoop {
 	el := &eventLoop{
-		filter:         newEventFilter(),
-		enterEvs:       make(map[uint32]*event.Pair),
-		pendingHandles: make(map[uint32]string),
-		files:          make(map[int32]file.File),
-		comms:          make(map[uint32]string),
-		prevPairTimes:  make(map[uint32]uint64),
-		rawHandlers:    make(map[EventType]rawEventHandler),
-		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		flamegraph:     flamegraph.New(),
-		cfg:            cfg,
-		done:           make(chan struct{}),
+		filter:             newEventFilter(),
+		enterEvs:           make(map[uint32]*event.Pair),
+		pendingHandles:     make(map[uint32]string),
+		files:              make(map[int32]file.File),
+		comms:              make(map[uint32]string),
+		pendingCommLookups: make(map[uint32]struct{}),
+		prevPairTimes:      make(map[uint32]uint64),
+		rawHandlers:        make(map[EventType]rawEventHandler),
+		printCb:            func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
+		flamegraph:         flamegraph.New(),
+		cfg:                cfg,
+		done:               make(chan struct{}),
 	}
 	el.initRawHandlers()
 	if cfg.liveFlamegraph {
@@ -78,11 +83,26 @@ func newEventLoop(cfg eventLoopConfig) *eventLoop {
 }
 
 func (e *eventLoop) seedTrackedPidComm() {
-	pid := e.cfg.pidFilter
-	if pid <= 0 {
-		return
+	candidates := []uint32{uint32(os.Getpid()), uint32(os.Getppid())}
+	if pid := e.cfg.pidFilter; pid > 0 {
+		candidates = append(candidates, uint32(pid))
 	}
-	_ = e.comm(uint32(pid))
+
+	seen := make(map[uint32]struct{}, len(candidates))
+	for _, tid := range candidates {
+		if tid == 0 {
+			continue
+		}
+		if _, ok := seen[tid]; ok {
+			continue
+		}
+		seen[tid] = struct{}{}
+		if comm := resolveCommFromProc(tid); comm != "" {
+			e.setCachedComm(tid, comm)
+			continue
+		}
+		e.queueCommLookup(tid)
+	}
 }
 
 func (e *eventLoop) stats() string {
@@ -248,10 +268,8 @@ func (e *eventLoop) initRawHandlers() {
 
 func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	tid := enterEv.GetTid()
-	// Cache comm as early as possible to reduce races for short-lived processes.
-	if _, ok := e.comms[tid]; !ok {
-		_ = e.comm(tid)
-	}
+	// Schedule comm lookup as early as possible to reduce races for short-lived processes.
+	e.queueCommLookup(tid)
 	if !e.filter.commFilterEnable {
 		e.enterEvs[tid] = event.NewPair(enterEv)
 		return
@@ -262,7 +280,7 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 		e.enterEvs[tid] = event.NewPair(enterEv)
 	default:
 		// Only, when we have a comm name
-		if _, ok := e.comms[tid]; ok {
+		if _, ok := e.cachedComm(tid); ok {
 			e.enterEvs[tid] = event.NewPair(enterEv)
 		} else {
 			// Probably not an issue.
@@ -340,7 +358,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *OpenEvent) bool {
 		// Keep path information for failed opens so error scenarios remain observable.
 		ep.File = file.NewPathname(openEv.Filename[:])
 	}
-	e.comms[openEv.Tid] = comm
+	e.setCachedComm(openEv.Tid, comm)
 	return true
 }
 
@@ -599,9 +617,60 @@ func (e *eventLoop) notifyWarning(message string) {
 }
 
 func (e *eventLoop) comm(tid uint32) string {
-	if comm, ok := e.comms[tid]; ok {
+	if comm, ok := e.cachedComm(tid); ok {
 		return comm
 	}
+	e.queueCommLookup(tid)
+	return ""
+}
+
+func (e *eventLoop) cachedComm(tid uint32) (string, bool) {
+	e.commsMu.RLock()
+	defer e.commsMu.RUnlock()
+	comm, ok := e.comms[tid]
+	return comm, ok
+}
+
+func (e *eventLoop) setCachedComm(tid uint32, comm string) {
+	if comm == "" {
+		return
+	}
+	e.commsMu.Lock()
+	e.comms[tid] = comm
+	e.commsMu.Unlock()
+}
+
+func (e *eventLoop) queueCommLookup(tid uint32) {
+	if tid == 0 {
+		return
+	}
+	e.commsMu.Lock()
+	if _, ok := e.comms[tid]; ok {
+		e.commsMu.Unlock()
+		return
+	}
+	if e.pendingCommLookups == nil {
+		e.pendingCommLookups = make(map[uint32]struct{})
+	}
+	if _, ok := e.pendingCommLookups[tid]; ok {
+		e.commsMu.Unlock()
+		return
+	}
+	e.pendingCommLookups[tid] = struct{}{}
+	e.commsMu.Unlock()
+
+	go func() {
+		comm := resolveCommFromProc(tid)
+		e.commsMu.Lock()
+		delete(e.pendingCommLookups, tid)
+		if comm != "" {
+			e.comms[tid] = comm
+		}
+		e.commsMu.Unlock()
+	}()
+}
+
+func resolveCommFromProc(tid uint32) string {
 	commPath := fmt.Sprintf("/proc/%d/comm", tid)
 	if data, err := os.ReadFile(commPath); err == nil {
 		comm := string(data)
@@ -609,13 +678,11 @@ func (e *eventLoop) comm(tid uint32) string {
 			comm = comm[:len(comm)-1]
 		}
 		if comm != "" {
-			e.comms[tid] = comm
 			return comm
 		}
 	}
 	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid)); err == nil {
 		linkName = filepath.Base(linkName)
-		e.comms[tid] = linkName
 		return linkName
 	}
 	return ""
