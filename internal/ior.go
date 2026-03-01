@@ -77,10 +77,6 @@ func (m libbpfTracepointModule) GetProgram(progName string) (probemanager.Progra
 	return libbpfTracepointProgram{prog: prog}, nil
 }
 
-func attachTracepoints(bpfModule *bpf.Module) error {
-	return attachTracepointsWith(libbpfTracepointModule{module: bpfModule}, flags.Get().ShouldIAttachTracepoint, tracepoints.List, true)
-}
-
 func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bool, tracepointNames []string, verbose bool) error {
 	logln := func(...any) {}
 	logf := func(string, ...any) {}
