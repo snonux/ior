@@ -94,3 +94,29 @@ func TestNewStreamEventWithoutRetEvent(t *testing.T) {
 		t.Fatalf("FD = %d, want %d", got.FD, UnknownFD)
 	}
 }
+
+func TestNewWarningEventPopulatesFields(t *testing.T) {
+	got := NewWarningEvent("Dropped malformed event")
+
+	if got.Syscall != "warning" {
+		t.Fatalf("Syscall = %q, want warning", got.Syscall)
+	}
+	if got.Comm != "ior" {
+		t.Fatalf("Comm = %q, want ior", got.Comm)
+	}
+	if got.FileName != "Dropped malformed event" {
+		t.Fatalf("FileName = %q, want warning text", got.FileName)
+	}
+	if got.FD != UnknownFD {
+		t.Fatalf("FD = %d, want %d", got.FD, UnknownFD)
+	}
+	if got.RetVal != -1 {
+		t.Fatalf("RetVal = %d, want -1", got.RetVal)
+	}
+	if !got.IsError {
+		t.Fatalf("IsError = false, want true")
+	}
+	if got.Seq == 0 || got.TimeNs == 0 {
+		t.Fatalf("Seq/TimeNs = %d/%d, want non-zero", got.Seq, got.TimeNs)
+	}
+}

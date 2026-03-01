@@ -190,6 +190,13 @@ func tuiTraceStarterFromRunTrace(
 					streamEvents <- eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep)
 					ep.Recycle()
 				}
+				el.warningCb = func(message string) {
+					// Drop warning notifications if the stream channel is saturated.
+					select {
+					case streamEvents <- eventstream.NewWarningEvent(message):
+					default:
+					}
+				}
 			})
 			close(streamEvents)
 			errCh <- err

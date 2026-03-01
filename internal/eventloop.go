@@ -43,6 +43,7 @@ type eventLoop struct {
 	flamegraph     flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
 	liveTrie       *flamegraph.LiveTrie
 	printCb        func(ep *event.Pair) // Callback to print the event
+	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
 	cfg            eventLoopConfig
 
 	// Statistics
@@ -144,7 +145,12 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 
 	if e.cfg.flamegraphEnable {
 		fmt.Println("Waiting for flamegraph")
-		<-e.flamegraph.Done
+		if err := <-e.flamegraph.Done; err != nil {
+			e.notifyWarning(fmt.Sprintf("Flamegraph generation failed: %v", err))
+			if e.warningCb == nil {
+				fmt.Println("Flamegraph generation failed:", err)
+			}
+		}
 	}
 }
 
@@ -182,7 +188,8 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	evType := EventType(raw[0])
 	handler, ok := e.rawHandlers[evType]
 	if !ok {
-		panic(fmt.Sprintf("unhandled event type %v: %v", evType, raw))
+		e.notifyWarning(fmt.Sprintf("Dropped unhandled raw event type %d", evType))
+		return
 	}
 	handler(raw, ch)
 }
@@ -279,6 +286,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	// enterEv:SYS_ENTER_OPEN => exitEv:SYS_EXIT_OPEN
 	if ep.EnterEv.GetTraceId()-1 != ep.ExitEv.GetTraceId() {
 		e.numTracepointMismatches++
+		e.notifyWarning("Dropped tracepoint pair with mismatched enter/exit IDs")
 		ep.Recycle()
 		return
 	}
@@ -286,9 +294,14 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	switch v := ep.EnterEv.(type) {
 	case *OpenEvent:
 		openEv := ep.EnterEv.(*OpenEvent)
+		retEvent, ok := ep.ExitEv.(*RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed open exit event")
+			return
+		}
 		comm := types.StringValue(openEv.Comm[:])
 		ep.Comm = comm
-		if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
+		if fd := int32(retEvent.Ret); fd >= 0 {
 			file := file.NewFd(fd, types.StringValue(openEv.Filename[:]), v.Flags)
 			e.files[fd] = file
 			ep.File = file
@@ -319,7 +332,12 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 		nameEvent := ep.EnterEv.(*PathEvent)
 		if ep.Is(SYS_ENTER_CREAT) {
-			if fd := int32(ep.ExitEv.(*RetEvent).Ret); fd >= 0 {
+			retEvent, ok := ep.ExitEv.(*RetEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed creat exit event")
+				return
+			}
+			if fd := int32(retEvent.Ret); fd >= 0 {
 				file := file.NewFd(fd, types.StringValue(nameEvent.Pathname[:]),
 					syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
 				e.files[fd] = file
@@ -360,10 +378,16 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		if ep.Is(SYS_ENTER_DUP) || ep.Is(SYS_ENTER_DUP2) {
 			fdFile, ok := ep.File.(file.FdFile)
 			if !ok {
-				panic("expected a file.FdFile")
+				e.recyclePair(ep, "Dropped malformed dup source event")
+				return
+			}
+			retEvent, ok := ep.ExitEv.(*RetEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed dup exit event")
+				return
 			}
 			// Duplicating fd
-			newFd := int32(ep.ExitEv.(*RetEvent).Ret)
+			newFd := int32(retEvent.Ret)
 			if newFd != -1 {
 				e.files[newFd] = fdFile.Dup(newFd)
 			}
@@ -371,7 +395,8 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		if ep.Is(SYS_ENTER_PIDFD_GETFD) {
 			retEv, ok := ep.ExitEv.(*RetEvent)
 			if !ok {
-				panic("expected *types.RetEvent")
+				e.recyclePair(ep, "Dropped malformed pidfd_getfd exit event")
+				return
 			}
 			if newFd := int32(retEv.Ret); newFd >= 0 {
 				transferredFile := file.NewFdWithPid(newFd, v.Pid)
@@ -400,9 +425,15 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		// Duplicating fd
 		fdFile, ok := ep.File.(file.FdFile)
 		if !ok {
-			panic("expected a file.FdFile")
+			e.recyclePair(ep, "Dropped malformed dup3 source event")
+			return
 		}
-		newFd := int32(ep.ExitEv.(*RetEvent).Ret)
+		retEvent, ok := ep.ExitEv.(*RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed dup3 exit event")
+			return
+		}
+		newFd := int32(retEvent.Ret)
 		if newFd != -1 {
 			duppedFdFile := fdFile.Dup(newFd)
 			duppedFdFile.AddFlags(dup3Event.Flags & syscall.O_CLOEXEC)
@@ -413,7 +444,8 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		tid := ep.EnterEv.GetTid()
 		retEvent, ok := ep.ExitEv.(*RetEvent)
 		if !ok {
-			panic("expected *types.RetEvent for open_by_handle_at exit")
+			e.recyclePair(ep, "Dropped malformed open_by_handle_at exit event")
+			return
 		}
 
 		if fd := int32(retEvent.Ret); fd >= 0 {
@@ -441,7 +473,8 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		if ep.Is(SYS_ENTER_IO_URING_SETUP) {
 			retEvent, ok := exitEv.(*types.RetEvent)
 			if !ok {
-				panic("expected *types.RetEvent")
+				e.recyclePair(ep, "Dropped malformed io_uring_setup exit event")
+				return
 			}
 			if fd := int32(retEvent.Ret); fd >= 0 {
 				fdFile := file.NewFdWithPid(fd, v.Pid)
@@ -452,7 +485,8 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		if ep.Is(SYS_ENTER_GETCWD) {
 			retEvent, ok := ep.ExitEv.(*types.RetEvent)
 			if !ok {
-				panic("expected *types.RetEvent")
+				e.recyclePair(ep, "Dropped malformed getcwd exit event")
+				return
 			}
 			if retEvent.Ret > 0 {
 				if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", ep.EnterEv.GetTid())); err == nil {
@@ -481,7 +515,8 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 		retEvent, ok := exitEv.(*types.RetEvent)
 		if !ok {
-			panic("expected *types.RetEvent")
+			e.recyclePair(ep, "Dropped malformed fcntl exit event")
+			return
 		}
 		// Syscall returned -1, nothing was changed with the fd
 		if retEvent.Ret == -1 {
@@ -490,7 +525,8 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 		fdFile, ok := ep.File.(file.FdFile)
 		if !ok {
-			panic("expected a file.FdFile")
+			e.recyclePair(ep, "Dropped malformed fcntl file event")
+			return
 		}
 
 		// See fcntl(2) for implementation details
@@ -511,12 +547,25 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		}
 
 	default:
-		panic(fmt.Sprintf("unknown type: %v", v))
+		e.recyclePair(ep, "Dropped malformed enter event")
+		return
 	}
 	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]
 	ep.CalculateDurations(prevPairTime)
 	e.prevPairTimes[ep.EnterEv.GetTid()] = ep.ExitEv.GetTime()
 	ch <- ep
+}
+
+func (e *eventLoop) recyclePair(ep *event.Pair, warning string) {
+	e.notifyWarning(warning)
+	ep.Recycle()
+}
+
+func (e *eventLoop) notifyWarning(message string) {
+	if e.warningCb == nil || message == "" {
+		return
+	}
+	e.warningCb(message)
 }
 
 func (e *eventLoop) comm(tid uint32) string {
