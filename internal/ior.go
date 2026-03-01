@@ -254,11 +254,11 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	}
 	defer bpfModule.Close()
 
-	if err := cfg.ResizeBPFMaps(bpfModule); err != nil {
+	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
 		return err
 	}
 
-	if err := cfg.SetBPF(bpfModule); err != nil {
+	if err := setBPFGlobals(cfg, bpfModule); err != nil {
 		return err
 	}
 
