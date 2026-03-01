@@ -15,42 +15,9 @@ func ServeLive(ctx context.Context, lt *LiveTrie, interval time.Duration) error 
 	mux.HandleFunc("/events", handleSSE(lt, interval))
 	mux.HandleFunc("/reset", handleReset(lt))
 	mux.HandleFunc("/order", handleOrder(lt))
-	srv := &http.Server{Handler: mux}
-
-	listener, err := listenRandomPort()
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-
-	hostname, port := serverHostPort(listener)
-	fmt.Printf("Live flamegraph available at http://%s:%d/\n", hostname, port)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- srv.Serve(listener)
-	}()
-
-	select {
-	case <-ctx.Done():
-	case serveErr := <-errCh:
-		if serveErr != nil && serveErr != http.ErrServerClosed {
-			return serveErr
-		}
-		return nil
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown live web server: %w", err)
-	}
-
-	serveErr := <-errCh
-	if serveErr != nil && serveErr != http.ErrServerClosed {
-		return serveErr
-	}
-	return nil
+	return runServer(ctx, mux, func(hostname string, port int) {
+		fmt.Printf("Live flamegraph available at http://%s:%d/\n", hostname, port)
+	})
 }
 
 func handleLivePage() http.HandlerFunc {
