@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"ior/internal/event"
 	"ior/internal/flags"
-	"os"
 	"runtime"
 	"sync"
 )
@@ -13,14 +12,14 @@ import (
 type IorDataCollector struct {
 	flags   flags.Flags
 	Ch      chan *event.Pair
-	Done    chan struct{}
+	Done    chan error
 	workers []worker
 }
 
 func New() IorDataCollector {
 	f := IorDataCollector{
 		Ch:   make(chan *event.Pair, 4096),
-		Done: make(chan struct{}),
+		Done: make(chan error, 1),
 	}
 	numWorkers := runtime.NumCPU() / 4
 	if numWorkers == 0 {
@@ -52,8 +51,9 @@ func (f IorDataCollector) Start(ctx context.Context) {
 			}
 		}
 		if err := iod.serializeToFile(); err != nil {
-			fmt.Println(err)
-			os.Exit(2)
+			f.Done <- err
+			return
 		}
+		f.Done <- nil
 	}()
 }

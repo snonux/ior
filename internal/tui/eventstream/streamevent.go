@@ -3,6 +3,7 @@ package eventstream
 import (
 	"ior/internal/event"
 	"ior/internal/types"
+	"time"
 )
 
 type StreamEvent struct {
@@ -48,4 +49,19 @@ func NewStreamEvent(seq uint64, pair *event.Pair) StreamEvent {
 	}
 
 	return e
+}
+
+// NewWarningEvent creates a synthetic stream row for non-fatal runtime warnings.
+func NewWarningEvent(message string) StreamEvent {
+	now := uint64(time.Now().UnixNano())
+	return StreamEvent{
+		Seq:      now,
+		TimeNs:   now,
+		Syscall:  "warning",
+		Comm:     "ior",
+		FileName: message,
+		FD:       UnknownFD,
+		RetVal:   -1,
+		IsError:  true,
+	}
 }
