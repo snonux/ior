@@ -30,13 +30,16 @@ type eventLoopConfig struct {
 	plainMode        bool
 }
 
+type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
+
 type eventLoop struct {
 	filter         *eventFilter
-	enterEvs       map[uint32]*event.Pair      // Temp. store of sys_enter tracepoints per Tid.
-	pendingHandles map[uint32]string           // map of TID to pathname from name_to_handle_at
-	files          map[int32]file.File         // Track all open files by file descriptor..
-	comms          map[uint32]string           // Program or thread name of the current Tid.
-	prevPairTimes  map[uint32]uint64           // Previous event's time (to calculate time differences between two events)
+	enterEvs       map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
+	pendingHandles map[uint32]string      // map of TID to pathname from name_to_handle_at
+	files          map[int32]file.File    // Track all open files by file descriptor..
+	comms          map[uint32]string      // Program or thread name of the current Tid.
+	prevPairTimes  map[uint32]uint64      // Previous event's time (to calculate time differences between two events)
+	rawHandlers    map[EventType]rawEventHandler
 	flamegraph     flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
 	liveTrie       *flamegraph.LiveTrie
 	printCb        func(ep *event.Pair) // Callback to print the event
@@ -59,11 +62,13 @@ func newEventLoop(cfg eventLoopConfig) *eventLoop {
 		files:          make(map[int32]file.File),
 		comms:          make(map[uint32]string),
 		prevPairTimes:  make(map[uint32]uint64),
+		rawHandlers:    make(map[EventType]rawEventHandler),
 		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		flamegraph:     flamegraph.New(),
 		cfg:            cfg,
 		done:           make(chan struct{}),
 	}
+	el.initRawHandlers()
 	if cfg.liveFlamegraph {
 		el.liveTrie = flamegraph.NewLiveTrie(cfg.collapsedFields, cfg.countField)
 	}
@@ -173,39 +178,64 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 
 func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	e.numTracepoints++
-	switch EventType(raw[0]) {
-	case ENTER_OPEN_EVENT:
+	e.initRawHandlers()
+	evType := EventType(raw[0])
+	handler, ok := e.rawHandlers[evType]
+	if !ok {
+		panic(fmt.Sprintf("unhandled event type %v: %v", evType, raw))
+	}
+	handler(raw, ch)
+}
+
+func (e *eventLoop) initRawHandlers() {
+	if e.rawHandlers == nil {
+		e.rawHandlers = make(map[EventType]rawEventHandler)
+	}
+	if len(e.rawHandlers) != 0 {
+		return
+	}
+
+	e.rawHandlers[ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
 			e.tracepointEntered(ev)
 		}
-	case EXIT_OPEN_EVENT:
+	}
+	e.rawHandlers[EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
 		e.tracepointExited(NewRetEvent(raw), ch)
-	case ENTER_FD_EVENT:
+	}
+	e.rawHandlers[ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		e.tracepointEntered(NewFdEvent(raw))
-	case EXIT_FD_EVENT:
+	}
+	e.rawHandlers[EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
 		e.tracepointExited(NewFdEvent(raw), ch)
-	case ENTER_NULL_EVENT:
+	}
+	e.rawHandlers[ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		e.tracepointEntered(NewNullEvent(raw))
-	case EXIT_NULL_EVENT:
+	}
+	e.rawHandlers[EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
 		e.tracepointExited(NewNullEvent(raw), ch)
-	case EXIT_RET_EVENT:
+	}
+	e.rawHandlers[EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
 		e.tracepointExited(NewRetEvent(raw), ch)
-	case ENTER_NAME_EVENT:
+	}
+	e.rawHandlers[ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		if ev, ok := e.filter.nameEvent(NewNameEvent(raw)); ok {
 			e.tracepointEntered(ev)
 		}
-	case ENTER_PATH_EVENT:
+	}
+	e.rawHandlers[ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		if ev, ok := e.filter.pathEvent(NewPathEvent(raw)); ok {
 			e.tracepointEntered(ev)
 		}
-	case ENTER_FCNTL_EVENT:
+	}
+	e.rawHandlers[ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		e.tracepointEntered(NewFcntlEvent(raw))
-	case ENTER_OPEN_BY_HANDLE_AT_EVENT:
+	}
+	e.rawHandlers[ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		e.tracepointEntered(NewOpenByHandleAtEvent(raw))
-	case ENTER_DUP3_EVENT:
+	}
+	e.rawHandlers[ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		e.tracepointEntered(NewDup3Event(raw))
-	default:
-		panic(fmt.Sprintf("unhandled event type %v: %v", EventType(raw[0]), raw))
 	}
 }
 
