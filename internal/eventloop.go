@@ -65,19 +65,7 @@ func (e *eventLoop) seedTrackedPidComm() {
 	if pid <= 0 {
 		return
 	}
-	commPath := fmt.Sprintf("/proc/%d/comm", pid)
-	data, err := os.ReadFile(commPath)
-	if err != nil {
-		return
-	}
-	comm := string(data)
-	if len(comm) > 0 && comm[len(comm)-1] == '\n' {
-		comm = comm[:len(comm)-1]
-	}
-	if comm == "" {
-		return
-	}
-	e.comms[uint32(pid)] = comm
+	_ = e.comm(uint32(pid))
 }
 
 func (e *eventLoop) stats() string {
