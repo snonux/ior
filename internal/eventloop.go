@@ -290,270 +290,300 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep.Recycle()
 		return
 	}
-
-	switch v := ep.EnterEv.(type) {
-	case *OpenEvent:
-		openEv := ep.EnterEv.(*OpenEvent)
-		retEvent, ok := ep.ExitEv.(*RetEvent)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed open exit event")
-			return
-		}
-		comm := types.StringValue(openEv.Comm[:])
-		ep.Comm = comm
-		if fd := int32(retEvent.Ret); fd >= 0 {
-			file := file.NewFd(fd, types.StringValue(openEv.Filename[:]), v.Flags)
-			e.files[fd] = file
-			ep.File = file
-		} else {
-			// Keep path information for failed opens so error scenarios remain observable.
-			ep.File = file.NewPathname(openEv.Filename[:])
-		}
-		e.comms[openEv.Tid] = comm
-
-	case *NameEvent:
-		nameEvent := ep.EnterEv.(*NameEvent)
-		ep.File = file.NewOldnameNewname(nameEvent.Oldname[:], nameEvent.Newname[:])
-		ep.Comm = e.comm(ep.EnterEv.GetTid())
-
-	case *PathEvent:
-		if ep.EnterEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
-			retEv, ok := ep.ExitEv.(*types.RetEvent)
-			if !ok || retEv.Ret < 0 {
-				ep.Recycle()
-				return
-			}
-			pathEv := ep.EnterEv.(*PathEvent)
-			pathname := types.StringValue(pathEv.Pathname[:])
-			e.pendingHandles[ep.EnterEv.GetTid()] = pathname
-			ep.Recycle()
-			return
-		}
-
-		nameEvent := ep.EnterEv.(*PathEvent)
-		if ep.Is(SYS_ENTER_CREAT) {
-			retEvent, ok := ep.ExitEv.(*RetEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed creat exit event")
-				return
-			}
-			if fd := int32(retEvent.Ret); fd >= 0 {
-				file := file.NewFd(fd, types.StringValue(nameEvent.Pathname[:]),
-					syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
-				e.files[fd] = file
-				ep.File = file
-			}
-		} else {
-			ep.File = file.NewPathname(nameEvent.Pathname[:])
-		}
-		ep.Comm = e.comm(ep.EnterEv.GetTid())
-
-	case *FdEvent:
-		fd := ep.EnterEv.(*FdEvent).Fd
-		if file_, ok := e.files[fd]; ok {
-			ep.File = file_
-			if ep.Is(SYS_ENTER_CLOSE) {
-				delete(e.files, fd)
-			}
-		} else {
-			ep.File = file.NewFdWithPid(fd, v.Pid)
-		}
-		if ep.Is(SYS_ENTER_CLOSE_RANGE) {
-			// close_range provides (first, last), but fd_event only carries the first
-			// argument, so we approximate by closing all tracked fds >= first.
-			retEv, ok := ep.ExitEv.(*types.RetEvent)
-			if ok && retEv.Ret == 0 {
-				for fdToClose := range e.files {
-					if fdToClose >= fd {
-						delete(e.files, fdToClose)
-					}
-				}
-			}
-		}
-		ep.Comm = e.comm(ep.EnterEv.GetTid())
-		if !e.filter.eventPair(ep) {
-			ep.Recycle()
-			return
-		}
-		if ep.Is(SYS_ENTER_DUP) || ep.Is(SYS_ENTER_DUP2) {
-			fdFile, ok := ep.File.(file.FdFile)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed dup source event")
-				return
-			}
-			retEvent, ok := ep.ExitEv.(*RetEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed dup exit event")
-				return
-			}
-			// Duplicating fd
-			newFd := int32(retEvent.Ret)
-			if newFd != -1 {
-				e.files[newFd] = fdFile.Dup(newFd)
-			}
-		}
-		if ep.Is(SYS_ENTER_PIDFD_GETFD) {
-			retEv, ok := ep.ExitEv.(*RetEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed pidfd_getfd exit event")
-				return
-			}
-			if newFd := int32(retEv.Ret); newFd >= 0 {
-				transferredFile := file.NewFdWithPid(newFd, v.Pid)
-				e.files[newFd] = transferredFile
-				ep.File = transferredFile
-			}
-		}
-
-		if retEv, ok := ep.ExitEv.(*RetEvent); ok {
-			ep.Bytes = bytesFromRet(retEv)
-		}
-
-	case *Dup3Event:
-		dup3Event := ep.EnterEv.(*Dup3Event)
-		fd := int32(dup3Event.Fd)
-		if file_, ok := e.files[fd]; ok {
-			ep.File = file_
-		} else {
-			ep.File = file.NewFdWithPid(fd, v.Pid)
-		}
-		ep.Comm = e.comm(ep.EnterEv.GetTid())
-		if !e.filter.eventPair(ep) {
-			ep.Recycle()
-			return
-		}
-		// Duplicating fd
-		fdFile, ok := ep.File.(file.FdFile)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed dup3 source event")
-			return
-		}
-		retEvent, ok := ep.ExitEv.(*RetEvent)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed dup3 exit event")
-			return
-		}
-		newFd := int32(retEvent.Ret)
-		if newFd != -1 {
-			duppedFdFile := fdFile.Dup(newFd)
-			duppedFdFile.AddFlags(dup3Event.Flags & syscall.O_CLOEXEC)
-			e.files[newFd] = duppedFdFile
-		}
-
-	case *OpenByHandleAtEvent:
-		tid := ep.EnterEv.GetTid()
-		retEvent, ok := ep.ExitEv.(*RetEvent)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed open_by_handle_at exit event")
-			return
-		}
-
-		if fd := int32(retEvent.Ret); fd >= 0 {
-			openByHandleEv := ep.EnterEv.(*OpenByHandleAtEvent)
-			if pathname, ok := e.pendingHandles[tid]; ok {
-				delete(e.pendingHandles, tid)
-				file := file.NewFd(fd, pathname, openByHandleEv.Flags)
-				e.files[fd] = file
-				ep.File = file
-			} else {
-				fdFile := file.NewFdWithPid(fd, v.Pid)
-				if fdFile.Flags() == file.Flags(-1) {
-					fdFile.SetFlags(openByHandleEv.Flags)
-				}
-				e.files[fd] = fdFile
-				ep.File = fdFile
-			}
-			ep.Comm = e.comm(tid)
-		} else {
-			ep.Recycle()
-			return
-		}
-
-	case *NullEvent:
-		if ep.Is(SYS_ENTER_IO_URING_SETUP) {
-			retEvent, ok := exitEv.(*types.RetEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed io_uring_setup exit event")
-				return
-			}
-			if fd := int32(retEvent.Ret); fd >= 0 {
-				fdFile := file.NewFdWithPid(fd, v.Pid)
-				e.files[fd] = fdFile
-				ep.File = fdFile
-			}
-		}
-		if ep.Is(SYS_ENTER_GETCWD) {
-			retEvent, ok := ep.ExitEv.(*types.RetEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed getcwd exit event")
-				return
-			}
-			if retEvent.Ret > 0 {
-				if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", ep.EnterEv.GetTid())); err == nil {
-					ep.File = file.NewPathname([]byte(cwd))
-				}
-			}
-		}
-		ep.Comm = e.comm(ep.EnterEv.GetTid())
-		if !e.filter.eventPair(ep) {
-			ep.Recycle()
-			return
-		}
-
-	case *FcntlEvent:
-		ep.Comm = e.comm(ep.EnterEv.GetTid())
-		fd := int32(v.Fd)
-		if file_, ok := e.files[fd]; ok {
-			ep.File = file_
-		} else {
-			ep.File = file.NewFdWithPid(fd, v.Pid)
-		}
-		if !e.filter.eventPair(ep) {
-			ep.Recycle()
-			return
-		}
-
-		retEvent, ok := exitEv.(*types.RetEvent)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed fcntl exit event")
-			return
-		}
-		// Syscall returned -1, nothing was changed with the fd
-		if retEvent.Ret == -1 {
-			break
-		}
-
-		fdFile, ok := ep.File.(file.FdFile)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed fcntl file event")
-			return
-		}
-
-		// See fcntl(2) for implementation details
-		switch v.Cmd {
-		case syscall.F_SETFL:
-			const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-			fdFile.SetFlags((int32(v.Arg) & int32(canChange)))
-			ep.File = fdFile
-			e.files[fd] = fdFile
-		case syscall.F_DUPFD:
-			newFd := int32(retEvent.Ret)
-			e.files[newFd] = fdFile.Dup(newFd)
-		case syscall.F_DUPFD_CLOEXEC:
-			newFd := int32(retEvent.Ret)
-			duppedFdFile := fdFile.Dup(newFd)
-			duppedFdFile.AddFlags(syscall.O_CLOEXEC)
-			e.files[newFd] = duppedFdFile
-		}
-
-	default:
-		e.recyclePair(ep, "Dropped malformed enter event")
+	if !e.handleTracepointExit(ep) {
 		return
 	}
 	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]
 	ep.CalculateDurations(prevPairTime)
 	e.prevPairTimes[ep.EnterEv.GetTid()] = ep.ExitEv.GetTime()
 	ch <- ep
+}
+
+func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
+	switch enterEv := ep.EnterEv.(type) {
+	case *OpenEvent:
+		return e.handleOpenExit(ep, enterEv)
+	case *NameEvent:
+		return e.handleNameExit(ep, enterEv)
+	case *PathEvent:
+		return e.handlePathExit(ep, enterEv)
+	case *FdEvent:
+		return e.handleFdExit(ep, enterEv)
+	case *Dup3Event:
+		return e.handleDup3Exit(ep, enterEv)
+	case *OpenByHandleAtEvent:
+		return e.handleOpenByHandleAtExit(ep, enterEv)
+	case *NullEvent:
+		return e.handleNullExit(ep, enterEv)
+	case *FcntlEvent:
+		return e.handleFcntlExit(ep, enterEv)
+	default:
+		e.recyclePair(ep, "Dropped malformed enter event")
+		return false
+	}
+}
+
+func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *OpenEvent) bool {
+	retEvent, ok := ep.ExitEv.(*RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed open exit event")
+		return false
+	}
+
+	comm := types.StringValue(openEv.Comm[:])
+	ep.Comm = comm
+	if fd := int32(retEvent.Ret); fd >= 0 {
+		fdFile := file.NewFd(fd, types.StringValue(openEv.Filename[:]), openEv.Flags)
+		e.files[fd] = fdFile
+		ep.File = fdFile
+	} else {
+		// Keep path information for failed opens so error scenarios remain observable.
+		ep.File = file.NewPathname(openEv.Filename[:])
+	}
+	e.comms[openEv.Tid] = comm
+	return true
+}
+
+func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *NameEvent) bool {
+	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
+	ep.Comm = e.comm(nameEv.GetTid())
+	return true
+}
+
+func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
+	if pathEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
+		retEv, ok := ep.ExitEv.(*types.RetEvent)
+		if !ok || retEv.Ret < 0 {
+			ep.Recycle()
+			return false
+		}
+		e.pendingHandles[pathEv.GetTid()] = types.StringValue(pathEv.Pathname[:])
+		ep.Recycle()
+		return false
+	}
+
+	if ep.Is(SYS_ENTER_CREAT) {
+		retEvent, ok := ep.ExitEv.(*RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed creat exit event")
+			return false
+		}
+		if fd := int32(retEvent.Ret); fd >= 0 {
+			fdFile := file.NewFd(fd, types.StringValue(pathEv.Pathname[:]),
+				syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
+			e.files[fd] = fdFile
+			ep.File = fdFile
+		}
+	} else {
+		ep.File = file.NewPathname(pathEv.Pathname[:])
+	}
+	ep.Comm = e.comm(pathEv.GetTid())
+	return true
+}
+
+func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
+	fd := fdEv.Fd
+	if fdFile, ok := e.files[fd]; ok {
+		ep.File = fdFile
+		if ep.Is(SYS_ENTER_CLOSE) {
+			delete(e.files, fd)
+		}
+	} else {
+		ep.File = file.NewFdWithPid(fd, fdEv.Pid)
+	}
+	if ep.Is(SYS_ENTER_CLOSE_RANGE) {
+		// close_range provides (first, last), but fd_event only carries the first
+		// argument, so we approximate by closing all tracked fds >= first.
+		retEv, ok := ep.ExitEv.(*types.RetEvent)
+		if ok && retEv.Ret == 0 {
+			for fdToClose := range e.files {
+				if fdToClose >= fd {
+					delete(e.files, fdToClose)
+				}
+			}
+		}
+	}
+	ep.Comm = e.comm(fdEv.GetTid())
+	if !e.filter.eventPair(ep) {
+		ep.Recycle()
+		return false
+	}
+
+	if ep.Is(SYS_ENTER_DUP) || ep.Is(SYS_ENTER_DUP2) {
+		fdFile, ok := ep.File.(file.FdFile)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed dup source event")
+			return false
+		}
+		retEvent, ok := ep.ExitEv.(*RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed dup exit event")
+			return false
+		}
+		// Duplicating fd
+		if newFd := int32(retEvent.Ret); newFd != -1 {
+			e.files[newFd] = fdFile.Dup(newFd)
+		}
+	}
+	if ep.Is(SYS_ENTER_PIDFD_GETFD) {
+		retEv, ok := ep.ExitEv.(*RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed pidfd_getfd exit event")
+			return false
+		}
+		if newFd := int32(retEv.Ret); newFd >= 0 {
+			transferredFile := file.NewFdWithPid(newFd, fdEv.Pid)
+			e.files[newFd] = transferredFile
+			ep.File = transferredFile
+		}
+	}
+	if retEv, ok := ep.ExitEv.(*RetEvent); ok {
+		ep.Bytes = bytesFromRet(retEv)
+	}
+	return true
+}
+
+func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
+	fd := int32(dup3Ev.Fd)
+	if fdFile, ok := e.files[fd]; ok {
+		ep.File = fdFile
+	} else {
+		ep.File = file.NewFdWithPid(fd, dup3Ev.Pid)
+	}
+	ep.Comm = e.comm(dup3Ev.GetTid())
+	if !e.filter.eventPair(ep) {
+		ep.Recycle()
+		return false
+	}
+
+	fdFile, ok := ep.File.(file.FdFile)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed dup3 source event")
+		return false
+	}
+	retEvent, ok := ep.ExitEv.(*RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed dup3 exit event")
+		return false
+	}
+	if newFd := int32(retEvent.Ret); newFd != -1 {
+		duppedFdFile := fdFile.Dup(newFd)
+		duppedFdFile.AddFlags(dup3Ev.Flags & syscall.O_CLOEXEC)
+		e.files[newFd] = duppedFdFile
+	}
+	return true
+}
+
+func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *OpenByHandleAtEvent) bool {
+	tid := openByHandleEv.GetTid()
+	retEvent, ok := ep.ExitEv.(*RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed open_by_handle_at exit event")
+		return false
+	}
+
+	fd := int32(retEvent.Ret)
+	if fd < 0 {
+		ep.Recycle()
+		return false
+	}
+
+	if pathname, ok := e.pendingHandles[tid]; ok {
+		delete(e.pendingHandles, tid)
+		fdFile := file.NewFd(fd, pathname, openByHandleEv.Flags)
+		e.files[fd] = fdFile
+		ep.File = fdFile
+	} else {
+		fdFile := file.NewFdWithPid(fd, openByHandleEv.Pid)
+		if fdFile.Flags() == file.Flags(-1) {
+			fdFile.SetFlags(openByHandleEv.Flags)
+		}
+		e.files[fd] = fdFile
+		ep.File = fdFile
+	}
+	ep.Comm = e.comm(tid)
+	return true
+}
+
+func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
+	if ep.Is(SYS_ENTER_IO_URING_SETUP) {
+		retEvent, ok := ep.ExitEv.(*types.RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed io_uring_setup exit event")
+			return false
+		}
+		if fd := int32(retEvent.Ret); fd >= 0 {
+			fdFile := file.NewFdWithPid(fd, nullEv.Pid)
+			e.files[fd] = fdFile
+			ep.File = fdFile
+		}
+	}
+	if ep.Is(SYS_ENTER_GETCWD) {
+		retEvent, ok := ep.ExitEv.(*types.RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed getcwd exit event")
+			return false
+		}
+		if retEvent.Ret > 0 {
+			if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", nullEv.GetTid())); err == nil {
+				ep.File = file.NewPathname([]byte(cwd))
+			}
+		}
+	}
+	ep.Comm = e.comm(nullEv.GetTid())
+	if !e.filter.eventPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
+func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *FcntlEvent) bool {
+	ep.Comm = e.comm(fcntlEv.GetTid())
+	fd := int32(fcntlEv.Fd)
+	if fdFile, ok := e.files[fd]; ok {
+		ep.File = fdFile
+	} else {
+		ep.File = file.NewFdWithPid(fd, fcntlEv.Pid)
+	}
+	if !e.filter.eventPair(ep) {
+		ep.Recycle()
+		return false
+	}
+
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed fcntl exit event")
+		return false
+	}
+	// Syscall returned -1, nothing was changed with the fd
+	if retEvent.Ret == -1 {
+		return true
+	}
+
+	fdFile, ok := ep.File.(file.FdFile)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed fcntl file event")
+		return false
+	}
+
+	// See fcntl(2) for implementation details
+	switch fcntlEv.Cmd {
+	case syscall.F_SETFL:
+		const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
+		fdFile.SetFlags(int32(fcntlEv.Arg) & int32(canChange))
+		ep.File = fdFile
+		e.files[fd] = fdFile
+	case syscall.F_DUPFD:
+		newFd := int32(retEvent.Ret)
+		e.files[newFd] = fdFile.Dup(newFd)
+	case syscall.F_DUPFD_CLOEXEC:
+		newFd := int32(retEvent.Ret)
+		duppedFdFile := fdFile.Dup(newFd)
+		duppedFdFile.AddFlags(syscall.O_CLOEXEC)
+		e.files[newFd] = duppedFdFile
+	}
+	return true
 }
 
 func (e *eventLoop) recyclePair(ep *event.Pair, warning string) {
