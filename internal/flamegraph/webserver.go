@@ -24,23 +24,11 @@ func ServeSVG(svgFile string) error {
 		return fmt.Errorf("resolve svg path: %w", err)
 	}
 	urlPath := buildURLPath(absPath)
-	srv := &http.Server{Handler: buildSVGHandler(absPath, urlPath)}
-
-	listener, err := listenRandomPort()
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-
-	hostname, port := serverHostPort(listener)
-	printServerURL(hostname, port, urlPath)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- srv.Serve(listener)
-	}()
-
-	return waitForStop(srv, errCh)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runServer(ctx, buildSVGHandler(absPath, urlPath), func(hostname string, port int) {
+		printServerURL(hostname, port, urlPath)
+	})
 }
 
 func buildURLPath(absPath string) string {
@@ -51,7 +39,7 @@ func buildURLPath(absPath string) string {
 	return urlPath
 }
 
-func buildSVGHandler(absPath, urlPath string) http.Handler {
+func buildSVGHandler(absPath, urlPath string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, urlPath, http.StatusFound)
@@ -84,14 +72,27 @@ func printServerURL(hostname string, port int, urlPath string) {
 	fmt.Println("Press Ctrl+C to stop the web server.")
 }
 
-func waitForStop(srv *http.Server, errCh <-chan error) error {
-	stopCh := make(chan os.Signal, 1)
-	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(stopCh)
+func runServer(ctx context.Context, mux *http.ServeMux, printURL func(hostname string, port int)) error {
+	srv := &http.Server{Handler: mux}
+
+	listener, err := listenRandomPort()
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	hostname, port := serverHostPort(listener)
+	if printURL != nil {
+		printURL(hostname, port)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve(listener)
+	}()
 
 	select {
-	case sig := <-stopCh:
-		_ = sig
+	case <-ctx.Done():
 	case serveErr := <-errCh:
 		if serveErr != nil && serveErr != http.ErrServerClosed {
 			return serveErr
@@ -99,9 +100,9 @@ func waitForStop(srv *http.Server, errCh <-chan error) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown web server: %w", err)
 	}
 
