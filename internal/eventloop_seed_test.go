@@ -3,22 +3,17 @@ package internal
 import (
 	"os"
 	"testing"
-
-	"ior/internal/flags"
 )
 
 func TestSeedTrackedPidCommCachesTrackedPidComm(t *testing.T) {
-	oldPID := flags.Get().PidFilter
-	flags.SetPidFilter(os.Getpid())
-	t.Cleanup(func() {
-		flags.SetPidFilter(oldPID)
-	})
-
+	pid := uint32(os.Getpid())
 	el := &eventLoop{
+		cfg: eventLoopConfig{
+			pidFilter: int(pid),
+		},
 		comms: make(map[uint32]string),
 	}
 
-	pid := uint32(os.Getpid())
 	want := el.comm(pid)
 	if want == "" {
 		t.Fatalf("expected comm for pid %d", pid)
@@ -33,13 +28,10 @@ func TestSeedTrackedPidCommCachesTrackedPidComm(t *testing.T) {
 }
 
 func TestSeedTrackedPidCommSkipsWhenPidFilterDisabled(t *testing.T) {
-	oldPID := flags.Get().PidFilter
-	flags.SetPidFilter(-1)
-	t.Cleanup(func() {
-		flags.SetPidFilter(oldPID)
-	})
-
 	el := &eventLoop{
+		cfg: eventLoopConfig{
+			pidFilter: -1,
+		},
 		comms: make(map[uint32]string),
 	}
 

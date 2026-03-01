@@ -96,7 +96,7 @@ func TestEventloop(t *testing.T) {
 			inCh := make(chan []byte)
 			outCh := make(chan *event.Pair)
 
-			el := newEventLoop()
+			el := newEventLoop(eventLoopConfig{})
 			el.printCb = func(ev *event.Pair) { outCh <- ev }
 			go el.run(ctx, inCh)
 
