@@ -19,6 +19,7 @@ var (
 		TUIExportEnable: true,
 	}
 	once            sync.Once
+	parseErr        error
 	pidFilter       atomic.Int64
 	tidFilter       atomic.Int64
 	tuiExportEnable atomic.Bool
@@ -98,13 +99,14 @@ func SetTUIExportEnable(enabled bool) {
 	tuiExportEnable.Store(enabled)
 }
 
-func Parse() {
+func Parse() error {
 	once.Do(func() {
-		parse()
+		parseErr = parse()
 	})
+	return parseErr
 }
 
-func parse() {
+func parse() error {
 	flag.IntVar(&singleton.PidFilter, "pid", -1, "Filter for processes ID")
 	flag.IntVar(&singleton.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&singleton.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
@@ -130,13 +132,22 @@ func parse() {
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
 	flag.StringVar(&singleton.CountField, "count", "count",
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCollapsedCounts))
-	flag.Parse()
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		return err
+	}
 	pidFilter.Store(int64(singleton.PidFilter))
 	tidFilter.Store(int64(singleton.TidFilter))
 	tuiExportEnable.Store(singleton.TUIExportEnable)
 
-	singleton.TracepointsToAttach = extractTracepointFlags(*tracepointsToAttach)
-	singleton.TracepointsToExclude = extractTracepointFlags(*tracepointsToExclude)
+	var err error
+	singleton.TracepointsToAttach, err = extractTracepointFlags(*tracepointsToAttach)
+	if err != nil {
+		return err
+	}
+	singleton.TracepointsToExclude, err = extractTracepointFlags(*tracepointsToExclude)
+	if err != nil {
+		return err
+	}
 
 	// Keep this list empty by default.
 	// As of February 23, 2026, open_by_handle_at and name_to_handle_at were
@@ -151,30 +162,29 @@ func parse() {
 
 	for _, field := range singleton.CollapsedFields {
 		if !slices.Contains(validCollapsedFields, field) {
-			fmt.Println("Invalid field for collapse:", field)
-			os.Exit(2)
+			return fmt.Errorf("invalid field for collapse: %s", field)
 		}
 	}
 
 	if !slices.Contains(validCollapsedCounts, singleton.CountField) {
-		fmt.Println("Invalid count field:", singleton.CountField)
-		os.Exit(2)
+		return fmt.Errorf("invalid count field: %s", singleton.CountField)
 	}
+
+	return nil
 }
 
-func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp) {
+func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp, err error) {
 	if len(tracepoints) == 0 {
-		return regexes
+		return regexes, nil
 	}
 	for _, name := range strings.Split(tracepoints, ",") {
 		re, err := regexp.Compile(name)
 		if err != nil {
-			fmt.Println("Unable to compile regex", name, ": ", err)
-			os.Exit(2)
+			return nil, fmt.Errorf("unable to compile regex %q: %w", name, err)
 		}
 		regexes = append(regexes, re)
 	}
-	return regexes
+	return regexes, nil
 }
 
 func (flags Flags) ShouldIAttachTracepoint(tracepointName string) bool {
