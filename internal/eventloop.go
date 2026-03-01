@@ -22,10 +22,13 @@ const sysEnterNameToHandleAtName = "name_to_handle_at"
 
 type eventLoopConfig struct {
 	pidFilter        int
+	commFilter       string
+	pathFilter       string
 	liveFlamegraph   bool
 	liveInterval     time.Duration
 	collapsedFields  []string
 	countField       string
+	flamegraphName   string
 	flamegraphEnable bool
 	pprofEnable      bool
 	plainMode        bool
@@ -61,7 +64,7 @@ type eventLoop struct {
 
 func newEventLoop(cfg eventLoopConfig) *eventLoop {
 	el := &eventLoop{
-		filter:             newEventFilter(),
+		filter:             newEventFilter(cfg.commFilter, cfg.pathFilter),
 		enterEvs:           make(map[uint32]*event.Pair),
 		pendingHandles:     make(map[uint32]string),
 		files:              make(map[int32]file.File),
@@ -70,7 +73,7 @@ func newEventLoop(cfg eventLoopConfig) *eventLoop {
 		prevPairTimes:      make(map[uint32]uint64),
 		rawHandlers:        make(map[EventType]rawEventHandler),
 		printCb:            func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		flamegraph:         flamegraph.New(),
+		flamegraph:         flamegraph.New(cfg.flamegraphName),
 		cfg:                cfg,
 		done:               make(chan struct{}),
 	}

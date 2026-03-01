@@ -4,13 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"ior/internal/flags"
 	"ior/internal/statsengine"
 )
 
 func TestRenderProcessesIncludesHeaders(t *testing.T) {
-	flags.SetPidFilter(-1)
-
 	snap := statsengine.NewSnapshot(
 		nil, nil, nil,
 		nil, nil,
@@ -34,9 +31,6 @@ func TestRenderProcessesIncludesHeaders(t *testing.T) {
 }
 
 func TestRenderProcessesShowsSinglePIDNote(t *testing.T) {
-	flags.SetPidFilter(77)
-	t.Cleanup(func() { flags.SetPidFilter(-1) })
-
 	snap := statsengine.NewSnapshot(
 		nil, nil, nil,
 		nil, nil,
@@ -47,7 +41,7 @@ func TestRenderProcessesShowsSinglePIDNote(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 
-	out := renderProcesses(&snap, 100, 20)
+	out := renderProcessesWithOffset(&snap, 100, 20, 0, 77)
 	if !strings.Contains(out, "most useful with All PIDs") {
 		t.Fatalf("expected single-pid guidance note")
 	}

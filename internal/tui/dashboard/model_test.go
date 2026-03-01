@@ -386,7 +386,7 @@ func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 		statsengine.HistogramSnapshot{},
 	)
-	out := renderActiveTab(TabFiles, &snap, nil, 120, 30, 0, 0, true, 0, 0)
+	out := renderActiveTab(TabFiles, &snap, nil, 120, 30, -1, 0, 0, true, 0, 0)
 	if !strings.Contains(out, "Directory") {
 		t.Fatalf("expected grouped directory files view header, got %q", out)
 	}

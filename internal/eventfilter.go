@@ -3,7 +3,6 @@ package internal
 import (
 	"fmt"
 	"ior/internal/event"
-	"ior/internal/flags"
 	"ior/internal/types"
 	"strings"
 )
@@ -15,23 +14,23 @@ type eventFilter struct {
 	pathFilter       string
 }
 
-func newEventFilter() *eventFilter {
+func newEventFilter(commFilter, pathFilter string) *eventFilter {
 	var ef eventFilter
 
-	if flags.Get().CommFilter != "" {
-		if len(flags.Get().CommFilter) > types.MAX_FILENAME_LENGTH {
+	if commFilter != "" {
+		if len(commFilter) > types.MAX_FILENAME_LENGTH {
 			panic(fmt.Sprintf("Comm filter's max size is %d", types.MAX_PROGNAME_LENGTH))
 		}
 		ef.commFilterEnable = true
-		ef.commFilter = flags.Get().CommFilter
+		ef.commFilter = commFilter
 	}
 
-	if flags.Get().PathFilter != "" {
-		if len(flags.Get().PathFilter) > types.MAX_FILENAME_LENGTH {
+	if pathFilter != "" {
+		if len(pathFilter) > types.MAX_FILENAME_LENGTH {
 			panic(fmt.Sprintf("Path filter's max size is %d", types.MAX_FILENAME_LENGTH))
 		}
 		ef.pathFilterEnable = true
-		ef.pathFilter = flags.Get().PathFilter
+		ef.pathFilter = pathFilter
 	}
 
 	return &ef

@@ -223,10 +223,13 @@ func newEventLoopConfig(cfg flags.Flags) eventLoopConfig {
 	copy(fields, cfg.CollapsedFields)
 	return eventLoopConfig{
 		pidFilter:        cfg.PidFilter,
+		commFilter:       cfg.CommFilter,
+		pathFilter:       cfg.PathFilter,
 		liveFlamegraph:   cfg.LiveFlamegraph,
 		liveInterval:     cfg.LiveInterval,
 		collapsedFields:  fields,
 		countField:       cfg.CountField,
+		flamegraphName:   cfg.FlamegraphName,
 		flamegraphEnable: cfg.FlamegraphEnable,
 		pprofEnable:      cfg.PprofEnable,
 		plainMode:        cfg.PlainMode,

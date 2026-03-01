@@ -7,7 +7,6 @@ import (
 	"io"
 	"ior/internal/event"
 	"ior/internal/file"
-	"ior/internal/flags"
 	"ior/internal/types"
 	"iter"
 	"os"
@@ -98,13 +97,16 @@ func (iod iorData) merge(other iorData) iorData {
 	return iod
 }
 
-func (iod iorData) serializeToFile() error {
+func (iod iorData) serializeToFile(flamegraphName string) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		panic(err)
 	}
+	if flamegraphName == "" {
+		flamegraphName = "default"
+	}
 
-	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flags.Get().FlamegraphName,
+	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flamegraphName,
 		time.Now().Format("2006-01-02_15:04:05"))
 	fmt.Println("Writing", filename)
 	tmpFilename := fmt.Sprintf("%s.tmp", filename)

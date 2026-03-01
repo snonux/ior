@@ -467,7 +467,7 @@ func TestRunExportCmdCSVWritesFile(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prev) })
 
 	snap := &statsengine.Snapshot{TotalSyscalls: 1}
-	msg := runExportCmd(tuiexport.OptionCSV, snap)()
+	msg := runExportCmd(true, tuiexport.OptionCSV, snap)()
 	done, ok := msg.(tuiexport.CompletedMsg)
 	if !ok {
 		t.Fatalf("expected CompletedMsg, got %T", msg)
