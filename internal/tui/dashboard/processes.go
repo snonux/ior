@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/flags"
 	"ior/internal/statsengine"
 	"strconv"
 	"strings"
@@ -11,10 +10,10 @@ import (
 )
 
 func renderProcesses(snap *statsengine.Snapshot, width, height int) string {
-	return renderProcessesWithOffset(snap, width, height, 0)
+	return renderProcessesWithOffset(snap, width, height, 0, -1)
 }
 
-func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset int) string {
+func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset, pidFilter int) string {
 	if snap == nil {
 		return "Processes: waiting for stats..."
 	}
@@ -44,7 +43,7 @@ func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset
 	tbl.SetCursor(cursor)
 
 	out := tbl.View() + fmt.Sprintf("\nRow %d/%d", cursor+1, len(rows))
-	if flags.Get().PidFilter > 0 {
+	if pidFilter > 0 {
 		out += "\n" + "Note: this tab is most useful with All PIDs."
 	}
 	return out

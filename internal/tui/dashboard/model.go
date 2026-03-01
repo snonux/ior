@@ -39,6 +39,7 @@ type Model struct {
 
 	refreshEvery    time.Duration
 	keys            common.KeyMap
+	pidFilter       int
 	syscallsOffset  int
 	filesOffset     int
 	filesDirGrouped bool
@@ -63,6 +64,7 @@ func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuf
 		engine:       engine,
 		refreshEvery: time.Duration(refreshMs) * time.Millisecond,
 		keys:         keys,
+		pidFilter:    -1,
 		streamModel:  eventstream.NewModel(streamSource),
 	}
 }
@@ -280,6 +282,11 @@ func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
 	m.streamModel.SetSource(source)
 }
 
+// SetPidFilter updates the active PID filter used by tab render hints.
+func (m *Model) SetPidFilter(pid int) {
+	m.pidFilter = pid
+}
+
 // View renders the tab bar, active tab scaffold, and help bar.
 func (m Model) View() string {
 	width, height := common.EffectiveViewport(m.width, m.height)
@@ -299,6 +306,7 @@ func (m Model) View() string {
 		&streamModel,
 		width,
 		activeHeight,
+		m.pidFilter,
 		m.syscallsOffset,
 		m.filesOffset,
 		m.filesDirGrouped,
@@ -318,7 +326,7 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, width, height, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, width, height, pidFilter, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
 	if tab == TabStream {
 		if streamModel == nil {
 			return common.PanelStyle.Render("Stream: waiting for source...")
@@ -341,7 +349,7 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 		}
 		return renderFilesWithOffset(snap, width, height, filesOffset)
 	case TabProcesses:
-		return renderProcessesWithOffset(snap, width, height, processesOffset)
+		return renderProcessesWithOffset(snap, width, height, processesOffset, pidFilter)
 	case TabLatency:
 		return renderLatencyGapsTab(snap, width, height)
 	default:

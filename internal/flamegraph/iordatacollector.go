@@ -4,22 +4,27 @@ import (
 	"context"
 	"fmt"
 	"ior/internal/event"
-	"ior/internal/flags"
 	"runtime"
 	"sync"
 )
 
 type IorDataCollector struct {
-	flags   flags.Flags
-	Ch      chan *event.Pair
-	Done    chan error
-	workers []worker
+	flamegraphName string
+	Ch             chan *event.Pair
+	Done           chan error
+	workers        []worker
 }
 
-func New() IorDataCollector {
+func New(flamegraphName ...string) IorDataCollector {
+	name := "default"
+	if len(flamegraphName) > 0 && flamegraphName[0] != "" {
+		name = flamegraphName[0]
+	}
+
 	f := IorDataCollector{
-		Ch:   make(chan *event.Pair, 4096),
-		Done: make(chan error, 1),
+		flamegraphName: name,
+		Ch:             make(chan *event.Pair, 4096),
+		Done:           make(chan error, 1),
 	}
 	numWorkers := runtime.NumCPU() / 4
 	if numWorkers == 0 {
@@ -50,7 +55,7 @@ func (f IorDataCollector) Start(ctx context.Context) {
 				fmt.Println("Worker", i+1, "merged")
 			}
 		}
-		if err := iod.serializeToFile(); err != nil {
+		if err := iod.serializeToFile(f.flamegraphName); err != nil {
 			f.Done <- err
 			return
 		}

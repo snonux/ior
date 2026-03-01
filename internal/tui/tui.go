@@ -127,7 +127,8 @@ func Run() error {
 
 // RunWithTraceStarter starts the TUI program with a custom trace starter.
 func RunWithTraceStarter(starter TraceStarter) error {
-	model := NewModel(flags.Get().PidFilter, starter)
+	cfg := flags.Get()
+	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	_, err := program.Run()
 	return err
@@ -153,29 +154,46 @@ type Model struct {
 
 	startTrace TraceStarter
 	traceStop  context.CancelFunc
+
+	pidFilter     int
+	exportEnabled bool
 }
 
 // NewModel creates the top-level TUI model.
 func NewModel(initialPID int, startTrace TraceStarter) Model {
+	cfg := flags.Get()
+	return newModelWithRuntimeConfig(initialPID, cfg.PidFilter, cfg.TUIExportEnable, startTrace)
+}
+
+func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.MiniDot
 	if startTrace == nil {
 		startTrace = defaultTraceStarter
 	}
 	keys := Keys
-	if !flags.Get().TUIExportEnable {
+	if !exportEnabled {
 		keys.Export = key.NewBinding()
 	}
 
+	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{}, getEventStreamSource(), 1000, keys)
+	pidFilter := selectedPIDFilter(startupPidFilter)
+	if initialPID > 0 {
+		pidFilter = selectedPIDFilter(initialPID)
+	}
+	dashboard.SetPidFilter(pidFilter)
+
 	model := Model{
-		screen:     ScreenPIDPicker,
-		pidPicker:  pidpicker.New(),
-		dashboard:  dashboardui.NewModelWithConfig(lateBoundDashboardSource{}, getEventStreamSource(), 1000, keys),
-		exporter:   tuiexport.NewModel(),
-		probeModal: probes.NewModel(getProbeManager()),
-		keys:       keys,
-		spin:       spin,
-		startTrace: startTrace,
+		screen:        ScreenPIDPicker,
+		pidPicker:     pidpicker.New(),
+		dashboard:     dashboard,
+		exporter:      tuiexport.NewModel(),
+		probeModal:    probes.NewModel(getProbeManager()),
+		keys:          keys,
+		spin:          spin,
+		startTrace:    startTrace,
+		pidFilter:     pidFilter,
+		exportEnabled: exportEnabled,
 	}
 
 	if initialPID > 0 {
@@ -216,7 +234,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stopTrace()
 			return m, tea.Quit
 		}
-		if flags.Get().TUIExportEnable && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+		if m.exportEnabled && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
 			m.exporter = m.exporter.Open()
 			return m, nil
 		}
@@ -231,7 +249,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.reselectTID()
 		}
 	case tuiexport.RequestMsg:
-		return m, runExportCmd(msg.Option, m.dashboard.LatestSnapshot())
+		return m, runExportCmd(m.exportEnabled, msg.Option, m.dashboard.LatestSnapshot())
 	case tuiexport.CompletedMsg:
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
@@ -316,6 +334,8 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.stopTrace()
 	flags.SetPidFilter(pid)
 	flags.SetTidFilter(-1)
+	m.pidFilter = pid
+	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -324,13 +344,15 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	tid := selectedPIDFilter(msg.Tid)
-	pid := flags.Get().PidFilter
+	pid := m.pidFilter
 	if msg.Pid > 0 {
 		pid = msg.Pid
 	}
 	m.stopTrace()
 	flags.SetPidFilter(pid)
 	flags.SetTidFilter(tid)
+	m.pidFilter = pid
+	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -357,7 +379,7 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) reselectTID() (tea.Model, tea.Cmd) {
-	pid := flags.Get().PidFilter
+	pid := m.pidFilter
 
 	m.stopTrace()
 	m.screen = ScreenPIDPicker
@@ -451,9 +473,9 @@ func (m Model) View() string {
 	}
 }
 
-func runExportCmd(option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
+func runExportCmd(exportEnabled bool, option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
 	return func() tea.Msg {
-		if !flags.Get().TUIExportEnable {
+		if !exportEnabled {
 			return tuiexport.FailedMsg{Err: errors.New("tui export is disabled by -tuiExport=false")}
 		}
 		switch option {
