@@ -16,8 +16,7 @@ func TestSeedTrackedPidCommCachesTrackedPidComm(t *testing.T) {
 		cfg: eventLoopConfig{
 			pidFilter: int(pid),
 		},
-		comms:              make(map[uint32]string),
-		pendingCommLookups: make(map[uint32]struct{}),
+		comms: make(map[uint32]string),
 	}
 
 	el.seedTrackedPidComm()
@@ -36,8 +35,7 @@ func TestSeedTrackedPidCommSeedsCurrentProcessWhenPidFilterDisabled(t *testing.T
 		cfg: eventLoopConfig{
 			pidFilter: -1,
 		},
-		comms:              make(map[uint32]string),
-		pendingCommLookups: make(map[uint32]struct{}),
+		comms: make(map[uint32]string),
 	}
 
 	el.seedTrackedPidComm()
