@@ -170,8 +170,10 @@ func tuiTraceStarterFromRunTrace(
 
 		engine := statsengine.NewEngine(64)
 		streamBuf := eventstream.NewRingBuffer()
-		tui.SetDashboardSnapshotSource(engine)
-		tui.SetEventStreamSource(streamBuf)
+		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+			bindings.SetDashboardSnapshotSource(engine)
+			bindings.SetEventStreamSource(streamBuf)
+		}
 		streamEvents := make(chan eventstream.StreamEvent, 4096)
 
 		go func() {
@@ -271,8 +273,10 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	if err := mgr.AttachAll(cfg.ShouldIAttachTracepoint, tracepoints.List); err != nil {
 		return err
 	}
-	tui.SetProbeManager(mgr)
-	defer tui.SetProbeManager(nil)
+	if bindings, ok := tui.RuntimeBindingsFromContext(parentCtx); ok {
+		bindings.SetProbeManager(mgr)
+		defer bindings.SetProbeManager(nil)
+	}
 
 	// 4096 channel size, minimises event drops
 	ch := make(chan []byte, 4096)
