@@ -229,7 +229,6 @@ func newEventLoopConfig(cfg flags.Flags) eventLoopConfig {
 		pathFilter:       cfg.PathFilter,
 		liveFlamegraph:   cfg.LiveFlamegraph,
 		liveInterval:     cfg.LiveInterval,
-		liveOpen:         cfg.OpenLiveBrowser,
 		liveOpenCommand:  cfg.OpenCommand,
 		collapsedFields:  fields,
 		countField:       cfg.CountField,

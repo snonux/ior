@@ -5,40 +5,15 @@ import (
 	"testing"
 )
 
-func TestBrowserOpenCommandPartsUsesLinuxDefault(t *testing.T) {
-	got, err := browserOpenCommandParts("linux", "", "http://localhost:1234/")
-	if err != nil {
-		t.Fatalf("browserOpenCommandParts returned error: %v", err)
-	}
-	want := []string{"firefox", "http://localhost:1234/"}
-	if len(got) != len(want) {
-		t.Fatalf("len(parts) = %d, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("parts[%d] = %q, want %q", i, got[i], want[i])
-		}
+func TestBrowserOpenCommandPartsRequiresCommand(t *testing.T) {
+	_, err := browserOpenCommandParts("", "http://localhost:1234/")
+	if err == nil {
+		t.Fatalf("expected error for empty open command")
 	}
 }
 
-func TestBrowserOpenCommandPartsUsesDarwinDefault(t *testing.T) {
-	got, err := browserOpenCommandParts("darwin", "", "http://localhost:1234/")
-	if err != nil {
-		t.Fatalf("browserOpenCommandParts returned error: %v", err)
-	}
-	want := []string{"open", "-a", "Firefox", "http://localhost:1234/"}
-	if len(got) != len(want) {
-		t.Fatalf("len(parts) = %d, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("parts[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestBrowserOpenCommandPartsOverrideAppendsURL(t *testing.T) {
-	got, err := browserOpenCommandParts("linux", "chromium --new-window", "http://localhost:1234/")
+func TestBrowserOpenCommandPartsAppendsURLWhenMissing(t *testing.T) {
+	got, err := browserOpenCommandParts("chromium --new-window", "http://localhost:1234/")
 	if err != nil {
 		t.Fatalf("browserOpenCommandParts returned error: %v", err)
 	}
@@ -53,8 +28,8 @@ func TestBrowserOpenCommandPartsOverrideAppendsURL(t *testing.T) {
 	}
 }
 
-func TestBrowserOpenCommandPartsOverrideReplacesPlaceholder(t *testing.T) {
-	got, err := browserOpenCommandParts("linux", "open-browser --target={url}", "http://localhost:1234/")
+func TestBrowserOpenCommandPartsReplacesURLPlaceholder(t *testing.T) {
+	got, err := browserOpenCommandParts("open-browser --target={url}", "http://localhost:1234/")
 	if err != nil {
 		t.Fatalf("browserOpenCommandParts returned error: %v", err)
 	}
@@ -69,7 +44,7 @@ func TestBrowserOpenCommandPartsOverrideReplacesPlaceholder(t *testing.T) {
 	}
 }
 
-func TestMaybeOpenLiveBrowserDisabledSkipsOpen(t *testing.T) {
+func TestMaybeOpenLiveBrowserWithoutCommandSkipsOpen(t *testing.T) {
 	called := false
 	orig := openBrowserURLFn
 	openBrowserURLFn = func(url, openCommand string) error {
@@ -78,16 +53,16 @@ func TestMaybeOpenLiveBrowserDisabledSkipsOpen(t *testing.T) {
 	}
 	t.Cleanup(func() { openBrowserURLFn = orig })
 
-	err := maybeOpenLiveBrowser("http://localhost:1234/", LiveServerOptions{AutoOpenBrowser: false})
+	err := maybeOpenLiveBrowser("http://localhost:1234/", LiveServerOptions{})
 	if err != nil {
 		t.Fatalf("maybeOpenLiveBrowser returned error: %v", err)
 	}
 	if called {
-		t.Fatalf("expected browser opener not to be called when disabled")
+		t.Fatalf("expected browser opener not to be called without open command")
 	}
 }
 
-func TestMaybeOpenLiveBrowserEnabledCallsOpen(t *testing.T) {
+func TestMaybeOpenLiveBrowserWithCommandCallsOpen(t *testing.T) {
 	called := false
 	orig := openBrowserURLFn
 	openBrowserURLFn = func(url, openCommand string) error {
@@ -103,8 +78,7 @@ func TestMaybeOpenLiveBrowserEnabledCallsOpen(t *testing.T) {
 	t.Cleanup(func() { openBrowserURLFn = orig })
 
 	err := maybeOpenLiveBrowser("http://localhost:1234/", LiveServerOptions{
-		AutoOpenBrowser: true,
-		OpenCommand:     "chromium",
+		OpenCommand: "chromium",
 	})
 	if err != nil {
 		t.Fatalf("maybeOpenLiveBrowser returned error: %v", err)
@@ -122,7 +96,7 @@ func TestMaybeOpenLiveBrowserPropagatesOpenError(t *testing.T) {
 	t.Cleanup(func() { openBrowserURLFn = orig })
 
 	err := maybeOpenLiveBrowser("http://localhost:1234/", LiveServerOptions{
-		AutoOpenBrowser: true,
+		OpenCommand: "chromium",
 	})
 	if err == nil || err.Error() != "launch failed" {
 		t.Fatalf("expected launch failed error, got %v", err)

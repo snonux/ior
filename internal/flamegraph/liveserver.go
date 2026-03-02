@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -19,8 +18,7 @@ var liveServerTimeouts = serverTimeouts{
 }
 
 type LiveServerOptions struct {
-	AutoOpenBrowser bool
-	OpenCommand     string
+	OpenCommand string
 }
 
 var openBrowserURLFn = openBrowserURL
@@ -47,14 +45,14 @@ func ServeLiveWithOptions(ctx context.Context, lt *LiveTrie, interval time.Durat
 }
 
 func maybeOpenLiveBrowser(url string, options LiveServerOptions) error {
-	if !options.AutoOpenBrowser {
+	if strings.TrimSpace(options.OpenCommand) == "" {
 		return nil
 	}
 	return openBrowserURLFn(url, options.OpenCommand)
 }
 
 func openBrowserURL(url, openCommand string) error {
-	parts, err := browserOpenCommandParts(runtime.GOOS, openCommand, url)
+	parts, err := browserOpenCommandParts(openCommand, url)
 	if err != nil {
 		return err
 	}
@@ -66,13 +64,8 @@ func openBrowserURL(url, openCommand string) error {
 	return nil
 }
 
-func browserOpenCommandParts(goos, openCommand, url string) ([]string, error) {
-	var parts []string
-	if trimmed := strings.TrimSpace(openCommand); trimmed != "" {
-		parts = strings.Fields(trimmed)
-	} else {
-		parts = defaultBrowserCommand(goos)
-	}
+func browserOpenCommandParts(openCommand, url string) ([]string, error) {
+	parts := strings.Fields(strings.TrimSpace(openCommand))
 	if len(parts) == 0 {
 		return nil, errors.New("empty browser open command")
 	}
@@ -88,19 +81,6 @@ func browserOpenCommandParts(goos, openCommand, url string) ([]string, error) {
 		parts = append(parts, url)
 	}
 	return parts, nil
-}
-
-func defaultBrowserCommand(goos string) []string {
-	switch goos {
-	case "darwin":
-		return []string{"open", "-a", "Firefox"}
-	case "linux":
-		return []string{"firefox"}
-	case "windows":
-		return []string{"cmd", "/c", "start"}
-	default:
-		return []string{"firefox"}
-	}
 }
 
 func handleLivePage() http.HandlerFunc {
