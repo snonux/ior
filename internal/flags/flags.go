@@ -108,7 +108,7 @@ func parse() error {
 	flag.IntVar(&singleton.PidFilter, "pid", -1, "Filter for processes ID")
 	flag.IntVar(&singleton.TidFilter, "tid", -1, "Filter for thread ID")
 	flag.IntVar(&singleton.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
-	flag.IntVar(&singleton.Duration, "duration", 60, "Probe duration in seconds")
+	flag.IntVar(&singleton.Duration, "duration", 900, "Probe duration in seconds")
 
 	flag.StringVar(&singleton.CommFilter, "comm", "", "Command to filter for")
 	flag.StringVar(&singleton.PathFilter, "path", "", "Path to filter for")
