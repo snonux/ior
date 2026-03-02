@@ -69,9 +69,6 @@ func TestParseLiveFlagsAndInterval(t *testing.T) {
 	if got := int(pidFilter.Load()); got != 1234 {
 		t.Fatalf("global pid filter = %d, want 1234", got)
 	}
-	if cfg.OpenLiveBrowser {
-		t.Fatalf("expected open-live disabled by default")
-	}
 	if cfg.OpenCommand != "" {
 		t.Fatalf("expected empty open command by default")
 	}
@@ -89,24 +86,18 @@ func TestParseLiveDefaults(t *testing.T) {
 	if cfg.LiveInterval != 200*time.Millisecond {
 		t.Fatalf("default live interval = %v, want %v", cfg.LiveInterval, 200*time.Millisecond)
 	}
-	if cfg.OpenLiveBrowser {
-		t.Fatalf("expected open-live disabled by default")
-	}
 	if cfg.OpenCommand != "" {
 		t.Fatalf("expected empty open command by default")
 	}
 }
 
 func TestParseOpenFlags(t *testing.T) {
-	cfg, err := parseForTest(t, "-live", "-open", "-open-cmd", "chromium --new-window")
+	cfg, err := parseForTest(t, "-live", "-open", "chromium --new-window")
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
 	if !cfg.LiveFlamegraph {
 		t.Fatalf("expected live mode enabled")
-	}
-	if !cfg.OpenLiveBrowser {
-		t.Fatalf("expected -open to enable live browser open")
 	}
 	if cfg.OpenCommand != "chromium --new-window" {
 		t.Fatalf("open command = %q, want %q", cfg.OpenCommand, "chromium --new-window")
