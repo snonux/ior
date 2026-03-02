@@ -2,6 +2,9 @@ package flamegraph
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"strconv"
 	"testing"
 )
 
@@ -100,5 +103,77 @@ func TestMaybeOpenLiveBrowserPropagatesOpenError(t *testing.T) {
 	})
 	if err == nil || err.Error() != "launch failed" {
 		t.Fatalf("expected launch failed error, got %v", err)
+	}
+}
+
+func TestOpenBrowserURLReturnsErrorWhenCommandExitsNonZero(t *testing.T) {
+	err := openBrowserURL("http://localhost:1234/", "false")
+	if err == nil {
+		t.Fatalf("expected non-nil error")
+	}
+}
+
+func TestOpenBrowserURLReturnsNilWhenCommandExitsZero(t *testing.T) {
+	err := openBrowserURL("http://localhost:1234/", "true")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestApplySudoInvokerContextWithEnvSetsCredential(t *testing.T) {
+	cmd := exec.Command("echo")
+	uid := os.Getuid()
+	gid := os.Getgid()
+	env := []string{
+		"SUDO_UID=" + strconv.Itoa(uid),
+		"SUDO_GID=" + strconv.Itoa(gid),
+		"SUDO_USER=tester",
+		"HOME=/root",
+	}
+
+	applySudoInvokerContextWithEnv(cmd, 0, env)
+
+	if cmd.SysProcAttr == nil || cmd.SysProcAttr.Credential == nil {
+		t.Fatalf("expected process credentials to be configured")
+	}
+	if got := cmd.SysProcAttr.Credential.Uid; got != uint32(uid) {
+		t.Fatalf("credential uid = %d, want %d", got, uint32(uid))
+	}
+	if got := cmd.SysProcAttr.Credential.Gid; got != uint32(gid) {
+		t.Fatalf("credential gid = %d, want %d", got, uint32(gid))
+	}
+	if got, ok := lookupEnvValue(cmd.Env, "USER"); !ok || got != "tester" {
+		t.Fatalf("USER env = %q (ok=%v), want %q", got, ok, "tester")
+	}
+	if got, ok := lookupEnvValue(cmd.Env, "LOGNAME"); !ok || got != "tester" {
+		t.Fatalf("LOGNAME env = %q (ok=%v), want %q", got, ok, "tester")
+	}
+}
+
+func TestApplySudoInvokerContextWithEnvSkipsWhenNotRoot(t *testing.T) {
+	cmd := exec.Command("echo")
+	env := []string{
+		"SUDO_UID=1000",
+		"SUDO_GID=1000",
+		"SUDO_USER=tester",
+	}
+
+	applySudoInvokerContextWithEnv(cmd, 1000, env)
+
+	if cmd.SysProcAttr != nil {
+		t.Fatalf("expected credentials to remain nil for non-root euid")
+	}
+	if cmd.Env != nil {
+		t.Fatalf("expected environment to remain nil for non-root euid")
+	}
+}
+
+func TestNotifyLiveWarningUsesCallback(t *testing.T) {
+	var got string
+	notifyLiveWarning(func(message string) {
+		got = message
+	}, "open failed")
+	if got != "open failed" {
+		t.Fatalf("warning callback got %q, want %q", got, "open failed")
 	}
 }
