@@ -3,8 +3,12 @@ package flamegraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -14,16 +18,89 @@ var liveServerTimeouts = serverTimeouts{
 	idleTimeout:  60 * time.Second,
 }
 
+type LiveServerOptions struct {
+	AutoOpenBrowser bool
+	OpenCommand     string
+}
+
+var openBrowserURLFn = openBrowserURL
+
 // ServeLive starts the live flamegraph HTTP server and blocks until ctx is canceled.
 func ServeLive(ctx context.Context, lt *LiveTrie, interval time.Duration) error {
+	return ServeLiveWithOptions(ctx, lt, interval, LiveServerOptions{})
+}
+
+// ServeLiveWithOptions starts the live flamegraph server with runtime options.
+func ServeLiveWithOptions(ctx context.Context, lt *LiveTrie, interval time.Duration, options LiveServerOptions) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleLivePage())
 	mux.HandleFunc("/events", handleSSE(lt, interval))
 	mux.HandleFunc("/reset", handleReset(lt))
 	mux.HandleFunc("/order", handleOrder(lt))
 	return runServer(ctx, mux, liveServerTimeouts, func(hostname string, port int) {
-		fmt.Printf("Live flamegraph available at http://%s:%d/\n", hostname, port)
+		url := fmt.Sprintf("http://%s:%d/", hostname, port)
+		fmt.Printf("Live flamegraph available at %s\n", url)
+		if err := maybeOpenLiveBrowser(url, options); err != nil {
+			fmt.Printf("Live flamegraph browser auto-open failed: %v\n", err)
+		}
 	})
+}
+
+func maybeOpenLiveBrowser(url string, options LiveServerOptions) error {
+	if !options.AutoOpenBrowser {
+		return nil
+	}
+	return openBrowserURLFn(url, options.OpenCommand)
+}
+
+func openBrowserURL(url, openCommand string) error {
+	parts, err := browserOpenCommandParts(runtime.GOOS, openCommand, url)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(parts[0], parts[1:]...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+func browserOpenCommandParts(goos, openCommand, url string) ([]string, error) {
+	var parts []string
+	if trimmed := strings.TrimSpace(openCommand); trimmed != "" {
+		parts = strings.Fields(trimmed)
+	} else {
+		parts = defaultBrowserCommand(goos)
+	}
+	if len(parts) == 0 {
+		return nil, errors.New("empty browser open command")
+	}
+
+	containsURL := false
+	for i := range parts {
+		if strings.Contains(parts[i], "{url}") {
+			parts[i] = strings.ReplaceAll(parts[i], "{url}", url)
+			containsURL = true
+		}
+	}
+	if !containsURL {
+		parts = append(parts, url)
+	}
+	return parts, nil
+}
+
+func defaultBrowserCommand(goos string) []string {
+	switch goos {
+	case "darwin":
+		return []string{"open", "-a", "Firefox"}
+	case "linux":
+		return []string{"firefox"}
+	case "windows":
+		return []string{"cmd", "/c", "start"}
+	default:
+		return []string{"firefox"}
+	}
 }
 
 func handleLivePage() http.HandlerFunc {
