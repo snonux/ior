@@ -286,6 +286,9 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 			liveOptions := flamegraph.LiveServerOptions{
 				OpenCommand: e.cfg.liveOpenCommand,
 			}
+			if e.warningCb != nil {
+				liveOptions.WarningCb = e.notifyWarning
+			}
 			if err := flamegraph.ServeLiveWithOptions(ctx, e.liveTrie, e.cfg.liveInterval, liveOptions); err != nil && ctx.Err() == nil {
 				fmt.Println("Live flamegraph server error:", err)
 			}
