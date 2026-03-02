@@ -26,6 +26,8 @@ type eventLoopConfig struct {
 	pathFilter       string
 	liveFlamegraph   bool
 	liveInterval     time.Duration
+	liveOpen         bool
+	liveOpenCommand  string
 	collapsedFields  []string
 	countField       string
 	flamegraphName   string
@@ -282,7 +284,11 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	if e.liveTrie != nil {
 		fmt.Println("Starting live flamegraph server")
 		go func() {
-			if err := flamegraph.ServeLive(ctx, e.liveTrie, e.cfg.liveInterval); err != nil && ctx.Err() == nil {
+			liveOptions := flamegraph.LiveServerOptions{
+				AutoOpenBrowser: e.cfg.liveOpen,
+				OpenCommand:     e.cfg.liveOpenCommand,
+			}
+			if err := flamegraph.ServeLiveWithOptions(ctx, e.liveTrie, e.cfg.liveInterval, liveOptions); err != nil && ctx.Err() == nil {
 				fmt.Println("Live flamegraph server error:", err)
 			}
 		}()

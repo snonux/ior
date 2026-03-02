@@ -65,6 +65,8 @@ type Flags struct {
 	FlamegraphEnable bool
 	LiveFlamegraph   bool
 	LiveInterval     time.Duration
+	OpenLiveBrowser  bool
+	OpenCommand      string
 	FlamegraphName   string
 	TUIExportEnable  bool
 
@@ -122,6 +124,8 @@ func parse() error {
 	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 	flag.BoolVar(&singleton.LiveFlamegraph, "live", false, "Enable live flamegraph mode")
 	flag.DurationVar(&singleton.LiveInterval, "live-interval", 200*time.Millisecond, "Live flamegraph refresh interval")
+	flag.BoolVar(&singleton.OpenLiveBrowser, "open", false, "Auto-open live flamegraph URL in a browser (used with -live)")
+	flag.StringVar(&singleton.OpenCommand, "open-cmd", "", "Custom command to open live flamegraph URL; use {url} placeholder or URL is appended")
 	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
 	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
 
