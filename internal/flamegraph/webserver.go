@@ -13,6 +13,18 @@ import (
 	"time"
 )
 
+type serverTimeouts struct {
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+	idleTimeout  time.Duration
+}
+
+var defaultServerTimeouts = serverTimeouts{
+	readTimeout:  10 * time.Second,
+	writeTimeout: 30 * time.Second,
+	idleTimeout:  60 * time.Second,
+}
+
 // ServeSVG starts a small HTTP server that serves a single flamegraph SVG.
 //
 // It prints a URL of the form http://HOSTNAME:PORT/abs/path/to.svg and blocks until
@@ -26,7 +38,7 @@ func ServeSVG(svgFile string) error {
 	urlPath := buildURLPath(absPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runServer(ctx, buildSVGHandler(absPath, urlPath), func(hostname string, port int) {
+	return runServer(ctx, buildSVGHandler(absPath, urlPath), defaultServerTimeouts, func(hostname string, port int) {
 		printServerURL(hostname, port, urlPath)
 	})
 }
@@ -72,8 +84,17 @@ func printServerURL(hostname string, port int, urlPath string) {
 	fmt.Println("Press Ctrl+C to stop the web server.")
 }
 
-func runServer(ctx context.Context, mux *http.ServeMux, printURL func(hostname string, port int)) error {
-	srv := &http.Server{Handler: mux}
+func newHTTPServer(mux *http.ServeMux, timeouts serverTimeouts) *http.Server {
+	return &http.Server{
+		Handler:      mux,
+		ReadTimeout:  timeouts.readTimeout,
+		WriteTimeout: timeouts.writeTimeout,
+		IdleTimeout:  timeouts.idleTimeout,
+	}
+}
+
+func runServer(ctx context.Context, mux *http.ServeMux, timeouts serverTimeouts, printURL func(hostname string, port int)) error {
+	srv := newHTTPServer(mux, timeouts)
 
 	listener, err := listenRandomPort()
 	if err != nil {
