@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+var liveServerTimeouts = serverTimeouts{
+	readTimeout:  10 * time.Second,
+	writeTimeout: 5 * time.Minute,
+	idleTimeout:  60 * time.Second,
+}
+
 // ServeLive starts the live flamegraph HTTP server and blocks until ctx is canceled.
 func ServeLive(ctx context.Context, lt *LiveTrie, interval time.Duration) error {
 	mux := http.NewServeMux()
@@ -15,7 +21,7 @@ func ServeLive(ctx context.Context, lt *LiveTrie, interval time.Duration) error 
 	mux.HandleFunc("/events", handleSSE(lt, interval))
 	mux.HandleFunc("/reset", handleReset(lt))
 	mux.HandleFunc("/order", handleOrder(lt))
-	return runServer(ctx, mux, func(hostname string, port int) {
+	return runServer(ctx, mux, liveServerTimeouts, func(hostname string, port int) {
 		fmt.Printf("Live flamegraph available at http://%s:%d/\n", hostname, port)
 	})
 }
