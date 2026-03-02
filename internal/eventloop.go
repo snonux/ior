@@ -580,9 +580,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 			return false
 		}
 		// Duplicating fd
-		if newFd := int32(retEvent.Ret); newFd != -1 {
-			e.fdState().set(newFd, fdFile.Dup(newFd))
-		}
+		e.registerDup(fdFile, int32(retEvent.Ret), 0)
 	}
 	if ep.Is(SYS_ENTER_PIDFD_GETFD) {
 		retEv, ok := ep.ExitEv.(*RetEvent)
@@ -625,11 +623,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
 		e.recyclePair(ep, "Dropped malformed dup3 exit event")
 		return false
 	}
-	if newFd := int32(retEvent.Ret); newFd != -1 {
-		duppedFdFile := fdFile.Dup(newFd)
-		duppedFdFile.AddFlags(dup3Ev.Flags & syscall.O_CLOEXEC)
-		e.fdState().set(newFd, duppedFdFile)
-	}
+	e.registerDup(fdFile, int32(retEvent.Ret), dup3Ev.Flags&syscall.O_CLOEXEC)
 	return true
 }
 
@@ -734,15 +728,22 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *FcntlEvent) bool {
 		ep.File = fdFile
 		e.fdState().set(fd, fdFile)
 	case syscall.F_DUPFD:
-		newFd := int32(retEvent.Ret)
-		e.fdState().set(newFd, fdFile.Dup(newFd))
+		e.registerDup(fdFile, int32(retEvent.Ret), 0)
 	case syscall.F_DUPFD_CLOEXEC:
-		newFd := int32(retEvent.Ret)
-		duppedFdFile := fdFile.Dup(newFd)
-		duppedFdFile.AddFlags(syscall.O_CLOEXEC)
-		e.fdState().set(newFd, duppedFdFile)
+		e.registerDup(fdFile, int32(retEvent.Ret), syscall.O_CLOEXEC)
 	}
 	return true
+}
+
+func (e *eventLoop) registerDup(fdFile file.FdFile, newFd int32, extraFlags int32) {
+	if newFd < 0 {
+		return
+	}
+	duppedFdFile := fdFile.Dup(newFd)
+	if extraFlags != 0 {
+		duppedFdFile.AddFlags(extraFlags)
+	}
+	e.fdState().set(newFd, duppedFdFile)
 }
 
 func (e *eventLoop) recyclePair(ep *event.Pair, warning string) {
