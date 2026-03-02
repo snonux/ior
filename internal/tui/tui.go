@@ -40,7 +40,8 @@ const (
 // Long-lived tracing work should continue in background goroutines.
 type TraceStarter func(context.Context) error
 
-type snapshotSource interface {
+// SnapshotSource provides dashboard snapshots for TUI rendering.
+type SnapshotSource interface {
 	Snapshot() *statsengine.Snapshot
 }
 
@@ -51,62 +52,66 @@ type ProbeManager interface {
 	ActiveCount() (int, int)
 }
 
-var dashboardSourceState struct {
-	mu     sync.RWMutex
-	source snapshotSource
+// TraceRuntimeBindings allows a trace starter to publish runtime dependencies
+// (snapshot source, stream source, probe manager) into the active TUI model.
+type TraceRuntimeBindings interface {
+	SetDashboardSnapshotSource(source SnapshotSource)
+	SetEventStreamSource(source *eventstream.RingBuffer)
+	SetProbeManager(manager ProbeManager)
 }
 
-var eventStreamSourceState struct {
-	mu     sync.RWMutex
-	source *eventstream.RingBuffer
+type runtimeBindingsContextKey struct{}
+
+type runtimeBindings struct {
+	mu sync.RWMutex
+
+	snapshotSource SnapshotSource
+	streamSource   *eventstream.RingBuffer
+	probeManager   ProbeManager
 }
 
-var probeManagerState struct {
-	mu      sync.RWMutex
-	manager ProbeManager
+func newRuntimeBindings() *runtimeBindings {
+	return &runtimeBindings{}
 }
 
-// SetDashboardSnapshotSource sets the snapshot source used by dashboard mode.
-func SetDashboardSnapshotSource(source snapshotSource) {
-	dashboardSourceState.mu.Lock()
-	dashboardSourceState.source = source
-	dashboardSourceState.mu.Unlock()
+func (r *runtimeBindings) SetDashboardSnapshotSource(source SnapshotSource) {
+	r.mu.Lock()
+	r.snapshotSource = source
+	r.mu.Unlock()
 }
 
-// SetEventStreamSource sets the event stream source used by dashboard mode.
-func SetEventStreamSource(source *eventstream.RingBuffer) {
-	eventStreamSourceState.mu.Lock()
-	eventStreamSourceState.source = source
-	eventStreamSourceState.mu.Unlock()
+func (r *runtimeBindings) SetEventStreamSource(source *eventstream.RingBuffer) {
+	r.mu.Lock()
+	r.streamSource = source
+	r.mu.Unlock()
 }
 
-// SetProbeManager sets the probe manager used by TUI probe controls.
-func SetProbeManager(manager ProbeManager) {
-	probeManagerState.mu.Lock()
-	probeManagerState.manager = manager
-	probeManagerState.mu.Unlock()
+func (r *runtimeBindings) SetProbeManager(manager ProbeManager) {
+	r.mu.Lock()
+	r.probeManager = manager
+	r.mu.Unlock()
 }
 
-func getDashboardSnapshotSource() snapshotSource {
-	dashboardSourceState.mu.RLock()
-	defer dashboardSourceState.mu.RUnlock()
-	return dashboardSourceState.source
+func (r *runtimeBindings) dashboardSnapshotSource() SnapshotSource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.snapshotSource
 }
 
-func getEventStreamSource() *eventstream.RingBuffer {
-	eventStreamSourceState.mu.RLock()
-	defer eventStreamSourceState.mu.RUnlock()
-	return eventStreamSourceState.source
+func (r *runtimeBindings) eventStreamSource() *eventstream.RingBuffer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.streamSource
 }
 
-func getProbeManager() ProbeManager {
-	probeManagerState.mu.RLock()
-	defer probeManagerState.mu.RUnlock()
-	return probeManagerState.manager
+func (r *runtimeBindings) currentProbeManager() ProbeManager {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.probeManager
 }
 
-func resetDashboardSnapshotSource() *statsengine.Snapshot {
-	src := getDashboardSnapshotSource()
+func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
+	src := r.dashboardSnapshotSource()
 	if src == nil {
 		return nil
 	}
@@ -118,6 +123,16 @@ func resetDashboardSnapshotSource() *statsengine.Snapshot {
 		return resettable.Snapshot()
 	}
 	return nil
+}
+
+// RuntimeBindingsFromContext returns model-scoped trace bindings when the
+// context was created by the TUI.
+func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool) {
+	bindings, ok := ctx.Value(runtimeBindingsContextKey{}).(*runtimeBindings)
+	if !ok || bindings == nil {
+		return nil, false
+	}
+	return bindings, true
 }
 
 // Run starts the TUI program in alternate screen mode.
@@ -141,6 +156,7 @@ type Model struct {
 	dashboard  dashboardui.Model
 	exporter   tuiexport.Model
 	probeModal probes.Model
+	runtime    *runtimeBindings
 
 	keys KeyMap
 
@@ -176,7 +192,8 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 		keys.Export = key.NewBinding()
 	}
 
-	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{}, getEventStreamSource(), 1000, keys)
+	runtime := newRuntimeBindings()
+	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{runtime: runtime}, runtime.eventStreamSource(), 1000, keys)
 	pidFilter := selectedPIDFilter(startupPidFilter)
 	if initialPID > 0 {
 		pidFilter = selectedPIDFilter(initialPID)
@@ -188,7 +205,8 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 		pidPicker:     pidpicker.New(),
 		dashboard:     dashboard,
 		exporter:      tuiexport.NewModel(),
-		probeModal:    probes.NewModel(getProbeManager()),
+		probeModal:    probes.NewModel(runtime.currentProbeManager()),
+		runtime:       runtime,
 		keys:          keys,
 		spin:          spin,
 		startTrace:    startTrace,
@@ -239,7 +257,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Probes) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
-			m.probeModal = probes.NewModel(getProbeManager()).Open()
+			m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).Open()
 			return m, nil
 		}
 		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
@@ -261,7 +279,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case probes.ProbeToggledMsg:
 		var cmd tea.Cmd
 		m.probeModal, cmd = m.probeModal.Update(msg)
-		if snap := resetDashboardSnapshotSource(); snap != nil {
+		if snap := m.runtime.resetDashboardSnapshotSource(); snap != nil {
 			next, dashboardCmd := m.dashboard.Update(messages.StatsTickMsg{Snap: snap})
 			m.dashboard = next.(dashboardui.Model)
 			return m, tea.Batch(dashboardCmd, cmd)
@@ -273,7 +291,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTidSelected(msg)
 	case TracingStartedMsg:
 		m.attaching = false
-		m.dashboard.SetStreamSource(getEventStreamSource())
+		m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 		return m, m.dashboard.Init()
 	case TracingErrorMsg:
 		m.attaching = false
@@ -365,7 +383,7 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(getProbeManager())
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
 	m.pidPicker = pidpicker.New()
 
 	var sizeCmd tea.Cmd
@@ -386,7 +404,7 @@ func (m Model) reselectTID() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(getProbeManager())
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
 	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap())
 
 	var sizeCmd tea.Cmd
@@ -409,6 +427,7 @@ func selectedPIDFilter(pid int) int {
 func (m *Model) beginTraceCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.traceStop = cancel
+	ctx = context.WithValue(ctx, runtimeBindingsContextKey{}, m.runtime)
 	return startTraceCmd(m.startTrace, ctx)
 }
 
@@ -491,20 +510,19 @@ func runExportCmd(exportEnabled bool, option tuiexport.Option, snap *statsengine
 	}
 }
 
-type lateBoundDashboardSource struct{}
+type lateBoundDashboardSource struct {
+	runtime *runtimeBindings
+}
 
-func (lateBoundDashboardSource) Snapshot() *statsengine.Snapshot {
-	source := getDashboardSnapshotSource()
+func (s lateBoundDashboardSource) Snapshot() *statsengine.Snapshot {
+	if s.runtime == nil {
+		return nil
+	}
+	source := s.runtime.dashboardSnapshotSource()
 	if source == nil {
 		return nil
 	}
 	return source.Snapshot()
-}
-
-type lateBoundEventStreamSource struct{}
-
-func (lateBoundEventStreamSource) Source() *eventstream.RingBuffer {
-	return getEventStreamSource()
 }
 
 func exportSnapshotCSV(snap *statsengine.Snapshot) (string, error) {

@@ -206,27 +206,23 @@ func (f *fakeResettableDashboardSource) Reset() {
 }
 
 func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
-	orig := getDashboardSnapshotSource()
-	defer SetDashboardSnapshotSource(orig)
-
-	SetDashboardSnapshotSource(nil)
-	source := lateBoundDashboardSource{}
+	runtime := newRuntimeBindings()
+	source := lateBoundDashboardSource{runtime: runtime}
 
 	want := &statsengine.Snapshot{TotalSyscalls: 77}
-	SetDashboardSnapshotSource(fakeDashboardSource{snap: want})
+	runtime.SetDashboardSnapshotSource(fakeDashboardSource{snap: want})
 
 	got := source.Snapshot()
 	if got != want {
-		t.Fatalf("expected late-bound source to use latest global source")
+		t.Fatalf("expected late-bound source to use latest runtime source")
 	}
 }
 
 func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 	src := &fakeResettableDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
-	SetDashboardSnapshotSource(src)
-	t.Cleanup(func() { SetDashboardSnapshotSource(nil) })
 
 	m := NewModel(-1, func(context.Context) error { return nil })
+	m.runtime.SetDashboardSnapshotSource(src)
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
@@ -244,14 +240,11 @@ func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 }
 
 func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
-	orig := getEventStreamSource()
-	defer SetEventStreamSource(orig)
-
 	rb := eventstream.NewRingBuffer()
 	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 1, TID: 1})
-	SetEventStreamSource(rb)
 
 	m := NewModel(-1, func(context.Context) error { return nil })
+	m.runtime.SetEventStreamSource(rb)
 	m.screen = ScreenDashboard
 	m.attaching = true
 
@@ -596,10 +589,9 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 }
 
 func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
-	SetProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
-	t.Cleanup(func() { SetProbeManager(nil) })
-
 	m := NewModel(-1, func(context.Context) error { return nil })
+	m.runtime.SetProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.width = 120
