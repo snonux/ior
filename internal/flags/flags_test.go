@@ -114,6 +114,16 @@ func TestParseFlamegraphJSONFlag(t *testing.T) {
 	}
 }
 
+func TestParseIorWatchIntervalFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-iorWatchInterval", "2s")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.IorWatchInterval != 2*time.Second {
+		t.Fatalf("ior watch interval = %v, want %v", cfg.IorWatchInterval, 2*time.Second)
+	}
+}
+
 func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {
