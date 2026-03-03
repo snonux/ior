@@ -15,6 +15,7 @@ perltidy.ERR
 *.collapsed
 *.collapsed.zst
 *.svg
+/bench-profiles/
 /.cursor/
 REVIEW-COMMENTS.md
 /.serena/
