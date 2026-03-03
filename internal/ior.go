@@ -121,19 +121,25 @@ func Run() error {
 	var noTraceRun bool
 
 	if iorFile != "" {
+		if cfg.IorWatchInterval < 0 {
+			return errors.New("-iorWatchInterval must be >= 0")
+		}
 		noTraceRun = true
 		native := flamegraph.NewNativeSVG(cfg.CollapsedFields, cfg.CountField)
-		svgFile, err := native.WriteSVGFromFile(iorFile)
+		svgFile, err := writeIorOutputs(native, iorFile, cfg.FlamegraphJSON)
 		if err != nil {
 			return err
 		}
-		if cfg.FlamegraphJSON {
-			if _, err := native.WriteJSONFromFile(iorFile); err != nil {
-				return err
-			}
-		}
 
-		if err := flamegraph.ServeSVG(svgFile); err != nil {
+		done := make(chan struct{})
+		defer close(done)
+		if cfg.IorWatchInterval > 0 {
+			go watchIorOutputs(done, cfg.IorWatchInterval, iorFile, native, cfg.FlamegraphJSON)
+			err = flamegraph.ServeSVGAutoReload(svgFile, cfg.IorWatchInterval)
+		} else {
+			err = flamegraph.ServeSVG(svgFile)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -142,6 +148,54 @@ func Run() error {
 		return nil
 	}
 	return dispatchRun(cfg)
+}
+
+func writeIorOutputs(native flamegraph.NativeSVG, iorFile string, writeJSON bool) (string, error) {
+	svgFile, err := native.WriteSVGFromFile(iorFile)
+	if err != nil {
+		return "", err
+	}
+	if !writeJSON {
+		return svgFile, nil
+	}
+	if _, err := native.WriteJSONFromFile(iorFile); err != nil {
+		return "", err
+	}
+	return svgFile, nil
+}
+
+func watchIorOutputs(done <-chan struct{}, interval time.Duration, iorFile string,
+	native flamegraph.NativeSVG, writeJSON bool) {
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	lastMod := fileModTime(iorFile)
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			mod := fileModTime(iorFile)
+			if !mod.After(lastMod) {
+				continue
+			}
+			if _, err := writeIorOutputs(native, iorFile, writeJSON); err != nil {
+				_, _ = fmt.Printf("Failed to refresh flamegraph outputs: %v\n", err)
+				continue
+			}
+			lastMod = mod
+			_, _ = fmt.Printf("Refreshed flamegraph outputs at %s\n", time.Now().Format(time.RFC3339))
+		}
+	}
+}
+
+func fileModTime(path string) time.Time {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return stat.ModTime()
 }
 
 func dispatchRun(cfg flags.Flags) error {
@@ -157,6 +211,12 @@ func dispatchRun(cfg flags.Flags) error {
 func validateRunConfig(cfg flags.Flags) error {
 	if cfg.LiveFlamegraph && cfg.FlamegraphEnable {
 		return errors.New("-live and -flamegraph are mutually exclusive")
+	}
+	if cfg.IorWatchInterval > 0 && cfg.IorDataFile == "" {
+		return errors.New("-iorWatchInterval requires -ior")
+	}
+	if cfg.IorWatchInterval < 0 {
+		return errors.New("-iorWatchInterval must be >= 0")
 	}
 	return nil
 }

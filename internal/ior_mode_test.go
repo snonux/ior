@@ -176,6 +176,28 @@ func TestDispatchRunRejectsLiveAndFlamegraph(t *testing.T) {
 	}
 }
 
+func TestValidateRunConfigRejectsIorWatchWithoutIor(t *testing.T) {
+	cfg := flags.Flags{IorWatchInterval: time.Second}
+	err := validateRunConfig(cfg)
+	if err == nil {
+		t.Fatalf("expected error for -iorWatchInterval without -ior")
+	}
+	if err.Error() != "-iorWatchInterval requires -ior" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRunConfigRejectsNegativeIorWatchInterval(t *testing.T) {
+	cfg := flags.Flags{IorWatchInterval: -time.Second}
+	err := validateRunConfig(cfg)
+	if err == nil {
+		t.Fatalf("expected error for negative -iorWatchInterval")
+	}
+	if err.Error() != "-iorWatchInterval must be >= 0" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunTraceWithContextRequiresRoot(t *testing.T) {
 	origGetEUID := getEUID
 	defer func() { getEUID = origGetEUID }()

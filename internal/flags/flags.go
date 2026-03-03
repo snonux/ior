@@ -71,9 +71,10 @@ type Flags struct {
 	TUIExportEnable  bool
 
 	// To convert ior data into native SVG format
-	IorDataFile     string
-	CollapsedFields []string
-	CountField      string
+	IorDataFile      string
+	IorWatchInterval time.Duration
+	CollapsedFields  []string
+	CountField       string
 }
 
 func Get() Flags {
@@ -130,6 +131,8 @@ func parse() error {
 	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
 
 	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into native SVG flamegraph")
+	flag.DurationVar(&singleton.IorWatchInterval, "iorWatchInterval", 0,
+		"In -ior mode, poll input file for changes and regenerate outputs; also enables auto-reloading viewer")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
 	flag.StringVar(&singleton.CountField, "count", "count",

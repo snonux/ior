@@ -85,6 +85,14 @@ For experimental WebAssembly frontends, you can also emit a flamegraph JSON tree
 
 This writes `<trace>.<fields>-by-<count>.json` next to the SVG.
 
+To keep the served flamegraph changing as the `.ior.zst` file is updated, enable watch mode:
+
+```sh
+./ior -ior=trace.ior.zst -iorWatchInterval=2s
+```
+
+This polls the input file for modifications, regenerates SVG/JSON outputs, and serves an auto-reloading viewer at `/`.
+
 ## Live Flamegraph Mode
 
 Run live mode (requires root privileges):
