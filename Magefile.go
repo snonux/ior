@@ -40,6 +40,7 @@ const (
 	typesGoPath          = "internal/types/generated_types.go"
 	typesHeaderPath      = "internal/c/types.h"
 	VMLINUXPath          = "internal/c/vmlinux.h"
+	benchProfilesDir     = "bench-profiles"
 	integrationParallel  = "INTEGRATION_PARALLEL"
 	integrationParallelE = "IOR_INTEGRATION_PARALLEL"
 )
@@ -124,6 +125,58 @@ func TestWithName() error {
 // Bench runs benchmarks.
 func Bench() error {
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-v", "-bench=.", "-run", "xxx")
+}
+
+// BenchProf runs pipeline benchmarks and writes timestamped pprof artifacts.
+func BenchProf() error {
+	if err := ensureBenchProfilesDir(); err != nil {
+		return err
+	}
+
+	timestamp := benchTimestamp()
+	cpuProfile := filepath.Join(benchProfilesDir, fmt.Sprintf("pipeline-%s-cpu.prof", timestamp))
+	memProfile := filepath.Join(benchProfilesDir, fmt.Sprintf("pipeline-%s-mem.prof", timestamp))
+	blockProfile := filepath.Join(benchProfilesDir, fmt.Sprintf("pipeline-%s-block.prof", timestamp))
+
+	if err := sh.RunWithV(goEnv(), "go", "test", "./internal",
+		"-run", "^$",
+		"-bench", "^BenchmarkPipeline",
+		"-benchmem",
+		"-count=1",
+		"-cpuprofile", cpuProfile,
+		"-memprofile", memProfile,
+		"-blockprofile", blockProfile,
+	); err != nil {
+		return err
+	}
+
+	fmt.Println("Profiles written:")
+	fmt.Println(" ", cpuProfile)
+	fmt.Println(" ", memProfile)
+	fmt.Println(" ", blockProfile)
+	fmt.Println("Analyze with:")
+	fmt.Printf("  go tool pprof -http=:8080 %s\n", cpuProfile)
+	fmt.Printf("  go tool pprof -http=:8080 %s\n", memProfile)
+	fmt.Printf("  go tool pprof -http=:8080 %s\n", blockProfile)
+	return nil
+}
+
+// BenchCompare runs all benchmarks repeatedly and stores output for benchstat.
+func BenchCompare() error {
+	if err := ensureBenchProfilesDir(); err != nil {
+		return err
+	}
+
+	outputFile := filepath.Join(benchProfilesDir, fmt.Sprintf("bench-%s.txt", benchTimestamp()))
+	cmd := fmt.Sprintf("go test ./... -v -bench=. -run=xxx -benchmem -count=6 | tee %q", outputFile)
+	if err := sh.RunWithV(goEnv(), "sh", "-c", cmd); err != nil {
+		return err
+	}
+
+	fmt.Println("Bench output written to:", outputFile)
+	fmt.Println("Compare snapshots with:")
+	fmt.Println("  benchstat bench-profiles/bench-*.txt")
+	return nil
 }
 
 // Generate regenerates all generated files.
@@ -375,6 +428,17 @@ func buildBPFObject() error {
 
 func bpfEnv() map[string]string {
 	return map[string]string{"CC": "clang"}
+}
+
+func ensureBenchProfilesDir() error {
+	if err := os.MkdirAll(benchProfilesDir, 0o755); err != nil {
+		return fmt.Errorf("ensure %s: %w", benchProfilesDir, err)
+	}
+	return nil
+}
+
+func benchTimestamp() string {
+	return time.Now().UTC().Format("20060102-150405")
 }
 
 func cleanBPFArtifacts() error {
