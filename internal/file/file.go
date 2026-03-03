@@ -44,6 +44,9 @@ func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
 	f.name, err = os.Readlink(procPath)
 	if err != nil {
 		f.name = ""
+		f.flags = unknownFlag
+		f.flagsFromProcFS = true
+		return f
 	}
 
 	f.flags, _ = readFlagsFromFdInfo(fd, pid)
