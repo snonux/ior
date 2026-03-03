@@ -104,6 +104,16 @@ func TestParseOpenFlags(t *testing.T) {
 	}
 }
 
+func TestParseFlamegraphJSONFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-flamegraphJson")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.FlamegraphJSON {
+		t.Fatalf("expected -flamegraphJson to enable JSON export")
+	}
+}
+
 func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {

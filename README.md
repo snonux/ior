@@ -77,6 +77,14 @@ This generates an SVG and starts an embedded web server. The terminal prints a U
 Flamegraph available at http://HOSTNAME:PORT/abs/path/to.svg
 ```
 
+For experimental WebAssembly frontends, you can also emit a flamegraph JSON tree:
+
+```sh
+./ior -ior=trace.ior.zst -flamegraphJson
+```
+
+This writes `<trace>.<fields>-by-<count>.json` next to the SVG.
+
 ## Live Flamegraph Mode
 
 Run live mode (requires root privileges):

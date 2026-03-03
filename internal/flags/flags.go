@@ -67,6 +67,7 @@ type Flags struct {
 	LiveInterval     time.Duration
 	OpenCommand      string
 	FlamegraphName   string
+	FlamegraphJSON   bool
 	TUIExportEnable  bool
 
 	// To convert ior data into native SVG format
@@ -125,6 +126,7 @@ func parse() error {
 	flag.DurationVar(&singleton.LiveInterval, "live-interval", 200*time.Millisecond, "Live flamegraph refresh interval")
 	flag.StringVar(&singleton.OpenCommand, "open", "", "Command to open live flamegraph URL (used with -live); use {url} placeholder or URL is appended")
 	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
+	flag.BoolVar(&singleton.FlamegraphJSON, "flamegraphJson", false, "Also export flamegraph tree as JSON in -ior mode (experimental WASM-ready output)")
 	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
 
 	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into native SVG flamegraph")
