@@ -58,18 +58,26 @@ func (n NativeSVG) WriteSVGFromFile(iorDataFile string) (outFile string, err err
 }
 
 func (n NativeSVG) WriteSVGFromIter(records iter.Seq[IterRecord], w io.Writer) error {
+	tr, err := n.buildTrieFromIter(records)
+	if err != nil {
+		return err
+	}
+	return WriteSVG(w, tr, n.config)
+}
+
+func (n NativeSVG) buildTrieFromIter(records iter.Seq[IterRecord]) (*trie, error) {
 	tr := newTrie()
 	var framesBuf []string
 	for record := range records {
 		frames, err := n.recordFrames(record, framesBuf)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		framesBuf = frames
 		tr.add(frames, record.Cnt.ValueByName(n.countField))
 	}
 	tr.computeTotals()
-	return WriteSVG(w, tr, n.config)
+	return tr, nil
 }
 
 func (n NativeSVG) recordFrames(record IterRecord, framesBuf []string) ([]string, error) {

@@ -127,6 +127,11 @@ func Run() error {
 		if err != nil {
 			return err
 		}
+		if cfg.FlamegraphJSON {
+			if _, err := native.WriteJSONFromFile(iorFile); err != nil {
+				return err
+			}
+		}
 
 		if err := flamegraph.ServeSVG(svgFile); err != nil {
 			return err
