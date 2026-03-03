@@ -566,6 +566,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if ok && retEv.Ret == 0 {
 			e.fdState().closeRangeFrom(fd)
+			e.deleteProcFdCacheFrom(fd, fdEv.Pid)
 		}
 	}
 	ep.Comm = e.comm(fdEv.GetTid())
@@ -785,6 +786,17 @@ func (e *eventLoop) setProcFdCache(fd int32, pid uint32, resolved file.FdFile) {
 
 func (e *eventLoop) deleteProcFdCache(fd int32, pid uint32) {
 	delete(e.procFdCacheState(), procFdCacheKey(pid, fd))
+}
+
+func (e *eventLoop) deleteProcFdCacheFrom(first int32, pid uint32) {
+	cache := e.procFdCacheState()
+	for key := range cache {
+		cachePid := uint32(key >> 32)
+		cacheFd := int32(uint32(key))
+		if cachePid == pid && cacheFd >= first {
+			delete(cache, key)
+		}
+	}
 }
 
 func (e *eventLoop) procFdCacheState() map[uint64]file.FdFile {

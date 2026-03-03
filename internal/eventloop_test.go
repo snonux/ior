@@ -141,6 +141,67 @@ func TestEventloop(t *testing.T) {
 	}
 }
 
+func TestHandleFdExitCloseClearsProcFdCache(t *testing.T) {
+	el := newEventLoop(eventLoopConfig{})
+	pid := uint32(1001)
+	fd := int32(55)
+
+	el.setProcFdCache(fd, pid, file.NewFd(fd, "stale", syscall.O_RDONLY))
+	verifyProcFdCached(t, el, pid, fd)
+
+	enter := &types.FdEvent{
+		TraceId: types.SYS_ENTER_CLOSE,
+		Pid:     pid,
+		Tid:     pid,
+		Fd:      fd,
+	}
+	exit := &types.FdEvent{
+		TraceId: types.SYS_EXIT_CLOSE,
+		Pid:     pid,
+		Tid:     pid,
+		Fd:      fd,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleFdExit(ep, enter); !ok {
+		t.Fatal("handleFdExit(close) returned false")
+	}
+	verifyProcFdNotCached(t, el, pid, fd)
+}
+
+func TestHandleFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
+	el := newEventLoop(eventLoopConfig{})
+	pid := uint32(2002)
+
+	el.setProcFdCache(10, pid, file.NewFd(10, "keep", syscall.O_RDONLY))
+	el.setProcFdCache(20, pid, file.NewFd(20, "drop", syscall.O_RDONLY))
+	el.setProcFdCache(30, pid, file.NewFd(30, "drop", syscall.O_RDONLY))
+	el.setProcFdCache(20, pid+1, file.NewFd(20, "other-pid", syscall.O_RDONLY))
+
+	enter := &types.FdEvent{
+		TraceId: types.SYS_ENTER_CLOSE_RANGE,
+		Pid:     pid,
+		Tid:     pid,
+		Fd:      20,
+	}
+	exit := &types.RetEvent{
+		TraceId: types.SYS_EXIT_CLOSE_RANGE,
+		Pid:     pid,
+		Tid:     pid,
+		Ret:     0,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleFdExit(ep, enter); !ok {
+		t.Fatal("handleFdExit(close_range) returned false")
+	}
+
+	verifyProcFdCached(t, el, pid, 10)
+	verifyProcFdNotCached(t, el, pid, 20)
+	verifyProcFdNotCached(t, el, pid, 30)
+	verifyProcFdCached(t, el, pid+1, 20)
+}
+
 // Tests a simple enter/exit pair of tracepoints.
 func makeOpenEventTestData1(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
@@ -1613,6 +1674,18 @@ func verifyFileDescriptor(t *testing.T, el *eventLoop, fd int32, expectedFileNam
 func verifyFdNotTracked(t *testing.T, el *eventLoop, fd int32) {
 	if _, ok := el.files[fd]; ok {
 		t.Errorf("Expected fd %d to not be tracked but it was found", fd)
+	}
+}
+
+func verifyProcFdCached(t *testing.T, el *eventLoop, pid uint32, fd int32) {
+	if _, ok := el.cachedProcFdFile(fd, pid); !ok {
+		t.Errorf("Expected proc fd cache to contain pid=%d fd=%d", pid, fd)
+	}
+}
+
+func verifyProcFdNotCached(t *testing.T, el *eventLoop, pid uint32, fd int32) {
+	if _, ok := el.cachedProcFdFile(fd, pid); ok {
+		t.Errorf("Expected proc fd cache to not contain pid=%d fd=%d", pid, fd)
 	}
 }
 
