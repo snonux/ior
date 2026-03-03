@@ -58,20 +58,16 @@ func DefaultSVGConfig() SVGConfig {
 // for zoom, search, and highlighting, and is designed to be served directly to
 // a browser (for example via ServeSVG) without any external assets.
 func WriteSVG(w io.Writer, t *trie, cfg SVGConfig) error {
-	if cfg.Width <= 0 || cfg.FrameHeight <= 0 || cfg.FontSize <= 0 || cfg.MinWidthPx <= 0 {
-		cfg = defaultSVGConfig()
-	}
-	if cfg.Title == "" {
-		cfg.Title = defaultSVGConfig().Title
-	}
+	cfg = sanitizeSVGConfig(cfg)
 
-	canvasHeight := cfg.FrameHeight*(t.maxDepth+1) + 80
+	canvasHeight := canvasHeightFor(cfg, t)
 	bw := bufio.NewWriter(w)
 	if err := writeSVGHeader(bw, cfg, canvasHeight); err != nil {
 		return err
 	}
-	if t.root.total > 0 {
-		if err := renderFrames(bw, t.root, t.root.total, cfg, 0, 0, canvasHeight, true); err != nil {
+	for _, frame := range BuildFrameLayout(t, cfg) {
+		if err := writeFrame(bw, frame.Name, frame.Title, frame.Fill,
+			frame.X, frame.Y, frame.Width, frame.Height, frame.Depth, cfg.FontSize); err != nil {
 			return err
 		}
 	}
@@ -106,32 +102,6 @@ func writeSVGHeader(bw *bufio.Writer, cfg SVGConfig, height int) error {
 func writeSVGFooter(bw *bufio.Writer) error {
 	_, err := fmt.Fprintln(bw, "</svg>")
 	return err
-}
-
-func renderFrames(bw *bufio.Writer, node *trieNode, rootTotal uint64, cfg SVGConfig, x float64, depth int, canvasHeight int, isRoot bool) error {
-	if !isRoot {
-		w := float64(cfg.Width) * (float64(node.total) / float64(rootTotal))
-		if w < cfg.MinWidthPx {
-			return nil
-		}
-		y := float64(canvasHeight - (depth+1)*cfg.FrameHeight)
-		fill := frameColor(node.name)
-		pct := 100 * float64(node.total) / float64(rootTotal)
-		title := fmt.Sprintf("%s (%d, %.2f%%)", node.name, node.total, pct)
-		if err := writeFrame(bw, node.name, title, fill, x, y, w, float64(cfg.FrameHeight-1), depth, cfg.FontSize); err != nil {
-			return err
-		}
-	}
-
-	cursor := x
-	for _, child := range node.children {
-		cw := float64(cfg.Width) * (float64(child.total) / float64(rootTotal))
-		if err := renderFrames(bw, child, rootTotal, cfg, cursor, depth+1, canvasHeight, false); err != nil {
-			return err
-		}
-		cursor += cw
-	}
-	return nil
 }
 
 func writeFrame(bw *bufio.Writer, name, title, fill string, x, y, w, h float64, depth, fontSize int) error {
