@@ -377,46 +377,46 @@ func (e *eventLoop) initRawHandlers() {
 	}
 
 	e.rawHandlers[ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.openEvent(NewOpenEvent(raw)); ok {
+		if ev, ok := e.filter.openEvent(NewOpenEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
 	e.rawHandlers[EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewRetEvent(raw), ch)
+		e.tracepointExited(NewRetEventFast(raw), ch)
 	}
 	e.rawHandlers[ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewFdEvent(raw))
+		e.tracepointEntered(NewFdEventFast(raw))
 	}
 	e.rawHandlers[EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewFdEvent(raw), ch)
+		e.tracepointExited(NewFdEventFast(raw), ch)
 	}
 	e.rawHandlers[ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewNullEvent(raw))
+		e.tracepointEntered(NewNullEventFast(raw))
 	}
 	e.rawHandlers[EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewNullEvent(raw), ch)
+		e.tracepointExited(NewNullEventFast(raw), ch)
 	}
 	e.rawHandlers[EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewRetEvent(raw), ch)
+		e.tracepointExited(NewRetEventFast(raw), ch)
 	}
 	e.rawHandlers[ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.nameEvent(NewNameEvent(raw)); ok {
+		if ev, ok := e.filter.nameEvent(NewNameEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
 	e.rawHandlers[ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.pathEvent(NewPathEvent(raw)); ok {
+		if ev, ok := e.filter.pathEvent(NewPathEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
 	e.rawHandlers[ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewFcntlEvent(raw))
+		e.tracepointEntered(NewFcntlEventFast(raw))
 	}
 	e.rawHandlers[ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewOpenByHandleAtEvent(raw))
+		e.tracepointEntered(NewOpenByHandleAtEventFast(raw))
 	}
 	e.rawHandlers[ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewDup3Event(raw))
+		e.tracepointEntered(NewDup3EventFast(raw))
 	}
 }
 
