@@ -169,7 +169,8 @@ type eventLoop struct {
 	pendingHandles map[uint32]string      // map of TID to pathname from name_to_handle_at
 	files          map[int32]file.File    // Track all open files by file descriptor.
 	fdTracker      *fdTracker
-	comms          map[uint32]string // Program or thread name of the current Tid.
+	procFdCache    map[uint64]file.FdFile // Cache procfs-resolved metadata for unknown fds.
+	comms          map[uint32]string      // Program or thread name of the current Tid.
 	commResolver   *commResolver
 	prevPairTimes  map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
 	rawHandlers    map[EventType]rawEventHandler
@@ -198,6 +199,7 @@ func newEventLoop(cfg eventLoopConfig) *eventLoop {
 		pendingHandles: make(map[uint32]string),
 		files:          filesByFD,
 		fdTracker:      newFDTracker(filesByFD),
+		procFdCache:    make(map[uint64]file.FdFile),
 		comms:          commsByTID,
 		commResolver:   newCommResolver(commsByTID),
 		prevPairTimes:  make(map[uint32]uint64),
@@ -553,13 +555,10 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
 
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 	fd := fdEv.Fd
-	if fdFile, ok := e.fdState().get(fd); ok {
-		ep.File = fdFile
-		if ep.Is(SYS_ENTER_CLOSE) {
-			e.fdState().delete(fd)
-		}
-	} else {
-		ep.File = file.NewFdWithPid(fd, fdEv.Pid)
+	ep.File = e.resolveFdFile(fd, fdEv.Pid)
+	if ep.Is(SYS_ENTER_CLOSE) {
+		e.fdState().delete(fd)
+		e.deleteProcFdCache(fd, fdEv.Pid)
 	}
 	if ep.Is(SYS_ENTER_CLOSE_RANGE) {
 		// close_range provides (first, last), but fd_event only carries the first
@@ -609,11 +608,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 
 func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
 	fd := int32(dup3Ev.Fd)
-	if fdFile, ok := e.fdState().get(fd); ok {
-		ep.File = fdFile
-	} else {
-		ep.File = file.NewFdWithPid(fd, dup3Ev.Pid)
-	}
+	ep.File = e.resolveFdFile(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
 	if !e.filter.eventPair(ep) {
 		ep.Recycle()
@@ -701,11 +696,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
-	if fdFile, ok := e.fdState().get(fd); ok {
-		ep.File = fdFile
-	} else {
-		ep.File = file.NewFdWithPid(fd, fcntlEv.Pid)
-	}
+	ep.File = e.resolveFdFile(fd, fcntlEv.Pid)
 	if !e.filter.eventPair(ep) {
 		ep.Recycle()
 		return false
@@ -763,6 +754,48 @@ func (e *eventLoop) notifyWarning(message string) {
 		return
 	}
 	e.warningCb(message)
+}
+
+func (e *eventLoop) resolveFdFile(fd int32, pid uint32) file.File {
+	if fdFile, ok := e.fdState().get(fd); ok {
+		return fdFile
+	}
+	if fd < 0 {
+		return file.NewFd(fd, "", -1)
+	}
+
+	if cached, ok := e.cachedProcFdFile(fd, pid); ok {
+		return cached
+	}
+
+	// Cache first procfs resolution to avoid repeated /proc lookups for hot unknown FDs.
+	discovered := file.NewFdWithPid(fd, pid)
+	e.setProcFdCache(fd, pid, discovered)
+	return discovered
+}
+
+func (e *eventLoop) cachedProcFdFile(fd int32, pid uint32) (file.FdFile, bool) {
+	cache, ok := e.procFdCacheState()[procFdCacheKey(pid, fd)]
+	return cache, ok
+}
+
+func (e *eventLoop) setProcFdCache(fd int32, pid uint32, resolved file.FdFile) {
+	e.procFdCacheState()[procFdCacheKey(pid, fd)] = resolved
+}
+
+func (e *eventLoop) deleteProcFdCache(fd int32, pid uint32) {
+	delete(e.procFdCacheState(), procFdCacheKey(pid, fd))
+}
+
+func (e *eventLoop) procFdCacheState() map[uint64]file.FdFile {
+	if e.procFdCache == nil {
+		e.procFdCache = make(map[uint64]file.FdFile)
+	}
+	return e.procFdCache
+}
+
+func procFdCacheKey(pid uint32, fd int32) uint64 {
+	return uint64(pid)<<32 | uint64(uint32(fd))
 }
 
 func (e *eventLoop) comm(tid uint32) string {
