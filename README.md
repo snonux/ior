@@ -10,6 +10,10 @@ Maybe this is a spiritual successor of one of my previous projects, I/O Riot htt
 
 This works only on Linux!
 
+## Requirements
+
+- Go 1.26 or newer (ior relies on cgo via libbpfgo).
+
 ## Timing Semantics
 
 Each reported event pair has two timing counters:

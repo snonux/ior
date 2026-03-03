@@ -1,6 +1,6 @@
 module ior
 
-go 1.24.2
+go 1.26.0
 
 require (
 	github.com/DataDog/zstd v1.5.7
