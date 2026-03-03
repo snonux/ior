@@ -16,6 +16,7 @@ mage integrationTest                       # Build + run integration tests (defa
 INTEGRATION_PARALLEL=1 mage integrationTest  # Force serial integration tests
 mage generate     # Generate code (required after modifying tracepoint definitions)
 mage bench        # Run benchmarks
+mage prReview     # Run PR review baseline: world + benchProf
 mage clean        # Clean build artifacts
 mage world        # Clean + generate + test + build (recommended reset path)
 ```

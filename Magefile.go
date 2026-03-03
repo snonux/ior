@@ -127,6 +127,15 @@ func Bench() error {
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-v", "-bench=.", "-run", "xxx")
 }
 
+// PrReview runs a reproducible baseline for Codex-assisted PR reviews.
+func PrReview() error {
+	fmt.Println("Running PR review baseline: world + benchProf")
+	if err := World(); err != nil {
+		return err
+	}
+	return BenchProf()
+}
+
 // BenchProf runs pipeline benchmarks and writes timestamped pprof artifacts.
 func BenchProf() error {
 	if err := ensureBenchProfilesDir(); err != nil {
