@@ -102,6 +102,9 @@ func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 		io.Copy(io.Discard, stdout) //nolint:errcheck
 	}()
 
+	startupTimer := time.NewTimer(workloadStartupTimeout)
+	defer stopAndDrainTimer(startupTimer)
+
 	select {
 	case pid := <-pidCh:
 		return cmd, pid, nil
@@ -109,7 +112,7 @@ func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 		cmd.Process.Kill()
 		cmd.Wait()
 		return nil, 0, err
-	case <-time.After(workloadStartupTimeout):
+	case <-startupTimer.C:
 		cmd.Process.Kill()
 		cmd.Wait()
 		return nil, 0, fmt.Errorf("timeout waiting for workload PID")
@@ -151,7 +154,8 @@ func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int, grace time.Duration) 
 	go func(ch chan error) { ch <- workloadCmd.Wait() }(workloadDone)
 	go func(ch chan error) { ch <- iorCmd.Wait() }(iorDone)
 
-	timeout := time.After(time.Duration(duration)*time.Second + grace)
+	timeout := time.NewTimer(time.Duration(duration)*time.Second + grace)
+	defer stopAndDrainTimer(timeout)
 
 	for workloadDone != nil || iorDone != nil {
 		select {
@@ -161,7 +165,7 @@ func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int, grace time.Duration) 
 		case err := <-iorDone:
 			iorErr = err
 			iorDone = nil
-		case <-timeout:
+		case <-timeout.C:
 			if iorDone != nil {
 				iorCmd.Process.Kill()
 				iorErr = fmt.Errorf("ior timed out")
@@ -176,6 +180,19 @@ func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int, grace time.Duration) 
 		}
 	}
 	return
+}
+
+func stopAndDrainTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
 }
 
 // findIorZstFile locates the .ior.zst file matching the scenario name in the output directory.

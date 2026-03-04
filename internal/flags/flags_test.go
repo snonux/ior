@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -16,7 +15,6 @@ func parseForTest(t *testing.T, args ...string) (Flags, error) {
 	oldCommandLine := flag.CommandLine
 	oldArgs := os.Args
 	oldSingleton := singleton
-	oldOnce := once
 	oldParseErr := parseErr
 	oldPID := pidFilter.Load()
 	oldTID := tidFilter.Load()
@@ -28,7 +26,6 @@ func parseForTest(t *testing.T, args ...string) (Flags, error) {
 	os.Args = append([]string{"ior"}, args...)
 
 	singleton = Flags{TUIExportEnable: true}
-	once = sync.Once{}
 	parseErr = nil
 	pidFilter.Store(-1)
 	tidFilter.Store(-1)
@@ -41,7 +38,6 @@ func parseForTest(t *testing.T, args ...string) (Flags, error) {
 		flag.CommandLine = oldCommandLine
 		os.Args = oldArgs
 		singleton = oldSingleton
-		once = oldOnce
 		parseErr = oldParseErr
 		pidFilter.Store(oldPID)
 		tidFilter.Store(oldTID)
