@@ -71,14 +71,30 @@ func openBrowserURL(url, openCommand string) error {
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
 
+	timer := time.NewTimer(750 * time.Millisecond)
+	defer stopAndDrainTimer(timer)
+
 	select {
 	case waitErr := <-waitCh:
 		if waitErr != nil {
 			return fmt.Errorf("browser command exited early: %w", waitErr)
 		}
-	case <-time.After(750 * time.Millisecond):
+	case <-timer.C:
 	}
 	return nil
+}
+
+func stopAndDrainTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
 }
 
 func notifyLiveWarning(warningCb func(string), message string) {

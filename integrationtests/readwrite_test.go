@@ -98,11 +98,11 @@ func TestReadwriteWronlyRead(t *testing.T) {
 			MinCount:     1,
 		},
 	})
-	assertEventBytesAtLeast(t, result, ExpectedEvent{
+	assertEventBytesEqual(t, result, ExpectedEvent{
 		PathContains: "wronlyfile.txt",
 		Tracepoint:   "enter_read",
 		Comm:         "ioworkload",
-	}, 1)
+	}, 0)
 	assertEventBytesReasonable(t, result, ExpectedEvent{
 		PathContains: "wronlyfile.txt",
 		Tracepoint:   "enter_read",
@@ -119,11 +119,11 @@ func TestReadwriteRdonlyWrite(t *testing.T) {
 			MinCount:     1,
 		},
 	})
-	assertEventBytesAtLeast(t, result, ExpectedEvent{
+	assertEventBytesEqual(t, result, ExpectedEvent{
 		PathContains: "rdonlywritefile.txt",
 		Tracepoint:   "enter_write",
 		Comm:         "ioworkload",
-	}, 1)
+	}, 0)
 	assertEventBytesReasonable(t, result, ExpectedEvent{
 		PathContains: "rdonlywritefile.txt",
 		Tracepoint:   "enter_write",
@@ -140,11 +140,11 @@ func TestReadwritePreadInvalid(t *testing.T) {
 			MinCount:     1,
 		},
 	})
-	assertEventBytesAtLeast(t, result, ExpectedEvent{
+	assertEventBytesEqual(t, result, ExpectedEvent{
 		PathContains: "preadinvalid.txt",
 		Tracepoint:   "enter_pread64",
 		Comm:         "ioworkload",
-	}, 1)
+	}, 0)
 	assertEventBytesReasonable(t, result, ExpectedEvent{
 		PathContains: "preadinvalid.txt",
 		Tracepoint:   "enter_pread64",
@@ -161,11 +161,11 @@ func TestReadwritePwriteInvalid(t *testing.T) {
 			MinCount:     1,
 		},
 	})
-	assertEventBytesAtLeast(t, result, ExpectedEvent{
+	assertEventBytesEqual(t, result, ExpectedEvent{
 		PathContains: "pwriteinvalid.txt",
 		Tracepoint:   "enter_pwrite64",
 		Comm:         "ioworkload",
-	}, 1)
+	}, 0)
 	assertEventBytesReasonable(t, result, ExpectedEvent{
 		PathContains: "pwriteinvalid.txt",
 		Tracepoint:   "enter_pwrite64",
@@ -189,6 +189,25 @@ func assertEventBytesAtLeast(t *testing.T, result TestResult, exp ExpectedEvent,
 	}
 	if totalBytes < minBytes {
 		t.Fatalf("bytes for %+v too small: got=%d want>=%d", exp, totalBytes, minBytes)
+	}
+}
+
+func assertEventBytesEqual(t *testing.T, result TestResult, exp ExpectedEvent, wantBytes uint64) {
+	t.Helper()
+	var matched bool
+	var totalBytes uint64
+	for _, rec := range result.Records {
+		if !matchesExpectation(rec, exp) {
+			continue
+		}
+		matched = true
+		totalBytes += rec.Cnt.Bytes
+	}
+	if !matched {
+		t.Fatalf("expected event not found while asserting bytes: %+v", exp)
+	}
+	if totalBytes != wantBytes {
+		t.Fatalf("bytes for %+v mismatch: got=%d want=%d", exp, totalBytes, wantBytes)
 	}
 }
 

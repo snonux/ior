@@ -12,9 +12,9 @@ import (
 )
 
 // Give ior enough time to attach tracepoints before scenarios emit syscalls.
-// Under parallel integration load, 2s can be too short and cause missed
-// first-call events for single-shot scenarios.
-const startupDelay = 5 * time.Second
+// Under slower CI or locally saturated systems, 5s can still miss first-call
+// events for single-shot scenarios. Use a slightly larger delay for stability.
+const startupDelay = 8 * time.Second
 
 func main() {
 	scenario := flag.String("scenario", "", "I/O scenario to execute")
