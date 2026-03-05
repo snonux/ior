@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
-	coreflamegraph "ior/internal/flamegraph"
-	common "ior/internal/tui/common"
 	"sort"
 	"time"
+
+	coreflamegraph "ior/internal/flamegraph"
+	common "ior/internal/tui/common"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"

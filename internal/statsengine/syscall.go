@@ -1,12 +1,13 @@
 package statsengine
 
 import (
-	"ior/internal/event"
-	"ior/internal/types"
 	"math"
 	"math/rand"
 	"sort"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/types"
 )
 
 const syscallReservoirSampleCapDefault = 10_000

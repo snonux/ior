@@ -2,11 +2,12 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
-	common "ior/internal/tui/common"
 	"math"
 	"strconv"
 	"strings"
+
+	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 )
 
 func renderLatencyTab(snap *statsengine.Snapshot, width, height int) string {

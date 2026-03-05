@@ -2,8 +2,9 @@ package flamegraph
 
 import (
 	"fmt"
-	common "ior/internal/tui/common"
 	"strings"
+
+	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 )

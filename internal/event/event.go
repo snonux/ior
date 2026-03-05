@@ -1,8 +1,9 @@
 package event
 
 import (
-	. "ior/internal/types"
 	"sync"
+
+	. "ior/internal/types"
 )
 
 var poolOfEventPairs = sync.Pool{

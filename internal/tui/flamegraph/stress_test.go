@@ -3,12 +3,13 @@ package flamegraph
 import (
 	"encoding/json"
 	"fmt"
-	coreflamegraph "ior/internal/flamegraph"
-	"ior/internal/types"
 	"math/rand"
 	"sync"
 	"testing"
 	"time"
+
+	coreflamegraph "ior/internal/flamegraph"
+	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
 )

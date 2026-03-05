@@ -1,9 +1,10 @@
 package flamegraph
 
 import (
-	coreflamegraph "ior/internal/flamegraph"
 	"reflect"
 	"testing"
+
+	coreflamegraph "ior/internal/flamegraph"
 
 	tea "charm.land/bubbletea/v2"
 )

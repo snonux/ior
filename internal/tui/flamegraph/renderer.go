@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
-	common "ior/internal/tui/common"
 	"math"
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 )

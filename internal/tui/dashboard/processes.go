@@ -2,9 +2,10 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
 	"strconv"
 	"strings"
+
+	"ior/internal/statsengine"
 
 	"charm.land/bubbles/v2/table"
 )

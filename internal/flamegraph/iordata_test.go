@@ -2,9 +2,10 @@ package flamegraph
 
 import (
 	"bytes"
-	"ior/internal/types"
 	"syscall"
 	"testing"
+
+	"ior/internal/types"
 )
 
 func counterAt(iod iorData, path pathType, traceID traceIdType, comm commType, pid pidType, tid tidType, flags flagsType) (Counter, bool) {

@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"ior/internal/types"
 	"os"
 	"strconv"
 	"strings"
+
+	"ior/internal/types"
 )
 
 type File interface {

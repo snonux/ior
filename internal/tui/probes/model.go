@@ -2,9 +2,10 @@ package probes
 
 import (
 	"fmt"
-	"ior/internal/probemanager"
 	"strings"
 	"unicode/utf8"
+
+	"ior/internal/probemanager"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"

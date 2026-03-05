@@ -1,9 +1,10 @@
 package pidpicker
 
 import (
-	"ior/internal/tui/messages"
 	"strings"
 	"testing"
+
+	"ior/internal/tui/messages"
 
 	tea "charm.land/bubbletea/v2"
 )

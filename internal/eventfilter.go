@@ -2,9 +2,10 @@ package internal
 
 import (
 	"fmt"
+	"strings"
+
 	"ior/internal/event"
 	"ior/internal/types"
-	"strings"
 )
 
 type eventFilter struct {

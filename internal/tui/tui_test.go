@@ -3,6 +3,12 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
@@ -10,11 +16,6 @@ import (
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
 	"ior/internal/tui/messages"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
 
 	"ior/internal/flags"
 	"ior/internal/tui/probes"
