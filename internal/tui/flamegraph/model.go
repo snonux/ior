@@ -120,6 +120,8 @@ func (m *Model) RefreshFromLiveTrie() bool {
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
 		return false
 	}
+	m.targetFrames = BuildTerminalLayout(&snapshot, m.width, m.height)
+	m.frames = append(m.frames[:0], m.targetFrames...)
 	m.snapshot = &snapshot
 	m.lastVersion = version
 	return true
