@@ -5,6 +5,7 @@ import (
 	"errors"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
+	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
 	"ior/internal/tui/messages"
@@ -604,5 +605,38 @@ func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 	}
 	if strings.Contains(out, "Overview: waiting for stats") {
 		t.Fatalf("expected probe modal to render as standalone view, got stacked dashboard content")
+	}
+}
+
+func TestBlurPausesDashboardRefreshAndFocusResumesIt(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.dashboard = dashboardui.NewModelWithConfig(nil, nil, 1, m.keys)
+	m.focused = true
+
+	next, _ := m.Update(tea.BlurMsg{})
+	m = next.(Model)
+	if m.focused {
+		t.Fatalf("expected focused=false after blur")
+	}
+
+	tickMsg := m.dashboard.Init()()
+	next, tickCmd := m.Update(tickMsg)
+	m = next.(Model)
+	if tickCmd != nil {
+		t.Fatalf("expected no follow-up tick command while blurred")
+	}
+
+	next, focusCmd := m.Update(tea.FocusMsg{})
+	m = next.(Model)
+	if !m.focused {
+		t.Fatalf("expected focused=true after focus")
+	}
+	if focusCmd == nil {
+		t.Fatalf("expected focus to resume refresh with a command batch")
+	}
+	if _, ok := focusCmd().(tea.BatchMsg); !ok {
+		t.Fatalf("expected focus command to be a batch")
 	}
 }
