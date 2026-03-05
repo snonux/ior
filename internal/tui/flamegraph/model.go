@@ -25,8 +25,6 @@ type zoomState struct {
 	previousSelectedIdx int
 }
 
-type frameSpring struct{}
-
 type flameKeyMap struct {
 	MoveShallower key.Binding
 	MoveDeeper    key.Binding
