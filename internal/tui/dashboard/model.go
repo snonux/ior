@@ -68,7 +68,7 @@ func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuf
 		refreshMs = defaultRefreshMs
 	}
 	m := Model{
-		activeTab:       TabOverview,
+		activeTab:       TabFlame,
 		engine:          engine,
 		refreshEvery:    time.Duration(refreshMs) * time.Millisecond,
 		keys:            keys,
@@ -157,6 +157,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 		return m, nil
 	}
+	if m.activeTab == TabFlame && m.flamegraphModel.ConsumesKey(msg) {
+		next, flameCmd := m.flamegraphModel.Update(msg)
+		m.flamegraphModel = next.(flamegraphtui.Model)
+		return m, flameCmd
+	}
 	handled, scrollCmd := m.handleScrollKey(msg)
 	if scrollCmd != nil {
 		cmd = scrollCmd
@@ -167,32 +172,32 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if !handled {
 		switch {
+		case key.Matches(msg, m.keys.One):
+			m.activeTab = TabFlame
+			handled = true
 		case key.Matches(msg, m.keys.Tab):
 			m.activeTab = nextTab(m.activeTab)
 			handled = true
 		case key.Matches(msg, m.keys.ShiftTab):
 			m.activeTab = prevTab(m.activeTab)
 			handled = true
-		case key.Matches(msg, m.keys.One):
+		case key.Matches(msg, m.keys.Two):
 			m.activeTab = TabOverview
 			handled = true
-		case key.Matches(msg, m.keys.Two):
+		case key.Matches(msg, m.keys.Three):
 			m.activeTab = TabSyscalls
 			handled = true
-		case key.Matches(msg, m.keys.Three):
+		case key.Matches(msg, m.keys.Four):
 			m.activeTab = TabFiles
 			handled = true
-		case key.Matches(msg, m.keys.Four):
+		case key.Matches(msg, m.keys.Five):
 			m.activeTab = TabProcesses
 			handled = true
-		case key.Matches(msg, m.keys.Five):
+		case key.Matches(msg, m.keys.Six):
 			m.activeTab = TabLatency
 			handled = true
-		case key.Matches(msg, m.keys.Six):
-			m.activeTab = TabStream
-			handled = true
 		case key.Matches(msg, m.keys.Seven):
-			m.activeTab = TabFlame
+			m.activeTab = TabStream
 			handled = true
 		case key.Matches(msg, m.keys.Refresh):
 			snap := m.snapshot()
@@ -206,6 +211,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if !handled {
+		if m.activeTab == TabFlame {
+			next, flameCmd := m.flamegraphModel.Update(msg)
+			m.flamegraphModel = next.(flamegraphtui.Model)
+			return m, flameCmd
+		}
 		return m, nil
 	}
 	batch := make([]tea.Cmd, 0, 3)
@@ -317,10 +327,16 @@ func (m Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
 }
 
-// BlocksGlobalShortcuts reports whether modal UI in the active tab should
-// suppress top-level shortcuts (for example global export key handling).
-func (m Model) BlocksGlobalShortcuts() bool {
-	return m.activeTab == TabStream && (m.streamModel.FilterModalVisible() || m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible())
+// BlocksGlobalShortcuts reports whether the active tab should suppress a
+// top-level shortcut for the given key press.
+func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
+	if m.activeTab == TabStream {
+		return m.streamModel.FilterModalVisible() || m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
+	}
+	if m.activeTab == TabFlame {
+		return m.flamegraphModel.ConsumesKey(msg)
+	}
+	return false
 }
 
 // SetStreamSource updates the live stream source used by the stream tab.

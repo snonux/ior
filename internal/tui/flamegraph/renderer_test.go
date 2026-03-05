@@ -1,6 +1,7 @@
 package flamegraph
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,29 @@ func TestBuildTerminalLayoutUsesPathSeparatorAndColor(t *testing.T) {
 	}
 	if child.Fill == nil {
 		t.Fatalf("expected frame color to be set")
+	}
+}
+
+func TestTerminalFrameColorSemanticPalette(t *testing.T) {
+	tests := []struct {
+		name  string
+		label string
+		want  color.RGBA
+	}{
+		{name: "read", label: "sys_enter_read", want: color.RGBA{R: 78, G: 132, B: 201, A: 255}},
+		{name: "write", label: "sys_enter_write", want: color.RGBA{R: 222, G: 122, B: 58, A: 255}},
+		{name: "metadata", label: "sys_enter_openat", want: color.RGBA{R: 196, G: 168, B: 72, A: 255}},
+		{name: "path", label: "/var/log/app.log", want: color.RGBA{R: 88, G: 156, B: 84, A: 255}},
+		{name: "pid", label: "pid=1234", want: color.RGBA{R: 67, G: 151, B: 149, A: 255}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := terminalFrameColor(tc.label)
+			if got != tc.want {
+				t.Fatalf("unexpected semantic color for %q: got=%v want=%v", tc.label, got, tc.want)
+			}
+		})
 	}
 }
 

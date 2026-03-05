@@ -30,13 +30,13 @@ const (
 )
 
 var allTabs = []Tab{
+	TabFlame,
 	TabOverview,
 	TabSyscalls,
 	TabFiles,
 	TabProcesses,
 	TabLatency,
 	TabStream,
-	TabFlame,
 }
 
 func (t Tab) String() string {

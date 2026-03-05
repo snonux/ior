@@ -31,37 +31,38 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	model := next.(Model)
-	if model.activeTab != TabSyscalls {
-		t.Fatalf("expected syscalls tab, got %v", model.activeTab)
+	if model.activeTab != TabOverview {
+		t.Fatalf("expected overview tab on key 2, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = next.(Model)
-	if model.activeTab != TabFiles {
-		t.Fatalf("expected next tab to be files, got %v", model.activeTab)
+	if model.activeTab != TabSyscalls {
+		t.Fatalf("expected next tab to be syscalls, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = next.(Model)
-	if model.activeTab != TabSyscalls {
-		t.Fatalf("expected previous tab to be syscalls, got %v", model.activeTab)
+	if model.activeTab != TabOverview {
+		t.Fatalf("expected previous tab to be overview, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	model = next.(Model)
-	if model.activeTab != TabFlame {
-		t.Fatalf("expected flame tab on key 7, got %v", model.activeTab)
+	if model.activeTab != TabStream {
+		t.Fatalf("expected stream tab on key 7, got %v", model.activeTab)
 	}
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'6'}[0], Text: string([]rune{'6'})})
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'1'}[0], Text: string([]rune{'1'})})
 	model = next.(Model)
-	if model.activeTab != TabStream {
-		t.Fatalf("expected stream tab on key 6, got %v", model.activeTab)
+	if model.activeTab != TabFlame {
+		t.Fatalf("expected flame tab on key 1, got %v", model.activeTab)
 	}
 }
 
 func TestArrowAndViKeysDoNotCycleTabs(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabOverview
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	model := next.(Model)
@@ -303,6 +304,7 @@ func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 13}
 	engine := &fakeSnapshotSource{snap: snap}
 	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabOverview
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
 	_ = next
 	if cmd == nil {
@@ -315,6 +317,63 @@ func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 	}
 	if stats.Snap != snap {
 		t.Fatalf("expected refreshed snapshot from engine")
+	}
+}
+
+func TestFlameTabReceivesSlashKey(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFlame
+	m.width = 120
+	m.height = 30
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'/'}[0], Text: string([]rune{'/'})})
+	model := next.(Model)
+	if cmd != nil {
+		t.Fatalf("did not expect global command for flame search key")
+	}
+	if !strings.Contains(model.View().Content, "0/0 matches") {
+		t.Fatalf("expected flame search footer after pressing /")
+	}
+}
+
+func TestFlameTabReceivesResetAndPauseKeys(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFlame
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
+	model := next.(Model)
+	if !strings.Contains(model.View().Content, "[PAUSED]") {
+		t.Fatalf("expected flame pause key to toggle paused state")
+	}
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
+	model = next.(Model)
+	if cmd != nil {
+		t.Fatalf("expected flame reset key to be handled by flame tab without global refresh command")
+	}
+	if model.activeTab != TabFlame {
+		t.Fatalf("expected flame tab to stay active after reset key")
+	}
+}
+
+func TestFlameSearchConsumesNumericTabKeys(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFlame
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'/'}[0], Text: string([]rune{'/'})})
+	model := next.(Model)
+	if model.activeTab != TabFlame {
+		t.Fatalf("expected flame tab to stay active after opening search")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	model = next.(Model)
+	if model.activeTab != TabFlame {
+		t.Fatalf("expected numeric key while searching to stay in flame tab")
 	}
 }
 
@@ -386,8 +445,8 @@ func TestStatsTickClampsGroupedFilesOffset(t *testing.T) {
 func TestViewRendersTabBarAndHelp(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
 	out := m.View().Content
-	if !strings.Contains(out, "Overview") {
-		t.Fatalf("expected overview label in view")
+	if !strings.Contains(out, "Flame") {
+		t.Fatalf("expected flame tab label in view")
 	}
 	if !strings.Contains(out, "press H for help") {
 		t.Fatalf("expected help hint text in view")
@@ -437,7 +496,7 @@ func TestStreamTabViewKeepsTabAndHelpChromeVisible(t *testing.T) {
 	m.streamModel.Refresh()
 
 	out := m.View().Content
-	if !strings.Contains(out, "1:Overview") {
+	if !strings.Contains(out, "1:Flame") {
 		t.Fatalf("expected tab bar to remain visible in stream view")
 	}
 	if !strings.Contains(out, "press H for help") {

@@ -24,8 +24,8 @@ func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 		t.Fatalf("unexpected select tid binding help: key=%q desc=%q", selectTIDHelp.Key, selectTIDHelp.Desc)
 	}
 
-	flameHelp := keys.Seven.Help()
-	if flameHelp.Key != "7" || flameHelp.Desc != "flame" {
+	flameHelp := keys.One.Help()
+	if flameHelp.Key != "1" || flameHelp.Desc != "flame" {
 		t.Fatalf("unexpected flame binding help: key=%q desc=%q", flameHelp.Key, flameHelp.Desc)
 	}
 }
@@ -38,7 +38,7 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	}
 
 	found := false
-	foundSeven := false
+	foundOne := false
 	for _, binding := range groups[1] {
 		help := binding.Help()
 		if help.Key == "d" && help.Desc == "dir group" {
@@ -52,12 +52,12 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 
 	for _, binding := range groups[0] {
 		help := binding.Help()
-		if help.Key == "7" && help.Desc == "flame" {
-			foundSeven = true
+		if help.Key == "1" && help.Desc == "flame" {
+			foundOne = true
 			break
 		}
 	}
-	if !foundSeven {
+	if !foundOne {
 		t.Fatalf("expected flame tab binding in dashboard full help tabs")
 	}
 
@@ -103,7 +103,7 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	short := keys.DashboardStatusHelp()
 	found := false
 	foundSelectTID := false
-	foundSeven := false
+	foundOne := false
 	for _, binding := range short {
 		help := binding.Help()
 		if help.Key == "o" && help.Desc == "probes" {
@@ -112,8 +112,8 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 		if help.Key == "t" && help.Desc == "select tid" {
 			foundSelectTID = true
 		}
-		if help.Key == "7" && help.Desc == "flame" {
-			foundSeven = true
+		if help.Key == "1" && help.Desc == "flame" {
+			foundOne = true
 		}
 	}
 	if !found {
@@ -122,7 +122,7 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	if !foundSelectTID {
 		t.Fatalf("expected select tid binding in dashboard short help")
 	}
-	if !foundSeven {
+	if !foundOne {
 		t.Fatalf("expected flame tab binding in dashboard short help")
 	}
 }
