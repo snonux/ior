@@ -1,13 +1,20 @@
 package flamegraph
 
 import (
+	"fmt"
 	"hash/fnv"
 	"image/color"
+	common "ior/internal/tui/common"
 	"math"
+	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
 )
 
 const pathSeparator = "\x1f"
+const minFlameWidth = 60
 
 // BuildTerminalLayout converts a live trie snapshot into terminal frame cells.
 func BuildTerminalLayout(snapshot *snapshotNode, width, height int) []tuiFrame {
@@ -96,4 +103,135 @@ func terminalFrameColor(name string) color.Color {
 		B: uint8(40 + int((h>>16)%90)),
 		A: 255,
 	}
+}
+
+// RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
+func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int) string {
+	if width < minFlameWidth {
+		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
+	}
+	if height < 3 {
+		return common.PanelStyle.Render("Flame: viewport too short")
+	}
+	if len(frames) == 0 {
+		return common.PanelStyle.Render("Flame: waiting for data...")
+	}
+
+	availableRows := height - 2 // toolbar + status
+	maxRow := maxFrameRow(frames)
+	rowOffset := 0
+	truncated := false
+	if maxRow+1 > availableRows {
+		rowOffset = maxRow + 1 - availableRows
+		truncated = true
+	}
+
+	if selectedIdx < 0 || selectedIdx >= len(frames) {
+		selectedIdx = 0
+	}
+	selected := frames[selectedIdx]
+
+	toolbar := fmt.Sprintf("Flame | frames:%d | rows:%d", len(frames), availableRows)
+	if truncated {
+		toolbar += " | showing deepest levels"
+	}
+	toolbar = padOrTrim(toolbar, width)
+	status := fmt.Sprintf("Selected: %s %.2f%% total=%d depth=%d", selected.Name, selected.Percent, selected.Total, selected.Depth)
+	status = padOrTrim(status, width)
+
+	rows := buildRenderRows(frames, width, rowOffset, maxRow, selected.Path)
+
+	var b strings.Builder
+	b.Grow((width + 1) * (len(rows) + 2))
+	b.WriteString(toolbar)
+	for _, row := range rows {
+		b.WriteString("\n")
+		b.WriteString(row)
+	}
+	b.WriteString("\n")
+	b.WriteString(status)
+	return b.String()
+}
+
+func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string) []string {
+	rowsByDepth := make(map[int][]tuiFrame)
+	for _, frame := range frames {
+		if frame.Row < rowOffset || frame.Row > maxRow {
+			continue
+		}
+		rowsByDepth[frame.Row] = append(rowsByDepth[frame.Row], frame)
+	}
+
+	rows := make([]string, 0, maxRow-rowOffset+1)
+	for row := maxRow; row >= rowOffset; row-- {
+		framesAtRow := rowsByDepth[row]
+		sort.Slice(framesAtRow, func(i, j int) bool {
+			return framesAtRow[i].Col < framesAtRow[j].Col
+		})
+		rows = append(rows, renderRow(framesAtRow, width, selectedPath))
+	}
+	return rows
+}
+
+func renderRow(frames []tuiFrame, width int, selectedPath string) string {
+	if len(frames) == 0 {
+		return strings.Repeat(" ", width)
+	}
+	var b strings.Builder
+	b.Grow(width + 8)
+	cursor := 0
+	for _, frame := range frames {
+		if frame.Col >= width {
+			continue
+		}
+		if frame.Col > cursor {
+			gap := frame.Col - cursor
+			b.WriteString(strings.Repeat(" ", gap))
+			cursor += gap
+		}
+
+		cellWidth := frame.Width
+		if frame.Col+cellWidth > width {
+			cellWidth = width - frame.Col
+		}
+		if cellWidth <= 0 {
+			continue
+		}
+		label := padOrTrim(frame.Name, cellWidth)
+		style := lipgloss.NewStyle().Width(cellWidth).Foreground(common.ColorBackground).Background(frame.Fill)
+		if frame.Path == selectedPath {
+			style = style.Bold(true).Underline(true)
+		}
+		cell := style.Render(label)
+		b.WriteString(cell)
+		cursor = frame.Col + cellWidth
+	}
+	if cursor < width {
+		b.WriteString(strings.Repeat(" ", width-cursor))
+	}
+	return b.String()
+}
+
+func maxFrameRow(frames []tuiFrame) int {
+	maxRow := 0
+	for _, frame := range frames {
+		if frame.Row > maxRow {
+			maxRow = frame.Row
+		}
+	}
+	return maxRow
+}
+
+func padOrTrim(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= width {
+		return s + strings.Repeat(" ", width-utf8.RuneCountInString(s))
+	}
+	if width == 1 {
+		return "…"
+	}
+	r := []rune(s)
+	return string(r[:width-1]) + "…"
 }

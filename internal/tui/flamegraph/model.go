@@ -90,11 +90,10 @@ func (m Model) Update(tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the flamegraph viewport.
 func (m Model) View() tea.View {
-	content := "Flame: waiting for data..."
-	if m.snapshot != nil {
-		content = fmt.Sprintf("Flame: live snapshot v%d", m.lastVersion)
+	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx)
+	if m.snapshot != nil && len(m.frames) == 0 {
+		content = common.PanelStyle.Render(fmt.Sprintf("Flame: snapshot v%d has no visible frames", m.lastVersion))
 	}
-	content = common.PanelStyle.Render(content)
 	return tea.NewView(content)
 }
 

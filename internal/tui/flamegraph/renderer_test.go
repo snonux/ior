@@ -108,6 +108,65 @@ func TestBuildTerminalLayoutUsesPathSeparatorAndColor(t *testing.T) {
 	}
 }
 
+func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
+	out := RenderTerminalView(nil, 50, 10, 0)
+	if !strings.Contains(out, "terminal too narrow") {
+		t.Fatalf("expected narrow terminal warning, got %q", out)
+	}
+}
+
+func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 10,
+		Children: []*snapshotNode{
+			{Name: "child", Total: 10},
+		},
+	}
+	frames := BuildTerminalLayout(snapshot, 80, 6)
+
+	out := RenderTerminalView(frames, 80, 6, 1)
+	if !strings.Contains(out, "Flame | frames:2") {
+		t.Fatalf("expected toolbar to include frame count, got %q", out)
+	}
+	if !strings.Contains(out, "Selected: child") {
+		t.Fatalf("expected status line to show selected frame, got %q", out)
+	}
+}
+
+func TestRenderTerminalViewShowsDeepLevelTruncationHint(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 4,
+		Children: []*snapshotNode{
+			{
+				Name:  "a",
+				Total: 4,
+				Children: []*snapshotNode{
+					{
+						Name:  "b",
+						Total: 4,
+						Children: []*snapshotNode{
+							{
+								Name:  "c",
+								Total: 4,
+								Children: []*snapshotNode{
+									{Name: "d", Total: 4},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	frames := BuildTerminalLayout(snapshot, 80, 10)
+	out := RenderTerminalView(frames, 80, 4, 0)
+	if !strings.Contains(out, "showing deepest levels") {
+		t.Fatalf("expected truncation hint in toolbar, got %q", out)
+	}
+}
+
 func mustFindFrame(t *testing.T, frames []tuiFrame, path string) tuiFrame {
 	t.Helper()
 	for _, frame := range frames {
