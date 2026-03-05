@@ -15,6 +15,7 @@ import (
 	"ior/internal/tui/messages"
 	"ior/internal/tui/pidpicker"
 	"ior/internal/tui/probes"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -175,6 +176,9 @@ type Model struct {
 	exportEnabled bool
 	isDark        bool
 	focused       bool
+
+	keyboardEnhancements      tea.KeyboardEnhancementsMsg
+	keyboardEnhancementsKnown bool
 }
 
 // NewModel creates the top-level TUI model.
@@ -256,6 +260,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateActiveModel(msg)
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
+		return m, nil
+	case tea.KeyboardEnhancementsMsg:
+		m.keyboardEnhancements = msg
+		m.keyboardEnhancementsKnown = true
+		if msg.SupportsKeyDisambiguation() {
+			log.Printf("tui: keyboard enhancements enabled (flags=%d, eventTypes=%t)", msg.Flags, msg.SupportsEventTypes())
+		}
 		return m, nil
 	case tea.FocusMsg:
 		m.focused = true
@@ -696,5 +707,6 @@ func altScreenView(content string) tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
 	view.ReportFocus = true
+	view.KeyboardEnhancements.ReportEventTypes = true
 	return view
 }
