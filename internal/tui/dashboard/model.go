@@ -103,7 +103,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 		m.streamModel.Refresh()
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case streamEditorDoneMsg:
 		if msg.err != nil {
@@ -114,7 +114,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	var cmd tea.Cmd
 	keyStr := msg.String()
@@ -182,7 +182,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) handleScrollKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	switch m.activeTab {
 	case TabSyscalls:

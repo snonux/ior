@@ -60,7 +60,7 @@ func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 	if !m.visible {
 		return m, "", false
 	}
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		switch keyMsg.String() {
 		case "esc":
 			return m.Close(), "", false

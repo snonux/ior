@@ -246,7 +246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m.updateActiveModel(msg)
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if key.Matches(msg, m.keys.Quit) {
 			m.quitting = true
 			m.stopTrace()
@@ -307,7 +307,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.probeModal.Visible() {
 		var dashboardCmd tea.Cmd
 		// Keep dashboard refresh/data flow alive while probe modal is open.
-		if _, isKey := msg.(tea.KeyMsg); !isKey && m.screen == ScreenDashboard {
+		if _, isKey := msg.(tea.KeyPressMsg); !isKey && m.screen == ScreenDashboard {
 			next, cmd := m.dashboard.Update(msg)
 			m.dashboard = next.(dashboardui.Model)
 			dashboardCmd = cmd
@@ -319,7 +319,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.exporter.Visible() {
 		var dashboardCmd tea.Cmd
 		// Keep dashboard refresh/data flow alive while export modal is open.
-		if _, isKey := msg.(tea.KeyMsg); !isKey && m.screen == ScreenDashboard {
+		if _, isKey := msg.(tea.KeyPressMsg); !isKey && m.screen == ScreenDashboard {
 			next, cmd := m.dashboard.Update(msg)
 			m.dashboard = next.(dashboardui.Model)
 			dashboardCmd = cmd

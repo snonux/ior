@@ -87,7 +87,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		m.clampCursor()
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.searching {
 			return m.updateSearch(msg)
 		}
@@ -125,7 +125,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m Model) updateSearch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.searching = false

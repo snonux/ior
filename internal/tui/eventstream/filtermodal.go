@@ -86,7 +86,7 @@ func (m FilterModal) Update(msg tea.Msg) FilterModal {
 		return m
 	}
 
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		switch keyMsg.String() {
 		case "esc":
 			if m.editing {
