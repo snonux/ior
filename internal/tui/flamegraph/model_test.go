@@ -1,6 +1,9 @@
 package flamegraph
 
-import "testing"
+import (
+	coreflamegraph "ior/internal/flamegraph"
+	"testing"
+)
 
 func TestNewModelDefaults(t *testing.T) {
 	m := NewModel(nil)
@@ -27,5 +30,21 @@ func TestSetViewportAndDarkMode(t *testing.T) {
 	}
 	if m.isDark {
 		t.Fatalf("expected dark mode to be disabled")
+	}
+}
+
+func TestRefreshFromLiveTrieTracksVersionAndSnapshot(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModel(trie)
+
+	if changed := m.RefreshFromLiveTrie(); !changed {
+		t.Fatalf("expected first refresh to load baseline snapshot")
+	}
+	if m.snapshot == nil {
+		t.Fatalf("expected snapshot to be populated after refresh")
+	}
+
+	if changed := m.RefreshFromLiveTrie(); changed {
+		t.Fatalf("expected no refresh when version is unchanged")
 	}
 }

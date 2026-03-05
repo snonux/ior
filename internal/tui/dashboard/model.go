@@ -1,9 +1,11 @@
 package dashboard
 
 import (
+	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/eventstream"
+	flamegraphtui "ior/internal/tui/flamegraph"
 	"ior/internal/tui/messages"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 
 const defaultRefreshMs = 1000
 const streamRefreshMs = 200
+const flameRefreshMs = 200
 const streamChromeRows = 4
 
 // SnapshotSource is the dashboard data source.
@@ -23,6 +26,7 @@ type SnapshotSource interface {
 
 type refreshTickMsg struct{}
 type streamTickMsg struct{}
+type flameTickMsg struct{}
 type streamEditorDoneMsg struct {
 	err error
 }
@@ -31,8 +35,9 @@ type streamEditorDoneMsg struct {
 type Model struct {
 	activeTab Tab
 
-	engine SnapshotSource
-	latest *statsengine.Snapshot
+	engine   SnapshotSource
+	latest   *statsengine.Snapshot
+	liveTrie *coreflamegraph.LiveTrie
 
 	width  int
 	height int
@@ -46,6 +51,7 @@ type Model struct {
 	filesDirOffset  int
 	processesOffset int
 	streamModel     eventstream.Model
+	flamegraphModel flamegraphtui.Model
 	showHelp        bool
 	isDark          bool
 	focused         bool
@@ -62,14 +68,15 @@ func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuf
 		refreshMs = defaultRefreshMs
 	}
 	m := Model{
-		activeTab:    TabOverview,
-		engine:       engine,
-		refreshEvery: time.Duration(refreshMs) * time.Millisecond,
-		keys:         keys,
-		pidFilter:    -1,
-		streamModel:  eventstream.NewModel(streamSource),
-		isDark:       true,
-		focused:      true,
+		activeTab:       TabOverview,
+		engine:          engine,
+		refreshEvery:    time.Duration(refreshMs) * time.Millisecond,
+		keys:            keys,
+		pidFilter:       -1,
+		streamModel:     eventstream.NewModel(streamSource),
+		flamegraphModel: flamegraphtui.NewModel(nil),
+		isDark:          true,
+		focused:         true,
 	}
 	m.SetDarkMode(true)
 	return m
@@ -88,6 +95,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
 		m.streamModel.SetViewport(streamWidth, streamHeight)
+		m.flamegraphModel.SetViewport(msg.Width, msg.Height)
 		return m, nil
 	case refreshTickMsg:
 		if !m.focused {
@@ -104,6 +112,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.streamModel.Refresh()
 		return m, streamTickCmd()
+	case flameTickMsg:
+		if m.activeTab != TabFlame {
+			return m, nil
+		}
+		if m.liveTrie != nil && m.liveTrie.Version() != m.flamegraphModel.LastVersion() {
+			m.flamegraphModel.RefreshFromLiveTrie()
+		}
+		return m, flameTickCmd()
 	case messages.StatsTickMsg:
 		m.latest = msg.Snap
 		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
@@ -182,13 +198,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !handled {
 		return m, nil
 	}
-	if prevActiveTab != TabStream && m.activeTab == TabStream {
-		if cmd == nil {
-			return m, streamTickCmd()
-		}
-		return m, tea.Batch(cmd, streamTickCmd())
+	batch := make([]tea.Cmd, 0, 3)
+	if cmd != nil {
+		batch = append(batch, cmd)
 	}
-	return m, cmd
+	if prevActiveTab != TabStream && m.activeTab == TabStream {
+		batch = append(batch, streamTickCmd())
+	}
+	if prevActiveTab != TabFlame && m.activeTab == TabFlame {
+		batch = append(batch, flameTickCmd())
+	}
+	switch len(batch) {
+	case 0:
+		return m, nil
+	case 1:
+		return m, batch[0]
+	default:
+		return m, tea.Batch(batch...)
+	}
 }
 
 func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
@@ -291,10 +318,20 @@ func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
 	m.streamModel.SetSource(source)
 }
 
+// SetLiveTrie updates the live trie source used by the flamegraph tab.
+func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
+	m.liveTrie = liveTrie
+	m.flamegraphModel.SetLiveTrie(liveTrie)
+	if m.width > 0 && m.height > 0 {
+		m.flamegraphModel.SetViewport(m.width, m.height)
+	}
+}
+
 // SetDarkMode updates dashboard child models for the active theme.
 func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
 	m.streamModel.SetDarkMode(isDark)
+	m.flamegraphModel.SetDarkMode(isDark)
 }
 
 // SetFocused controls whether periodic refresh ticks are processed.
@@ -330,6 +367,7 @@ func (m Model) View() tea.View {
 		m.activeTab,
 		m.latest,
 		&streamModel,
+		&m.flamegraphModel,
 		width,
 		activeHeight,
 		m.pidFilter,
@@ -352,12 +390,19 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, width, height, pidFilter, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height, pidFilter, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
 	if tab == TabStream {
 		if streamModel == nil {
 			return common.PanelStyle.Render("Stream: waiting for source...")
 		}
 		return streamModel.View(width, height)
+	}
+	if tab == TabFlame {
+		if flameModel == nil {
+			return common.PanelStyle.Render("Flame: waiting for model...")
+		}
+		flameModel.SetViewport(width, height)
+		return flameModel.View().Content
 	}
 
 	if snap == nil {
@@ -378,8 +423,6 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 		return renderProcessesWithOffset(snap, width, height, processesOffset, pidFilter)
 	case TabLatency:
 		return renderLatencyGapsTab(snap, width, height)
-	case TabFlame:
-		return common.PanelStyle.Render("Flame: waiting for model...")
 	default:
 		return common.PanelStyle.Render("Unknown tab")
 	}
@@ -387,6 +430,10 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 
 func streamTickCmd() tea.Cmd {
 	return tea.Tick(streamRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return streamTickMsg{} })
+}
+
+func flameTickCmd() tea.Cmd {
+	return tea.Tick(flameRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return flameTickMsg{} })
 }
 
 func streamViewport(width, height int) (int, int) {
