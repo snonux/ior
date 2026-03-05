@@ -48,6 +48,7 @@ type Model struct {
 	streamModel     eventstream.Model
 	showHelp        bool
 	isDark          bool
+	focused         bool
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
@@ -68,6 +69,7 @@ func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuf
 		pidFilter:    -1,
 		streamModel:  eventstream.NewModel(streamSource),
 		isDark:       true,
+		focused:      true,
 	}
 	m.SetDarkMode(true)
 	return m
@@ -88,6 +90,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamModel.SetViewport(streamWidth, streamHeight)
 		return m, nil
 	case refreshTickMsg:
+		if !m.focused {
+			return m, nil
+		}
 		snap := m.snapshot()
 		return m, tea.Batch(
 			tickCmd(m.refreshEvery),
@@ -290,6 +295,17 @@ func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
 func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
 	m.streamModel.SetDarkMode(isDark)
+}
+
+// SetFocused controls whether periodic refresh ticks are processed.
+func (m *Model) SetFocused(focused bool) {
+	m.focused = focused
+}
+
+// SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
+func (m Model) SnapshotCmd() tea.Cmd {
+	snap := m.snapshot()
+	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 }
 
 // SetPidFilter updates the active PID filter used by tab render hints.

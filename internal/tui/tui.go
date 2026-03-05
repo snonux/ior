@@ -174,6 +174,7 @@ type Model struct {
 	pidFilter     int
 	exportEnabled bool
 	isDark        bool
+	focused       bool
 }
 
 // NewModel creates the top-level TUI model.
@@ -218,6 +219,7 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 		pidFilter:     pidFilter,
 		exportEnabled: exportEnabled,
 		isDark:        true,
+		focused:       true,
 	}
 
 	if initialPID > 0 {
@@ -254,6 +256,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateActiveModel(msg)
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
+		return m, nil
+	case tea.FocusMsg:
+		m.focused = true
+		m.dashboard.SetFocused(true)
+		if m.screen == ScreenDashboard && !m.attaching {
+			return m, tea.Batch(m.dashboard.Init(), m.dashboard.SnapshotCmd())
+		}
+		return m, nil
+	case tea.BlurMsg:
+		m.focused = false
+		m.dashboard.SetFocused(false)
 		return m, nil
 	case tea.KeyPressMsg:
 		if key.Matches(msg, m.keys.Quit) {
@@ -682,5 +695,6 @@ func placeToViewport(width, height int, content string) string {
 func altScreenView(content string) tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
+	view.ReportFocus = true
 	return view
 }
