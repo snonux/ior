@@ -95,3 +95,12 @@ func replaceFooterLine(content, footer string) string {
 	lines[len(lines)-1] = footer
 	return strings.Join(lines, "\n")
 }
+
+func replaceHeaderLine(content, header string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return header
+	}
+	lines[0] = header
+	return strings.Join(lines, "\n")
+}

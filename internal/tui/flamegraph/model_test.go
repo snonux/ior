@@ -2,6 +2,7 @@ package flamegraph
 
 import (
 	coreflamegraph "ior/internal/flamegraph"
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -211,6 +212,66 @@ func TestSearchEscapeClearsState(t *testing.T) {
 	}
 	if m.searchQuery != "" || len(m.matchIndices) != 0 {
 		t.Fatalf("expected search state to reset on escape, got query=%q matches=%d", m.searchQuery, len(m.matchIndices))
+	}
+}
+
+func TestControlPauseToggle(t *testing.T) {
+	m := NewModel(nil)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
+	if !m.paused {
+		t.Fatalf("expected pause to toggle on")
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
+	if m.paused {
+		t.Fatalf("expected pause to toggle off")
+	}
+}
+
+func TestControlResetBaseline(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	m := NewModel(liveTrie)
+	m.snapshot = &snapshotNode{Name: "root", Total: 10}
+	m.frames = []tuiFrame{{Name: "root", Path: "root"}}
+	m.zoomPath = "root"
+	m.zoomStack = []zoomState{{path: "", previousSelectedIdx: 0}}
+	m.selectedIdx = 3
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'r'}[0], Text: "r"})
+	if m.snapshot != nil || len(m.frames) != 0 || len(m.zoomStack) != 0 || m.zoomPath != "" {
+		t.Fatalf("expected baseline reset to clear snapshot/layout/zoom state")
+	}
+	if m.statusMessage != "Baseline reset" {
+		t.Fatalf("expected reset status message, got %q", m.statusMessage)
+	}
+}
+
+func TestControlCycleFieldOrderReconfiguresLiveTrie(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	m := NewModel(liveTrie)
+	initial := append([]string(nil), m.fieldPresets[m.fieldIndex]...)
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'o'}[0], Text: "o"})
+	if m.fieldIndex != 1 {
+		t.Fatalf("expected field index to advance to 1, got %d", m.fieldIndex)
+	}
+	next := m.fieldPresets[m.fieldIndex]
+	if reflect.DeepEqual(initial, next) {
+		t.Fatalf("expected next field preset to differ from initial")
+	}
+	if got := liveTrie.Fields(); !reflect.DeepEqual(got, next) {
+		t.Fatalf("expected live trie fields %v, got %v", next, got)
+	}
+}
+
+func TestControlHelpToggle(t *testing.T) {
+	m := NewModel(nil)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'?'}[0], Text: "?"})
+	if !m.showHelp {
+		t.Fatalf("expected help overlay to toggle on")
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'?'}[0], Text: "?"})
+	if m.showHelp {
+		t.Fatalf("expected help overlay to toggle off")
 	}
 }
 
