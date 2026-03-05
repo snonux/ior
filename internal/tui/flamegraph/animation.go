@@ -26,6 +26,7 @@ type frameSpring struct {
 // AnimationState stores per-frame spring interpolation state.
 type AnimationState struct {
 	springs []frameSpring
+	frames  []tuiFrame
 	settled bool
 
 	fps             int
@@ -71,6 +72,11 @@ func (a *AnimationState) SetTargets(targets []tuiFrame) {
 		next = append(next, spring)
 	}
 	a.springs = next
+	if cap(a.frames) < len(a.springs) {
+		a.frames = make([]tuiFrame, len(a.springs))
+	} else {
+		a.frames = a.frames[:len(a.springs)]
+	}
 	a.settled = len(a.springs) == 0
 	for _, spring := range a.springs {
 		if !isSpringSettled(spring) {
@@ -86,15 +92,18 @@ func (a *AnimationState) Tick(delta float64) bool {
 		a.settled = true
 		return false
 	}
+	baseDelta := harmonica.FPS(a.fps)
 	if delta <= 0 {
-		delta = harmonica.FPS(a.fps)
+		delta = baseDelta
 	}
 
 	active := false
 	for idx := range a.springs {
 		spring := &a.springs[idx]
-		spring.widthSpring = harmonica.NewSpring(delta, a.angularVelocity, a.damping)
-		spring.colSpring = harmonica.NewSpring(delta, a.angularVelocity, a.damping)
+		if delta != baseDelta {
+			spring.widthSpring = harmonica.NewSpring(delta, a.angularVelocity, a.damping)
+			spring.colSpring = harmonica.NewSpring(delta, a.angularVelocity, a.damping)
+		}
 		spring.currentW, spring.velocityW = spring.widthSpring.Update(spring.currentW, spring.velocityW, spring.targetW)
 		spring.currentCol, spring.velocityCol = spring.colSpring.Update(spring.currentCol, spring.velocityCol, spring.targetCol)
 		if !isSpringSettled(*spring) {
@@ -106,15 +115,14 @@ func (a *AnimationState) Tick(delta float64) bool {
 }
 
 // CurrentFrames returns interpolated frames for the current animation step.
-func (a AnimationState) CurrentFrames() []tuiFrame {
-	frames := make([]tuiFrame, 0, len(a.springs))
-	for _, spring := range a.springs {
+func (a *AnimationState) CurrentFrames() []tuiFrame {
+	for idx, spring := range a.springs {
 		frame := spring.base
 		frame.Col = maxInt(0, int(math.Round(spring.currentCol)))
 		frame.Width = maxInt(1, int(math.Round(spring.currentW)))
-		frames = append(frames, frame)
+		a.frames[idx] = frame
 	}
-	return frames
+	return a.frames
 }
 
 // Settled reports whether all active springs are at rest.

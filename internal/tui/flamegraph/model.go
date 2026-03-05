@@ -139,7 +139,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.animating = m.animation.Tick(0)
 		m.frames = m.animation.CurrentFrames()
 		m.clampSelection()
-		m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 		if m.animating {
 			return m, animTickCmd()
 		}
@@ -202,7 +202,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.moveSibling(1)
 		}
 		if m.selectedIdx != prev {
-			m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+			m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 		}
 	}
 	return m, nil
@@ -319,7 +319,7 @@ func (m *Model) rebuildFrames(animate bool) {
 		m.frames = append(m.frames[:0], m.targetFrames...)
 	}
 	m.clampSelection()
-	m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 }
 
 func (m *Model) zoomIn() {
