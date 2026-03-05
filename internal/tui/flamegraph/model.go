@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -65,6 +66,7 @@ type Model struct {
 	zoomPath    string
 
 	searchActive bool
+	searchInput  textinput.Model
 	searchQuery  string
 	matchIndices map[int]bool
 	subtreeSet   map[int]bool
@@ -93,10 +95,17 @@ type tuiFrame struct {
 
 // NewModel constructs a flamegraph tab model with default state.
 func NewModel(liveTrie *coreflamegraph.LiveTrie) Model {
+	searchInput := textinput.New()
+	searchInput.Prompt = "/"
+	searchInput.CharLimit = 0
+	searchInput.SetWidth(32)
+	searchInput.SetStyles(textinput.DefaultStyles(true))
+
 	return Model{
 		liveTrie:     liveTrie,
 		matchIndices: make(map[int]bool),
 		subtreeSet:   make(map[int]bool),
+		searchInput:  searchInput,
 		fieldPresets: [][]string{
 			{"comm", "path"},
 			{"tracepoint", "comm", "path"},
@@ -116,8 +125,31 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		if m.searchActive {
+			switch msg.String() {
+			case "esc":
+				m.clearSearch()
+				return m, nil
+			case "enter":
+				m.applySearchQuery(m.searchInput.Value())
+				m.searchActive = false
+				m.searchInput.Blur()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			_ = cmd
+			return m, nil
+		}
+
 		prev := m.selectedIdx
 		switch {
+		case msg.String() == "/":
+			m.openSearch()
+		case msg.String() == "n":
+			m.jumpMatch(1)
+		case msg.String() == "N":
+			m.jumpMatch(-1)
 		case key.Matches(msg, m.keys.ZoomIn):
 			m.zoomIn()
 		case key.Matches(msg, m.keys.ZoomUndo):
@@ -142,7 +174,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the flamegraph viewport.
 func (m Model) View() tea.View {
-	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx, m.subtreeSet, m.matchIndices, m.isDark)
+	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx, m.subtreeSet, m.matchIndices, m.isDark, m.searchActive, m.searchQuery)
+	if m.searchActive {
+		content = replaceFooterLine(content, m.searchFooter())
+	}
 	if m.snapshot != nil && len(m.frames) == 0 {
 		content = common.PanelStyle.Render(fmt.Sprintf("Flame: snapshot v%d has no visible frames", m.lastVersion))
 	}
@@ -204,6 +239,7 @@ func (m *Model) SetViewport(width, height int) {
 // SetDarkMode sets the active color theme mode.
 func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
+	m.searchInput.SetStyles(textinput.DefaultStyles(isDark))
 }
 
 func (m *Model) rebuildFrames() {

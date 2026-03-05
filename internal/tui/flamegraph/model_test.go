@@ -164,6 +164,56 @@ func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
 	}
 }
 
+func TestSearchLifecycleAndMatchNavigation(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{
+		{Name: "alpha", Path: "root" + pathSeparator + "alpha"},
+		{Name: "beta", Path: "root" + pathSeparator + "beta"},
+		{Name: "alphabet", Path: "root" + pathSeparator + "alphabet"},
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'/'}[0], Text: "/"})
+	if !m.searchActive {
+		t.Fatalf("expected search mode to activate on '/'")
+	}
+	for _, r := range []rune{'a', 'l', 'p'} {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.searchActive {
+		t.Fatalf("expected search mode to close on enter")
+	}
+	if got := len(m.matchIndices); got != 2 {
+		t.Fatalf("expected 2 matches for 'alp', got %d", got)
+	}
+	first := m.selectedIdx
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'n'}[0], Text: "n"})
+	if m.selectedIdx == first {
+		t.Fatalf("expected 'n' to jump to next match")
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'N'}[0], Text: "N"})
+	if m.selectedIdx != first {
+		t.Fatalf("expected 'N' to jump back to previous match")
+	}
+}
+
+func TestSearchEscapeClearsState(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{{Name: "alpha", Path: "root" + pathSeparator + "alpha"}}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'/'}[0], Text: "/"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'a'}[0], Text: "a"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	if m.searchActive {
+		t.Fatalf("expected search mode to close on escape")
+	}
+	if m.searchQuery != "" || len(m.matchIndices) != 0 {
+		t.Fatalf("expected search state to reset on escape, got query=%q matches=%d", m.searchQuery, len(m.matchIndices))
+	}
+}
+
 func newZoomModel() Model {
 	m := NewModel(nil)
 	m.width = 120

@@ -113,7 +113,7 @@ func terminalFrameColor(name string) color.Color {
 }
 
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
-func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet map[int]bool, isDark bool) string {
+func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet map[int]bool, isDark, searchActive bool, searchQuery string) string {
 	if width < minFlameWidth {
 		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
@@ -147,9 +147,19 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 	}
 	toolbar = padOrTrim(toolbar, width)
 	status := fmt.Sprintf("Selected: %s %.2f%% total=%d depth=%d", selected.Name, selected.Percent, selected.Total, selected.Depth)
+	if searchQuery != "" {
+		matches := orderedMatchIndices(matchSet)
+		pos := 0
+		if len(matches) > 0 {
+			if idx := indexOf(matches, selectedIdx); idx >= 0 {
+				pos = idx + 1
+			}
+		}
+		status = fmt.Sprintf("Search %q  %d/%d matches", searchQuery, pos, len(matches))
+	}
 	status = padOrTrim(status, width)
 
-	rows := buildRenderRows(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark)
+	rows := buildRenderRows(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive)
 
 	var b strings.Builder
 	b.Grow((width + 1) * (len(rows) + 2))
@@ -168,7 +178,7 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
-func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) []string {
+func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive bool) []string {
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
@@ -183,12 +193,12 @@ func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPa
 		sort.Slice(framesAtRow, func(i, j int) bool {
 			return framesAtRow[i].frame.Col < framesAtRow[j].frame.Col
 		})
-		rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark))
+		rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive))
 	}
 	return rows
 }
 
-func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) string {
+func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -214,7 +224,7 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 			continue
 		}
 		label := padOrTrim(frame.Name, cellWidth)
-		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark).Width(cellWidth)
+		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive).Width(cellWidth)
 		cell := style.Render(label)
 		b.WriteString(cell)
 		cursor = frame.Col + cellWidth
@@ -242,7 +252,7 @@ func computeSubtreeSet(frames []tuiFrame, selectedIdx int) map[int]bool {
 	return subtree
 }
 
-func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) lipgloss.Style {
+func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive bool) lipgloss.Style {
 	base := lipgloss.NewStyle().
 		Foreground(common.ColorBackground).
 		Background(frame.Fill)
@@ -266,6 +276,10 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 			return style.Bold(true)
 		}
 		return style.Faint(true)
+	}
+
+	if searchActive {
+		return base.Background(common.ColorPanel).Foreground(common.ColorMuted).Faint(true)
 	}
 
 	if inSubtree {
