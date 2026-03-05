@@ -129,7 +129,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.SetWidth(clamp(msg.Width-16, 10, 100))
+		inputWidth := msg.Width - 16
+		if inputWidth < 10 {
+			inputWidth = 10
+		}
+		m.input.SetWidth(inputWidth)
 		return m, nil
 	case processesLoadedMsg:
 		m.processes = msg.processes
@@ -276,7 +280,9 @@ func (m Model) View() tea.View {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpBarStyle.Render(renderHelp(m.keys.PickerShortHelp())))
+	viewWidth, _ := common.EffectiveViewport(m.width, m.height)
+	helpStyle := helpBarStyle.Copy().Width(viewWidth)
+	b.WriteString(helpStyle.Render(renderHelp(m.keys.PickerShortHelp())))
 	return tea.NewView(screenStyle.Render(b.String()))
 }
 

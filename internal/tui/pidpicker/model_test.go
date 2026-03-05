@@ -152,3 +152,13 @@ func TestRenderRowsKeepsSelectionVisible(t *testing.T) {
 		t.Fatalf("expected selected row to remain visible, got:\n%s", rows)
 	}
 }
+
+func TestWindowSizeDoesNotCapInputWidthOnWideTerminals(t *testing.T) {
+	m := NewWithKeys(DefaultKeyMap())
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	updated := next.(Model)
+
+	if got, want := updated.input.Width(), 144; got != want {
+		t.Fatalf("expected input width %d for 160-col terminal, got %d", want, got)
+	}
+}

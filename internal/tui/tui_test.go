@@ -20,6 +20,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type fakeProbeManager struct {
@@ -678,5 +679,21 @@ func TestViewSetsDynamicWindowTitle(t *testing.T) {
 	view = m.View()
 	if view.WindowTitle != "ior - I/O Riot" {
 		t.Fatalf("unexpected default window title: %q", view.WindowTitle)
+	}
+}
+
+func TestRenderHelpOverlayUsesWideViewport(t *testing.T) {
+	groups := [][]key.Binding{{key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help"))}}
+	out := renderHelpOverlay(160, 40, groups)
+
+	maxWidth := 0
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+
+	if maxWidth <= 110 {
+		t.Fatalf("expected wide help overlay to exceed previous 110-col cap, got %d", maxWidth)
 	}
 }

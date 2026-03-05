@@ -3,6 +3,14 @@ package common
 import "testing"
 
 func TestEffectiveViewport(t *testing.T) {
+	originalQuery := queryTerminalSize
+	t.Cleanup(func() {
+		queryTerminalSize = originalQuery
+	})
+	queryTerminalSize = func() (int, int, error) {
+		return 132, 41, nil
+	}
+
 	tests := []struct {
 		name       string
 		width      int
@@ -18,24 +26,24 @@ func TestEffectiveViewport(t *testing.T) {
 			wantHeight: 40,
 		},
 		{
-			name:       "both missing use defaults",
+			name:       "both missing use terminal size",
 			width:      0,
 			height:     0,
-			wantWidth:  defaultViewportWidth,
-			wantHeight: defaultViewportHeight,
+			wantWidth:  132,
+			wantHeight: 41,
 		},
 		{
-			name:       "missing height uses default",
+			name:       "missing height uses terminal size",
 			width:      100,
 			height:     0,
 			wantWidth:  100,
-			wantHeight: defaultViewportHeight,
+			wantHeight: 41,
 		},
 		{
-			name:       "missing width uses default",
+			name:       "missing width uses terminal size",
 			width:      -1,
 			height:     30,
-			wantWidth:  defaultViewportWidth,
+			wantWidth:  132,
 			wantHeight: 30,
 		},
 	}
@@ -47,3 +55,22 @@ func TestEffectiveViewport(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveViewportFallsBackToDefaultsWhenTerminalQueryFails(t *testing.T) {
+	originalQuery := queryTerminalSize
+	t.Cleanup(func() {
+		queryTerminalSize = originalQuery
+	})
+	queryTerminalSize = func() (int, int, error) {
+		return 0, 0, assertiveError{}
+	}
+
+	gotWidth, gotHeight := EffectiveViewport(0, 0)
+	if gotWidth != defaultViewportWidth || gotHeight != defaultViewportHeight {
+		t.Fatalf("got (%d,%d), want (%d,%d)", gotWidth, gotHeight, defaultViewportWidth, defaultViewportHeight)
+	}
+}
+
+type assertiveError struct{}
+
+func (assertiveError) Error() string { return "terminal query failed" }
