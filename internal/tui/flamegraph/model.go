@@ -283,7 +283,7 @@ func (m Model) Paused() bool {
 func (m *Model) SetViewport(width, height int) {
 	m.width = width
 	m.height = height
-	m.rebuildFrames(false)
+	m.rebuildFrames(true)
 }
 
 // SetDarkMode sets the active color theme mode.
@@ -331,7 +331,7 @@ func (m *Model) zoomIn() {
 	m.zoomRoot = target
 	m.zoomPath = selectedPath
 	m.selectedIdx = 0
-	m.rebuildFrames(false)
+	m.rebuildFrames(true)
 }
 
 func (m *Model) zoomUndo() {
@@ -347,7 +347,7 @@ func (m *Model) zoomUndo() {
 		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
 	}
 	m.selectedIdx = last.previousSelectedIdx
-	m.rebuildFrames(false)
+	m.rebuildFrames(true)
 }
 
 func (m *Model) zoomReset() {

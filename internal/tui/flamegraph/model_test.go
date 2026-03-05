@@ -165,6 +165,35 @@ func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
 	}
 }
 
+func TestZoomTransitionAnimatesToNewLayout(t *testing.T) {
+	m := newZoomModel()
+	pathA := "root" + pathSeparator + "A"
+	preWidth := m.frames[mustFrameIndex(t, m.frames, pathA)].Width
+
+	m.selectedIdx = mustFrameIndex(t, m.frames, pathA)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.animating {
+		t.Fatalf("expected zoom-in to start animation")
+	}
+	currentWidth := m.frames[mustFrameIndex(t, m.frames, pathA)].Width
+	targetWidth := m.targetFrames[mustFrameIndex(t, m.targetFrames, pathA)].Width
+	if currentWidth == targetWidth {
+		t.Fatalf("expected intermediate zoom frame width to differ from target (current=%d target=%d, pre=%d)", currentWidth, targetWidth, preWidth)
+	}
+
+	for i := 0; i < 180 && m.animating; i++ {
+		next, _ := m.Update(animTickMsg{})
+		m = next.(Model)
+	}
+	if m.animating {
+		t.Fatalf("expected zoom animation to settle within 180 ticks")
+	}
+	finalWidth := m.frames[mustFrameIndex(t, m.frames, pathA)].Width
+	if finalWidth != targetWidth {
+		t.Fatalf("expected final zoom width %d, got %d", targetWidth, finalWidth)
+	}
+}
+
 func TestSearchLifecycleAndMatchNavigation(t *testing.T) {
 	m := NewModel(nil)
 	m.frames = []tuiFrame{
