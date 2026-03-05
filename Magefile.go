@@ -109,7 +109,7 @@ func TestWithName() error {
 		}
 		fmt.Println("Running integration test", testName, "(requires root)...")
 		env := goEnv()
-		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH")
+		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH", "GOTOOLCHAIN")
 		return runGoTestWithProgress(env,
 			"./integrationtests/...",
 			"-run", "^"+testName+"$",
@@ -354,7 +354,7 @@ func runIntegrationTests(parallel bool) error {
 	}
 
 	env := goEnv()
-	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
+	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN")
 
 	timeout := "30m"
 	if !parallel {
