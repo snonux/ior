@@ -14,34 +14,25 @@ func parseForTest(t *testing.T, args ...string) (Flags, error) {
 
 	oldCommandLine := flag.CommandLine
 	oldArgs := os.Args
-	oldSingleton := singleton
+	oldCurrent := Get()
 	oldParseErr := parseErr
-	oldPID := pidFilter.Load()
-	oldTID := tidFilter.Load()
-	oldTUIExport := tuiExportEnable.Load()
 
 	fs := flag.NewFlagSet("ior-test", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	flag.CommandLine = fs
 	os.Args = append([]string{"ior"}, args...)
 
-	singleton = Flags{TUIExportEnable: true}
+	setCurrent(NewFlags())
 	parseErr = nil
-	pidFilter.Store(-1)
-	tidFilter.Store(-1)
-	tuiExportEnable.Store(true)
 
 	err := parse()
-	cfg := singleton
+	cfg := Get()
 
 	t.Cleanup(func() {
 		flag.CommandLine = oldCommandLine
 		os.Args = oldArgs
-		singleton = oldSingleton
+		setCurrent(oldCurrent)
 		parseErr = oldParseErr
-		pidFilter.Store(oldPID)
-		tidFilter.Store(oldTID)
-		tuiExportEnable.Store(oldTUIExport)
 	})
 
 	return cfg, err
@@ -62,11 +53,27 @@ func TestParseLiveFlagsAndInterval(t *testing.T) {
 	if cfg.PidFilter != 1234 {
 		t.Fatalf("pid filter = %d, want 1234", cfg.PidFilter)
 	}
-	if got := int(pidFilter.Load()); got != 1234 {
-		t.Fatalf("global pid filter = %d, want 1234", got)
+	if got := Get().GetPidFilter(); got != 1234 {
+		t.Fatalf("Get().GetPidFilter() = %d, want 1234", got)
 	}
 	if cfg.OpenCommand != "" {
 		t.Fatalf("expected empty open command by default")
+	}
+}
+
+func TestNewFlagsDefaultsAndGetters(t *testing.T) {
+	cfg := NewFlags()
+	if cfg.GetPidFilter() != -1 {
+		t.Fatalf("GetPidFilter() = %d, want -1", cfg.GetPidFilter())
+	}
+	if cfg.GetTidFilter() != -1 {
+		t.Fatalf("GetTidFilter() = %d, want -1", cfg.GetTidFilter())
+	}
+	if !cfg.GetTUIExportEnable() {
+		t.Fatalf("GetTUIExportEnable() = false, want true")
+	}
+	if cfg.CountField != "count" {
+		t.Fatalf("CountField = %q, want count", cfg.CountField)
 	}
 }
 
