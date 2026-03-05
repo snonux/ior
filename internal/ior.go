@@ -233,11 +233,14 @@ func tuiTraceStarterFromRunTrace(
 			Log: func(int, string) {},
 		})
 
+		cfg := flags.Get()
 		engine := statsengine.NewEngine(64)
 		streamBuf := eventstream.NewRingBuffer()
+		liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
 		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
 			bindings.SetDashboardSnapshotSource(engine)
 			bindings.SetEventStreamSource(streamBuf)
+			bindings.SetLiveTrie(liveTrie)
 		}
 		streamEvents := make(chan eventstream.StreamEvent, 4096)
 
@@ -255,7 +258,7 @@ func tuiTraceStarterFromRunTrace(
 				el.printCb = func(ep *event.Pair) {
 					engine.Ingest(ep)
 					streamEvents <- eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep)
-					ep.Recycle()
+					liveTrie.Ingest(ep)
 				}
 				el.warningCb = func(message string) {
 					// Drop warning notifications if the stream channel is saturated.
