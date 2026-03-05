@@ -126,6 +126,78 @@ func TestKeyboardNavigationSingleNodeClamped(t *testing.T) {
 	}
 }
 
+func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
+	m := newZoomModel()
+
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got, want := m.zoomPath, "root"+pathSeparator+"A"; got != want {
+		t.Fatalf("expected zoomPath %q, got %q", want, got)
+	}
+	if len(m.zoomStack) != 1 || m.zoomStack[0].path != "" {
+		t.Fatalf("expected one zoom stack entry from root, got %#v", m.zoomStack)
+	}
+	if m.zoomRoot == nil || m.zoomRoot.Name != "A" {
+		t.Fatalf("expected zoomRoot A, got %+v", m.zoomRoot)
+	}
+
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A"+pathSeparator+"A1")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got, want := m.zoomPath, "root"+pathSeparator+"A"+pathSeparator+"A1"; got != want {
+		t.Fatalf("expected nested zoomPath %q, got %q", want, got)
+	}
+	if len(m.zoomStack) != 2 || m.zoomStack[1].path != "root"+pathSeparator+"A" {
+		t.Fatalf("expected nested zoom stack to preserve parent path, got %#v", m.zoomStack)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if got, want := m.zoomPath, "root"+pathSeparator+"A"; got != want {
+		t.Fatalf("expected zoomPath after undo %q, got %q", want, got)
+	}
+	if len(m.zoomStack) != 1 {
+		t.Fatalf("expected one stack entry after undo, got %d", len(m.zoomStack))
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.zoomPath != "" || m.zoomRoot != nil || len(m.zoomStack) != 0 {
+		t.Fatalf("expected zoom reset to root state, got path=%q root=%+v stack=%d", m.zoomPath, m.zoomRoot, len(m.zoomStack))
+	}
+}
+
+func newZoomModel() Model {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 30
+	m.snapshot = &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{
+				Name:  "A",
+				Total: 60,
+				Children: []*snapshotNode{
+					{Name: "A1", Total: 30},
+					{Name: "A2", Total: 30},
+				},
+			},
+			{Name: "B", Total: 40},
+		},
+	}
+	m.rebuildFrames()
+	return m
+}
+
+func mustFrameIndex(t *testing.T, frames []tuiFrame, path string) int {
+	t.Helper()
+	for idx, frame := range frames {
+		if frame.Path == path {
+			return idx
+		}
+	}
+	t.Fatalf("frame path %q not found", path)
+	return -1
+}
+
 func pressFlameKey(t *testing.T, m Model, keyMsg tea.KeyPressMsg) Model {
 	t.Helper()
 	next, _ := m.Update(keyMsg)
