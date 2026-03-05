@@ -61,7 +61,7 @@ const EventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,not
 func (e *Pair) String() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("%08d,%08d", e.DurationToPrev, e.Duration))
+	_, _ = fmt.Fprintf(&sb, "%08d,%08d", e.DurationToPrev, e.Duration)
 
 	sb.WriteString(",")
 	sb.WriteString(e.Comm)
