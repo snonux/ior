@@ -48,8 +48,8 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	model = next.(Model)
-	if model.activeTab != TabStream {
-		t.Fatalf("expected stream tab on key 7, got %v", model.activeTab)
+	if model.activeTab != TabFlame {
+		t.Fatalf("expected flame tab on key 7, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'6'}[0], Text: string([]rune{'6'})})

@@ -255,7 +255,7 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'6'}[0], Text: string([]rune{'6'})})
 	m = next.(Model)
 	next, _ = m.Update(messages.StatsTickMsg{})
 	m = next.(Model)
@@ -429,7 +429,7 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'6'}[0], Text: string([]rune{'6'})})
 	m = next.(Model)
 	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(Model)

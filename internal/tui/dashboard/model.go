@@ -166,7 +166,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.activeTab = TabStream
 			handled = true
 		case key.Matches(msg, m.keys.Seven):
-			m.activeTab = TabStream
+			m.activeTab = TabFlame
 			handled = true
 		case key.Matches(msg, m.keys.Refresh):
 			snap := m.snapshot()
@@ -378,6 +378,8 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 		return renderProcessesWithOffset(snap, width, height, processesOffset, pidFilter)
 	case TabLatency:
 		return renderLatencyGapsTab(snap, width, height)
+	case TabFlame:
+		return common.PanelStyle.Render("Flame: waiting for model...")
 	default:
 		return common.PanelStyle.Render("Unknown tab")
 	}

@@ -44,7 +44,7 @@ func DefaultKeyMap() KeyMap {
 		Four:      key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "processes")),
 		Five:      key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "lat+gaps")),
 		Six:       key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "stream")),
-		Seven:     key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "stream")),
+		Seven:     key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "flame")),
 		DirGroup:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dir group")),
 		SelectPID: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "select pid")),
 		SelectTID: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "select tid")),
@@ -83,6 +83,7 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 		k.Four,
 		k.Five,
 		k.Six,
+		k.Seven,
 		k.SelectPID,
 		k.SelectTID,
 		k.Probes,
@@ -126,7 +127,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Refresh, k.Quit)
 
 	return [][]key.Binding{
-		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six},
+		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},
 		controls,
 		{
 			helpTextBinding("space", "stream pause"),
