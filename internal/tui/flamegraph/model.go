@@ -1,6 +1,8 @@
 package flamegraph
 
 import (
+	"encoding/json"
+	"fmt"
 	"image/color"
 	coreflamegraph "ior/internal/flamegraph"
 	common "ior/internal/tui/common"
@@ -88,8 +90,44 @@ func (m Model) Update(tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the flamegraph viewport.
 func (m Model) View() tea.View {
-	content := common.PanelStyle.Render("Flame: model scaffold")
+	content := "Flame: waiting for data..."
+	if m.snapshot != nil {
+		content = fmt.Sprintf("Flame: live snapshot v%d", m.lastVersion)
+	}
+	content = common.PanelStyle.Render(content)
 	return tea.NewView(content)
+}
+
+// SetLiveTrie updates the data source used by the flamegraph model.
+func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
+	m.liveTrie = liveTrie
+	m.lastVersion = 0
+	m.snapshot = nil
+}
+
+// RefreshFromLiveTrie loads a new snapshot when the source version changes.
+func (m *Model) RefreshFromLiveTrie() bool {
+	if m.liveTrie == nil {
+		return false
+	}
+	version := m.liveTrie.Version()
+	if version == m.lastVersion && m.snapshot != nil {
+		return false
+	}
+
+	payload, version := m.liveTrie.SnapshotJSON()
+	var snapshot snapshotNode
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return false
+	}
+	m.snapshot = &snapshot
+	m.lastVersion = version
+	return true
+}
+
+// LastVersion returns the latest snapshot version loaded into the model.
+func (m Model) LastVersion() uint64 {
+	return m.lastVersion
 }
 
 // SetViewport updates model render dimensions.

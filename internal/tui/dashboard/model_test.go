@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/eventstream"
@@ -175,6 +176,24 @@ func TestStreamSpaceUnpauseSchedulesStreamTick(t *testing.T) {
 	_ = next
 	if cmd == nil {
 		t.Fatalf("expected stream tick command when unpausing stream")
+	}
+}
+
+func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	liveTrie.Reset()
+
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.SetLiveTrie(liveTrie)
+	m.activeTab = TabFlame
+
+	next, cmd := m.Update(flameTickMsg{})
+	model := next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected flame tick to schedule next tick command")
+	}
+	if got, want := model.flamegraphModel.LastVersion(), liveTrie.Version(); got != want {
+		t.Fatalf("expected flame model version %d, got %d", want, got)
 	}
 }
 
@@ -386,7 +405,7 @@ func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 		statsengine.HistogramSnapshot{},
 	)
-	out := renderActiveTab(TabFiles, &snap, nil, 120, 30, -1, 0, 0, true, 0, 0)
+	out := renderActiveTab(TabFiles, &snap, nil, nil, 120, 30, -1, 0, 0, true, 0, 0)
 	if !strings.Contains(out, "Directory") {
 		t.Fatalf("expected grouped directory files view header, got %q", out)
 	}

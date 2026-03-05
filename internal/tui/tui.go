@@ -340,6 +340,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TracingStartedMsg:
 		m.attaching = false
 		m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
+		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
 		return m, m.dashboard.Init()
 	case TracingErrorMsg:
 		m.attaching = false
