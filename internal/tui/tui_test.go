@@ -657,3 +657,26 @@ func TestKeyboardEnhancementsMsgHandledGracefully(t *testing.T) {
 		t.Fatalf("expected non-zero flags to report key disambiguation support")
 	}
 }
+
+func TestViewSetsDynamicWindowTitle(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	m.screen = ScreenPIDPicker
+	view := m.View()
+	if view.WindowTitle != "ior - select process" {
+		t.Fatalf("unexpected picker window title: %q", view.WindowTitle)
+	}
+
+	m.screen = ScreenDashboard
+	m.pidFilter = 1234
+	view = m.View()
+	if view.WindowTitle != "ior - tracing PID 1234" {
+		t.Fatalf("unexpected tracing window title: %q", view.WindowTitle)
+	}
+
+	m.pidFilter = -1
+	view = m.View()
+	if view.WindowTitle != "ior - I/O Riot" {
+		t.Fatalf("unexpected default window title: %q", view.WindowTitle)
+	}
+}
