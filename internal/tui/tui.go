@@ -695,9 +695,6 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 	lines = append(lines, "", "Esc/? close")
 
 	boxWidth := width - 6
-	if boxWidth > 110 {
-		boxWidth = 110
-	}
 	if boxWidth < 72 {
 		boxWidth = 72
 	}
