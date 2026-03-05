@@ -106,7 +106,7 @@ func terminalFrameColor(name string) color.Color {
 }
 
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
-func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int) string {
+func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, matchSet map[int]bool, isDark bool) string {
 	if width < minFlameWidth {
 		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
@@ -130,6 +130,7 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int) strin
 		selectedIdx = 0
 	}
 	selected := frames[selectedIdx]
+	subtreeSet := computeSubtreeSet(frames, selectedIdx)
 
 	toolbar := fmt.Sprintf("Flame | frames:%d | rows:%d", len(frames), availableRows)
 	if truncated {
@@ -139,7 +140,7 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int) strin
 	status := fmt.Sprintf("Selected: %s %.2f%% total=%d depth=%d", selected.Name, selected.Percent, selected.Total, selected.Depth)
 	status = padOrTrim(status, width)
 
-	rows := buildRenderRows(frames, width, rowOffset, maxRow, selected.Path)
+	rows := buildRenderRows(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark)
 
 	var b strings.Builder
 	b.Grow((width + 1) * (len(rows) + 2))
@@ -153,34 +154,40 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int) strin
 	return b.String()
 }
 
-func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string) []string {
-	rowsByDepth := make(map[int][]tuiFrame)
-	for _, frame := range frames {
+type indexedFrame struct {
+	idx   int
+	frame tuiFrame
+}
+
+func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) []string {
+	rowsByDepth := make(map[int][]indexedFrame)
+	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
 			continue
 		}
-		rowsByDepth[frame.Row] = append(rowsByDepth[frame.Row], frame)
+		rowsByDepth[frame.Row] = append(rowsByDepth[frame.Row], indexedFrame{idx: idx, frame: frame})
 	}
 
 	rows := make([]string, 0, maxRow-rowOffset+1)
 	for row := maxRow; row >= rowOffset; row-- {
 		framesAtRow := rowsByDepth[row]
 		sort.Slice(framesAtRow, func(i, j int) bool {
-			return framesAtRow[i].Col < framesAtRow[j].Col
+			return framesAtRow[i].frame.Col < framesAtRow[j].frame.Col
 		})
-		rows = append(rows, renderRow(framesAtRow, width, selectedPath))
+		rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark))
 	}
 	return rows
 }
 
-func renderRow(frames []tuiFrame, width int, selectedPath string) string {
+func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
 	}
 	var b strings.Builder
 	b.Grow(width + 8)
 	cursor := 0
-	for _, frame := range frames {
+	for _, item := range frames {
+		frame := item.frame
 		if frame.Col >= width {
 			continue
 		}
@@ -198,10 +205,7 @@ func renderRow(frames []tuiFrame, width int, selectedPath string) string {
 			continue
 		}
 		label := padOrTrim(frame.Name, cellWidth)
-		style := lipgloss.NewStyle().Width(cellWidth).Foreground(common.ColorBackground).Background(frame.Fill)
-		if frame.Path == selectedPath {
-			style = style.Bold(true).Underline(true)
-		}
+		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark).Width(cellWidth)
 		cell := style.Render(label)
 		b.WriteString(cell)
 		cursor = frame.Col + cellWidth
@@ -210,6 +214,80 @@ func renderRow(frames []tuiFrame, width int, selectedPath string) string {
 		b.WriteString(strings.Repeat(" ", width-cursor))
 	}
 	return b.String()
+}
+
+func computeSubtreeSet(frames []tuiFrame, selectedIdx int) map[int]bool {
+	subtree := make(map[int]bool)
+	if selectedIdx < 0 || selectedIdx >= len(frames) {
+		return subtree
+	}
+	selectedPath := frames[selectedIdx].Path
+	for idx, frame := range frames {
+		path := frame.Path
+		if path == selectedPath ||
+			strings.HasPrefix(path, selectedPath+pathSeparator) ||
+			strings.HasPrefix(selectedPath, path+pathSeparator) {
+			subtree[idx] = true
+		}
+	}
+	return subtree
+}
+
+func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) lipgloss.Style {
+	base := lipgloss.NewStyle().
+		Foreground(common.ColorBackground).
+		Background(frame.Fill)
+
+	isSelected := idx == selectedIdx
+	inSubtree := subtreeSet[idx]
+	isMatch := matchSet != nil && matchSet[idx]
+
+	matchColor := lipgloss.Color("160")
+	if !isDark {
+		matchColor = lipgloss.Color("124")
+	}
+
+	if isSelected {
+		return base.Bold(true).Reverse(true).Underline(true)
+	}
+
+	if isMatch {
+		style := base.Background(matchColor)
+		if inSubtree {
+			return style.Bold(true)
+		}
+		return style.Faint(true)
+	}
+
+	if inSubtree {
+		if frameRelation(frame.Path, selectedPath) == relationAncestor {
+			return base.BorderLeft(true).BorderForeground(common.ColorAccent)
+		}
+		return base
+	}
+
+	return base.Background(common.ColorPanel).Foreground(common.ColorMuted).Faint(true)
+}
+
+type relation int
+
+const (
+	relationNone relation = iota
+	relationAncestor
+	relationDescendant
+)
+
+func frameRelation(path, selectedPath string) relation {
+	if path == selectedPath {
+		return relationDescendant
+	}
+	if strings.HasPrefix(selectedPath, path+pathSeparator) {
+		return relationAncestor
+	}
+	if strings.HasPrefix(path, selectedPath+pathSeparator) {
+		return relationDescendant
+	}
+	return relationNone
 }
 
 func maxFrameRow(frames []tuiFrame) int {

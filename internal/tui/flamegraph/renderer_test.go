@@ -109,7 +109,7 @@ func TestBuildTerminalLayoutUsesPathSeparatorAndColor(t *testing.T) {
 }
 
 func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
-	out := RenderTerminalView(nil, 50, 10, 0)
+	out := RenderTerminalView(nil, 50, 10, 0, nil, true)
 	if !strings.Contains(out, "terminal too narrow") {
 		t.Fatalf("expected narrow terminal warning, got %q", out)
 	}
@@ -125,7 +125,7 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 
-	out := RenderTerminalView(frames, 80, 6, 1)
+	out := RenderTerminalView(frames, 80, 6, 1, nil, true)
 	if !strings.Contains(out, "Flame | frames:2") {
 		t.Fatalf("expected toolbar to include frame count, got %q", out)
 	}
@@ -161,9 +161,26 @@ func TestRenderTerminalViewShowsDeepLevelTruncationHint(t *testing.T) {
 		},
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 10)
-	out := RenderTerminalView(frames, 80, 4, 0)
+	out := RenderTerminalView(frames, 80, 4, 0, nil, true)
 	if !strings.Contains(out, "showing deepest levels") {
 		t.Fatalf("expected truncation hint in toolbar, got %q", out)
+	}
+}
+
+func TestComputeSubtreeSetIncludesAncestorsAndDescendants(t *testing.T) {
+	frames := []tuiFrame{
+		{Path: "root"},
+		{Path: "root" + pathSeparator + "A"},
+		{Path: "root" + pathSeparator + "A" + pathSeparator + "A1"},
+		{Path: "root" + pathSeparator + "B"},
+	}
+
+	set := computeSubtreeSet(frames, 1)
+	if !set[0] || !set[1] || !set[2] {
+		t.Fatalf("expected root/A/A1 to be in selected subtree: %#v", set)
+	}
+	if set[3] {
+		t.Fatalf("did not expect sibling branch B in subtree: %#v", set)
 	}
 }
 
