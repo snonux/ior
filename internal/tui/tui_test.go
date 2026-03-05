@@ -17,8 +17,8 @@ import (
 	"ior/internal/flags"
 	"ior/internal/tui/probes"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 type fakeProbeManager struct {
@@ -98,14 +98,14 @@ func TestTracingErrorMessageClearsAttachingState(t *testing.T) {
 func TestViewShowsAttachingAndErrorStates(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.attaching = true
-	attachingView := m.View()
+	attachingView := m.View().Content
 	if !strings.Contains(attachingView, "Attaching tracepoints...") {
 		t.Fatalf("expected attaching view, got %q", attachingView)
 	}
 
 	m.attaching = false
 	m.lastErr = errors.New("failed")
-	errorView := m.View()
+	errorView := m.View().Content
 	if !strings.Contains(errorView, "failed") {
 		t.Fatalf("expected error view, got %q", errorView)
 	}
@@ -114,7 +114,7 @@ func TestViewShowsAttachingAndErrorStates(t *testing.T) {
 func TestQuitKeySetsQuittingState(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	if cmd == nil {
 		t.Fatalf("expected quit cmd")
 	}
@@ -132,9 +132,9 @@ func TestQuitKeyMatchesSingleBindingWithoutPanic(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.keys.Quit = key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "quit"))
 
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	_, _ = m.Update(tea.KeyPressMsg{Code: []rune{'z'}[0], Text: string([]rune{'z'})})
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'x'}[0], Text: string([]rune{'x'})})
 	if cmd == nil {
 		t.Fatalf("expected quit cmd")
 	}
@@ -171,7 +171,7 @@ func TestQuitInvokesTraceStop(t *testing.T) {
 		close(done)
 	}
 
-	_, quitCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, quitCmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	if quitCmd == nil {
 		t.Fatalf("expected quit command")
 	}
@@ -253,12 +253,12 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	m = next.(Model)
 	next, _ = m.Update(messages.StatsTickMsg{})
 	m = next.(Model)
 
-	if !strings.Contains(m.View(), "read") {
+	if !strings.Contains(m.View().Content, "read") {
 		t.Fatalf("expected stream tab to render rebound stream event")
 	}
 }
@@ -271,7 +271,7 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open on e key")
@@ -287,7 +287,7 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
 	updated := next.(Model)
 
 	if !stopped {
@@ -319,7 +319,7 @@ func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'t'}[0], Text: string([]rune{'t'})})
 	updated := next.(Model)
 	if !stopped {
 		t.Fatalf("expected tracing stop before tid reselect")
@@ -344,7 +344,7 @@ func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'t'}[0], Text: string([]rune{'t'})})
 	updated := next.(Model)
 	if !stopped {
 		t.Fatalf("expected tracing stop before tid reselect")
@@ -410,7 +410,7 @@ func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if updated.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed when export is disabled")
@@ -427,23 +427,23 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	for _, r := range []rune{'o', 'p', 'e'} {
-		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		next, _ = m.Update(tea.KeyPressMsg{Code: []rune{r}[0], Text: string([]rune{r})})
 		m = next.(Model)
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(Model)
 
 	if m.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed while stream filter modal handles typing")
 	}
-	if !strings.Contains(m.View(), "syscall~ope") {
+	if !strings.Contains(m.View().Content, "syscall~ope") {
 		t.Fatalf("expected typed syscall filter to be applied")
 	}
 }
@@ -475,7 +475,7 @@ func TestRunExportCmdCSVWritesFile(t *testing.T) {
 
 func TestHelpKeyDoesNotToggleOverlay(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'?'}[0], Text: string([]rune{'?'})})
 	updated := next.(Model)
 	if updated.screen != ScreenPIDPicker {
 		t.Fatalf("expected ? to have no effect, got screen %v", updated.screen)
@@ -488,7 +488,7 @@ func TestViewShowsDashboardWithoutHelpOverlay(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	out := m.View()
+	out := m.View().Content
 	if !strings.Contains(out, "press H for help") {
 		t.Fatalf("expected bottom help hint in dashboard")
 	}
@@ -498,7 +498,7 @@ func TestQuestionMarkDoesNotBlockUnderlyingActions(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open; ? overlay is removed")
@@ -512,19 +512,19 @@ func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	next, _ = updated.Update(tea.KeyPressMsg{Code: []rune{'?'}[0], Text: string([]rune{'?'})})
 	updated = next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to remain open after ? key")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	updated = next.(Model)
 	if updated.exporter.Visible() {
 		t.Fatalf("expected esc to close export modal")
@@ -540,7 +540,7 @@ func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	out := m.View()
+	out := m.View().Content
 	if strings.Contains(out, "e snapshot export") {
 		t.Fatalf("did not expect export shortcut in status bar when export is disabled")
 	}
@@ -568,21 +568,21 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	out := m.View()
+	out := m.View().Content
 	if !strings.Contains(out, "Overview: waiting for stats") {
 		t.Fatalf("expected overview waiting view by default")
 	}
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	updated := next.(Model)
-	out = updated.View()
+	out = updated.View().Content
 	if !strings.Contains(out, "Syscalls: waiting for stats") {
 		t.Fatalf("expected syscalls waiting view after pressing 2")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	updated = next.(Model)
-	out = updated.View()
+	out = updated.View().Content
 	if !strings.Contains(out, "Files: waiting for stats") {
 		t.Fatalf("expected files waiting view after tab")
 	}
@@ -598,7 +598,7 @@ func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 	m.height = 30
 	m.probeModal = m.probeModal.Open()
 
-	out := m.View()
+	out := m.View().Content
 	if !strings.Contains(out, "Probes (") {
 		t.Fatalf("expected probe modal content, got %q", out)
 	}

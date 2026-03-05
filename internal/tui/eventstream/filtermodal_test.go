@@ -3,7 +3,7 @@ package eventstream
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestFilterModalOpenClose(t *testing.T) {
@@ -17,7 +17,7 @@ func TestFilterModalOpenClose(t *testing.T) {
 		t.Fatalf("modal should be visible after open")
 	}
 
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.Visible() {
 		t.Fatalf("modal should close on esc")
 	}
@@ -29,11 +29,11 @@ func TestFilterModalNavigateFields(t *testing.T) {
 		t.Fatalf("activeField=%d, want 0", m.activeField)
 	}
 
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
 	if m.activeField != 1 {
 		t.Fatalf("activeField=%d, want 1", m.activeField)
 	}
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("k")[0], Text: string([]rune("k"))})
 	if m.activeField != 0 {
 		t.Fatalf("activeField=%d, want 0", m.activeField)
 	}
@@ -43,34 +43,34 @@ func TestFilterModalEditAndBuildFilter(t *testing.T) {
 	m := NewFilterModal().Open(Filter{})
 
 	// Syscall = read
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("read")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// PID >= 123
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // '=' -> '>'
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("123")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // '=' -> '>'
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("123")[0], Text: string([]rune("123"))})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Latency >= 1ms
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // '=' -> '>='
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1ms")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // '=' -> '>='
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("1ms")[0], Text: string([]rune("1ms"))})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// ErrorsOnly = true
 	for m.activeField < len(m.fields)-1 {
-		m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = m.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
 	}
-	m = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.Visible() {
 		t.Fatalf("modal should close on esc")
 	}
@@ -98,8 +98,8 @@ func TestFilterModalClearAll(t *testing.T) {
 	}
 	m := NewFilterModal().Open(initial)
 
-	m = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
-	m = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m.Update(tea.KeyPressMsg{Code: []rune("c")[0], Text: string([]rune("c"))})
+	m = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 
 	f := m.Filter()
 	if f.IsActive() {

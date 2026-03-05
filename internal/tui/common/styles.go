@@ -1,6 +1,6 @@
 package common
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 var (
 	// Palette colors shared across the TUI package.

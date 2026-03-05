@@ -3,9 +3,9 @@ package eventstream
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type ExportModal struct {
@@ -18,7 +18,7 @@ func NewExportModal() ExportModal {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
-	input.Width = 44
+	input.SetWidth(44)
 	return ExportModal{textInput: input}
 }
 

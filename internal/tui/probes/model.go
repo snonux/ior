@@ -6,9 +6,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Manager defines the probe operations used by the modal.
@@ -45,7 +45,7 @@ func NewModel(manager Manager) Model {
 	ti := textinput.New()
 	ti.Prompt = "/ "
 	ti.CharLimit = 0
-	ti.Width = 28
+	ti.SetWidth(28)
 	return Model{
 		manager:   manager,
 		textInput: ti,
@@ -110,7 +110,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.textInput.CursorEnd()
 			m.textInput.Focus()
 			return m, nil
-		case " ", "enter":
+		case " ", "space", "enter":
 			selected := m.selectedSyscall()
 			if selected == "" {
 				return m, nil

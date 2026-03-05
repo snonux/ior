@@ -1,6 +1,6 @@
 package common
 
-import "github.com/charmbracelet/bubbles/key"
+import "charm.land/bubbles/v2/key"
 
 // HelpSection groups related key bindings under a shared heading.
 type HelpSection struct {

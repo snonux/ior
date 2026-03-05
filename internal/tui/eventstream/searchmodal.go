@@ -3,9 +3,9 @@ package eventstream
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type SearchDirection int
@@ -26,7 +26,7 @@ func NewSearchModal() SearchModal {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
-	input.Width = 44
+	input.SetWidth(44)
 	return SearchModal{textInput: input, direction: SearchForward}
 }
 

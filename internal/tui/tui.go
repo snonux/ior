@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Screen identifies the currently active TUI screen.
@@ -144,7 +144,7 @@ func Run() error {
 func RunWithTraceStarter(starter TraceStarter) error {
 	cfg := flags.Get()
 	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TUIExportEnable, starter)
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
 }
@@ -227,9 +227,9 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 func (m Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
 	if m.screen == ScreenDashboard && m.attaching {
-		return tea.Batch(sizeCmd, tea.WindowSize(), m.spin.Tick, m.beginTraceCmd())
+		return tea.Batch(sizeCmd, tea.RequestWindowSize, m.spin.Tick, m.beginTraceCmd())
 	}
-	return tea.Batch(sizeCmd, tea.WindowSize(), m.pidPicker.Init())
+	return tea.Batch(sizeCmd, tea.RequestWindowSize, m.pidPicker.Init())
 }
 
 func initialWindowSizeCmd() tea.Cmd {
@@ -455,40 +455,40 @@ func (m *Model) stopTrace() {
 }
 
 // View renders the currently active screen and startup overlay state.
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	if m.quitting {
-		return ""
+		return altScreenView("")
 	}
 
 	width, height := common.EffectiveViewport(m.width, m.height)
 
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return placeToViewport(width, height, ScreenStyle.Render(PanelStyle.Render(line)))
+		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(PanelStyle.Render(line))))
 	}
 
 	if m.lastErr != nil {
-		return placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error())))
+		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))))
 	}
 
 	switch m.screen {
 	case ScreenPIDPicker:
-		base := m.pidPicker.View()
+		base := m.pidPicker.View().Content
 		if m.exporter.Visible() {
-			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
+			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base))
 		}
-		return placeToViewport(width, height, base)
+		return altScreenView(placeToViewport(width, height, base))
 	case ScreenDashboard:
-		base := m.dashboard.View()
+		base := m.dashboard.View().Content
 		if m.probeModal.Visible() {
-			return placeToViewport(width, height, m.probeModal.View(width, height))
+			return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)))
 		}
 		if m.exporter.Visible() {
-			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
+			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base))
 		}
-		return placeToViewport(width, height, base)
+		return altScreenView(placeToViewport(width, height, base))
 	default:
-		return ""
+		return altScreenView("")
 	}
 }
 
@@ -656,4 +656,10 @@ func placeToViewport(width, height int, content string) string {
 		return content
 	}
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
+}
+
+func altScreenView(content string) tea.View {
+	view := tea.NewView(content)
+	view.AltScreen = true
+	return view
 }
