@@ -640,3 +640,20 @@ func TestBlurPausesDashboardRefreshAndFocusResumesIt(t *testing.T) {
 		t.Fatalf("expected focus command to be a batch")
 	}
 }
+
+func TestKeyboardEnhancementsMsgHandledGracefully(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	next, cmd := m.Update(tea.KeyboardEnhancementsMsg{Flags: 1})
+	if cmd != nil {
+		t.Fatalf("expected no command when handling keyboard enhancements msg")
+	}
+
+	updated := next.(Model)
+	if !updated.keyboardEnhancementsKnown {
+		t.Fatalf("expected keyboard enhancements to be marked as known")
+	}
+	if !updated.keyboardEnhancements.SupportsKeyDisambiguation() {
+		t.Fatalf("expected non-zero flags to report key disambiguation support")
+	}
+}
