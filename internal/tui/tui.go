@@ -300,18 +300,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stopTrace()
 			return m, tea.Quit
 		}
-		if m.exportEnabled && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+		if m.exportEnabled && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
 			m.exporter = m.exporter.Open()
 			return m, nil
 		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Probes) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Probes) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
 			m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
 			return m, nil
 		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
 			return m.reselectPID()
 		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectTID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
+		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectTID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
 			return m.reselectTID()
 		}
 	case tuiexport.RequestMsg:

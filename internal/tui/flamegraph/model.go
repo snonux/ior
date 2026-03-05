@@ -208,6 +208,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ConsumesKey reports whether the flamegraph should handle a key press before
+// dashboard- or app-level shortcuts.
+func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
+	if m.searchActive {
+		return true
+	}
+	switch {
+	case msg.String() == "/",
+		msg.String() == "n",
+		msg.String() == "N",
+		msg.String() == "p",
+		msg.String() == "r",
+		msg.String() == "o",
+		msg.String() == "?":
+		return true
+	case key.Matches(msg, m.keys.ZoomIn),
+		key.Matches(msg, m.keys.ZoomUndo),
+		key.Matches(msg, m.keys.ZoomReset),
+		key.Matches(msg, m.keys.MoveShallower),
+		key.Matches(msg, m.keys.MoveDeeper),
+		key.Matches(msg, m.keys.PrevSibling),
+		key.Matches(msg, m.keys.NextSibling):
+		return true
+	default:
+		return false
+	}
+}
+
 // View renders the flamegraph viewport.
 func (m Model) View() tea.View {
 	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx, m.subtreeSet, m.matchIndices, m.isDark, m.searchActive, m.searchQuery)

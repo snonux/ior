@@ -270,7 +270,7 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'6'}[0], Text: string([]rune{'6'})})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	m = next.(Model)
 	next, _ = m.Update(messages.StatsTickMsg{})
 	m = next.(Model)
@@ -295,6 +295,37 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	}
 }
 
+func TestFlamePauseKeyDoesNotTriggerPIDReselect(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
+	updated := next.(Model)
+	if updated.screen != ScreenDashboard {
+		t.Fatalf("expected flame pause key to keep dashboard screen, got %v", updated.screen)
+	}
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected flame pause key to toggle flame paused state")
+	}
+}
+
+func TestFlameOrderKeyDoesNotOpenProbeModal(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'o'}[0], Text: string([]rune{'o'})})
+	updated := next.(Model)
+	if updated.probeModal.Visible() {
+		t.Fatalf("expected flame order key to stay in flame tab, not open probes modal")
+	}
+}
+
 func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
@@ -303,6 +334,9 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	m.height = 30
 	stopped := false
 	m.traceStop = func() { stopped = true }
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
 	updated := next.(Model)
@@ -336,6 +370,9 @@ func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
+
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'t'}[0], Text: string([]rune{'t'})})
 	updated := next.(Model)
 	if !stopped {
@@ -360,6 +397,9 @@ func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
 
 	stopped := false
 	m.traceStop = func() { stopped = true }
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'t'}[0], Text: string([]rune{'t'})})
 	updated := next.(Model)
@@ -444,7 +484,7 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'6'}[0], Text: string([]rune{'6'})})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	m = next.(Model)
 	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(Model)
@@ -586,22 +626,22 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 	m.height = 30
 
 	out := m.View().Content
-	if !strings.Contains(out, "Overview: waiting for stats") {
-		t.Fatalf("expected overview waiting view by default")
+	if !strings.Contains(out, "Flame: waiting for data") {
+		t.Fatalf("expected flame waiting view by default")
 	}
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	updated := next.(Model)
 	out = updated.View().Content
-	if !strings.Contains(out, "Syscalls: waiting for stats") {
-		t.Fatalf("expected syscalls waiting view after pressing 2")
+	if !strings.Contains(out, "Overview: waiting for stats") {
+		t.Fatalf("expected overview waiting view after pressing 2")
 	}
 
 	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	updated = next.(Model)
 	out = updated.View().Content
-	if !strings.Contains(out, "Files: waiting for stats") {
-		t.Fatalf("expected files waiting view after tab")
+	if !strings.Contains(out, "Syscalls: waiting for stats") {
+		t.Fatalf("expected syscalls waiting view after tab")
 	}
 }
 
@@ -619,7 +659,7 @@ func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 	if !strings.Contains(out, "Probes (") {
 		t.Fatalf("expected probe modal content, got %q", out)
 	}
-	if strings.Contains(out, "Overview: waiting for stats") {
+	if strings.Contains(out, "Flame: waiting for data") || strings.Contains(out, "Overview: waiting for stats") {
 		t.Fatalf("expected probe modal to render as standalone view, got stacked dashboard content")
 	}
 }
