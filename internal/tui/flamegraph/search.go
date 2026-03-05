@@ -92,21 +92,25 @@ func (m Model) searchFooter() string {
 }
 
 func replaceFooterLine(content, footer string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) == 0 {
+	if content == "" {
 		return footer
 	}
-	lines[len(lines)-1] = footer
-	return strings.Join(lines, "\n")
+	lastNewline := strings.LastIndexByte(content, '\n')
+	if lastNewline == -1 {
+		return footer
+	}
+	return content[:lastNewline+1] + footer
 }
 
 func replaceHeaderLine(content, header string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) == 0 {
+	if content == "" {
 		return header
 	}
-	lines[0] = header
-	return strings.Join(lines, "\n")
+	firstNewline := strings.IndexByte(content, '\n')
+	if firstNewline == -1 {
+		return header
+	}
+	return header + content[firstNewline:]
 }
 
 func clearBoolMap[K comparable](values map[K]bool) {

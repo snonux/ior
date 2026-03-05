@@ -220,9 +220,11 @@ func BenchmarkAnimationTick(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				if !state.Tick(0) {
-					state.SetTargets(base)
-					state.SetTargets(target)
-					_ = state.Tick(0)
+					for idx := range state.springs {
+						state.springs[idx].targetCol += 3
+						state.springs[idx].targetW += 2
+					}
+					state.settled = false
 				}
 				frames := state.CurrentFrames()
 				benchIntSink = frames[len(frames)-1].Width

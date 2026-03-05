@@ -14,6 +14,7 @@ import (
 )
 
 const pathSeparator = "\x1f"
+const pathSeparatorByte = '\x1f'
 const minFlameWidth = 60
 
 // BuildTerminalLayout converts a live trie snapshot into terminal frame cells.
@@ -224,7 +225,7 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 			continue
 		}
 		label := padOrTrim(frame.Name, cellWidth)
-		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive).Width(cellWidth)
+		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive)
 		cell := style.Render(label)
 		b.WriteString(cell)
 		cursor = frame.Col + cellWidth
@@ -255,12 +256,22 @@ func computeSubtreeSetInto(frames []tuiFrame, selectedIdx int, subtree map[int]b
 	for idx, frame := range frames {
 		path := frame.Path
 		if path == selectedPath ||
-			strings.HasPrefix(path, selectedPath+pathSeparator) ||
-			strings.HasPrefix(selectedPath, path+pathSeparator) {
+			hasPathBoundaryPrefix(path, selectedPath) ||
+			hasPathBoundaryPrefix(selectedPath, path) {
 			subtree[idx] = true
 		}
 	}
 	return subtree
+}
+
+func hasPathBoundaryPrefix(value, prefix string) bool {
+	if len(value) <= len(prefix) {
+		return false
+	}
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	return value[len(prefix)] == pathSeparatorByte
 }
 
 func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive bool) lipgloss.Style {
