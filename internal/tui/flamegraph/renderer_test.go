@@ -109,7 +109,7 @@ func TestBuildTerminalLayoutUsesPathSeparatorAndColor(t *testing.T) {
 }
 
 func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
-	out := RenderTerminalView(nil, 50, 10, 0, nil, nil, true)
+	out := RenderTerminalView(nil, 50, 10, 0, nil, nil, true, false, "")
 	if !strings.Contains(out, "terminal too narrow") {
 		t.Fatalf("expected narrow terminal warning, got %q", out)
 	}
@@ -125,7 +125,7 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 
-	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, true)
+	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, true, false, "")
 	if !strings.Contains(out, "Flame | frames:2") {
 		t.Fatalf("expected toolbar to include frame count, got %q", out)
 	}
@@ -161,7 +161,7 @@ func TestRenderTerminalViewShowsDeepLevelTruncationHint(t *testing.T) {
 		},
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 10)
-	out := RenderTerminalView(frames, 80, 4, 0, nil, nil, true)
+	out := RenderTerminalView(frames, 80, 4, 0, nil, nil, true, false, "")
 	if !strings.Contains(out, "showing deepest levels") {
 		t.Fatalf("expected truncation hint in toolbar, got %q", out)
 	}
