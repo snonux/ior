@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -59,6 +60,7 @@ type Model struct {
 	height int
 
 	showFooter bool
+	viewport   viewport.Model
 }
 
 type fdTraceViewState struct {
@@ -81,9 +83,24 @@ func NewModel(source *RingBuffer) Model {
 		exportDir:   ".",
 		showFooter:  true,
 		isDark:      true,
+		viewport:    newStreamViewport(),
 	}
 	m.SetDarkMode(true)
 	return m
+}
+
+func newStreamViewport() viewport.Model {
+	vp := viewport.New()
+	keyMap := viewport.DefaultKeyMap()
+	keyMap.Down.SetKeys("down", "j")
+	keyMap.Up.SetKeys("up", "k")
+	keyMap.Left.SetKeys("left", "h")
+	keyMap.Right.SetKeys("right", "l")
+	keyMap.PageDown.SetKeys("pgdown", "pgdn", "pagedown")
+	keyMap.PageUp.SetKeys("pgup", "pageup")
+	vp.KeyMap = keyMap
+	vp.SoftWrap = true
+	return vp
 }
 
 // SetViewport updates the render/scroll viewport dimensions used for
@@ -91,9 +108,11 @@ func NewModel(source *RingBuffer) Model {
 func (m *Model) SetViewport(width, height int) {
 	if width > 0 {
 		m.width = width
+		m.viewport.SetWidth(width)
 	}
 	if height > 0 {
 		m.height = height
+		m.viewport.SetHeight(m.visibleRows())
 	}
 }
 
@@ -296,7 +315,8 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.moveSelectionTo(len(m.filtered) - 1)
 		} else {
 			m.autoScroll = true
-			m.scrollOffset = m.maxScrollOffset()
+			m.viewport.GotoBottom()
+			m.scrollOffset = clamp(m.viewport.YOffset(), 0, m.maxScrollOffset())
 		}
 		return true
 	case "g":
@@ -304,6 +324,7 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.moveSelectionTo(0)
 		} else {
 			m.autoScroll = false
+			m.viewport.GotoTop()
 			m.scrollOffset = 0
 		}
 		return true
@@ -317,14 +338,14 @@ func (m *Model) HandleKey(keyStr string) bool {
 		if m.paused {
 			m.moveSelectionBy(1)
 		} else {
-			m.scrollByLines(1)
+			m.handleViewportUpdate(keyMsgFromString("down"))
 		}
 		return true
 	case "k", "up":
 		if m.paused {
 			m.moveSelectionBy(-1)
 		} else {
-			m.scrollByLines(-1)
+			m.handleViewportUpdate(keyMsgFromString("up"))
 		}
 		return true
 	case "left", "h":
@@ -332,25 +353,25 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.moveSelectedColBy(-1)
 			return true
 		}
-		return false
+		return m.handleViewportUpdate(keyMsgFromString("left"))
 	case "right", "l":
 		if m.paused {
 			m.moveSelectedColBy(1)
 			return true
 		}
-		return false
+		return m.handleViewportUpdate(keyMsgFromString("right"))
 	case "pgdown", "pgdn", "pagedown":
 		if m.paused {
 			m.moveSelectionBy(m.pageStep())
 		} else {
-			m.scrollByLines(m.pageStep())
+			m.handleViewportUpdate(keyMsgFromString("pgdown"))
 		}
 		return true
 	case "pgup", "pageup":
 		if m.paused {
 			m.moveSelectionBy(-m.pageStep())
 		} else {
-			m.scrollByLines(-m.pageStep())
+			m.handleViewportUpdate(keyMsgFromString("pgup"))
 		}
 		return true
 	case "esc":
@@ -366,6 +387,10 @@ func (m *Model) HandleKey(keyStr string) bool {
 // HandleTeaKey handles stream keys based on Bubble Tea key message types first,
 // then falls back to string matching for rune-driven shortcuts.
 func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) bool {
+	if m.handleViewportUpdate(msg) {
+		return true
+	}
+
 	switch msg.Code {
 	case tea.KeyLeft:
 		return m.HandleKey("left")
@@ -396,6 +421,34 @@ func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) bool {
 	return m.HandleKey(msg.String())
 }
 
+func (m *Model) handleViewportUpdate(msg tea.KeyPressMsg) bool {
+	if m.paused || m.fdTraceView.visible || m.filterModal.Visible() || m.exportModal.Visible() || m.searchModal.Visible() {
+		return false
+	}
+
+	switch msg.String() {
+	case "down", "j", "up", "k", "left", "h", "right", "l", "pgup", "pageup", "pgdown", "pgdn", "pagedown":
+	default:
+		return false
+	}
+
+	switch msg.String() {
+	case "pgup", "pageup":
+		m.viewport.ScrollUp(m.pageStep())
+	case "pgdown", "pgdn", "pagedown":
+		m.viewport.ScrollDown(m.pageStep())
+	default:
+		vp, cmd := m.viewport.Update(msg)
+		_ = cmd
+		m.viewport = vp
+	}
+	m.scrollOffset = clamp(m.viewport.YOffset(), 0, m.maxScrollOffset())
+	if m.scrollOffset < m.maxScrollOffset() {
+		m.autoScroll = false
+	}
+	return true
+}
+
 func (m *Model) View(width, height int) string {
 	if width <= 0 {
 		width = 100
@@ -405,13 +458,16 @@ func (m *Model) View(width, height int) string {
 	}
 	m.width = width
 	m.height = height
+	m.viewport.SetWidth(width)
+	m.viewport.SetHeight(m.visibleRows())
 
 	if m.fdTraceView.visible {
 		return m.viewFDTrace(width)
 	}
 
 	rows := m.visibleRows()
-	start := clamp(m.scrollOffset, 0, m.maxScrollOffset())
+	start := clamp(m.viewport.YOffset(), 0, m.maxScrollOffset())
+	m.scrollOffset = start
 	end := start + rows
 	if end > len(m.filtered) {
 		end = len(m.filtered)
@@ -479,6 +535,8 @@ func (m *Model) Refresh() {
 		m.allEvents = []StreamEvent{}
 		m.filtered = []StreamEvent{}
 		m.scrollOffset = 0
+		m.viewport.SetContentLines(nil)
+		m.viewport.SetYOffset(0)
 		return
 	}
 
@@ -491,6 +549,8 @@ func (m *Model) applyFilter() {
 		m.filtered = []StreamEvent{}
 		m.scrollOffset = 0
 		m.selectedIdx = -1
+		m.viewport.SetContentLines(nil)
+		m.viewport.SetYOffset(0)
 		return
 	}
 
@@ -502,12 +562,18 @@ func (m *Model) applyFilter() {
 		}
 	}
 	m.filtered = filtered
+	m.viewport.SetWidth(m.width)
+	m.viewport.SetHeight(m.visibleRows())
+	lines := make([]string, len(m.filtered))
+	m.viewport.SetContentLines(lines)
 
 	max := m.maxScrollOffset()
 	if m.autoScroll {
-		m.scrollOffset = max
+		m.viewport.GotoBottom()
+		m.scrollOffset = clamp(m.viewport.YOffset(), 0, max)
 	} else {
 		m.scrollOffset = clamp(m.scrollOffset, 0, max)
+		m.viewport.SetYOffset(m.scrollOffset)
 	}
 	m.clampSelection()
 	if m.paused {
@@ -542,26 +608,6 @@ func (m *Model) pageStep() int {
 		return 1
 	}
 	return rows - 1
-}
-
-func (m *Model) scrollByLines(delta int) {
-	if delta == 0 {
-		return
-	}
-	max := m.maxScrollOffset()
-	next := m.scrollOffset + delta
-	if next < 0 {
-		next = 0
-	}
-	if next > max {
-		next = max
-	}
-	if next != m.scrollOffset {
-		m.scrollOffset = next
-	}
-	if m.scrollOffset < max {
-		m.autoScroll = false
-	}
 }
 
 func (m *Model) openFDTraceView() bool {
@@ -661,6 +707,7 @@ func (m *Model) centerSelection() {
 	mid := m.visibleRows() / 2
 	target := m.selectedIdx - mid
 	m.scrollOffset = clamp(target, 0, m.maxScrollOffset())
+	m.viewport.SetYOffset(m.scrollOffset)
 }
 
 func (m *Model) ensureSelection() {
