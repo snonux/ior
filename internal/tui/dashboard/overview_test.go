@@ -7,7 +7,7 @@ import (
 
 	"ior/internal/statsengine"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 func TestRenderOverviewIncludesCoreMetrics(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/charmbracelet/bubbles/table"
+	"charm.land/bubbles/v2/table"
 )
 
 type DirSnapshot struct {

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/table"
+	"charm.land/bubbles/v2/table"
 )
 
 func renderProcesses(snap *statsengine.Snapshot, width, height int) string {

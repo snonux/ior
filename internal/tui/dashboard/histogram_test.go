@@ -6,7 +6,7 @@ import (
 
 	"ior/internal/statsengine"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 func TestRenderHistogramNoBuckets(t *testing.T) {

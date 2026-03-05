@@ -6,10 +6,10 @@ import (
 	"ior/internal/tui/messages"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 const allPIDsLabel = "All PIDs"
@@ -86,7 +86,7 @@ func NewPIDWithKeys(keys KeyMap) Model {
 	input.Placeholder = "pid, comm, or cmdline"
 	input.Focus()
 	input.CharLimit = 0
-	input.Width = 40
+	input.SetWidth(40)
 
 	return Model{
 		input:     input,
@@ -117,7 +117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.Width = clamp(msg.Width-16, 10, 100)
+		m.input.SetWidth(clamp(msg.Width-16, 10, 100))
 		return m, nil
 	case processesLoadedMsg:
 		m.processes = msg.processes
@@ -138,17 +138,17 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Esc):
 		return m, tea.Quit
-	case msg.Type == tea.KeyCtrlR:
+	case msg.Key().Mod&tea.ModCtrl != 0 && (msg.Key().Code == 'r' || msg.Key().Code == 'R'):
 		return m, m.scanCmd()
 	case key.Matches(msg, m.keys.Enter):
 		return m, m.emitSelection()
-	case msg.Type == tea.KeyUp:
+	case msg.Key().Code == tea.KeyUp:
 		if m.selectedIndex > 0 {
 			m.selectedIndex--
 		}
 		m.input.Blur()
 		return m, nil
-	case msg.Type == tea.KeyDown:
+	case msg.Key().Code == tea.KeyDown:
 		maxIndex := len(m.filtered)
 		if m.selectedIndex < maxIndex {
 			m.selectedIndex++
@@ -157,7 +157,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if msg.Type == tea.KeyRunes && !m.input.Focused() {
+	if msg.Key().Text != "" && !m.input.Focused() {
 		if key.Matches(msg, m.keys.Refresh) {
 			return m, m.scanCmd()
 		}
@@ -240,7 +240,7 @@ func cloneProcesses(in []ProcessInfo) []ProcessInfo {
 }
 
 // View renders the PID picker with filter input, list, and help bar.
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	var b strings.Builder
 	if m.mode == PickerModeTID {
 		if m.targetPID > 0 {
@@ -265,7 +265,7 @@ func (m Model) View() string {
 
 	b.WriteString("\n")
 	b.WriteString(helpBarStyle.Render(renderHelp(m.keys.PickerShortHelp())))
-	return screenStyle.Render(b.String())
+	return tea.NewView(screenStyle.Render(b.String()))
 }
 
 func (m Model) renderRows() string {

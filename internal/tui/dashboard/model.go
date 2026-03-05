@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 const defaultRefreshMs = 1000
@@ -288,7 +288,7 @@ func (m *Model) SetPidFilter(pid int) {
 }
 
 // View renders the tab bar, active tab scaffold, and help bar.
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
 	activeHeight := height
 	streamModel := m.streamModel
@@ -319,7 +319,7 @@ func (m Model) View() string {
 	} else {
 		b.WriteString(renderHelpHint(width))
 	}
-	return common.ScreenStyle.Render(b.String())
+	return tea.NewView(common.ScreenStyle.Render(b.String()))
 }
 
 func tickCmd(d time.Duration) tea.Cmd {

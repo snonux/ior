@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 const (
@@ -354,7 +354,7 @@ func (m *Model) HandleKey(keyStr string) bool {
 // HandleTeaKey handles stream keys based on Bubble Tea key message types first,
 // then falls back to string matching for rune-driven shortcuts.
 func (m *Model) HandleTeaKey(msg tea.KeyMsg) bool {
-	switch msg.Type {
+	switch msg.Key().Code {
 	case tea.KeyLeft:
 		return m.HandleKey("left")
 	case tea.KeyRight:
@@ -373,9 +373,12 @@ func (m *Model) HandleTeaKey(msg tea.KeyMsg) bool {
 		return m.HandleKey("esc")
 	case tea.KeyEnter:
 		return m.HandleKey("enter")
-	case tea.KeyRunes:
-		if len(msg.Runes) == 1 {
-			return m.HandleKey(string(msg.Runes[0]))
+	default:
+		if msg.Key().Text != "" {
+			runes := []rune(msg.Key().Text)
+			if len(runes) == 1 {
+				return m.HandleKey(msg.Key().Text)
+			}
 		}
 	}
 	return m.HandleKey(msg.String())
@@ -810,23 +813,23 @@ func (m *Model) clampSelection() {
 func keyMsgFromString(keyStr string) tea.KeyMsg {
 	switch keyStr {
 	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
+		return tea.KeyPressMsg{Code: tea.KeyEsc}
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "tab":
-		return tea.KeyMsg{Type: tea.KeyTab}
+		return tea.KeyPressMsg{Code: tea.KeyTab}
 	case "up":
-		return tea.KeyMsg{Type: tea.KeyUp}
+		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
+		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case " ", "space":
-		return tea.KeyMsg{Type: tea.KeySpace}
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	}
 	if keyStr == "" {
-		return tea.KeyMsg{}
+		return tea.KeyPressMsg{}
 	}
 	runes := []rune(keyStr)
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: runes}
+	return tea.KeyPressMsg{Code: runes[0], Text: keyStr}
 }
 
 func rowNumber(start, total int) int {
