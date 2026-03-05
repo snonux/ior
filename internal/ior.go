@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/pprof"
+	"runtime/trace"
+	"sync"
 	"syscall"
 	"time"
 
@@ -222,7 +225,7 @@ func validateRunConfig(cfg flags.Flags) error {
 }
 
 func shouldRunTraceMode(cfg flags.Flags) bool {
-	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph || cfg.PprofEnable
+	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph
 }
 
 func tuiTraceStarterFromRunTrace(
@@ -355,36 +358,6 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	}
 	rb.Poll(300)
 
-	pprofDone := make(chan struct{})
-	var cpuProfile, memProfile *os.File
-	if cfg.PprofEnable {
-		if cpuProfile, err = os.Create("ior.cpuprofile"); err != nil {
-			return err
-		}
-		if memProfile, err = os.Create("ior.memprofile"); err != nil {
-			return err
-		}
-		pprof.StartCPUProfile(cpuProfile)
-	} else {
-		close(pprofDone)
-	}
-
-	signalTraceStarted(started)
-
-	el := newEventLoop(newEventLoopConfig(cfg))
-	if configure != nil {
-		configure(el)
-	}
-	origPrintCb := el.printCb
-	el.printCb = func(ep *event.Pair) {
-		if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
-			ep.Recycle()
-			return
-		}
-		if origPrintCb != nil {
-			origPrintCb(ep)
-		}
-	}
 	ctx := parentCtx
 	cancel := func() {}
 	if shouldAutoStopByDuration(cfg) {
@@ -411,15 +384,96 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 		}
 	}()
 
+	pprofDone := make(chan struct{})
+	var cpuProfile, memProfile, execTraceProfile *os.File
+	stopExecTrace := func() {}
+	if cfg.PprofEnable {
+		isTUIMode := started != nil
+		cpuProfilePath, memProfilePath, execTracePath, execTraceDuration := profilingFilesForMode(isTUIMode)
+
+		if cpuProfile, err = os.Create(cpuProfilePath); err != nil {
+			return err
+		}
+		if memProfile, err = os.Create(memProfilePath); err != nil {
+			_ = cpuProfile.Close()
+			return err
+		}
+
+		if execTracePath != "" {
+			if execTraceProfile, err = os.Create(execTracePath); err != nil {
+				_ = cpuProfile.Close()
+				_ = memProfile.Close()
+				return err
+			}
+			if err := trace.Start(execTraceProfile); err != nil {
+				_ = cpuProfile.Close()
+				_ = memProfile.Close()
+				_ = execTraceProfile.Close()
+				return err
+			}
+
+			// TUI profiling workflow:
+			//   go tool pprof -http=:8080 ior-tui-cpu.prof
+			//   go tool trace ior-tui-trace.out
+			var stopOnce sync.Once
+			stopExecTrace = func() {
+				stopOnce.Do(func() {
+					trace.Stop()
+					_ = execTraceProfile.Close()
+				})
+			}
+
+			go func() {
+				timer := time.NewTimer(execTraceDuration)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+				case <-timer.C:
+				}
+				stopExecTrace()
+			}()
+		}
+
+		if err := pprof.StartCPUProfile(cpuProfile); err != nil {
+			stopExecTrace()
+			_ = cpuProfile.Close()
+			_ = memProfile.Close()
+			return err
+		}
+	} else {
+		close(pprofDone)
+	}
+
+	signalTraceStarted(started)
+
+	el := newEventLoop(newEventLoopConfig(cfg))
+	if configure != nil {
+		configure(el)
+	}
+	origPrintCb := el.printCb
+	el.printCb = func(ep *event.Pair) {
+		if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
+			ep.Recycle()
+			return
+		}
+		if origPrintCb != nil {
+			origPrintCb(ep)
+		}
+	}
+
 	go func() {
 		<-ctx.Done()
 		if verbose {
 			fmt.Println(el.stats())
 		}
 		if cfg.PprofEnable {
-			logln("Stoppig profiling, writing ior.cpuprofile and ior.memprofile")
+			logln("Stopping profiling and writing profile files")
 			pprof.StopCPUProfile()
-			pprof.WriteHeapProfile(memProfile)
+			runtime.GC()
+			_ = pprof.WriteHeapProfile(memProfile)
+			stopExecTrace()
+			_ = cpuProfile.Close()
+			_ = memProfile.Close()
 			close(pprofDone)
 		}
 	}()
@@ -440,5 +494,12 @@ func signalTraceStarted(started chan<- struct{}) {
 }
 
 func shouldAutoStopByDuration(cfg flags.Flags) bool {
-	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph || cfg.PprofEnable
+	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph
+}
+
+func profilingFilesForMode(tuiMode bool) (cpuProfilePath, memProfilePath, execTracePath string, execTraceDuration time.Duration) {
+	if tuiMode {
+		return "ior-tui-cpu.prof", "ior-tui-mem.prof", "ior-tui-trace.out", 10 * time.Second
+	}
+	return "ior.cpuprofile", "ior.memprofile", "", 0
 }
