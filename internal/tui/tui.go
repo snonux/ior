@@ -499,41 +499,54 @@ func (m *Model) applyTheme(isDark bool) {
 	m.probeModal = m.probeModal.SetDarkMode(isDark)
 }
 
+func (m Model) windowTitle() string {
+	switch m.screen {
+	case ScreenPIDPicker:
+		return "ior - select process"
+	case ScreenDashboard:
+		if m.pidFilter > 0 {
+			return fmt.Sprintf("ior - tracing PID %d", m.pidFilter)
+		}
+	}
+	return "ior - I/O Riot"
+}
+
 // View renders the currently active screen and startup overlay state.
 func (m Model) View() tea.View {
+	title := m.windowTitle()
 	if m.quitting {
-		return altScreenView("")
+		return altScreenView("", title)
 	}
 
 	width, height := common.EffectiveViewport(m.width, m.height)
 
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(PanelStyle.Render(line))))
+		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(PanelStyle.Render(line))), title)
 	}
 
 	if m.lastErr != nil {
-		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))))
+		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))), title)
 	}
 
 	switch m.screen {
 	case ScreenPIDPicker:
 		base := m.pidPicker.View().Content
 		if m.exporter.Visible() {
-			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base))
+			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
 		}
-		return altScreenView(placeToViewport(width, height, base))
+		return altScreenView(placeToViewport(width, height, base), title)
 	case ScreenDashboard:
 		base := m.dashboard.View().Content
 		if m.probeModal.Visible() {
-			return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)))
+			return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)), title)
 		}
 		if m.exporter.Visible() {
-			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base))
+			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
 		}
-		return altScreenView(placeToViewport(width, height, base))
+		return altScreenView(placeToViewport(width, height, base), title)
 	default:
-		return altScreenView("")
+		return altScreenView("", title)
 	}
 }
 
@@ -703,10 +716,11 @@ func placeToViewport(width, height int, content string) string {
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
 }
 
-func altScreenView(content string) tea.View {
+func altScreenView(content, title string) tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
 	view.ReportFocus = true
+	view.WindowTitle = title
 	view.KeyboardEnhancements.ReportEventTypes = true
 	return view
 }
