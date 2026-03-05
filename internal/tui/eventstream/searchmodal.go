@@ -27,6 +27,7 @@ func NewSearchModal() SearchModal {
 	input.Prompt = ""
 	input.CharLimit = 0
 	input.SetWidth(44)
+	input.SetStyles(textinput.DefaultStyles(true))
 	return SearchModal{textInput: input, direction: SearchForward}
 }
 
@@ -36,6 +37,12 @@ func (m SearchModal) Visible() bool {
 
 func (m SearchModal) Direction() SearchDirection {
 	return m.direction
+}
+
+// SetDarkMode updates search modal text input styles.
+func (m SearchModal) SetDarkMode(isDark bool) SearchModal {
+	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
+	return m
 }
 
 func (m SearchModal) Open(direction SearchDirection, defaultTerm string) SearchModal {

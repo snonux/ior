@@ -53,6 +53,7 @@ type Model struct {
 	pendingOpenPath   string
 	statusMessage     string
 	exportDir         string
+	isDark            bool
 
 	width  int
 	height int
@@ -69,7 +70,7 @@ type fdTraceViewState struct {
 }
 
 func NewModel(source *RingBuffer) Model {
-	return Model{
+	m := Model{
 		source:      source,
 		filterModal: NewFilterModal(),
 		exportModal: NewExportModal(),
@@ -79,7 +80,10 @@ func NewModel(source *RingBuffer) Model {
 		selectedCol: 0,
 		exportDir:   ".",
 		showFooter:  true,
+		isDark:      true,
 	}
+	m.SetDarkMode(true)
+	return m
 }
 
 // SetViewport updates the render/scroll viewport dimensions used for
@@ -102,6 +106,14 @@ func (m *Model) SetFooterVisible(visible bool) {
 func (m *Model) SetSource(source *RingBuffer) {
 	m.source = source
 	m.Refresh()
+}
+
+// SetDarkMode updates stream modal text input styles for the active theme.
+func (m *Model) SetDarkMode(isDark bool) {
+	m.isDark = isDark
+	m.filterModal = m.filterModal.SetDarkMode(isDark)
+	m.exportModal = m.exportModal.SetDarkMode(isDark)
+	m.searchModal = m.searchModal.SetDarkMode(isDark)
 }
 
 // FilterModalVisible reports whether the filter modal is currently open.

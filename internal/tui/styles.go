@@ -38,3 +38,26 @@ var (
 	// ErrorStyle is used for fatal or warning messages.
 	ErrorStyle = common.ErrorStyle
 )
+
+func syncStylesFromCommon() {
+	ColorBackground = common.ColorBackground
+	ColorPanel = common.ColorPanel
+	ColorPrimary = common.ColorPrimary
+	ColorAccent = common.ColorAccent
+	ColorMuted = common.ColorMuted
+	ColorText = common.ColorText
+	ColorDanger = common.ColorDanger
+
+	ScreenStyle = common.ScreenStyle
+	HeaderStyle = common.HeaderStyle
+	TabActiveStyle = common.TabActiveStyle
+	TabInactiveStyle = common.TabInactiveStyle
+	PanelStyle = common.PanelStyle
+	HelpBarStyle = common.HelpBarStyle
+	HighlightStyle = common.HighlightStyle
+	ErrorStyle = common.ErrorStyle
+}
+
+func init() {
+	syncStylesFromCommon()
+}

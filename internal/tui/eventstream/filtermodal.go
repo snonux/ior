@@ -49,6 +49,7 @@ func NewFilterModal() FilterModal {
 	input.Prompt = ""
 	input.CharLimit = 0
 	input.SetWidth(24)
+	input.SetStyles(textinput.DefaultStyles(true))
 
 	m := FilterModal{textInput: input}
 	m.fields = defaultFilterFields()
@@ -61,6 +62,12 @@ func (m FilterModal) Visible() bool {
 
 func (m FilterModal) Filter() Filter {
 	return m.filter
+}
+
+// SetDarkMode updates filter modal text input styles.
+func (m FilterModal) SetDarkMode(isDark bool) FilterModal {
+	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
+	return m
 }
 
 func (m FilterModal) Open(initial Filter) FilterModal {

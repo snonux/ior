@@ -39,6 +39,7 @@ type Model struct {
 	lastErr string
 	manager Manager
 	height  int
+	isDark  bool
 }
 
 func NewModel(manager Manager) Model {
@@ -46,9 +47,11 @@ func NewModel(manager Manager) Model {
 	ti.Prompt = "/ "
 	ti.CharLimit = 0
 	ti.SetWidth(28)
+	ti.SetStyles(textinput.DefaultStyles(true))
 	return Model{
 		manager:   manager,
 		textInput: ti,
+		isDark:    true,
 	}
 }
 
@@ -69,6 +72,13 @@ func (m Model) Close() Model {
 	m.searching = false
 	m.textInput.Blur()
 	m.lastErr = ""
+	return m
+}
+
+// SetDarkMode updates probe modal text input styles.
+func (m Model) SetDarkMode(isDark bool) Model {
+	m.isDark = isDark
+	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
 	return m
 }
 

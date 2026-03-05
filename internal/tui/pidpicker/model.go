@@ -50,6 +50,14 @@ var (
 	errorStyle     = common.ErrorStyle
 )
 
+func syncPickerStyles() {
+	screenStyle = common.ScreenStyle
+	headerStyle = common.HeaderStyle
+	helpBarStyle = common.HelpBarStyle
+	highlightStyle = common.HighlightStyle
+	errorStyle = common.ErrorStyle
+}
+
 type processesLoadedMsg struct {
 	processes []ProcessInfo
 	err       error
@@ -67,6 +75,7 @@ type Model struct {
 	height        int
 	keys          KeyMap
 	lastErr       error
+	isDark        bool
 }
 
 // New creates a PID picker model with default shared key bindings.
@@ -81,12 +90,14 @@ func NewWithKeys(keys KeyMap) Model {
 
 // NewPIDWithKeys creates a PID picker model with the provided key bindings.
 func NewPIDWithKeys(keys KeyMap) Model {
+	syncPickerStyles()
 	input := textinput.New()
 	input.Prompt = "Filter: "
 	input.Placeholder = "pid, comm, or cmdline"
 	input.Focus()
 	input.CharLimit = 0
 	input.SetWidth(40)
+	input.SetStyles(textinput.DefaultStyles(true))
 
 	return Model{
 		input:     input,
@@ -94,6 +105,7 @@ func NewPIDWithKeys(keys KeyMap) Model {
 		filtered:  []ProcessInfo{},
 		mode:      PickerModePID,
 		targetPID: -1,
+		isDark:    true,
 	}
 }
 
@@ -266,6 +278,14 @@ func (m Model) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(helpBarStyle.Render(renderHelp(m.keys.PickerShortHelp())))
 	return tea.NewView(screenStyle.Render(b.String()))
+}
+
+// SetDarkMode updates picker theme and text input styles.
+func (m Model) SetDarkMode(isDark bool) Model {
+	m.isDark = isDark
+	syncPickerStyles()
+	m.input.SetStyles(textinput.DefaultStyles(isDark))
+	return m
 }
 
 func (m Model) renderRows() string {

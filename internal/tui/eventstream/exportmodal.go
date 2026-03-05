@@ -19,11 +19,18 @@ func NewExportModal() ExportModal {
 	input.Prompt = ""
 	input.CharLimit = 0
 	input.SetWidth(44)
+	input.SetStyles(textinput.DefaultStyles(true))
 	return ExportModal{textInput: input}
 }
 
 func (m ExportModal) Visible() bool {
 	return m.visible
+}
+
+// SetDarkMode updates export modal text input styles.
+func (m ExportModal) SetDarkMode(isDark bool) ExportModal {
+	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
+	return m
 }
 
 func (m ExportModal) Open(defaultName string) ExportModal {
