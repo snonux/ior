@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"ior/internal/flags"
+	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -58,6 +59,7 @@ type ProbeManager interface {
 type TraceRuntimeBindings interface {
 	SetDashboardSnapshotSource(source SnapshotSource)
 	SetEventStreamSource(source *eventstream.RingBuffer)
+	SetLiveTrie(liveTrie *coreflamegraph.LiveTrie)
 	SetProbeManager(manager ProbeManager)
 }
 
@@ -68,6 +70,7 @@ type runtimeBindings struct {
 
 	snapshotSource SnapshotSource
 	streamSource   *eventstream.RingBuffer
+	liveTrieSource *coreflamegraph.LiveTrie
 	probeManager   ProbeManager
 }
 
@@ -87,6 +90,12 @@ func (r *runtimeBindings) SetEventStreamSource(source *eventstream.RingBuffer) {
 	r.mu.Unlock()
 }
 
+func (r *runtimeBindings) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
+	r.mu.Lock()
+	r.liveTrieSource = liveTrie
+	r.mu.Unlock()
+}
+
 func (r *runtimeBindings) SetProbeManager(manager ProbeManager) {
 	r.mu.Lock()
 	r.probeManager = manager
@@ -103,6 +112,12 @@ func (r *runtimeBindings) eventStreamSource() *eventstream.RingBuffer {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamSource
+}
+
+func (r *runtimeBindings) liveTrie() *coreflamegraph.LiveTrie {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.liveTrieSource
 }
 
 func (r *runtimeBindings) currentProbeManager() ProbeManager {
