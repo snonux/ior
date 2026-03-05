@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"ior/internal/event"
-	"ior/internal/file"
-	"ior/internal/types"
 	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 )
 
 func TestLiveTrieIngestAndSnapshotRoundTrip(t *testing.T) {

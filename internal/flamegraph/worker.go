@@ -2,8 +2,9 @@ package flamegraph
 
 import (
 	"context"
-	"ior/internal/event"
 	"sync"
+
+	"ior/internal/event"
 )
 
 type worker struct {

@@ -2,9 +2,10 @@ package pidpicker
 
 import (
 	"fmt"
+	"strings"
+
 	common "ior/internal/tui/common"
 	"ior/internal/tui/messages"
-	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"

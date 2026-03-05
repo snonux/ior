@@ -10,6 +10,7 @@ import (
 //   - Duration is the syscall runtime on the same thread.
 //   - DurationToPrev is the inter-syscall gap on the same thread and is attributed
 //     to the current node; there is no separate "idle" pseudo-node.
+//
 // Bytes is only populated for read/write/transfer syscalls.
 type Counter struct {
 	Count          uint64

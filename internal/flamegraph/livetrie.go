@@ -3,12 +3,13 @@ package flamegraph
 import (
 	"encoding/json"
 	"fmt"
-	"ior/internal/event"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"ior/internal/event"
 )
 
 const liveTrieMinFraction = 0.001

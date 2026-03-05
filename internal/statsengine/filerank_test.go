@@ -2,11 +2,12 @@ package statsengine
 
 import (
 	"fmt"
+	"reflect"
+	"testing"
+
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
-	"reflect"
-	"testing"
 )
 
 func TestFileRankerHeapEviction(t *testing.T) {

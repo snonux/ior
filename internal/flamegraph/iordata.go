@@ -5,13 +5,14 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
-	"ior/internal/event"
-	"ior/internal/file"
-	"ior/internal/types"
 	"iter"
 	"os"
 	"strings"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 
 	// Is there a zstd library part of Go 1.25
 	"github.com/DataDog/zstd"

@@ -2,9 +2,10 @@ package dashboard
 
 import (
 	"fmt"
-	common "ior/internal/tui/common"
 	"strings"
 	"unicode/utf8"
+
+	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 )

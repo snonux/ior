@@ -3,9 +3,10 @@ package flamegraph
 import (
 	"encoding/json"
 	"fmt"
+	"testing"
+
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/types"
-	"testing"
 
 	"github.com/charmbracelet/harmonica"
 )

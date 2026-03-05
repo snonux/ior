@@ -3,12 +3,13 @@ package integrationtests
 import (
 	"bytes"
 	"encoding/gob"
-	"ior/internal/file"
-	"ior/internal/flamegraph"
-	"ior/internal/types"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"ior/internal/file"
+	"ior/internal/flamegraph"
+	"ior/internal/types"
 
 	"github.com/DataDog/zstd"
 )

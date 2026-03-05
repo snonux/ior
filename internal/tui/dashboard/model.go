@@ -1,14 +1,15 @@
 package dashboard
 
 import (
+	"strings"
+	"time"
+
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/eventstream"
 	flamegraphtui "ior/internal/tui/flamegraph"
 	"ior/internal/tui/messages"
-	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"

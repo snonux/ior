@@ -3,9 +3,10 @@ package flamegraph
 import (
 	"context"
 	"fmt"
-	"ior/internal/event"
 	"runtime"
 	"sync"
+
+	"ior/internal/event"
 )
 
 type IorDataCollector struct {

@@ -2,10 +2,11 @@ package event
 
 import (
 	"fmt"
-	"ior/internal/file"
-	"ior/internal/types"
 	"strconv"
 	"strings"
+
+	"ior/internal/file"
+	"ior/internal/types"
 )
 
 // Pair represents a matched syscall enter/exit pair together with derived metadata.

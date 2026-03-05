@@ -3,12 +3,13 @@ package internal
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/flamegraph"
 	"ior/internal/types"
-	"testing"
-	"time"
 )
 
 // Test that comm names are properly propagated across syscalls

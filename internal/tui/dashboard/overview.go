@@ -2,11 +2,12 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
-	common "ior/internal/tui/common"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 )

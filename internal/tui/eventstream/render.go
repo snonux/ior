@@ -2,9 +2,10 @@ package eventstream
 
 import (
 	"fmt"
-	"ior/internal/tui/common"
 	"strconv"
 	"strings"
+
+	"ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 )

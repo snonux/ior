@@ -1,12 +1,13 @@
 package statsengine
 
 import (
-	"ior/internal/event"
-	"ior/internal/types"
 	"math"
 	"math/rand"
 	"testing"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/types"
 )
 
 func TestSyscallAccumulatorBasicStats(t *testing.T) {

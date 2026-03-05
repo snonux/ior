@@ -1,9 +1,10 @@
 package integrationtests
 
 import (
-	"ior/internal/flamegraph"
 	"strings"
 	"testing"
+
+	"ior/internal/flamegraph"
 )
 
 // ExpectedEvent describes an I/O event that should appear in the test output.

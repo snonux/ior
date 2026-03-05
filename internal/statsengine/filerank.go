@@ -2,9 +2,10 @@ package statsengine
 
 import (
 	"container/heap"
+	"sort"
+
 	"ior/internal/event"
 	"ior/internal/types"
-	"sort"
 )
 
 const fileRankTopNDefault = 20
