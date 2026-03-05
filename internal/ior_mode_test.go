@@ -31,8 +31,8 @@ func TestShouldRunTraceMode(t *testing.T) {
 
 	withPprof := base
 	withPprof.PprofEnable = true
-	if !shouldRunTraceMode(withPprof) {
-		t.Fatalf("expected pprof mode to use trace mode")
+	if shouldRunTraceMode(withPprof) {
+		t.Fatalf("expected pprof flag alone to keep TUI mode")
 	}
 
 	withLive := base
@@ -62,8 +62,8 @@ func TestShouldAutoStopByDuration(t *testing.T) {
 
 	withPprof := base
 	withPprof.PprofEnable = true
-	if !shouldAutoStopByDuration(withPprof) {
-		t.Fatalf("expected pprof mode to auto-stop by duration")
+	if shouldAutoStopByDuration(withPprof) {
+		t.Fatalf("expected pprof flag alone not to auto-stop by duration")
 	}
 
 	withLive := base
@@ -101,6 +101,37 @@ func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 	}
 	if tuiCalled {
 		t.Fatalf("did not expect runTUIFn to be called")
+	}
+}
+
+func TestDispatchRunUsesTUIWhenOnlyPprofEnabled(t *testing.T) {
+	origRunTrace := runTraceFn
+	origRunTUI := runTUIFn
+	defer func() {
+		runTraceFn = origRunTrace
+		runTUIFn = origRunTUI
+	}()
+
+	traceCalled := false
+	tuiCalled := false
+	runTraceFn = func() error {
+		traceCalled = true
+		return nil
+	}
+	runTUIFn = func(tui.TraceStarter) error {
+		tuiCalled = true
+		return nil
+	}
+
+	cfg := flags.Flags{PprofEnable: true}
+	if err := dispatchRun(cfg); err != nil {
+		t.Fatalf("dispatchRun returned error: %v", err)
+	}
+	if traceCalled {
+		t.Fatalf("did not expect runTraceFn when only -pprof is enabled")
+	}
+	if !tuiCalled {
+		t.Fatalf("expected runTUIFn to be called")
 	}
 }
 
@@ -217,6 +248,24 @@ func TestTuiTraceStarterFromRunTracePropagatesError(t *testing.T) {
 	err := starter(context.Background())
 	if err == nil || err.Error() != "startup failed" {
 		t.Fatalf("expected startup error, got %v", err)
+	}
+}
+
+func TestProfilingFilesForMode(t *testing.T) {
+	cpu, mem, execTrace, duration := profilingFilesForMode(false)
+	if cpu != "ior.cpuprofile" || mem != "ior.memprofile" {
+		t.Fatalf("unexpected trace-mode profiling file names: cpu=%q mem=%q", cpu, mem)
+	}
+	if execTrace != "" || duration != 0 {
+		t.Fatalf("expected trace-mode execution tracing to be disabled, got trace=%q duration=%s", execTrace, duration)
+	}
+
+	cpu, mem, execTrace, duration = profilingFilesForMode(true)
+	if cpu != "ior-tui-cpu.prof" || mem != "ior-tui-mem.prof" || execTrace != "ior-tui-trace.out" {
+		t.Fatalf("unexpected TUI profiling file names: cpu=%q mem=%q trace=%q", cpu, mem, execTrace)
+	}
+	if duration != 10*time.Second {
+		t.Fatalf("expected 10s TUI execution trace duration, got %s", duration)
 	}
 }
 
