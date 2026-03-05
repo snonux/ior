@@ -397,6 +397,18 @@ func TestViewRendersTabBarAndHelp(t *testing.T) {
 	}
 }
 
+func TestFlameTabRendersWaitingForDataPlaceholder(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
+	m.activeTab = TabFlame
+	m.width = 120
+	m.height = 30
+
+	out := m.View().Content
+	if !strings.Contains(out, "Flame: waiting for data...") {
+		t.Fatalf("expected flame waiting placeholder, got %q", out)
+	}
+}
+
 func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
 	snap := statsengine.NewSnapshot(
 		nil, nil, nil, nil,
