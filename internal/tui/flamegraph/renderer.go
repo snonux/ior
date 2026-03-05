@@ -106,7 +106,7 @@ func terminalFrameColor(name string) color.Color {
 }
 
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
-func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, matchSet map[int]bool, isDark bool) string {
+func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet map[int]bool, isDark bool) string {
 	if width < minFlameWidth {
 		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
@@ -130,7 +130,9 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, match
 		selectedIdx = 0
 	}
 	selected := frames[selectedIdx]
-	subtreeSet := computeSubtreeSet(frames, selectedIdx)
+	if subtreeSet == nil {
+		subtreeSet = computeSubtreeSet(frames, selectedIdx)
+	}
 
 	toolbar := fmt.Sprintf("Flame | frames:%d | rows:%d", len(frames), availableRows)
 	if truncated {
