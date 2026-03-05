@@ -25,6 +25,8 @@ const (
 	TabLatency
 	// TabStream is the live event stream tab.
 	TabStream
+	// TabFlame is the live flamegraph tab.
+	TabFlame
 )
 
 var allTabs = []Tab{
@@ -34,6 +36,7 @@ var allTabs = []Tab{
 	TabProcesses,
 	TabLatency,
 	TabStream,
+	TabFlame,
 }
 
 func (t Tab) String() string {
@@ -50,6 +53,8 @@ func (t Tab) String() string {
 		return "Latency+Gaps"
 	case TabStream:
 		return "Stream"
+	case TabFlame:
+		return "Flame"
 	default:
 		return "Unknown"
 	}
@@ -192,6 +197,8 @@ func tabLabel(tab Tab, short bool) string {
 		return "Lat"
 	case TabStream:
 		return "Str"
+	case TabFlame:
+		return "Flm"
 	default:
 		return "Unk"
 	}
