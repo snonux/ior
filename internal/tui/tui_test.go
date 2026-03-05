@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	dashboardui "ior/internal/tui/dashboard"
@@ -217,6 +218,20 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	got := source.Snapshot()
 	if got != want {
 		t.Fatalf("expected late-bound source to use latest runtime source")
+	}
+}
+
+func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
+	runtime := newRuntimeBindings()
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	runtime.SetLiveTrie(trie)
+	if got := runtime.liveTrie(); got != trie {
+		t.Fatalf("expected live trie to be stored and returned")
+	}
+
+	runtime.SetLiveTrie(nil)
+	if got := runtime.liveTrie(); got != nil {
+		t.Fatalf("expected live trie to clear on nil assignment")
 	}
 }
 
