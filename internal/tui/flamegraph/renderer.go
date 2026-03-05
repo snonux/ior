@@ -18,6 +18,10 @@ const minFlameWidth = 60
 
 // BuildTerminalLayout converts a live trie snapshot into terminal frame cells.
 func BuildTerminalLayout(snapshot *snapshotNode, width, height int) []tuiFrame {
+	return buildTerminalLayoutWithPath(snapshot, width, height, "")
+}
+
+func buildTerminalLayoutWithPath(snapshot *snapshotNode, width, height int, rootPath string) []tuiFrame {
 	if snapshot == nil || width <= 0 || height <= 0 {
 		return nil
 	}
@@ -27,6 +31,9 @@ func BuildTerminalLayout(snapshot *snapshotNode, width, height int) []tuiFrame {
 	}
 
 	rootName := frameName(snapshot.Name, 0)
+	if rootPath != "" {
+		rootName = rootPath
+	}
 	frames := make([]tuiFrame, 0, len(snapshot.Children)+1)
 	collectTerminalLayout(&frames, snapshot, rootTotal, width, height, 0, 0, rootName)
 	return frames

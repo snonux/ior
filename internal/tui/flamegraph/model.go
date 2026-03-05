@@ -20,8 +20,8 @@ type snapshotNode struct {
 }
 
 type zoomState struct {
-	path        string
-	selectedIdx int
+	path                string
+	previousSelectedIdx int
 }
 
 type frameSpring struct{}
@@ -31,6 +31,9 @@ type flameKeyMap struct {
 	MoveDeeper    key.Binding
 	PrevSibling   key.Binding
 	NextSibling   key.Binding
+	ZoomIn        key.Binding
+	ZoomUndo      key.Binding
+	ZoomReset     key.Binding
 }
 
 func defaultFlameKeyMap() flameKeyMap {
@@ -39,6 +42,9 @@ func defaultFlameKeyMap() flameKeyMap {
 		MoveDeeper:    key.NewBinding(key.WithKeys("k", "up")),
 		PrevSibling:   key.NewBinding(key.WithKeys("h", "left")),
 		NextSibling:   key.NewBinding(key.WithKeys("l", "right")),
+		ZoomIn:        key.NewBinding(key.WithKeys("enter")),
+		ZoomUndo:      key.NewBinding(key.WithKeys("backspace", "u")),
+		ZoomReset:     key.NewBinding(key.WithKeys("esc")),
 	}
 }
 
@@ -56,6 +62,7 @@ type Model struct {
 	selectedIdx int
 	zoomStack   []zoomState
 	zoomRoot    *snapshotNode
+	zoomPath    string
 
 	searchActive bool
 	searchQuery  string
@@ -111,6 +118,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		prev := m.selectedIdx
 		switch {
+		case key.Matches(msg, m.keys.ZoomIn):
+			m.zoomIn()
+		case key.Matches(msg, m.keys.ZoomUndo):
+			m.zoomUndo()
+		case key.Matches(msg, m.keys.ZoomReset):
+			m.zoomReset()
 		case key.Matches(msg, m.keys.MoveShallower):
 			m.moveVertical(-1)
 		case key.Matches(msg, m.keys.MoveDeeper):
@@ -144,6 +157,9 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.selectedIdx = 0
 	m.frames = nil
 	m.targetFrames = nil
+	m.zoomStack = nil
+	m.zoomRoot = nil
+	m.zoomPath = ""
 	m.subtreeSet = make(map[int]bool)
 }
 
@@ -162,11 +178,13 @@ func (m *Model) RefreshFromLiveTrie() bool {
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
 		return false
 	}
-	m.targetFrames = BuildTerminalLayout(&snapshot, m.width, m.height)
-	m.frames = append(m.frames[:0], m.targetFrames...)
-	m.clampSelection()
-	m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
 	m.snapshot = &snapshot
+	if m.zoomPath != "" {
+		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
+	} else {
+		m.zoomRoot = nil
+	}
+	m.rebuildFrames()
 	m.lastVersion = version
 	return true
 }
@@ -180,15 +198,73 @@ func (m Model) LastVersion() uint64 {
 func (m *Model) SetViewport(width, height int) {
 	m.width = width
 	m.height = height
-	m.targetFrames = BuildTerminalLayout(m.snapshot, width, height)
-	m.frames = append(m.frames[:0], m.targetFrames...)
-	m.clampSelection()
-	m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+	m.rebuildFrames()
 }
 
 // SetDarkMode sets the active color theme mode.
 func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
+}
+
+func (m *Model) rebuildFrames() {
+	var root *snapshotNode
+	rootPath := ""
+	if m.zoomRoot != nil {
+		root = m.zoomRoot
+		rootPath = m.zoomPath
+	} else {
+		root = m.snapshot
+	}
+	m.targetFrames = buildTerminalLayoutWithPath(root, m.width, m.height, rootPath)
+	m.frames = append(m.frames[:0], m.targetFrames...)
+	m.clampSelection()
+	m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+}
+
+func (m *Model) zoomIn() {
+	if len(m.frames) == 0 || m.snapshot == nil {
+		return
+	}
+	m.clampSelection()
+	selectedPath := m.frames[m.selectedIdx].Path
+	target := findNodeByPath(m.snapshot, selectedPath)
+	if target == nil {
+		return
+	}
+	m.zoomStack = append(m.zoomStack, zoomState{
+		path:                m.zoomPath,
+		previousSelectedIdx: m.selectedIdx,
+	})
+	m.zoomRoot = target
+	m.zoomPath = selectedPath
+	m.selectedIdx = 0
+	m.rebuildFrames()
+}
+
+func (m *Model) zoomUndo() {
+	if len(m.zoomStack) == 0 || m.snapshot == nil {
+		return
+	}
+	last := m.zoomStack[len(m.zoomStack)-1]
+	m.zoomStack = m.zoomStack[:len(m.zoomStack)-1]
+	m.zoomPath = last.path
+	if m.zoomPath == "" {
+		m.zoomRoot = nil
+	} else {
+		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
+	}
+	m.selectedIdx = last.previousSelectedIdx
+	m.rebuildFrames()
+}
+
+func (m *Model) zoomReset() {
+	if m.zoomRoot == nil && len(m.zoomStack) == 0 {
+		return
+	}
+	m.zoomRoot = nil
+	m.zoomPath = ""
+	m.zoomStack = nil
+	m.rebuildFrames()
 }
 
 func (m *Model) moveVertical(delta int) {
