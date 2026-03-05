@@ -275,6 +275,58 @@ func TestControlHelpToggle(t *testing.T) {
 	}
 }
 
+func TestDataRefreshAnimationConvergesOverTicks(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 20
+	m.snapshot = &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{Name: "A", Total: 60},
+			{Name: "B", Total: 40},
+		},
+	}
+	m.rebuildFrames(false)
+	initial := append([]tuiFrame(nil), m.frames...)
+
+	m.snapshot = &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{Name: "A", Total: 20},
+			{Name: "B", Total: 80},
+		},
+	}
+	m.rebuildFrames(true)
+	if !m.animating {
+		t.Fatalf("expected animation to start after animated rebuild")
+	}
+
+	next, _ := m.Update(animTickMsg{})
+	m = next.(Model)
+	if len(m.frames) != len(initial) {
+		t.Fatalf("expected frame count to remain stable during animation")
+	}
+
+	for i := 0; i < 180 && m.animating; i++ {
+		next, _ = m.Update(animTickMsg{})
+		m = next.(Model)
+	}
+	if m.animating {
+		t.Fatalf("expected animation to settle within 180 ticks")
+	}
+	if len(m.frames) != len(m.targetFrames) {
+		t.Fatalf("expected settled frame count to match targets")
+	}
+	for i := range m.frames {
+		if m.frames[i].Width != m.targetFrames[i].Width || m.frames[i].Col != m.targetFrames[i].Col {
+			t.Fatalf("frame %d did not converge to target: got col=%d width=%d want col=%d width=%d",
+				i, m.frames[i].Col, m.frames[i].Width, m.targetFrames[i].Col, m.targetFrames[i].Width)
+		}
+	}
+}
+
 func newZoomModel() Model {
 	m := NewModel(nil)
 	m.width = 120
@@ -294,7 +346,7 @@ func newZoomModel() Model {
 			{Name: "B", Total: 40},
 		},
 	}
-	m.rebuildFrames()
+	m.rebuildFrames(false)
 	return m
 }
 
