@@ -116,8 +116,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.activeTab != TabFlame {
 			return m, nil
 		}
+		var animCmd tea.Cmd
 		if m.liveTrie != nil && !m.flamegraphModel.Paused() && m.liveTrie.Version() != m.flamegraphModel.LastVersion() {
 			m.flamegraphModel.RefreshFromLiveTrie()
+			animCmd = m.flamegraphModel.AnimationCmd()
+		}
+		if animCmd != nil {
+			return m, tea.Batch(flameTickCmd(), animCmd)
 		}
 		return m, flameTickCmd()
 	case messages.StatsTickMsg:
@@ -135,6 +140,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamModel.SetStatusMessage("Open failed: " + msg.err.Error())
 		}
 		return m, nil
+	}
+	if m.activeTab == TabFlame {
+		next, cmd := m.flamegraphModel.Update(msg)
+		m.flamegraphModel = next.(flamegraphtui.Model)
+		return m, cmd
 	}
 	return m, nil
 }

@@ -117,6 +117,11 @@ func (a AnimationState) CurrentFrames() []tuiFrame {
 	return frames
 }
 
+// Settled reports whether all active springs are at rest.
+func (a AnimationState) Settled() bool {
+	return a.settled
+}
+
 func isSpringSettled(s frameSpring) bool {
 	return math.Abs(s.currentW-s.targetW) < springEpsilon &&
 		math.Abs(s.currentCol-s.targetCol) < springEpsilon &&

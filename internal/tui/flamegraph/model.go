@@ -7,6 +7,7 @@ import (
 	coreflamegraph "ior/internal/flamegraph"
 	common "ior/internal/tui/common"
 	"sort"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -19,6 +20,10 @@ type snapshotNode struct {
 	Total    uint64          `json:"t"`
 	Children []*snapshotNode `json:"c,omitempty"`
 }
+
+type animTickMsg struct{}
+
+const animFrameDuration = 33 * time.Millisecond
 
 type zoomState struct {
 	path                string
@@ -74,10 +79,11 @@ type Model struct {
 	fieldPresets [][]string
 	fieldIndex   int
 
-	springs []frameSpring
-	paused  bool
-	isDark  bool
-	keys    flameKeyMap
+	animation AnimationState
+	animating bool
+	paused    bool
+	isDark    bool
+	keys      flameKeyMap
 }
 
 // tuiFrame stores one terminal flamegraph frame cell.
@@ -112,8 +118,9 @@ func NewModel(liveTrie *coreflamegraph.LiveTrie) Model {
 			{"tracepoint", "comm", "path"},
 			{"pid", "path", "tracepoint"},
 		},
-		isDark: true,
-		keys:   defaultFlameKeyMap(),
+		isDark:    true,
+		keys:      defaultFlameKeyMap(),
+		animation: NewAnimationState(30, 6.0, 1.0),
 	}
 }
 
@@ -125,6 +132,18 @@ func (m Model) Init() tea.Cmd {
 // Update handles incoming messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case animTickMsg:
+		if !m.animating {
+			return m, nil
+		}
+		m.animating = m.animation.Tick(0)
+		m.frames = m.animation.CurrentFrames()
+		m.clampSelection()
+		m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+		if m.animating {
+			return m, animTickCmd()
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		if m.searchActive {
 			switch msg.String() {
@@ -209,6 +228,8 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.zoomRoot = nil
 	m.zoomPath = ""
 	m.subtreeSet = make(map[int]bool)
+	m.animation = NewAnimationState(30, 6.0, 1.0)
+	m.animating = false
 }
 
 // RefreshFromLiveTrie loads a new snapshot when the source version changes.
@@ -235,7 +256,7 @@ func (m *Model) RefreshFromLiveTrie() bool {
 	} else {
 		m.zoomRoot = nil
 	}
-	m.rebuildFrames()
+	m.rebuildFrames(true)
 	m.lastVersion = version
 	return true
 }
@@ -243,6 +264,14 @@ func (m *Model) RefreshFromLiveTrie() bool {
 // LastVersion returns the latest snapshot version loaded into the model.
 func (m Model) LastVersion() uint64 {
 	return m.lastVersion
+}
+
+// AnimationCmd returns a frame animation tick command when animation is active.
+func (m Model) AnimationCmd() tea.Cmd {
+	if !m.animating {
+		return nil
+	}
+	return animTickCmd()
 }
 
 // Paused reports whether live refresh is paused.
@@ -254,7 +283,7 @@ func (m Model) Paused() bool {
 func (m *Model) SetViewport(width, height int) {
 	m.width = width
 	m.height = height
-	m.rebuildFrames()
+	m.rebuildFrames(false)
 }
 
 // SetDarkMode sets the active color theme mode.
@@ -263,7 +292,7 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.searchInput.SetStyles(textinput.DefaultStyles(isDark))
 }
 
-func (m *Model) rebuildFrames() {
+func (m *Model) rebuildFrames(animate bool) {
 	var root *snapshotNode
 	rootPath := ""
 	if m.zoomRoot != nil {
@@ -273,7 +302,14 @@ func (m *Model) rebuildFrames() {
 		root = m.snapshot
 	}
 	m.targetFrames = buildTerminalLayoutWithPath(root, m.width, m.height, rootPath)
-	m.frames = append(m.frames[:0], m.targetFrames...)
+	m.animation.SetTargets(m.targetFrames)
+	if animate && len(m.frames) > 0 && !m.animation.Settled() {
+		m.animating = true
+		m.frames = m.animation.CurrentFrames()
+	} else {
+		m.animating = false
+		m.frames = append(m.frames[:0], m.targetFrames...)
+	}
 	m.clampSelection()
 	m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
 }
@@ -295,7 +331,7 @@ func (m *Model) zoomIn() {
 	m.zoomRoot = target
 	m.zoomPath = selectedPath
 	m.selectedIdx = 0
-	m.rebuildFrames()
+	m.rebuildFrames(false)
 }
 
 func (m *Model) zoomUndo() {
@@ -311,7 +347,7 @@ func (m *Model) zoomUndo() {
 		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
 	}
 	m.selectedIdx = last.previousSelectedIdx
-	m.rebuildFrames()
+	m.rebuildFrames(false)
 }
 
 func (m *Model) zoomReset() {
@@ -321,7 +357,7 @@ func (m *Model) zoomReset() {
 	m.zoomRoot = nil
 	m.zoomPath = ""
 	m.zoomStack = nil
-	m.rebuildFrames()
+	m.rebuildFrames(false)
 }
 
 func (m *Model) moveVertical(delta int) {
@@ -414,4 +450,8 @@ func abs(v int) int {
 		return -v
 	}
 	return v
+}
+
+func animTickCmd() tea.Cmd {
+	return tea.Tick(animFrameDuration, func(time.Time) tea.Msg { return animTickMsg{} })
 }
