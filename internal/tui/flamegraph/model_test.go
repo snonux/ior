@@ -356,6 +356,49 @@ func TestDataRefreshAnimationConvergesOverTicks(t *testing.T) {
 	}
 }
 
+func TestResizeRecalculatesLayoutAndCullsNarrowFrames(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 40
+	m.snapshot = &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{
+				Name:  "big",
+				Total: 99,
+				Children: []*snapshotNode{
+					{Name: "deep", Total: 99},
+				},
+			},
+			{Name: "tiny", Total: 1},
+		},
+	}
+	m.rebuildFrames(false)
+	_ = mustFrameIndex(t, m.frames, "root"+pathSeparator+"tiny")
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	for i := 0; i < 180 && m.animating; i++ {
+		next, _ = m.Update(animTickMsg{})
+		m = next.(Model)
+	}
+
+	for _, frame := range m.frames {
+		if frame.Col+frame.Width > 80 {
+			t.Fatalf("frame exceeds resized width: %+v", frame)
+		}
+		if frame.Row >= 24 {
+			t.Fatalf("frame row exceeds resized height: %+v", frame)
+		}
+	}
+	for _, frame := range m.frames {
+		if frame.Path == "root"+pathSeparator+"tiny" {
+			t.Fatalf("expected tiny frame to be culled at width 80")
+		}
+	}
+}
+
 func newZoomModel() Model {
 	m := NewModel(nil)
 	m.width = 120

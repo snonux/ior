@@ -144,6 +144,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, animTickCmd()
 		}
 		return m, nil
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.rebuildFrames(true)
+		if m.animating {
+			return m, animTickCmd()
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		if m.searchActive {
 			switch msg.String() {
