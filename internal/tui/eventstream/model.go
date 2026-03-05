@@ -353,8 +353,8 @@ func (m *Model) HandleKey(keyStr string) bool {
 
 // HandleTeaKey handles stream keys based on Bubble Tea key message types first,
 // then falls back to string matching for rune-driven shortcuts.
-func (m *Model) HandleTeaKey(msg tea.KeyMsg) bool {
-	switch msg.Key().Code {
+func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) bool {
+	switch msg.Code {
 	case tea.KeyLeft:
 		return m.HandleKey("left")
 	case tea.KeyRight:
@@ -374,10 +374,10 @@ func (m *Model) HandleTeaKey(msg tea.KeyMsg) bool {
 	case tea.KeyEnter:
 		return m.HandleKey("enter")
 	default:
-		if msg.Key().Text != "" {
-			runes := []rune(msg.Key().Text)
+		if msg.Text != "" {
+			runes := []rune(msg.Text)
 			if len(runes) == 1 {
-				return m.HandleKey(msg.Key().Text)
+				return m.HandleKey(msg.Text)
 			}
 		}
 	}
@@ -810,7 +810,7 @@ func (m *Model) clampSelection() {
 	m.selectedIdx = clamp(m.selectedIdx, 0, len(m.filtered)-1)
 }
 
-func keyMsgFromString(keyStr string) tea.KeyMsg {
+func keyMsgFromString(keyStr string) tea.KeyPressMsg {
 	switch keyStr {
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEsc}

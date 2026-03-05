@@ -75,7 +75,7 @@ func (m Model) Close() Model {
 // Update handles modal key navigation and export completion messages.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if !m.visible {
 			return m, nil
 		}
