@@ -116,7 +116,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.activeTab != TabFlame {
 			return m, nil
 		}
-		if m.liveTrie != nil && m.liveTrie.Version() != m.flamegraphModel.LastVersion() {
+		if m.liveTrie != nil && !m.flamegraphModel.Paused() && m.liveTrie.Version() != m.flamegraphModel.LastVersion() {
 			m.flamegraphModel.RefreshFromLiveTrie()
 		}
 		return m, flameTickCmd()

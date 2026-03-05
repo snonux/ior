@@ -65,11 +65,13 @@ type Model struct {
 	zoomRoot    *snapshotNode
 	zoomPath    string
 
-	searchActive bool
-	searchInput  textinput.Model
-	searchQuery  string
-	matchIndices map[int]bool
-	subtreeSet   map[int]bool
+	searchActive  bool
+	searchInput   textinput.Model
+	searchQuery   string
+	matchIndices  map[int]bool
+	subtreeSet    map[int]bool
+	showHelp      bool
+	statusMessage string
 
 	fieldPresets [][]string
 	fieldIndex   int
@@ -107,9 +109,10 @@ func NewModel(liveTrie *coreflamegraph.LiveTrie) Model {
 		subtreeSet:   make(map[int]bool),
 		searchInput:  searchInput,
 		fieldPresets: [][]string{
-			{"comm", "path"},
+			{"comm", "path", "tracepoint"},
+			{"path", "tracepoint", "comm"},
 			{"tracepoint", "comm", "path"},
-			{"pid", "tid", "comm", "path"},
+			{"pid", "path", "tracepoint"},
 		},
 		isDark: true,
 		keys:   defaultFlameKeyMap(),
@@ -150,6 +153,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.jumpMatch(1)
 		case msg.String() == "N":
 			m.jumpMatch(-1)
+		case msg.String() == "p":
+			m.togglePause()
+		case msg.String() == "r":
+			m.resetBaseline()
+		case msg.String() == "o":
+			m.cycleFieldOrder()
+		case msg.String() == "?":
+			m.toggleHelp()
 		case key.Matches(msg, m.keys.ZoomIn):
 			m.zoomIn()
 		case key.Matches(msg, m.keys.ZoomUndo):
@@ -175,11 +186,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the flamegraph viewport.
 func (m Model) View() tea.View {
 	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx, m.subtreeSet, m.matchIndices, m.isDark, m.searchActive, m.searchQuery)
+	content = replaceHeaderLine(content, m.toolbarLine())
 	if m.searchActive {
 		content = replaceFooterLine(content, m.searchFooter())
 	}
 	if m.snapshot != nil && len(m.frames) == 0 {
 		content = common.PanelStyle.Render(fmt.Sprintf("Flame: snapshot v%d has no visible frames", m.lastVersion))
+	}
+	if m.showHelp {
+		content += "\n" + m.helpOverlay()
 	}
 	return tea.NewView(content)
 }
@@ -201,6 +216,9 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 // RefreshFromLiveTrie loads a new snapshot when the source version changes.
 func (m *Model) RefreshFromLiveTrie() bool {
 	if m.liveTrie == nil {
+		return false
+	}
+	if m.paused {
 		return false
 	}
 	version := m.liveTrie.Version()
@@ -227,6 +245,11 @@ func (m *Model) RefreshFromLiveTrie() bool {
 // LastVersion returns the latest snapshot version loaded into the model.
 func (m Model) LastVersion() uint64 {
 	return m.lastVersion
+}
+
+// Paused reports whether live refresh is paused.
+func (m Model) Paused() bool {
+	return m.paused
 }
 
 // SetViewport updates model render dimensions.
