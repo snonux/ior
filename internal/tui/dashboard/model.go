@@ -47,6 +47,7 @@ type Model struct {
 	processesOffset int
 	streamModel     eventstream.Model
 	showHelp        bool
+	isDark          bool
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
@@ -59,14 +60,17 @@ func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuf
 	if refreshMs <= 0 {
 		refreshMs = defaultRefreshMs
 	}
-	return Model{
+	m := Model{
 		activeTab:    TabOverview,
 		engine:       engine,
 		refreshEvery: time.Duration(refreshMs) * time.Millisecond,
 		keys:         keys,
 		pidFilter:    -1,
 		streamModel:  eventstream.NewModel(streamSource),
+		isDark:       true,
 	}
+	m.SetDarkMode(true)
+	return m
 }
 
 // Init starts periodic refresh ticks.
@@ -280,6 +284,12 @@ func (m Model) BlocksGlobalShortcuts() bool {
 // SetStreamSource updates the live stream source used by the stream tab.
 func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
 	m.streamModel.SetSource(source)
+}
+
+// SetDarkMode updates dashboard child models for the active theme.
+func (m *Model) SetDarkMode(isDark bool) {
+	m.isDark = isDark
+	m.streamModel.SetDarkMode(isDark)
 }
 
 // SetPidFilter updates the active PID filter used by tab render hints.

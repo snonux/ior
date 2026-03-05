@@ -173,6 +173,7 @@ type Model struct {
 
 	pidFilter     int
 	exportEnabled bool
+	isDark        bool
 }
 
 // NewModel creates the top-level TUI model.
@@ -182,6 +183,9 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 }
 
 func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
+	common.ApplyPalette(true)
+	syncStylesFromCommon()
+
 	spin := spinner.New()
 	spin.Spinner = spinner.MiniDot
 	if startTrace == nil {
@@ -194,6 +198,7 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 
 	runtime := newRuntimeBindings()
 	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{runtime: runtime}, runtime.eventStreamSource(), 1000, keys)
+	dashboard.SetDarkMode(true)
 	pidFilter := selectedPIDFilter(startupPidFilter)
 	if initialPID > 0 {
 		pidFilter = selectedPIDFilter(initialPID)
@@ -202,16 +207,17 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 
 	model := Model{
 		screen:        ScreenPIDPicker,
-		pidPicker:     pidpicker.New(),
+		pidPicker:     pidpicker.New().SetDarkMode(true),
 		dashboard:     dashboard,
 		exporter:      tuiexport.NewModel(),
-		probeModal:    probes.NewModel(runtime.currentProbeManager()),
+		probeModal:    probes.NewModel(runtime.currentProbeManager()).SetDarkMode(true),
 		runtime:       runtime,
 		keys:          keys,
 		spin:          spin,
 		startTrace:    startTrace,
 		pidFilter:     pidFilter,
 		exportEnabled: exportEnabled,
+		isDark:        true,
 	}
 
 	if initialPID > 0 {
@@ -227,9 +233,9 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 func (m Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
 	if m.screen == ScreenDashboard && m.attaching {
-		return tea.Batch(sizeCmd, tea.RequestWindowSize, m.spin.Tick, m.beginTraceCmd())
+		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, m.beginTraceCmd())
 	}
-	return tea.Batch(sizeCmd, tea.RequestWindowSize, m.pidPicker.Init())
+	return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.pidPicker.Init())
 }
 
 func initialWindowSizeCmd() tea.Cmd {
@@ -246,6 +252,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m.updateActiveModel(msg)
+	case tea.BackgroundColorMsg:
+		m.applyTheme(msg.IsDark())
+		return m, nil
 	case tea.KeyPressMsg:
 		if key.Matches(msg, m.keys.Quit) {
 			m.quitting = true
@@ -257,7 +266,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Probes) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
-			m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).Open()
+			m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
 			return m, nil
 		}
 		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
@@ -383,8 +392,8 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
-	m.pidPicker = pidpicker.New()
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
+	m.pidPicker = pidpicker.New().SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
 	if m.width > 0 && m.height > 0 {
@@ -404,8 +413,8 @@ func (m Model) reselectTID() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
-	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap())
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
+	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap()).SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
 	if m.width > 0 && m.height > 0 {
@@ -452,6 +461,18 @@ func (m *Model) stopTrace() {
 		m.traceStop()
 		m.traceStop = nil
 	}
+}
+
+func (m *Model) applyTheme(isDark bool) {
+	if m.isDark == isDark {
+		return
+	}
+	m.isDark = isDark
+	common.ApplyPalette(isDark)
+	syncStylesFromCommon()
+	m.dashboard.SetDarkMode(isDark)
+	m.pidPicker = m.pidPicker.SetDarkMode(isDark)
+	m.probeModal = m.probeModal.SetDarkMode(isDark)
 }
 
 // View renders the currently active screen and startup overlay state.
