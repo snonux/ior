@@ -16,7 +16,7 @@ func (m *Model) openSearch() {
 func (m *Model) clearSearch() {
 	m.searchActive = false
 	m.searchQuery = ""
-	m.matchIndices = make(map[int]bool)
+	clearBoolMap(m.matchIndices)
 	m.searchInput.SetValue("")
 	m.searchInput.Blur()
 }
@@ -24,7 +24,11 @@ func (m *Model) clearSearch() {
 func (m *Model) applySearchQuery(raw string) {
 	query := strings.ToLower(strings.TrimSpace(raw))
 	m.searchQuery = query
-	m.matchIndices = make(map[int]bool)
+	if m.matchIndices == nil {
+		m.matchIndices = make(map[int]bool)
+	} else {
+		clearBoolMap(m.matchIndices)
+	}
 	if query == "" {
 		return
 	}
@@ -51,7 +55,7 @@ func (m *Model) jumpMatch(direction int) {
 		} else {
 			m.selectedIdx = matches[0]
 		}
-		m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 		return
 	}
 
@@ -63,7 +67,7 @@ func (m *Model) jumpMatch(direction int) {
 		next = 0
 	}
 	m.selectedIdx = matches[next]
-	m.subtreeSet = computeSubtreeSet(m.frames, m.selectedIdx)
+	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 }
 
 func orderedMatchIndices(matchSet map[int]bool) []int {
@@ -103,4 +107,10 @@ func replaceHeaderLine(content, header string) string {
 	}
 	lines[0] = header
 	return strings.Join(lines, "\n")
+}
+
+func clearBoolMap[K comparable](values map[K]bool) {
+	for key := range values {
+		delete(values, key)
+	}
 }

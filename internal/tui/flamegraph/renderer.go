@@ -236,10 +236,21 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 }
 
 func computeSubtreeSet(frames []tuiFrame, selectedIdx int) map[int]bool {
-	subtree := make(map[int]bool)
+	return computeSubtreeSetInto(frames, selectedIdx, nil)
+}
+
+func computeSubtreeSetInto(frames []tuiFrame, selectedIdx int, subtree map[int]bool) map[int]bool {
+	if subtree == nil {
+		subtree = make(map[int]bool)
+	} else {
+		for idx := range subtree {
+			delete(subtree, idx)
+		}
+	}
 	if selectedIdx < 0 || selectedIdx >= len(frames) {
 		return subtree
 	}
+
 	selectedPath := frames[selectedIdx].Path
 	for idx, frame := range frames {
 		path := frame.Path
