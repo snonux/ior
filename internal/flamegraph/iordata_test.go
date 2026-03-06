@@ -2,6 +2,8 @@ package flamegraph
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -285,6 +287,24 @@ func TestDeserializeInvalidData(t *testing.T) {
 	err := iod.deserialize(&buf)
 	if err == nil {
 		t.Error("Expected error when deserializing invalid data, got nil")
+	}
+}
+
+func TestSerializeToFileHostnameErrorReturnsError(t *testing.T) {
+	origHostnameFn := hostnameFn
+	t.Cleanup(func() { hostnameFn = origHostnameFn })
+
+	hostnameFn = func() (string, error) {
+		return "", errors.New("hostname unavailable")
+	}
+
+	iod := newIorData()
+	err := iod.serializeToFile("test")
+	if err == nil {
+		t.Fatal("Expected error when hostname lookup fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "get hostname") {
+		t.Fatalf("Expected get hostname context, got %v", err)
 	}
 }
 
