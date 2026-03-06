@@ -82,13 +82,15 @@ func TestStressHighEventRate(t *testing.T) {
 				if seed%2 == 0 {
 					traceID = types.SYS_ENTER_WRITE
 				}
-				liveTrie.Ingest(newBenchmarkPair(
+				pair := newBenchmarkPair(
 					fmt.Sprintf("worker-%d", worker),
 					traceID,
 					uint32(1000+worker),
 					uint32(200000+seed),
 					buildBenchmarkPath(6, 3, seed),
-				))
+				)
+				liveTrie.Ingest(pair)
+				pair.Recycle()
 			}
 		}()
 	}
@@ -221,12 +223,14 @@ func ingestStressEvents(liveTrie *coreflamegraph.LiveTrie, count, seedBase int) 
 		} else if seed%2 == 0 {
 			traceID = types.SYS_ENTER_WRITE
 		}
-		liveTrie.Ingest(newBenchmarkPair(
+		pair := newBenchmarkPair(
 			fmt.Sprintf("stress-%d", seed%8),
 			traceID,
 			uint32(1200+(seed%64)),
 			uint32(300000+seed),
 			buildBenchmarkPath(9, 5, seed),
-		))
+		)
+		liveTrie.Ingest(pair)
+		pair.Recycle()
 	}
 }

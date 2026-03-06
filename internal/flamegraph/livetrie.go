@@ -77,11 +77,10 @@ func (lt *LiveTrie) invalidateCache() {
 	lt.cacheMu.Unlock()
 }
 
-// Ingest adds one event pair into the live trie and recycles the pair.
+// Ingest adds one event pair into the live trie.
 func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	record := eventPairToRecord(ep)
 	lt.AddRecord(record)
-	ep.Recycle()
 }
 
 // AddRecord adds one already-decoded flamegraph record into the live trie.
