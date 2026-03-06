@@ -11,13 +11,13 @@ import (
 
 	coreexport "ior/internal/export"
 	"ior/internal/flags"
-	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
+	flamegraphtui "ior/internal/tui/flamegraph"
 	"ior/internal/tui/messages"
 	"ior/internal/tui/pidpicker"
 	"ior/internal/tui/probes"
@@ -58,8 +58,8 @@ type ProbeManager interface {
 // (snapshot source, stream source, probe manager) into the active TUI model.
 type TraceRuntimeBindings interface {
 	SetDashboardSnapshotSource(source SnapshotSource)
-	SetEventStreamSource(source *eventstream.RingBuffer)
-	SetLiveTrie(liveTrie *coreflamegraph.LiveTrie)
+	SetEventStreamSource(source eventstream.Source)
+	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
 	SetProbeManager(manager ProbeManager)
 }
 
@@ -70,8 +70,8 @@ type runtimeBindings struct {
 	mu sync.RWMutex
 
 	snapshotSource SnapshotSource
-	streamSource   *eventstream.RingBuffer
-	liveTrieSource *coreflamegraph.LiveTrie
+	streamSource   eventstream.Source
+	liveTrieSource flamegraphtui.LiveTrieSource
 	probeManager   ProbeManager
 }
 
@@ -90,13 +90,13 @@ func (r *runtimeBindings) SetDashboardSnapshotSource(source SnapshotSource) {
 	r.mu.Unlock()
 }
 
-func (r *runtimeBindings) SetEventStreamSource(source *eventstream.RingBuffer) {
+func (r *runtimeBindings) SetEventStreamSource(source eventstream.Source) {
 	r.mu.Lock()
 	r.streamSource = source
 	r.mu.Unlock()
 }
 
-func (r *runtimeBindings) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
+func (r *runtimeBindings) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 	r.mu.Lock()
 	r.liveTrieSource = liveTrie
 	r.mu.Unlock()
@@ -114,13 +114,13 @@ func (r *runtimeBindings) dashboardSnapshotSource() SnapshotSource {
 	return r.snapshotSource
 }
 
-func (r *runtimeBindings) eventStreamSource() *eventstream.RingBuffer {
+func (r *runtimeBindings) eventStreamSource() eventstream.Source {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamSource
 }
 
-func (r *runtimeBindings) liveTrie() *coreflamegraph.LiveTrie {
+func (r *runtimeBindings) liveTrie() flamegraphtui.LiveTrieSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.liveTrieSource

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	coreflamegraph "ior/internal/flamegraph"
 	common "ior/internal/tui/common"
 
 	"charm.land/bubbles/v2/key"
@@ -27,6 +26,17 @@ type snapshotNode struct {
 type animTickMsg struct{}
 
 const animFrameDuration = 33 * time.Millisecond
+
+// LiveTrieSource is the minimal trie contract needed by the flamegraph TUI model.
+type LiveTrieSource interface {
+	Fields() []string
+	CountField() string
+	Reconfigure([]string) error
+	SetCountField(string) error
+	Reset()
+	Version() uint64
+	SnapshotJSON() ([]byte, uint64)
+}
 
 type zoomState struct {
 	path                string
@@ -61,7 +71,7 @@ func defaultFlameKeyMap() flameKeyMap {
 
 // Model is the Bubble Tea model for the TUI flamegraph tab.
 type Model struct {
-	liveTrie    *coreflamegraph.LiveTrie
+	liveTrie    LiveTrieSource
 	lastVersion uint64
 	snapshot    *snapshotNode
 	globalTotal uint64
@@ -113,7 +123,7 @@ type tuiFrame struct {
 }
 
 // NewModel constructs a flamegraph tab model with default state.
-func NewModel(liveTrie *coreflamegraph.LiveTrie) Model {
+func NewModel(liveTrie LiveTrieSource) Model {
 	searchInput := textinput.New()
 	searchInput.Prompt = "/"
 	searchInput.CharLimit = 0
@@ -316,7 +326,7 @@ func (m Model) View() tea.View {
 }
 
 // SetLiveTrie updates the data source used by the flamegraph model.
-func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
+func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.syncFieldPresetToTrie()
 	m.syncCountFieldToTrie()
