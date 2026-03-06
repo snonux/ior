@@ -1527,7 +1527,7 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 
 		// Verify the new fd has O_CLOEXEC flag
 		if newFile, ok := el.fdState().files[newFd]; ok {
-			fdFile, ok := newFile.(file.FdFile)
+			fdFile, ok := newFile.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else if !fdFile.Flags().Is(syscall.O_CLOEXEC) {
@@ -1612,7 +1612,7 @@ func makeDup2TestData(t *testing.T) (td testData) {
 
 		// Verify the new fd does NOT have O_CLOEXEC flag (unlike dup3)
 		if newFile, ok := el.fdState().files[targetFd]; ok {
-			fdFile, ok := newFile.(file.FdFile)
+			fdFile, ok := newFile.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else if fdFile.Flags().Is(syscall.O_CLOEXEC) {
@@ -1765,7 +1765,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 
 		// Verify flags were updated on the file descriptor
 		if f, ok := el.fdState().files[int32(fd)]; ok {
-			fdFile, ok := f.(file.FdFile)
+			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else {
@@ -1801,7 +1801,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 
 		// Verify flags were updated correctly
 		if f, ok := el.fdState().files[int32(fd)]; ok {
-			fdFile, ok := f.(file.FdFile)
+			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else {
@@ -1879,7 +1879,7 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 
 		// Verify the new fd does NOT have O_CLOEXEC flag (F_DUPFD doesn't set it)
 		if f, ok := el.fdState().files[int32(newFd)]; ok {
-			fdFile, ok := f.(file.FdFile)
+			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else if fdFile.Flags().Is(syscall.O_CLOEXEC) {
@@ -1963,7 +1963,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, int32(origFd), filename)
 		// Verify original fd doesn't have O_CLOEXEC
 		if f, ok := el.fdState().files[int32(origFd)]; ok {
-			fdFile, ok := f.(file.FdFile)
+			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else if fdFile.Flags().Is(syscall.O_CLOEXEC) {
@@ -1994,7 +1994,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 
 		// Verify the new fd has O_CLOEXEC flag
 		if f, ok := el.fdState().files[int32(newFd)]; ok {
-			fdFile, ok := f.(file.FdFile)
+			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else if !fdFile.Flags().Is(syscall.O_CLOEXEC) {
@@ -2004,7 +2004,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 
 		// Verify original fd still doesn't have O_CLOEXEC
 		if f, ok := el.fdState().files[int32(origFd)]; ok {
-			fdFile, ok := f.(file.FdFile)
+			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else if fdFile.Flags().Is(syscall.O_CLOEXEC) {
@@ -2123,7 +2123,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 
 		// Verify flags were NOT updated due to error
 		if f, ok := el.fdState().files[int32(fd)]; ok {
-			fdFile, ok := f.(file.FdFile)
+			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			} else if fdFile.Flags().Is(syscall.O_NONBLOCK) {
@@ -2193,7 +2193,7 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Errorf("Expected file to be created for invalid fd")
 		} else {
-			_, ok := ep.File.(file.FdFile)
+			_, ok := ep.File.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
 			}
