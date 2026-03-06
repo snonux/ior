@@ -15,12 +15,12 @@ type eventFilter struct {
 	pathFilter       string
 }
 
-func newEventFilter(commFilter, pathFilter string) *eventFilter {
+func newEventFilter(commFilter, pathFilter string) (*eventFilter, error) {
 	var ef eventFilter
 
 	if commFilter != "" {
-		if len(commFilter) > types.MAX_FILENAME_LENGTH {
-			panic(fmt.Sprintf("Comm filter's max size is %d", types.MAX_PROGNAME_LENGTH))
+		if len(commFilter) > types.MAX_PROGNAME_LENGTH {
+			return nil, fmt.Errorf("comm filter max size is %d (got %d)", types.MAX_PROGNAME_LENGTH, len(commFilter))
 		}
 		ef.commFilterEnable = true
 		ef.commFilter = commFilter
@@ -28,13 +28,13 @@ func newEventFilter(commFilter, pathFilter string) *eventFilter {
 
 	if pathFilter != "" {
 		if len(pathFilter) > types.MAX_FILENAME_LENGTH {
-			panic(fmt.Sprintf("Path filter's max size is %d", types.MAX_FILENAME_LENGTH))
+			return nil, fmt.Errorf("path filter max size is %d (got %d)", types.MAX_FILENAME_LENGTH, len(pathFilter))
 		}
 		ef.pathFilterEnable = true
 		ef.pathFilter = pathFilter
 	}
 
-	return &ef
+	return &ef, nil
 }
 
 func (ef *eventFilter) eventPair(ev *event.Pair) bool {

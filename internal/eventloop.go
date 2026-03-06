@@ -181,12 +181,16 @@ type eventLoop struct {
 	done                    chan struct{}
 }
 
-func newEventLoop(cfg eventLoopConfig) *eventLoop {
+func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	filesByFD := make(map[int32]file.File)
 	commsByTID := make(map[uint32]string)
+	filter, err := newEventFilter(cfg.commFilter, cfg.pathFilter)
+	if err != nil {
+		return nil, fmt.Errorf("create event filter: %w", err)
+	}
 
 	el := &eventLoop{
-		filter:         newEventFilter(cfg.commFilter, cfg.pathFilter),
+		filter:         filter,
 		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
 		files:          filesByFD,
@@ -203,7 +207,7 @@ func newEventLoop(cfg eventLoopConfig) *eventLoop {
 	el.initRawHandlers()
 	el.configureOutputCallback()
 	el.seedTrackedPidComm()
-	return el
+	return el, nil
 }
 
 func (e *eventLoop) seedTrackedPidComm() {
