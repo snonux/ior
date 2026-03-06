@@ -47,6 +47,7 @@ const (
 	tabVizModeTable tabVizMode = iota
 	tabVizModeBubbles
 	tabVizModeTreemap
+	tabVizModeIcicle
 )
 
 // Model is the dashboard tab framework model.
@@ -284,7 +285,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.DirGroup):
 			if m.activeTab == TabFiles {
 				m.filesDirGrouped = !m.filesDirGrouped
-				if !m.filesDirGrouped && m.filesVizMode == tabVizModeBubbles {
+				if !m.filesDirGrouped && m.filesVizMode != tabVizModeTable {
 					m.filesVizMode = tabVizModeTable
 				}
 				if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
@@ -522,6 +523,9 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 	if m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap {
 		return renderSyscallsTreemap(m.latest, width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark)
 	}
+	if m.activeTab == TabFiles && m.filesVizMode == tabVizModeIcicle && m.filesDirGrouped {
+		return renderFilesIcicle(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark)
+	}
 	if m.bubbleEnabledForTab(m.activeTab) {
 		switch m.activeTab {
 		case TabSyscalls:
@@ -726,7 +730,7 @@ func (m Model) allowedVizModes(tab Tab) []tabVizMode {
 		return []tabVizMode{tabVizModeTable, tabVizModeBubbles}
 	case TabFiles:
 		if m.filesDirGrouped {
-			return []tabVizMode{tabVizModeTable, tabVizModeBubbles}
+			return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeIcicle}
 		}
 		return []tabVizMode{tabVizModeTable}
 	default:
