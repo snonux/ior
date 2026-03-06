@@ -152,7 +152,7 @@ func TestTerminalFrameColorSemanticPalette(t *testing.T) {
 }
 
 func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
-	out := RenderTerminalView(nil, 50, 10, 0, nil, nil, true, false, "")
+	out := RenderTerminalView(nil, 50, 10, 0, nil, nil, nil, 0, true, false, "")
 	if !strings.Contains(out, "terminal too narrow") {
 		t.Fatalf("expected narrow terminal warning, got %q", out)
 	}
@@ -168,7 +168,7 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 
-	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, true, false, "")
+	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, nil, 0, true, false, "")
 	if !strings.Contains(out, "Flame | view:root | frames:2") {
 		t.Fatalf("expected toolbar to include frame count, got %q", out)
 	}
@@ -197,9 +197,65 @@ func TestRenderTerminalViewShowsPersistentFilterContext(t *testing.T) {
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 	matchSet := map[int]bool{1: true}
 
-	out := RenderTerminalView(frames, 80, 6, 1, nil, matchSet, true, false, "child")
+	out := RenderTerminalView(frames, 140, 6, 1, nil, matchSet, nil, 0, true, false, "child")
 	if !strings.Contains(out, `Filter "child"`) {
 		t.Fatalf("expected filter context in status line, got %q", out)
+	}
+}
+
+func TestRenderTerminalViewFilterOnlyShowsMatchingBranchToRoot(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{
+				Name:  "keep",
+				Total: 60,
+				Children: []*snapshotNode{
+					{Name: "needle", Total: 60},
+				},
+			},
+			{
+				Name:  "drop",
+				Total: 40,
+				Children: []*snapshotNode{
+					{Name: "noise", Total: 40},
+				},
+			},
+		},
+	}
+	frames := BuildTerminalLayout(snapshot, 80, 8)
+	needleIdx := frameIndexByPathRenderer(frames, "root"+pathSeparator+"keep"+pathSeparator+"needle")
+	if needleIdx < 0 {
+		t.Fatalf("expected needle frame in layout")
+	}
+	matchSet := map[int]bool{needleIdx: true}
+
+	out := RenderTerminalView(frames, 80, 8, needleIdx, nil, matchSet, nil, 100, true, false, "needle")
+	if !strings.Contains(out, `Filter "needle": 60.0% system`) {
+		t.Fatalf("expected filter status to report 60.0%% system share, got %q", out)
+	}
+	if !strings.Contains(out, "keep") || !strings.Contains(out, "needle") {
+		t.Fatalf("expected matching branch to remain visible, got %q", out)
+	}
+	if strings.Contains(out, "drop") || strings.Contains(out, "noise") {
+		t.Fatalf("expected non-matching branch to be hidden, got %q", out)
+	}
+}
+
+func TestFilterSampleCoverageAvoidsDoubleCountingNestedMatches(t *testing.T) {
+	frames := []tuiFrame{
+		{Path: "root", Total: 100},
+		{Path: "root" + pathSeparator + "A", Total: 60},
+		{Path: "root" + pathSeparator + "A" + pathSeparator + "A1", Total: 30},
+		{Path: "root" + pathSeparator + "B", Total: 40},
+	}
+	matchSet := map[int]bool{
+		1: true, // A
+		2: true, // A1 (nested under A)
+	}
+	if got := filterSampleCoverage(frames, matchSet, 100); got != 60 {
+		t.Fatalf("expected nested matches to count once at 60%%, got %.1f%%", got)
 	}
 }
 
@@ -230,7 +286,7 @@ func TestRenderTerminalViewShowsDeepLevelTruncationHint(t *testing.T) {
 		},
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 10)
-	out := RenderTerminalView(frames, 80, 4, 0, nil, nil, true, false, "")
+	out := RenderTerminalView(frames, 80, 4, 0, nil, nil, nil, 0, true, false, "")
 	if !strings.Contains(out, "showing deepest levels") {
 		t.Fatalf("expected truncation hint in toolbar, got %q", out)
 	}
@@ -271,4 +327,13 @@ func hasFrame(frames []tuiFrame, path string) bool {
 		}
 	}
 	return false
+}
+
+func frameIndexByPathRenderer(frames []tuiFrame, path string) int {
+	for idx, frame := range frames {
+		if frame.Path == path {
+			return idx
+		}
+	}
+	return -1
 }

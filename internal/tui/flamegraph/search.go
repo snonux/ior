@@ -17,29 +17,22 @@ func (m *Model) clearSearch() {
 	m.searchActive = false
 	m.searchQuery = ""
 	clearBoolMap(m.matchIndices)
+	clearBoolMap(m.filterVisible)
 	m.searchInput.SetValue("")
 	m.searchInput.Blur()
 	m.statusMessage = "Filter cleared"
 }
 
 func (m *Model) applySearchQuery(raw string) {
-	query := strings.ToLower(strings.TrimSpace(raw))
-	m.searchQuery = query
-	if m.matchIndices == nil {
-		m.matchIndices = make(map[int]bool)
-	} else {
-		clearBoolMap(m.matchIndices)
-	}
+	m.searchQuery = strings.ToLower(strings.TrimSpace(raw))
+	m.recomputeFilterState()
+	query := m.searchQuery
 	if query == "" {
+		m.ensureSelectionNavigable()
 		m.statusMessage = "Filter cleared"
 		return
 	}
 
-	for idx, frame := range m.frames {
-		if strings.Contains(strings.ToLower(frame.Name), query) {
-			m.matchIndices[idx] = true
-		}
-	}
 	if len(m.matchIndices) > 0 {
 		m.jumpMatch(1)
 		m.statusMessage = fmt.Sprintf("Filter %q: %d matches", query, len(m.matchIndices))
@@ -73,6 +66,29 @@ func (m *Model) jumpMatch(direction int) {
 	}
 	m.selectedIdx = matches[next]
 	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+}
+
+func (m *Model) recomputeFilterState() {
+	if m.matchIndices == nil {
+		m.matchIndices = make(map[int]bool)
+	} else {
+		clearBoolMap(m.matchIndices)
+	}
+	if m.filterVisible == nil {
+		m.filterVisible = make(map[int]bool)
+	} else {
+		clearBoolMap(m.filterVisible)
+	}
+	if m.searchQuery == "" {
+		return
+	}
+
+	for idx, frame := range m.frames {
+		if strings.Contains(strings.ToLower(frame.Name), m.searchQuery) {
+			m.matchIndices[idx] = true
+		}
+	}
+	m.filterVisible = computeFilterVisibleSetInto(m.frames, m.matchIndices, m.filterVisible)
 }
 
 func orderedMatchIndices(matchSet map[int]bool) []int {

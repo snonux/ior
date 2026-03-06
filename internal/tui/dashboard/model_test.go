@@ -198,6 +198,23 @@ func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
 	}
 }
 
+func TestFlameTickLoadsInitialSnapshotWithoutVersionChange(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.SetLiveTrie(liveTrie)
+	m.activeTab = TabFlame
+	if m.flamegraphModel.HasSnapshot() {
+		t.Fatalf("expected fresh flame model to start without snapshot")
+	}
+
+	next, _ := m.Update(flameTickMsg{})
+	model := next.(Model)
+	if !model.flamegraphModel.HasSnapshot() {
+		t.Fatalf("expected flame tick to load initial snapshot even when trie version is unchanged")
+	}
+}
+
 func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
 	rb := eventstream.NewRingBuffer()
 	for i := 0; i < 300; i++ {

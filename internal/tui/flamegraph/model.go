@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"sort"
+	"strings"
 	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
@@ -58,6 +59,7 @@ type Model struct {
 	liveTrie    *coreflamegraph.LiveTrie
 	lastVersion uint64
 	snapshot    *snapshotNode
+	globalTotal uint64
 
 	frames       []tuiFrame
 	targetFrames []tuiFrame
@@ -73,6 +75,7 @@ type Model struct {
 	searchInput   textinput.Model
 	searchQuery   string
 	matchIndices  map[int]bool
+	filterVisible map[int]bool
 	subtreeSet    map[int]bool
 	showHelp      bool
 	statusMessage string
@@ -109,10 +112,11 @@ func NewModel(liveTrie *coreflamegraph.LiveTrie) Model {
 	searchInput.SetStyles(textinput.DefaultStyles(true))
 
 	return Model{
-		liveTrie:     liveTrie,
-		matchIndices: make(map[int]bool),
-		subtreeSet:   make(map[int]bool),
-		searchInput:  searchInput,
+		liveTrie:      liveTrie,
+		matchIndices:  make(map[int]bool),
+		filterVisible: make(map[int]bool),
+		subtreeSet:    make(map[int]bool),
+		searchInput:   searchInput,
 		fieldPresets: [][]string{
 			{"comm", "path", "tracepoint"},
 			{"path", "tracepoint", "comm"},
@@ -173,33 +177,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		prev := m.selectedIdx
 		switch {
-		case msg.String() == "/":
+		case isSearchOpenKey(msg):
 			m.openSearch()
-		case msg.String() == "n":
+		case isNextMatchKey(msg):
 			m.jumpMatch(1)
-		case msg.String() == "N":
+		case isPrevMatchKey(msg):
 			m.jumpMatch(-1)
-		case msg.String() == "p":
+		case isPauseKey(msg):
 			m.togglePause()
-		case msg.String() == "r":
+		case isResetBaselineKey(msg):
 			m.resetBaseline()
-		case msg.String() == "o":
+		case isCycleOrderKey(msg):
 			m.cycleFieldOrder()
-		case msg.String() == "?":
+		case isHelpToggleKey(msg):
 			m.toggleHelp()
-		case key.Matches(msg, m.keys.ZoomIn):
+		case isZoomInKey(msg, m.keys):
 			m.zoomIn()
-		case key.Matches(msg, m.keys.ZoomUndo):
+		case isZoomUndoKey(msg, m.keys):
 			m.zoomUndo()
-		case key.Matches(msg, m.keys.ZoomReset):
+		case isZoomResetKey(msg, m.keys):
 			m.zoomReset()
-		case key.Matches(msg, m.keys.MoveShallower):
+		case isMoveShallowerKey(msg, m.keys):
 			m.moveVerticalWithFallback(-1, 1)
-		case key.Matches(msg, m.keys.MoveDeeper):
+		case isMoveDeeperKey(msg, m.keys):
 			m.moveVerticalWithFallback(1, -1)
-		case key.Matches(msg, m.keys.PrevSibling):
+		case isPrevSiblingKey(msg, m.keys):
 			m.moveSibling(-1)
-		case key.Matches(msg, m.keys.NextSibling):
+		case isNextSiblingKey(msg, m.keys):
 			m.moveSibling(1)
 		}
 		if m.selectedIdx != prev {
@@ -216,21 +220,21 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 		return true
 	}
 	switch {
-	case msg.String() == "/",
-		msg.String() == "n",
-		msg.String() == "N",
-		msg.String() == "p",
-		msg.String() == "r",
-		msg.String() == "o",
-		msg.String() == "?":
+	case isSearchOpenKey(msg),
+		isNextMatchKey(msg),
+		isPrevMatchKey(msg),
+		isPauseKey(msg),
+		isResetBaselineKey(msg),
+		isCycleOrderKey(msg),
+		isHelpToggleKey(msg):
 		return true
-	case key.Matches(msg, m.keys.ZoomIn),
-		key.Matches(msg, m.keys.ZoomUndo),
-		key.Matches(msg, m.keys.ZoomReset),
-		key.Matches(msg, m.keys.MoveShallower),
-		key.Matches(msg, m.keys.MoveDeeper),
-		key.Matches(msg, m.keys.PrevSibling),
-		key.Matches(msg, m.keys.NextSibling):
+	case isZoomInKey(msg, m.keys),
+		isZoomUndoKey(msg, m.keys),
+		isZoomResetKey(msg, m.keys),
+		isMoveShallowerKey(msg, m.keys),
+		isMoveDeeperKey(msg, m.keys),
+		isPrevSiblingKey(msg, m.keys),
+		isNextSiblingKey(msg, m.keys):
 		return true
 	default:
 		return false
@@ -239,7 +243,7 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 
 // View renders the flamegraph viewport.
 func (m Model) View() tea.View {
-	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx, m.subtreeSet, m.matchIndices, m.isDark, m.searchActive, m.searchQuery)
+	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx, m.subtreeSet, m.matchIndices, m.filterVisible, m.globalTotal, m.isDark, m.searchActive, m.searchQuery)
 	content = replaceHeaderLine(content, m.toolbarLine())
 	if m.searchActive {
 		content = replaceFooterLine(content, m.searchFooter())
@@ -258,6 +262,7 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.liveTrie = liveTrie
 	m.lastVersion = 0
 	m.snapshot = nil
+	m.globalTotal = 0
 	m.selectedIdx = 0
 	m.frames = nil
 	m.targetFrames = nil
@@ -265,6 +270,7 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.zoomRoot = nil
 	m.zoomPath = ""
 	m.subtreeSet = make(map[int]bool)
+	m.filterVisible = make(map[int]bool)
 	m.animation = NewAnimationState(30, 6.0, 1.0)
 	m.animating = false
 }
@@ -288,6 +294,7 @@ func (m *Model) RefreshFromLiveTrie() bool {
 		return false
 	}
 	m.snapshot = &snapshot
+	m.globalTotal = snapshotTotal(m.snapshot)
 	if m.zoomPath != "" {
 		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
 	} else {
@@ -301,6 +308,11 @@ func (m *Model) RefreshFromLiveTrie() bool {
 // LastVersion returns the latest snapshot version loaded into the model.
 func (m Model) LastVersion() uint64 {
 	return m.lastVersion
+}
+
+// HasSnapshot reports whether the flamegraph model has loaded at least one snapshot.
+func (m Model) HasSnapshot() bool {
+	return m.snapshot != nil
 }
 
 // AnimationCmd returns a frame animation tick command when animation is active.
@@ -348,6 +360,8 @@ func (m *Model) rebuildFrames(animate bool) {
 		m.frames = append(m.frames[:0], m.targetFrames...)
 	}
 	m.clampSelection()
+	m.recomputeFilterState()
+	m.ensureSelectionNavigable()
 	m.ensureSelectionVisible()
 	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 }
@@ -418,9 +432,10 @@ func (m *Model) moveVertical(delta int) {
 		return
 	}
 	m.clampSelection()
+	m.ensureSelectionNavigable()
 	current := m.frames[m.selectedIdx]
 	targetDepth := current.Depth + delta
-	targets := framesAtDepth(m.frames, targetDepth)
+	targets := m.framesAtDepth(targetDepth)
 	if len(targets) == 0 {
 		return
 	}
@@ -449,8 +464,9 @@ func (m *Model) moveSibling(delta int) {
 		return
 	}
 	m.clampSelection()
+	m.ensureSelectionNavigable()
 	current := m.frames[m.selectedIdx]
-	siblings := framesAtDepth(m.frames, current.Depth)
+	siblings := m.framesAtDepth(current.Depth)
 	if len(siblings) <= 1 {
 		return
 	}
@@ -469,11 +485,18 @@ func (m *Model) moveSibling(delta int) {
 }
 
 func framesAtDepth(frames []tuiFrame, depth int) []int {
+	return framesAtDepthFiltered(frames, depth, nil)
+}
+
+func framesAtDepthFiltered(frames []tuiFrame, depth int, include map[int]bool) []int {
 	if depth < 0 {
 		return nil
 	}
 	indices := make([]int, 0)
 	for idx, frame := range frames {
+		if include != nil && !include[idx] {
+			continue
+		}
 		if frame.Depth == depth {
 			indices = append(indices, idx)
 		}
@@ -527,6 +550,125 @@ func (m Model) currentRootPath() string {
 	return m.frames[0].Path
 }
 
+func (m Model) filterActive() bool {
+	return strings.TrimSpace(m.searchQuery) != ""
+}
+
+func (m Model) navigableFrameSet() map[int]bool {
+	if !m.filterActive() {
+		return nil
+	}
+	return m.filterVisible
+}
+
+func (m Model) framesAtDepth(depth int) []int {
+	return framesAtDepthFiltered(m.frames, depth, m.navigableFrameSet())
+}
+
+func (m Model) frameNavigable(idx int) bool {
+	if idx < 0 || idx >= len(m.frames) {
+		return false
+	}
+	if !m.filterActive() {
+		return true
+	}
+	return m.filterVisible[idx]
+}
+
+func (m *Model) ensureSelectionNavigable() {
+	if len(m.frames) == 0 {
+		m.selectedIdx = 0
+		return
+	}
+	m.clampSelection()
+	if m.frameNavigable(m.selectedIdx) {
+		return
+	}
+
+	if len(m.matchIndices) > 0 {
+		for _, idx := range orderedMatchIndices(m.matchIndices) {
+			if m.frameNavigable(idx) {
+				m.selectedIdx = idx
+				return
+			}
+		}
+	}
+
+	for idx := range m.frames {
+		if m.frameNavigable(idx) {
+			m.selectedIdx = idx
+			return
+		}
+	}
+}
+
+func keyString(msg tea.KeyPressMsg) string {
+	if s := msg.String(); s != "" {
+		return s
+	}
+	return msg.Text
+}
+
+func isSearchOpenKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "/" }
+func isNextMatchKey(msg tea.KeyPressMsg) bool  { return keyString(msg) == "n" }
+func isPrevMatchKey(msg tea.KeyPressMsg) bool  { return keyString(msg) == "N" }
+func isPauseKey(msg tea.KeyPressMsg) bool      { return keyString(msg) == "p" }
+func isResetBaselineKey(msg tea.KeyPressMsg) bool {
+	return keyString(msg) == "r"
+}
+func isCycleOrderKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "o" }
+func isHelpToggleKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "?" }
+
+func isZoomInKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	return key.Matches(msg, keys.ZoomIn) || msg.Code == tea.KeyEnter || strings.EqualFold(keyString(msg), "enter")
+}
+
+func isZoomUndoKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	return key.Matches(msg, keys.ZoomUndo) || msg.Code == tea.KeyBackspace
+}
+
+func isZoomResetKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	return key.Matches(msg, keys.ZoomReset) || msg.Code == tea.KeyEsc
+}
+
+func isMoveShallowerKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	k := keyString(msg)
+	return key.Matches(msg, keys.MoveShallower) || msg.Code == tea.KeyDown || keyMatchesDirection(k, "down", 'B')
+}
+
+func isMoveDeeperKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	k := keyString(msg)
+	return key.Matches(msg, keys.MoveDeeper) || msg.Code == tea.KeyUp || keyMatchesDirection(k, "up", 'A')
+}
+
+func isPrevSiblingKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	k := keyString(msg)
+	return key.Matches(msg, keys.PrevSibling) || msg.Code == tea.KeyLeft || keyMatchesDirection(k, "left", 'D')
+}
+
+func isNextSiblingKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	k := keyString(msg)
+	return key.Matches(msg, keys.NextSibling) || msg.Code == tea.KeyRight || keyMatchesDirection(k, "right", 'C')
+}
+
+func keyMatchesDirection(keyName, plain string, ansiFinal byte) bool {
+	if keyName == plain || strings.HasSuffix(keyName, "+"+plain) {
+		return true
+	}
+	return isArrowEscapeSequence(keyName, ansiFinal)
+}
+
+func isArrowEscapeSequence(value string, ansiFinal byte) bool {
+	if len(value) < 3 || value[0] != '\x1b' {
+		return false
+	}
+	last := value[len(value)-1]
+	if last != ansiFinal {
+		return false
+	}
+	return value[1] == '[' || value[1] == 'O'
+}
+
 func (m Model) visibleRowOffset() int {
 	if len(m.frames) == 0 {
 		return 0
@@ -535,7 +677,7 @@ func (m Model) visibleRowOffset() int {
 	if availableRows <= 0 {
 		return 0
 	}
-	maxRow := maxFrameRow(m.frames)
+	maxRow := maxFrameRowForSet(m.frames, m.navigableFrameSet())
 	if maxRow+1 <= availableRows {
 		return 0
 	}
@@ -547,6 +689,10 @@ func (m *Model) ensureSelectionVisible() {
 		return
 	}
 	m.clampSelection()
+	m.ensureSelectionNavigable()
+	if !m.frameNavigable(m.selectedIdx) {
+		return
+	}
 	rowOffset := m.visibleRowOffset()
 	selected := m.frames[m.selectedIdx]
 	if selected.Row >= rowOffset {
@@ -556,6 +702,9 @@ func (m *Model) ensureSelectionVisible() {
 	bestIdx := -1
 	bestScore := int(^uint(0) >> 1)
 	for idx, frame := range m.frames {
+		if !m.frameNavigable(idx) {
+			continue
+		}
 		if frame.Row < rowOffset {
 			continue
 		}
