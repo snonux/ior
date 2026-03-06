@@ -328,7 +328,7 @@ func initialWindowSizeCmd() tea.Cmd {
 
 // Update routes messages, transitions screens, and manages tracing startup state.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	normalizedMsg, ok := m.normalizeKeyEvent(msg)
+	normalizedMsg, ok := m.keyNormalizer(msg)
 	if !ok {
 		return m, nil
 	}
@@ -361,34 +361,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboard.SetFocused(false)
 		return m, nil
 	case tea.KeyPressMsg:
-		if key.Matches(msg, m.keys.Quit) {
-			m.quitting = true
-			m.stopTrace()
-			return m, tea.Quit
-		}
-		if m.helpOverlayVisible {
-			if isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
-				m.helpOverlayVisible = false
-			}
-			return m, nil
-		}
-		if isHelpOverlayOpenKey(msg) && !m.attaching && m.lastErr == nil {
-			m.helpOverlayVisible = true
-			return m, nil
-		}
-		if m.exportEnabled && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
-			m.exporter = m.exporter.Open()
-			return m, nil
-		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Probes) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
-			m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
-			return m, nil
-		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
-			return m.reselectPID()
-		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectTID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
-			return m.reselectTID()
+		if next, cmd, handled := m.handleGlobalKeyPress(msg); handled {
+			return next, cmd
 		}
 	case tuiexport.RequestMsg:
 		return m, runExportCmd(m.exportEnabled, msg.Option, m.dashboard.LatestSnapshot())
@@ -427,37 +401,99 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.attaching {
-		var cmd tea.Cmd
-		m.spin, cmd = m.spin.Update(msg)
-		return m, cmd
-	}
-	if m.probeModal.Visible() {
-		var dashboardCmd tea.Cmd
-		// Keep dashboard refresh/data flow alive while probe modal is open.
-		if _, isKey := msg.(tea.KeyPressMsg); !isKey && m.screen == ScreenDashboard {
-			next, cmd := m.dashboard.Update(msg)
-			m.dashboard = next.(dashboardui.Model)
-			dashboardCmd = cmd
-		}
-		var cmd tea.Cmd
-		m.probeModal, cmd = m.probeModal.Update(msg)
-		return m, tea.Batch(dashboardCmd, cmd)
-	}
-	if m.exporter.Visible() {
-		var dashboardCmd tea.Cmd
-		// Keep dashboard refresh/data flow alive while export modal is open.
-		if _, isKey := msg.(tea.KeyPressMsg); !isKey && m.screen == ScreenDashboard {
-			next, cmd := m.dashboard.Update(msg)
-			m.dashboard = next.(dashboardui.Model)
-			dashboardCmd = cmd
-		}
-		var cmd tea.Cmd
-		m.exporter, cmd = m.exporter.Update(msg)
-		return m, tea.Batch(dashboardCmd, cmd)
+	if next, cmd, handled := m.handleModalDispatch(msg); handled {
+		return next, cmd
 	}
 
 	return m.updateActiveModel(msg)
+}
+
+func (m *Model) keyNormalizer(msg tea.Msg) (tea.Msg, bool) {
+	return m.normalizeKeyEvent(msg)
+}
+
+func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
+	return m.screen == ScreenDashboard &&
+		!m.attaching &&
+		m.lastErr == nil &&
+		!m.exporter.Visible() &&
+		!m.probeModal.Visible() &&
+		!m.dashboard.BlocksGlobalShortcuts(msg)
+}
+
+func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if key.Matches(msg, m.keys.Quit) {
+		m.quitting = true
+		m.stopTrace()
+		return m, tea.Quit, true
+	}
+	if m.helpOverlayVisible {
+		if isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
+			m.helpOverlayVisible = false
+		}
+		return m, nil, true
+	}
+	if isHelpOverlayOpenKey(msg) && !m.attaching && m.lastErr == nil {
+		m.helpOverlayVisible = true
+		return m, nil, true
+	}
+	if m.exportEnabled && m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Export) {
+		m.exporter = m.exporter.Open()
+		return m, nil, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Probes) {
+		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
+		return m, nil, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectPID) {
+		next, cmd := m.reselectPID()
+		return next, cmd, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectTID) {
+		next, cmd := m.reselectTID()
+		return next, cmd, true
+	}
+	return m, nil, false
+}
+
+func (m Model) updateDashboardForModal(msg tea.Msg) (Model, tea.Cmd) {
+	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.screen != ScreenDashboard {
+		return m, nil
+	}
+	next, cmd := m.dashboard.Update(msg)
+	m.dashboard = next.(dashboardui.Model)
+	return m, cmd
+}
+
+func (m Model) updateProbeModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, dashboardCmd := m.updateDashboardForModal(msg)
+	var cmd tea.Cmd
+	m.probeModal, cmd = m.probeModal.Update(msg)
+	return m, tea.Batch(dashboardCmd, cmd)
+}
+
+func (m Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, dashboardCmd := m.updateDashboardForModal(msg)
+	var cmd tea.Cmd
+	m.exporter, cmd = m.exporter.Update(msg)
+	return m, tea.Batch(dashboardCmd, cmd)
+}
+
+func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if m.attaching {
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd, true
+	}
+	if m.probeModal.Visible() {
+		next, cmd := m.updateProbeModal(msg)
+		return next, cmd, true
+	}
+	if m.exporter.Visible() {
+		next, cmd := m.updateExportModal(msg)
+		return next, cmd, true
+	}
+	return m, nil, false
 }
 
 func (m *Model) normalizeKeyEvent(msg tea.Msg) (tea.Msg, bool) {
