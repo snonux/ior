@@ -740,7 +740,7 @@ func (m Model) View() tea.View {
 
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(PanelStyle.Render(line))), title)
+		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(common.PanelStyle.Render(line))), title)
 	}
 
 	if m.lastErr != nil {
@@ -837,7 +837,7 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 		boxWidth = 72
 	}
 
-	box := PanelStyle.Copy().
+	box := common.PanelStyle.Copy().
 		Width(boxWidth).
 		Render(strings.Join(lines, "\n"))
 
@@ -932,7 +932,7 @@ func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
 		lines = append(lines, truncateHelpLine("... (resize for full help)", contentWidth))
 	}
 
-	box := PanelStyle.Copy().Width(boxWidth).Render(strings.Join(lines, "\n"))
+	box := common.PanelStyle.Copy().Width(boxWidth).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
