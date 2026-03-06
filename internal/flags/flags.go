@@ -54,23 +54,14 @@ type Flags struct {
 	TracepointsToAttach  []*regexp.Regexp
 	TracepointsToExclude []*regexp.Regexp
 
-	// Flamegraph flags
-	PlainMode        bool
-	FlamegraphEnable bool
-	LiveFlamegraph   bool
-	TestFlames       bool
-	TestLiveFlames   bool
-	LiveInterval     time.Duration
-	OpenCommand      string
-	FlamegraphName   string
-	FlamegraphJSON   bool
-	TUIExportEnable  bool
-
-	// To convert ior data into native SVG format
-	IorDataFile      string
-	IorWatchInterval time.Duration
-	CollapsedFields  []string
-	CountField       string
+	// Output/runtime flags
+	PlainMode       bool
+	TestFlames      bool
+	TestLiveFlames  bool
+	LiveInterval    time.Duration
+	TUIExportEnable bool
+	CollapsedFields []string
+	CountField      string
 }
 
 // NewFlags returns a configuration instance initialized with project defaults.
@@ -81,7 +72,6 @@ func NewFlags() Flags {
 		EventMapSize:    4096 * 16,
 		Duration:        900,
 		LiveInterval:    200 * time.Millisecond,
-		FlamegraphName:  "default",
 		TUIExportEnable: true,
 		CollapsedFields: []string{"comm", "tracepoint", "path"},
 		CountField:      "count",
@@ -184,19 +174,10 @@ func parse() error {
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
 	flag.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
-	flag.BoolVar(&cfg.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
-	flag.BoolVar(&cfg.LiveFlamegraph, "live", false, "Enable live flamegraph mode")
 	flag.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
 	flag.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
-	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Live flamegraph refresh interval")
-	flag.StringVar(&cfg.OpenCommand, "open", "", "Command to open live flamegraph URL (used with -live); use {url} placeholder or URL is appended")
-	flag.StringVar(&cfg.FlamegraphName, "name", cfg.FlamegraphName, "Name of the flamegraph, used to generate the SVG file")
-	flag.BoolVar(&cfg.FlamegraphJSON, "flamegraphJson", false, "Also export flamegraph tree as JSON in -ior mode (experimental WASM-ready output)")
+	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
 	flag.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable writing TUI snapshot export files")
-
-	flag.StringVar(&cfg.IorDataFile, "ior", "", "IOR data file to convert into native SVG flamegraph")
-	flag.DurationVar(&cfg.IorWatchInterval, "iorWatchInterval", 0,
-		"In -ior mode, poll input file for changes and regenerate outputs; also enables auto-reloading viewer")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
 	flag.StringVar(&cfg.CountField, "count", cfg.CountField,

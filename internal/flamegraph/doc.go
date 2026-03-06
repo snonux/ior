@@ -1,2 +1,2 @@
-// Package flamegraph builds aggregated call trees and rendering inputs for I/O flamegraphs.
+// Package flamegraph provides TUI flamegraph aggregation primitives.
 package flamegraph
