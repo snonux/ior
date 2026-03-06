@@ -153,7 +153,7 @@ func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 		t.Fatalf("parse returned error: %v", err)
 	}
 
-	want := []string{"comm", "path", "tracepoint"}
+	want := []string{"comm", "tracepoint", "path"}
 	if len(cfg.CollapsedFields) != len(want) {
 		t.Fatalf("default collapsed fields len = %d, want %d", len(cfg.CollapsedFields), len(want))
 	}

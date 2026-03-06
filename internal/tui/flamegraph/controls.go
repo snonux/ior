@@ -70,7 +70,7 @@ func (m Model) toolbarLine() string {
 		state = lipgloss.NewStyle().Foreground(common.ColorDanger).Bold(true).Render("[PAUSED]")
 	}
 	order := m.currentFieldPresetLabel()
-	line := fmt.Sprintf("%s | view:%s | o:order(%s) | /:search | enter:zoom | u:undo | r:reset | space/p:pause", state, compactFramePath(m.currentRootPath()), order)
+	line := fmt.Sprintf("%s | view:%s | o:order(%s) | /:search | enter:zoom | u/esc:undo | r:reset | space/p:pause", state, compactFramePath(m.currentRootPath()), order)
 	if m.searchQuery != "" {
 		line += " | filter:" + m.searchQuery
 	}
@@ -92,7 +92,7 @@ func (m Model) helpOverlay() string {
 	if width <= 0 {
 		width = 80
 	}
-	help := "Flame help: j/k depth  h/l sibling  enter zoom  u/backspace undo  esc reset  / search  n/N matches  space/p pause  r reset baseline  o order  ? help"
+	help := "Flame help: j/k depth  h/l sibling  enter zoom  u/backspace/esc undo  / search  n/N matches  space/p pause  r reset baseline  o order  ? help"
 	return common.HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 

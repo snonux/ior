@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -49,8 +50,8 @@ func defaultFlameKeyMap() flameKeyMap {
 		PrevSibling:   key.NewBinding(key.WithKeys("h", "left")),
 		NextSibling:   key.NewBinding(key.WithKeys("l", "right")),
 		ZoomIn:        key.NewBinding(key.WithKeys("enter")),
-		ZoomUndo:      key.NewBinding(key.WithKeys("backspace", "u")),
-		ZoomReset:     key.NewBinding(key.WithKeys("esc")),
+		ZoomUndo:      key.NewBinding(key.WithKeys("backspace", "u", "esc")),
+		ZoomReset:     key.NewBinding(),
 	}
 }
 
@@ -114,22 +115,25 @@ func NewModel(liveTrie *coreflamegraph.LiveTrie) Model {
 	searchInput.SetWidth(32)
 	searchInput.SetStyles(textinput.DefaultStyles(true))
 
-	return Model{
+	m := Model{
 		liveTrie:      liveTrie,
 		matchIndices:  make(map[int]bool),
 		filterVisible: make(map[int]bool),
 		subtreeSet:    make(map[int]bool),
 		searchInput:   searchInput,
 		fieldPresets: [][]string{
-			{"comm", "path", "tracepoint"},
+			{"comm", "tracepoint", "path"},
 			{"path", "tracepoint", "comm"},
 			{"tracepoint", "comm", "path"},
-			{"pid", "path", "tracepoint"},
+			{"pid", "tracepoint", "path"},
+			{"comm", "path", "tracepoint"},
 		},
 		isDark:    true,
 		keys:      defaultFlameKeyMap(),
 		animation: NewAnimationState(30, 6.0, 1.0),
 	}
+	m.syncFieldPresetToTrie()
+	return m
 }
 
 // Init starts the flamegraph model.
@@ -286,6 +290,7 @@ func (m Model) View() tea.View {
 // SetLiveTrie updates the data source used by the flamegraph model.
 func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.liveTrie = liveTrie
+	m.syncFieldPresetToTrie()
 	m.lastVersion = 0
 	m.snapshot = nil
 	m.globalTotal = 0
@@ -300,6 +305,27 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.animation = NewAnimationState(30, 6.0, 1.0)
 	m.animating = false
 	m.hasNavigableSnapshot = false
+}
+
+func (m *Model) syncFieldPresetToTrie() {
+	if m.liveTrie == nil {
+		m.fieldIndex = 0
+		return
+	}
+	fields := m.liveTrie.Fields()
+	if len(fields) == 0 {
+		m.fieldIndex = 0
+		return
+	}
+	for idx, preset := range m.fieldPresets {
+		if slices.Equal(preset, fields) {
+			m.fieldIndex = idx
+			return
+		}
+	}
+	custom := slices.Clone(fields)
+	m.fieldPresets = append([][]string{custom}, m.fieldPresets...)
+	m.fieldIndex = 0
 }
 
 // RefreshFromLiveTrie loads a new snapshot when the source version changes.
@@ -760,11 +786,11 @@ func isZoomInKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
 }
 
 func isZoomUndoKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
-	return key.Matches(msg, keys.ZoomUndo) || msg.Code == tea.KeyBackspace
+	return key.Matches(msg, keys.ZoomUndo) || msg.Code == tea.KeyBackspace || msg.Code == tea.KeyEsc
 }
 
 func isZoomResetKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
-	return key.Matches(msg, keys.ZoomReset) || msg.Code == tea.KeyEsc
+	return key.Matches(msg, keys.ZoomReset)
 }
 
 func isMoveShallowerKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {

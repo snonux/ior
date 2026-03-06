@@ -21,6 +21,9 @@ func TestNewModelDefaults(t *testing.T) {
 	if len(m.fieldPresets) == 0 {
 		t.Fatalf("expected default field presets to be initialized")
 	}
+	if got, want := m.fieldPresets[0], []string{"comm", "tracepoint", "path"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("default field preset[0] = %v, want %v", got, want)
+	}
 	if !m.isDark {
 		t.Fatalf("expected dark mode enabled by default")
 	}
@@ -399,7 +402,7 @@ func TestFilteredNavigationSkipsHiddenBranches(t *testing.T) {
 	}
 }
 
-func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
+func TestZoomInUndoSingleLevelAndNestedEsc(t *testing.T) {
 	m := newZoomModel()
 
 	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
@@ -423,17 +426,33 @@ func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
 		t.Fatalf("expected nested zoom stack to preserve parent path, got %#v", m.zoomStack)
 	}
 
-	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	if got, want := m.zoomPath, "root"+pathSeparator+"A"; got != want {
-		t.Fatalf("expected zoomPath after undo %q, got %q", want, got)
+		t.Fatalf("expected zoomPath after esc undo %q, got %q", want, got)
 	}
 	if len(m.zoomStack) != 1 {
-		t.Fatalf("expected one stack entry after undo, got %d", len(m.zoomStack))
+		t.Fatalf("expected one stack entry after esc undo, got %d", len(m.zoomStack))
 	}
 
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.zoomPath != "" || m.zoomRoot != nil || len(m.zoomStack) != 0 {
-		t.Fatalf("expected zoom reset to root state, got path=%q root=%+v stack=%d", m.zoomPath, m.zoomRoot, len(m.zoomStack))
+		t.Fatalf("expected second esc undo to return to root state, got path=%q root=%+v stack=%d", m.zoomPath, m.zoomRoot, len(m.zoomStack))
+	}
+}
+
+func TestZoomResetToRoot(t *testing.T) {
+	m := newZoomModel()
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A"+pathSeparator+"A1")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.zoomPath == "" || len(m.zoomStack) == 0 {
+		t.Fatalf("expected nested zoom before reset")
+	}
+
+	m.zoomReset()
+	if m.zoomPath != "" || m.zoomRoot != nil || len(m.zoomStack) != 0 {
+		t.Fatalf("expected explicit zoom reset to clear zoom stack, got path=%q root=%+v stack=%d", m.zoomPath, m.zoomRoot, len(m.zoomStack))
 	}
 }
 
@@ -620,10 +639,11 @@ func TestControlCycleFieldOrderReconfiguresLiveTrie(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
 	m := NewModel(liveTrie)
 	initial := append([]string(nil), m.fieldPresets[m.fieldIndex]...)
+	expectedNextIdx := (m.fieldIndex + 1) % len(m.fieldPresets)
 
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'o'}[0], Text: "o"})
-	if m.fieldIndex != 1 {
-		t.Fatalf("expected field index to advance to 1, got %d", m.fieldIndex)
+	if m.fieldIndex != expectedNextIdx {
+		t.Fatalf("expected field index to advance to %d, got %d", expectedNextIdx, m.fieldIndex)
 	}
 	next := m.fieldPresets[m.fieldIndex]
 	if reflect.DeepEqual(initial, next) {
@@ -631,6 +651,14 @@ func TestControlCycleFieldOrderReconfiguresLiveTrie(t *testing.T) {
 	}
 	if got := liveTrie.Fields(); !reflect.DeepEqual(got, next) {
 		t.Fatalf("expected live trie fields %v, got %v", next, got)
+	}
+}
+
+func TestNewModelAlignsPresetIndexToLiveTrieFields(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	m := NewModel(liveTrie)
+	if got, want := m.fieldPresets[m.fieldIndex], []string{"comm", "path", "tracepoint"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected model field preset to align with trie fields, got %v want %v", got, want)
 	}
 }
 
