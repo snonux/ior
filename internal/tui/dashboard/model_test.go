@@ -215,7 +215,7 @@ func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
 	}
 }
 
-func TestFlameTickPausedContinuesBootstrapRefresh(t *testing.T) {
+func TestFlameTickPausedFreezesAfterInitialSnapshot(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
@@ -235,8 +235,8 @@ func TestFlameTickPausedContinuesBootstrapRefresh(t *testing.T) {
 
 	next, _ = model.Update(flameTickMsg{})
 	model = next.(Model)
-	if got, want := model.flamegraphModel.LastVersion(), liveTrie.Version(); got != want {
-		t.Fatalf("expected paused flame tick bootstrap to refresh version, got %d want %d", got, want)
+	if got, want := model.flamegraphModel.LastVersion(), initialVersion; got != want {
+		t.Fatalf("expected paused flame tick to freeze version at %d, got %d", want, got)
 	}
 }
 

@@ -90,7 +90,7 @@ func TestRefreshFromLiveTriePausedBlocksAfterNavigableSnapshot(t *testing.T) {
 	}
 }
 
-func TestRefreshFromLiveTriePausedKeepsBootstrappingWithoutNavigableSnapshot(t *testing.T) {
+func TestRefreshFromLiveTriePausedBlocksAfterAnySnapshot(t *testing.T) {
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
 	m := NewModel(trie)
 	m.paused = true
@@ -99,11 +99,11 @@ func TestRefreshFromLiveTriePausedKeepsBootstrappingWithoutNavigableSnapshot(t *
 	m.hasNavigableSnapshot = false
 	m.lastVersion = 1
 
-	if changed := m.RefreshFromLiveTrie(); !changed {
-		t.Fatalf("expected paused refresh to continue bootstrapping before navigation is possible")
+	if changed := m.RefreshFromLiveTrie(); changed {
+		t.Fatalf("expected paused refresh to freeze after first snapshot even when non-navigable")
 	}
-	if got, want := m.lastVersion, trie.Version(); got != want {
-		t.Fatalf("expected paused bootstrap refresh to track trie version, got %d want %d", got, want)
+	if got, want := m.lastVersion, uint64(1); got != want {
+		t.Fatalf("expected paused refresh to keep existing snapshot version, got %d want %d", got, want)
 	}
 }
 
@@ -292,6 +292,31 @@ func TestLiveFixtureArrowTraversalWhileStreamingVisitsAllFrames(t *testing.T) {
 	}
 	if len(visitedPaths) < 8 {
 		t.Fatalf("expected traversal across live updates to reach multiple frame paths, got %d", len(visitedPaths))
+	}
+}
+
+func TestSelectionRestoresByPathAcrossLiveRefresh(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestLiveFlameData(trie, 0)
+
+	m := NewModel(trie)
+	m.SetViewport(180, 40)
+	if changed := m.RefreshFromLiveTrie(); !changed {
+		t.Fatalf("expected initial refresh")
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	selected := m.frames[m.selectedIdx].Path
+	if selected == "" || selected == "root" {
+		t.Fatalf("expected selection to move off root, got %q", selected)
+	}
+
+	trie.Reset()
+	coreflamegraph.SeedTestLiveFlameData(trie, 2)
+	if changed := m.RefreshFromLiveTrie(); !changed {
+		t.Fatalf("expected refresh after live update")
+	}
+	if got := m.frames[m.selectedIdx].Path; got != selected {
+		t.Fatalf("expected selection path to persist across refresh, got %q want %q", got, selected)
 	}
 }
 

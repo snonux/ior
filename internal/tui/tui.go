@@ -367,7 +367,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attaching = false
 		m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
-		return m, m.dashboard.Init()
+		width, height := common.EffectiveViewport(m.width, m.height)
+		next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
+		m.dashboard = next.(dashboardui.Model)
+		return m, tea.Batch(sizeCmd, m.dashboard.Init())
 	case TracingErrorMsg:
 		m.attaching = false
 		m.lastErr = msg.Err
@@ -430,7 +433,9 @@ func (m *Model) normalizeKeyEvent(msg tea.Msg) (tea.Msg, bool) {
 			return nil, false
 		}
 		// Fallback: treat release as press for terminals that only emit release events.
-		m.armPressSuppression(keyID)
+		if shouldSuppressMatchingPressAfterRelease(pressMsg) {
+			m.armPressSuppression(keyID)
+		}
 		m.recordKeyEvent(pressMsg, false)
 		return pressMsg, true
 	default:
@@ -474,18 +479,24 @@ func (m *Model) recordKeyEvent(msg tea.KeyPressMsg, wasPress bool) {
 }
 
 func keyEventID(msg tea.KeyPressMsg) string {
-	return fmt.Sprintf("code:%d/mod:%d", msg.Code, msg.Mod)
+	return fmt.Sprintf("code:%d/mod:%d/key:%q/text:%q", msg.Code, msg.Mod, msg.String(), msg.Text)
 }
 
 func releaseHasIdentity(msg tea.KeyPressMsg) bool {
-	if msg.Code != 0 {
-		return true
-	}
 	if msg.Text != "" {
 		return true
 	}
 	keyStr := msg.String()
-	return keyStr != "" && keyStr != "\x00"
+	if keyStr != "" && keyStr != "\x00" {
+		return true
+	}
+	// Some terminals emit release-only space events without text identity.
+	return msg.Code == tea.KeySpace
+}
+
+func shouldSuppressMatchingPressAfterRelease(msg tea.KeyPressMsg) bool {
+	keyStr := msg.String()
+	return msg.Code == tea.KeySpace || keyStr == " " || keyStr == "space" || msg.Text == " "
 }
 
 func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {

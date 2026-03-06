@@ -12,7 +12,11 @@ import (
 	"ior/internal/event"
 )
 
-const liveTrieMinFraction = 0.001
+const (
+	liveTrieMinFraction                     = 0.001
+	liveTrieMinVisibleChildrenWhenPruned    = 8
+	liveTrieVisibleChildrenFallbackMaxDepth = 1
+)
 
 type trieSnapshot struct {
 	Name     string          `json:"n"`
@@ -244,28 +248,44 @@ func subtreeTotal(node *trieNode) uint64 {
 }
 
 func buildSnapshot(node *trieNode, depth int, minFraction float64, rootTotal uint64) *trieSnapshot {
-	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal)
+	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal, false)
 	return snapshot
 }
 
-func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64) (*trieSnapshot, uint64) {
+type childSnapshotState struct {
+	node     *trieNode
+	snapshot *trieSnapshot
+	total    uint64
+}
+
+func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*trieSnapshot, uint64) {
 	total := node.value
 	children := slices.Clone(node.children)
 	sort.Slice(children, func(i, j int) bool {
 		return children[i].name < children[j].name
 	})
 
-	childSnapshots := make([]*trieSnapshot, 0, len(children))
+	childStates := make([]childSnapshotState, 0, len(children))
 	for _, child := range children {
-		childSnapshot, childTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal)
+		childSnapshot, childTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal, false)
 		total += childTotal
-		if childSnapshot != nil {
-			childSnapshots = append(childSnapshots, childSnapshot)
-		}
+		childStates = append(childStates, childSnapshotState{
+			node:     child,
+			snapshot: childSnapshot,
+			total:    childTotal,
+		})
 	}
 
-	if depth > 0 && rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction {
+	if !forceKeep && depth > 0 && rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction {
 		return nil, total
+	}
+	ensureFallbackVisibleChildren(childStates, depth, minFraction, rootTotal)
+
+	childSnapshots := make([]*trieSnapshot, 0, len(childStates))
+	for _, child := range childStates {
+		if child.snapshot != nil {
+			childSnapshots = append(childSnapshots, child.snapshot)
+		}
 	}
 
 	snapshot := &trieSnapshot{
@@ -277,4 +297,44 @@ func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, root
 		snapshot.Children = childSnapshots
 	}
 	return snapshot, total
+}
+
+func ensureFallbackVisibleChildren(children []childSnapshotState, depth int, minFraction float64, rootTotal uint64) {
+	if depth > liveTrieVisibleChildrenFallbackMaxDepth {
+		return
+	}
+	visible := 0
+	for _, child := range children {
+		if child.snapshot != nil {
+			visible++
+		}
+	}
+	if visible > 0 {
+		return
+	}
+
+	candidates := make([]int, 0, len(children))
+	for idx, child := range children {
+		if child.total > 0 {
+			candidates = append(candidates, idx)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left := children[candidates[i]]
+		right := children[candidates[j]]
+		if left.total == right.total {
+			return left.node.name < right.node.name
+		}
+		return left.total > right.total
+	})
+
+	limit := liveTrieMinVisibleChildrenWhenPruned
+	if len(candidates) < limit {
+		limit = len(candidates)
+	}
+	for i := 0; i < limit; i++ {
+		idx := candidates[i]
+		forced, _ := buildSnapshotWithTotal(children[idx].node, depth+1, minFraction, rootTotal, true)
+		children[idx].snapshot = forced
+	}
 }

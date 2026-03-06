@@ -221,6 +221,41 @@ func TestLiveTrieSnapshotJSONPrunesTinyNodes(t *testing.T) {
 	}
 }
 
+func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	const total = 6000
+	for i := 0; i < total; i++ {
+		comm := fmt.Sprintf("svc-%04d", i)
+		lt.Ingest(newTestPair(comm, 42, uint32(100000+i), "/tmp/a", 1, 1, 1))
+	}
+
+	snap := decodeLiveSnapshot(t, lt)
+	if len(snap.Children) == 0 {
+		t.Fatalf("expected fallback root children when pruning would hide every branch")
+	}
+	if got, want := len(snap.Children), liveTrieMinVisibleChildrenWhenPruned; got != want {
+		t.Fatalf("expected fallback to keep %d root children, got %d", want, got)
+	}
+}
+
+func TestLiveTrieSnapshotJSONKeepsFallbackChildrenAtDepthOne(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
+	const total = 6000
+	for i := 0; i < total; i++ {
+		pid := uint32(100000 + i)
+		lt.Ingest(newTestPair("svc", pid, pid, "/tmp/a", 1, 1, 1))
+	}
+
+	snap := decodeLiveSnapshot(t, lt)
+	commNode := findSnapshotPath(t, &snap, "svc")
+	if len(commNode.Children) == 0 {
+		t.Fatalf("expected fallback depth-one children for pid branches")
+	}
+	if got, want := len(commNode.Children), liveTrieMinVisibleChildrenWhenPruned; got != want {
+		t.Fatalf("expected fallback to keep %d depth-one children, got %d", want, got)
+	}
+}
+
 func TestLiveTrieConcurrentIngestAndSnapshot(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
 
