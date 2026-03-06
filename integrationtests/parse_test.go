@@ -15,44 +15,39 @@ import (
 )
 
 // writeIorZst creates a minimal .ior.zst file from known data.
-// It encodes a pathMap (the same nested-map structure used internally by iorData)
-// so that LoadTestResult can decode it via the public flamegraph.LoadFromFile API.
+// It encodes the current record-key map format used by flamegraph iorData.
 func writeIorZst(t *testing.T, dir string, records []flamegraph.IterRecord) string {
 	t.Helper()
 
-	// Build the nested map matching iorData.paths layout:
-	//   path → traceId → comm → pid → tid → flags → Counter
-	type (
-		flagsMap    = map[file.Flags]flamegraph.Counter
-		tidMap      = map[uint32]flagsMap
-		pidMap      = map[uint32]tidMap
-		commMap     = map[string]pidMap
-		traceIdMap  = map[types.TraceId]commMap
-		pathMapType = map[string]traceIdMap
-	)
+	type recordKey struct {
+		Path    string
+		TraceID types.TraceId
+		Comm    string
+		Pid     uint32
+		Tid     uint32
+		Flags   file.Flags
+	}
 
-	paths := make(pathMapType)
+	flat := make(map[recordKey]flamegraph.Counter)
 	for _, r := range records {
-		if paths[r.Path] == nil {
-			paths[r.Path] = make(traceIdMap)
+		key := recordKey{
+			Path:    r.Path,
+			TraceID: r.TraceID,
+			Comm:    r.Comm,
+			Pid:     r.Pid,
+			Tid:     r.Tid,
+			Flags:   r.Flags,
 		}
-		if paths[r.Path][r.TraceID] == nil {
-			paths[r.Path][r.TraceID] = make(commMap)
-		}
-		if paths[r.Path][r.TraceID][r.Comm] == nil {
-			paths[r.Path][r.TraceID][r.Comm] = make(pidMap)
-		}
-		if paths[r.Path][r.TraceID][r.Comm][r.Pid] == nil {
-			paths[r.Path][r.TraceID][r.Comm][r.Pid] = make(tidMap)
-		}
-		if paths[r.Path][r.TraceID][r.Comm][r.Pid][r.Tid] == nil {
-			paths[r.Path][r.TraceID][r.Comm][r.Pid][r.Tid] = make(flagsMap)
-		}
-		paths[r.Path][r.TraceID][r.Comm][r.Pid][r.Tid][r.Flags] = r.Cnt
+		current := flat[key]
+		current.Count += r.Cnt.Count
+		current.Duration += r.Cnt.Duration
+		current.DurationToPrev += r.Cnt.DurationToPrev
+		current.Bytes += r.Cnt.Bytes
+		flat[key] = current
 	}
 
 	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(paths); err != nil {
+	if err := gob.NewEncoder(&buf).Encode(flat); err != nil {
 		t.Fatalf("gob encode: %v", err)
 	}
 
