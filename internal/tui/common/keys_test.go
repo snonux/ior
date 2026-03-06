@@ -28,6 +28,16 @@ func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 	if flameHelp.Key != "1" || flameHelp.Desc != "flame" {
 		t.Fatalf("unexpected flame binding help: key=%q desc=%q", flameHelp.Key, flameHelp.Desc)
 	}
+
+	visualizeHelp := keys.Visualize.Help()
+	if visualizeHelp.Key != "v" || visualizeHelp.Desc != "viz" {
+		t.Fatalf("unexpected visualize binding help: key=%q desc=%q", visualizeHelp.Key, visualizeHelp.Desc)
+	}
+
+	metricHelp := keys.Metric.Help()
+	if metricHelp.Key != "b" || metricHelp.Desc != "metric" {
+		t.Fatalf("unexpected metric binding help: key=%q desc=%q", metricHelp.Key, metricHelp.Desc)
+	}
 }
 
 func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
@@ -95,6 +105,30 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected select tid binding in dashboard full help controls")
+	}
+
+	found = false
+	for _, binding := range groups[1] {
+		help := binding.Help()
+		if help.Key == "v" && help.Desc == "viz" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected viz binding in dashboard full help controls")
+	}
+
+	found = false
+	for _, binding := range groups[1] {
+		help := binding.Help()
+		if help.Key == "b" && help.Desc == "metric" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected metric binding in dashboard full help controls")
 	}
 }
 

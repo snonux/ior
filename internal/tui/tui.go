@@ -813,6 +813,19 @@ func (s lateBoundDashboardSource) Snapshot() *statsengine.Snapshot {
 	return source.Snapshot()
 }
 
+func (s lateBoundDashboardSource) Reset() {
+	if s.runtime == nil {
+		return
+	}
+	source := s.runtime.dashboardSnapshotSource()
+	if source == nil {
+		return
+	}
+	if resettable, ok := source.(interface{ Reset() }); ok {
+		resettable.Reset()
+	}
+}
+
 func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 	if width <= 0 {
 		width = 80
@@ -851,12 +864,11 @@ type helpSection struct {
 
 func (m Model) helpSections() []helpSection {
 	globalLines := []string{
-		"H help  esc close help  q quit",
-		"tab/shift+tab cycle tabs  1..7 jump tab",
-		"p pid picker  t tid picker  o probes  r refresh",
+		"H help  esc/? close help  q quit",
+		"p pid picker  t tid picker  o probes",
 	}
 	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
-		globalLines = append(globalLines, "e snapshot export")
+		globalLines[1] += "  e snapshot export"
 	}
 
 	return []helpSection{
@@ -865,22 +877,16 @@ func (m Model) helpSections() []helpSection {
 			lines: globalLines,
 		},
 		{
-			title: "Flame Tab",
+			title: "Dashboard Tabs",
 			lines: []string{
-				"arrows/hjkl navigate  pgup top  pgdn root",
-				"enter zoom  u/backspace/esc undo",
-				"/ filter  n/N match next/prev",
-				"space/p pause  o order  b metric  r reset baseline",
-			},
-		},
-		{
-			title: "Stream Tab",
-			lines: []string{
-				"space pause/live  f add filter  esc undo filter",
-				"enter apply filter  / or ? search  n/N next/prev",
-				"j/k/up/down scroll  pgup/pgdn page  g/G top/tail",
-				"left/right or h/l switch columns",
-				"c clear  x export  X export-as  E open last",
+				"tab/shift+tab tabs  1..7 jump tab  r reset baseline",
+				"sys/files/proc tables: j/k or up/down scroll",
+				"sys/proc: v bubbles  b metric events/bytes",
+				"files: d dirs toggle  v bubbles (dirs only)  b metric",
+				"flame: arrows/hjkl nav  enter zoom  u/bs/esc undo  o order",
+				"flame: / filter  n/N match next/prev  space/p pause  b metric",
+				"stream: space pause  f filter  enter apply  esc undo  /? n/N",
+				"stream: j/k/pg scroll  g/G top/tail  h/l cols  c  x/X  E open",
 			},
 		},
 		{
