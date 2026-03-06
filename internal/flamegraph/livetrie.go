@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"ior/internal/collapse"
 	"ior/internal/event"
 )
 
@@ -261,21 +262,11 @@ func normalizeLiveTrieFields(fields []string) ([]string, error) {
 }
 
 func isLiveTrieField(field string) bool {
-	switch field {
-	case "path", "comm", "tracepoint", "pid", "tid", "flags":
-		return true
-	default:
-		return false
-	}
+	return collapse.IsValidField(field)
 }
 
 func isLiveTrieCountField(field string) bool {
-	switch field {
-	case "count", "duration", "durationToPrev", "bytes":
-		return true
-	default:
-		return false
-	}
+	return collapse.IsValidCountField(field)
 }
 
 func subtreeTotal(node *trieNode) uint64 {

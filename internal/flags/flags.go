@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"ior/internal/collapse"
 )
 
 var (
@@ -22,24 +24,6 @@ func init() {
 	defaults := NewFlags()
 	current.Store(&defaults)
 }
-
-var (
-	validCollapsedFields = []string{
-		"path",
-		"comm",
-		"tracepoint",
-		"pid",
-		"tid",
-		"flags",
-	}
-
-	validCollapsedCounts = []string{
-		"count",
-		"duration",
-		"durationToPrev",
-		"bytes",
-	}
-)
 
 type Flags struct {
 	PidFilter    int
@@ -159,6 +143,8 @@ func Parse() error {
 
 func parse() error {
 	cfg := NewFlags()
+	validFields := collapse.ValidFields()
+	validCounts := collapse.ValidCountFields()
 
 	flag.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
 	flag.IntVar(&cfg.TidFilter, "tid", cfg.TidFilter, "Filter for thread ID")
@@ -179,9 +165,9 @@ func parse() error {
 	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
 	flag.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable writing TUI snapshot export files")
 	fields := flag.String("fields", "",
-		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
+		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	flag.StringVar(&cfg.CountField, "count", cfg.CountField,
-		fmt.Sprintf("Count field to collapse, valid are: %v", validCollapsedCounts))
+		fmt.Sprintf("Count field to collapse, valid are: %v", validCounts))
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -208,12 +194,12 @@ func parse() error {
 	}
 
 	for _, field := range cfg.CollapsedFields {
-		if !slices.Contains(validCollapsedFields, field) {
+		if !collapse.IsValidField(field) {
 			return fmt.Errorf("invalid field for collapse: %s", field)
 		}
 	}
 
-	if !slices.Contains(validCollapsedCounts, cfg.CountField) {
+	if !collapse.IsValidCountField(cfg.CountField) {
 		return fmt.Errorf("invalid count field: %s", cfg.CountField)
 	}
 
