@@ -211,7 +211,7 @@ type eventLoop struct {
 	enterEvs       map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
 	pendingHandles map[uint32]string      // map of TID to pathname from name_to_handle_at
 	fdTracker      *fdTracker
-	procFdCache    map[uint64]file.FdFile // Cache procfs-resolved metadata for unknown fds.
+	procFdCache    map[uint64]*file.FdFile // Cache procfs-resolved metadata for unknown fds.
 	commResolver   *commResolver
 	prevPairTimes  map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
 	rawHandlers    map[types.EventType]rawEventHandler
@@ -242,7 +242,7 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
 		fdTracker:      fdState,
-		procFdCache:    make(map[uint64]file.FdFile),
+		procFdCache:    make(map[uint64]*file.FdFile),
 		commResolver:   commState,
 		prevPairTimes:  make(map[uint32]uint64),
 		rawHandlers:    make(map[types.EventType]rawEventHandler),
@@ -668,7 +668,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	}
 
 	if ep.Is(types.SYS_ENTER_DUP) || ep.Is(types.SYS_ENTER_DUP2) {
-		fdFile, ok := ep.File.(file.FdFile)
+		fdFile, ok := ep.File.(*file.FdFile)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed dup source event")
 			return false
@@ -708,7 +708,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 		return false
 	}
 
-	fdFile, ok := ep.File.(file.FdFile)
+	fdFile, ok := ep.File.(*file.FdFile)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed dup3 source event")
 		return false
@@ -805,7 +805,7 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) b
 		return true
 	}
 
-	fdFile, ok := ep.File.(file.FdFile)
+	fdFile, ok := ep.File.(*file.FdFile)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed fcntl file event")
 		return false
@@ -826,7 +826,7 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) b
 	return true
 }
 
-func (e *eventLoop) registerDup(fdFile file.FdFile, newFd int32, extraFlags int32) {
+func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int32) {
 	if newFd < 0 {
 		return
 	}
@@ -867,12 +867,12 @@ func (e *eventLoop) resolveFdFile(fd int32, pid uint32) file.File {
 	return discovered
 }
 
-func (e *eventLoop) cachedProcFdFile(fd int32, pid uint32) (file.FdFile, bool) {
+func (e *eventLoop) cachedProcFdFile(fd int32, pid uint32) (*file.FdFile, bool) {
 	cache, ok := e.procFdCacheState()[procFdCacheKey(pid, fd)]
 	return cache, ok
 }
 
-func (e *eventLoop) setProcFdCache(fd int32, pid uint32, resolved file.FdFile) {
+func (e *eventLoop) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) {
 	e.procFdCacheState()[procFdCacheKey(pid, fd)] = resolved
 }
 
@@ -891,9 +891,9 @@ func (e *eventLoop) deleteProcFdCacheFrom(first int32, pid uint32) {
 	}
 }
 
-func (e *eventLoop) procFdCacheState() map[uint64]file.FdFile {
+func (e *eventLoop) procFdCacheState() map[uint64]*file.FdFile {
 	if e.procFdCache == nil {
-		e.procFdCache = make(map[uint64]file.FdFile)
+		e.procFdCache = make(map[uint64]*file.FdFile)
 	}
 	return e.procFdCache
 }
