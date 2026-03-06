@@ -22,7 +22,7 @@ var traceId2Name = map[TraceId]string{
 func (s TraceId) String() string {
 	str, ok := traceId2String[s]
 	if !ok {
-		panic(fmt.Sprintf("no string representation for trace ID %d found", s))
+		return fmt.Sprintf("unknown_trace_id_%d", s)
 	}
 	return str
 }
@@ -30,7 +30,7 @@ func (s TraceId) String() string {
 func (s TraceId) Name() string {
 	str, ok := traceId2Name[s]
 	if !ok {
-		panic(fmt.Sprintf("no name for trace ID %d found", s))
+		return fmt.Sprintf("unknown_trace_id_%d", s)
 	}
 	return str
 }
