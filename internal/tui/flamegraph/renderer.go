@@ -222,7 +222,7 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 	}
 
 	availableRows := height - 2 // toolbar + status
-	maxRow := maxFrameRowForSet(frames, filterSet)
+	maxRow := maxFrameRowForSet(frames, nil)
 	rowOffset := 0
 	truncated := false
 	if maxRow+1 > availableRows {
@@ -230,11 +230,8 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		truncated = true
 	}
 
-	visibleFrames := countVisibleFrames(frames, filterSet)
+	visibleFrames := countVisibleFrames(frames, nil)
 	toolbar := fmt.Sprintf("Flame | view:%s | frames:%d", viewPath, visibleFrames)
-	if filterActive {
-		toolbar += fmt.Sprintf("/%d", len(frames))
-	}
 	toolbar += fmt.Sprintf(" | rows:%d", availableRows)
 	if truncated {
 		toolbar += " | showing deepest levels"
@@ -245,6 +242,13 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		selectedSystemShare = percentOfTotal(selected.Total, globalTotal)
 	}
 	if filterActive {
+		filterCoveredTotal, filterBaseTotal := filterCoverageTotals(frames, matchSet, globalTotal)
+		filterSystemShare := percentOfTotal(filterCoveredTotal, filterBaseTotal)
+		selectedFilterShare := 0.0
+		if filterCoveredTotal > 0 {
+			selectedMatchTotal := filterCoverageTotalForPath(frames, matchSet, selected.Path)
+			selectedFilterShare = percentOfTotal(selectedMatchTotal, filterCoveredTotal)
+		}
 		matches := orderedMatchIndices(matchSet)
 		pos := 0
 		if len(matches) > 0 {
@@ -256,20 +260,19 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		if len(frames) > 0 {
 			frameCoverage = 100 * float64(visibleFrames) / float64(len(frames))
 		}
-		filterSystemShare := filterSampleCoverage(frames, matchSet, globalTotal)
-		status := fmt.Sprintf("Filter %q: %.1f%% system (%d/%d matches, %d visible, %.1f%% frames) | Selected: %s total=%d depth=%d %.2f%% system",
-			searchQuery, filterSystemShare, pos, len(matches), visibleFrames, frameCoverage,
-			selected.Name, selected.Total, selected.Depth, selectedSystemShare)
-		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, filterSet, selectedIdx, isDark, searchActive, filterActive), width)
+		status := fmt.Sprintf("Filter %q: %.1f%% system (%d/%d matches, %.1f%% frames shown) | Selected: %s total=%d depth=%d %.2f%% filter",
+			searchQuery, filterSystemShare, pos, len(matches), frameCoverage,
+			selected.Name, selected.Total, selected.Depth, selectedFilterShare)
+		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
 	} else {
 		status := fmt.Sprintf("Selected: %s [%s] total=%d depth=%d col=%d width=%d share=%.2f%%",
 			selected.Name, compactFramePath(selected.Path), selected.Total, selected.Depth, selected.Col, selected.Width, selectedSystemShare)
-		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, filterSet, selectedIdx, isDark, searchActive, filterActive), width)
+		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
 	}
 }
 
-func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet, filterSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
-	return buildRenderRows(frames, width, rowOffset, maxRow, selectedPath, subtreeSet, matchSet, filterSet, selectedIdx, isDark, searchActive, filterActive)
+func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
+	return buildRenderRows(frames, width, rowOffset, maxRow, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
 }
 
 func renderViewRows(toolbar, status string, rows []string, width int) string {
@@ -291,12 +294,9 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
-func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet, filterSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
+func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
-		if filterSet != nil && !filterSet[idx] {
-			continue
-		}
 		if frame.Row < rowOffset || frame.Row > maxRow {
 			continue
 		}
@@ -453,10 +453,7 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 	}
 
 	if filterActive {
-		if frameRelation(frame.Path, selectedPath) == relationAncestor {
-			return base.BorderLeft(true).BorderForeground(common.ColorAccent)
-		}
-		return base.Foreground(common.ColorPrimary)
+		return base.Background(common.ColorPanel).Foreground(common.ColorMuted).Faint(true)
 	}
 
 	if inSubtree {
@@ -568,20 +565,48 @@ func normalizeSelectedIndex(frames []tuiFrame, selectedIdx int, include map[int]
 }
 
 func filterSampleCoverage(frames []tuiFrame, matchSet map[int]bool, totalBase uint64) float64 {
+	coveredTotal, rootTotal := filterCoverageTotals(frames, matchSet, totalBase)
+	return percentOfTotal(coveredTotal, rootTotal)
+}
+
+func filterCoverageTotals(frames []tuiFrame, matchSet map[int]bool, totalBase uint64) (coveredTotal uint64, rootTotal uint64) {
 	if len(frames) == 0 || len(matchSet) == 0 {
-		return 0
+		return 0, 0
 	}
-	rootTotal := totalBase
+	rootTotal = totalBase
 	if rootTotal == 0 {
 		rootTotal = frames[0].Total
 	}
 	if rootTotal == 0 {
+		return 0, 0
+	}
+	roots := compactMatchRoots(frames, matchSet)
+	for _, root := range roots {
+		coveredTotal += root.total
+	}
+	return coveredTotal, rootTotal
+}
+
+func filterCoverageTotalForPath(frames []tuiFrame, matchSet map[int]bool, path string) uint64 {
+	if path == "" || len(frames) == 0 || len(matchSet) == 0 {
 		return 0
 	}
-	type matchRoot struct {
-		path  string
-		total uint64
+	roots := compactMatchRoots(frames, matchSet)
+	var coveredTotal uint64
+	for _, root := range roots {
+		if root.path == path || hasPathBoundaryPrefix(root.path, path) {
+			coveredTotal += root.total
+		}
 	}
+	return coveredTotal
+}
+
+type matchRoot struct {
+	path  string
+	total uint64
+}
+
+func compactMatchRoots(frames []tuiFrame, matchSet map[int]bool) []matchRoot {
 	roots := make([]matchRoot, 0, len(matchSet))
 	for idx := range matchSet {
 		if idx < 0 || idx >= len(frames) {
@@ -609,15 +634,7 @@ func filterSampleCoverage(frames []tuiFrame, matchSet map[int]bool, totalBase ui
 		}
 		merged = append(merged, candidate)
 	}
-	var coveredTotal uint64
-	for _, root := range merged {
-		coveredTotal += root.total
-	}
-	coverage := 100 * float64(coveredTotal) / float64(rootTotal)
-	if coverage > 100 {
-		return 100
-	}
-	return coverage
+	return merged
 }
 
 func percentOfTotal(value, total uint64) float64 {
