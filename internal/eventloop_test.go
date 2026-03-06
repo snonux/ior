@@ -96,7 +96,7 @@ func TestEventloop(t *testing.T) {
 			inCh := make(chan []byte)
 			outCh := make(chan *event.Pair)
 
-			el := newEventLoop(eventLoopConfig{})
+			el := mustNewEventLoop(t, eventLoopConfig{})
 			el.printCb = func(ev *event.Pair) { outCh <- ev }
 			go el.run(ctx, inCh)
 
@@ -142,7 +142,7 @@ func TestEventloop(t *testing.T) {
 }
 
 func TestHandleFdExitCloseClearsProcFdCache(t *testing.T) {
-	el := newEventLoop(eventLoopConfig{})
+	el := mustNewEventLoop(t, eventLoopConfig{})
 	pid := uint32(1001)
 	fd := int32(55)
 
@@ -170,7 +170,7 @@ func TestHandleFdExitCloseClearsProcFdCache(t *testing.T) {
 }
 
 func TestHandleFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
-	el := newEventLoop(eventLoopConfig{})
+	el := mustNewEventLoop(t, eventLoopConfig{})
 	pid := uint32(2002)
 
 	el.setProcFdCache(10, pid, file.NewFd(10, "keep", syscall.O_RDONLY))

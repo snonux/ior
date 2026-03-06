@@ -432,7 +432,10 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 
 	signalTraceStarted(started)
 
-	el := newEventLoop(newEventLoopConfig(cfg))
+	el, err := newEventLoop(newEventLoopConfig(cfg))
+	if err != nil {
+		return err
+	}
 	if configure != nil {
 		configure(el)
 	}
