@@ -37,17 +37,16 @@ func buildTerminalLayoutWithPath(snapshot *snapshotNode, width, height int, root
 		rootName = rootPath
 	}
 	frames := make([]tuiFrame, 0, len(snapshot.Children)+1)
-	collectTerminalLayout(&frames, snapshot, rootTotal, width, height, 0, 0, rootName)
+	collectTerminalLayout(&frames, snapshot, rootTotal, height, 0, 0, rootName, width)
 	return frames
 }
 
-func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64, width, height, depth, col int, path string) {
+func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64, height, depth, col int, path string, span int) {
 	if node == nil || depth >= height {
 		return
 	}
 	total := snapshotTotal(node)
-	frameWidth := int(math.Floor(float64(width) * (float64(total) / float64(rootTotal))))
-	if frameWidth < 1 {
+	if total == 0 || span < 1 {
 		return
 	}
 
@@ -56,7 +55,7 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		Name:    name,
 		Col:     col,
 		Row:     depth,
-		Width:   frameWidth,
+		Width:   span,
 		Total:   total,
 		Percent: 100 * float64(total) / float64(rootTotal),
 		Fill:    terminalFrameColor(name),
@@ -64,18 +63,69 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		Path:    path,
 	})
 
+	if len(node.Children) == 0 {
+		return
+	}
+
+	childWidths := allocateChildWidths(node.Children, total, span)
 	cursor := col
-	for _, child := range node.Children {
-		childTotal := snapshotTotal(child)
-		childWidth := int(math.Floor(float64(width) * (float64(childTotal) / float64(rootTotal))))
+	for idx, child := range node.Children {
+		childWidth := childWidths[idx]
 		if childWidth < 1 {
 			continue
 		}
 		childName := frameName(child.Name, depth+1)
 		childPath := strings.Join([]string{path, childName}, pathSeparator)
-		collectTerminalLayout(out, child, rootTotal, width, height, depth+1, cursor, childPath)
+		collectTerminalLayout(out, child, rootTotal, height, depth+1, cursor, childPath, childWidth)
 		cursor += childWidth
 	}
+}
+
+func allocateChildWidths(children []*snapshotNode, parentTotal uint64, span int) []int {
+	widths := make([]int, len(children))
+	if span <= 0 || parentTotal == 0 || len(children) == 0 {
+		return widths
+	}
+
+	type childWidth struct {
+		idx   int
+		total uint64
+		raw   float64
+	}
+	items := make([]childWidth, 0, len(children))
+	used := 0
+	for idx, child := range children {
+		total := snapshotTotal(child)
+		if total == 0 {
+			continue
+		}
+		raw := float64(span) * (float64(total) / float64(parentTotal))
+		width := int(math.Floor(raw))
+		if width > 0 {
+			widths[idx] = width
+			used += width
+		}
+		items = append(items, childWidth{idx: idx, total: total, raw: raw})
+	}
+	if len(items) == 0 {
+		return widths
+	}
+
+	// If proportional rounding culled every child, surface top contributors so
+	// the user can still navigate beyond the root frame.
+	if used == 0 {
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].total == items[j].total {
+				return items[i].idx < items[j].idx
+			}
+			return items[i].total > items[j].total
+		})
+		visible := min(span, len(items))
+		for i := 0; i < visible; i++ {
+			widths[items[i].idx] = 1
+		}
+	}
+	return widths
 }
 
 func snapshotTotal(node *snapshotNode) uint64 {
@@ -176,7 +226,7 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		toolbar += " | showing deepest levels"
 	}
 	toolbar = padOrTrim(toolbar, width)
-	status := fmt.Sprintf("Selected: %s [%s] %.2f%% total=%d depth=%d", selected.Name, compactFramePath(selected.Path), selected.Percent, selected.Total, selected.Depth)
+	status := fmt.Sprintf("Selected: %s [%s] total=%d depth=%d", selected.Name, compactFramePath(selected.Path), selected.Total, selected.Depth)
 	if filterActive {
 		matches := orderedMatchIndices(matchSet)
 		pos := 0
@@ -185,7 +235,13 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 				pos = idx + 1
 			}
 		}
-		status += fmt.Sprintf(" | Filter %q %d/%d", searchQuery, pos, len(matches))
+		coverage := 0.0
+		if len(frames) > 0 {
+			coverage = 100 * float64(len(matches)) / float64(len(frames))
+		}
+		status += fmt.Sprintf(" | Filter %q %d/%d (%.1f%%)", searchQuery, pos, len(matches), coverage)
+	} else {
+		status += fmt.Sprintf(" %.2f%%", selected.Percent)
 	}
 	status = padOrTrim(status, width)
 

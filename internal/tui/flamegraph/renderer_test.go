@@ -90,6 +90,25 @@ func TestBuildTerminalLayoutCullsSubCellFramesAndRespectsHeight(t *testing.T) {
 	}
 }
 
+func TestBuildTerminalLayoutKeepsChildrenVisibleWhenRoundingWouldCullAll(t *testing.T) {
+	children := make([]*snapshotNode, 0, 200)
+	for i := 0; i < 200; i++ {
+		children = append(children, &snapshotNode{Name: "c", Total: 1})
+	}
+	snapshot := &snapshotNode{Name: "root", Children: children}
+
+	frames := BuildTerminalLayout(snapshot, 120, 6)
+	depthOne := 0
+	for _, frame := range frames {
+		if frame.Depth == 1 {
+			depthOne++
+		}
+	}
+	if depthOne == 0 {
+		t.Fatalf("expected at least one visible depth-1 frame, got none")
+	}
+}
+
 func TestBuildTerminalLayoutUsesPathSeparatorAndColor(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",
