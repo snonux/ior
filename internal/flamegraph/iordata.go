@@ -5,7 +5,6 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"os"
 	"strings"
@@ -25,7 +24,6 @@ type commType = string
 type pidType = uint32
 type tidType = uint32
 type flagsType = file.Flags
-type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]Counter
 
 var hostnameFn = os.Hostname
 
@@ -157,23 +155,14 @@ func (iod *iorData) loadFromFile(filename string) error {
 	defer decoder.Close()
 
 	var records map[recordKey]Counter
-	if err := gob.NewDecoder(decoder).Decode(&records); err == nil && len(records) > 0 {
-		iod.records = records
-		return nil
-	}
-
-	// Fallback path for legacy payloads and empty-map ambiguity.
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
+	if err := gob.NewDecoder(decoder).Decode(&records); err != nil {
 		return err
 	}
-	decoder = zstd.NewReader(file)
-	defer decoder.Close()
-
-	var buffer bytes.Buffer
-	if _, err = io.Copy(&buffer, decoder); err != nil {
-		return err
+	if records == nil {
+		records = make(map[recordKey]Counter)
 	}
-	return iod.deserialize(&buffer)
+	iod.records = records
+	return nil
 }
 
 func (iod iorData) serialize() ([]byte, error) {
@@ -184,36 +173,14 @@ func (iod iorData) serialize() ([]byte, error) {
 }
 
 func (iod *iorData) deserialize(buf *bytes.Buffer) error {
-	raw := append([]byte(nil), buf.Bytes()...)
-	dec := gob.NewDecoder(bytes.NewReader(raw))
 	var records map[recordKey]Counter
-	if err := dec.Decode(&records); err == nil && len(records) > 0 {
-		iod.records = records
-		return nil
-	}
-
-	var legacy pathMap
-	if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&legacy); err != nil {
+	if err := gob.NewDecoder(bytes.NewReader(buf.Bytes())).Decode(&records); err != nil {
 		return err
 	}
-
-	iod.records = make(map[recordKey]Counter)
-	for path, traceIDMap := range legacy {
-		for traceID, commMap := range traceIDMap {
-			for comm, pidMap := range commMap {
-				for pid, tidMap := range pidMap {
-					for tid, flagsMap := range tidMap {
-						for f, cnt := range flagsMap {
-							iod.add(path, traceID, comm, pid, tid, f, cnt)
-						}
-					}
-				}
-			}
-		}
+	if records == nil {
+		records = make(map[recordKey]Counter)
 	}
-	if len(iod.records) == 0 && records != nil {
-		iod.records = records
-	}
+	iod.records = records
 	return nil
 }
 
