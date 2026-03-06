@@ -475,6 +475,7 @@ func TestCommFilterToggle(t *testing.T) {
 			filter: &eventFilter{
 				commFilterEnable: true,
 				commFilter:       "test",
+				commFilterBytes:  []byte("test"),
 			},
 			enterEvs:      make(map[uint32]*event.Pair),
 			files:         make(map[int32]file.File),
@@ -507,8 +508,10 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 		filter: &eventFilter{
 			commFilterEnable: commFilter != "",
 			commFilter:       commFilter,
+			commFilterBytes:  []byte(commFilter),
 			pathFilterEnable: pathFilter != "",
 			pathFilter:       pathFilter,
+			pathFilterBytes:  []byte(pathFilter),
 		},
 		enterEvs:      make(map[uint32]*event.Pair),
 		files:         make(map[int32]file.File),
