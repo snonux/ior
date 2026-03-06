@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
@@ -27,6 +28,8 @@ type eventLoopConfig struct {
 	countField      string
 	pprofEnable     bool
 	plainMode       bool
+	fdTracker       *fdTracker
+	commResolver    *commResolver
 }
 
 type fdTracker struct {
@@ -156,6 +159,7 @@ func (r *commResolver) queueLookup(tid uint32) {
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
+type tracepointExitHandler func(ep *event.Pair) bool
 
 type eventLoop struct {
 	filter         *eventFilter
@@ -168,6 +172,7 @@ type eventLoop struct {
 	commResolver   *commResolver
 	prevPairTimes  map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
 	rawHandlers    map[EventType]rawEventHandler
+	exitHandlers   map[reflect.Type]tracepointExitHandler
 	printCb        func(ep *event.Pair) // Callback to print the event
 	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
 	cfg            eventLoopConfig
@@ -182,8 +187,8 @@ type eventLoop struct {
 }
 
 func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
-	filesByFD := make(map[int32]file.File)
-	commsByTID := make(map[uint32]string)
+	fdState := configuredFDTracker(cfg.fdTracker)
+	commState := configuredCommResolver(cfg.commResolver)
 	filter, err := newEventFilter(cfg.commFilter, cfg.pathFilter)
 	if err != nil {
 		return nil, fmt.Errorf("create event filter: %w", err)
@@ -193,21 +198,46 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		filter:         filter,
 		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
-		files:          filesByFD,
-		fdTracker:      newFDTracker(filesByFD),
+		files:          fdState.files,
+		fdTracker:      fdState,
 		procFdCache:    make(map[uint64]file.FdFile),
-		comms:          commsByTID,
-		commResolver:   newCommResolver(commsByTID),
+		comms:          commState.comms,
+		commResolver:   commState,
 		prevPairTimes:  make(map[uint32]uint64),
 		rawHandlers:    make(map[EventType]rawEventHandler),
+		exitHandlers:   make(map[reflect.Type]tracepointExitHandler),
 		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		cfg:            cfg,
 		done:           make(chan struct{}),
 	}
 	el.initRawHandlers()
+	el.initExitHandlers()
 	el.configureOutputCallback()
 	el.seedTrackedPidComm()
 	return el, nil
+}
+
+func configuredFDTracker(injected *fdTracker) *fdTracker {
+	if injected == nil {
+		return newFDTracker(nil)
+	}
+	if injected.files == nil {
+		injected.files = make(map[int32]file.File)
+	}
+	return injected
+}
+
+func configuredCommResolver(injected *commResolver) *commResolver {
+	if injected == nil {
+		return newCommResolver(nil)
+	}
+	if injected.comms == nil {
+		injected.comms = make(map[uint32]string)
+	}
+	if injected.pending == nil {
+		injected.pending = make(map[uint32]struct{})
+	}
+	return injected
 }
 
 func (e *eventLoop) seedTrackedPidComm() {
@@ -215,22 +245,27 @@ func (e *eventLoop) seedTrackedPidComm() {
 }
 
 func (e *eventLoop) fdState() *fdTracker {
-	if e.files == nil {
-		e.files = make(map[int32]file.File)
-	}
 	if e.fdTracker == nil {
-		e.fdTracker = newFDTracker(e.files)
+		e.fdTracker = newFDTracker(nil)
 	}
+	if e.fdTracker.files == nil {
+		e.fdTracker.files = make(map[int32]file.File)
+	}
+	e.files = e.fdTracker.files
 	return e.fdTracker
 }
 
 func (e *eventLoop) commState() *commResolver {
-	if e.comms == nil {
-		e.comms = make(map[uint32]string)
-	}
 	if e.commResolver == nil {
-		e.commResolver = newCommResolver(e.comms)
+		e.commResolver = newCommResolver(nil)
 	}
+	if e.commResolver.comms == nil {
+		e.commResolver.comms = make(map[uint32]string)
+	}
+	if e.commResolver.pending == nil {
+		e.commResolver.pending = make(map[uint32]struct{})
+	}
+	e.comms = e.commResolver.comms
 	return e.commResolver
 }
 
@@ -426,28 +461,89 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	ch <- ep
 }
 
+func (e *eventLoop) initExitHandlers() {
+	e.exitHandlers = map[reflect.Type]tracepointExitHandler{
+		reflect.TypeOf(&OpenEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*OpenEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed open enter event")
+				return false
+			}
+			return e.handleOpenExit(ep, enterEv)
+		},
+		reflect.TypeOf(&NameEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*NameEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed name enter event")
+				return false
+			}
+			return e.handleNameExit(ep, enterEv)
+		},
+		reflect.TypeOf(&PathEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*PathEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed path enter event")
+				return false
+			}
+			return e.handlePathExit(ep, enterEv)
+		},
+		reflect.TypeOf(&FdEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*FdEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed fd enter event")
+				return false
+			}
+			return e.handleFdExit(ep, enterEv)
+		},
+		reflect.TypeOf(&Dup3Event{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*Dup3Event)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed dup3 enter event")
+				return false
+			}
+			return e.handleDup3Exit(ep, enterEv)
+		},
+		reflect.TypeOf(&OpenByHandleAtEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*OpenByHandleAtEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed open_by_handle_at enter event")
+				return false
+			}
+			return e.handleOpenByHandleAtExit(ep, enterEv)
+		},
+		reflect.TypeOf(&NullEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*NullEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed null enter event")
+				return false
+			}
+			return e.handleNullExit(ep, enterEv)
+		},
+		reflect.TypeOf(&FcntlEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*FcntlEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed fcntl enter event")
+				return false
+			}
+			return e.handleFcntlExit(ep, enterEv)
+		},
+	}
+}
+
+func (e *eventLoop) exitHandlerRegistry() map[reflect.Type]tracepointExitHandler {
+	if e.exitHandlers == nil {
+		e.initExitHandlers()
+	}
+	return e.exitHandlers
+}
+
 func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
-	switch enterEv := ep.EnterEv.(type) {
-	case *OpenEvent:
-		return e.handleOpenExit(ep, enterEv)
-	case *NameEvent:
-		return e.handleNameExit(ep, enterEv)
-	case *PathEvent:
-		return e.handlePathExit(ep, enterEv)
-	case *FdEvent:
-		return e.handleFdExit(ep, enterEv)
-	case *Dup3Event:
-		return e.handleDup3Exit(ep, enterEv)
-	case *OpenByHandleAtEvent:
-		return e.handleOpenByHandleAtExit(ep, enterEv)
-	case *NullEvent:
-		return e.handleNullExit(ep, enterEv)
-	case *FcntlEvent:
-		return e.handleFcntlExit(ep, enterEv)
-	default:
+	handler, ok := e.exitHandlerRegistry()[reflect.TypeOf(ep.EnterEv)]
+	if !ok {
 		e.recyclePair(ep, "Dropped malformed enter event")
 		return false
 	}
+	return handler(ep)
 }
 
 func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *OpenEvent) bool {
