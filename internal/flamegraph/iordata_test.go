@@ -170,16 +170,36 @@ func TestStringByNameValidFields(t *testing.T) {
 	}
 }
 
-func TestCounterValueByNamePanic(t *testing.T) {
+func TestCounterValueByNameUnknownField(t *testing.T) {
 	c := Counter{Count: 1, Duration: 100, DurationToPrev: 10, Bytes: 64}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic for unknown counter name, got none")
-		}
-	}()
+	_, err := c.ValueByName("nonexistent")
+	if err == nil {
+		t.Error("Expected error for unknown counter name, got nil")
+	}
+}
 
-	c.ValueByName("nonexistent")
+func TestCounterValueByNameValidFields(t *testing.T) {
+	c := Counter{Count: 1, Duration: 100, DurationToPrev: 10, Bytes: 64}
+
+	tests := map[string]uint64{
+		"count":          c.Count,
+		"duration":       c.Duration,
+		"durationToPrev": c.DurationToPrev,
+		"bytes":          c.Bytes,
+	}
+
+	for field, want := range tests {
+		t.Run(field, func(t *testing.T) {
+			got, err := c.ValueByName(field)
+			if err != nil {
+				t.Fatalf("Expected no error for field %q, got %v", field, err)
+			}
+			if got != want {
+				t.Fatalf("Expected %d for field %q, got %d", want, field, got)
+			}
+		})
+	}
 }
 
 func TestMergeEmpty(t *testing.T) {
