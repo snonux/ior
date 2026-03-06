@@ -98,7 +98,7 @@ func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bo
 
 		prog, err := module.getProgram(fmt.Sprintf("handle_%s", name))
 		if err != nil {
-			return fmt.Errorf("Failed to get BPF program handle_%s: %v", name, err)
+			return fmt.Errorf("failed to get BPF program handle_%s: %w", name, err)
 		}
 		logln("Attached prog handle_", name)
 
