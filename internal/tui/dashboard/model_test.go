@@ -342,7 +342,7 @@ func TestDirGroupKeyTogglesOnlyOnFilesTab(t *testing.T) {
 	}
 }
 
-func TestBubbleVisualizationToggleForSyscallsTab(t *testing.T) {
+func TestVisualizationCycleForSyscallsTab(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "read", Count: 9, Bytes: 512},
 		{Name: "write", Count: 3, Bytes: 1024},
@@ -359,8 +359,14 @@ func TestBubbleVisualizationToggleForSyscallsTab(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model = next.(Model)
+	if got := model.syscallsVizMode; got != tabVizModeTreemap {
+		t.Fatalf("expected syscalls treemap mode enabled")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model = next.(Model)
 	if got := model.syscallsVizMode; got != tabVizModeTable {
-		t.Fatalf("expected syscalls bubble mode toggled off")
+		t.Fatalf("expected syscalls mode cycled back to table")
 	}
 }
 
@@ -431,6 +437,41 @@ func TestBubbleModeUsesJKForSelection(t *testing.T) {
 	model := next.(Model)
 	if model.syscallsChart.selected != 1 {
 		t.Fatalf("expected bubble selection to move to index 1, got %d", model.syscallsChart.selected)
+	}
+}
+
+func TestTreemapModeUsesJKForSelection(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9, Bytes: 512},
+		{Name: "write", Count: 3, Bytes: 1024},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.latest = &snap
+	m.syscallsVizMode = tabVizModeTreemap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
+	model := next.(Model)
+	if model.syscallsTreemapSelection != 1 {
+		t.Fatalf("expected treemap selection to move to index 1, got %d", model.syscallsTreemapSelection)
+	}
+}
+
+func TestTreemapModeRendersTreemapHeader(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9, Bytes: 512},
+		{Name: "write", Count: 3, Bytes: 1024},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.latest = &snap
+	m.syscallsVizMode = tabVizModeTreemap
+	m.width = 120
+	m.height = 28
+
+	out := m.View().Content
+	if !strings.Contains(out, "Syscalls treemap") {
+		t.Fatalf("expected treemap header in syscalls view")
 	}
 }
 

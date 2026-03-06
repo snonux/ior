@@ -46,6 +46,7 @@ type tabVizMode uint8
 const (
 	tabVizModeTable tabVizMode = iota
 	tabVizModeBubbles
+	tabVizModeTreemap
 )
 
 // Model is the dashboard tab framework model.
@@ -59,25 +60,26 @@ type Model struct {
 	width  int
 	height int
 
-	refreshEvery     time.Duration
-	keys             common.KeyMap
-	pidFilter        int
-	syscallsOffset   int
-	filesOffset      int
-	filesDirGrouped  bool
-	filesDirOffset   int
-	processesOffset  int
-	syscallsVizMode  tabVizMode
-	filesVizMode     tabVizMode
-	processesVizMode tabVizMode
-	streamModel      eventstream.Model
-	flamegraphModel  flamegraphtui.Model
-	syscallsChart    bubbleChart
-	filesChart       bubbleChart
-	processesChart   bubbleChart
-	showHelp         bool
-	isDark           bool
-	focused          bool
+	refreshEvery             time.Duration
+	keys                     common.KeyMap
+	pidFilter                int
+	syscallsOffset           int
+	syscallsTreemapSelection int
+	filesOffset              int
+	filesDirGrouped          bool
+	filesDirOffset           int
+	processesOffset          int
+	syscallsVizMode          tabVizMode
+	filesVizMode             tabVizMode
+	processesVizMode         tabVizMode
+	streamModel              eventstream.Model
+	flamegraphModel          flamegraphtui.Model
+	syscallsChart            bubbleChart
+	filesChart               bubbleChart
+	processesChart           bubbleChart
+	showHelp                 bool
+	isDark                   bool
+	focused                  bool
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
@@ -193,6 +195,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messages.StatsTickMsg:
 		m.latest = msg.Snap
 		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
+		m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
 		m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
 		m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRows())
 		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
@@ -336,6 +339,9 @@ func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	switch m.activeTab {
 	case TabSyscalls:
+		if m.syscallsVizMode == tabVizModeTreemap {
+			return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.maxSyscallsRows()), nil
+		}
 		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows()), nil
 	case TabFiles:
 		if m.filesDirGrouped {
@@ -513,6 +519,9 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model) string {
+	if m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap {
+		return renderSyscallsTreemap(m.latest, width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark)
+	}
 	if m.bubbleEnabledForTab(m.activeTab) {
 		switch m.activeTab {
 		case TabSyscalls:
@@ -711,7 +720,9 @@ func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
 
 func (m Model) allowedVizModes(tab Tab) []tabVizMode {
 	switch tab {
-	case TabSyscalls, TabProcesses:
+	case TabSyscalls:
+		return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
+	case TabProcesses:
 		return []tabVizMode{tabVizModeTable, tabVizModeBubbles}
 	case TabFiles:
 		if m.filesDirGrouped {
