@@ -24,8 +24,14 @@ const (
 	streamColumnCount
 )
 
+// Source is the minimal stream buffer contract needed by the stream model.
+type Source interface {
+	Len() int
+	Snapshot() []StreamEvent
+}
+
 type Model struct {
-	source *RingBuffer
+	source Source
 
 	allEvents []StreamEvent
 	filtered  []StreamEvent
@@ -71,7 +77,7 @@ type fdTraceViewState struct {
 	offset  int
 }
 
-func NewModel(source *RingBuffer) Model {
+func NewModel(source Source) Model {
 	m := Model{
 		source:      source,
 		filterModal: NewFilterModal(),
@@ -122,7 +128,7 @@ func (m *Model) SetFooterVisible(visible bool) {
 }
 
 // SetSource updates the backing ring buffer and refreshes visible rows.
-func (m *Model) SetSource(source *RingBuffer) {
+func (m *Model) SetSource(source Source) {
 	m.source = source
 	m.Refresh()
 }

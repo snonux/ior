@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/eventstream"
@@ -41,7 +40,7 @@ type Model struct {
 
 	engine   SnapshotSource
 	latest   *statsengine.Snapshot
-	liveTrie *coreflamegraph.LiveTrie
+	liveTrie flamegraphtui.LiveTrieSource
 
 	width  int
 	height int
@@ -62,12 +61,12 @@ type Model struct {
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
-func NewModel(engine SnapshotSource, streamSource *eventstream.RingBuffer) Model {
+func NewModel(engine SnapshotSource, streamSource eventstream.Source) Model {
 	return NewModelWithConfig(engine, streamSource, defaultRefreshMs, common.Keys)
 }
 
 // NewModelWithConfig creates a dashboard model with explicit refresh and keys.
-func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuffer, refreshMs int, keys common.KeyMap) Model {
+func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, refreshMs int, keys common.KeyMap) Model {
 	if refreshMs <= 0 {
 		refreshMs = defaultRefreshMs
 	}
@@ -362,12 +361,12 @@ func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
 }
 
 // SetStreamSource updates the live stream source used by the stream tab.
-func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
+func (m *Model) SetStreamSource(source eventstream.Source) {
 	m.streamModel.SetSource(source)
 }
 
 // SetLiveTrie updates the live trie source used by the flamegraph tab.
-func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
+func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.flamegraphModel.SetLiveTrie(liveTrie)
 	if m.width > 0 && m.height > 0 {
