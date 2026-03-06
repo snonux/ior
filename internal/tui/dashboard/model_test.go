@@ -385,6 +385,23 @@ func TestBubbleMetricToggleForSyscallsTab(t *testing.T) {
 	}
 }
 
+func TestMetricToggleAppliesInFilesIcicleMode(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/var/log/a", Accesses: 5, BytesRead: 120, BytesWritten: 40},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.latest = &snap
+	m.filesDirGrouped = true
+	m.filesVizMode = tabVizModeIcicle
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'b'}[0], Text: string([]rune{'b'})})
+	model := next.(Model)
+	if got := model.filesChart.Metric(); got != bubbleMetricBytes {
+		t.Fatalf("expected files metric toggle to bytes in icicle mode, got %q", got)
+	}
+}
+
 func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/tmp/a", Accesses: 3},
@@ -410,6 +427,12 @@ func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
 	model = next.(Model)
 	if got := model.filesVizMode; got != tabVizModeBubbles {
 		t.Fatalf("expected files bubble mode enabled in directory mode")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model = next.(Model)
+	if got := model.filesVizMode; got != tabVizModeIcicle {
+		t.Fatalf("expected files icicle mode enabled in directory mode")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
@@ -472,6 +495,25 @@ func TestTreemapModeRendersTreemapHeader(t *testing.T) {
 	out := m.View().Content
 	if !strings.Contains(out, "Syscalls treemap") {
 		t.Fatalf("expected treemap header in syscalls view")
+	}
+}
+
+func TestIcicleModeRendersFilesHeader(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/srv/log/a", Accesses: 9, BytesRead: 400, BytesWritten: 200},
+		{Path: "/srv/log/b", Accesses: 4, BytesRead: 100, BytesWritten: 40},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.latest = &snap
+	m.filesDirGrouped = true
+	m.filesVizMode = tabVizModeIcicle
+	m.width = 120
+	m.height = 28
+
+	out := m.View().Content
+	if !strings.Contains(out, "Files icicle") {
+		t.Fatalf("expected icicle header in files view")
 	}
 }
 
