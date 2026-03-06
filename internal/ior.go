@@ -38,9 +38,9 @@ type tracepointLink interface {
 var (
 	runTraceFn             = runTrace
 	runTraceWithContextFn  = runTraceWithContext
-	runTUIFn               = tui.RunWithTraceStarter
-	runTUITestFlamesFn     = tui.RunTestFlamesWithTraceStarter
-	runTUITestLiveFlamesFn = tui.RunTestFlamesWithTraceStarter
+	runTUIFn               = tui.RunWithTraceStarterConfig
+	runTUITestFlamesFn     = tui.RunTestFlamesWithTraceStarterConfig
+	runTUITestLiveFlamesFn = tui.RunTestFlamesWithTraceStarterConfig
 	getEUID                = os.Geteuid
 
 	errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
@@ -124,15 +124,15 @@ func dispatchRun(cfg flags.Flags) error {
 		return err
 	}
 	if cfg.TestFlames {
-		return runTUITestFlamesFn(tuiTestFlamesStarter())
+		return runTUITestFlamesFn(cfg, tuiTestFlamesStarter(cfg))
 	}
 	if cfg.TestLiveFlames {
-		return runTUITestLiveFlamesFn(tuiTestLiveFlamesStarter())
+		return runTUITestLiveFlamesFn(cfg, tuiTestLiveFlamesStarter(cfg))
 	}
 	if shouldRunTraceMode(cfg) {
-		return runTraceFn()
+		return runTraceFn(cfg)
 	}
-	return runTUIFn(tuiTraceStarterFromRunTrace(runTraceWithContextFn))
+	return runTUIFn(cfg, tuiTraceStarterFromRunTrace(cfg, runTraceWithContextFn))
 }
 
 func validateRunConfig(cfg flags.Flags) error {
@@ -148,9 +148,9 @@ func validateRunConfig(cfg flags.Flags) error {
 	return nil
 }
 
-func tuiTestFlamesStarter() tui.TraceStarter {
+func tuiTestFlamesStarter(cfg flags.Flags) tui.TraceStarter {
 	return func(ctx context.Context) error {
-		engine, streamBuf, liveTrie := buildTestFlamesRuntime(flags.Get())
+		engine, streamBuf, liveTrie := buildTestFlamesRuntime(cfg)
 		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
 			bindings.SetDashboardSnapshotSource(engine)
 			bindings.SetEventStreamSource(streamBuf)
@@ -160,9 +160,9 @@ func tuiTestFlamesStarter() tui.TraceStarter {
 	}
 }
 
-func tuiTestLiveFlamesStarter() tui.TraceStarter {
+func tuiTestLiveFlamesStarter(cfg flags.Flags) tui.TraceStarter {
 	return func(ctx context.Context) error {
-		engine, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, flags.Get())
+		engine, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, cfg)
 		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
 			bindings.SetDashboardSnapshotSource(engine)
 			bindings.SetEventStreamSource(streamBuf)
@@ -220,14 +220,19 @@ func shouldRunTraceMode(cfg flags.Flags) bool {
 }
 
 func tuiTraceStarterFromRunTrace(
-	startTrace func(context.Context, chan<- struct{}, func(*eventLoop)) error,
+	baseCfg flags.Flags,
+	startTrace func(context.Context, flags.Flags, chan<- struct{}, func(*eventLoop)) error,
 ) tui.TraceStarter {
 	return func(ctx context.Context) error {
 		bpf.SetLoggerCbs(bpf.Callbacks{
 			Log: func(int, string) {},
 		})
 
-		cfg := flags.Get()
+		cfg := baseCfg
+		if pidFilter, tidFilter, ok := tui.TraceFiltersFromContext(ctx); ok {
+			cfg.PidFilter = pidFilter
+			cfg.TidFilter = tidFilter
+		}
 		engine := statsengine.NewEngine(64)
 		streamBuf := eventstream.NewRingBuffer()
 		liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
@@ -248,7 +253,7 @@ func tuiTraceStarterFromRunTrace(
 		errCh := make(chan error, 1)
 
 		go func() {
-			err := startTrace(ctx, startedCh, func(el *eventLoop) {
+			err := startTrace(ctx, cfg, startedCh, func(el *eventLoop) {
 				el.printCb = func(ep *event.Pair) {
 					engine.Ingest(ep)
 					streamEvents <- eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep)
@@ -278,8 +283,8 @@ func tuiTraceStarterFromRunTrace(
 	}
 }
 
-func runTrace() error {
-	return runTraceWithContext(context.Background(), nil, nil)
+func runTrace(cfg flags.Flags) error {
+	return runTraceWithContext(context.Background(), cfg, nil, nil)
 }
 
 func newEventLoopConfig(cfg flags.Flags) eventLoopConfig {
@@ -296,7 +301,7 @@ func newEventLoopConfig(cfg flags.Flags) eventLoopConfig {
 	}
 }
 
-func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, configure func(*eventLoop)) error {
+func runTraceWithContext(parentCtx context.Context, cfg flags.Flags, started chan<- struct{}, configure func(*eventLoop)) error {
 	if getEUID() != 0 {
 		return errRootPrivilegesRequired
 	}
@@ -306,7 +311,6 @@ func runTraceWithContext(parentCtx context.Context, started chan<- struct{}, con
 	if verbose {
 		logln = func(args ...any) { _, _ = fmt.Println(args...) }
 	}
-	cfg := flags.Get()
 
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {

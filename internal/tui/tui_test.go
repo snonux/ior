@@ -51,11 +51,11 @@ func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
 	}
-	if got := flags.Get().PidFilter; got != 42 {
-		t.Fatalf("expected pid filter 42, got %d", got)
+	if updated.pidFilter != 42 {
+		t.Fatalf("expected pid filter 42, got %d", updated.pidFilter)
 	}
-	if got := flags.Get().TidFilter; got != -1 {
-		t.Fatalf("expected tid filter reset to -1, got %d", got)
+	if updated.tidFilter != -1 {
+		t.Fatalf("expected tid filter reset to -1, got %d", updated.tidFilter)
 	}
 }
 
@@ -80,10 +80,9 @@ func TestPidSelectedAllSetsNoFilter(t *testing.T) {
 	next, _ := m.Update(PidSelectedMsg{Pid: 0})
 	updated := next.(Model)
 
-	if got := flags.Get().PidFilter; got != -1 {
-		t.Fatalf("expected pid filter -1 for all pids, got %d", got)
+	if updated.pidFilter != -1 {
+		t.Fatalf("expected pid filter -1 for all pids, got %d", updated.pidFilter)
 	}
-	_ = updated
 }
 
 func TestTracingErrorMessageClearsAttachingState(t *testing.T) {
@@ -623,11 +622,11 @@ func TestTidSelectedTransitionsToDashboardAndSetsTIDFilter(t *testing.T) {
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
 	}
-	if got := flags.Get().TidFilter; got != 3333 {
-		t.Fatalf("expected tid filter 3333, got %d", got)
+	if updated.tidFilter != 3333 {
+		t.Fatalf("expected tid filter 3333, got %d", updated.tidFilter)
 	}
-	if got := flags.Get().PidFilter; got != 2222 {
-		t.Fatalf("expected pid filter to remain 2222, got %d", got)
+	if updated.pidFilter != 2222 {
+		t.Fatalf("expected pid filter to remain 2222, got %d", updated.pidFilter)
 	}
 }
 
@@ -644,11 +643,11 @@ func TestTidSelectedFromAllPIDModeSetsOwningPID(t *testing.T) {
 	if updated.screen != ScreenDashboard {
 		t.Fatalf("expected dashboard screen, got %v", updated.screen)
 	}
-	if got := flags.Get().PidFilter; got != 4444 {
-		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", got)
+	if updated.pidFilter != 4444 {
+		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", updated.pidFilter)
 	}
-	if got := flags.Get().TidFilter; got != 5555 {
-		t.Fatalf("expected tid filter 5555, got %d", got)
+	if updated.tidFilter != 5555 {
+		t.Fatalf("expected tid filter 5555, got %d", updated.tidFilter)
 	}
 }
 
