@@ -36,10 +36,12 @@ type tracepointLink interface {
 }
 
 var (
-	runTraceFn            = runTrace
-	runTraceWithContextFn = runTraceWithContext
-	runTUIFn              = tui.RunWithTraceStarter
-	getEUID               = os.Geteuid
+	runTraceFn             = runTrace
+	runTraceWithContextFn  = runTraceWithContext
+	runTUIFn               = tui.RunWithTraceStarter
+	runTUITestFlamesFn     = tui.RunTestFlamesWithTraceStarter
+	runTUITestLiveFlamesFn = tui.RunTestFlamesWithTraceStarter
+	getEUID                = os.Geteuid
 
 	errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
 )
@@ -120,6 +122,12 @@ func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bo
 func Run() error {
 	flags.PrintVersion()
 	cfg := flags.Get()
+	if cfg.TestFlames && cfg.IorDataFile != "" {
+		return errors.New("--testflames and -ior are mutually exclusive")
+	}
+	if cfg.TestLiveFlames && cfg.IorDataFile != "" {
+		return errors.New("--testliveflames and -ior are mutually exclusive")
+	}
 	iorFile := cfg.IorDataFile
 	var noTraceRun bool
 
@@ -205,6 +213,12 @@ func dispatchRun(cfg flags.Flags) error {
 	if err := validateRunConfig(cfg); err != nil {
 		return err
 	}
+	if cfg.TestFlames {
+		return runTUITestFlamesFn(tuiTestFlamesStarter())
+	}
+	if cfg.TestLiveFlames {
+		return runTUITestLiveFlamesFn(tuiTestLiveFlamesStarter())
+	}
 	if shouldRunTraceMode(cfg) {
 		return runTraceFn()
 	}
@@ -212,6 +226,15 @@ func dispatchRun(cfg flags.Flags) error {
 }
 
 func validateRunConfig(cfg flags.Flags) error {
+	if cfg.TestFlames && (cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph) {
+		return errors.New("--testflames cannot be combined with -plain, -flamegraph, or -live")
+	}
+	if cfg.TestLiveFlames && (cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph) {
+		return errors.New("--testliveflames cannot be combined with -plain, -flamegraph, or -live")
+	}
+	if cfg.TestFlames && cfg.TestLiveFlames {
+		return errors.New("--testflames and --testliveflames are mutually exclusive")
+	}
 	if cfg.LiveFlamegraph && cfg.FlamegraphEnable {
 		return errors.New("-live and -flamegraph are mutually exclusive")
 	}
@@ -222,6 +245,73 @@ func validateRunConfig(cfg flags.Flags) error {
 		return errors.New("-iorWatchInterval must be >= 0")
 	}
 	return nil
+}
+
+func tuiTestFlamesStarter() tui.TraceStarter {
+	return func(ctx context.Context) error {
+		engine, streamBuf, liveTrie := buildTestFlamesRuntime(flags.Get())
+		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+			bindings.SetDashboardSnapshotSource(engine)
+			bindings.SetEventStreamSource(streamBuf)
+			bindings.SetLiveTrie(liveTrie)
+		}
+		return nil
+	}
+}
+
+func tuiTestLiveFlamesStarter() tui.TraceStarter {
+	return func(ctx context.Context) error {
+		engine, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, flags.Get())
+		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+			bindings.SetDashboardSnapshotSource(engine)
+			bindings.SetEventStreamSource(streamBuf)
+			bindings.SetLiveTrie(liveTrie)
+		}
+		return nil
+	}
+}
+
+func buildTestFlamesRuntime(cfg flags.Flags) (*statsengine.Engine, *eventstream.RingBuffer, *flamegraph.LiveTrie) {
+	engine := statsengine.NewEngine(64)
+	streamBuf := eventstream.NewRingBuffer()
+	liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
+	flamegraph.SeedTestFlameData(liveTrie)
+	return engine, streamBuf, liveTrie
+}
+
+func buildTestLiveFlamesRuntime(ctx context.Context, cfg flags.Flags) (*statsengine.Engine, *eventstream.RingBuffer, *flamegraph.LiveTrie) {
+	engine := statsengine.NewEngine(64)
+	streamBuf := eventstream.NewRingBuffer()
+	liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
+	flamegraph.SeedTestLiveFlameData(liveTrie, 0)
+
+	interval := cfg.LiveInterval
+	if interval <= 0 {
+		interval = 200 * time.Millisecond
+	}
+	go runSyntheticLiveFlames(ctx, liveTrie, interval)
+	return engine, streamBuf, liveTrie
+}
+
+func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, interval time.Duration) {
+	if liveTrie == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	tick := uint64(1)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Keep a moving synthetic workload profile so the live test flamegraph
+			// visibly changes shape over time instead of only increasing totals.
+			liveTrie.Reset()
+			flamegraph.SeedTestLiveFlameData(liveTrie, tick)
+			tick++
+		}
+	}
 }
 
 func shouldRunTraceMode(cfg flags.Flags) bool {

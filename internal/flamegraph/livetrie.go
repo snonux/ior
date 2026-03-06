@@ -88,6 +88,12 @@ func (lt *LiveTrie) invalidateCache() {
 // Ingest adds one event pair into the live trie and recycles the pair.
 func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	record := eventPairToRecord(ep)
+	lt.AddRecord(record)
+	ep.Recycle()
+}
+
+// AddRecord adds one already-decoded flamegraph record into the live trie.
+func (lt *LiveTrie) AddRecord(record IterRecord) {
 	value := record.Cnt.ValueByName(lt.countField)
 
 	lt.mu.Lock()
@@ -95,8 +101,6 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	lt.addLocked(frames, value)
 	lt.version.Add(1)
 	lt.mu.Unlock()
-
-	ep.Recycle()
 }
 
 // Reset clears the trie so live snapshots start from a new baseline.

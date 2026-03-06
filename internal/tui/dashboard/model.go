@@ -134,8 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		var animCmd tea.Cmd
-		if m.liveTrie != nil && !m.flamegraphModel.Paused() && (!m.flamegraphModel.HasSnapshot() || m.liveTrie.Version() != m.flamegraphModel.LastVersion()) {
-			m.flamegraphModel.RefreshFromLiveTrie()
+		if m.liveTrie != nil && m.flamegraphModel.RefreshFromLiveTrie() {
 			animCmd = m.flamegraphModel.AnimationCmd()
 		}
 		if animCmd != nil {
@@ -368,6 +367,7 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	if m.width > 0 && m.height > 0 {
 		m.flamegraphModel.SetViewport(m.width, m.height)
 	}
+	m.flamegraphModel.RefreshFromLiveTrie()
 }
 
 // SetDarkMode updates dashboard child models for the active theme.

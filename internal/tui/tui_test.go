@@ -303,13 +303,107 @@ func TestFlamePauseKeyDoesNotTriggerPIDReselect(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	updated := next.(Model)
 	if updated.screen != ScreenDashboard {
-		t.Fatalf("expected flame pause key to keep dashboard screen, got %v", updated.screen)
+		t.Fatalf("expected flame space key to keep dashboard screen, got %v", updated.screen)
 	}
 	if !strings.Contains(updated.View().Content, "[PAUSED]") {
-		t.Fatalf("expected flame pause key to toggle flame paused state")
+		t.Fatalf("expected flame space key to toggle flame paused state")
+	}
+}
+
+func TestFlameSpaceKeyReleaseFallbackTogglesPause(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	updated := next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key release fallback to toggle flame paused state")
+	}
+}
+
+func TestFlameSpacePressReleaseDoesNotDoubleTogglePause(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	updated := next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key press to pause flame")
+	}
+
+	next, _ = updated.Update(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	updated = next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key release after key press to be ignored as duplicate")
+	}
+}
+
+func TestFlameSpaceReleasePressDoesNotDoubleTogglePause(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	updated := next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key release fallback to pause flame")
+	}
+
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	updated = next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected immediate matching key press after release fallback to be ignored")
+	}
+}
+
+func TestNormalizeKeyEventReleaseFallbackSuppressesImmediatePressOnly(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	normalized, ok := m.normalizeKeyEvent(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	if !ok {
+		t.Fatalf("expected release fallback to be handled")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected release fallback to normalize to KeyPressMsg, got %T", normalized)
+	}
+
+	if normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); ok {
+		t.Fatalf("expected immediate matching press to be suppressed, got %T", normalized)
+	}
+
+	time.Sleep(70 * time.Millisecond)
+	if normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); !ok {
+		t.Fatalf("expected press to be accepted after suppression window")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected accepted message to be KeyPressMsg, got %T", normalized)
+	}
+}
+
+func TestNormalizeKeyEventIgnoresUnidentifiedRelease(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	if normalized, ok := m.normalizeKeyEvent(tea.KeyReleaseMsg{}); ok {
+		t.Fatalf("expected unidentified release to be ignored, got %T", normalized)
+	}
+
+	normalized, ok := m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if !ok {
+		t.Fatalf("expected subsequent real key press to be handled")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected normalized message to be KeyPressMsg, got %T", normalized)
 	}
 }
 

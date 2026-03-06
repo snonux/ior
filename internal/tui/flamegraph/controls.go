@@ -29,6 +29,7 @@ func (m *Model) resetBaseline() {
 	m.matchIndices = make(map[int]bool)
 	m.filterVisible = make(map[int]bool)
 	m.subtreeSet = make(map[int]bool)
+	m.hasNavigableSnapshot = false
 	m.statusMessage = "Baseline reset"
 }
 
@@ -55,6 +56,7 @@ func (m *Model) cycleFieldOrder() {
 	m.matchIndices = make(map[int]bool)
 	m.filterVisible = make(map[int]bool)
 	m.subtreeSet = make(map[int]bool)
+	m.hasNavigableSnapshot = false
 	m.statusMessage = "Order: " + strings.Join(nextPreset, "/")
 }
 
@@ -68,12 +70,15 @@ func (m Model) toolbarLine() string {
 		state = lipgloss.NewStyle().Foreground(common.ColorDanger).Bold(true).Render("[PAUSED]")
 	}
 	order := m.currentFieldPresetLabel()
-	line := fmt.Sprintf("%s | view:%s | o:order(%s) | /:search | enter:zoom | u:undo | r:reset | p:pause", state, compactFramePath(m.currentRootPath()), order)
+	line := fmt.Sprintf("%s | view:%s | o:order(%s) | /:search | enter:zoom | u:undo | r:reset | space/p:pause", state, compactFramePath(m.currentRootPath()), order)
 	if m.searchQuery != "" {
 		line += " | filter:" + m.searchQuery
 	}
 	if m.statusMessage != "" {
 		line += " | " + m.statusMessage
+	}
+	if m.lastKeyDebug != "" {
+		line += " | " + m.lastKeyDebug
 	}
 	width := m.width
 	if width <= 0 {
@@ -87,8 +92,38 @@ func (m Model) helpOverlay() string {
 	if width <= 0 {
 		width = 80
 	}
-	help := "Flame help: j/k depth  h/l sibling  enter zoom  u/backspace undo  esc reset  / search  n/N matches  p pause  r reset baseline  o order  ? help"
+	help := "Flame help: j/k depth  h/l sibling  enter zoom  u/backspace undo  esc reset  / search  n/N matches  space/p pause  r reset baseline  o order  ? help"
 	return common.HelpBarStyle.Width(width).Render(padOrTrim(help, width))
+}
+
+func (m Model) selectionStatusLine() string {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	mode := "LIVE"
+	if m.paused {
+		mode = "PAUSED"
+	}
+	if len(m.frames) == 0 {
+		line := fmt.Sprintf("[%s] sel:none | arrows/hjkl navigate | enter zoom | / filter", mode)
+		return common.HelpBarStyle.Width(width).Render(padOrTrim(line, width))
+	}
+	selIdx := m.selectedIdx
+	if selIdx < 0 || selIdx >= len(m.frames) {
+		selIdx = 0
+	}
+	frame := m.frames[selIdx]
+	systemShare := frame.Percent
+	if m.globalTotal > 0 {
+		systemShare = percentOfTotal(frame.Total, m.globalTotal)
+	}
+	line := fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total:%d | %.2f%% system",
+		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, frame.Total, systemShare)
+	if m.searchQuery != "" {
+		line += " | filter:" + m.searchQuery
+	}
+	return common.HelpBarStyle.Width(width).Render(padOrTrim(line, width))
 }
 
 func (m Model) currentFieldPresetLabel() string {

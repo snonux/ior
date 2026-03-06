@@ -58,6 +58,8 @@ type Flags struct {
 	PlainMode        bool
 	FlamegraphEnable bool
 	LiveFlamegraph   bool
+	TestFlames       bool
+	TestLiveFlames   bool
 	LiveInterval     time.Duration
 	OpenCommand      string
 	FlamegraphName   string
@@ -184,6 +186,8 @@ func parse() error {
 	flag.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	flag.BoolVar(&cfg.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
 	flag.BoolVar(&cfg.LiveFlamegraph, "live", false, "Enable live flamegraph mode")
+	flag.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
+	flag.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Live flamegraph refresh interval")
 	flag.StringVar(&cfg.OpenCommand, "open", "", "Command to open live flamegraph URL (used with -live); use {url} placeholder or URL is appended")
 	flag.StringVar(&cfg.FlamegraphName, "name", cfg.FlamegraphName, "Name of the flamegraph, used to generate the SVG file")

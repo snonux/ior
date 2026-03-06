@@ -79,6 +79,7 @@ type Model struct {
 	subtreeSet    map[int]bool
 	showHelp      bool
 	statusMessage string
+	lastKeyDebug  string
 
 	fieldPresets [][]string
 	fieldIndex   int
@@ -86,8 +87,11 @@ type Model struct {
 	animation AnimationState
 	animating bool
 	paused    bool
-	isDark    bool
-	keys      flameKeyMap
+	// hasNavigableSnapshot flips once we have at least one selectable non-root
+	// frame. Paused mode can still bootstrap snapshots until then.
+	hasNavigableSnapshot bool
+	isDark               bool
+	keys                 flameKeyMap
 }
 
 // tuiFrame stores one terminal flamegraph frame cell.
@@ -159,56 +163,78 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		if m.searchActive {
+			handled := false
 			switch msg.String() {
 			case "esc":
+				handled = true
 				m.clearSearch()
+				m.recordKeyDebug(msg, handled, false)
 				return m, nil
 			case "enter":
+				handled = true
 				m.applySearchQuery(m.searchInput.Value())
 				m.searchActive = false
 				m.searchInput.Blur()
+				m.recordKeyDebug(msg, handled, false)
 				return m, nil
 			}
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)
 			_ = cmd
+			m.recordKeyDebug(msg, true, false)
 			return m, nil
 		}
 
 		prev := m.selectedIdx
+		handled := false
 		switch {
 		case isSearchOpenKey(msg):
+			handled = true
 			m.openSearch()
 		case isNextMatchKey(msg):
+			handled = true
 			m.jumpMatch(1)
 		case isPrevMatchKey(msg):
+			handled = true
 			m.jumpMatch(-1)
 		case isPauseKey(msg):
+			handled = true
 			m.togglePause()
 		case isResetBaselineKey(msg):
+			handled = true
 			m.resetBaseline()
 		case isCycleOrderKey(msg):
+			handled = true
 			m.cycleFieldOrder()
 		case isHelpToggleKey(msg):
+			handled = true
 			m.toggleHelp()
 		case isZoomInKey(msg, m.keys):
+			handled = true
 			m.zoomIn()
 		case isZoomUndoKey(msg, m.keys):
+			handled = true
 			m.zoomUndo()
 		case isZoomResetKey(msg, m.keys):
+			handled = true
 			m.zoomReset()
 		case isMoveShallowerKey(msg, m.keys):
-			m.moveVerticalWithFallback(-1, 1)
+			handled = true
+			m.moveVerticalWithFallback(-1, 1, -1)
 		case isMoveDeeperKey(msg, m.keys):
-			m.moveVerticalWithFallback(1, -1)
+			handled = true
+			m.moveVerticalWithFallback(1, -1, 1)
 		case isPrevSiblingKey(msg, m.keys):
+			handled = true
 			m.moveSibling(-1)
 		case isNextSiblingKey(msg, m.keys):
+			handled = true
 			m.moveSibling(1)
 		}
 		if m.selectedIdx != prev {
 			m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 		}
+		m.recordKeyDebug(msg, handled, m.selectedIdx != prev)
 	}
 	return m, nil
 }
@@ -251,6 +277,7 @@ func (m Model) View() tea.View {
 	if m.snapshot != nil && len(m.frames) == 0 {
 		content = common.PanelStyle.Render(fmt.Sprintf("Flame: snapshot v%d has no visible frames", m.lastVersion))
 	}
+	content += "\n" + m.selectionStatusLine()
 	if m.showHelp {
 		content += "\n" + m.helpOverlay()
 	}
@@ -273,6 +300,7 @@ func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.filterVisible = make(map[int]bool)
 	m.animation = NewAnimationState(30, 6.0, 1.0)
 	m.animating = false
+	m.hasNavigableSnapshot = false
 }
 
 // RefreshFromLiveTrie loads a new snapshot when the source version changes.
@@ -280,7 +308,8 @@ func (m *Model) RefreshFromLiveTrie() bool {
 	if m.liveTrie == nil {
 		return false
 	}
-	if m.paused {
+	// Keep bootstrapping while paused until we have a navigable snapshot.
+	if m.paused && m.snapshot != nil && m.hasNavigableSnapshot {
 		return false
 	}
 	version := m.liveTrie.Version()
@@ -358,6 +387,9 @@ func (m *Model) rebuildFrames(animate bool) {
 	} else {
 		m.animating = false
 		m.frames = append(m.frames[:0], m.targetFrames...)
+	}
+	if len(m.frames) > 1 {
+		m.hasNavigableSnapshot = true
 	}
 	m.clampSelection()
 	m.recomputeFilterState()
@@ -451,11 +483,14 @@ func (m *Model) moveVertical(delta int) {
 	m.selectedIdx = best
 }
 
-func (m *Model) moveVerticalWithFallback(primaryDelta, fallbackDelta int) {
+func (m *Model) moveVerticalWithFallback(primaryDelta, fallbackDelta, traversalDelta int) {
 	before := m.selectedIdx
 	m.moveVertical(primaryDelta)
 	if m.selectedIdx == before && fallbackDelta != 0 {
 		m.moveVertical(fallbackDelta)
+	}
+	if m.selectedIdx == before && traversalDelta != 0 {
+		m.moveTraversal(traversalDelta)
 	}
 }
 
@@ -463,15 +498,18 @@ func (m *Model) moveSibling(delta int) {
 	if len(m.frames) == 0 {
 		return
 	}
+	before := m.selectedIdx
 	m.clampSelection()
 	m.ensureSelectionNavigable()
 	current := m.frames[m.selectedIdx]
 	siblings := m.framesAtDepth(current.Depth)
 	if len(siblings) <= 1 {
+		m.moveTraversal(delta)
 		return
 	}
 	pos := indexOf(siblings, m.selectedIdx)
 	if pos < 0 {
+		m.moveTraversal(delta)
 		return
 	}
 	next := pos + delta
@@ -482,6 +520,9 @@ func (m *Model) moveSibling(delta int) {
 		next = len(siblings) - 1
 	}
 	m.selectedIdx = siblings[next]
+	if m.selectedIdx == before {
+		m.moveTraversal(delta)
+	}
 }
 
 func framesAtDepth(frames []tuiFrame, depth int) []int {
@@ -602,6 +643,67 @@ func (m *Model) ensureSelectionNavigable() {
 	}
 }
 
+func (m *Model) recordKeyDebug(msg tea.KeyPressMsg, handled, moved bool) {
+	keyID := keyString(msg)
+	if keyID == "" {
+		keyID = fmt.Sprintf("code:%d", msg.Code)
+	}
+	sel := "-"
+	selIdx := m.selectedIdx
+	if len(m.frames) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.frames) {
+		sel = compactFramePath(m.frames[m.selectedIdx].Path)
+	}
+	m.lastKeyDebug = fmt.Sprintf("dbg frames=%d idx=%d key=%q code=%d handled=%t moved=%t sel=%s", len(m.frames), selIdx, keyID, msg.Code, handled, moved, sel)
+}
+
+func (m *Model) moveTraversal(delta int) {
+	if len(m.frames) == 0 || delta == 0 {
+		return
+	}
+	order := m.visibleTraversalOrder()
+	if len(order) == 0 {
+		return
+	}
+	pos := indexOf(order, m.selectedIdx)
+	if pos < 0 {
+		pos = 0
+	}
+	next := pos + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(order) {
+		next = len(order) - 1
+	}
+	m.selectedIdx = order[next]
+}
+
+func (m Model) visibleTraversalOrder() []int {
+	indices := make([]int, 0, len(m.frames))
+	include := m.navigableFrameSet()
+	for idx := range m.frames {
+		if include != nil && !include[idx] {
+			continue
+		}
+		indices = append(indices, idx)
+	}
+	sort.Slice(indices, func(i, j int) bool {
+		left := m.frames[indices[i]]
+		right := m.frames[indices[j]]
+		if left.Depth != right.Depth {
+			return left.Depth < right.Depth
+		}
+		if left.Col != right.Col {
+			return left.Col < right.Col
+		}
+		if left.Row != right.Row {
+			return left.Row < right.Row
+		}
+		return indices[i] < indices[j]
+	})
+	return indices
+}
+
 func keyString(msg tea.KeyPressMsg) string {
 	if s := msg.String(); s != "" {
 		return s
@@ -612,7 +714,10 @@ func keyString(msg tea.KeyPressMsg) string {
 func isSearchOpenKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "/" }
 func isNextMatchKey(msg tea.KeyPressMsg) bool  { return keyString(msg) == "n" }
 func isPrevMatchKey(msg tea.KeyPressMsg) bool  { return keyString(msg) == "N" }
-func isPauseKey(msg tea.KeyPressMsg) bool      { return keyString(msg) == "p" }
+func isPauseKey(msg tea.KeyPressMsg) bool {
+	k := keyString(msg)
+	return k == "p" || k == " " || k == "space" || msg.Code == tea.KeySpace
+}
 func isResetBaselineKey(msg tea.KeyPressMsg) bool {
 	return keyString(msg) == "r"
 }

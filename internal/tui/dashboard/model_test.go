@@ -198,20 +198,45 @@ func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
 	}
 }
 
-func TestFlameTickLoadsInitialSnapshotWithoutVersionChange(t *testing.T) {
+func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
 
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabFlame
-	if m.flamegraphModel.HasSnapshot() {
-		t.Fatalf("expected fresh flame model to start without snapshot")
+	if !m.flamegraphModel.HasSnapshot() {
+		t.Fatalf("expected SetLiveTrie to preload a baseline snapshot")
 	}
 
 	next, _ := m.Update(flameTickMsg{})
 	model := next.(Model)
 	if !model.flamegraphModel.HasSnapshot() {
-		t.Fatalf("expected flame tick to load initial snapshot even when trie version is unchanged")
+		t.Fatalf("expected flame tick to retain initial snapshot even when trie version is unchanged")
+	}
+}
+
+func TestFlameTickPausedContinuesBootstrapRefresh(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.SetLiveTrie(liveTrie)
+	m.activeTab = TabFlame
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	model := next.(Model)
+
+	next, _ = model.Update(flameTickMsg{})
+	model = next.(Model)
+	initialVersion := model.flamegraphModel.LastVersion()
+
+	liveTrie.Reset()
+	if liveTrie.Version() == initialVersion {
+		t.Fatalf("expected reset to advance trie version")
+	}
+
+	next, _ = model.Update(flameTickMsg{})
+	model = next.(Model)
+	if got, want := model.flamegraphModel.LastVersion(), liveTrie.Version(); got != want {
+		t.Fatalf("expected paused flame tick bootstrap to refresh version, got %d want %d", got, want)
 	}
 }
 
@@ -359,10 +384,10 @@ func TestFlameTabReceivesResetAndPauseKeys(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	model := next.(Model)
 	if !strings.Contains(model.View().Content, "[PAUSED]") {
-		t.Fatalf("expected flame pause key to toggle paused state")
+		t.Fatalf("expected flame space key to toggle paused state")
 	}
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
