@@ -25,6 +25,7 @@ func init() {
 	current.Store(&defaults)
 }
 
+// Config captures runtime configuration parsed from CLI flags.
 type Config struct {
 	PidFilter    int
 	TidFilter    int
@@ -85,6 +86,7 @@ func (f Config) clone() Config {
 	return out
 }
 
+// Get returns a copy of the currently active runtime configuration.
 func Get() Config {
 	cfg := current.Load()
 	if cfg == nil {
@@ -134,6 +136,7 @@ func SetTUIExportEnable(enabled bool) {
 	})
 }
 
+// Parse parses CLI flags once and updates the current runtime configuration.
 func Parse() error {
 	once.Do(func() {
 		parseErr = parse()

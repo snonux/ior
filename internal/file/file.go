@@ -11,6 +11,7 @@ import (
 	"ior/internal/types"
 )
 
+// File is the common interface for file-like syscall payload representations.
 type File interface {
 	String() string
 	Name() string
@@ -18,6 +19,7 @@ type File interface {
 	FD() int32
 }
 
+// FdFile represents a file descriptor-backed file reference.
 type FdFile struct {
 	fd              int32
 	name            string
@@ -25,6 +27,7 @@ type FdFile struct {
 	flagsFromProcFS bool
 }
 
+// NewFd constructs an FdFile from explicit descriptor metadata.
 func NewFd(fd int32, name string, flags int32) *FdFile {
 	f := &FdFile{
 		fd:    fd,
@@ -37,6 +40,7 @@ func NewFd(fd int32, name string, flags int32) *FdFile {
 	return f
 }
 
+// NewFdWithPid resolves descriptor metadata from /proc/<pid>/fd.
 func NewFdWithPid(fd int32, pid uint32) *FdFile {
 	f := &FdFile{
 		fd: fd,
@@ -122,6 +126,7 @@ type oldnameNewnameFile struct {
 	Oldname, Newname string
 }
 
+// NewOldnameNewname creates a file representation for rename-like syscalls.
 func NewOldnameNewname(oldname, newname []byte) oldnameNewnameFile {
 	return oldnameNewnameFile{types.StringValue(oldname), types.StringValue(newname)}
 }
@@ -156,6 +161,7 @@ type pathnameFile struct {
 	Pathname string
 }
 
+// NewPathname creates a path-only file representation.
 func NewPathname(pathname []byte) pathnameFile {
 	return pathnameFile{types.StringValue(pathname)}
 }
