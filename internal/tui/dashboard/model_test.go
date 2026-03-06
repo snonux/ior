@@ -353,13 +353,13 @@ func TestBubbleVisualizationToggleForSyscallsTab(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model := next.(Model)
-	if !model.syscallsBubble {
+	if got := model.syscallsVizMode; got != tabVizModeBubbles {
 		t.Fatalf("expected syscalls bubble mode enabled")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model = next.(Model)
-	if model.syscallsBubble {
+	if got := model.syscallsVizMode; got != tabVizModeTable {
 		t.Fatalf("expected syscalls bubble mode toggled off")
 	}
 }
@@ -390,7 +390,7 @@ func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model := next.(Model)
-	if model.filesBubble {
+	if got := model.filesVizMode; got != tabVizModeTable {
 		t.Fatalf("expected files bubble mode to stay disabled without directory mode")
 	}
 
@@ -402,13 +402,13 @@ func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model = next.(Model)
-	if !model.filesBubble {
+	if got := model.filesVizMode; got != tabVizModeBubbles {
 		t.Fatalf("expected files bubble mode enabled in directory mode")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
 	model = next.(Model)
-	if model.filesBubble {
+	if got := model.filesVizMode; got != tabVizModeTable {
 		t.Fatalf("expected files bubble mode disabled when leaving directory mode")
 	}
 }
@@ -421,7 +421,7 @@ func TestBubbleModeUsesJKForSelection(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.latest = &snap
-	m.syscallsBubble = true
+	m.syscallsVizMode = tabVizModeBubbles
 	m.refreshBubbleData()
 	if len(m.syscallsChart.nodes) < 2 {
 		t.Fatalf("expected at least two syscall bubbles")

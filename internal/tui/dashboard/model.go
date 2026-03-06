@@ -41,6 +41,13 @@ type streamEditorDoneMsg struct {
 	err error
 }
 
+type tabVizMode uint8
+
+const (
+	tabVizModeTable tabVizMode = iota
+	tabVizModeBubbles
+)
+
 // Model is the dashboard tab framework model.
 type Model struct {
 	activeTab Tab
@@ -52,25 +59,25 @@ type Model struct {
 	width  int
 	height int
 
-	refreshEvery    time.Duration
-	keys            common.KeyMap
-	pidFilter       int
-	syscallsOffset  int
-	filesOffset     int
-	filesDirGrouped bool
-	filesDirOffset  int
-	processesOffset int
-	syscallsBubble  bool
-	filesBubble     bool
-	processesBubble bool
-	streamModel     eventstream.Model
-	flamegraphModel flamegraphtui.Model
-	syscallsChart   bubbleChart
-	filesChart      bubbleChart
-	processesChart  bubbleChart
-	showHelp        bool
-	isDark          bool
-	focused         bool
+	refreshEvery     time.Duration
+	keys             common.KeyMap
+	pidFilter        int
+	syscallsOffset   int
+	filesOffset      int
+	filesDirGrouped  bool
+	filesDirOffset   int
+	processesOffset  int
+	syscallsVizMode  tabVizMode
+	filesVizMode     tabVizMode
+	processesVizMode tabVizMode
+	streamModel      eventstream.Model
+	flamegraphModel  flamegraphtui.Model
+	syscallsChart    bubbleChart
+	filesChart       bubbleChart
+	processesChart   bubbleChart
+	showHelp         bool
+	isDark           bool
+	focused          bool
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
@@ -84,18 +91,21 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 		refreshMs = defaultRefreshMs
 	}
 	m := Model{
-		activeTab:       TabFlame,
-		engine:          engine,
-		refreshEvery:    time.Duration(refreshMs) * time.Millisecond,
-		keys:            keys,
-		pidFilter:       -1,
-		streamModel:     eventstream.NewModel(streamSource),
-		flamegraphModel: flamegraphtui.NewModel(nil),
-		syscallsChart:   newBubbleChart(),
-		filesChart:      newBubbleChart(),
-		processesChart:  newBubbleChart(),
-		isDark:          true,
-		focused:         true,
+		activeTab:        TabFlame,
+		engine:           engine,
+		refreshEvery:     time.Duration(refreshMs) * time.Millisecond,
+		keys:             keys,
+		pidFilter:        -1,
+		syscallsVizMode:  tabVizModeTable,
+		filesVizMode:     tabVizModeTable,
+		processesVizMode: tabVizModeTable,
+		streamModel:      eventstream.NewModel(streamSource),
+		flamegraphModel:  flamegraphtui.NewModel(nil),
+		syscallsChart:    newBubbleChart(),
+		filesChart:       newBubbleChart(),
+		processesChart:   newBubbleChart(),
+		isDark:           true,
+		focused:          true,
 	}
 	m.SetDarkMode(true)
 	return m
@@ -175,7 +185,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.bubbleEnabledForTab(m.activeTab) {
 			return m, nil
 		}
-		if m.tickActiveBubbleChart() {
+		_ = m.tickActiveBubbleChart()
+		if m.activeBubbleChartHasNodes() {
 			return m, bubbleTickCmdFn()
 		}
 		return m, nil
@@ -260,7 +271,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			handled = true
 		case key.Matches(msg, m.keys.Visualize):
 			handled = true
-			cmd = m.toggleBubbleVisualization()
+			cmd = m.cycleVisualizationMode()
 		case key.Matches(msg, m.keys.Metric):
 			handled = true
 			cmd = m.toggleBubbleMetric()
@@ -270,10 +281,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.DirGroup):
 			if m.activeTab == TabFiles {
 				m.filesDirGrouped = !m.filesDirGrouped
-				if !m.filesDirGrouped && m.filesBubble {
-					m.filesBubble = false
+				if !m.filesDirGrouped && m.filesVizMode == tabVizModeBubbles {
+					m.filesVizMode = tabVizModeTable
 				}
-				if m.filesDirGrouped && m.filesBubble && m.refreshBubbleData() {
+				if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
 					cmd = bubbleTickCmdFn()
 				}
 				handled = true
@@ -558,11 +569,11 @@ func (m *Model) refreshBubbleData() bool {
 
 	switch m.activeTab {
 	case TabSyscalls:
-		return m.syscallsBubble && syscallsAnimating
+		return m.syscallsVizMode == tabVizModeBubbles && syscallsAnimating
 	case TabFiles:
-		return m.filesBubble && filesAnimating
+		return m.filesVizMode == tabVizModeBubbles && filesAnimating
 	case TabProcesses:
-		return m.processesBubble && processesAnimating
+		return m.processesVizMode == tabVizModeBubbles && processesAnimating
 	default:
 		return false
 	}
@@ -571,17 +582,17 @@ func (m *Model) refreshBubbleData() bool {
 func (m *Model) tickActiveBubbleChart() bool {
 	switch m.activeTab {
 	case TabSyscalls:
-		if !m.syscallsBubble {
+		if m.syscallsVizMode != tabVizModeBubbles {
 			return false
 		}
 		return m.syscallsChart.Tick(0)
 	case TabFiles:
-		if !m.filesBubble {
+		if m.filesVizMode != tabVizModeBubbles {
 			return false
 		}
 		return m.filesChart.Tick(0)
 	case TabProcesses:
-		if !m.processesBubble {
+		if m.processesVizMode != tabVizModeBubbles {
 			return false
 		}
 		return m.processesChart.Tick(0)
@@ -603,37 +614,44 @@ func (m *Model) moveBubbleSelection(delta int) bool {
 	}
 }
 
-func (m Model) bubbleEnabledForTab(tab Tab) bool {
-	switch tab {
+func (m Model) activeBubbleChartHasNodes() bool {
+	switch m.activeTab {
 	case TabSyscalls:
-		return m.syscallsBubble
+		return m.syscallsChart.HasNodes()
 	case TabFiles:
-		return m.filesBubble && m.filesDirGrouped
+		return m.filesChart.HasNodes()
 	case TabProcesses:
-		return m.processesBubble
+		return m.processesChart.HasNodes()
 	default:
 		return false
 	}
 }
 
-func (m *Model) toggleBubbleVisualization() tea.Cmd {
-	switch m.activeTab {
+func (m Model) bubbleEnabledForTab(tab Tab) bool {
+	switch tab {
 	case TabSyscalls:
-		m.syscallsBubble = !m.syscallsBubble
-		if m.syscallsBubble && m.refreshBubbleData() {
-			return bubbleTickCmdFn()
-		}
+		return m.syscallsVizMode == tabVizModeBubbles
 	case TabFiles:
-		if !m.filesDirGrouped {
-			return nil
-		}
-		m.filesBubble = !m.filesBubble
-		if m.filesBubble && m.refreshBubbleData() {
-			return bubbleTickCmdFn()
-		}
+		return m.filesDirGrouped && m.filesVizMode == tabVizModeBubbles
 	case TabProcesses:
-		m.processesBubble = !m.processesBubble
-		if m.processesBubble && m.refreshBubbleData() {
+		return m.processesVizMode == tabVizModeBubbles
+	default:
+		return false
+	}
+}
+
+func (m *Model) cycleVisualizationMode() tea.Cmd {
+	allowed := m.allowedVizModes(m.activeTab)
+	if len(allowed) < 2 {
+		return nil
+	}
+	current := m.tabVizModeFor(m.activeTab)
+	next := nextVizMode(current, allowed)
+	m.setTabVizMode(m.activeTab, next)
+
+	if next == tabVizModeBubbles {
+		m.refreshBubbleData()
+		if m.activeBubbleChartHasNodes() {
 			return bubbleTickCmdFn()
 		}
 	}
@@ -644,7 +662,8 @@ func (m *Model) toggleBubbleMetric() tea.Cmd {
 	switch m.activeTab {
 	case TabSyscalls:
 		m.syscallsChart.SetMetric(nextBubbleMetric(m.syscallsChart.Metric()))
-		if m.refreshBubbleData() {
+		m.refreshBubbleData()
+		if m.syscallsVizMode == tabVizModeBubbles && m.activeBubbleChartHasNodes() {
 			return bubbleTickCmdFn()
 		}
 	case TabFiles:
@@ -652,16 +671,68 @@ func (m *Model) toggleBubbleMetric() tea.Cmd {
 			return nil
 		}
 		m.filesChart.SetMetric(nextBubbleMetric(m.filesChart.Metric()))
-		if m.refreshBubbleData() {
+		m.refreshBubbleData()
+		if m.filesVizMode == tabVizModeBubbles && m.activeBubbleChartHasNodes() {
 			return bubbleTickCmdFn()
 		}
 	case TabProcesses:
 		m.processesChart.SetMetric(nextBubbleMetric(m.processesChart.Metric()))
-		if m.refreshBubbleData() {
+		m.refreshBubbleData()
+		if m.processesVizMode == tabVizModeBubbles && m.activeBubbleChartHasNodes() {
 			return bubbleTickCmdFn()
 		}
 	}
 	return nil
+}
+
+func (m Model) tabVizModeFor(tab Tab) tabVizMode {
+	switch tab {
+	case TabSyscalls:
+		return m.syscallsVizMode
+	case TabFiles:
+		return m.filesVizMode
+	case TabProcesses:
+		return m.processesVizMode
+	default:
+		return tabVizModeTable
+	}
+}
+
+func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
+	switch tab {
+	case TabSyscalls:
+		m.syscallsVizMode = mode
+	case TabFiles:
+		m.filesVizMode = mode
+	case TabProcesses:
+		m.processesVizMode = mode
+	}
+}
+
+func (m Model) allowedVizModes(tab Tab) []tabVizMode {
+	switch tab {
+	case TabSyscalls, TabProcesses:
+		return []tabVizMode{tabVizModeTable, tabVizModeBubbles}
+	case TabFiles:
+		if m.filesDirGrouped {
+			return []tabVizMode{tabVizModeTable, tabVizModeBubbles}
+		}
+		return []tabVizMode{tabVizModeTable}
+	default:
+		return []tabVizMode{tabVizModeTable}
+	}
+}
+
+func nextVizMode(current tabVizMode, allowed []tabVizMode) tabVizMode {
+	if len(allowed) == 0 {
+		return tabVizModeTable
+	}
+	for idx, mode := range allowed {
+		if mode == current {
+			return allowed[(idx+1)%len(allowed)]
+		}
+	}
+	return allowed[0]
 }
 
 func nextBubbleMetric(metric bubbleMetric) bubbleMetric {

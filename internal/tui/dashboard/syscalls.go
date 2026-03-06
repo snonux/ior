@@ -33,7 +33,7 @@ func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset 
 	tbl.SetWidth(tableWidth(width))
 	cursor := clampOffset(offset, len(rows))
 	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d [v:bubbles] [b:metric]", cursor+1, len(rows))
+	return tbl.View() + fmt.Sprintf("\nRow %d/%d [v:mode] [b:metric]", cursor+1, len(rows))
 }
 
 func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]table.Column, []table.Row) {
