@@ -15,7 +15,6 @@ import (
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
-	. "ior/internal/types"
 )
 
 const sysEnterNameToHandleAtName = "name_to_handle_at"
@@ -217,7 +216,7 @@ type eventLoop struct {
 	comms          map[uint32]string      // Program or thread name of the current Tid.
 	commResolver   *commResolver
 	prevPairTimes  map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
-	rawHandlers    map[EventType]rawEventHandler
+	rawHandlers    map[types.EventType]rawEventHandler
 	exitHandlers   map[reflect.Type]tracepointExitHandler
 	printCb        func(ep *event.Pair) // Callback to print the event
 	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
@@ -250,7 +249,7 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		comms:          commState.comms,
 		commResolver:   commState,
 		prevPairTimes:  make(map[uint32]uint64),
-		rawHandlers:    make(map[EventType]rawEventHandler),
+		rawHandlers:    make(map[types.EventType]rawEventHandler),
 		exitHandlers:   make(map[reflect.Type]tracepointExitHandler),
 		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		cfg:            cfg,
@@ -397,7 +396,7 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	e.numTracepoints++
 	e.initRawHandlers()
-	evType := EventType(raw[0])
+	evType := types.EventType(raw[0])
 	handler, ok := e.rawHandlers[evType]
 	if !ok {
 		e.notifyWarning(fmt.Sprintf("Dropped unhandled raw event type %d", evType))
@@ -408,53 +407,53 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 
 func (e *eventLoop) initRawHandlers() {
 	if e.rawHandlers == nil {
-		e.rawHandlers = make(map[EventType]rawEventHandler)
+		e.rawHandlers = make(map[types.EventType]rawEventHandler)
 	}
 	if len(e.rawHandlers) != 0 {
 		return
 	}
 
-	e.rawHandlers[ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.openEvent(NewOpenEventFast(raw)); ok {
+	e.rawHandlers[types.ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		if ev, ok := e.filter.openEvent(types.NewOpenEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
-	e.rawHandlers[EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewRetEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewRetEventFast(raw), ch)
 	}
-	e.rawHandlers[ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewFdEventFast(raw))
+	e.rawHandlers[types.ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewFdEventFast(raw))
 	}
-	e.rawHandlers[EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewFdEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewFdEventFast(raw), ch)
 	}
-	e.rawHandlers[ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewNullEventFast(raw))
+	e.rawHandlers[types.ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewNullEventFast(raw))
 	}
-	e.rawHandlers[EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewNullEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewNullEventFast(raw), ch)
 	}
-	e.rawHandlers[EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewRetEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewRetEventFast(raw), ch)
 	}
-	e.rawHandlers[ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.nameEvent(NewNameEventFast(raw)); ok {
+	e.rawHandlers[types.ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		if ev, ok := e.filter.nameEvent(types.NewNameEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
-	e.rawHandlers[ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.pathEvent(NewPathEventFast(raw)); ok {
+	e.rawHandlers[types.ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		if ev, ok := e.filter.pathEvent(types.NewPathEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
-	e.rawHandlers[ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewFcntlEventFast(raw))
+	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewFcntlEventFast(raw))
 	}
-	e.rawHandlers[ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewOpenByHandleAtEventFast(raw))
+	e.rawHandlers[types.ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewOpenByHandleAtEventFast(raw))
 	}
-	e.rawHandlers[ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewDup3EventFast(raw))
+	e.rawHandlers[types.ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewDup3EventFast(raw))
 	}
 }
 
@@ -468,7 +467,7 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	}
 
 	switch enterEv.(type) {
-	case *OpenEvent:
+	case *types.OpenEvent:
 		e.enterEvs[tid] = event.NewPair(enterEv)
 	default:
 		// Only, when we have a comm name
@@ -511,64 +510,64 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 
 func (e *eventLoop) initExitHandlers() {
 	e.exitHandlers = map[reflect.Type]tracepointExitHandler{
-		reflect.TypeOf(&OpenEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*OpenEvent)
+		reflect.TypeOf(&types.OpenEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.OpenEvent)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed open enter event")
 				return false
 			}
 			return e.handleOpenExit(ep, enterEv)
 		},
-		reflect.TypeOf(&NameEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*NameEvent)
+		reflect.TypeOf(&types.NameEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.NameEvent)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed name enter event")
 				return false
 			}
 			return e.handleNameExit(ep, enterEv)
 		},
-		reflect.TypeOf(&PathEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*PathEvent)
+		reflect.TypeOf(&types.PathEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.PathEvent)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed path enter event")
 				return false
 			}
 			return e.handlePathExit(ep, enterEv)
 		},
-		reflect.TypeOf(&FdEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*FdEvent)
+		reflect.TypeOf(&types.FdEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.FdEvent)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed fd enter event")
 				return false
 			}
 			return e.handleFdExit(ep, enterEv)
 		},
-		reflect.TypeOf(&Dup3Event{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*Dup3Event)
+		reflect.TypeOf(&types.Dup3Event{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.Dup3Event)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed dup3 enter event")
 				return false
 			}
 			return e.handleDup3Exit(ep, enterEv)
 		},
-		reflect.TypeOf(&OpenByHandleAtEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*OpenByHandleAtEvent)
+		reflect.TypeOf(&types.OpenByHandleAtEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.OpenByHandleAtEvent)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed open_by_handle_at enter event")
 				return false
 			}
 			return e.handleOpenByHandleAtExit(ep, enterEv)
 		},
-		reflect.TypeOf(&NullEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*NullEvent)
+		reflect.TypeOf(&types.NullEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.NullEvent)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed null enter event")
 				return false
 			}
 			return e.handleNullExit(ep, enterEv)
 		},
-		reflect.TypeOf(&FcntlEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*FcntlEvent)
+		reflect.TypeOf(&types.FcntlEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.FcntlEvent)
 			if !ok {
 				e.recyclePair(ep, "Dropped malformed fcntl enter event")
 				return false
@@ -594,8 +593,8 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 	return handler(ep)
 }
 
-func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *OpenEvent) bool {
-	retEvent, ok := ep.ExitEv.(*RetEvent)
+func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool {
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed open exit event")
 		return false
@@ -615,13 +614,13 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *OpenEvent) bool {
 	return true
 }
 
-func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *NameEvent) bool {
+func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool {
 	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
 	ep.Comm = e.comm(nameEv.GetTid())
 	return true
 }
 
-func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
+func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
 	if pathEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok || retEv.Ret < 0 {
@@ -633,8 +632,8 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
 		return false
 	}
 
-	if ep.Is(SYS_ENTER_CREAT) {
-		retEvent, ok := ep.ExitEv.(*RetEvent)
+	if ep.Is(types.SYS_ENTER_CREAT) {
+		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed creat exit event")
 			return false
@@ -652,14 +651,14 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
 	return true
 }
 
-func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
+func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	ep.File = e.resolveFdFile(fd, fdEv.Pid)
-	if ep.Is(SYS_ENTER_CLOSE) {
+	if ep.Is(types.SYS_ENTER_CLOSE) {
 		e.fdState().delete(fd)
 		e.deleteProcFdCache(fd, fdEv.Pid)
 	}
-	if ep.Is(SYS_ENTER_CLOSE_RANGE) {
+	if ep.Is(types.SYS_ENTER_CLOSE_RANGE) {
 		// close_range provides (first, last), but fd_event only carries the first
 		// argument, so we approximate by closing all tracked fds >= first.
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
@@ -674,13 +673,13 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 		return false
 	}
 
-	if ep.Is(SYS_ENTER_DUP) || ep.Is(SYS_ENTER_DUP2) {
+	if ep.Is(types.SYS_ENTER_DUP) || ep.Is(types.SYS_ENTER_DUP2) {
 		fdFile, ok := ep.File.(file.FdFile)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed dup source event")
 			return false
 		}
-		retEvent, ok := ep.ExitEv.(*RetEvent)
+		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed dup exit event")
 			return false
@@ -688,8 +687,8 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 		// Duplicating fd
 		e.registerDup(fdFile, int32(retEvent.Ret), 0)
 	}
-	if ep.Is(SYS_ENTER_PIDFD_GETFD) {
-		retEv, ok := ep.ExitEv.(*RetEvent)
+	if ep.Is(types.SYS_ENTER_PIDFD_GETFD) {
+		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed pidfd_getfd exit event")
 			return false
@@ -700,13 +699,13 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 			ep.File = transferredFile
 		}
 	}
-	if retEv, ok := ep.ExitEv.(*RetEvent); ok {
+	if retEv, ok := ep.ExitEv.(*types.RetEvent); ok {
 		ep.Bytes = bytesFromRet(retEv)
 	}
 	return true
 }
 
-func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
+func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool {
 	fd := int32(dup3Ev.Fd)
 	ep.File = e.resolveFdFile(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
@@ -720,7 +719,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
 		e.recyclePair(ep, "Dropped malformed dup3 source event")
 		return false
 	}
-	retEvent, ok := ep.ExitEv.(*RetEvent)
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed dup3 exit event")
 		return false
@@ -729,9 +728,9 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
 	return true
 }
 
-func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *OpenByHandleAtEvent) bool {
+func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *types.OpenByHandleAtEvent) bool {
 	tid := openByHandleEv.GetTid()
-	retEvent, ok := ep.ExitEv.(*RetEvent)
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed open_by_handle_at exit event")
 		return false
@@ -760,8 +759,8 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *Ope
 	return true
 }
 
-func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
-	if ep.Is(SYS_ENTER_IO_URING_SETUP) {
+func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool {
+	if ep.Is(types.SYS_ENTER_IO_URING_SETUP) {
 		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed io_uring_setup exit event")
@@ -773,7 +772,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
 			ep.File = fdFile
 		}
 	}
-	if ep.Is(SYS_ENTER_GETCWD) {
+	if ep.Is(types.SYS_ENTER_GETCWD) {
 		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed getcwd exit event")
@@ -793,7 +792,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
 	return true
 }
 
-func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *FcntlEvent) bool {
+func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.resolveFdFile(fd, fcntlEv.Pid)

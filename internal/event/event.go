@@ -3,7 +3,7 @@ package event
 import (
 	"sync"
 
-	. "ior/internal/types"
+	"ior/internal/types"
 )
 
 var poolOfEventPairs = sync.Pool{
@@ -12,7 +12,7 @@ var poolOfEventPairs = sync.Pool{
 
 type Event interface {
 	String() string
-	GetTraceId() TraceId
+	GetTraceId() types.TraceId
 	GetPid() uint32
 	GetTid() uint32
 	GetTime() uint64
