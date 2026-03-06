@@ -158,6 +158,15 @@ func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
 	}
 }
 
+func TestComputeBarHeightCappedAtThree(t *testing.T) {
+	if got := computeBarHeight(30, 4, 3); got != 3 {
+		t.Fatalf("expected bar height cap at 3, got %d", got)
+	}
+	if got := computeBarHeight(5, 10, 3); got != 1 {
+		t.Fatalf("expected bar height minimum 1 when depth exceeds rows, got %d", got)
+	}
+}
+
 func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",
@@ -174,6 +183,23 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	}
 	if !strings.Contains(out, "Selected: child") {
 		t.Fatalf("expected status line to show selected frame, got %q", out)
+	}
+}
+
+func TestRenderTerminalViewFillsAvailableHeightForShallowTree(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 10,
+		Children: []*snapshotNode{
+			{Name: "child", Total: 10},
+		},
+	}
+	frames := BuildTerminalLayout(snapshot, 100, 20)
+
+	out := RenderTerminalView(frames, 100, 20, 1, nil, nil, nil, 0, true, false, "")
+	lines := strings.Split(out, "\n")
+	if got, want := len(lines), 20; got != want {
+		t.Fatalf("expected render to fill viewport height (%d lines), got %d", want, got)
 	}
 }
 
