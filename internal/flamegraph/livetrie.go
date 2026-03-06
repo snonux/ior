@@ -56,23 +56,7 @@ func NewLiveTrie(fields []string, countField string) *LiveTrie {
 }
 
 func (lt *LiveTrie) addLocked(frames []string, value uint64) {
-	node := lt.root
-	for _, frame := range frames {
-		if node.childMap == nil {
-			node.childMap = make(map[string]*trieNode)
-		}
-		child, ok := node.childMap[frame]
-		if !ok {
-			child = &trieNode{
-				name:     frame,
-				childMap: make(map[string]*trieNode),
-			}
-			node.children = append(node.children, child)
-			node.childMap[frame] = child
-		}
-		node = child
-	}
-	node.value += value
+	insertTriePath(lt.root, frames, value)
 	if len(frames) > lt.maxDepth {
 		lt.maxDepth = len(frames)
 	}
