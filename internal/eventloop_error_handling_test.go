@@ -8,7 +8,7 @@ import (
 )
 
 func TestTracepointExitedMalformedOpenExitDoesNotPanicAndNotifies(t *testing.T) {
-	el := newEventLoop(eventLoopConfig{})
+	el := mustNewEventLoop(t, eventLoopConfig{})
 	warnings := make(chan string, 1)
 	el.warningCb = func(message string) { warnings <- message }
 
@@ -48,7 +48,7 @@ func TestTracepointExitedMalformedOpenExitDoesNotPanicAndNotifies(t *testing.T) 
 }
 
 func TestTracepointExitedMalformedOpenByHandleAtExitDoesNotPanicAndNotifies(t *testing.T) {
-	el := newEventLoop(eventLoopConfig{})
+	el := mustNewEventLoop(t, eventLoopConfig{})
 	warnings := make(chan string, 1)
 	el.warningCb = func(message string) { warnings <- message }
 
@@ -84,7 +84,7 @@ func TestTracepointExitedMalformedOpenByHandleAtExitDoesNotPanicAndNotifies(t *t
 }
 
 func TestProcessRawEventUnknownTypeDoesNotPanicAndNotifies(t *testing.T) {
-	el := newEventLoop(eventLoopConfig{})
+	el := mustNewEventLoop(t, eventLoopConfig{})
 	warnings := make(chan string, 1)
 	el.warningCb = func(message string) { warnings <- message }
 

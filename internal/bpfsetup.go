@@ -9,7 +9,7 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-func setBPFGlobals(cfg flags.Flags, bpfModule *bpf.Module) error {
+func setBPFGlobals(cfg flags.Config, bpfModule *bpf.Module) error {
 	// Ignore `ior` process itself from the filter.
 	if err := bpfModule.InitGlobalVariable("IOR_PID_FILTER", uint32(os.Getpid())); err != nil {
 		return fmt.Errorf("unable set IOR_PID_FILTER: %w", err)
@@ -23,7 +23,7 @@ func setBPFGlobals(cfg flags.Flags, bpfModule *bpf.Module) error {
 	return nil
 }
 
-func resizeBPFMaps(cfg flags.Flags, bpfModule *bpf.Module) error {
+func resizeBPFMaps(cfg flags.Config, bpfModule *bpf.Module) error {
 	if err := resizeBPFMap(bpfModule, "event_map", uint32(cfg.EventMapSize)); err != nil {
 		return fmt.Errorf("event_map: %w", err)
 	}

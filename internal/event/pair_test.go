@@ -1,8 +1,9 @@
 package event
 
 import (
-	"ior/internal/types"
 	"testing"
+
+	"ior/internal/types"
 )
 
 func TestPairCalculateDurationsFirstEvent(t *testing.T) {

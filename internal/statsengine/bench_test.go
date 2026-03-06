@@ -1,10 +1,11 @@
 package statsengine
 
 import (
-	"ior/internal/types"
 	"math/rand"
 	"testing"
 	"time"
+
+	"ior/internal/types"
 )
 
 func BenchmarkSyscallAccumulatorSnapshot(b *testing.B) {

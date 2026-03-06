@@ -1,11 +1,12 @@
 package pidpicker
 
 import (
-	"ior/internal/tui/messages"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	"ior/internal/tui/messages"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestApplyFilterByPIDCommAndCmdline(t *testing.T) {
@@ -39,7 +40,7 @@ func TestEnterEmitsAllPIDsAndSelectedPID(t *testing.T) {
 	m.processes = []ProcessInfo{{Pid: 7, Comm: "vim"}, {Pid: 9, Comm: "top"}}
 	m.applyFilter()
 
-	modelAny, cmdAny := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	modelAny, cmdAny := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = modelAny
 	msgAny := cmdAny()
 	pidAny, ok := msgAny.(messages.PidSelectedMsg)
@@ -51,7 +52,7 @@ func TestEnterEmitsAllPIDsAndSelectedPID(t *testing.T) {
 	}
 
 	m.selectedIndex = 2
-	modelOne, cmdOne := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	modelOne, cmdOne := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = modelOne
 	msgOne := cmdOne()
 	pidOne, ok := msgOne.(messages.PidSelectedMsg)
@@ -71,7 +72,7 @@ func TestEnterEmitsAllTIDsAndSelectedTIDInTIDMode(t *testing.T) {
 	}
 	m.applyFilter()
 
-	modelAny, cmdAny := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	modelAny, cmdAny := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = modelAny
 	msgAny := cmdAny()
 	tidAny, ok := msgAny.(messages.TidSelectedMsg)
@@ -86,7 +87,7 @@ func TestEnterEmitsAllTIDsAndSelectedTIDInTIDMode(t *testing.T) {
 	}
 
 	m.selectedIndex = 2
-	modelOne, cmdOne := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	modelOne, cmdOne := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = modelOne
 	msgOne := cmdOne()
 	tidOne, ok := msgOne.(messages.TidSelectedMsg)
@@ -104,7 +105,7 @@ func TestEnterEmitsAllTIDsAndSelectedTIDInTIDMode(t *testing.T) {
 func TestEscQuitsAndRefreshTriggersScan(t *testing.T) {
 	m := NewWithKeys(DefaultKeyMap())
 
-	_, escCmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, escCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if escCmd == nil {
 		t.Fatalf("expected esc to return quit cmd")
 	}
@@ -112,7 +113,7 @@ func TestEscQuitsAndRefreshTriggersScan(t *testing.T) {
 		t.Fatalf("expected quit msg from esc, got %T", msg)
 	}
 
-	_, refreshCmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, refreshCmd := m.Update(tea.KeyPressMsg{Code: rune('r'), Text: "r", Mod: tea.ModCtrl})
 	if refreshCmd == nil {
 		t.Fatalf("expected refresh cmd")
 	}
@@ -124,7 +125,7 @@ func TestEscQuitsAndRefreshTriggersScan(t *testing.T) {
 func TestRuneRDoesNotTriggerRefreshWhileFilterFocused(t *testing.T) {
 	m := NewWithKeys(DefaultKeyMap())
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
 	if cmd == nil {
 		t.Fatalf("expected textinput update cmd")
 	}
@@ -150,5 +151,15 @@ func TestRenderRowsKeepsSelectionVisible(t *testing.T) {
 	rows := m.renderRows()
 	if !strings.Contains(rows, "> 4  p4") {
 		t.Fatalf("expected selected row to remain visible, got:\n%s", rows)
+	}
+}
+
+func TestWindowSizeDoesNotCapInputWidthOnWideTerminals(t *testing.T) {
+	m := NewWithKeys(DefaultKeyMap())
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	updated := next.(Model)
+
+	if got, want := updated.input.Width(), 144; got != want {
+		t.Fatalf("expected input width %d for 160-col terminal, got %d", want, got)
 	}
 }

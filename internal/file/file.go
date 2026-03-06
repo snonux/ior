@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"ior/internal/types"
 	"os"
 	"strconv"
 	"strings"
+
+	"ior/internal/types"
 )
 
+// File is the common interface for file-like syscall payload representations.
 type File interface {
 	String() string
 	Name() string
@@ -17,6 +19,7 @@ type File interface {
 	FD() int32
 }
 
+// FdFile represents a file descriptor-backed file reference.
 type FdFile struct {
 	fd              int32
 	name            string
@@ -24,8 +27,9 @@ type FdFile struct {
 	flagsFromProcFS bool
 }
 
-func NewFd(fd int32, name string, flags int32) FdFile {
-	f := FdFile{
+// NewFd constructs an FdFile from explicit descriptor metadata.
+func NewFd(fd int32, name string, flags int32) *FdFile {
+	f := &FdFile{
 		fd:    fd,
 		name:  name,
 		flags: Flags(flags),
@@ -36,10 +40,13 @@ func NewFd(fd int32, name string, flags int32) FdFile {
 	return f
 }
 
-func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
+// NewFdWithPid resolves descriptor metadata from /proc/<pid>/fd.
+func NewFdWithPid(fd int32, pid uint32) *FdFile {
+	f := &FdFile{
+		fd: fd,
+	}
 	var err error
 
-	f.fd = fd
 	procPath := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
 	f.name, err = os.Readlink(procPath)
 	if err != nil {
@@ -55,10 +62,10 @@ func NewFdWithPid(fd int32, pid uint32) (f FdFile) {
 	return f
 }
 
-func (f FdFile) Dup(fd int32) FdFile {
-	dupFd := f
+func (f *FdFile) Dup(fd int32) *FdFile {
+	dupFd := *f
 	dupFd.fd = fd
-	return dupFd
+	return &dupFd
 }
 
 func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
@@ -78,11 +85,11 @@ func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
 	return unknownFlag, scanner.Err()
 }
 
-func (f FdFile) Name() string {
+func (f *FdFile) Name() string {
 	return f.name
 }
 
-func (f FdFile) String() string {
+func (f *FdFile) String() string {
 	var sb strings.Builder
 
 	if len(f.name) == 0 {
@@ -99,11 +106,11 @@ func (f FdFile) String() string {
 	return sb.String()
 }
 
-func (f FdFile) Flags() Flags {
+func (f *FdFile) Flags() Flags {
 	return f.flags
 }
 
-func (f FdFile) FD() int32 {
+func (f *FdFile) FD() int32 {
 	return f.fd
 }
 
@@ -119,6 +126,7 @@ type oldnameNewnameFile struct {
 	Oldname, Newname string
 }
 
+// NewOldnameNewname creates a file representation for rename-like syscalls.
 func NewOldnameNewname(oldname, newname []byte) oldnameNewnameFile {
 	return oldnameNewnameFile{types.StringValue(oldname), types.StringValue(newname)}
 }
@@ -153,6 +161,7 @@ type pathnameFile struct {
 	Pathname string
 }
 
+// NewPathname creates a path-only file representation.
 func NewPathname(pathname []byte) pathnameFile {
 	return pathnameFile{types.StringValue(pathname)}
 }

@@ -3,9 +3,9 @@ package eventstream
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type SearchDirection int
@@ -26,7 +26,8 @@ func NewSearchModal() SearchModal {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
-	input.Width = 44
+	input.SetWidth(44)
+	input.SetStyles(textinput.DefaultStyles(true))
 	return SearchModal{textInput: input, direction: SearchForward}
 }
 
@@ -36,6 +37,12 @@ func (m SearchModal) Visible() bool {
 
 func (m SearchModal) Direction() SearchDirection {
 	return m.direction
+}
+
+// SetDarkMode updates search modal text input styles.
+func (m SearchModal) SetDarkMode(isDark bool) SearchModal {
+	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
+	return m
 }
 
 func (m SearchModal) Open(direction SearchDirection, defaultTerm string) SearchModal {
@@ -60,7 +67,7 @@ func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 	if !m.visible {
 		return m, "", false
 	}
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		switch keyMsg.String() {
 		case "esc":
 			return m.Close(), "", false

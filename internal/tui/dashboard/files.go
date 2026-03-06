@@ -2,12 +2,13 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
 	"path/filepath"
 	"sort"
 	"strconv"
 
-	"github.com/charmbracelet/bubbles/table"
+	"ior/internal/statsengine"
+
+	"charm.land/bubbles/v2/table"
 )
 
 type DirSnapshot struct {

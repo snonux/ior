@@ -1,11 +1,12 @@
 package statsengine
 
 import (
-	"ior/internal/event"
-	"ior/internal/types"
 	"math"
 	"testing"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/types"
 )
 
 func TestProcessAccumulatorBasicStats(t *testing.T) {

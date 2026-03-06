@@ -70,7 +70,7 @@ func benchmarkPipelineMix(b *testing.B, mix benchutil.EventMix, events, numThrea
 		close(rawCh)
 
 		var pairCount int64
-		el := newEventLoop(eventLoopConfig{})
+		el := mustNewEventLoop(b, eventLoopConfig{})
 		preseedBenchComms(el, numThreads)
 		el.printCb = func(ep *event.Pair) {
 			pairCount++

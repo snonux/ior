@@ -1,10 +1,11 @@
 package eventstream
 
 import (
+	"testing"
+
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
-	"testing"
 )
 
 func TestNewStreamEventPopulatesFields(t *testing.T) {

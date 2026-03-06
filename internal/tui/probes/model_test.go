@@ -5,7 +5,7 @@ import (
 
 	"ior/internal/probemanager"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 type fakeManager struct {
@@ -61,7 +61,7 @@ func TestToggleEmitsProbeToggledMsg(t *testing.T) {
 		states: []probemanager.ProbeState{{Syscall: "read", Active: true}},
 	}
 	m := NewModel(fm).Open()
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{' '}[0], Text: string([]rune{' '})})
 	if cmd == nil {
 		t.Fatalf("expected toggle command")
 	}
@@ -90,7 +90,7 @@ func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	m := NewModel(fm).Open()
 	m.search = "read"
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'n'}[0], Text: string([]rune{'n'})})
 	if cmd == nil {
 		t.Fatalf("expected bulk off command")
 	}
@@ -107,7 +107,7 @@ func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	m = NewModel(fm).Open()
 	m.search = "read"
 	fm.toggles = nil
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	_, cmd = m.Update(tea.KeyPressMsg{Code: []rune{'a'}[0], Text: string([]rune{'a'})})
 	if cmd == nil {
 		t.Fatalf("expected bulk on command")
 	}

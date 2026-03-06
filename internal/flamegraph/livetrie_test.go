@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"ior/internal/event"
-	"ior/internal/file"
-	"ior/internal/types"
 	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 )
 
 func TestLiveTrieIngestAndSnapshotRoundTrip(t *testing.T) {
@@ -47,6 +48,39 @@ func TestLiveTrieIngestIsAdditive(t *testing.T) {
 	}
 }
 
+func TestLiveTrieCommTracepointPathAggregatesSameSyscallAcrossPaths(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
+	lt.AddRecord(IterRecord{
+		Path:    "/srv/a",
+		TraceID: types.SYS_ENTER_READ,
+		Comm:    "svc",
+		Pid:     1001,
+		Tid:     1001,
+		Cnt:     Counter{Count: 1},
+	})
+	lt.AddRecord(IterRecord{
+		Path:    "/srv/b",
+		TraceID: types.SYS_ENTER_READ,
+		Comm:    "svc",
+		Pid:     1002,
+		Tid:     1002,
+		Cnt:     Counter{Count: 1},
+	})
+
+	snap := decodeLiveSnapshot(t, lt)
+	commNode := findSnapshotPath(t, &snap, "svc")
+	if len(commNode.Children) != 1 {
+		t.Fatalf("expected one syscall child under comm node, got %d", len(commNode.Children))
+	}
+	syscallNode := commNode.Children[0]
+	if got, want := syscallNode.Name, "enter_read"; got != want {
+		t.Fatalf("syscall child name = %q, want %q", got, want)
+	}
+	if got, want := syscallNode.Total, uint64(2); got != want {
+		t.Fatalf("syscall aggregate total = %d, want %d", got, want)
+	}
+}
+
 func TestLiveTrieVersionIncrementsPerIngest(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	if got := lt.Version(); got != 0 {
@@ -57,6 +91,70 @@ func TestLiveTrieVersionIncrementsPerIngest(t *testing.T) {
 
 	if got := lt.Version(); got != 2 {
 		t.Fatalf("version = %d, want 2", got)
+	}
+}
+
+func TestLiveTrieAddRecordIncrementsVersion(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt.AddRecord(IterRecord{
+		Path:    "/tmp/demo/read",
+		TraceID: types.SYS_ENTER_READ,
+		Comm:    "demo",
+		Pid:     1001,
+		Tid:     1001,
+		Cnt:     Counter{Count: 7, Duration: 70, DurationToPrev: 14, Bytes: 28},
+	})
+
+	if got := lt.Version(); got != 1 {
+		t.Fatalf("version = %d, want 1", got)
+	}
+	snap := decodeLiveSnapshot(t, lt)
+	if snap.Total != 7 {
+		t.Fatalf("root total = %d, want 7", snap.Total)
+	}
+}
+
+func TestSeedTestFlameDataBuildsStaticFixture(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	SeedTestFlameData(lt)
+
+	if got := lt.Version(); got == 0 {
+		t.Fatalf("expected seed fixture to add records")
+	}
+	snap := decodeLiveSnapshot(t, lt)
+	if snap.Total == 0 {
+		t.Fatalf("expected non-empty seeded snapshot")
+	}
+	if findSnapshotChild(&snap, "api") == nil {
+		t.Fatalf("expected seeded snapshot to include api branch")
+	}
+	if findSnapshotChild(&snap, "worker") == nil {
+		t.Fatalf("expected seeded snapshot to include worker branch")
+	}
+}
+
+func TestSeedTestLiveFlameDataVariesByTick(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+
+	SeedTestLiveFlameData(lt, 0)
+	snapTick0 := decodeLiveSnapshot(t, lt)
+	apiTick0 := findSnapshotPath(t, &snapTick0, "api").Total
+	workerTick0 := findSnapshotPath(t, &snapTick0, "worker").Total
+
+	lt.Reset()
+	SeedTestLiveFlameData(lt, 1)
+	snapTick1 := decodeLiveSnapshot(t, lt)
+	apiTick1 := findSnapshotPath(t, &snapTick1, "api").Total
+	workerTick1 := findSnapshotPath(t, &snapTick1, "worker").Total
+
+	if apiTick0 == apiTick1 && workerTick0 == workerTick1 {
+		t.Fatalf("expected phase shift to alter branch totals, got api=%d worker=%d for both ticks", apiTick0, workerTick0)
+	}
+	if apiTick0 <= workerTick0 {
+		t.Fatalf("expected api to dominate at tick 0, got api=%d worker=%d", apiTick0, workerTick0)
+	}
+	if workerTick1 <= apiTick1 {
+		t.Fatalf("expected worker to dominate at tick 1, got worker=%d api=%d", workerTick1, apiTick1)
 	}
 }
 
@@ -125,6 +223,54 @@ func TestLiveTrieReconfigureRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+func TestLiveTrieSetCountFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
+
+	initial := decodeLiveSnapshot(t, lt)
+	if got, want := initial.Total, uint64(1); got != want {
+		t.Fatalf("count snapshot total = %d, want %d", got, want)
+	}
+
+	if err := lt.SetCountField("bytes"); err != nil {
+		t.Fatalf("set count field: %v", err)
+	}
+	if got, want := lt.CountField(), "bytes"; got != want {
+		t.Fatalf("count field = %q, want %q", got, want)
+	}
+
+	empty := decodeLiveSnapshot(t, lt)
+	if got := empty.Total; got != 0 {
+		t.Fatalf("expected reset baseline after metric switch, total=%d", got)
+	}
+
+	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 10, 1, 64))
+	bytesSnap := decodeLiveSnapshot(t, lt)
+	if got, want := bytesSnap.Total, uint64(64); got != want {
+		t.Fatalf("bytes snapshot total = %d, want %d", got, want)
+	}
+	leaf := findSnapshotPath(t, &bytesSnap, "svc")
+	if got, want := leaf.Total, uint64(64); got != want {
+		t.Fatalf("bytes leaf total = %d, want %d", got, want)
+	}
+}
+
+func TestLiveTrieSetCountFieldRejectsInvalidValue(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
+	beforeVersion := lt.Version()
+
+	if err := lt.SetCountField("bogus"); err == nil {
+		t.Fatalf("expected invalid count field error")
+	}
+	if got, want := lt.CountField(), "count"; got != want {
+		t.Fatalf("count field changed unexpectedly: got %q want %q", got, want)
+	}
+	if got := lt.Version(); got != beforeVersion {
+		t.Fatalf("version changed on invalid count field: got %d want %d", got, beforeVersion)
+	}
+}
+
 func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
@@ -153,6 +299,41 @@ func TestLiveTrieSnapshotJSONPrunesTinyNodes(t *testing.T) {
 	}
 	if findSnapshotChild(&snap, "tiny") != nil {
 		t.Fatalf("tiny node should be pruned at <0.1%% of root total")
+	}
+}
+
+func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	const total = 6000
+	for i := 0; i < total; i++ {
+		comm := fmt.Sprintf("svc-%04d", i)
+		lt.Ingest(newTestPair(comm, 42, uint32(100000+i), "/tmp/a", 1, 1, 1))
+	}
+
+	snap := decodeLiveSnapshot(t, lt)
+	if len(snap.Children) == 0 {
+		t.Fatalf("expected fallback root children when pruning would hide every branch")
+	}
+	if got, want := len(snap.Children), liveTrieMinVisibleChildrenWhenPruned; got != want {
+		t.Fatalf("expected fallback to keep %d root children, got %d", want, got)
+	}
+}
+
+func TestLiveTrieSnapshotJSONKeepsFallbackChildrenAtDepthOne(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
+	const total = 6000
+	for i := 0; i < total; i++ {
+		pid := uint32(100000 + i)
+		lt.Ingest(newTestPair("svc", pid, pid, "/tmp/a", 1, 1, 1))
+	}
+
+	snap := decodeLiveSnapshot(t, lt)
+	commNode := findSnapshotPath(t, &snap, "svc")
+	if len(commNode.Children) == 0 {
+		t.Fatalf("expected fallback depth-one children for pid branches")
+	}
+	if got, want := len(commNode.Children), liveTrieMinVisibleChildrenWhenPruned; got != want {
+		t.Fatalf("expected fallback to keep %d depth-one children, got %d", want, got)
 	}
 }
 

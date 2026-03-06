@@ -2,11 +2,12 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
 	"strconv"
 	"time"
 
-	"github.com/charmbracelet/bubbles/table"
+	"ior/internal/statsengine"
+
+	"charm.land/bubbles/v2/table"
 )
 
 func renderSyscalls(snap *statsengine.Snapshot, width, height int) string {

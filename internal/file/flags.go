@@ -3,12 +3,13 @@ package file
 import (
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 )
 
 type Flags int32
 
-var flagsToHumanCache = map[Flags]string{}
+var flagsToHumanCache sync.Map
 var unknownFlag = Flags(-1)
 
 type tuple struct {
@@ -49,12 +50,16 @@ func (f Flags) Is(flag int) bool {
 }
 
 func (f Flags) BuildString(sb *strings.Builder) {
-	if str, ok := flagsToHumanCache[f]; ok {
+	if cached, ok := flagsToHumanCache.Load(f); ok {
+		str, _ := cached.(string)
 		sb.WriteString(str)
 		return
 	}
 	str := f.String()
-	flagsToHumanCache[f] = str
+	cached, loaded := flagsToHumanCache.LoadOrStore(f, str)
+	if loaded {
+		str, _ = cached.(string)
+	}
 	sb.WriteString(str)
 }
 

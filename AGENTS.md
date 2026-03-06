@@ -46,7 +46,7 @@ Generator source code:
 
 - **Entry point**: `cmd/ior/main.go` - Linux-only BPF-based I/O syscall tracer
 - **Core packages**: `/internal/event/` (BPF event handling), `/internal/flamegraph/` (FlameGraph generation), `/internal/c/` (BPF programs)  
-- **Output**: Compressed `.ior.zst` trace data and native SVG flamegraphs (served via embedded web server in `-ior` mode)
+- **Output**: TUI dashboard and TUI flamegraphs (no embedded web flamegraph server mode)
 - **TUI package**: `/internal/tui/` contains top-level Bubble Tea orchestration (`tui.go`), shared key map (`keys.go`), and styles (`styles.go`).
 - **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (overview/syscalls/files/processes/latency/gaps) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.

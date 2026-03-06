@@ -109,7 +109,7 @@ func TestWithName() error {
 		}
 		fmt.Println("Running integration test", testName, "(requires root)...")
 		env := goEnv()
-		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH")
+		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH", "GOTOOLCHAIN")
 		return runGoTestWithProgress(env,
 			"./integrationtests/...",
 			"-run", "^"+testName+"$",
@@ -124,7 +124,11 @@ func TestWithName() error {
 
 // Bench runs benchmarks.
 func Bench() error {
-	return sh.RunWithV(goEnv(), "go", "test", "./...", "-v", "-bench=.", "-run", "xxx")
+	if err := sh.RunWithV(goEnv(), "go", "test", "./...", "-v", "-bench=.", "-run", "xxx"); err != nil {
+		return err
+	}
+	fmt.Println("Running dedicated flamegraph benchmark suite...")
+	return BenchFlame()
 }
 
 // PrReview runs a reproducible baseline for Codex-assisted PR reviews.
@@ -167,7 +171,67 @@ func BenchProf() error {
 	fmt.Printf("  go tool pprof -http=:8080 %s\n", cpuProfile)
 	fmt.Printf("  go tool pprof -http=:8080 %s\n", memProfile)
 	fmt.Printf("  go tool pprof -http=:8080 %s\n", blockProfile)
+	fmt.Println("Running flamegraph benchmark profiling...")
+	return BenchFlameProf()
+}
+
+// BenchFlame runs flamegraph TUI benchmarks with benchmem and repeated samples.
+func BenchFlame() error {
+	return sh.RunWithV(goEnv(), "go", "test", "./internal/tui/flamegraph/", "-run", "^$", "-bench=.", "-benchmem", "-count=5")
+}
+
+// BenchFlameProf runs flamegraph benchmarks and writes CPU/memory profiles.
+func BenchFlameProf() error {
+	if err := sh.RunWithV(goEnv(), "go", "test", "./internal/tui/flamegraph/",
+		"-run", "^$",
+		"-bench=.",
+		"-benchmem",
+		"-count=1",
+		"-cpuprofile=flame-cpu.prof",
+		"-memprofile=flame-mem.prof",
+	); err != nil {
+		return err
+	}
+	fmt.Println("Flame profiles written:")
+	fmt.Println("  flame-cpu.prof")
+	fmt.Println("  flame-mem.prof")
+	fmt.Println("Analyze with:")
+	fmt.Println("  go tool pprof -http=:8080 flame-cpu.prof")
+	fmt.Println("  go tool pprof -http=:8080 flame-mem.prof")
 	return nil
+}
+
+// BenchFlameCmp compares flamegraph benchmark runs using benchstat (if installed).
+func BenchFlameCmp() error {
+	if err := ensureBenchProfilesDir(); err != nil {
+		return err
+	}
+	if _, err := exec.LookPath("benchstat"); err != nil {
+		fmt.Println("benchstat not found in PATH; install with:")
+		fmt.Println("  go install golang.org/x/perf/cmd/benchstat@latest")
+		return nil
+	}
+
+	baseline := filepath.Join(benchProfilesDir, "flame-baseline.txt")
+	candidate := filepath.Join(benchProfilesDir, fmt.Sprintf("flame-%s.txt", benchTimestamp()))
+
+	if _, err := os.Stat(baseline); errors.Is(err, os.ErrNotExist) {
+		fmt.Println("No flame baseline found; creating:", baseline)
+		if err := runFlameBenchToFile(baseline); err != nil {
+			return err
+		}
+		fmt.Println("Baseline created. Re-run mage benchFlameCmp to compare.")
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	if err := runFlameBenchToFile(candidate); err != nil {
+		return err
+	}
+
+	fmt.Println("Comparing flame benchmark runs:")
+	return sh.RunWithV(goEnv(), "benchstat", baseline, candidate)
 }
 
 // BenchCompare runs all benchmarks repeatedly and stores output for benchstat.
@@ -354,7 +418,7 @@ func runIntegrationTests(parallel bool) error {
 	}
 
 	env := goEnv()
-	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE")
+	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN")
 
 	timeout := "30m"
 	if !parallel {
@@ -448,6 +512,11 @@ func ensureBenchProfilesDir() error {
 
 func benchTimestamp() string {
 	return time.Now().UTC().Format("20060102-150405")
+}
+
+func runFlameBenchToFile(outputFile string) error {
+	cmd := fmt.Sprintf("set -o pipefail; go test ./internal/tui/flamegraph/ -run '^$' -bench=. -benchmem -count=5 | tee %q", outputFile)
+	return sh.RunWithV(goEnv(), "bash", "-c", cmd)
 }
 
 func cleanBPFArtifacts() error {

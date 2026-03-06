@@ -9,64 +9,65 @@ import (
 	"time"
 )
 
-func parseForTest(t *testing.T, args ...string) (Flags, error) {
+func parseForTest(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
 
 	oldCommandLine := flag.CommandLine
 	oldArgs := os.Args
-	oldSingleton := singleton
+	oldCurrent := Get()
 	oldParseErr := parseErr
-	oldPID := pidFilter.Load()
-	oldTID := tidFilter.Load()
-	oldTUIExport := tuiExportEnable.Load()
 
 	fs := flag.NewFlagSet("ior-test", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	flag.CommandLine = fs
 	os.Args = append([]string{"ior"}, args...)
 
-	singleton = Flags{TUIExportEnable: true}
+	setCurrent(NewFlags())
 	parseErr = nil
-	pidFilter.Store(-1)
-	tidFilter.Store(-1)
-	tuiExportEnable.Store(true)
 
 	err := parse()
-	cfg := singleton
+	cfg := Get()
 
 	t.Cleanup(func() {
 		flag.CommandLine = oldCommandLine
 		os.Args = oldArgs
-		singleton = oldSingleton
+		setCurrent(oldCurrent)
 		parseErr = oldParseErr
-		pidFilter.Store(oldPID)
-		tidFilter.Store(oldTID)
-		tuiExportEnable.Store(oldTUIExport)
 	})
 
 	return cfg, err
 }
 
-func TestParseLiveFlagsAndInterval(t *testing.T) {
-	cfg, err := parseForTest(t, "-live", "-live-interval", "200ms", "-pid", "1234")
+func TestParseLiveIntervalAndPID(t *testing.T) {
+	cfg, err := parseForTest(t, "-live-interval", "200ms", "-pid", "1234")
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
 
-	if !cfg.LiveFlamegraph {
-		t.Fatalf("expected -live to enable live mode")
-	}
 	if cfg.LiveInterval != 200*time.Millisecond {
 		t.Fatalf("live interval = %v, want %v", cfg.LiveInterval, 200*time.Millisecond)
 	}
 	if cfg.PidFilter != 1234 {
 		t.Fatalf("pid filter = %d, want 1234", cfg.PidFilter)
 	}
-	if got := int(pidFilter.Load()); got != 1234 {
-		t.Fatalf("global pid filter = %d, want 1234", got)
+	if got := Get().GetPidFilter(); got != 1234 {
+		t.Fatalf("Get().GetPidFilter() = %d, want 1234", got)
 	}
-	if cfg.OpenCommand != "" {
-		t.Fatalf("expected empty open command by default")
+}
+
+func TestNewFlagsDefaultsAndGetters(t *testing.T) {
+	cfg := NewFlags()
+	if cfg.GetPidFilter() != -1 {
+		t.Fatalf("GetPidFilter() = %d, want -1", cfg.GetPidFilter())
+	}
+	if cfg.GetTidFilter() != -1 {
+		t.Fatalf("GetTidFilter() = %d, want -1", cfg.GetTidFilter())
+	}
+	if !cfg.GetTUIExportEnable() {
+		t.Fatalf("GetTUIExportEnable() = false, want true")
+	}
+	if cfg.CountField != "count" {
+		t.Fatalf("CountField = %q, want count", cfg.CountField)
 	}
 }
 
@@ -76,47 +77,28 @@ func TestParseLiveDefaults(t *testing.T) {
 		t.Fatalf("parse returned error: %v", err)
 	}
 
-	if cfg.LiveFlamegraph {
-		t.Fatalf("expected live mode disabled by default")
-	}
 	if cfg.LiveInterval != 200*time.Millisecond {
 		t.Fatalf("default live interval = %v, want %v", cfg.LiveInterval, 200*time.Millisecond)
 	}
-	if cfg.OpenCommand != "" {
-		t.Fatalf("expected empty open command by default")
-	}
 }
 
-func TestParseOpenFlags(t *testing.T) {
-	cfg, err := parseForTest(t, "-live", "-open", "chromium --new-window")
+func TestParseTestFlamesFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "--testflames")
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
-	if !cfg.LiveFlamegraph {
-		t.Fatalf("expected live mode enabled")
-	}
-	if cfg.OpenCommand != "chromium --new-window" {
-		t.Fatalf("open command = %q, want %q", cfg.OpenCommand, "chromium --new-window")
+	if !cfg.TestFlames {
+		t.Fatalf("expected --testflames to enable static flamegraph test mode")
 	}
 }
 
-func TestParseFlamegraphJSONFlag(t *testing.T) {
-	cfg, err := parseForTest(t, "-flamegraphJson")
+func TestParseTestLiveFlamesFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "--testliveflames")
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
-	if !cfg.FlamegraphJSON {
-		t.Fatalf("expected -flamegraphJson to enable JSON export")
-	}
-}
-
-func TestParseIorWatchIntervalFlag(t *testing.T) {
-	cfg, err := parseForTest(t, "-iorWatchInterval", "2s")
-	if err != nil {
-		t.Fatalf("parse returned error: %v", err)
-	}
-	if cfg.IorWatchInterval != 2*time.Second {
-		t.Fatalf("ior watch interval = %v, want %v", cfg.IorWatchInterval, 2*time.Second)
+	if !cfg.TestLiveFlames {
+		t.Fatalf("expected --testliveflames to enable synthetic live flamegraph test mode")
 	}
 }
 
@@ -126,7 +108,7 @@ func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 		t.Fatalf("parse returned error: %v", err)
 	}
 
-	want := []string{"comm", "path", "tracepoint"}
+	want := []string{"comm", "tracepoint", "path"}
 	if len(cfg.CollapsedFields) != len(want) {
 		t.Fatalf("default collapsed fields len = %d, want %d", len(cfg.CollapsedFields), len(want))
 	}

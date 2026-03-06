@@ -71,7 +71,7 @@ func BenchmarkDeserializeDup3Event(b *testing.B) {
 func BenchmarkRawHandlerLookup(b *testing.B) {
 	b.ReportAllocs()
 
-	el := newEventLoop(eventLoopConfig{})
+	el := mustNewEventLoop(b, eventLoopConfig{})
 	eventTypes := []types.EventType{
 		types.ENTER_OPEN_EVENT,
 		types.EXIT_OPEN_EVENT,
@@ -97,7 +97,7 @@ func BenchmarkTracepointEntered(b *testing.B) {
 
 	gen := benchutil.NewEventGenerator()
 	_, raw := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -118,7 +118,7 @@ func BenchmarkTracepointExited(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	_, enterRaw := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
 	_, exitRaw := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 	out := make(chan *event.Pair, 1)
 
 	b.ResetTimer()
@@ -137,7 +137,7 @@ func BenchmarkHandleOpenExit(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	enterTemplate, _ := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
 	exitTemplate, _ := gen.ExitOpenEvent(2, componentBenchPID, componentBenchTID)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -160,7 +160,7 @@ func BenchmarkHandleFdExit(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	enterTemplate, _ := gen.EnterFdEvent(1, componentBenchPID, componentBenchTID, 99, types.SYS_ENTER_READ)
 	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_READ, 128)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 	el.fdState().set(99, file.NewFd(99, "/tmp/fd", syscall.O_RDONLY))
 
 	b.ResetTimer()
@@ -184,7 +184,7 @@ func BenchmarkHandlePathExit(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	enterTemplate, _ := gen.EnterPathEvent(1, componentBenchPID, componentBenchTID, "/tmp/path", types.SYS_ENTER_MKDIR)
 	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_MKDIR, 0)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -207,7 +207,7 @@ func BenchmarkHandleNameExit(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	enterTemplate, _ := gen.EnterNameEvent(1, componentBenchPID, componentBenchTID, "/tmp/a", "/tmp/b", types.SYS_ENTER_RENAME)
 	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_RENAME, 0)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -230,7 +230,7 @@ func BenchmarkHandleNullExit(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	enterTemplate, _ := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
 	exitTemplate, _ := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -253,7 +253,7 @@ func BenchmarkHandleFcntlExit(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	enterTemplate, _ := gen.EnterFcntlEvent(1, componentBenchPID, componentBenchTID, 7, syscall.F_SETFL, syscall.O_NONBLOCK)
 	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_FCNTL, 0)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 	el.fdState().set(7, file.NewFd(7, "/tmp/fcntl", syscall.O_RDONLY))
 
 	b.ResetTimer()
@@ -277,7 +277,7 @@ func BenchmarkHandleDup3Exit(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
 	enterTemplate, _ := gen.EnterDup3Event(1, componentBenchPID, componentBenchTID, 9, syscall.O_CLOEXEC)
 	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_DUP3, 10)
-	el := newComponentBenchEventLoop(componentBenchTID)
+	el := newComponentBenchEventLoop(b, componentBenchTID)
 	el.fdState().set(9, file.NewFd(9, "/tmp/dup3", syscall.O_RDONLY))
 
 	b.ResetTimer()
@@ -354,8 +354,9 @@ func benchmarkDeserialize[T recyclable](b *testing.B, raw []byte, decode func([]
 	}
 }
 
-func newComponentBenchEventLoop(tids ...uint32) *eventLoop {
-	el := newEventLoop(eventLoopConfig{})
+func newComponentBenchEventLoop(tb testing.TB, tids ...uint32) *eventLoop {
+	tb.Helper()
+	el := mustNewEventLoop(tb, eventLoopConfig{})
 	for _, tid := range tids {
 		el.setCachedComm(tid, fmt.Sprintf("bench-%d", tid))
 	}

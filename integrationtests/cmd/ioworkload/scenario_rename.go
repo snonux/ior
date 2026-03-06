@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	sysRenameat2       = 316 // SYS_RENAMEAT2 on amd64
-	renameNoreplaceFlag = 1  // RENAME_NOREPLACE
+	sysRenameat2        = 316 // SYS_RENAMEAT2 on amd64
+	renameNoreplaceFlag = 1   // RENAME_NOREPLACE
 )
 
 // renameBasic creates a file and renames it via rename(2).

@@ -50,6 +50,7 @@ type Manager struct {
 	closed   bool
 }
 
+// NewManager creates a new probe manager that resolves programs via attacher.
 func NewManager(attacher Attacher) *Manager {
 	return &Manager{
 		attacher: attacher,
@@ -57,6 +58,7 @@ func NewManager(attacher Attacher) *Manager {
 	}
 }
 
+// Register registers the enter/exit tracepoint pair for a syscall key.
 func (m *Manager) Register(syscall string, pair TracepointPair) {
 	if m == nil || syscall == "" {
 		return
@@ -74,6 +76,7 @@ func (m *Manager) Register(syscall string, pair TracepointPair) {
 	entry.exitTP = pair.Exit
 }
 
+// AttachAll registers and attaches all tracepoint pairs selected by shouldAttach.
 func (m *Manager) AttachAll(shouldAttach func(string) bool, tpNames []string) error {
 	if m == nil {
 		return errors.New("probe manager is nil")
@@ -95,6 +98,7 @@ func (m *Manager) AttachAll(shouldAttach func(string) bool, tpNames []string) er
 	return nil
 }
 
+// Toggle flips a syscall probe between attached and detached states.
 func (m *Manager) Toggle(syscall string) error {
 	if m == nil {
 		return errors.New("probe manager is nil")
@@ -118,6 +122,7 @@ func (m *Manager) Toggle(syscall string) error {
 	return m.Attach(syscall)
 }
 
+// Attach attaches enter/exit tracepoints for a registered syscall.
 func (m *Manager) Attach(syscall string) error {
 	if syscall == "" {
 		return errors.New("syscall is required")
@@ -167,6 +172,7 @@ func (m *Manager) Attach(syscall string) error {
 	return nil
 }
 
+// Detach detaches enter/exit tracepoints for a registered syscall.
 func (m *Manager) Detach(syscall string) error {
 	if syscall == "" {
 		return errors.New("syscall is required")
@@ -220,6 +226,7 @@ func (m *Manager) Detach(syscall string) error {
 	return combined
 }
 
+// States returns a stable snapshot of all known probe states.
 func (m *Manager) States() []ProbeState {
 	if m == nil {
 		return nil
@@ -243,6 +250,7 @@ func (m *Manager) States() []ProbeState {
 	return out
 }
 
+// ActiveCount returns the number of active probes and total registered probes.
 func (m *Manager) ActiveCount() (active, total int) {
 	if m == nil {
 		return 0, 0
@@ -276,6 +284,7 @@ func (m *Manager) IsActive(syscall string) bool {
 	return entry.active
 }
 
+// Close detaches all registered probes and marks the manager closed.
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil

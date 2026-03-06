@@ -3,15 +3,16 @@ package flamegraph
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"fmt"
-	"io"
-	"ior/internal/event"
-	"ior/internal/file"
-	"ior/internal/types"
 	"iter"
 	"os"
 	"strings"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 
 	// Is there a zstd library part of Go 1.25
 	"github.com/DataDog/zstd"
@@ -23,7 +24,8 @@ type commType = string
 type pidType = uint32
 type tidType = uint32
 type flagsType = file.Flags
-type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]Counter
+
+var hostnameFn = os.Hostname
 
 type recordKey struct {
 	Path    pathType
@@ -97,10 +99,10 @@ func (iod iorData) merge(other iorData) iorData {
 	return iod
 }
 
-func (iod iorData) serializeToFile(flamegraphName string) error {
-	hostname, err := os.Hostname()
+func (iod iorData) serializeToFile(flamegraphName string) (retErr error) {
+	hostname, err := hostnameFn()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("get hostname: %w", err)
 	}
 	if flamegraphName == "" {
 		flamegraphName = "default"
@@ -113,22 +115,33 @@ func (iod iorData) serializeToFile(flamegraphName string) error {
 
 	file, err := os.Create(tmpFilename)
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file %s: %w", tmpFilename, err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close temp file %s: %w", tmpFilename, err))
+		}
+	}()
 
 	encoder := zstd.NewWriter(file)
-	defer encoder.Close()
+	defer func() {
+		if err := encoder.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close zstd writer for %s: %w", tmpFilename, err))
+		}
+	}()
 
 	gobEncoder := gob.NewEncoder(encoder)
 	if err := gobEncoder.Encode(iod.records); err != nil {
-		return err
+		return fmt.Errorf("encode ior records: %w", err)
 	}
 	if err := encoder.Flush(); err != nil {
-		return err
+		return fmt.Errorf("flush ior records: %w", err)
 	}
 
-	return os.Rename(tmpFilename, filename)
+	if err := os.Rename(tmpFilename, filename); err != nil {
+		return fmt.Errorf("rename %s to %s: %w", tmpFilename, filename, err)
+	}
+	return nil
 }
 
 func (iod *iorData) loadFromFile(filename string) error {
@@ -142,23 +155,14 @@ func (iod *iorData) loadFromFile(filename string) error {
 	defer decoder.Close()
 
 	var records map[recordKey]Counter
-	if err := gob.NewDecoder(decoder).Decode(&records); err == nil && len(records) > 0 {
-		iod.records = records
-		return nil
-	}
-
-	// Fallback path for legacy payloads and empty-map ambiguity.
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
+	if err := gob.NewDecoder(decoder).Decode(&records); err != nil {
 		return err
 	}
-	decoder = zstd.NewReader(file)
-	defer decoder.Close()
-
-	var buffer bytes.Buffer
-	if _, err = io.Copy(&buffer, decoder); err != nil {
-		return err
+	if records == nil {
+		records = make(map[recordKey]Counter)
 	}
-	return iod.deserialize(&buffer)
+	iod.records = records
+	return nil
 }
 
 func (iod iorData) serialize() ([]byte, error) {
@@ -169,36 +173,14 @@ func (iod iorData) serialize() ([]byte, error) {
 }
 
 func (iod *iorData) deserialize(buf *bytes.Buffer) error {
-	raw := append([]byte(nil), buf.Bytes()...)
-	dec := gob.NewDecoder(bytes.NewReader(raw))
 	var records map[recordKey]Counter
-	if err := dec.Decode(&records); err == nil && len(records) > 0 {
-		iod.records = records
-		return nil
-	}
-
-	var legacy pathMap
-	if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&legacy); err != nil {
+	if err := gob.NewDecoder(bytes.NewReader(buf.Bytes())).Decode(&records); err != nil {
 		return err
 	}
-
-	iod.records = make(map[recordKey]Counter)
-	for path, traceIDMap := range legacy {
-		for traceID, commMap := range traceIDMap {
-			for comm, pidMap := range commMap {
-				for pid, tidMap := range pidMap {
-					for tid, flagsMap := range tidMap {
-						for f, cnt := range flagsMap {
-							iod.add(path, traceID, comm, pid, tid, f, cnt)
-						}
-					}
-				}
-			}
-		}
+	if records == nil {
+		records = make(map[recordKey]Counter)
 	}
-	if len(iod.records) == 0 && records != nil {
-		iod.records = records
-	}
+	iod.records = records
 	return nil
 }
 

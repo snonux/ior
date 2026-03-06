@@ -2,13 +2,14 @@ package probes
 
 import (
 	"fmt"
-	"ior/internal/probemanager"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"ior/internal/probemanager"
+
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Manager defines the probe operations used by the modal.
@@ -39,16 +40,19 @@ type Model struct {
 	lastErr string
 	manager Manager
 	height  int
+	isDark  bool
 }
 
 func NewModel(manager Manager) Model {
 	ti := textinput.New()
 	ti.Prompt = "/ "
 	ti.CharLimit = 0
-	ti.Width = 28
+	ti.SetWidth(28)
+	ti.SetStyles(textinput.DefaultStyles(true))
 	return Model{
 		manager:   manager,
 		textInput: ti,
+		isDark:    true,
 	}
 }
 
@@ -72,6 +76,13 @@ func (m Model) Close() Model {
 	return m
 }
 
+// SetDarkMode updates probe modal text input styles.
+func (m Model) SetDarkMode(isDark bool) Model {
+	m.isDark = isDark
+	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
+	return m
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if !m.visible {
 		return m, nil
@@ -87,7 +98,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		m.clampCursor()
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.searching {
 			return m.updateSearch(msg)
 		}
@@ -110,7 +121,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.textInput.CursorEnd()
 			m.textInput.Focus()
 			return m, nil
-		case " ", "enter":
+		case " ", "space", "enter":
 			selected := m.selectedSyscall()
 			if selected == "" {
 				return m, nil
@@ -125,7 +136,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateSearch(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m Model) updateSearch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.searching = false

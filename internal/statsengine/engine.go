@@ -1,11 +1,12 @@
 package statsengine
 
 import (
-	"ior/internal/event"
-	"ior/internal/types"
 	"math"
 	"sync"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/types"
 )
 
 const trendWindowSlots = 20

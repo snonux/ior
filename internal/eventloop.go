@@ -7,32 +7,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
 
 	"ior/internal/event"
 	"ior/internal/file"
-	"ior/internal/flamegraph"
 	"ior/internal/types"
-	. "ior/internal/types"
 )
 
 const sysEnterNameToHandleAtName = "name_to_handle_at"
 
+const (
+	defaultCommLookupWorkers   = 4
+	defaultCommLookupQueueSize = 512
+)
+
 type eventLoopConfig struct {
-	pidFilter        int
-	commFilter       string
-	pathFilter       string
-	liveFlamegraph   bool
-	liveInterval     time.Duration
-	liveOpenCommand  string
-	collapsedFields  []string
-	countField       string
-	flamegraphName   string
-	flamegraphEnable bool
-	pprofEnable      bool
-	plainMode        bool
+	pidFilter       int
+	commFilter      string
+	pathFilter      string
+	collapsedFields []string
+	countField      string
+	pprofEnable     bool
+	plainMode       bool
+	fdTracker       *fdTracker
+	commResolver    *commResolver
 }
 
 type fdTracker struct {
@@ -72,15 +73,55 @@ type commResolver struct {
 
 	mu      sync.RWMutex
 	pending map[uint32]struct{}
+
+	lookupQueue      chan uint32
+	lookupWorkers    int
+	resolveFn        func(uint32) string
+	startWorkersOnce sync.Once
 }
 
 func newCommResolver(comms map[uint32]string) *commResolver {
 	if comms == nil {
 		comms = make(map[uint32]string)
 	}
-	return &commResolver{
+	r := &commResolver{
 		comms:   comms,
 		pending: make(map[uint32]struct{}),
+	}
+	r.ensureLookupConfig()
+	return r
+}
+
+func (r *commResolver) ensureLookupConfig() {
+	if r.lookupWorkers <= 0 {
+		r.lookupWorkers = defaultCommLookupWorkers
+	}
+	if r.lookupQueue == nil {
+		r.lookupQueue = make(chan uint32, defaultCommLookupQueueSize)
+	}
+	if r.resolveFn == nil {
+		r.resolveFn = resolveCommFromProc
+	}
+}
+
+func (r *commResolver) startLookupWorkers() {
+	r.ensureLookupConfig()
+	r.startWorkersOnce.Do(func() {
+		for i := 0; i < r.lookupWorkers; i++ {
+			go r.lookupWorker()
+		}
+	})
+}
+
+func (r *commResolver) lookupWorker() {
+	for tid := range r.lookupQueue {
+		comm := r.resolveFn(tid)
+		r.mu.Lock()
+		delete(r.pending, tid)
+		if comm != "" {
+			r.comms[tid] = comm
+		}
+		r.mu.Unlock()
 	}
 }
 
@@ -150,32 +191,31 @@ func (r *commResolver) queueLookup(tid uint32) {
 	r.pending[tid] = struct{}{}
 	r.mu.Unlock()
 
-	go func() {
-		comm := resolveCommFromProc(tid)
+	r.startLookupWorkers()
+
+	// Keep event processing non-blocking if resolver workers are saturated.
+	select {
+	case r.lookupQueue <- tid:
+	default:
 		r.mu.Lock()
 		delete(r.pending, tid)
-		if comm != "" {
-			r.comms[tid] = comm
-		}
 		r.mu.Unlock()
-	}()
+	}
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
+type tracepointExitHandler func(ep *event.Pair) bool
 
 type eventLoop struct {
 	filter         *eventFilter
 	enterEvs       map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
 	pendingHandles map[uint32]string      // map of TID to pathname from name_to_handle_at
-	files          map[int32]file.File    // Track all open files by file descriptor.
 	fdTracker      *fdTracker
-	procFdCache    map[uint64]file.FdFile // Cache procfs-resolved metadata for unknown fds.
-	comms          map[uint32]string      // Program or thread name of the current Tid.
+	procFdCache    map[uint64]*file.FdFile // Cache procfs-resolved metadata for unknown fds.
 	commResolver   *commResolver
 	prevPairTimes  map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
-	rawHandlers    map[EventType]rawEventHandler
-	flamegraph     flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
-	liveTrie       *flamegraph.LiveTrie
+	rawHandlers    map[types.EventType]rawEventHandler
+	exitHandlers   map[reflect.Type]tracepointExitHandler
 	printCb        func(ep *event.Pair) // Callback to print the event
 	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
 	cfg            eventLoopConfig
@@ -189,33 +229,57 @@ type eventLoop struct {
 	done                    chan struct{}
 }
 
-func newEventLoop(cfg eventLoopConfig) *eventLoop {
-	filesByFD := make(map[int32]file.File)
-	commsByTID := make(map[uint32]string)
+func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
+	fdState := configuredFDTracker(cfg.fdTracker)
+	commState := configuredCommResolver(cfg.commResolver)
+	filter, err := newEventFilter(cfg.commFilter, cfg.pathFilter)
+	if err != nil {
+		return nil, fmt.Errorf("create event filter: %w", err)
+	}
 
 	el := &eventLoop{
-		filter:         newEventFilter(cfg.commFilter, cfg.pathFilter),
+		filter:         filter,
 		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
-		files:          filesByFD,
-		fdTracker:      newFDTracker(filesByFD),
-		procFdCache:    make(map[uint64]file.FdFile),
-		comms:          commsByTID,
-		commResolver:   newCommResolver(commsByTID),
+		fdTracker:      fdState,
+		procFdCache:    make(map[uint64]*file.FdFile),
+		commResolver:   commState,
 		prevPairTimes:  make(map[uint32]uint64),
-		rawHandlers:    make(map[EventType]rawEventHandler),
+		rawHandlers:    make(map[types.EventType]rawEventHandler),
+		exitHandlers:   make(map[reflect.Type]tracepointExitHandler),
 		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		flamegraph:     flamegraph.New(cfg.flamegraphName),
 		cfg:            cfg,
 		done:           make(chan struct{}),
 	}
 	el.initRawHandlers()
-	if cfg.liveFlamegraph {
-		el.liveTrie = flamegraph.NewLiveTrie(cfg.collapsedFields, cfg.countField)
-	}
+	el.initExitHandlers()
 	el.configureOutputCallback()
 	el.seedTrackedPidComm()
-	return el
+	return el, nil
+}
+
+func configuredFDTracker(injected *fdTracker) *fdTracker {
+	if injected == nil {
+		return newFDTracker(nil)
+	}
+	if injected.files == nil {
+		injected.files = make(map[int32]file.File)
+	}
+	return injected
+}
+
+func configuredCommResolver(injected *commResolver) *commResolver {
+	if injected == nil {
+		return newCommResolver(nil)
+	}
+	if injected.comms == nil {
+		injected.comms = make(map[uint32]string)
+	}
+	if injected.pending == nil {
+		injected.pending = make(map[uint32]struct{})
+	}
+	injected.ensureLookupConfig()
+	return injected
 }
 
 func (e *eventLoop) seedTrackedPidComm() {
@@ -223,35 +287,31 @@ func (e *eventLoop) seedTrackedPidComm() {
 }
 
 func (e *eventLoop) fdState() *fdTracker {
-	if e.files == nil {
-		e.files = make(map[int32]file.File)
-	}
 	if e.fdTracker == nil {
-		e.fdTracker = newFDTracker(e.files)
+		e.fdTracker = newFDTracker(nil)
+	}
+	if e.fdTracker.files == nil {
+		e.fdTracker.files = make(map[int32]file.File)
 	}
 	return e.fdTracker
 }
 
 func (e *eventLoop) commState() *commResolver {
-	if e.comms == nil {
-		e.comms = make(map[uint32]string)
-	}
 	if e.commResolver == nil {
-		e.commResolver = newCommResolver(e.comms)
+		e.commResolver = newCommResolver(nil)
 	}
+	if e.commResolver.comms == nil {
+		e.commResolver.comms = make(map[uint32]string)
+	}
+	if e.commResolver.pending == nil {
+		e.commResolver.pending = make(map[uint32]struct{})
+	}
+	e.commResolver.ensureLookupConfig()
 	return e.commResolver
 }
 
 func (e *eventLoop) configureOutputCallback() {
 	switch {
-	case e.cfg.flamegraphEnable:
-		e.printCb = func(ep *event.Pair) {
-			e.flamegraph.Ch <- ep
-		}
-	case e.liveTrie != nil:
-		e.printCb = func(ep *event.Pair) {
-			e.liveTrie.Ingest(ep)
-		}
 	case e.cfg.pprofEnable:
 		e.printCb = func(ep *event.Pair) {
 			ep.Recycle()
@@ -282,29 +342,10 @@ func (e *eventLoop) stats() string {
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 
-	if e.liveTrie != nil {
-		fmt.Println("Starting live flamegraph server")
-		go func() {
-			liveOptions := flamegraph.LiveServerOptions{
-				OpenCommand: e.cfg.liveOpenCommand,
-			}
-			if e.warningCb != nil {
-				liveOptions.WarningCb = e.notifyWarning
-			}
-			if err := flamegraph.ServeLiveWithOptions(ctx, e.liveTrie, e.cfg.liveInterval, liveOptions); err != nil && ctx.Err() == nil {
-				fmt.Println("Live flamegraph server error:", err)
-			}
-		}()
-	}
-
-	if e.cfg.flamegraphEnable {
-		fmt.Println("Collecting flame graph stats, press Ctrl+C to stop")
-		e.flamegraph.Start(ctx)
-	}
 	if e.cfg.pprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
 	}
-	if e.cfg.plainMode && !e.cfg.flamegraphEnable && !e.cfg.pprofEnable {
+	if e.cfg.plainMode && !e.cfg.pprofEnable {
 		fmt.Println(event.EventStreamHeader)
 	}
 
@@ -315,16 +356,6 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	for ep := range e.events(ctx, rawCh) {
 		e.printCb(ep)
 		e.numSyscallsAfterFilter++
-	}
-
-	if e.cfg.flamegraphEnable {
-		fmt.Println("Waiting for flamegraph")
-		if err := <-e.flamegraph.Done; err != nil {
-			e.notifyWarning(fmt.Sprintf("Flamegraph generation failed: %v", err))
-			if e.warningCb == nil {
-				fmt.Println("Flamegraph generation failed:", err)
-			}
-		}
 	}
 }
 
@@ -359,7 +390,7 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	e.numTracepoints++
 	e.initRawHandlers()
-	evType := EventType(raw[0])
+	evType := types.EventType(raw[0])
 	handler, ok := e.rawHandlers[evType]
 	if !ok {
 		e.notifyWarning(fmt.Sprintf("Dropped unhandled raw event type %d", evType))
@@ -370,53 +401,53 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 
 func (e *eventLoop) initRawHandlers() {
 	if e.rawHandlers == nil {
-		e.rawHandlers = make(map[EventType]rawEventHandler)
+		e.rawHandlers = make(map[types.EventType]rawEventHandler)
 	}
 	if len(e.rawHandlers) != 0 {
 		return
 	}
 
-	e.rawHandlers[ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.openEvent(NewOpenEventFast(raw)); ok {
+	e.rawHandlers[types.ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		if ev, ok := e.filter.openEvent(types.NewOpenEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
-	e.rawHandlers[EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewRetEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewRetEventFast(raw), ch)
 	}
-	e.rawHandlers[ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewFdEventFast(raw))
+	e.rawHandlers[types.ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewFdEventFast(raw))
 	}
-	e.rawHandlers[EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewFdEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewFdEventFast(raw), ch)
 	}
-	e.rawHandlers[ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewNullEventFast(raw))
+	e.rawHandlers[types.ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewNullEventFast(raw))
 	}
-	e.rawHandlers[EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewNullEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewNullEventFast(raw), ch)
 	}
-	e.rawHandlers[EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(NewRetEventFast(raw), ch)
+	e.rawHandlers[types.EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		e.tracepointExited(types.NewRetEventFast(raw), ch)
 	}
-	e.rawHandlers[ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.nameEvent(NewNameEventFast(raw)); ok {
+	e.rawHandlers[types.ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		if ev, ok := e.filter.nameEvent(types.NewNameEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
-	e.rawHandlers[ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.pathEvent(NewPathEventFast(raw)); ok {
+	e.rawHandlers[types.ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		if ev, ok := e.filter.pathEvent(types.NewPathEventFast(raw)); ok {
 			e.tracepointEntered(ev)
 		}
 	}
-	e.rawHandlers[ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewFcntlEventFast(raw))
+	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewFcntlEventFast(raw))
 	}
-	e.rawHandlers[ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewOpenByHandleAtEventFast(raw))
+	e.rawHandlers[types.ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewOpenByHandleAtEventFast(raw))
 	}
-	e.rawHandlers[ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(NewDup3EventFast(raw))
+	e.rawHandlers[types.ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		e.tracepointEntered(types.NewDup3EventFast(raw))
 	}
 }
 
@@ -430,7 +461,7 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	}
 
 	switch enterEv.(type) {
-	case *OpenEvent:
+	case *types.OpenEvent:
 		e.enterEvs[tid] = event.NewPair(enterEv)
 	default:
 		// Only, when we have a comm name
@@ -471,32 +502,93 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	ch <- ep
 }
 
-func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
-	switch enterEv := ep.EnterEv.(type) {
-	case *OpenEvent:
-		return e.handleOpenExit(ep, enterEv)
-	case *NameEvent:
-		return e.handleNameExit(ep, enterEv)
-	case *PathEvent:
-		return e.handlePathExit(ep, enterEv)
-	case *FdEvent:
-		return e.handleFdExit(ep, enterEv)
-	case *Dup3Event:
-		return e.handleDup3Exit(ep, enterEv)
-	case *OpenByHandleAtEvent:
-		return e.handleOpenByHandleAtExit(ep, enterEv)
-	case *NullEvent:
-		return e.handleNullExit(ep, enterEv)
-	case *FcntlEvent:
-		return e.handleFcntlExit(ep, enterEv)
-	default:
-		e.recyclePair(ep, "Dropped malformed enter event")
-		return false
+func (e *eventLoop) initExitHandlers() {
+	e.exitHandlers = map[reflect.Type]tracepointExitHandler{
+		reflect.TypeOf(&types.OpenEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.OpenEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed open enter event")
+				return false
+			}
+			return e.handleOpenExit(ep, enterEv)
+		},
+		reflect.TypeOf(&types.NameEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.NameEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed name enter event")
+				return false
+			}
+			return e.handleNameExit(ep, enterEv)
+		},
+		reflect.TypeOf(&types.PathEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.PathEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed path enter event")
+				return false
+			}
+			return e.handlePathExit(ep, enterEv)
+		},
+		reflect.TypeOf(&types.FdEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.FdEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed fd enter event")
+				return false
+			}
+			return e.handleFdExit(ep, enterEv)
+		},
+		reflect.TypeOf(&types.Dup3Event{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.Dup3Event)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed dup3 enter event")
+				return false
+			}
+			return e.handleDup3Exit(ep, enterEv)
+		},
+		reflect.TypeOf(&types.OpenByHandleAtEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.OpenByHandleAtEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed open_by_handle_at enter event")
+				return false
+			}
+			return e.handleOpenByHandleAtExit(ep, enterEv)
+		},
+		reflect.TypeOf(&types.NullEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.NullEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed null enter event")
+				return false
+			}
+			return e.handleNullExit(ep, enterEv)
+		},
+		reflect.TypeOf(&types.FcntlEvent{}): func(ep *event.Pair) bool {
+			enterEv, ok := ep.EnterEv.(*types.FcntlEvent)
+			if !ok {
+				e.recyclePair(ep, "Dropped malformed fcntl enter event")
+				return false
+			}
+			return e.handleFcntlExit(ep, enterEv)
+		},
 	}
 }
 
-func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *OpenEvent) bool {
-	retEvent, ok := ep.ExitEv.(*RetEvent)
+func (e *eventLoop) exitHandlerRegistry() map[reflect.Type]tracepointExitHandler {
+	if e.exitHandlers == nil {
+		e.initExitHandlers()
+	}
+	return e.exitHandlers
+}
+
+func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
+	handler, ok := e.exitHandlerRegistry()[reflect.TypeOf(ep.EnterEv)]
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed enter event")
+		return false
+	}
+	return handler(ep)
+}
+
+func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool {
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed open exit event")
 		return false
@@ -516,13 +608,13 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *OpenEvent) bool {
 	return true
 }
 
-func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *NameEvent) bool {
+func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool {
 	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
 	ep.Comm = e.comm(nameEv.GetTid())
 	return true
 }
 
-func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
+func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
 	if pathEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok || retEv.Ret < 0 {
@@ -534,8 +626,8 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
 		return false
 	}
 
-	if ep.Is(SYS_ENTER_CREAT) {
-		retEvent, ok := ep.ExitEv.(*RetEvent)
+	if ep.Is(types.SYS_ENTER_CREAT) {
+		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed creat exit event")
 			return false
@@ -553,14 +645,14 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *PathEvent) bool {
 	return true
 }
 
-func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
+func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	ep.File = e.resolveFdFile(fd, fdEv.Pid)
-	if ep.Is(SYS_ENTER_CLOSE) {
+	if ep.Is(types.SYS_ENTER_CLOSE) {
 		e.fdState().delete(fd)
 		e.deleteProcFdCache(fd, fdEv.Pid)
 	}
-	if ep.Is(SYS_ENTER_CLOSE_RANGE) {
+	if ep.Is(types.SYS_ENTER_CLOSE_RANGE) {
 		// close_range provides (first, last), but fd_event only carries the first
 		// argument, so we approximate by closing all tracked fds >= first.
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
@@ -575,13 +667,13 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 		return false
 	}
 
-	if ep.Is(SYS_ENTER_DUP) || ep.Is(SYS_ENTER_DUP2) {
-		fdFile, ok := ep.File.(file.FdFile)
+	if ep.Is(types.SYS_ENTER_DUP) || ep.Is(types.SYS_ENTER_DUP2) {
+		fdFile, ok := ep.File.(*file.FdFile)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed dup source event")
 			return false
 		}
-		retEvent, ok := ep.ExitEv.(*RetEvent)
+		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed dup exit event")
 			return false
@@ -589,8 +681,8 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 		// Duplicating fd
 		e.registerDup(fdFile, int32(retEvent.Ret), 0)
 	}
-	if ep.Is(SYS_ENTER_PIDFD_GETFD) {
-		retEv, ok := ep.ExitEv.(*RetEvent)
+	if ep.Is(types.SYS_ENTER_PIDFD_GETFD) {
+		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed pidfd_getfd exit event")
 			return false
@@ -601,13 +693,13 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *FdEvent) bool {
 			ep.File = transferredFile
 		}
 	}
-	if retEv, ok := ep.ExitEv.(*RetEvent); ok {
+	if retEv, ok := ep.ExitEv.(*types.RetEvent); ok {
 		ep.Bytes = bytesFromRet(retEv)
 	}
 	return true
 }
 
-func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
+func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool {
 	fd := int32(dup3Ev.Fd)
 	ep.File = e.resolveFdFile(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
@@ -616,12 +708,12 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
 		return false
 	}
 
-	fdFile, ok := ep.File.(file.FdFile)
+	fdFile, ok := ep.File.(*file.FdFile)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed dup3 source event")
 		return false
 	}
-	retEvent, ok := ep.ExitEv.(*RetEvent)
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed dup3 exit event")
 		return false
@@ -630,9 +722,9 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *Dup3Event) bool {
 	return true
 }
 
-func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *OpenByHandleAtEvent) bool {
+func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *types.OpenByHandleAtEvent) bool {
 	tid := openByHandleEv.GetTid()
-	retEvent, ok := ep.ExitEv.(*RetEvent)
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed open_by_handle_at exit event")
 		return false
@@ -661,8 +753,8 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *Ope
 	return true
 }
 
-func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
-	if ep.Is(SYS_ENTER_IO_URING_SETUP) {
+func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool {
+	if ep.Is(types.SYS_ENTER_IO_URING_SETUP) {
 		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed io_uring_setup exit event")
@@ -674,7 +766,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
 			ep.File = fdFile
 		}
 	}
-	if ep.Is(SYS_ENTER_GETCWD) {
+	if ep.Is(types.SYS_ENTER_GETCWD) {
 		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed getcwd exit event")
@@ -694,7 +786,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *NullEvent) bool {
 	return true
 }
 
-func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *FcntlEvent) bool {
+func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.resolveFdFile(fd, fcntlEv.Pid)
@@ -713,7 +805,7 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *FcntlEvent) bool {
 		return true
 	}
 
-	fdFile, ok := ep.File.(file.FdFile)
+	fdFile, ok := ep.File.(*file.FdFile)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed fcntl file event")
 		return false
@@ -734,7 +826,7 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *FcntlEvent) bool {
 	return true
 }
 
-func (e *eventLoop) registerDup(fdFile file.FdFile, newFd int32, extraFlags int32) {
+func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int32) {
 	if newFd < 0 {
 		return
 	}
@@ -775,12 +867,12 @@ func (e *eventLoop) resolveFdFile(fd int32, pid uint32) file.File {
 	return discovered
 }
 
-func (e *eventLoop) cachedProcFdFile(fd int32, pid uint32) (file.FdFile, bool) {
+func (e *eventLoop) cachedProcFdFile(fd int32, pid uint32) (*file.FdFile, bool) {
 	cache, ok := e.procFdCacheState()[procFdCacheKey(pid, fd)]
 	return cache, ok
 }
 
-func (e *eventLoop) setProcFdCache(fd int32, pid uint32, resolved file.FdFile) {
+func (e *eventLoop) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) {
 	e.procFdCacheState()[procFdCacheKey(pid, fd)] = resolved
 }
 
@@ -799,9 +891,9 @@ func (e *eventLoop) deleteProcFdCacheFrom(first int32, pid uint32) {
 	}
 }
 
-func (e *eventLoop) procFdCacheState() map[uint64]file.FdFile {
+func (e *eventLoop) procFdCacheState() map[uint64]*file.FdFile {
 	if e.procFdCache == nil {
-		e.procFdCache = make(map[uint64]file.FdFile)
+		e.procFdCache = make(map[uint64]*file.FdFile)
 	}
 	return e.procFdCache
 }
