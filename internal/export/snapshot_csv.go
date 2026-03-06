@@ -2,6 +2,7 @@ package export
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,13 +11,17 @@ import (
 )
 
 // SnapshotCSV writes a dashboard snapshot to a timestamped CSV file.
-func SnapshotCSV(snap *statsengine.Snapshot) (string, error) {
-	filename := fmt.Sprintf("ior-snapshot-%s.csv", time.Now().Format("20060102-150405"))
+func SnapshotCSV(snap *statsengine.Snapshot) (filename string, retErr error) {
+	filename = fmt.Sprintf("ior-snapshot-%s.csv", time.Now().Format("20060102-150405"))
 	f, err := os.Create(filename)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close %s: %w", filename, err))
+		}
+	}()
 
 	w := csv.NewWriter(f)
 
