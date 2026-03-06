@@ -2,6 +2,7 @@ package flamegraph
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	coreflamegraph "ior/internal/flamegraph"
@@ -50,6 +51,59 @@ func TestRefreshFromLiveTrieTracksVersionAndSnapshot(t *testing.T) {
 
 	if changed := m.RefreshFromLiveTrie(); changed {
 		t.Fatalf("expected no refresh when version is unchanged")
+	}
+}
+
+func TestRefreshFromLiveTrieAllowsInitialLoadWhilePaused(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModel(trie)
+	m.paused = true
+
+	if changed := m.RefreshFromLiveTrie(); !changed {
+		t.Fatalf("expected initial paused refresh to load first snapshot")
+	}
+	if m.snapshot == nil {
+		t.Fatalf("expected snapshot to be available after initial paused refresh")
+	}
+	if changed := m.RefreshFromLiveTrie(); changed {
+		t.Fatalf("expected subsequent paused refresh to be skipped once snapshot exists")
+	}
+}
+
+func TestRefreshFromLiveTriePausedBlocksAfterNavigableSnapshot(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModel(trie)
+	m.paused = true
+	m.snapshot = &snapshotNode{Name: "root", Total: 1}
+	m.frames = []tuiFrame{
+		{Name: "root", Path: "root"},
+		{Name: "child", Path: "root" + pathSeparator + "child"},
+	}
+	m.hasNavigableSnapshot = true
+	m.lastVersion = 1
+
+	if changed := m.RefreshFromLiveTrie(); changed {
+		t.Fatalf("expected paused refresh to remain frozen once navigable snapshot exists")
+	}
+	if got, want := m.lastVersion, uint64(1); got != want {
+		t.Fatalf("expected version to remain unchanged while paused, got %d want %d", got, want)
+	}
+}
+
+func TestRefreshFromLiveTriePausedKeepsBootstrappingWithoutNavigableSnapshot(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModel(trie)
+	m.paused = true
+	m.snapshot = &snapshotNode{Name: "root", Total: 1}
+	m.frames = []tuiFrame{{Name: "root", Path: "root"}}
+	m.hasNavigableSnapshot = false
+	m.lastVersion = 1
+
+	if changed := m.RefreshFromLiveTrie(); !changed {
+		t.Fatalf("expected paused refresh to continue bootstrapping before navigation is possible")
+	}
+	if got, want := m.lastVersion, trie.Version(); got != want {
+		t.Fatalf("expected paused bootstrap refresh to track trie version, got %d want %d", got, want)
 	}
 }
 
@@ -103,6 +157,141 @@ func TestKeyboardNavigationShallowWideSiblings(t *testing.T) {
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'h'}[0], Text: "h"})
 	if m.selectedIdx != 2 {
 		t.Fatalf("expected previous sibling B, got idx %d", m.selectedIdx)
+	}
+}
+
+func TestHorizontalTraversalFallbackFromRoot(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Path: "root"},
+		{Name: "A", Depth: 1, Col: 0, Path: "root" + pathSeparator + "A"},
+		{Name: "B", Depth: 1, Col: 30, Path: "root" + pathSeparator + "B"},
+	}
+	m.selectedIdx = 0
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.selectedIdx != 1 {
+		t.Fatalf("expected right arrow from root to move to first traversable frame, got idx %d", m.selectedIdx)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'l'}[0], Text: "l"})
+	if m.selectedIdx != 2 {
+		t.Fatalf("expected vi right key to move to next frame, got idx %d", m.selectedIdx)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.selectedIdx != 1 {
+		t.Fatalf("expected left arrow to move back to previous frame, got idx %d", m.selectedIdx)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'h'}[0], Text: "h"})
+	if m.selectedIdx != 0 {
+		t.Fatalf("expected vi left key to move back to root, got idx %d", m.selectedIdx)
+	}
+}
+
+func TestPausedStateStillAllowsNavigation(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Path: "root"},
+		{Name: "A", Depth: 1, Col: 0, Path: "root" + pathSeparator + "A"},
+	}
+	m.paused = true
+	m.selectedIdx = 0
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.selectedIdx != 1 {
+		t.Fatalf("expected navigation to work while paused, got idx %d", m.selectedIdx)
+	}
+}
+
+func TestStaticFixtureArrowTraversalVisitsAllFrames(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestFlameData(trie)
+
+	m := NewModel(trie)
+	m.SetViewport(180, 40)
+	if changed := m.RefreshFromLiveTrie(); !changed {
+		t.Fatalf("expected seeded fixture refresh to load frames")
+	}
+	if len(m.frames) < 2 {
+		t.Fatalf("expected seeded fixture to contain navigable frames, got %d", len(m.frames))
+	}
+
+	visited := map[int]bool{m.selectedIdx: true}
+	for i := 0; i < len(m.frames)*4; i++ {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+		visited[m.selectedIdx] = true
+	}
+	for i := 0; i < len(m.frames)*4; i++ {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyLeft})
+		visited[m.selectedIdx] = true
+	}
+
+	if got, want := len(visited), len(m.frames); got != want {
+		t.Fatalf("expected arrow traversal to visit all frames: visited=%d frames=%d", got, want)
+	}
+	if !strings.Contains(m.View().Content, "sel:") {
+		t.Fatalf("expected view to expose selected-frame status line")
+	}
+}
+
+func TestLiveFixtureArrowTraversalWhileStreamingVisitsAllFrames(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestLiveFlameData(trie, 0)
+
+	m := NewModel(trie)
+	m.SetViewport(180, 40)
+	if changed := m.RefreshFromLiveTrie(); !changed {
+		t.Fatalf("expected initial refresh to load frames")
+	}
+	if len(m.frames) < 2 {
+		t.Fatalf("expected seeded fixture to contain navigable frames, got %d", len(m.frames))
+	}
+
+	selectedPath := func(model Model) string {
+		if len(model.frames) == 0 || model.selectedIdx < 0 || model.selectedIdx >= len(model.frames) {
+			return ""
+		}
+		return model.frames[model.selectedIdx].Path
+	}
+
+	visitedPaths := map[string]bool{selectedPath(m): true}
+	moves := 0
+	for i := 0; i < len(m.frames)*4; i++ {
+		trie.Reset()
+		coreflamegraph.SeedTestLiveFlameData(trie, uint64(i+1))
+		if changed := m.RefreshFromLiveTrie(); !changed {
+			t.Fatalf("expected refresh after synthetic live ingest at step %d", i)
+		}
+		before := selectedPath(m)
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+		after := selectedPath(m)
+		if after != before {
+			moves++
+		}
+		visitedPaths[after] = true
+	}
+	for i := 0; i < len(m.frames)*4; i++ {
+		trie.Reset()
+		coreflamegraph.SeedTestLiveFlameData(trie, uint64(i+1+len(m.frames)*4))
+		if changed := m.RefreshFromLiveTrie(); !changed {
+			t.Fatalf("expected refresh after synthetic live ingest (reverse) at step %d", i)
+		}
+		before := selectedPath(m)
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyLeft})
+		after := selectedPath(m)
+		if after != before {
+			moves++
+		}
+		visitedPaths[after] = true
+	}
+
+	if moves == 0 {
+		t.Fatalf("expected live-stream navigation to change selection at least once")
+	}
+	if len(visitedPaths) < 8 {
+		t.Fatalf("expected traversal across live updates to reach multiple frame paths, got %d", len(visitedPaths))
 	}
 }
 
@@ -350,9 +539,17 @@ func TestControlPauseToggle(t *testing.T) {
 	if !m.paused {
 		t.Fatalf("expected pause to toggle on")
 	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if m.paused {
+		t.Fatalf("expected space key to toggle pause off")
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if !m.paused {
+		t.Fatalf("expected space key to toggle pause on")
+	}
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
 	if m.paused {
-		t.Fatalf("expected pause to toggle off")
+		t.Fatalf("expected p key to toggle pause off")
 	}
 }
 
@@ -371,6 +568,26 @@ func TestControlResetBaseline(t *testing.T) {
 	}
 	if m.statusMessage != "Baseline reset" {
 		t.Fatalf("expected reset status message, got %q", m.statusMessage)
+	}
+}
+
+func TestViewIncludesSelectionStatusBar(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 20
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Row: 0, Width: 120, Total: 100, Percent: 100, Path: "root"},
+		{Name: "child", Depth: 1, Col: 0, Row: 1, Width: 60, Total: 40, Percent: 40, Path: "root" + pathSeparator + "child"},
+	}
+	m.selectedIdx = 1
+	m.globalTotal = 100
+
+	view := m.View().Content
+	if !strings.Contains(view, "[LIVE] sel:2/2 child") {
+		t.Fatalf("expected selection status bar to include selected frame info, got %q", view)
+	}
+	if !strings.Contains(view, "40.00% system") {
+		t.Fatalf("expected selection status bar to include selected share, got %q", view)
 	}
 }
 

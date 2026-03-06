@@ -127,6 +127,26 @@ func TestParseIorWatchIntervalFlag(t *testing.T) {
 	}
 }
 
+func TestParseTestFlamesFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "--testflames")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TestFlames {
+		t.Fatalf("expected --testflames to enable static flamegraph test mode")
+	}
+}
+
+func TestParseTestLiveFlamesFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "--testliveflames")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TestLiveFlames {
+		t.Fatalf("expected --testliveflames to enable synthetic live flamegraph test mode")
+	}
+}
+
 func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {

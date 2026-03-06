@@ -61,6 +61,70 @@ func TestLiveTrieVersionIncrementsPerIngest(t *testing.T) {
 	}
 }
 
+func TestLiveTrieAddRecordIncrementsVersion(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt.AddRecord(IterRecord{
+		Path:    "/tmp/demo/read",
+		TraceID: types.SYS_ENTER_READ,
+		Comm:    "demo",
+		Pid:     1001,
+		Tid:     1001,
+		Cnt:     Counter{Count: 7, Duration: 70, DurationToPrev: 14, Bytes: 28},
+	})
+
+	if got := lt.Version(); got != 1 {
+		t.Fatalf("version = %d, want 1", got)
+	}
+	snap := decodeLiveSnapshot(t, lt)
+	if snap.Total != 7 {
+		t.Fatalf("root total = %d, want 7", snap.Total)
+	}
+}
+
+func TestSeedTestFlameDataBuildsStaticFixture(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	SeedTestFlameData(lt)
+
+	if got := lt.Version(); got == 0 {
+		t.Fatalf("expected seed fixture to add records")
+	}
+	snap := decodeLiveSnapshot(t, lt)
+	if snap.Total == 0 {
+		t.Fatalf("expected non-empty seeded snapshot")
+	}
+	if findSnapshotChild(&snap, "api") == nil {
+		t.Fatalf("expected seeded snapshot to include api branch")
+	}
+	if findSnapshotChild(&snap, "worker") == nil {
+		t.Fatalf("expected seeded snapshot to include worker branch")
+	}
+}
+
+func TestSeedTestLiveFlameDataVariesByTick(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+
+	SeedTestLiveFlameData(lt, 0)
+	snapTick0 := decodeLiveSnapshot(t, lt)
+	apiTick0 := findSnapshotPath(t, &snapTick0, "api").Total
+	workerTick0 := findSnapshotPath(t, &snapTick0, "worker").Total
+
+	lt.Reset()
+	SeedTestLiveFlameData(lt, 1)
+	snapTick1 := decodeLiveSnapshot(t, lt)
+	apiTick1 := findSnapshotPath(t, &snapTick1, "api").Total
+	workerTick1 := findSnapshotPath(t, &snapTick1, "worker").Total
+
+	if apiTick0 == apiTick1 && workerTick0 == workerTick1 {
+		t.Fatalf("expected phase shift to alter branch totals, got api=%d worker=%d for both ticks", apiTick0, workerTick0)
+	}
+	if apiTick0 <= workerTick0 {
+		t.Fatalf("expected api to dominate at tick 0, got api=%d worker=%d", apiTick0, workerTick0)
+	}
+	if workerTick1 <= apiTick1 {
+		t.Fatalf("expected worker to dominate at tick 1, got worker=%d api=%d", workerTick1, apiTick1)
+	}
+}
+
 func TestLiveTrieResetClearsDataAndAdvancesVersion(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
