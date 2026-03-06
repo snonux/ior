@@ -183,7 +183,7 @@ func RunWithTraceStarter(starter TraceStarter) error {
 }
 
 // RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
-func RunWithTraceStarterConfig(cfg flags.Flags, starter TraceStarter) error {
+func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
@@ -197,7 +197,7 @@ func RunTestFlamesWithTraceStarter(starter TraceStarter) error {
 }
 
 // RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
-func RunTestFlamesWithTraceStarterConfig(cfg flags.Flags, starter TraceStarter) error {
+func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	model := newModelWithRuntimeConfig(1, 1, -1, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
@@ -253,7 +253,7 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 }
 
 // NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
-func NewModelWithConfig(cfg flags.Flags, initialPID int, startTrace TraceStarter) Model {
+func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) Model {
 	return newModelWithRuntimeConfig(initialPID, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
 }
 

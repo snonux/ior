@@ -64,7 +64,7 @@ func Run() error {
 	return dispatchRun(flags.Get())
 }
 
-func dispatchRun(cfg flags.Flags) error {
+func dispatchRun(cfg flags.Config) error {
 	if err := validateRunConfig(cfg); err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func dispatchRun(cfg flags.Flags) error {
 	return runTUIFn(cfg, tuiTraceStarterFromRunTrace(cfg, runTraceWithContextFn))
 }
 
-func validateRunConfig(cfg flags.Flags) error {
+func validateRunConfig(cfg flags.Config) error {
 	if cfg.TestFlames && cfg.PlainMode {
 		return errors.New("--testflames cannot be combined with -plain")
 	}
@@ -93,7 +93,7 @@ func validateRunConfig(cfg flags.Flags) error {
 	return nil
 }
 
-func tuiTestFlamesStarter(cfg flags.Flags) tui.TraceStarter {
+func tuiTestFlamesStarter(cfg flags.Config) tui.TraceStarter {
 	return func(ctx context.Context) error {
 		engine, streamBuf, liveTrie := buildTestFlamesRuntime(cfg)
 		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
@@ -105,7 +105,7 @@ func tuiTestFlamesStarter(cfg flags.Flags) tui.TraceStarter {
 	}
 }
 
-func tuiTestLiveFlamesStarter(cfg flags.Flags) tui.TraceStarter {
+func tuiTestLiveFlamesStarter(cfg flags.Config) tui.TraceStarter {
 	return func(ctx context.Context) error {
 		engine, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, cfg)
 		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
@@ -117,7 +117,7 @@ func tuiTestLiveFlamesStarter(cfg flags.Flags) tui.TraceStarter {
 	}
 }
 
-func buildTestFlamesRuntime(cfg flags.Flags) (*statsengine.Engine, *eventstream.RingBuffer, *flamegraph.LiveTrie) {
+func buildTestFlamesRuntime(cfg flags.Config) (*statsengine.Engine, *eventstream.RingBuffer, *flamegraph.LiveTrie) {
 	engine := statsengine.NewEngine(64)
 	streamBuf := eventstream.NewRingBuffer()
 	liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
@@ -125,7 +125,7 @@ func buildTestFlamesRuntime(cfg flags.Flags) (*statsengine.Engine, *eventstream.
 	return engine, streamBuf, liveTrie
 }
 
-func buildTestLiveFlamesRuntime(ctx context.Context, cfg flags.Flags) (*statsengine.Engine, *eventstream.RingBuffer, *flamegraph.LiveTrie) {
+func buildTestLiveFlamesRuntime(ctx context.Context, cfg flags.Config) (*statsengine.Engine, *eventstream.RingBuffer, *flamegraph.LiveTrie) {
 	engine := statsengine.NewEngine(64)
 	streamBuf := eventstream.NewRingBuffer()
 	liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
@@ -160,13 +160,13 @@ func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, 
 	}
 }
 
-func shouldRunTraceMode(cfg flags.Flags) bool {
+func shouldRunTraceMode(cfg flags.Config) bool {
 	return cfg.PlainMode
 }
 
 func tuiTraceStarterFromRunTrace(
-	baseCfg flags.Flags,
-	startTrace func(context.Context, flags.Flags, chan<- struct{}, func(*eventLoop)) error,
+	baseCfg flags.Config,
+	startTrace func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error,
 ) tui.TraceStarter {
 	return func(ctx context.Context) error {
 		bpf.SetLoggerCbs(bpf.Callbacks{
@@ -229,11 +229,11 @@ func tuiTraceStarterFromRunTrace(
 	}
 }
 
-func runTrace(cfg flags.Flags) error {
+func runTrace(cfg flags.Config) error {
 	return runTraceWithContext(context.Background(), cfg, nil, nil)
 }
 
-func newEventLoopConfig(cfg flags.Flags) eventLoopConfig {
+func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	fields := make([]string, len(cfg.CollapsedFields))
 	copy(fields, cfg.CollapsedFields)
 	return eventLoopConfig{
@@ -263,7 +263,7 @@ func newLogger(verbose bool) func(...any) {
 	return func(args ...any) { _, _ = fmt.Println(args...) }
 }
 
-func setupBPFModule(parentCtx context.Context, cfg flags.Flags) (*bpf.Module, *probemanager.Manager, func(), error) {
+func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *probemanager.Manager, func(), error) {
 	releaseBindings := func() {}
 
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
@@ -307,7 +307,7 @@ func setupEventChannel(bpfModule *bpf.Module) (chan []byte, error) {
 	return ch, nil
 }
 
-func setupTraceContext(parentCtx context.Context, cfg flags.Flags, logln func(...any)) (context.Context, context.CancelFunc, func()) {
+func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(...any)) (context.Context, context.CancelFunc, func()) {
 	ctx := parentCtx
 	cancel := func() {}
 	if shouldAutoStopByDuration(cfg) {
@@ -335,7 +335,7 @@ func setupTraceContext(parentCtx context.Context, cfg flags.Flags, logln func(..
 	return ctx, cancel, stopSignals
 }
 
-func setupProfiling(ctx context.Context, cfg flags.Flags, started chan<- struct{}) (*profilingControl, error) {
+func setupProfiling(ctx context.Context, cfg flags.Config, started chan<- struct{}) (*profilingControl, error) {
 	control := &profilingControl{
 		done:          make(chan struct{}),
 		stopExecTrace: func() {},
@@ -443,7 +443,7 @@ func startTraceShutdownWatcher(ctx context.Context, verbose bool, el *eventLoop,
 	}()
 }
 
-func runTraceWithContext(parentCtx context.Context, cfg flags.Flags, started chan<- struct{}, configure func(*eventLoop)) error {
+func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
 	if getEUID() != 0 {
 		return errRootPrivilegesRequired
 	}
@@ -496,7 +496,7 @@ func signalTraceStarted(started chan<- struct{}) {
 	close(started)
 }
 
-func shouldAutoStopByDuration(cfg flags.Flags) bool {
+func shouldAutoStopByDuration(cfg flags.Config) bool {
 	return cfg.PlainMode
 }
 

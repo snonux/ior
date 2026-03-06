@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func parseForTest(t *testing.T, args ...string) (Flags, error) {
+func parseForTest(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
 
 	oldCommandLine := flag.CommandLine
