@@ -2,13 +2,14 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
-	common "ior/internal/tui/common"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
+	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
+
+	"charm.land/lipgloss/v2"
 )
 
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
@@ -33,6 +34,7 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 		trendWithArrow(snap.ThroughputTrend),
 	)
 
+	panelW := panelWidth(width)
 	panelInner := panelInnerWidth(width)
 	labelWidth := maxLabelWidth("Latency:", "Gap:", "Throughput:")
 	latencySpark := renderOverviewSparklineAligned("Latency:", snap.LatencySeriesNs(), panelInner, labelWidth)
@@ -44,8 +46,8 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	latencyHist := "Latency buckets: " + summarizeHistogramBrief(snap.LatencyHistogram)
 	gapHist := "Gap buckets: " + summarizeHistogramBrief(snap.GapHistogram)
 
-	panel := common.PanelStyle.Width(panelInner)
-	sparkPanel := panel.Render(strings.Join([]string{latencySpark, "", gapSpark, "", throughputSpark}, "\n"))
+	panel := common.PanelStyle.Width(panelW)
+	sparkPanel := panel.Render(strings.Join([]string{latencySpark, gapSpark, throughputSpark}, "\n"))
 	topPanel := panel.Render(strings.Join([]string{topSyscalls, topFiles, topProcesses}, "\n"))
 	histPanel := panel.Render(strings.Join([]string{latencyHist, gapHist}, "\n"))
 
@@ -73,7 +75,7 @@ func renderSyscallBox(snap *statsengine.Snapshot, width int) string {
 		snap.SyscallRatePerSec,
 		generatedAt,
 	)
-	return common.PanelStyle.Width(summaryBoxInnerWidth(width)).Height(5).Render(content)
+	return common.PanelStyle.Width(width).Height(5).Render(content)
 }
 
 func renderBytesBox(snap *statsengine.Snapshot, width int) string {
@@ -83,7 +85,7 @@ func renderBytesBox(snap *statsengine.Snapshot, width int) string {
 		formatBytes(snap.WriteBytesPerSec),
 		formatBytes(float64(snap.TotalBytes)),
 	)
-	return common.PanelStyle.Width(summaryBoxInnerWidth(width)).Height(5).Render(content)
+	return common.PanelStyle.Width(width).Height(5).Render(content)
 }
 
 func renderErrorBox(snap *statsengine.Snapshot, width int) string {
@@ -99,7 +101,7 @@ func renderErrorBox(snap *statsengine.Snapshot, width int) string {
 		snap.LatencyMeanNs,
 		snap.GapMeanNs,
 	)
-	return common.PanelStyle.Width(summaryBoxInnerWidth(width)).Height(5).Render(content)
+	return common.PanelStyle.Width(width).Height(5).Render(content)
 }
 
 func trendWithArrow(trend statsengine.Trend) string {
@@ -212,19 +214,8 @@ func summaryBoxWidth(width int) int {
 	return w
 }
 
-func summaryBoxInnerWidth(width int) int {
-	inner := width - panelHorizontalChrome
-	if inner < 14 {
-		return 14
-	}
-	return inner
-}
-
 func renderOverviewSparkline(label string, data []float64, panelInner int) string {
 	w := panelInner - utf8.RuneCountInString(label) - 1 - sparklineSafetyMargin
-	if w > sparklineMaxWidth {
-		w = sparklineMaxWidth
-	}
 	if w < 8 {
 		w = 8
 	}
@@ -234,9 +225,6 @@ func renderOverviewSparkline(label string, data []float64, panelInner int) strin
 func renderOverviewSparklineAligned(label string, data []float64, panelInner int, labelWidth int) string {
 	paddedLabel := padLabelRight(label, labelWidth)
 	w := panelInner - labelWidth - 1 - sparklineSafetyMargin
-	if w > sparklineMaxWidth {
-		w = sparklineMaxWidth
-	}
 	if w < 8 {
 		w = 8
 	}
@@ -262,13 +250,20 @@ func padLabelRight(label string, width int) string {
 	return label + strings.Repeat(" ", pad)
 }
 
-func panelInnerWidth(width int) int {
+func panelWidth(width int) int {
 	if width <= 0 {
 		width = 80
 	}
-	inner := width - panelHorizontalChrome
-	if inner < 20 {
+	if width < 20 {
 		return 20
+	}
+	return width
+}
+
+func panelInnerWidth(width int) int {
+	inner := panelWidth(width) - panelHorizontalChrome
+	if inner < 16 {
+		return 16
 	}
 	return inner
 }

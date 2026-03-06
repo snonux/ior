@@ -1,9 +1,10 @@
 package statsengine
 
 import (
-	"ior/internal/types"
 	"slices"
 	"time"
+
+	"ior/internal/types"
 )
 
 // TrendDirection is the direction of a time-window comparison.

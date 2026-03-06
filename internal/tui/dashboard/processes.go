@@ -2,11 +2,12 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/table"
+	"ior/internal/statsengine"
+
+	"charm.land/bubbles/v2/table"
 )
 
 func renderProcesses(snap *statsengine.Snapshot, width, height int) string {

@@ -2,11 +2,12 @@ package dashboard
 
 import (
 	"fmt"
-	common "ior/internal/tui/common"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
+	common "ior/internal/tui/common"
+
+	"charm.land/lipgloss/v2"
 )
 
 // Tab is a dashboard tab identifier.
@@ -25,9 +26,12 @@ const (
 	TabLatency
 	// TabStream is the live event stream tab.
 	TabStream
+	// TabFlame is the live flamegraph tab.
+	TabFlame
 )
 
 var allTabs = []Tab{
+	TabFlame,
 	TabOverview,
 	TabSyscalls,
 	TabFiles,
@@ -50,6 +54,8 @@ func (t Tab) String() string {
 		return "Latency+Gaps"
 	case TabStream:
 		return "Stream"
+	case TabFlame:
+		return "Flame"
 	default:
 		return "Unknown"
 	}
@@ -192,6 +198,8 @@ func tabLabel(tab Tab, short bool) string {
 		return "Lat"
 	case TabStream:
 		return "Str"
+	case TabFlame:
+		return "Flm"
 	default:
 		return "Unk"
 	}

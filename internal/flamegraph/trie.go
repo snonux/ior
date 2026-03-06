@@ -24,20 +24,7 @@ func newTrie() *trie {
 }
 
 func (t *trie) add(frames []string, value uint64) {
-	node := t.root
-	for _, frame := range frames {
-		child, ok := node.childMap[frame]
-		if !ok {
-			child = &trieNode{
-				name:     frame,
-				childMap: make(map[string]*trieNode),
-			}
-			node.children = append(node.children, child)
-			node.childMap[frame] = child
-		}
-		node = child
-	}
-	node.value += value
+	insertTriePath(t.root, frames, value)
 }
 
 func (t *trie) computeTotals() {

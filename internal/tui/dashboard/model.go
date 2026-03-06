@@ -1,20 +1,26 @@
 package dashboard
 
 import (
-	"ior/internal/statsengine"
-	common "ior/internal/tui/common"
-	"ior/internal/tui/eventstream"
-	"ior/internal/tui/messages"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
+	"ior/internal/tui/eventstream"
+	flamegraphtui "ior/internal/tui/flamegraph"
+	"ior/internal/tui/messages"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 const defaultRefreshMs = 1000
 const streamRefreshMs = 200
+const flameRefreshMs = 200
 const streamChromeRows = 4
+const dashboardHelpHintRows = 1
+const dashboardExpandedHelpRows = 2
+const dashboardTabBarRows = 1
 
 // SnapshotSource is the dashboard data source.
 type SnapshotSource interface {
@@ -23,6 +29,7 @@ type SnapshotSource interface {
 
 type refreshTickMsg struct{}
 type streamTickMsg struct{}
+type flameTickMsg struct{}
 type streamEditorDoneMsg struct {
 	err error
 }
@@ -31,8 +38,9 @@ type streamEditorDoneMsg struct {
 type Model struct {
 	activeTab Tab
 
-	engine SnapshotSource
-	latest *statsengine.Snapshot
+	engine   SnapshotSource
+	latest   *statsengine.Snapshot
+	liveTrie flamegraphtui.LiveTrieSource
 
 	width  int
 	height int
@@ -46,32 +54,50 @@ type Model struct {
 	filesDirOffset  int
 	processesOffset int
 	streamModel     eventstream.Model
+	flamegraphModel flamegraphtui.Model
 	showHelp        bool
+	isDark          bool
+	focused         bool
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
-func NewModel(engine SnapshotSource, streamSource *eventstream.RingBuffer) Model {
+func NewModel(engine SnapshotSource, streamSource eventstream.Source) Model {
 	return NewModelWithConfig(engine, streamSource, defaultRefreshMs, common.Keys)
 }
 
 // NewModelWithConfig creates a dashboard model with explicit refresh and keys.
-func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuffer, refreshMs int, keys common.KeyMap) Model {
+func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, refreshMs int, keys common.KeyMap) Model {
 	if refreshMs <= 0 {
 		refreshMs = defaultRefreshMs
 	}
-	return Model{
-		activeTab:    TabOverview,
-		engine:       engine,
-		refreshEvery: time.Duration(refreshMs) * time.Millisecond,
-		keys:         keys,
-		pidFilter:    -1,
-		streamModel:  eventstream.NewModel(streamSource),
+	m := Model{
+		activeTab:       TabFlame,
+		engine:          engine,
+		refreshEvery:    time.Duration(refreshMs) * time.Millisecond,
+		keys:            keys,
+		pidFilter:       -1,
+		streamModel:     eventstream.NewModel(streamSource),
+		flamegraphModel: flamegraphtui.NewModel(nil),
+		isDark:          true,
+		focused:         true,
 	}
+	m.SetDarkMode(true)
+	return m
 }
 
 // Init starts periodic refresh ticks.
 func (m Model) Init() tea.Cmd {
-	return tickCmd(m.refreshEvery)
+	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
+	switch m.activeTab {
+	case TabStream:
+		cmds = append(cmds, streamTickCmd())
+	case TabFlame:
+		cmds = append(cmds, flameTickCmd())
+	}
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles ticks, snapshots, tab changes, and resize events.
@@ -82,19 +108,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
 		m.streamModel.SetViewport(streamWidth, streamHeight)
+		flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
+		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 		return m, nil
 	case refreshTickMsg:
+		if !m.focused {
+			return m, nil
+		}
 		snap := m.snapshot()
 		return m, tea.Batch(
 			tickCmd(m.refreshEvery),
 			func() tea.Msg { return messages.StatsTickMsg{Snap: snap} },
 		)
 	case streamTickMsg:
+		if !m.focused {
+			return m, nil
+		}
 		if m.activeTab != TabStream {
 			return m, nil
 		}
 		m.streamModel.Refresh()
 		return m, streamTickCmd()
+	case flameTickMsg:
+		if !m.focused {
+			return m, nil
+		}
+		if m.activeTab != TabFlame {
+			return m, nil
+		}
+		var animCmd tea.Cmd
+		if m.liveTrie != nil && m.flamegraphModel.RefreshFromLiveTrie() {
+			animCmd = m.flamegraphModel.AnimationCmd()
+		}
+		if animCmd != nil {
+			return m, tea.Batch(flameTickCmd(), animCmd)
+		}
+		return m, flameTickCmd()
 	case messages.StatsTickMsg:
 		m.latest = msg.Snap
 		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
@@ -103,7 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 		m.streamModel.Refresh()
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case streamEditorDoneMsg:
 		if msg.err != nil {
@@ -111,16 +160,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.activeTab == TabFlame {
+		next, cmd := m.flamegraphModel.Update(msg)
+		m.flamegraphModel = next.(flamegraphtui.Model)
+		return m, cmd
+	}
 	return m, nil
 }
 
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	var cmd tea.Cmd
 	keyStr := msg.String()
 	if keyStr == "H" {
 		m.showHelp = !m.showHelp
+		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
+		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 		return m, nil
+	}
+	if m.activeTab == TabFlame && m.flamegraphModel.ConsumesKey(msg) {
+		next, flameCmd := m.flamegraphModel.Update(msg)
+		m.flamegraphModel = next.(flamegraphtui.Model)
+		return m, flameCmd
 	}
 	handled, scrollCmd := m.handleScrollKey(msg)
 	if scrollCmd != nil {
@@ -132,29 +193,29 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if !handled {
 		switch {
+		case key.Matches(msg, m.keys.One):
+			m.activeTab = TabFlame
+			handled = true
 		case key.Matches(msg, m.keys.Tab):
 			m.activeTab = nextTab(m.activeTab)
 			handled = true
 		case key.Matches(msg, m.keys.ShiftTab):
 			m.activeTab = prevTab(m.activeTab)
 			handled = true
-		case key.Matches(msg, m.keys.One):
+		case key.Matches(msg, m.keys.Two):
 			m.activeTab = TabOverview
 			handled = true
-		case key.Matches(msg, m.keys.Two):
+		case key.Matches(msg, m.keys.Three):
 			m.activeTab = TabSyscalls
 			handled = true
-		case key.Matches(msg, m.keys.Three):
+		case key.Matches(msg, m.keys.Four):
 			m.activeTab = TabFiles
 			handled = true
-		case key.Matches(msg, m.keys.Four):
+		case key.Matches(msg, m.keys.Five):
 			m.activeTab = TabProcesses
 			handled = true
-		case key.Matches(msg, m.keys.Five):
-			m.activeTab = TabLatency
-			handled = true
 		case key.Matches(msg, m.keys.Six):
-			m.activeTab = TabStream
+			m.activeTab = TabLatency
 			handled = true
 		case key.Matches(msg, m.keys.Seven):
 			m.activeTab = TabStream
@@ -171,18 +232,34 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if !handled {
+		if m.activeTab == TabFlame {
+			next, flameCmd := m.flamegraphModel.Update(msg)
+			m.flamegraphModel = next.(flamegraphtui.Model)
+			return m, flameCmd
+		}
 		return m, nil
 	}
-	if prevActiveTab != TabStream && m.activeTab == TabStream {
-		if cmd == nil {
-			return m, streamTickCmd()
-		}
-		return m, tea.Batch(cmd, streamTickCmd())
+	batch := make([]tea.Cmd, 0, 3)
+	if cmd != nil {
+		batch = append(batch, cmd)
 	}
-	return m, cmd
+	if prevActiveTab != TabStream && m.activeTab == TabStream {
+		batch = append(batch, streamTickCmd())
+	}
+	if prevActiveTab != TabFlame && m.activeTab == TabFlame {
+		batch = append(batch, flameTickCmd())
+	}
+	switch len(batch) {
+	case 0:
+		return m, nil
+	case 1:
+		return m, batch[0]
+	default:
+		return m, tea.Batch(batch...)
+	}
 }
 
-func (m *Model) handleScrollKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	switch m.activeTab {
 	case TabSyscalls:
@@ -271,15 +348,49 @@ func (m Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
 }
 
-// BlocksGlobalShortcuts reports whether modal UI in the active tab should
-// suppress top-level shortcuts (for example global export key handling).
-func (m Model) BlocksGlobalShortcuts() bool {
-	return m.activeTab == TabStream && (m.streamModel.FilterModalVisible() || m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible())
+// BlocksGlobalShortcuts reports whether the active tab should suppress a
+// top-level shortcut for the given key press.
+func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
+	if m.activeTab == TabStream {
+		return m.streamModel.FilterModalVisible() || m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
+	}
+	if m.activeTab == TabFlame {
+		return m.flamegraphModel.ConsumesKey(msg)
+	}
+	return false
 }
 
 // SetStreamSource updates the live stream source used by the stream tab.
-func (m *Model) SetStreamSource(source *eventstream.RingBuffer) {
+func (m *Model) SetStreamSource(source eventstream.Source) {
 	m.streamModel.SetSource(source)
+}
+
+// SetLiveTrie updates the live trie source used by the flamegraph tab.
+func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
+	m.liveTrie = liveTrie
+	m.flamegraphModel.SetLiveTrie(liveTrie)
+	if m.width > 0 && m.height > 0 {
+		m.flamegraphModel.SetViewport(m.width, m.height)
+	}
+	m.flamegraphModel.RefreshFromLiveTrie()
+}
+
+// SetDarkMode updates dashboard child models for the active theme.
+func (m *Model) SetDarkMode(isDark bool) {
+	m.isDark = isDark
+	m.streamModel.SetDarkMode(isDark)
+	m.flamegraphModel.SetDarkMode(isDark)
+}
+
+// SetFocused controls whether periodic refresh ticks are processed.
+func (m *Model) SetFocused(focused bool) {
+	m.focused = focused
+}
+
+// SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
+func (m Model) SnapshotCmd() tea.Cmd {
+	snap := m.snapshot()
+	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 }
 
 // SetPidFilter updates the active PID filter used by tab render hints.
@@ -288,9 +399,9 @@ func (m *Model) SetPidFilter(pid int) {
 }
 
 // View renders the tab bar, active tab scaffold, and help bar.
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
-	activeHeight := height
+	_, activeHeight := flameViewport(width, height, m.showHelp)
 	streamModel := m.streamModel
 	streamModel.SetFooterVisible(m.showHelp)
 	if m.activeTab == TabStream {
@@ -304,6 +415,7 @@ func (m Model) View() string {
 		m.activeTab,
 		m.latest,
 		&streamModel,
+		&m.flamegraphModel,
 		width,
 		activeHeight,
 		m.pidFilter,
@@ -319,19 +431,26 @@ func (m Model) View() string {
 	} else {
 		b.WriteString(renderHelpHint(width))
 	}
-	return common.ScreenStyle.Render(b.String())
+	return tea.NewView(common.ScreenStyle.Render(b.String()))
 }
 
 func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, width, height, pidFilter, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height, pidFilter, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
 	if tab == TabStream {
 		if streamModel == nil {
 			return common.PanelStyle.Render("Stream: waiting for source...")
 		}
 		return streamModel.View(width, height)
+	}
+	if tab == TabFlame {
+		if flameModel == nil {
+			return common.PanelStyle.Render("Flame: waiting for model...")
+		}
+		flameModel.SetViewport(width, height)
+		return flameModel.View().Content
 	}
 
 	if snap == nil {
@@ -361,9 +480,26 @@ func streamTickCmd() tea.Cmd {
 	return tea.Tick(streamRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return streamTickMsg{} })
 }
 
+func flameTickCmd() tea.Cmd {
+	return tea.Tick(flameRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return flameTickMsg{} })
+}
+
 func streamViewport(width, height int) (int, int) {
 	width, height = common.EffectiveViewport(width, height)
 	height -= streamChromeRows
+	if height < 1 {
+		height = 1
+	}
+	return width, height
+}
+
+func flameViewport(width, height int, showHelp bool) (int, int) {
+	width, height = common.EffectiveViewport(width, height)
+	chromeRows := dashboardTabBarRows + dashboardHelpHintRows
+	if showHelp {
+		chromeRows = dashboardTabBarRows + dashboardExpandedHelpRows
+	}
+	height -= chromeRows
 	if height < 1 {
 		height = 1
 	}

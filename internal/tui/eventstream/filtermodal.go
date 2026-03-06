@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type fieldKey int
@@ -48,7 +48,8 @@ func NewFilterModal() FilterModal {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
-	input.Width = 24
+	input.SetWidth(24)
+	input.SetStyles(textinput.DefaultStyles(true))
 
 	m := FilterModal{textInput: input}
 	m.fields = defaultFilterFields()
@@ -61,6 +62,12 @@ func (m FilterModal) Visible() bool {
 
 func (m FilterModal) Filter() Filter {
 	return m.filter
+}
+
+// SetDarkMode updates filter modal text input styles.
+func (m FilterModal) SetDarkMode(isDark bool) FilterModal {
+	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
+	return m
 }
 
 func (m FilterModal) Open(initial Filter) FilterModal {
@@ -86,7 +93,7 @@ func (m FilterModal) Update(msg tea.Msg) FilterModal {
 		return m
 	}
 
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		switch keyMsg.String() {
 		case "esc":
 			if m.editing {
@@ -112,7 +119,7 @@ func (m FilterModal) Update(msg tea.Msg) FilterModal {
 				m.fields[m.activeField].opIndex = (m.fields[m.activeField].opIndex + 1) % len(compareOps)
 			}
 			return m
-		case " ":
+		case " ", "space":
 			if !m.editing && m.fields[m.activeField].fieldKey == fieldErrorsOnly {
 				if strings.TrimSpace(m.fields[m.activeField].value) == "true" {
 					m.fields[m.activeField].value = "false"

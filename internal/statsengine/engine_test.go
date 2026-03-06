@@ -1,12 +1,13 @@
 package statsengine
 
 import (
-	"ior/internal/event"
-	"ior/internal/file"
-	"ior/internal/types"
 	"math"
 	"testing"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 )
 
 type fakeClock struct {

@@ -2,11 +2,12 @@ package eventstream
 
 import (
 	"fmt"
-	"ior/internal/tui/common"
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"ior/internal/tui/common"
+
+	"charm.land/lipgloss/v2"
 )
 
 type columnLayout struct {

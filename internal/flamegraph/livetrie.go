@@ -3,15 +3,21 @@ package flamegraph
 import (
 	"encoding/json"
 	"fmt"
-	"ior/internal/event"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"ior/internal/collapse"
+	"ior/internal/event"
 )
 
-const liveTrieMinFraction = 0.001
+const (
+	liveTrieMinFraction                     = 0.001
+	liveTrieMinVisibleChildrenWhenPruned    = 8
+	liveTrieVisibleChildrenFallbackMaxDepth = 1
+)
 
 type trieSnapshot struct {
 	Name     string          `json:"n"`
@@ -37,6 +43,9 @@ type LiveTrie struct {
 
 // NewLiveTrie constructs an empty live trie with the configured frame/count fields.
 func NewLiveTrie(fields []string, countField string) *LiveTrie {
+	if !isLiveTrieCountField(countField) {
+		countField = "count"
+	}
 	return &LiveTrie{
 		root: &trieNode{
 			childMap: make(map[string]*trieNode),
@@ -47,23 +56,7 @@ func NewLiveTrie(fields []string, countField string) *LiveTrie {
 }
 
 func (lt *LiveTrie) addLocked(frames []string, value uint64) {
-	node := lt.root
-	for _, frame := range frames {
-		if node.childMap == nil {
-			node.childMap = make(map[string]*trieNode)
-		}
-		child, ok := node.childMap[frame]
-		if !ok {
-			child = &trieNode{
-				name:     frame,
-				childMap: make(map[string]*trieNode),
-			}
-			node.children = append(node.children, child)
-			node.childMap[frame] = child
-		}
-		node = child
-	}
-	node.value += value
+	insertTriePath(lt.root, frames, value)
 	if len(frames) > lt.maxDepth {
 		lt.maxDepth = len(frames)
 	}
@@ -84,18 +77,24 @@ func (lt *LiveTrie) invalidateCache() {
 	lt.cacheMu.Unlock()
 }
 
-// Ingest adds one event pair into the live trie and recycles the pair.
+// Ingest adds one event pair into the live trie.
 func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	record := eventPairToRecord(ep)
-	value := record.Cnt.ValueByName(lt.countField)
+	lt.AddRecord(record)
+}
+
+// AddRecord adds one already-decoded flamegraph record into the live trie.
+func (lt *LiveTrie) AddRecord(record IterRecord) {
+	value, err := record.Cnt.ValueByName(lt.countField)
+	if err != nil {
+		return
+	}
 
 	lt.mu.Lock()
 	frames := lt.buildFrames(record)
 	lt.addLocked(frames, value)
 	lt.version.Add(1)
 	lt.mu.Unlock()
-
-	ep.Recycle()
 }
 
 // Reset clears the trie so live snapshots start from a new baseline.
@@ -112,6 +111,33 @@ func (lt *LiveTrie) Fields() []string {
 	out := slices.Clone(lt.fields)
 	lt.mu.RUnlock()
 	return out
+}
+
+// CountField returns the active metric used to aggregate node values.
+func (lt *LiveTrie) CountField() string {
+	lt.mu.RLock()
+	field := lt.countField
+	lt.mu.RUnlock()
+	return field
+}
+
+// SetCountField changes the active aggregation metric and starts a new baseline.
+func (lt *LiveTrie) SetCountField(countField string) error {
+	field := strings.TrimSpace(countField)
+	if !isLiveTrieCountField(field) {
+		return fmt.Errorf("invalid count field %q", countField)
+	}
+
+	lt.mu.Lock()
+	if lt.countField == field {
+		lt.mu.Unlock()
+		return nil
+	}
+	lt.countField = field
+	lt.resetLocked()
+	lt.mu.Unlock()
+	lt.invalidateCache()
+	return nil
 }
 
 // Reconfigure changes frame fields and clears accumulated data for a new baseline.
@@ -222,12 +248,11 @@ func normalizeLiveTrieFields(fields []string) ([]string, error) {
 }
 
 func isLiveTrieField(field string) bool {
-	switch field {
-	case "path", "comm", "tracepoint", "pid", "tid", "flags":
-		return true
-	default:
-		return false
-	}
+	return collapse.IsValidField(field)
+}
+
+func isLiveTrieCountField(field string) bool {
+	return collapse.IsValidCountField(field)
 }
 
 func subtreeTotal(node *trieNode) uint64 {
@@ -239,28 +264,44 @@ func subtreeTotal(node *trieNode) uint64 {
 }
 
 func buildSnapshot(node *trieNode, depth int, minFraction float64, rootTotal uint64) *trieSnapshot {
-	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal)
+	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal, false)
 	return snapshot
 }
 
-func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64) (*trieSnapshot, uint64) {
+type childSnapshotState struct {
+	node     *trieNode
+	snapshot *trieSnapshot
+	total    uint64
+}
+
+func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*trieSnapshot, uint64) {
 	total := node.value
 	children := slices.Clone(node.children)
 	sort.Slice(children, func(i, j int) bool {
 		return children[i].name < children[j].name
 	})
 
-	childSnapshots := make([]*trieSnapshot, 0, len(children))
+	childStates := make([]childSnapshotState, 0, len(children))
 	for _, child := range children {
-		childSnapshot, childTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal)
+		childSnapshot, childTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal, false)
 		total += childTotal
-		if childSnapshot != nil {
-			childSnapshots = append(childSnapshots, childSnapshot)
-		}
+		childStates = append(childStates, childSnapshotState{
+			node:     child,
+			snapshot: childSnapshot,
+			total:    childTotal,
+		})
 	}
 
-	if depth > 0 && rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction {
+	if !forceKeep && depth > 0 && rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction {
 		return nil, total
+	}
+	ensureFallbackVisibleChildren(childStates, depth, minFraction, rootTotal)
+
+	childSnapshots := make([]*trieSnapshot, 0, len(childStates))
+	for _, child := range childStates {
+		if child.snapshot != nil {
+			childSnapshots = append(childSnapshots, child.snapshot)
+		}
 	}
 
 	snapshot := &trieSnapshot{
@@ -272,4 +313,44 @@ func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, root
 		snapshot.Children = childSnapshots
 	}
 	return snapshot, total
+}
+
+func ensureFallbackVisibleChildren(children []childSnapshotState, depth int, minFraction float64, rootTotal uint64) {
+	if depth > liveTrieVisibleChildrenFallbackMaxDepth {
+		return
+	}
+	visible := 0
+	for _, child := range children {
+		if child.snapshot != nil {
+			visible++
+		}
+	}
+	if visible > 0 {
+		return
+	}
+
+	candidates := make([]int, 0, len(children))
+	for idx, child := range children {
+		if child.total > 0 {
+			candidates = append(candidates, idx)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left := children[candidates[i]]
+		right := children[candidates[j]]
+		if left.total == right.total {
+			return left.node.name < right.node.name
+		}
+		return left.total > right.total
+	})
+
+	limit := liveTrieMinVisibleChildrenWhenPruned
+	if len(candidates) < limit {
+		limit = len(candidates)
+	}
+	for i := 0; i < limit; i++ {
+		idx := candidates[i]
+		forced, _ := buildSnapshotWithTotal(children[idx].node, depth+1, minFraction, rootTotal, true)
+		children[idx].snapshot = forced
+	}
 }

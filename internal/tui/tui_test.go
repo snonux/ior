@@ -3,22 +3,27 @@ package tui
 import (
 	"context"
 	"errors"
-	"ior/internal/probemanager"
-	"ior/internal/statsengine"
-	"ior/internal/tui/eventstream"
-	tuiexport "ior/internal/tui/export"
-	"ior/internal/tui/messages"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	coreflamegraph "ior/internal/flamegraph"
+	"ior/internal/probemanager"
+	"ior/internal/statsengine"
+	dashboardui "ior/internal/tui/dashboard"
+	"ior/internal/tui/eventstream"
+	tuiexport "ior/internal/tui/export"
+	"ior/internal/tui/messages"
+
 	"ior/internal/flags"
 	"ior/internal/tui/probes"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type fakeProbeManager struct {
@@ -46,11 +51,11 @@ func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
 	}
-	if got := flags.Get().PidFilter; got != 42 {
-		t.Fatalf("expected pid filter 42, got %d", got)
+	if updated.pidFilter != 42 {
+		t.Fatalf("expected pid filter 42, got %d", updated.pidFilter)
 	}
-	if got := flags.Get().TidFilter; got != -1 {
-		t.Fatalf("expected tid filter reset to -1, got %d", got)
+	if updated.tidFilter != -1 {
+		t.Fatalf("expected tid filter reset to -1, got %d", updated.tidFilter)
 	}
 }
 
@@ -75,10 +80,9 @@ func TestPidSelectedAllSetsNoFilter(t *testing.T) {
 	next, _ := m.Update(PidSelectedMsg{Pid: 0})
 	updated := next.(Model)
 
-	if got := flags.Get().PidFilter; got != -1 {
-		t.Fatalf("expected pid filter -1 for all pids, got %d", got)
+	if updated.pidFilter != -1 {
+		t.Fatalf("expected pid filter -1 for all pids, got %d", updated.pidFilter)
 	}
-	_ = updated
 }
 
 func TestTracingErrorMessageClearsAttachingState(t *testing.T) {
@@ -98,14 +102,14 @@ func TestTracingErrorMessageClearsAttachingState(t *testing.T) {
 func TestViewShowsAttachingAndErrorStates(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.attaching = true
-	attachingView := m.View()
+	attachingView := m.View().Content
 	if !strings.Contains(attachingView, "Attaching tracepoints...") {
 		t.Fatalf("expected attaching view, got %q", attachingView)
 	}
 
 	m.attaching = false
 	m.lastErr = errors.New("failed")
-	errorView := m.View()
+	errorView := m.View().Content
 	if !strings.Contains(errorView, "failed") {
 		t.Fatalf("expected error view, got %q", errorView)
 	}
@@ -114,7 +118,7 @@ func TestViewShowsAttachingAndErrorStates(t *testing.T) {
 func TestQuitKeySetsQuittingState(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	if cmd == nil {
 		t.Fatalf("expected quit cmd")
 	}
@@ -132,9 +136,9 @@ func TestQuitKeyMatchesSingleBindingWithoutPanic(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.keys.Quit = key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "quit"))
 
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	_, _ = m.Update(tea.KeyPressMsg{Code: []rune{'z'}[0], Text: string([]rune{'z'})})
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'x'}[0], Text: string([]rune{'x'})})
 	if cmd == nil {
 		t.Fatalf("expected quit cmd")
 	}
@@ -171,7 +175,7 @@ func TestQuitInvokesTraceStop(t *testing.T) {
 		close(done)
 	}
 
-	_, quitCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, quitCmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	if quitCmd == nil {
 		t.Fatalf("expected quit command")
 	}
@@ -218,6 +222,20 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	}
 }
 
+func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
+	runtime := newRuntimeBindings()
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	runtime.SetLiveTrie(trie)
+	if got := runtime.liveTrie(); got != trie {
+		t.Fatalf("expected live trie to be stored and returned")
+	}
+
+	runtime.SetLiveTrie(nil)
+	if got := runtime.liveTrie(); got != nil {
+		t.Fatalf("expected live trie to clear on nil assignment")
+	}
+}
+
 func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 	src := &fakeResettableDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
 
@@ -253,13 +271,76 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	m = next.(Model)
 	next, _ = m.Update(messages.StatsTickMsg{})
 	m = next.(Model)
 
-	if !strings.Contains(m.View(), "read") {
+	if !strings.Contains(m.View().Content, "read") {
 		t.Fatalf("expected stream tab to render rebound stream event")
+	}
+}
+
+func TestTracingStartedUsesCurrentViewportForFlameNavigationWithoutResize(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestFlameData(trie)
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = true
+	m.width = 120
+	m.height = 30
+	m.runtime.SetLiveTrie(trie)
+
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(Model)
+
+	if strings.Contains(m.View().Content, "sel:none") {
+		t.Fatalf("expected flamegraph selection to be available immediately after tracing start")
+	}
+
+	selectedLabel := func(view string) string {
+		re := regexp.MustCompile(`sel:[0-9]+/[0-9]+ ([^|]+) \|`)
+		match := re.FindStringSubmatch(view)
+		if len(match) != 2 {
+			return ""
+		}
+		return strings.TrimSpace(match[1])
+	}
+
+	moved := false
+	before := selectedLabel(m.View().Content)
+	for i := 0; i < 12 && !moved; i++ {
+		next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		m = next.(Model)
+		after := selectedLabel(m.View().Content)
+		if after != "" && after != before {
+			moved = true
+			break
+		}
+	}
+	if !moved {
+		t.Fatalf("expected arrow navigation to move selection without requiring resize, view=%q", m.View().Content)
+	}
+}
+
+func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestFlameData(trie)
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = true
+	m.runtime.SetLiveTrie(trie)
+	m.width = 0
+	m.height = 0
+
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(Model)
+
+	view := m.View().Content
+	if strings.Contains(view, "sel:none") {
+		t.Fatalf("expected tracing start to apply an effective viewport even when width/height are unset")
 	}
 }
 
@@ -271,10 +352,169 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open on e key")
+	}
+}
+
+func TestFlamePauseKeyDoesNotTriggerPIDReselect(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	updated := next.(Model)
+	if updated.screen != ScreenDashboard {
+		t.Fatalf("expected flame space key to keep dashboard screen, got %v", updated.screen)
+	}
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected flame space key to toggle flame paused state")
+	}
+}
+
+func TestFlameSpaceKeyReleaseFallbackTogglesPause(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	updated := next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key release fallback to toggle flame paused state")
+	}
+}
+
+func TestFlameSpacePressReleaseDoesNotDoubleTogglePause(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	updated := next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key press to pause flame")
+	}
+
+	next, _ = updated.Update(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	updated = next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key release after key press to be ignored as duplicate")
+	}
+}
+
+func TestFlameSpaceReleasePressDoesNotDoubleTogglePause(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	updated := next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected key release fallback to pause flame")
+	}
+
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	updated = next.(Model)
+	if !strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected immediate matching key press after release fallback to be ignored")
+	}
+}
+
+func TestNormalizeKeyEventReleaseFallbackSuppressesImmediatePressOnly(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	normalized, ok := m.normalizeKeyEvent(tea.KeyReleaseMsg{Code: tea.KeySpace, Text: " "})
+	if !ok {
+		t.Fatalf("expected release fallback to be handled")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected release fallback to normalize to KeyPressMsg, got %T", normalized)
+	}
+
+	if normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); ok {
+		t.Fatalf("expected immediate matching press to be suppressed, got %T", normalized)
+	}
+
+	time.Sleep(70 * time.Millisecond)
+	if normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); !ok {
+		t.Fatalf("expected press to be accepted after suppression window")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected accepted message to be KeyPressMsg, got %T", normalized)
+	}
+}
+
+func TestNormalizeKeyEventIgnoresUnidentifiedRelease(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	if normalized, ok := m.normalizeKeyEvent(tea.KeyReleaseMsg{}); ok {
+		t.Fatalf("expected unidentified release to be ignored, got %T", normalized)
+	}
+
+	normalized, ok := m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if !ok {
+		t.Fatalf("expected subsequent real key press to be handled")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected normalized message to be KeyPressMsg, got %T", normalized)
+	}
+}
+
+func TestNormalizeKeyEventReleaseFallbackDoesNotSuppressArrowPress(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	normalized, ok := m.normalizeKeyEvent(tea.KeyReleaseMsg{Code: tea.KeyRight})
+	if !ok {
+		t.Fatalf("expected right release fallback to be handled")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected release fallback to normalize to KeyPressMsg, got %T", normalized)
+	}
+
+	normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeyRight})
+	if !ok {
+		t.Fatalf("expected right key press to be accepted after release fallback")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected normalized message to be KeyPressMsg, got %T", normalized)
+	}
+}
+
+func TestFlameOrderKeyDoesNotOpenProbeModal(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'o'}[0], Text: string([]rune{'o'})})
+	updated := next.(Model)
+	if updated.probeModal.Visible() {
+		t.Fatalf("expected flame order key to stay in flame tab, not open probes modal")
+	}
+}
+
+func TestFlameMetricKeyDoesNotOpenProbeModal(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'b'}[0], Text: string([]rune{'b'})})
+	updated := next.(Model)
+	if updated.probeModal.Visible() {
+		t.Fatalf("expected flame metric key to stay in flame tab, not open probes modal")
 	}
 }
 
@@ -287,7 +527,10 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
 	updated := next.(Model)
 
 	if !stopped {
@@ -319,7 +562,10 @@ func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'t'}[0], Text: string([]rune{'t'})})
 	updated := next.(Model)
 	if !stopped {
 		t.Fatalf("expected tracing stop before tid reselect")
@@ -344,7 +590,10 @@ func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
 	stopped := false
 	m.traceStop = func() { stopped = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'t'}[0], Text: string([]rune{'t'})})
 	updated := next.(Model)
 	if !stopped {
 		t.Fatalf("expected tracing stop before tid reselect")
@@ -373,11 +622,11 @@ func TestTidSelectedTransitionsToDashboardAndSetsTIDFilter(t *testing.T) {
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
 	}
-	if got := flags.Get().TidFilter; got != 3333 {
-		t.Fatalf("expected tid filter 3333, got %d", got)
+	if updated.tidFilter != 3333 {
+		t.Fatalf("expected tid filter 3333, got %d", updated.tidFilter)
 	}
-	if got := flags.Get().PidFilter; got != 2222 {
-		t.Fatalf("expected pid filter to remain 2222, got %d", got)
+	if updated.pidFilter != 2222 {
+		t.Fatalf("expected pid filter to remain 2222, got %d", updated.pidFilter)
 	}
 }
 
@@ -394,11 +643,11 @@ func TestTidSelectedFromAllPIDModeSetsOwningPID(t *testing.T) {
 	if updated.screen != ScreenDashboard {
 		t.Fatalf("expected dashboard screen, got %v", updated.screen)
 	}
-	if got := flags.Get().PidFilter; got != 4444 {
-		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", got)
+	if updated.pidFilter != 4444 {
+		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", updated.pidFilter)
 	}
-	if got := flags.Get().TidFilter; got != 5555 {
-		t.Fatalf("expected tid filter 5555, got %d", got)
+	if updated.tidFilter != 5555 {
+		t.Fatalf("expected tid filter 5555, got %d", updated.tidFilter)
 	}
 }
 
@@ -410,7 +659,7 @@ func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if updated.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed when export is disabled")
@@ -427,23 +676,23 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	for _, r := range []rune{'o', 'p', 'e'} {
-		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		next, _ = m.Update(tea.KeyPressMsg{Code: []rune{r}[0], Text: string([]rune{r})})
 		m = next.(Model)
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(Model)
 
 	if m.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed while stream filter modal handles typing")
 	}
-	if !strings.Contains(m.View(), "syscall~ope") {
+	if !strings.Contains(m.View().Content, "syscall~ope") {
 		t.Fatalf("expected typed syscall filter to be applied")
 	}
 }
@@ -475,7 +724,7 @@ func TestRunExportCmdCSVWritesFile(t *testing.T) {
 
 func TestHelpKeyDoesNotToggleOverlay(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'?'}[0], Text: string([]rune{'?'})})
 	updated := next.(Model)
 	if updated.screen != ScreenPIDPicker {
 		t.Fatalf("expected ? to have no effect, got screen %v", updated.screen)
@@ -488,9 +737,52 @@ func TestViewShowsDashboardWithoutHelpOverlay(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	out := m.View()
+	out := m.View().Content
 	if !strings.Contains(out, "press H for help") {
 		t.Fatalf("expected bottom help hint in dashboard")
+	}
+}
+
+func TestHelpOverlayOpensWithUppercaseHAndClosesWithEsc(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	m = next.(Model)
+	if !m.helpOverlayVisible {
+		t.Fatalf("expected help overlay to become visible after H")
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "Help") || !strings.Contains(view, "Global") || !strings.Contains(view, "Esc close") {
+		t.Fatalf("expected global help overlay content, got %q", view)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+	if m.helpOverlayVisible {
+		t.Fatalf("expected esc to close help overlay")
+	}
+	if !strings.Contains(m.View().Content, "press H for help") {
+		t.Fatalf("expected dashboard help hint after closing overlay")
+	}
+}
+
+func TestHelpOverlayCanOpenFromPIDPicker(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenPIDPicker
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	m = next.(Model)
+	if !m.helpOverlayVisible {
+		t.Fatalf("expected help overlay to open on pid picker screen")
+	}
+	if !strings.Contains(m.View().Content, "PID/TID Picker") {
+		t.Fatalf("expected picker shortcuts in help overlay")
 	}
 }
 
@@ -498,7 +790,7 @@ func TestQuestionMarkDoesNotBlockUnderlyingActions(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open; ? overlay is removed")
@@ -512,19 +804,19 @@ func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	next, _ = updated.Update(tea.KeyPressMsg{Code: []rune{'?'}[0], Text: string([]rune{'?'})})
 	updated = next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to remain open after ? key")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	updated = next.(Model)
 	if updated.exporter.Visible() {
 		t.Fatalf("expected esc to close export modal")
@@ -540,7 +832,7 @@ func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	out := m.View()
+	out := m.View().Content
 	if strings.Contains(out, "e snapshot export") {
 		t.Fatalf("did not expect export shortcut in status bar when export is disabled")
 	}
@@ -568,23 +860,23 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	out := m.View()
-	if !strings.Contains(out, "Overview: waiting for stats") {
-		t.Fatalf("expected overview waiting view by default")
+	out := m.View().Content
+	if !strings.Contains(out, "Flame: waiting for data") {
+		t.Fatalf("expected flame waiting view by default")
 	}
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	updated := next.(Model)
-	out = updated.View()
-	if !strings.Contains(out, "Syscalls: waiting for stats") {
-		t.Fatalf("expected syscalls waiting view after pressing 2")
+	out = updated.View().Content
+	if !strings.Contains(out, "Overview: waiting for stats") {
+		t.Fatalf("expected overview waiting view after pressing 2")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	updated = next.(Model)
-	out = updated.View()
-	if !strings.Contains(out, "Files: waiting for stats") {
-		t.Fatalf("expected files waiting view after tab")
+	out = updated.View().Content
+	if !strings.Contains(out, "Syscalls: waiting for stats") {
+		t.Fatalf("expected syscalls waiting view after tab")
 	}
 }
 
@@ -598,11 +890,123 @@ func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 	m.height = 30
 	m.probeModal = m.probeModal.Open()
 
-	out := m.View()
+	out := m.View().Content
 	if !strings.Contains(out, "Probes (") {
 		t.Fatalf("expected probe modal content, got %q", out)
 	}
-	if strings.Contains(out, "Overview: waiting for stats") {
+	if strings.Contains(out, "Flame: waiting for data") || strings.Contains(out, "Overview: waiting for stats") {
 		t.Fatalf("expected probe modal to render as standalone view, got stacked dashboard content")
+	}
+}
+
+func TestBlurPausesDashboardRefreshAndFocusResumesIt(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.dashboard = dashboardui.NewModelWithConfig(nil, nil, 1, m.keys)
+	m.focused = true
+
+	next, _ := m.Update(tea.BlurMsg{})
+	m = next.(Model)
+	if m.focused {
+		t.Fatalf("expected focused=false after blur")
+	}
+
+	tickMsg := m.dashboard.Init()()
+	next, tickCmd := m.Update(tickMsg)
+	m = next.(Model)
+	if tickCmd != nil {
+		t.Fatalf("expected no follow-up tick command while blurred")
+	}
+
+	next, focusCmd := m.Update(tea.FocusMsg{})
+	m = next.(Model)
+	if !m.focused {
+		t.Fatalf("expected focused=true after focus")
+	}
+	if focusCmd == nil {
+		t.Fatalf("expected focus to resume refresh with a command batch")
+	}
+	if _, ok := focusCmd().(tea.BatchMsg); !ok {
+		t.Fatalf("expected focus command to be a batch")
+	}
+}
+
+func TestKeyboardEnhancementsMsgHandledGracefully(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	next, cmd := m.Update(tea.KeyboardEnhancementsMsg{Flags: 1})
+	if cmd != nil {
+		t.Fatalf("expected no command when handling keyboard enhancements msg")
+	}
+
+	updated := next.(Model)
+	if !updated.keyboardEnhancementsKnown {
+		t.Fatalf("expected keyboard enhancements to be marked as known")
+	}
+	if !updated.keyboardEnhancements.SupportsKeyDisambiguation() {
+		t.Fatalf("expected non-zero flags to report key disambiguation support")
+	}
+}
+
+func TestViewSetsDynamicWindowTitle(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	m.screen = ScreenPIDPicker
+	view := m.View()
+	if view.WindowTitle != "ior - select process" {
+		t.Fatalf("unexpected picker window title: %q", view.WindowTitle)
+	}
+
+	m.screen = ScreenDashboard
+	m.pidFilter = 1234
+	view = m.View()
+	if view.WindowTitle != "ior - tracing PID 1234" {
+		t.Fatalf("unexpected tracing window title: %q", view.WindowTitle)
+	}
+
+	m.pidFilter = -1
+	view = m.View()
+	if view.WindowTitle != "ior - I/O Riot" {
+		t.Fatalf("unexpected default window title: %q", view.WindowTitle)
+	}
+}
+
+func TestRenderHelpOverlayUsesWideViewport(t *testing.T) {
+	groups := [][]key.Binding{{key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help"))}}
+	out := renderHelpOverlay(160, 40, groups)
+
+	maxWidth := 0
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+
+	if maxWidth <= 110 {
+		t.Fatalf("expected wide help overlay to exceed previous 110-col cap, got %d", maxWidth)
+	}
+}
+
+func TestGlobalHelpOverlayFitsStandardTerminal(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	out := renderGlobalHelpOverlay(80, 24, m.helpSections())
+
+	lines := strings.Split(out, "\n")
+	if len(lines) > 24 {
+		t.Fatalf("expected help overlay to fit within 24 lines, got %d", len(lines))
+	}
+
+	maxWidth := 0
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	if maxWidth > 80 {
+		t.Fatalf("expected help overlay width <= 80, got %d", maxWidth)
+	}
+	if !strings.Contains(out, "Flame Tab") || !strings.Contains(out, "Stream Tab") {
+		t.Fatalf("expected overlay to include tab-specific help sections")
 	}
 }

@@ -3,12 +3,12 @@ package internal
 import (
 	"context"
 	"fmt"
-	"ior/internal/event"
-	"ior/internal/file"
-	"ior/internal/flamegraph"
-	"ior/internal/types"
 	"testing"
 	"time"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 )
 
 // Test that comm names are properly propagated across syscalls
@@ -21,7 +21,7 @@ func TestCommPropagation(t *testing.T) {
 	inCh := make(chan []byte)
 	outCh := make(chan *event.Pair)
 
-	el := newEventLoop(eventLoopConfig{})
+	el := mustNewEventLoop(t, eventLoopConfig{})
 	el.printCb = func(ev *event.Pair) { outCh <- ev }
 	go el.run(ctx, inCh)
 
@@ -123,7 +123,7 @@ func makeCommPropagationTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected no comm name for different thread but got '%s'", ep.Comm)
 		}
 		// Verify comm map doesn't have entry for this tid
-		if _, ok := el.comms[differentTid]; ok {
+		if _, ok := el.cachedComm(differentTid); ok {
 			t.Errorf("Expected no comm entry for tid %d but one was found", differentTid)
 		}
 	})
@@ -438,11 +438,10 @@ func TestCommFilterToggle(t *testing.T) {
 				commFilterEnable: false,
 			},
 			enterEvs:      make(map[uint32]*event.Pair),
-			files:         make(map[int32]file.File),
-			comms:         make(map[uint32]string),
+			fdTracker:     newFDTracker(make(map[int32]file.File)),
+			commResolver:  newCommResolver(make(map[uint32]string)),
 			prevPairTimes: make(map[uint32]uint64),
 			printCb:       func(ep *event.Pair) { outCh <- ep },
-			flamegraph:    flamegraph.New(),
 			done:          make(chan struct{}),
 		}
 		go el.run(ctx, inCh)
@@ -476,13 +475,13 @@ func TestCommFilterToggle(t *testing.T) {
 			filter: &eventFilter{
 				commFilterEnable: true,
 				commFilter:       "test",
+				commFilterBytes:  []byte("test"),
 			},
 			enterEvs:      make(map[uint32]*event.Pair),
-			files:         make(map[int32]file.File),
-			comms:         make(map[uint32]string),
+			fdTracker:     newFDTracker(make(map[int32]file.File)),
+			commResolver:  newCommResolver(make(map[uint32]string)),
 			prevPairTimes: make(map[uint32]uint64),
 			printCb:       func(ep *event.Pair) { outCh <- ep },
-			flamegraph:    flamegraph.New(),
 			done:          make(chan struct{}),
 		}
 		go el.run(ctx, inCh)
@@ -509,15 +508,16 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 		filter: &eventFilter{
 			commFilterEnable: commFilter != "",
 			commFilter:       commFilter,
+			commFilterBytes:  []byte(commFilter),
 			pathFilterEnable: pathFilter != "",
 			pathFilter:       pathFilter,
+			pathFilterBytes:  []byte(pathFilter),
 		},
 		enterEvs:      make(map[uint32]*event.Pair),
-		files:         make(map[int32]file.File),
-		comms:         make(map[uint32]string),
+		fdTracker:     newFDTracker(make(map[int32]file.File)),
+		commResolver:  newCommResolver(make(map[uint32]string)),
 		prevPairTimes: make(map[uint32]uint64),
 		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		flamegraph:    flamegraph.New(),
 		done:          make(chan struct{}),
 	}
 	return el

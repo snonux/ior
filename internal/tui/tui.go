@@ -2,9 +2,14 @@ package tui
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	coreexport "ior/internal/export"
 	"ior/internal/flags"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
@@ -12,18 +17,15 @@ import (
 	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
+	flamegraphtui "ior/internal/tui/flamegraph"
 	"ior/internal/tui/messages"
 	"ior/internal/tui/pidpicker"
 	"ior/internal/tui/probes"
-	"os"
-	"strings"
-	"sync"
-	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Screen identifies the currently active TUI screen.
@@ -56,18 +58,26 @@ type ProbeManager interface {
 // (snapshot source, stream source, probe manager) into the active TUI model.
 type TraceRuntimeBindings interface {
 	SetDashboardSnapshotSource(source SnapshotSource)
-	SetEventStreamSource(source *eventstream.RingBuffer)
+	SetEventStreamSource(source eventstream.Source)
+	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
 	SetProbeManager(manager ProbeManager)
 }
 
 type runtimeBindingsContextKey struct{}
+type traceFiltersContextKey struct{}
 
 type runtimeBindings struct {
 	mu sync.RWMutex
 
 	snapshotSource SnapshotSource
-	streamSource   *eventstream.RingBuffer
+	streamSource   eventstream.Source
+	liveTrieSource flamegraphtui.LiveTrieSource
 	probeManager   ProbeManager
+}
+
+type traceFilters struct {
+	pidFilter int
+	tidFilter int
 }
 
 func newRuntimeBindings() *runtimeBindings {
@@ -80,9 +90,15 @@ func (r *runtimeBindings) SetDashboardSnapshotSource(source SnapshotSource) {
 	r.mu.Unlock()
 }
 
-func (r *runtimeBindings) SetEventStreamSource(source *eventstream.RingBuffer) {
+func (r *runtimeBindings) SetEventStreamSource(source eventstream.Source) {
 	r.mu.Lock()
 	r.streamSource = source
+	r.mu.Unlock()
+}
+
+func (r *runtimeBindings) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
+	r.mu.Lock()
+	r.liveTrieSource = liveTrie
 	r.mu.Unlock()
 }
 
@@ -98,10 +114,16 @@ func (r *runtimeBindings) dashboardSnapshotSource() SnapshotSource {
 	return r.snapshotSource
 }
 
-func (r *runtimeBindings) eventStreamSource() *eventstream.RingBuffer {
+func (r *runtimeBindings) eventStreamSource() eventstream.Source {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamSource
+}
+
+func (r *runtimeBindings) liveTrie() flamegraphtui.LiveTrieSource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.liveTrieSource
 }
 
 func (r *runtimeBindings) currentProbeManager() ProbeManager {
@@ -135,6 +157,21 @@ func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool
 	return bindings, true
 }
 
+// ContextWithTraceFilters stores the active PID/TID filters for the trace starter.
+func ContextWithTraceFilters(ctx context.Context, pidFilter, tidFilter int) context.Context {
+	filters := traceFilters{pidFilter: pidFilter, tidFilter: tidFilter}
+	return context.WithValue(ctx, traceFiltersContextKey{}, filters)
+}
+
+// TraceFiltersFromContext returns the active PID/TID filters when provided by the TUI model.
+func TraceFiltersFromContext(ctx context.Context) (pidFilter, tidFilter int, ok bool) {
+	filters, ok := ctx.Value(traceFiltersContextKey{}).(traceFilters)
+	if !ok {
+		return 0, 0, false
+	}
+	return filters.pidFilter, filters.tidFilter, true
+}
+
 // Run starts the TUI program in alternate screen mode.
 func Run() error {
 	return RunWithTraceStarter(defaultTraceStarter)
@@ -142,9 +179,27 @@ func Run() error {
 
 // RunWithTraceStarter starts the TUI program with a custom trace starter.
 func RunWithTraceStarter(starter TraceStarter) error {
-	cfg := flags.Get()
-	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TUIExportEnable, starter)
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	return RunWithTraceStarterConfig(flags.Get(), starter)
+}
+
+// RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
+func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
+	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
+	program := tea.NewProgram(model)
+	_, err := program.Run()
+	return err
+}
+
+// RunTestFlamesWithTraceStarter starts the TUI directly on dashboard/flame view
+// with a synthetic static flamegraph source.
+func RunTestFlamesWithTraceStarter(starter TraceStarter) error {
+	return RunTestFlamesWithTraceStarterConfig(flags.Get(), starter)
+}
+
+// RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
+func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
+	model := newModelWithRuntimeConfig(1, 1, -1, cfg.TUIExportEnable, starter)
+	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
 }
@@ -160,6 +215,8 @@ type Model struct {
 
 	keys KeyMap
 
+	helpOverlayVisible bool
+
 	width    int
 	height   int
 	quitting bool
@@ -172,16 +229,38 @@ type Model struct {
 	traceStop  context.CancelFunc
 
 	pidFilter     int
+	tidFilter     int
 	exportEnabled bool
+	isDark        bool
+	focused       bool
+
+	keyboardEnhancements      tea.KeyboardEnhancementsMsg
+	keyboardEnhancementsKnown bool
+
+	lastKeyEventID       string
+	lastKeyEventAt       time.Time
+	lastKeyEventWasPress bool
+	// Some terminals emit release+press for a single physical key event.
+	// When we fallback-handle a release as a press, suppress the immediate
+	// matching press to avoid double-handling.
+	suppressPressKeyID string
+	suppressPressUntil time.Time
 }
 
 // NewModel creates the top-level TUI model.
 func NewModel(initialPID int, startTrace TraceStarter) Model {
-	cfg := flags.Get()
-	return newModelWithRuntimeConfig(initialPID, cfg.PidFilter, cfg.TUIExportEnable, startTrace)
+	return NewModelWithConfig(flags.Get(), initialPID, startTrace)
 }
 
-func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
+// NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
+func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) Model {
+	return newModelWithRuntimeConfig(initialPID, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
+}
+
+func newModelWithRuntimeConfig(initialPID, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
+	common.ApplyPalette(true)
+	syncStylesFromCommon()
+
 	spin := spinner.New()
 	spin.Spinner = spinner.MiniDot
 	if startTrace == nil {
@@ -194,28 +273,35 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 
 	runtime := newRuntimeBindings()
 	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{runtime: runtime}, runtime.eventStreamSource(), 1000, keys)
+	dashboard.SetDarkMode(true)
 	pidFilter := selectedPIDFilter(startupPidFilter)
 	if initialPID > 0 {
 		pidFilter = selectedPIDFilter(initialPID)
+	}
+	tidFilter := selectedPIDFilter(startupTidFilter)
+	if initialPID > 0 {
+		tidFilter = -1
 	}
 	dashboard.SetPidFilter(pidFilter)
 
 	model := Model{
 		screen:        ScreenPIDPicker,
-		pidPicker:     pidpicker.New(),
+		pidPicker:     pidpicker.New().SetDarkMode(true),
 		dashboard:     dashboard,
 		exporter:      tuiexport.NewModel(),
-		probeModal:    probes.NewModel(runtime.currentProbeManager()),
+		probeModal:    probes.NewModel(runtime.currentProbeManager()).SetDarkMode(true),
 		runtime:       runtime,
 		keys:          keys,
 		spin:          spin,
 		startTrace:    startTrace,
 		pidFilter:     pidFilter,
+		tidFilter:     tidFilter,
 		exportEnabled: exportEnabled,
+		isDark:        true,
+		focused:       true,
 	}
 
 	if initialPID > 0 {
-		flags.SetPidFilter(initialPID)
 		model.screen = ScreenDashboard
 		model.attaching = true
 	}
@@ -227,9 +313,9 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 func (m Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
 	if m.screen == ScreenDashboard && m.attaching {
-		return tea.Batch(sizeCmd, tea.WindowSize(), m.spin.Tick, m.beginTraceCmd())
+		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, m.beginTraceCmd())
 	}
-	return tea.Batch(sizeCmd, tea.WindowSize(), m.pidPicker.Init())
+	return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.pidPicker.Init())
 }
 
 func initialWindowSizeCmd() tea.Cmd {
@@ -241,30 +327,41 @@ func initialWindowSizeCmd() tea.Cmd {
 
 // Update routes messages, transitions screens, and manages tracing startup state.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	normalizedMsg, ok := m.keyNormalizer(msg)
+	if !ok {
+		return m, nil
+	}
+	msg = normalizedMsg
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m.updateActiveModel(msg)
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.Quit) {
-			m.quitting = true
-			m.stopTrace()
-			return m, tea.Quit
+	case tea.BackgroundColorMsg:
+		m.applyTheme(msg.IsDark())
+		return m, nil
+	case tea.KeyboardEnhancementsMsg:
+		m.keyboardEnhancements = msg
+		m.keyboardEnhancementsKnown = true
+		if msg.SupportsKeyDisambiguation() {
+			log.Printf("tui: keyboard enhancements enabled (flags=%d, eventTypes=%t)", msg.Flags, msg.SupportsEventTypes())
 		}
-		if m.exportEnabled && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
-			m.exporter = m.exporter.Open()
-			return m, nil
+		return m, nil
+	case tea.FocusMsg:
+		m.focused = true
+		m.dashboard.SetFocused(true)
+		if m.screen == ScreenDashboard && !m.attaching {
+			return m, tea.Batch(m.dashboard.Init(), m.dashboard.SnapshotCmd())
 		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Probes) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
-			m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).Open()
-			return m, nil
-		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectPID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
-			return m.reselectPID()
-		}
-		if m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.SelectTID) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts() {
-			return m.reselectTID()
+		return m, nil
+	case tea.BlurMsg:
+		m.focused = false
+		m.dashboard.SetFocused(false)
+		return m, nil
+	case tea.KeyPressMsg:
+		if next, cmd, handled := m.handleGlobalKeyPress(msg); handled {
+			return next, cmd
 		}
 	case tuiexport.RequestMsg:
 		return m, runExportCmd(m.exportEnabled, msg.Option, m.dashboard.LatestSnapshot())
@@ -292,44 +389,199 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TracingStartedMsg:
 		m.attaching = false
 		m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
-		return m, m.dashboard.Init()
+		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
+		width, height := common.EffectiveViewport(m.width, m.height)
+		next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
+		m.dashboard = next.(dashboardui.Model)
+		return m, tea.Batch(sizeCmd, m.dashboard.Init())
 	case TracingErrorMsg:
 		m.attaching = false
 		m.lastErr = msg.Err
 		return m, nil
 	}
 
-	if m.attaching {
-		var cmd tea.Cmd
-		m.spin, cmd = m.spin.Update(msg)
-		return m, cmd
-	}
-	if m.probeModal.Visible() {
-		var dashboardCmd tea.Cmd
-		// Keep dashboard refresh/data flow alive while probe modal is open.
-		if _, isKey := msg.(tea.KeyMsg); !isKey && m.screen == ScreenDashboard {
-			next, cmd := m.dashboard.Update(msg)
-			m.dashboard = next.(dashboardui.Model)
-			dashboardCmd = cmd
-		}
-		var cmd tea.Cmd
-		m.probeModal, cmd = m.probeModal.Update(msg)
-		return m, tea.Batch(dashboardCmd, cmd)
-	}
-	if m.exporter.Visible() {
-		var dashboardCmd tea.Cmd
-		// Keep dashboard refresh/data flow alive while export modal is open.
-		if _, isKey := msg.(tea.KeyMsg); !isKey && m.screen == ScreenDashboard {
-			next, cmd := m.dashboard.Update(msg)
-			m.dashboard = next.(dashboardui.Model)
-			dashboardCmd = cmd
-		}
-		var cmd tea.Cmd
-		m.exporter, cmd = m.exporter.Update(msg)
-		return m, tea.Batch(dashboardCmd, cmd)
+	if next, cmd, handled := m.handleModalDispatch(msg); handled {
+		return next, cmd
 	}
 
 	return m.updateActiveModel(msg)
+}
+
+func (m *Model) keyNormalizer(msg tea.Msg) (tea.Msg, bool) {
+	return m.normalizeKeyEvent(msg)
+}
+
+func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
+	return m.screen == ScreenDashboard &&
+		!m.attaching &&
+		m.lastErr == nil &&
+		!m.exporter.Visible() &&
+		!m.probeModal.Visible() &&
+		!m.dashboard.BlocksGlobalShortcuts(msg)
+}
+
+func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if key.Matches(msg, m.keys.Quit) {
+		m.quitting = true
+		m.stopTrace()
+		return m, tea.Quit, true
+	}
+	if m.helpOverlayVisible {
+		if isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
+			m.helpOverlayVisible = false
+		}
+		return m, nil, true
+	}
+	if isHelpOverlayOpenKey(msg) && !m.attaching && m.lastErr == nil {
+		m.helpOverlayVisible = true
+		return m, nil, true
+	}
+	if m.exportEnabled && m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Export) {
+		m.exporter = m.exporter.Open()
+		return m, nil, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Probes) {
+		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
+		return m, nil, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectPID) {
+		next, cmd := m.reselectPID()
+		return next, cmd, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectTID) {
+		next, cmd := m.reselectTID()
+		return next, cmd, true
+	}
+	return m, nil, false
+}
+
+func (m Model) updateDashboardForModal(msg tea.Msg) (Model, tea.Cmd) {
+	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.screen != ScreenDashboard {
+		return m, nil
+	}
+	next, cmd := m.dashboard.Update(msg)
+	m.dashboard = next.(dashboardui.Model)
+	return m, cmd
+}
+
+func (m Model) updateProbeModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, dashboardCmd := m.updateDashboardForModal(msg)
+	var cmd tea.Cmd
+	m.probeModal, cmd = m.probeModal.Update(msg)
+	return m, tea.Batch(dashboardCmd, cmd)
+}
+
+func (m Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, dashboardCmd := m.updateDashboardForModal(msg)
+	var cmd tea.Cmd
+	m.exporter, cmd = m.exporter.Update(msg)
+	return m, tea.Batch(dashboardCmd, cmd)
+}
+
+func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if m.attaching {
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd, true
+	}
+	if m.probeModal.Visible() {
+		next, cmd := m.updateProbeModal(msg)
+		return next, cmd, true
+	}
+	if m.exporter.Visible() {
+		next, cmd := m.updateExportModal(msg)
+		return next, cmd, true
+	}
+	return m, nil, false
+}
+
+func (m *Model) normalizeKeyEvent(msg tea.Msg) (tea.Msg, bool) {
+	switch keyMsg := msg.(type) {
+	case tea.KeyPressMsg:
+		keyID := keyEventID(keyMsg)
+		if m.shouldSuppressPress(keyID) {
+			return nil, false
+		}
+		m.recordKeyEvent(keyMsg, true)
+		return keyMsg, true
+	case tea.KeyReleaseMsg:
+		pressMsg := tea.KeyPressMsg(keyMsg)
+		keyID := keyEventID(pressMsg)
+		if m.lastKeyEventWasPress && keyID != "" && keyID == m.lastKeyEventID && time.Since(m.lastKeyEventAt) <= 500*time.Millisecond {
+			// Some terminals emit both press+release; avoid handling release as a duplicate.
+			m.lastKeyEventWasPress = false
+			return nil, false
+		}
+		if !releaseHasIdentity(pressMsg) {
+			// Ignore release messages that don't carry enough identity information.
+			// Some terminals emit these before a usable press event.
+			return nil, false
+		}
+		// Fallback: treat release as press for terminals that only emit release events.
+		if shouldSuppressMatchingPressAfterRelease(pressMsg) {
+			m.armPressSuppression(keyID)
+		}
+		m.recordKeyEvent(pressMsg, false)
+		return pressMsg, true
+	default:
+		return msg, true
+	}
+}
+
+func (m *Model) shouldSuppressPress(keyID string) bool {
+	if m.suppressPressKeyID == "" {
+		return false
+	}
+	if time.Now().After(m.suppressPressUntil) {
+		m.clearPressSuppression()
+		return false
+	}
+	if keyID == "" || keyID != m.suppressPressKeyID {
+		return false
+	}
+	m.clearPressSuppression()
+	return true
+}
+
+func (m *Model) armPressSuppression(keyID string) {
+	if keyID == "" {
+		return
+	}
+	// Keep this short so fast repeated key presses still work naturally.
+	m.suppressPressKeyID = keyID
+	m.suppressPressUntil = time.Now().Add(60 * time.Millisecond)
+}
+
+func (m *Model) clearPressSuppression() {
+	m.suppressPressKeyID = ""
+	m.suppressPressUntil = time.Time{}
+}
+
+func (m *Model) recordKeyEvent(msg tea.KeyPressMsg, wasPress bool) {
+	m.lastKeyEventID = keyEventID(msg)
+	m.lastKeyEventAt = time.Now()
+	m.lastKeyEventWasPress = wasPress
+}
+
+func keyEventID(msg tea.KeyPressMsg) string {
+	return fmt.Sprintf("code:%d/mod:%d/key:%q/text:%q", msg.Code, msg.Mod, msg.String(), msg.Text)
+}
+
+func releaseHasIdentity(msg tea.KeyPressMsg) bool {
+	if msg.Text != "" {
+		return true
+	}
+	keyStr := msg.String()
+	if keyStr != "" && keyStr != "\x00" {
+		return true
+	}
+	// Some terminals emit release-only space events without text identity.
+	return msg.Code == tea.KeySpace
+}
+
+func shouldSuppressMatchingPressAfterRelease(msg tea.KeyPressMsg) bool {
+	keyStr := msg.String()
+	return msg.Code == tea.KeySpace || keyStr == " " || keyStr == "space" || msg.Text == " "
 }
 
 func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -350,9 +602,8 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	m.stopTrace()
-	flags.SetPidFilter(pid)
-	flags.SetTidFilter(-1)
 	m.pidFilter = pid
+	m.tidFilter = -1
 	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
@@ -367,9 +618,8 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 		pid = msg.Pid
 	}
 	m.stopTrace()
-	flags.SetPidFilter(pid)
-	flags.SetTidFilter(tid)
 	m.pidFilter = pid
+	m.tidFilter = tid
 	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
@@ -383,8 +633,8 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
-	m.pidPicker = pidpicker.New()
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
+	m.pidPicker = pidpicker.New().SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
 	if m.width > 0 && m.height > 0 {
@@ -404,8 +654,8 @@ func (m Model) reselectTID() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
-	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap())
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
+	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap()).SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
 	if m.width > 0 && m.height > 0 {
@@ -428,6 +678,7 @@ func (m *Model) beginTraceCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.traceStop = cancel
 	ctx = context.WithValue(ctx, runtimeBindingsContextKey{}, m.runtime)
+	ctx = ContextWithTraceFilters(ctx, m.pidFilter, m.tidFilter)
 	return startTraceCmd(m.startTrace, ctx)
 }
 
@@ -454,42 +705,79 @@ func (m *Model) stopTrace() {
 	}
 }
 
+func (m *Model) applyTheme(isDark bool) {
+	if m.isDark == isDark {
+		return
+	}
+	m.isDark = isDark
+	common.ApplyPalette(isDark)
+	syncStylesFromCommon()
+	m.dashboard.SetDarkMode(isDark)
+	m.pidPicker = m.pidPicker.SetDarkMode(isDark)
+	m.probeModal = m.probeModal.SetDarkMode(isDark)
+}
+
+func (m Model) windowTitle() string {
+	switch m.screen {
+	case ScreenPIDPicker:
+		return "ior - select process"
+	case ScreenDashboard:
+		if m.pidFilter > 0 {
+			return fmt.Sprintf("ior - tracing PID %d", m.pidFilter)
+		}
+	}
+	return "ior - I/O Riot"
+}
+
 // View renders the currently active screen and startup overlay state.
-func (m Model) View() string {
+func (m Model) View() tea.View {
+	title := m.windowTitle()
 	if m.quitting {
-		return ""
+		return altScreenView("", title)
 	}
 
 	width, height := common.EffectiveViewport(m.width, m.height)
 
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return placeToViewport(width, height, ScreenStyle.Render(PanelStyle.Render(line)))
+		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(common.PanelStyle.Render(line))), title)
 	}
 
 	if m.lastErr != nil {
-		return placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error())))
+		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))), title)
+	}
+	if m.helpOverlayVisible {
+		helpView := renderGlobalHelpOverlay(width, height, m.helpSections())
+		return altScreenView(helpView, title)
 	}
 
 	switch m.screen {
 	case ScreenPIDPicker:
-		base := m.pidPicker.View()
+		base := m.pidPicker.View().Content
 		if m.exporter.Visible() {
-			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
+			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
 		}
-		return placeToViewport(width, height, base)
+		return altScreenView(placeToViewport(width, height, base), title)
 	case ScreenDashboard:
-		base := m.dashboard.View()
+		base := m.dashboard.View().Content
 		if m.probeModal.Visible() {
-			return placeToViewport(width, height, m.probeModal.View(width, height))
+			return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)), title)
 		}
 		if m.exporter.Visible() {
-			return placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base)
+			return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
 		}
-		return placeToViewport(width, height, base)
+		return altScreenView(placeToViewport(width, height, base), title)
 	default:
-		return ""
+		return altScreenView("", title)
 	}
+}
+
+func isHelpOverlayOpenKey(msg tea.KeyPressMsg) bool {
+	return msg.String() == "H"
+}
+
+func isHelpOverlayCloseKey(msg tea.KeyPressMsg) bool {
+	return msg.Code == tea.KeyEsc || msg.String() == "esc" || msg.String() == "?"
 }
 
 func runExportCmd(exportEnabled bool, option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
@@ -499,7 +787,7 @@ func runExportCmd(exportEnabled bool, option tuiexport.Option, snap *statsengine
 		}
 		switch option {
 		case tuiexport.OptionCSV:
-			path, err := exportSnapshotCSV(snap)
+			path, err := coreexport.SnapshotCSV(snap)
 			if err != nil {
 				return tuiexport.FailedMsg{Err: err}
 			}
@@ -525,98 +813,6 @@ func (s lateBoundDashboardSource) Snapshot() *statsengine.Snapshot {
 	return source.Snapshot()
 }
 
-func exportSnapshotCSV(snap *statsengine.Snapshot) (string, error) {
-	filename := fmt.Sprintf("ior-snapshot-%s.csv", time.Now().Format("20060102-150405"))
-	f, err := os.Create(filename)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	w := csv.NewWriter(f)
-
-	rows := [][]string{
-		{"section", "name", "value1", "value2", "value3"},
-		{"summary", "totals", fmt.Sprint(snapValue(snap, func(s *statsengine.Snapshot) uint64 { return s.TotalSyscalls })), fmt.Sprint(snapValue(snap, func(s *statsengine.Snapshot) uint64 { return s.TotalErrors })), fmt.Sprint(snapValue(snap, func(s *statsengine.Snapshot) uint64 { return s.TotalBytes }))},
-		{"summary", "rates_per_sec", fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.SyscallRatePerSec })), fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.ReadBytesPerSec })), fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.WriteBytesPerSec }))},
-		{"summary", "latency_gap_mean_ns", fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.LatencyMeanNs })), fmt.Sprintf("%.2f", snapValueF(snap, func(s *statsengine.Snapshot) float64 { return s.GapMeanNs })), ""},
-		{"summary", "trend", trendSummary(snap, func(s *statsengine.Snapshot) statsengine.Trend { return s.LatencyTrend }), trendSummary(snap, func(s *statsengine.Snapshot) statsengine.Trend { return s.GapTrend }), trendSummary(snap, func(s *statsengine.Snapshot) statsengine.Trend { return s.ThroughputTrend })},
-	}
-	for _, row := range rows {
-		if err := w.Write(row); err != nil {
-			return "", err
-		}
-	}
-
-	if snap != nil {
-		for _, s := range snap.Syscalls() {
-			if err := w.Write([]string{"syscall", s.Name, fmt.Sprint(s.Count), fmt.Sprintf("%.2f", s.RatePerSec), fmt.Sprint(s.Bytes)}); err != nil {
-				return "", err
-			}
-			if err := w.Write([]string{"syscall_latency_ns", s.Name, fmt.Sprintf("%.2f", s.LatencyMeanNs), fmt.Sprint(s.LatencyMinNs), fmt.Sprint(s.LatencyMaxNs)}); err != nil {
-				return "", err
-			}
-			if err := w.Write([]string{"syscall_percentiles_ns", s.Name, fmt.Sprint(s.LatencyP50Ns), fmt.Sprint(s.LatencyP95Ns), fmt.Sprint(s.LatencyP99Ns)}); err != nil {
-				return "", err
-			}
-		}
-		for _, r := range snap.Files() {
-			if err := w.Write([]string{"file", r.Path, fmt.Sprint(r.Accesses), fmt.Sprint(r.BytesRead), fmt.Sprint(r.BytesWritten)}); err != nil {
-				return "", err
-			}
-			if err := w.Write([]string{"file_latency_ns", r.Path, fmt.Sprintf("%.2f", r.AvgLatencyNs), fmt.Sprint(r.MaxLatencyNs), ""}); err != nil {
-				return "", err
-			}
-		}
-		for _, p := range snap.Processes() {
-			if err := w.Write([]string{"process", fmt.Sprint(p.PID), fmt.Sprint(p.Syscalls), fmt.Sprintf("%.2f", p.RatePerSec), fmt.Sprint(p.Bytes)}); err != nil {
-				return "", err
-			}
-			if err := w.Write([]string{"process_latency_ns", fmt.Sprint(p.PID), fmt.Sprintf("%.2f", p.AvgLatencyNs), "", ""}); err != nil {
-				return "", err
-			}
-		}
-		for _, b := range snap.LatencyHistogram.Buckets() {
-			if err := w.Write([]string{"latency_hist", b.Label, fmt.Sprint(b.Count), fmt.Sprint(b.LowerNs), fmt.Sprint(b.UpperNs)}); err != nil {
-				return "", err
-			}
-		}
-		for _, b := range snap.GapHistogram.Buckets() {
-			if err := w.Write([]string{"gap_hist", b.Label, fmt.Sprint(b.Count), fmt.Sprint(b.LowerNs), fmt.Sprint(b.UpperNs)}); err != nil {
-				return "", err
-			}
-		}
-	}
-
-	w.Flush()
-	if err := w.Error(); err != nil {
-		return "", err
-	}
-	return filename, nil
-}
-
-func snapValue(snap *statsengine.Snapshot, get func(*statsengine.Snapshot) uint64) uint64 {
-	if snap == nil {
-		return 0
-	}
-	return get(snap)
-}
-
-func snapValueF(snap *statsengine.Snapshot, get func(*statsengine.Snapshot) float64) float64 {
-	if snap == nil {
-		return 0
-	}
-	return get(snap)
-}
-
-func trendSummary(snap *statsengine.Snapshot, get func(*statsengine.Snapshot) statsengine.Trend) string {
-	if snap == nil {
-		return "stable:0.00"
-	}
-	trend := get(snap)
-	return fmt.Sprintf("%s:%.2f", trend.Direction, trend.DeltaPercent)
-}
-
 func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 	if width <= 0 {
 		width = 80
@@ -637,18 +833,124 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 	lines = append(lines, "", "Esc/? close")
 
 	boxWidth := width - 6
-	if boxWidth > 110 {
-		boxWidth = 110
-	}
 	if boxWidth < 72 {
 		boxWidth = 72
 	}
 
-	box := PanelStyle.Copy().
+	box := common.PanelStyle.Copy().
 		Width(boxWidth).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+type helpSection struct {
+	title string
+	lines []string
+}
+
+func (m Model) helpSections() []helpSection {
+	globalLines := []string{
+		"H help  esc close help  q quit",
+		"tab/shift+tab cycle tabs  1..7 jump tab",
+		"p pid picker  t tid picker  o probes  r refresh",
+	}
+	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
+		globalLines = append(globalLines, "e snapshot export")
+	}
+
+	return []helpSection{
+		{
+			title: "Global",
+			lines: globalLines,
+		},
+		{
+			title: "Flame Tab",
+			lines: []string{
+				"arrows/hjkl navigate  pgup top  pgdn root",
+				"enter zoom  u/backspace/esc undo",
+				"/ filter  n/N match next/prev",
+				"space/p pause  o order  b metric  r reset baseline",
+			},
+		},
+		{
+			title: "Stream Tab",
+			lines: []string{
+				"space pause/live  f add filter  esc undo filter",
+				"enter apply filter  / or ? search  n/N next/prev",
+				"j/k/up/down scroll  pgup/pgdn page  g/G top/tail",
+				"left/right or h/l switch columns",
+				"c clear  x export  X export-as  E open last",
+			},
+		},
+		{
+			title: "PID/TID Picker",
+			lines: []string{
+				"enter select  r refresh  esc back",
+			},
+		},
+	}
+}
+
+func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 24
+	}
+
+	boxWidth := width - 4
+	if boxWidth > 100 {
+		boxWidth = 100
+	}
+	if boxWidth < 74 {
+		boxWidth = 74
+	}
+	contentWidth := boxWidth - 4
+	if contentWidth < 20 {
+		contentWidth = boxWidth
+	}
+
+	lines := make([]string, 0, 24)
+	lines = append(lines, "Help")
+	for _, section := range sections {
+		lines = append(lines, "")
+		lines = append(lines, section.title)
+		for _, line := range section.lines {
+			lines = append(lines, "  "+truncateHelpLine(line, contentWidth-2))
+		}
+	}
+	lines = append(lines, "", "Esc close")
+
+	maxLines := height - 4
+	if maxLines < 6 {
+		maxLines = 6
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines-1]
+		lines = append(lines, truncateHelpLine("... (resize for full help)", contentWidth))
+	}
+
+	box := common.PanelStyle.Copy().Width(boxWidth).Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func truncateHelpLine(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	r := []rune(s)
+	if len(r) >= width {
+		return string(r[:width-1]) + "…"
+	}
+	return s
 }
 
 func placeToViewport(width, height int, content string) string {
@@ -656,4 +958,13 @@ func placeToViewport(width, height int, content string) string {
 		return content
 	}
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
+}
+
+func altScreenView(content, title string) tea.View {
+	view := tea.NewView(content)
+	view.AltScreen = true
+	view.ReportFocus = true
+	view.WindowTitle = title
+	view.KeyboardEnhancements.ReportEventTypes = true
+	return view
 }

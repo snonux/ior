@@ -2,14 +2,15 @@ package pidpicker
 
 import (
 	"fmt"
-	common "ior/internal/tui/common"
-	"ior/internal/tui/messages"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	common "ior/internal/tui/common"
+	"ior/internal/tui/messages"
+
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 const allPIDsLabel = "All PIDs"
@@ -50,6 +51,14 @@ var (
 	errorStyle     = common.ErrorStyle
 )
 
+func syncPickerStyles() {
+	screenStyle = common.ScreenStyle
+	headerStyle = common.HeaderStyle
+	helpBarStyle = common.HelpBarStyle
+	highlightStyle = common.HighlightStyle
+	errorStyle = common.ErrorStyle
+}
+
 type processesLoadedMsg struct {
 	processes []ProcessInfo
 	err       error
@@ -67,6 +76,7 @@ type Model struct {
 	height        int
 	keys          KeyMap
 	lastErr       error
+	isDark        bool
 }
 
 // New creates a PID picker model with default shared key bindings.
@@ -81,12 +91,14 @@ func NewWithKeys(keys KeyMap) Model {
 
 // NewPIDWithKeys creates a PID picker model with the provided key bindings.
 func NewPIDWithKeys(keys KeyMap) Model {
+	syncPickerStyles()
 	input := textinput.New()
 	input.Prompt = "Filter: "
 	input.Placeholder = "pid, comm, or cmdline"
 	input.Focus()
 	input.CharLimit = 0
-	input.Width = 40
+	input.SetWidth(40)
+	input.SetStyles(textinput.DefaultStyles(true))
 
 	return Model{
 		input:     input,
@@ -94,6 +106,7 @@ func NewPIDWithKeys(keys KeyMap) Model {
 		filtered:  []ProcessInfo{},
 		mode:      PickerModePID,
 		targetPID: -1,
+		isDark:    true,
 	}
 }
 
@@ -117,14 +130,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.Width = clamp(msg.Width-16, 10, 100)
+		inputWidth := msg.Width - 16
+		if inputWidth < 10 {
+			inputWidth = 10
+		}
+		m.input.SetWidth(inputWidth)
 		return m, nil
 	case processesLoadedMsg:
 		m.processes = msg.processes
 		m.lastErr = msg.err
 		m.applyFilter()
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	}
 
@@ -134,21 +151,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Esc):
 		return m, tea.Quit
-	case msg.Type == tea.KeyCtrlR:
+	case msg.Key().Mod&tea.ModCtrl != 0 && (msg.Key().Code == 'r' || msg.Key().Code == 'R'):
 		return m, m.scanCmd()
 	case key.Matches(msg, m.keys.Enter):
 		return m, m.emitSelection()
-	case msg.Type == tea.KeyUp:
+	case msg.Key().Code == tea.KeyUp:
 		if m.selectedIndex > 0 {
 			m.selectedIndex--
 		}
 		m.input.Blur()
 		return m, nil
-	case msg.Type == tea.KeyDown:
+	case msg.Key().Code == tea.KeyDown:
 		maxIndex := len(m.filtered)
 		if m.selectedIndex < maxIndex {
 			m.selectedIndex++
@@ -157,7 +174,7 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if msg.Type == tea.KeyRunes && !m.input.Focused() {
+	if msg.Key().Text != "" && !m.input.Focused() {
 		if key.Matches(msg, m.keys.Refresh) {
 			return m, m.scanCmd()
 		}
@@ -240,7 +257,7 @@ func cloneProcesses(in []ProcessInfo) []ProcessInfo {
 }
 
 // View renders the PID picker with filter input, list, and help bar.
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	var b strings.Builder
 	if m.mode == PickerModeTID {
 		if m.targetPID > 0 {
@@ -264,8 +281,18 @@ func (m Model) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpBarStyle.Render(renderHelp(m.keys.PickerShortHelp())))
-	return screenStyle.Render(b.String())
+	viewWidth, _ := common.EffectiveViewport(m.width, m.height)
+	helpStyle := helpBarStyle.Copy().Width(viewWidth)
+	b.WriteString(helpStyle.Render(renderHelp(m.keys.PickerShortHelp())))
+	return tea.NewView(screenStyle.Render(b.String()))
+}
+
+// SetDarkMode updates picker theme and text input styles.
+func (m Model) SetDarkMode(isDark bool) Model {
+	m.isDark = isDark
+	syncPickerStyles()
+	m.input.SetStyles(textinput.DefaultStyles(isDark))
+	return m
 }
 
 func (m Model) renderRows() string {

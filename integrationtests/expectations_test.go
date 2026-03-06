@@ -1,9 +1,10 @@
 package integrationtests
 
 import (
+	"testing"
+
 	"ior/internal/flamegraph"
 	"ior/internal/types"
-	"testing"
 )
 
 func TestAssertEventsAbsentNoMatch(t *testing.T) {

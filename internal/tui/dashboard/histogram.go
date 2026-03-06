@@ -2,11 +2,12 @@ package dashboard
 
 import (
 	"fmt"
-	"ior/internal/statsengine"
-	common "ior/internal/tui/common"
 	"math"
 	"strconv"
 	"strings"
+
+	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 )
 
 func renderLatencyTab(snap *statsengine.Snapshot, width, height int) string {
@@ -14,9 +15,10 @@ func renderLatencyTab(snap *statsengine.Snapshot, width, height int) string {
 		return common.PanelStyle.Render("Latency: waiting for stats...")
 	}
 
+	panelW := panelWidth(width)
 	panelInner := panelInnerWidth(width)
 	hist := renderHistogram(snap.LatencyHistogram, "Latency Histogram", width, height)
-	spark := common.PanelStyle.Width(panelInner).Render(
+	spark := common.PanelStyle.Width(panelW).Render(
 		renderOverviewSparkline("Latency sparkline:", snap.LatencySeriesNs(), panelInner),
 	)
 	return strings.Join([]string{hist, spark}, "\n")
@@ -27,9 +29,10 @@ func renderGapsTab(snap *statsengine.Snapshot, width, height int) string {
 		return common.PanelStyle.Render("Gaps: waiting for stats...")
 	}
 
+	panelW := panelWidth(width)
 	panelInner := panelInnerWidth(width)
 	hist := renderHistogram(snap.GapHistogram, "Gap Histogram", width, height)
-	spark := common.PanelStyle.Width(panelInner).Render(
+	spark := common.PanelStyle.Width(panelW).Render(
 		renderOverviewSparkline("Gap sparkline:", snap.GapSeriesNs(), panelInner),
 	)
 	return strings.Join([]string{hist, spark}, "\n")
@@ -53,6 +56,7 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 	if width <= 0 {
 		width = 80
 	}
+	panelW := panelWidth(width)
 	panelInner := panelInnerWidth(width)
 
 	if height > 0 {
@@ -93,7 +97,7 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 	}
 	lines = append(lines, "Scale: █▓▒░")
 
-	return common.PanelStyle.Width(panelInner).Render(strings.Join(lines, "\n"))
+	return common.PanelStyle.Width(panelW).Render(strings.Join(lines, "\n"))
 }
 
 func renderHistogramBar(count, maxCount uint64, width int) string {

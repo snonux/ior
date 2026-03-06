@@ -1,9 +1,8 @@
 package dashboard
 
 import "math"
-import "strings"
 
-var sparkRowChars = []rune(" ▁▂▃▄▅▆▇█")
+var sparkChars = []rune("▁▂▃▄▅▆▇█")
 
 func renderSparkline(data []float64, width int) string {
 	if len(data) == 0 || width <= 0 {
@@ -11,23 +10,15 @@ func renderSparkline(data []float64, width int) string {
 	}
 
 	samples := sampleForWidth(data, width)
-	leftPad := 0
-	if len(samples) < width {
-		leftPad = width - len(samples)
-	}
 	min, max := minMax(samples)
 	if min == max {
-		top := repeatRune(' ', width)
-		bottom := repeatRune(' ', leftPad) + repeatRune('█', len(samples))
-		return top + "\n" + bottom
+		if min == 0 {
+			return repeatRune(' ', width)
+		}
+		return repeatRune('▁', width)
 	}
 
-	top := make([]rune, width)
-	bottom := make([]rune, width)
-	for i := 0; i < leftPad; i++ {
-		top[i] = ' '
-		bottom[i] = ' '
-	}
+	row := make([]rune, width)
 	scale := 16.0
 	denom := max - min
 	for i, value := range samples {
@@ -39,20 +30,17 @@ func renderSparkline(data []float64, width int) string {
 			level = 16
 		}
 
-		topLevel := level - 8
-		if topLevel < 0 {
-			topLevel = 0
+		// Collapse the previous two-row 0..16 scale to a single-row 0..7 scale.
+		oneRow := level / 2
+		if oneRow < 0 {
+			oneRow = 0
 		}
-		bottomLevel := level
-		if bottomLevel > 8 {
-			bottomLevel = 8
+		if oneRow > 7 {
+			oneRow = 7
 		}
-
-		col := leftPad + i
-		top[col] = sparkRowChars[topLevel]
-		bottom[col] = sparkRowChars[bottomLevel]
+		row[i] = sparkChars[oneRow]
 	}
-	return string(top) + "\n" + string(bottom)
+	return string(row)
 }
 
 func renderLabeledSparkline(label string, data []float64, width int) string {
@@ -60,20 +48,47 @@ func renderLabeledSparkline(label string, data []float64, width int) string {
 	if spark == "" {
 		return label
 	}
-	lines := strings.Split(spark, "\n")
-	if len(lines) == 1 {
-		return label + " " + lines[0]
-	}
-	pad := repeatRune(' ', len([]rune(label))+1)
-	return label + " " + lines[0] + "\n" + pad + lines[1]
+	return label + " " + spark
 }
 
 func sampleForWidth(data []float64, width int) []float64 {
-	if width >= len(data) {
+	if width <= 0 || len(data) == 0 {
+		return nil
+	}
+
+	if width < len(data) {
+		start := len(data) - width
+		return append([]float64(nil), data[start:]...)
+	}
+
+	if width == len(data) {
 		return append([]float64(nil), data...)
 	}
-	start := len(data) - width
-	return append([]float64(nil), data[start:]...)
+
+	if len(data) == 1 {
+		out := make([]float64, width)
+		for i := range out {
+			out[i] = data[0]
+		}
+		return out
+	}
+
+	out := make([]float64, width)
+	srcLast := len(data) - 1
+	dstLast := width - 1
+	for i := 0; i < width; i++ {
+		// Nearest-neighbor upsampling preserves the original series shape
+		// without introducing interpolated spikes between samples.
+		srcIdx := int(math.Round(float64(i) * float64(srcLast) / float64(dstLast)))
+		if srcIdx < 0 {
+			srcIdx = 0
+		}
+		if srcIdx > srcLast {
+			srcIdx = srcLast
+		}
+		out[i] = data[srcIdx]
+	}
+	return out
 }
 
 func minMax(values []float64) (float64, float64) {

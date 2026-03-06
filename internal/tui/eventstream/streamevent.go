@@ -1,9 +1,10 @@
 package eventstream
 
 import (
+	"time"
+
 	"ior/internal/event"
 	"ior/internal/types"
-	"time"
 )
 
 type StreamEvent struct {

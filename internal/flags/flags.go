@@ -10,44 +10,23 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"ior/internal/collapse"
 )
 
 var (
-	singleton = Flags{
-		TUIExportEnable: true,
-	}
-	once            sync.Once
-	parseErr        error
-	pidFilter       atomic.Int64
-	tidFilter       atomic.Int64
-	tuiExportEnable atomic.Bool
+	current  atomic.Pointer[Config]
+	once     sync.Once
+	parseErr error
 )
 
 func init() {
-	pidFilter.Store(-1)
-	tidFilter.Store(-1)
-	tuiExportEnable.Store(true)
+	defaults := NewFlags()
+	current.Store(&defaults)
 }
 
-var (
-	validCollapsedFields = []string{
-		"path",
-		"comm",
-		"tracepoint",
-		"pid",
-		"tid",
-		"flags",
-	}
-
-	validCollapsedCounts = []string{
-		"count",
-		"duration",
-		"durationToPrev",
-		"bytes",
-	}
-)
-
-type Flags struct {
+// Config captures runtime configuration parsed from CLI flags.
+type Config struct {
 	PidFilter    int
 	TidFilter    int
 	EventMapSize int
@@ -60,46 +39,104 @@ type Flags struct {
 	TracepointsToAttach  []*regexp.Regexp
 	TracepointsToExclude []*regexp.Regexp
 
-	// Flamegraph flags
-	PlainMode        bool
-	FlamegraphEnable bool
-	LiveFlamegraph   bool
-	LiveInterval     time.Duration
-	OpenCommand      string
-	FlamegraphName   string
-	FlamegraphJSON   bool
-	TUIExportEnable  bool
-
-	// To convert ior data into native SVG format
-	IorDataFile      string
-	IorWatchInterval time.Duration
-	CollapsedFields  []string
-	CountField       string
+	// Output/runtime flags
+	PlainMode       bool
+	TestFlames      bool
+	TestLiveFlames  bool
+	LiveInterval    time.Duration
+	TUIExportEnable bool
+	CollapsedFields []string
+	CountField      string
 }
 
-func Get() Flags {
-	out := singleton
-	out.PidFilter = int(pidFilter.Load())
-	out.TidFilter = int(tidFilter.Load())
-	out.TUIExportEnable = tuiExportEnable.Load()
+// NewFlags returns a configuration instance initialized with project defaults.
+func NewFlags() Config {
+	return Config{
+		PidFilter:       -1,
+		TidFilter:       -1,
+		EventMapSize:    4096 * 16,
+		Duration:        900,
+		LiveInterval:    200 * time.Millisecond,
+		TUIExportEnable: true,
+		CollapsedFields: []string{"comm", "tracepoint", "path"},
+		CountField:      "count",
+	}
+}
+
+// GetPidFilter returns the active process filter.
+func (f Config) GetPidFilter() int {
+	return f.PidFilter
+}
+
+// GetTidFilter returns the active thread filter.
+func (f Config) GetTidFilter() int {
+	return f.TidFilter
+}
+
+// GetTUIExportEnable reports whether TUI CSV export is enabled.
+func (f Config) GetTUIExportEnable() bool {
+	return f.TUIExportEnable
+}
+
+func (f Config) clone() Config {
+	out := f
+	out.TracepointsToAttach = slices.Clone(f.TracepointsToAttach)
+	out.TracepointsToExclude = slices.Clone(f.TracepointsToExclude)
+	out.CollapsedFields = slices.Clone(f.CollapsedFields)
 	return out
+}
+
+// Get returns a copy of the currently active runtime configuration.
+func Get() Config {
+	cfg := current.Load()
+	if cfg == nil {
+		return NewFlags()
+	}
+	return cfg.clone()
+}
+
+func setCurrent(cfg Config) {
+	snapshot := cfg.clone()
+	current.Store(&snapshot)
+}
+
+func updateCurrent(update func(*Config)) {
+	for {
+		old := current.Load()
+		next := NewFlags()
+		if old != nil {
+			next = old.clone()
+		}
+		update(&next)
+		snapshot := next.clone()
+		if current.CompareAndSwap(old, &snapshot) {
+			return
+		}
+	}
 }
 
 // SetPidFilter updates the active PID filter used for subsequent tracing runs.
 func SetPidFilter(pid int) {
-	pidFilter.Store(int64(pid))
+	updateCurrent(func(cfg *Config) {
+		cfg.PidFilter = pid
+	})
 }
 
 // SetTidFilter updates the active TID filter used for subsequent tracing runs.
 func SetTidFilter(tid int) {
-	tidFilter.Store(int64(tid))
+	updateCurrent(func(cfg *Config) {
+		cfg.TidFilter = tid
+	})
 }
 
 // SetTUIExportEnable toggles TUI snapshot export file writing.
 func SetTUIExportEnable(enabled bool) {
-	tuiExportEnable.Store(enabled)
+	updateCurrent(func(cfg *Config) {
+		cfg.TUIExportEnable = enabled
+	})
 }
 
+// Parse parses CLI flags once and updates the current runtime configuration.
 func Parse() error {
 	once.Do(func() {
 		parseErr = parse()
@@ -108,48 +145,42 @@ func Parse() error {
 }
 
 func parse() error {
-	flag.IntVar(&singleton.PidFilter, "pid", -1, "Filter for processes ID")
-	flag.IntVar(&singleton.TidFilter, "tid", -1, "Filter for thread ID")
-	flag.IntVar(&singleton.EventMapSize, "mapSize", 4096*16, "BPF FD event ring buffer map size")
-	flag.IntVar(&singleton.Duration, "duration", 900, "Probe duration in seconds")
+	cfg := NewFlags()
+	validFields := collapse.ValidFields()
+	validCounts := collapse.ValidCountFields()
 
-	flag.StringVar(&singleton.CommFilter, "comm", "", "Command to filter for")
-	flag.StringVar(&singleton.PathFilter, "path", "", "Path to filter for")
+	flag.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
+	flag.IntVar(&cfg.TidFilter, "tid", cfg.TidFilter, "Filter for thread ID")
+	flag.IntVar(&cfg.EventMapSize, "mapSize", cfg.EventMapSize, "BPF FD event ring buffer map size")
+	flag.IntVar(&cfg.Duration, "duration", cfg.Duration, "Probe duration in seconds")
 
-	flag.BoolVar(&singleton.PprofEnable, "pprof", false, "Enable profiling")
+	flag.StringVar(&cfg.CommFilter, "comm", "", "Command to filter for")
+	flag.StringVar(&cfg.PathFilter, "path", "", "Path to filter for")
+
+	flag.BoolVar(&cfg.PprofEnable, "pprof", false, "Enable profiling")
 
 	tracepointsToAttach := flag.String("tps", "", "Comma separated list regexes for tracepoints to load")
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
-	flag.BoolVar(&singleton.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
-	flag.BoolVar(&singleton.FlamegraphEnable, "flamegraph", false, "Enable flamegraph builder")
-	flag.BoolVar(&singleton.LiveFlamegraph, "live", false, "Enable live flamegraph mode")
-	flag.DurationVar(&singleton.LiveInterval, "live-interval", 200*time.Millisecond, "Live flamegraph refresh interval")
-	flag.StringVar(&singleton.OpenCommand, "open", "", "Command to open live flamegraph URL (used with -live); use {url} placeholder or URL is appended")
-	flag.StringVar(&singleton.FlamegraphName, "name", "default", "Name of the flamegraph, used to generate the SVG file")
-	flag.BoolVar(&singleton.FlamegraphJSON, "flamegraphJson", false, "Also export flamegraph tree as JSON in -ior mode (experimental WASM-ready output)")
-	flag.BoolVar(&singleton.TUIExportEnable, "tuiExport", true, "Enable writing TUI snapshot export files")
-
-	flag.StringVar(&singleton.IorDataFile, "ior", "", "IOR data file to convert into native SVG flamegraph")
-	flag.DurationVar(&singleton.IorWatchInterval, "iorWatchInterval", 0,
-		"In -ior mode, poll input file for changes and regenerate outputs; also enables auto-reloading viewer")
+	flag.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
+	flag.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
+	flag.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
+	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
+	flag.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable writing TUI snapshot export files")
 	fields := flag.String("fields", "",
-		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validCollapsedFields))
-	flag.StringVar(&singleton.CountField, "count", "count",
-		fmt.Sprintf("Count field to collapse, valid are: %v", validCollapsedCounts))
+		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
+	flag.StringVar(&cfg.CountField, "count", cfg.CountField,
+		fmt.Sprintf("Count field to collapse, valid are: %v", validCounts))
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	pidFilter.Store(int64(singleton.PidFilter))
-	tidFilter.Store(int64(singleton.TidFilter))
-	tuiExportEnable.Store(singleton.TUIExportEnable)
 
 	var err error
-	singleton.TracepointsToAttach, err = extractTracepointFlags(*tracepointsToAttach)
+	cfg.TracepointsToAttach, err = extractTracepointFlags(*tracepointsToAttach)
 	if err != nil {
 		return err
 	}
-	singleton.TracepointsToExclude, err = extractTracepointFlags(*tracepointsToExclude)
+	cfg.TracepointsToExclude, err = extractTracepointFlags(*tracepointsToExclude)
 	if err != nil {
 		return err
 	}
@@ -160,21 +191,22 @@ func parse() error {
 	// If future kernels regress, add targeted exclusions here.
 
 	if *fields == "" {
-		singleton.CollapsedFields = []string{"comm", "path", "tracepoint"}
+		cfg.CollapsedFields = []string{"comm", "tracepoint", "path"}
 	} else {
-		singleton.CollapsedFields = strings.Split(*fields, ",")
+		cfg.CollapsedFields = strings.Split(*fields, ",")
 	}
 
-	for _, field := range singleton.CollapsedFields {
-		if !slices.Contains(validCollapsedFields, field) {
+	for _, field := range cfg.CollapsedFields {
+		if !collapse.IsValidField(field) {
 			return fmt.Errorf("invalid field for collapse: %s", field)
 		}
 	}
 
-	if !slices.Contains(validCollapsedCounts, singleton.CountField) {
-		return fmt.Errorf("invalid count field: %s", singleton.CountField)
+	if !collapse.IsValidCountField(cfg.CountField) {
+		return fmt.Errorf("invalid count field: %s", cfg.CountField)
 	}
 
+	setCurrent(cfg)
 	return nil
 }
 
@@ -192,7 +224,7 @@ func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp, err e
 	return regexes, nil
 }
 
-func (flags Flags) ShouldIAttachTracepoint(tracepointName string) bool {
+func (flags Config) ShouldIAttachTracepoint(tracepointName string) bool {
 	for _, re := range flags.TracepointsToExclude {
 		if re.MatchString(tracepointName) {
 			return false

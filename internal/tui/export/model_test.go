@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestOpenAndClose(t *testing.T) {
@@ -21,7 +21,7 @@ func TestOpenAndClose(t *testing.T) {
 
 func TestEnterEmitsRequest(t *testing.T) {
 	m := NewModel().Open()
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatalf("expected request command on enter")
 	}
@@ -40,7 +40,7 @@ func TestEnterEmitsRequest(t *testing.T) {
 func TestCancelOptionCloses(t *testing.T) {
 	m := NewModel().Open()
 	m.selected = len(optionValues) - 1
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatalf("expected no command when selecting cancel")
 	}

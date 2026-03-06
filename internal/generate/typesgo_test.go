@@ -240,7 +240,7 @@ func TestGenerateTypesGoTraceIdMethods(t *testing.T) {
 
 	requireContains(t, output, "func (s TraceId) String() string")
 	requireContains(t, output, "func (s TraceId) Name() string")
-	requireContains(t, output, `panic(fmt.Sprintf("no string representation for trace ID %d found", s))`)
+	requireContains(t, output, `return fmt.Sprintf("unknown_trace_id_%d", s)`)
 }
 
 func TestGenerateTypesGoPackageDecl(t *testing.T) {

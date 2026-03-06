@@ -6,8 +6,9 @@ import (
 	"time"
 
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 func TestRenderOverviewIncludesCoreMetrics(t *testing.T) {
@@ -121,23 +122,22 @@ func TestRenderOverviewDoesNotOverflowWidth(t *testing.T) {
 func TestRenderOverviewSparklineHasSafetyMargin(t *testing.T) {
 	const panelInner = 80
 	out := renderOverviewSparkline("Latency:", []float64{1, 2, 3, 4, 5}, panelInner)
-	lines := strings.Split(out, "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2-line sparkline, got %q", out)
+	if strings.Contains(out, "\n") {
+		t.Fatalf("expected single-line sparkline, got %q", out)
 	}
-	if got, max := lipgloss.Width(lines[0]), panelInner-sparklineSafetyMargin; got > max {
+	if got, max := lipgloss.Width(out), panelInner-sparklineSafetyMargin; got > max {
 		t.Fatalf("expected sparkline width <= %d with safety margin, got %d", max, got)
 	}
 }
 
-func TestRenderOverviewSparklineCapsWidth(t *testing.T) {
+func TestRenderOverviewSparklineUsesAvailableWidth(t *testing.T) {
 	out := renderOverviewSparkline("Latency:", make([]float64, 120), 400)
-	lines := strings.Split(out, "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2-line sparkline, got %q", out)
+	if strings.Contains(out, "\n") {
+		t.Fatalf("expected single-line sparkline, got %q", out)
 	}
-	if got := lipgloss.Width(lines[0]) - len("Latency: "); got > sparklineMaxWidth {
-		t.Fatalf("expected capped sparkline width <= %d, got %d", sparklineMaxWidth, got)
+	want := 400 - len("Latency:") - 1 - sparklineSafetyMargin
+	if got := lipgloss.Width(out) - len("Latency: "); got != want {
+		t.Fatalf("expected sparkline width %d, got %d", want, got)
 	}
 }
 
@@ -162,5 +162,16 @@ func TestRenderOverviewSparklineAlignedUsesSameSparkStartColumn(t *testing.T) {
 	}
 	if !strings.HasPrefix(thrTop, "Throughput: ") {
 		t.Fatalf("unexpected throughput prefix: %q", thrTop)
+	}
+}
+
+func TestRenderOverviewSparklineAlignedFitsSinglePanelRow(t *testing.T) {
+	panelW := panelWidth(220)
+	panelInner := panelInnerWidth(220)
+	labelWidth := maxLabelWidth("Latency:", "Gap:", "Throughput:")
+	line := renderOverviewSparklineAligned("Latency:", []float64{0, 10, 5, 10, 0}, panelInner, labelWidth)
+	rendered := common.PanelStyle.Width(panelW).Render(line)
+	if got := len(strings.Split(rendered, "\n")); got != 3 {
+		t.Fatalf("expected sparkline to fit one panel row (3 total lines with border), got %d lines", got)
 	}
 }

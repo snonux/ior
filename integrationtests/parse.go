@@ -2,6 +2,7 @@ package integrationtests
 
 import (
 	"fmt"
+
 	"ior/internal/flamegraph"
 )
 

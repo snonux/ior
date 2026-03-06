@@ -1,9 +1,10 @@
 package statsengine
 
 import (
-	"ior/internal/event"
 	"sort"
 	"time"
+
+	"ior/internal/event"
 )
 
 const processRankTopNDefault = 20

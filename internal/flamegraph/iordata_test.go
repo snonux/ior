@@ -2,9 +2,12 @@ package flamegraph
 
 import (
 	"bytes"
-	"ior/internal/types"
+	"errors"
+	"strings"
 	"syscall"
 	"testing"
+
+	"ior/internal/types"
 )
 
 func counterAt(iod iorData, path pathType, traceID traceIdType, comm commType, pid pidType, tid tidType, flags flagsType) (Counter, bool) {
@@ -167,16 +170,36 @@ func TestStringByNameValidFields(t *testing.T) {
 	}
 }
 
-func TestCounterValueByNamePanic(t *testing.T) {
+func TestCounterValueByNameUnknownField(t *testing.T) {
 	c := Counter{Count: 1, Duration: 100, DurationToPrev: 10, Bytes: 64}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic for unknown counter name, got none")
-		}
-	}()
+	_, err := c.ValueByName("nonexistent")
+	if err == nil {
+		t.Error("Expected error for unknown counter name, got nil")
+	}
+}
 
-	c.ValueByName("nonexistent")
+func TestCounterValueByNameValidFields(t *testing.T) {
+	c := Counter{Count: 1, Duration: 100, DurationToPrev: 10, Bytes: 64}
+
+	tests := map[string]uint64{
+		"count":          c.Count,
+		"duration":       c.Duration,
+		"durationToPrev": c.DurationToPrev,
+		"bytes":          c.Bytes,
+	}
+
+	for field, want := range tests {
+		t.Run(field, func(t *testing.T) {
+			got, err := c.ValueByName(field)
+			if err != nil {
+				t.Fatalf("Expected no error for field %q, got %v", field, err)
+			}
+			if got != want {
+				t.Fatalf("Expected %d for field %q, got %d", want, field, got)
+			}
+		})
+	}
 }
 
 func TestMergeEmpty(t *testing.T) {
@@ -284,6 +307,24 @@ func TestDeserializeInvalidData(t *testing.T) {
 	err := iod.deserialize(&buf)
 	if err == nil {
 		t.Error("Expected error when deserializing invalid data, got nil")
+	}
+}
+
+func TestSerializeToFileHostnameErrorReturnsError(t *testing.T) {
+	origHostnameFn := hostnameFn
+	t.Cleanup(func() { hostnameFn = origHostnameFn })
+
+	hostnameFn = func() (string, error) {
+		return "", errors.New("hostname unavailable")
+	}
+
+	iod := newIorData()
+	err := iod.serializeToFile("test")
+	if err == nil {
+		t.Fatal("Expected error when hostname lookup fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "get hostname") {
+		t.Fatalf("Expected get hostname context, got %v", err)
 	}
 }
 
