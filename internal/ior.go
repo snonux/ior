@@ -27,14 +27,6 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-type tracepointProgram interface {
-	attachTracepoint(category, name string) (tracepointLink, error)
-}
-
-type tracepointLink interface {
-	Destroy() error
-}
-
 var (
 	runTraceFn             = runTrace
 	runTraceWithContextFn  = runTraceWithContext
@@ -46,10 +38,6 @@ var (
 	errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
 )
 
-type tracepointModule interface {
-	getProgram(progName string) (tracepointProgram, error)
-}
-
 type libbpfTracepointProgram struct {
 	prog *bpf.BPFProg
 }
@@ -58,20 +46,8 @@ func (p libbpfTracepointProgram) AttachTracepoint(category, name string) (probem
 	return p.prog.AttachTracepoint(category, name)
 }
 
-func (p libbpfTracepointProgram) attachTracepoint(category, name string) (tracepointLink, error) {
-	return p.AttachTracepoint(category, name)
-}
-
 type libbpfTracepointModule struct {
 	module *bpf.Module
-}
-
-func (m libbpfTracepointModule) getProgram(progName string) (tracepointProgram, error) {
-	prog, err := m.module.GetProgram(progName)
-	if err != nil {
-		return nil, err
-	}
-	return libbpfTracepointProgram{prog: prog}, nil
 }
 
 func (m libbpfTracepointModule) GetProgram(progName string) (probemanager.Program, error) {
@@ -80,37 +56,6 @@ func (m libbpfTracepointModule) GetProgram(progName string) (probemanager.Progra
 		return nil, err
 	}
 	return libbpfTracepointProgram{prog: prog}, nil
-}
-
-func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bool, tracepointNames []string, verbose bool) error {
-	logln := func(...any) {}
-	logf := func(string, ...any) {}
-	if verbose {
-		logln = func(args ...any) { _, _ = fmt.Println(args...) }
-		logf = func(format string, args ...any) { _, _ = fmt.Printf(format, args...) }
-	}
-
-	for _, name := range tracepointNames {
-		if !shouldAttach(name) {
-			continue
-		}
-		logln("Attaching tracepoint", name)
-
-		prog, err := module.getProgram(fmt.Sprintf("handle_%s", name))
-		if err != nil {
-			return fmt.Errorf("failed to get BPF program handle_%s: %w", name, err)
-		}
-		logln("Attached prog handle_", name)
-
-		if _, err = prog.attachTracepoint("syscalls", name); err != nil {
-			// OK, older Kernel versions may not have this tracepoint!
-			logf("Failed to attach to %s tracepoint: %v, kernel version may be too old, skipping", name, err)
-			continue
-		}
-		logln("Attached tracepoint ", name)
-	}
-
-	return nil
 }
 
 // Run is the main entry point for the ior binary.
