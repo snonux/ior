@@ -92,7 +92,7 @@ func (m Model) helpOverlay() string {
 	if width <= 0 {
 		width = 80
 	}
-	help := "Flame help: j/k depth  h/l sibling  enter zoom  u/backspace/esc undo  / search  n/N matches  space/p pause  r reset baseline  o order  ? help"
+	help := "Flame help: j/k depth  h/l sibling  pgup top  pgdn root  enter zoom  u/backspace/esc undo  / search  n/N matches  space/p pause  r reset baseline  o order  ? help"
 	return common.HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 
@@ -118,8 +118,17 @@ func (m Model) selectionStatusLine() string {
 	if m.globalTotal > 0 {
 		systemShare = percentOfTotal(frame.Total, m.globalTotal)
 	}
-	line := fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total:%d | %.2f%% system",
-		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, frame.Total, systemShare)
+	shareLabel := fmt.Sprintf("%.2f%% system", systemShare)
+	if strings.TrimSpace(m.searchQuery) != "" && len(m.matchIndices) > 0 {
+		filterTotal, _ := filterCoverageTotals(m.frames, m.matchIndices, m.globalTotal)
+		if filterTotal > 0 {
+			selectedFilterTotal := filterCoverageTotalForPath(m.frames, m.matchIndices, frame.Path)
+			filterShare := percentOfTotal(selectedFilterTotal, filterTotal)
+			shareLabel = fmt.Sprintf("%.2f%% filter", filterShare)
+		}
+	}
+	line := fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total:%d | %s",
+		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, frame.Total, shareLabel)
 	if m.searchQuery != "" {
 		line += " | filter:" + m.searchQuery
 	}

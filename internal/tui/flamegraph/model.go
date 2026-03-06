@@ -38,6 +38,8 @@ type flameKeyMap struct {
 	MoveDeeper    key.Binding
 	PrevSibling   key.Binding
 	NextSibling   key.Binding
+	JumpTop       key.Binding
+	JumpRoot      key.Binding
 	ZoomIn        key.Binding
 	ZoomUndo      key.Binding
 	ZoomReset     key.Binding
@@ -49,6 +51,8 @@ func defaultFlameKeyMap() flameKeyMap {
 		MoveDeeper:    key.NewBinding(key.WithKeys("k", "up")),
 		PrevSibling:   key.NewBinding(key.WithKeys("h", "left")),
 		NextSibling:   key.NewBinding(key.WithKeys("l", "right")),
+		JumpTop:       key.NewBinding(key.WithKeys("pgup", "pageup")),
+		JumpRoot:      key.NewBinding(key.WithKeys("pgdown", "pgdn", "pagedown")),
 		ZoomIn:        key.NewBinding(key.WithKeys("enter")),
 		ZoomUndo:      key.NewBinding(key.WithKeys("backspace", "u", "esc")),
 		ZoomReset:     key.NewBinding(),
@@ -233,6 +237,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case isNextSiblingKey(msg, m.keys):
 			handled = true
 			m.moveSibling(1)
+		case isJumpTopKey(msg, m.keys):
+			handled = true
+			m.jumpToTop()
+		case isJumpRootKey(msg, m.keys):
+			handled = true
+			m.jumpToRoot()
 		}
 		if m.selectedIdx != prev {
 			m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
@@ -263,7 +273,9 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 		isMoveShallowerKey(msg, m.keys),
 		isMoveDeeperKey(msg, m.keys),
 		isPrevSiblingKey(msg, m.keys),
-		isNextSiblingKey(msg, m.keys):
+		isNextSiblingKey(msg, m.keys),
+		isJumpTopKey(msg, m.keys),
+		isJumpRootKey(msg, m.keys):
 		return true
 	default:
 		return false
@@ -582,6 +594,87 @@ func (m *Model) moveSibling(delta int) {
 	}
 }
 
+func (m *Model) jumpToTop() {
+	if len(m.frames) == 0 {
+		return
+	}
+	m.clampSelection()
+	m.ensureSelectionNavigable()
+
+	include := m.navigableFrameSet()
+	currentCol := m.frames[m.selectedIdx].Col
+	bestIdx := -1
+	bestDepth := -1
+	bestDist := int(^uint(0) >> 1)
+
+	for idx, frame := range m.frames {
+		if include != nil && !include[idx] {
+			continue
+		}
+		dist := abs(frame.Col - currentCol)
+		if frame.Depth > bestDepth {
+			bestDepth = frame.Depth
+			bestIdx = idx
+			bestDist = dist
+			continue
+		}
+		if frame.Depth == bestDepth {
+			if dist < bestDist || (dist == bestDist && frame.Col < m.frames[bestIdx].Col) {
+				bestIdx = idx
+				bestDist = dist
+			}
+		}
+	}
+	if bestIdx >= 0 {
+		m.selectedIdx = bestIdx
+	}
+}
+
+func (m *Model) jumpToRoot() {
+	if len(m.frames) == 0 {
+		return
+	}
+	m.clampSelection()
+	m.ensureSelectionNavigable()
+
+	rootPath := m.currentRootPath()
+	if rootPath != "" {
+		if idx := m.frameIndexByPath(rootPath); idx >= 0 {
+			if !m.filterActive() || m.frameNavigable(idx) {
+				m.selectedIdx = idx
+				return
+			}
+		}
+	}
+
+	include := m.navigableFrameSet()
+	currentCol := m.frames[m.selectedIdx].Col
+	bestIdx := -1
+	bestDepth := int(^uint(0) >> 1)
+	bestDist := int(^uint(0) >> 1)
+	for idx, frame := range m.frames {
+		if include != nil && !include[idx] {
+			continue
+		}
+		dist := abs(frame.Col - currentCol)
+		if frame.Depth < bestDepth {
+			bestDepth = frame.Depth
+			bestDist = dist
+			bestIdx = idx
+			continue
+		}
+		if frame.Depth == bestDepth {
+			if dist < bestDist || (dist == bestDist && frame.Col < m.frames[bestIdx].Col) {
+				bestDist = dist
+				bestIdx = idx
+			}
+		}
+	}
+	if bestIdx >= 0 {
+		m.selectedIdx = bestIdx
+	}
+}
+
 func framesAtDepth(frames []tuiFrame, depth int) []int {
 	return framesAtDepthFiltered(frames, depth, nil)
 }
@@ -811,6 +904,16 @@ func isPrevSiblingKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
 func isNextSiblingKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
 	k := keyString(msg)
 	return key.Matches(msg, keys.NextSibling) || msg.Code == tea.KeyRight || keyMatchesDirection(k, "right", 'C')
+}
+
+func isJumpTopKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	k := strings.ToLower(keyString(msg))
+	return key.Matches(msg, keys.JumpTop) || msg.Code == tea.KeyPgUp || k == "pgup" || k == "pageup"
+}
+
+func isJumpRootKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
+	k := strings.ToLower(keyString(msg))
+	return key.Matches(msg, keys.JumpRoot) || msg.Code == tea.KeyPgDown || k == "pgdown" || k == "pgdn" || k == "pagedown"
 }
 
 func keyMatchesDirection(keyName, plain string, ansiFinal byte) bool {

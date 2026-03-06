@@ -203,7 +203,7 @@ func TestRenderTerminalViewShowsPersistentFilterContext(t *testing.T) {
 	}
 }
 
-func TestRenderTerminalViewFilterOnlyShowsMatchingBranchToRoot(t *testing.T) {
+func TestRenderTerminalViewFilterKeepsNonMatchingBranchesVisible(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",
 		Total: 100,
@@ -231,15 +231,18 @@ func TestRenderTerminalViewFilterOnlyShowsMatchingBranchToRoot(t *testing.T) {
 	}
 	matchSet := map[int]bool{needleIdx: true}
 
-	out := RenderTerminalView(frames, 80, 8, needleIdx, nil, matchSet, nil, 100, true, false, "needle")
+	out := RenderTerminalView(frames, 180, 8, needleIdx, nil, matchSet, nil, 100, true, false, "needle")
 	if !strings.Contains(out, `Filter "needle": 60.0% system`) {
 		t.Fatalf("expected filter status to report 60.0%% system share, got %q", out)
 	}
 	if !strings.Contains(out, "keep") || !strings.Contains(out, "needle") {
 		t.Fatalf("expected matching branch to remain visible, got %q", out)
 	}
-	if strings.Contains(out, "drop") || strings.Contains(out, "noise") {
-		t.Fatalf("expected non-matching branch to be hidden, got %q", out)
+	if !strings.Contains(out, "drop") || !strings.Contains(out, "noise") {
+		t.Fatalf("expected non-matching branch to remain visible (greyed), got %q", out)
+	}
+	if !strings.Contains(out, "100.00% filter") {
+		t.Fatalf("expected selected match share to be computed against filtered total, got %q", out)
 	}
 }
 

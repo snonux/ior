@@ -193,6 +193,37 @@ func TestHorizontalTraversalFallbackFromRoot(t *testing.T) {
 	}
 }
 
+func TestPageUpJumpsSelectionToTopMostDepth(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Path: "root"},
+		{Name: "A", Depth: 1, Col: 0, Path: "root" + pathSeparator + "A"},
+		{Name: "B", Depth: 1, Col: 40, Path: "root" + pathSeparator + "B"},
+		{Name: "A1", Depth: 2, Col: 0, Path: "root" + pathSeparator + "A" + pathSeparator + "A1"},
+		{Name: "B1", Depth: 2, Col: 40, Path: "root" + pathSeparator + "B" + pathSeparator + "B1"},
+		{Name: "A2", Depth: 3, Col: 0, Path: "root" + pathSeparator + "A" + pathSeparator + "A1" + pathSeparator + "A2"},
+		{Name: "B2", Depth: 3, Col: 40, Path: "root" + pathSeparator + "B" + pathSeparator + "B1" + pathSeparator + "B2"},
+	}
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"B"+pathSeparator+"B1")
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if got, want := m.frames[m.selectedIdx].Path, "root"+pathSeparator+"B"+pathSeparator+"B1"+pathSeparator+"B2"; got != want {
+		t.Fatalf("expected pgup to jump to deepest top frame %q, got %q", want, got)
+	}
+}
+
+func TestPageDownJumpsSelectionToCurrentViewRoot(t *testing.T) {
+	m := newZoomModel()
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A"+pathSeparator+"A1")
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if got, want := m.frames[m.selectedIdx].Path, "root"+pathSeparator+"A"; got != want {
+		t.Fatalf("expected pgdn to jump to current zoom root %q, got %q", want, got)
+	}
+}
+
 func TestPausedStateStillAllowsNavigation(t *testing.T) {
 	m := NewModel(nil)
 	m.frames = []tuiFrame{
@@ -632,6 +663,45 @@ func TestViewIncludesSelectionStatusBar(t *testing.T) {
 	}
 	if !strings.Contains(view, "40.00% system") {
 		t.Fatalf("expected selection status bar to include selected share, got %q", view)
+	}
+}
+
+func TestViewFilterSelectionStatusUsesFilteredTotalAndKeepsContextVisible(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{
+				Name:  "keep",
+				Total: 60,
+				Children: []*snapshotNode{
+					{Name: "needle", Total: 60},
+				},
+			},
+			{
+				Name:  "drop",
+				Total: 40,
+				Children: []*snapshotNode{
+					{Name: "noise", Total: 40},
+				},
+			},
+		},
+	}
+	m := NewModel(nil)
+	m.width = 220
+	m.height = 12
+	m.frames = BuildTerminalLayout(snapshot, m.width, m.height)
+	m.globalTotal = 100
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"keep"+pathSeparator+"needle")
+	m.searchQuery = "needle"
+	m.recomputeFilterState()
+
+	view := m.View().Content
+	if !strings.Contains(view, "100.00% filter") {
+		t.Fatalf("expected filtered selection share in status line, got %q", view)
+	}
+	if !strings.Contains(view, "drop") || !strings.Contains(view, "noise") {
+		t.Fatalf("expected non-matching branches to remain visible while filtering, got %q", view)
 	}
 }
 
