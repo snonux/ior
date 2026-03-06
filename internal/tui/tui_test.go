@@ -117,6 +117,8 @@ func TestViewShowsAttachingAndErrorStates(t *testing.T) {
 
 func TestQuitKeySetsQuittingState(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	if cmd == nil {
@@ -135,6 +137,8 @@ func TestQuitKeySetsQuittingState(t *testing.T) {
 func TestQuitKeyMatchesSingleBindingWithoutPanic(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.keys.Quit = key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "quit"))
+	m.screen = ScreenDashboard
+	m.attaching = false
 
 	_, _ = m.Update(tea.KeyPressMsg{Code: []rune{'z'}[0], Text: string([]rune{'z'})})
 
@@ -170,6 +174,8 @@ func TestStartTraceCmdEmitsErrorMsg(t *testing.T) {
 
 func TestQuitInvokesTraceStop(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
 	done := make(chan struct{})
 	m.traceStop = func() {
 		close(done)
@@ -184,6 +190,85 @@ func TestQuitInvokesTraceStop(t *testing.T) {
 	case <-done:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatalf("expected stopTrace to be invoked on quit")
+	}
+}
+
+func TestQuitKeyDoesNotExitOnPIDPickerScreen(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	if m.screen != ScreenPIDPicker {
+		t.Fatalf("expected default screen to be PID picker")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	updated := next.(Model)
+	if cmd != nil {
+		t.Fatalf("expected no quit command outside main dashboard")
+	}
+	if updated.quitting {
+		t.Fatalf("expected q outside main dashboard not to set quitting state")
+	}
+}
+
+func TestQuitKeyClosesProbeModalLikeEsc(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.probeModal = probes.NewModel(fakeProbeManager{
+		states: []probemanager.ProbeState{{Syscall: "read", Active: true}},
+	}).Open()
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	updated := next.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	if updated.probeModal.Visible() {
+		t.Fatalf("expected q to close probe modal like esc")
+	}
+	if updated.quitting {
+		t.Fatalf("expected q in probe modal not to quit app")
+	}
+}
+
+func TestQuitKeyClosesExportModalLikeEsc(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.exporter = m.exporter.Open()
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	updated := next.(Model)
+	if updated.exporter.Visible() {
+		t.Fatalf("expected q to close export modal like esc")
+	}
+	if updated.quitting {
+		t.Fatalf("expected q in export modal not to quit app")
+	}
+}
+
+func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'/'}[0], Text: string([]rune{'/'})})
+	m = next.(Model)
+	if !strings.Contains(m.View().Content, "0/0 matches") {
+		t.Fatalf("expected flame search footer to open on /")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("expected q in flame search to close search, not quit")
+	}
+	if m.quitting {
+		t.Fatalf("expected q in flame search not to set quitting state")
+	}
+	if strings.Contains(m.View().Content, "0/0 matches") {
+		t.Fatalf("expected q to close flame search like esc")
 	}
 }
 
@@ -995,6 +1080,13 @@ func TestViewSetsDynamicWindowTitle(t *testing.T) {
 	view = m.View()
 	if view.WindowTitle != "ior - I/O Riot" {
 		t.Fatalf("unexpected default window title: %q", view.WindowTitle)
+	}
+}
+
+func TestAltScreenViewEnablesMouseCellMotion(t *testing.T) {
+	view := altScreenView("test", "ior")
+	if view.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("expected mouse mode cell motion, got %v", view.MouseMode)
 	}
 }
 

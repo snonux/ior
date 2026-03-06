@@ -239,6 +239,93 @@ func TestPausedStateStillAllowsNavigation(t *testing.T) {
 	}
 }
 
+func TestMouseClickSelectsFrameAndZooms(t *testing.T) {
+	m := newZoomModel()
+	targetPath := "root" + pathSeparator + "A"
+	targetIdx := mustFrameIndex(t, m.frames, targetPath)
+
+	x, y, ok := firstClickablePointForFrame(m, targetIdx)
+	if !ok {
+		t.Fatalf("expected clickable point for %q", targetPath)
+	}
+
+	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m = next.(Model)
+
+	if got := m.zoomPath; got != targetPath {
+		t.Fatalf("expected mouse click to zoom into %q, got %q", targetPath, got)
+	}
+	if got := m.frames[m.selectedIdx].Path; got != targetPath {
+		t.Fatalf("expected clicked frame to remain selected after zoom, got %q", got)
+	}
+}
+
+func TestMouseClickOutsideBarsDoesNotChangeSelectionOrZoom(t *testing.T) {
+	m := newZoomModel()
+	beforeSelection := m.selectedIdx
+	beforeZoom := m.zoomPath
+
+	next, _ := m.Update(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft}) // toolbar row
+	m = next.(Model)
+
+	if m.selectedIdx != beforeSelection {
+		t.Fatalf("expected toolbar click to preserve selection, got idx %d want %d", m.selectedIdx, beforeSelection)
+	}
+	if m.zoomPath != beforeZoom {
+		t.Fatalf("expected toolbar click to preserve zoom path, got %q want %q", m.zoomPath, beforeZoom)
+	}
+}
+
+func TestZoomKeepsNarrowLineageRail(t *testing.T) {
+	m := newZoomModel()
+	targetPath := "root" + pathSeparator + "A"
+	targetIdx := mustFrameIndex(t, m.frames, targetPath)
+	selectedWidth := m.frames[targetIdx].Width
+	expectedRailWidth := min(max(selectedWidth, 3), max(3, m.width/3))
+
+	m.selectedIdx = targetIdx
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = settleFlameAnimation(t, m)
+
+	rootIdx := mustFrameIndex(t, m.frames, "root")
+	zoomIdx := mustFrameIndex(t, m.frames, targetPath)
+	if m.frames[rootIdx].Width != expectedRailWidth {
+		t.Fatalf("expected root lineage width %d, got %d", expectedRailWidth, m.frames[rootIdx].Width)
+	}
+	if m.frames[zoomIdx].Width != expectedRailWidth {
+		t.Fatalf("expected zoom lineage width %d, got %d", expectedRailWidth, m.frames[zoomIdx].Width)
+	}
+	if m.frames[rootIdx].Col != 0 || m.frames[zoomIdx].Col != 0 {
+		t.Fatalf("expected lineage rail at column 0, got root=%d zoom=%d", m.frames[rootIdx].Col, m.frames[zoomIdx].Col)
+	}
+}
+
+func TestMouseClickOnLineageAncestorUndoesToThatZoomLevel(t *testing.T) {
+	m := newZoomModel()
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = settleFlameAnimation(t, m)
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A"+pathSeparator+"A1")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = settleFlameAnimation(t, m)
+	if got, want := m.zoomPath, "root"+pathSeparator+"A"+pathSeparator+"A1"; got != want {
+		t.Fatalf("expected nested zoom path %q, got %q", want, got)
+	}
+
+	ancestorPath := "root" + pathSeparator + "A"
+	ancestorIdx := mustFrameIndex(t, m.frames, ancestorPath)
+	x, y, ok := firstClickablePointForFrame(m, ancestorIdx)
+	if !ok {
+		t.Fatalf("expected clickable lineage point for ancestor %q", ancestorPath)
+	}
+
+	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m = next.(Model)
+	if got := m.zoomPath; got != ancestorPath {
+		t.Fatalf("expected click on lineage ancestor to undo zoom to %q, got %q", ancestorPath, got)
+	}
+}
+
 func TestStaticFixtureArrowTraversalVisitsAllFrames(t *testing.T) {
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
 	coreflamegraph.SeedTestFlameData(trie)
@@ -984,4 +1071,39 @@ func pressFlameKey(t *testing.T, m Model, keyMsg tea.KeyPressMsg) Model {
 	t.Helper()
 	next, _ := m.Update(keyMsg)
 	return next.(Model)
+}
+
+func firstClickablePointForFrame(m Model, frameIdx int) (x, y int, ok bool) {
+	if frameIdx < 0 || frameIdx >= len(m.frames) {
+		return 0, 0, false
+	}
+	frame := m.frames[frameIdx]
+	left := frame.Col
+	right := min(m.width, frame.Col+frame.Width)
+	if left < 0 {
+		left = 0
+	}
+	if right <= left {
+		return 0, 0, false
+	}
+	for row := 0; row < m.height; row++ {
+		for col := left; col < right; col++ {
+			if m.frameIndexAt(col, row) == frameIdx {
+				return col, row, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+func settleFlameAnimation(t *testing.T, m Model) Model {
+	t.Helper()
+	for i := 0; i < 240 && m.animating; i++ {
+		next, _ := m.Update(animTickMsg{})
+		m = next.(Model)
+	}
+	if m.animating {
+		t.Fatalf("expected flame animation to settle within 240 ticks")
+	}
+	return m
 }
