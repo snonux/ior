@@ -83,7 +83,7 @@ func NewFlags() Flags {
 		LiveInterval:    200 * time.Millisecond,
 		FlamegraphName:  "default",
 		TUIExportEnable: true,
-		CollapsedFields: []string{"comm", "path", "tracepoint"},
+		CollapsedFields: []string{"comm", "tracepoint", "path"},
 		CountField:      "count",
 	}
 }
@@ -221,7 +221,7 @@ func parse() error {
 	// If future kernels regress, add targeted exclusions here.
 
 	if *fields == "" {
-		cfg.CollapsedFields = []string{"comm", "path", "tracepoint"}
+		cfg.CollapsedFields = []string{"comm", "tracepoint", "path"}
 	} else {
 		cfg.CollapsedFields = strings.Split(*fields, ",")
 	}

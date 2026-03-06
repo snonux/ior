@@ -166,7 +166,7 @@ global.prompt = function(){ return ""; };
 global.fetch = function() {
   return Promise.resolve({
     ok: true,
-    json: function() { return Promise.resolve({ fields: ["comm", "path", "tracepoint"], snapshot: { n: "", v: 0, t: 0 } }); },
+    json: function() { return Promise.resolve({ fields: ["comm", "tracepoint", "path"], snapshot: { n: "", v: 0, t: 0 } }); },
     text: function() { return Promise.resolve("{\"n\":\"\",\"v\":0,\"t\":0}"); }
   });
 };

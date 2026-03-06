@@ -116,7 +116,7 @@ const liveHTML = `<!doctype html>
     <button id="btn-undo-zoom" type="button">Undo Zoom</button>
     <button id="btn-reset-zoom" type="button">Reset Zoom</button>
     <button id="btn-reset-baseline" type="button">Reset Baseline</button>
-    <button id="btn-toggle-order" class="order-toggle" type="button">Order: comm > path > tracepoint</button>
+    <button id="btn-toggle-order" class="order-toggle" type="button">Order: comm > tracepoint > path</button>
     <span id="status">LIVE</span>
   </div>
 
@@ -146,10 +146,11 @@ const liveHTML = `<!doctype html>
         resetBaselineBtn: document.getElementById('btn-reset-baseline'),
         toggleOrderBtn: document.getElementById('btn-toggle-order'),
         orderPresets: [
-          'comm,path,tracepoint',
+          'comm,tracepoint,path',
           'path,tracepoint,comm',
           'tracepoint,comm,path',
-          'pid,path,tracepoint'
+          'pid,tracepoint,path',
+          'comm,path,tracepoint'
         ],
         orderIndex: 0,
         cfg: {

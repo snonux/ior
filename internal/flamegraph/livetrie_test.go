@@ -48,6 +48,39 @@ func TestLiveTrieIngestIsAdditive(t *testing.T) {
 	}
 }
 
+func TestLiveTrieCommTracepointPathAggregatesSameSyscallAcrossPaths(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
+	lt.AddRecord(IterRecord{
+		Path:    "/srv/a",
+		TraceID: types.SYS_ENTER_READ,
+		Comm:    "svc",
+		Pid:     1001,
+		Tid:     1001,
+		Cnt:     Counter{Count: 1},
+	})
+	lt.AddRecord(IterRecord{
+		Path:    "/srv/b",
+		TraceID: types.SYS_ENTER_READ,
+		Comm:    "svc",
+		Pid:     1002,
+		Tid:     1002,
+		Cnt:     Counter{Count: 1},
+	})
+
+	snap := decodeLiveSnapshot(t, lt)
+	commNode := findSnapshotPath(t, &snap, "svc")
+	if len(commNode.Children) != 1 {
+		t.Fatalf("expected one syscall child under comm node, got %d", len(commNode.Children))
+	}
+	syscallNode := commNode.Children[0]
+	if got, want := syscallNode.Name, "enter_read"; got != want {
+		t.Fatalf("syscall child name = %q, want %q", got, want)
+	}
+	if got, want := syscallNode.Total, uint64(2); got != want {
+		t.Fatalf("syscall aggregate total = %d, want %d", got, want)
+	}
+}
+
 func TestLiveTrieVersionIncrementsPerIngest(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	if got := lt.Version(); got != 0 {
