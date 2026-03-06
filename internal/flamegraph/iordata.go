@@ -3,6 +3,7 @@ package flamegraph
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -25,6 +26,8 @@ type pidType = uint32
 type tidType = uint32
 type flagsType = file.Flags
 type pathMap map[pathType]map[traceIdType]map[commType]map[pidType]map[tidType]map[flagsType]Counter
+
+var hostnameFn = os.Hostname
 
 type recordKey struct {
 	Path    pathType
@@ -98,10 +101,10 @@ func (iod iorData) merge(other iorData) iorData {
 	return iod
 }
 
-func (iod iorData) serializeToFile(flamegraphName string) error {
-	hostname, err := os.Hostname()
+func (iod iorData) serializeToFile(flamegraphName string) (retErr error) {
+	hostname, err := hostnameFn()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("get hostname: %w", err)
 	}
 	if flamegraphName == "" {
 		flamegraphName = "default"
@@ -114,22 +117,33 @@ func (iod iorData) serializeToFile(flamegraphName string) error {
 
 	file, err := os.Create(tmpFilename)
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file %s: %w", tmpFilename, err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close temp file %s: %w", tmpFilename, err))
+		}
+	}()
 
 	encoder := zstd.NewWriter(file)
-	defer encoder.Close()
+	defer func() {
+		if err := encoder.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close zstd writer for %s: %w", tmpFilename, err))
+		}
+	}()
 
 	gobEncoder := gob.NewEncoder(encoder)
 	if err := gobEncoder.Encode(iod.records); err != nil {
-		return err
+		return fmt.Errorf("encode ior records: %w", err)
 	}
 	if err := encoder.Flush(); err != nil {
-		return err
+		return fmt.Errorf("flush ior records: %w", err)
 	}
 
-	return os.Rename(tmpFilename, filename)
+	if err := os.Rename(tmpFilename, filename); err != nil {
+		return fmt.Errorf("rename %s to %s: %w", tmpFilename, filename, err)
+	}
+	return nil
 }
 
 func (iod *iorData) loadFromFile(filename string) error {
