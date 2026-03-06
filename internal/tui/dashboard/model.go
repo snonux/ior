@@ -85,7 +85,17 @@ func NewModelWithConfig(engine SnapshotSource, streamSource *eventstream.RingBuf
 
 // Init starts periodic refresh ticks.
 func (m Model) Init() tea.Cmd {
-	return tickCmd(m.refreshEvery)
+	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
+	switch m.activeTab {
+	case TabStream:
+		cmds = append(cmds, streamTickCmd())
+	case TabFlame:
+		cmds = append(cmds, flameTickCmd())
+	}
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles ticks, snapshots, tab changes, and resize events.
@@ -108,12 +118,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			func() tea.Msg { return messages.StatsTickMsg{Snap: snap} },
 		)
 	case streamTickMsg:
+		if !m.focused {
+			return m, nil
+		}
 		if m.activeTab != TabStream {
 			return m, nil
 		}
 		m.streamModel.Refresh()
 		return m, streamTickCmd()
 	case flameTickMsg:
+		if !m.focused {
+			return m, nil
+		}
 		if m.activeTab != TabFlame {
 			return m, nil
 		}
