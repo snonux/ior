@@ -19,6 +19,7 @@ func (m *Model) clearSearch() {
 	clearBoolMap(m.matchIndices)
 	m.searchInput.SetValue("")
 	m.searchInput.Blur()
+	m.statusMessage = "Filter cleared"
 }
 
 func (m *Model) applySearchQuery(raw string) {
@@ -30,6 +31,7 @@ func (m *Model) applySearchQuery(raw string) {
 		clearBoolMap(m.matchIndices)
 	}
 	if query == "" {
+		m.statusMessage = "Filter cleared"
 		return
 	}
 
@@ -40,7 +42,10 @@ func (m *Model) applySearchQuery(raw string) {
 	}
 	if len(m.matchIndices) > 0 {
 		m.jumpMatch(1)
+		m.statusMessage = fmt.Sprintf("Filter %q: %d matches", query, len(m.matchIndices))
+		return
 	}
+	m.statusMessage = fmt.Sprintf("Filter %q: no matches", query)
 }
 
 func (m *Model) jumpMatch(direction int) {

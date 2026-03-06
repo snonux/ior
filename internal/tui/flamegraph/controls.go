@@ -63,7 +63,10 @@ func (m Model) toolbarLine() string {
 		state = lipgloss.NewStyle().Foreground(common.ColorDanger).Bold(true).Render("[PAUSED]")
 	}
 	order := m.currentFieldPresetLabel()
-	line := fmt.Sprintf("%s | o:order(%s) | /:search | enter:zoom | u:undo | r:reset | p:pause", state, order)
+	line := fmt.Sprintf("%s | view:%s | o:order(%s) | /:search | enter:zoom | u:undo | r:reset | p:pause", state, compactFramePath(m.currentRootPath()), order)
+	if m.searchQuery != "" {
+		line += " | filter:" + m.searchQuery
+	}
 	if m.statusMessage != "" {
 		line += " | " + m.statusMessage
 	}

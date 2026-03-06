@@ -165,17 +165,19 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		selectedIdx = 0
 	}
 	selected := frames[selectedIdx]
+	viewPath := compactFramePath(frames[0].Path)
+	filterActive := strings.TrimSpace(searchQuery) != ""
 	if subtreeSet == nil {
 		subtreeSet = computeSubtreeSet(frames, selectedIdx)
 	}
 
-	toolbar := fmt.Sprintf("Flame | frames:%d | rows:%d", len(frames), availableRows)
+	toolbar := fmt.Sprintf("Flame | view:%s | frames:%d | rows:%d", viewPath, len(frames), availableRows)
 	if truncated {
 		toolbar += " | showing deepest levels"
 	}
 	toolbar = padOrTrim(toolbar, width)
-	status := fmt.Sprintf("Selected: %s %.2f%% total=%d depth=%d", selected.Name, selected.Percent, selected.Total, selected.Depth)
-	if searchQuery != "" {
+	status := fmt.Sprintf("Selected: %s [%s] %.2f%% total=%d depth=%d", selected.Name, compactFramePath(selected.Path), selected.Percent, selected.Total, selected.Depth)
+	if filterActive {
 		matches := orderedMatchIndices(matchSet)
 		pos := 0
 		if len(matches) > 0 {
@@ -183,11 +185,11 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 				pos = idx + 1
 			}
 		}
-		status = fmt.Sprintf("Search %q  %d/%d matches", searchQuery, pos, len(matches))
+		status += fmt.Sprintf(" | Filter %q %d/%d", searchQuery, pos, len(matches))
 	}
 	status = padOrTrim(status, width)
 
-	rows := buildRenderRows(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive)
+	rows := buildRenderRows(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
 
 	var b strings.Builder
 	b.Grow((width + 1) * (len(rows) + 2))
@@ -206,7 +208,7 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
-func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive bool) []string {
+func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
@@ -221,12 +223,12 @@ func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPa
 		sort.Slice(framesAtRow, func(i, j int) bool {
 			return framesAtRow[i].frame.Col < framesAtRow[j].frame.Col
 		})
-		rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive))
+		rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive))
 	}
 	return rows
 }
 
-func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive bool) string {
+func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -251,8 +253,8 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 		if cellWidth <= 0 {
 			continue
 		}
-		label := padOrTrim(frame.Name, cellWidth)
-		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive)
+		label := frameLabel(frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
+		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
 		cell := style.Render(label)
 		b.WriteString(cell)
 		cursor = frame.Col + cellWidth
@@ -301,7 +303,8 @@ func hasPathBoundaryPrefix(value, prefix string) bool {
 	return value[len(prefix)] == pathSeparatorByte
 }
 
-func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive bool) lipgloss.Style {
+func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) lipgloss.Style {
+	_ = searchActive
 	base := lipgloss.NewStyle().
 		Foreground(common.ColorBackground).
 		Background(frame.Fill)
@@ -316,18 +319,24 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 	}
 
 	if isSelected {
-		return base.Bold(true).Reverse(true).Underline(true)
+		selectedBg := lipgloss.Color("226")
+		selectedFg := lipgloss.Color("16")
+		if !isDark {
+			selectedBg = lipgloss.Color("160")
+			selectedFg = lipgloss.Color("15")
+		}
+		return base.Background(selectedBg).Foreground(selectedFg).Bold(true).Underline(true)
 	}
 
 	if isMatch {
-		style := base.Background(matchColor)
+		style := base.Background(matchColor).Foreground(lipgloss.Color("15"))
 		if inSubtree {
 			return style.Bold(true)
 		}
 		return style.Faint(true)
 	}
 
-	if searchActive {
+	if filterActive {
 		return base.Background(common.ColorPanel).Foreground(common.ColorMuted).Faint(true)
 	}
 
@@ -339,6 +348,36 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 	}
 
 	return base.Background(common.ColorPanel).Foreground(common.ColorMuted).Faint(true)
+}
+
+func frameLabel(name string, width int, isSelected, isMatch bool) string {
+	if width <= 0 {
+		return ""
+	}
+	if isSelected {
+		if width == 1 {
+			return ">"
+		}
+		return ">" + padOrTrim(name, width-2) + "<"
+	}
+	if isMatch {
+		if width == 1 {
+			return "*"
+		}
+		return "*" + padOrTrim(name, width-1)
+	}
+	return padOrTrim(name, width)
+}
+
+func compactFramePath(path string) string {
+	if path == "" {
+		return "root"
+	}
+	parts := strings.Split(path, pathSeparator)
+	if len(parts) <= 3 {
+		return strings.Join(parts, "/")
+	}
+	return strings.Join([]string{parts[0], "...", parts[len(parts)-1]}, "/")
 }
 
 type relation int
