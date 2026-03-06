@@ -26,9 +26,6 @@ var (
 	// TabInactiveStyle is applied to non-selected tabs.
 	TabInactiveStyle = common.TabInactiveStyle
 
-	// PanelStyle is used for boxed sections.
-	PanelStyle = common.PanelStyle
-
 	// HelpBarStyle is used for keybinding hints at the bottom.
 	HelpBarStyle = common.HelpBarStyle
 
@@ -52,7 +49,6 @@ func syncStylesFromCommon() {
 	HeaderStyle = common.HeaderStyle
 	TabActiveStyle = common.TabActiveStyle
 	TabInactiveStyle = common.TabInactiveStyle
-	PanelStyle = common.PanelStyle
 	HelpBarStyle = common.HelpBarStyle
 	HighlightStyle = common.HighlightStyle
 	ErrorStyle = common.ErrorStyle
