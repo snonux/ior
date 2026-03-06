@@ -152,7 +152,7 @@ func TestTerminalFrameColorSemanticPalette(t *testing.T) {
 }
 
 func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
-	out := RenderTerminalView(nil, 50, 10, 0, nil, nil, nil, 0, true, false, "")
+	out := RenderTerminalView(nil, 50, 10, 0, nil, nil, nil, 0, "events", true, false, "")
 	if !strings.Contains(out, "terminal too narrow") {
 		t.Fatalf("expected narrow terminal warning, got %q", out)
 	}
@@ -177,7 +177,7 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 
-	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, nil, 0, true, false, "")
+	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, nil, 0, "events", true, false, "")
 	if !strings.Contains(out, "Flame | view:root | frames:2") {
 		t.Fatalf("expected toolbar to include frame count, got %q", out)
 	}
@@ -196,7 +196,7 @@ func TestRenderTerminalViewFillsAvailableHeightForShallowTree(t *testing.T) {
 	}
 	frames := BuildTerminalLayout(snapshot, 100, 20)
 
-	out := RenderTerminalView(frames, 100, 20, 1, nil, nil, nil, 0, true, false, "")
+	out := RenderTerminalView(frames, 100, 20, 1, nil, nil, nil, 0, "events", true, false, "")
 	lines := strings.Split(out, "\n")
 	if got, want := len(lines), 20; got != want {
 		t.Fatalf("expected render to fill viewport height (%d lines), got %d", want, got)
@@ -223,7 +223,7 @@ func TestRenderTerminalViewShowsPersistentFilterContext(t *testing.T) {
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 	matchSet := map[int]bool{1: true}
 
-	out := RenderTerminalView(frames, 140, 6, 1, nil, matchSet, nil, 0, true, false, "child")
+	out := RenderTerminalView(frames, 140, 6, 1, nil, matchSet, nil, 0, "events", true, false, "child")
 	if !strings.Contains(out, `Filter "child"`) {
 		t.Fatalf("expected filter context in status line, got %q", out)
 	}
@@ -257,9 +257,9 @@ func TestRenderTerminalViewFilterKeepsNonMatchingBranchesVisible(t *testing.T) {
 	}
 	matchSet := map[int]bool{needleIdx: true}
 
-	out := RenderTerminalView(frames, 180, 8, needleIdx, nil, matchSet, nil, 100, true, false, "needle")
-	if !strings.Contains(out, `Filter "needle": 60.0% system`) {
-		t.Fatalf("expected filter status to report 60.0%% system share, got %q", out)
+	out := RenderTerminalView(frames, 180, 8, needleIdx, nil, matchSet, nil, 100, "bytes", true, false, "needle")
+	if !strings.Contains(out, `Filter "needle": 60.0% bytes`) {
+		t.Fatalf("expected filter status to report 60.0%% bytes share, got %q", out)
 	}
 	if !strings.Contains(out, "keep") || !strings.Contains(out, "needle") {
 		t.Fatalf("expected matching branch to remain visible, got %q", out)
@@ -267,7 +267,7 @@ func TestRenderTerminalViewFilterKeepsNonMatchingBranchesVisible(t *testing.T) {
 	if !strings.Contains(out, "drop") || !strings.Contains(out, "noise") {
 		t.Fatalf("expected non-matching branch to remain visible (greyed), got %q", out)
 	}
-	if !strings.Contains(out, "100.00% filter") {
+	if !strings.Contains(out, "100.00% filtered bytes") {
 		t.Fatalf("expected selected match share to be computed against filtered total, got %q", out)
 	}
 }
@@ -315,7 +315,7 @@ func TestRenderTerminalViewShowsDeepLevelTruncationHint(t *testing.T) {
 		},
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 10)
-	out := RenderTerminalView(frames, 80, 4, 0, nil, nil, nil, 0, true, false, "")
+	out := RenderTerminalView(frames, 80, 4, 0, nil, nil, nil, 0, "events", true, false, "")
 	if !strings.Contains(out, "showing deepest levels") {
 		t.Fatalf("expected truncation hint in toolbar, got %q", out)
 	}

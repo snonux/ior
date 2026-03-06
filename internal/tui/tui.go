@@ -890,7 +890,7 @@ func (m Model) helpSections() []helpSection {
 				"arrows/hjkl navigate  pgup top  pgdn root",
 				"enter zoom  u/backspace/esc undo",
 				"/ filter  n/N match next/prev",
-				"space/p pause  o order  r reset baseline",
+				"space/p pause  o order  b metric  r reset baseline",
 			},
 		},
 		{

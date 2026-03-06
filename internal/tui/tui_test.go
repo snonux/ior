@@ -505,6 +505,20 @@ func TestFlameOrderKeyDoesNotOpenProbeModal(t *testing.T) {
 	}
 }
 
+func TestFlameMetricKeyDoesNotOpenProbeModal(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'b'}[0], Text: string([]rune{'b'})})
+	updated := next.(Model)
+	if updated.probeModal.Visible() {
+		t.Fatalf("expected flame metric key to stay in flame tab, not open probes modal")
+	}
+}
+
 func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard

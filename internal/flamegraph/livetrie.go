@@ -42,6 +42,9 @@ type LiveTrie struct {
 
 // NewLiveTrie constructs an empty live trie with the configured frame/count fields.
 func NewLiveTrie(fields []string, countField string) *LiveTrie {
+	if !isLiveTrieCountField(countField) {
+		countField = "count"
+	}
 	return &LiveTrie{
 		root: &trieNode{
 			childMap: make(map[string]*trieNode),
@@ -121,6 +124,33 @@ func (lt *LiveTrie) Fields() []string {
 	out := slices.Clone(lt.fields)
 	lt.mu.RUnlock()
 	return out
+}
+
+// CountField returns the active metric used to aggregate node values.
+func (lt *LiveTrie) CountField() string {
+	lt.mu.RLock()
+	field := lt.countField
+	lt.mu.RUnlock()
+	return field
+}
+
+// SetCountField changes the active aggregation metric and starts a new baseline.
+func (lt *LiveTrie) SetCountField(countField string) error {
+	field := strings.TrimSpace(countField)
+	if !isLiveTrieCountField(field) {
+		return fmt.Errorf("invalid count field %q", countField)
+	}
+
+	lt.mu.Lock()
+	if lt.countField == field {
+		lt.mu.Unlock()
+		return nil
+	}
+	lt.countField = field
+	lt.resetLocked()
+	lt.mu.Unlock()
+	lt.invalidateCache()
+	return nil
 }
 
 // Reconfigure changes frame fields and clears accumulated data for a new baseline.
@@ -233,6 +263,15 @@ func normalizeLiveTrieFields(fields []string) ([]string, error) {
 func isLiveTrieField(field string) bool {
 	switch field {
 	case "path", "comm", "tracepoint", "pid", "tid", "flags":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLiveTrieCountField(field string) bool {
+	switch field {
+	case "count", "duration", "durationToPrev", "bytes":
 		return true
 	default:
 		return false
