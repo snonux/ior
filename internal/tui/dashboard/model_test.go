@@ -353,12 +353,6 @@ func TestVisualizationCycleForSyscallsTab(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model := next.(Model)
-	if got := model.syscallsVizMode; got != tabVizModeBubbles {
-		t.Fatalf("expected syscalls bubble mode enabled")
-	}
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model = next.(Model)
 	if got := model.syscallsVizMode; got != tabVizModeTreemap {
 		t.Fatalf("expected syscalls treemap mode enabled")
 	}
@@ -385,7 +379,7 @@ func TestBubbleMetricToggleForSyscallsTab(t *testing.T) {
 	}
 }
 
-func TestMetricToggleAppliesInFilesIcicleMode(t *testing.T) {
+func TestMetricToggleAppliesInFilesTreemapMode(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/var/log/a", Accesses: 5, BytesRead: 120, BytesWritten: 40},
 	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
@@ -393,16 +387,16 @@ func TestMetricToggleAppliesInFilesIcicleMode(t *testing.T) {
 	m.activeTab = TabFiles
 	m.latest = &snap
 	m.filesDirGrouped = true
-	m.filesVizMode = tabVizModeIcicle
+	m.filesVizMode = tabVizModeTreemap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'b'}[0], Text: string([]rune{'b'})})
 	model := next.(Model)
 	if got := model.filesChart.Metric(); got != bubbleMetricBytes {
-		t.Fatalf("expected files metric toggle to bytes in icicle mode, got %q", got)
+		t.Fatalf("expected files metric toggle to bytes in treemap mode, got %q", got)
 	}
 }
 
-func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
+func TestFilesTreemapRequiresDirectoryMode(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/tmp/a", Accesses: 3},
 		{Path: "/tmp/b", Accesses: 1},
@@ -414,7 +408,7 @@ func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model := next.(Model)
 	if got := model.filesVizMode; got != tabVizModeTable {
-		t.Fatalf("expected files bubble mode to stay disabled without directory mode")
+		t.Fatalf("expected files treemap mode to stay disabled without directory mode")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
@@ -425,20 +419,20 @@ func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model = next.(Model)
-	if got := model.filesVizMode; got != tabVizModeBubbles {
-		t.Fatalf("expected files bubble mode enabled in directory mode")
+	if got := model.filesVizMode; got != tabVizModeTreemap {
+		t.Fatalf("expected files treemap mode enabled in directory mode")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model = next.(Model)
-	if got := model.filesVizMode; got != tabVizModeIcicle {
-		t.Fatalf("expected files icicle mode enabled in directory mode")
+	if got := model.filesVizMode; got != tabVizModeTable {
+		t.Fatalf("expected files mode cycled back to table")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
 	model = next.(Model)
 	if got := model.filesVizMode; got != tabVizModeTable {
-		t.Fatalf("expected files bubble mode disabled when leaving directory mode")
+		t.Fatalf("expected files mode reset to table when leaving directory mode")
 	}
 }
 
@@ -498,7 +492,7 @@ func TestTreemapModeRendersTreemapHeader(t *testing.T) {
 	}
 }
 
-func TestIcicleModeRendersFilesHeader(t *testing.T) {
+func TestTreemapModeRendersFilesHeader(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/srv/log/a", Accesses: 9, BytesRead: 400, BytesWritten: 200},
 		{Path: "/srv/log/b", Accesses: 4, BytesRead: 100, BytesWritten: 40},
@@ -507,13 +501,31 @@ func TestIcicleModeRendersFilesHeader(t *testing.T) {
 	m.activeTab = TabFiles
 	m.latest = &snap
 	m.filesDirGrouped = true
-	m.filesVizMode = tabVizModeIcicle
+	m.filesVizMode = tabVizModeTreemap
 	m.width = 120
 	m.height = 28
 
 	out := m.View().Content
-	if !strings.Contains(out, "Files icicle") {
-		t.Fatalf("expected icicle header in files view")
+	if !strings.Contains(out, "Files treemap") {
+		t.Fatalf("expected treemap header in files view")
+	}
+}
+
+func TestTreemapModeRendersProcessesHeader(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 10, Comm: "worker", Syscalls: 12, Bytes: 500},
+		{PID: 11, Comm: "agent", Syscalls: 4, Bytes: 120},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	m.latest = &snap
+	m.processesVizMode = tabVizModeTreemap
+	m.width = 120
+	m.height = 28
+
+	out := m.View().Content
+	if !strings.Contains(out, "Processes treemap") {
+		t.Fatalf("expected treemap header in processes view")
 	}
 }
 

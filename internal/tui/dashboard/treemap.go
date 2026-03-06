@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -21,6 +22,7 @@ type syscallTreemapItem struct {
 	Bytes  uint64
 	Errors uint64
 	P95Ns  uint64
+	Detail string
 	Value  uint64
 }
 
@@ -43,16 +45,36 @@ func renderSyscallsTreemap(snap *statsengine.Snapshot, width, height int, metric
 	if snap == nil {
 		return "Syscalls treemap: waiting for stats..."
 	}
+	items := buildSyscallTreemapItems(snap, metric)
+	return renderTreemapPanel("Syscalls treemap", "Syscalls treemap: no data", items, width, height, metric, selected, isDark)
+}
+
+func renderFilesTreemap(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
+	if snap == nil {
+		return "Files treemap: waiting for stats..."
+	}
+	items := buildFilesTreemapItems(snap, metric)
+	return renderTreemapPanel("Files treemap", "Files treemap: no directory data", items, width, height, metric, selected, isDark)
+}
+
+func renderProcessesTreemap(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
+	if snap == nil {
+		return "Processes treemap: waiting for stats..."
+	}
+	items := buildProcessesTreemapItems(snap, metric)
+	return renderTreemapPanel("Processes treemap", "Processes treemap: no data", items, width, height, metric, selected, isDark)
+}
+
+func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if width <= 0 {
 		width = 80
 	}
 	if height <= 0 {
 		height = 18
 	}
-	items := buildSyscallTreemapItems(snap, metric)
-	header := fmt.Sprintf("Syscalls treemap | metric:%s | v mode | b metric | j/k select", treemapMetricLabel(metric))
+	header := fmt.Sprintf("%s | metric:%s | v mode | b metric | j/k select", title, treemapMetricLabel(metric))
 	if len(items) == 0 {
-		return header + "\nSyscalls treemap: no data\nsel: none"
+		return header + "\n" + emptyText + "\nsel: none"
 	}
 
 	selected = clampOffset(selected, len(items))
@@ -94,6 +116,101 @@ func buildSyscallTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) [
 			Bytes:  syscall.Bytes,
 			Errors: syscall.Errors,
 			P95Ns:  syscall.LatencyP95Ns,
+			Detail: fmt.Sprintf(
+				"rate %.1f/s, errors %d, p95 %s",
+				syscall.RatePerSec,
+				syscall.Errors,
+				formatDurationUintNs(syscall.LatencyP95Ns),
+			),
+		}
+		item.Value = treemapValue(item, metric)
+		if item.Value == 0 {
+			continue
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Value != items[j].Value {
+			return items[i].Value > items[j].Value
+		}
+		return items[i].Name < items[j].Name
+	})
+	if len(items) > maxSyscallTreemapItems {
+		items = items[:maxSyscallTreemapItems]
+	}
+	return items
+}
+
+func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
+	if snap == nil {
+		return nil
+	}
+	dirs := aggregateFilesByDir(snap.Files())
+	items := make([]syscallTreemapItem, 0, len(dirs))
+	for _, dir := range dirs {
+		label := filepath.Base(dir.Dir)
+		if label == "." || label == "/" || label == "" {
+			label = dir.Dir
+		}
+		totalBytes := dir.BytesRead + dir.BytesWritten
+		item := syscallTreemapItem{
+			Name:  label,
+			Count: dir.Accesses,
+			Bytes: totalBytes,
+			Detail: fmt.Sprintf(
+				"dir %s, files %d, read %s, write %s, max %s",
+				dir.Dir,
+				dir.FileCount,
+				formatBytes(float64(dir.BytesRead)),
+				formatBytes(float64(dir.BytesWritten)),
+				formatDurationUintNs(dir.MaxLatencyNs),
+			),
+		}
+		item.Value = treemapValue(item, metric)
+		if item.Value == 0 {
+			continue
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Value != items[j].Value {
+			return items[i].Value > items[j].Value
+		}
+		return items[i].Name < items[j].Name
+	})
+	if len(items) > maxSyscallTreemapItems {
+		items = items[:maxSyscallTreemapItems]
+	}
+	return items
+}
+
+func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
+	if snap == nil {
+		return nil
+	}
+	processes := snap.Processes()
+	items := make([]syscallTreemapItem, 0, len(processes))
+	for _, proc := range processes {
+		label := fmt.Sprintf("%d", proc.PID)
+		if comm := strings.TrimSpace(proc.Comm); comm != "" {
+			label = fmt.Sprintf("%d:%s", proc.PID, comm)
+		}
+		item := syscallTreemapItem{
+			Name:  label,
+			Count: proc.Syscalls,
+			Bytes: proc.Bytes,
+			Detail: fmt.Sprintf(
+				"pid %d, rate %.1f/s, avg %s",
+				proc.PID,
+				proc.RatePerSec,
+				formatDurationNs(proc.AvgLatencyNs),
+			),
 		}
 		item.Value = treemapValue(item, metric)
 		if item.Value == 0 {
@@ -315,17 +432,19 @@ func treemapStatusLine(items []syscallTreemapItem, selected int, metric bubbleMe
 	if metric == bubbleMetricBytes {
 		metricText = formatBytes(float64(metricValue))
 	}
-	return fmt.Sprintf(
-		"sel:%d/%d %s | %s=%s | bytes=%s | errors=%d | p95=%s",
+	status := fmt.Sprintf(
+		"sel:%d/%d %s | %s=%s | bytes=%s",
 		selected+1,
 		len(items),
 		item.Name,
 		treemapMetricLabel(metric),
 		metricText,
 		formatBytes(float64(item.Bytes)),
-		item.Errors,
-		formatDurationUintNs(item.P95Ns),
 	)
+	if detail := strings.TrimSpace(item.Detail); detail != "" {
+		status += " | " + detail
+	}
+	return status
 }
 
 func treemapMetricLabel(metric bubbleMetric) string {

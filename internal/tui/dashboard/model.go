@@ -523,8 +523,11 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 	if m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap {
 		return renderSyscallsTreemap(m.latest, width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark)
 	}
-	if m.activeTab == TabFiles && m.filesVizMode == tabVizModeIcicle && m.filesDirGrouped {
-		return renderFilesIcicle(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark)
+	if m.activeTab == TabFiles && m.filesVizMode == tabVizModeTreemap && m.filesDirGrouped {
+		return renderFilesTreemap(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark)
+	}
+	if m.activeTab == TabProcesses && m.processesVizMode == tabVizModeTreemap {
+		return renderProcessesTreemap(m.latest, width, activeHeight, m.processesChart.Metric(), m.processesOffset, m.isDark)
 	}
 	if m.bubbleEnabledForTab(m.activeTab) {
 		switch m.activeTab {
@@ -725,12 +728,12 @@ func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
 func (m Model) allowedVizModes(tab Tab) []tabVizMode {
 	switch tab {
 	case TabSyscalls:
-		return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
+		return []tabVizMode{tabVizModeTable, tabVizModeTreemap}
 	case TabProcesses:
-		return []tabVizMode{tabVizModeTable, tabVizModeBubbles}
+		return []tabVizMode{tabVizModeTable, tabVizModeTreemap}
 	case TabFiles:
 		if m.filesDirGrouped {
-			return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeIcicle}
+			return []tabVizMode{tabVizModeTable, tabVizModeTreemap}
 		}
 		return []tabVizMode{tabVizModeTable}
 	default:
