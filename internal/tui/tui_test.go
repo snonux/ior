@@ -1006,7 +1006,10 @@ func TestGlobalHelpOverlayFitsStandardTerminal(t *testing.T) {
 	if maxWidth > 80 {
 		t.Fatalf("expected help overlay width <= 80, got %d", maxWidth)
 	}
-	if !strings.Contains(out, "Flame Tab") || !strings.Contains(out, "Stream Tab") {
-		t.Fatalf("expected overlay to include tab-specific help sections")
+	if !strings.Contains(out, "Dashboard Tabs") {
+		t.Fatalf("expected overlay to include dashboard help section")
+	}
+	if !strings.Contains(out, "v bubbles") || !strings.Contains(out, "b metric") {
+		t.Fatalf("expected overlay to include bubble dashboard hotkeys")
 	}
 }

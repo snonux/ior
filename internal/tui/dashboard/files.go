@@ -56,7 +56,7 @@ func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int
 	tbl.SetWidth(tableWidth(width))
 	cursor := clampOffset(offset, len(rows))
 	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:dirs]", cursor+1, len(rows))
+	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:dirs] [v:bubbles in dirs]", cursor+1, len(rows))
 }
 
 func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset int) string {
@@ -89,7 +89,7 @@ func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset int
 	tbl.SetWidth(tableWidth(width))
 	cursor := clampOffset(offset, len(rows))
 	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:files]", cursor+1, len(rows))
+	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:files] [v:bubbles] [b:metric]", cursor+1, len(rows))
 }
 
 func fileRows(files []statsengine.FileSnapshot, pathWidth int) []table.Row {

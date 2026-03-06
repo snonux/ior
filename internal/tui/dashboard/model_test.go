@@ -26,6 +26,21 @@ func (f *fakeSnapshotSource) Snapshot() *statsengine.Snapshot {
 	return f.snap
 }
 
+type fakeResettableSnapshotSource struct {
+	resetCount int
+	snapCount  int
+	snap       *statsengine.Snapshot
+}
+
+func (f *fakeResettableSnapshotSource) Reset() {
+	f.resetCount++
+}
+
+func (f *fakeResettableSnapshotSource) Snapshot() *statsengine.Snapshot {
+	f.snapCount++
+	return f.snap
+}
+
 func TestKeySwitchingChangesActiveTab(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 
@@ -327,6 +342,98 @@ func TestDirGroupKeyTogglesOnlyOnFilesTab(t *testing.T) {
 	}
 }
 
+func TestBubbleVisualizationToggleForSyscallsTab(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9, Bytes: 512},
+		{Name: "write", Count: 3, Bytes: 1024},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model := next.(Model)
+	if !model.syscallsBubble {
+		t.Fatalf("expected syscalls bubble mode enabled")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model = next.(Model)
+	if model.syscallsBubble {
+		t.Fatalf("expected syscalls bubble mode toggled off")
+	}
+}
+
+func TestBubbleMetricToggleForSyscallsTab(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9, Bytes: 512},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'b'}[0], Text: string([]rune{'b'})})
+	model := next.(Model)
+	if got := model.syscallsChart.Metric(); got != bubbleMetricBytes {
+		t.Fatalf("expected syscalls bubble metric bytes, got %q", got)
+	}
+}
+
+func TestFilesBubbleRequiresDirectoryMode(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/tmp/a", Accesses: 3},
+		{Path: "/tmp/b", Accesses: 1},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model := next.(Model)
+	if model.filesBubble {
+		t.Fatalf("expected files bubble mode to stay disabled without directory mode")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
+	model = next.(Model)
+	if !model.filesDirGrouped {
+		t.Fatalf("expected files dir mode enabled")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model = next.(Model)
+	if !model.filesBubble {
+		t.Fatalf("expected files bubble mode enabled in directory mode")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
+	model = next.(Model)
+	if model.filesBubble {
+		t.Fatalf("expected files bubble mode disabled when leaving directory mode")
+	}
+}
+
+func TestBubbleModeUsesJKForSelection(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9, Bytes: 512},
+		{Name: "write", Count: 3, Bytes: 1024},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.latest = &snap
+	m.syscallsBubble = true
+	m.refreshBubbleData()
+	if len(m.syscallsChart.nodes) < 2 {
+		t.Fatalf("expected at least two syscall bubbles")
+	}
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
+	model := next.(Model)
+	if model.syscallsChart.selected != 1 {
+		t.Fatalf("expected bubble selection to move to index 1, got %d", model.syscallsChart.selected)
+	}
+}
+
 func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
@@ -359,6 +466,47 @@ func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 	}
 	if stats.Snap != snap {
 		t.Fatalf("expected refreshed snapshot from engine")
+	}
+}
+
+func TestRefreshKeyResetsBaselineWhenSourceSupportsReset(t *testing.T) {
+	snap := &statsengine.Snapshot{TotalSyscalls: 5}
+	engine := &fakeResettableSnapshotSource{snap: snap}
+	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabOverview
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
+	_ = next
+	if cmd == nil {
+		t.Fatalf("expected reset baseline command")
+	}
+	if engine.resetCount != 1 {
+		t.Fatalf("expected reset count 1, got %d", engine.resetCount)
+	}
+	msg := cmd()
+	stats, ok := msg.(messages.StatsTickMsg)
+	if !ok {
+		t.Fatalf("expected StatsTickMsg from reset baseline, got %T", msg)
+	}
+	if stats.Snap != snap {
+		t.Fatalf("expected snapshot after reset")
+	}
+}
+
+func TestRefreshKeyResetsLiveTrieOutsideFlameTab(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.SetLiveTrie(liveTrie)
+	m.activeTab = TabSyscalls
+	before := liveTrie.Version()
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
+	_ = next
+	if cmd == nil {
+		t.Fatalf("expected baseline reset command")
+	}
+	if liveTrie.Version() == before {
+		t.Fatalf("expected live trie version to change after baseline reset")
 	}
 }
 

@@ -19,6 +19,8 @@ type KeyMap struct {
 	Five      key.Binding
 	Six       key.Binding
 	Seven     key.Binding
+	Visualize key.Binding
+	Metric    key.Binding
 	DirGroup  key.Binding
 	SelectPID key.Binding
 	SelectTID key.Binding
@@ -45,6 +47,8 @@ func DefaultKeyMap() KeyMap {
 		Five:      key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "processes")),
 		Six:       key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "lat+gaps")),
 		Seven:     key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "stream")),
+		Visualize: key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "viz")),
+		Metric:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "metric")),
 		DirGroup:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dir group")),
 		SelectPID: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "select pid")),
 		SelectTID: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "select tid")),
@@ -53,7 +57,7 @@ func DefaultKeyMap() KeyMap {
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Enter:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Esc:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		Refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset baseline")),
 	}
 }
 
@@ -84,6 +88,8 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 		k.Five,
 		k.Six,
 		k.Seven,
+		k.Visualize,
+		k.Metric,
 		k.SelectPID,
 		k.SelectTID,
 		k.Probes,
@@ -95,6 +101,8 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 	}
 	dashboard := []key.Binding{
 		k.DirGroup,
+		k.Visualize,
+		k.Metric,
 		helpTextBinding("space", "stream pause"),
 		helpTextBinding("f", "stream filter"),
 		helpTextBinding("g/G", "stream top/tail"),
@@ -125,6 +133,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 		controls = append(controls, k.Export)
 	}
 	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Refresh, k.Quit)
+	controls = append(controls, k.Visualize, k.Metric)
 
 	return [][]key.Binding{
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},

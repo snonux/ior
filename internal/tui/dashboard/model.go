@@ -17,6 +17,7 @@ import (
 const defaultRefreshMs = 1000
 const streamRefreshMs = 200
 const flameRefreshMs = 200
+const bubbleRefreshMs = 33
 const streamChromeRows = 4
 const dashboardHelpHintRows = 1
 const dashboardExpandedHelpRows = 2
@@ -27,9 +28,15 @@ type SnapshotSource interface {
 	Snapshot() *statsengine.Snapshot
 }
 
+type resettableSnapshotSource interface {
+	Reset()
+	Snapshot() *statsengine.Snapshot
+}
+
 type refreshTickMsg struct{}
 type streamTickMsg struct{}
 type flameTickMsg struct{}
+type bubbleTickMsg struct{}
 type streamEditorDoneMsg struct {
 	err error
 }
@@ -53,8 +60,14 @@ type Model struct {
 	filesDirGrouped bool
 	filesDirOffset  int
 	processesOffset int
+	syscallsBubble  bool
+	filesBubble     bool
+	processesBubble bool
 	streamModel     eventstream.Model
 	flamegraphModel flamegraphtui.Model
+	syscallsChart   bubbleChart
+	filesChart      bubbleChart
+	processesChart  bubbleChart
 	showHelp        bool
 	isDark          bool
 	focused         bool
@@ -78,6 +91,9 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 		pidFilter:       -1,
 		streamModel:     eventstream.NewModel(streamSource),
 		flamegraphModel: flamegraphtui.NewModel(nil),
+		syscallsChart:   newBubbleChart(),
+		filesChart:      newBubbleChart(),
+		processesChart:  newBubbleChart(),
 		isDark:          true,
 		focused:         true,
 	}
@@ -93,6 +109,10 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, streamTickCmd())
 	case TabFlame:
 		cmds = append(cmds, flameTickCmd())
+	default:
+		if m.bubbleEnabledForTab(m.activeTab) {
+			cmds = append(cmds, bubbleTickCmdFn())
+		}
 	}
 	if len(cmds) == 1 {
 		return cmds[0]
@@ -110,6 +130,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamModel.SetViewport(streamWidth, streamHeight)
 		flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
 		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+		m.setBubbleViewports(flameWidth, flameHeight)
+		if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
+			return m, bubbleTickCmdFn()
+		}
 		return m, nil
 	case refreshTickMsg:
 		if !m.focused {
@@ -144,6 +168,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(flameTickCmd(), animCmd)
 		}
 		return m, flameTickCmd()
+	case bubbleTickMsg:
+		if !m.focused {
+			return m, nil
+		}
+		if !m.bubbleEnabledForTab(m.activeTab) {
+			return m, nil
+		}
+		if m.tickActiveBubbleChart() {
+			return m, bubbleTickCmdFn()
+		}
+		return m, nil
 	case messages.StatsTickMsg:
 		m.latest = msg.Snap
 		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
@@ -151,6 +186,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRows())
 		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 		m.streamModel.Refresh()
+		if m.refreshBubbleData() {
+			return m, bubbleTickCmdFn()
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -220,13 +258,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Seven):
 			m.activeTab = TabStream
 			handled = true
+		case key.Matches(msg, m.keys.Visualize):
+			handled = true
+			cmd = m.toggleBubbleVisualization()
+		case key.Matches(msg, m.keys.Metric):
+			handled = true
+			cmd = m.toggleBubbleMetric()
 		case key.Matches(msg, m.keys.Refresh):
-			snap := m.snapshot()
-			cmd = func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
+			cmd = m.resetBaselineCmd()
 			handled = true
 		case key.Matches(msg, m.keys.DirGroup):
 			if m.activeTab == TabFiles {
 				m.filesDirGrouped = !m.filesDirGrouped
+				if !m.filesDirGrouped && m.filesBubble {
+					m.filesBubble = false
+				}
+				if m.filesDirGrouped && m.filesBubble && m.refreshBubbleData() {
+					cmd = bubbleTickCmdFn()
+				}
 				handled = true
 			}
 		}
@@ -249,6 +298,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if prevActiveTab != TabFlame && m.activeTab == TabFlame {
 		batch = append(batch, flameTickCmd())
 	}
+	if prevActiveTab != m.activeTab && m.bubbleEnabledForTab(m.activeTab) {
+		batch = append(batch, bubbleTickCmdFn())
+	}
 	switch len(batch) {
 	case 0:
 		return m, nil
@@ -261,6 +313,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
+	if m.bubbleEnabledForTab(m.activeTab) {
+		switch keyStr {
+		case "down", "j", "right", "l":
+			return m.moveBubbleSelection(1), nil
+		case "up", "k", "left", "h":
+			return m.moveBubbleSelection(-1), nil
+		default:
+			return false, nil
+		}
+	}
 	switch m.activeTab {
 	case TabSyscalls:
 		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows()), nil
@@ -343,6 +405,21 @@ func (m Model) snapshot() *statsengine.Snapshot {
 	return m.engine.Snapshot()
 }
 
+func (m *Model) resetBaselineCmd() tea.Cmd {
+	if m.liveTrie != nil {
+		m.liveTrie.Reset()
+	}
+
+	var snap *statsengine.Snapshot
+	if resettable, ok := m.engine.(resettableSnapshotSource); ok {
+		resettable.Reset()
+		snap = resettable.Snapshot()
+	} else {
+		snap = m.snapshot()
+	}
+	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
+}
+
 // LatestSnapshot returns the most recently received snapshot.
 func (m Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
@@ -380,6 +457,9 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
 	m.streamModel.SetDarkMode(isDark)
 	m.flamegraphModel.SetDarkMode(isDark)
+	m.syscallsChart.SetDarkMode(isDark)
+	m.filesChart.SetDarkMode(isDark)
+	m.processesChart.SetDarkMode(isDark)
 }
 
 // SetFocused controls whether periodic refresh ticks are processed.
@@ -411,10 +491,34 @@ func (m Model) View() tea.View {
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, width))
 	b.WriteString("\n")
-	b.WriteString(renderActiveTab(
+	b.WriteString(m.renderActiveContent(width, activeHeight, &streamModel))
+	b.WriteString("\n")
+	if m.showHelp {
+		b.WriteString(renderHelpBar(m.keys, width))
+	} else {
+		b.WriteString(renderHelpHint(width))
+	}
+	return tea.NewView(common.ScreenStyle.Render(b.String()))
+}
+
+func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model) string {
+	if m.bubbleEnabledForTab(m.activeTab) {
+		switch m.activeTab {
+		case TabSyscalls:
+			chart := m.syscallsChart
+			return chart.Render("Syscalls", width, activeHeight)
+		case TabFiles:
+			chart := m.filesChart
+			return chart.Render("Files/Dirs", width, activeHeight)
+		case TabProcesses:
+			chart := m.processesChart
+			return chart.Render("Processes", width, activeHeight)
+		}
+	}
+	return renderActiveTab(
 		m.activeTab,
 		m.latest,
-		&streamModel,
+		streamModel,
 		&m.flamegraphModel,
 		width,
 		activeHeight,
@@ -424,14 +528,147 @@ func (m Model) View() tea.View {
 		m.filesDirGrouped,
 		m.filesDirOffset,
 		m.processesOffset,
-	))
-	b.WriteString("\n")
-	if m.showHelp {
-		b.WriteString(renderHelpBar(m.keys, width))
+	)
+}
+
+func (m *Model) setBubbleViewports(width, height int) {
+	m.syscallsChart.SetViewport(width, height)
+	m.filesChart.SetViewport(width, height)
+	m.processesChart.SetViewport(width, height)
+}
+
+func (m *Model) refreshBubbleData() bool {
+	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
+	m.setBubbleViewports(flameWidth, flameHeight)
+
+	syscallsAnimating := m.syscallsChart.SetData(syscallBubbleData(m.latest))
+
+	if m.filesDirGrouped {
+		m.filesChart.SetStatusHint("")
 	} else {
-		b.WriteString(renderHelpHint(width))
+		m.filesChart.SetStatusHint("Files bubble view requires directory mode (press d).")
 	}
-	return tea.NewView(common.ScreenStyle.Render(b.String()))
+	filesAnimating := false
+	if m.filesDirGrouped {
+		filesAnimating = m.filesChart.SetData(filesDirBubbleData(m.latest))
+	} else {
+		m.filesChart.SetData(nil)
+	}
+	processesAnimating := m.processesChart.SetData(processBubbleData(m.latest))
+
+	switch m.activeTab {
+	case TabSyscalls:
+		return m.syscallsBubble && syscallsAnimating
+	case TabFiles:
+		return m.filesBubble && filesAnimating
+	case TabProcesses:
+		return m.processesBubble && processesAnimating
+	default:
+		return false
+	}
+}
+
+func (m *Model) tickActiveBubbleChart() bool {
+	switch m.activeTab {
+	case TabSyscalls:
+		if !m.syscallsBubble {
+			return false
+		}
+		return m.syscallsChart.Tick(0)
+	case TabFiles:
+		if !m.filesBubble {
+			return false
+		}
+		return m.filesChart.Tick(0)
+	case TabProcesses:
+		if !m.processesBubble {
+			return false
+		}
+		return m.processesChart.Tick(0)
+	default:
+		return false
+	}
+}
+
+func (m *Model) moveBubbleSelection(delta int) bool {
+	switch m.activeTab {
+	case TabSyscalls:
+		return m.syscallsChart.MoveSelection(delta)
+	case TabFiles:
+		return m.filesChart.MoveSelection(delta)
+	case TabProcesses:
+		return m.processesChart.MoveSelection(delta)
+	default:
+		return false
+	}
+}
+
+func (m Model) bubbleEnabledForTab(tab Tab) bool {
+	switch tab {
+	case TabSyscalls:
+		return m.syscallsBubble
+	case TabFiles:
+		return m.filesBubble && m.filesDirGrouped
+	case TabProcesses:
+		return m.processesBubble
+	default:
+		return false
+	}
+}
+
+func (m *Model) toggleBubbleVisualization() tea.Cmd {
+	switch m.activeTab {
+	case TabSyscalls:
+		m.syscallsBubble = !m.syscallsBubble
+		if m.syscallsBubble && m.refreshBubbleData() {
+			return bubbleTickCmdFn()
+		}
+	case TabFiles:
+		if !m.filesDirGrouped {
+			return nil
+		}
+		m.filesBubble = !m.filesBubble
+		if m.filesBubble && m.refreshBubbleData() {
+			return bubbleTickCmdFn()
+		}
+	case TabProcesses:
+		m.processesBubble = !m.processesBubble
+		if m.processesBubble && m.refreshBubbleData() {
+			return bubbleTickCmdFn()
+		}
+	}
+	return nil
+}
+
+func (m *Model) toggleBubbleMetric() tea.Cmd {
+	switch m.activeTab {
+	case TabSyscalls:
+		m.syscallsChart.SetMetric(nextBubbleMetric(m.syscallsChart.Metric()))
+		if m.refreshBubbleData() {
+			return bubbleTickCmdFn()
+		}
+	case TabFiles:
+		if !m.filesDirGrouped {
+			return nil
+		}
+		m.filesChart.SetMetric(nextBubbleMetric(m.filesChart.Metric()))
+		if m.refreshBubbleData() {
+			return bubbleTickCmdFn()
+		}
+	case TabProcesses:
+		m.processesChart.SetMetric(nextBubbleMetric(m.processesChart.Metric()))
+		if m.refreshBubbleData() {
+			return bubbleTickCmdFn()
+		}
+	}
+	return nil
+}
+
+func nextBubbleMetric(metric bubbleMetric) bubbleMetric {
+	if metric == bubbleMetricBytes {
+		return bubbleMetricCount
+	}
+	return bubbleMetricBytes
 }
 
 func tickCmd(d time.Duration) tea.Cmd {
@@ -482,6 +719,10 @@ func streamTickCmd() tea.Cmd {
 
 func flameTickCmd() tea.Cmd {
 	return tea.Tick(flameRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return flameTickMsg{} })
+}
+
+func bubbleTickCmdFn() tea.Cmd {
+	return tea.Tick(bubbleRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return bubbleTickMsg{} })
 }
 
 func streamViewport(width, height int) (int, int) {
