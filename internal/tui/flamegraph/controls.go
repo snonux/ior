@@ -22,10 +22,12 @@ func (m *Model) resetBaseline() {
 	m.zoomStack = nil
 	m.selectedIdx = 0
 	m.snapshot = nil
+	m.globalTotal = 0
 	m.frames = nil
 	m.targetFrames = nil
 	m.searchQuery = ""
 	m.matchIndices = make(map[int]bool)
+	m.filterVisible = make(map[int]bool)
 	m.subtreeSet = make(map[int]bool)
 	m.statusMessage = "Baseline reset"
 }
@@ -47,8 +49,11 @@ func (m *Model) cycleFieldOrder() {
 	m.zoomStack = nil
 	m.selectedIdx = 0
 	m.snapshot = nil
+	m.globalTotal = 0
 	m.frames = nil
 	m.targetFrames = nil
+	m.matchIndices = make(map[int]bool)
+	m.filterVisible = make(map[int]bool)
 	m.subtreeSet = make(map[int]bool)
 	m.statusMessage = "Order: " + strings.Join(nextPreset, "/")
 }

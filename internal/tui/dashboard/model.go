@@ -134,7 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		var animCmd tea.Cmd
-		if m.liveTrie != nil && !m.flamegraphModel.Paused() && m.liveTrie.Version() != m.flamegraphModel.LastVersion() {
+		if m.liveTrie != nil && !m.flamegraphModel.Paused() && (!m.flamegraphModel.HasSnapshot() || m.liveTrie.Version() != m.flamegraphModel.LastVersion()) {
 			m.flamegraphModel.RefreshFromLiveTrie()
 			animCmd = m.flamegraphModel.AnimationCmd()
 		}

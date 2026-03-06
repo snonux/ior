@@ -142,6 +142,49 @@ func TestArrowDownFallsBackToVisibleDepthFromRoot(t *testing.T) {
 	}
 }
 
+func TestArrowEscapeSequencesAreRecognized(t *testing.T) {
+	tests := []struct {
+		key      string
+		dir      string
+		ansiCode byte
+	}{
+		{key: "\x1b[A", dir: "up", ansiCode: 'A'},
+		{key: "\x1b[B", dir: "down", ansiCode: 'B'},
+		{key: "\x1b[C", dir: "right", ansiCode: 'C'},
+		{key: "\x1b[D", dir: "left", ansiCode: 'D'},
+		{key: "\x1bOA", dir: "up", ansiCode: 'A'},   // application mode
+		{key: "\x1bOB", dir: "down", ansiCode: 'B'}, // application mode
+		{key: "\x1b[1;2A", dir: "up", ansiCode: 'A'},
+	}
+	for _, tc := range tests {
+		if !keyMatchesDirection(tc.key, tc.dir, tc.ansiCode) {
+			t.Fatalf("expected key %q to match %s", tc.key, tc.dir)
+		}
+	}
+}
+
+func TestFilteredNavigationSkipsHiddenBranches(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Row: 0, Path: "root"},
+		{Name: "keep", Depth: 1, Col: 0, Row: 1, Path: "root" + pathSeparator + "keep"},
+		{Name: "drop", Depth: 1, Col: 40, Row: 1, Path: "root" + pathSeparator + "drop"},
+	}
+	m.searchQuery = "keep"
+	m.recomputeFilterState()
+	m.selectedIdx = 1
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.selectedIdx != 1 {
+		t.Fatalf("expected sibling navigation to stay on visible filtered branch, got idx %d", m.selectedIdx)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.selectedIdx != 0 {
+		t.Fatalf("expected down key to move to visible root ancestor, got idx %d", m.selectedIdx)
+	}
+}
+
 func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
 	m := newZoomModel()
 
