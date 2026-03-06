@@ -728,12 +728,12 @@ func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
 func (m Model) allowedVizModes(tab Tab) []tabVizMode {
 	switch tab {
 	case TabSyscalls:
-		return []tabVizMode{tabVizModeTable, tabVizModeTreemap}
+		return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
 	case TabProcesses:
-		return []tabVizMode{tabVizModeTable, tabVizModeTreemap}
+		return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
 	case TabFiles:
 		if m.filesDirGrouped {
-			return []tabVizMode{tabVizModeTable, tabVizModeTreemap}
+			return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
 		}
 		return []tabVizMode{tabVizModeTable}
 	default:

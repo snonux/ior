@@ -26,6 +26,7 @@ type snapshotNode struct {
 type animTickMsg struct{}
 
 const animFrameDuration = 33 * time.Millisecond
+const flameKeyDebugEnabled = false
 
 // LiveTrieSource is the minimal trie contract needed by the flamegraph TUI model.
 type LiveTrieSource interface {
@@ -467,7 +468,17 @@ func (m *Model) rebuildFrames(animate bool) {
 	} else {
 		root = m.snapshot
 	}
-	targetFrames := buildTerminalLayoutWithPath(root, m.width, m.height, rootPath)
+	layoutWidth := m.width
+	if m.zoomPath != "" {
+		fallbackLineWidth := m.zoomLineWidth
+		if fallbackLineWidth <= 0 {
+			fallbackLineWidth = layoutWidth
+		}
+		if _, gutter, ok := m.zoomLineageGeometry(fallbackLineWidth); ok {
+			layoutWidth = m.width - gutter
+		}
+	}
+	targetFrames := buildTerminalLayoutWithPath(root, layoutWidth, m.height, rootPath)
 	if m.zoomPath != "" {
 		targetFrames = m.withZoomLineage(targetFrames)
 	}
@@ -544,7 +555,7 @@ func (m *Model) zoomIn() {
 	m.zoomRoot = target
 	m.zoomPath = selectedPath
 	m.zoomLineWidth = selectedWidth
-	m.rebuildFrames(true)
+	m.rebuildFrames(false)
 	m.statusMessage = "Zoom: " + compactFramePath(selectedPath)
 }
 
@@ -564,7 +575,7 @@ func (m *Model) zoomUndo() {
 		m.zoomLineWidth = last.lineWidth
 	}
 	m.selectedIdx = last.previousSelectedIdx
-	m.rebuildFrames(true)
+	m.rebuildFrames(false)
 	if m.zoomPath == "" {
 		m.statusMessage = "Zoom: root"
 		return
@@ -851,6 +862,9 @@ func (m *Model) ensureSelectionNavigable() {
 }
 
 func (m *Model) recordKeyDebug(msg tea.KeyPressMsg, handled, moved bool) {
+	if !flameKeyDebugEnabled {
+		return
+	}
 	keyID := keyString(msg)
 	if keyID == "" {
 		keyID = fmt.Sprintf("code:%d", msg.Code)
@@ -1137,6 +1151,28 @@ func (m Model) frameIndexAt(x, y int) int {
 	return best
 }
 
+func (m Model) zoomLineageGeometry(fallbackLineWidth int) (lineWidth, gutter int, ok bool) {
+	if m.zoomPath == "" || m.width <= 0 {
+		return 0, 0, false
+	}
+	lineWidth = m.zoomLineWidth
+	if lineWidth <= 0 {
+		lineWidth = fallbackLineWidth
+	}
+	if lineWidth <= 0 {
+		lineWidth = m.width / 4
+	}
+	lineWidth = min(max(lineWidth, 3), max(3, m.width/3))
+	if lineWidth >= m.width-2 {
+		return 0, 0, false
+	}
+	gutter = lineWidth + 1
+	if m.width-gutter < minFlameWidth/2 {
+		return 0, 0, false
+	}
+	return lineWidth, gutter, true
+}
+
 func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 	if len(frames) == 0 || m.snapshot == nil {
 		return frames
@@ -1146,16 +1182,16 @@ func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 		return frames
 	}
 
-	lineWidth := m.zoomLineWidth
-	if lineWidth <= 0 {
-		lineWidth = frames[0].Width
+	fallbackLineWidth := 0
+	if len(frames) > 0 {
+		fallbackLineWidth = frames[0].Width
 	}
-	lineWidth = min(max(lineWidth, 3), max(3, m.width/3))
-	if lineWidth >= m.width-2 {
+	_, gutter, ok := m.zoomLineageGeometry(fallbackLineWidth)
+	if !ok {
 		return frames
 	}
-	gutter := lineWidth + 1
-	if m.width-gutter < minFlameWidth/2 {
+	lineageWidth := m.width - gutter
+	if lineageWidth < 1 {
 		return frames
 	}
 
@@ -1186,9 +1222,9 @@ func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 		name := parts[depth]
 		out = append(out, tuiFrame{
 			Name:    name,
-			Col:     0,
+			Col:     gutter,
 			Row:     depth,
-			Width:   lineWidth,
+			Width:   lineageWidth,
 			Total:   total,
 			Percent: percent,
 			Fill:    terminalFrameColor(name),
