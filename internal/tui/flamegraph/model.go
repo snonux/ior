@@ -194,9 +194,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.ZoomReset):
 			m.zoomReset()
 		case key.Matches(msg, m.keys.MoveShallower):
-			m.moveVertical(-1)
+			m.moveVerticalWithFallback(-1, 1)
 		case key.Matches(msg, m.keys.MoveDeeper):
-			m.moveVertical(1)
+			m.moveVerticalWithFallback(1, -1)
 		case key.Matches(msg, m.keys.PrevSibling):
 			m.moveSibling(-1)
 		case key.Matches(msg, m.keys.NextSibling):
@@ -348,6 +348,7 @@ func (m *Model) rebuildFrames(animate bool) {
 		m.frames = append(m.frames[:0], m.targetFrames...)
 	}
 	m.clampSelection()
+	m.ensureSelectionVisible()
 	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 }
 
@@ -435,6 +436,14 @@ func (m *Model) moveVertical(delta int) {
 	m.selectedIdx = best
 }
 
+func (m *Model) moveVerticalWithFallback(primaryDelta, fallbackDelta int) {
+	before := m.selectedIdx
+	m.moveVertical(primaryDelta)
+	if m.selectedIdx == before && fallbackDelta != 0 {
+		m.moveVertical(fallbackDelta)
+	}
+}
+
 func (m *Model) moveSibling(delta int) {
 	if len(m.frames) == 0 {
 		return
@@ -516,4 +525,47 @@ func (m Model) currentRootPath() string {
 		return ""
 	}
 	return m.frames[0].Path
+}
+
+func (m Model) visibleRowOffset() int {
+	if len(m.frames) == 0 {
+		return 0
+	}
+	availableRows := m.height - 2 // toolbar + status
+	if availableRows <= 0 {
+		return 0
+	}
+	maxRow := maxFrameRow(m.frames)
+	if maxRow+1 <= availableRows {
+		return 0
+	}
+	return maxRow + 1 - availableRows
+}
+
+func (m *Model) ensureSelectionVisible() {
+	if len(m.frames) == 0 {
+		return
+	}
+	m.clampSelection()
+	rowOffset := m.visibleRowOffset()
+	selected := m.frames[m.selectedIdx]
+	if selected.Row >= rowOffset {
+		return
+	}
+
+	bestIdx := -1
+	bestScore := int(^uint(0) >> 1)
+	for idx, frame := range m.frames {
+		if frame.Row < rowOffset {
+			continue
+		}
+		score := abs(frame.Row-rowOffset)*1000 + abs(frame.Col-selected.Col)
+		if score < bestScore {
+			bestIdx = idx
+			bestScore = score
+		}
+	}
+	if bestIdx >= 0 {
+		m.selectedIdx = bestIdx
+	}
 }

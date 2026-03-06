@@ -128,6 +128,20 @@ func TestKeyboardNavigationSingleNodeClamped(t *testing.T) {
 	}
 }
 
+func TestArrowDownFallsBackToVisibleDepthFromRoot(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Path: "root"},
+		{Name: "child", Depth: 1, Col: 0, Path: "root" + pathSeparator + "child"},
+	}
+	m.selectedIdx = 0
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.selectedIdx != 1 {
+		t.Fatalf("expected down arrow to move selection to child when root has no shallower row, got %d", m.selectedIdx)
+	}
+}
+
 func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
 	m := newZoomModel()
 
@@ -396,6 +410,37 @@ func TestDataRefreshAnimationConvergesOverTicks(t *testing.T) {
 			t.Fatalf("frame %d did not converge to target: got col=%d width=%d want col=%d width=%d",
 				i, m.frames[i].Col, m.frames[i].Width, m.targetFrames[i].Col, m.targetFrames[i].Width)
 		}
+	}
+}
+
+func TestRebuildKeepsSelectionOnVisibleRowsWhenTruncated(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 80
+	m.height = 4 // only 2 render rows remain after toolbar+status
+	m.snapshot = &snapshotNode{
+		Name: "root",
+		Children: []*snapshotNode{
+			{
+				Name: "a",
+				Children: []*snapshotNode{
+					{
+						Name: "b",
+						Children: []*snapshotNode{
+							{Name: "c", Total: 5},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	m.rebuildFrames(false)
+	if len(m.frames) == 0 {
+		t.Fatalf("expected rebuilt frames")
+	}
+	rowOffset := m.visibleRowOffset()
+	if m.frames[m.selectedIdx].Row < rowOffset {
+		t.Fatalf("expected selected frame row %d to be visible (offset=%d)", m.frames[m.selectedIdx].Row, rowOffset)
 	}
 }
 
