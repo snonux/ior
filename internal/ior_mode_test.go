@@ -13,7 +13,7 @@ import (
 )
 
 func TestShouldRunTraceMode(t *testing.T) {
-	base := flags.Flags{}
+	base := flags.Config{}
 
 	if shouldRunTraceMode(base) {
 		t.Fatalf("expected default mode to use TUI")
@@ -45,7 +45,7 @@ func TestShouldRunTraceMode(t *testing.T) {
 }
 
 func TestShouldAutoStopByDuration(t *testing.T) {
-	base := flags.Flags{}
+	base := flags.Config{}
 	if shouldAutoStopByDuration(base) {
 		t.Fatalf("expected default TUI mode not to auto-stop by duration")
 	}
@@ -78,24 +78,24 @@ func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 
 	traceCalled := false
 	tuiCalled := false
-	runTraceFn = func(flags.Flags) error {
+	runTraceFn = func(flags.Config) error {
 		traceCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, tui.TraceStarter) error {
 		tuiCalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called in trace mode")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called in trace mode")
 		return nil
 	}
 
-	cfg := flags.Flags{PlainMode: true}
+	cfg := flags.Config{PlainMode: true}
 	if err := dispatchRun(cfg); err != nil {
 		t.Fatalf("dispatchRun returned error: %v", err)
 	}
@@ -121,24 +121,24 @@ func TestDispatchRunUsesTUIWhenOnlyPprofEnabled(t *testing.T) {
 
 	traceCalled := false
 	tuiCalled := false
-	runTraceFn = func(flags.Flags) error {
+	runTraceFn = func(flags.Config) error {
 		traceCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, tui.TraceStarter) error {
 		tuiCalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called for regular TUI mode")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called for regular TUI mode")
 		return nil
 	}
 
-	cfg := flags.Flags{PprofEnable: true}
+	cfg := flags.Config{PprofEnable: true}
 	if err := dispatchRun(cfg); err != nil {
 		t.Fatalf("dispatchRun returned error: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	}()
 
 	traceDone := make(chan struct{}, 1)
-	runTraceWithContextFn = func(_ context.Context, _ flags.Flags, started chan<- struct{}, configure func(*eventLoop)) error {
+	runTraceWithContextFn = func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
 		if configure != nil {
 			configure(&eventLoop{})
 		}
@@ -173,7 +173,7 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	}
 
 	tuiCalled := false
-	runTUIFn = func(_ flags.Flags, starter tui.TraceStarter) error {
+	runTUIFn = func(_ flags.Config, starter tui.TraceStarter) error {
 		tuiCalled = true
 		if starter == nil {
 			t.Fatalf("expected non-nil starter")
@@ -183,16 +183,16 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 		}
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called for normal starter path")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called for normal starter path")
 		return nil
 	}
 
-	cfg := flags.Flags{}
+	cfg := flags.Config{}
 	if err := dispatchRun(cfg); err != nil {
 		t.Fatalf("dispatchRun returned error: %v", err)
 	}
@@ -222,27 +222,27 @@ func TestDispatchRunUsesTestFlamesModeWhenRequested(t *testing.T) {
 	traceCalled := false
 	regularTUICalled := false
 	testFlamesCalled := false
-	runTraceFn = func(flags.Flags) error {
+	runTraceFn = func(flags.Config) error {
 		traceCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, tui.TraceStarter) error {
 		regularTUICalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(_ flags.Flags, starter tui.TraceStarter) error {
+	runTUITestFlamesFn = func(_ flags.Config, starter tui.TraceStarter) error {
 		testFlamesCalled = true
 		if starter == nil {
 			t.Fatalf("expected non-nil starter for test flames mode")
 		}
 		return starter(context.Background())
 	}
-	runTUITestLiveFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called for --testflames")
 		return nil
 	}
 
-	cfg := flags.Flags{TestFlames: true}
+	cfg := flags.Config{TestFlames: true}
 	if err := dispatchRun(cfg); err != nil {
 		t.Fatalf("dispatchRun returned error: %v", err)
 	}
@@ -272,19 +272,19 @@ func TestDispatchRunUsesTestLiveFlamesModeWhenRequested(t *testing.T) {
 	traceCalled := false
 	regularTUICalled := false
 	testLiveFlamesCalled := false
-	runTraceFn = func(flags.Flags) error {
+	runTraceFn = func(flags.Config) error {
 		traceCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, tui.TraceStarter) error {
 		regularTUICalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Flags, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called for --testliveflames")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(_ flags.Flags, starter tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(_ flags.Config, starter tui.TraceStarter) error {
 		testLiveFlamesCalled = true
 		if starter == nil {
 			t.Fatalf("expected non-nil starter for test live flames mode")
@@ -292,7 +292,7 @@ func TestDispatchRunUsesTestLiveFlamesModeWhenRequested(t *testing.T) {
 		return starter(context.Background())
 	}
 
-	cfg := flags.Flags{TestLiveFlames: true}
+	cfg := flags.Config{TestLiveFlames: true}
 	if err := dispatchRun(cfg); err != nil {
 		t.Fatalf("dispatchRun returned error: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestDispatchRunUsesTestLiveFlamesModeWhenRequested(t *testing.T) {
 }
 
 func TestValidateRunConfigRejectsTestFlamesWithTraceFlags(t *testing.T) {
-	cfg := flags.Flags{TestFlames: true, PlainMode: true}
+	cfg := flags.Config{TestFlames: true, PlainMode: true}
 	err := validateRunConfig(cfg)
 	if err == nil {
 		t.Fatalf("expected error for --testflames with trace-mode flags")
@@ -319,7 +319,7 @@ func TestValidateRunConfigRejectsTestFlamesWithTraceFlags(t *testing.T) {
 }
 
 func TestValidateRunConfigRejectsTestLiveFlamesWithTraceFlags(t *testing.T) {
-	cfg := flags.Flags{TestLiveFlames: true, PlainMode: true}
+	cfg := flags.Config{TestLiveFlames: true, PlainMode: true}
 	err := validateRunConfig(cfg)
 	if err == nil {
 		t.Fatalf("expected error for --testliveflames with trace-mode flags")
@@ -330,7 +330,7 @@ func TestValidateRunConfigRejectsTestLiveFlamesWithTraceFlags(t *testing.T) {
 }
 
 func TestValidateRunConfigRejectsBothTestModes(t *testing.T) {
-	cfg := flags.Flags{TestFlames: true, TestLiveFlames: true}
+	cfg := flags.Config{TestFlames: true, TestLiveFlames: true}
 	err := validateRunConfig(cfg)
 	if err == nil {
 		t.Fatalf("expected error when both test flame modes are enabled")
@@ -418,7 +418,7 @@ func TestRunTraceWithContextRequiresRoot(t *testing.T) {
 func TestTuiTraceStarterFromRunTracePropagatesError(t *testing.T) {
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(context.Context, flags.Flags, chan<- struct{}, func(*eventLoop)) error {
+		func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error {
 			return errors.New("startup failed")
 		},
 	)
@@ -434,10 +434,10 @@ func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
 	base.PidFilter = 11
 	base.TidFilter = 12
 
-	var gotCfg flags.Flags
+	var gotCfg flags.Config
 	starter := tuiTraceStarterFromRunTrace(
 		base,
-		func(_ context.Context, cfg flags.Flags, started chan<- struct{}, _ func(*eventLoop)) error {
+		func(_ context.Context, cfg flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
 			gotCfg = cfg
 			close(started)
 			return nil
@@ -477,7 +477,7 @@ func TestProfilingFilesForMode(t *testing.T) {
 func TestTuiTraceStarterFromRunTraceRespectsCancel(t *testing.T) {
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(ctx context.Context, _ flags.Flags, _ chan<- struct{}, _ func(*eventLoop)) error {
+		func(ctx context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop)) error {
 			<-ctx.Done()
 			return ctx.Err()
 		},

@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	current  atomic.Pointer[Flags]
+	current  atomic.Pointer[Config]
 	once     sync.Once
 	parseErr error
 )
@@ -25,7 +25,7 @@ func init() {
 	current.Store(&defaults)
 }
 
-type Flags struct {
+type Config struct {
 	PidFilter    int
 	TidFilter    int
 	EventMapSize int
@@ -49,8 +49,8 @@ type Flags struct {
 }
 
 // NewFlags returns a configuration instance initialized with project defaults.
-func NewFlags() Flags {
-	return Flags{
+func NewFlags() Config {
+	return Config{
 		PidFilter:       -1,
 		TidFilter:       -1,
 		EventMapSize:    4096 * 16,
@@ -63,21 +63,21 @@ func NewFlags() Flags {
 }
 
 // GetPidFilter returns the active process filter.
-func (f Flags) GetPidFilter() int {
+func (f Config) GetPidFilter() int {
 	return f.PidFilter
 }
 
 // GetTidFilter returns the active thread filter.
-func (f Flags) GetTidFilter() int {
+func (f Config) GetTidFilter() int {
 	return f.TidFilter
 }
 
 // GetTUIExportEnable reports whether TUI CSV export is enabled.
-func (f Flags) GetTUIExportEnable() bool {
+func (f Config) GetTUIExportEnable() bool {
 	return f.TUIExportEnable
 }
 
-func (f Flags) clone() Flags {
+func (f Config) clone() Config {
 	out := f
 	out.TracepointsToAttach = slices.Clone(f.TracepointsToAttach)
 	out.TracepointsToExclude = slices.Clone(f.TracepointsToExclude)
@@ -85,7 +85,7 @@ func (f Flags) clone() Flags {
 	return out
 }
 
-func Get() Flags {
+func Get() Config {
 	cfg := current.Load()
 	if cfg == nil {
 		return NewFlags()
@@ -93,12 +93,12 @@ func Get() Flags {
 	return cfg.clone()
 }
 
-func setCurrent(cfg Flags) {
+func setCurrent(cfg Config) {
 	snapshot := cfg.clone()
 	current.Store(&snapshot)
 }
 
-func updateCurrent(update func(*Flags)) {
+func updateCurrent(update func(*Config)) {
 	for {
 		old := current.Load()
 		next := NewFlags()
@@ -115,21 +115,21 @@ func updateCurrent(update func(*Flags)) {
 
 // SetPidFilter updates the active PID filter used for subsequent tracing runs.
 func SetPidFilter(pid int) {
-	updateCurrent(func(cfg *Flags) {
+	updateCurrent(func(cfg *Config) {
 		cfg.PidFilter = pid
 	})
 }
 
 // SetTidFilter updates the active TID filter used for subsequent tracing runs.
 func SetTidFilter(tid int) {
-	updateCurrent(func(cfg *Flags) {
+	updateCurrent(func(cfg *Config) {
 		cfg.TidFilter = tid
 	})
 }
 
 // SetTUIExportEnable toggles TUI snapshot export file writing.
 func SetTUIExportEnable(enabled bool) {
-	updateCurrent(func(cfg *Flags) {
+	updateCurrent(func(cfg *Config) {
 		cfg.TUIExportEnable = enabled
 	})
 }
@@ -221,7 +221,7 @@ func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp, err e
 	return regexes, nil
 }
 
-func (flags Flags) ShouldIAttachTracepoint(tracepointName string) bool {
+func (flags Config) ShouldIAttachTracepoint(tracepointName string) bool {
 	for _, re := range flags.TracepointsToExclude {
 		if re.MatchString(tracepointName) {
 			return false
