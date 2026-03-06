@@ -89,7 +89,7 @@ func (m Model) toolbarLine() string {
 	if m.statusMessage != "" {
 		line += " | " + m.statusMessage
 	}
-	if m.lastKeyDebug != "" {
+	if flameKeyDebugEnabled && m.lastKeyDebug != "" {
 		line += " | " + m.lastKeyDebug
 	}
 	width := m.width

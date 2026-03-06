@@ -230,6 +230,7 @@ type Model struct {
 
 	pidFilter     int
 	tidFilter     int
+	pickerReturn  *pickerReturnState
 	exportEnabled bool
 	isDark        bool
 	focused       bool
@@ -245,6 +246,11 @@ type Model struct {
 	// matching press to avoid double-handling.
 	suppressPressKeyID string
 	suppressPressUntil time.Time
+}
+
+type pickerReturnState struct {
+	pidFilter int
+	tidFilter int
 }
 
 // NewModel creates the top-level TUI model.
@@ -429,6 +435,12 @@ func (m Model) canQuitFromMainDashboard(msg tea.KeyPressMsg) bool {
 		!m.dashboard.BlocksGlobalShortcuts(msg)
 }
 
+func (m Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
+	return m.screen == ScreenPIDPicker &&
+		m.pickerReturn != nil &&
+		(isEscKey(msg) || key.Matches(msg, m.keys.Quit))
+}
+
 func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 	if m.helpOverlayVisible {
 		return false
@@ -443,6 +455,10 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 			m.helpOverlayVisible = false
 		}
 		return m, nil, true
+	}
+	if m.shouldCancelPickerToDashboard(msg) {
+		next, cmd := m.cancelPickerToDashboard()
+		return next, cmd, true
 	}
 	if key.Matches(msg, m.keys.Quit) {
 		if m.canQuitFromMainDashboard(msg) {
@@ -638,6 +654,7 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.stopTrace()
 	m.pidFilter = pid
 	m.tidFilter = -1
+	m.pickerReturn = nil
 	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
@@ -654,6 +671,7 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.stopTrace()
 	m.pidFilter = pid
 	m.tidFilter = tid
+	m.pickerReturn = nil
 	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
@@ -662,6 +680,10 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) reselectPID() (tea.Model, tea.Cmd) {
+	m.pickerReturn = &pickerReturnState{
+		pidFilter: m.pidFilter,
+		tidFilter: m.tidFilter,
+	}
 	m.stopTrace()
 	m.screen = ScreenPIDPicker
 	m.attaching = false
@@ -683,6 +705,10 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 func (m Model) reselectTID() (tea.Model, tea.Cmd) {
 	pid := m.pidFilter
 
+	m.pickerReturn = &pickerReturnState{
+		pidFilter: m.pidFilter,
+		tidFilter: m.tidFilter,
+	}
 	m.stopTrace()
 	m.screen = ScreenPIDPicker
 	m.attaching = false
@@ -706,6 +732,22 @@ func selectedPIDFilter(pid int) int {
 		return -1
 	}
 	return pid
+}
+
+func (m Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
+	if m.pickerReturn == nil {
+		return m, nil
+	}
+	returnState := *m.pickerReturn
+	m.pickerReturn = nil
+	m.stopTrace()
+	m.pidFilter = returnState.pidFilter
+	m.tidFilter = returnState.tidFilter
+	m.dashboard.SetPidFilter(m.pidFilter)
+	m.screen = ScreenDashboard
+	m.attaching = true
+	m.lastErr = nil
+	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
 func (m *Model) beginTraceCmd() tea.Cmd {
@@ -810,8 +852,12 @@ func isHelpOverlayOpenKey(msg tea.KeyPressMsg) bool {
 	return msg.String() == "H"
 }
 
+func isEscKey(msg tea.KeyPressMsg) bool {
+	return msg.Code == tea.KeyEsc || msg.String() == "esc"
+}
+
 func isHelpOverlayCloseKey(msg tea.KeyPressMsg) bool {
-	return msg.Code == tea.KeyEsc || msg.String() == "esc" || msg.String() == "?"
+	return isEscKey(msg) || msg.String() == "?"
 }
 
 func isHelpOverlayQuitKey(msg tea.KeyPressMsg) bool {
@@ -930,7 +976,7 @@ func (m Model) helpSections() []helpSection {
 		{
 			title: "PID/TID Picker",
 			lines: []string{
-				"enter select  r refresh  esc back",
+				"enter select  r refresh  esc/q back",
 			},
 		},
 	}

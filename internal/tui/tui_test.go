@@ -209,6 +209,88 @@ func TestQuitKeyDoesNotExitOnPIDPickerScreen(t *testing.T) {
 	}
 }
 
+func TestQuitKeyOnReselectPIDPickerReturnsToDashboardLikeEsc(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+	m.pidFilter = 1111
+	m.tidFilter = 2222
+	m.dashboard.SetPidFilter(1111)
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
+	m = next.(Model)
+	if m.screen != ScreenPIDPicker {
+		t.Fatalf("expected pid picker screen after reselect, got %v", m.screen)
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	updated := next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected q in reselect picker to return to dashboard and restart tracing")
+	}
+	if updated.screen != ScreenDashboard {
+		t.Fatalf("expected dashboard screen after q cancel, got %v", updated.screen)
+	}
+	if !updated.attaching {
+		t.Fatalf("expected attaching=true after q cancel")
+	}
+	if updated.quitting {
+		t.Fatalf("expected q in reselect picker to behave like esc, not quit")
+	}
+	if updated.pickerReturn != nil {
+		t.Fatalf("expected picker return context to clear after cancel")
+	}
+	if updated.pidFilter != 1111 || updated.tidFilter != 2222 {
+		t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.pidFilter, updated.tidFilter)
+	}
+}
+
+func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+	m.pidFilter = 3333
+	m.tidFilter = 4444
+	m.dashboard.SetPidFilter(3333)
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
+	m = next.(Model)
+	if m.screen != ScreenPIDPicker {
+		t.Fatalf("expected pid picker screen after reselect, got %v", m.screen)
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	updated := next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected esc in reselect picker to return to dashboard and restart tracing")
+	}
+	if updated.screen != ScreenDashboard {
+		t.Fatalf("expected dashboard screen after esc cancel, got %v", updated.screen)
+	}
+	if !updated.attaching {
+		t.Fatalf("expected attaching=true after esc cancel")
+	}
+	if updated.quitting {
+		t.Fatalf("expected esc in reselect picker not to quit app")
+	}
+	if updated.pickerReturn != nil {
+		t.Fatalf("expected picker return context to clear after cancel")
+	}
+	if updated.pidFilter != 3333 || updated.tidFilter != 4444 {
+		t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.pidFilter, updated.tidFilter)
+	}
+}
+
 func TestQuitKeyClosesProbeModalLikeEsc(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard

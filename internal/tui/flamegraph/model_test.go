@@ -276,7 +276,7 @@ func TestMouseClickOutsideBarsDoesNotChangeSelectionOrZoom(t *testing.T) {
 	}
 }
 
-func TestZoomKeepsNarrowLineageRail(t *testing.T) {
+func TestZoomLineageSpansZoomViewportAndAlignsAtGutter(t *testing.T) {
 	m := newZoomModel()
 	targetPath := "root" + pathSeparator + "A"
 	targetIdx := mustFrameIndex(t, m.frames, targetPath)
@@ -289,14 +289,77 @@ func TestZoomKeepsNarrowLineageRail(t *testing.T) {
 
 	rootIdx := mustFrameIndex(t, m.frames, "root")
 	zoomIdx := mustFrameIndex(t, m.frames, targetPath)
-	if m.frames[rootIdx].Width != expectedRailWidth {
-		t.Fatalf("expected root lineage width %d, got %d", expectedRailWidth, m.frames[rootIdx].Width)
+	_, gutter, ok := m.zoomLineageGeometry(expectedRailWidth)
+	if !ok {
+		t.Fatalf("expected lineage geometry to be enabled for zoomed view")
 	}
-	if m.frames[zoomIdx].Width != expectedRailWidth {
-		t.Fatalf("expected zoom lineage width %d, got %d", expectedRailWidth, m.frames[zoomIdx].Width)
+	expectedLineageWidth := m.width - gutter
+	if m.frames[rootIdx].Width != expectedLineageWidth {
+		t.Fatalf("expected root lineage width %d, got %d", expectedLineageWidth, m.frames[rootIdx].Width)
 	}
-	if m.frames[rootIdx].Col != 0 || m.frames[zoomIdx].Col != 0 {
-		t.Fatalf("expected lineage rail at column 0, got root=%d zoom=%d", m.frames[rootIdx].Col, m.frames[zoomIdx].Col)
+	if m.frames[zoomIdx].Width != expectedLineageWidth {
+		t.Fatalf("expected zoom lineage width %d, got %d", expectedLineageWidth, m.frames[zoomIdx].Width)
+	}
+	if m.frames[rootIdx].Col != gutter || m.frames[zoomIdx].Col != gutter {
+		t.Fatalf("expected lineage rail at column %d, got root=%d zoom=%d", gutter, m.frames[rootIdx].Col, m.frames[zoomIdx].Col)
+	}
+}
+
+func TestZoomLineageKeepsAllFramesWithinViewportWidth(t *testing.T) {
+	m := newZoomModel()
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = settleFlameAnimation(t, m)
+
+	for _, frame := range m.frames {
+		if frame.Col+frame.Width > m.width {
+			t.Fatalf("frame exceeds viewport width %d: %+v", m.width, frame)
+		}
+	}
+}
+
+func TestZoomLineageAlignsWithZoomedSubtreeColumn(t *testing.T) {
+	m := newZoomModel()
+	rootPath := "root" + pathSeparator + "A"
+	childPath := rootPath + pathSeparator + "A1"
+	m.selectedIdx = mustFrameIndex(t, m.frames, rootPath)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = settleFlameAnimation(t, m)
+
+	rootIdx := mustFrameIndex(t, m.frames, rootPath)
+	childIdx := mustFrameIndex(t, m.frames, childPath)
+	_, gutter, ok := m.zoomLineageGeometry(m.zoomLineWidth)
+	if !ok {
+		t.Fatalf("expected lineage geometry to be enabled")
+	}
+	if got := m.frames[rootIdx].Col; got != gutter {
+		t.Fatalf("expected zoom lineage root column %d, got %d", gutter, got)
+	}
+	if got := m.frames[childIdx].Col; got != gutter {
+		t.Fatalf("expected first child column to align at %d, got %d", gutter, got)
+	}
+}
+
+func TestZoomLineageParentsAreNeverNarrowerThanChildren(t *testing.T) {
+	m := newZoomModel()
+	rootPath := "root" + pathSeparator + "A"
+	m.selectedIdx = mustFrameIndex(t, m.frames, rootPath)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = settleFlameAnimation(t, m)
+
+	for _, frame := range m.frames {
+		parentPath := parentFramePath(frame.Path)
+		if parentPath == "" {
+			continue
+		}
+		parentIdx := m.frameIndexByPath(parentPath)
+		if parentIdx < 0 {
+			continue
+		}
+		parent := m.frames[parentIdx]
+		if parent.Width < frame.Width {
+			t.Fatalf("expected parent %q width %d >= child %q width %d", parent.Path, parent.Width, frame.Path, frame.Width)
+		}
 	}
 }
 
@@ -587,32 +650,19 @@ func TestZoomInOnCurrentRootSetsStatusMessage(t *testing.T) {
 	}
 }
 
-func TestZoomTransitionAnimatesToNewLayout(t *testing.T) {
+func TestZoomTransitionAppliesNewLayoutImmediately(t *testing.T) {
 	m := newZoomModel()
 	pathA := "root" + pathSeparator + "A"
-	preWidth := m.frames[mustFrameIndex(t, m.frames, pathA)].Width
 
 	m.selectedIdx = mustFrameIndex(t, m.frames, pathA)
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.animating {
-		t.Fatalf("expected zoom-in to start animation")
+	if m.animating {
+		t.Fatalf("expected zoom-in layout update to apply immediately")
 	}
 	currentWidth := m.frames[mustFrameIndex(t, m.frames, pathA)].Width
 	targetWidth := m.targetFrames[mustFrameIndex(t, m.targetFrames, pathA)].Width
-	if currentWidth == targetWidth {
-		t.Fatalf("expected intermediate zoom frame width to differ from target (current=%d target=%d, pre=%d)", currentWidth, targetWidth, preWidth)
-	}
-
-	for i := 0; i < 180 && m.animating; i++ {
-		next, _ := m.Update(animTickMsg{})
-		m = next.(Model)
-	}
-	if m.animating {
-		t.Fatalf("expected zoom animation to settle within 180 ticks")
-	}
-	finalWidth := m.frames[mustFrameIndex(t, m.frames, pathA)].Width
-	if finalWidth != targetWidth {
-		t.Fatalf("expected final zoom width %d, got %d", targetWidth, finalWidth)
+	if currentWidth != targetWidth {
+		t.Fatalf("expected zoom width %d after immediate layout update, got %d", targetWidth, currentWidth)
 	}
 }
 
@@ -1065,6 +1115,14 @@ func mustFrameIndex(t *testing.T, frames []tuiFrame, path string) int {
 	}
 	t.Fatalf("frame path %q not found", path)
 	return -1
+}
+
+func parentFramePath(path string) string {
+	lastSep := strings.LastIndex(path, pathSeparator)
+	if lastSep <= 0 {
+		return ""
+	}
+	return path[:lastSep]
 }
 
 func pressFlameKey(t *testing.T, m Model, keyMsg tea.KeyPressMsg) Model {

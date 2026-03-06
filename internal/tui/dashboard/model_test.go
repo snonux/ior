@@ -353,6 +353,12 @@ func TestVisualizationCycleForSyscallsTab(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
 	model := next.(Model)
+	if got := model.syscallsVizMode; got != tabVizModeBubbles {
+		t.Fatalf("expected syscalls bubbles mode enabled")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model = next.(Model)
 	if got := model.syscallsVizMode; got != tabVizModeTreemap {
 		t.Fatalf("expected syscalls treemap mode enabled")
 	}
@@ -415,6 +421,12 @@ func TestFilesTreemapRequiresDirectoryMode(t *testing.T) {
 	model = next.(Model)
 	if !model.filesDirGrouped {
 		t.Fatalf("expected files dir mode enabled")
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
+	model = next.(Model)
+	if got := model.filesVizMode; got != tabVizModeBubbles {
+		t.Fatalf("expected files bubbles mode enabled in directory mode")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
