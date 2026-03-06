@@ -187,6 +187,8 @@ type Model struct {
 
 	keys KeyMap
 
+	helpOverlayVisible bool
+
 	width    int
 	height   int
 	quitting bool
@@ -325,6 +327,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			m.stopTrace()
 			return m, tea.Quit
+		}
+		if m.helpOverlayVisible {
+			if isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
+				m.helpOverlayVisible = false
+			}
+			return m, nil
+		}
+		if isHelpOverlayOpenKey(msg) && !m.attaching && m.lastErr == nil {
+			m.helpOverlayVisible = true
+			return m, nil
 		}
 		if m.exportEnabled && m.screen == ScreenDashboard && !m.attaching && m.lastErr == nil && key.Matches(msg, m.keys.Export) && !m.exporter.Visible() && !m.probeModal.Visible() && !m.dashboard.BlocksGlobalShortcuts(msg) {
 			m.exporter = m.exporter.Open()
@@ -662,6 +674,10 @@ func (m Model) View() tea.View {
 	if m.lastErr != nil {
 		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))), title)
 	}
+	if m.helpOverlayVisible {
+		helpView := renderGlobalHelpOverlay(width, height, m.helpSections())
+		return altScreenView(helpView, title)
+	}
 
 	switch m.screen {
 	case ScreenPIDPicker:
@@ -682,6 +698,14 @@ func (m Model) View() tea.View {
 	default:
 		return altScreenView("", title)
 	}
+}
+
+func isHelpOverlayOpenKey(msg tea.KeyPressMsg) bool {
+	return msg.String() == "H"
+}
+
+func isHelpOverlayCloseKey(msg tea.KeyPressMsg) bool {
+	return msg.Code == tea.KeyEsc || msg.String() == "esc" || msg.String() == "?"
 }
 
 func runExportCmd(exportEnabled bool, option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
@@ -838,6 +862,115 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+type helpSection struct {
+	title string
+	lines []string
+}
+
+func (m Model) helpSections() []helpSection {
+	globalLines := []string{
+		"H help  esc close help  q quit",
+		"tab/shift+tab cycle tabs  1..7 jump tab",
+		"p pid picker  t tid picker  o probes  r refresh",
+	}
+	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
+		globalLines = append(globalLines, "e snapshot export")
+	}
+
+	return []helpSection{
+		{
+			title: "Global",
+			lines: globalLines,
+		},
+		{
+			title: "Flame Tab",
+			lines: []string{
+				"arrows/hjkl navigate  pgup top  pgdn root",
+				"enter zoom  u/backspace/esc undo",
+				"/ filter  n/N match next/prev",
+				"space/p pause  o order  r reset baseline",
+			},
+		},
+		{
+			title: "Stream Tab",
+			lines: []string{
+				"space pause/live  f add filter  esc undo filter",
+				"enter apply filter  / or ? search  n/N next/prev",
+				"j/k/up/down scroll  pgup/pgdn page  g/G top/tail",
+				"left/right or h/l switch columns",
+				"c clear  x export  X export-as  E open last",
+			},
+		},
+		{
+			title: "PID/TID Picker",
+			lines: []string{
+				"enter select  r refresh  esc back",
+			},
+		},
+	}
+}
+
+func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 24
+	}
+
+	boxWidth := width - 4
+	if boxWidth > 100 {
+		boxWidth = 100
+	}
+	if boxWidth < 74 {
+		boxWidth = 74
+	}
+	contentWidth := boxWidth - 4
+	if contentWidth < 20 {
+		contentWidth = boxWidth
+	}
+
+	lines := make([]string, 0, 24)
+	lines = append(lines, "Help")
+	for _, section := range sections {
+		lines = append(lines, "")
+		lines = append(lines, section.title)
+		for _, line := range section.lines {
+			lines = append(lines, "  "+truncateHelpLine(line, contentWidth-2))
+		}
+	}
+	lines = append(lines, "", "Esc close")
+
+	maxLines := height - 4
+	if maxLines < 6 {
+		maxLines = 6
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines-1]
+		lines = append(lines, truncateHelpLine("... (resize for full help)", contentWidth))
+	}
+
+	box := PanelStyle.Copy().Width(boxWidth).Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func truncateHelpLine(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	r := []rune(s)
+	if len(r) >= width {
+		return string(r[:width-1]) + "…"
+	}
+	return s
 }
 
 func placeToViewport(width, height int, content string) string {

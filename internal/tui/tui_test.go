@@ -730,6 +730,49 @@ func TestViewShowsDashboardWithoutHelpOverlay(t *testing.T) {
 	}
 }
 
+func TestHelpOverlayOpensWithUppercaseHAndClosesWithEsc(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	m = next.(Model)
+	if !m.helpOverlayVisible {
+		t.Fatalf("expected help overlay to become visible after H")
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "Help") || !strings.Contains(view, "Global") || !strings.Contains(view, "Esc close") {
+		t.Fatalf("expected global help overlay content, got %q", view)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+	if m.helpOverlayVisible {
+		t.Fatalf("expected esc to close help overlay")
+	}
+	if !strings.Contains(m.View().Content, "press H for help") {
+		t.Fatalf("expected dashboard help hint after closing overlay")
+	}
+}
+
+func TestHelpOverlayCanOpenFromPIDPicker(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenPIDPicker
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	m = next.(Model)
+	if !m.helpOverlayVisible {
+		t.Fatalf("expected help overlay to open on pid picker screen")
+	}
+	if !strings.Contains(m.View().Content, "PID/TID Picker") {
+		t.Fatalf("expected picker shortcuts in help overlay")
+	}
+}
+
 func TestQuestionMarkDoesNotBlockUnderlyingActions(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
@@ -929,5 +972,28 @@ func TestRenderHelpOverlayUsesWideViewport(t *testing.T) {
 
 	if maxWidth <= 110 {
 		t.Fatalf("expected wide help overlay to exceed previous 110-col cap, got %d", maxWidth)
+	}
+}
+
+func TestGlobalHelpOverlayFitsStandardTerminal(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	out := renderGlobalHelpOverlay(80, 24, m.helpSections())
+
+	lines := strings.Split(out, "\n")
+	if len(lines) > 24 {
+		t.Fatalf("expected help overlay to fit within 24 lines, got %d", len(lines))
+	}
+
+	maxWidth := 0
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	if maxWidth > 80 {
+		t.Fatalf("expected help overlay width <= 80, got %d", maxWidth)
+	}
+	if !strings.Contains(out, "Flame Tab") || !strings.Contains(out, "Stream Tab") {
+		t.Fatalf("expected overlay to include tab-specific help sections")
 	}
 }
