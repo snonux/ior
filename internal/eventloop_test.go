@@ -774,7 +774,7 @@ func makePidfdGetfdEventTestData(t *testing.T) (td testData) {
 		if got, want := ep.File.Name(), path; got != want {
 			t.Errorf("Expected transferred file '%v' but got '%v'", want, got)
 		}
-		if _, ok := el.files[int32(fd)]; !ok {
+		if _, ok := el.fdState().files[int32(fd)]; !ok {
 			t.Errorf("Expected transferred fd %d to be tracked", fd)
 		}
 	})
@@ -796,7 +796,7 @@ func makePidfdGetfdFailureTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
-		if _, ok := el.files[9999]; ok {
+		if _, ok := el.fdState().files[9999]; ok {
 			t.Errorf("Expected no tracked fd for failed pidfd_getfd")
 		}
 	})
@@ -1382,7 +1382,7 @@ func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Errorf("Expected io_uring fd to be tracked")
 		}
-		if _, ok := el.files[48]; !ok {
+		if _, ok := el.fdState().files[48]; !ok {
 			t.Errorf("Expected io_uring fd 48 to be tracked")
 		}
 	})
@@ -1408,7 +1408,7 @@ func makeIoUringSetupFailureTestData(t *testing.T) (td testData) {
 		if ep.File != nil {
 			t.Errorf("Expected io_uring_setup failure to have no file tracked")
 		}
-		if len(el.files) != 0 {
+		if len(el.fdState().files) != 0 {
 			t.Errorf("Expected no fds to be tracked after io_uring_setup failure")
 		}
 	})
@@ -1434,7 +1434,7 @@ func makeIoUringEnterEventTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Errorf("Expected io_uring_enter to have a file")
 		}
-		if _, ok := el.files[fd]; ok {
+		if _, ok := el.fdState().files[fd]; ok {
 			t.Errorf("Expected io_uring_enter to not track fd %d", fd)
 		}
 	})
@@ -1460,7 +1460,7 @@ func makeIoUringRegisterEventTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Errorf("Expected io_uring_register to have a file")
 		}
-		if _, ok := el.files[fd]; ok {
+		if _, ok := el.fdState().files[fd]; ok {
 			t.Errorf("Expected io_uring_register to not track fd %d", fd)
 		}
 	})
@@ -1526,7 +1526,7 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, newFd, filename)
 
 		// Verify the new fd has O_CLOEXEC flag
-		if newFile, ok := el.files[newFd]; ok {
+		if newFile, ok := el.fdState().files[newFd]; ok {
 			fdFile, ok := newFile.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1611,7 +1611,7 @@ func makeDup2TestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, targetFd, filename)
 
 		// Verify the new fd does NOT have O_CLOEXEC flag (unlike dup3)
-		if newFile, ok := el.files[targetFd]; ok {
+		if newFile, ok := el.fdState().files[targetFd]; ok {
 			fdFile, ok := newFile.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1662,7 +1662,7 @@ func makeDup2TestData(t *testing.T) (td testData) {
 
 // Helper functions for FD lifecycle tests
 func verifyFileDescriptor(t *testing.T, el *eventLoop, fd int32, expectedFileName string) {
-	if file, ok := el.files[fd]; ok {
+	if file, ok := el.fdState().files[fd]; ok {
 		if file.Name() != expectedFileName {
 			t.Errorf("Expected fd %d to map to file '%s' but got '%s'", fd, expectedFileName, file.Name())
 		}
@@ -1672,7 +1672,7 @@ func verifyFileDescriptor(t *testing.T, el *eventLoop, fd int32, expectedFileNam
 }
 
 func verifyFdNotTracked(t *testing.T, el *eventLoop, fd int32) {
-	if _, ok := el.files[fd]; ok {
+	if _, ok := el.fdState().files[fd]; ok {
 		t.Errorf("Expected fd %d to not be tracked but it was found", fd)
 	}
 }
@@ -1718,7 +1718,7 @@ func verifyMismatchCount(t *testing.T, el *eventLoop, expectedCount uint) {
 }
 
 func verifyCommName(t *testing.T, el *eventLoop, tid uint32, expectedComm string) {
-	if comm, ok := el.comms[tid]; !ok {
+	if comm, ok := el.commState().comms[tid]; !ok {
 		t.Errorf("Expected comm name for tid %d but it wasn't found", tid)
 	} else if comm != expectedComm {
 		t.Errorf("Expected comm name '%s' for tid %d but got '%s'", expectedComm, tid, comm)
@@ -1764,7 +1764,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 		}
 
 		// Verify flags were updated on the file descriptor
-		if f, ok := el.files[int32(fd)]; ok {
+		if f, ok := el.fdState().files[int32(fd)]; ok {
 			fdFile, ok := f.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1800,7 +1800,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 		}
 
 		// Verify flags were updated correctly
-		if f, ok := el.files[int32(fd)]; ok {
+		if f, ok := el.fdState().files[int32(fd)]; ok {
 			fdFile, ok := f.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1878,7 +1878,7 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, int32(newFd), filename)
 
 		// Verify the new fd does NOT have O_CLOEXEC flag (F_DUPFD doesn't set it)
-		if f, ok := el.files[int32(newFd)]; ok {
+		if f, ok := el.fdState().files[int32(newFd)]; ok {
 			fdFile, ok := f.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1962,7 +1962,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		verifyFileDescriptor(t, el, int32(origFd), filename)
 		// Verify original fd doesn't have O_CLOEXEC
-		if f, ok := el.files[int32(origFd)]; ok {
+		if f, ok := el.fdState().files[int32(origFd)]; ok {
 			fdFile, ok := f.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1993,7 +1993,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, int32(newFd), filename)
 
 		// Verify the new fd has O_CLOEXEC flag
-		if f, ok := el.files[int32(newFd)]; ok {
+		if f, ok := el.fdState().files[int32(newFd)]; ok {
 			fdFile, ok := f.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2003,7 +2003,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 		}
 
 		// Verify original fd still doesn't have O_CLOEXEC
-		if f, ok := el.files[int32(origFd)]; ok {
+		if f, ok := el.fdState().files[int32(origFd)]; ok {
 			fdFile, ok := f.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2122,7 +2122,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 		}
 
 		// Verify flags were NOT updated due to error
-		if f, ok := el.files[int32(fd)]; ok {
+		if f, ok := el.fdState().files[int32(fd)]; ok {
 			fdFile, ok := f.(file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2149,8 +2149,8 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 		}
 
 		// Only original fd should be tracked
-		if len(el.files) != 1 {
-			t.Errorf("Expected only 1 fd to be tracked, got %d", len(el.files))
+		if len(el.fdState().files) != 1 {
+			t.Errorf("Expected only 1 fd to be tracked, got %d", len(el.fdState().files))
 		}
 		verifyFileDescriptor(t, el, int32(fd), filename)
 	})
