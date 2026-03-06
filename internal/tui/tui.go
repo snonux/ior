@@ -421,16 +421,16 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 }
 
 func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.helpOverlayVisible {
+		if isHelpOverlayQuitKey(msg) || isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
+			m.helpOverlayVisible = false
+		}
+		return m, nil, true
+	}
 	if key.Matches(msg, m.keys.Quit) {
 		m.quitting = true
 		m.stopTrace()
 		return m, tea.Quit, true
-	}
-	if m.helpOverlayVisible {
-		if isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
-			m.helpOverlayVisible = false
-		}
-		return m, nil, true
 	}
 	if isHelpOverlayOpenKey(msg) && !m.attaching && m.lastErr == nil {
 		m.helpOverlayVisible = true
@@ -780,6 +780,10 @@ func isHelpOverlayCloseKey(msg tea.KeyPressMsg) bool {
 	return msg.Code == tea.KeyEsc || msg.String() == "esc" || msg.String() == "?"
 }
 
+func isHelpOverlayQuitKey(msg tea.KeyPressMsg) bool {
+	return msg.String() == "q"
+}
+
 func runExportCmd(exportEnabled bool, option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
 	return func() tea.Msg {
 		if !exportEnabled {
@@ -843,7 +847,7 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 		}
 		lines = append(lines, strings.Join(parts, " • "))
 	}
-	lines = append(lines, "", "Esc/? close")
+	lines = append(lines, "", "Esc/?/q close")
 
 	boxWidth := width - 6
 	if boxWidth < 72 {
@@ -927,7 +931,7 @@ func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
 			lines = append(lines, "  "+truncateHelpLine(line, contentWidth-2))
 		}
 	}
-	lines = append(lines, "", "Esc close")
+	lines = append(lines, "", "Esc/q close")
 
 	maxLines := height - 4
 	if maxLines < 6 {
