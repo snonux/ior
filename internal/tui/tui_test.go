@@ -756,7 +756,7 @@ func TestHelpOverlayOpensWithUppercaseHAndClosesWithEsc(t *testing.T) {
 		t.Fatalf("expected help overlay to become visible after H")
 	}
 	view := m.View().Content
-	if !strings.Contains(view, "Help") || !strings.Contains(view, "Global") || !strings.Contains(view, "Esc close") {
+	if !strings.Contains(view, "Help") || !strings.Contains(view, "Global") || !strings.Contains(view, "Esc/q close") {
 		t.Fatalf("expected global help overlay content, got %q", view)
 	}
 
@@ -767,6 +767,32 @@ func TestHelpOverlayOpensWithUppercaseHAndClosesWithEsc(t *testing.T) {
 	}
 	if !strings.Contains(m.View().Content, "press H for help") {
 		t.Fatalf("expected dashboard help hint after closing overlay")
+	}
+}
+
+func TestHelpOverlayClosesWithQWithoutQuitting(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	m = next.(Model)
+	if !m.helpOverlayVisible {
+		t.Fatalf("expected help overlay to become visible after H")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("expected no quit command when closing help with q")
+	}
+	if m.helpOverlayVisible {
+		t.Fatalf("expected q to close help overlay")
+	}
+	if m.quitting {
+		t.Fatalf("expected q in help overlay not to set quitting state")
 	}
 }
 
