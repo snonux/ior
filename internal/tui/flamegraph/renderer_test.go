@@ -150,11 +150,37 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 
 	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, true, false, "")
-	if !strings.Contains(out, "Flame | frames:2") {
+	if !strings.Contains(out, "Flame | view:root | frames:2") {
 		t.Fatalf("expected toolbar to include frame count, got %q", out)
 	}
 	if !strings.Contains(out, "Selected: child") {
 		t.Fatalf("expected status line to show selected frame, got %q", out)
+	}
+}
+
+func TestFrameLabelAddsSelectionAndMatchMarkers(t *testing.T) {
+	if got := frameLabel("child", 7, true, false); got != ">child<" {
+		t.Fatalf("expected selected marker label, got %q", got)
+	}
+	if got := frameLabel("child", 6, false, true); got != "*child" {
+		t.Fatalf("expected match marker label, got %q", got)
+	}
+}
+
+func TestRenderTerminalViewShowsPersistentFilterContext(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 10,
+		Children: []*snapshotNode{
+			{Name: "child", Total: 10},
+		},
+	}
+	frames := BuildTerminalLayout(snapshot, 80, 6)
+	matchSet := map[int]bool{1: true}
+
+	out := RenderTerminalView(frames, 80, 6, 1, nil, matchSet, true, false, "child")
+	if !strings.Contains(out, `Filter "child"`) {
+		t.Fatalf("expected filter context in status line, got %q", out)
 	}
 }
 

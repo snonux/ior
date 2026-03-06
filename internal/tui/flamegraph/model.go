@@ -353,12 +353,18 @@ func (m *Model) rebuildFrames(animate bool) {
 
 func (m *Model) zoomIn() {
 	if len(m.frames) == 0 || m.snapshot == nil {
+		m.statusMessage = "Zoom unavailable: no frame selected"
 		return
 	}
 	m.clampSelection()
 	selectedPath := m.frames[m.selectedIdx].Path
+	if selectedPath == m.currentRootPath() {
+		m.statusMessage = "Zoom unchanged: selected frame is current view root"
+		return
+	}
 	target := findNodeByPath(m.snapshot, selectedPath)
 	if target == nil {
+		m.statusMessage = "Zoom failed: selected node is unavailable"
 		return
 	}
 	m.zoomStack = append(m.zoomStack, zoomState{
@@ -369,10 +375,12 @@ func (m *Model) zoomIn() {
 	m.zoomPath = selectedPath
 	m.selectedIdx = 0
 	m.rebuildFrames(true)
+	m.statusMessage = "Zoom: " + compactFramePath(selectedPath)
 }
 
 func (m *Model) zoomUndo() {
 	if len(m.zoomStack) == 0 || m.snapshot == nil {
+		m.statusMessage = "Zoom undo unavailable"
 		return
 	}
 	last := m.zoomStack[len(m.zoomStack)-1]
@@ -385,16 +393,23 @@ func (m *Model) zoomUndo() {
 	}
 	m.selectedIdx = last.previousSelectedIdx
 	m.rebuildFrames(true)
+	if m.zoomPath == "" {
+		m.statusMessage = "Zoom: root"
+		return
+	}
+	m.statusMessage = "Zoom: " + compactFramePath(m.zoomPath)
 }
 
 func (m *Model) zoomReset() {
 	if m.zoomRoot == nil && len(m.zoomStack) == 0 {
+		m.statusMessage = "Zoom already at root"
 		return
 	}
 	m.zoomRoot = nil
 	m.zoomPath = ""
 	m.zoomStack = nil
 	m.rebuildFrames(false)
+	m.statusMessage = "Zoom reset to root"
 }
 
 func (m *Model) moveVertical(delta int) {
@@ -491,4 +506,14 @@ func abs(v int) int {
 
 func animTickCmd() tea.Cmd {
 	return tea.Tick(animFrameDuration, func(time.Time) tea.Msg { return animTickMsg{} })
+}
+
+func (m Model) currentRootPath() string {
+	if m.zoomPath != "" {
+		return m.zoomPath
+	}
+	if len(m.frames) == 0 {
+		return ""
+	}
+	return m.frames[0].Path
 }

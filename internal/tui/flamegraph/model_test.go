@@ -166,6 +166,19 @@ func TestZoomInUndoResetAndNestedZoom(t *testing.T) {
 	}
 }
 
+func TestZoomInOnCurrentRootSetsStatusMessage(t *testing.T) {
+	m := newZoomModel()
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root")
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.zoomPath != "" {
+		t.Fatalf("expected zoom path to remain root, got %q", m.zoomPath)
+	}
+	if m.statusMessage != "Zoom unchanged: selected frame is current view root" {
+		t.Fatalf("unexpected status message: %q", m.statusMessage)
+	}
+}
+
 func TestZoomTransitionAnimatesToNewLayout(t *testing.T) {
 	m := newZoomModel()
 	pathA := "root" + pathSeparator + "A"
@@ -242,6 +255,35 @@ func TestSearchEscapeClearsState(t *testing.T) {
 	}
 	if m.searchQuery != "" || len(m.matchIndices) != 0 {
 		t.Fatalf("expected search state to reset on escape, got query=%q matches=%d", m.searchQuery, len(m.matchIndices))
+	}
+	if m.statusMessage != "Filter cleared" {
+		t.Fatalf("expected filter cleared status message, got %q", m.statusMessage)
+	}
+}
+
+func TestSearchSubmitSetsFilterStatusMessage(t *testing.T) {
+	m := NewModel(nil)
+	m.frames = []tuiFrame{
+		{Name: "alpha", Path: "root" + pathSeparator + "alpha"},
+		{Name: "beta", Path: "root" + pathSeparator + "beta"},
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'/'}[0], Text: "/"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'a'}[0], Text: "a"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.statusMessage != `Filter "a": 2 matches` {
+		t.Fatalf("unexpected status after applying filter: %q", m.statusMessage)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'/'}[0], Text: "/"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'/'}[0], Text: "/"})
+	for _, r := range []rune{'z', 'z'} {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.statusMessage != `Filter "zz": no matches` {
+		t.Fatalf("unexpected status for unmatched filter: %q", m.statusMessage)
 	}
 }
 
