@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -281,6 +282,69 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 	}
 }
 
+func TestTracingStartedUsesCurrentViewportForFlameNavigationWithoutResize(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestFlameData(trie)
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = true
+	m.width = 120
+	m.height = 30
+	m.runtime.SetLiveTrie(trie)
+
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(Model)
+
+	if strings.Contains(m.View().Content, "sel:none") {
+		t.Fatalf("expected flamegraph selection to be available immediately after tracing start")
+	}
+
+	selectedLabel := func(view string) string {
+		re := regexp.MustCompile(`sel:[0-9]+/[0-9]+ ([^|]+) \|`)
+		match := re.FindStringSubmatch(view)
+		if len(match) != 2 {
+			return ""
+		}
+		return strings.TrimSpace(match[1])
+	}
+
+	moved := false
+	before := selectedLabel(m.View().Content)
+	for i := 0; i < 12 && !moved; i++ {
+		next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		m = next.(Model)
+		after := selectedLabel(m.View().Content)
+		if after != "" && after != before {
+			moved = true
+			break
+		}
+	}
+	if !moved {
+		t.Fatalf("expected arrow navigation to move selection without requiring resize, view=%q", m.View().Content)
+	}
+}
+
+func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestFlameData(trie)
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = true
+	m.runtime.SetLiveTrie(trie)
+	m.width = 0
+	m.height = 0
+
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(Model)
+
+	view := m.View().Content
+	if strings.Contains(view, "sel:none") {
+		t.Fatalf("expected tracing start to apply an effective viewport even when width/height are unset")
+	}
+}
+
 func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	flags.SetTUIExportEnable(true)
 	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
@@ -401,6 +465,26 @@ func TestNormalizeKeyEventIgnoresUnidentifiedRelease(t *testing.T) {
 	normalized, ok := m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	if !ok {
 		t.Fatalf("expected subsequent real key press to be handled")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected normalized message to be KeyPressMsg, got %T", normalized)
+	}
+}
+
+func TestNormalizeKeyEventReleaseFallbackDoesNotSuppressArrowPress(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+
+	normalized, ok := m.normalizeKeyEvent(tea.KeyReleaseMsg{Code: tea.KeyRight})
+	if !ok {
+		t.Fatalf("expected right release fallback to be handled")
+	}
+	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
+		t.Fatalf("expected release fallback to normalize to KeyPressMsg, got %T", normalized)
+	}
+
+	normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeyRight})
+	if !ok {
+		t.Fatalf("expected right key press to be accepted after release fallback")
 	}
 	if _, isPress := normalized.(tea.KeyPressMsg); !isPress {
 		t.Fatalf("expected normalized message to be KeyPressMsg, got %T", normalized)

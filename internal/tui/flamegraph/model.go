@@ -87,8 +87,7 @@ type Model struct {
 	animation AnimationState
 	animating bool
 	paused    bool
-	// hasNavigableSnapshot flips once we have at least one selectable non-root
-	// frame. Paused mode can still bootstrap snapshots until then.
+	// hasNavigableSnapshot flips once we have at least one selectable non-root frame.
 	hasNavigableSnapshot bool
 	isDark               bool
 	keys                 flameKeyMap
@@ -308,8 +307,9 @@ func (m *Model) RefreshFromLiveTrie() bool {
 	if m.liveTrie == nil {
 		return false
 	}
-	// Keep bootstrapping while paused until we have a navigable snapshot.
-	if m.paused && m.snapshot != nil && m.hasNavigableSnapshot {
+	// Once a snapshot exists, paused mode must freeze it regardless of current
+	// navigability so selection and percentages remain stable.
+	if m.paused && m.snapshot != nil {
 		return false
 	}
 	version := m.liveTrie.Version()
@@ -371,6 +371,11 @@ func (m *Model) SetDarkMode(isDark bool) {
 }
 
 func (m *Model) rebuildFrames(animate bool) {
+	prevPath := ""
+	if len(m.frames) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.frames) {
+		prevPath = m.frames[m.selectedIdx].Path
+	}
+
 	var root *snapshotNode
 	rootPath := ""
 	if m.zoomRoot != nil {
@@ -391,11 +396,37 @@ func (m *Model) rebuildFrames(animate bool) {
 	if len(m.frames) > 1 {
 		m.hasNavigableSnapshot = true
 	}
+	m.restoreSelectionByPath(prevPath)
 	m.clampSelection()
 	m.recomputeFilterState()
 	m.ensureSelectionNavigable()
 	m.ensureSelectionVisible()
 	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+}
+
+func (m *Model) restoreSelectionByPath(path string) {
+	if path == "" || len(m.frames) == 0 {
+		return
+	}
+	if idx := m.frameIndexByPath(path); idx >= 0 {
+		m.selectedIdx = idx
+		return
+	}
+	for idx, frame := range m.frames {
+		if hasPathBoundaryPrefix(path, frame.Path) || hasPathBoundaryPrefix(frame.Path, path) {
+			m.selectedIdx = idx
+			return
+		}
+	}
+}
+
+func (m Model) frameIndexByPath(path string) int {
+	for idx, frame := range m.frames {
+		if frame.Path == path {
+			return idx
+		}
+	}
+	return -1
 }
 
 func (m *Model) zoomIn() {
