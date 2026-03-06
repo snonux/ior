@@ -28,17 +28,17 @@ func (c Counter) add(other Counter) Counter {
 	return c
 }
 
-func (c Counter) ValueByName(name string) uint64 {
+func (c Counter) ValueByName(name string) (uint64, error) {
 	switch name {
 	case "count":
-		return c.Count
+		return c.Count, nil
 	case "duration":
-		return c.Duration
+		return c.Duration, nil
 	case "durationToPrev":
-		return c.DurationToPrev
+		return c.DurationToPrev, nil
 	case "bytes":
-		return c.Bytes
+		return c.Bytes, nil
 	default:
-		panic(fmt.Sprintln("No", name, "in count record"))
+		return 0, fmt.Errorf("unknown counter field %q", name)
 	}
 }
