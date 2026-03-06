@@ -88,6 +88,7 @@ type Model struct {
 
 	fieldPresets [][]string
 	fieldIndex   int
+	countField   string
 
 	animation AnimationState
 	animating bool
@@ -132,11 +133,13 @@ func NewModel(liveTrie *coreflamegraph.LiveTrie) Model {
 			{"pid", "tracepoint", "path"},
 			{"comm", "path", "tracepoint"},
 		},
-		isDark:    true,
-		keys:      defaultFlameKeyMap(),
-		animation: NewAnimationState(30, 6.0, 1.0),
+		isDark:     true,
+		keys:       defaultFlameKeyMap(),
+		animation:  NewAnimationState(30, 6.0, 1.0),
+		countField: "count",
 	}
 	m.syncFieldPresetToTrie()
+	m.syncCountFieldToTrie()
 	return m
 }
 
@@ -213,6 +216,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case isCycleOrderKey(msg):
 			handled = true
 			m.cycleFieldOrder()
+		case isCycleMetricKey(msg):
+			handled = true
+			m.toggleCountField()
 		case isHelpToggleKey(msg):
 			handled = true
 			m.toggleHelp()
@@ -265,6 +271,7 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 		isPauseKey(msg),
 		isResetBaselineKey(msg),
 		isCycleOrderKey(msg),
+		isCycleMetricKey(msg),
 		isHelpToggleKey(msg):
 		return true
 	case isZoomInKey(msg, m.keys),
@@ -293,7 +300,7 @@ func (m Model) View() tea.View {
 		renderHeight = 3
 	}
 
-	content := RenderTerminalView(m.frames, m.width, renderHeight, m.selectedIdx, m.subtreeSet, m.matchIndices, m.filterVisible, m.globalTotal, m.isDark, m.searchActive, m.searchQuery)
+	content := RenderTerminalView(m.frames, m.width, renderHeight, m.selectedIdx, m.subtreeSet, m.matchIndices, m.filterVisible, m.globalTotal, m.countFieldLabel(), m.isDark, m.searchActive, m.searchQuery)
 	content = replaceHeaderLine(content, m.toolbarLine())
 	if m.searchActive {
 		content = replaceFooterLine(content, m.searchFooter())
@@ -312,6 +319,7 @@ func (m Model) View() tea.View {
 func (m *Model) SetLiveTrie(liveTrie *coreflamegraph.LiveTrie) {
 	m.liveTrie = liveTrie
 	m.syncFieldPresetToTrie()
+	m.syncCountFieldToTrie()
 	m.lastVersion = 0
 	m.snapshot = nil
 	m.globalTotal = 0
@@ -347,6 +355,18 @@ func (m *Model) syncFieldPresetToTrie() {
 	custom := slices.Clone(fields)
 	m.fieldPresets = append([][]string{custom}, m.fieldPresets...)
 	m.fieldIndex = 0
+}
+
+func (m *Model) syncCountFieldToTrie() {
+	if m.liveTrie == nil {
+		m.countField = "count"
+		return
+	}
+	field := strings.TrimSpace(m.liveTrie.CountField())
+	if field == "" {
+		field = "count"
+	}
+	m.countField = field
 }
 
 // RefreshFromLiveTrie loads a new snapshot when the source version changes.
@@ -881,6 +901,9 @@ func isResetBaselineKey(msg tea.KeyPressMsg) bool {
 	return keyString(msg) == "r"
 }
 func isCycleOrderKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "o" }
+func isCycleMetricKey(msg tea.KeyPressMsg) bool {
+	return keyString(msg) == "b"
+}
 func isHelpToggleKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "?" }
 
 func isZoomInKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {

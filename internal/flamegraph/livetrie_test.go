@@ -223,6 +223,54 @@ func TestLiveTrieReconfigureRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+func TestLiveTrieSetCountFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
+
+	initial := decodeLiveSnapshot(t, lt)
+	if got, want := initial.Total, uint64(1); got != want {
+		t.Fatalf("count snapshot total = %d, want %d", got, want)
+	}
+
+	if err := lt.SetCountField("bytes"); err != nil {
+		t.Fatalf("set count field: %v", err)
+	}
+	if got, want := lt.CountField(), "bytes"; got != want {
+		t.Fatalf("count field = %q, want %q", got, want)
+	}
+
+	empty := decodeLiveSnapshot(t, lt)
+	if got := empty.Total; got != 0 {
+		t.Fatalf("expected reset baseline after metric switch, total=%d", got)
+	}
+
+	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 10, 1, 64))
+	bytesSnap := decodeLiveSnapshot(t, lt)
+	if got, want := bytesSnap.Total, uint64(64); got != want {
+		t.Fatalf("bytes snapshot total = %d, want %d", got, want)
+	}
+	leaf := findSnapshotPath(t, &bytesSnap, "svc")
+	if got, want := leaf.Total, uint64(64); got != want {
+		t.Fatalf("bytes leaf total = %d, want %d", got, want)
+	}
+}
+
+func TestLiveTrieSetCountFieldRejectsInvalidValue(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
+	beforeVersion := lt.Version()
+
+	if err := lt.SetCountField("bogus"); err == nil {
+		t.Fatalf("expected invalid count field error")
+	}
+	if got, want := lt.CountField(), "count"; got != want {
+		t.Fatalf("count field changed unexpectedly: got %q want %q", got, want)
+	}
+	if got := lt.Version(); got != beforeVersion {
+		t.Fatalf("version changed on invalid count field: got %d want %d", got, beforeVersion)
+	}
+}
+
 func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))

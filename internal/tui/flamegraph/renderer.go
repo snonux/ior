@@ -192,7 +192,7 @@ func semanticFrameColor(name string) (color.Color, bool) {
 }
 
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
-func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet, filterSet map[int]bool, globalTotal uint64, isDark, searchActive bool, searchQuery string) string {
+func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet, filterSet map[int]bool, globalTotal uint64, metricLabel string, isDark, searchActive bool, searchQuery string) string {
 	if width < minFlameWidth {
 		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
@@ -201,6 +201,9 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 	}
 	if len(frames) == 0 {
 		return common.PanelStyle.Render("Flame: waiting for data...")
+	}
+	if strings.TrimSpace(metricLabel) == "" {
+		metricLabel = "events"
 	}
 
 	filterActive := strings.TrimSpace(searchQuery) != ""
@@ -267,13 +270,13 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		if len(frames) > 0 {
 			frameCoverage = 100 * float64(visibleFrames) / float64(len(frames))
 		}
-		status := fmt.Sprintf("Filter %q: %.1f%% system (%d/%d matches, %.1f%% frames shown) | Selected: %s total=%d depth=%d %.2f%% filter",
-			searchQuery, filterSystemShare, pos, len(matches), frameCoverage,
-			selected.Name, selected.Total, selected.Depth, selectedFilterShare)
+		status := fmt.Sprintf("Filter %q: %.1f%% %s (%d/%d matches, %.1f%% frames shown) | Selected: %s total(%s)=%d depth=%d %.2f%% filtered %s",
+			searchQuery, filterSystemShare, metricLabel, pos, len(matches), frameCoverage,
+			selected.Name, metricLabel, selected.Total, selected.Depth, selectedFilterShare, metricLabel)
 		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, barHeight, availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
 	} else {
-		status := fmt.Sprintf("Selected: %s [%s] total=%d depth=%d col=%d width=%d share=%.2f%%",
-			selected.Name, compactFramePath(selected.Path), selected.Total, selected.Depth, selected.Col, selected.Width, selectedSystemShare)
+		status := fmt.Sprintf("Selected: %s [%s] total(%s)=%d depth=%d col=%d width=%d share=%.2f%% %s",
+			selected.Name, compactFramePath(selected.Path), metricLabel, selected.Total, selected.Depth, selected.Col, selected.Width, selectedSystemShare, metricLabel)
 		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, barHeight, availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
 	}
 }

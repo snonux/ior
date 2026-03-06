@@ -661,8 +661,26 @@ func TestViewIncludesSelectionStatusBar(t *testing.T) {
 	if !strings.Contains(view, "[LIVE] sel:2/2 child") {
 		t.Fatalf("expected selection status bar to include selected frame info, got %q", view)
 	}
-	if !strings.Contains(view, "40.00% system") {
+	if !strings.Contains(view, "40.00% of total events") {
 		t.Fatalf("expected selection status bar to include selected share, got %q", view)
+	}
+}
+
+func TestViewSelectionStatusUsesBytesLabelInBytesMode(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 20
+	m.countField = "bytes"
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Row: 0, Width: 120, Total: 200, Percent: 100, Path: "root"},
+		{Name: "child", Depth: 1, Col: 0, Row: 1, Width: 60, Total: 80, Percent: 40, Path: "root" + pathSeparator + "child"},
+	}
+	m.selectedIdx = 1
+	m.globalTotal = 200
+
+	view := m.View().Content
+	if !strings.Contains(view, "40.00% of total bytes") {
+		t.Fatalf("expected bytes-based selection share label, got %q", view)
 	}
 }
 
@@ -723,7 +741,7 @@ func TestViewFilterSelectionStatusUsesFilteredTotalAndKeepsContextVisible(t *tes
 	m.recomputeFilterState()
 
 	view := m.View().Content
-	if !strings.Contains(view, "100.00% filter") {
+	if !strings.Contains(view, "100.00% of filtered events") {
 		t.Fatalf("expected filtered selection share in status line, got %q", view)
 	}
 	if !strings.Contains(view, "drop") || !strings.Contains(view, "noise") {
@@ -750,11 +768,43 @@ func TestControlCycleFieldOrderReconfiguresLiveTrie(t *testing.T) {
 	}
 }
 
+func TestControlMetricToggleReconfiguresLiveTrieCountField(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	m := NewModel(liveTrie)
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'b'}[0], Text: "b"})
+	if got, want := m.countField, "bytes"; got != want {
+		t.Fatalf("expected model count field %q, got %q", want, got)
+	}
+	if got, want := liveTrie.CountField(), "bytes"; got != want {
+		t.Fatalf("expected live trie count field %q, got %q", want, got)
+	}
+	if got, want := m.statusMessage, "Metric: bytes (new baseline)"; got != want {
+		t.Fatalf("expected metric toggle status %q, got %q", want, got)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'b'}[0], Text: "b"})
+	if got, want := m.countField, "count"; got != want {
+		t.Fatalf("expected model count field %q after second toggle, got %q", want, got)
+	}
+	if got, want := liveTrie.CountField(), "count"; got != want {
+		t.Fatalf("expected live trie count field %q after second toggle, got %q", want, got)
+	}
+}
+
 func TestNewModelAlignsPresetIndexToLiveTrieFields(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
 	m := NewModel(liveTrie)
 	if got, want := m.fieldPresets[m.fieldIndex], []string{"comm", "path", "tracepoint"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected model field preset to align with trie fields, got %v want %v", got, want)
+	}
+}
+
+func TestNewModelAlignsCountFieldToLiveTrie(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "bytes")
+	m := NewModel(liveTrie)
+	if got, want := m.countField, "bytes"; got != want {
+		t.Fatalf("expected model count field to align with trie field, got %q want %q", got, want)
 	}
 }
 
