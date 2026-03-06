@@ -420,6 +420,23 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 		!m.dashboard.BlocksGlobalShortcuts(msg)
 }
 
+func (m Model) canQuitFromMainDashboard(msg tea.KeyPressMsg) bool {
+	return m.screen == ScreenDashboard &&
+		!m.attaching &&
+		m.lastErr == nil &&
+		!m.exporter.Visible() &&
+		!m.probeModal.Visible() &&
+		!m.dashboard.BlocksGlobalShortcuts(msg)
+}
+
+func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
+	if m.helpOverlayVisible {
+		return false
+	}
+	return m.screen == ScreenDashboard &&
+		(m.exporter.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
+}
+
 func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.helpOverlayVisible {
 		if isHelpOverlayQuitKey(msg) || isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
@@ -428,9 +445,26 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		return m, nil, true
 	}
 	if key.Matches(msg, m.keys.Quit) {
-		m.quitting = true
-		m.stopTrace()
-		return m, tea.Quit, true
+		if m.canQuitFromMainDashboard(msg) {
+			m.quitting = true
+			m.stopTrace()
+			return m, tea.Quit, true
+		}
+		if m.shouldRouteQuitToEsc(msg) {
+			esc := tea.KeyPressMsg{Code: tea.KeyEsc}
+			if m.probeModal.Visible() {
+				next, cmd := m.updateProbeModal(esc)
+				return next, cmd, true
+			}
+			if m.exporter.Visible() {
+				next, cmd := m.updateExportModal(esc)
+				return next, cmd, true
+			}
+			next, cmd := m.dashboard.Update(esc)
+			m.dashboard = next.(dashboardui.Model)
+			return m, cmd, true
+		}
+		return m, nil, true
 	}
 	if isHelpOverlayOpenKey(msg) && !m.attaching && m.lastErr == nil {
 		m.helpOverlayVisible = true
@@ -887,7 +921,7 @@ func (m Model) helpSections() []helpSection {
 				"sys/files/proc tables: j/k or up/down scroll",
 				"sys/proc: v bubbles  b metric events/bytes",
 				"files: d dirs toggle  v bubbles (dirs only)  b metric",
-				"flame: arrows/hjkl nav  enter zoom  u/bs/esc undo  o order",
+				"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",
 				"flame: / filter  n/N match next/prev  space/p pause  b metric",
 				"stream: space pause  f filter  enter apply  esc undo  /? n/N",
 				"stream: j/k/pg scroll  g/G top/tail  h/l cols  c  x/X  E open",
@@ -974,6 +1008,7 @@ func altScreenView(content, title string) tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
 	view.ReportFocus = true
+	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = title
 	view.KeyboardEnhancements.ReportEventTypes = true
 	return view

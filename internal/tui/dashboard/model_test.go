@@ -810,3 +810,26 @@ func TestHelpToggleWithH(t *testing.T) {
 		t.Fatalf("expected help hint after pressing h again")
 	}
 }
+
+func TestTranslateFlamegraphMouseMsgOffsetsTabBarRow(t *testing.T) {
+	translated := translateFlamegraphMsg(tea.MouseClickMsg{
+		X:      17,
+		Y:      9,
+		Button: tea.MouseLeft,
+	})
+	click, ok := translated.(tea.MouseClickMsg)
+	if !ok {
+		t.Fatalf("expected translated message to stay mouse click, got %T", translated)
+	}
+	if click.X != 17 || click.Y != 8 {
+		t.Fatalf("expected click coordinates (17,8), got (%d,%d)", click.X, click.Y)
+	}
+}
+
+func TestTranslateFlamegraphMsgLeavesNonMouseUnchanged(t *testing.T) {
+	msg := messages.StatsTickMsg{}
+	translated := translateFlamegraphMsg(msg)
+	if _, ok := translated.(messages.StatsTickMsg); !ok {
+		t.Fatalf("expected non-mouse message to remain unchanged, got %T", translated)
+	}
+}

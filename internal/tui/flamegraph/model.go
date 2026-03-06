@@ -41,6 +41,7 @@ type LiveTrieSource interface {
 type zoomState struct {
 	path                string
 	previousSelectedIdx int
+	lineWidth           int
 }
 
 type flameKeyMap struct {
@@ -81,10 +82,11 @@ type Model struct {
 	width        int
 	height       int
 
-	selectedIdx int
-	zoomStack   []zoomState
-	zoomRoot    *snapshotNode
-	zoomPath    string
+	selectedIdx   int
+	zoomStack     []zoomState
+	zoomRoot      *snapshotNode
+	zoomPath      string
+	zoomLineWidth int
 
 	searchActive  bool
 	searchInput   textinput.Model
@@ -180,6 +182,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.animating {
 			return m, animTickCmd()
 		}
+		return m, nil
+	case tea.MouseClickMsg:
+		_ = m.handleMouseClick(msg)
 		return m, nil
 	case tea.KeyPressMsg:
 		if m.searchActive {
@@ -339,6 +344,7 @@ func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
 	m.zoomStack = nil
 	m.zoomRoot = nil
 	m.zoomPath = ""
+	m.zoomLineWidth = 0
 	m.subtreeSet = make(map[int]bool)
 	m.filterVisible = make(map[int]bool)
 	m.animation = NewAnimationState(30, 6.0, 1.0)
@@ -461,7 +467,11 @@ func (m *Model) rebuildFrames(animate bool) {
 	} else {
 		root = m.snapshot
 	}
-	m.targetFrames = buildTerminalLayoutWithPath(root, m.width, m.height, rootPath)
+	targetFrames := buildTerminalLayoutWithPath(root, m.width, m.height, rootPath)
+	if m.zoomPath != "" {
+		targetFrames = m.withZoomLineage(targetFrames)
+	}
+	m.targetFrames = targetFrames
 	m.animation.SetTargets(m.targetFrames)
 	if animate && len(m.frames) > 0 && !m.animation.Settled() {
 		m.animating = true
@@ -522,13 +532,18 @@ func (m *Model) zoomIn() {
 		m.statusMessage = "Zoom failed: selected node is unavailable"
 		return
 	}
+	selectedWidth := m.frames[m.selectedIdx].Width
+	if selectedWidth < 1 {
+		selectedWidth = 1
+	}
 	m.zoomStack = append(m.zoomStack, zoomState{
 		path:                m.zoomPath,
 		previousSelectedIdx: m.selectedIdx,
+		lineWidth:           m.zoomLineWidth,
 	})
 	m.zoomRoot = target
 	m.zoomPath = selectedPath
-	m.selectedIdx = 0
+	m.zoomLineWidth = selectedWidth
 	m.rebuildFrames(true)
 	m.statusMessage = "Zoom: " + compactFramePath(selectedPath)
 }
@@ -543,8 +558,10 @@ func (m *Model) zoomUndo() {
 	m.zoomPath = last.path
 	if m.zoomPath == "" {
 		m.zoomRoot = nil
+		m.zoomLineWidth = 0
 	} else {
 		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
+		m.zoomLineWidth = last.lineWidth
 	}
 	m.selectedIdx = last.previousSelectedIdx
 	m.rebuildFrames(true)
@@ -563,6 +580,7 @@ func (m *Model) zoomReset() {
 	m.zoomRoot = nil
 	m.zoomPath = ""
 	m.zoomStack = nil
+	m.zoomLineWidth = 0
 	m.rebuildFrames(false)
 	m.statusMessage = "Zoom reset to root"
 }
@@ -1024,4 +1042,159 @@ func (m *Model) ensureSelectionVisible() {
 	if bestIdx >= 0 {
 		m.selectedIdx = bestIdx
 	}
+}
+
+func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
+	if msg.Button != tea.MouseLeft {
+		return false
+	}
+	idx := m.frameIndexAt(msg.X, msg.Y)
+	if idx < 0 {
+		return false
+	}
+	clickedPath := m.frames[idx].Path
+	currentRoot := m.currentRootPath()
+	if m.zoomPath != "" && (clickedPath == currentRoot || hasPathBoundaryPrefix(currentRoot, clickedPath)) {
+		for steps := 0; steps < len(m.zoomStack)+1 && m.currentRootPath() != clickedPath; steps++ {
+			m.zoomUndo()
+		}
+		if sel := m.frameIndexByPath(clickedPath); sel >= 0 {
+			m.selectedIdx = sel
+		}
+		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+		return true
+	}
+	m.selectedIdx = idx
+	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+	m.zoomIn()
+	return true
+}
+
+func (m Model) frameIndexAt(x, y int) int {
+	if len(m.frames) == 0 || m.width <= 0 || m.height <= 0 {
+		return -1
+	}
+	if x < 0 || x >= m.width || y < 0 {
+		return -1
+	}
+
+	extraLines := 1 // selection status line
+	if m.showHelp {
+		extraLines++
+	}
+	renderHeight := m.height - extraLines
+	if renderHeight < 3 {
+		renderHeight = 3
+	}
+	availableRows := renderHeight - 2 // flame toolbar + frame-status line
+	if availableRows < 1 {
+		return -1
+	}
+
+	// Row 0 is flame toolbar, rows 1..availableRows are bars, last row is status.
+	if y < 1 || y > availableRows {
+		return -1
+	}
+	dataRow := y - 1
+
+	maxRow := maxFrameRowForSet(m.frames, nil)
+	barHeight := computeBarHeight(availableRows, maxRow+1, maxBarVisualHeight)
+	visibleDepthRows := availableRows / barHeight
+	if visibleDepthRows < 1 {
+		visibleDepthRows = 1
+	}
+	rowOffset := 0
+	if maxRow+1 > visibleDepthRows {
+		rowOffset = maxRow + 1 - visibleDepthRows
+	}
+	renderedRows := (maxRow - rowOffset + 1) * barHeight
+	padTop := 0
+	if renderedRows < availableRows {
+		padTop = availableRows - renderedRows
+	}
+	if dataRow < padTop {
+		return -1
+	}
+
+	depthFromTop := (dataRow - padTop) / barHeight
+	targetRow := maxRow - depthFromTop
+
+	best := -1
+	bestWidth := int(^uint(0) >> 1)
+	for idx, frame := range m.frames {
+		if frame.Row != targetRow || frame.Col >= m.width {
+			continue
+		}
+		right := min(m.width, frame.Col+frame.Width)
+		if x < frame.Col || x >= right {
+			continue
+		}
+		if frame.Width < bestWidth {
+			best = idx
+			bestWidth = frame.Width
+		}
+	}
+	return best
+}
+
+func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
+	if len(frames) == 0 || m.snapshot == nil {
+		return frames
+	}
+	parts := strings.Split(m.zoomPath, pathSeparator)
+	if len(parts) <= 1 {
+		return frames
+	}
+
+	lineWidth := m.zoomLineWidth
+	if lineWidth <= 0 {
+		lineWidth = frames[0].Width
+	}
+	lineWidth = min(max(lineWidth, 3), max(3, m.width/3))
+	if lineWidth >= m.width-2 {
+		return frames
+	}
+	gutter := lineWidth + 1
+	if m.width-gutter < minFlameWidth/2 {
+		return frames
+	}
+
+	rowShift := len(parts) - 1
+	out := make([]tuiFrame, 0, len(frames)+len(parts))
+	for _, frame := range frames {
+		if frame.Path == m.zoomPath {
+			continue
+		}
+		frame.Col += gutter
+		frame.Row += rowShift
+		frame.Depth += rowShift
+		out = append(out, frame)
+	}
+
+	rootTotal := snapshotTotal(m.snapshot)
+	for depth := range parts {
+		path := strings.Join(parts[:depth+1], pathSeparator)
+		node := findNodeByPath(m.snapshot, path)
+		total := uint64(0)
+		if node != nil {
+			total = snapshotTotal(node)
+		}
+		percent := 0.0
+		if rootTotal > 0 {
+			percent = 100 * float64(total) / float64(rootTotal)
+		}
+		name := parts[depth]
+		out = append(out, tuiFrame{
+			Name:    name,
+			Col:     0,
+			Row:     depth,
+			Width:   lineWidth,
+			Total:   total,
+			Percent: percent,
+			Fill:    terminalFrameColor(name),
+			Depth:   depth,
+			Path:    path,
+		})
+	}
+	return out
 }

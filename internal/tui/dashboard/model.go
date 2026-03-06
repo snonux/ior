@@ -214,7 +214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.activeTab == TabFlame {
-		next, cmd := m.flamegraphModel.Update(msg)
+		next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
 		m.flamegraphModel = next.(flamegraphtui.Model)
 		return m, cmd
 	}
@@ -834,4 +834,27 @@ func flameViewport(width, height int, showHelp bool) (int, int) {
 		height = 1
 	}
 	return width, height
+}
+
+func translateFlamegraphMsg(msg tea.Msg) tea.Msg {
+	switch mouse := msg.(type) {
+	case tea.MouseClickMsg:
+		m := mouse.Mouse()
+		m.Y -= dashboardTabBarRows
+		return tea.MouseClickMsg(m)
+	case tea.MouseReleaseMsg:
+		m := mouse.Mouse()
+		m.Y -= dashboardTabBarRows
+		return tea.MouseReleaseMsg(m)
+	case tea.MouseMotionMsg:
+		m := mouse.Mouse()
+		m.Y -= dashboardTabBarRows
+		return tea.MouseMotionMsg(m)
+	case tea.MouseWheelMsg:
+		m := mouse.Mouse()
+		m.Y -= dashboardTabBarRows
+		return tea.MouseWheelMsg(m)
+	default:
+		return msg
+	}
 }
