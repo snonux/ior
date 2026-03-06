@@ -210,10 +210,8 @@ type eventLoop struct {
 	filter         *eventFilter
 	enterEvs       map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
 	pendingHandles map[uint32]string      // map of TID to pathname from name_to_handle_at
-	files          map[int32]file.File    // Track all open files by file descriptor.
 	fdTracker      *fdTracker
 	procFdCache    map[uint64]file.FdFile // Cache procfs-resolved metadata for unknown fds.
-	comms          map[uint32]string      // Program or thread name of the current Tid.
 	commResolver   *commResolver
 	prevPairTimes  map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
 	rawHandlers    map[types.EventType]rawEventHandler
@@ -243,10 +241,8 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		filter:         filter,
 		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
-		files:          fdState.files,
 		fdTracker:      fdState,
 		procFdCache:    make(map[uint64]file.FdFile),
-		comms:          commState.comms,
 		commResolver:   commState,
 		prevPairTimes:  make(map[uint32]uint64),
 		rawHandlers:    make(map[types.EventType]rawEventHandler),
@@ -297,7 +293,6 @@ func (e *eventLoop) fdState() *fdTracker {
 	if e.fdTracker.files == nil {
 		e.fdTracker.files = make(map[int32]file.File)
 	}
-	e.files = e.fdTracker.files
 	return e.fdTracker
 }
 
@@ -312,7 +307,6 @@ func (e *eventLoop) commState() *commResolver {
 		e.commResolver.pending = make(map[uint32]struct{})
 	}
 	e.commResolver.ensureLookupConfig()
-	e.comms = e.commResolver.comms
 	return e.commResolver
 }
 

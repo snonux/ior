@@ -123,7 +123,7 @@ func makeCommPropagationTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected no comm name for different thread but got '%s'", ep.Comm)
 		}
 		// Verify comm map doesn't have entry for this tid
-		if _, ok := el.comms[differentTid]; ok {
+		if _, ok := el.cachedComm(differentTid); ok {
 			t.Errorf("Expected no comm entry for tid %d but one was found", differentTid)
 		}
 	})
@@ -438,8 +438,8 @@ func TestCommFilterToggle(t *testing.T) {
 				commFilterEnable: false,
 			},
 			enterEvs:      make(map[uint32]*event.Pair),
-			files:         make(map[int32]file.File),
-			comms:         make(map[uint32]string),
+			fdTracker:     newFDTracker(make(map[int32]file.File)),
+			commResolver:  newCommResolver(make(map[uint32]string)),
 			prevPairTimes: make(map[uint32]uint64),
 			printCb:       func(ep *event.Pair) { outCh <- ep },
 			done:          make(chan struct{}),
@@ -478,8 +478,8 @@ func TestCommFilterToggle(t *testing.T) {
 				commFilterBytes:  []byte("test"),
 			},
 			enterEvs:      make(map[uint32]*event.Pair),
-			files:         make(map[int32]file.File),
-			comms:         make(map[uint32]string),
+			fdTracker:     newFDTracker(make(map[int32]file.File)),
+			commResolver:  newCommResolver(make(map[uint32]string)),
 			prevPairTimes: make(map[uint32]uint64),
 			printCb:       func(ep *event.Pair) { outCh <- ep },
 			done:          make(chan struct{}),
@@ -514,8 +514,8 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 			pathFilterBytes:  []byte(pathFilter),
 		},
 		enterEvs:      make(map[uint32]*event.Pair),
-		files:         make(map[int32]file.File),
-		comms:         make(map[uint32]string),
+		fdTracker:     newFDTracker(make(map[int32]file.File)),
+		commResolver:  newCommResolver(make(map[uint32]string)),
 		prevPairTimes: make(map[uint32]uint64),
 		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		done:          make(chan struct{}),
