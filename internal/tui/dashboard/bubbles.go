@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"hash/fnv"
 	"image/color"
 	"math"
 	"path/filepath"
@@ -51,6 +52,8 @@ type bubbleNode struct {
 	ySpring      harmonica.Spring
 
 	targetRadius float64
+	anchorX      float64
+	anchorY      float64
 	targetX      float64
 	targetY      float64
 
@@ -61,6 +64,11 @@ type bubbleNode struct {
 	velocityRadius float64
 	velocityX      float64
 	velocityY      float64
+
+	driftPhase float64
+	driftSpeed float64
+	driftAmpX  float64
+	driftAmpY  float64
 }
 
 type bubbleCell struct {
@@ -78,6 +86,7 @@ type bubbleChart struct {
 	animating  bool
 	statusHint string
 	isDark     bool
+	driftTime  float64
 }
 
 func newBubbleChart() bubbleChart {
@@ -160,6 +169,8 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 			Bytes:        target.Bytes,
 			Value:        target.Value,
 			targetRadius: target.targetRadius,
+			anchorX:      target.targetX,
+			anchorY:      target.targetY,
 			targetX:      target.targetX,
 			targetY:      target.targetY,
 			radiusSpring: harmonica.NewSpring(harmonica.FPS(bubbleFPS), bubbleAngularVelocity, bubbleDamping),
@@ -173,15 +184,26 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 			node.velocityRadius = prev.velocityRadius
 			node.velocityX = prev.velocityX
 			node.velocityY = prev.velocityY
+			node.driftPhase = prev.driftPhase
+			node.driftSpeed = prev.driftSpeed
+			node.driftAmpX = prev.driftAmpX
+			node.driftAmpY = prev.driftAmpY
 			// New metrics or topology can otherwise produce stale springs.
 			if node.radius == 0 {
 				node.radius = target.targetRadius
+			}
+			if node.driftSpeed == 0 {
+				c.initNodeDrift(&node)
+			} else {
+				c.updateNodeDriftAmplitude(&node)
 			}
 		} else {
 			node.radius = target.targetRadius
 			node.x = target.targetX
 			node.y = target.targetY
+			c.initNodeDrift(&node)
 		}
+		node.applyDrift(c.driftTime, c.width, c.height)
 		next = append(next, node)
 	}
 	c.nodes = next
@@ -239,9 +261,12 @@ func (c *bubbleChart) Tick(delta float64) bool {
 	if delta <= 0 {
 		delta = baseDelta
 	}
+	c.driftTime += delta
+
 	active := false
 	for idx := range c.nodes {
 		node := &c.nodes[idx]
+		node.applyDrift(c.driftTime, c.width, c.height)
 		if delta != baseDelta {
 			node.radiusSpring = harmonica.NewSpring(delta, bubbleAngularVelocity, bubbleDamping)
 			node.xSpring = harmonica.NewSpring(delta, bubbleAngularVelocity, bubbleDamping)
@@ -276,6 +301,54 @@ func (c *bubbleChart) nodeAnimating(node bubbleNode) bool {
 	return false
 }
 
+func (c *bubbleChart) initNodeDrift(node *bubbleNode) {
+	if node == nil {
+		return
+	}
+	h := stableHash(node.ID)
+	node.driftPhase = float64(h%628) / 100.0
+	node.driftSpeed = 0.12 + float64((h>>8)%35)/1000.0
+	c.updateNodeDriftAmplitude(node)
+}
+
+func (c *bubbleChart) updateNodeDriftAmplitude(node *bubbleNode) {
+	if node == nil {
+		return
+	}
+	h := stableHash(node.ID)
+	baseAmp := clampFloat(node.targetRadius*0.32, 0.45, 1.8)
+	node.driftAmpX = baseAmp * (0.85 + float64((h>>16)%31)/100.0)
+	node.driftAmpY = baseAmp * 0.75 * (0.85 + float64((h>>24)%31)/100.0)
+}
+
+func (n *bubbleNode) applyDrift(t float64, width, height int) {
+	if n == nil {
+		return
+	}
+	phase := n.driftPhase + t*n.driftSpeed
+	n.targetX = n.anchorX + math.Sin(phase)*n.driftAmpX
+	n.targetY = n.anchorY + math.Cos(phase*0.91+0.37)*n.driftAmpY
+
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 18
+	}
+	minX := n.targetRadius + 1.0
+	maxX := float64(width-1) - n.targetRadius - 1.0
+	minY := n.targetRadius
+	maxY := float64(height-1) - n.targetRadius
+	n.targetX = clampFloat(n.targetX, minX, maxX)
+	n.targetY = clampFloat(n.targetY, minY, maxY)
+}
+
+func stableHash(value string) uint32 {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(value))
+	return hasher.Sum32()
+}
+
 func (c *bubbleChart) MoveSelection(delta int) bool {
 	if len(c.nodes) == 0 {
 		return false
@@ -294,6 +367,10 @@ func (c *bubbleChart) MoveSelection(delta int) bool {
 	return true
 }
 
+func (c bubbleChart) HasNodes() bool {
+	return len(c.nodes) > 0
+}
+
 func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 	if width <= 0 {
 		width = c.width
@@ -307,7 +384,7 @@ func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 	if height <= 0 {
 		height = 18
 	}
-	header := fmt.Sprintf("%s bubbles | metric:%s | v table | b metric | j/k select", tabLabel, c.metricLabel())
+	header := fmt.Sprintf("%s bubbles | metric:%s | v mode | b metric | j/k select", tabLabel, c.metricLabel())
 	if len(c.nodes) == 0 {
 		body := "No data yet."
 		if c.statusHint != "" {
