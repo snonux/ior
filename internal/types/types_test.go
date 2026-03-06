@@ -1,6 +1,7 @@
 package types
 
 import (
+	"fmt"
 	"syscall"
 	"testing"
 )
@@ -154,6 +155,14 @@ func TestEqualsDifferentValues(t *testing.T) {
 
 	assertEquals(t, false, nullEv1.Equals(&nullEv2))
 	t.Log("Equals returns false for same type but different values")
+}
+
+func TestTraceIdUnknownFallback(t *testing.T) {
+	unknown := TraceId(0xFFFFFFFF)
+	want := fmt.Sprintf("unknown_trace_id_%d", unknown)
+
+	assertEquals(t, want, unknown.String())
+	assertEquals(t, want, unknown.Name())
 }
 
 func assertEquals[T comparable](t *testing.T, a, b T) {
