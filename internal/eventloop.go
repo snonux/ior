@@ -13,7 +13,6 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
-	"ior/internal/flamegraph"
 	"ior/internal/types"
 	. "ior/internal/types"
 )
@@ -21,18 +20,13 @@ import (
 const sysEnterNameToHandleAtName = "name_to_handle_at"
 
 type eventLoopConfig struct {
-	pidFilter        int
-	commFilter       string
-	pathFilter       string
-	liveFlamegraph   bool
-	liveInterval     time.Duration
-	liveOpenCommand  string
-	collapsedFields  []string
-	countField       string
-	flamegraphName   string
-	flamegraphEnable bool
-	pprofEnable      bool
-	plainMode        bool
+	pidFilter       int
+	commFilter      string
+	pathFilter      string
+	collapsedFields []string
+	countField      string
+	pprofEnable     bool
+	plainMode       bool
 }
 
 type fdTracker struct {
@@ -174,8 +168,6 @@ type eventLoop struct {
 	commResolver   *commResolver
 	prevPairTimes  map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
 	rawHandlers    map[EventType]rawEventHandler
-	flamegraph     flamegraph.IorDataCollector // Storing all paths in a map structure for analysis
-	liveTrie       *flamegraph.LiveTrie
 	printCb        func(ep *event.Pair) // Callback to print the event
 	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
 	cfg            eventLoopConfig
@@ -205,14 +197,10 @@ func newEventLoop(cfg eventLoopConfig) *eventLoop {
 		prevPairTimes:  make(map[uint32]uint64),
 		rawHandlers:    make(map[EventType]rawEventHandler),
 		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		flamegraph:     flamegraph.New(cfg.flamegraphName),
 		cfg:            cfg,
 		done:           make(chan struct{}),
 	}
 	el.initRawHandlers()
-	if cfg.liveFlamegraph {
-		el.liveTrie = flamegraph.NewLiveTrie(cfg.collapsedFields, cfg.countField)
-	}
 	el.configureOutputCallback()
 	el.seedTrackedPidComm()
 	return el
@@ -244,14 +232,6 @@ func (e *eventLoop) commState() *commResolver {
 
 func (e *eventLoop) configureOutputCallback() {
 	switch {
-	case e.cfg.flamegraphEnable:
-		e.printCb = func(ep *event.Pair) {
-			e.flamegraph.Ch <- ep
-		}
-	case e.liveTrie != nil:
-		e.printCb = func(ep *event.Pair) {
-			e.liveTrie.Ingest(ep)
-		}
 	case e.cfg.pprofEnable:
 		e.printCb = func(ep *event.Pair) {
 			ep.Recycle()
@@ -282,29 +262,10 @@ func (e *eventLoop) stats() string {
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 
-	if e.liveTrie != nil {
-		fmt.Println("Starting live flamegraph server")
-		go func() {
-			liveOptions := flamegraph.LiveServerOptions{
-				OpenCommand: e.cfg.liveOpenCommand,
-			}
-			if e.warningCb != nil {
-				liveOptions.WarningCb = e.notifyWarning
-			}
-			if err := flamegraph.ServeLiveWithOptions(ctx, e.liveTrie, e.cfg.liveInterval, liveOptions); err != nil && ctx.Err() == nil {
-				fmt.Println("Live flamegraph server error:", err)
-			}
-		}()
-	}
-
-	if e.cfg.flamegraphEnable {
-		fmt.Println("Collecting flame graph stats, press Ctrl+C to stop")
-		e.flamegraph.Start(ctx)
-	}
 	if e.cfg.pprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
 	}
-	if e.cfg.plainMode && !e.cfg.flamegraphEnable && !e.cfg.pprofEnable {
+	if e.cfg.plainMode && !e.cfg.pprofEnable {
 		fmt.Println(event.EventStreamHeader)
 	}
 
@@ -315,16 +276,6 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	for ep := range e.events(ctx, rawCh) {
 		e.printCb(ep)
 		e.numSyscallsAfterFilter++
-	}
-
-	if e.cfg.flamegraphEnable {
-		fmt.Println("Waiting for flamegraph")
-		if err := <-e.flamegraph.Done; err != nil {
-			e.notifyWarning(fmt.Sprintf("Flamegraph generation failed: %v", err))
-			if e.warningCb == nil {
-				fmt.Println("Flamegraph generation failed:", err)
-			}
-		}
 	}
 }
 

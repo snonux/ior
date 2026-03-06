@@ -38,15 +38,12 @@ func parseForTest(t *testing.T, args ...string) (Flags, error) {
 	return cfg, err
 }
 
-func TestParseLiveFlagsAndInterval(t *testing.T) {
-	cfg, err := parseForTest(t, "-live", "-live-interval", "200ms", "-pid", "1234")
+func TestParseLiveIntervalAndPID(t *testing.T) {
+	cfg, err := parseForTest(t, "-live-interval", "200ms", "-pid", "1234")
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
 
-	if !cfg.LiveFlamegraph {
-		t.Fatalf("expected -live to enable live mode")
-	}
 	if cfg.LiveInterval != 200*time.Millisecond {
 		t.Fatalf("live interval = %v, want %v", cfg.LiveInterval, 200*time.Millisecond)
 	}
@@ -55,9 +52,6 @@ func TestParseLiveFlagsAndInterval(t *testing.T) {
 	}
 	if got := Get().GetPidFilter(); got != 1234 {
 		t.Fatalf("Get().GetPidFilter() = %d, want 1234", got)
-	}
-	if cfg.OpenCommand != "" {
-		t.Fatalf("expected empty open command by default")
 	}
 }
 
@@ -83,47 +77,8 @@ func TestParseLiveDefaults(t *testing.T) {
 		t.Fatalf("parse returned error: %v", err)
 	}
 
-	if cfg.LiveFlamegraph {
-		t.Fatalf("expected live mode disabled by default")
-	}
 	if cfg.LiveInterval != 200*time.Millisecond {
 		t.Fatalf("default live interval = %v, want %v", cfg.LiveInterval, 200*time.Millisecond)
-	}
-	if cfg.OpenCommand != "" {
-		t.Fatalf("expected empty open command by default")
-	}
-}
-
-func TestParseOpenFlags(t *testing.T) {
-	cfg, err := parseForTest(t, "-live", "-open", "chromium --new-window")
-	if err != nil {
-		t.Fatalf("parse returned error: %v", err)
-	}
-	if !cfg.LiveFlamegraph {
-		t.Fatalf("expected live mode enabled")
-	}
-	if cfg.OpenCommand != "chromium --new-window" {
-		t.Fatalf("open command = %q, want %q", cfg.OpenCommand, "chromium --new-window")
-	}
-}
-
-func TestParseFlamegraphJSONFlag(t *testing.T) {
-	cfg, err := parseForTest(t, "-flamegraphJson")
-	if err != nil {
-		t.Fatalf("parse returned error: %v", err)
-	}
-	if !cfg.FlamegraphJSON {
-		t.Fatalf("expected -flamegraphJson to enable JSON export")
-	}
-}
-
-func TestParseIorWatchIntervalFlag(t *testing.T) {
-	cfg, err := parseForTest(t, "-iorWatchInterval", "2s")
-	if err != nil {
-		t.Fatalf("parse returned error: %v", err)
-	}
-	if cfg.IorWatchInterval != 2*time.Second {
-		t.Fatalf("ior watch interval = %v, want %v", cfg.IorWatchInterval, 2*time.Second)
 	}
 }
 

@@ -114,99 +114,9 @@ func attachTracepointsWith(module tracepointModule, shouldAttach func(string) bo
 }
 
 // Run is the main entry point for the ior binary.
-//
-// When -ior=<trace.ior.zst> is provided it reads the compressed trace data, generates
-// a native flamegraph SVG (using the selected fields and count metric) and then serves
-// it via an embedded HTTP server. Without -ior, Run either executes trace mode or
-// starts the TUI, depending on the active flags.
 func Run() error {
 	flags.PrintVersion()
-	cfg := flags.Get()
-	if cfg.TestFlames && cfg.IorDataFile != "" {
-		return errors.New("--testflames and -ior are mutually exclusive")
-	}
-	if cfg.TestLiveFlames && cfg.IorDataFile != "" {
-		return errors.New("--testliveflames and -ior are mutually exclusive")
-	}
-	iorFile := cfg.IorDataFile
-	var noTraceRun bool
-
-	if iorFile != "" {
-		if cfg.IorWatchInterval < 0 {
-			return errors.New("-iorWatchInterval must be >= 0")
-		}
-		noTraceRun = true
-		native := flamegraph.NewNativeSVG(cfg.CollapsedFields, cfg.CountField)
-		svgFile, err := writeIorOutputs(native, iorFile, cfg.FlamegraphJSON)
-		if err != nil {
-			return err
-		}
-
-		done := make(chan struct{})
-		defer close(done)
-		if cfg.IorWatchInterval > 0 {
-			go watchIorOutputs(done, cfg.IorWatchInterval, iorFile, native, cfg.FlamegraphJSON)
-			err = flamegraph.ServeSVGAutoReload(svgFile, cfg.IorWatchInterval)
-		} else {
-			err = flamegraph.ServeSVG(svgFile)
-		}
-		if err != nil {
-			return err
-		}
-	}
-
-	if noTraceRun {
-		return nil
-	}
-	return dispatchRun(cfg)
-}
-
-func writeIorOutputs(native flamegraph.NativeSVG, iorFile string, writeJSON bool) (string, error) {
-	svgFile, err := native.WriteSVGFromFile(iorFile)
-	if err != nil {
-		return "", err
-	}
-	if !writeJSON {
-		return svgFile, nil
-	}
-	if _, err := native.WriteJSONFromFile(iorFile); err != nil {
-		return "", err
-	}
-	return svgFile, nil
-}
-
-func watchIorOutputs(done <-chan struct{}, interval time.Duration, iorFile string,
-	native flamegraph.NativeSVG, writeJSON bool) {
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	lastMod := fileModTime(iorFile)
-
-	for {
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
-			mod := fileModTime(iorFile)
-			if !mod.After(lastMod) {
-				continue
-			}
-			if _, err := writeIorOutputs(native, iorFile, writeJSON); err != nil {
-				_, _ = fmt.Printf("Failed to refresh flamegraph outputs: %v\n", err)
-				continue
-			}
-			lastMod = mod
-			_, _ = fmt.Printf("Refreshed flamegraph outputs at %s\n", time.Now().Format(time.RFC3339))
-		}
-	}
-}
-
-func fileModTime(path string) time.Time {
-	stat, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}
-	}
-	return stat.ModTime()
+	return dispatchRun(flags.Get())
 }
 
 func dispatchRun(cfg flags.Flags) error {
@@ -226,23 +136,14 @@ func dispatchRun(cfg flags.Flags) error {
 }
 
 func validateRunConfig(cfg flags.Flags) error {
-	if cfg.TestFlames && (cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph) {
-		return errors.New("--testflames cannot be combined with -plain, -flamegraph, or -live")
+	if cfg.TestFlames && cfg.PlainMode {
+		return errors.New("--testflames cannot be combined with -plain")
 	}
-	if cfg.TestLiveFlames && (cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph) {
-		return errors.New("--testliveflames cannot be combined with -plain, -flamegraph, or -live")
+	if cfg.TestLiveFlames && cfg.PlainMode {
+		return errors.New("--testliveflames cannot be combined with -plain")
 	}
 	if cfg.TestFlames && cfg.TestLiveFlames {
 		return errors.New("--testflames and --testliveflames are mutually exclusive")
-	}
-	if cfg.LiveFlamegraph && cfg.FlamegraphEnable {
-		return errors.New("-live and -flamegraph are mutually exclusive")
-	}
-	if cfg.IorWatchInterval > 0 && cfg.IorDataFile == "" {
-		return errors.New("-iorWatchInterval requires -ior")
-	}
-	if cfg.IorWatchInterval < 0 {
-		return errors.New("-iorWatchInterval must be >= 0")
 	}
 	return nil
 }
@@ -315,7 +216,7 @@ func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, 
 }
 
 func shouldRunTraceMode(cfg flags.Flags) bool {
-	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph
+	return cfg.PlainMode
 }
 
 func tuiTraceStarterFromRunTrace(
@@ -385,18 +286,13 @@ func newEventLoopConfig(cfg flags.Flags) eventLoopConfig {
 	fields := make([]string, len(cfg.CollapsedFields))
 	copy(fields, cfg.CollapsedFields)
 	return eventLoopConfig{
-		pidFilter:        cfg.PidFilter,
-		commFilter:       cfg.CommFilter,
-		pathFilter:       cfg.PathFilter,
-		liveFlamegraph:   cfg.LiveFlamegraph,
-		liveInterval:     cfg.LiveInterval,
-		liveOpenCommand:  cfg.OpenCommand,
-		collapsedFields:  fields,
-		countField:       cfg.CountField,
-		flamegraphName:   cfg.FlamegraphName,
-		flamegraphEnable: cfg.FlamegraphEnable,
-		pprofEnable:      cfg.PprofEnable,
-		plainMode:        cfg.PlainMode,
+		pidFilter:       cfg.PidFilter,
+		commFilter:      cfg.CommFilter,
+		pathFilter:      cfg.PathFilter,
+		collapsedFields: fields,
+		countField:      cfg.CountField,
+		pprofEnable:     cfg.PprofEnable,
+		plainMode:       cfg.PlainMode,
 	}
 }
 
@@ -584,7 +480,7 @@ func signalTraceStarted(started chan<- struct{}) {
 }
 
 func shouldAutoStopByDuration(cfg flags.Flags) bool {
-	return cfg.PlainMode || cfg.FlamegraphEnable || cfg.LiveFlamegraph
+	return cfg.PlainMode
 }
 
 func profilingFilesForMode(tuiMode bool) (cpuProfilePath, memProfilePath, execTracePath string, execTraceDuration time.Duration) {

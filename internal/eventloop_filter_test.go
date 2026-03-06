@@ -8,7 +8,6 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
-	"ior/internal/flamegraph"
 	"ior/internal/types"
 )
 
@@ -443,7 +442,6 @@ func TestCommFilterToggle(t *testing.T) {
 			comms:         make(map[uint32]string),
 			prevPairTimes: make(map[uint32]uint64),
 			printCb:       func(ep *event.Pair) { outCh <- ep },
-			flamegraph:    flamegraph.New(),
 			done:          make(chan struct{}),
 		}
 		go el.run(ctx, inCh)
@@ -483,7 +481,6 @@ func TestCommFilterToggle(t *testing.T) {
 			comms:         make(map[uint32]string),
 			prevPairTimes: make(map[uint32]uint64),
 			printCb:       func(ep *event.Pair) { outCh <- ep },
-			flamegraph:    flamegraph.New(),
 			done:          make(chan struct{}),
 		}
 		go el.run(ctx, inCh)
@@ -518,7 +515,6 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 		comms:         make(map[uint32]string),
 		prevPairTimes: make(map[uint32]uint64),
 		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		flamegraph:    flamegraph.New(),
 		done:          make(chan struct{}),
 	}
 	return el

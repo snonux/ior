@@ -5,8 +5,8 @@
 Add a **7th dashboard tab** (`7:Flame`) that renders a live, interactive flamegraph
 directly in the terminal using lipgloss for layout/styling and **Charm Harmonica**
 for smooth spring-based animations on both zoom transitions and live data refresh.
-The tab consumes data from an embedded `LiveTrie` (same as the web live mode) and
-provides full feature parity with the browser version.
+The tab consumes data from an embedded `LiveTrie` and
+provides interactive flamegraph navigation directly in-terminal.
 
 ## Architecture
 
@@ -145,8 +145,7 @@ Terminal flamegraphs use a **cell-based layout** rather than pixel coordinates:
    - Use lipgloss background color fill with the existing `frameColor()` warm palette
    - Frame text = truncated function/path name that fits within the frame width
    - Selected frame gets a distinct border/highlight style (e.g., bold + inverted)
-   - Search-matched frames get a different highlight color (e.g., red background like
-     the web version's `matchColor`)
+   - Search-matched frames get a different highlight color (e.g., red background)
 
 3. **Compositing**: Use `lipgloss.Place()` or the new lipgloss v2 compositor/canvas
    to layer frames at their (col, row) positions. Each row of the flamegraph is
@@ -282,7 +281,7 @@ distinct colors for uncategorized frames.
 
 ### 10. Field Order Cycling
 
-Same preset cycle as the web version:
+Preset cycle:
 ```go
 fieldPresets = [][]string{
     {"comm", "path", "tracepoint"},
@@ -330,8 +329,7 @@ sys_read (1,234 calls, 45.2%) - /usr/bin/myapp > /dev/sda > sys_enter_read
 ### 14. Risks and Mitigations
 
 1. **Performance at high event rates**: The `LiveTrie.Ingest()` call adds overhead
-   to the hot path. Mitigation: already designed for production rates (used in
-   `-live` mode). TUI render is decoupled via version polling.
+   to the hot path. Mitigation: TUI render is decoupled via version polling.
 
 2. **Terminal width too narrow**: Flamegraphs with many shallow frames may not
    render meaningfully in 80-column terminals. Mitigation: cull frames below 1 cell,

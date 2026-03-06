@@ -61,60 +61,11 @@ make
 sudo cp -v ./libelf/libelf.a /usr/lib64/
 ```
 
-## Native Flamegraph Generation
+## TUI Flamegraphs
 
-Flamegraphs are generated natively by `ior` from `.ior.zst` data files; no external flamegraph tool is required.
-When `-fields` is omitted, the default stack order is `comm,path,tracepoint` (bottom to top).
-To change grouping order, pass `-fields` explicitly in the desired order.
-
-```sh
-./ior -ior=trace.ior.zst -fields=comm,path,tracepoint -count=count
-```
-
-This generates an SVG and starts an embedded web server. The terminal prints a URL like:
-
-```text
-Flamegraph available at http://HOSTNAME:PORT/abs/path/to.svg
-```
-
-For experimental WebAssembly frontends, you can also emit a flamegraph JSON tree:
-
-```sh
-./ior -ior=trace.ior.zst -flamegraphJson
-```
-
-This writes `<trace>.<fields>-by-<count>.json` next to the SVG.
-
-To keep the served flamegraph changing as the `.ior.zst` file is updated, enable watch mode:
-
-```sh
-./ior -ior=trace.ior.zst -iorWatchInterval=2s
-```
-
-This polls the input file for modifications, regenerates SVG/JSON outputs, and serves an auto-reloading viewer at `/`.
-
-## Live Flamegraph Mode
-
-Run live mode (requires root privileges):
-
-```sh
-sudo ./ior -live -pid <PID> -live-interval 200ms -duration 300
-```
-
-The terminal prints a URL like:
-
-```text
-Live flamegraph available at http://HOSTNAME:PORT/
-```
-
-Live controls:
-
-- `Space`: pause/resume incoming updates.
-- `/`: search frame labels.
-- `Escape`: reset zoom and search highlighting.
-- `r`: reset baseline (clears all live aggregated stats on the server and restarts from zero).
-- `Reset Baseline` button: same behavior as `r`.
-- `Order: ...` toggle button: cycles stack order presets on the fly and re-baselines live aggregation for the new order.
+Flamegraphs are available only inside the TUI dashboard.
+Use `-fields` to change the stack order and `-count` to choose the metric.
+The default stack order is `comm,path,tracepoint` (bottom to top).
 
 ## TUI Hotkeys
 

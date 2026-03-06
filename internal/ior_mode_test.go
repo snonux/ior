@@ -25,22 +25,10 @@ func TestShouldRunTraceMode(t *testing.T) {
 		t.Fatalf("expected plain mode to use trace mode")
 	}
 
-	withFlamegraph := base
-	withFlamegraph.FlamegraphEnable = true
-	if !shouldRunTraceMode(withFlamegraph) {
-		t.Fatalf("expected flamegraph mode to use trace mode")
-	}
-
 	withPprof := base
 	withPprof.PprofEnable = true
 	if shouldRunTraceMode(withPprof) {
 		t.Fatalf("expected pprof flag alone to keep TUI mode")
-	}
-
-	withLive := base
-	withLive.LiveFlamegraph = true
-	if !shouldRunTraceMode(withLive) {
-		t.Fatalf("expected live mode to use trace mode")
 	}
 
 	withTestFlames := base
@@ -68,23 +56,12 @@ func TestShouldAutoStopByDuration(t *testing.T) {
 		t.Fatalf("expected plain mode to auto-stop by duration")
 	}
 
-	withFlamegraph := base
-	withFlamegraph.FlamegraphEnable = true
-	if !shouldAutoStopByDuration(withFlamegraph) {
-		t.Fatalf("expected flamegraph mode to auto-stop by duration")
-	}
-
 	withPprof := base
 	withPprof.PprofEnable = true
 	if shouldAutoStopByDuration(withPprof) {
 		t.Fatalf("expected pprof flag alone not to auto-stop by duration")
 	}
 
-	withLive := base
-	withLive.LiveFlamegraph = true
-	if !shouldAutoStopByDuration(withLive) {
-		t.Fatalf("expected live mode to auto-stop by duration")
-	}
 }
 
 func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
@@ -230,45 +207,6 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	}
 }
 
-func TestDispatchRunRejectsLiveAndFlamegraph(t *testing.T) {
-	origRunTrace := runTraceFn
-	origRunTUI := runTUIFn
-	origRunTUITestFlames := runTUITestFlamesFn
-	origRunTUITestLiveFlames := runTUITestLiveFlamesFn
-	defer func() {
-		runTraceFn = origRunTrace
-		runTUIFn = origRunTUI
-		runTUITestFlamesFn = origRunTUITestFlames
-		runTUITestLiveFlamesFn = origRunTUITestLiveFlames
-	}()
-
-	runTraceFn = func() error {
-		t.Fatalf("runTraceFn should not be called for invalid flag combos")
-		return nil
-	}
-	runTUIFn = func(tui.TraceStarter) error {
-		t.Fatalf("runTUIFn should not be called for invalid flag combos")
-		return nil
-	}
-	runTUITestFlamesFn = func(tui.TraceStarter) error {
-		t.Fatalf("runTUITestFlamesFn should not be called for invalid flag combos")
-		return nil
-	}
-	runTUITestLiveFlamesFn = func(tui.TraceStarter) error {
-		t.Fatalf("runTUITestLiveFlamesFn should not be called for invalid flag combos")
-		return nil
-	}
-
-	cfg := flags.Flags{LiveFlamegraph: true, FlamegraphEnable: true}
-	err := dispatchRun(cfg)
-	if err == nil {
-		t.Fatalf("expected error for -live with -flamegraph")
-	}
-	if err.Error() != "-live and -flamegraph are mutually exclusive" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 func TestDispatchRunUsesTestFlamesModeWhenRequested(t *testing.T) {
 	origRunTrace := runTraceFn
 	origRunTUI := runTUIFn
@@ -369,35 +307,13 @@ func TestDispatchRunUsesTestLiveFlamesModeWhenRequested(t *testing.T) {
 	}
 }
 
-func TestValidateRunConfigRejectsIorWatchWithoutIor(t *testing.T) {
-	cfg := flags.Flags{IorWatchInterval: time.Second}
-	err := validateRunConfig(cfg)
-	if err == nil {
-		t.Fatalf("expected error for -iorWatchInterval without -ior")
-	}
-	if err.Error() != "-iorWatchInterval requires -ior" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateRunConfigRejectsNegativeIorWatchInterval(t *testing.T) {
-	cfg := flags.Flags{IorWatchInterval: -time.Second}
-	err := validateRunConfig(cfg)
-	if err == nil {
-		t.Fatalf("expected error for negative -iorWatchInterval")
-	}
-	if err.Error() != "-iorWatchInterval must be >= 0" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 func TestValidateRunConfigRejectsTestFlamesWithTraceFlags(t *testing.T) {
 	cfg := flags.Flags{TestFlames: true, PlainMode: true}
 	err := validateRunConfig(cfg)
 	if err == nil {
 		t.Fatalf("expected error for --testflames with trace-mode flags")
 	}
-	if err.Error() != "--testflames cannot be combined with -plain, -flamegraph, or -live" {
+	if err.Error() != "--testflames cannot be combined with -plain" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -408,7 +324,7 @@ func TestValidateRunConfigRejectsTestLiveFlamesWithTraceFlags(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for --testliveflames with trace-mode flags")
 	}
-	if err.Error() != "--testliveflames cannot be combined with -plain, -flamegraph, or -live" {
+	if err.Error() != "--testliveflames cannot be combined with -plain" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
