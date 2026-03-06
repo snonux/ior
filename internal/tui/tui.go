@@ -65,6 +65,7 @@ type TraceRuntimeBindings interface {
 }
 
 type runtimeBindingsContextKey struct{}
+type traceFiltersContextKey struct{}
 
 type runtimeBindings struct {
 	mu sync.RWMutex
@@ -73,6 +74,11 @@ type runtimeBindings struct {
 	streamSource   *eventstream.RingBuffer
 	liveTrieSource *coreflamegraph.LiveTrie
 	probeManager   ProbeManager
+}
+
+type traceFilters struct {
+	pidFilter int
+	tidFilter int
 }
 
 func newRuntimeBindings() *runtimeBindings {
@@ -152,6 +158,21 @@ func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool
 	return bindings, true
 }
 
+// ContextWithTraceFilters stores the active PID/TID filters for the trace starter.
+func ContextWithTraceFilters(ctx context.Context, pidFilter, tidFilter int) context.Context {
+	filters := traceFilters{pidFilter: pidFilter, tidFilter: tidFilter}
+	return context.WithValue(ctx, traceFiltersContextKey{}, filters)
+}
+
+// TraceFiltersFromContext returns the active PID/TID filters when provided by the TUI model.
+func TraceFiltersFromContext(ctx context.Context) (pidFilter, tidFilter int, ok bool) {
+	filters, ok := ctx.Value(traceFiltersContextKey{}).(traceFilters)
+	if !ok {
+		return 0, 0, false
+	}
+	return filters.pidFilter, filters.tidFilter, true
+}
+
 // Run starts the TUI program in alternate screen mode.
 func Run() error {
 	return RunWithTraceStarter(defaultTraceStarter)
@@ -159,8 +180,12 @@ func Run() error {
 
 // RunWithTraceStarter starts the TUI program with a custom trace starter.
 func RunWithTraceStarter(starter TraceStarter) error {
-	cfg := flags.Get()
-	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TUIExportEnable, starter)
+	return RunWithTraceStarterConfig(flags.Get(), starter)
+}
+
+// RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
+func RunWithTraceStarterConfig(cfg flags.Flags, starter TraceStarter) error {
+	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -169,8 +194,12 @@ func RunWithTraceStarter(starter TraceStarter) error {
 // RunTestFlamesWithTraceStarter starts the TUI directly on dashboard/flame view
 // with a synthetic static flamegraph source.
 func RunTestFlamesWithTraceStarter(starter TraceStarter) error {
-	cfg := flags.Get()
-	model := newModelWithRuntimeConfig(1, 1, cfg.TUIExportEnable, starter)
+	return RunTestFlamesWithTraceStarterConfig(flags.Get(), starter)
+}
+
+// RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
+func RunTestFlamesWithTraceStarterConfig(cfg flags.Flags, starter TraceStarter) error {
+	model := newModelWithRuntimeConfig(1, 1, -1, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -201,6 +230,7 @@ type Model struct {
 	traceStop  context.CancelFunc
 
 	pidFilter     int
+	tidFilter     int
 	exportEnabled bool
 	isDark        bool
 	focused       bool
@@ -220,11 +250,15 @@ type Model struct {
 
 // NewModel creates the top-level TUI model.
 func NewModel(initialPID int, startTrace TraceStarter) Model {
-	cfg := flags.Get()
-	return newModelWithRuntimeConfig(initialPID, cfg.PidFilter, cfg.TUIExportEnable, startTrace)
+	return NewModelWithConfig(flags.Get(), initialPID, startTrace)
 }
 
-func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
+// NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
+func NewModelWithConfig(cfg flags.Flags, initialPID int, startTrace TraceStarter) Model {
+	return newModelWithRuntimeConfig(initialPID, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
+}
+
+func newModelWithRuntimeConfig(initialPID, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
 	common.ApplyPalette(true)
 	syncStylesFromCommon()
 
@@ -245,6 +279,10 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 	if initialPID > 0 {
 		pidFilter = selectedPIDFilter(initialPID)
 	}
+	tidFilter := selectedPIDFilter(startupTidFilter)
+	if initialPID > 0 {
+		tidFilter = -1
+	}
 	dashboard.SetPidFilter(pidFilter)
 
 	model := Model{
@@ -258,13 +296,13 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter int, exportEnabled b
 		spin:          spin,
 		startTrace:    startTrace,
 		pidFilter:     pidFilter,
+		tidFilter:     tidFilter,
 		exportEnabled: exportEnabled,
 		isDark:        true,
 		focused:       true,
 	}
 
 	if initialPID > 0 {
-		flags.SetPidFilter(initialPID)
 		model.screen = ScreenDashboard
 		model.attaching = true
 	}
@@ -529,9 +567,8 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	m.stopTrace()
-	flags.SetPidFilter(pid)
-	flags.SetTidFilter(-1)
 	m.pidFilter = pid
+	m.tidFilter = -1
 	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
@@ -546,9 +583,8 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 		pid = msg.Pid
 	}
 	m.stopTrace()
-	flags.SetPidFilter(pid)
-	flags.SetTidFilter(tid)
 	m.pidFilter = pid
+	m.tidFilter = tid
 	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
@@ -607,6 +643,7 @@ func (m *Model) beginTraceCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.traceStop = cancel
 	ctx = context.WithValue(ctx, runtimeBindingsContextKey{}, m.runtime)
+	ctx = ContextWithTraceFilters(ctx, m.pidFilter, m.tidFilter)
 	return startTraceCmd(m.startTrace, ctx)
 }
 
