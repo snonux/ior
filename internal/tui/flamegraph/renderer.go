@@ -17,6 +17,7 @@ import (
 const pathSeparator = "\x1f"
 const pathSeparatorByte = '\x1f'
 const minFlameWidth = 60
+const maxBarVisualHeight = 3
 
 // BuildTerminalLayout converts a live trie snapshot into terminal frame cells.
 func BuildTerminalLayout(snapshot *snapshotNode, width, height int) []tuiFrame {
@@ -223,10 +224,16 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 
 	availableRows := height - 2 // toolbar + status
 	maxRow := maxFrameRowForSet(frames, nil)
+	totalDepthRows := maxRow + 1
+	barHeight := computeBarHeight(availableRows, totalDepthRows, maxBarVisualHeight)
+	visibleDepthRows := availableRows / barHeight
+	if visibleDepthRows < 1 {
+		visibleDepthRows = 1
+	}
 	rowOffset := 0
 	truncated := false
-	if maxRow+1 > availableRows {
-		rowOffset = maxRow + 1 - availableRows
+	if maxRow+1 > visibleDepthRows {
+		rowOffset = maxRow + 1 - visibleDepthRows
 		truncated = true
 	}
 
@@ -263,16 +270,16 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		status := fmt.Sprintf("Filter %q: %.1f%% system (%d/%d matches, %.1f%% frames shown) | Selected: %s total=%d depth=%d %.2f%% filter",
 			searchQuery, filterSystemShare, pos, len(matches), frameCoverage,
 			selected.Name, selected.Total, selected.Depth, selectedFilterShare)
-		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
+		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, barHeight, availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
 	} else {
 		status := fmt.Sprintf("Selected: %s [%s] total=%d depth=%d col=%d width=%d share=%.2f%%",
 			selected.Name, compactFramePath(selected.Path), selected.Total, selected.Depth, selected.Col, selected.Width, selectedSystemShare)
-		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
+		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, barHeight, availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
 	}
 }
 
-func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
-	return buildRenderRows(frames, width, rowOffset, maxRow, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
+func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow, barHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
+	return buildRenderRows(frames, width, rowOffset, maxRow, barHeight, availableRows, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
 }
 
 func renderViewRows(toolbar, status string, rows []string, width int) string {
@@ -294,7 +301,7 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
-func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
+func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
@@ -303,18 +310,40 @@ func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow int, selectedPa
 		rowsByDepth[frame.Row] = append(rowsByDepth[frame.Row], indexedFrame{idx: idx, frame: frame})
 	}
 
-	rows := make([]string, 0, maxRow-rowOffset+1)
+	if barHeight < 1 {
+		barHeight = 1
+	}
+
+	rows := make([]string, 0, (maxRow-rowOffset+1)*barHeight)
 	for row := maxRow; row >= rowOffset; row-- {
 		framesAtRow := rowsByDepth[row]
 		sort.Slice(framesAtRow, func(i, j int) bool {
 			return framesAtRow[i].frame.Col < framesAtRow[j].frame.Col
 		})
-		rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive))
+		for repeat := 0; repeat < barHeight; repeat++ {
+			showLabels := repeat == barHeight/2
+			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive, showLabels))
+		}
+	}
+
+	if availableRows > 0 {
+		if len(rows) > availableRows {
+			rows = rows[:availableRows]
+		}
+		if len(rows) < availableRows {
+			blank := strings.Repeat(" ", width)
+			pad := make([]string, 0, availableRows)
+			for i := 0; i < availableRows-len(rows); i++ {
+				pad = append(pad, blank)
+			}
+			pad = append(pad, rows...)
+			rows = pad
+		}
 	}
 	return rows
 }
 
-func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) string {
+func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive, showLabels bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -339,7 +368,10 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 		if cellWidth <= 0 {
 			continue
 		}
-		label := frameLabel(frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
+		label := strings.Repeat(" ", cellWidth)
+		if showLabels {
+			label = frameLabel(frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
+		}
 		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
 		cell := style.Render(label)
 		b.WriteString(cell)
@@ -567,6 +599,20 @@ func normalizeSelectedIndex(frames []tuiFrame, selectedIdx int, include map[int]
 func filterSampleCoverage(frames []tuiFrame, matchSet map[int]bool, totalBase uint64) float64 {
 	coveredTotal, rootTotal := filterCoverageTotals(frames, matchSet, totalBase)
 	return percentOfTotal(coveredTotal, rootTotal)
+}
+
+func computeBarHeight(availableRows, depthRows, maxHeight int) int {
+	if availableRows <= 0 || depthRows <= 0 {
+		return 1
+	}
+	height := availableRows / depthRows
+	if height < 1 {
+		height = 1
+	}
+	if maxHeight > 0 && height > maxHeight {
+		height = maxHeight
+	}
+	return height
 }
 
 func filterCoverageTotals(frames []tuiFrame, matchSet map[int]bool, totalBase uint64) (coveredTotal uint64, rootTotal uint64) {

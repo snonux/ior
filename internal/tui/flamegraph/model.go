@@ -284,7 +284,16 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 
 // View renders the flamegraph viewport.
 func (m Model) View() tea.View {
-	content := RenderTerminalView(m.frames, m.width, m.height, m.selectedIdx, m.subtreeSet, m.matchIndices, m.filterVisible, m.globalTotal, m.isDark, m.searchActive, m.searchQuery)
+	extraLines := 1 // selection status line
+	if m.showHelp {
+		extraLines++
+	}
+	renderHeight := m.height - extraLines
+	if renderHeight < 3 {
+		renderHeight = 3
+	}
+
+	content := RenderTerminalView(m.frames, m.width, renderHeight, m.selectedIdx, m.subtreeSet, m.matchIndices, m.filterVisible, m.globalTotal, m.isDark, m.searchActive, m.searchQuery)
 	content = replaceHeaderLine(content, m.toolbarLine())
 	if m.searchActive {
 		content = replaceFooterLine(content, m.searchFooter())

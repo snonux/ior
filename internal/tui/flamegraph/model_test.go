@@ -666,6 +666,32 @@ func TestViewIncludesSelectionStatusBar(t *testing.T) {
 	}
 }
 
+func TestViewFitsViewportHeightAndKeepsSearchFooterVisible(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 100
+	m.height = 12
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Row: 0, Width: 100, Total: 100, Percent: 100, Path: "root"},
+		{Name: "child", Depth: 1, Col: 0, Row: 1, Width: 80, Total: 80, Percent: 80, Path: "root" + pathSeparator + "child"},
+	}
+	m.selectedIdx = 1
+	m.globalTotal = 100
+	m.searchActive = true
+	m.searchInput.SetValue("child")
+
+	view := m.View().Content
+	lines := strings.Split(view, "\n")
+	if got, max := len(lines), m.height; got > max {
+		t.Fatalf("expected flame view to fit viewport height <=%d, got %d lines", max, got)
+	}
+	if !strings.Contains(view, "matches") {
+		t.Fatalf("expected search footer to remain visible in viewport, got %q", view)
+	}
+	if !strings.Contains(view, "[LIVE] sel:2/2 child") {
+		t.Fatalf("expected selection status line to remain visible, got %q", view)
+	}
+}
+
 func TestViewFilterSelectionStatusUsesFilteredTotalAndKeepsContextVisible(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",

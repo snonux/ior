@@ -19,6 +19,9 @@ const defaultRefreshMs = 1000
 const streamRefreshMs = 200
 const flameRefreshMs = 200
 const streamChromeRows = 4
+const dashboardHelpHintRows = 1
+const dashboardExpandedHelpRows = 2
+const dashboardTabBarRows = 1
 
 // SnapshotSource is the dashboard data source.
 type SnapshotSource interface {
@@ -106,7 +109,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
 		m.streamModel.SetViewport(streamWidth, streamHeight)
-		m.flamegraphModel.SetViewport(msg.Width, msg.Height)
+		flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
+		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 		return m, nil
 	case refreshTickMsg:
 		if !m.focused {
@@ -171,6 +175,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 	if keyStr == "H" {
 		m.showHelp = !m.showHelp
+		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
+		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 		return m, nil
 	}
 	if m.activeTab == TabFlame && m.flamegraphModel.ConsumesKey(msg) {
@@ -396,7 +402,7 @@ func (m *Model) SetPidFilter(pid int) {
 // View renders the tab bar, active tab scaffold, and help bar.
 func (m Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
-	activeHeight := height
+	_, activeHeight := flameViewport(width, height, m.showHelp)
 	streamModel := m.streamModel
 	streamModel.SetFooterVisible(m.showHelp)
 	if m.activeTab == TabStream {
@@ -482,6 +488,19 @@ func flameTickCmd() tea.Cmd {
 func streamViewport(width, height int) (int, int) {
 	width, height = common.EffectiveViewport(width, height)
 	height -= streamChromeRows
+	if height < 1 {
+		height = 1
+	}
+	return width, height
+}
+
+func flameViewport(width, height int, showHelp bool) (int, int) {
+	width, height = common.EffectiveViewport(width, height)
+	chromeRows := dashboardTabBarRows + dashboardHelpHintRows
+	if showHelp {
+		chromeRows = dashboardTabBarRows + dashboardExpandedHelpRows
+	}
+	height -= chromeRows
 	if height < 1 {
 		height = 1
 	}
