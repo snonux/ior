@@ -298,6 +298,7 @@ func BenchmarkLiveTrieIngestAndSnapshot(b *testing.B) {
 						buildBenchmarkPath(8, 6, eventIdx),
 					)
 					liveTrie.Ingest(pair)
+					pair.Recycle()
 				}
 
 				payload, _ := liveTrie.SnapshotJSON()
