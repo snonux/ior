@@ -1,3 +1,5 @@
+> **🚧 PRE-ALPHA SOFTWARE:** This project is in a pre-alpha state and is intended for my own personal use only. Use at your own risk.
+
 # I/O Riot NG (aka ior)
 
 <img src=assets/ior-small.png />
