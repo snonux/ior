@@ -299,8 +299,9 @@ func writeSyncPool(b *strings.Builder, goName, selfRef string) {
 	fmt.Fprintf(b, "func New%s(raw []byte) *%s {\n", goName, goName)
 	fmt.Fprintf(b, "\t%s := poolOf%ss.Get().(*%s)\n", selfRef, goName, goName)
 	fmt.Fprintf(b, "\tif err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, %s); err != nil {\n", selfRef)
-	fmt.Fprintf(b, "\t\tfmt.Println(%s, raw, len(raw), err)\n", selfRef)
-	b.WriteString("\t\tpanic(raw)\n\t}\n")
+	fmt.Fprintf(b, "\t\t*%s = %s{}\n", selfRef, goName)
+	fmt.Fprintf(b, "\t\tpoolOf%ss.Put(%s)\n", goName, selfRef)
+	b.WriteString("\t\treturn nil\n\t}\n")
 	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
 
 	fmt.Fprintf(b, "func (%s *%s) Bytes() ([]byte, error) {\n", selfRef, goName)
