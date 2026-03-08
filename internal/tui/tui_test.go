@@ -21,6 +21,7 @@ import (
 
 	"ior/internal/flags"
 	"ior/internal/tui/probes"
+	"ior/internal/types"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -1211,6 +1212,97 @@ func TestGlobalFilterApplyPreservesActiveDashboardTab(t *testing.T) {
 	}
 }
 
+func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testing.T) {
+	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 140
+	m.height = 36
+
+	oldSnap := aggregateTestSnapshot("write", "/tmp/old.log", "oldproc", "old-lat", "old-gap")
+	newSnap := aggregateTestSnapshot("read", "/tmp/new.log", "newproc", "new-lat", "new-gap")
+	oldTrie := aggregateTestTrie("oldsvc", "/srv/old")
+	newTrie := aggregateTestTrie("newsvc", "/srv/new")
+
+	m.runtime.SetDashboardSnapshotSource(fakeDashboardSource{snap: oldSnap})
+	m.runtime.SetLiveTrie(oldTrie)
+
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(Model)
+	next, _ = m.Update(messages.StatsTickMsg{Snap: oldSnap})
+	m = next.(Model)
+
+	if label := advanceFlameSelection(t, &m); !strings.Contains(label, "oldsvc") {
+		t.Fatalf("expected old flame data before filter apply, got %q", label)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	if got := m.dashboard.LatestSnapshot(); got != nil {
+		t.Fatalf("expected aggregate snapshot cleared during restart, got %+v", got)
+	}
+	if !m.attaching {
+		t.Fatalf("expected filter apply to restart tracing")
+	}
+
+	m.runtime.SetDashboardSnapshotSource(fakeDashboardSource{snap: newSnap})
+	m.runtime.SetLiveTrie(newTrie)
+
+	next, _ = m.Update(TracingStartedMsg{})
+	m = next.(Model)
+	next, _ = m.Update(messages.StatsTickMsg{Snap: newSnap})
+	m = next.(Model)
+
+	if label := advanceFlameSelection(t, &m); !strings.Contains(label, "newsvc") || strings.Contains(label, "oldsvc") {
+		t.Fatalf("expected flamegraph to reflect only new trie data, got %q", label)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	m = next.(Model)
+	overview := m.View().Content
+	for _, want := range []string{"read(1)", "/tmp/new.log(2)", "newproc/42(1)", "new-lat", "new-gap"} {
+		if !strings.Contains(overview, want) {
+			t.Fatalf("expected overview to contain %q, got %q", want, overview)
+		}
+	}
+	for _, unwanted := range []string{"write", "/tmp/old.log", "oldproc", "old-lat", "old-gap"} {
+		if strings.Contains(overview, unwanted) {
+			t.Fatalf("expected overview to drop pre-filter data %q, got %q", unwanted, overview)
+		}
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'3'}[0], Text: string([]rune{'3'})})
+	m = next.(Model)
+	if view := m.View().Content; !strings.Contains(view, "read") || strings.Contains(view, "write") {
+		t.Fatalf("expected syscalls view to reflect post-filter snapshot only, got %q", view)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'4'}[0], Text: string([]rune{'4'})})
+	m = next.(Model)
+	if view := m.View().Content; !strings.Contains(view, "/tmp/new.log") || strings.Contains(view, "/tmp/old.log") {
+		t.Fatalf("expected files view to reflect post-filter snapshot only, got %q", view)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'5'}[0], Text: string([]rune{'5'})})
+	m = next.(Model)
+	if view := m.View().Content; !strings.Contains(view, "newproc") || strings.Contains(view, "oldproc") {
+		t.Fatalf("expected processes view to reflect post-filter snapshot only, got %q", view)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'6'}[0], Text: string([]rune{'6'})})
+	m = next.(Model)
+	if view := m.View().Content; !strings.Contains(view, "new-lat") || !strings.Contains(view, "new-gap") || strings.Contains(view, "old-lat") || strings.Contains(view, "old-gap") {
+		t.Fatalf("expected latency view to reflect post-filter histogram only, got %q", view)
+	}
+}
+
 func TestQuestionMarkDoesNotBlockUnderlyingActions(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
@@ -1220,6 +1312,66 @@ func TestQuestionMarkDoesNotBlockUnderlyingActions(t *testing.T) {
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open; ? overlay is removed")
 	}
+}
+
+func aggregateTestSnapshot(syscall, path, comm, latencyLabel, gapLabel string) *statsengine.Snapshot {
+	snap := statsengine.NewSnapshot(
+		[]float64{111},
+		[]float64{222},
+		[]float64{333},
+		[]statsengine.SyscallSnapshot{{Name: syscall, Count: 1}},
+		[]statsengine.FileSnapshot{{Path: path, Accesses: 2}},
+		[]statsengine.ProcessSnapshot{{PID: 42, Comm: comm, Syscalls: 1}},
+		statsengine.NewHistogramSnapshot(1, []statsengine.HistogramBucketSnapshot{{Label: latencyLabel, Count: 1}}),
+		statsengine.NewHistogramSnapshot(1, []statsengine.HistogramBucketSnapshot{{Label: gapLabel, Count: 1}}),
+	)
+	snap.TotalSyscalls = 1
+	snap.TotalBytes = 64
+	snap.LatencyMeanNs = 111
+	snap.GapMeanNs = 222
+	return &snap
+}
+
+func aggregateTestTrie(comm, path string) *coreflamegraph.LiveTrie {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
+	trie.AddRecord(coreflamegraph.IterRecord{
+		Comm:    comm,
+		Path:    path,
+		Pid:     42,
+		Tid:     42,
+		TraceID: types.SYS_ENTER_READ,
+		Cnt: coreflamegraph.Counter{
+			Count:          5,
+			Duration:       5_000,
+			DurationToPrev: 500,
+			Bytes:          128,
+		},
+	})
+	return trie
+}
+
+func selectedFlameLabel(view string) string {
+	re := regexp.MustCompile(`sel:[0-9]+/[0-9]+ ([^|]+) \|`)
+	match := re.FindStringSubmatch(view)
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func advanceFlameSelection(t *testing.T, m *Model) string {
+	t.Helper()
+
+	before := selectedFlameLabel(m.View().Content)
+	for i := 0; i < 8; i++ {
+		next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		*m = next.(Model)
+		after := selectedFlameLabel(m.View().Content)
+		if after != "" && after != before && after != "root" {
+			return after
+		}
+	}
+	return selectedFlameLabel(m.View().Content)
 }
 
 func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
