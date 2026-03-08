@@ -21,6 +21,7 @@ func TestCommResolverQueueLookupRespectsWorkerLimit(t *testing.T) {
 	var maxRunning int32
 
 	resolver := newCommResolver(nil)
+	defer resolver.shutdown()
 	resolver.lookupWorkers = workers
 	resolver.lookupQueue = make(chan uint32, lookups)
 	resolver.resolveFn = func(tid uint32) string {
@@ -80,6 +81,7 @@ func TestCommResolverQueueLookupQueueFullClearsPending(t *testing.T) {
 	release := make(chan struct{})
 
 	resolver := newCommResolver(nil)
+	defer resolver.shutdown()
 	resolver.lookupWorkers = 1
 	resolver.lookupQueue = make(chan uint32, 1)
 	resolver.resolveFn = func(tid uint32) string {
@@ -128,6 +130,56 @@ func TestCommResolverQueueLookupQueueFullClearsPending(t *testing.T) {
 		_, ok := resolver.cached(tid3)
 		return ok
 	})
+}
+
+func TestCommResolverShutdownStopsWorkersAndPreventsNewLookups(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	resolver := newCommResolver(nil)
+	resolver.lookupWorkers = 1
+	resolver.lookupQueue = make(chan uint32, 1)
+	resolver.resolveFn = func(tid uint32) string {
+		started <- struct{}{}
+		<-release
+		return fmt.Sprintf("comm-%d", tid)
+	}
+
+	const activeTID uint32 = 201
+	const postShutdownTID uint32 = 202
+
+	resolver.queueLookup(activeTID)
+	waitForStarts(t, started, 1, 2*time.Second)
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		resolver.shutdown()
+		close(shutdownDone)
+	}()
+
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown returned before in-flight lookup completed")
+	case <-time.After(75 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-shutdownDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for resolver shutdown")
+	}
+
+	resolver.queueLookup(postShutdownTID)
+	if hasPending(resolver, postShutdownTID) {
+		t.Fatalf("expected no pending entry after shutdown for tid %d", postShutdownTID)
+	}
+	if _, ok := resolver.cached(postShutdownTID); ok {
+		t.Fatalf("did not expect tid %d to resolve after shutdown", postShutdownTID)
+	}
+	if pending := pendingCount(resolver); pending != 0 {
+		t.Fatalf("expected no pending lookups after shutdown, got %d", pending)
+	}
 }
 
 func hasPending(r *commResolver, tid uint32) bool {
