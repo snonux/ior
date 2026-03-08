@@ -400,10 +400,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attaching = false
 		m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
+		m.dashboard.SetGlobalFilter(m.globalFilter)
 		width, height := common.EffectiveViewport(m.width, m.height)
 		next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
 		m.dashboard = next.(dashboardui.Model)
-		return m, tea.Batch(sizeCmd, m.dashboard.Init())
+		return m, tea.Batch(sizeCmd, m.dashboard.Init(), m.dashboard.SnapshotCmd())
 	case TracingErrorMsg:
 		m.attaching = false
 		m.lastErr = msg.Err
@@ -540,7 +541,8 @@ func (m Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	wasVisible := m.filterModal.Visible()
 	m.filterModal = m.filterModal.Update(msg)
 	if wasVisible && !m.filterModal.Visible() {
-		m.setGlobalFilter(m.filterModal.Filter())
+		next, cmd := m.applyGlobalFilter(m.filterModal.Filter())
+		return next, tea.Batch(dashboardCmd, cmd)
 	}
 	return m, dashboardCmd
 }
@@ -831,6 +833,7 @@ func (m *Model) setProcessFilters(pid, tid int) {
 	m.globalFilter.PID = eqNumericFilter(pid)
 	m.globalFilter.TID = eqNumericFilter(tid)
 	m.dashboard.SetPidFilter(pid)
+	m.dashboard.SetGlobalFilter(m.globalFilter)
 }
 
 func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
@@ -840,6 +843,22 @@ func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
 	m.pidFilter = pid
 	m.tidFilter = tid
 	m.dashboard.SetPidFilter(pid)
+	m.dashboard.SetGlobalFilter(m.globalFilter)
+}
+
+func (m Model) applyGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
+	nextFilter := filter.Clone()
+	changed := !m.globalFilter.Equal(nextFilter)
+	m.setGlobalFilter(nextFilter)
+	if !changed || m.screen != ScreenDashboard {
+		return m, nil
+	}
+
+	m.stopTrace()
+	m.dashboard.PrepareForTraceRestart()
+	m.attaching = true
+	m.lastErr = nil
+	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
 func eqNumericFilterValue(filter *globalfilter.NumericFilter) (int, bool) {

@@ -142,3 +142,34 @@ func TestFilterSummaryAndDurationParsing(t *testing.T) {
 		t.Fatalf("ParseDurationNs(garbage) expected error")
 	}
 }
+
+func TestFilterEqual(t *testing.T) {
+	base := Filter{
+		Syscall:    &StringFilter{Pattern: "read"},
+		Comm:       &StringFilter{Pattern: "nginx"},
+		File:       &StringFilter{Pattern: "/var/log"},
+		PID:        &NumericFilter{Op: OpEq, Value: 42},
+		TID:        &NumericFilter{Op: OpNeq, Value: 99},
+		FD:         &NumericFilter{Op: OpEq, Value: 7},
+		LatencyNs:  &NumericFilter{Op: OpGt, Value: 1_000},
+		GapNs:      &NumericFilter{Op: OpGte, Value: 500},
+		Bytes:      &NumericFilter{Op: OpLt, Value: 4_096},
+		RetVal:     &NumericFilter{Op: OpEq, Value: -1},
+		ErrorsOnly: true,
+	}
+	if !base.Equal(base.Clone()) {
+		t.Fatalf("expected cloned filter to compare equal")
+	}
+
+	mutated := base.Clone()
+	mutated.File.Pattern = "/tmp"
+	if mutated.Equal(base) {
+		t.Fatalf("expected differing file pattern to compare unequal")
+	}
+
+	mutated = base.Clone()
+	mutated.Bytes = nil
+	if mutated.Equal(base) {
+		t.Fatalf("expected missing numeric filter to compare unequal")
+	}
+}

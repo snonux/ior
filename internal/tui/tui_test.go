@@ -452,7 +452,7 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 	rb := eventstream.NewRingBuffer()
 	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 1, TID: 1})
 
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context) error { return nil })
 	m.runtime.SetEventStreamSource(rb)
 	m.screen = ScreenDashboard
 	m.attaching = true
@@ -1036,6 +1036,10 @@ func TestQuitClosesGlobalFilterModalWithoutQuitting(t *testing.T) {
 func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
+	m.attaching = false
+
+	stopped := false
+	m.traceStop = func() { stopped = true }
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(Model)
@@ -1055,6 +1059,68 @@ func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
 	}
 	if m.globalFilter.Syscall == nil || m.globalFilter.Syscall.Pattern != "read" {
 		t.Fatalf("expected stored global filter updated from modal, got %+v", m.globalFilter.Syscall)
+	}
+	if !stopped {
+		t.Fatalf("expected filter apply to stop the active trace")
+	}
+	if !m.attaching {
+		t.Fatalf("expected filter apply to restart tracing")
+	}
+}
+
+func TestGlobalFilterCloseWithoutChangesDoesNotRestartTrace(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	if !m.filterModal.Visible() {
+		t.Fatalf("expected filter modal to open")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Fatalf("expected no restart command when filter is unchanged")
+	}
+	if stopped {
+		t.Fatalf("expected unchanged filter close not to stop tracing")
+	}
+	if m.attaching {
+		t.Fatalf("expected unchanged filter close not to restart tracing")
+	}
+}
+
+func TestGlobalFilterApplyPreservesActiveDashboardTab(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'4'}[0], Text: string([]rune{'4'})})
+	m = next.(Model)
+	if m.dashboard.ActiveTab() != dashboardui.TabFiles {
+		t.Fatalf("expected files tab active before filter apply")
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("log")[0], Text: string([]rune("log"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	if m.dashboard.ActiveTab() != dashboardui.TabFiles {
+		t.Fatalf("expected active tab preserved across filter restart")
+	}
+	if !m.attaching {
+		t.Fatalf("expected apply to enter attaching state")
 	}
 }
 
