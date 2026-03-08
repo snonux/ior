@@ -239,7 +239,7 @@ func drawIcicleLabel(grid [][]treemapCell, tile icicleTile, selected bool) {
 	}
 	width := len(grid[0])
 	maxLabel := tile.w - 1
-	label := abbreviateTreemapLabel(tile.node.name, maxLabel)
+	label := abbreviateTreemapLabel(rootPathLabelFromFSPath(tile.node.fullPath), maxLabel)
 	col := tile.x
 	for _, r := range []rune(label) {
 		if col < 0 {
@@ -273,7 +273,7 @@ func icicleStatusLine(tiles []icicleTile, selected int, metric bubbleMetric) str
 		"sel:%d/%d %s | %s=%s | accesses=%d | bytes=%s",
 		selected+1,
 		len(tiles),
-		tile.node.fullPath,
+		rootPathLabelFromFSPath(tile.node.fullPath),
 		treemapMetricLabel(metric),
 		metricText,
 		tile.node.accesses,
