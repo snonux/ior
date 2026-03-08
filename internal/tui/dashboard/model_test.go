@@ -492,6 +492,33 @@ func TestTreemapModeUsesJKForSelection(t *testing.T) {
 	}
 }
 
+func TestFilesIcicleModeSelectionUsesIcicleTileCount(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/a/b/c/file1", Accesses: 9},
+		{Path: "/a/d/e/file2", Accesses: 7},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.latest = &snap
+	m.filesDirGrouped = true
+	m.filesVizMode = tabVizModeIcicle
+	m.width = 120
+	m.height = 28
+
+	expectedMax := m.maxFilesDirRowsForMode()
+	if expectedMax <= m.maxFilesDirRows() {
+		t.Fatalf("expected icicle tile count to exceed grouped dir count: tiles=%d dirs=%d", expectedMax, m.maxFilesDirRows())
+	}
+
+	for i := 0; i < expectedMax+4; i++ {
+		next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
+		m = next.(Model)
+	}
+	if m.filesDirOffset != expectedMax-1 {
+		t.Fatalf("expected icicle selection clamped by tile count to %d, got %d", expectedMax-1, m.filesDirOffset)
+	}
+}
+
 func TestTreemapModeRendersTreemapHeader(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "read", Count: 9, Bytes: 512},
