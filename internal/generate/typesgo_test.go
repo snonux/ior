@@ -186,9 +186,13 @@ func TestGenerateTypesGoSyncPool(t *testing.T) {
 
 	requireContains(t, output, "var poolOfOpenEvents = sync.Pool{")
 	requireContains(t, output, "func NewOpenEvent(raw []byte) *OpenEvent")
+	requireContains(t, output, "return nil")
 	requireContains(t, output, "func (o *OpenEvent) Bytes() ([]byte, error)")
 	requireContains(t, output, "func (o *OpenEvent) Recycle()")
 	requireContains(t, output, "poolOfOpenEvents.Put(o)")
+	if strings.Contains(output, "panic(raw)") {
+		t.Fatalf("generated constructors must not panic on decode errors")
+	}
 
 	requireContains(t, output, "var poolOfNullEvents = sync.Pool{")
 	requireContains(t, output, "func NewNullEvent(raw []byte) *NullEvent")

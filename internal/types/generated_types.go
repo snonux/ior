@@ -344,8 +344,9 @@ var poolOfOpenEvents = sync.Pool{
 func NewOpenEvent(raw []byte) *OpenEvent {
 	o := poolOfOpenEvents.Get().(*OpenEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
-		fmt.Println(o, raw, len(raw), err)
-		panic(raw)
+		*o = OpenEvent{}
+		poolOfOpenEvents.Put(o)
+		return nil
 	}
 	return o
 }
@@ -410,8 +411,9 @@ var poolOfNullEvents = sync.Pool{
 func NewNullEvent(raw []byte) *NullEvent {
 	n := poolOfNullEvents.Get().(*NullEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, n); err != nil {
-		fmt.Println(n, raw, len(raw), err)
-		panic(raw)
+		*n = NullEvent{}
+		poolOfNullEvents.Put(n)
+		return nil
 	}
 	return n
 }
@@ -477,8 +479,9 @@ var poolOfFdEvents = sync.Pool{
 func NewFdEvent(raw []byte) *FdEvent {
 	f := poolOfFdEvents.Get().(*FdEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
-		fmt.Println(f, raw, len(raw), err)
-		panic(raw)
+		*f = FdEvent{}
+		poolOfFdEvents.Put(f)
+		return nil
 	}
 	return f
 }
@@ -545,8 +548,9 @@ var poolOfRetEvents = sync.Pool{
 func NewRetEvent(raw []byte) *RetEvent {
 	r := poolOfRetEvents.Get().(*RetEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, r); err != nil {
-		fmt.Println(r, raw, len(raw), err)
-		panic(raw)
+		*r = RetEvent{}
+		poolOfRetEvents.Put(r)
+		return nil
 	}
 	return r
 }
@@ -613,8 +617,9 @@ var poolOfNameEvents = sync.Pool{
 func NewNameEvent(raw []byte) *NameEvent {
 	n := poolOfNameEvents.Get().(*NameEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, n); err != nil {
-		fmt.Println(n, raw, len(raw), err)
-		panic(raw)
+		*n = NameEvent{}
+		poolOfNameEvents.Put(n)
+		return nil
 	}
 	return n
 }
@@ -680,8 +685,9 @@ var poolOfPathEvents = sync.Pool{
 func NewPathEvent(raw []byte) *PathEvent {
 	p := poolOfPathEvents.Get().(*PathEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, p); err != nil {
-		fmt.Println(p, raw, len(raw), err)
-		panic(raw)
+		*p = PathEvent{}
+		poolOfPathEvents.Put(p)
+		return nil
 	}
 	return p
 }
@@ -749,8 +755,9 @@ var poolOfFcntlEvents = sync.Pool{
 func NewFcntlEvent(raw []byte) *FcntlEvent {
 	f := poolOfFcntlEvents.Get().(*FcntlEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
-		fmt.Println(f, raw, len(raw), err)
-		panic(raw)
+		*f = FcntlEvent{}
+		poolOfFcntlEvents.Put(f)
+		return nil
 	}
 	return f
 }
@@ -817,8 +824,9 @@ var poolOfDup3Events = sync.Pool{
 func NewDup3Event(raw []byte) *Dup3Event {
 	d := poolOfDup3Events.Get().(*Dup3Event)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, d); err != nil {
-		fmt.Println(d, raw, len(raw), err)
-		panic(raw)
+		*d = Dup3Event{}
+		poolOfDup3Events.Put(d)
+		return nil
 	}
 	return d
 }
@@ -884,8 +892,9 @@ var poolOfOpenByHandleAtEvents = sync.Pool{
 func NewOpenByHandleAtEvent(raw []byte) *OpenByHandleAtEvent {
 	o := poolOfOpenByHandleAtEvents.Get().(*OpenByHandleAtEvent)
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
-		fmt.Println(o, raw, len(raw), err)
-		panic(raw)
+		*o = OpenByHandleAtEvent{}
+		poolOfOpenByHandleAtEvents.Put(o)
+		return nil
 	}
 	return o
 }
