@@ -408,46 +408,106 @@ func (e *eventLoop) initRawHandlers() {
 	}
 
 	e.rawHandlers[types.ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.openEvent(types.NewOpenEventFast(raw)); ok {
+		openEv := types.NewOpenEventFast(raw)
+		if openEv == nil {
+			e.dropMalformedRawEvent(types.ENTER_OPEN_EVENT, raw)
+			return
+		}
+		if ev, ok := e.filter.openEvent(openEv); ok {
 			e.tracepointEntered(ev)
 		}
 	}
 	e.rawHandlers[types.EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(types.NewRetEventFast(raw), ch)
+		retEv := types.NewRetEventFast(raw)
+		if retEv == nil {
+			e.dropMalformedRawEvent(types.EXIT_OPEN_EVENT, raw)
+			return
+		}
+		e.tracepointExited(retEv, ch)
 	}
 	e.rawHandlers[types.ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(types.NewFdEventFast(raw))
+		fdEv := types.NewFdEventFast(raw)
+		if fdEv == nil {
+			e.dropMalformedRawEvent(types.ENTER_FD_EVENT, raw)
+			return
+		}
+		e.tracepointEntered(fdEv)
 	}
 	e.rawHandlers[types.EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(types.NewFdEventFast(raw), ch)
+		fdEv := types.NewFdEventFast(raw)
+		if fdEv == nil {
+			e.dropMalformedRawEvent(types.EXIT_FD_EVENT, raw)
+			return
+		}
+		e.tracepointExited(fdEv, ch)
 	}
 	e.rawHandlers[types.ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(types.NewNullEventFast(raw))
+		nullEv := types.NewNullEventFast(raw)
+		if nullEv == nil {
+			e.dropMalformedRawEvent(types.ENTER_NULL_EVENT, raw)
+			return
+		}
+		e.tracepointEntered(nullEv)
 	}
 	e.rawHandlers[types.EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(types.NewNullEventFast(raw), ch)
+		nullEv := types.NewNullEventFast(raw)
+		if nullEv == nil {
+			e.dropMalformedRawEvent(types.EXIT_NULL_EVENT, raw)
+			return
+		}
+		e.tracepointExited(nullEv, ch)
 	}
 	e.rawHandlers[types.EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		e.tracepointExited(types.NewRetEventFast(raw), ch)
+		retEv := types.NewRetEventFast(raw)
+		if retEv == nil {
+			e.dropMalformedRawEvent(types.EXIT_RET_EVENT, raw)
+			return
+		}
+		e.tracepointExited(retEv, ch)
 	}
 	e.rawHandlers[types.ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.nameEvent(types.NewNameEventFast(raw)); ok {
+		nameEv := types.NewNameEventFast(raw)
+		if nameEv == nil {
+			e.dropMalformedRawEvent(types.ENTER_NAME_EVENT, raw)
+			return
+		}
+		if ev, ok := e.filter.nameEvent(nameEv); ok {
 			e.tracepointEntered(ev)
 		}
 	}
 	e.rawHandlers[types.ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		if ev, ok := e.filter.pathEvent(types.NewPathEventFast(raw)); ok {
+		pathEv := types.NewPathEventFast(raw)
+		if pathEv == nil {
+			e.dropMalformedRawEvent(types.ENTER_PATH_EVENT, raw)
+			return
+		}
+		if ev, ok := e.filter.pathEvent(pathEv); ok {
 			e.tracepointEntered(ev)
 		}
 	}
 	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(types.NewFcntlEventFast(raw))
+		fcntlEv := types.NewFcntlEventFast(raw)
+		if fcntlEv == nil {
+			e.dropMalformedRawEvent(types.ENTER_FCNTL_EVENT, raw)
+			return
+		}
+		e.tracepointEntered(fcntlEv)
 	}
 	e.rawHandlers[types.ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(types.NewOpenByHandleAtEventFast(raw))
+		openByHandleEv := types.NewOpenByHandleAtEventFast(raw)
+		if openByHandleEv == nil {
+			e.dropMalformedRawEvent(types.ENTER_OPEN_BY_HANDLE_AT_EVENT, raw)
+			return
+		}
+		e.tracepointEntered(openByHandleEv)
 	}
 	e.rawHandlers[types.ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		e.tracepointEntered(types.NewDup3EventFast(raw))
+		dup3Ev := types.NewDup3EventFast(raw)
+		if dup3Ev == nil {
+			e.dropMalformedRawEvent(types.ENTER_DUP3_EVENT, raw)
+			return
+		}
+		e.tracepointEntered(dup3Ev)
 	}
 }
 
@@ -847,6 +907,10 @@ func (e *eventLoop) notifyWarning(message string) {
 		return
 	}
 	e.warningCb(message)
+}
+
+func (e *eventLoop) dropMalformedRawEvent(evType types.EventType, raw []byte) {
+	e.notifyWarning(fmt.Sprintf("Dropped malformed raw event type %d (len=%d)", evType, len(raw)))
 }
 
 func (e *eventLoop) resolveFdFile(fd int32, pid uint32) file.File {
