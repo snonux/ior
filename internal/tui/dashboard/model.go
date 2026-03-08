@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -261,12 +263,31 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		cmd = streamTickCmd()
 	}
 	if !handled {
+		handled, cmd = m.handleEnterKey(msg)
+	}
+	if !handled {
 		handled, cmd = m.handleShortcutKey(msg)
 	}
 	if !handled {
 		return m.handleUnhandledKey(msg)
 	}
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
+}
+
+func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if !key.Matches(msg, m.keys.Enter) {
+		return false, nil
+	}
+	switch m.activeTab {
+	case TabProcesses:
+		filter, action, ok := m.selectedProcessFilter()
+		if !ok {
+			return false, nil
+		}
+		return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
+	default:
+		return false, nil
+	}
 }
 
 func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -351,6 +372,93 @@ func (m Model) handleUnhandledKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	next, flameCmd := m.flamegraphModel.Update(msg)
 	m.flamegraphModel = next.(flamegraphtui.Model)
 	return m, flameCmd
+}
+
+func (m Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
+	proc, ok := m.selectedProcessSnapshot()
+	if !ok || proc.PID == 0 {
+		return globalfilter.Filter{}, "", false
+	}
+	filter := m.globalFilter.Clone()
+	filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(proc.PID)}
+	action := fmt.Sprintf("pid=%d", proc.PID)
+	return filter, action, true
+}
+
+func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
+	if m.latest == nil {
+		return statsengine.ProcessSnapshot{}, false
+	}
+	rows := m.latest.Processes()
+	if len(rows) == 0 {
+		return statsengine.ProcessSnapshot{}, false
+	}
+
+	switch {
+	case m.processesVizMode == tabVizModeTreemap:
+		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesChart.Metric(), maxSyscallTreemapItems), m.processesOffset)
+	case m.processesVizMode == tabVizModeBubbles:
+		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesChart.Metric(), bubbleMaxItems), m.processesChart.selected)
+	default:
+		return indexedProcessSnapshot(rows, m.processesOffset)
+	}
+}
+
+func indexedProcessSnapshot(rows []statsengine.ProcessSnapshot, index int) (statsengine.ProcessSnapshot, bool) {
+	if len(rows) == 0 {
+		return statsengine.ProcessSnapshot{}, false
+	}
+	index = clampOffset(index, len(rows))
+	if index < 0 || index >= len(rows) {
+		return statsengine.ProcessSnapshot{}, false
+	}
+	return rows[index], true
+}
+
+func sortedProcessSnapshots(rows []statsengine.ProcessSnapshot, metric bubbleMetric, limit int) []statsengine.ProcessSnapshot {
+	if len(rows) == 0 {
+		return nil
+	}
+	sorted := slices.Clone(rows)
+	slices.SortFunc(sorted, func(left, right statsengine.ProcessSnapshot) int {
+		lv := processMetricValue(left, metric)
+		rv := processMetricValue(right, metric)
+		switch {
+		case lv > rv:
+			return -1
+		case lv < rv:
+			return 1
+		}
+		llabel := processSelectionLabel(left)
+		rlabel := processSelectionLabel(right)
+		switch {
+		case llabel < rlabel:
+			return -1
+		case llabel > rlabel:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if limit > 0 && len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+	return sorted
+}
+
+func processMetricValue(proc statsengine.ProcessSnapshot, metric bubbleMetric) uint64 {
+	if metric == bubbleMetricBytes {
+		return proc.Bytes
+	}
+	return proc.Syscalls
+}
+
+func processSelectionLabel(proc statsengine.ProcessSnapshot) string {
+	label := fmt.Sprintf("%d", proc.PID)
+	if comm := strings.TrimSpace(proc.Comm); comm != "" {
+		label = fmt.Sprintf("%d:%s", proc.PID, comm)
+	}
+	return label
 }
 
 func (m Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {

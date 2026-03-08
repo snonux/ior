@@ -43,7 +43,7 @@ func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset
 	cursor := clampOffset(offset, len(rows))
 	tbl.SetCursor(cursor)
 
-	out := tbl.View() + fmt.Sprintf("\nRow %d/%d [v:mode] [b:metric]", cursor+1, len(rows))
+	out := tbl.View() + fmt.Sprintf("\nRow %d/%d [enter:filter] [v:mode] [b:metric]", cursor+1, len(rows))
 	if pidFilter > 0 {
 		out += "\n" + "Note: this tab is most useful with All PIDs."
 	}

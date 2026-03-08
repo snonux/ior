@@ -142,6 +142,34 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 	}
 }
 
+func TestProcessesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 111, Comm: "alpha", Syscalls: 9},
+		{PID: 222, Comm: "beta", Syscalls: 4},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.processesOffset = 1
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on processes tab to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.PID == nil || req.Filter.PID.Value != 222 {
+		t.Fatalf("expected pid=222 filter, got %+v", req.Filter.PID)
+	}
+	if req.Action != "pid=222" {
+		t.Fatalf("expected action pid=222, got %q", req.Action)
+	}
+}
+
 func TestFilesTabScrollsWithJK(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles
