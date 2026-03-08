@@ -18,6 +18,7 @@ import (
 	"ior/internal/event"
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
+	"ior/internal/globalfilter"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	"ior/internal/tracepoints"
@@ -174,9 +175,9 @@ func tuiTraceStarterFromRunTrace(
 		})
 
 		cfg := baseCfg
-		if pidFilter, tidFilter, ok := tui.TraceFiltersFromContext(ctx); ok {
-			cfg.PidFilter = pidFilter
-			cfg.TidFilter = tidFilter
+		if filter, ok := tui.TraceFiltersFromContext(ctx); ok {
+			cfg.GlobalFilter = filter.Clone()
+			applyTraceFilterConfig(&cfg, filter)
 		}
 		engine := statsengine.NewEngine(64)
 		streamBuf := eventstream.NewRingBuffer()
@@ -227,6 +228,36 @@ func tuiTraceStarterFromRunTrace(
 			return err
 		}
 	}
+}
+
+func applyTraceFilterConfig(cfg *flags.Config, filter globalfilter.Filter) {
+	if cfg == nil {
+		return
+	}
+	cfg.CommFilter = ""
+	cfg.PathFilter = ""
+	cfg.PidFilter = -1
+	cfg.TidFilter = -1
+
+	if filter.Comm != nil {
+		cfg.CommFilter = filter.Comm.Pattern
+	}
+	if filter.File != nil {
+		cfg.PathFilter = filter.File.Pattern
+	}
+	if pid, ok := eqFilterValue(filter.PID); ok {
+		cfg.PidFilter = pid
+	}
+	if tid, ok := eqFilterValue(filter.TID); ok {
+		cfg.TidFilter = tid
+	}
+}
+
+func eqFilterValue(filter *globalfilter.NumericFilter) (int, bool) {
+	if filter == nil || filter.Op != globalfilter.OpEq || filter.Value <= 0 {
+		return 0, false
+	}
+	return int(filter.Value), true
 }
 
 func runTrace(cfg flags.Config) error {

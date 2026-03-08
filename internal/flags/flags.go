@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ior/internal/collapse"
+	"ior/internal/globalfilter"
 )
 
 var (
@@ -47,6 +48,7 @@ type Config struct {
 	TUIExportEnable bool
 	CollapsedFields []string
 	CountField      string
+	GlobalFilter    globalfilter.Filter
 }
 
 // NewFlags returns a configuration instance initialized with project defaults.
@@ -83,6 +85,7 @@ func (f Config) clone() Config {
 	out.TracepointsToAttach = slices.Clone(f.TracepointsToAttach)
 	out.TracepointsToExclude = slices.Clone(f.TracepointsToExclude)
 	out.CollapsedFields = slices.Clone(f.CollapsedFields)
+	out.GlobalFilter = f.GlobalFilter.Clone()
 	return out
 }
 

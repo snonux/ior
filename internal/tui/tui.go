@@ -11,6 +11,7 @@ import (
 
 	coreexport "ior/internal/export"
 	"ior/internal/flags"
+	"ior/internal/globalfilter"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -76,8 +77,7 @@ type runtimeBindings struct {
 }
 
 type traceFilters struct {
-	pidFilter int
-	tidFilter int
+	filter globalfilter.Filter
 }
 
 func newRuntimeBindings() *runtimeBindings {
@@ -157,19 +157,19 @@ func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool
 	return bindings, true
 }
 
-// ContextWithTraceFilters stores the active PID/TID filters for the trace starter.
-func ContextWithTraceFilters(ctx context.Context, pidFilter, tidFilter int) context.Context {
-	filters := traceFilters{pidFilter: pidFilter, tidFilter: tidFilter}
+// ContextWithTraceFilters stores the active trace filters for the trace starter.
+func ContextWithTraceFilters(ctx context.Context, filter globalfilter.Filter) context.Context {
+	filters := traceFilters{filter: filter.Clone()}
 	return context.WithValue(ctx, traceFiltersContextKey{}, filters)
 }
 
-// TraceFiltersFromContext returns the active PID/TID filters when provided by the TUI model.
-func TraceFiltersFromContext(ctx context.Context) (pidFilter, tidFilter int, ok bool) {
+// TraceFiltersFromContext returns the active trace filters when provided by the TUI model.
+func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 	filters, ok := ctx.Value(traceFiltersContextKey{}).(traceFilters)
 	if !ok {
-		return 0, 0, false
+		return globalfilter.Filter{}, false
 	}
-	return filters.pidFilter, filters.tidFilter, true
+	return filters.filter.Clone(), true
 }
 
 // Run starts the TUI program in alternate screen mode.
@@ -184,7 +184,7 @@ func RunWithTraceStarter(starter TraceStarter) error {
 
 // RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
 func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
-	model := newModelWithRuntimeConfig(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
+	model := newModelWithRuntimeConfig(cfg.PidFilter, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -198,7 +198,7 @@ func RunTestFlamesWithTraceStarter(starter TraceStarter) error {
 
 // RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
 func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
-	model := newModelWithRuntimeConfig(1, 1, -1, cfg.TUIExportEnable, starter)
+	model := newModelWithRuntimeConfig(1, filterFromConfig(cfg), 1, -1, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -230,6 +230,7 @@ type Model struct {
 
 	pidFilter     int
 	tidFilter     int
+	globalFilter  globalfilter.Filter
 	pickerReturn  *pickerReturnState
 	exportEnabled bool
 	isDark        bool
@@ -260,10 +261,10 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 
 // NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
 func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) Model {
-	return newModelWithRuntimeConfig(initialPID, cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
+	return newModelWithRuntimeConfig(initialPID, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
 }
 
-func newModelWithRuntimeConfig(initialPID, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
+func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
 	common.ApplyPalette(true)
 	syncStylesFromCommon()
 
@@ -300,12 +301,12 @@ func newModelWithRuntimeConfig(initialPID, startupPidFilter, startupTidFilter in
 		keys:          keys,
 		spin:          spin,
 		startTrace:    startTrace,
-		pidFilter:     pidFilter,
-		tidFilter:     tidFilter,
+		globalFilter:  startupFilter.Clone(),
 		exportEnabled: exportEnabled,
 		isDark:        true,
 		focused:       true,
 	}
+	model.setProcessFilters(pidFilter, tidFilter)
 
 	if initialPID > 0 {
 		model.screen = ScreenDashboard
@@ -652,10 +653,8 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	m.stopTrace()
-	m.pidFilter = pid
-	m.tidFilter = -1
+	m.setProcessFilters(pid, -1)
 	m.pickerReturn = nil
-	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -669,10 +668,8 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 		pid = msg.Pid
 	}
 	m.stopTrace()
-	m.pidFilter = pid
-	m.tidFilter = tid
+	m.setProcessFilters(pid, tid)
 	m.pickerReturn = nil
-	m.dashboard.SetPidFilter(pid)
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -741,9 +738,7 @@ func (m Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 	returnState := *m.pickerReturn
 	m.pickerReturn = nil
 	m.stopTrace()
-	m.pidFilter = returnState.pidFilter
-	m.tidFilter = returnState.tidFilter
-	m.dashboard.SetPidFilter(m.pidFilter)
+	m.setProcessFilters(returnState.pidFilter, returnState.tidFilter)
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -754,7 +749,7 @@ func (m *Model) beginTraceCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.traceStop = cancel
 	ctx = context.WithValue(ctx, runtimeBindingsContextKey{}, m.runtime)
-	ctx = ContextWithTraceFilters(ctx, m.pidFilter, m.tidFilter)
+	ctx = ContextWithTraceFilters(ctx, m.globalFilter)
 	return startTraceCmd(m.startTrace, ctx)
 }
 
@@ -772,6 +767,41 @@ func startTraceCmd(starter TraceStarter, ctx context.Context) tea.Cmd {
 
 func defaultTraceStarter(context.Context) error {
 	return nil
+}
+
+func filterFromConfig(cfg flags.Config) globalfilter.Filter {
+	filter := cfg.GlobalFilter.Clone()
+	if filter.IsActive() {
+		return filter
+	}
+	if cfg.CommFilter != "" {
+		filter.Comm = &globalfilter.StringFilter{Pattern: cfg.CommFilter}
+	}
+	if cfg.PathFilter != "" {
+		filter.File = &globalfilter.StringFilter{Pattern: cfg.PathFilter}
+	}
+	if cfg.PidFilter > 0 {
+		filter.PID = eqNumericFilter(cfg.PidFilter)
+	}
+	if cfg.TidFilter > 0 {
+		filter.TID = eqNumericFilter(cfg.TidFilter)
+	}
+	return filter
+}
+
+func eqNumericFilter(value int) *globalfilter.NumericFilter {
+	if value <= 0 {
+		return nil
+	}
+	return &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(value)}
+}
+
+func (m *Model) setProcessFilters(pid, tid int) {
+	m.pidFilter = pid
+	m.tidFilter = tid
+	m.globalFilter.PID = eqNumericFilter(pid)
+	m.globalFilter.TID = eqNumericFilter(tid)
+	m.dashboard.SetPidFilter(pid)
 }
 
 func (m *Model) stopTrace() {
