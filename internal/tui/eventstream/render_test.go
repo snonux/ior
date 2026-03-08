@@ -95,7 +95,7 @@ func TestRenderEventRowIsSingleLineWithControlCharsAndLongValues(t *testing.T) {
 		RetVal:     -9223372036854775808,
 	}
 
-	row := renderEventRow(ev, 80, false, -1)
+	row := renderEventRow(ev, streamColumns(80), false, -1)
 	if strings.Contains(row, "\n") || strings.Contains(row, "\r") || strings.Contains(row, "\t") {
 		t.Fatalf("expected a sanitized single-line row, got %q", row)
 	}

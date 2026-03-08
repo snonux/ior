@@ -70,11 +70,15 @@ type Model struct {
 	filterStack              []string
 	pidFilter                int
 	syscallsOffset           int
+	syscallsCol              int
 	syscallsTreemapSelection int
 	filesOffset              int
+	filesCol                 int
 	filesDirGrouped          bool
 	filesDirOffset           int
+	filesDirCol              int
 	processesOffset          int
+	processesCol             int
 	syscallsVizMode          tabVizMode
 	filesVizMode             tabVizMode
 	processesVizMode         tabVizMode
@@ -164,6 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.width = msg.Width
 	m.height = msg.Height
+	m.clampTableColumns()
 	streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
 	m.streamModel.SetViewport(streamWidth, streamHeight)
 	flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
@@ -226,6 +231,7 @@ func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
 	m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRowsForMode())
 	m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
+	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
 		return m, bubbleTickCmdFn()
@@ -279,6 +285,24 @@ func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	switch m.activeTab {
+	case TabSyscalls:
+		if m.syscallsVizMode != tabVizModeTable {
+			return false, nil
+		}
+		filter, action, ok := m.selectedSyscallFilter()
+		if !ok {
+			return false, nil
+		}
+		return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
+	case TabFiles:
+		if m.filesVizMode != tabVizModeTable {
+			return false, nil
+		}
+		filter, action, ok := m.selectedFileFilter()
+		if !ok {
+			return false, nil
+		}
+		return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
 	case TabProcesses:
 		filter, action, ok := m.selectedProcessFilter()
 		if !ok {
@@ -288,6 +312,52 @@ func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	default:
 		return false, nil
 	}
+}
+
+func (m Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
+	if m.latest == nil || m.syscallsOffset < 0 {
+		return globalfilter.Filter{}, "", false
+	}
+	rows := m.latest.Syscalls()
+	if len(rows) == 0 {
+		return globalfilter.Filter{}, "", false
+	}
+	selected := rows[clampOffset(m.syscallsOffset, len(rows))]
+	if strings.TrimSpace(selected.Name) == "" {
+		return globalfilter.Filter{}, "", false
+	}
+	filter := m.globalFilter.Clone()
+	filter.Syscall = &globalfilter.StringFilter{Pattern: selected.Name}
+	return filter, "syscall~" + selected.Name, true
+}
+
+func (m Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
+	if m.latest == nil {
+		return globalfilter.Filter{}, "", false
+	}
+	filter := m.globalFilter.Clone()
+	if m.filesDirGrouped {
+		dirs := aggregateFilesByDir(m.latest.Files())
+		if len(dirs) == 0 {
+			return globalfilter.Filter{}, "", false
+		}
+		selected := dirs[clampOffset(m.filesDirOffset, len(dirs))]
+		if strings.TrimSpace(selected.Dir) == "" {
+			return globalfilter.Filter{}, "", false
+		}
+		filter.File = &globalfilter.StringFilter{Pattern: selected.Dir}
+		return filter, "file~" + selected.Dir, true
+	}
+	files := m.latest.Files()
+	if len(files) == 0 {
+		return globalfilter.Filter{}, "", false
+	}
+	selected := files[clampOffset(m.filesOffset, len(files))]
+	if strings.TrimSpace(selected.Path) == "" {
+		return globalfilter.Filter{}, "", false
+	}
+	filter.File = &globalfilter.StringFilter{Pattern: selected.Path}
+	return filter, "file~" + selected.Path, true
 }
 
 func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -380,9 +450,15 @@ func (m Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 		return globalfilter.Filter{}, "", false
 	}
 	filter := m.globalFilter.Clone()
+	if m.processesCol == 1 {
+		comm := strings.TrimSpace(proc.Comm)
+		if comm != "" {
+			filter.Comm = &globalfilter.StringFilter{Pattern: comm}
+			return filter, "comm~" + comm, true
+		}
+	}
 	filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(proc.PID)}
-	action := fmt.Sprintf("pid=%d", proc.PID)
-	return filter, action, true
+	return filter, fmt.Sprintf("pid=%d", proc.PID), true
 }
 
 func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
@@ -515,14 +591,14 @@ func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if m.syscallsVizMode == tabVizModeTreemap {
 			return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.maxSyscallsRows()), nil
 		}
-		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows()), nil
+		return common.HandleTableNavigationKey(keyStr, &m.syscallsOffset, &m.syscallsCol, m.maxSyscallsRows(), len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 	case TabFiles:
 		if m.filesDirGrouped {
-			return scrollOffset(keyStr, &m.filesDirOffset, m.maxFilesDirRowsForMode()), nil
+			return common.HandleTableNavigationKey(keyStr, &m.filesDirOffset, &m.filesDirCol, m.maxFilesDirRowsForMode(), len(fileDirColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 		}
-		return scrollOffset(keyStr, &m.filesOffset, m.maxFilesRows()), nil
+		return common.HandleTableNavigationKey(keyStr, &m.filesOffset, &m.filesCol, m.maxFilesRows(), len(fileColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 	case TabProcesses:
-		return scrollOffset(keyStr, &m.processesOffset, m.maxProcessesRows()), nil
+		return common.HandleTableNavigationKey(keyStr, &m.processesOffset, &m.processesCol, m.maxProcessesRows(), len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 	case TabStream:
 		streamWidth, streamHeight := streamViewport(m.width, m.height)
 		m.streamModel.SetViewport(streamWidth, streamHeight)
@@ -564,6 +640,13 @@ func scrollOffset(keyStr string, offset *int, maxRows int) bool {
 	default:
 		return false
 	}
+}
+
+func (m *Model) clampTableColumns() {
+	m.syscallsCol = common.ClampTableCol(m.syscallsCol, len(syscallColumns(m.width)))
+	m.filesCol = common.ClampTableCol(m.filesCol, len(fileColumns(m.width)))
+	m.filesDirCol = common.ClampTableCol(m.filesDirCol, len(fileDirColumns(m.width)))
+	m.processesCol = common.ClampTableCol(m.processesCol, len(processColumns()))
 }
 
 func (m Model) maxSyscallsRows() int {
@@ -775,11 +858,20 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 		activeHeight,
 		m.pidFilter,
 		m.syscallsOffset,
+		m.syscallsCol,
 		m.filesOffset,
+		m.filesCol,
 		m.filesDirGrouped,
 		m.filesDirOffset,
+		m.filesDirCol,
 		m.processesOffset,
+		m.processesCol,
 	)
+}
+
+func (m Model) activeTableHeight() int {
+	_, activeHeight := flameViewport(m.width, m.height, m.showHelp)
+	return activeHeight
 }
 
 func (m *Model) setBubbleViewports(width, height int) {
@@ -988,7 +1080,7 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height, pidFilter, syscallsOffset, filesOffset int, filesDirGrouped bool, filesDirOffset, processesOffset int) string {
+func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height, pidFilter, syscallsOffset, syscallsCol, filesOffset, filesCol int, filesDirGrouped bool, filesDirOffset, filesDirCol, processesOffset, processesCol int) string {
 	if tab == TabStream {
 		if streamModel == nil {
 			return common.PanelStyle.Render("Stream: waiting for source...")
@@ -1011,14 +1103,14 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 	case TabOverview:
 		return renderOverview(snap, width, height)
 	case TabSyscalls:
-		return renderSyscallsWithOffset(snap, width, height, syscallsOffset)
+		return renderSyscallsWithOffset(snap, width, height, syscallsOffset, syscallsCol)
 	case TabFiles:
 		if filesDirGrouped {
-			return renderFilesDirGrouped(snap, width, height, filesDirOffset)
+			return renderFilesDirGrouped(snap, width, height, filesDirOffset, filesDirCol)
 		}
-		return renderFilesWithOffset(snap, width, height, filesOffset)
+		return renderFilesWithOffset(snap, width, height, filesOffset, filesCol)
 	case TabProcesses:
-		return renderProcessesWithOffset(snap, width, height, processesOffset, pidFilter)
+		return renderProcessesWithOffset(snap, width, height, processesOffset, processesCol, pidFilter)
 	case TabLatency:
 		return renderLatencyGapsTab(snap, width, height)
 	default:

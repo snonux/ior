@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"ior/internal/tui/common"
+
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 )
@@ -321,7 +323,7 @@ func (m *Model) HandleKey(keyStr string) bool {
 		return true
 	case "G":
 		if m.paused {
-			m.moveSelectionTo(len(m.filtered) - 1)
+			return m.handlePausedTableNavigation("G")
 		} else {
 			m.autoScroll = true
 			m.viewport.GotoBottom()
@@ -330,7 +332,7 @@ func (m *Model) HandleKey(keyStr string) bool {
 		return true
 	case "g":
 		if m.paused {
-			m.moveSelectionTo(0)
+			return m.handlePausedTableNavigation("g")
 		} else {
 			m.autoScroll = false
 			m.viewport.GotoTop()
@@ -339,40 +341,38 @@ func (m *Model) HandleKey(keyStr string) bool {
 		return true
 	case "j", "down":
 		if m.paused {
-			m.moveSelectionBy(1)
+			return m.handlePausedTableNavigation(keyStr)
 		} else {
 			m.handleViewportUpdate(keyMsgFromString("down"))
 		}
 		return true
 	case "k", "up":
 		if m.paused {
-			m.moveSelectionBy(-1)
+			return m.handlePausedTableNavigation(keyStr)
 		} else {
 			m.handleViewportUpdate(keyMsgFromString("up"))
 		}
 		return true
 	case "left", "h":
 		if m.paused {
-			m.moveSelectedColBy(-1)
-			return true
+			return m.handlePausedTableNavigation(keyStr)
 		}
 		return m.handleViewportUpdate(keyMsgFromString("left"))
 	case "right", "l":
 		if m.paused {
-			m.moveSelectedColBy(1)
-			return true
+			return m.handlePausedTableNavigation(keyStr)
 		}
 		return m.handleViewportUpdate(keyMsgFromString("right"))
 	case "pgdown", "pgdn", "pagedown":
 		if m.paused {
-			m.moveSelectionBy(m.pageStep())
+			return m.handlePausedTableNavigation(keyStr)
 		} else {
 			m.handleViewportUpdate(keyMsgFromString("pgdown"))
 		}
 		return true
 	case "pgup", "pageup":
 		if m.paused {
-			m.moveSelectionBy(-m.pageStep())
+			return m.handlePausedTableNavigation(keyStr)
 		} else {
 			m.handleViewportUpdate(keyMsgFromString("pgup"))
 		}
@@ -597,6 +597,24 @@ func (m *Model) pageStep() int {
 	return rows - 1
 }
 
+func (m *Model) handlePausedTableNavigation(keyStr string) bool {
+	if len(m.filtered) == 0 {
+		m.selectedIdx = -1
+		return true
+	}
+	m.ensureSelection()
+	m.ensureSelectedCol()
+	row := m.selectedIdx
+	col := m.selectedCol
+	if !common.HandleTableNavigationKey(keyStr, &row, &col, len(m.filtered), streamColumnCount, m.pageStep()) {
+		return false
+	}
+	m.selectedIdx = row
+	m.selectedCol = col
+	m.centerSelection()
+	return true
+}
+
 func (m *Model) openFDTraceView() bool {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false
@@ -666,16 +684,6 @@ func (m *Model) scrollFDTraceByLines(delta int) {
 	m.fdTraceView.offset = next
 }
 
-func (m *Model) moveSelectionBy(delta int) {
-	if len(m.filtered) == 0 {
-		m.selectedIdx = -1
-		return
-	}
-	m.ensureSelection()
-	m.ensureSelectedCol()
-	m.moveSelectionTo(m.selectedIdx + delta)
-}
-
 func (m *Model) moveSelectionTo(idx int) {
 	if len(m.filtered) == 0 {
 		m.selectedIdx = -1
@@ -716,14 +724,6 @@ func (m *Model) ensureSelectedCol() {
 	if m.selectedCol >= streamColumnCount {
 		m.selectedCol = streamColumnCount - 1
 	}
-}
-
-func (m *Model) moveSelectedColBy(delta int) {
-	if delta == 0 {
-		return
-	}
-	m.ensureSelectedCol()
-	m.selectedCol = clamp(m.selectedCol+delta, 0, streamColumnCount-1)
 }
 
 func (m *Model) requestGlobalFilterFromSelectedCell() bool {

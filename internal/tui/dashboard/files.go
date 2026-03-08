@@ -1,14 +1,12 @@
 package dashboard
 
 import (
-	"fmt"
 	"path/filepath"
 	"sort"
 	"strconv"
 
 	"ior/internal/statsengine"
-
-	"charm.land/bubbles/v2/table"
+	common "ior/internal/tui/common"
 )
 
 type DirSnapshot struct {
@@ -24,10 +22,10 @@ type DirSnapshot struct {
 }
 
 func renderFiles(snap *statsengine.Snapshot, width, height int) string {
-	return renderFilesWithOffset(snap, width, height, 0)
+	return renderFilesWithOffset(snap, width, height, 0, 0)
 }
 
-func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int) string {
+func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
 	if snap == nil {
 		return "Files: waiting for stats..."
 	}
@@ -38,28 +36,11 @@ func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset int
 		return "Files: no data"
 	}
 
-	columns := []table.Column{
-		{Title: "Accesses", Width: 8},
-		{Title: "Read", Width: 9},
-		{Title: "Write", Width: 9},
-		{Title: "Avg Latency", Width: 11},
-		{Title: "Max Latency", Width: 11},
-		{Title: "Path", Width: pathWidth},
-	}
-
-	tbl := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-	)
-	tbl.SetHeight(syscallTableHeight(height))
-	tbl.SetWidth(tableWidth(width))
-	cursor := clampOffset(offset, len(rows))
-	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:dirs] [v:mode in dirs]", cursor+1, len(rows))
+	columns := fileColumns(width)
+	return renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "d:dirs", "v:mode in dirs")
 }
 
-func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset int) string {
+func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
 	if snap == nil {
 		return "Files (dirs): waiting for stats..."
 	}
@@ -70,32 +51,14 @@ func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset int
 		return "Files (dirs): no data"
 	}
 
-	columns := []table.Column{
-		{Title: "Accesses", Width: 8},
-		{Title: "Read", Width: 9},
-		{Title: "Write", Width: 9},
-		{Title: "Avg Latency", Width: 11},
-		{Title: "Max Latency", Width: 11},
-		{Title: "Files", Width: 5},
-		{Title: "Directory", Width: pathWidth},
-	}
-
-	tbl := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-	)
-	tbl.SetHeight(syscallTableHeight(height))
-	tbl.SetWidth(tableWidth(width))
-	cursor := clampOffset(offset, len(rows))
-	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d [d:files] [v:mode] [b:metric]", cursor+1, len(rows))
+	columns := fileDirColumns(width)
+	return renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "d:files", "v:mode", "b:metric")
 }
 
-func fileRows(files []statsengine.FileSnapshot, pathWidth int) []table.Row {
-	rows := make([]table.Row, 0, len(files))
+func fileRows(files []statsengine.FileSnapshot, pathWidth int) [][]string {
+	rows := make([][]string, 0, len(files))
 	for _, f := range files {
-		rows = append(rows, table.Row{
+		rows = append(rows, []string{
 			strconv.FormatUint(f.Accesses, 10),
 			formatBytes(float64(f.BytesRead)),
 			formatBytes(float64(f.BytesWritten)),
@@ -130,6 +93,31 @@ func dirPathWidth(width int) int {
 		return 14
 	}
 	return w
+}
+
+func fileColumns(width int) []common.TableColumn {
+	pathWidth := filePathWidth(width)
+	return []common.TableColumn{
+		{Title: "Accesses", Width: 8},
+		{Title: "Read", Width: 9},
+		{Title: "Write", Width: 9},
+		{Title: "Avg Latency", Width: 11},
+		{Title: "Max Latency", Width: 11},
+		{Title: "Path", Width: pathWidth},
+	}
+}
+
+func fileDirColumns(width int) []common.TableColumn {
+	pathWidth := dirPathWidth(width)
+	return []common.TableColumn{
+		{Title: "Accesses", Width: 8},
+		{Title: "Read", Width: 9},
+		{Title: "Write", Width: 9},
+		{Title: "Avg Latency", Width: 11},
+		{Title: "Max Latency", Width: 11},
+		{Title: "Files", Width: 5},
+		{Title: "Directory", Width: pathWidth},
+	}
 }
 
 func truncatePathMiddle(path string, limit int) string {
@@ -187,10 +175,10 @@ func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
 	return out
 }
 
-func dirRows(dirs []DirSnapshot, pathWidth int) []table.Row {
-	rows := make([]table.Row, 0, len(dirs))
+func dirRows(dirs []DirSnapshot, pathWidth int) [][]string {
+	rows := make([][]string, 0, len(dirs))
 	for _, d := range dirs {
-		rows = append(rows, table.Row{
+		rows = append(rows, []string{
 			strconv.FormatUint(d.Accesses, 10),
 			formatBytes(float64(d.BytesRead)),
 			formatBytes(float64(d.BytesWritten)),

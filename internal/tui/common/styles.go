@@ -77,6 +77,15 @@ var (
 
 	// ErrorStyle is used for fatal or warning messages.
 	ErrorStyle lipgloss.Style
+
+	// TableHeaderStyle is used by shared table headers.
+	TableHeaderStyle lipgloss.Style
+
+	// TableSelectedRowStyle highlights the selected row in shared tables.
+	TableSelectedRowStyle lipgloss.Style
+
+	// TableSelectedCellStyle highlights the selected cell in shared tables.
+	TableSelectedCellStyle lipgloss.Style
 )
 
 // ApplyPalette updates shared colors and styles to match the provided theme.
@@ -110,6 +119,18 @@ func ApplyPalette(isDark bool) {
 		BorderForeground(ColorPanel)
 	HighlightStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 	ErrorStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorDanger)
+	TableHeaderStyle = lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		BorderTop(true).
+		BorderForeground(ColorPanel)
+	TableSelectedRowStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorBackground).
+		Background(ColorPrimary)
+	TableSelectedCellStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorBackground).
+		Background(ColorAccent)
 }
 
 func init() {

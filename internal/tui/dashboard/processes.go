@@ -6,15 +6,14 @@ import (
 	"strings"
 
 	"ior/internal/statsengine"
-
-	"charm.land/bubbles/v2/table"
+	common "ior/internal/tui/common"
 )
 
 func renderProcesses(snap *statsengine.Snapshot, width, height int) string {
-	return renderProcessesWithOffset(snap, width, height, 0, -1)
+	return renderProcessesWithOffset(snap, width, height, 0, 0, -1)
 }
 
-func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset, pidFilter int) string {
+func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol, pidFilter int) string {
 	if snap == nil {
 		return "Processes: waiting for stats..."
 	}
@@ -24,7 +23,16 @@ func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset
 		return "Processes: no data"
 	}
 
-	columns := []table.Column{
+	columns := processColumns()
+	out := renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "v:mode", "b:metric")
+	if pidFilter > 0 {
+		out += "\n" + "Note: this tab is most useful with All PIDs."
+	}
+	return out
+}
+
+func processColumns() []common.TableColumn {
+	return []common.TableColumn{
 		{Title: "PID", Width: 8},
 		{Title: "Comm", Width: 18},
 		{Title: "Syscalls", Width: 10},
@@ -32,28 +40,12 @@ func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset
 		{Title: "Total Bytes", Width: 12},
 		{Title: "Avg Latency", Width: 12},
 	}
-
-	tbl := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-	)
-	tbl.SetHeight(syscallTableHeight(height))
-	tbl.SetWidth(tableWidth(width))
-	cursor := clampOffset(offset, len(rows))
-	tbl.SetCursor(cursor)
-
-	out := tbl.View() + fmt.Sprintf("\nRow %d/%d [enter:filter] [v:mode] [b:metric]", cursor+1, len(rows))
-	if pidFilter > 0 {
-		out += "\n" + "Note: this tab is most useful with All PIDs."
-	}
-	return out
 }
 
-func processRows(processes []statsengine.ProcessSnapshot) []table.Row {
-	rows := make([]table.Row, 0, len(processes))
+func processRows(processes []statsengine.ProcessSnapshot) [][]string {
+	rows := make([][]string, 0, len(processes))
 	for _, p := range processes {
-		rows = append(rows, table.Row{
+		rows = append(rows, []string{
 			strconv.FormatUint(uint64(p.PID), 10),
 			truncateText(p.Comm, 18),
 			strconv.FormatUint(p.Syscalls, 10),
