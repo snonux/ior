@@ -15,6 +15,9 @@ const (
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
+	if len(raw) < openEventSize {
+		return nil
+	}
 	if len(raw) != openEventSize {
 		return NewOpenEvent(raw)
 	}
@@ -31,6 +34,9 @@ func NewOpenEventFast(raw []byte) *OpenEvent {
 }
 
 func NewNullEventFast(raw []byte) *NullEvent {
+	if len(raw) < nullEventSize {
+		return nil
+	}
 	if len(raw) != nullEventSize {
 		return NewNullEvent(raw)
 	}
@@ -44,6 +50,9 @@ func NewNullEventFast(raw []byte) *NullEvent {
 }
 
 func NewFdEventFast(raw []byte) *FdEvent {
+	if len(raw) < fdEventSize {
+		return nil
+	}
 	if len(raw) != fdEventSize {
 		return NewFdEvent(raw)
 	}
@@ -58,6 +67,9 @@ func NewFdEventFast(raw []byte) *FdEvent {
 }
 
 func NewRetEventFast(raw []byte) *RetEvent {
+	if len(raw) < retEventSize {
+		return nil
+	}
 	if len(raw) != retEventSize {
 		return NewRetEvent(raw)
 	}
@@ -73,6 +85,9 @@ func NewRetEventFast(raw []byte) *RetEvent {
 }
 
 func NewNameEventFast(raw []byte) *NameEvent {
+	if len(raw) < nameEventSize {
+		return nil
+	}
 	if len(raw) != nameEventSize {
 		return NewNameEvent(raw)
 	}
@@ -88,6 +103,9 @@ func NewNameEventFast(raw []byte) *NameEvent {
 }
 
 func NewPathEventFast(raw []byte) *PathEvent {
+	if len(raw) < pathEventSize {
+		return nil
+	}
 	if len(raw) != pathEventSize {
 		return NewPathEvent(raw)
 	}
@@ -102,6 +120,9 @@ func NewPathEventFast(raw []byte) *PathEvent {
 }
 
 func NewFcntlEventFast(raw []byte) *FcntlEvent {
+	if len(raw) < fcntlEventSize {
+		return nil
+	}
 	if len(raw) != fcntlEventSize {
 		return NewFcntlEvent(raw)
 	}
@@ -118,6 +139,9 @@ func NewFcntlEventFast(raw []byte) *FcntlEvent {
 }
 
 func NewDup3EventFast(raw []byte) *Dup3Event {
+	if len(raw) < dup3EventSize {
+		return nil
+	}
 	if len(raw) != dup3EventSize {
 		return NewDup3Event(raw)
 	}
@@ -133,6 +157,9 @@ func NewDup3EventFast(raw []byte) *Dup3Event {
 }
 
 func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
+	if len(raw) < openByHandleAtEventSize {
+		return nil
+	}
 	if len(raw) != openByHandleAtEventSize {
 		return NewOpenByHandleAtEvent(raw)
 	}

@@ -125,3 +125,28 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		}
 	})
 }
+
+func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
+	cases := []struct {
+		name   string
+		decode func([]byte) bool
+	}{
+		{name: "OpenEvent", decode: func(raw []byte) bool { return NewOpenEventFast(raw) == nil }},
+		{name: "NullEvent", decode: func(raw []byte) bool { return NewNullEventFast(raw) == nil }},
+		{name: "FdEvent", decode: func(raw []byte) bool { return NewFdEventFast(raw) == nil }},
+		{name: "RetEvent", decode: func(raw []byte) bool { return NewRetEventFast(raw) == nil }},
+		{name: "NameEvent", decode: func(raw []byte) bool { return NewNameEventFast(raw) == nil }},
+		{name: "PathEvent", decode: func(raw []byte) bool { return NewPathEventFast(raw) == nil }},
+		{name: "FcntlEvent", decode: func(raw []byte) bool { return NewFcntlEventFast(raw) == nil }},
+		{name: "Dup3Event", decode: func(raw []byte) bool { return NewDup3EventFast(raw) == nil }},
+		{name: "OpenByHandleAtEvent", decode: func(raw []byte) bool { return NewOpenByHandleAtEventFast(raw) == nil }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.decode([]byte{1}) {
+				t.Fatalf("expected nil for short payload")
+			}
+		})
+	}
+}

@@ -113,3 +113,34 @@ func TestProcessRawEventUnknownTypeDoesNotPanicAndNotifies(t *testing.T) {
 		t.Fatalf("expected warning notification")
 	}
 }
+
+func TestProcessRawEventMalformedKnownTypeDoesNotPanicAndNotifies(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	warnings := make(chan string, 1)
+	el.warningCb = func(message string) { warnings <- message }
+
+	pairCh := make(chan *event.Pair, 1)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("processRawEvent panicked: %v", r)
+		}
+	}()
+
+	el.processRawEvent([]byte{byte(types.ENTER_OPEN_EVENT)}, pairCh)
+
+	select {
+	case ep := <-pairCh:
+		t.Fatalf("unexpected event produced: %v", ep)
+	default:
+	}
+
+	select {
+	case msg := <-warnings:
+		if msg == "" {
+			t.Fatalf("expected non-empty warning message")
+		}
+	default:
+		t.Fatalf("expected warning notification")
+	}
+}
