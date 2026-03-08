@@ -26,6 +26,11 @@ type testData struct {
 	validates []func(t *testing.T, el *eventLoop, ev *event.Pair)
 }
 
+type synchronizedPair struct {
+	pair *event.Pair
+	ack  chan struct{}
+}
+
 func TestEventloop(t *testing.T) {
 	testTable := map[string]testData{
 		"OpenEventTest1":       makeOpenEventTestData1(t),
@@ -94,51 +99,62 @@ func TestEventloop(t *testing.T) {
 			defer cancel()
 
 			inCh := make(chan []byte)
-			outCh := make(chan *event.Pair)
+			outCh := make(chan synchronizedPair)
 
 			el := mustNewEventLoop(t, eventLoopConfig{})
-			el.printCb = func(ev *event.Pair) { outCh <- ev }
+			el.printCb = func(ev *event.Pair) {
+				next := synchronizedPair{pair: ev, ack: make(chan struct{})}
+				outCh <- next
+				<-next.ack
+			}
 			go el.run(ctx, inCh)
 
 			go func() {
+				defer close(inCh)
 				for _, raw := range td.rawTracepoints {
 					t.Log("Sending raw tracepoint", raw, "simulating BPF sending this")
 					inCh <- raw
-					// Keep synthetic feed pace close to real arrival and avoid
-					// stateful assertion races between adjacent events.
-					time.Sleep(100 * time.Microsecond)
 				}
 			}()
 			for _, validate := range td.validates {
-				ep := <-outCh
-				t.Log("Received", ep)
-				validate(t, el, ep)
+				next := <-outCh
+				func() {
+					defer close(next.ack)
+					ep := next.pair
+					t.Log("Received", ep)
+					validate(t, el, ep)
+				}()
 			}
-			// Give a small delay to ensure any unexpected events would have arrived
-			time.Sleep(10 * time.Millisecond)
+			waitForEventLoopDone(t, el, 250*time.Millisecond)
 			select {
-			case x := <-outCh:
-				t.Errorf("Expected no more events but got '%v'", x)
+			case next := <-outCh:
+				close(next.ack)
+				t.Errorf("Expected no more events but got '%v'", next.pair)
 			default:
 			}
 
 			// Special checks for edge case tests
 			switch testName {
 			case "EnterOnlyTest":
-				// Give time for events to be processed
-				time.Sleep(20 * time.Millisecond)
 				// Verify enter events are still pending
 				// Only the OpenEvent is guaranteed to be stored (FdEvent requires comm name)
 				verifyEnterEventPending(t, el, defaultTid)
 			case "MismatchedPairTest":
-				// Give time for all events to be processed
-				time.Sleep(50 * time.Millisecond)
 				// Verify mismatch counter was incremented
 				if el.numTracepointMismatches < 2 {
 					t.Errorf("Expected at least 2 tracepoint mismatches but got %d", el.numTracepointMismatches)
 				}
 			}
 		})
+	}
+}
+
+func waitForEventLoopDone(t *testing.T, el *eventLoop, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-el.done:
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for event loop to finish")
 	}
 }
 
@@ -1789,22 +1805,19 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected '%v' but got '%v'", fcntlExitEv, ep.ExitEv)
 		}
 
-		// Verify flags were updated on the file descriptor
-		if f, ok := el.fdState().files[int32(fd)]; ok {
-			fdFile, ok := f.(*file.FdFile)
-			if !ok {
-				t.Errorf("Expected file to be FdFile type")
-			} else {
-				// Check that O_NONBLOCK and O_APPEND were set
-				if !fdFile.Flags().Is(syscall.O_NONBLOCK) {
-					t.Errorf("Expected fd %d to have O_NONBLOCK flag set", fd)
-				}
-				if !fdFile.Flags().Is(syscall.O_APPEND) {
-					t.Errorf("Expected fd %d to have O_APPEND flag set", fd)
-				}
-			}
+		// Validate against the emitted pair snapshot; tracker state can advance
+		// as later raw events are processed concurrently by the decoder goroutine.
+		fdFile, ok := ep.File.(*file.FdFile)
+		if !ok {
+			t.Errorf("Expected file to be FdFile type")
 		} else {
-			t.Errorf("Expected fd %d to be tracked", fd)
+			// Check that O_NONBLOCK and O_APPEND were set.
+			if !fdFile.Flags().Is(syscall.O_NONBLOCK) {
+				t.Errorf("Expected fd %d to have O_NONBLOCK flag set", fd)
+			}
+			if !fdFile.Flags().Is(syscall.O_APPEND) {
+				t.Errorf("Expected fd %d to have O_APPEND flag set", fd)
+			}
 		}
 	})
 
@@ -1825,25 +1838,20 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected '%v' but got '%v'", fcntlExitEv2, ep.ExitEv)
 		}
 
-		// Verify flags were updated correctly
-		if f, ok := el.fdState().files[int32(fd)]; ok {
-			fdFile, ok := f.(*file.FdFile)
-			if !ok {
-				t.Errorf("Expected file to be FdFile type")
-			} else {
-				// O_NONBLOCK should be removed, O_APPEND should remain, O_DIRECT should be added
-				if fdFile.Flags().Is(syscall.O_NONBLOCK) {
-					t.Errorf("Expected fd %d to NOT have O_NONBLOCK flag", fd)
-				}
-				if !fdFile.Flags().Is(syscall.O_APPEND) {
-					t.Errorf("Expected fd %d to have O_APPEND flag set", fd)
-				}
-				if !fdFile.Flags().Is(syscall.O_DIRECT) {
-					t.Errorf("Expected fd %d to have O_DIRECT flag set", fd)
-				}
-			}
+		fdFile, ok := ep.File.(*file.FdFile)
+		if !ok {
+			t.Errorf("Expected file to be FdFile type")
 		} else {
-			t.Errorf("Expected fd %d to be tracked", fd)
+			// O_NONBLOCK should be removed, O_APPEND should remain, O_DIRECT should be added.
+			if fdFile.Flags().Is(syscall.O_NONBLOCK) {
+				t.Errorf("Expected fd %d to NOT have O_NONBLOCK flag", fd)
+			}
+			if !fdFile.Flags().Is(syscall.O_APPEND) {
+				t.Errorf("Expected fd %d to have O_APPEND flag set", fd)
+			}
+			if !fdFile.Flags().Is(syscall.O_DIRECT) {
+				t.Errorf("Expected fd %d to have O_DIRECT flag set", fd)
+			}
 		}
 	})
 

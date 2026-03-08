@@ -32,8 +32,11 @@ type eventLoopConfig struct {
 	countField      string
 	pprofEnable     bool
 	plainMode       bool
-	fdTracker       *fdTracker
-	commResolver    *commResolver
+	// synchronousRawProcessing keeps raw decode and callback emission in a
+	// single goroutine for deterministic test execution.
+	synchronousRawProcessing bool
+	fdTracker                *fdTracker
+	commResolver             *commResolver
 }
 
 type fdTracker struct {
@@ -385,9 +388,43 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	if e.printCb == nil {
 		e.printCb = func(ep *event.Pair) { ep.Recycle() }
 	}
+	if e.cfg.synchronousRawProcessing {
+		e.runSynchronously(ctx, rawCh)
+		return
+	}
 	for ep := range e.events(ctx, rawCh) {
 		e.printCb(ep)
 		e.numSyscallsAfterFilter++
+	}
+}
+
+func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
+	pairs := make(chan *event.Pair, 1)
+
+	for {
+		select {
+		case raw, ok := <-rawCh:
+			if !ok {
+				return
+			}
+			if len(raw) == 0 {
+				continue
+			}
+			e.processRawEvent(raw, pairs)
+			for {
+				select {
+				case ep := <-pairs:
+					e.printCb(ep)
+					e.numSyscallsAfterFilter++
+				default:
+					goto nextRaw
+				}
+			}
+		case <-ctx.Done():
+			fmt.Println("Stopping event loop")
+			return
+		}
+	nextRaw:
 	}
 }
 
