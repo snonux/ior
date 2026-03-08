@@ -119,6 +119,10 @@ func renderTabBar(active Tab, width int) string {
 }
 
 func renderHelpBar(keys common.KeyMap, width int) string {
+	return renderHelpBarWithStatus(keys, width, "")
+}
+
+func renderHelpBarWithStatus(keys common.KeyMap, width int, status string) string {
 	sections := keys.DashboardStatusHelpSections()
 	lines := make([]string, 0, len(sections))
 	for _, section := range sections {
@@ -133,6 +137,9 @@ func renderHelpBar(keys common.KeyMap, width int) string {
 		}
 		lines = append(lines, line)
 	}
+	if status != "" && len(lines) > 0 {
+		lines[len(lines)-1] = appendStatusText(lines[len(lines)-1], status, width)
+	}
 	text := strings.Join(lines, "\n")
 	if width > 0 && width < 90 {
 		return text
@@ -141,11 +148,29 @@ func renderHelpBar(keys common.KeyMap, width int) string {
 }
 
 func renderHelpHint(width int) string {
+	return renderHelpHintWithStatus(width, "")
+}
+
+func renderHelpHintWithStatus(width int, status string) string {
 	hint := "press H for help"
+	if status != "" {
+		hint = appendStatusText(hint, status, width)
+	}
 	if width > 0 && width < 90 {
 		return hint
 	}
 	return common.HelpBarStyle.Width(width).Render(hint)
+}
+
+func appendStatusText(base, status string, width int) string {
+	if status == "" {
+		return base
+	}
+	line := base + " | " + status
+	if width > 0 {
+		return truncatePlain(line, width)
+	}
+	return line
 }
 
 func wrapHelpLines(parts []string, width int) (string, string) {

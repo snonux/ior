@@ -64,6 +64,7 @@ type Model struct {
 
 	refreshEvery             time.Duration
 	keys                     common.KeyMap
+	globalFilter             globalfilter.Filter
 	pidFilter                int
 	syscallsOffset           int
 	syscallsTreemapSelection int
@@ -538,6 +539,7 @@ func (m *Model) SetStreamSource(source eventstream.Source) {
 // SetGlobalFilter forwards the shared TUI filter into the stream tab so
 // buffered rows can be re-filtered immediately.
 func (m *Model) SetGlobalFilter(filter globalfilter.Filter) {
+	m.globalFilter = filter.Clone()
 	m.streamModel.SetFilter(eventstream.Filter(filter))
 }
 
@@ -602,11 +604,15 @@ func (m Model) View() tea.View {
 	b.WriteString(m.renderActiveContent(width, activeHeight, &streamModel))
 	b.WriteString("\n")
 	if m.showHelp {
-		b.WriteString(renderHelpBar(m.keys, width))
+		b.WriteString(renderHelpBarWithStatus(m.keys, width, m.filterSummary()))
 	} else {
-		b.WriteString(renderHelpHint(width))
+		b.WriteString(renderHelpHintWithStatus(width, m.filterSummary()))
 	}
 	return tea.NewView(common.ScreenStyle.Render(b.String()))
+}
+
+func (m Model) filterSummary() string {
+	return "filter: " + m.globalFilter.Summary()
 }
 
 func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model) string {
