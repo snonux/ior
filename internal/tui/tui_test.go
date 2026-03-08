@@ -643,6 +643,26 @@ func TestFlamePauseKeyDoesNotTriggerPIDReselect(t *testing.T) {
 	}
 }
 
+func TestFlamePIDShortcutOpensPIDPickerInsteadOfPausing(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
+	updated := next.(Model)
+	if updated.screen != ScreenPIDPicker {
+		t.Fatalf("expected p to open PID picker from flame tab, got %v", updated.screen)
+	}
+	if strings.Contains(updated.View().Content, "[PAUSED]") {
+		t.Fatalf("expected p not to pause flame tab")
+	}
+	if cmd == nil {
+		t.Fatalf("expected picker init command on p")
+	}
+}
+
 func TestFlameSpaceKeyReleaseFallbackTogglesPause(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard

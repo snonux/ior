@@ -82,7 +82,7 @@ func (m Model) toolbarLine() string {
 		state = lipgloss.NewStyle().Foreground(common.ColorDanger).Bold(true).Render("[PAUSED]")
 	}
 	order := m.currentFieldPresetLabel()
-	line := fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space/p:pause", state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel())
+	line := fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause", state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel())
 	if m.searchQuery != "" {
 		line += " | filter:" + m.searchQuery
 	}
@@ -104,7 +104,7 @@ func (m Model) helpOverlay() string {
 	if width <= 0 {
 		width = 80
 	}
-	help := "Flame help: j/k depth  h/l sibling  pgup top  pgdn root  enter/click zoom  click ancestor undo  u/backspace/esc undo  / search  n/N matches  space/p pause  r reset baseline  o order  b metric  ? help"
+	help := "Flame help: j/k depth  h/l sibling  pgup top  pgdn root  enter/click zoom  click ancestor undo  u/backspace/esc undo  / search  n/N matches  space pause  r reset baseline  o order  b metric  ? help"
 	return common.HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 
