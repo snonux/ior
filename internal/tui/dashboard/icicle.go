@@ -79,6 +79,37 @@ func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bub
 	return strings.Join(lines, "\n")
 }
 
+func filesIcicleTileCount(snap *statsengine.Snapshot, width, height int, metric bubbleMetric) int {
+	if snap == nil {
+		return 0
+	}
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 18
+	}
+
+	dirs := aggregateFilesByDir(snap.Files())
+	if len(dirs) == 0 {
+		return 0
+	}
+	root := buildIcicleTree(dirs)
+	children := sortedIcicleChildren(root, metric)
+	if len(children) == 0 {
+		return 0
+	}
+
+	chartHeight := height - 2
+	if chartHeight < 4 {
+		chartHeight = 4
+	}
+
+	tiles := make([]icicleTile, 0, 64)
+	layoutIcicle(children, 0, width, 0, chartHeight, 0, metric, &tiles)
+	return len(tiles)
+}
+
 func buildIcicleTree(dirs []DirSnapshot) *icicleNode {
 	root := &icicleNode{
 		name:     "/",

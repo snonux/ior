@@ -219,7 +219,7 @@ func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
 	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
 	m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
-	m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRows())
+	m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRowsForMode())
 	m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
@@ -407,7 +407,7 @@ func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return scrollOffset(keyStr, &m.syscallsOffset, m.maxSyscallsRows()), nil
 	case TabFiles:
 		if m.filesDirGrouped {
-			return scrollOffset(keyStr, &m.filesDirOffset, m.maxFilesDirRows()), nil
+			return scrollOffset(keyStr, &m.filesDirOffset, m.maxFilesDirRowsForMode()), nil
 		}
 		return scrollOffset(keyStr, &m.filesOffset, m.maxFilesRows()), nil
 	case TabProcesses:
@@ -468,6 +468,14 @@ func (m Model) maxFilesDirRows() int {
 		return 0
 	}
 	return len(aggregateFilesByDir(m.latest.Files()))
+}
+
+func (m Model) maxFilesDirRowsForMode() int {
+	if m.filesVizMode != tabVizModeIcicle {
+		return m.maxFilesDirRows()
+	}
+	width, height := flameViewport(m.width, m.height, m.showHelp)
+	return filesIcicleTileCount(m.latest, width, height, m.filesChart.Metric())
 }
 
 func (m Model) maxProcessesRows() int {
