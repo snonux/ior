@@ -203,6 +203,31 @@ func TestHandleFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
 	verifyProcFdCached(t, el, pid+1, 20)
 }
 
+func TestFreezePairForEmissionCopiesFdFile(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	fdFile := file.NewFd(9, "/tmp/x", syscall.O_RDONLY)
+	ep := event.NewPair(&types.NullEvent{})
+	ep.File = fdFile
+
+	el.freezePairForEmission(ep)
+
+	emitted, ok := ep.File.(*file.FdFile)
+	if !ok {
+		t.Fatalf("expected emitted file to be *file.FdFile, got %T", ep.File)
+	}
+	if emitted == fdFile {
+		t.Fatalf("expected emitted fd file to be detached copy")
+	}
+	if emitted.Flags() != file.Flags(syscall.O_RDONLY) {
+		t.Fatalf("expected copied flags %v, got %v", syscall.O_RDONLY, emitted.Flags())
+	}
+
+	fdFile.SetFlags(syscall.O_WRONLY)
+	if emitted.Flags() != file.Flags(syscall.O_RDONLY) {
+		t.Fatalf("expected emitted copy flags unchanged after source mutation")
+	}
+}
+
 // Tests a simple enter/exit pair of tracepoints.
 func makeOpenEventTestData1(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)

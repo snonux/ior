@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -408,9 +407,6 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 					continue
 				}
 				e.processRawEvent(raw, ch)
-				// Yield so downstream consumers can process emitted pairs before
-				// the next raw event mutates shared tracker state.
-				runtime.Gosched()
 			case <-ctx.Done():
 				fmt.Println("Stopping event loop")
 				return
@@ -593,7 +589,16 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	prevPairTime, _ := e.prevPairTimes[ep.EnterEv.GetTid()]
 	ep.CalculateDurations(prevPairTime)
 	e.prevPairTimes[ep.EnterEv.GetTid()] = ep.ExitEv.GetTime()
+	e.freezePairForEmission(ep)
 	ch <- ep
+}
+
+func (e *eventLoop) freezePairForEmission(ep *event.Pair) {
+	fdFile, ok := ep.File.(*file.FdFile)
+	if !ok {
+		return
+	}
+	ep.File = fdFile.Dup(fdFile.FD())
 }
 
 func (e *eventLoop) initExitHandlers() {
