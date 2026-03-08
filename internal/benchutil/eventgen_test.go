@@ -17,7 +17,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	)
 
 	t.Run("EnterOpenEvent", func(t *testing.T) {
-		want, raw := gen.EnterOpenEvent(time, pid, tid)
+		want, raw, err := gen.EnterOpenEvent(time, pid, tid)
+		requireNoError(t, err)
 		got := types.NewOpenEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -26,7 +27,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("ExitOpenEvent", func(t *testing.T) {
-		want, raw := gen.ExitOpenEvent(time, pid, tid)
+		want, raw, err := gen.ExitOpenEvent(time, pid, tid)
+		requireNoError(t, err)
 		got := types.NewRetEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -35,7 +37,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("EnterFdEvent", func(t *testing.T) {
-		want, raw := gen.EnterFdEvent(time, pid, tid, 11, types.SYS_ENTER_READ)
+		want, raw, err := gen.EnterFdEvent(time, pid, tid, 11, types.SYS_ENTER_READ)
+		requireNoError(t, err)
 		got := types.NewFdEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -44,7 +47,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("ExitFdEvent", func(t *testing.T) {
-		want, raw := gen.ExitFdEvent(time, pid, tid, 11, types.SYS_EXIT_CLOSE)
+		want, raw, err := gen.ExitFdEvent(time, pid, tid, 11, types.SYS_EXIT_CLOSE)
+		requireNoError(t, err)
 		got := types.NewFdEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -53,7 +57,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("EnterNullEvent", func(t *testing.T) {
-		want, raw := gen.EnterNullEvent(time, pid, tid, types.SYS_ENTER_SYNC)
+		want, raw, err := gen.EnterNullEvent(time, pid, tid, types.SYS_ENTER_SYNC)
+		requireNoError(t, err)
 		got := types.NewNullEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -62,7 +67,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("ExitNullEvent", func(t *testing.T) {
-		want, raw := gen.ExitNullEvent(time, pid, tid, types.SYS_EXIT_SYNC)
+		want, raw, err := gen.ExitNullEvent(time, pid, tid, types.SYS_EXIT_SYNC)
+		requireNoError(t, err)
 		got := types.NewNullEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -71,7 +77,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("ExitRetEvent", func(t *testing.T) {
-		want, raw := gen.ExitRetEvent(time, pid, tid, types.SYS_EXIT_READ, 256)
+		want, raw, err := gen.ExitRetEvent(time, pid, tid, types.SYS_EXIT_READ, 256)
+		requireNoError(t, err)
 		got := types.NewRetEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -83,7 +90,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("EnterPathEvent", func(t *testing.T) {
-		want, raw := gen.EnterPathEvent(time, pid, tid, "/tmp/path", types.SYS_ENTER_MKDIR)
+		want, raw, err := gen.EnterPathEvent(time, pid, tid, "/tmp/path", types.SYS_ENTER_MKDIR)
+		requireNoError(t, err)
 		got := types.NewPathEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -92,7 +100,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("EnterNameEvent", func(t *testing.T) {
-		want, raw := gen.EnterNameEvent(time, pid, tid, "/tmp/old", "/tmp/new", types.SYS_ENTER_RENAME)
+		want, raw, err := gen.EnterNameEvent(time, pid, tid, "/tmp/old", "/tmp/new", types.SYS_ENTER_RENAME)
+		requireNoError(t, err)
 		got := types.NewNameEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -101,7 +110,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("EnterFcntlEvent", func(t *testing.T) {
-		want, raw := gen.EnterFcntlEvent(time, pid, tid, 33, syscall.F_SETFL, syscall.O_NONBLOCK)
+		want, raw, err := gen.EnterFcntlEvent(time, pid, tid, 33, syscall.F_SETFL, syscall.O_NONBLOCK)
+		requireNoError(t, err)
 		got := types.NewFcntlEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -110,7 +120,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("EnterDup3Event", func(t *testing.T) {
-		want, raw := gen.EnterDup3Event(time, pid, tid, 44, syscall.O_CLOEXEC)
+		want, raw, err := gen.EnterDup3Event(time, pid, tid, 44, syscall.O_CLOEXEC)
+		requireNoError(t, err)
 		got := types.NewDup3Event(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -119,7 +130,8 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("EnterOpenByHandleAtEvent", func(t *testing.T) {
-		want, raw := gen.EnterOpenByHandleAtEvent(time, pid, tid, syscall.O_RDONLY)
+		want, raw, err := gen.EnterOpenByHandleAtEvent(time, pid, tid, syscall.O_RDONLY)
+		requireNoError(t, err)
 		got := types.NewOpenByHandleAtEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -138,7 +150,8 @@ func TestEventGeneratorPairMethods(t *testing.T) {
 	)
 
 	t.Run("OpenPair", func(t *testing.T) {
-		enterRaw, exitRaw := gen.OpenPair(start, pid, tid)
+		enterRaw, exitRaw, err := gen.OpenPair(start, pid, tid)
+		requireNoError(t, err)
 		enter := types.NewOpenEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -151,7 +164,8 @@ func TestEventGeneratorPairMethods(t *testing.T) {
 	})
 
 	t.Run("FdPair", func(t *testing.T) {
-		enterRaw, exitRaw := gen.FdPair(start, pid, tid, 9, types.SYS_ENTER_READ, types.SYS_EXIT_READ, 128)
+		enterRaw, exitRaw, err := gen.FdPair(start, pid, tid, 9, types.SYS_ENTER_READ, types.SYS_EXIT_READ, 128)
+		requireNoError(t, err)
 		enter := types.NewFdEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -167,7 +181,8 @@ func TestEventGeneratorPairMethods(t *testing.T) {
 	})
 
 	t.Run("NullPair", func(t *testing.T) {
-		enterRaw, exitRaw := gen.NullPair(start, pid, tid, types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
+		enterRaw, exitRaw, err := gen.NullPair(start, pid, tid, types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
+		requireNoError(t, err)
 		enter := types.NewNullEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewNullEvent(exitRaw)
@@ -180,7 +195,8 @@ func TestEventGeneratorPairMethods(t *testing.T) {
 	})
 
 	t.Run("PathPair", func(t *testing.T) {
-		enterRaw, exitRaw := gen.PathPair(start, pid, tid, "/tmp/p", types.SYS_ENTER_MKDIR, types.SYS_EXIT_MKDIR, 0)
+		enterRaw, exitRaw, err := gen.PathPair(start, pid, tid, "/tmp/p", types.SYS_ENTER_MKDIR, types.SYS_EXIT_MKDIR, 0)
+		requireNoError(t, err)
 		enter := types.NewPathEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -193,7 +209,8 @@ func TestEventGeneratorPairMethods(t *testing.T) {
 	})
 
 	t.Run("NamePair", func(t *testing.T) {
-		enterRaw, exitRaw := gen.NamePair(start, pid, tid, "old", "new", types.SYS_ENTER_RENAME, types.SYS_EXIT_RENAME, 0)
+		enterRaw, exitRaw, err := gen.NamePair(start, pid, tid, "old", "new", types.SYS_ENTER_RENAME, types.SYS_EXIT_RENAME, 0)
+		requireNoError(t, err)
 		enter := types.NewNameEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -206,7 +223,8 @@ func TestEventGeneratorPairMethods(t *testing.T) {
 	})
 
 	t.Run("FcntlPair", func(t *testing.T) {
-		enterRaw, exitRaw := gen.FcntlPair(start, pid, tid, 5, syscall.F_SETFL, syscall.O_NONBLOCK, types.SYS_EXIT_FCNTL, 0)
+		enterRaw, exitRaw, err := gen.FcntlPair(start, pid, tid, 5, syscall.F_SETFL, syscall.O_NONBLOCK, types.SYS_EXIT_FCNTL, 0)
+		requireNoError(t, err)
 		enter := types.NewFcntlEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -219,7 +237,8 @@ func TestEventGeneratorPairMethods(t *testing.T) {
 	})
 
 	t.Run("Dup3Pair", func(t *testing.T) {
-		enterRaw, exitRaw := gen.Dup3Pair(start, pid, tid, 8, syscall.O_CLOEXEC, types.SYS_EXIT_DUP3, 9)
+		enterRaw, exitRaw, err := gen.Dup3Pair(start, pid, tid, 8, syscall.O_CLOEXEC, types.SYS_EXIT_DUP3, 9)
+		requireNoError(t, err)
 		enter := types.NewDup3Event(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -241,7 +260,8 @@ func TestEventGeneratorPairDeltaDefaultAndCustom(t *testing.T) {
 
 	t.Run("default", func(t *testing.T) {
 		gen := EventGenerator{}
-		enterRaw, exitRaw := gen.OpenPair(start, pid, tid)
+		enterRaw, exitRaw, err := gen.OpenPair(start, pid, tid)
+		requireNoError(t, err)
 		enter := types.NewOpenEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -254,7 +274,8 @@ func TestEventGeneratorPairDeltaDefaultAndCustom(t *testing.T) {
 	t.Run("custom", func(t *testing.T) {
 		const customDelta uint64 = 7
 		gen := EventGenerator{PairDelta: customDelta}
-		enterRaw, exitRaw := gen.OpenPair(start, pid, tid)
+		enterRaw, exitRaw, err := gen.OpenPair(start, pid, tid)
+		requireNoError(t, err)
 		enter := types.NewOpenEvent(enterRaw)
 		defer enter.Recycle()
 		exit := types.NewRetEvent(exitRaw)
@@ -278,5 +299,12 @@ func assertPairTimingAndIdentity(t *testing.T, start uint64, pid, tid uint32, en
 	}
 	if exitPid != pid || exitTid != tid {
 		t.Fatalf("exit identity mismatch: pid/tid = %d/%d, want %d/%d", exitPid, exitTid, pid, tid)
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

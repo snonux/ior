@@ -22,49 +22,73 @@ type recyclable interface {
 
 func BenchmarkDeserializeOpenEvent(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
+	_, raw, err := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewOpenEvent)
 }
 
 func BenchmarkDeserializeFdEvent(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterFdEvent(1, componentBenchPID, componentBenchTID, 12, types.SYS_ENTER_READ)
+	_, raw, err := gen.EnterFdEvent(1, componentBenchPID, componentBenchTID, 12, types.SYS_ENTER_READ)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewFdEvent)
 }
 
 func BenchmarkDeserializeNullEvent(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
+	_, raw, err := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewNullEvent)
 }
 
 func BenchmarkDeserializeRetEvent(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.ExitRetEvent(1, componentBenchPID, componentBenchTID, types.SYS_EXIT_READ, 64)
+	_, raw, err := gen.ExitRetEvent(1, componentBenchPID, componentBenchTID, types.SYS_EXIT_READ, 64)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewRetEvent)
 }
 
 func BenchmarkDeserializePathEvent(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterPathEvent(1, componentBenchPID, componentBenchTID, "/tmp/p", types.SYS_ENTER_MKDIR)
+	_, raw, err := gen.EnterPathEvent(1, componentBenchPID, componentBenchTID, "/tmp/p", types.SYS_ENTER_MKDIR)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewPathEvent)
 }
 
 func BenchmarkDeserializeNameEvent(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterNameEvent(1, componentBenchPID, componentBenchTID, "/tmp/a", "/tmp/b", types.SYS_ENTER_RENAME)
+	_, raw, err := gen.EnterNameEvent(1, componentBenchPID, componentBenchTID, "/tmp/a", "/tmp/b", types.SYS_ENTER_RENAME)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewNameEvent)
 }
 
 func BenchmarkDeserializeFcntlEvent(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterFcntlEvent(1, componentBenchPID, componentBenchTID, 33, syscall.F_SETFL, syscall.O_NONBLOCK)
+	_, raw, err := gen.EnterFcntlEvent(1, componentBenchPID, componentBenchTID, 33, syscall.F_SETFL, syscall.O_NONBLOCK)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewFcntlEvent)
 }
 
 func BenchmarkDeserializeDup3Event(b *testing.B) {
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterDup3Event(1, componentBenchPID, componentBenchTID, 8, syscall.O_CLOEXEC)
+	_, raw, err := gen.EnterDup3Event(1, componentBenchPID, componentBenchTID, 8, syscall.O_CLOEXEC)
+	if err != nil {
+		b.Fatal(err)
+	}
 	benchmarkDeserialize(b, raw, types.NewDup3Event)
 }
 
@@ -96,7 +120,10 @@ func BenchmarkTracepointEntered(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	_, raw := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
+	_, raw, err := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
@@ -116,8 +143,14 @@ func BenchmarkTracepointExited(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	_, enterRaw := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
-	_, exitRaw := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
+	_, enterRaw, err := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, exitRaw, err := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 	out := make(chan *event.Pair, 1)
 
@@ -135,8 +168,14 @@ func BenchmarkHandleOpenExit(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
-	exitTemplate, _ := gen.ExitOpenEvent(2, componentBenchPID, componentBenchTID)
+	enterTemplate, _, err := gen.EnterOpenEvent(1, componentBenchPID, componentBenchTID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitOpenEvent(2, componentBenchPID, componentBenchTID)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
@@ -158,8 +197,14 @@ func BenchmarkHandleFdExit(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterFdEvent(1, componentBenchPID, componentBenchTID, 99, types.SYS_ENTER_READ)
-	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_READ, 128)
+	enterTemplate, _, err := gen.EnterFdEvent(1, componentBenchPID, componentBenchTID, 99, types.SYS_ENTER_READ)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_READ, 128)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 	el.fdState().set(99, file.NewFd(99, "/tmp/fd", syscall.O_RDONLY))
 
@@ -182,8 +227,14 @@ func BenchmarkHandlePathExit(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterPathEvent(1, componentBenchPID, componentBenchTID, "/tmp/path", types.SYS_ENTER_MKDIR)
-	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_MKDIR, 0)
+	enterTemplate, _, err := gen.EnterPathEvent(1, componentBenchPID, componentBenchTID, "/tmp/path", types.SYS_ENTER_MKDIR)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_MKDIR, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
@@ -205,8 +256,14 @@ func BenchmarkHandleNameExit(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterNameEvent(1, componentBenchPID, componentBenchTID, "/tmp/a", "/tmp/b", types.SYS_ENTER_RENAME)
-	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_RENAME, 0)
+	enterTemplate, _, err := gen.EnterNameEvent(1, componentBenchPID, componentBenchTID, "/tmp/a", "/tmp/b", types.SYS_ENTER_RENAME)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_RENAME, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
@@ -228,8 +285,14 @@ func BenchmarkHandleNullExit(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
-	exitTemplate, _ := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
+	enterTemplate, _, err := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 
 	b.ResetTimer()
@@ -251,8 +314,14 @@ func BenchmarkHandleFcntlExit(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterFcntlEvent(1, componentBenchPID, componentBenchTID, 7, syscall.F_SETFL, syscall.O_NONBLOCK)
-	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_FCNTL, 0)
+	enterTemplate, _, err := gen.EnterFcntlEvent(1, componentBenchPID, componentBenchTID, 7, syscall.F_SETFL, syscall.O_NONBLOCK)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_FCNTL, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 	el.fdState().set(7, file.NewFd(7, "/tmp/fcntl", syscall.O_RDONLY))
 
@@ -275,8 +344,14 @@ func BenchmarkHandleDup3Exit(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterDup3Event(1, componentBenchPID, componentBenchTID, 9, syscall.O_CLOEXEC)
-	exitTemplate, _ := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_DUP3, 10)
+	enterTemplate, _, err := gen.EnterDup3Event(1, componentBenchPID, componentBenchTID, 9, syscall.O_CLOEXEC)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitRetEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_DUP3, 10)
+	if err != nil {
+		b.Fatal(err)
+	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
 	el.fdState().set(9, file.NewFd(9, "/tmp/dup3", syscall.O_RDONLY))
 
@@ -328,8 +403,14 @@ func BenchmarkEventPoolGetPut(b *testing.B) {
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	enterTemplate, _ := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
-	exitTemplate, _ := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
+	enterTemplate, _, err := gen.EnterNullEvent(1, componentBenchPID, componentBenchTID, types.SYS_ENTER_SYNC)
+	if err != nil {
+		b.Fatal(err)
+	}
+	exitTemplate, _, err := gen.ExitNullEvent(2, componentBenchPID, componentBenchTID, types.SYS_EXIT_SYNC)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

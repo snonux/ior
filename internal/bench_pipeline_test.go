@@ -53,7 +53,10 @@ func benchmarkPipelineMix(b *testing.B, mix benchutil.EventMix, events, numThrea
 	b.ReportAllocs()
 
 	gen := benchutil.NewEventGenerator()
-	stream := mix.GenerateStream(gen, events, numThreads)
+	stream, err := mix.GenerateStream(gen, events, numThreads)
+	if err != nil {
+		b.Fatalf("generate stream: %v", err)
+	}
 	if len(stream) == 0 {
 		b.Fatal("generated empty benchmark stream")
 	}
