@@ -25,6 +25,7 @@ type KeyMap struct {
 	SelectPID key.Binding
 	SelectTID key.Binding
 	Probes    key.Binding
+	Filter    key.Binding
 	Export    key.Binding
 	Quit      key.Binding
 	Enter     key.Binding
@@ -53,6 +54,7 @@ func DefaultKeyMap() KeyMap {
 		SelectPID: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "select pid")),
 		SelectTID: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "select tid")),
 		Probes:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "probes")),
+		Filter:    key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
 		Export:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "snapshot export")),
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Enter:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
