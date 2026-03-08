@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ior/internal/flags"
+	"ior/internal/globalfilter"
 	"ior/internal/tui"
 )
 
@@ -440,7 +441,14 @@ func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
 		},
 	)
 
-	ctx := tui.ContextWithTraceFilters(context.Background(), 2222, 3333)
+	ctx := tui.ContextWithTraceFilters(context.Background(), globalfilter.Filter{
+		PID:     &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 2222},
+		TID:     &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 3333},
+		Comm:    &globalfilter.StringFilter{Pattern: "nginx"},
+		File:    &globalfilter.StringFilter{Pattern: "/var/log"},
+		Syscall: &globalfilter.StringFilter{Pattern: "read"},
+		FD:      &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 7},
+	})
 	if err := starter(ctx); err != nil {
 		t.Fatalf("starter returned error: %v", err)
 	}
@@ -449,6 +457,18 @@ func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
 	}
 	if gotCfg.TidFilter != 3333 {
 		t.Fatalf("expected tid filter from context, got %d", gotCfg.TidFilter)
+	}
+	if gotCfg.CommFilter != "nginx" {
+		t.Fatalf("expected comm filter from context, got %q", gotCfg.CommFilter)
+	}
+	if gotCfg.PathFilter != "/var/log" {
+		t.Fatalf("expected path filter from context, got %q", gotCfg.PathFilter)
+	}
+	if gotCfg.GlobalFilter.Syscall == nil || gotCfg.GlobalFilter.Syscall.Pattern != "read" {
+		t.Fatalf("expected syscall preserved in global filter payload, got %+v", gotCfg.GlobalFilter.Syscall)
+	}
+	if gotCfg.GlobalFilter.FD == nil || gotCfg.GlobalFilter.FD.Value != 7 {
+		t.Fatalf("expected fd preserved in global filter payload, got %+v", gotCfg.GlobalFilter.FD)
 	}
 }
 

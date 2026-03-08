@@ -11,6 +11,7 @@ import (
 	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
+	"ior/internal/globalfilter"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	dashboardui "ior/internal/tui/dashboard"
@@ -33,6 +34,29 @@ type fakeProbeManager struct {
 func (f fakeProbeManager) States() []probemanager.ProbeState { return f.states }
 func (f fakeProbeManager) Toggle(string) error               { return nil }
 func (f fakeProbeManager) ActiveCount() (int, int)           { return len(f.states), len(f.states) }
+
+func TestTraceFiltersContextRoundTripClonesPayload(t *testing.T) {
+	original := globalfilter.Filter{
+		Comm: &globalfilter.StringFilter{Pattern: "nginx"},
+		File: &globalfilter.StringFilter{Pattern: "/var/log"},
+		PID:  &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 42},
+	}
+
+	ctx := ContextWithTraceFilters(context.Background(), original)
+	original.Comm.Pattern = "mutated"
+	original.PID.Value = 7
+
+	got, ok := TraceFiltersFromContext(ctx)
+	if !ok {
+		t.Fatalf("expected trace filters in context")
+	}
+	if got.Comm == nil || got.Comm.Pattern != "nginx" {
+		t.Fatalf("expected comm pattern cloned into context, got %+v", got.Comm)
+	}
+	if got.PID == nil || got.PID.Value != 42 {
+		t.Fatalf("expected pid filter cloned into context, got %+v", got.PID)
+	}
+}
 
 func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	flags.SetPidFilter(-1)
