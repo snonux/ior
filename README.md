@@ -69,7 +69,24 @@ Flamegraphs are available only inside the TUI dashboard.
 Use `-fields` to change the stack order and `-count` to choose the metric.
 The default stack order is `comm,path,tracepoint` (bottom to top).
 
-## TUI Hotkeys
+## TUI Navigation
+
+The TUI interface provides an in‑screen help panel (toggle with **H**) that lists all available keys. Use this help screen to discover navigation shortcuts.
+
+You can move between dashboard tabs:
+
+- **tab** – next dashboard tab
+- **shift+tab** – previous dashboard tab
+- **1** – Overview
+- **2** – Syscalls
+- **3** – Files
+- **4** – Processes
+- **5** – Latency+Gaps
+- **6** – Stream
+
+The bottom hint shows `press H for help` when the help is hidden.
+
+
 
 The TUI has two key scopes:
 
