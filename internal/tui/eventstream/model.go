@@ -36,25 +36,30 @@ type Model struct {
 	allEvents []StreamEvent
 	filtered  []StreamEvent
 
-	filter Filter
+	filter      Filter
+	filterStack []string
 
 	paused bool
 
-	scrollOffset    int
-	autoScroll      bool
-	selectedIdx     int
-	selectedCol     int
-	fdTraceView     fdTraceViewState
-	exportModal     ExportModal
-	searchModal     SearchModal
-	searchPattern   string
-	searchRegex     *regexp.Regexp
-	searchDirection SearchDirection
-	lastExportPath  string
-	pendingOpenPath string
-	statusMessage   string
-	exportDir       string
-	isDark          bool
+	scrollOffset        int
+	autoScroll          bool
+	selectedIdx         int
+	selectedCol         int
+	fdTraceView         fdTraceViewState
+	exportModal         ExportModal
+	searchModal         SearchModal
+	searchPattern       string
+	searchRegex         *regexp.Regexp
+	searchDirection     SearchDirection
+	lastExportPath      string
+	pendingOpenPath     string
+	pendingFilter       Filter
+	pendingFilterAction string
+	hasPendingFilter    bool
+	pendingUndo         bool
+	statusMessage       string
+	exportDir           string
+	isDark              bool
 
 	width  int
 	height int
@@ -133,6 +138,11 @@ func (m *Model) SetFilter(filter Filter) {
 	m.filter = filter.Clone()
 	m.applyFilter()
 	m.restoreSelectionBySeq(targetSeq)
+}
+
+// SetFilterStack updates the visible shared filter stack summary.
+func (m *Model) SetFilterStack(stack []string) {
+	m.filterStack = append(m.filterStack[:0], stack...)
 }
 
 // SetDarkMode updates stream modal text input styles for the active theme.
@@ -231,6 +241,23 @@ func (m *Model) HandleKey(keyStr string) bool {
 	}
 
 	switch keyStr {
+	case "enter":
+		if m.paused {
+			return m.requestGlobalFilterFromSelectedCell()
+		}
+		return false
+	case "F":
+		if len(m.filterStack) == 0 {
+			return false
+		}
+		m.pendingUndo = true
+		return true
+	case "esc":
+		if m.paused && len(m.filterStack) > 0 {
+			m.pendingUndo = true
+			return true
+		}
+		return false
 	case "/":
 		m.openSearch(SearchForward)
 		return true
@@ -458,7 +485,7 @@ func (m *Model) View(width, height int) string {
 	if m.paused && selectedVisibleIdx >= 0 {
 		selectedCol = m.selectedCol
 	}
-	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx, selectedCol)
+	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, m.filterStack, visible, selectedVisibleIdx, selectedCol)
 	if !m.showFooter {
 		if m.exportModal.Visible() {
 			return m.exportModal.View(width, height)
@@ -471,7 +498,7 @@ func (m *Model) View(width, height int) string {
 
 	status := fmt.Sprintf("Row %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount)
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | Esc/F undo", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount)
 	}
 	out := base + "\n" + status
 	if m.statusMessage != "" {
@@ -699,6 +726,53 @@ func (m *Model) moveSelectedColBy(delta int) {
 	m.selectedCol = clamp(m.selectedCol+delta, 0, streamColumnCount-1)
 }
 
+func (m *Model) requestGlobalFilterFromSelectedCell() bool {
+	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
+		return false
+	}
+	ev := m.filtered[m.selectedIdx]
+	next := m.filter.Clone()
+
+	switch m.selectedCol {
+	case streamColGap:
+		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
+		m.pendingFilterAction = fmt.Sprintf("gap>=%s", formatDurationNs(ev.GapNs))
+	case streamColLatency:
+		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
+		m.pendingFilterAction = fmt.Sprintf("latency>=%s", formatDurationNs(ev.DurationNs))
+	case streamColComm:
+		next.Comm = &StringFilter{Pattern: ev.Comm}
+		m.pendingFilterAction = "comm~" + ev.Comm
+	case streamColPID:
+		next.PID = &NumericFilter{Op: OpEq, Value: int64(ev.PID)}
+		m.pendingFilterAction = fmt.Sprintf("pid=%d", ev.PID)
+	case streamColTID:
+		next.TID = &NumericFilter{Op: OpEq, Value: int64(ev.TID)}
+		m.pendingFilterAction = fmt.Sprintf("tid=%d", ev.TID)
+	case streamColSyscall:
+		next.Syscall = &StringFilter{Pattern: ev.Syscall}
+		m.pendingFilterAction = "syscall~" + ev.Syscall
+	case streamColFD:
+		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
+		m.pendingFilterAction = fmt.Sprintf("fd=%d", ev.FD)
+	case streamColRet:
+		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
+		m.pendingFilterAction = fmt.Sprintf("ret=%d", ev.RetVal)
+	case streamColBytes:
+		next.Bytes = &NumericFilter{Op: OpEq, Value: int64(ev.Bytes)}
+		m.pendingFilterAction = fmt.Sprintf("bytes=%d", ev.Bytes)
+	case streamColFile:
+		next.File = &StringFilter{Pattern: ev.FileName}
+		m.pendingFilterAction = "file~" + ev.FileName
+	default:
+		return false
+	}
+
+	m.pendingFilter = next
+	m.hasPendingFilter = true
+	return true
+}
+
 func (m *Model) currentSelectedSeq() uint64 {
 	if m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return 0
@@ -788,6 +862,28 @@ func (m *Model) ConsumeOpenEditorRequest() (string, bool) {
 	path := m.pendingOpenPath
 	m.pendingOpenPath = ""
 	return path, true
+}
+
+// ConsumeGlobalFilterRequest returns the pending global-filter request once.
+func (m *Model) ConsumeGlobalFilterRequest() (Filter, string, bool) {
+	if !m.hasPendingFilter {
+		return Filter{}, "", false
+	}
+	filter := m.pendingFilter.Clone()
+	action := m.pendingFilterAction
+	m.pendingFilter = Filter{}
+	m.pendingFilterAction = ""
+	m.hasPendingFilter = false
+	return filter, action, true
+}
+
+// ConsumeGlobalFilterUndoRequest returns the pending undo request once.
+func (m *Model) ConsumeGlobalFilterUndoRequest() bool {
+	if !m.pendingUndo {
+		return false
+	}
+	m.pendingUndo = false
+	return true
 }
 
 // SetStatusMessage updates the stream footer status line.

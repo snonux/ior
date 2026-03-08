@@ -65,6 +65,7 @@ type Model struct {
 	refreshEvery             time.Duration
 	keys                     common.KeyMap
 	globalFilter             globalfilter.Filter
+	filterStack              []string
 	pidFilter                int
 	syscallsOffset           int
 	syscallsTreemapSelection int
@@ -418,6 +419,12 @@ func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		streamWidth, streamHeight := streamViewport(m.width, m.height)
 		m.streamModel.SetViewport(streamWidth, streamHeight)
 		handled := m.streamModel.HandleTeaKey(msg)
+		if m.streamModel.ConsumeGlobalFilterUndoRequest() {
+			return true, func() tea.Msg { return messages.GlobalFilterUndoRequestedMsg{} }
+		}
+		if filter, action, ok := m.streamModel.ConsumeGlobalFilterRequest(); ok {
+			return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
+		}
 		if path, ok := m.streamModel.ConsumeOpenEditorRequest(); ok {
 			editorCmd, err := eventstream.EditorCommandForPath(path)
 			if err != nil {
@@ -543,6 +550,12 @@ func (m *Model) SetGlobalFilter(filter globalfilter.Filter) {
 	m.streamModel.SetFilter(eventstream.Filter(filter))
 }
 
+// SetFilterStack forwards the shared global filter stack into dashboard views.
+func (m *Model) SetFilterStack(stack []string) {
+	m.filterStack = append(m.filterStack[:0], stack...)
+	m.streamModel.SetFilterStack(stack)
+}
+
 // SetLiveTrie updates the live trie source used by the flamegraph tab.
 func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 	m.liveTrie = liveTrie
@@ -612,7 +625,11 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) filterSummary() string {
-	return "filter: " + m.globalFilter.Summary()
+	summary := "filter: " + m.globalFilter.Summary()
+	if len(m.filterStack) == 0 {
+		return summary
+	}
+	return summary + " | stack: " + strings.Join(m.filterStack, " | ")
 }
 
 func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model) string {

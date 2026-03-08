@@ -213,7 +213,25 @@ func matchString(sf *StringFilter, value string) bool {
 	if pattern == "" {
 		return true
 	}
-	return strings.Contains(strings.ToLower(value), pattern)
+	value = strings.ToLower(value)
+	anchoredStart := strings.HasPrefix(pattern, "^")
+	anchoredEnd := strings.HasSuffix(pattern, "$")
+	if anchoredStart {
+		pattern = pattern[1:]
+	}
+	if anchoredEnd && len(pattern) > 0 {
+		pattern = pattern[:len(pattern)-1]
+	}
+	switch {
+	case anchoredStart && anchoredEnd:
+		return value == pattern
+	case anchoredStart:
+		return strings.HasPrefix(value, pattern)
+	case anchoredEnd:
+		return strings.HasSuffix(value, pattern)
+	default:
+		return strings.Contains(value, pattern)
+	}
 }
 
 func matchNumeric(nf *NumericFilter, value int64) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -255,6 +256,8 @@ type Model struct {
 	pidFilter     int
 	tidFilter     int
 	globalFilter  globalfilter.Filter
+	filterHistory []globalfilter.Filter
+	filterStack   []string
 	pickerReturn  *pickerReturnState
 	exportEnabled bool
 	isDark        bool
@@ -431,6 +434,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attaching = false
 		m.lastErr = msg.Err
 		return m, nil
+	case messages.GlobalFilterRequestedMsg:
+		return m.applyGlobalFilter(msg.Filter, msg.Action)
+	case messages.GlobalFilterUndoRequestedMsg:
+		return m.undoGlobalFilter()
 	}
 
 	if next, cmd, handled := m.handleModalDispatch(msg); handled {
@@ -531,6 +538,10 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		m.filterModal = m.filterModal.Open(m.globalFilter)
 		return m, nil, true
 	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.FilterUndo) {
+		next, cmd := m.undoGlobalFilter()
+		return next, cmd, true
+	}
 	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectPID) {
 		next, cmd := m.reselectPID()
 		return next, cmd, true
@@ -563,7 +574,7 @@ func (m Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	wasVisible := m.filterModal.Visible()
 	m.filterModal = m.filterModal.Update(msg)
 	if wasVisible && !m.filterModal.Visible() {
-		next, cmd := m.applyGlobalFilter(m.filterModal.Filter())
+		next, cmd := m.applyGlobalFilter(m.filterModal.Filter(), "")
 		return next, tea.Batch(dashboardCmd, cmd)
 	}
 	return m, dashboardCmd
@@ -854,10 +865,11 @@ func eqNumericFilter(value int) *globalfilter.NumericFilter {
 func (m *Model) setProcessFilters(pid, tid int) {
 	m.pidFilter = pid
 	m.tidFilter = tid
-	m.globalFilter.PID = eqNumericFilter(pid)
-	m.globalFilter.TID = eqNumericFilter(tid)
-	m.dashboard.SetPidFilter(pid)
-	m.dashboard.SetGlobalFilter(m.globalFilter)
+	m.globalFilter = applyProcessFilters(m.globalFilter, pid, tid)
+	for i := range m.filterHistory {
+		m.filterHistory[i] = applyProcessFilters(m.filterHistory[i], pid, tid)
+	}
+	m.syncDashboardFilterState()
 }
 
 func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
@@ -866,15 +878,52 @@ func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
 	tid, _ := eqNumericFilterValue(m.globalFilter.TID)
 	m.pidFilter = pid
 	m.tidFilter = tid
-	m.dashboard.SetPidFilter(pid)
-	m.dashboard.SetGlobalFilter(m.globalFilter)
+	m.syncDashboardFilterState()
 }
 
-func (m Model) applyGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
+func (m *Model) syncDashboardFilterState() {
+	m.dashboard.SetPidFilter(m.pidFilter)
+	m.dashboard.SetGlobalFilter(m.globalFilter)
+	m.dashboard.SetFilterStack(m.filterStack)
+}
+
+func applyProcessFilters(filter globalfilter.Filter, pid, tid int) globalfilter.Filter {
+	out := filter.Clone()
+	out.PID = eqNumericFilter(pid)
+	out.TID = eqNumericFilter(tid)
+	return out
+}
+
+func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
 	nextFilter := filter.Clone()
 	changed := !m.globalFilter.Equal(nextFilter)
+	if changed {
+		m.filterHistory = append(m.filterHistory, m.globalFilter.Clone())
+		m.filterStack = append(m.filterStack, globalFilterActionLabel(m.globalFilter, nextFilter, action))
+	}
 	m.setGlobalFilter(nextFilter)
 	if !changed || m.screen != ScreenDashboard {
+		return m, nil
+	}
+
+	m.stopTrace()
+	m.dashboard.PrepareForTraceRestart()
+	m.attaching = true
+	m.lastErr = nil
+	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+}
+
+func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
+	if len(m.filterHistory) == 0 {
+		return m, nil
+	}
+	prev := m.filterHistory[len(m.filterHistory)-1]
+	m.filterHistory = m.filterHistory[:len(m.filterHistory)-1]
+	if len(m.filterStack) > 0 {
+		m.filterStack = m.filterStack[:len(m.filterStack)-1]
+	}
+	m.setGlobalFilter(prev)
+	if m.screen != ScreenDashboard {
 		return m, nil
 	}
 
@@ -890,6 +939,94 @@ func eqNumericFilterValue(filter *globalfilter.NumericFilter) (int, bool) {
 		return -1, false
 	}
 	return int(filter.Value), true
+}
+
+func globalFilterActionLabel(prev, next globalfilter.Filter, action string) string {
+	if strings.TrimSpace(action) != "" {
+		return action
+	}
+	parts := make([]string, 0, 10)
+	if prev.ErrorsOnly != next.ErrorsOnly {
+		if next.ErrorsOnly {
+			parts = append(parts, "errors")
+		} else {
+			parts = append(parts, "clear errors")
+		}
+	}
+	parts = appendStringFilterChange(parts, "syscall", prev.Syscall, next.Syscall)
+	parts = appendStringFilterChange(parts, "comm", prev.Comm, next.Comm)
+	parts = appendStringFilterChange(parts, "file", prev.File, next.File)
+	parts = appendNumericFilterChange(parts, "pid", prev.PID, next.PID, false)
+	parts = appendNumericFilterChange(parts, "tid", prev.TID, next.TID, false)
+	parts = appendNumericFilterChange(parts, "fd", prev.FD, next.FD, false)
+	parts = appendNumericFilterChange(parts, "latency", prev.LatencyNs, next.LatencyNs, true)
+	parts = appendNumericFilterChange(parts, "gap", prev.GapNs, next.GapNs, true)
+	parts = appendNumericFilterChange(parts, "bytes", prev.Bytes, next.Bytes, false)
+	parts = appendNumericFilterChange(parts, "ret", prev.RetVal, next.RetVal, false)
+	if len(parts) == 0 {
+		return next.Summary()
+	}
+	return strings.Join(parts, " ")
+}
+
+func appendStringFilterChange(parts []string, name string, prev, next *globalfilter.StringFilter) []string {
+	if sameStringFilter(prev, next) {
+		return parts
+	}
+	if next == nil || strings.TrimSpace(next.Pattern) == "" {
+		return append(parts, "clear "+name)
+	}
+	return append(parts, fmt.Sprintf("%s~%s", name, strings.TrimSpace(next.Pattern)))
+}
+
+func appendNumericFilterChange(parts []string, name string, prev, next *globalfilter.NumericFilter, duration bool) []string {
+	if sameNumericFilter(prev, next) {
+		return parts
+	}
+	if next == nil {
+		return append(parts, "clear "+name)
+	}
+	value := strconv.FormatInt(next.Value, 10)
+	if duration {
+		value = time.Duration(next.Value).String()
+	}
+	return append(parts, fmt.Sprintf("%s%s%s", name, compareOpSymbol(next.Op), value))
+}
+
+func sameStringFilter(a, b *globalfilter.StringFilter) bool {
+	if a == nil || strings.TrimSpace(a.Pattern) == "" {
+		return b == nil || strings.TrimSpace(b.Pattern) == ""
+	}
+	if b == nil {
+		return false
+	}
+	return strings.TrimSpace(a.Pattern) == strings.TrimSpace(b.Pattern)
+}
+
+func sameNumericFilter(a, b *globalfilter.NumericFilter) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Op == b.Op && a.Value == b.Value
+}
+
+func compareOpSymbol(op globalfilter.CompareOp) string {
+	switch op {
+	case globalfilter.OpEq:
+		return "="
+	case globalfilter.OpNeq:
+		return "!="
+	case globalfilter.OpGt:
+		return ">"
+	case globalfilter.OpGte:
+		return ">="
+	case globalfilter.OpLt:
+		return "<"
+	case globalfilter.OpLte:
+		return "<="
+	default:
+		return "="
+	}
 }
 
 func (m *Model) stopTrace() {
