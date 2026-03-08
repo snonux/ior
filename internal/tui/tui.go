@@ -22,6 +22,7 @@ import (
 	"ior/internal/tui/messages"
 	"ior/internal/tui/pidpicker"
 	"ior/internal/tui/probes"
+	tracefilterui "ior/internal/tui/tracefilter"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -206,12 +207,13 @@ func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter)
 
 // Model is the top-level Bubble Tea model that routes between PID picker and dashboard.
 type Model struct {
-	screen     Screen
-	pidPicker  pidpicker.Model
-	dashboard  dashboardui.Model
-	exporter   tuiexport.Model
-	probeModal probes.Model
-	runtime    *runtimeBindings
+	screen      Screen
+	pidPicker   pidpicker.Model
+	dashboard   dashboardui.Model
+	exporter    tuiexport.Model
+	probeModal  probes.Model
+	filterModal tracefilterui.Model
+	runtime     *runtimeBindings
 
 	keys KeyMap
 
@@ -297,6 +299,7 @@ func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter
 		dashboard:     dashboard,
 		exporter:      tuiexport.NewModel(),
 		probeModal:    probes.NewModel(runtime.currentProbeManager()).SetDarkMode(true),
+		filterModal:   tracefilterui.NewModel().SetDarkMode(true),
 		runtime:       runtime,
 		keys:          keys,
 		spin:          spin,
@@ -422,6 +425,7 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 	return m.screen == ScreenDashboard &&
 		!m.attaching &&
 		m.lastErr == nil &&
+		!m.filterModal.Visible() &&
 		!m.exporter.Visible() &&
 		!m.probeModal.Visible() &&
 		!m.dashboard.BlocksGlobalShortcuts(msg)
@@ -431,6 +435,7 @@ func (m Model) canQuitFromMainDashboard(msg tea.KeyPressMsg) bool {
 	return m.screen == ScreenDashboard &&
 		!m.attaching &&
 		m.lastErr == nil &&
+		!m.filterModal.Visible() &&
 		!m.exporter.Visible() &&
 		!m.probeModal.Visible() &&
 		!m.dashboard.BlocksGlobalShortcuts(msg)
@@ -447,7 +452,7 @@ func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 		return false
 	}
 	return m.screen == ScreenDashboard &&
-		(m.exporter.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
+		(m.filterModal.Visible() || m.exporter.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
 }
 
 func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
@@ -473,6 +478,10 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 				next, cmd := m.updateProbeModal(esc)
 				return next, cmd, true
 			}
+			if m.filterModal.Visible() {
+				next, cmd := m.updateFilterModal(esc)
+				return next, cmd, true
+			}
 			if m.exporter.Visible() {
 				next, cmd := m.updateExportModal(esc)
 				return next, cmd, true
@@ -493,6 +502,10 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 	}
 	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Probes) {
 		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
+		return m, nil, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Filter) {
+		m.filterModal = m.filterModal.Open(m.globalFilter)
 		return m, nil, true
 	}
 	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectPID) {
@@ -522,6 +535,16 @@ func (m Model) updateProbeModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(dashboardCmd, cmd)
 }
 
+func (m Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, dashboardCmd := m.updateDashboardForModal(msg)
+	wasVisible := m.filterModal.Visible()
+	m.filterModal = m.filterModal.Update(msg)
+	if wasVisible && !m.filterModal.Visible() {
+		m.setGlobalFilter(m.filterModal.Filter())
+	}
+	return m, dashboardCmd
+}
+
 func (m Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	var cmd tea.Cmd
@@ -534,6 +557,10 @@ func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd, true
+	}
+	if m.filterModal.Visible() {
+		next, cmd := m.updateFilterModal(msg)
+		return next, cmd, true
 	}
 	if m.probeModal.Visible() {
 		next, cmd := m.updateProbeModal(msg)
@@ -687,6 +714,7 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
+	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
 	m.pidPicker = pidpicker.New().SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
@@ -712,6 +740,7 @@ func (m Model) reselectTID() (tea.Model, tea.Cmd) {
 	m.lastErr = nil
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
+	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
 	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap()).SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
@@ -804,6 +833,22 @@ func (m *Model) setProcessFilters(pid, tid int) {
 	m.dashboard.SetPidFilter(pid)
 }
 
+func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
+	m.globalFilter = filter.Clone()
+	pid, _ := eqNumericFilterValue(m.globalFilter.PID)
+	tid, _ := eqNumericFilterValue(m.globalFilter.TID)
+	m.pidFilter = pid
+	m.tidFilter = tid
+	m.dashboard.SetPidFilter(pid)
+}
+
+func eqNumericFilterValue(filter *globalfilter.NumericFilter) (int, bool) {
+	if filter == nil || filter.Op != globalfilter.OpEq || filter.Value <= 0 {
+		return -1, false
+	}
+	return int(filter.Value), true
+}
+
 func (m *Model) stopTrace() {
 	if m.traceStop != nil {
 		m.traceStop()
@@ -821,6 +866,7 @@ func (m *Model) applyTheme(isDark bool) {
 	m.dashboard.SetDarkMode(isDark)
 	m.pidPicker = m.pidPicker.SetDarkMode(isDark)
 	m.probeModal = m.probeModal.SetDarkMode(isDark)
+	m.filterModal = m.filterModal.SetDarkMode(isDark)
 }
 
 func (m Model) windowTitle() string {
@@ -866,6 +912,9 @@ func (m Model) View() tea.View {
 		return altScreenView(placeToViewport(width, height, base), title)
 	case ScreenDashboard:
 		base := m.dashboard.View().Content
+		if m.filterModal.Visible() {
+			return altScreenView(placeToViewport(width, height, m.filterModal.View(width, height)), title)
+		}
 		if m.probeModal.Visible() {
 			return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)), title)
 		}
@@ -979,7 +1028,7 @@ type helpSection struct {
 func (m Model) helpSections() []helpSection {
 	globalLines := []string{
 		"H help  esc/? close help  q quit",
-		"p pid picker  t tid picker  o probes",
+		"f filter  p pid picker  t tid picker  o probes",
 	}
 	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
 		globalLines[1] += "  e snapshot export"

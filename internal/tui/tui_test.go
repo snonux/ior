@@ -884,8 +884,8 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	if m.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed while stream filter modal handles typing")
 	}
-	if !strings.Contains(m.View().Content, "syscall~ope") {
-		t.Fatalf("expected typed syscall filter to be applied")
+	if m.globalFilter.Syscall == nil || m.globalFilter.Syscall.Pattern != "ope" {
+		t.Fatalf("expected typed syscall filter to be stored globally, got %+v", m.globalFilter.Syscall)
 	}
 }
 
@@ -1001,6 +1001,60 @@ func TestHelpOverlayCanOpenFromPIDPicker(t *testing.T) {
 	}
 	if !strings.Contains(m.View().Content, "PID/TID Picker") {
 		t.Fatalf("expected picker shortcuts in help overlay")
+	}
+}
+
+func TestGlobalFilterModalOpensFromDashboardShortcut(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	if !m.filterModal.Visible() {
+		t.Fatalf("expected global filter modal to open on f")
+	}
+}
+
+func TestQuitClosesGlobalFilterModalWithoutQuitting(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.filterModal = m.filterModal.Open(m.globalFilter)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("expected no quit command while closing filter modal")
+	}
+	if m.filterModal.Visible() {
+		t.Fatalf("expected q to close global filter modal")
+	}
+	if m.quitting {
+		t.Fatalf("expected q in filter modal not to set quitting state")
+	}
+}
+
+func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	if !m.filterModal.Visible() {
+		t.Fatalf("expected global filter modal to open")
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	if m.filterModal.Visible() {
+		t.Fatalf("expected global filter modal to close after esc")
+	}
+	if m.globalFilter.Syscall == nil || m.globalFilter.Syscall.Pattern != "read" {
+		t.Fatalf("expected stored global filter updated from modal, got %+v", m.globalFilter.Syscall)
 	}
 }
 
