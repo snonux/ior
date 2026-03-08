@@ -63,6 +63,7 @@ type TraceRuntimeBindings interface {
 	SetEventStreamSource(source eventstream.Source)
 	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
 	SetProbeManager(manager ProbeManager)
+	StreamBuffer() *eventstream.RingBuffer
 }
 
 type runtimeBindingsContextKey struct{}
@@ -73,6 +74,7 @@ type runtimeBindings struct {
 
 	snapshotSource SnapshotSource
 	streamSource   eventstream.Source
+	streamBuffer   *eventstream.RingBuffer
 	liveTrieSource flamegraphtui.LiveTrieSource
 	probeManager   ProbeManager
 }
@@ -82,7 +84,11 @@ type traceFilters struct {
 }
 
 func newRuntimeBindings() *runtimeBindings {
-	return &runtimeBindings{}
+	streamBuffer := eventstream.NewRingBuffer()
+	return &runtimeBindings{
+		streamSource: streamBuffer,
+		streamBuffer: streamBuffer,
+	}
 }
 
 func (r *runtimeBindings) SetDashboardSnapshotSource(source SnapshotSource) {
@@ -95,6 +101,12 @@ func (r *runtimeBindings) SetEventStreamSource(source eventstream.Source) {
 	r.mu.Lock()
 	r.streamSource = source
 	r.mu.Unlock()
+}
+
+func (r *runtimeBindings) StreamBuffer() *eventstream.RingBuffer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.streamBuffer
 }
 
 func (r *runtimeBindings) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
@@ -131,6 +143,16 @@ func (r *runtimeBindings) currentProbeManager() ProbeManager {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.probeManager
+}
+
+func (r *runtimeBindings) resetStreamBuffer() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.streamBuffer == nil {
+		r.streamBuffer = eventstream.NewRingBuffer()
+	}
+	r.streamBuffer.Reset()
+	r.streamSource = r.streamBuffer
 }
 
 func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
@@ -682,6 +704,7 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	m.stopTrace()
+	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, -1)
 	m.pickerReturn = nil
 	m.screen = ScreenDashboard
@@ -697,6 +720,7 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 		pid = msg.Pid
 	}
 	m.stopTrace()
+	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, tid)
 	m.pickerReturn = nil
 	m.screen = ScreenDashboard
