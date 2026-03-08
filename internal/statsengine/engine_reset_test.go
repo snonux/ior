@@ -15,7 +15,6 @@ func TestEngineResetClearsAccumulatedStats(t *testing.T) {
 		t.Fatalf("expected non-zero totals before reset")
 	}
 
-	time.Sleep(1 * time.Millisecond)
 	e.Reset()
 	after := e.Snapshot()
 	if after.TotalSyscalls != 0 || after.TotalBytes != 0 || after.TotalErrors != 0 {

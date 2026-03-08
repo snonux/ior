@@ -612,7 +612,8 @@ func TestNormalizeKeyEventReleaseFallbackSuppressesImmediatePressOnly(t *testing
 		t.Fatalf("expected immediate matching press to be suppressed, got %T", normalized)
 	}
 
-	time.Sleep(70 * time.Millisecond)
+	// Expire suppression deterministically instead of waiting on wall clock time.
+	m.suppressPressUntil = time.Now().Add(-time.Nanosecond)
 	if normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); !ok {
 		t.Fatalf("expected press to be accepted after suppression window")
 	}

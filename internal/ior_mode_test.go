@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"ior/internal/flags"
@@ -365,43 +366,38 @@ func TestBuildTestFlamesRuntimeSeedsLiveTrie(t *testing.T) {
 }
 
 func TestBuildTestLiveFlamesRuntimeContinuouslyUpdatesLiveTrie(t *testing.T) {
-	cfg := flags.NewFlags()
-	cfg.LiveInterval = 15 * time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		cfg := flags.NewFlags()
+		cfg.LiveInterval = 15 * time.Millisecond
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	_, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, cfg)
-	if streamBuf == nil {
-		t.Fatalf("expected stream buffer in test live flames runtime")
-	}
-	if liveTrie == nil {
-		t.Fatalf("expected live trie in test live flames runtime")
-	}
+		_, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, cfg)
+		if streamBuf == nil {
+			t.Fatalf("expected stream buffer in test live flames runtime")
+		}
+		if liveTrie == nil {
+			t.Fatalf("expected live trie in test live flames runtime")
+		}
 
-	initialVersion := liveTrie.Version()
-	if initialVersion == 0 {
-		t.Fatalf("expected seeded live trie version to be non-zero")
-	}
-	initialSnapshot, _ := liveTrie.SnapshotJSON()
+		initialVersion := liveTrie.Version()
+		if initialVersion == 0 {
+			t.Fatalf("expected seeded live trie version to be non-zero")
+		}
+		initialSnapshot, _ := liveTrie.SnapshotJSON()
 
-	sawUpdate := false
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadline) {
+		time.Sleep(cfg.LiveInterval + time.Nanosecond)
+		synctest.Wait()
+
 		if liveTrie.Version() <= initialVersion {
-			time.Sleep(10 * time.Millisecond)
-			continue
+			t.Fatalf("expected live trie version to advance beyond %d", initialVersion)
 		}
 		currentSnapshot, _ := liveTrie.SnapshotJSON()
-		if !bytes.Equal(initialSnapshot, currentSnapshot) {
-			sawUpdate = true
-			break
+		if bytes.Equal(initialSnapshot, currentSnapshot) {
+			t.Fatalf("expected test live flames snapshot shape to change over time")
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !sawUpdate {
-		t.Fatalf("expected test live flames snapshot shape to change over time (version > %d)", initialVersion)
-	}
+	})
 }
 
 func TestRunTraceWithContextRequiresRoot(t *testing.T) {
