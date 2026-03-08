@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 	"image/color"
 	"math"
-	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -587,6 +586,7 @@ func renderBubbleRow(cells []bubbleCell, palette []color.Color) string {
 	}
 	var b strings.Builder
 	styleCache := make(map[string]lipgloss.Style, 8)
+	selectedColor := lipgloss.Color("129")
 	for _, cell := range cells {
 		if cell.colorSlot < 0 {
 			if cell.bold {
@@ -604,6 +604,9 @@ func renderBubbleRow(cells []bubbleCell, palette []color.Color) string {
 		style, ok := styleCache[key]
 		if !ok {
 			style = lipgloss.NewStyle().Foreground(palette[slot])
+			if cell.bold {
+				style = style.Foreground(selectedColor)
+			}
 			if cell.bold {
 				style = style.Bold(true)
 			}
@@ -795,15 +798,11 @@ func filesDirBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 	dirs := aggregateFilesByDir(snap.Files())
 	data := make([]bubbleDatum, 0, len(dirs))
 	for _, dir := range dirs {
-		label := filepath.Base(dir.Dir)
-		if label == "." || label == "/" || label == "" {
-			label = dir.Dir
-		}
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", dir.Dir, dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
 		data = append(data, bubbleDatum{
 			ID:     dir.Dir,
-			Label:  label,
+			Label:  rootPathLabelFromFSPath(dir.Dir),
 			Count:  dir.Accesses,
 			Bytes:  totalBytes,
 			Detail: detail,

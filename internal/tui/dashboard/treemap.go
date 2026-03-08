@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/color"
 	"math"
-	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -151,13 +150,10 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 	dirs := aggregateFilesByDir(snap.Files())
 	items := make([]syscallTreemapItem, 0, len(dirs))
 	for _, dir := range dirs {
-		label := filepath.Base(dir.Dir)
-		if label == "." || label == "/" || label == "" {
-			label = dir.Dir
-		}
+		pathLabel := rootPathLabelFromFSPath(dir.Dir)
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		item := syscallTreemapItem{
-			Name:  label,
+			Name:  pathLabel,
 			Count: dir.Accesses,
 			Bytes: totalBytes,
 			Detail: fmt.Sprintf(
@@ -485,6 +481,7 @@ func renderTreemapRow(cells []treemapCell, palette []color.Color) string {
 	}
 	var b strings.Builder
 	styleCache := make(map[string]lipgloss.Style, 8)
+	selectedColor := lipgloss.Color("129")
 	for _, cell := range cells {
 		if cell.colorSlot < 0 {
 			if cell.bold {
@@ -502,6 +499,9 @@ func renderTreemapRow(cells []treemapCell, palette []color.Color) string {
 		style, ok := styleCache[key]
 		if !ok {
 			style = lipgloss.NewStyle().Foreground(palette[slot])
+			if cell.bold {
+				style = style.Foreground(selectedColor)
+			}
 			if cell.bold {
 				style = style.Bold(true)
 			}

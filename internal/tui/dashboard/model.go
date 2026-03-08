@@ -526,6 +526,9 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 	if m.activeTab == TabFiles && m.filesVizMode == tabVizModeTreemap && m.filesDirGrouped {
 		return renderFilesTreemap(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark)
 	}
+	if m.activeTab == TabFiles && m.filesVizMode == tabVizModeIcicle && m.filesDirGrouped {
+		return renderFilesIcicle(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark)
+	}
 	if m.activeTab == TabProcesses && m.processesVizMode == tabVizModeTreemap {
 		return renderProcessesTreemap(m.latest, width, activeHeight, m.processesChart.Metric(), m.processesOffset, m.isDark)
 	}
@@ -733,7 +736,7 @@ func (m Model) allowedVizModes(tab Tab) []tabVizMode {
 		return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
 	case TabFiles:
 		if m.filesDirGrouped {
-			return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
+			return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap, tabVizModeIcicle}
 		}
 		return []tabVizMode{tabVizModeTable}
 	default:
