@@ -23,6 +23,50 @@ type StreamEvent struct {
 	FD         int32
 }
 
+func (e StreamEvent) SyscallValue() string {
+	return e.Syscall
+}
+
+func (e StreamEvent) CommValue() string {
+	return e.Comm
+}
+
+func (e StreamEvent) FileValue() string {
+	return e.FileName
+}
+
+func (e StreamEvent) PIDValue() uint32 {
+	return e.PID
+}
+
+func (e StreamEvent) TIDValue() uint32 {
+	return e.TID
+}
+
+func (e StreamEvent) FDValue() int32 {
+	return e.FD
+}
+
+func (e StreamEvent) LatencyValue() uint64 {
+	return e.DurationNs
+}
+
+func (e StreamEvent) GapValue() uint64 {
+	return e.GapNs
+}
+
+func (e StreamEvent) BytesValue() uint64 {
+	return e.Bytes
+}
+
+func (e StreamEvent) ReturnValue() int64 {
+	return e.RetVal
+}
+
+func (e StreamEvent) ErrorValue() bool {
+	return e.IsError
+}
+
 // UnknownFD marks events that are not associated with a file descriptor.
 const UnknownFD int32 = -1
 
