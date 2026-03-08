@@ -36,31 +36,25 @@ type Model struct {
 	allEvents []StreamEvent
 	filtered  []StreamEvent
 
-	filter      Filter
-	filterModal FilterModal
+	filter Filter
 
 	paused bool
-	// pauseBeforeFilter keeps the pre-modal pause state so opening the filter
-	// can pause refresh temporarily without losing the user's prior state.
-	pauseBeforeFilter bool
 
-	scrollOffset      int
-	autoScroll        bool
-	selectedIdx       int
-	selectedCol       int
-	fdTraceView       fdTraceViewState
-	filterStack       []Filter
-	filterActionStack []string
-	exportModal       ExportModal
-	searchModal       SearchModal
-	searchPattern     string
-	searchRegex       *regexp.Regexp
-	searchDirection   SearchDirection
-	lastExportPath    string
-	pendingOpenPath   string
-	statusMessage     string
-	exportDir         string
-	isDark            bool
+	scrollOffset    int
+	autoScroll      bool
+	selectedIdx     int
+	selectedCol     int
+	fdTraceView     fdTraceViewState
+	exportModal     ExportModal
+	searchModal     SearchModal
+	searchPattern   string
+	searchRegex     *regexp.Regexp
+	searchDirection SearchDirection
+	lastExportPath  string
+	pendingOpenPath string
+	statusMessage   string
+	exportDir       string
+	isDark          bool
 
 	width  int
 	height int
@@ -80,7 +74,6 @@ type fdTraceViewState struct {
 func NewModel(source Source) Model {
 	m := Model{
 		source:      source,
-		filterModal: NewFilterModal(),
 		exportModal: NewExportModal(),
 		searchModal: NewSearchModal(),
 		autoScroll:  true,
@@ -145,14 +138,13 @@ func (m *Model) SetFilter(filter Filter) {
 // SetDarkMode updates stream modal text input styles for the active theme.
 func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
-	m.filterModal = m.filterModal.SetDarkMode(isDark)
 	m.exportModal = m.exportModal.SetDarkMode(isDark)
 	m.searchModal = m.searchModal.SetDarkMode(isDark)
 }
 
 // FilterModalVisible reports whether the filter modal is currently open.
 func (m Model) FilterModalVisible() bool {
-	return m.filterModal.Visible()
+	return false
 }
 
 // ExportModalVisible reports whether the stream export modal is currently open.
@@ -202,21 +194,6 @@ func (m *Model) HandleKey(keyStr string) bool {
 		m.statusMessage = "Exported: " + path
 		return true
 	}
-	if m.filterModal.Visible() {
-		wasVisible := m.filterModal.Visible()
-		m.filterModal = m.filterModal.Update(keyMsgFromString(keyStr))
-		if wasVisible && !m.filterModal.Visible() {
-			m.filter = m.filterModal.Filter()
-			m.filterStack = nil
-			m.filterActionStack = nil
-			m.paused = m.pauseBeforeFilter
-			m.applyFilter()
-			if !m.paused {
-				m.Refresh()
-			}
-		}
-		return true
-	}
 	if m.fdTraceView.visible {
 		switch keyStr {
 		case "enter", " ", "space":
@@ -260,11 +237,6 @@ func (m *Model) HandleKey(keyStr string) bool {
 	case "?":
 		m.openSearch(SearchBackward)
 		return true
-	case "enter":
-		if m.paused {
-			return m.applyFilterFromSelectedCell()
-		}
-		return false
 	case "n":
 		if m.searchRegex == nil {
 			return false
@@ -320,11 +292,6 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.centerSelection()
 		}
 		return true
-	case "f", "F":
-		m.pauseBeforeFilter = m.paused
-		m.paused = true
-		m.filterModal = m.filterModal.Open(m.filter)
-		return true
 	case "G":
 		if m.paused {
 			m.moveSelectionTo(len(m.filtered) - 1)
@@ -342,12 +309,6 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.viewport.GotoTop()
 			m.scrollOffset = 0
 		}
-		return true
-	case "c":
-		m.filter = Filter{}
-		m.filterStack = nil
-		m.filterActionStack = nil
-		m.applyFilter()
 		return true
 	case "j", "down":
 		if m.paused {
@@ -389,11 +350,6 @@ func (m *Model) HandleKey(keyStr string) bool {
 			m.handleViewportUpdate(keyMsgFromString("pgup"))
 		}
 		return true
-	case "esc":
-		if m.paused {
-			return m.popFilter()
-		}
-		return false
 	default:
 		return false
 	}
@@ -437,7 +393,7 @@ func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) bool {
 }
 
 func (m *Model) handleViewportUpdate(msg tea.KeyPressMsg) bool {
-	if m.paused || m.fdTraceView.visible || m.filterModal.Visible() || m.exportModal.Visible() || m.searchModal.Visible() {
+	if m.paused || m.fdTraceView.visible || m.exportModal.Visible() || m.searchModal.Visible() {
 		return false
 	}
 
@@ -504,9 +460,6 @@ func (m *Model) View(width, height int) string {
 	}
 	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, visible, selectedVisibleIdx, selectedCol)
 	if !m.showFooter {
-		if m.filterModal.Visible() {
-			return m.filterModal.View(width, height)
-		}
 		if m.exportModal.Visible() {
 			return m.exportModal.View(width, height)
 		}
@@ -518,21 +471,13 @@ func (m *Model) View(width, height int) string {
 
 	status := fmt.Sprintf("Row %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Filters %d", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount, len(m.filterStack))
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount)
 	}
 	out := base + "\n" + status
-	if len(m.filterActionStack) > 0 {
-		out += "\n" + "Stack: " + strings.Join(m.filterActionStack, " | ")
-	}
 	if m.statusMessage != "" {
 		out += "\n" + m.statusMessage
 	}
 
-	if m.filterModal.Visible() {
-		// While editing filters, show a dedicated modal screen to avoid
-		// visual mixing with the live stream table underneath.
-		return m.filterModal.View(width, height)
-	}
 	if m.exportModal.Visible() {
 		return m.exportModal.View(width, height)
 	}
@@ -752,74 +697,6 @@ func (m *Model) moveSelectedColBy(delta int) {
 	}
 	m.ensureSelectedCol()
 	m.selectedCol = clamp(m.selectedCol+delta, 0, streamColumnCount-1)
-}
-
-func (m *Model) applyFilterFromSelectedCell() bool {
-	if m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
-		return false
-	}
-	ev := m.filtered[m.selectedIdx]
-	targetSeq := ev.Seq
-	next := m.filter.Clone()
-	action := ""
-
-	switch m.selectedCol {
-	case streamColGap:
-		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
-		action = fmt.Sprintf("gap>=%dns", ev.GapNs)
-	case streamColLatency:
-		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
-		action = fmt.Sprintf("latency>=%dns", ev.DurationNs)
-	case streamColComm:
-		next.Comm = &StringFilter{Pattern: ev.Comm}
-		action = fmt.Sprintf("comm~%s", ev.Comm)
-	case streamColPID:
-		next.PID = &NumericFilter{Op: OpEq, Value: int64(ev.PID)}
-		action = fmt.Sprintf("pid=%d", ev.PID)
-	case streamColTID:
-		next.TID = &NumericFilter{Op: OpEq, Value: int64(ev.TID)}
-		action = fmt.Sprintf("tid=%d", ev.TID)
-	case streamColSyscall:
-		next.Syscall = &StringFilter{Pattern: ev.Syscall}
-		action = fmt.Sprintf("syscall~%s", ev.Syscall)
-	case streamColFD:
-		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
-		action = fmt.Sprintf("fd=%d", ev.FD)
-	case streamColRet:
-		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
-		action = fmt.Sprintf("ret=%d", ev.RetVal)
-	case streamColBytes:
-		next.Bytes = &NumericFilter{Op: OpEq, Value: int64(ev.Bytes)}
-		action = fmt.Sprintf("bytes=%d", ev.Bytes)
-	case streamColFile:
-		next.File = &StringFilter{Pattern: ev.FileName}
-		action = fmt.Sprintf("file~%s", ev.FileName)
-	default:
-		return false
-	}
-
-	m.filterStack = append(m.filterStack, m.filter.Clone())
-	m.filterActionStack = append(m.filterActionStack, action)
-	m.filter = next
-	m.applyFilter()
-	m.restoreSelectionBySeq(targetSeq)
-	return true
-}
-
-func (m *Model) popFilter() bool {
-	if len(m.filterStack) == 0 {
-		return false
-	}
-	targetSeq := m.currentSelectedSeq()
-	last := m.filterStack[len(m.filterStack)-1]
-	m.filterStack = m.filterStack[:len(m.filterStack)-1]
-	if len(m.filterActionStack) > 0 {
-		m.filterActionStack = m.filterActionStack[:len(m.filterActionStack)-1]
-	}
-	m.filter = last.Clone()
-	m.applyFilter()
-	m.restoreSelectionBySeq(targetSeq)
-	return true
 }
 
 func (m *Model) currentSelectedSeq() uint64 {

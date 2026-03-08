@@ -185,65 +185,26 @@ func TestModelHandleKeyRouting(t *testing.T) {
 	if m.HandleKey("x") {
 		t.Fatalf("unknown key should not be handled")
 	}
-	if !m.HandleKey("f") {
-		t.Fatalf("f should be handled")
-	}
-	if !m.filterModal.Visible() {
-		t.Fatalf("modal should be visible after f")
-	}
-	if !m.HandleKey("esc") {
-		t.Fatalf("esc should route to modal")
-	}
-	if m.filterModal.Visible() {
-		t.Fatalf("modal should close on esc")
+	if m.HandleKey("f") {
+		t.Fatalf("stream-local filter shortcut should no longer be handled here")
 	}
 }
 
-func TestFilterModalTemporarilyPausesAndRestoresState(t *testing.T) {
+func TestSetFilterReappliesCurrentBufferedRows(t *testing.T) {
 	rb := NewRingBuffer()
 	m := NewModel(rb)
 	m.height = 20
-	pushEvents(rb, 4)
+	pushEvents(rb, 6)
 	m.Refresh()
 
-	if m.paused {
-		t.Fatalf("expected model to start unpaused")
-	}
-	if !m.HandleKey("f") {
-		t.Fatalf("f should be handled")
-	}
-	if !m.paused {
-		t.Fatalf("expected model paused while filter modal is open")
-	}
-	if !m.filterModal.Visible() {
-		t.Fatalf("expected filter modal visible after f")
-	}
-	if !m.HandleKey("esc") {
-		t.Fatalf("esc should be routed to filter modal")
-	}
-	if m.filterModal.Visible() {
-		t.Fatalf("expected filter modal closed after esc")
-	}
-	if m.paused {
-		t.Fatalf("expected pause state restored to unpaused after modal close")
+	m.SetFilter(Filter{Syscall: &StringFilter{Pattern: "read"}})
+	if len(m.filtered) != 3 {
+		t.Fatalf("expected 3 matching rows after filter, got %d", len(m.filtered))
 	}
 
-	// If the user was already paused before opening the filter modal,
-	// that pause state should remain after closing.
-	if !m.HandleKey("space") {
-		t.Fatalf("space should toggle pause")
-	}
-	if !m.paused {
-		t.Fatalf("expected paused=true after space")
-	}
-	if !m.HandleKey("f") {
-		t.Fatalf("f should be handled while paused")
-	}
-	if !m.HandleKey("esc") {
-		t.Fatalf("esc should close modal")
-	}
-	if !m.paused {
-		t.Fatalf("expected paused state preserved after modal close")
+	m.SetFilter(Filter{})
+	if len(m.filtered) != 6 {
+		t.Fatalf("expected clearing filter to restore all rows, got %d", len(m.filtered))
 	}
 }
 
@@ -416,113 +377,31 @@ func TestPausedSelectionMovesAcrossColumnsWithLeftRightAndHL(t *testing.T) {
 	}
 }
 
-func TestPausedEnterAddsStackableFiltersAndEscUndoes(t *testing.T) {
-	rb := NewRingBuffer()
-	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, Comm: "firefox", Syscall: "read", FD: 5, RetVal: 10, Bytes: 10, GapNs: 50, DurationNs: 100, FileName: "/a"})
-	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, Comm: "firefox", Syscall: "write", FD: 6, RetVal: 11, Bytes: 11, GapNs: 51, DurationNs: 101, FileName: "/b"})
-	rb.Push(StreamEvent{Seq: 3, PID: 11, TID: 201, Comm: "bash", Syscall: "read", FD: 7, RetVal: 12, Bytes: 12, GapNs: 52, DurationNs: 102, FileName: "/c"})
-
-	m := NewModel(rb)
-	m.height = 20
-	m.Refresh()
-	if !m.HandleKey("space") {
-		t.Fatalf("space should toggle pause")
-	}
-
-	m.selectedIdx = 0
-	m.selectedCol = streamColComm
-	if !m.HandleKey("enter") {
-		t.Fatalf("enter should add filter from selected comm cell")
-	}
-	if m.filter.Comm == nil || m.filter.Comm.Pattern != "firefox" {
-		t.Fatalf("expected comm filter firefox, got %+v", m.filter.Comm)
-	}
-	if len(m.filtered) != 2 {
-		t.Fatalf("expected 2 rows after comm filter, got %d", len(m.filtered))
-	}
-	if len(m.filterStack) != 1 {
-		t.Fatalf("expected filter stack len 1, got %d", len(m.filterStack))
-	}
-	if got := m.View(120, 24); !strings.Contains(got, "Stack: comm~firefox") {
-		t.Fatalf("expected stack status line with comm filter, got:\n%s", got)
-	}
-
-	m.selectedIdx = 1
-	m.selectedCol = streamColTID
-	if !m.HandleKey("enter") {
-		t.Fatalf("enter should add filter from selected tid cell")
-	}
-	if m.filter.TID == nil || m.filter.TID.Value != 102 {
-		t.Fatalf("expected tid filter 102, got %+v", m.filter.TID)
-	}
-	if m.filter.Comm == nil || m.filter.Comm.Pattern != "firefox" {
-		t.Fatalf("expected comm filter preserved, got %+v", m.filter.Comm)
-	}
-	if len(m.filtered) != 1 {
-		t.Fatalf("expected 1 row after comm+tid filters, got %d", len(m.filtered))
-	}
-
-	if !m.HandleKey("esc") {
-		t.Fatalf("esc should undo last filter")
-	}
-	if m.filter.TID != nil {
-		t.Fatalf("expected tid filter cleared after undo")
-	}
-	if m.filter.Comm == nil || m.filter.Comm.Pattern != "firefox" {
-		t.Fatalf("expected comm filter kept after first undo")
-	}
-	if len(m.filtered) != 2 {
-		t.Fatalf("expected 2 rows after undo tid filter, got %d", len(m.filtered))
-	}
-
-	if !m.HandleKey("esc") {
-		t.Fatalf("esc should undo previous filter")
-	}
-	if m.filter.IsActive() {
-		t.Fatalf("expected no active filters after second undo, got summary=%q", m.filter.Summary())
-	}
-	if len(m.filtered) != 3 {
-		t.Fatalf("expected all rows after second undo, got %d", len(m.filtered))
-	}
-	if got := m.View(120, 24); strings.Contains(got, "Stack:") {
-		t.Fatalf("did not expect stack status line after all undos, got:\n%s", got)
-	}
-}
-
-func TestPausedEnterCanFilterLatencyAndGapColumns(t *testing.T) {
+func TestPausedEnterDoesNotMutateGlobalFilter(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a", DurationNs: 100, GapNs: 5})
 	rb.Push(StreamEvent{Seq: 2, PID: 1, TID: 2, Comm: "b", DurationNs: 200, GapNs: 6})
 	m := NewModel(rb)
 	m.height = 20
 	m.Refresh()
-	_ = m.HandleKey("space")
+	if !m.HandleKey("space") {
+		t.Fatalf("space should pause")
+	}
 
 	m.selectedIdx = 0
 	m.selectedCol = streamColLatency
-	if !m.HandleKey("enter") {
-		t.Fatalf("expected enter to filter by latency")
+	if m.HandleKey("enter") {
+		t.Fatalf("expected enter not to mutate filters in paused stream mode")
 	}
-	if m.filter.LatencyNs == nil || m.filter.LatencyNs.Op != OpGte || m.filter.LatencyNs.Value != 100 {
-		t.Fatalf("expected latency filter >=100ns, got %+v", m.filter.LatencyNs)
+	if m.filter.IsActive() {
+		t.Fatalf("expected enter to leave global filter unchanged")
 	}
-	if len(m.filtered) != 2 {
-		t.Fatalf("expected both rows after latency >=100 filter, got %d", len(m.filtered))
-	}
-
-	m.selectedCol = streamColGap
-	if !m.HandleKey("enter") {
-		t.Fatalf("expected enter to filter by gap")
-	}
-	if m.filter.GapNs == nil || m.filter.GapNs.Op != OpGte || m.filter.GapNs.Value != 5 {
-		t.Fatalf("expected gap filter >=5ns, got %+v", m.filter.GapNs)
-	}
-	if len(m.filtered) != 2 {
-		t.Fatalf("expected both rows after gap >=5 filter, got %d", len(m.filtered))
+	if m.HandleKey("esc") {
+		t.Fatalf("expected esc not to act as local filter undo anymore")
 	}
 }
 
-func TestPausedEnterKeepsSelectedRowCenteredAfterFilter(t *testing.T) {
+func TestSetFilterKeepsPausedSelectionCentered(t *testing.T) {
 	rb := NewRingBuffer()
 	for i := 0; i < 300; i++ {
 		comm := "other"
@@ -549,40 +428,10 @@ func TestPausedEnterKeepsSelectedRowCenteredAfterFilter(t *testing.T) {
 		t.Fatalf("expected initial selected row near middle, got relative idx %d", before)
 	}
 
-	m.selectedCol = streamColComm
-	if !m.HandleKey("enter") {
-		t.Fatalf("expected enter to apply filter")
-	}
+	m.SetFilter(Filter{Comm: &StringFilter{Pattern: "match"}})
 	after := m.selectedIdx - m.scrollOffset
 	if after < 4 || after > 8 {
-		t.Fatalf("expected selected row to stay near middle after filter, got relative idx %d", after)
-	}
-}
-
-func TestPausedEnterCanFilterByFDColumn(t *testing.T) {
-	rb := NewRingBuffer()
-	rb.Push(StreamEvent{Seq: 1, PID: 10, TID: 101, FD: 3, Syscall: "read", FileName: "/a"})
-	rb.Push(StreamEvent{Seq: 2, PID: 10, TID: 102, FD: 3, Syscall: "write", FileName: "/a"})
-	rb.Push(StreamEvent{Seq: 3, PID: 10, TID: 103, FD: 4, Syscall: "read", FileName: "/b"})
-	rb.Push(StreamEvent{Seq: 4, PID: 11, TID: 104, FD: 3, Syscall: "read", FileName: "/c"})
-
-	m := NewModel(rb)
-	m.height = 20
-	m.Refresh()
-	if !m.HandleKey("space") {
-		t.Fatalf("space should pause")
-	}
-
-	m.selectedIdx = 0
-	m.selectedCol = streamColFD
-	if !m.HandleKey("enter") {
-		t.Fatalf("enter should add fd filter")
-	}
-	if m.filter.FD == nil || m.filter.FD.Value != 3 {
-		t.Fatalf("expected fd filter 3, got %+v", m.filter.FD)
-	}
-	if len(m.filtered) != 3 {
-		t.Fatalf("expected 3 rows with fd=3, got %d", len(m.filtered))
+		t.Fatalf("expected selected row to stay near middle after global refilter, got relative idx %d", after)
 	}
 }
 
@@ -600,11 +449,7 @@ func TestPausedQuickExportWritesFilteredRows(t *testing.T) {
 		t.Fatalf("space should pause")
 	}
 
-	m.selectedIdx = 0
-	m.selectedCol = streamColComm
-	if !m.HandleKey("enter") {
-		t.Fatalf("enter should apply comm filter")
-	}
+	m.SetFilter(Filter{Comm: &StringFilter{Pattern: "firefox"}})
 	if len(m.filtered) != 2 {
 		t.Fatalf("expected 2 filtered rows before export, got %d", len(m.filtered))
 	}
