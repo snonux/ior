@@ -40,14 +40,26 @@ func (m *Model) exportFilteredToCSV(filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	closed := false
+	closeFile := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return f.Close()
+	}
+	fail := func(baseErr error) (string, error) {
+		if closeErr := closeFile(); closeErr != nil {
+			return "", errors.Join(baseErr, closeErr)
+		}
+		return "", baseErr
+	}
 
 	w := csv.NewWriter(f)
-	defer w.Flush()
 
 	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error"}
 	if err := w.Write(header); err != nil {
-		return "", err
+		return fail(err)
 	}
 	for i := range m.filtered {
 		ev := m.filtered[i]
@@ -67,10 +79,14 @@ func (m *Model) exportFilteredToCSV(filename string) (string, error) {
 			fmt.Sprintf("%t", ev.IsError),
 		}
 		if err := w.Write(record); err != nil {
-			return "", err
+			return fail(err)
 		}
 	}
+	w.Flush()
 	if err := w.Error(); err != nil {
+		return fail(err)
+	}
+	if err := closeFile(); err != nil {
 		return "", err
 	}
 	absPath, err := filepath.Abs(path)
