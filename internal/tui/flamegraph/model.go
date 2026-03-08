@@ -937,7 +937,7 @@ func isNextMatchKey(msg tea.KeyPressMsg) bool  { return keyString(msg) == "n" }
 func isPrevMatchKey(msg tea.KeyPressMsg) bool  { return keyString(msg) == "N" }
 func isPauseKey(msg tea.KeyPressMsg) bool {
 	k := keyString(msg)
-	return k == "p" || k == " " || k == "space" || msg.Code == tea.KeySpace
+	return k == " " || k == "space" || msg.Code == tea.KeySpace
 }
 func isResetBaselineKey(msg tea.KeyPressMsg) bool {
 	return keyString(msg) == "r"

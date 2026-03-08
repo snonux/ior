@@ -747,21 +747,17 @@ func TestSearchSubmitSetsFilterStatusMessage(t *testing.T) {
 
 func TestControlPauseToggle(t *testing.T) {
 	m := NewModel(nil)
-	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	if !m.paused {
-		t.Fatalf("expected pause to toggle on")
+		t.Fatalf("expected space key to toggle pause on")
 	}
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	if m.paused {
 		t.Fatalf("expected space key to toggle pause off")
 	}
-	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
-	if !m.paused {
-		t.Fatalf("expected space key to toggle pause on")
-	}
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
 	if m.paused {
-		t.Fatalf("expected p key to toggle pause off")
+		t.Fatalf("expected p key not to toggle pause")
 	}
 }
 

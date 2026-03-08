@@ -1227,7 +1227,7 @@ func (m Model) helpSections() []helpSection {
 				"sys/proc: v bubbles  b metric events/bytes",
 				"files: d dirs toggle  v bubbles (dirs only)  b metric",
 				"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",
-				"flame: / filter  n/N match next/prev  space/p pause  b metric",
+				"flame: / filter  n/N match next/prev  space pause  b metric",
 				"stream: space pause  enter push filter  esc/F undo  /? n/N search",
 				"stream: x/X export  E open",
 			},
