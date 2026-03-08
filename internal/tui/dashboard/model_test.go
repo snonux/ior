@@ -142,6 +142,63 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 	}
 }
 
+func TestSyscallsTabSupportsHorizontalColumnNavigation(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model := next.(Model)
+	if model.syscallsCol != 1 {
+		t.Fatalf("expected syscalls selected column 1 after right, got %d", model.syscallsCol)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	model = next.(Model)
+	if model.syscallsCol != 0 {
+		t.Fatalf("expected syscalls selected column 0 after left, got %d", model.syscallsCol)
+	}
+}
+
+func TestFilesTabSupportsHorizontalColumnNavigation(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{{Path: "/a"}}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model := next.(Model)
+	if model.filesCol != 1 {
+		t.Fatalf("expected files selected column 1 after right, got %d", model.filesCol)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	model = next.(Model)
+	if model.filesCol != 0 {
+		t.Fatalf("expected files selected column 0 after left, got %d", model.filesCol)
+	}
+}
+
+func TestProcessesTabSupportsHorizontalColumnNavigation(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{{PID: 1, Comm: "alpha"}}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model := next.(Model)
+	if model.processesCol != 1 {
+		t.Fatalf("expected processes selected column 1 after right, got %d", model.processesCol)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	model = next.(Model)
+	if model.processesCol != 0 {
+		t.Fatalf("expected processes selected column 0 after left, got %d", model.processesCol)
+	}
+}
+
 func TestProcessesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
@@ -170,6 +227,35 @@ func TestProcessesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	}
 }
 
+func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 111, Comm: "alpha", Syscalls: 9},
+		{PID: 222, Comm: "beta", Syscalls: 4},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.processesOffset = 1
+	m.processesCol = 1
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on processes comm column to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "beta" {
+		t.Fatalf("expected comm beta filter, got %+v", req.Filter.Comm)
+	}
+	if req.Action != "comm~beta" {
+		t.Fatalf("expected action comm~beta, got %q", req.Action)
+	}
+}
+
 func TestFilesTabScrollsWithJK(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles
@@ -186,6 +272,34 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 	model = next.(Model)
 	if model.filesOffset != 0 {
 		t.Fatalf("expected files offset 0 after k, got %d", model.filesOffset)
+	}
+}
+
+func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9},
+		{Name: "write", Count: 4},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.syscallsOffset = 1
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on syscalls tab to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "write" {
+		t.Fatalf("expected syscall write filter, got %+v", req.Filter.Syscall)
+	}
+	if req.Action != "syscall~write" {
+		t.Fatalf("expected action syscall~write, got %q", req.Action)
 	}
 }
 
@@ -207,6 +321,34 @@ func TestFilesTabGroupedScrollUsesDirectoryOffset(t *testing.T) {
 	}
 	if model.filesOffset != 0 {
 		t.Fatalf("expected flat files offset unchanged, got %d", model.filesOffset)
+	}
+}
+
+func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/tmp/a"},
+		{Path: "/tmp/b"},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.filesOffset = 1
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on files tab to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp/b" {
+		t.Fatalf("expected file /tmp/b filter, got %+v", req.Filter.File)
+	}
+	if req.Action != "file~/tmp/b" {
+		t.Fatalf("expected action file~/tmp/b, got %q", req.Action)
 	}
 }
 
@@ -853,7 +995,7 @@ func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 		statsengine.HistogramSnapshot{},
 	)
-	out := renderActiveTab(TabFiles, &snap, nil, nil, 120, 30, -1, 0, 0, true, 0, 0)
+	out := renderActiveTab(TabFiles, &snap, nil, nil, 120, 30, -1, 0, 0, 0, 0, true, 0, 0, 0, 0)
 	if !strings.Contains(out, "Directory") {
 		t.Fatalf("expected grouped directory files view header, got %q", out)
 	}

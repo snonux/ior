@@ -23,21 +23,12 @@ type columnLayout struct {
 	file    int
 }
 
-var selectedRowStyle = lipgloss.NewStyle().
-	Bold(true).
-	Foreground(common.ColorBackground).
-	Background(common.ColorPrimary)
-
-var selectedCellStyle = lipgloss.NewStyle().
-	Bold(true).
-	Foreground(common.ColorBackground).
-	Background(common.ColorAccent)
-
 func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, filterStack []string, events []StreamEvent, selectedVisibleIdx int, selectedCol int) string {
 	if width <= 0 {
 		width = 100
 	}
 	contentWidth := panelContentWidth(width)
+	columns := streamColumns(contentWidth)
 
 	lines := make([]string, 0, len(events)+3)
 	lines = append(lines, renderStatusLine(paused, totalCount, filteredCount, bufferLen, bufferCap))
@@ -45,13 +36,9 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 	if len(filterStack) > 0 {
 		lines = append(lines, renderFilterStackLine(filterStack))
 	}
-	lines = append(lines, renderColumnHeader(contentWidth))
+	lines = append(lines, common.RenderTableHeader(columns))
 	for i, ev := range events {
-		col := -1
-		if i == selectedVisibleIdx {
-			col = selectedCol
-		}
-		lines = append(lines, renderEventRow(ev, contentWidth, i == selectedVisibleIdx, col))
+		lines = append(lines, renderEventRow(ev, columns, i == selectedVisibleIdx, selectedCol))
 	}
 
 	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
@@ -66,9 +53,10 @@ func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events 
 	lines := make([]string, 0, len(events)+3)
 	lines = append(lines, common.HeaderStyle.Render("FD Trace (ring snapshot)"))
 	lines = append(lines, fmt.Sprintf("PID:%d FD:%d matched:%d", pid, fd, totalCount))
-	lines = append(lines, renderColumnHeader(contentWidth))
+	columns := streamColumns(contentWidth)
+	lines = append(lines, common.RenderTableHeader(columns))
 	for _, ev := range events {
-		lines = append(lines, renderEventRow(ev, contentWidth, false, -1))
+		lines = append(lines, renderEventRow(ev, columns, false, -1))
 	}
 
 	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
@@ -98,55 +86,43 @@ func renderFilterStackLine(filterStack []string) string {
 	return common.HeaderStyle.Render("Stack:") + " " + strings.Join(filterStack, " | ")
 }
 
-func renderColumnHeader(width int) string {
+func streamColumns(width int) []common.TableColumn {
 	cols := computeColumnLayout(width)
-	header := fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %s",
-		cols.gap, "Gap",
-		cols.latency, "Latency",
-		cols.comm, "Comm",
-		cols.pid, "PID",
-		cols.tid, "TID",
-		cols.syscall, "Syscall",
-		cols.fd, "FD",
-		cols.ret, "Ret",
-		cols.bytes, "Bytes",
-		"File",
-	)
-	return common.HelpBarStyle.Render(header)
+	return []common.TableColumn{
+		{Title: "Gap", Width: cols.gap},
+		{Title: "Latency", Width: cols.latency},
+		{Title: "Comm", Width: cols.comm},
+		{Title: "PID", Width: cols.pid},
+		{Title: "TID", Width: cols.tid},
+		{Title: "Syscall", Width: cols.syscall},
+		{Title: "FD", Width: cols.fd},
+		{Title: "Ret", Width: cols.ret},
+		{Title: "Bytes", Width: cols.bytes},
+		{Title: "File", Width: cols.file},
+	}
 }
 
-func renderEventRow(ev StreamEvent, width int, selected bool, selectedCol int) string {
-	cols := computeColumnLayout(width)
+func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool, selectedCol int) string {
 	fd := "-"
 	if ev.FD >= 0 {
 		fd = strconv.FormatInt(int64(ev.FD), 10)
 	}
 	cells := []string{
-		fmt.Sprintf("%-*s", cols.gap, fitCell(formatDurationNs(ev.GapNs), cols.gap)),
-		fmt.Sprintf("%-*s", cols.latency, fitCell(formatDurationNs(ev.DurationNs), cols.latency)),
-		fmt.Sprintf("%-*s", cols.comm, fitCell(ev.Comm, cols.comm)),
-		fmt.Sprintf("%-*s", cols.pid, fitCell(strconv.FormatUint(uint64(ev.PID), 10), cols.pid)),
-		fmt.Sprintf("%-*s", cols.tid, fitCell(strconv.FormatUint(uint64(ev.TID), 10), cols.tid)),
-		fmt.Sprintf("%-*s", cols.syscall, fitCell(ev.Syscall, cols.syscall)),
-		fmt.Sprintf("%-*s", cols.fd, fitCell(fd, cols.fd)),
-		fmt.Sprintf("%-*s", cols.ret, fitCell(strconv.FormatInt(ev.RetVal, 10), cols.ret)),
-		fmt.Sprintf("%-*s", cols.bytes, fitCell(strconv.FormatUint(ev.Bytes, 10), cols.bytes)),
-		fitCell(ev.FileName, cols.file),
-	}
-	if selected {
-		for i := range cells {
-			if i == selectedCol {
-				cells[i] = selectedCellStyle.Render(cells[i])
-			} else {
-				cells[i] = selectedRowStyle.Render(cells[i])
-			}
-		}
-		return strings.Join(cells, " ")
+		fitCell(formatDurationNs(ev.GapNs), columns[0].Width),
+		fitCell(formatDurationNs(ev.DurationNs), columns[1].Width),
+		fitCell(ev.Comm, columns[2].Width),
+		fitCell(strconv.FormatUint(uint64(ev.PID), 10), columns[3].Width),
+		fitCell(strconv.FormatUint(uint64(ev.TID), 10), columns[4].Width),
+		fitCell(ev.Syscall, columns[5].Width),
+		fitCell(fd, columns[6].Width),
+		fitCell(strconv.FormatInt(ev.RetVal, 10), columns[7].Width),
+		fitCell(strconv.FormatUint(ev.Bytes, 10), columns[8].Width),
+		fitCell(ev.FileName, columns[9].Width),
 	}
 	if ev.IsError {
-		return common.ErrorStyle.Render(strings.Join(cells, " "))
+		return common.RenderTableRow(columns, cells, selected, selectedCol, common.ErrorStyle)
 	}
-	return strings.Join(cells, " ")
+	return common.RenderTableRow(columns, cells, selected, selectedCol, lipgloss.Style{})
 }
 
 func computeColumnLayout(width int) columnLayout {

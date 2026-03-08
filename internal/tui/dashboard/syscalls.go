@@ -6,15 +6,14 @@ import (
 	"time"
 
 	"ior/internal/statsengine"
-
-	"charm.land/bubbles/v2/table"
+	common "ior/internal/tui/common"
 )
 
 func renderSyscalls(snap *statsengine.Snapshot, width, height int) string {
-	return renderSyscallsWithOffset(snap, width, height, 0)
+	return renderSyscallsWithOffset(snap, width, height, 0, 0)
 }
 
-func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset int) string {
+func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
 	if snap == nil {
 		return "Syscalls: waiting for stats..."
 	}
@@ -23,22 +22,20 @@ func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset 
 	if len(rows) == 0 {
 		return "Syscalls: no data"
 	}
-
-	tbl := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-	)
-	tbl.SetHeight(syscallTableHeight(height))
-	tbl.SetWidth(tableWidth(width))
-	cursor := clampOffset(offset, len(rows))
-	tbl.SetCursor(cursor)
-	return tbl.View() + fmt.Sprintf("\nRow %d/%d [v:mode] [b:metric]", cursor+1, len(rows))
+	return renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "v:mode", "b:metric")
 }
 
-func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]table.Column, []table.Row) {
+func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]common.TableColumn, [][]string) {
+	columns := syscallColumns(width)
 	if width < 140 {
-		columns := []table.Column{
+		return columns, syscallRowsCompact(syscalls)
+	}
+	return columns, syscallRowsFull(syscalls)
+}
+
+func syscallColumns(width int) []common.TableColumn {
+	if width < 140 {
+		return []common.TableColumn{
 			{Title: "Syscall", Width: 14},
 			{Title: "Count", Width: 6},
 			{Title: "Rate/s", Width: 7},
@@ -48,10 +45,9 @@ func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]tabl
 			{Title: "Bytes", Width: 8},
 			{Title: "Errors", Width: 6},
 		}
-		return columns, syscallRowsCompact(syscalls)
 	}
 
-	columns := []table.Column{
+	return []common.TableColumn{
 		{Title: "Syscall", Width: 16},
 		{Title: "Count", Width: 8},
 		{Title: "Rate/s", Width: 8},
@@ -64,13 +60,12 @@ func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]tabl
 		{Title: "Bytes", Width: 10},
 		{Title: "Errors", Width: 8},
 	}
-	return columns, syscallRowsFull(syscalls)
 }
 
-func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) []table.Row {
-	rows := make([]table.Row, 0, len(syscalls))
+func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) [][]string {
+	rows := make([][]string, 0, len(syscalls))
 	for _, s := range syscalls {
-		rows = append(rows, table.Row{
+		rows = append(rows, []string{
 			s.Name,
 			strconv.FormatUint(s.Count, 10),
 			fmt.Sprintf("%.1f", s.RatePerSec),
@@ -87,10 +82,10 @@ func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) []table.Row {
 	return rows
 }
 
-func syscallRowsCompact(syscalls []statsengine.SyscallSnapshot) []table.Row {
-	rows := make([]table.Row, 0, len(syscalls))
+func syscallRowsCompact(syscalls []statsengine.SyscallSnapshot) [][]string {
+	rows := make([][]string, 0, len(syscalls))
 	for _, s := range syscalls {
-		rows = append(rows, table.Row{
+		rows = append(rows, []string{
 			s.Name,
 			strconv.FormatUint(s.Count, 10),
 			fmt.Sprintf("%.1f", s.RatePerSec),
@@ -133,16 +128,6 @@ func syscallTableHeight(height int) int {
 		return 5
 	}
 	return h
-}
-
-func tableWidth(width int) int {
-	if width <= 0 {
-		return 80
-	}
-	if width < 60 {
-		return 60
-	}
-	return width
 }
 
 func clampOffset(offset, size int) int {
