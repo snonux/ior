@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -407,11 +408,12 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 					continue
 				}
 				e.processRawEvent(raw, ch)
+				// Yield so downstream consumers can process emitted pairs before
+				// the next raw event mutates shared tracker state.
+				runtime.Gosched()
 			case <-ctx.Done():
 				fmt.Println("Stopping event loop")
 				return
-			default:
-				time.Sleep(time.Millisecond * 10)
 			}
 		}
 	}()

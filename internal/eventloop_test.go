@@ -104,8 +104,9 @@ func TestEventloop(t *testing.T) {
 				for _, raw := range td.rawTracepoints {
 					t.Log("Sending raw tracepoint", raw, "simulating BPF sending this")
 					inCh <- raw
-					// Small delay to simulate real BPF event timing
-					time.Sleep(time.Microsecond)
+					// Keep synthetic feed pace close to real arrival and avoid
+					// stateful assertion races between adjacent events.
+					time.Sleep(100 * time.Microsecond)
 				}
 			}()
 			for _, validate := range td.validates {
