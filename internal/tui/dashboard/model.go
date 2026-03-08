@@ -137,192 +137,253 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
-		m.streamModel.SetViewport(streamWidth, streamHeight)
-		flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
-		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
-		m.setBubbleViewports(flameWidth, flameHeight)
-		if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-			return m, bubbleTickCmdFn()
-		}
-		return m, nil
+		return m.handleWindowSize(msg)
 	case refreshTickMsg:
-		if !m.focused {
-			return m, nil
-		}
-		snap := m.snapshot()
-		return m, tea.Batch(
-			tickCmd(m.refreshEvery),
-			func() tea.Msg { return messages.StatsTickMsg{Snap: snap} },
-		)
+		return m.handleRefreshTick()
 	case streamTickMsg:
-		if !m.focused {
-			return m, nil
-		}
-		if m.activeTab != TabStream {
-			return m, nil
-		}
-		m.streamModel.Refresh()
-		return m, streamTickCmd()
+		return m.handleStreamTick()
 	case flameTickMsg:
-		if !m.focused {
-			return m, nil
-		}
-		if m.activeTab != TabFlame {
-			return m, nil
-		}
-		var animCmd tea.Cmd
-		if m.liveTrie != nil && m.flamegraphModel.RefreshFromLiveTrie() {
-			animCmd = m.flamegraphModel.AnimationCmd()
-		}
-		if animCmd != nil {
-			return m, tea.Batch(flameTickCmd(), animCmd)
-		}
-		return m, flameTickCmd()
+		return m.handleFlameTick()
 	case bubbleTickMsg:
-		if !m.focused {
-			return m, nil
-		}
-		if !m.bubbleEnabledForTab(m.activeTab) {
-			return m, nil
-		}
-		_ = m.tickActiveBubbleChart()
-		if m.activeBubbleChartHasNodes() {
-			return m, bubbleTickCmdFn()
-		}
-		return m, nil
+		return m.handleBubbleTick()
 	case messages.StatsTickMsg:
-		m.latest = msg.Snap
-		m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
-		m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
-		m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
-		m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRows())
-		m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
-		m.streamModel.Refresh()
-		if m.refreshBubbleData() {
-			return m, bubbleTickCmdFn()
-		}
-		return m, nil
+		return m.handleStatsTick(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case streamEditorDoneMsg:
-		if msg.err != nil {
-			m.streamModel.SetStatusMessage("Open failed: " + msg.err.Error())
-		}
-		return m, nil
+		return m.handleStreamEditorDone(msg)
 	}
-	if m.activeTab == TabFlame {
-		next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
-		m.flamegraphModel = next.(flamegraphtui.Model)
-		return m, cmd
+	return m.handleActiveTabMsg(msg)
+}
+
+func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+	streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
+	m.streamModel.SetViewport(streamWidth, streamHeight)
+	flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
+	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+	m.setBubbleViewports(flameWidth, flameHeight)
+	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
+		return m, bubbleTickCmdFn()
 	}
 	return m, nil
 }
 
-func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	prevActiveTab := m.activeTab
-	var cmd tea.Cmd
-	keyStr := msg.String()
-	if keyStr == "H" {
-		m.showHelp = !m.showHelp
-		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
-		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+func (m Model) handleRefreshTick() (tea.Model, tea.Cmd) {
+	if !m.focused {
 		return m, nil
 	}
-	if m.activeTab == TabFlame && m.flamegraphModel.ConsumesKey(msg) {
-		next, flameCmd := m.flamegraphModel.Update(msg)
-		m.flamegraphModel = next.(flamegraphtui.Model)
-		return m, flameCmd
+	snap := m.snapshot()
+	return m, tea.Batch(
+		tickCmd(m.refreshEvery),
+		func() tea.Msg { return messages.StatsTickMsg{Snap: snap} },
+	)
+}
+
+func (m Model) handleStreamTick() (tea.Model, tea.Cmd) {
+	if !m.focused || m.activeTab != TabStream {
+		return m, nil
 	}
-	handled, scrollCmd := m.handleScrollKey(msg)
-	if scrollCmd != nil {
-		cmd = scrollCmd
+	m.streamModel.Refresh()
+	return m, streamTickCmd()
+}
+
+func (m Model) handleFlameTick() (tea.Model, tea.Cmd) {
+	if !m.focused || m.activeTab != TabFlame {
+		return m, nil
 	}
-	if handled && m.activeTab == TabStream && (keyStr == " " || keyStr == "space") && !m.streamModel.Paused() {
-		cmd = streamTickCmd()
+	var animCmd tea.Cmd
+	if m.liveTrie != nil && m.flamegraphModel.RefreshFromLiveTrie() {
+		animCmd = m.flamegraphModel.AnimationCmd()
+	}
+	if animCmd == nil {
+		return m, flameTickCmd()
+	}
+	return m, tea.Batch(flameTickCmd(), animCmd)
+}
+
+func (m Model) handleBubbleTick() (tea.Model, tea.Cmd) {
+	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) {
+		return m, nil
+	}
+	_ = m.tickActiveBubbleChart()
+	if m.activeBubbleChartHasNodes() {
+		return m, bubbleTickCmdFn()
+	}
+	return m, nil
+}
+
+func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
+	m.latest = msg.Snap
+	m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
+	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
+	m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
+	m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRows())
+	m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
+	m.streamModel.Refresh()
+	if m.refreshBubbleData() {
+		return m, bubbleTickCmdFn()
+	}
+	return m, nil
+}
+
+func (m Model) handleStreamEditorDone(msg streamEditorDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.streamModel.SetStatusMessage("Open failed: " + msg.err.Error())
+	}
+	return m, nil
+}
+
+func (m Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.activeTab != TabFlame {
+		return m, nil
+	}
+	next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
+	m.flamegraphModel = next.(flamegraphtui.Model)
+	return m, cmd
+}
+
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if handled, next, cmd := m.handleHelpToggleKey(msg); handled {
+		return next, cmd
+	}
+	if handled, next, cmd := m.handleFlameConsumedKey(msg); handled {
+		return next, cmd
 	}
 
-	if !handled {
-		switch {
-		case key.Matches(msg, m.keys.One):
-			m.activeTab = TabFlame
-			handled = true
-		case key.Matches(msg, m.keys.Tab):
-			m.activeTab = nextTab(m.activeTab)
-			handled = true
-		case key.Matches(msg, m.keys.ShiftTab):
-			m.activeTab = prevTab(m.activeTab)
-			handled = true
-		case key.Matches(msg, m.keys.Two):
-			m.activeTab = TabOverview
-			handled = true
-		case key.Matches(msg, m.keys.Three):
-			m.activeTab = TabSyscalls
-			handled = true
-		case key.Matches(msg, m.keys.Four):
-			m.activeTab = TabFiles
-			handled = true
-		case key.Matches(msg, m.keys.Five):
-			m.activeTab = TabProcesses
-			handled = true
-		case key.Matches(msg, m.keys.Six):
-			m.activeTab = TabLatency
-			handled = true
-		case key.Matches(msg, m.keys.Seven):
-			m.activeTab = TabStream
-			handled = true
-		case key.Matches(msg, m.keys.Visualize):
-			handled = true
-			cmd = m.cycleVisualizationMode()
-		case key.Matches(msg, m.keys.Metric):
-			handled = true
-			cmd = m.toggleBubbleMetric()
-		case key.Matches(msg, m.keys.Refresh):
-			cmd = m.resetBaselineCmd()
-			handled = true
-		case key.Matches(msg, m.keys.DirGroup):
-			if m.activeTab == TabFiles {
-				m.filesDirGrouped = !m.filesDirGrouped
-				if !m.filesDirGrouped && m.filesVizMode != tabVizModeTable {
-					m.filesVizMode = tabVizModeTable
-				}
-				if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-					cmd = bubbleTickCmdFn()
-				}
-				handled = true
-			}
-		}
+	prevActiveTab := m.activeTab
+	handled, cmd := m.handleScrollKey(msg)
+	if handled && isStreamResumeKey(msg) && m.activeTab == TabStream && !m.streamModel.Paused() {
+		cmd = streamTickCmd()
 	}
 	if !handled {
-		if m.activeTab == TabFlame {
-			next, flameCmd := m.flamegraphModel.Update(msg)
-			m.flamegraphModel = next.(flamegraphtui.Model)
-			return m, flameCmd
+		handled, cmd = m.handleShortcutKey(msg)
+	}
+	if !handled {
+		return m.handleUnhandledKey(msg)
+	}
+	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
+}
+
+func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
+	if msg.String() != "H" {
+		return false, m, nil
+	}
+	m.showHelp = !m.showHelp
+	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
+	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+	return true, m, nil
+}
+
+func (m Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
+	if m.activeTab != TabFlame || !m.flamegraphModel.ConsumesKey(msg) {
+		return false, m, nil
+	}
+	next, cmd := m.flamegraphModel.Update(msg)
+	m.flamegraphModel = next.(flamegraphtui.Model)
+	return true, m, cmd
+}
+
+func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.One):
+		m.activeTab = TabFlame
+		return true, nil
+	case key.Matches(msg, m.keys.Tab):
+		m.activeTab = nextTab(m.activeTab)
+		return true, nil
+	case key.Matches(msg, m.keys.ShiftTab):
+		m.activeTab = prevTab(m.activeTab)
+		return true, nil
+	case key.Matches(msg, m.keys.Two):
+		m.activeTab = TabOverview
+		return true, nil
+	case key.Matches(msg, m.keys.Three):
+		m.activeTab = TabSyscalls
+		return true, nil
+	case key.Matches(msg, m.keys.Four):
+		m.activeTab = TabFiles
+		return true, nil
+	case key.Matches(msg, m.keys.Five):
+		m.activeTab = TabProcesses
+		return true, nil
+	case key.Matches(msg, m.keys.Six):
+		m.activeTab = TabLatency
+		return true, nil
+	case key.Matches(msg, m.keys.Seven):
+		m.activeTab = TabStream
+		return true, nil
+	case key.Matches(msg, m.keys.Visualize):
+		return true, m.cycleVisualizationMode()
+	case key.Matches(msg, m.keys.Metric):
+		return true, m.toggleBubbleMetric()
+	case key.Matches(msg, m.keys.Refresh):
+		return true, m.resetBaselineCmd()
+	case key.Matches(msg, m.keys.DirGroup):
+		if m.activeTab != TabFiles {
+			return false, nil
 		}
+		return true, m.toggleFilesDirGrouping()
+	default:
+		return false, nil
+	}
+}
+
+func (m *Model) toggleFilesDirGrouping() tea.Cmd {
+	m.filesDirGrouped = !m.filesDirGrouped
+	if !m.filesDirGrouped && m.filesVizMode != tabVizModeTable {
+		m.filesVizMode = tabVizModeTable
+	}
+	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
+		return bubbleTickCmdFn()
+	}
+	return nil
+}
+
+func (m Model) handleUnhandledKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.activeTab != TabFlame {
 		return m, nil
 	}
-	batch := make([]tea.Cmd, 0, 3)
-	if cmd != nil {
-		batch = append(batch, cmd)
-	}
+	next, flameCmd := m.flamegraphModel.Update(msg)
+	m.flamegraphModel = next.(flamegraphtui.Model)
+	return m, flameCmd
+}
+
+func (m Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 4)
+	cmds = append(cmds, cmd)
 	if prevActiveTab != TabStream && m.activeTab == TabStream {
-		batch = append(batch, streamTickCmd())
+		cmds = append(cmds, streamTickCmd())
 	}
 	if prevActiveTab != TabFlame && m.activeTab == TabFlame {
-		batch = append(batch, flameTickCmd())
+		cmds = append(cmds, flameTickCmd())
 	}
 	if prevActiveTab != m.activeTab && m.bubbleEnabledForTab(m.activeTab) {
-		batch = append(batch, bubbleTickCmdFn())
+		cmds = append(cmds, bubbleTickCmdFn())
 	}
-	switch len(batch) {
+	return batchCmds(cmds...)
+}
+
+func isStreamResumeKey(msg tea.KeyPressMsg) bool {
+	keyStr := msg.String()
+	return keyStr == " " || keyStr == "space"
+}
+
+func batchCmds(cmds ...tea.Cmd) tea.Cmd {
+	nonNil := make([]tea.Cmd, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd != nil {
+			nonNil = append(nonNil, cmd)
+		}
+	}
+	switch len(nonNil) {
 	case 0:
-		return m, nil
+		return nil
 	case 1:
-		return m, batch[0]
+		return nonNil[0]
 	default:
-		return m, tea.Batch(batch...)
+		return tea.Batch(nonNil...)
 	}
 }
 
