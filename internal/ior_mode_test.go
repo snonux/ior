@@ -9,9 +9,12 @@ import (
 	"testing/synctest"
 	"time"
 
+	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/tui"
+	"ior/internal/types"
 )
 
 func TestShouldRunTraceMode(t *testing.T) {
@@ -469,6 +472,42 @@ func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
 	}
 	if gotCfg.GlobalFilter.FD == nil || gotCfg.GlobalFilter.FD.Value != 7 {
 		t.Fatalf("expected fd preserved in global filter payload, got %+v", gotCfg.GlobalFilter.FD)
+	}
+}
+
+func TestShouldIngestTracePairAppliesFullGlobalFilter(t *testing.T) {
+	pair := &event.Pair{
+		EnterEv:        &types.RetEvent{TraceId: types.SYS_ENTER_READ, Pid: 1234, Tid: 1235},
+		ExitEv:         &types.RetEvent{TraceId: types.SYS_EXIT_READ, Pid: 1234, Tid: 1235, Ret: -1},
+		Comm:           "nginx",
+		File:           file.NewFd(7, "/var/log/access.log", 0),
+		Duration:       1_500_000,
+		DurationToPrev: 12_000,
+		Bytes:          4_096,
+	}
+
+	filter := globalfilter.Filter{
+		Syscall:    &globalfilter.StringFilter{Pattern: "rea"},
+		Comm:       &globalfilter.StringFilter{Pattern: "ngi"},
+		File:       &globalfilter.StringFilter{Pattern: "access"},
+		PID:        &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 1234},
+		TID:        &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 1235},
+		FD:         &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 7},
+		LatencyNs:  &globalfilter.NumericFilter{Op: globalfilter.OpGt, Value: 1_000_000},
+		GapNs:      &globalfilter.NumericFilter{Op: globalfilter.OpLte, Value: 12_000},
+		Bytes:      &globalfilter.NumericFilter{Op: globalfilter.OpLt, Value: 8_192},
+		RetVal:     &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: -1},
+		ErrorsOnly: true,
+	}
+
+	if !shouldIngestTracePair(filter, pair) {
+		t.Fatalf("expected full filter to accept matching pair")
+	}
+	if shouldIngestTracePair(globalfilter.Filter{Syscall: &globalfilter.StringFilter{Pattern: "write"}}, pair) {
+		t.Fatalf("expected syscall mismatch to reject pair")
+	}
+	if shouldIngestTracePair(globalfilter.Filter{FD: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 99}}, pair) {
+		t.Fatalf("expected fd mismatch to reject pair")
 	}
 }
 

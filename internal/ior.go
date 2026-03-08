@@ -201,6 +201,10 @@ func tuiTraceStarterFromRunTrace(
 		go func() {
 			err := startTrace(ctx, cfg, startedCh, func(el *eventLoop) {
 				el.printCb = func(ep *event.Pair) {
+					if !shouldIngestTracePair(cfg.GlobalFilter, ep) {
+						ep.Recycle()
+						return
+					}
 					engine.Ingest(ep)
 					streamEvents <- eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep)
 					liveTrie.Ingest(ep)
@@ -228,6 +232,13 @@ func tuiTraceStarterFromRunTrace(
 			return err
 		}
 	}
+}
+
+func shouldIngestTracePair(filter globalfilter.Filter, pair *event.Pair) bool {
+	if !filter.IsActive() {
+		return true
+	}
+	return globalfilter.MatchPair(filter, pair)
 }
 
 func applyTraceFilterConfig(cfg *flags.Config, filter globalfilter.Filter) {
