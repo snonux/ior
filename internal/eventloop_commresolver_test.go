@@ -241,14 +241,19 @@ func waitForWaitGroup(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
 func waitForCondition(t *testing.T, timeout time.Duration, message string, fn func() bool) {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
+	timer := time.NewTimer(timeout)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer timer.Stop()
+	defer ticker.Stop()
+
 	for {
 		if fn() {
 			return
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-timer.C:
 			t.Fatal(message)
+		case <-ticker.C:
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }

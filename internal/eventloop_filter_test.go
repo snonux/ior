@@ -19,32 +19,39 @@ func TestCommPropagation(t *testing.T) {
 	defer cancel()
 
 	inCh := make(chan []byte)
-	outCh := make(chan *event.Pair)
+	outCh := make(chan synchronizedPair)
 
 	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.printCb = func(ev *event.Pair) { outCh <- ev }
+	el.printCb = func(ev *event.Pair) {
+		next := synchronizedPair{pair: ev, ack: make(chan struct{})}
+		outCh <- next
+		<-next.ack
+	}
 	go el.run(ctx, inCh)
 
 	go func() {
+		defer close(inCh)
 		for _, raw := range td.rawTracepoints {
 			t.Log("Sending raw tracepoint", raw, "simulating BPF sending this")
 			inCh <- raw
-			// Small delay to simulate real BPF event timing
-			time.Sleep(time.Microsecond)
 		}
 	}()
 
 	for _, validate := range td.validates {
-		ep := <-outCh
-		t.Log("Received", ep)
-		validate(t, el, ep)
+		next := <-outCh
+		func() {
+			defer close(next.ack)
+			ep := next.pair
+			t.Log("Received", ep)
+			validate(t, el, ep)
+		}()
 	}
 
-	// Give a small delay to ensure any unexpected events would have arrived
-	time.Sleep(10 * time.Millisecond)
+	waitForEventLoopDone(t, el, 250*time.Millisecond)
 	select {
-	case x := <-outCh:
-		t.Errorf("Expected no more events but got '%v'", x)
+	case next := <-outCh:
+		close(next.ack)
+		t.Errorf("Expected no more events but got '%v'", next.pair)
 	default:
 	}
 }
@@ -174,24 +181,32 @@ func TestEventTypeFiltering(t *testing.T) {
 			defer cancel()
 
 			inCh := make(chan []byte)
-			outCh := make(chan *event.Pair)
+			outCh := make(chan synchronizedPair)
 
 			el := newEventLoopWithFilter(tt.commFilter, tt.pathFilter)
-			el.printCb = func(ev *event.Pair) { outCh <- ev }
+			el.printCb = func(ev *event.Pair) {
+				next := synchronizedPair{pair: ev, ack: make(chan struct{})}
+				outCh <- next
+				<-next.ack
+			}
 			go el.run(ctx, inCh)
 
 			go func() {
+				defer close(inCh)
 				for _, raw := range td.rawTracepoints {
 					inCh <- raw
-					time.Sleep(time.Microsecond)
 				}
 			}()
 
 			for _, validate := range td.validates {
 				select {
-				case ep := <-outCh:
-					t.Log("Received", ep)
-					validate(t, el, ep)
+				case next := <-outCh:
+					func() {
+						defer close(next.ack)
+						ep := next.pair
+						t.Log("Received", ep)
+						validate(t, el, ep)
+					}()
 				case <-time.After(100 * time.Millisecond):
 					// No event expected (filtered out)
 					validate(t, el, nil)
@@ -430,7 +445,7 @@ func TestCommFilterToggle(t *testing.T) {
 		defer cancel()
 
 		inCh := make(chan []byte)
-		outCh := make(chan *event.Pair)
+		outCh := make(chan synchronizedPair)
 
 		// Create eventloop without comm filter
 		el := &eventLoop{
@@ -441,21 +456,27 @@ func TestCommFilterToggle(t *testing.T) {
 			fdTracker:     newFDTracker(make(map[int32]file.File)),
 			commResolver:  newCommResolver(make(map[uint32]string)),
 			prevPairTimes: make(map[uint32]uint64),
-			printCb:       func(ep *event.Pair) { outCh <- ep },
-			done:          make(chan struct{}),
+			cfg:           eventLoopConfig{synchronousRawProcessing: true},
+			printCb: func(ep *event.Pair) {
+				next := synchronizedPair{pair: ep, ack: make(chan struct{})}
+				outCh <- next
+				<-next.ack
+			},
+			done: make(chan struct{}),
 		}
 		go el.run(ctx, inCh)
 
 		go func() {
+			defer close(inCh)
 			for _, raw := range rawTracepoints {
 				inCh <- raw
-				time.Sleep(time.Microsecond)
 			}
 		}()
 
 		select {
-		case ep := <-outCh:
-			t.Log("Received event with comm filter disabled:", ep)
+		case next := <-outCh:
+			close(next.ack)
+			t.Log("Received event with comm filter disabled:", next.pair)
 			// Good, we received the event
 		case <-time.After(100 * time.Millisecond):
 			t.Error("Expected to receive event with comm filter disabled but got nothing")
@@ -468,7 +489,7 @@ func TestCommFilterToggle(t *testing.T) {
 		defer cancel()
 
 		inCh := make(chan []byte)
-		outCh := make(chan *event.Pair)
+		outCh := make(chan synchronizedPair)
 
 		// Create eventloop with comm filter enabled
 		el := &eventLoop{
@@ -481,21 +502,27 @@ func TestCommFilterToggle(t *testing.T) {
 			fdTracker:     newFDTracker(make(map[int32]file.File)),
 			commResolver:  newCommResolver(make(map[uint32]string)),
 			prevPairTimes: make(map[uint32]uint64),
-			printCb:       func(ep *event.Pair) { outCh <- ep },
-			done:          make(chan struct{}),
+			cfg:           eventLoopConfig{synchronousRawProcessing: true},
+			printCb: func(ep *event.Pair) {
+				next := synchronizedPair{pair: ep, ack: make(chan struct{})}
+				outCh <- next
+				<-next.ack
+			},
+			done: make(chan struct{}),
 		}
 		go el.run(ctx, inCh)
 
 		go func() {
+			defer close(inCh)
 			for _, raw := range rawTracepoints {
 				inCh <- raw
-				time.Sleep(time.Microsecond)
 			}
 		}()
 
 		select {
-		case ep := <-outCh:
-			t.Error("Expected no event with comm filter enabled but got:", ep)
+		case next := <-outCh:
+			close(next.ack)
+			t.Error("Expected no event with comm filter enabled but got:", next.pair)
 		case <-time.After(100 * time.Millisecond):
 			t.Log("Good, no event received with comm filter enabled")
 			// Expected behavior
@@ -517,6 +544,7 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 		fdTracker:     newFDTracker(make(map[int32]file.File)),
 		commResolver:  newCommResolver(make(map[uint32]string)),
 		prevPairTimes: make(map[uint32]uint64),
+		cfg:           eventLoopConfig{synchronousRawProcessing: true},
 		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		done:          make(chan struct{}),
 	}

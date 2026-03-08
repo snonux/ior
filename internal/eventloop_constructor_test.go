@@ -9,6 +9,9 @@ import (
 
 func mustNewEventLoop(tb testing.TB, cfg eventLoopConfig) *eventLoop {
 	tb.Helper()
+	if _, isBenchmark := tb.(*testing.B); !isBenchmark {
+		cfg.synchronousRawProcessing = true
+	}
 	el, err := newEventLoop(cfg)
 	if err != nil {
 		tb.Fatalf("newEventLoop() error = %v", err)
