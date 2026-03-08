@@ -751,7 +751,7 @@ func (m *Model) applyFilterFromSelectedCell() bool {
 	}
 	ev := m.filtered[m.selectedIdx]
 	targetSeq := ev.Seq
-	next := cloneFilter(m.filter)
+	next := m.filter.Clone()
 	action := ""
 
 	switch m.selectedCol {
@@ -789,7 +789,7 @@ func (m *Model) applyFilterFromSelectedCell() bool {
 		return false
 	}
 
-	m.filterStack = append(m.filterStack, cloneFilter(m.filter))
+	m.filterStack = append(m.filterStack, m.filter.Clone())
 	m.filterActionStack = append(m.filterActionStack, action)
 	m.filter = next
 	m.applyFilter()
@@ -807,7 +807,7 @@ func (m *Model) popFilter() bool {
 	if len(m.filterActionStack) > 0 {
 		m.filterActionStack = m.filterActionStack[:len(m.filterActionStack)-1]
 	}
-	m.filter = cloneFilter(last)
+	m.filter = last.Clone()
 	m.applyFilter()
 	m.restoreSelectionBySeq(targetSeq)
 	return true
@@ -831,37 +831,6 @@ func (m *Model) restoreSelectionBySeq(seq uint64) {
 			return
 		}
 	}
-}
-
-func cloneFilter(in Filter) Filter {
-	out := in
-	out.Syscall = cloneStringFilter(in.Syscall)
-	out.Comm = cloneStringFilter(in.Comm)
-	out.File = cloneStringFilter(in.File)
-	out.PID = cloneNumericFilter(in.PID)
-	out.TID = cloneNumericFilter(in.TID)
-	out.FD = cloneNumericFilter(in.FD)
-	out.LatencyNs = cloneNumericFilter(in.LatencyNs)
-	out.GapNs = cloneNumericFilter(in.GapNs)
-	out.Bytes = cloneNumericFilter(in.Bytes)
-	out.RetVal = cloneNumericFilter(in.RetVal)
-	return out
-}
-
-func cloneStringFilter(in *StringFilter) *StringFilter {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
-}
-
-func cloneNumericFilter(in *NumericFilter) *NumericFilter {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
 }
 
 func (m *Model) clampSelection() {
