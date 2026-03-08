@@ -92,6 +92,7 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 		k.Seven,
 		k.Visualize,
 		k.Metric,
+		k.Filter,
 		k.SelectPID,
 		k.SelectTID,
 		k.Probes,
@@ -106,11 +107,7 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 		k.Visualize,
 		k.Metric,
 		helpTextBinding("space", "stream pause"),
-		helpTextBinding("f", "stream filter"),
 		helpTextBinding("g/G", "stream top/tail"),
-		helpTextBinding("c", "stream clear"),
-		helpTextBinding("enter", "stream add filter"),
-		helpTextBinding("esc", "stream undo filter"),
 		helpTextBinding("left/right", "stream col"),
 		helpTextBinding("h/l", "stream col"),
 		helpTextBinding("j/k", "scroll"),
@@ -135,18 +132,14 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 		controls = append(controls, k.Export)
 	}
 	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Refresh, k.Quit)
-	controls = append(controls, k.Visualize, k.Metric)
+	controls = append(controls, k.Visualize, k.Metric, k.Filter)
 
 	return [][]key.Binding{
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},
 		controls,
 		{
 			helpTextBinding("space", "stream pause"),
-			helpTextBinding("f", "stream filter"),
 			helpTextBinding("g/G", "stream top/tail"),
-			helpTextBinding("c", "stream clear"),
-			helpTextBinding("enter", "stream add filter"),
-			helpTextBinding("esc", "stream undo filter"),
 			helpTextBinding("left/right", "stream col"),
 			helpTextBinding("h/l", "stream col"),
 			helpTextBinding("j/k", "scroll"),

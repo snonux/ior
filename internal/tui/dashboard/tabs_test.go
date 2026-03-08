@@ -55,3 +55,17 @@ func TestRenderHelpBarSmallWidthCanWrapToTwoLines(t *testing.T) {
 		t.Fatalf("expected Dashboard section line, got %q", lines[1])
 	}
 }
+
+func TestRenderHelpHintWithStatusIncludesFilterSummary(t *testing.T) {
+	out := renderHelpHintWithStatus(120, "filter: syscall~read")
+	if !strings.Contains(out, "filter: syscall~read") {
+		t.Fatalf("expected filter summary in help hint, got %q", out)
+	}
+}
+
+func TestRenderHelpBarWithStatusIncludesFilterSummary(t *testing.T) {
+	out := renderHelpBarWithStatus(common.DefaultKeyMap(), 0, "filter: pid=42")
+	if !strings.Contains(out, "filter: pid=42") {
+		t.Fatalf("expected filter summary in help bar, got %q", out)
+	}
+}
