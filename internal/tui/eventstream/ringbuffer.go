@@ -57,3 +57,13 @@ func (r *RingBuffer) TotalPushed() uint64 {
 	defer r.mu.RUnlock()
 	return r.totalPushed
 }
+
+func (r *RingBuffer) Reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	clear(r.buf)
+	r.start = 0
+	r.size = 0
+	r.totalPushed = 0
+}

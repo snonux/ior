@@ -183,6 +183,9 @@ func tuiTraceStarterFromRunTrace(
 		streamBuf := eventstream.NewRingBuffer()
 		liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
 		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+			if persistent := bindings.StreamBuffer(); persistent != nil {
+				streamBuf = persistent
+			}
 			bindings.SetDashboardSnapshotSource(engine)
 			bindings.SetEventStreamSource(streamBuf)
 			bindings.SetLiveTrie(liveTrie)

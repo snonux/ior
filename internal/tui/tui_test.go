@@ -427,6 +427,30 @@ func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
 	}
 }
 
+func TestRuntimeBindingsProvidePersistentStreamBuffer(t *testing.T) {
+	runtime := newRuntimeBindings()
+	buffer := runtime.StreamBuffer()
+	if buffer == nil {
+		t.Fatalf("expected persistent stream buffer")
+	}
+	if got := runtime.eventStreamSource(); got != buffer {
+		t.Fatalf("expected runtime stream source to default to persistent buffer")
+	}
+
+	buffer.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read"})
+	if buffer.Len() != 1 {
+		t.Fatalf("expected pushed event in persistent buffer")
+	}
+
+	runtime.resetStreamBuffer()
+	if buffer.Len() != 0 {
+		t.Fatalf("expected resetStreamBuffer to clear existing buffer contents")
+	}
+	if got := runtime.eventStreamSource(); got != buffer {
+		t.Fatalf("expected resetStreamBuffer to preserve the same buffer source")
+	}
+}
+
 func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 	src := &fakeResettableDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
 
@@ -469,6 +493,57 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 
 	if !strings.Contains(m.View().Content, "read") {
 		t.Fatalf("expected stream tab to render rebound stream event")
+	}
+}
+
+func TestGlobalFilterApplyPreservesBufferedStreamRowsAcrossRestart(t *testing.T) {
+	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	buffer := m.runtime.StreamBuffer()
+	buffer.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 1, TID: 1, FileName: "/tmp/read"})
+	buffer.Push(eventstream.StreamEvent{Seq: 2, Syscall: "write", Comm: "proc", PID: 1, TID: 2, FileName: "/tmp/write"})
+	m.dashboard.SetStreamSource(buffer)
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
+	m = next.(Model)
+	next, _ = m.Update(messages.StatsTickMsg{})
+	m = next.(Model)
+	initial := m.View().Content
+	if !strings.Contains(initial, "read") || !strings.Contains(initial, "write") {
+		t.Fatalf("expected initial stream view to show buffered rows, got %q", initial)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	if buffer.Len() != 2 {
+		t.Fatalf("expected filter apply not to clear persistent stream buffer")
+	}
+	if !m.attaching {
+		t.Fatalf("expected filter apply to restart tracing")
+	}
+
+	next, _ = m.Update(TracingStartedMsg{})
+	m = next.(Model)
+	next, _ = m.Update(messages.StatsTickMsg{})
+	m = next.(Model)
+
+	view := m.View().Content
+	if !strings.Contains(view, "read") {
+		t.Fatalf("expected matching historical row to remain visible, got %q", view)
+	}
+	if strings.Contains(view, "write") {
+		t.Fatalf("expected non-matching historical row to be hidden after refilter, got %q", view)
 	}
 }
 
@@ -739,6 +814,18 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatalf("expected picker init command when returning to picker")
+	}
+}
+
+func TestPidSelectedClearsPersistentStreamBuffer(t *testing.T) {
+	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context) error { return nil })
+	m.runtime.StreamBuffer().Push(eventstream.StreamEvent{Seq: 1, Syscall: "read"})
+
+	next, _ := m.Update(PidSelectedMsg{Pid: 42})
+	m = next.(Model)
+
+	if got := m.runtime.StreamBuffer().Len(); got != 0 {
+		t.Fatalf("expected pid reselection to clear persistent stream buffer, got len=%d", got)
 	}
 }
 
