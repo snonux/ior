@@ -1091,8 +1091,8 @@ func (m Model) helpSections() []helpSection {
 				"files: d dirs toggle  v bubbles (dirs only)  b metric",
 				"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",
 				"flame: / filter  n/N match next/prev  space/p pause  b metric",
-				"stream: space pause  f filter  enter apply  esc undo  /? n/N",
-				"stream: j/k/pg scroll  g/G top/tail  h/l cols  c  x/X  E open",
+				"stream: space pause  /? n/N search",
+				"stream: j/k/pg scroll  g/G top/tail  h/l cols  x/X export  E open",
 			},
 		},
 		{

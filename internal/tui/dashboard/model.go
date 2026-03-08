@@ -522,7 +522,7 @@ func (m Model) ActiveTab() Tab {
 // top-level shortcut for the given key press.
 func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
 	if m.activeTab == TabStream {
-		return m.streamModel.FilterModalVisible() || m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
+		return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
 	}
 	if m.activeTab == TabFlame {
 		return m.flamegraphModel.ConsumesKey(msg)
