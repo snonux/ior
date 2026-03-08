@@ -33,7 +33,7 @@ var selectedCellStyle = lipgloss.NewStyle().
 	Foreground(common.ColorBackground).
 	Background(common.ColorAccent)
 
-func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, events []StreamEvent, selectedVisibleIdx int, selectedCol int) string {
+func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, filterStack []string, events []StreamEvent, selectedVisibleIdx int, selectedCol int) string {
 	if width <= 0 {
 		width = 100
 	}
@@ -42,6 +42,9 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 	lines := make([]string, 0, len(events)+3)
 	lines = append(lines, renderStatusLine(paused, totalCount, filteredCount, bufferLen, bufferCap))
 	lines = append(lines, renderFilterLine(filter))
+	if len(filterStack) > 0 {
+		lines = append(lines, renderFilterStackLine(filterStack))
+	}
 	lines = append(lines, renderColumnHeader(contentWidth))
 	for i, ev := range events {
 		col := -1
@@ -89,6 +92,10 @@ func renderFilterLine(filter Filter) string {
 		summary = common.HighlightStyle.Render(summary)
 	}
 	return common.HeaderStyle.Render("Filter:") + " " + summary
+}
+
+func renderFilterStackLine(filterStack []string) string {
+	return common.HeaderStyle.Render("Stack:") + " " + strings.Join(filterStack, " | ")
 }
 
 func renderColumnHeader(width int) string {

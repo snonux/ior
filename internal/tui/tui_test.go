@@ -1184,6 +1184,185 @@ func TestGlobalFilterCloseWithoutChangesDoesNotRestartTrace(t *testing.T) {
 	}
 }
 
+func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	rb := eventstream.NewRingBuffer()
+	rb.Push(eventstream.StreamEvent{
+		Seq:        1,
+		Syscall:    "write",
+		Comm:       "systemd",
+		PID:        3655,
+		TID:        4862,
+		FileName:   "/var/lib/clickhouse/data",
+		DurationNs: 1234,
+		GapNs:      44,
+		FD:         20,
+	})
+	m.dashboard.SetStreamSource(rb)
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = next.(Model)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on paused stream selection to emit a global filter request")
+	}
+
+	next, cmd = m.Update(cmd())
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected applying selected-cell global filter to restart tracing")
+	}
+	if m.globalFilter.Comm == nil || m.globalFilter.Comm.Pattern != "systemd" {
+		t.Fatalf("expected selected comm applied globally, got %+v", m.globalFilter.Comm)
+	}
+	if !stopped {
+		t.Fatalf("expected selected-cell global filter to stop the active trace")
+	}
+	if !m.attaching {
+		t.Fatalf("expected selected-cell global filter to restart tracing")
+	}
+	if len(m.filterStack) != 1 || m.filterStack[0] != "comm~systemd" {
+		t.Fatalf("expected selected-cell action pushed to filter stack, got %+v", m.filterStack)
+	}
+}
+
+func TestGlobalFilterUndoKeyPopsLatestStackEntry(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	m.attaching = false
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'F'}[0], Text: string([]rune{'F'})})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected F to trigger global filter undo")
+	}
+	if m.globalFilter.IsActive() {
+		t.Fatalf("expected undo to restore the previous all-filter state, got %+v", m.globalFilter)
+	}
+	if len(m.filterStack) != 0 || len(m.filterHistory) != 0 {
+		t.Fatalf("expected filter stack/history cleared after undo, got stack=%+v history=%d", m.filterStack, len(m.filterHistory))
+	}
+	if !stopped {
+		t.Fatalf("expected undo to stop the active trace")
+	}
+	if !m.attaching {
+		t.Fatalf("expected undo to restart tracing")
+	}
+}
+
+func TestPausedStreamEscUndoesLatestGlobalFilter(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	rb := eventstream.NewRingBuffer()
+	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "systemd", PID: 1, TID: 2})
+	m.dashboard.SetStreamSource(rb)
+	m.attaching = false
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = next.(Model)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected esc in paused stream to undo one global filter layer")
+	}
+	next, cmd = m.Update(cmd())
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected esc undo to restart tracing")
+	}
+	if m.globalFilter.IsActive() {
+		t.Fatalf("expected esc undo to restore all-filter state, got %+v", m.globalFilter)
+	}
+	if len(m.filterStack) != 0 {
+		t.Fatalf("expected filter stack cleared after esc undo, got %+v", m.filterStack)
+	}
+	if !stopped {
+		t.Fatalf("expected esc undo to stop the active trace")
+	}
+	if !m.attaching {
+		t.Fatalf("expected esc undo to restart tracing")
+	}
+}
+
+func TestDashboardFooterShowsGlobalFilterStack(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 140
+	m.height = 35
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	m.attaching = false
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'4'}[0], Text: string([]rune{'4'})})
+	m = next.(Model)
+
+	view := m.View().Content
+	for _, want := range []string{"filter: syscall~read", "stack: syscall~read"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected dashboard footer to show %q\n%s", want, view)
+		}
+	}
+}
+
 func TestGlobalFilterApplyPreservesActiveDashboardTab(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard

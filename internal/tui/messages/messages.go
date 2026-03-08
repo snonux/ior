@@ -1,6 +1,9 @@
 package messages
 
-import "ior/internal/statsengine"
+import (
+	"ior/internal/globalfilter"
+	"ior/internal/statsengine"
+)
 
 // PidSelectedMsg is emitted when the user selects a PID from the process table.
 type PidSelectedMsg struct {
@@ -20,6 +23,15 @@ type StatsTickMsg struct {
 
 // ExportRequestMsg requests an export of the current UI state.
 type ExportRequestMsg struct{}
+
+// GlobalFilterRequestedMsg requests applying a new shared TUI filter.
+type GlobalFilterRequestedMsg struct {
+	Filter globalfilter.Filter
+	Action string
+}
+
+// GlobalFilterUndoRequestedMsg requests popping the latest shared filter layer.
+type GlobalFilterUndoRequestedMsg struct{}
 
 // TracingStartedMsg signals that tracing started successfully.
 type TracingStartedMsg struct{}

@@ -104,11 +104,32 @@ func (m Model) Update(msg tea.Msg) Model {
 	}
 
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		if m.editing {
+			switch keyMsg.String() {
+			case "esc":
+				m.commitEdit()
+				m.filter = m.buildFilterFromFields()
+				return m.Close()
+			case "enter":
+				if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
+					if strings.TrimSpace(m.fields[m.activeField].value) == "true" {
+						m.fields[m.activeField].value = "false"
+					} else {
+						m.fields[m.activeField].value = "true"
+					}
+					return m
+				}
+				m.commitEdit()
+				return m
+			}
+			var cmd tea.Cmd
+			m.textInput, cmd = m.textInput.Update(msg)
+			_ = cmd
+			return m
+		}
+
 		switch keyMsg.String() {
 		case "esc":
-			if m.editing {
-				m.commitEdit()
-			}
 			m.filter = m.buildFilterFromFields()
 			return m.Close()
 		case "c":
@@ -147,19 +168,9 @@ func (m Model) Update(msg tea.Msg) Model {
 				}
 				return m
 			}
-			if m.editing {
-				m.commitEdit()
-				return m
-			}
 			m.startEdit()
 			return m
 		}
-	}
-
-	if m.editing {
-		var cmd tea.Cmd
-		m.textInput, cmd = m.textInput.Update(msg)
-		_ = cmd
 	}
 	return m
 }
@@ -192,6 +203,7 @@ func (m Model) View(width, height int) string {
 		lines = append(lines, prefix+m.renderField(field, i == m.activeField))
 	}
 	lines = append(lines, "", "j/k move • Enter edit/apply • Tab op • Space toggle errors • c clear • Esc apply+close")
+	lines = append(lines, "strings: substring by default, use ^prefix, suffix$, or ^exact$")
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

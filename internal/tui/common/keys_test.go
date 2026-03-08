@@ -38,6 +38,11 @@ func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 	if metricHelp.Key != "b" || metricHelp.Desc != "metric" {
 		t.Fatalf("unexpected metric binding help: key=%q desc=%q", metricHelp.Key, metricHelp.Desc)
 	}
+
+	undoHelp := keys.FilterUndo.Help()
+	if undoHelp.Key != "F" || undoHelp.Desc != "undo filter" {
+		t.Fatalf("unexpected filter undo binding help: key=%q desc=%q", undoHelp.Key, undoHelp.Desc)
+	}
 }
 
 func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
@@ -130,6 +135,18 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	if !found {
 		t.Fatalf("expected metric binding in dashboard full help controls")
 	}
+
+	found = false
+	for _, binding := range groups[1] {
+		help := binding.Help()
+		if help.Key == "F" && help.Desc == "undo filter" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected undo filter binding in dashboard full help controls")
+	}
 }
 
 func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
@@ -138,6 +155,7 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	found := false
 	foundSelectTID := false
 	foundOne := false
+	foundUndo := false
 	for _, binding := range short {
 		help := binding.Help()
 		if help.Key == "o" && help.Desc == "probes" {
@@ -149,6 +167,9 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 		if help.Key == "1" && help.Desc == "flame" {
 			foundOne = true
 		}
+		if help.Key == "F" && help.Desc == "undo filter" {
+			foundUndo = true
+		}
 	}
 	if !found {
 		t.Fatalf("expected probes binding in dashboard short help")
@@ -158,5 +179,8 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	}
 	if !foundOne {
 		t.Fatalf("expected flame tab binding in dashboard short help")
+	}
+	if !foundUndo {
+		t.Fatalf("expected undo filter binding in dashboard short help")
 	}
 }

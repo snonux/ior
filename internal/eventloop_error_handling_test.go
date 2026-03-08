@@ -144,3 +144,32 @@ func TestProcessRawEventMalformedKnownTypeDoesNotPanicAndNotifies(t *testing.T) 
 		t.Fatalf("expected warning notification")
 	}
 }
+
+func TestTracepointEnteredMissingCommWithCommFilterNotifies(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{commFilter: "system"})
+	warnings := make(chan string, 1)
+	el.warningCb = func(message string) { warnings <- message }
+
+	_, enterRaw := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, 20, types.SYS_ENTER_WRITE)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("tracepointEntered panicked: %v", r)
+		}
+	}()
+
+	el.tracepointEntered(types.NewFdEvent(enterRaw))
+
+	select {
+	case msg := <-warnings:
+		if msg == "" {
+			t.Fatalf("expected non-empty warning message")
+		}
+	default:
+		t.Fatalf("expected warning notification")
+	}
+
+	if _, ok := el.enterEvs[defaultTid]; ok {
+		t.Fatalf("expected no enter event to be stored for tid %d", defaultTid)
+	}
+}

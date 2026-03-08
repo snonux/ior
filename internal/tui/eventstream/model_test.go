@@ -377,27 +377,65 @@ func TestPausedSelectionMovesAcrossColumnsWithLeftRightAndHL(t *testing.T) {
 	}
 }
 
-func TestPausedEnterDoesNotMutateGlobalFilter(t *testing.T) {
+func TestPausedEnterQueuesGlobalFilterRequestFromSelectedCell(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a", DurationNs: 100, GapNs: 5})
 	rb.Push(StreamEvent{Seq: 2, PID: 1, TID: 2, Comm: "b", DurationNs: 200, GapNs: 6})
 	m := NewModel(rb)
 	m.height = 20
 	m.Refresh()
+	m.SetFilter(Filter{PID: &NumericFilter{Op: OpEq, Value: 1}})
 	if !m.HandleKey("space") {
 		t.Fatalf("space should pause")
 	}
 
 	m.selectedIdx = 0
-	m.selectedCol = streamColLatency
-	if m.HandleKey("enter") {
-		t.Fatalf("expected enter not to mutate filters in paused stream mode")
+	m.selectedCol = streamColComm
+	if !m.HandleKey("enter") {
+		t.Fatalf("expected enter to queue a global filter request in paused stream mode")
 	}
-	if m.filter.IsActive() {
-		t.Fatalf("expected enter to leave global filter unchanged")
+	if m.filter.Comm != nil {
+		t.Fatalf("expected local stream filter state to remain unchanged until parent applies it")
+	}
+	req, action, ok := m.ConsumeGlobalFilterRequest()
+	if !ok {
+		t.Fatalf("expected pending global filter request")
+	}
+	if action != "comm~a" {
+		t.Fatalf("expected action label comm~a, got %q", action)
+	}
+	if req.PID == nil || req.PID.Op != OpEq || req.PID.Value != 1 {
+		t.Fatalf("expected existing pid filter preserved, got %+v", req.PID)
+	}
+	if req.Comm == nil || req.Comm.Pattern != "a" {
+		t.Fatalf("expected selected comm folded into global filter, got %+v", req.Comm)
+	}
+	if _, _, ok := m.ConsumeGlobalFilterRequest(); ok {
+		t.Fatalf("expected global filter request to be one-shot")
 	}
 	if m.HandleKey("esc") {
 		t.Fatalf("expected esc not to act as local filter undo anymore")
+	}
+}
+
+func TestPausedEscQueuesGlobalFilterUndoWhenStackPresent(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a"})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	m.SetFilterStack([]string{"comm~a"})
+	if !m.HandleKey("space") {
+		t.Fatalf("space should pause")
+	}
+	if !m.HandleKey("esc") {
+		t.Fatalf("expected esc to queue undo when a global filter stack exists")
+	}
+	if !m.ConsumeGlobalFilterUndoRequest() {
+		t.Fatalf("expected pending global filter undo request")
+	}
+	if m.ConsumeGlobalFilterUndoRequest() {
+		t.Fatalf("expected global filter undo request to be one-shot")
 	}
 }
 

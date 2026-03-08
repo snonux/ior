@@ -80,6 +80,31 @@ func TestFilterStringAndNumericMatching(t *testing.T) {
 	}
 }
 
+func TestFilterStringAnchorsSupportExactPrefixAndSuffix(t *testing.T) {
+	candidate := testCandidate()
+
+	if !(Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(candidate) {
+		t.Fatalf("expected ^read$ to exactly match read")
+	}
+	if !(Filter{Syscall: &StringFilter{Pattern: "^re"}}).Matches(candidate) {
+		t.Fatalf("expected ^re to match read by prefix")
+	}
+	if !(Filter{File: &StringFilter{Pattern: ".log$"}}).Matches(candidate) {
+		t.Fatalf("expected .log$ to match by suffix")
+	}
+
+	candidate.syscall = "readlink"
+	if (Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(candidate) {
+		t.Fatalf("expected ^read$ not to match readlink")
+	}
+	if !(Filter{Syscall: &StringFilter{Pattern: "^read"}}).Matches(candidate) {
+		t.Fatalf("expected ^read to match readlink by prefix")
+	}
+	if !(Filter{Syscall: &StringFilter{Pattern: "link$"}}).Matches(candidate) {
+		t.Fatalf("expected link$ to match readlink by suffix")
+	}
+}
+
 func TestFilterErrorsOnlyAndClone(t *testing.T) {
 	filter := Filter{
 		ErrorsOnly: true,

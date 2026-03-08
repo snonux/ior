@@ -595,8 +595,7 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 		if _, ok := e.cachedComm(tid); ok {
 			e.enterEvs[tid] = event.NewPair(enterEv)
 		} else {
-			// Probably not an issue.
-			fmt.Println("WARN: No comm name for", enterEv, "process probably already vanished?")
+			e.notifyWarning(fmt.Sprintf("No comm name for %v process probably already vanished?", enterEv))
 		}
 	}
 }
