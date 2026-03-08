@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/eventstream"
@@ -512,6 +513,11 @@ func (m Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
 }
 
+// ActiveTab returns the currently selected dashboard tab.
+func (m Model) ActiveTab() Tab {
+	return m.activeTab
+}
+
 // BlocksGlobalShortcuts reports whether the active tab should suppress a
 // top-level shortcut for the given key press.
 func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
@@ -529,6 +535,12 @@ func (m *Model) SetStreamSource(source eventstream.Source) {
 	m.streamModel.SetSource(source)
 }
 
+// SetGlobalFilter forwards the shared TUI filter into the stream tab so
+// buffered rows can be re-filtered immediately.
+func (m *Model) SetGlobalFilter(filter globalfilter.Filter) {
+	m.streamModel.SetFilter(eventstream.Filter(filter))
+}
+
 // SetLiveTrie updates the live trie source used by the flamegraph tab.
 func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 	m.liveTrie = liveTrie
@@ -537,6 +549,15 @@ func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 		m.flamegraphModel.SetViewport(m.width, m.height)
 	}
 	m.flamegraphModel.RefreshFromLiveTrie()
+}
+
+// PrepareForTraceRestart clears aggregate state while keeping the current tab
+// and retained stream rows intact for the next trace session.
+func (m *Model) PrepareForTraceRestart() {
+	m.latest = nil
+	m.liveTrie = nil
+	m.flamegraphModel.SetLiveTrie(nil)
+	m.refreshBubbleData()
 }
 
 // SetDarkMode updates dashboard child models for the active theme.

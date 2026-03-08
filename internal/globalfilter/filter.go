@@ -70,6 +70,20 @@ func (f Filter) Clone() Filter {
 	return out
 }
 
+func (f Filter) Equal(other Filter) bool {
+	return sameStringFilter(f.Syscall, other.Syscall) &&
+		sameStringFilter(f.Comm, other.Comm) &&
+		sameStringFilter(f.File, other.File) &&
+		sameNumericFilter(f.PID, other.PID) &&
+		sameNumericFilter(f.TID, other.TID) &&
+		sameNumericFilter(f.FD, other.FD) &&
+		sameNumericFilter(f.LatencyNs, other.LatencyNs) &&
+		sameNumericFilter(f.GapNs, other.GapNs) &&
+		sameNumericFilter(f.Bytes, other.Bytes) &&
+		sameNumericFilter(f.RetVal, other.RetVal) &&
+		f.ErrorsOnly == other.ErrorsOnly
+}
+
 func (f Filter) Matches(candidate Candidate) bool {
 	if candidate == nil {
 		return false
@@ -257,6 +271,28 @@ func cloneNumericFilter(in *NumericFilter) *NumericFilter {
 	}
 	out := *in
 	return &out
+}
+
+func sameStringFilter(left, right *StringFilter) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	default:
+		return left.Pattern == right.Pattern
+	}
+}
+
+func sameNumericFilter(left, right *NumericFilter) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	default:
+		return left.Op == right.Op && left.Value == right.Value
+	}
 }
 
 func onlyDigits(s string) bool {

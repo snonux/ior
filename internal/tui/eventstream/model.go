@@ -133,6 +133,15 @@ func (m *Model) SetSource(source Source) {
 	m.Refresh()
 }
 
+// SetFilter updates the active stream filter and immediately re-filters the
+// current in-memory snapshot without mutating the underlying ring buffer.
+func (m *Model) SetFilter(filter Filter) {
+	targetSeq := m.currentSelectedSeq()
+	m.filter = filter.Clone()
+	m.applyFilter()
+	m.restoreSelectionBySeq(targetSeq)
+}
+
 // SetDarkMode updates stream modal text input styles for the active theme.
 func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
