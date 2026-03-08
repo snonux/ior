@@ -1363,6 +1363,53 @@ func TestDashboardFooterShowsGlobalFilterStack(t *testing.T) {
 	}
 }
 
+func TestProcessesTabEnterAppliesSelectedProcessAsGlobalFilter(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	stopped := false
+	m.traceStop = func() { stopped = true }
+
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 111, Comm: "alpha", Syscalls: 9},
+		{PID: 222, Comm: "beta", Syscalls: 4},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+
+	next, _ := m.Update(messages.StatsTickMsg{Snap: &snap})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'5'}[0], Text: string([]rune{'5'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
+	m = next.(Model)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on processes tab to emit a filter request")
+	}
+
+	next, cmd = m.Update(cmd())
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected selected process filter to restart tracing")
+	}
+	if m.globalFilter.PID == nil || m.globalFilter.PID.Value != 222 {
+		t.Fatalf("expected selected process pid applied globally, got %+v", m.globalFilter.PID)
+	}
+	if len(m.filterStack) != 1 || m.filterStack[0] != "pid=222" {
+		t.Fatalf("expected pid filter pushed to stack, got %+v", m.filterStack)
+	}
+	if !stopped {
+		t.Fatalf("expected selected process filter to stop the active trace")
+	}
+	if !m.attaching {
+		t.Fatalf("expected selected process filter to restart tracing")
+	}
+}
+
 func TestGlobalFilterApplyPreservesActiveDashboardTab(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
