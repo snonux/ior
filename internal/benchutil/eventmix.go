@@ -101,9 +101,9 @@ var DiverseAllTypes = EventMix{
 	Seed: defaultMixSeed,
 }
 
-func (m EventMix) GenerateStream(gen EventGenerator, n, numThreads int) [][]byte {
+func (m EventMix) GenerateStream(gen EventGenerator, n, numThreads int) ([][]byte, error) {
 	if n <= 0 {
-		return nil
+		return nil, nil
 	}
 
 	threadCount := numThreads
@@ -123,12 +123,15 @@ func (m EventMix) GenerateStream(gen EventGenerator, n, numThreads int) [][]byte
 		tid := defaultBaseTid + uint32(threadIdx)
 		fd := fdFor(threadIdx, i)
 		event := choose(entries, totalWeight, rng)
-		enter, exit := event.pair(gen, nextTime, pid, tid, fd, i)
+		enter, exit, err := event.pair(gen, nextTime, pid, tid, fd, i)
+		if err != nil {
+			return nil, fmt.Errorf("generate event %v pair: %w", event, err)
+		}
 		stream = append(stream, enter, exit)
 		nextTime += gen.pairDelta() + 1
 	}
 
-	return stream
+	return stream, nil
 }
 
 func choose(entries []MixEntry, totalWeight int, rng *rand.Rand) MixEvent {
@@ -181,7 +184,7 @@ func sumWeights(entries []MixEntry) int {
 	return total
 }
 
-func (e MixEvent) pair(gen EventGenerator, time uint64, pid, tid uint32, fd int32, seq int) ([]byte, []byte) {
+func (e MixEvent) pair(gen EventGenerator, time uint64, pid, tid uint32, fd int32, seq int) ([]byte, []byte, error) {
 	switch e {
 	case MixRead:
 		return gen.FdPair(time, pid, tid, fd, types.SYS_ENTER_READ, types.SYS_EXIT_READ, 128)
@@ -190,9 +193,15 @@ func (e MixEvent) pair(gen EventGenerator, time uint64, pid, tid uint32, fd int3
 	case MixOpen:
 		return gen.OpenPair(time, pid, tid)
 	case MixClose:
-		_, enter := gen.EnterFdEvent(time, pid, tid, fd, types.SYS_ENTER_CLOSE)
-		_, exit := gen.ExitFdEvent(time+gen.pairDelta(), pid, tid, fd, types.SYS_EXIT_CLOSE)
-		return enter, exit
+		_, enter, err := gen.EnterFdEvent(time, pid, tid, fd, types.SYS_ENTER_CLOSE)
+		if err != nil {
+			return nil, nil, err
+		}
+		_, exit, err := gen.ExitFdEvent(time+gen.pairDelta(), pid, tid, fd, types.SYS_EXIT_CLOSE)
+		if err != nil {
+			return nil, nil, err
+		}
+		return enter, exit, nil
 	case MixStat:
 		path := fmt.Sprintf("/tmp/ior-stat-%d-%d", tid, seq)
 		return gen.PathPair(time, pid, tid, path, types.SYS_ENTER_NEWSTAT, types.SYS_EXIT_NEWSTAT, 0)
@@ -222,9 +231,15 @@ func (e MixEvent) pair(gen EventGenerator, time uint64, pid, tid uint32, fd int3
 	case MixDup3:
 		return gen.Dup3Pair(time, pid, tid, fd, syscall.O_CLOEXEC, types.SYS_EXIT_DUP3, int64(fd+1))
 	case MixOpenByHandleAt:
-		_, enter := gen.EnterOpenByHandleAtEvent(time, pid, tid, syscall.O_RDWR)
-		_, exit := gen.ExitRetEvent(time+gen.pairDelta(), pid, tid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
-		return enter, exit
+		_, enter, err := gen.EnterOpenByHandleAtEvent(time, pid, tid, syscall.O_RDWR)
+		if err != nil {
+			return nil, nil, err
+		}
+		_, exit, err := gen.ExitRetEvent(time+gen.pairDelta(), pid, tid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
+		if err != nil {
+			return nil, nil, err
+		}
+		return enter, exit, nil
 	default:
 		return gen.NullPair(time, pid, tid, types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
 	}
