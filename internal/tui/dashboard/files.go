@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -21,38 +22,92 @@ type DirSnapshot struct {
 	FileCount    uint64
 }
 
+type fileSortKey uint8
+
+const (
+	fileSortKeyAccesses fileSortKey = iota
+	fileSortKeyRead
+	fileSortKeyWrite
+	fileSortKeyAvgLatency
+	fileSortKeyMaxLatency
+	fileSortKeyPath
+)
+
+type fileDirSortKey uint8
+
+const (
+	fileDirSortKeyAccesses fileDirSortKey = iota
+	fileDirSortKeyRead
+	fileDirSortKeyWrite
+	fileDirSortKeyAvgLatency
+	fileDirSortKeyMaxLatency
+	fileDirSortKeyFileCount
+	fileDirSortKeyDir
+)
+
 func renderFiles(snap *statsengine.Snapshot, width, height int) string {
-	return renderFilesWithOffset(snap, width, height, 0, 0)
+	return renderFilesWithSort(snap, width, height, 0, 0, tableSortState[fileSortKey]{})
 }
 
 func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
+	return renderFilesWithSort(snap, width, height, offset, selectedCol, tableSortState[fileSortKey]{})
+}
+
+func renderFilesWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[fileSortKey]) string {
 	if snap == nil {
 		return "Files: waiting for stats..."
 	}
 
 	pathWidth := filePathWidth(width)
-	rows := fileRows(snap.Files(), pathWidth)
+	rows := fileRows(sortedFileSnapshots(snap.Files(), sortState), pathWidth)
 	if len(rows) == 0 {
 		return "Files: no data"
 	}
 
 	columns := fileColumns(width)
-	return renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "d:dirs", "v:mode in dirs")
+	return renderSelectableTable(
+		columns,
+		rows,
+		height,
+		offset,
+		selectedCol,
+		"enter:filter",
+		"s:sort",
+		fileSortHint(sortState),
+		"d:dirs",
+		"v:mode in dirs",
+	)
 }
 
 func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
+	return renderFilesDirGroupedWithSort(snap, width, height, offset, selectedCol, tableSortState[fileDirSortKey]{})
+}
+
+func renderFilesDirGroupedWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[fileDirSortKey]) string {
 	if snap == nil {
 		return "Files (dirs): waiting for stats..."
 	}
 
 	pathWidth := dirPathWidth(width)
-	rows := dirRows(aggregateFilesByDir(snap.Files()), pathWidth)
+	rows := dirRows(sortedDirSnapshots(aggregateFilesByDir(snap.Files()), sortState), pathWidth)
 	if len(rows) == 0 {
 		return "Files (dirs): no data"
 	}
 
 	columns := fileDirColumns(width)
-	return renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "d:files", "v:mode", "b:metric")
+	return renderSelectableTable(
+		columns,
+		rows,
+		height,
+		offset,
+		selectedCol,
+		"enter:filter",
+		"s:sort",
+		fileDirSortHint(sortState),
+		"d:files",
+		"v:mode",
+		"b:metric",
+	)
 }
 
 func fileRows(files []statsengine.FileSnapshot, pathWidth int) [][]string {
@@ -118,6 +173,208 @@ func fileDirColumns(width int) []common.TableColumn {
 		{Title: "Files", Width: 5},
 		{Title: "Directory", Width: pathWidth},
 	}
+}
+
+func sortedFileSnapshots(rows []statsengine.FileSnapshot, sortState tableSortState[fileSortKey]) []statsengine.FileSnapshot {
+	if len(rows) == 0 {
+		return nil
+	}
+	if !sortState.active {
+		return rows
+	}
+
+	sorted := slices.Clone(rows)
+	slices.SortFunc(sorted, func(left, right statsengine.FileSnapshot) int {
+		if cmp := compareFileBySort(left, right, sortState.key); cmp != 0 {
+			return cmp
+		}
+		return compareFileDefault(left, right)
+	})
+	return sorted
+}
+
+func sortedDirSnapshots(rows []DirSnapshot, sortState tableSortState[fileDirSortKey]) []DirSnapshot {
+	if len(rows) == 0 {
+		return nil
+	}
+	if !sortState.active {
+		return rows
+	}
+
+	sorted := slices.Clone(rows)
+	slices.SortFunc(sorted, func(left, right DirSnapshot) int {
+		if cmp := compareDirBySort(left, right, sortState.key); cmp != 0 {
+			return cmp
+		}
+		return compareDirDefault(left, right)
+	})
+	return sorted
+}
+
+func compareFileBySort(left, right statsengine.FileSnapshot, key fileSortKey) int {
+	switch key {
+	case fileSortKeyAccesses:
+		return compareUint64Desc(left.Accesses, right.Accesses)
+	case fileSortKeyRead:
+		return compareUint64Desc(left.BytesRead, right.BytesRead)
+	case fileSortKeyWrite:
+		return compareUint64Desc(left.BytesWritten, right.BytesWritten)
+	case fileSortKeyAvgLatency:
+		return compareFloat64Desc(left.AvgLatencyNs, right.AvgLatencyNs)
+	case fileSortKeyMaxLatency:
+		return compareUint64Desc(left.MaxLatencyNs, right.MaxLatencyNs)
+	case fileSortKeyPath:
+		return compareStringAsc(left.Path, right.Path)
+	default:
+		return 0
+	}
+}
+
+func compareFileDefault(left, right statsengine.FileSnapshot) int {
+	if cmp := compareUint64Desc(left.Accesses, right.Accesses); cmp != 0 {
+		return cmp
+	}
+	return compareStringAsc(left.Path, right.Path)
+}
+
+func compareDirBySort(left, right DirSnapshot, key fileDirSortKey) int {
+	switch key {
+	case fileDirSortKeyAccesses:
+		return compareUint64Desc(left.Accesses, right.Accesses)
+	case fileDirSortKeyRead:
+		return compareUint64Desc(left.BytesRead, right.BytesRead)
+	case fileDirSortKeyWrite:
+		return compareUint64Desc(left.BytesWritten, right.BytesWritten)
+	case fileDirSortKeyAvgLatency:
+		return compareFloat64Desc(left.AvgLatencyNs, right.AvgLatencyNs)
+	case fileDirSortKeyMaxLatency:
+		return compareUint64Desc(left.MaxLatencyNs, right.MaxLatencyNs)
+	case fileDirSortKeyFileCount:
+		return compareUint64Desc(left.FileCount, right.FileCount)
+	case fileDirSortKeyDir:
+		return compareStringAsc(left.Dir, right.Dir)
+	default:
+		return 0
+	}
+}
+
+func compareDirDefault(left, right DirSnapshot) int {
+	if cmp := compareUint64Desc(left.Accesses, right.Accesses); cmp != 0 {
+		return cmp
+	}
+	return compareStringAsc(left.Dir, right.Dir)
+}
+
+func fileSortKeyForColumn(column int) (fileSortKey, bool) {
+	switch column {
+	case 0:
+		return fileSortKeyAccesses, true
+	case 1:
+		return fileSortKeyRead, true
+	case 2:
+		return fileSortKeyWrite, true
+	case 3:
+		return fileSortKeyAvgLatency, true
+	case 4:
+		return fileSortKeyMaxLatency, true
+	case 5:
+		return fileSortKeyPath, true
+	default:
+		return 0, false
+	}
+}
+
+func fileDirSortKeyForColumn(column int) (fileDirSortKey, bool) {
+	switch column {
+	case 0:
+		return fileDirSortKeyAccesses, true
+	case 1:
+		return fileDirSortKeyRead, true
+	case 2:
+		return fileDirSortKeyWrite, true
+	case 3:
+		return fileDirSortKeyAvgLatency, true
+	case 4:
+		return fileDirSortKeyMaxLatency, true
+	case 5:
+		return fileDirSortKeyFileCount, true
+	case 6:
+		return fileDirSortKeyDir, true
+	default:
+		return 0, false
+	}
+}
+
+func fileSortHint(sortState tableSortState[fileSortKey]) string {
+	return "sort: " + fileSortLabel(sortState)
+}
+
+func fileSortLabel(sortState tableSortState[fileSortKey]) string {
+	if !sortState.active {
+		return "default"
+	}
+	switch sortState.key {
+	case fileSortKeyAccesses:
+		return "Accesses desc"
+	case fileSortKeyRead:
+		return "Read desc"
+	case fileSortKeyWrite:
+		return "Write desc"
+	case fileSortKeyAvgLatency:
+		return "Avg Latency desc"
+	case fileSortKeyMaxLatency:
+		return "Max Latency desc"
+	case fileSortKeyPath:
+		return "Path asc"
+	default:
+		return "default"
+	}
+}
+
+func fileDirSortHint(sortState tableSortState[fileDirSortKey]) string {
+	return "sort: " + fileDirSortLabel(sortState)
+}
+
+func fileDirSortLabel(sortState tableSortState[fileDirSortKey]) string {
+	if !sortState.active {
+		return "default"
+	}
+	switch sortState.key {
+	case fileDirSortKeyAccesses:
+		return "Accesses desc"
+	case fileDirSortKeyRead:
+		return "Read desc"
+	case fileDirSortKeyWrite:
+		return "Write desc"
+	case fileDirSortKeyAvgLatency:
+		return "Avg Latency desc"
+	case fileDirSortKeyMaxLatency:
+		return "Max Latency desc"
+	case fileDirSortKeyFileCount:
+		return "Files desc"
+	case fileDirSortKeyDir:
+		return "Directory asc"
+	default:
+		return "default"
+	}
+}
+
+func findFileOffset(rows []statsengine.FileSnapshot, path string) (int, bool) {
+	for idx, row := range rows {
+		if row.Path == path {
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
+func findDirOffset(rows []DirSnapshot, dir string) (int, bool) {
+	for idx, row := range rows {
+		if row.Dir == dir {
+			return idx, true
+		}
+	}
+	return 0, false
 }
 
 func truncatePathMiddle(path string, limit int) string {
