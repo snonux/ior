@@ -28,7 +28,7 @@ func TestRenderSyscallsIncludesHeaders(t *testing.T) {
 	if !strings.Contains(out, "read") {
 		t.Fatalf("expected syscall row in output")
 	}
-	if !strings.Contains(out, "s:sort") {
+	if !strings.Contains(out, "s/S:sort") {
 		t.Fatalf("expected syscall sort hint in output")
 	}
 	if !strings.Contains(out, "sort: default") {
@@ -71,6 +71,11 @@ func TestSortedSyscallSnapshotsUsesSelectedSortKey(t *testing.T) {
 	sorted = sortedSyscallSnapshots(rows, tableSortState[syscallSortKey]{active: true, key: syscallSortKeyP95})
 	if sorted[0].Name != "read" {
 		t.Fatalf("expected p95 desc sort to put read first, got %q", sorted[0].Name)
+	}
+
+	sorted = sortedSyscallSnapshots(rows, tableSortState[syscallSortKey]{active: true, key: syscallSortKeyName, reverse: true})
+	if sorted[0].Name != "write" {
+		t.Fatalf("expected reverse syscall name sort to put write first, got %q", sorted[0].Name)
 	}
 }
 

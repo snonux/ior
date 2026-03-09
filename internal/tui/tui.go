@@ -1223,6 +1223,7 @@ func (m Model) helpSections() []helpSection {
 			lines: []string{
 				"tab/shift+tab tabs  1..7 jump tab  r reset baseline",
 				"sys/files/proc/stream tables: arrows or hjkl move  pgup/pgdown page  g/G top/bottom",
+				"sys/files/proc tables: s sort  S reverse sort",
 				"sys/proc: v bubbles  b metric events/bytes",
 				"files: d dirs toggle  v bubbles (dirs only)  b metric",
 				"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",

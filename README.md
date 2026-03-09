@@ -119,6 +119,8 @@ Help visibility:
 ### Dashboard / Tab-Specific Hotkeys
 
 - `d` in `3:Files`: toggle directory-grouped files view.
+- `s` in sortable table tabs (`2:Syscalls`, `3:Files`, `4:Processes`): sort by the selected column using that table's default direction.
+- `S` in sortable table tabs (`2:Syscalls`, `3:Files`, `4:Processes`): reverse-sort by the selected column.
 - `j/k` or `up/down` in list-like tabs (`2:Syscalls`, `3:Files`, `4:Processes`): scroll list.
 
 `left/right` and `h/l` do not switch tabs. In `6:Stream` paused mode they move selected column.

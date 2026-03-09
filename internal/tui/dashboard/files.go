@@ -72,7 +72,7 @@ func renderFilesWithSort(snap *statsengine.Snapshot, width, height, offset, sele
 		offset,
 		selectedCol,
 		"enter:filter",
-		"s:sort",
+		"s/S:sort",
 		fileSortHint(sortState),
 		"d:dirs",
 		"v:mode in dirs",
@@ -102,7 +102,7 @@ func renderFilesDirGroupedWithSort(snap *statsengine.Snapshot, width, height, of
 		offset,
 		selectedCol,
 		"enter:filter",
-		"s:sort",
+		"s/S:sort",
 		fileDirSortHint(sortState),
 		"d:files",
 		"v:mode",
@@ -185,10 +185,11 @@ func sortedFileSnapshots(rows []statsengine.FileSnapshot, sortState tableSortSta
 
 	sorted := slices.Clone(rows)
 	slices.SortFunc(sorted, func(left, right statsengine.FileSnapshot) int {
-		if cmp := compareFileBySort(left, right, sortState.key); cmp != 0 {
-			return cmp
+		cmp := compareFileBySort(left, right, sortState.key)
+		if cmp == 0 {
+			cmp = compareFileDefault(left, right)
 		}
-		return compareFileDefault(left, right)
+		return sortState.apply(cmp)
 	})
 	return sorted
 }
@@ -203,10 +204,11 @@ func sortedDirSnapshots(rows []DirSnapshot, sortState tableSortState[fileDirSort
 
 	sorted := slices.Clone(rows)
 	slices.SortFunc(sorted, func(left, right DirSnapshot) int {
-		if cmp := compareDirBySort(left, right, sortState.key); cmp != 0 {
-			return cmp
+		cmp := compareDirBySort(left, right, sortState.key)
+		if cmp == 0 {
+			cmp = compareDirDefault(left, right)
 		}
-		return compareDirDefault(left, right)
+		return sortState.apply(cmp)
 	})
 	return sorted
 }
@@ -315,17 +317,17 @@ func fileSortLabel(sortState tableSortState[fileSortKey]) string {
 	}
 	switch sortState.key {
 	case fileSortKeyAccesses:
-		return "Accesses desc"
+		return sortLabelWithDirection("Accesses", false, sortState.reverse)
 	case fileSortKeyRead:
-		return "Read desc"
+		return sortLabelWithDirection("Read", false, sortState.reverse)
 	case fileSortKeyWrite:
-		return "Write desc"
+		return sortLabelWithDirection("Write", false, sortState.reverse)
 	case fileSortKeyAvgLatency:
-		return "Avg Latency desc"
+		return sortLabelWithDirection("Avg Latency", false, sortState.reverse)
 	case fileSortKeyMaxLatency:
-		return "Max Latency desc"
+		return sortLabelWithDirection("Max Latency", false, sortState.reverse)
 	case fileSortKeyPath:
-		return "Path asc"
+		return sortLabelWithDirection("Path", true, sortState.reverse)
 	default:
 		return "default"
 	}
@@ -341,19 +343,19 @@ func fileDirSortLabel(sortState tableSortState[fileDirSortKey]) string {
 	}
 	switch sortState.key {
 	case fileDirSortKeyAccesses:
-		return "Accesses desc"
+		return sortLabelWithDirection("Accesses", false, sortState.reverse)
 	case fileDirSortKeyRead:
-		return "Read desc"
+		return sortLabelWithDirection("Read", false, sortState.reverse)
 	case fileDirSortKeyWrite:
-		return "Write desc"
+		return sortLabelWithDirection("Write", false, sortState.reverse)
 	case fileDirSortKeyAvgLatency:
-		return "Avg Latency desc"
+		return sortLabelWithDirection("Avg Latency", false, sortState.reverse)
 	case fileDirSortKeyMaxLatency:
-		return "Max Latency desc"
+		return sortLabelWithDirection("Max Latency", false, sortState.reverse)
 	case fileDirSortKeyFileCount:
-		return "Files desc"
+		return sortLabelWithDirection("Files", false, sortState.reverse)
 	case fileDirSortKeyDir:
-		return "Directory asc"
+		return sortLabelWithDirection("Directory", true, sortState.reverse)
 	default:
 		return "default"
 	}

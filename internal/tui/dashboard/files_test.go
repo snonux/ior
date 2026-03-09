@@ -27,7 +27,7 @@ func TestRenderFilesIncludesHeaders(t *testing.T) {
 			t.Fatalf("expected token %q in files table output", token)
 		}
 	}
-	if !strings.Contains(out, "s:sort") {
+	if !strings.Contains(out, "s/S:sort") {
 		t.Fatalf("expected files sort hint in output")
 	}
 	if !strings.Contains(out, "sort: default") {
@@ -128,6 +128,11 @@ func TestSortedFileSnapshotsUsesSelectedSortKey(t *testing.T) {
 	if sorted[0].Path != "/tmp/a.log" {
 		t.Fatalf("expected read desc sort to put /tmp/a.log first, got %q", sorted[0].Path)
 	}
+
+	sorted = sortedFileSnapshots(rows, tableSortState[fileSortKey]{active: true, key: fileSortKeyPath, reverse: true})
+	if sorted[0].Path != "/tmp/z.log" {
+		t.Fatalf("expected reverse path sort to put /tmp/z.log first, got %q", sorted[0].Path)
+	}
 }
 
 func TestSortedDirSnapshotsUsesSelectedSortKey(t *testing.T) {
@@ -144,5 +149,10 @@ func TestSortedDirSnapshotsUsesSelectedSortKey(t *testing.T) {
 	sorted = sortedDirSnapshots(rows, tableSortState[fileDirSortKey]{active: true, key: fileDirSortKeyFileCount})
 	if sorted[0].Dir != "/tmp" {
 		t.Fatalf("expected file-count sort to put /tmp first, got %q", sorted[0].Dir)
+	}
+
+	sorted = sortedDirSnapshots(rows, tableSortState[fileDirSortKey]{active: true, key: fileDirSortKeyDir, reverse: true})
+	if sorted[0].Dir != "/var/log" {
+		t.Fatalf("expected reverse dir sort to put /var/log first, got %q", sorted[0].Dir)
 	}
 }

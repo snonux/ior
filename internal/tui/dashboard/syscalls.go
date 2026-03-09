@@ -51,7 +51,7 @@ func renderSyscallsWithSort(snap *statsengine.Snapshot, width, height, offset, s
 		offset,
 		selectedCol,
 		"enter:filter",
-		"s:sort",
+		"s/S:sort",
 		syscallSortHint(sortState),
 		"v:mode",
 		"b:metric",
@@ -105,10 +105,11 @@ func sortedSyscallSnapshots(rows []statsengine.SyscallSnapshot, sortState tableS
 
 	sorted := slices.Clone(rows)
 	slices.SortFunc(sorted, func(left, right statsengine.SyscallSnapshot) int {
-		if cmp := compareSyscallBySort(left, right, sortState.key); cmp != 0 {
-			return cmp
+		cmp := compareSyscallBySort(left, right, sortState.key)
+		if cmp == 0 {
+			cmp = compareSyscallDefault(left, right)
 		}
-		return compareSyscallDefault(left, right)
+		return sortState.apply(cmp)
 	})
 	return sorted
 }
@@ -218,27 +219,27 @@ func syscallSortLabel(sortState tableSortState[syscallSortKey]) string {
 	}
 	switch sortState.key {
 	case syscallSortKeyName:
-		return "Syscall asc"
+		return sortLabelWithDirection("Syscall", true, sortState.reverse)
 	case syscallSortKeyCount:
-		return "Count desc"
+		return sortLabelWithDirection("Count", false, sortState.reverse)
 	case syscallSortKeyRate:
-		return "Rate/s desc"
+		return sortLabelWithDirection("Rate/s", false, sortState.reverse)
 	case syscallSortKeyAvg:
-		return "Avg desc"
+		return sortLabelWithDirection("Avg", false, sortState.reverse)
 	case syscallSortKeyMin:
-		return "Min desc"
+		return sortLabelWithDirection("Min", false, sortState.reverse)
 	case syscallSortKeyMax:
-		return "Max desc"
+		return sortLabelWithDirection("Max", false, sortState.reverse)
 	case syscallSortKeyP50:
-		return "p50 desc"
+		return sortLabelWithDirection("p50", false, sortState.reverse)
 	case syscallSortKeyP95:
-		return "p95 desc"
+		return sortLabelWithDirection("p95", false, sortState.reverse)
 	case syscallSortKeyP99:
-		return "p99 desc"
+		return sortLabelWithDirection("p99", false, sortState.reverse)
 	case syscallSortKeyBytes:
-		return "Bytes desc"
+		return sortLabelWithDirection("Bytes", false, sortState.reverse)
 	case syscallSortKeyErrors:
-		return "Errors desc"
+		return sortLabelWithDirection("Errors", false, sortState.reverse)
 	default:
 		return "default"
 	}

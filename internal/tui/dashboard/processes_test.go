@@ -28,7 +28,7 @@ func TestRenderProcessesIncludesHeaders(t *testing.T) {
 	if !strings.Contains(out, "100") || !strings.Contains(out, "proc-a") {
 		t.Fatalf("expected process row in output")
 	}
-	if !strings.Contains(out, "s:sort") {
+	if !strings.Contains(out, "s/S:sort") {
 		t.Fatalf("expected processes sort hint in output")
 	}
 	if !strings.Contains(out, "sort: default") {
@@ -74,5 +74,10 @@ func TestSortedProcessTableRowsUsesSelectedSortKey(t *testing.T) {
 	sorted = sortedProcessTableRows(rows, tableSortState[processSortKey]{active: true, key: processSortKeyPID})
 	if sorted[0].PID != 100 {
 		t.Fatalf("expected pid asc sort to put PID 100 first, got %d", sorted[0].PID)
+	}
+
+	sorted = sortedProcessTableRows(rows, tableSortState[processSortKey]{active: true, key: processSortKeyComm, reverse: true})
+	if sorted[0].PID != 200 {
+		t.Fatalf("expected reverse comm sort to put PID 200 first, got %d", sorted[0].PID)
 	}
 }

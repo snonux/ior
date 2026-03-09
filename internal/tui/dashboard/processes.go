@@ -40,7 +40,7 @@ func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, 
 	}
 
 	columns := processColumns()
-	out := renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "s:sort", processSortHint(sortState), "v:mode", "b:metric")
+	out := renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
 	if pidFilter > 0 {
 		out += "\n" + "Note: this tab is most useful with All PIDs."
 	}
@@ -68,10 +68,11 @@ func sortedProcessTableRows(rows []statsengine.ProcessSnapshot, sortState tableS
 
 	sorted := slices.Clone(rows)
 	slices.SortFunc(sorted, func(left, right statsengine.ProcessSnapshot) int {
-		if cmp := compareProcessBySort(left, right, sortState.key); cmp != 0 {
-			return cmp
+		cmp := compareProcessBySort(left, right, sortState.key)
+		if cmp == 0 {
+			cmp = compareProcessDefault(left, right)
 		}
-		return compareProcessDefault(left, right)
+		return sortState.apply(cmp)
 	})
 	return sorted
 }
@@ -134,17 +135,17 @@ func processSortLabel(sortState tableSortState[processSortKey]) string {
 	}
 	switch sortState.key {
 	case processSortKeyPID:
-		return "PID asc"
+		return sortLabelWithDirection("PID", true, sortState.reverse)
 	case processSortKeyComm:
-		return "Comm asc"
+		return sortLabelWithDirection("Comm", true, sortState.reverse)
 	case processSortKeySyscalls:
-		return "Syscalls desc"
+		return sortLabelWithDirection("Syscalls", false, sortState.reverse)
 	case processSortKeyRate:
-		return "Rate/s desc"
+		return sortLabelWithDirection("Rate/s", false, sortState.reverse)
 	case processSortKeyBytes:
-		return "Total Bytes desc"
+		return sortLabelWithDirection("Total Bytes", false, sortState.reverse)
 	case processSortKeyAvgLatency:
-		return "Avg Latency desc"
+		return sortLabelWithDirection("Avg Latency", false, sortState.reverse)
 	default:
 		return "default"
 	}
