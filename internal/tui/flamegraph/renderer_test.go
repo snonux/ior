@@ -212,6 +212,28 @@ func TestFrameLabelAddsSelectionAndMatchMarkers(t *testing.T) {
 	}
 }
 
+func TestSelectedFrameStyleDoesNotUnderline(t *testing.T) {
+	style := styleForFrame(
+		1,
+		tuiFrame{
+			Name: "child",
+			Path: "root" + pathSeparator + "child",
+			Fill: color.RGBA{R: 120, G: 80, B: 160, A: 255},
+		},
+		"root"+pathSeparator+"child",
+		map[int]bool{1: true},
+		nil,
+		1,
+		true,
+		false,
+		false,
+	)
+	rendered := style.Render(" child ")
+	if strings.Contains(rendered, "\x1b[4m") || strings.Contains(rendered, "[4;") || strings.Contains(rendered, ";4m") {
+		t.Fatalf("expected selected flame frame style without underline, got %q", rendered)
+	}
+}
+
 func TestRenderTerminalViewShowsPersistentFilterContext(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",
