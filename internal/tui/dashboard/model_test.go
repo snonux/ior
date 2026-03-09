@@ -271,6 +271,101 @@ func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
 	}
 }
 
+func TestProcessesSortKeyTogglesOnSelectedColumn(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 200, Comm: "worker", Syscalls: 9},
+		{PID: 100, Comm: "agent", Syscalls: 3},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.processesCol = 1
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model := next.(Model)
+	if !model.processesSort.active || model.processesSort.key != processSortKeyComm {
+		t.Fatalf("expected process comm sort enabled, got %+v", model.processesSort)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model = next.(Model)
+	if model.processesSort.active {
+		t.Fatalf("expected second s press to restore default process ordering")
+	}
+}
+
+func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 200, Comm: "worker", Syscalls: 9},
+		{PID: 100, Comm: "agent", Syscalls: 3},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.processesOffset = 1
+	m.processesCol = 1
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	m = next.(Model)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on sorted processes tab to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "agent" {
+		t.Fatalf("expected visible sorted row to filter agent comm, got %+v", req.Filter.Comm)
+	}
+}
+
+func TestProcessesSortIgnoredOutsideTableMode(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	m.processesVizMode = tabVizModeTreemap
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 200, Comm: "worker", Syscalls: 9},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model := next.(Model)
+	if model.processesSort.active {
+		t.Fatalf("expected sort key ignored outside processes table mode")
+	}
+}
+
+func TestStatsTickReanchorsSortedProcessSelectionByPID(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	m.processesSort = tableSortState[processSortKey]{active: true, key: processSortKeyComm}
+	oldSnap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 100, Comm: "agent", Syscalls: 3},
+		{PID: 200, Comm: "worker", Syscalls: 9},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &oldSnap
+	m.processesOffset = 1
+	m.processesCol = 1
+
+	newSnap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 50, Comm: "alpha", Syscalls: 12},
+		{PID: 100, Comm: "agent", Syscalls: 3},
+		{PID: 200, Comm: "worker", Syscalls: 9},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+
+	next, _ := m.Update(messages.StatsTickMsg{Snap: &newSnap})
+	model := next.(Model)
+	if model.processesOffset != 2 {
+		t.Fatalf("expected selected worker row reanchored to offset 2, got %d", model.processesOffset)
+	}
+	if selected := model.selectedProcessPID(); selected != 200 {
+		t.Fatalf("expected selected process PID 200 after stats refresh, got %d", selected)
+	}
+}
+
 func TestFilesTabScrollsWithJK(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles
