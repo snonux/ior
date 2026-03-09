@@ -38,11 +38,11 @@ func buildTerminalLayoutWithPath(snapshot *snapshotNode, width, height int, root
 		rootName = rootPath
 	}
 	frames := make([]tuiFrame, 0, len(snapshot.Children)+1)
-	collectTerminalLayout(&frames, snapshot, rootTotal, height, 0, 0, rootName, width)
+	collectTerminalLayout(&frames, snapshot, rootTotal, height, 0, 0, rootName, width, rootPath != "")
 	return frames
 }
 
-func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64, height, depth, col int, path string, span int) {
+func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64, height, depth, col int, path string, span int, normalizeRootChildren bool) {
 	if node == nil || depth >= height {
 		return
 	}
@@ -68,7 +68,13 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		return
 	}
 
-	childWidths := allocateChildWidths(node.Children, total, span)
+	layoutTotal := total
+	if normalizeRootChildren && depth == 0 {
+		if childrenTotal := childSnapshotTotal(node.Children); childrenTotal > 0 {
+			layoutTotal = childrenTotal
+		}
+	}
+	childWidths := allocateChildWidths(node.Children, layoutTotal, span)
 	cursor := col
 	for idx, child := range node.Children {
 		childWidth := childWidths[idx]
@@ -77,9 +83,17 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		}
 		childName := frameName(child.Name, depth+1)
 		childPath := strings.Join([]string{path, childName}, pathSeparator)
-		collectTerminalLayout(out, child, rootTotal, height, depth+1, cursor, childPath, childWidth)
+		collectTerminalLayout(out, child, rootTotal, height, depth+1, cursor, childPath, childWidth, false)
 		cursor += childWidth
 	}
+}
+
+func childSnapshotTotal(children []*snapshotNode) uint64 {
+	total := uint64(0)
+	for _, child := range children {
+		total += snapshotTotal(child)
+	}
+	return total
 }
 
 func allocateChildWidths(children []*snapshotNode, parentTotal uint64, span int) []int {

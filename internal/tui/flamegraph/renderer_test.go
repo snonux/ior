@@ -294,6 +294,37 @@ func TestRenderTerminalViewFilterKeepsNonMatchingBranchesVisible(t *testing.T) {
 	}
 }
 
+func TestBuildTerminalLayoutWithPathNormalizesZoomRootChildrenToFullWidth(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{
+				Name:  "zoom",
+				Total: 80,
+				Children: []*snapshotNode{
+					{Name: "left", Total: 10},
+					{Name: "right", Total: 10},
+				},
+			},
+			{Name: "other", Total: 20},
+		},
+	}
+
+	frames := buildTerminalLayoutWithPath(snapshot.Children[0], 120, 12, "root"+pathSeparator+"zoom")
+	left := mustFindFrame(t, frames, "root"+pathSeparator+"zoom"+pathSeparator+"left")
+	right := mustFindFrame(t, frames, "root"+pathSeparator+"zoom"+pathSeparator+"right")
+	if got := left.Width + right.Width; got != 120 {
+		t.Fatalf("expected zoom-root children to fill full width 120, got %d", got)
+	}
+	if left.Col != 0 {
+		t.Fatalf("expected left child to start at column 0, got %d", left.Col)
+	}
+	if right.Col != left.Width {
+		t.Fatalf("expected right child to start after left child, got %d want %d", right.Col, left.Width)
+	}
+}
+
 func TestFilterSampleCoverageAvoidsDoubleCountingNestedMatches(t *testing.T) {
 	frames := []tuiFrame{
 		{Path: "root", Total: 100},
