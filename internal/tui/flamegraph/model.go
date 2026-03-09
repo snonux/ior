@@ -528,24 +528,12 @@ func (m *Model) zoomIn() {
 		m.statusMessage = "Zoom unchanged: selected frame is current view root"
 		return
 	}
-	target := findNodeByPath(m.snapshot, selectedPath)
-	if target == nil {
+	prevRootPath := m.zoomPath
+	if !m.setZoomPath(selectedPath) {
 		m.statusMessage = "Zoom failed: selected node is unavailable"
 		return
 	}
-	selectedWidth := m.frames[m.selectedIdx].Width
-	if selectedWidth < 1 {
-		selectedWidth = 1
-	}
-	m.zoomStack = append(m.zoomStack, zoomState{
-		path:                m.zoomPath,
-		previousSelectedIdx: m.selectedIdx,
-		lineWidth:           m.zoomLineWidth,
-	})
-	m.zoomRoot = target
-	m.zoomPath = selectedPath
-	m.zoomLineWidth = selectedWidth
-	m.rebuildFrames(false)
+	m.zoomStack = append(m.zoomStack, zoomState{path: prevRootPath})
 	m.statusMessage = "Zoom: " + compactFramePath(selectedPath)
 }
 
@@ -554,18 +542,13 @@ func (m *Model) zoomUndo() {
 		m.statusMessage = "Zoom undo unavailable"
 		return
 	}
-	last := m.zoomStack[len(m.zoomStack)-1]
-	m.zoomStack = m.zoomStack[:len(m.zoomStack)-1]
-	m.zoomPath = last.path
-	if m.zoomPath == "" {
-		m.zoomRoot = nil
-		m.zoomLineWidth = 0
-	} else {
-		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
-		m.zoomLineWidth = last.lineWidth
+	lastIdx := len(m.zoomStack) - 1
+	last := m.zoomStack[lastIdx]
+	m.zoomStack = m.zoomStack[:lastIdx]
+	if !m.setZoomPath(last.path) {
+		m.statusMessage = "Zoom undo unavailable"
+		return
 	}
-	m.selectedIdx = last.previousSelectedIdx
-	m.rebuildFrames(false)
 	if m.zoomPath == "" {
 		m.statusMessage = "Zoom: root"
 		return
@@ -1058,20 +1041,74 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 	}
 	clickedPath := m.frames[idx].Path
 	currentRoot := m.currentRootPath()
-	if m.zoomPath != "" && (clickedPath == currentRoot || hasPathBoundaryPrefix(currentRoot, clickedPath)) {
-		for steps := 0; steps < len(m.zoomStack)+1 && m.currentRootPath() != clickedPath; steps++ {
-			m.zoomUndo()
-		}
-		if sel := m.frameIndexByPath(clickedPath); sel >= 0 {
-			m.selectedIdx = sel
-		}
+	if clickedPath == currentRoot {
+		m.selectedIdx = idx
 		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
 		return true
 	}
-	m.selectedIdx = idx
+	if m.zoomPath != "" && hasPathBoundaryPrefix(currentRoot, clickedPath) {
+		if !m.setZoomPath(clickedPath) {
+			return false
+		}
+		m.zoomStack = buildZoomStack(clickedPath)
+	} else {
+		prevRootPath := m.zoomPath
+		if !m.setZoomPath(clickedPath) {
+			return false
+		}
+		m.zoomStack = append(m.zoomStack, zoomState{path: prevRootPath})
+	}
+	if sel := m.frameIndexByPath(clickedPath); sel >= 0 {
+		m.selectedIdx = sel
+	}
 	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
-	m.zoomIn()
+	m.statusMessage = "Zoom: " + compactFramePath(clickedPath)
 	return true
+}
+
+func (m *Model) setZoomPath(path string) bool {
+	if m.snapshot == nil {
+		return false
+	}
+	rootPath := m.rootSnapshotPath()
+	if path == "" || path == rootPath {
+		m.zoomRoot = nil
+		m.zoomPath = ""
+		m.zoomLineWidth = 0
+		m.rebuildFrames(false)
+		return true
+	}
+	target := findNodeByPath(m.snapshot, path)
+	if target == nil {
+		return false
+	}
+	m.zoomRoot = target
+	m.zoomPath = path
+	m.zoomLineWidth = 0
+	m.rebuildFrames(false)
+	return true
+}
+
+func (m Model) rootSnapshotPath() string {
+	if m.snapshot != nil {
+		return frameName(m.snapshot.Name, 0)
+	}
+	if len(m.frames) > 0 {
+		return m.frames[0].Path
+	}
+	return ""
+}
+
+func buildZoomStack(path string) []zoomState {
+	parts := strings.Split(path, pathSeparator)
+	if len(parts) <= 1 {
+		return nil
+	}
+	stack := []zoomState{{path: ""}}
+	for idx := 1; idx < len(parts)-1; idx++ {
+		stack = append(stack, zoomState{path: strings.Join(parts[:idx+1], pathSeparator)})
+	}
+	return stack
 }
 
 func (m Model) frameIndexAt(x, y int) int {

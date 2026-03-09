@@ -378,6 +378,68 @@ func TestMouseClickOnLineageAncestorUndoesToThatZoomLevel(t *testing.T) {
 	}
 }
 
+func TestMouseClickDirectDeepZoomThenAncestorClickReRootsToAncestor(t *testing.T) {
+	m := newZoomModel()
+	deepPath := "root" + pathSeparator + "A" + pathSeparator + "A1"
+	deepIdx := mustFrameIndex(t, m.frames, deepPath)
+	x, y, ok := firstClickablePointForFrame(m, deepIdx)
+	if !ok {
+		t.Fatalf("expected clickable point for %q", deepPath)
+	}
+
+	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m = next.(Model)
+	if got := m.zoomPath; got != deepPath {
+		t.Fatalf("expected direct deep click to zoom into %q, got %q", deepPath, got)
+	}
+
+	ancestorPath := "root" + pathSeparator + "A"
+	ancestorIdx := mustFrameIndex(t, m.frames, ancestorPath)
+	x, y, ok = firstClickablePointForFrame(m, ancestorIdx)
+	if !ok {
+		t.Fatalf("expected clickable point for ancestor %q", ancestorPath)
+	}
+
+	next, _ = m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m = next.(Model)
+	if got := m.zoomPath; got != ancestorPath {
+		t.Fatalf("expected ancestor click to re-root to %q, got %q", ancestorPath, got)
+	}
+	if got := m.currentRootPath(); got != ancestorPath {
+		t.Fatalf("expected current root %q after ancestor click, got %q", ancestorPath, got)
+	}
+	if idx := mustFrameIndex(t, m.frames, ancestorPath); m.frames[idx].Width != m.width {
+		t.Fatalf("expected ancestor %q to span full width %d, got %d", ancestorPath, m.width, m.frames[idx].Width)
+	}
+}
+
+func TestMouseClickDirectDeepZoomUndoReturnsToRoot(t *testing.T) {
+	m := newZoomModel()
+	deepPath := "root" + pathSeparator + "A" + pathSeparator + "A1"
+	deepIdx := mustFrameIndex(t, m.frames, deepPath)
+	x, y, ok := firstClickablePointForFrame(m, deepIdx)
+	if !ok {
+		t.Fatalf("expected clickable point for %q", deepPath)
+	}
+
+	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m = next.(Model)
+	if got, want := m.zoomPath, deepPath; got != want {
+		t.Fatalf("expected direct deep click to zoom into %q, got %q", want, got)
+	}
+	if got, want := len(m.zoomStack), 1; got != want {
+		t.Fatalf("expected single undo step after direct deep click, got %d", got)
+	}
+
+	m.zoomUndo()
+	if m.zoomPath != "" {
+		t.Fatalf("expected undo after direct deep click to return to root, got %q", m.zoomPath)
+	}
+	if len(m.zoomStack) != 0 {
+		t.Fatalf("expected zoom stack cleared after undo to root, got %d", len(m.zoomStack))
+	}
+}
+
 func TestStaticFixtureArrowTraversalVisitsAllFrames(t *testing.T) {
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
 	coreflamegraph.SeedTestFlameData(trie)
