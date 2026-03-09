@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -9,22 +10,37 @@ import (
 	common "ior/internal/tui/common"
 )
 
+type processSortKey uint8
+
+const (
+	processSortKeyPID processSortKey = iota
+	processSortKeyComm
+	processSortKeySyscalls
+	processSortKeyRate
+	processSortKeyBytes
+	processSortKeyAvgLatency
+)
+
 func renderProcesses(snap *statsengine.Snapshot, width, height int) string {
-	return renderProcessesWithOffset(snap, width, height, 0, 0, -1)
+	return renderProcessesWithSort(snap, width, height, 0, 0, -1, tableSortState[processSortKey]{})
 }
 
 func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol, pidFilter int) string {
+	return renderProcessesWithSort(snap, width, height, offset, selectedCol, pidFilter, tableSortState[processSortKey]{})
+}
+
+func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol, pidFilter int, sortState tableSortState[processSortKey]) string {
 	if snap == nil {
 		return "Processes: waiting for stats..."
 	}
 
-	rows := processRows(snap.Processes())
+	rows := processRows(sortedProcessTableRows(snap.Processes(), sortState))
 	if len(rows) == 0 {
 		return "Processes: no data"
 	}
 
 	columns := processColumns()
-	out := renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "v:mode", "b:metric")
+	out := renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "s:sort", processSortHint(sortState), "v:mode", "b:metric")
 	if pidFilter > 0 {
 		out += "\n" + "Note: this tab is most useful with All PIDs."
 	}
@@ -40,6 +56,107 @@ func processColumns() []common.TableColumn {
 		{Title: "Total Bytes", Width: 12},
 		{Title: "Avg Latency", Width: 12},
 	}
+}
+
+func sortedProcessTableRows(rows []statsengine.ProcessSnapshot, sortState tableSortState[processSortKey]) []statsengine.ProcessSnapshot {
+	if len(rows) == 0 {
+		return nil
+	}
+	if !sortState.active {
+		return rows
+	}
+
+	sorted := slices.Clone(rows)
+	slices.SortFunc(sorted, func(left, right statsengine.ProcessSnapshot) int {
+		if cmp := compareProcessBySort(left, right, sortState.key); cmp != 0 {
+			return cmp
+		}
+		return compareProcessDefault(left, right)
+	})
+	return sorted
+}
+
+func compareProcessBySort(left, right statsengine.ProcessSnapshot, key processSortKey) int {
+	switch key {
+	case processSortKeyPID:
+		return compareUint64Asc(uint64(left.PID), uint64(right.PID))
+	case processSortKeyComm:
+		return compareStringAsc(left.Comm, right.Comm)
+	case processSortKeySyscalls:
+		return compareUint64Desc(left.Syscalls, right.Syscalls)
+	case processSortKeyRate:
+		return compareFloat64Desc(left.RatePerSec, right.RatePerSec)
+	case processSortKeyBytes:
+		return compareUint64Desc(left.Bytes, right.Bytes)
+	case processSortKeyAvgLatency:
+		return compareFloat64Desc(left.AvgLatencyNs, right.AvgLatencyNs)
+	default:
+		return 0
+	}
+}
+
+func compareProcessDefault(left, right statsengine.ProcessSnapshot) int {
+	if cmp := compareUint64Desc(left.Syscalls, right.Syscalls); cmp != 0 {
+		return cmp
+	}
+	if cmp := compareUint64Desc(left.Bytes, right.Bytes); cmp != 0 {
+		return cmp
+	}
+	return compareUint64Asc(uint64(left.PID), uint64(right.PID))
+}
+
+func processSortKeyForColumn(column int) (processSortKey, bool) {
+	switch column {
+	case 0:
+		return processSortKeyPID, true
+	case 1:
+		return processSortKeyComm, true
+	case 2:
+		return processSortKeySyscalls, true
+	case 3:
+		return processSortKeyRate, true
+	case 4:
+		return processSortKeyBytes, true
+	case 5:
+		return processSortKeyAvgLatency, true
+	default:
+		return 0, false
+	}
+}
+
+func processSortHint(sortState tableSortState[processSortKey]) string {
+	return "sort: " + processSortLabel(sortState)
+}
+
+func processSortLabel(sortState tableSortState[processSortKey]) string {
+	if !sortState.active {
+		return "default"
+	}
+	switch sortState.key {
+	case processSortKeyPID:
+		return "PID asc"
+	case processSortKeyComm:
+		return "Comm asc"
+	case processSortKeySyscalls:
+		return "Syscalls desc"
+	case processSortKeyRate:
+		return "Rate/s desc"
+	case processSortKeyBytes:
+		return "Total Bytes desc"
+	case processSortKeyAvgLatency:
+		return "Avg Latency desc"
+	default:
+		return "default"
+	}
+}
+
+func findProcessOffset(rows []statsengine.ProcessSnapshot, pid uint32) (int, bool) {
+	for idx, row := range rows {
+		if row.PID == pid {
+			return idx, true
+		}
+	}
+	return 0, false
 }
 
 func processRows(processes []statsengine.ProcessSnapshot) [][]string {

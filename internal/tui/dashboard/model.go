@@ -82,6 +82,7 @@ type Model struct {
 	filesDirSort             tableSortState[fileDirSortKey]
 	processesOffset          int
 	processesCol             int
+	processesSort            tableSortState[processSortKey]
 	syscallsVizMode          tabVizMode
 	filesVizMode             tabVizMode
 	processesVizMode         tabVizMode
@@ -231,6 +232,7 @@ func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	selectedSyscall := ""
 	selectedFile := ""
 	selectedDir := ""
+	selectedProcess := uint32(0)
 	if m.syscallsSort.active {
 		selectedSyscall = m.selectedSyscallName()
 	}
@@ -242,12 +244,15 @@ func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 			selectedDir = m.selectedDirPath()
 		}
 	}
+	if m.processesVizMode == tabVizModeTable && m.processesSort.active {
+		selectedProcess = m.selectedProcessPID()
+	}
 	m.latest = msg.Snap
 	m.reanchorSyscallsOffset(selectedSyscall)
 	m.reanchorFilesOffset(selectedFile)
 	m.reanchorFilesDirOffset(selectedDir)
+	m.reanchorProcessesOffset(selectedProcess)
 	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
-	m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
@@ -380,6 +385,8 @@ func (m *Model) handleSortKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return m.handleSyscallsSortKey()
 	case TabFiles:
 		return m.handleFilesSortKey()
+	case TabProcesses:
+		return m.handleProcessesSortKey()
 	default:
 		return false, nil
 	}
@@ -420,6 +427,20 @@ func (m *Model) handleFilesSortKey() (bool, tea.Cmd) {
 	selectedPath := m.selectedFilePath()
 	m.filesSort = m.filesSort.toggled(key)
 	m.reanchorFilesOffset(selectedPath)
+	return true, nil
+}
+
+func (m *Model) handleProcessesSortKey() (bool, tea.Cmd) {
+	if m.processesVizMode != tabVizModeTable {
+		return false, nil
+	}
+	key, ok := processSortKeyForColumn(m.processesCol)
+	if !ok {
+		return false, nil
+	}
+	selectedPID := m.selectedProcessPID()
+	m.processesSort = m.processesSort.toggled(key)
+	m.reanchorProcessesOffset(selectedPID)
 	return true, nil
 }
 
@@ -466,6 +487,21 @@ func (m *Model) reanchorFilesDirOffset(selectedDir string) {
 		}
 	}
 	m.filesDirOffset = clampOffset(m.filesDirOffset, len(rows))
+}
+
+func (m *Model) reanchorProcessesOffset(selectedPID uint32) {
+	rows := m.sortedProcessTableRows()
+	if len(rows) == 0 {
+		m.processesOffset = 0
+		return
+	}
+	if selectedPID != 0 {
+		if index, ok := findProcessOffset(rows, selectedPID); ok {
+			m.processesOffset = index
+			return
+		}
+	}
+	m.processesOffset = clampOffset(m.processesOffset, len(rows))
 }
 
 func (m Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
@@ -659,8 +695,23 @@ func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 	case m.processesVizMode == tabVizModeBubbles:
 		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesChart.Metric(), bubbleMaxItems), m.processesChart.selected)
 	default:
-		return indexedProcessSnapshot(rows, m.processesOffset)
+		return indexedProcessSnapshot(m.sortedProcessTableRows(), m.processesOffset)
 	}
+}
+
+func (m Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
+	if m.latest == nil {
+		return nil
+	}
+	return sortedProcessTableRows(m.latest.Processes(), m.processesSort)
+}
+
+func (m Model) selectedProcessPID() uint32 {
+	selected, ok := m.selectedProcessSnapshot()
+	if !ok {
+		return 0
+	}
+	return selected.PID
 }
 
 func indexedProcessSnapshot(rows []statsengine.ProcessSnapshot, index int) (statsengine.ProcessSnapshot, bool) {
@@ -1045,6 +1096,9 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirOffset, m.filesDirCol, m.filesDirSort)
 		}
 		return renderFilesWithSort(m.latest, width, activeHeight, m.filesOffset, m.filesCol, m.filesSort)
+	}
+	if m.activeTab == TabProcesses && m.latest != nil && m.processesVizMode == tabVizModeTable {
+		return renderProcessesWithSort(m.latest, width, activeHeight, m.processesOffset, m.processesCol, m.pidFilter, m.processesSort)
 	}
 	return renderActiveTab(
 		m.activeTab,

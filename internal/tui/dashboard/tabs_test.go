@@ -69,3 +69,10 @@ func TestRenderHelpBarWithStatusIncludesFilterSummary(t *testing.T) {
 		t.Fatalf("expected filter summary in help bar, got %q", out)
 	}
 }
+
+func TestRenderHelpBarIncludesSortBinding(t *testing.T) {
+	out := renderHelpBar(common.DefaultKeyMap(), 0)
+	if !strings.Contains(out, "s sort table") {
+		t.Fatalf("expected sort binding in rendered help bar, got %q", out)
+	}
+}
