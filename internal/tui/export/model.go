@@ -18,7 +18,7 @@ const (
 )
 
 var optionLabels = []string{
-	"CSV snapshot",
+	"CSV stream rows",
 	"Cancel",
 }
 
@@ -147,7 +147,7 @@ func (m Model) View(width, height int) string {
 		}
 	}
 
-	lines := []string{"Export"}
+	lines := []string{"Export Stream CSV"}
 	for i, label := range optionLabels {
 		prefix := "  "
 		if i == m.selected && !m.exporting {

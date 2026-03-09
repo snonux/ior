@@ -109,7 +109,7 @@ Help visibility:
 - `5`: `Latency+Gaps` tab.
 - `6`: `Stream` tab.
 - `7`: `Stream` tab (alias).
-- `e`: export snapshot summaries CSV (`ior-snapshot-<timestamp>.csv`) in current working directory.
+- `e`: export filtered stream rows to CSV (`ior-stream-<timestamp>.csv`) in current working directory.
 - `p`: re-open process selector (PID selection flow).
 - `t`: open TID selector flow.
 - `o`: open probe selection/toggling dialog.
@@ -172,7 +172,7 @@ Undo:
 - `X`: export filtered stream rows to CSV with filename prompt.
 - `E`: open last stream-exported CSV in foreground editor (`SUDO_EDITOR` -> `VISUAL` -> `EDITOR` -> fallback `vi`).
 
-Important export distinction:
+Export behavior:
 
-- `e` exports dashboard snapshot summaries.
-- `x`/`X` export raw stream rows currently visible under active stream filters.
+- `e` exports a fresh filtered stream snapshot using the current shared TUI filter, even outside paused mode.
+- `x`/`X` export the currently paused stream rows, preserving the stream tab's exact paused view.

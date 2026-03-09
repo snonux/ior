@@ -132,7 +132,7 @@ func SetTidFilter(tid int) {
 	})
 }
 
-// SetTUIExportEnable toggles TUI snapshot export file writing.
+// SetTUIExportEnable toggles TUI stream export file writing.
 func SetTUIExportEnable(enabled bool) {
 	updateCurrent(func(cfg *Config) {
 		cfg.TUIExportEnable = enabled
@@ -169,7 +169,7 @@ func parse() error {
 	flag.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
 	flag.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
-	flag.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable writing TUI snapshot export files")
+	flag.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable writing TUI stream export files")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	flag.StringVar(&cfg.CountField, "count", cfg.CountField,
