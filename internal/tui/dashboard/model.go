@@ -71,6 +71,7 @@ type Model struct {
 	pidFilter                int
 	syscallsOffset           int
 	syscallsCol              int
+	syscallsSort             tableSortState[syscallSortKey]
 	syscallsTreemapSelection int
 	filesOffset              int
 	filesCol                 int
@@ -225,8 +226,12 @@ func (m Model) handleBubbleTick() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
+	selectedSyscall := ""
+	if m.syscallsSort.active {
+		selectedSyscall = m.selectedSyscallName()
+	}
 	m.latest = msg.Snap
-	m.syscallsOffset = clampOffset(m.syscallsOffset, m.maxSyscallsRows())
+	m.reanchorSyscallsOffset(selectedSyscall)
 	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
 	m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
 	m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRowsForMode())
@@ -272,6 +277,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		handled, cmd = m.handleEnterKey(msg)
 	}
 	if !handled {
+		handled, cmd = m.handleSortKey(msg)
+	}
+	if !handled {
 		handled, cmd = m.handleShortcutKey(msg)
 	}
 	if !handled {
@@ -315,20 +323,72 @@ func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
-	if m.latest == nil || m.syscallsOffset < 0 {
+	selected, ok := m.selectedSyscallSnapshot()
+	if !ok {
 		return globalfilter.Filter{}, "", false
 	}
-	rows := m.latest.Syscalls()
-	if len(rows) == 0 {
-		return globalfilter.Filter{}, "", false
-	}
-	selected := rows[clampOffset(m.syscallsOffset, len(rows))]
 	if strings.TrimSpace(selected.Name) == "" {
 		return globalfilter.Filter{}, "", false
 	}
 	filter := m.globalFilter.Clone()
 	filter.Syscall = &globalfilter.StringFilter{Pattern: selected.Name}
 	return filter, "syscall~" + selected.Name, true
+}
+
+func (m Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
+	rows := m.sortedSyscallRows()
+	if len(rows) == 0 {
+		return statsengine.SyscallSnapshot{}, false
+	}
+	index := clampOffset(m.syscallsOffset, len(rows))
+	return rows[index], true
+}
+
+func (m Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
+	if m.latest == nil {
+		return nil
+	}
+	return sortedSyscallSnapshots(m.latest.Syscalls(), m.syscallsSort)
+}
+
+func (m Model) selectedSyscallName() string {
+	selected, ok := m.selectedSyscallSnapshot()
+	if !ok {
+		return ""
+	}
+	return selected.Name
+}
+
+func (m *Model) handleSortKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if !key.Matches(msg, m.keys.Sort) {
+		return false, nil
+	}
+	if m.activeTab != TabSyscalls || m.syscallsVizMode != tabVizModeTable {
+		return false, nil
+	}
+	key, ok := syscallSortKeyForColumn(m.width, m.syscallsCol)
+	if !ok {
+		return false, nil
+	}
+	selectedName := m.selectedSyscallName()
+	m.syscallsSort = m.syscallsSort.toggled(key)
+	m.reanchorSyscallsOffset(selectedName)
+	return true, nil
+}
+
+func (m *Model) reanchorSyscallsOffset(selectedName string) {
+	rows := m.sortedSyscallRows()
+	if len(rows) == 0 {
+		m.syscallsOffset = 0
+		return
+	}
+	if selectedName != "" {
+		if index, ok := findSyscallOffset(rows, selectedName); ok {
+			m.syscallsOffset = index
+			return
+		}
+	}
+	m.syscallsOffset = clampOffset(m.syscallsOffset, len(rows))
 }
 
 func (m Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
@@ -853,6 +913,9 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 			chart := m.processesChart
 			return chart.Render("Processes", width, activeHeight)
 		}
+	}
+	if m.activeTab == TabSyscalls && m.latest != nil {
+		return renderSyscallsWithSort(m.latest, width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort)
 	}
 	return renderActiveTab(
 		m.activeTab,
