@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -9,20 +10,52 @@ import (
 	common "ior/internal/tui/common"
 )
 
+type syscallSortKey uint8
+
+const (
+	syscallSortKeyName syscallSortKey = iota
+	syscallSortKeyCount
+	syscallSortKeyRate
+	syscallSortKeyAvg
+	syscallSortKeyMin
+	syscallSortKeyMax
+	syscallSortKeyP50
+	syscallSortKeyP95
+	syscallSortKeyP99
+	syscallSortKeyBytes
+	syscallSortKeyErrors
+)
+
 func renderSyscalls(snap *statsengine.Snapshot, width, height int) string {
-	return renderSyscallsWithOffset(snap, width, height, 0, 0)
+	return renderSyscallsWithSort(snap, width, height, 0, 0, tableSortState[syscallSortKey]{})
 }
 
 func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
+	return renderSyscallsWithSort(snap, width, height, offset, selectedCol, tableSortState[syscallSortKey]{})
+}
+
+func renderSyscallsWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[syscallSortKey]) string {
 	if snap == nil {
 		return "Syscalls: waiting for stats..."
 	}
 
-	columns, rows := syscallTableData(snap.Syscalls(), width)
+	rowsData := sortedSyscallSnapshots(snap.Syscalls(), sortState)
+	columns, rows := syscallTableData(rowsData, width)
 	if len(rows) == 0 {
 		return "Syscalls: no data"
 	}
-	return renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "v:mode", "b:metric")
+	return renderSelectableTable(
+		columns,
+		rows,
+		height,
+		offset,
+		selectedCol,
+		"enter:filter",
+		"s:sort",
+		syscallSortHint(sortState),
+		"v:mode",
+		"b:metric",
+	)
 }
 
 func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]common.TableColumn, [][]string) {
@@ -60,6 +93,197 @@ func syscallColumns(width int) []common.TableColumn {
 		{Title: "Bytes", Width: 10},
 		{Title: "Errors", Width: 8},
 	}
+}
+
+func sortedSyscallSnapshots(rows []statsengine.SyscallSnapshot, sortState tableSortState[syscallSortKey]) []statsengine.SyscallSnapshot {
+	if len(rows) == 0 {
+		return nil
+	}
+	if !sortState.active {
+		return rows
+	}
+
+	sorted := slices.Clone(rows)
+	slices.SortFunc(sorted, func(left, right statsengine.SyscallSnapshot) int {
+		if cmp := compareSyscallBySort(left, right, sortState.key); cmp != 0 {
+			return cmp
+		}
+		return compareSyscallDefault(left, right)
+	})
+	return sorted
+}
+
+func compareSyscallBySort(left, right statsengine.SyscallSnapshot, key syscallSortKey) int {
+	switch key {
+	case syscallSortKeyName:
+		return compareStringAsc(left.Name, right.Name)
+	case syscallSortKeyCount:
+		return compareUint64Desc(left.Count, right.Count)
+	case syscallSortKeyRate:
+		return compareFloat64Desc(left.RatePerSec, right.RatePerSec)
+	case syscallSortKeyAvg:
+		return compareFloat64Desc(left.LatencyMeanNs, right.LatencyMeanNs)
+	case syscallSortKeyMin:
+		return compareUint64Desc(left.LatencyMinNs, right.LatencyMinNs)
+	case syscallSortKeyMax:
+		return compareUint64Desc(left.LatencyMaxNs, right.LatencyMaxNs)
+	case syscallSortKeyP50:
+		return compareUint64Desc(left.LatencyP50Ns, right.LatencyP50Ns)
+	case syscallSortKeyP95:
+		return compareUint64Desc(left.LatencyP95Ns, right.LatencyP95Ns)
+	case syscallSortKeyP99:
+		return compareUint64Desc(left.LatencyP99Ns, right.LatencyP99Ns)
+	case syscallSortKeyBytes:
+		return compareUint64Desc(left.Bytes, right.Bytes)
+	case syscallSortKeyErrors:
+		return compareUint64Desc(left.Errors, right.Errors)
+	default:
+		return 0
+	}
+}
+
+func compareSyscallDefault(left, right statsengine.SyscallSnapshot) int {
+	if cmp := compareUint64Desc(left.Count, right.Count); cmp != 0 {
+		return cmp
+	}
+	return compareStringAsc(left.Name, right.Name)
+}
+
+func compareUint64Desc(left, right uint64) int {
+	switch {
+	case left > right:
+		return -1
+	case left < right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareFloat64Desc(left, right float64) int {
+	switch {
+	case left > right:
+		return -1
+	case left < right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareStringAsc(left, right string) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func syscallSortKeyForColumn(width, column int) (syscallSortKey, bool) {
+	if width < 140 {
+		return compactSyscallSortKey(column)
+	}
+	return fullSyscallSortKey(column)
+}
+
+func compactSyscallSortKey(column int) (syscallSortKey, bool) {
+	switch column {
+	case 0:
+		return syscallSortKeyName, true
+	case 1:
+		return syscallSortKeyCount, true
+	case 2:
+		return syscallSortKeyRate, true
+	case 3:
+		return syscallSortKeyAvg, true
+	case 4:
+		return syscallSortKeyP95, true
+	case 5:
+		return syscallSortKeyP99, true
+	case 6:
+		return syscallSortKeyBytes, true
+	case 7:
+		return syscallSortKeyErrors, true
+	default:
+		return 0, false
+	}
+}
+
+func fullSyscallSortKey(column int) (syscallSortKey, bool) {
+	switch column {
+	case 0:
+		return syscallSortKeyName, true
+	case 1:
+		return syscallSortKeyCount, true
+	case 2:
+		return syscallSortKeyRate, true
+	case 3:
+		return syscallSortKeyAvg, true
+	case 4:
+		return syscallSortKeyMin, true
+	case 5:
+		return syscallSortKeyMax, true
+	case 6:
+		return syscallSortKeyP50, true
+	case 7:
+		return syscallSortKeyP95, true
+	case 8:
+		return syscallSortKeyP99, true
+	case 9:
+		return syscallSortKeyBytes, true
+	case 10:
+		return syscallSortKeyErrors, true
+	default:
+		return 0, false
+	}
+}
+
+func syscallSortHint(sortState tableSortState[syscallSortKey]) string {
+	return "sort: " + syscallSortLabel(sortState)
+}
+
+func syscallSortLabel(sortState tableSortState[syscallSortKey]) string {
+	if !sortState.active {
+		return "default"
+	}
+	switch sortState.key {
+	case syscallSortKeyName:
+		return "Syscall asc"
+	case syscallSortKeyCount:
+		return "Count desc"
+	case syscallSortKeyRate:
+		return "Rate/s desc"
+	case syscallSortKeyAvg:
+		return "Avg desc"
+	case syscallSortKeyMin:
+		return "Min desc"
+	case syscallSortKeyMax:
+		return "Max desc"
+	case syscallSortKeyP50:
+		return "p50 desc"
+	case syscallSortKeyP95:
+		return "p95 desc"
+	case syscallSortKeyP99:
+		return "p99 desc"
+	case syscallSortKeyBytes:
+		return "Bytes desc"
+	case syscallSortKeyErrors:
+		return "Errors desc"
+	default:
+		return "default"
+	}
+}
+
+func findSyscallOffset(rows []statsengine.SyscallSnapshot, name string) (int, bool) {
+	for idx, row := range rows {
+		if row.Name == name {
+			return idx, true
+		}
+	}
+	return 0, false
 }
 
 func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) [][]string {

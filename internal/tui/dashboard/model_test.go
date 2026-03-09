@@ -318,6 +318,142 @@ func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	}
 }
 
+func TestSyscallsSortKeyTogglesOnSelectedColumn(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "write", Count: 9},
+		{Name: "read", Count: 3},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model := next.(Model)
+	if !model.syscallsSort.active || model.syscallsSort.key != syscallSortKeyName {
+		t.Fatalf("expected syscall name sort enabled, got %+v", model.syscallsSort)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model = next.(Model)
+	if model.syscallsSort.active {
+		t.Fatalf("expected second s press to restore default ordering")
+	}
+}
+
+func TestSyscallsSortReanchorsSelectedSyscall(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "write", Count: 9},
+		{Name: "read", Count: 3},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.syscallsOffset = 1
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model := next.(Model)
+	if model.syscallsOffset != 0 {
+		t.Fatalf("expected selected read row reanchored to offset 0, got %d", model.syscallsOffset)
+	}
+	if selected := model.selectedSyscallName(); selected != "read" {
+		t.Fatalf("expected selected syscall read after reanchor, got %q", selected)
+	}
+}
+
+func TestSyscallsSortEnterUsesSortedVisibleRow(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "write", Count: 9},
+		{Name: "read", Count: 3},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.syscallsOffset = 1
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	m = next.(Model)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on sorted syscalls tab to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "read" {
+		t.Fatalf("expected visible sorted row to filter read, got %+v", req.Filter.Syscall)
+	}
+}
+
+func TestSyscallsSortIgnoredOutsideTableMode(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.syscallsVizMode = tabVizModeTreemap
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "write", Count: 9},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model := next.(Model)
+	if model.syscallsSort.active {
+		t.Fatalf("expected sort key ignored outside syscall table mode")
+	}
+}
+
+func TestSyscallsP95SortSurvivesWidthExpansion(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.width = 120
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "write", Count: 9, LatencyMinNs: 100, LatencyP95Ns: 10},
+		{Name: "read", Count: 3, LatencyMinNs: 1, LatencyP95Ns: 50},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.syscallsCol = 4
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model := next.(Model)
+	if first := model.sortedSyscallRows()[0].Name; first != "read" {
+		t.Fatalf("expected compact p95 sort to put read first, got %q", first)
+	}
+
+	next, _ = model.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	model = next.(Model)
+	if first := model.sortedSyscallRows()[0].Name; first != "read" {
+		t.Fatalf("expected p95 sort to survive width expansion, got %q", first)
+	}
+}
+
+func TestStatsTickReanchorsSortedSyscallSelectionByName(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.syscallsSort = tableSortState[syscallSortKey]{active: true, key: syscallSortKeyName}
+	oldSnap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9},
+		{Name: "write", Count: 3},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &oldSnap
+	m.syscallsOffset = 1
+
+	newSnap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "close", Count: 50},
+		{Name: "read", Count: 9},
+		{Name: "write", Count: 3},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+
+	next, _ := m.Update(messages.StatsTickMsg{Snap: &newSnap})
+	model := next.(Model)
+	if model.syscallsOffset != 2 {
+		t.Fatalf("expected selected write row reanchored to offset 2, got %d", model.syscallsOffset)
+	}
+	if selected := model.selectedSyscallName(); selected != "write" {
+		t.Fatalf("expected selected syscall write after stats refresh, got %q", selected)
+	}
+}
+
 func TestFilesTabGroupedScrollUsesDirectoryOffset(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabFiles

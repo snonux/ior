@@ -28,6 +28,12 @@ func TestRenderSyscallsIncludesHeaders(t *testing.T) {
 	if !strings.Contains(out, "read") {
 		t.Fatalf("expected syscall row in output")
 	}
+	if !strings.Contains(out, "s:sort") {
+		t.Fatalf("expected syscall sort hint in output")
+	}
+	if !strings.Contains(out, "sort: default") {
+		t.Fatalf("expected default sort label in output")
+	}
 }
 
 func TestFormatDurationNs(t *testing.T) {
@@ -48,5 +54,34 @@ func TestClampOffset(t *testing.T) {
 	}
 	if got := clampOffset(99, 4); got != 3 {
 		t.Fatalf("expected max index clamp, got %d", got)
+	}
+}
+
+func TestSortedSyscallSnapshotsUsesSelectedSortKey(t *testing.T) {
+	rows := []statsengine.SyscallSnapshot{
+		{Name: "write", Count: 8, LatencyP95Ns: 10},
+		{Name: "read", Count: 3, LatencyP95Ns: 50},
+	}
+
+	sorted := sortedSyscallSnapshots(rows, tableSortState[syscallSortKey]{active: true, key: syscallSortKeyName})
+	if sorted[0].Name != "read" {
+		t.Fatalf("expected syscall name sort to put read first, got %q", sorted[0].Name)
+	}
+
+	sorted = sortedSyscallSnapshots(rows, tableSortState[syscallSortKey]{active: true, key: syscallSortKeyP95})
+	if sorted[0].Name != "read" {
+		t.Fatalf("expected p95 desc sort to put read first, got %q", sorted[0].Name)
+	}
+}
+
+func TestSyscallSortKeyForColumnKeepsLogicalMeaningAcrossWidths(t *testing.T) {
+	key, ok := syscallSortKeyForColumn(120, 4)
+	if !ok || key != syscallSortKeyP95 {
+		t.Fatalf("expected compact column 4 to map to p95, got %v ok=%v", key, ok)
+	}
+
+	key, ok = syscallSortKeyForColumn(160, 7)
+	if !ok || key != syscallSortKeyP95 {
+		t.Fatalf("expected full column 7 to map to p95, got %v ok=%v", key, ok)
 	}
 }
