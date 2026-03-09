@@ -16,6 +16,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
 type fakeSnapshotSource struct {
 	snapshots int
 	snap      *statsengine.Snapshot
@@ -39,6 +41,19 @@ func (f *fakeResettableSnapshotSource) Reset() {
 func (f *fakeResettableSnapshotSource) Snapshot() *statsengine.Snapshot {
 	f.snapCount++
 	return f.snap
+}
+
+func stripANSIEscape(value string) string {
+	return ansiEscapePattern.ReplaceAllString(value, "")
+}
+
+func firstLineContaining(value, needle string) string {
+	for _, line := range strings.Split(value, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestKeySwitchingChangesActiveTab(t *testing.T) {
@@ -422,6 +437,48 @@ func TestFlameTickPausedFreezesAfterInitialSnapshot(t *testing.T) {
 	model = next.(Model)
 	if got, want := model.flamegraphModel.LastVersion(), initialVersion; got != want {
 		t.Fatalf("expected paused flame tick to freeze version at %d, got %d", want, got)
+	}
+}
+
+func TestPausedFlameDashboardViewPreservesZoomedSelectedLine(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	coreflamegraph.SeedTestFlameData(liveTrie)
+
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFlame
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
+	m.SetLiveTrie(liveTrie)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = next.(Model)
+
+	if !m.flamegraphModel.Paused() {
+		t.Fatalf("expected flamegraph model to be paused")
+	}
+
+	flameView := stripANSIEscape(m.flamegraphModel.View().Content)
+	selectedLine := firstLineContaining(flameView, "Selected:")
+	if selectedLine == "" {
+		t.Fatalf("expected flame view to include a selected line, got %q", flameView)
+	}
+	if !strings.Contains(selectedLine, "width=") {
+		t.Fatalf("expected selected line to include width details, got %q", selectedLine)
+	}
+
+	dashboardView := stripANSIEscape(m.View().Content)
+	if !strings.Contains(dashboardView, selectedLine) {
+		t.Fatalf("expected dashboard view to preserve paused zoom selected line %q, got %q", selectedLine, dashboardView)
+	}
+
+	dashboardViewAgain := stripANSIEscape(m.View().Content)
+	if !strings.Contains(dashboardViewAgain, selectedLine) {
+		t.Fatalf("expected repeated dashboard view to preserve paused zoom selected line %q, got %q", selectedLine, dashboardViewAgain)
 	}
 }
 
