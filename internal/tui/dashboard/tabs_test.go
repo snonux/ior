@@ -75,4 +75,7 @@ func TestRenderHelpBarIncludesSortBinding(t *testing.T) {
 	if !strings.Contains(out, "s sort table") {
 		t.Fatalf("expected sort binding in rendered help bar, got %q", out)
 	}
+	if !strings.Contains(out, "S reverse sort") {
+		t.Fatalf("expected reverse sort binding in rendered help bar, got %q", out)
+	}
 }

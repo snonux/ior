@@ -43,6 +43,10 @@ func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 	if sortHelp.Key != "s" || sortHelp.Desc != "sort table" {
 		t.Fatalf("unexpected sort binding help: key=%q desc=%q", sortHelp.Key, sortHelp.Desc)
 	}
+	reverseSortHelp := keys.ReverseSort.Help()
+	if reverseSortHelp.Key != "S" || reverseSortHelp.Desc != "reverse sort" {
+		t.Fatalf("unexpected reverse sort binding help: key=%q desc=%q", reverseSortHelp.Key, reverseSortHelp.Desc)
+	}
 
 	undoHelp := keys.FilterUndo.Help()
 	if undoHelp.Key != "F" || undoHelp.Desc != "undo filter" {
@@ -156,6 +160,18 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	found = false
 	for _, binding := range groups[1] {
 		help := binding.Help()
+		if help.Key == "S" && help.Desc == "reverse sort" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected reverse sort binding in dashboard full help controls")
+	}
+
+	found = false
+	for _, binding := range groups[1] {
+		help := binding.Help()
 		if help.Key == "F" && help.Desc == "undo filter" {
 			found = true
 			break
@@ -174,6 +190,7 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	foundOne := false
 	foundUndo := false
 	foundSort := false
+	foundReverseSort := false
 	for _, binding := range short {
 		help := binding.Help()
 		if help.Key == "o" && help.Desc == "probes" {
@@ -191,6 +208,9 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 		if help.Key == "s" && help.Desc == "sort table" {
 			foundSort = true
 		}
+		if help.Key == "S" && help.Desc == "reverse sort" {
+			foundReverseSort = true
+		}
 	}
 	if !found {
 		t.Fatalf("expected probes binding in dashboard short help")
@@ -206,5 +226,8 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	}
 	if !foundSort {
 		t.Fatalf("expected sort binding in dashboard short help")
+	}
+	if !foundReverseSort {
+		t.Fatalf("expected reverse sort binding in dashboard short help")
 	}
 }

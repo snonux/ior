@@ -377,22 +377,23 @@ func (m Model) selectedSyscallName() string {
 }
 
 func (m *Model) handleSortKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if !key.Matches(msg, m.keys.Sort) {
+	reverse := key.Matches(msg, m.keys.ReverseSort)
+	if !reverse && !key.Matches(msg, m.keys.Sort) {
 		return false, nil
 	}
 	switch m.activeTab {
 	case TabSyscalls:
-		return m.handleSyscallsSortKey()
+		return m.handleSyscallsSortKey(reverse)
 	case TabFiles:
-		return m.handleFilesSortKey()
+		return m.handleFilesSortKey(reverse)
 	case TabProcesses:
-		return m.handleProcessesSortKey()
+		return m.handleProcessesSortKey(reverse)
 	default:
 		return false, nil
 	}
 }
 
-func (m *Model) handleSyscallsSortKey() (bool, tea.Cmd) {
+func (m *Model) handleSyscallsSortKey(reverse bool) (bool, tea.Cmd) {
 	if m.syscallsVizMode != tabVizModeTable {
 		return false, nil
 	}
@@ -401,12 +402,12 @@ func (m *Model) handleSyscallsSortKey() (bool, tea.Cmd) {
 		return false, nil
 	}
 	selectedName := m.selectedSyscallName()
-	m.syscallsSort = m.syscallsSort.toggled(key)
+	m.syscallsSort = m.syscallsSort.toggled(key, reverse)
 	m.reanchorSyscallsOffset(selectedName)
 	return true, nil
 }
 
-func (m *Model) handleFilesSortKey() (bool, tea.Cmd) {
+func (m *Model) handleFilesSortKey(reverse bool) (bool, tea.Cmd) {
 	if m.filesVizMode != tabVizModeTable {
 		return false, nil
 	}
@@ -416,7 +417,7 @@ func (m *Model) handleFilesSortKey() (bool, tea.Cmd) {
 			return false, nil
 		}
 		selectedDir := m.selectedDirPath()
-		m.filesDirSort = m.filesDirSort.toggled(key)
+		m.filesDirSort = m.filesDirSort.toggled(key, reverse)
 		m.reanchorFilesDirOffset(selectedDir)
 		return true, nil
 	}
@@ -425,12 +426,12 @@ func (m *Model) handleFilesSortKey() (bool, tea.Cmd) {
 		return false, nil
 	}
 	selectedPath := m.selectedFilePath()
-	m.filesSort = m.filesSort.toggled(key)
+	m.filesSort = m.filesSort.toggled(key, reverse)
 	m.reanchorFilesOffset(selectedPath)
 	return true, nil
 }
 
-func (m *Model) handleProcessesSortKey() (bool, tea.Cmd) {
+func (m *Model) handleProcessesSortKey(reverse bool) (bool, tea.Cmd) {
 	if m.processesVizMode != tabVizModeTable {
 		return false, nil
 	}
@@ -439,7 +440,7 @@ func (m *Model) handleProcessesSortKey() (bool, tea.Cmd) {
 		return false, nil
 	}
 	selectedPID := m.selectedProcessPID()
-	m.processesSort = m.processesSort.toggled(key)
+	m.processesSort = m.processesSort.toggled(key, reverse)
 	m.reanchorProcessesOffset(selectedPID)
 	return true, nil
 }

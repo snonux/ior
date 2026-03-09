@@ -1,15 +1,34 @@
 package dashboard
 
 type tableSortState[K comparable] struct {
-	active bool
-	key    K
+	active  bool
+	key     K
+	reverse bool
 }
 
-func (s tableSortState[K]) toggled(key K) tableSortState[K] {
-	if s.active && s.key == key {
+func (s tableSortState[K]) toggled(key K, reverse bool) tableSortState[K] {
+	if s.active && s.key == key && s.reverse == reverse {
 		return tableSortState[K]{}
 	}
-	return tableSortState[K]{active: true, key: key}
+	return tableSortState[K]{active: true, key: key, reverse: reverse}
+}
+
+func (s tableSortState[K]) apply(cmp int) int {
+	if !s.reverse {
+		return cmp
+	}
+	return -cmp
+}
+
+func sortDirectionLabel(defaultAscending, reverse bool) string {
+	if defaultAscending != reverse {
+		return "asc"
+	}
+	return "desc"
+}
+
+func sortLabelWithDirection(name string, defaultAscending, reverse bool) string {
+	return name + " " + sortDirectionLabel(defaultAscending, reverse)
 }
 
 func compareUint64Desc(left, right uint64) int {

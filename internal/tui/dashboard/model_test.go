@@ -294,6 +294,29 @@ func TestProcessesSortKeyTogglesOnSelectedColumn(t *testing.T) {
 	}
 }
 
+func TestProcessesReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 200, Comm: "worker", Syscalls: 9},
+		{PID: 100, Comm: "agent", Syscalls: 3},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.processesCol = 1
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model := next.(Model)
+	if !model.processesSort.active || model.processesSort.key != processSortKeyComm || !model.processesSort.reverse {
+		t.Fatalf("expected reverse process comm sort enabled, got %+v", model.processesSort)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model = next.(Model)
+	if model.processesSort.active {
+		t.Fatalf("expected second S press to restore default process ordering")
+	}
+}
+
 func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
@@ -432,6 +455,28 @@ func TestSyscallsSortKeyTogglesOnSelectedColumn(t *testing.T) {
 	model = next.(Model)
 	if model.syscallsSort.active {
 		t.Fatalf("expected second s press to restore default ordering")
+	}
+}
+
+func TestSyscallsReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "write", Count: 9},
+		{Name: "read", Count: 3},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model := next.(Model)
+	if !model.syscallsSort.active || model.syscallsSort.key != syscallSortKeyName || !model.syscallsSort.reverse {
+		t.Fatalf("expected reverse syscall name sort enabled, got %+v", model.syscallsSort)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model = next.(Model)
+	if model.syscallsSort.active {
+		t.Fatalf("expected second S press to restore default ordering")
 	}
 }
 
@@ -618,6 +663,53 @@ func TestFilesSortKeyTogglesFlatMode(t *testing.T) {
 	model = next.(Model)
 	if model.filesSort.active {
 		t.Fatalf("expected second s press to restore default file ordering")
+	}
+}
+
+func TestFilesReverseSortKeyTogglesFlatMode(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/tmp/z.log", Accesses: 9},
+		{Path: "/tmp/a.log", Accesses: 3},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.filesCol = 5
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model := next.(Model)
+	if !model.filesSort.active || model.filesSort.key != fileSortKeyPath || !model.filesSort.reverse {
+		t.Fatalf("expected reverse flat file path sort enabled, got %+v", model.filesSort)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model = next.(Model)
+	if model.filesSort.active {
+		t.Fatalf("expected second S press to restore default file ordering")
+	}
+}
+
+func TestFilesDirReverseSortKeyTogglesGroupedMode(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.filesDirGrouped = true
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/var/log/z.log", Accesses: 9},
+		{Path: "/tmp/a.log", Accesses: 3},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.filesDirCol = 6
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model := next.(Model)
+	if !model.filesDirSort.active || model.filesDirSort.key != fileDirSortKeyDir || !model.filesDirSort.reverse {
+		t.Fatalf("expected reverse grouped file dir sort enabled, got %+v", model.filesDirSort)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
+	model = next.(Model)
+	if model.filesDirSort.active {
+		t.Fatalf("expected second S press to restore default grouped file ordering")
 	}
 }
 
