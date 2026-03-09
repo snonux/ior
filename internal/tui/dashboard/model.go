@@ -752,7 +752,8 @@ func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.flamegraphModel.SetLiveTrie(liveTrie)
 	if m.width > 0 && m.height > 0 {
-		m.flamegraphModel.SetViewport(m.width, m.height)
+		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
+		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 	}
 	m.flamegraphModel.RefreshFromLiveTrie()
 }
@@ -797,15 +798,19 @@ func (m Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
 	_, activeHeight := flameViewport(width, height, m.showHelp)
 	streamModel := m.streamModel
+	flameModel := m.flamegraphModel
 	streamModel.SetFooterVisible(m.showHelp)
 	if m.activeTab == TabStream {
 		_, activeHeight = streamViewport(width, height)
+	}
+	if m.activeTab == TabFlame {
+		flameModel.SetViewport(width, activeHeight)
 	}
 
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, width))
 	b.WriteString("\n")
-	b.WriteString(m.renderActiveContent(width, activeHeight, &streamModel))
+	b.WriteString(m.renderActiveContent(width, activeHeight, &streamModel, &flameModel))
 	b.WriteString("\n")
 	if m.showHelp {
 		b.WriteString(renderHelpBarWithStatus(m.keys, width, m.filterSummary()))
@@ -823,7 +828,7 @@ func (m Model) filterSummary() string {
 	return summary + " | stack: " + strings.Join(m.filterStack, " | ")
 }
 
-func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model) string {
+func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
 	if m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap {
 		return renderSyscallsTreemap(m.latest, width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark)
 	}
@@ -853,7 +858,7 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 		m.activeTab,
 		m.latest,
 		streamModel,
-		&m.flamegraphModel,
+		flameModel,
 		width,
 		activeHeight,
 		m.pidFilter,
@@ -1091,7 +1096,6 @@ func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstre
 		if flameModel == nil {
 			return common.PanelStyle.Render("Flame: waiting for model...")
 		}
-		flameModel.SetViewport(width, height)
 		return flameModel.View().Content
 	}
 

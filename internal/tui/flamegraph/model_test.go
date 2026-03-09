@@ -1130,6 +1130,36 @@ func TestResizeRecalculatesLayoutAndCullsNarrowFrames(t *testing.T) {
 	}
 }
 
+func TestSetViewportSameSizeKeepsPausedZoomLayoutStable(t *testing.T) {
+	m := newZoomModel()
+	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.paused = true
+
+	rootIdx := mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	if got, want := m.frames[rootIdx].Width, m.width; got != want {
+		t.Fatalf("expected zoom root to span full width before redundant viewport set, got %d want %d", got, want)
+	}
+
+	beforeFrames := append([]tuiFrame(nil), m.frames...)
+	beforeTargets := append([]tuiFrame(nil), m.targetFrames...)
+	m.SetViewport(m.width, m.height)
+
+	if m.animating {
+		t.Fatalf("expected redundant viewport set to avoid starting animation")
+	}
+	if !reflect.DeepEqual(m.frames, beforeFrames) {
+		t.Fatalf("expected redundant viewport set to preserve current frames")
+	}
+	if !reflect.DeepEqual(m.targetFrames, beforeTargets) {
+		t.Fatalf("expected redundant viewport set to preserve target frames")
+	}
+	rootIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
+	if got, want := m.frames[rootIdx].Width, m.width; got != want {
+		t.Fatalf("expected zoom root to remain full width after redundant viewport set, got %d want %d", got, want)
+	}
+}
+
 func newZoomModel() Model {
 	m := NewModel(nil)
 	m.width = 120

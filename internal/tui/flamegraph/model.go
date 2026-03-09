@@ -443,6 +443,9 @@ func (m Model) Paused() bool {
 
 // SetViewport updates model render dimensions.
 func (m *Model) SetViewport(width, height int) {
+	if m.width == width && m.height == height {
+		return
+	}
 	m.width = width
 	m.height = height
 	m.rebuildFrames(true)
