@@ -503,6 +503,118 @@ func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	}
 }
 
+func TestFilesSortKeyTogglesFlatMode(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/tmp/z.log", Accesses: 9},
+		{Path: "/tmp/a.log", Accesses: 3},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.filesCol = 5
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model := next.(Model)
+	if !model.filesSort.active || model.filesSort.key != fileSortKeyPath {
+		t.Fatalf("expected flat file path sort enabled, got %+v", model.filesSort)
+	}
+
+	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	model = next.(Model)
+	if model.filesSort.active {
+		t.Fatalf("expected second s press to restore default file ordering")
+	}
+}
+
+func TestFilesSortEnterUsesSortedVisibleRow(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/tmp/z.log", Accesses: 9},
+		{Path: "/tmp/a.log", Accesses: 3},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.filesOffset = 1
+	m.filesCol = 5
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	m = next.(Model)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on sorted files tab to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp/a.log" {
+		t.Fatalf("expected visible sorted row to filter /tmp/a.log, got %+v", req.Filter.File)
+	}
+}
+
+func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.filesDirGrouped = true
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/var/log/z.log", Accesses: 9},
+		{Path: "/tmp/a.log", Accesses: 3},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.filesDirOffset = 1
+	m.filesDirCol = 6
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	m = next.(Model)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected enter on sorted grouped files tab to emit a filter request")
+	}
+	msg := cmd()
+	req, ok := msg.(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
+	}
+	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp" {
+		t.Fatalf("expected visible sorted grouped row to filter /tmp, got %+v", req.Filter.File)
+	}
+}
+
+func TestFilesSortStatesPersistAcrossDirToggle(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
+		{Path: "/var/log/z.log", Accesses: 9},
+		{Path: "/tmp/a.log", Accesses: 3},
+	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m.latest = &snap
+	m.filesCol = 5
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
+	m = next.(Model)
+	m.filesDirCol = 6
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
+	m = next.(Model)
+
+	if !m.filesSort.active || m.filesSort.key != fileSortKeyPath {
+		t.Fatalf("expected flat file sort state preserved, got %+v", m.filesSort)
+	}
+	if !m.filesDirSort.active || m.filesDirSort.key != fileDirSortKeyDir {
+		t.Fatalf("expected dir sort state enabled, got %+v", m.filesDirSort)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
+	m = next.(Model)
+	if !m.filesSort.active || m.filesSort.key != fileSortKeyPath {
+		t.Fatalf("expected flat file sort state after returning from dir mode, got %+v", m.filesSort)
+	}
+}
+
 func TestStreamSpaceUnpauseSchedulesStreamTick(t *testing.T) {
 	rb := eventstream.NewRingBuffer()
 	m := NewModelWithConfig(nil, rb, 250, common.DefaultKeyMap())

@@ -75,9 +75,11 @@ type Model struct {
 	syscallsTreemapSelection int
 	filesOffset              int
 	filesCol                 int
+	filesSort                tableSortState[fileSortKey]
 	filesDirGrouped          bool
 	filesDirOffset           int
 	filesDirCol              int
+	filesDirSort             tableSortState[fileDirSortKey]
 	processesOffset          int
 	processesCol             int
 	syscallsVizMode          tabVizMode
@@ -227,14 +229,24 @@ func (m Model) handleBubbleTick() (tea.Model, tea.Cmd) {
 
 func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	selectedSyscall := ""
+	selectedFile := ""
+	selectedDir := ""
 	if m.syscallsSort.active {
 		selectedSyscall = m.selectedSyscallName()
 	}
+	if m.filesVizMode == tabVizModeTable {
+		if !m.filesDirGrouped && m.filesSort.active {
+			selectedFile = m.selectedFilePath()
+		}
+		if m.filesDirGrouped && m.filesDirSort.active {
+			selectedDir = m.selectedDirPath()
+		}
+	}
 	m.latest = msg.Snap
 	m.reanchorSyscallsOffset(selectedSyscall)
+	m.reanchorFilesOffset(selectedFile)
+	m.reanchorFilesDirOffset(selectedDir)
 	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
-	m.filesOffset = clampOffset(m.filesOffset, m.maxFilesRows())
-	m.filesDirOffset = clampOffset(m.filesDirOffset, m.maxFilesDirRowsForMode())
 	m.processesOffset = clampOffset(m.processesOffset, m.maxProcessesRows())
 	m.clampTableColumns()
 	m.streamModel.Refresh()
@@ -363,7 +375,18 @@ func (m *Model) handleSortKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !key.Matches(msg, m.keys.Sort) {
 		return false, nil
 	}
-	if m.activeTab != TabSyscalls || m.syscallsVizMode != tabVizModeTable {
+	switch m.activeTab {
+	case TabSyscalls:
+		return m.handleSyscallsSortKey()
+	case TabFiles:
+		return m.handleFilesSortKey()
+	default:
+		return false, nil
+	}
+}
+
+func (m *Model) handleSyscallsSortKey() (bool, tea.Cmd) {
+	if m.syscallsVizMode != tabVizModeTable {
 		return false, nil
 	}
 	key, ok := syscallSortKeyForColumn(m.width, m.syscallsCol)
@@ -373,6 +396,30 @@ func (m *Model) handleSortKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	selectedName := m.selectedSyscallName()
 	m.syscallsSort = m.syscallsSort.toggled(key)
 	m.reanchorSyscallsOffset(selectedName)
+	return true, nil
+}
+
+func (m *Model) handleFilesSortKey() (bool, tea.Cmd) {
+	if m.filesVizMode != tabVizModeTable {
+		return false, nil
+	}
+	if m.filesDirGrouped {
+		key, ok := fileDirSortKeyForColumn(m.filesDirCol)
+		if !ok {
+			return false, nil
+		}
+		selectedDir := m.selectedDirPath()
+		m.filesDirSort = m.filesDirSort.toggled(key)
+		m.reanchorFilesDirOffset(selectedDir)
+		return true, nil
+	}
+	key, ok := fileSortKeyForColumn(m.filesCol)
+	if !ok {
+		return false, nil
+	}
+	selectedPath := m.selectedFilePath()
+	m.filesSort = m.filesSort.toggled(key)
+	m.reanchorFilesOffset(selectedPath)
 	return true, nil
 }
 
@@ -391,33 +438,109 @@ func (m *Model) reanchorSyscallsOffset(selectedName string) {
 	m.syscallsOffset = clampOffset(m.syscallsOffset, len(rows))
 }
 
+func (m *Model) reanchorFilesOffset(selectedPath string) {
+	rows := m.sortedFileRows()
+	if len(rows) == 0 {
+		m.filesOffset = 0
+		return
+	}
+	if selectedPath != "" {
+		if index, ok := findFileOffset(rows, selectedPath); ok {
+			m.filesOffset = index
+			return
+		}
+	}
+	m.filesOffset = clampOffset(m.filesOffset, len(rows))
+}
+
+func (m *Model) reanchorFilesDirOffset(selectedDir string) {
+	rows := m.sortedDirRows()
+	if len(rows) == 0 {
+		m.filesDirOffset = 0
+		return
+	}
+	if selectedDir != "" {
+		if index, ok := findDirOffset(rows, selectedDir); ok {
+			m.filesDirOffset = index
+			return
+		}
+	}
+	m.filesDirOffset = clampOffset(m.filesDirOffset, len(rows))
+}
+
 func (m Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 	if m.latest == nil {
 		return globalfilter.Filter{}, "", false
 	}
 	filter := m.globalFilter.Clone()
 	if m.filesDirGrouped {
-		dirs := aggregateFilesByDir(m.latest.Files())
-		if len(dirs) == 0 {
+		selected, ok := m.selectedDirSnapshot()
+		if !ok {
 			return globalfilter.Filter{}, "", false
 		}
-		selected := dirs[clampOffset(m.filesDirOffset, len(dirs))]
 		if strings.TrimSpace(selected.Dir) == "" {
 			return globalfilter.Filter{}, "", false
 		}
 		filter.File = &globalfilter.StringFilter{Pattern: selected.Dir}
 		return filter, "file~" + selected.Dir, true
 	}
-	files := m.latest.Files()
-	if len(files) == 0 {
+	selected, ok := m.selectedFileSnapshot()
+	if !ok {
 		return globalfilter.Filter{}, "", false
 	}
-	selected := files[clampOffset(m.filesOffset, len(files))]
 	if strings.TrimSpace(selected.Path) == "" {
 		return globalfilter.Filter{}, "", false
 	}
 	filter.File = &globalfilter.StringFilter{Pattern: selected.Path}
 	return filter, "file~" + selected.Path, true
+}
+
+func (m Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
+	rows := m.sortedFileRows()
+	if len(rows) == 0 {
+		return statsengine.FileSnapshot{}, false
+	}
+	index := clampOffset(m.filesOffset, len(rows))
+	return rows[index], true
+}
+
+func (m Model) sortedFileRows() []statsengine.FileSnapshot {
+	if m.latest == nil {
+		return nil
+	}
+	return sortedFileSnapshots(m.latest.Files(), m.filesSort)
+}
+
+func (m Model) selectedFilePath() string {
+	selected, ok := m.selectedFileSnapshot()
+	if !ok {
+		return ""
+	}
+	return selected.Path
+}
+
+func (m Model) selectedDirSnapshot() (DirSnapshot, bool) {
+	rows := m.sortedDirRows()
+	if len(rows) == 0 {
+		return DirSnapshot{}, false
+	}
+	index := clampOffset(m.filesDirOffset, len(rows))
+	return rows[index], true
+}
+
+func (m Model) sortedDirRows() []DirSnapshot {
+	if m.latest == nil {
+		return nil
+	}
+	return sortedDirSnapshots(aggregateFilesByDir(m.latest.Files()), m.filesDirSort)
+}
+
+func (m Model) selectedDirPath() string {
+	selected, ok := m.selectedDirSnapshot()
+	if !ok {
+		return ""
+	}
+	return selected.Dir
 }
 
 func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -916,6 +1039,12 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 	}
 	if m.activeTab == TabSyscalls && m.latest != nil {
 		return renderSyscallsWithSort(m.latest, width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort)
+	}
+	if m.activeTab == TabFiles && m.latest != nil && m.filesVizMode == tabVizModeTable {
+		if m.filesDirGrouped {
+			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirOffset, m.filesDirCol, m.filesDirSort)
+		}
+		return renderFilesWithSort(m.latest, width, activeHeight, m.filesOffset, m.filesCol, m.filesSort)
 	}
 	return renderActiveTab(
 		m.activeTab,
