@@ -276,12 +276,10 @@ func TestMouseClickOutsideBarsDoesNotChangeSelectionOrZoom(t *testing.T) {
 	}
 }
 
-func TestZoomLineageSpansZoomViewportAndAlignsAtGutter(t *testing.T) {
+func TestZoomLineageSpansFullViewportWidth(t *testing.T) {
 	m := newZoomModel()
 	targetPath := "root" + pathSeparator + "A"
 	targetIdx := mustFrameIndex(t, m.frames, targetPath)
-	selectedWidth := m.frames[targetIdx].Width
-	expectedRailWidth := min(max(selectedWidth, 3), max(3, m.width/3))
 
 	m.selectedIdx = targetIdx
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -289,19 +287,14 @@ func TestZoomLineageSpansZoomViewportAndAlignsAtGutter(t *testing.T) {
 
 	rootIdx := mustFrameIndex(t, m.frames, "root")
 	zoomIdx := mustFrameIndex(t, m.frames, targetPath)
-	_, gutter, ok := m.zoomLineageGeometry(expectedRailWidth)
-	if !ok {
-		t.Fatalf("expected lineage geometry to be enabled for zoomed view")
+	if m.frames[rootIdx].Width != m.width {
+		t.Fatalf("expected root lineage width %d, got %d", m.width, m.frames[rootIdx].Width)
 	}
-	expectedLineageWidth := m.width - gutter
-	if m.frames[rootIdx].Width != expectedLineageWidth {
-		t.Fatalf("expected root lineage width %d, got %d", expectedLineageWidth, m.frames[rootIdx].Width)
+	if m.frames[zoomIdx].Width != m.width {
+		t.Fatalf("expected zoom lineage width %d, got %d", m.width, m.frames[zoomIdx].Width)
 	}
-	if m.frames[zoomIdx].Width != expectedLineageWidth {
-		t.Fatalf("expected zoom lineage width %d, got %d", expectedLineageWidth, m.frames[zoomIdx].Width)
-	}
-	if m.frames[rootIdx].Col != gutter || m.frames[zoomIdx].Col != gutter {
-		t.Fatalf("expected lineage rail at column %d, got root=%d zoom=%d", gutter, m.frames[rootIdx].Col, m.frames[zoomIdx].Col)
+	if m.frames[rootIdx].Col != 0 || m.frames[zoomIdx].Col != 0 {
+		t.Fatalf("expected full-width lineage bars at column 0, got root=%d zoom=%d", m.frames[rootIdx].Col, m.frames[zoomIdx].Col)
 	}
 }
 
@@ -318,7 +311,7 @@ func TestZoomLineageKeepsAllFramesWithinViewportWidth(t *testing.T) {
 	}
 }
 
-func TestZoomLineageAlignsWithZoomedSubtreeColumn(t *testing.T) {
+func TestZoomLineageDoesNotShiftZoomedSubtreeHorizontally(t *testing.T) {
 	m := newZoomModel()
 	rootPath := "root" + pathSeparator + "A"
 	childPath := rootPath + pathSeparator + "A1"
@@ -328,15 +321,11 @@ func TestZoomLineageAlignsWithZoomedSubtreeColumn(t *testing.T) {
 
 	rootIdx := mustFrameIndex(t, m.frames, rootPath)
 	childIdx := mustFrameIndex(t, m.frames, childPath)
-	_, gutter, ok := m.zoomLineageGeometry(m.zoomLineWidth)
-	if !ok {
-		t.Fatalf("expected lineage geometry to be enabled")
+	if got := m.frames[rootIdx].Col; got != 0 {
+		t.Fatalf("expected zoom lineage root column 0, got %d", got)
 	}
-	if got := m.frames[rootIdx].Col; got != gutter {
-		t.Fatalf("expected zoom lineage root column %d, got %d", gutter, got)
-	}
-	if got := m.frames[childIdx].Col; got != gutter {
-		t.Fatalf("expected first child column to align at %d, got %d", gutter, got)
+	if got := m.frames[childIdx].Col; got != 0 {
+		t.Fatalf("expected first child column to stay aligned at 0, got %d", got)
 	}
 }
 

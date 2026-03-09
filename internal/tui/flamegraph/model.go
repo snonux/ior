@@ -468,17 +468,7 @@ func (m *Model) rebuildFrames(animate bool) {
 	} else {
 		root = m.snapshot
 	}
-	layoutWidth := m.width
-	if m.zoomPath != "" {
-		fallbackLineWidth := m.zoomLineWidth
-		if fallbackLineWidth <= 0 {
-			fallbackLineWidth = layoutWidth
-		}
-		if _, gutter, ok := m.zoomLineageGeometry(fallbackLineWidth); ok {
-			layoutWidth = m.width - gutter
-		}
-	}
-	targetFrames := buildTerminalLayoutWithPath(root, layoutWidth, m.height, rootPath)
+	targetFrames := buildTerminalLayoutWithPath(root, m.width, m.height, rootPath)
 	if m.zoomPath != "" {
 		targetFrames = m.withZoomLineage(targetFrames)
 	}
@@ -1151,28 +1141,6 @@ func (m Model) frameIndexAt(x, y int) int {
 	return best
 }
 
-func (m Model) zoomLineageGeometry(fallbackLineWidth int) (lineWidth, gutter int, ok bool) {
-	if m.zoomPath == "" || m.width <= 0 {
-		return 0, 0, false
-	}
-	lineWidth = m.zoomLineWidth
-	if lineWidth <= 0 {
-		lineWidth = fallbackLineWidth
-	}
-	if lineWidth <= 0 {
-		lineWidth = m.width / 4
-	}
-	lineWidth = min(max(lineWidth, 3), max(3, m.width/3))
-	if lineWidth >= m.width-2 {
-		return 0, 0, false
-	}
-	gutter = lineWidth + 1
-	if m.width-gutter < minFlameWidth/2 {
-		return 0, 0, false
-	}
-	return lineWidth, gutter, true
-}
-
 func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 	if len(frames) == 0 || m.snapshot == nil {
 		return frames
@@ -1182,26 +1150,12 @@ func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 		return frames
 	}
 
-	fallbackLineWidth := 0
-	if len(frames) > 0 {
-		fallbackLineWidth = frames[0].Width
-	}
-	_, gutter, ok := m.zoomLineageGeometry(fallbackLineWidth)
-	if !ok {
-		return frames
-	}
-	lineageWidth := m.width - gutter
-	if lineageWidth < 1 {
-		return frames
-	}
-
 	rowShift := len(parts) - 1
 	out := make([]tuiFrame, 0, len(frames)+len(parts))
 	for _, frame := range frames {
 		if frame.Path == m.zoomPath {
 			continue
 		}
-		frame.Col += gutter
 		frame.Row += rowShift
 		frame.Depth += rowShift
 		out = append(out, frame)
@@ -1222,9 +1176,9 @@ func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 		name := parts[depth]
 		out = append(out, tuiFrame{
 			Name:    name,
-			Col:     gutter,
+			Col:     0,
 			Row:     depth,
-			Width:   lineageWidth,
+			Width:   m.width,
 			Total:   total,
 			Percent: percent,
 			Fill:    terminalFrameColor(name),
