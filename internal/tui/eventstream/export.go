@@ -15,25 +15,35 @@ func defaultStreamExportFilename() string {
 	return fmt.Sprintf("ior-stream-%s.csv", time.Now().Format("20060102-150405"))
 }
 
-func ensureCSVFilename(name string) (string, error) {
-	clean := strings.TrimSpace(name)
-	if clean == "" {
-		return "", errors.New("filename cannot be empty")
+func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename string) (string, error) {
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		name = defaultStreamExportFilename()
 	}
-	if strings.HasSuffix(strings.ToLower(clean), ".csv") {
-		return clean, nil
+
+	rows := make([]StreamEvent, 0)
+	if source != nil {
+		snapshot := source.Snapshot()
+		rows = make([]StreamEvent, 0, len(snapshot))
+		for i := range snapshot {
+			ev := snapshot[i]
+			if filter.Matches(&ev) {
+				rows = append(rows, ev)
+			}
+		}
 	}
-	return clean + ".csv", nil
+
+	return exportRowsToCSV(rows, exportDir, name)
 }
 
-func (m *Model) exportFilteredToCSV(filename string) (string, error) {
+func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, error) {
 	name, err := ensureCSVFilename(filename)
 	if err != nil {
 		return "", err
 	}
 	path := name
-	if m.exportDir != "" {
-		path = filepath.Join(m.exportDir, name)
+	if exportDir != "" {
+		path = filepath.Join(exportDir, name)
 	}
 
 	f, err := os.Create(path)
@@ -61,8 +71,8 @@ func (m *Model) exportFilteredToCSV(filename string) (string, error) {
 	if err := w.Write(header); err != nil {
 		return fail(err)
 	}
-	for i := range m.filtered {
-		ev := m.filtered[i]
+	for i := range rows {
+		ev := rows[i]
 		record := []string{
 			fmt.Sprintf("%d", ev.Seq),
 			fmt.Sprintf("%d", ev.TimeNs),
@@ -94,6 +104,27 @@ func (m *Model) exportFilteredToCSV(filename string) (string, error) {
 		return path, nil
 	}
 	return absPath, nil
+}
+
+func ensureCSVFilename(name string) (string, error) {
+	clean := strings.TrimSpace(name)
+	if clean == "" {
+		return "", errors.New("filename cannot be empty")
+	}
+	if strings.HasSuffix(strings.ToLower(clean), ".csv") {
+		return clean, nil
+	}
+	return clean + ".csv", nil
+}
+
+// ExportSnapshotToCSV exports a fresh filtered snapshot from the current source
+// without mutating the model's paused/live view state.
+func (m Model) ExportSnapshotToCSV(filename string) (string, error) {
+	return exportSnapshotToCSV(m.source, m.filter, m.exportDir, filename)
+}
+
+func (m *Model) exportFilteredToCSV(filename string) (string, error) {
+	return exportRowsToCSV(m.filtered, m.exportDir, filename)
 }
 
 // EditorCommandForPath builds an editor command for the given path.

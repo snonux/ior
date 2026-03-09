@@ -1,2 +1,2 @@
-// Package export implements the TUI snapshot export modal and option handling.
+// Package export implements the top-level TUI stream export modal and option handling.
 package export

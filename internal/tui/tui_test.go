@@ -2,9 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -997,7 +997,7 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	}
 }
 
-func TestRunExportCmdCSVWritesFile(t *testing.T) {
+func TestRunExportCmdCSVWritesFilteredStreamSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	prev, err := os.Getwd()
 	if err != nil {
@@ -1008,8 +1008,27 @@ func TestRunExportCmdCSVWritesFile(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prev) })
 
-	snap := &statsengine.Snapshot{TotalSyscalls: 1}
-	msg := runExportCmd(true, tuiexport.OptionCSV, snap)()
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	buffer := m.runtime.StreamBuffer()
+	buffer.Push(eventstream.StreamEvent{Seq: 1, Comm: "firefox", PID: 10, TID: 100, Syscall: "read", FileName: "/tmp/a"})
+	buffer.Push(eventstream.StreamEvent{Seq: 2, Comm: "bash", PID: 11, TID: 110, Syscall: "write", FileName: "/tmp/b"})
+	m.setGlobalFilter(globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "firefox"}})
+
+	next, _ := m.Update(messages.StatsTickMsg{Snap: &statsengine.Snapshot{}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: "7"})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = next.(Model)
+
+	buffer.Push(eventstream.StreamEvent{Seq: 3, Comm: "firefox", PID: 12, TID: 120, Syscall: "open", FileName: "/tmp/c"})
+	next, _ = m.Update(messages.StatsTickMsg{Snap: &statsengine.Snapshot{}})
+	m = next.(Model)
+
+	msg := runExportCmd(true, tuiexport.OptionCSV, m.dashboard)()
 	done, ok := msg.(tuiexport.CompletedMsg)
 	if !ok {
 		t.Fatalf("expected CompletedMsg, got %T", msg)
@@ -1017,8 +1036,26 @@ func TestRunExportCmdCSVWritesFile(t *testing.T) {
 	if done.Path == "" {
 		t.Fatalf("expected export path")
 	}
-	if _, err := os.Stat(filepath.Join(dir, done.Path)); err != nil {
+	if _, err := os.Stat(done.Path); err != nil {
 		t.Fatalf("expected CSV file to exist: %v", err)
+	}
+	f, err := os.Open(done.Path)
+	if err != nil {
+		t.Fatalf("open csv: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	records, err := csv.NewReader(f).ReadAll()
+	if err != nil {
+		t.Fatalf("read csv: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("expected header + 2 filtered rows, got %d records", len(records))
+	}
+	if records[1][0] != "1" || records[2][0] != "3" {
+		t.Fatalf("expected fresh filtered stream snapshot rows 1 and 3, got %v", records[1:])
+	}
+	if records[1][4] != "firefox" || records[2][4] != "firefox" {
+		t.Fatalf("expected firefox rows only, got %v", records[1:])
 	}
 }
 
@@ -1656,7 +1693,7 @@ func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
 	m.height = 30
 
 	out := m.View().Content
-	if strings.Contains(out, "e snapshot export") {
+	if strings.Contains(out, "e stream export") {
 		t.Fatalf("did not expect export shortcut in status bar when export is disabled")
 	}
 }

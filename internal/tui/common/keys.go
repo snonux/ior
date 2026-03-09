@@ -59,7 +59,7 @@ func DefaultKeyMap() KeyMap {
 		Probes:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "probes")),
 		Filter:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
 		FilterUndo: key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "undo filter")),
-		Export:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "snapshot export")),
+		Export:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "stream export")),
 		Quit:       key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Enter:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		Esc:        key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),

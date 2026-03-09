@@ -951,6 +951,11 @@ func (m Model) ActiveTab() Tab {
 	return m.activeTab
 }
 
+// ExportStreamCSV exports a fresh filtered snapshot of the stream ringbuffer.
+func (m Model) ExportStreamCSV() (string, error) {
+	return m.streamModel.ExportSnapshotToCSV("")
+}
+
 // BlocksGlobalShortcuts reports whether the active tab should suppress a
 // top-level shortcut for the given key press.
 func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {

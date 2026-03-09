@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	coreexport "ior/internal/export"
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/probemanager"
@@ -399,7 +398,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return next, cmd
 		}
 	case tuiexport.RequestMsg:
-		return m, runExportCmd(m.exportEnabled, msg.Option, m.dashboard.LatestSnapshot())
+		return m, runExportCmd(m.exportEnabled, msg.Option, m.dashboard)
 	case tuiexport.CompletedMsg:
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
@@ -1123,14 +1122,14 @@ func isHelpOverlayQuitKey(msg tea.KeyPressMsg) bool {
 	return msg.String() == "q"
 }
 
-func runExportCmd(exportEnabled bool, option tuiexport.Option, snap *statsengine.Snapshot) tea.Cmd {
+func runExportCmd(exportEnabled bool, option tuiexport.Option, dashboard dashboardui.Model) tea.Cmd {
 	return func() tea.Msg {
 		if !exportEnabled {
 			return tuiexport.FailedMsg{Err: errors.New("tui export is disabled by -tuiExport=false")}
 		}
 		switch option {
 		case tuiexport.OptionCSV:
-			path, err := coreexport.SnapshotCSV(snap)
+			path, err := dashboard.ExportStreamCSV()
 			if err != nil {
 				return tuiexport.FailedMsg{Err: err}
 			}
@@ -1211,7 +1210,7 @@ func (m Model) helpSections() []helpSection {
 		"f filter  p pid picker  t tid picker  o probes",
 	}
 	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
-		globalLines[1] += "  e snapshot export"
+		globalLines[1] += "  e stream export"
 	}
 
 	return []helpSection{
