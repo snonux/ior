@@ -476,7 +476,7 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 			selectedBg = lipgloss.Color("129")
 			selectedFg = lipgloss.Color("15")
 		}
-		return base.Background(selectedBg).Foreground(selectedFg).Bold(true).Underline(true)
+		return base.Background(selectedBg).Foreground(selectedFg).Bold(true)
 	}
 
 	if isMatch {
