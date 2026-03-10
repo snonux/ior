@@ -55,3 +55,13 @@ func TestPairCalculateDurationsWithPreviousExit(t *testing.T) {
 		t.Fatalf("DurationToPrev = %d, want 500", pair.DurationToPrev)
 	}
 }
+
+func TestPairRecycleHandlesMissingExitEvent(t *testing.T) {
+	pair := NewPair(&types.OpenEvent{
+		Time: 1000,
+		Pid:  1,
+		Tid:  2,
+	})
+
+	pair.Recycle()
+}

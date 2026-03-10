@@ -120,8 +120,14 @@ func (e *Pair) Dump() string {
 }
 
 func (e *Pair) Recycle() {
-	e.EnterEv.Recycle()
-	e.ExitEv.Recycle()
+	if e.EnterEv != nil {
+		e.EnterEv.Recycle()
+	}
+	if e.ExitEv != nil {
+		e.ExitEv.Recycle()
+	}
+	e.EnterEv = nil
+	e.ExitEv = nil
 	e.File = nil
 	e.Comm = ""
 	e.Duration = 0
