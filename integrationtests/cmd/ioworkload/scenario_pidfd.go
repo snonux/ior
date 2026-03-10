@@ -76,7 +76,11 @@ func pidfdGetfdFailure() error {
 }
 
 func pidfdOpen(pid int, flags uintptr) (int, error) {
-	fd, _, errno := syscall.Syscall(pidfdOpenSyscallNr(), uintptr(pid), flags, 0)
+	syscallNr, err := pidfdOpenSyscallNr()
+	if err != nil {
+		return 0, err
+	}
+	fd, _, errno := syscall.Syscall(syscallNr, uintptr(pid), flags, 0)
 	if errno != 0 {
 		return 0, errno
 	}
@@ -84,8 +88,12 @@ func pidfdOpen(pid int, flags uintptr) (int, error) {
 }
 
 func pidfdGetfd(pidfd int, targetFd int, flags uintptr) (int, error) {
+	syscallNr, err := pidfdGetfdSyscallNr()
+	if err != nil {
+		return 0, err
+	}
 	fd, _, errno := syscall.Syscall(
-		pidfdGetfdSyscallNr(),
+		syscallNr,
 		uintptr(pidfd),
 		uintptr(targetFd),
 		flags,
@@ -96,24 +104,30 @@ func pidfdGetfd(pidfd int, targetFd int, flags uintptr) (int, error) {
 	return int(fd), nil
 }
 
-func pidfdOpenSyscallNr() uintptr {
-	// Go's syscall package does not expose pidfd constants on all toolchains.
-	if runtime.GOARCH == "amd64" {
-		return 434
-	}
-	if runtime.GOARCH == "arm64" {
-		return 434
-	}
-	panic("pidfd_open syscall number not defined for GOARCH=" + runtime.GOARCH)
+func pidfdOpenSyscallNr() (uintptr, error) {
+	return pidfdOpenSyscallNrForArch(runtime.GOARCH)
 }
 
-func pidfdGetfdSyscallNr() uintptr {
+func pidfdGetfdSyscallNr() (uintptr, error) {
+	return pidfdGetfdSyscallNrForArch(runtime.GOARCH)
+}
+
+func pidfdOpenSyscallNrForArch(arch string) (uintptr, error) {
 	// Go's syscall package does not expose pidfd constants on all toolchains.
-	if runtime.GOARCH == "amd64" {
-		return 438
+	switch arch {
+	case "amd64", "arm64":
+		return 434, nil
+	default:
+		return 0, fmt.Errorf("pidfd_open syscall number not defined for GOARCH=%s", arch)
 	}
-	if runtime.GOARCH == "arm64" {
-		return 438
+}
+
+func pidfdGetfdSyscallNrForArch(arch string) (uintptr, error) {
+	// Go's syscall package does not expose pidfd constants on all toolchains.
+	switch arch {
+	case "amd64", "arm64":
+		return 438, nil
+	default:
+		return 0, fmt.Errorf("pidfd_getfd syscall number not defined for GOARCH=%s", arch)
 	}
-	panic("pidfd_getfd syscall number not defined for GOARCH=" + runtime.GOARCH)
 }
