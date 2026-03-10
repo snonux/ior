@@ -989,7 +989,7 @@ func appendNumericFilterChange(parts []string, name string, prev, next *globalfi
 	if duration {
 		value = time.Duration(next.Value).String()
 	}
-	return append(parts, fmt.Sprintf("%s%s%s", name, compareOpSymbol(next.Op), value))
+	return append(parts, fmt.Sprintf("%s%s%s", name, globalfilter.CompareOpSymbol(next.Op), value))
 }
 
 func sameStringFilter(a, b *globalfilter.StringFilter) bool {
@@ -1007,25 +1007,6 @@ func sameNumericFilter(a, b *globalfilter.NumericFilter) bool {
 		return a == nil && b == nil
 	}
 	return a.Op == b.Op && a.Value == b.Value
-}
-
-func compareOpSymbol(op globalfilter.CompareOp) string {
-	switch op {
-	case globalfilter.OpEq:
-		return "="
-	case globalfilter.OpNeq:
-		return "!="
-	case globalfilter.OpGt:
-		return ">"
-	case globalfilter.OpGte:
-		return ">="
-	case globalfilter.OpLt:
-		return "<"
-	case globalfilter.OpLte:
-		return "<="
-	default:
-		return "="
-	}
 }
 
 func (m *Model) stopTrace() {

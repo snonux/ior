@@ -202,7 +202,7 @@ func appendNumericSummary(parts []string, name string, nf *NumericFilter, durati
 	if duration {
 		value = time.Duration(nf.Value).String()
 	}
-	return append(parts, fmt.Sprintf("%s%s%s", name, compareOpSymbol(nf.Op), value))
+	return append(parts, fmt.Sprintf("%s%s%s", name, CompareOpSymbol(nf.Op), value))
 }
 
 func matchString(sf *StringFilter, value string) bool {
@@ -256,7 +256,8 @@ func matchNumeric(nf *NumericFilter, value int64) bool {
 	}
 }
 
-func compareOpSymbol(op CompareOp) string {
+// CompareOpSymbol returns the summary/render symbol for a numeric comparison operator.
+func CompareOpSymbol(op CompareOp) string {
 	switch op {
 	case OpEq:
 		return "="
