@@ -168,6 +168,26 @@ func TestFilterSummaryAndDurationParsing(t *testing.T) {
 	}
 }
 
+func TestCompareOpSymbol(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		op   CompareOp
+		want string
+	}{
+		{name: "eq", op: OpEq, want: "="},
+		{name: "neq", op: OpNeq, want: "!="},
+		{name: "gt", op: OpGt, want: ">"},
+		{name: "gte", op: OpGte, want: ">="},
+		{name: "lt", op: OpLt, want: "<"},
+		{name: "lte", op: OpLte, want: "<="},
+		{name: "unknown", op: CompareOp(99), want: "?"},
+	} {
+		if got := CompareOpSymbol(tc.op); got != tc.want {
+			t.Fatalf("%s: CompareOpSymbol(%v) = %q, want %q", tc.name, tc.op, got, tc.want)
+		}
+	}
+}
+
 func TestFilterEqual(t *testing.T) {
 	base := Filter{
 		Syscall:    &StringFilter{Pattern: "read"},
