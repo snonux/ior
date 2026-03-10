@@ -446,63 +446,32 @@ func (m *Model) handleProcessesSortKey(reverse bool) (bool, tea.Cmd) {
 }
 
 func (m *Model) reanchorSyscallsOffset(selectedName string) {
-	rows := m.sortedSyscallRows()
-	if len(rows) == 0 {
-		m.syscallsOffset = 0
-		return
-	}
-	if selectedName != "" {
-		if index, ok := findSyscallOffset(rows, selectedName); ok {
-			m.syscallsOffset = index
-			return
-		}
-	}
-	m.syscallsOffset = clampOffset(m.syscallsOffset, len(rows))
+	m.syscallsOffset = reanchorOffset(m.syscallsOffset, m.sortedSyscallRows(), selectedName, findSyscallOffset)
 }
 
 func (m *Model) reanchorFilesOffset(selectedPath string) {
-	rows := m.sortedFileRows()
-	if len(rows) == 0 {
-		m.filesOffset = 0
-		return
-	}
-	if selectedPath != "" {
-		if index, ok := findFileOffset(rows, selectedPath); ok {
-			m.filesOffset = index
-			return
-		}
-	}
-	m.filesOffset = clampOffset(m.filesOffset, len(rows))
+	m.filesOffset = reanchorOffset(m.filesOffset, m.sortedFileRows(), selectedPath, findFileOffset)
 }
 
 func (m *Model) reanchorFilesDirOffset(selectedDir string) {
-	rows := m.sortedDirRows()
-	if len(rows) == 0 {
-		m.filesDirOffset = 0
-		return
-	}
-	if selectedDir != "" {
-		if index, ok := findDirOffset(rows, selectedDir); ok {
-			m.filesDirOffset = index
-			return
-		}
-	}
-	m.filesDirOffset = clampOffset(m.filesDirOffset, len(rows))
+	m.filesDirOffset = reanchorOffset(m.filesDirOffset, m.sortedDirRows(), selectedDir, findDirOffset)
 }
 
 func (m *Model) reanchorProcessesOffset(selectedPID uint32) {
-	rows := m.sortedProcessTableRows()
+	m.processesOffset = reanchorOffset(m.processesOffset, m.sortedProcessTableRows(), selectedPID, findProcessOffset)
+}
+
+func reanchorOffset[T any, K comparable](current int, rows []T, selected K, find func([]T, K) (int, bool)) int {
 	if len(rows) == 0 {
-		m.processesOffset = 0
-		return
+		return 0
 	}
-	if selectedPID != 0 {
-		if index, ok := findProcessOffset(rows, selectedPID); ok {
-			m.processesOffset = index
-			return
+	var zero K
+	if selected != zero {
+		if index, ok := find(rows, selected); ok {
+			return index
 		}
 	}
-	m.processesOffset = clampOffset(m.processesOffset, len(rows))
+	return clampOffset(current, len(rows))
 }
 
 func (m Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
