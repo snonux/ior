@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bytes"
 	"strings"
 	"syscall"
 	"testing"
@@ -106,4 +107,46 @@ func TestFdFileDup(t *testing.T) {
 	if strings.Contains(duped.String(), "%(1,") {
 		t.Errorf("expected duped String() to NOT contain old fd 1, got '%s'", duped.String())
 	}
+}
+
+func TestParseFlagsFromFdInfo(t *testing.T) {
+	t.Run("valid flags", func(t *testing.T) {
+		flags, err := parseFlagsFromFdInfo([]byte("pos:\t0\nflags:\t0100002\nmnt_id:\t24\n"))
+		if err != nil {
+			t.Fatalf("parseFlagsFromFdInfo valid err = %v", err)
+		}
+		if flags != Flags(0o100002) {
+			t.Fatalf("parseFlagsFromFdInfo valid flags = %v, want %v", flags, Flags(0o100002))
+		}
+	})
+
+	t.Run("invalid octal", func(t *testing.T) {
+		flags, err := parseFlagsFromFdInfo([]byte("flags:\tnot-octal\n"))
+		if err == nil {
+			t.Fatalf("parseFlagsFromFdInfo invalid octal expected error")
+		}
+		if flags != 0 {
+			t.Fatalf("parseFlagsFromFdInfo invalid octal flags = %v, want 0", flags)
+		}
+	})
+
+	t.Run("missing flags", func(t *testing.T) {
+		flags, err := parseFlagsFromFdInfo([]byte("pos:\t0\nmnt_id:\t24\n"))
+		if err == nil {
+			t.Fatalf("parseFlagsFromFdInfo missing flags expected error")
+		}
+		if flags != unknownFlag {
+			t.Fatalf("parseFlagsFromFdInfo missing flags = %v, want %v", flags, unknownFlag)
+		}
+	})
+
+	t.Run("scanner error", func(t *testing.T) {
+		flags, err := parseFlagsFromFdInfo(bytes.Repeat([]byte("x"), 128*1024))
+		if err == nil {
+			t.Fatalf("parseFlagsFromFdInfo scanner error expected error")
+		}
+		if flags != unknownFlag {
+			t.Fatalf("parseFlagsFromFdInfo scanner error flags = %v, want %v", flags, unknownFlag)
+		}
+	})
 }
