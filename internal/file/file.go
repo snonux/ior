@@ -56,7 +56,12 @@ func NewFdWithPid(fd int32, pid uint32) *FdFile {
 		return f
 	}
 
-	f.flags, _ = readFlagsFromFdInfo(fd, pid)
+	flags, err := readFlagsFromFdInfo(fd, pid)
+	if err != nil {
+		f.flags = unknownFlag
+	} else {
+		f.flags = flags
+	}
 	f.flagsFromProcFS = true
 
 	return f
@@ -73,6 +78,10 @@ func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
 	if err != nil {
 		return unknownFlag, err
 	}
+	return parseFlagsFromFdInfo(data)
+}
+
+func parseFlagsFromFdInfo(data []byte) (Flags, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -82,7 +91,10 @@ func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
 			return Flags(flags), err
 		}
 	}
-	return unknownFlag, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return unknownFlag, err
+	}
+	return unknownFlag, fmt.Errorf("flags field not found in fdinfo")
 }
 
 func (f *FdFile) Name() string {
