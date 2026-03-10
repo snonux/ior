@@ -51,6 +51,11 @@ type libbpfTracepointModule struct {
 	module *bpf.Module
 }
 
+type streamEventSink interface {
+	eventstream.Source
+	Push(eventstream.StreamEvent)
+}
+
 func (m libbpfTracepointModule) GetProgram(progName string) (probemanager.Program, error) {
 	prog, err := m.module.GetProgram(progName)
 	if err != nil {
@@ -180,14 +185,20 @@ func tuiTraceStarterFromRunTrace(
 			applyTraceScopeFromGlobalFilter(&cfg, filter)
 		}
 		engine := statsengine.NewEngine(64)
-		streamBuf := eventstream.NewRingBuffer()
+		streamBuf := streamEventSink(eventstream.NewRingBuffer())
+		streamSource := eventstream.Source(streamBuf)
 		liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
 		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
 			if persistent := bindings.StreamBuffer(); persistent != nil {
-				streamBuf = persistent
+				streamSource = persistent
+				if sink, ok := persistent.(streamEventSink); ok {
+					streamBuf = sink
+				} else {
+					return fmt.Errorf("runtime stream source does not support event pushes")
+				}
 			}
 			bindings.SetDashboardSnapshotSource(engine)
-			bindings.SetEventStreamSource(streamBuf)
+			bindings.SetEventStreamSource(streamSource)
 			bindings.SetLiveTrie(liveTrie)
 		}
 		streamEvents := make(chan eventstream.StreamEvent, 4096)

@@ -36,6 +36,20 @@ func (f fakeProbeManager) States() []probemanager.ProbeState { return f.states }
 func (f fakeProbeManager) Toggle(string) error               { return nil }
 func (f fakeProbeManager) ActiveCount() (int, int)           { return len(f.states), len(f.states) }
 
+type testStreamSink interface {
+	eventstream.Source
+	Push(eventstream.StreamEvent)
+}
+
+func requireTestStreamSink(t *testing.T, source eventstream.Source) testStreamSink {
+	t.Helper()
+	sink, ok := source.(testStreamSink)
+	if !ok {
+		t.Fatalf("expected stream source to support Push, got %T", source)
+	}
+	return sink
+}
+
 func TestTraceFiltersContextRoundTripClonesPayload(t *testing.T) {
 	original := globalfilter.Filter{
 		Comm: &globalfilter.StringFilter{Pattern: "nginx"},
@@ -430,7 +444,7 @@ func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
 
 func TestRuntimeBindingsProvidePersistentStreamBuffer(t *testing.T) {
 	runtime := newRuntimeBindings()
-	buffer := runtime.StreamBuffer()
+	buffer := requireTestStreamSink(t, runtime.StreamBuffer())
 	if buffer == nil {
 		t.Fatalf("expected persistent stream buffer")
 	}
@@ -504,7 +518,7 @@ func TestGlobalFilterApplyPreservesBufferedStreamRowsAcrossRestart(t *testing.T)
 	m.width = 120
 	m.height = 30
 
-	buffer := m.runtime.StreamBuffer()
+	buffer := requireTestStreamSink(t, m.runtime.StreamBuffer())
 	buffer.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 1, TID: 1, FileName: "/tmp/read"})
 	buffer.Push(eventstream.StreamEvent{Seq: 2, Syscall: "write", Comm: "proc", PID: 1, TID: 2, FileName: "/tmp/write"})
 	m.dashboard.SetStreamSource(buffer)
@@ -840,7 +854,7 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 
 func TestPidSelectedClearsPersistentStreamBuffer(t *testing.T) {
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context) error { return nil })
-	m.runtime.StreamBuffer().Push(eventstream.StreamEvent{Seq: 1, Syscall: "read"})
+	requireTestStreamSink(t, m.runtime.StreamBuffer()).Push(eventstream.StreamEvent{Seq: 1, Syscall: "read"})
 
 	next, _ := m.Update(PidSelectedMsg{Pid: 42})
 	m = next.(Model)
@@ -1012,7 +1026,7 @@ func TestRunExportCmdCSVWritesFilteredStreamSnapshot(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 
-	buffer := m.runtime.StreamBuffer()
+	buffer := requireTestStreamSink(t, m.runtime.StreamBuffer())
 	buffer.Push(eventstream.StreamEvent{Seq: 1, Comm: "firefox", PID: 10, TID: 100, Syscall: "read", FileName: "/tmp/a"})
 	buffer.Push(eventstream.StreamEvent{Seq: 2, Comm: "bash", PID: 11, TID: 110, Syscall: "write", FileName: "/tmp/b"})
 	m.setGlobalFilter(globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "firefox"}})

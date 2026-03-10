@@ -63,7 +63,7 @@ type TraceRuntimeBindings interface {
 	SetEventStreamSource(source eventstream.Source)
 	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
 	SetProbeManager(manager ProbeManager)
-	StreamBuffer() *eventstream.RingBuffer
+	StreamBuffer() eventstream.Source
 }
 
 type runtimeBindingsContextKey struct{}
@@ -103,7 +103,7 @@ func (r *runtimeBindings) SetEventStreamSource(source eventstream.Source) {
 	r.mu.Unlock()
 }
 
-func (r *runtimeBindings) StreamBuffer() *eventstream.RingBuffer {
+func (r *runtimeBindings) StreamBuffer() eventstream.Source {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamBuffer
