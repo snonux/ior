@@ -39,33 +39,37 @@ type KeyMap struct {
 // Keys contains the default shared key map.
 var Keys = DefaultKeyMap()
 
+func keyBinding(desc string, keys ...string) key.Binding {
+	return key.NewBinding(key.WithKeys(keys...), key.WithHelp(keys[0], desc))
+}
+
 // DefaultKeyMap builds the default key bindings used by models.
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
-		Tab:         key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab")),
-		ShiftTab:    key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev tab")),
-		One:         key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "flame")),
-		Two:         key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "overview")),
-		Three:       key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "syscalls")),
-		Four:        key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "files")),
-		Five:        key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "processes")),
-		Six:         key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "lat+gaps")),
-		Seven:       key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "stream")),
-		Visualize:   key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "viz")),
-		Metric:      key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "metric")),
-		Sort:        key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort table")),
-		ReverseSort: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "reverse sort")),
-		DirGroup:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "dir group")),
-		SelectPID:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "select pid")),
-		SelectTID:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "select tid")),
-		Probes:      key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "probes")),
-		Filter:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
-		FilterUndo:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "undo filter")),
-		Export:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "stream export")),
-		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-		Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-		Esc:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset baseline")),
+		Tab:         keyBinding("next tab", "tab"),
+		ShiftTab:    keyBinding("prev tab", "shift+tab"),
+		One:         keyBinding("flame", "1"),
+		Two:         keyBinding("overview", "2"),
+		Three:       keyBinding("syscalls", "3"),
+		Four:        keyBinding("files", "4"),
+		Five:        keyBinding("processes", "5"),
+		Six:         keyBinding("lat+gaps", "6"),
+		Seven:       keyBinding("stream", "7"),
+		Visualize:   keyBinding("viz", "v"),
+		Metric:      keyBinding("metric", "b"),
+		Sort:        keyBinding("sort table", "s"),
+		ReverseSort: keyBinding("reverse sort", "S"),
+		DirGroup:    keyBinding("dir group", "d"),
+		SelectPID:   keyBinding("select pid", "p"),
+		SelectTID:   keyBinding("select tid", "t"),
+		Probes:      keyBinding("probes", "o"),
+		Filter:      keyBinding("filter", "f"),
+		FilterUndo:  keyBinding("undo filter", "F"),
+		Export:      keyBinding("stream export", "e"),
+		Quit:        keyBinding("quit", "q", "ctrl+c"),
+		Enter:       keyBinding("select", "enter"),
+		Esc:         keyBinding("back", "esc"),
+		Refresh:     keyBinding("reset baseline", "r"),
 	}
 }
 
