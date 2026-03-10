@@ -12,6 +12,19 @@ import (
 )
 
 // File is the common interface for file-like syscall payload representations.
+//
+// Implementations may represent either a live file descriptor-backed handle
+// (FdFile) or partial path metadata for syscalls that do not resolve to a
+// stable descriptor (for example rename-like or pathname-only events).
+//
+// Semantics:
+//   - Name returns the best single-path identifier for the event. For
+//     rename-like events this is the "new" path; for pathname-only events it is
+//     the observed pathname.
+//   - Flags returns open flags when known, otherwise unknownFlag.
+//   - FD returns the tracked file descriptor when one exists, otherwise -1.
+//   - String returns a human-readable representation suitable for TUI/CSV use
+//     and should remain informative even when Name or FD are unavailable.
 type File interface {
 	String() string
 	Name() string
