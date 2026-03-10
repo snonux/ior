@@ -2,6 +2,7 @@ package probemanager
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -19,10 +20,14 @@ type fakeProgram struct {
 	tracepoint string
 	link       *fakeLink
 	err        error
+	onAttach   func()
 }
 
 func (p *fakeProgram) AttachTracepoint(_, name string) (Link, error) {
 	p.tracepoint = name
+	if p.onAttach != nil {
+		p.onAttach()
+	}
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -238,5 +243,75 @@ func TestManagerIsActiveReflectsCurrentState(t *testing.T) {
 	}
 	if mgr.IsActive("does_not_exist") {
 		t.Fatalf("expected unknown syscall to be inactive")
+	}
+}
+
+func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
+	enterDestroyErr := errors.New("enter cleanup failed")
+	exitDestroyErr := errors.New("exit cleanup failed")
+	enter := &fakeLink{err: enterDestroyErr}
+	exit := &fakeLink{err: exitDestroyErr}
+
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": {link: enter},
+			"handle_sys_exit_close":  {link: exit},
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	attacher.programs["handle_sys_exit_close"].onAttach = func() {
+		if err := mgr.Close(); err != nil {
+			t.Fatalf("Close returned error during attach hook: %v", err)
+		}
+	}
+	mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
+
+	err := mgr.Attach("close")
+	if err == nil {
+		t.Fatalf("expected attach error when manager closes mid-attach")
+	}
+	if !strings.Contains(err.Error(), "probe manager is closed") {
+		t.Fatalf("expected close error in attach result, got %v", err)
+	}
+	if !errors.Is(err, enterDestroyErr) {
+		t.Fatalf("expected joined enter cleanup error, got %v", err)
+	}
+	if !errors.Is(err, exitDestroyErr) {
+		t.Fatalf("expected joined exit cleanup error, got %v", err)
+	}
+	if enter.destroyed != 1 || exit.destroyed != 1 {
+		t.Fatalf("expected both cleanup destroys to run once, got enter=%d exit=%d", enter.destroyed, exit.destroyed)
+	}
+}
+
+func TestAttachPairReturnsCleanupErrorWhenExitAttachFails(t *testing.T) {
+	enterDestroyErr := errors.New("enter cleanup failed")
+	exitAttachErr := errors.New("exit attach failed")
+	enter := &fakeLink{err: enterDestroyErr}
+
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": {link: enter},
+			"handle_sys_exit_close":  {err: exitAttachErr},
+		},
+		errs: map[string]error{},
+	}
+
+	enterLink, exitLink, err := attachPair(attacher, "sys_enter_close", "sys_exit_close")
+	if err == nil {
+		t.Fatalf("expected attachPair error")
+	}
+	if enterLink != nil || exitLink != nil {
+		t.Fatalf("expected failed attachPair to return nil links, got enter=%v exit=%v", enterLink, exitLink)
+	}
+	if !errors.Is(err, exitAttachErr) {
+		t.Fatalf("expected exit attach error in result, got %v", err)
+	}
+	if !errors.Is(err, enterDestroyErr) {
+		t.Fatalf("expected enter cleanup error in result, got %v", err)
+	}
+	if enter.destroyed != 1 {
+		t.Fatalf("expected enter link cleanup to run once, got %d", enter.destroyed)
 	}
 }
