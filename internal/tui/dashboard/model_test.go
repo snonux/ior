@@ -75,6 +75,15 @@ func TestFlameViewportClampsHeightWithExpandedHelp(t *testing.T) {
 	}
 }
 
+func TestSnapshotOrZeroReturnsZeroSnapshotWhenLatestMissing(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+
+	snap := m.snapshotOrZero()
+	if snap.SyscallsCount() != 0 || snap.FilesCount() != 0 || snap.ProcessesCount() != 0 {
+		t.Fatalf("snapshotOrZero() should return an empty snapshot when latest is nil, got counts %d/%d/%d", snap.SyscallsCount(), snap.FilesCount(), snap.ProcessesCount())
+	}
+}
+
 func TestKeySwitchingChangesActiveTab(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 
