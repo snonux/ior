@@ -150,13 +150,11 @@ func (m *Manager) Attach(syscall string) error {
 	defer m.mu.Unlock()
 	entry, err = m.entryLocked(syscall)
 	if err != nil {
-		if enterLink != nil {
-			_ = enterLink.Destroy()
-		}
-		if exitLink != nil {
-			_ = exitLink.Destroy()
-		}
-		return err
+		return errors.Join(
+			err,
+			destroyLink(fmt.Sprintf("cleanup enter %s", syscall), enterLink),
+			destroyLink(fmt.Sprintf("cleanup exit %s", syscall), exitLink),
+		)
 	}
 
 	if attachErr != nil {
@@ -373,12 +371,19 @@ func attachPair(attacher Attacher, enterTP, exitTP string) (Link, Link, error) {
 
 	exitLink, err := attachOne(attacher, exitTP)
 	if err != nil {
-		if enterLink != nil {
-			_ = enterLink.Destroy()
-		}
-		return nil, nil, err
+		return nil, nil, errors.Join(err, destroyLink("cleanup enter link after exit attach failure", enterLink))
 	}
 	return enterLink, exitLink, nil
+}
+
+func destroyLink(action string, link Link) error {
+	if link == nil {
+		return nil
+	}
+	if err := link.Destroy(); err != nil {
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	return nil
 }
 
 func attachOne(attacher Attacher, tracepoint string) (Link, error) {
