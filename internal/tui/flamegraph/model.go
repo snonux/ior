@@ -968,14 +968,18 @@ func keyMatchesDirection(keyName, plain string, ansiFinal byte) bool {
 }
 
 func isArrowEscapeSequence(value string, ansiFinal byte) bool {
-	if len(value) < 3 || value[0] != '\x1b' {
+	body, ok := strings.CutPrefix(value, "\x1b")
+	if !ok || len(body) < 2 {
 		return false
 	}
-	last := value[len(value)-1]
-	if last != ansiFinal {
+	switch body[0] {
+	case '[':
+		return body[len(body)-1] == ansiFinal
+	case 'O':
+		return len(body) == 2 && body[1] == ansiFinal
+	default:
 		return false
 	}
-	return value[1] == '[' || value[1] == 'O'
 }
 
 func (m Model) visibleRowOffset() int {

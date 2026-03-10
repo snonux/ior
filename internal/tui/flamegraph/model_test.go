@@ -612,6 +612,25 @@ func TestArrowEscapeSequencesAreRecognized(t *testing.T) {
 	}
 }
 
+func TestArrowEscapeSequencesRejectMalformedValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		ansiCode byte
+	}{
+		{name: "missing escape", key: "up", ansiCode: 'A'},
+		{name: "too short", key: "\x1b[", ansiCode: 'A'},
+		{name: "wrong final", key: "\x1b[A", ansiCode: 'B'},
+		{name: "unsupported introducer", key: "\x1bPA", ansiCode: 'A'},
+		{name: "application mode with extra payload", key: "\x1bO1A", ansiCode: 'A'},
+	}
+	for _, tc := range tests {
+		if isArrowEscapeSequence(tc.key, tc.ansiCode) {
+			t.Fatalf("expected %s sequence %q to be rejected", tc.name, tc.key)
+		}
+	}
+}
+
 func TestFilteredNavigationSkipsHiddenBranches(t *testing.T) {
 	m := NewModel(nil)
 	m.frames = []tuiFrame{
