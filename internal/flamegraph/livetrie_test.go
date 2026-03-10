@@ -48,6 +48,23 @@ func TestLiveTrieIngestIsAdditive(t *testing.T) {
 	}
 }
 
+func TestLiveTrieIngestCopiesBeforeRecycle(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path"}, "count")
+
+	pair := newTestPair("svc", 42, 1001, "/tmp/a", 1, 2, 3)
+	lt.Ingest(pair)
+	pair.Recycle()
+
+	snap := decodeLiveSnapshot(t, lt)
+	leaf := findSnapshotPath(t, &snap, "svc", "/tmp", "/a")
+	if got, want := leaf.Value, uint64(1); got != want {
+		t.Fatalf("leaf value after recycle = %d, want %d", got, want)
+	}
+	if got, want := leaf.Total, uint64(1); got != want {
+		t.Fatalf("leaf total after recycle = %d, want %d", got, want)
+	}
+}
+
 func TestLiveTrieCommTracepointPathAggregatesSameSyscallAcrossPaths(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
 	lt.AddRecord(IterRecord{

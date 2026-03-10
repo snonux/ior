@@ -211,6 +211,8 @@ func tuiTraceStarterFromRunTrace(
 					engine.Ingest(ep)
 					streamEvents <- eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep)
 					liveTrie.Ingest(ep)
+					// Both downstream consumers snapshot the pair synchronously, so
+					// the pooled pair can be recycled immediately afterwards.
 					ep.Recycle()
 				}
 				el.warningCb = func(message string) {
