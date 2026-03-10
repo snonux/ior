@@ -6,10 +6,7 @@ import (
 )
 
 func MatchPair(filter Filter, pair *event.Pair) bool {
-	if pair == nil {
-		return false
-	}
-	return filter.Matches(pairCandidate{pair: pair})
+	return filter.MatchPair(pair)
 }
 
 type pairCandidate struct {

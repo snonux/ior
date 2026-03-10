@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"ior/internal/event"
+	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
 
@@ -146,7 +147,11 @@ func TestProcessRawEventMalformedKnownTypeDoesNotPanicAndNotifies(t *testing.T) 
 }
 
 func TestTracepointEnteredMissingCommWithCommFilterNotifies(t *testing.T) {
-	el := mustNewEventLoop(t, eventLoopConfig{commFilter: "system"})
+	el := mustNewEventLoop(t, eventLoopConfig{
+		filter: globalfilter.Filter{
+			Comm: &globalfilter.StringFilter{Pattern: "system"},
+		},
+	})
 	warnings := make(chan string, 1)
 	el.warningCb = func(message string) { warnings <- message }
 

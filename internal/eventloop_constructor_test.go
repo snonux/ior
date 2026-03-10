@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
 
@@ -19,17 +20,25 @@ func mustNewEventLoop(tb testing.TB, cfg eventLoopConfig) *eventLoop {
 	return el
 }
 
-func TestNewEventFilterRejectsTooLongCommFilter(t *testing.T) {
+func TestNewEventLoopRejectsTooLongCommFilter(t *testing.T) {
 	tooLong := strings.Repeat("a", types.MAX_PROGNAME_LENGTH+1)
-	_, err := newEventFilter(tooLong, "")
+	_, err := newEventLoop(eventLoopConfig{
+		filter: globalfilter.Filter{
+			Comm: &globalfilter.StringFilter{Pattern: tooLong},
+		},
+	})
 	if err == nil {
 		t.Fatalf("expected error for comm filter longer than %d", types.MAX_PROGNAME_LENGTH)
 	}
 }
 
-func TestNewEventFilterRejectsTooLongPathFilter(t *testing.T) {
+func TestNewEventLoopRejectsTooLongPathFilter(t *testing.T) {
 	tooLong := strings.Repeat("a", types.MAX_FILENAME_LENGTH+1)
-	_, err := newEventFilter("", tooLong)
+	_, err := newEventLoop(eventLoopConfig{
+		filter: globalfilter.Filter{
+			File: &globalfilter.StringFilter{Pattern: tooLong},
+		},
+	})
 	if err == nil {
 		t.Fatalf("expected error for path filter longer than %d", types.MAX_FILENAME_LENGTH)
 	}
@@ -37,7 +46,11 @@ func TestNewEventFilterRejectsTooLongPathFilter(t *testing.T) {
 
 func TestNewEventLoopPropagatesFilterError(t *testing.T) {
 	tooLong := strings.Repeat("a", types.MAX_PROGNAME_LENGTH+1)
-	_, err := newEventLoop(eventLoopConfig{commFilter: tooLong})
+	_, err := newEventLoop(eventLoopConfig{
+		filter: globalfilter.Filter{
+			Comm: &globalfilter.StringFilter{Pattern: tooLong},
+		},
+	})
 	if err == nil {
 		t.Fatalf("expected newEventLoop to propagate invalid filter error")
 	}

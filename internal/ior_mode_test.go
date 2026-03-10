@@ -461,11 +461,17 @@ func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
 	if gotCfg.TidFilter != 3333 {
 		t.Fatalf("expected tid filter from context, got %d", gotCfg.TidFilter)
 	}
-	if gotCfg.CommFilter != "nginx" {
-		t.Fatalf("expected comm filter from context, got %q", gotCfg.CommFilter)
+	if gotCfg.CommFilter != "" {
+		t.Fatalf("expected legacy comm filter to remain unused, got %q", gotCfg.CommFilter)
 	}
-	if gotCfg.PathFilter != "/var/log" {
-		t.Fatalf("expected path filter from context, got %q", gotCfg.PathFilter)
+	if gotCfg.PathFilter != "" {
+		t.Fatalf("expected legacy path filter to remain unused, got %q", gotCfg.PathFilter)
+	}
+	if gotCfg.GlobalFilter.Comm == nil || gotCfg.GlobalFilter.Comm.Pattern != "nginx" {
+		t.Fatalf("expected comm preserved in global filter payload, got %+v", gotCfg.GlobalFilter.Comm)
+	}
+	if gotCfg.GlobalFilter.File == nil || gotCfg.GlobalFilter.File.Pattern != "/var/log" {
+		t.Fatalf("expected file preserved in global filter payload, got %+v", gotCfg.GlobalFilter.File)
 	}
 	if gotCfg.GlobalFilter.Syscall == nil || gotCfg.GlobalFilter.Syscall.Pattern != "read" {
 		t.Fatalf("expected syscall preserved in global filter payload, got %+v", gotCfg.GlobalFilter.Syscall)

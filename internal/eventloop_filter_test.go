@@ -8,6 +8,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
 
@@ -449,9 +450,7 @@ func TestCommFilterToggle(t *testing.T) {
 
 		// Create eventloop without comm filter
 		el := &eventLoop{
-			filter: &eventFilter{
-				commFilterEnable: false,
-			},
+			filter:        globalfilter.Filter{},
 			enterEvs:      make(map[uint32]*event.Pair),
 			fdTracker:     newFDTracker(make(map[int32]file.File)),
 			commResolver:  newCommResolver(make(map[uint32]string)),
@@ -493,10 +492,8 @@ func TestCommFilterToggle(t *testing.T) {
 
 		// Create eventloop with comm filter enabled
 		el := &eventLoop{
-			filter: &eventFilter{
-				commFilterEnable: true,
-				commFilter:       "test",
-				commFilterBytes:  []byte("test"),
+			filter: globalfilter.Filter{
+				Comm: &globalfilter.StringFilter{Pattern: "test"},
 			},
 			enterEvs:      make(map[uint32]*event.Pair),
 			fdTracker:     newFDTracker(make(map[int32]file.File)),
@@ -532,14 +529,7 @@ func TestCommFilterToggle(t *testing.T) {
 
 func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 	el := &eventLoop{
-		filter: &eventFilter{
-			commFilterEnable: commFilter != "",
-			commFilter:       commFilter,
-			commFilterBytes:  []byte(commFilter),
-			pathFilterEnable: pathFilter != "",
-			pathFilter:       pathFilter,
-			pathFilterBytes:  []byte(pathFilter),
-		},
+		filter:        testFilter(commFilter, pathFilter),
 		enterEvs:      make(map[uint32]*event.Pair),
 		fdTracker:     newFDTracker(make(map[int32]file.File)),
 		commResolver:  newCommResolver(make(map[uint32]string)),
@@ -549,4 +539,15 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 		done:          make(chan struct{}),
 	}
 	return el
+}
+
+func testFilter(commFilter, pathFilter string) globalfilter.Filter {
+	filter := globalfilter.Filter{}
+	if commFilter != "" {
+		filter.Comm = &globalfilter.StringFilter{Pattern: commFilter}
+	}
+	if pathFilter != "" {
+		filter.File = &globalfilter.StringFilter{Pattern: pathFilter}
+	}
+	return filter
 }
