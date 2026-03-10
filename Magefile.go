@@ -89,6 +89,14 @@ func Test() error {
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-failfast", "-timeout=90m")
 }
 
+// TestRace runs the full test suite with the race detector enabled.
+func TestRace() error {
+	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
+		return err
+	}
+	return sh.RunWithV(goEnv(), "go", "test", "./...", "-race", "-failfast", "-timeout=90m")
+}
+
 // TestWithName runs a specific test by name.
 func TestWithName() error {
 	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
