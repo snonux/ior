@@ -1056,6 +1056,22 @@ func TestDataRefreshAnimationConvergesOverTicks(t *testing.T) {
 	}
 }
 
+func TestAnimationCmdFollowsAnimatingState(t *testing.T) {
+	m := NewModel(nil)
+	if cmd := m.AnimationCmd(); cmd != nil {
+		t.Fatalf("expected no animation command when model is idle")
+	}
+
+	m.animating = true
+	cmd := m.AnimationCmd()
+	if cmd == nil {
+		t.Fatalf("expected animation command when model is animating")
+	}
+	if _, ok := cmd().(animTickMsg); !ok {
+		t.Fatalf("expected animation command to emit animTickMsg")
+	}
+}
+
 func TestRebuildKeepsSelectionOnVisibleRowsWhenTruncated(t *testing.T) {
 	m := NewModel(nil)
 	m.width = 80

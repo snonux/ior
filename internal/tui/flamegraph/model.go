@@ -172,18 +172,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.frames = m.animation.CurrentFrames()
 		m.clampSelection()
 		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
-		if m.animating {
-			return m, animTickCmd()
-		}
-		return m, nil
+		return m, m.animationTickCmd()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.rebuildFrames(true)
-		if m.animating {
-			return m, animTickCmd()
-		}
-		return m, nil
+		return m, m.animationTickCmd()
 	case tea.MouseClickMsg:
 		_ = m.handleMouseClick(msg)
 		return m, nil
@@ -430,10 +424,7 @@ func (m Model) HasSnapshot() bool {
 
 // AnimationCmd returns a frame animation tick command when animation is active.
 func (m Model) AnimationCmd() tea.Cmd {
-	if !m.animating {
-		return nil
-	}
-	return animTickCmd()
+	return m.animationTickCmd()
 }
 
 // Paused reports whether live refresh is paused.
@@ -771,7 +762,10 @@ func abs(v int) int {
 	return v
 }
 
-func animTickCmd() tea.Cmd {
+func (m Model) animationTickCmd() tea.Cmd {
+	if !m.animating {
+		return nil
+	}
 	return tea.Tick(animFrameDuration, func(time.Time) tea.Msg { return animTickMsg{} })
 }
 
