@@ -172,7 +172,7 @@ Undo:
 
 - `x`: quick export filtered stream rows to CSV (`ior-stream-<timestamp>.csv`).
 - `X`: export filtered stream rows to CSV with filename prompt.
-- `E`: open last stream-exported CSV in foreground editor (`SUDO_EDITOR` -> `VISUAL` -> `EDITOR` -> fallback `vi`).
+- `E`: open last stream-exported CSV in foreground editor (`EDITOR` -> `VISUAL` -> `SUDO_EDITOR` -> fallback `hx`, else `vi`).
 
 Export behavior:
 

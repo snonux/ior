@@ -138,7 +138,7 @@ func EditorCommandForPath(path string) (*exec.Cmd, error) {
 }
 
 func resolveEditorCommand() ([]string, string, error) {
-	candidates := []string{"SUDO_EDITOR", "VISUAL", "EDITOR"}
+	candidates := []string{"EDITOR", "VISUAL", "SUDO_EDITOR"}
 	for _, key := range candidates {
 		value := strings.TrimSpace(os.Getenv(key))
 		if value == "" {
@@ -150,5 +150,12 @@ func resolveEditorCommand() ([]string, string, error) {
 		}
 		return parts, key, nil
 	}
-	return []string{"vi"}, "fallback", nil
+	return []string{fallbackEditor()}, "fallback", nil
+}
+
+func fallbackEditor() string {
+	if _, err := exec.LookPath("hx"); err == nil {
+		return "hx"
+	}
+	return "vi"
 }
