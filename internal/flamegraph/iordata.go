@@ -144,19 +144,27 @@ func (iod iorData) serializeToFile(flamegraphName string) (retErr error) {
 	return nil
 }
 
-func (iod *iorData) loadFromFile(filename string) error {
+func (iod *iorData) loadFromFile(filename string) (retErr error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return err
+		return fmt.Errorf("open %s: %w", filename, err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close file %s: %w", filename, err))
+		}
+	}()
 
 	decoder := zstd.NewReader(file)
-	defer decoder.Close()
+	defer func() {
+		if err := decoder.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close zstd reader for %s: %w", filename, err))
+		}
+	}()
 
 	var records map[recordKey]Counter
 	if err := gob.NewDecoder(decoder).Decode(&records); err != nil {
-		return err
+		return fmt.Errorf("decode ior records from %s: %w", filename, err)
 	}
 	if records == nil {
 		records = make(map[recordKey]Counter)

@@ -3,6 +3,8 @@ package flamegraph
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -325,6 +327,22 @@ func TestSerializeToFileHostnameErrorReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "get hostname") {
 		t.Fatalf("Expected get hostname context, got %v", err)
+	}
+}
+
+func TestLoadFromFileCorruptDataReturnsContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corrupt.ior.zst")
+	if err := os.WriteFile(path, []byte("not-a-valid-zstd-stream"), 0o600); err != nil {
+		t.Fatalf("write corrupt file: %v", err)
+	}
+
+	iod := newIorData()
+	err := iod.loadFromFile(path)
+	if err == nil {
+		t.Fatal("Expected corrupt file to return an error")
+	}
+	if !strings.Contains(err.Error(), "decode ior records from") {
+		t.Fatalf("Expected decode context, got %v", err)
 	}
 }
 
