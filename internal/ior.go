@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	appconfig "ior/internal/config"
 	"ior/internal/event"
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
@@ -201,7 +202,7 @@ func tuiTraceStarterFromRunTrace(
 			bindings.SetEventStreamSource(streamSource)
 			bindings.SetLiveTrie(liveTrie)
 		}
-		streamEvents := make(chan eventstream.StreamEvent, 4096)
+		streamEvents := make(chan eventstream.StreamEvent, appconfig.DefaultChannelBufferSize)
 
 		go func() {
 			for ev := range streamEvents {
@@ -372,8 +373,7 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 }
 
 func setupEventChannel(bpfModule *bpf.Module) (chan []byte, error) {
-	// 4096 channel size minimizes event drops.
-	ch := make(chan []byte, 4096)
+	ch := make(chan []byte, appconfig.DefaultChannelBufferSize)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
 		return nil, err
