@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -1210,9 +1211,13 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 	e.commState().queueLookup(tid)
 }
 
+func procTidPathPrefix(tid uint32) string {
+	return "/proc/" + strconv.FormatUint(uint64(tid), 10)
+}
+
 func resolveCommFromProc(tid uint32) string {
-	commPath := fmt.Sprintf("/proc/%d/comm", tid)
-	if data, err := os.ReadFile(commPath); err == nil {
+	procPath := procTidPathPrefix(tid)
+	if data, err := os.ReadFile(procPath + "/comm"); err == nil {
 		comm := string(data)
 		if len(comm) > 0 && comm[len(comm)-1] == '\n' {
 			comm = comm[:len(comm)-1]
@@ -1221,7 +1226,7 @@ func resolveCommFromProc(tid uint32) string {
 			return comm
 		}
 	}
-	if linkName, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", tid)); err == nil {
+	if linkName, err := os.Readlink(procPath + "/exe"); err == nil {
 		linkName = filepath.Base(linkName)
 		return linkName
 	}

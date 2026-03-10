@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestProcTidPathPrefix(t *testing.T) {
+	if got, want := procTidPathPrefix(42), "/proc/42"; got != want {
+		t.Fatalf("procTidPathPrefix() = %q, want %q", got, want)
+	}
+}
+
 func TestSeedTrackedPidCommCachesTrackedPidComm(t *testing.T) {
 	pid := uint32(os.Getpid())
 	want := resolveCommFromProc(pid)
