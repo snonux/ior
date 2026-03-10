@@ -57,30 +57,30 @@ type Filter struct {
 
 func (f Filter) Clone() Filter {
 	out := f
-	out.Syscall = cloneStringFilter(f.Syscall)
-	out.Comm = cloneStringFilter(f.Comm)
-	out.File = cloneStringFilter(f.File)
-	out.PID = cloneNumericFilter(f.PID)
-	out.TID = cloneNumericFilter(f.TID)
-	out.FD = cloneNumericFilter(f.FD)
-	out.LatencyNs = cloneNumericFilter(f.LatencyNs)
-	out.GapNs = cloneNumericFilter(f.GapNs)
-	out.Bytes = cloneNumericFilter(f.Bytes)
-	out.RetVal = cloneNumericFilter(f.RetVal)
+	out.Syscall = cloneFilter(f.Syscall)
+	out.Comm = cloneFilter(f.Comm)
+	out.File = cloneFilter(f.File)
+	out.PID = cloneFilter(f.PID)
+	out.TID = cloneFilter(f.TID)
+	out.FD = cloneFilter(f.FD)
+	out.LatencyNs = cloneFilter(f.LatencyNs)
+	out.GapNs = cloneFilter(f.GapNs)
+	out.Bytes = cloneFilter(f.Bytes)
+	out.RetVal = cloneFilter(f.RetVal)
 	return out
 }
 
 func (f Filter) Equal(other Filter) bool {
-	return sameStringFilter(f.Syscall, other.Syscall) &&
-		sameStringFilter(f.Comm, other.Comm) &&
-		sameStringFilter(f.File, other.File) &&
-		sameNumericFilter(f.PID, other.PID) &&
-		sameNumericFilter(f.TID, other.TID) &&
-		sameNumericFilter(f.FD, other.FD) &&
-		sameNumericFilter(f.LatencyNs, other.LatencyNs) &&
-		sameNumericFilter(f.GapNs, other.GapNs) &&
-		sameNumericFilter(f.Bytes, other.Bytes) &&
-		sameNumericFilter(f.RetVal, other.RetVal) &&
+	return sameFilter(f.Syscall, other.Syscall) &&
+		sameFilter(f.Comm, other.Comm) &&
+		sameFilter(f.File, other.File) &&
+		sameFilter(f.PID, other.PID) &&
+		sameFilter(f.TID, other.TID) &&
+		sameFilter(f.FD, other.FD) &&
+		sameFilter(f.LatencyNs, other.LatencyNs) &&
+		sameFilter(f.GapNs, other.GapNs) &&
+		sameFilter(f.Bytes, other.Bytes) &&
+		sameFilter(f.RetVal, other.RetVal) &&
 		f.ErrorsOnly == other.ErrorsOnly
 }
 
@@ -276,7 +276,7 @@ func CompareOpSymbol(op CompareOp) string {
 	}
 }
 
-func cloneStringFilter(in *StringFilter) *StringFilter {
+func cloneFilter[T any](in *T) *T {
 	if in == nil {
 		return nil
 	}
@@ -284,33 +284,14 @@ func cloneStringFilter(in *StringFilter) *StringFilter {
 	return &out
 }
 
-func cloneNumericFilter(in *NumericFilter) *NumericFilter {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
-}
-
-func sameStringFilter(left, right *StringFilter) bool {
+func sameFilter[T comparable](left, right *T) bool {
 	switch {
 	case left == nil && right == nil:
 		return true
 	case left == nil || right == nil:
 		return false
 	default:
-		return left.Pattern == right.Pattern
-	}
-}
-
-func sameNumericFilter(left, right *NumericFilter) bool {
-	switch {
-	case left == nil && right == nil:
-		return true
-	case left == nil || right == nil:
-		return false
-	default:
-		return left.Op == right.Op && left.Value == right.Value
+		return *left == *right
 	}
 }
 
