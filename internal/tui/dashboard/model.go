@@ -362,10 +362,7 @@ func (m Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
 }
 
 func (m Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
-	if m.latest == nil {
-		return nil
-	}
-	return sortedSyscallSnapshots(m.latest.Syscalls(), m.syscallsSort)
+	return sortedSyscallSnapshots(m.snapshotOrZero().Syscalls(), m.syscallsSort)
 }
 
 func (m Model) selectedSyscallName() string {
@@ -511,10 +508,7 @@ func (m Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
 }
 
 func (m Model) sortedFileRows() []statsengine.FileSnapshot {
-	if m.latest == nil {
-		return nil
-	}
-	return sortedFileSnapshots(m.latest.Files(), m.filesSort)
+	return sortedFileSnapshots(m.snapshotOrZero().Files(), m.filesSort)
 }
 
 func (m Model) selectedFilePath() string {
@@ -535,10 +529,7 @@ func (m Model) selectedDirSnapshot() (DirSnapshot, bool) {
 }
 
 func (m Model) sortedDirRows() []DirSnapshot {
-	if m.latest == nil {
-		return nil
-	}
-	return sortedDirSnapshots(aggregateFilesByDir(m.latest.Files()), m.filesDirSort)
+	return sortedDirSnapshots(aggregateFilesByDir(m.snapshotOrZero().Files()), m.filesDirSort)
 }
 
 func (m Model) selectedDirPath() string {
@@ -651,10 +642,7 @@ func (m Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 }
 
 func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
-	if m.latest == nil {
-		return statsengine.ProcessSnapshot{}, false
-	}
-	rows := m.latest.Processes()
+	rows := m.snapshotOrZero().Processes()
 	if len(rows) == 0 {
 		return statsengine.ProcessSnapshot{}, false
 	}
@@ -670,10 +658,7 @@ func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 }
 
 func (m Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
-	if m.latest == nil {
-		return nil
-	}
-	return sortedProcessTableRows(m.latest.Processes(), m.processesSort)
+	return sortedProcessTableRows(m.snapshotOrZero().Processes(), m.processesSort)
 }
 
 func (m Model) selectedProcessPID() uint32 {
@@ -854,24 +839,15 @@ func (m *Model) clampTableColumns() {
 }
 
 func (m Model) maxSyscallsRows() int {
-	if m.latest == nil {
-		return 0
-	}
-	return m.latest.SyscallsCount()
+	return m.snapshotOrZero().SyscallsCount()
 }
 
 func (m Model) maxFilesRows() int {
-	if m.latest == nil {
-		return 0
-	}
-	return m.latest.FilesCount()
+	return m.snapshotOrZero().FilesCount()
 }
 
 func (m Model) maxFilesDirRows() int {
-	if m.latest == nil {
-		return 0
-	}
-	return len(aggregateFilesByDir(m.latest.Files()))
+	return len(aggregateFilesByDir(m.snapshotOrZero().Files()))
 }
 
 func (m Model) maxFilesDirRowsForMode() int {
@@ -883,10 +859,7 @@ func (m Model) maxFilesDirRowsForMode() int {
 }
 
 func (m Model) maxProcessesRows() int {
-	if m.latest == nil {
-		return 0
-	}
-	return m.latest.ProcessesCount()
+	return m.snapshotOrZero().ProcessesCount()
 }
 
 func (m Model) snapshot() *statsengine.Snapshot {
@@ -894,6 +867,13 @@ func (m Model) snapshot() *statsengine.Snapshot {
 		return nil
 	}
 	return m.engine.Snapshot()
+}
+
+func (m Model) snapshotOrZero() statsengine.Snapshot {
+	if m.latest == nil {
+		return statsengine.Snapshot{}
+	}
+	return *m.latest
 }
 
 func (m *Model) resetBaselineCmd() tea.Cmd {
