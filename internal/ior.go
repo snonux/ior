@@ -177,7 +177,7 @@ func tuiTraceStarterFromRunTrace(
 		cfg := baseCfg
 		if filter, ok := tui.TraceFiltersFromContext(ctx); ok {
 			cfg.GlobalFilter = filter.Clone()
-			applyTraceFilterConfig(&cfg, filter)
+			applyTraceScopeFromGlobalFilter(&cfg, filter)
 		}
 		engine := statsengine.NewEngine(64)
 		streamBuf := eventstream.NewRingBuffer()
@@ -243,24 +243,15 @@ func shouldIngestTracePair(filter globalfilter.Filter, pair *event.Pair) bool {
 	if !filter.IsActive() {
 		return true
 	}
-	return globalfilter.MatchPair(filter, pair)
+	return filter.MatchPair(pair)
 }
 
-func applyTraceFilterConfig(cfg *flags.Config, filter globalfilter.Filter) {
+func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filter) {
 	if cfg == nil {
 		return
 	}
-	cfg.CommFilter = ""
-	cfg.PathFilter = ""
 	cfg.PidFilter = -1
 	cfg.TidFilter = -1
-
-	if filter.Comm != nil {
-		cfg.CommFilter = filter.Comm.Pattern
-	}
-	if filter.File != nil {
-		cfg.PathFilter = filter.File.Pattern
-	}
 	if pid, ok := eqFilterValue(filter.PID); ok {
 		cfg.PidFilter = pid
 	}
@@ -285,13 +276,32 @@ func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	copy(fields, cfg.CollapsedFields)
 	return eventLoopConfig{
 		pidFilter:       cfg.PidFilter,
-		commFilter:      cfg.CommFilter,
-		pathFilter:      cfg.PathFilter,
+		filter:          traceFilterFromConfig(cfg),
 		collapsedFields: fields,
 		countField:      cfg.CountField,
 		pprofEnable:     cfg.PprofEnable,
 		plainMode:       cfg.PlainMode,
 	}
+}
+
+func traceFilterFromConfig(cfg flags.Config) globalfilter.Filter {
+	filter := cfg.GlobalFilter.Clone()
+	if filter.IsActive() {
+		return filter
+	}
+	if cfg.CommFilter != "" {
+		filter.Comm = &globalfilter.StringFilter{Pattern: cfg.CommFilter}
+	}
+	if cfg.PathFilter != "" {
+		filter.File = &globalfilter.StringFilter{Pattern: cfg.PathFilter}
+	}
+	if cfg.PidFilter > 0 {
+		filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(cfg.PidFilter)}
+	}
+	if cfg.TidFilter > 0 {
+		filter.TID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(cfg.TidFilter)}
+	}
+	return filter
 }
 
 type profilingControl struct {

@@ -14,6 +14,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
 
@@ -26,8 +27,7 @@ const (
 
 type eventLoopConfig struct {
 	pidFilter       int
-	commFilter      string
-	pathFilter      string
+	filter          globalfilter.Filter
 	collapsedFields []string
 	countField      string
 	pprofEnable     bool
@@ -241,7 +241,7 @@ type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
 type tracepointExitHandler func(ep *event.Pair) bool
 
 type eventLoop struct {
-	filter         *eventFilter
+	filter         globalfilter.Filter
 	enterEvs       map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
 	pendingHandles map[uint32]string      // map of TID to pathname from name_to_handle_at
 	fdTracker      *fdTracker
@@ -266,13 +266,12 @@ type eventLoop struct {
 func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	fdState := configuredFDTracker(cfg.fdTracker)
 	commState := configuredCommResolver(cfg.commResolver)
-	filter, err := newEventFilter(cfg.commFilter, cfg.pathFilter)
-	if err != nil {
+	if err := cfg.filter.ValidateTracepointFields(); err != nil {
 		return nil, fmt.Errorf("create event filter: %w", err)
 	}
 
 	el := &eventLoop{
-		filter:         filter,
+		filter:         cfg.filter.Clone(),
 		enterEvs:       make(map[uint32]*event.Pair),
 		pendingHandles: make(map[uint32]string),
 		fdTracker:      fdState,
@@ -480,8 +479,8 @@ func (e *eventLoop) initRawHandlers() {
 			e.dropMalformedRawEvent(types.ENTER_OPEN_EVENT, raw)
 			return
 		}
-		if ev, ok := e.filter.openEvent(openEv); ok {
-			e.tracepointEntered(ev)
+		if e.filter.MatchOpenEvent(openEv) {
+			e.tracepointEntered(openEv)
 		}
 	}
 	e.rawHandlers[types.EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
@@ -538,8 +537,8 @@ func (e *eventLoop) initRawHandlers() {
 			e.dropMalformedRawEvent(types.ENTER_NAME_EVENT, raw)
 			return
 		}
-		if ev, ok := e.filter.nameEvent(nameEv); ok {
-			e.tracepointEntered(ev)
+		if e.filter.MatchNameEvent(nameEv) {
+			e.tracepointEntered(nameEv)
 		}
 	}
 	e.rawHandlers[types.ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
@@ -548,8 +547,8 @@ func (e *eventLoop) initRawHandlers() {
 			e.dropMalformedRawEvent(types.ENTER_PATH_EVENT, raw)
 			return
 		}
-		if ev, ok := e.filter.pathEvent(pathEv); ok {
-			e.tracepointEntered(ev)
+		if e.filter.MatchPathEvent(pathEv) {
+			e.tracepointEntered(pathEv)
 		}
 	}
 	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
@@ -582,7 +581,7 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	tid := enterEv.GetTid()
 	// Schedule comm lookup as early as possible to reduce races for short-lived processes.
 	e.queueCommLookup(tid)
-	if !e.filter.commFilterEnable {
+	if !e.filter.UsesCommFilter() {
 		e.enterEvs[tid] = event.NewPair(enterEv)
 		return
 	}
@@ -797,7 +796,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 		}
 	}
 	ep.Comm = e.comm(fdEv.GetTid())
-	if !e.filter.eventPair(ep) {
+	if !e.filter.MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}
@@ -838,7 +837,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 	fd := int32(dup3Ev.Fd)
 	ep.File = e.resolveFdFile(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
-	if !e.filter.eventPair(ep) {
+	if !e.filter.MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}
@@ -914,7 +913,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 		}
 	}
 	ep.Comm = e.comm(nullEv.GetTid())
-	if !e.filter.eventPair(ep) {
+	if !e.filter.MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}
@@ -925,7 +924,7 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) b
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.resolveFdFile(fd, fcntlEv.Pid)
-	if !e.filter.eventPair(ep) {
+	if !e.filter.MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}
