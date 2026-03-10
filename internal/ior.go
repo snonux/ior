@@ -308,31 +308,38 @@ func newLogger(verbose bool) func(...any) {
 	return func(args ...any) { _, _ = fmt.Println(args...) }
 }
 
+func setupBPFModuleError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("setup BPF module: %s: %w", stage, err)
+}
+
 func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *probemanager.Manager, func(), error) {
 	releaseBindings := func() {}
 
 	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
 	if err != nil {
-		return nil, nil, releaseBindings, err
+		return nil, nil, releaseBindings, setupBPFModuleError("load module from file", err)
 	}
 	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
 		bpfModule.Close()
-		return nil, nil, releaseBindings, err
+		return nil, nil, releaseBindings, setupBPFModuleError("resize maps", err)
 	}
 	if err := setBPFGlobals(cfg, bpfModule); err != nil {
 		bpfModule.Close()
-		return nil, nil, releaseBindings, err
+		return nil, nil, releaseBindings, setupBPFModuleError("set globals", err)
 	}
 	if err := bpfModule.BPFLoadObject(); err != nil {
 		bpfModule.Close()
-		return nil, nil, releaseBindings, err
+		return nil, nil, releaseBindings, setupBPFModuleError("load object", err)
 	}
 
 	mgr := probemanager.NewManager(libbpfTracepointModule{module: bpfModule})
 	if err := mgr.AttachAll(cfg.ShouldIAttachTracepoint, tracepoints.List); err != nil {
 		mgr.Close()
 		bpfModule.Close()
-		return nil, nil, releaseBindings, err
+		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)
 	}
 	if bindings, ok := tui.RuntimeBindingsFromContext(parentCtx); ok {
 		bindings.SetProbeManager(mgr)
