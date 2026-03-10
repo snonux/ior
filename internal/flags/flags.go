@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ior/internal/collapse"
+	appconfig "ior/internal/config"
 	"ior/internal/globalfilter"
 )
 
@@ -56,7 +57,7 @@ func NewFlags() Config {
 	return Config{
 		PidFilter:       -1,
 		TidFilter:       -1,
-		EventMapSize:    4096 * 16,
+		EventMapSize:    appconfig.DefaultEventMapSize,
 		Duration:        900,
 		LiveInterval:    200 * time.Millisecond,
 		TUIExportEnable: true,
