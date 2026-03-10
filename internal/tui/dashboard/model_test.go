@@ -56,6 +56,25 @@ func firstLineContaining(value, needle string) string {
 	return ""
 }
 
+func TestStreamViewportUsesSharedChromeCalculator(t *testing.T) {
+	wantWidth, wantHeight := common.EffectiveViewport(120, 40)
+	wantHeight -= streamChromeRows
+
+	width, height := streamViewport(120, 40)
+	if width != wantWidth || height != wantHeight {
+		t.Fatalf("streamViewport() = %dx%d, want %dx%d", width, height, wantWidth, wantHeight)
+	}
+}
+
+func TestFlameViewportClampsHeightWithExpandedHelp(t *testing.T) {
+	wantWidth, _ := common.EffectiveViewport(80, 2)
+
+	width, height := flameViewport(80, 2, true)
+	if width != wantWidth || height != 1 {
+		t.Fatalf("flameViewport() = %dx%d, want %dx%d", width, height, wantWidth, 1)
+	}
+}
+
 func TestKeySwitchingChangesActiveTab(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 

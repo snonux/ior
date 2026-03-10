@@ -1356,20 +1356,19 @@ func bubbleTickCmdFn() tea.Cmd {
 }
 
 func streamViewport(width, height int) (int, int) {
-	width, height = common.EffectiveViewport(width, height)
-	height -= streamChromeRows
-	if height < 1 {
-		height = 1
-	}
-	return width, height
+	return dashboardViewport(width, height, streamChromeRows)
 }
 
 func flameViewport(width, height int, showHelp bool) (int, int) {
-	width, height = common.EffectiveViewport(width, height)
 	chromeRows := dashboardTabBarRows + dashboardHelpHintRows
 	if showHelp {
 		chromeRows = dashboardTabBarRows + dashboardExpandedHelpRows
 	}
+	return dashboardViewport(width, height, chromeRows)
+}
+
+func dashboardViewport(width, height, chromeRows int) (int, int) {
+	width, height = common.EffectiveViewport(width, height)
 	height -= chromeRows
 	if height < 1 {
 		height = 1
