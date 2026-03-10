@@ -253,9 +253,18 @@ func BenchCompare() error {
 }
 
 // Generate regenerates all generated files.
+// If the environment variable IOR_FORCE_GENERATE=1 is set,
+// the C tracepoint generation will be forced even when it would cause a diff.
 func Generate() error {
 	fmt.Println("Generating tracepoint and type artifacts...")
-	mg.SerialDeps(GenerateTracepointsC, GenerateTracepointsGo, GenerateTypesGo)
+	forceEnv := os.Getenv("IOR_FORCE_GENERATE")
+	force := strings.EqualFold(forceEnv, "1") || strings.EqualFold(forceEnv, "yes") || forceEnv != ""
+	if force {
+		fmt.Println("Force generation enabled – ignoring diff checks.")
+		mg.SerialDeps(GenerateTracepointsCForce, GenerateTracepointsGo, GenerateTypesGo)
+	} else {
+		mg.SerialDeps(GenerateTracepointsC, GenerateTracepointsGo, GenerateTypesGo)
+	}
 	fmt.Println("Generation complete.")
 	return nil
 }
