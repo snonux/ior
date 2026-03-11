@@ -146,6 +146,67 @@ func TestProcessRawEventMalformedKnownTypeDoesNotPanicAndNotifies(t *testing.T) 
 	}
 }
 
+func TestDecodeRawEventMalformedNotifies(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	warnings := make(chan string, 1)
+	el.warningCb = func(message string) { warnings <- message }
+
+	decoded, ok := decodeRawEvent(el, types.ENTER_OPEN_EVENT, []byte{byte(types.ENTER_OPEN_EVENT)}, types.NewOpenEventFast)
+	if ok || decoded != nil {
+		t.Fatalf("expected malformed raw event decode to fail, got ok=%v decoded=%v", ok, decoded)
+	}
+
+	select {
+	case msg := <-warnings:
+		if msg == "" {
+			t.Fatalf("expected non-empty warning message")
+		}
+	default:
+		t.Fatalf("expected warning notification")
+	}
+}
+
+func TestMustBeTypeReturnsTypedEnterEvent(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	enterEv, enterRaw := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	ep := event.NewPair(types.NewOpenEvent(enterRaw))
+	defer ep.Recycle()
+
+	typed, ok := mustBeType[*types.OpenEvent](el, ep, "ignored")
+	if !ok {
+		t.Fatal("expected mustBeType to return the typed enter event")
+	}
+	if typed.GetTid() != enterEv.Tid {
+		t.Fatalf("mustBeType() returned tid %d, want %d", typed.GetTid(), enterEv.Tid)
+	}
+}
+
+func TestMustBeTypeRecyclesMalformedPairAndNotifies(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	warnings := make(chan string, 1)
+	el.warningCb = func(message string) { warnings <- message }
+
+	_, enterRaw := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_SYNC)
+	ep := event.NewPair(types.NewNullEvent(enterRaw))
+
+	typed, ok := mustBeType[*types.OpenEvent](el, ep, "Dropped malformed open enter event")
+	if ok || typed != nil {
+		t.Fatalf("expected mustBeType mismatch to fail, got ok=%v typed=%v", ok, typed)
+	}
+	if ep.EnterEv != nil || ep.ExitEv != nil {
+		t.Fatalf("expected malformed pair to be recycled")
+	}
+
+	select {
+	case msg := <-warnings:
+		if msg != "Dropped malformed open enter event" {
+			t.Fatalf("unexpected warning %q", msg)
+		}
+	default:
+		t.Fatalf("expected warning notification")
+	}
+}
+
 func TestTracepointEnteredMissingCommWithCommFilterNotifies(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{
 		filter: globalfilter.Filter{
