@@ -486,9 +486,8 @@ func (e *eventLoop) initRawHandlers() {
 	}
 
 	e.rawHandlers[types.ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		openEv := types.NewOpenEventFast(raw)
-		if openEv == nil {
-			e.dropMalformedRawEvent(types.ENTER_OPEN_EVENT, raw)
+		openEv, ok := decodeRawEvent(e, types.ENTER_OPEN_EVENT, raw, types.NewOpenEventFast)
+		if !ok {
 			return
 		}
 		if e.filter.MatchOpenEvent(openEv) {
@@ -496,57 +495,50 @@ func (e *eventLoop) initRawHandlers() {
 		}
 	}
 	e.rawHandlers[types.EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		retEv := types.NewRetEventFast(raw)
-		if retEv == nil {
-			e.dropMalformedRawEvent(types.EXIT_OPEN_EVENT, raw)
+		retEv, ok := decodeRawEvent(e, types.EXIT_OPEN_EVENT, raw, types.NewRetEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointExited(retEv, ch)
 	}
 	e.rawHandlers[types.ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		fdEv := types.NewFdEventFast(raw)
-		if fdEv == nil {
-			e.dropMalformedRawEvent(types.ENTER_FD_EVENT, raw)
+		fdEv, ok := decodeRawEvent(e, types.ENTER_FD_EVENT, raw, types.NewFdEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointEntered(fdEv)
 	}
 	e.rawHandlers[types.EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		fdEv := types.NewFdEventFast(raw)
-		if fdEv == nil {
-			e.dropMalformedRawEvent(types.EXIT_FD_EVENT, raw)
+		fdEv, ok := decodeRawEvent(e, types.EXIT_FD_EVENT, raw, types.NewFdEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointExited(fdEv, ch)
 	}
 	e.rawHandlers[types.ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		nullEv := types.NewNullEventFast(raw)
-		if nullEv == nil {
-			e.dropMalformedRawEvent(types.ENTER_NULL_EVENT, raw)
+		nullEv, ok := decodeRawEvent(e, types.ENTER_NULL_EVENT, raw, types.NewNullEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointEntered(nullEv)
 	}
 	e.rawHandlers[types.EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		nullEv := types.NewNullEventFast(raw)
-		if nullEv == nil {
-			e.dropMalformedRawEvent(types.EXIT_NULL_EVENT, raw)
+		nullEv, ok := decodeRawEvent(e, types.EXIT_NULL_EVENT, raw, types.NewNullEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointExited(nullEv, ch)
 	}
 	e.rawHandlers[types.EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		retEv := types.NewRetEventFast(raw)
-		if retEv == nil {
-			e.dropMalformedRawEvent(types.EXIT_RET_EVENT, raw)
+		retEv, ok := decodeRawEvent(e, types.EXIT_RET_EVENT, raw, types.NewRetEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointExited(retEv, ch)
 	}
 	e.rawHandlers[types.ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		nameEv := types.NewNameEventFast(raw)
-		if nameEv == nil {
-			e.dropMalformedRawEvent(types.ENTER_NAME_EVENT, raw)
+		nameEv, ok := decodeRawEvent(e, types.ENTER_NAME_EVENT, raw, types.NewNameEventFast)
+		if !ok {
 			return
 		}
 		if e.filter.MatchNameEvent(nameEv) {
@@ -554,9 +546,8 @@ func (e *eventLoop) initRawHandlers() {
 		}
 	}
 	e.rawHandlers[types.ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		pathEv := types.NewPathEventFast(raw)
-		if pathEv == nil {
-			e.dropMalformedRawEvent(types.ENTER_PATH_EVENT, raw)
+		pathEv, ok := decodeRawEvent(e, types.ENTER_PATH_EVENT, raw, types.NewPathEventFast)
+		if !ok {
 			return
 		}
 		if e.filter.MatchPathEvent(pathEv) {
@@ -564,29 +555,35 @@ func (e *eventLoop) initRawHandlers() {
 		}
 	}
 	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		fcntlEv := types.NewFcntlEventFast(raw)
-		if fcntlEv == nil {
-			e.dropMalformedRawEvent(types.ENTER_FCNTL_EVENT, raw)
+		fcntlEv, ok := decodeRawEvent(e, types.ENTER_FCNTL_EVENT, raw, types.NewFcntlEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointEntered(fcntlEv)
 	}
 	e.rawHandlers[types.ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		openByHandleEv := types.NewOpenByHandleAtEventFast(raw)
-		if openByHandleEv == nil {
-			e.dropMalformedRawEvent(types.ENTER_OPEN_BY_HANDLE_AT_EVENT, raw)
+		openByHandleEv, ok := decodeRawEvent(e, types.ENTER_OPEN_BY_HANDLE_AT_EVENT, raw, types.NewOpenByHandleAtEventFast)
+		if !ok {
 			return
 		}
 		e.tracepointEntered(openByHandleEv)
 	}
 	e.rawHandlers[types.ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		dup3Ev := types.NewDup3EventFast(raw)
-		if dup3Ev == nil {
-			e.dropMalformedRawEvent(types.ENTER_DUP3_EVENT, raw)
+		dup3Ev, ok := decodeRawEvent(e, types.ENTER_DUP3_EVENT, raw, types.NewDup3EventFast)
+		if !ok {
 			return
 		}
 		e.tracepointEntered(dup3Ev)
 	}
+}
+
+func decodeRawEvent[T any](e *eventLoop, eventType types.EventType, raw []byte, decode func([]byte) *T) (*T, bool) {
+	decoded := decode(raw)
+	if decoded == nil {
+		e.dropMalformedRawEvent(eventType, raw)
+		return nil, false
+	}
+	return decoded, true
 }
 
 func (e *eventLoop) tracepointEntered(enterEv event.Event) {
@@ -649,71 +646,40 @@ func (e *eventLoop) freezePairForEmission(ep *event.Pair) {
 
 func (e *eventLoop) initExitHandlers() {
 	e.exitHandlers = map[reflect.Type]tracepointExitHandler{
-		reflect.TypeOf(&types.OpenEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.OpenEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed open enter event")
-				return false
-			}
-			return e.handleOpenExit(ep, enterEv)
-		},
-		reflect.TypeOf(&types.NameEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.NameEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed name enter event")
-				return false
-			}
-			return e.handleNameExit(ep, enterEv)
-		},
-		reflect.TypeOf(&types.PathEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.PathEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed path enter event")
-				return false
-			}
-			return e.handlePathExit(ep, enterEv)
-		},
-		reflect.TypeOf(&types.FdEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.FdEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed fd enter event")
-				return false
-			}
-			return e.handleFdExit(ep, enterEv)
-		},
-		reflect.TypeOf(&types.Dup3Event{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.Dup3Event)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed dup3 enter event")
-				return false
-			}
-			return e.handleDup3Exit(ep, enterEv)
-		},
-		reflect.TypeOf(&types.OpenByHandleAtEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.OpenByHandleAtEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed open_by_handle_at enter event")
-				return false
-			}
-			return e.handleOpenByHandleAtExit(ep, enterEv)
-		},
-		reflect.TypeOf(&types.NullEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.NullEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed null enter event")
-				return false
-			}
-			return e.handleNullExit(ep, enterEv)
-		},
-		reflect.TypeOf(&types.FcntlEvent{}): func(ep *event.Pair) bool {
-			enterEv, ok := ep.EnterEv.(*types.FcntlEvent)
-			if !ok {
-				e.recyclePair(ep, "Dropped malformed fcntl enter event")
-				return false
-			}
-			return e.handleFcntlExit(ep, enterEv)
-		},
+		typeKey[*types.OpenEvent]():           newTypedExitHandler(e, "Dropped malformed open enter event", e.handleOpenExit),
+		typeKey[*types.NameEvent]():           newTypedExitHandler(e, "Dropped malformed name enter event", e.handleNameExit),
+		typeKey[*types.PathEvent]():           newTypedExitHandler(e, "Dropped malformed path enter event", e.handlePathExit),
+		typeKey[*types.FdEvent]():             newTypedExitHandler(e, "Dropped malformed fd enter event", e.handleFdExit),
+		typeKey[*types.Dup3Event]():           newTypedExitHandler(e, "Dropped malformed dup3 enter event", e.handleDup3Exit),
+		typeKey[*types.OpenByHandleAtEvent](): newTypedExitHandler(e, "Dropped malformed open_by_handle_at enter event", e.handleOpenByHandleAtExit),
+		typeKey[*types.NullEvent]():           newTypedExitHandler(e, "Dropped malformed null enter event", e.handleNullExit),
+		typeKey[*types.FcntlEvent]():          newTypedExitHandler(e, "Dropped malformed fcntl enter event", e.handleFcntlExit),
 	}
+}
+
+func mustBeType[T event.Event](e *eventLoop, ep *event.Pair, message string) (T, bool) {
+	enterEv, ok := ep.EnterEv.(T)
+	if !ok {
+		e.recyclePair(ep, message)
+		var zero T
+		return zero, false
+	}
+	return enterEv, true
+}
+
+func newTypedExitHandler[T event.Event](e *eventLoop, message string, handle func(*event.Pair, T) bool) tracepointExitHandler {
+	return func(ep *event.Pair) bool {
+		enterEv, ok := mustBeType[T](e, ep, message)
+		if !ok {
+			return false
+		}
+		return handle(ep, enterEv)
+	}
+}
+
+func typeKey[T any]() reflect.Type {
+	var zero T
+	return reflect.TypeOf(zero)
 }
 
 func (e *eventLoop) exitHandlerRegistry() map[reflect.Type]tracepointExitHandler {
