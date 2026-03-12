@@ -97,7 +97,7 @@ func TestNewStreamEventWithoutRetEvent(t *testing.T) {
 }
 
 func TestNewWarningEventPopulatesFields(t *testing.T) {
-	got := NewWarningEvent("Dropped malformed event")
+	got := NewWarningEvent(7, "Dropped malformed event")
 
 	if got.Syscall != "warning" {
 		t.Fatalf("Syscall = %q, want warning", got.Syscall)
@@ -117,7 +117,7 @@ func TestNewWarningEventPopulatesFields(t *testing.T) {
 	if !got.IsError {
 		t.Fatalf("IsError = false, want true")
 	}
-	if got.Seq == 0 || got.TimeNs == 0 {
-		t.Fatalf("Seq/TimeNs = %d/%d, want non-zero", got.Seq, got.TimeNs)
+	if got.Seq != 7 || got.TimeNs == 0 {
+		t.Fatalf("Seq/TimeNs = %d/%d, want 7/non-zero", got.Seq, got.TimeNs)
 	}
 }
