@@ -29,6 +29,7 @@ const (
 	binaryName           = "ior"
 	workloadBinaryName   = "ioworkload"
 	defaultLibbpfgoPath  = "../libbpfgo"
+	libbpfgoRequiredTag  = "v0.9.2-libbpf-1.5.1"
 	bpfSourcePath        = "internal/c/ior.bpf.c"
 	bpfObjectPath        = "internal/c/ior.bpf.o"
 	bpfOutputPath        = "ior.bpf.o"
@@ -519,6 +520,9 @@ func Prof() error {
 }
 
 func buildBPFObject() error {
+	if err := ensureLibbpfgoStaticToolchain(); err != nil {
+		return err
+	}
 	libbpfgo := libbpfgoPath()
 	includeDir := filepath.Join(libbpfgo, "output")
 	return sh.RunWithV(bpfEnv(), "clang", "-g", "-O2", "-Wall", "-fpie", "-target", "bpf",
@@ -527,6 +531,35 @@ func buildBPFObject() error {
 
 func bpfEnv() map[string]string {
 	return map[string]string{"CC": "clang"}
+}
+
+func ensureLibbpfgoStaticToolchain() error {
+	libbpfgo := libbpfgoPath()
+	requiredPaths := []string{
+		filepath.Join(libbpfgo, "output"),
+		filepath.Join(libbpfgo, "output", "libbpf", "libbpf.a"),
+		filepath.Join(libbpfgo, "selftest", "common"),
+	}
+	for _, path := range requiredPaths {
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("missing libbpfgo static toolchain path %s\n%s", path, libbpfgoSetupHint(libbpfgo))
+		} else {
+			return fmt.Errorf("stat %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func libbpfgoSetupHint(libbpfgo string) string {
+	return strings.Join([]string{
+		fmt.Sprintf("expected a local libbpfgo checkout at %s pinned to %s", libbpfgo, libbpfgoRequiredTag),
+		"rebuild the static toolchain with:",
+		fmt.Sprintf("  git -C %s checkout %s", libbpfgo, libbpfgoRequiredTag),
+		fmt.Sprintf("  git -C %s submodule update --init --recursive", libbpfgo),
+		fmt.Sprintf("  make -C %s libbpfgo-static", libbpfgo),
+	}, "\n")
 }
 
 func ensureBenchProfilesDir() error {
