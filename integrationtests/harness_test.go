@@ -178,3 +178,32 @@ func TestIorStartFailureCleansUpWorkload(t *testing.T) {
 		}
 	}
 }
+
+func TestStartIorPassesBPFObjectOverrideEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputDir := t.TempDir()
+	overridePath := filepath.Join(tmpDir, "fake.bpf.o")
+	iorBin := writeScript(t, tmpDir, "ior", `printf '%s' "$IOR_BPF_OBJECT" > "$PWD/override.txt"`)
+
+	h := TestHarness{
+		IorBinary: iorBin,
+		BpfObject: overridePath,
+		OutputDir: outputDir,
+	}
+
+	cmd, err := h.startIor(1234, "test", 5, nil)
+	if err != nil {
+		t.Fatalf("startIor returned error: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait for fake ior: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outputDir, "override.txt"))
+	if err != nil {
+		t.Fatalf("read override marker: %v", err)
+	}
+	if got, want := string(data), overridePath; got != want {
+		t.Fatalf("IOR_BPF_OBJECT = %q, want %q", got, want)
+	}
+}

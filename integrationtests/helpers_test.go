@@ -9,7 +9,6 @@ import (
 const (
 	iorBinaryDefault      = "../ior"
 	workloadBinaryDefault = "../ioworkload"
-	bpfObjectDefault      = "../ior.bpf.o"
 	defaultDuration       = 10
 	parallelEnvVar        = "IOR_INTEGRATION_PARALLEL"
 )
@@ -23,7 +22,6 @@ func newTestHarness(t *testing.T) TestHarness {
 	return TestHarness{
 		IorBinary:      absPath(t, iorBinaryDefault),
 		WorkloadBinary: absPath(t, workloadBinaryDefault),
-		BpfObject:      absPath(t, bpfObjectDefault),
 		OutputDir:      t.TempDir(),
 	}
 }

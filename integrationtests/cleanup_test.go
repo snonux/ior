@@ -80,8 +80,7 @@ func TestCleanupOutputDirContainsOnlyExpectedFiles(t *testing.T) {
 	for _, e := range entries {
 		name := e.Name()
 		validSuffix := strings.HasSuffix(name, ".ior.zst") ||
-			strings.HasSuffix(name, ".svg") ||
-			name == "ior.bpf.o" // symlink created by startIor
+			strings.HasSuffix(name, ".svg")
 		if !validSuffix {
 			t.Errorf("unexpected file in output dir: %s", name)
 		}
@@ -172,11 +171,8 @@ func TestCleanupOutputDirEmptyAfterIorFailure(t *testing.T) {
 		t.Fatalf("read output dir: %v", err)
 	}
 
-	// Only the BPF symlink should exist; ior produced no output.
-	for _, e := range entries {
-		if e.Name() != "ior.bpf.o" {
-			t.Errorf("unexpected file in output dir after ior failure: %s", e.Name())
-		}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty output dir after ior failure, found %d entries", len(entries))
 	}
 }
 
