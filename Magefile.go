@@ -70,19 +70,23 @@ func All() error {
 	return nil
 }
 
-// BpfBuild builds the BPF object and copies it to the repo root.
+// BpfBuild builds the embedded BPF object used by the Go binary.
 func BpfBuild() error {
 	if err := ensureVMLINUX(); err != nil {
 		return err
 	}
-	if err := buildBPFObject(); err != nil {
-		return err
-	}
+	return buildBPFObject()
+}
+
+// BpfExport copies the built BPF object to the repo root for debug workflows.
+func BpfExport() error {
+	mg.Deps(BpfBuild)
 	return sh.RunV("cp", "-v", bpfObjectPath, bpfOutputPath)
 }
 
 // Test runs the full test suite.
 func Test() error {
+	mg.Deps(BpfBuild)
 	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
 		return err
 	}
@@ -91,6 +95,7 @@ func Test() error {
 
 // TestRace runs the full test suite with the race detector enabled.
 func TestRace() error {
+	mg.Deps(BpfBuild)
 	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
 		return err
 	}
@@ -99,6 +104,7 @@ func TestRace() error {
 
 // TestWithName runs a specific test by name.
 func TestWithName() error {
+	mg.Deps(BpfBuild)
 	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
 		return err
 	}
@@ -132,6 +138,7 @@ func TestWithName() error {
 
 // Bench runs benchmarks.
 func Bench() error {
+	mg.Deps(BpfBuild)
 	if err := sh.RunWithV(goEnv(), "go", "test", "./...", "-v", "-bench=.", "-run", "xxx"); err != nil {
 		return err
 	}
@@ -150,6 +157,7 @@ func PrReview() error {
 
 // BenchProf runs pipeline benchmarks and writes timestamped pprof artifacts.
 func BenchProf() error {
+	mg.Deps(BpfBuild)
 	if err := ensureBenchProfilesDir(); err != nil {
 		return err
 	}
@@ -244,6 +252,7 @@ func BenchFlameCmp() error {
 
 // BenchCompare runs all benchmarks repeatedly and stores output for benchstat.
 func BenchCompare() error {
+	mg.Deps(BpfBuild)
 	if err := ensureBenchProfilesDir(); err != nil {
 		return err
 	}

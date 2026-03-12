@@ -342,9 +342,9 @@ func setupBPFModuleError(stage string, err error) error {
 func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *probemanager.Manager, func(), error) {
 	releaseBindings := func() {}
 
-	bpfModule, err := bpf.NewModuleFromFile("ior.bpf.o")
+	bpfModule, stage, err := loadBPFModule()
 	if err != nil {
-		return nil, nil, releaseBindings, setupBPFModuleError("load module from file", err)
+		return nil, nil, releaseBindings, setupBPFModuleError(stage, err)
 	}
 	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
 		bpfModule.Close()

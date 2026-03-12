@@ -15,6 +15,7 @@ import (
 const (
 	workloadStartupTimeout = 5 * time.Second
 	iorShutdownGrace       = 30 * time.Second
+	bpfObjectOverrideEnv   = "IOR_BPF_OBJECT"
 )
 
 // TestHarness orchestrates integration tests by starting an ior trace
@@ -22,7 +23,7 @@ const (
 type TestHarness struct {
 	IorBinary      string // path to built ior binary
 	WorkloadBinary string // path to built ioworkload binary
-	BpfObject      string // path to ior.bpf.o
+	BpfObject      string // optional path to external BPF object override
 	OutputDir      string // temp dir for .ior.zst output
 }
 
@@ -120,11 +121,6 @@ func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 }
 
 func (h *TestHarness) startIor(pid int, scenario string, duration int, extraArgs []string) (*exec.Cmd, error) {
-	bpfLink := filepath.Join(h.OutputDir, "ior.bpf.o")
-	if err := os.Symlink(h.BpfObject, bpfLink); err != nil {
-		return nil, fmt.Errorf("symlink bpf object: %w", err)
-	}
-
 	args := []string{
 		"-pid", strconv.Itoa(pid),
 		"-flamegraph",
@@ -136,6 +132,9 @@ func (h *TestHarness) startIor(pid int, scenario string, duration int, extraArgs
 	cmd.Dir = h.OutputDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if h.BpfObject != "" {
+		cmd.Env = append(os.Environ(), bpfObjectOverrideEnv+"="+h.BpfObject)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start ior: %w", err)

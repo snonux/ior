@@ -6,8 +6,11 @@ harness asserts the captured `.ior.zst` output matches expectations.
 
 ## Prerequisites
 
-- Built `ior` binary and `ior.bpf.o` (`mage all`)
+- Built `ior` binary (`mage all`)
 - Root privileges or `CAP_BPF` (required for BPF tracepoint attachment)
+
+The binary embeds its default BPF object. Set `IOR_BPF_OBJECT=/path/to/ior.bpf.o`
+only when you explicitly want to override the embedded object during testing.
 
 ## Running
 
