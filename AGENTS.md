@@ -12,20 +12,19 @@ git -C ../libbpfgo submodule update --init --recursive
 make -C ../libbpfgo libbpfgo-static
 ```
 
-If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), run `mage world` first. It bootstraps generation/dependencies and is the preferred first troubleshooting step before retrying `mage test` or `go test`.
+If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), rerun the commands above and then run `env GOTOOLCHAIN=auto mage world`. Prefer Mage targets over raw `go test` for packages that import `libbpfgo`; Mage wires the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
 
 ```bash
-mage all          # Build everything (BPF objects and Go binary)
-mage test         # Run all tests
-TEST_NAME=TestEventloop mage testWithName  # Run specific test
-go test ./internal -v                      # Run tests for internal package
-mage integrationTest                       # Build + run integration tests (default parallelism is capped)
-INTEGRATION_PARALLEL=1 mage integrationTest  # Force serial integration tests
-mage generate     # Generate code (required after modifying tracepoint definitions)
-mage bench        # Run benchmarks
-mage prReview     # Run PR review baseline: world + benchProf
-mage clean        # Clean build artifacts
-mage world        # Clean + generate + test + build (recommended reset path)
+env GOTOOLCHAIN=auto mage all          # Build everything (BPF objects and Go binary)
+env GOTOOLCHAIN=auto mage test         # Run all tests
+GOTOOLCHAIN=auto TEST_NAME=TestEventloop mage testWithName  # Run specific test
+env GOTOOLCHAIN=auto mage integrationTest  # Build + run integration tests (default parallelism is capped)
+GOTOOLCHAIN=auto INTEGRATION_PARALLEL=1 mage integrationTest  # Force serial integration tests
+env GOTOOLCHAIN=auto mage generate     # Generate code (required after modifying tracepoint definitions)
+env GOTOOLCHAIN=auto mage bench        # Run benchmarks
+env GOTOOLCHAIN=auto mage prReview     # Run PR review baseline: world + benchProf
+env GOTOOLCHAIN=auto mage clean        # Clean build artifacts
+env GOTOOLCHAIN=auto mage world        # Clean + generate + test + build (recommended reset path)
 ```
 
 ## Code Generation
@@ -75,3 +74,16 @@ Generator source code:
 - BPF C code in `/internal/c/ior.bpf.c` should be minimal for verification
 - Import style: `"ior/internal/packagename"` for internal packages
 - Error handling: Return errors, don't panic except for setup validation
+
+## Rollback
+
+If `v0.9.2-libbpf-1.5.1` stops working, roll the local checkout back to commit
+`90dbffffbdab` (module version
+`v0.6.0-libbpf-1.3.0.20240111220235-90dbffffbdab`), update `go.mod`/`go.sum`
+accordingly, and rebuild:
+
+```bash
+git -C ../libbpfgo checkout 90dbffffbdab
+git -C ../libbpfgo submodule update --init --recursive
+make -C ../libbpfgo libbpfgo-static
+```

@@ -31,6 +31,29 @@ git -C ../libbpfgo submodule update --init --recursive
 make -C ../libbpfgo libbpfgo-static
 ```
 
+Validated commands for this pin:
+
+```shell
+env GOTOOLCHAIN=auto mage world
+env GOTOOLCHAIN=auto mage integrationTest
+```
+
+Troubleshooting and rollback:
+
+- If builds fail with `bpf/bpf.h` missing, re-run the checkout, submodule sync,
+  and `make libbpfgo-static` commands above, then retry `env GOTOOLCHAIN=auto mage world`.
+- Prefer Mage targets over raw `go test` for packages that import `libbpfgo`;
+  Mage injects the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
+- To roll back to the previous wrapper state, repin `go.mod` to
+  `github.com/aquasecurity/libbpfgo v0.6.0-libbpf-1.3.0.20240111220235-90dbffffbdab`,
+  then reset the sibling checkout and rebuild:
+
+```shell
+git -C ../libbpfgo checkout 90dbffffbdab
+git -C ../libbpfgo submodule update --init --recursive
+make -C ../libbpfgo libbpfgo-static
+```
+
 ## Timing Semantics
 
 Each reported event pair has two timing counters:
