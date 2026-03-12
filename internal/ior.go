@@ -212,6 +212,7 @@ func tuiTraceStarterFromRunTrace(
 			bindings.SetLiveTrie(liveTrie)
 		}
 		streamEvents := make(chan eventstream.StreamEvent, appconfig.DefaultChannelBufferSize)
+		streamSeq := eventstream.NewSequencer(0)
 
 		go func() {
 			for ev := range streamEvents {
@@ -230,7 +231,7 @@ func tuiTraceStarterFromRunTrace(
 						return
 					}
 					engine.Ingest(ep)
-					streamEvents <- eventstream.NewStreamEvent(ep.EnterEv.GetTime(), ep)
+					streamEvents <- eventstream.NewStreamEvent(streamSeq.Next(), ep)
 					liveTrie.Ingest(ep)
 					// Both downstream consumers snapshot the pair synchronously, so
 					// the pooled pair can be recycled immediately afterwards.
@@ -239,7 +240,7 @@ func tuiTraceStarterFromRunTrace(
 				el.warningCb = func(message string) {
 					// Drop warning notifications if the stream channel is saturated.
 					select {
-					case streamEvents <- eventstream.NewWarningEvent(message):
+					case streamEvents <- eventstream.NewWarningEvent(streamSeq.Next(), message):
 					default:
 					}
 				}

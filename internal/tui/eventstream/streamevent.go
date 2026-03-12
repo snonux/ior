@@ -1,112 +1,25 @@
 package eventstream
 
 import (
-	"time"
-
 	"ior/internal/event"
-	"ior/internal/types"
+	"ior/internal/streamrow"
 )
 
-type StreamEvent struct {
-	Seq        uint64
-	TimeNs     uint64
-	Syscall    string
-	Comm       string
-	PID        uint32
-	TID        uint32
-	FileName   string
-	DurationNs uint64
-	GapNs      uint64
-	Bytes      uint64
-	RetVal     int64
-	IsError    bool
-	FD         int32
-}
-
-func (e StreamEvent) SyscallValue() string {
-	return e.Syscall
-}
-
-func (e StreamEvent) CommValue() string {
-	return e.Comm
-}
-
-func (e StreamEvent) FileValue() string {
-	return e.FileName
-}
-
-func (e StreamEvent) PIDValue() uint32 {
-	return e.PID
-}
-
-func (e StreamEvent) TIDValue() uint32 {
-	return e.TID
-}
-
-func (e StreamEvent) FDValue() int32 {
-	return e.FD
-}
-
-func (e StreamEvent) LatencyValue() uint64 {
-	return e.DurationNs
-}
-
-func (e StreamEvent) GapValue() uint64 {
-	return e.GapNs
-}
-
-func (e StreamEvent) BytesValue() uint64 {
-	return e.Bytes
-}
-
-func (e StreamEvent) ReturnValue() int64 {
-	return e.RetVal
-}
-
-func (e StreamEvent) ErrorValue() bool {
-	return e.IsError
-}
+type StreamEvent = streamrow.Row
+type Sequencer = streamrow.Sequencer
 
 // UnknownFD marks events that are not associated with a file descriptor.
-const UnknownFD int32 = -1
+const UnknownFD = streamrow.UnknownFD
+
+func NewSequencer(start uint64) *Sequencer {
+	return streamrow.NewSequencer(start)
+}
 
 func NewStreamEvent(seq uint64, pair *event.Pair) StreamEvent {
-	e := StreamEvent{
-		Seq:        seq,
-		TimeNs:     pair.EnterEv.GetTime(),
-		Syscall:    pair.EnterEv.GetTraceId().Name(),
-		Comm:       pair.Comm,
-		PID:        pair.EnterEv.GetPid(),
-		TID:        pair.EnterEv.GetTid(),
-		FileName:   pair.FileName(),
-		DurationNs: pair.Duration,
-		GapNs:      pair.DurationToPrev,
-		Bytes:      pair.Bytes,
-		FD:         UnknownFD,
-	}
-	if fd, ok := pair.FileDescriptor(); ok {
-		e.FD = fd
-	}
-
-	if retEv, ok := pair.ExitEv.(*types.RetEvent); ok {
-		e.RetVal = retEv.Ret
-		e.IsError = retEv.Ret < 0
-	}
-
-	return e
+	return streamrow.New(seq, pair)
 }
 
 // NewWarningEvent creates a synthetic stream row for non-fatal runtime warnings.
-func NewWarningEvent(message string) StreamEvent {
-	now := uint64(time.Now().UnixNano())
-	return StreamEvent{
-		Seq:      now,
-		TimeNs:   now,
-		Syscall:  "warning",
-		Comm:     "ior",
-		FileName: message,
-		FD:       UnknownFD,
-		RetVal:   -1,
-		IsError:  true,
-	}
+func NewWarningEvent(seq uint64, message string) StreamEvent {
+	return streamrow.NewWarning(seq, message)
 }
