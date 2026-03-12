@@ -73,6 +73,19 @@ func TestTraceFiltersContextRoundTripClonesPayload(t *testing.T) {
 	}
 }
 
+func TestRuntimeBindingsContextRoundTrip(t *testing.T) {
+	runtime := newRuntimeBindings()
+
+	ctx := ContextWithRuntimeBindings(context.Background(), runtime)
+	got, ok := RuntimeBindingsFromContext(ctx)
+	if !ok {
+		t.Fatalf("expected runtime bindings in context")
+	}
+	if got != runtime {
+		t.Fatalf("expected same runtime bindings instance from context")
+	}
+}
+
 func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	flags.SetPidFilter(-1)
 	flags.SetTidFilter(99)
@@ -466,6 +479,29 @@ func TestRuntimeBindingsProvidePersistentStreamBuffer(t *testing.T) {
 	}
 }
 
+func TestRuntimeBindingsProvidePersistentRecorderAndSequencer(t *testing.T) {
+	runtime := newRuntimeBindings()
+
+	recorder := runtime.Recorder()
+	if recorder == nil {
+		t.Fatalf("expected persistent recorder")
+	}
+	if got := runtime.Recorder(); got != recorder {
+		t.Fatalf("expected recorder pointer to remain stable")
+	}
+
+	seq := runtime.StreamSequencer()
+	if seq == nil {
+		t.Fatalf("expected persistent stream sequencer")
+	}
+	if got := seq.Next(); got != 1 {
+		t.Fatalf("first persistent sequence = %d, want 1", got)
+	}
+	if got := runtime.StreamSequencer().Next(); got != 2 {
+		t.Fatalf("second persistent sequence = %d, want 2", got)
+	}
+}
+
 func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 	src := &fakeResettableDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
 
@@ -559,6 +595,39 @@ func TestGlobalFilterApplyPreservesBufferedStreamRowsAcrossRestart(t *testing.T)
 	}
 	if strings.Contains(view, "write") {
 		t.Fatalf("expected non-matching historical row to be hidden after refilter, got %q", view)
+	}
+}
+
+func TestGlobalFilterApplyAdvancesRuntimeFilterEpochAndKeepsRecorder(t *testing.T) {
+	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	initialRecorder := m.runtime.Recorder()
+	if initialRecorder == nil {
+		t.Fatalf("expected runtime recorder")
+	}
+	if got := m.runtime.FilterEpoch(); got != 0 {
+		t.Fatalf("initial filter epoch = %d, want 0", got)
+	}
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	if got := m.runtime.FilterEpoch(); got != 1 {
+		t.Fatalf("filter epoch after apply = %d, want 1", got)
+	}
+	if got := m.runtime.Recorder(); got != initialRecorder {
+		t.Fatalf("expected runtime recorder to survive filter restart")
+	}
+	if !m.attaching {
+		t.Fatalf("expected filter apply to restart tracing")
 	}
 }
 

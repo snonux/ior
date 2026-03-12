@@ -8,10 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
+	"ior/internal/parquet"
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -64,6 +66,9 @@ type TraceRuntimeBindings interface {
 	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
 	SetProbeManager(manager ProbeManager)
 	StreamBuffer() eventstream.Source
+	Recorder() *parquet.Recorder
+	StreamSequencer() *eventstream.Sequencer
+	FilterEpoch() uint64
 }
 
 type runtimeBindingsContextKey struct{}
@@ -75,8 +80,11 @@ type runtimeBindings struct {
 	snapshotSource SnapshotSource
 	streamSource   eventstream.Source
 	streamBuffer   *eventstream.RingBuffer
+	streamSeq      *eventstream.Sequencer
+	recorder       *parquet.Recorder
 	liveTrieSource flamegraphtui.LiveTrieSource
 	probeManager   ProbeManager
+	filterEpoch    atomic.Uint64
 }
 
 type traceFilters struct {
@@ -88,6 +96,8 @@ func newRuntimeBindings() *runtimeBindings {
 	return &runtimeBindings{
 		streamSource: streamBuffer,
 		streamBuffer: streamBuffer,
+		streamSeq:    eventstream.NewSequencer(0),
+		recorder:     parquet.NewRecorder(parquet.RecorderConfig{}),
 	}
 }
 
@@ -107,6 +117,22 @@ func (r *runtimeBindings) StreamBuffer() eventstream.Source {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamBuffer
+}
+
+func (r *runtimeBindings) Recorder() *parquet.Recorder {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.recorder
+}
+
+func (r *runtimeBindings) StreamSequencer() *eventstream.Sequencer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.streamSeq
+}
+
+func (r *runtimeBindings) FilterEpoch() uint64 {
+	return r.filterEpoch.Load()
 }
 
 func (r *runtimeBindings) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
@@ -155,6 +181,10 @@ func (r *runtimeBindings) resetStreamBuffer() {
 	r.streamSource = r.streamBuffer
 }
 
+func (r *runtimeBindings) advanceFilterEpoch() uint64 {
+	return r.filterEpoch.Add(1)
+}
+
 func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 	src := r.dashboardSnapshotSource()
 	if src == nil {
@@ -173,11 +203,16 @@ func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 // RuntimeBindingsFromContext returns model-scoped trace bindings when the
 // context was created by the TUI.
 func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool) {
-	bindings, ok := ctx.Value(runtimeBindingsContextKey{}).(*runtimeBindings)
+	bindings, ok := ctx.Value(runtimeBindingsContextKey{}).(TraceRuntimeBindings)
 	if !ok || bindings == nil {
 		return nil, false
 	}
 	return bindings, true
+}
+
+// ContextWithRuntimeBindings stores trace runtime bindings on the context.
+func ContextWithRuntimeBindings(ctx context.Context, bindings TraceRuntimeBindings) context.Context {
+	return context.WithValue(ctx, runtimeBindingsContextKey{}, bindings)
 }
 
 // ContextWithTraceFilters stores the active trace filters for the trace starter.
@@ -724,7 +759,7 @@ func (m Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 func (m *Model) beginTraceCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.traceStop = cancel
-	ctx = context.WithValue(ctx, runtimeBindingsContextKey{}, m.runtime)
+	ctx = ContextWithRuntimeBindings(ctx, m.runtime)
 	ctx = ContextWithTraceFilters(ctx, m.globalFilter)
 	return startTraceCmd(m.startTrace, ctx)
 }
@@ -816,6 +851,7 @@ func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea
 		return m, nil
 	}
 
+	m.runtime.advanceFilterEpoch()
 	m.stopTrace()
 	m.dashboard.PrepareForTraceRestart()
 	m.attaching = true
@@ -837,6 +873,7 @@ func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	m.runtime.advanceFilterEpoch()
 	m.stopTrace()
 	m.dashboard.PrepareForTraceRestart()
 	m.attaching = true
