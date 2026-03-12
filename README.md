@@ -16,6 +16,21 @@ This works only on Linux!
 
 - Go 1.26 or newer (ior relies on cgo via libbpfgo).
 
+## Local libbpfgo Toolchain
+
+`ior` links against a locally built `libbpfgo` checkout. By default
+`Magefile.go` expects that checkout at `../libbpfgo` relative to this repo; set
+`LIBBPFGO=/absolute/path/to/libbpfgo` if you keep it elsewhere.
+
+Pin that checkout to `v0.9.2-libbpf-1.5.1` and rebuild the static artifacts
+before running `mage` targets:
+
+```shell
+git -C ../libbpfgo checkout v0.9.2-libbpf-1.5.1
+git -C ../libbpfgo submodule update --init --recursive
+make -C ../libbpfgo libbpfgo-static
+```
+
 ## Timing Semantics
 
 Each reported event pair has two timing counters:
@@ -35,13 +50,13 @@ Important details:
 To get this running on Fedora 42, run:
 
 ```shell
-mkdir ~/git
-git clone https://codeberg.org/snonux/ior
-git clone https://github.com/aquasecurity/libbpfgo
+mkdir -p ~/git
+git clone https://codeberg.org/snonux/ior ~/git/ior
+git clone https://github.com/aquasecurity/libbpfgo ~/git/libbpfgo
 sudo dnf install -y golang clang bpftool elfutils-libelf-devel zlib-static glibc-static libzstd-static
-cd libbpfgo
-make
-make libbpfgo-static
+git -C ~/git/libbpfgo checkout v0.9.2-libbpf-1.5.1
+git -C ~/git/libbpfgo submodule update --init --recursive
+make -C ~/git/libbpfgo libbpfgo-static
 ```
 
 Need libelf static, which isn't in any repos. So we need to compile it ourselves.
