@@ -9,15 +9,18 @@ runtime validation on that same tag.
 
 ## Current State
 
-- `go.mod` / `go.sum` are expected to pin
+- `go.mod` / `go.sum` now pin
   `github.com/aquasecurity/libbpfgo v0.9.2-libbpf-1.5.1`
 - `Magefile.go` defaults to the sibling checkout at `../libbpfgo` (local path:
-  `/home/paul/git/libbpfgo`) and should emit rebuild guidance if static
+  `/home/paul/git/libbpfgo`) and emits rebuild guidance if static
   artifacts are missing
 - The local checkout is currently ahead of the latest tag:
   `v0.9.2-libbpf-1.5.1-23-g9a319d2`
-- `README.md` / `AGENTS.md` should pin the tag, sync the `libbpf` submodule,
-  and document the static rebuild workflow explicitly
+- `README.md`, `AGENTS.md`, and `integrationtests/README.md` now pin the tag,
+  sync the `libbpf` submodule, and document the rebuild or validation workflow
+- Integration coverage now passes again after restoring the legacy
+  `-flamegraph` / `-name` compatibility path used by the harness to collect
+  `.ior.zst` artifacts
 
 ## Upgrade Target
 
@@ -31,12 +34,15 @@ runtime validation on that same tag.
 
 ## Pinned Source of Truth
 
-- `go.mod` / `go.sum` should pin `github.com/aquasecurity/libbpfgo
+- `go.mod` / `go.sum` pin `github.com/aquasecurity/libbpfgo
   v0.9.2-libbpf-1.5.1`
-- `README.md` and `AGENTS.md` should document the same checkout, tag, submodule,
-  and `make libbpfgo-static` workflow
-- `Magefile.go` should fail with explicit rebuild guidance when the local
+- `README.md`, `AGENTS.md`, and `integrationtests/README.md` document the same
+  checkout, tag, validation commands, and `make libbpfgo-static` workflow
+- `Magefile.go` fails with explicit rebuild guidance when the local
   `libbpfgo` checkout is missing the static artifacts that `ior` expects
+- `internal/ior.go` preserves the legacy `-flamegraph` / `-name` trace-output
+  path required by the integration harness while leaving TUI and `-plain`
+  behavior unchanged
 
 ## Breaking-Change Watchpoints
 
@@ -80,8 +86,8 @@ validation is still required.
      - any `probemanager` adapter code if signatures changed
 
 4. Validate behavior
-   - Run `mage world`
-   - Run root-required integration coverage
+   - Run `env GOTOOLCHAIN=auto mage world`
+   - Run root-required `env GOTOOLCHAIN=auto mage integrationTest`
    - Specifically verify:
      - embedded `ior.bpf.o` loading still works
      - tracepoint attach/detach still works
@@ -92,6 +98,41 @@ validation is still required.
    - Document the exact `libbpfgo` tag and rebuild commands
    - Mention the local checkout path used by `Magefile.go`
    - Add troubleshooting notes for submodule sync / static rebuild failures
+   - Record the rollback target: `go.mod` pseudo-version
+     `v0.6.0-libbpf-1.3.0.20240111220235-90dbffffbdab` plus local checkout
+     commit `90dbffffbdab`
+
+## Validation Result
+
+- `env GOTOOLCHAIN=auto mage world` passed after the pinning commit
+  `f28dab3`
+- `env GOTOOLCHAIN=auto mage integrationTest` passed after compatibility fix
+  commit `28338f4`
+- The embedded-object path is covered by
+  `env GOTOOLCHAIN=auto TEST_NAME=TestLoadBPFModuleUsesEmbeddedObjectByDefault mage testWithName`
+
+## Troubleshooting
+
+- Missing `bpf/bpf.h` or `libbpf` symbols usually means the sibling checkout is
+  not at `v0.9.2-libbpf-1.5.1` or was not rebuilt after a `git checkout`.
+- Raw `go test` can still fail for packages that import `libbpfgo` because it
+  does not inherit the `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values that
+  `Magefile.go` sets up. Use Mage targets for validated flows.
+- If integration tests fail immediately with unknown `-flamegraph` /
+  `-name` flags, rebuild `ior` from a checkout that includes commit `28338f4`.
+
+## Rollback
+
+If the tagged release proves insufficient, revert the `ior` side to
+`github.com/aquasecurity/libbpfgo
+v0.6.0-libbpf-1.3.0.20240111220235-90dbffffbdab`, reset the sibling checkout,
+and rebuild:
+
+```bash
+git -C /home/paul/git/libbpfgo checkout 90dbffffbdab
+git -C /home/paul/git/libbpfgo submodule update --init --recursive
+make -C /home/paul/git/libbpfgo libbpfgo-static
+```
 
 ## Validation Commands
 
