@@ -42,14 +42,16 @@ type Config struct {
 	TracepointsToExclude []*regexp.Regexp
 
 	// Output/runtime flags
-	PlainMode       bool
-	TestFlames      bool
-	TestLiveFlames  bool
-	LiveInterval    time.Duration
-	TUIExportEnable bool
-	CollapsedFields []string
-	CountField      string
-	GlobalFilter    globalfilter.Filter
+	PlainMode        bool
+	FlamegraphOutput bool
+	OutputName       string
+	TestFlames       bool
+	TestLiveFlames   bool
+	LiveInterval     time.Duration
+	TUIExportEnable  bool
+	CollapsedFields  []string
+	CountField       string
+	GlobalFilter     globalfilter.Filter
 }
 
 // NewFlags returns a configuration instance initialized with project defaults.
@@ -167,6 +169,8 @@ func parse() error {
 	tracepointsToExclude := flag.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
 	flag.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
+	flag.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
+	flag.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name for .ior.zst trace output files")
 	flag.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
 	flag.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")

@@ -91,8 +91,17 @@ func validateRunConfig(cfg flags.Config) error {
 	if cfg.TestFlames && cfg.PlainMode {
 		return errors.New("--testflames cannot be combined with -plain")
 	}
+	if cfg.TestFlames && cfg.FlamegraphOutput {
+		return errors.New("--testflames cannot be combined with -flamegraph")
+	}
 	if cfg.TestLiveFlames && cfg.PlainMode {
 		return errors.New("--testliveflames cannot be combined with -plain")
+	}
+	if cfg.TestLiveFlames && cfg.FlamegraphOutput {
+		return errors.New("--testliveflames cannot be combined with -flamegraph")
+	}
+	if cfg.PlainMode && cfg.FlamegraphOutput {
+		return errors.New("-plain and -flamegraph are mutually exclusive")
 	}
 	if cfg.TestFlames && cfg.TestLiveFlames {
 		return errors.New("--testflames and --testliveflames are mutually exclusive")
@@ -168,7 +177,7 @@ func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, 
 }
 
 func shouldRunTraceMode(cfg flags.Config) bool {
-	return cfg.PlainMode
+	return cfg.PlainMode || cfg.FlamegraphOutput
 }
 
 func tuiTraceStarterFromRunTrace(
@@ -525,6 +534,10 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 
 	verbose := started == nil
 	logln := newLogger(verbose)
+	var recorder *flamegraph.Recorder
+	if cfg.FlamegraphOutput {
+		recorder = flamegraph.NewRecorder(cfg.OutputName)
+	}
 
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg)
 	if err != nil {
@@ -553,6 +566,15 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	if err != nil {
 		return err
 	}
+	if recorder != nil {
+		recordOutput := func(el *eventLoop) {
+			el.printCb = func(ep *event.Pair) {
+				recorder.AddPair(ep)
+				ep.Recycle()
+			}
+		}
+		configure = chainEventLoopConfigure(recordOutput, configure)
+	}
 	configureEventLoopOutput(el, mgr, configure)
 	startTraceShutdownWatcher(ctx, verbose, el, profiling, logln)
 
@@ -560,8 +582,24 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	el.run(ctx, ch)
 	totalDuration := time.Since(startTime)
 	<-profiling.done
+	if recorder != nil {
+		if err := recorder.Write(); err != nil {
+			return err
+		}
+	}
 	logln("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
 	return nil
+}
+
+func chainEventLoopConfigure(fns ...func(*eventLoop)) func(*eventLoop) {
+	return func(el *eventLoop) {
+		for _, fn := range fns {
+			if fn == nil {
+				continue
+			}
+			fn(el)
+		}
+	}
 }
 
 func signalTraceStarted(started chan<- struct{}) {
@@ -572,7 +610,7 @@ func signalTraceStarted(started chan<- struct{}) {
 }
 
 func shouldAutoStopByDuration(cfg flags.Config) bool {
-	return cfg.PlainMode
+	return cfg.PlainMode || cfg.FlamegraphOutput
 }
 
 func profilingFilesForMode(tuiMode bool) (cpuProfilePath, memProfilePath, execTracePath string, execTraceDuration time.Duration) {

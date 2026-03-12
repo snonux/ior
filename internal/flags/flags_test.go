@@ -102,6 +102,19 @@ func TestParseTestLiveFlamesFlag(t *testing.T) {
 	}
 }
 
+func TestParseFlamegraphOutputFlags(t *testing.T) {
+	cfg, err := parseForTest(t, "--flamegraph", "--name", "scenario-run")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.FlamegraphOutput {
+		t.Fatalf("expected --flamegraph to enable .ior.zst output mode")
+	}
+	if got, want := cfg.OutputName, "scenario-run"; got != want {
+		t.Fatalf("output name = %q, want %q", got, want)
+	}
+}
+
 func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {
