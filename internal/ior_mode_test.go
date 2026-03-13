@@ -449,6 +449,22 @@ func TestValidateRunConfigRejectsParquetWithContentFilters(t *testing.T) {
 	}
 }
 
+func TestValidateRunConfigRejectsParquetWithGlobalFilter(t *testing.T) {
+	cfg := flags.Config{
+		ParquetPath: "trace.parquet",
+		GlobalFilter: globalfilter.Filter{
+			Syscall: &globalfilter.StringFilter{Pattern: "read"},
+		},
+	}
+	err := validateRunConfig(cfg)
+	if err == nil {
+		t.Fatalf("expected error for -parquet with global filter")
+	}
+	if err.Error() != "-parquet cannot be combined with content filters (-comm, -path, -pid, -tid)" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildTestFlamesRuntimeSeedsLiveTrie(t *testing.T) {
 	cfg := flags.NewFlags()
 	_, streamBuf, liveTrie := buildTestFlamesRuntime(cfg)
@@ -678,6 +694,50 @@ func TestHeadlessParquetTraceConfigClearsContentFilters(t *testing.T) {
 	}
 	if got.GlobalFilter.IsActive() {
 		t.Fatalf("expected sanitized global filter to be empty, got %+v", got.GlobalFilter)
+	}
+}
+
+func TestHeadlessParquetSinkRecordsRows(t *testing.T) {
+	recorder := parquet.NewRecorder(parquet.RecorderConfig{
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+	})
+	path := filepath.Join(t.TempDir(), "headless.parquet")
+	if err := recorder.Start(path, parquet.StartOptions{
+		Metadata: parquet.FileMetadata{Mode: "headless"},
+	}); err != nil {
+		t.Fatalf("recorder.Start() error = %v", err)
+	}
+
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sink := newHeadlessParquetSink(recorder, cancel)
+	el := &eventLoop{}
+	sink.configure(el)
+
+	el.printCb(testTracePair(1, "keep"))
+	el.printCb(testTracePair(2, "keep"))
+
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("recorder.Stop() error = %v", err)
+	}
+	if err := sink.err(); err != nil {
+		t.Fatalf("sink.err() = %v, want nil", err)
+	}
+
+	rows := readRecordedParquet(t, path)
+	if len(rows) != 2 {
+		t.Fatalf("recorded rows = %d, want 2", len(rows))
+	}
+	if rows[0].Seq != 1 || rows[1].Seq != 2 {
+		t.Fatalf("recorded seq = %d,%d, want 1,2", rows[0].Seq, rows[1].Seq)
+	}
+	if rows[0].FilterEpoch != 0 || rows[1].FilterEpoch != 0 {
+		t.Fatalf("recorded filter epochs = %d,%d, want 0,0", rows[0].FilterEpoch, rows[1].FilterEpoch)
+	}
+	if rows[0].Comm != "keep" || rows[1].Syscall != "openat" {
+		t.Fatalf("unexpected recorded rows: %+v %+v", rows[0], rows[1])
 	}
 }
 

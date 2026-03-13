@@ -722,6 +722,52 @@ func TestRecordKeyOpensRecordingModalOnDashboard(t *testing.T) {
 	}
 }
 
+func TestRecordModalSubmitStartsRecording(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	path := filepath.Join(t.TempDir(), "capture.parquet")
+	m.recordModal = m.recordModal.Open(path)
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated := next.(Model)
+	if updated.recordModal.Visible() {
+		t.Fatalf("expected recording modal to close after submit")
+	}
+	status := updated.runtime.Recorder().Status()
+	if !status.Active {
+		t.Fatalf("expected recorder to be active after modal submit")
+	}
+	t.Cleanup(func() {
+		if err := updated.stopRecording(); err != nil {
+			t.Fatalf("stopRecording() cleanup error = %v", err)
+		}
+	})
+	if status.Path != path {
+		t.Fatalf("recording path = %q, want %q", status.Path, path)
+	}
+}
+
+func TestRecordModalRejectsBlankFilename(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.recordModal = m.recordModal.Open("   ")
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated := next.(Model)
+	if !updated.recordModal.Visible() {
+		t.Fatalf("expected recording modal to stay open on blank filename")
+	}
+	if updated.runtime.Recorder().Status().Active {
+		t.Fatalf("expected blank filename submit not to start recorder")
+	}
+	if !strings.Contains(updated.recordModal.View(120, 30), "filename is required") {
+		t.Fatalf("expected blank filename error to be visible")
+	}
+}
+
 func TestStartRecordingUpdatesDashboardStatus(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
@@ -807,6 +853,43 @@ func TestSelectPIDStopsActiveRecording(t *testing.T) {
 	}
 	if updated.runtime.Recorder().Status().Active {
 		t.Fatalf("expected pid reselect to stop active recording")
+	}
+}
+
+func TestGlobalFilterApplyKeepsActiveRecordingAcrossRestart(t *testing.T) {
+	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	path := filepath.Join(t.TempDir(), "capture.parquet")
+	if err := m.startRecording(path); err != nil {
+		t.Fatalf("startRecording() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := m.stopRecording(); err != nil {
+			t.Fatalf("stopRecording() cleanup error = %v", err)
+		}
+	})
+
+	initialRecorder := m.runtime.Recorder()
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune("read")[0], Text: string([]rune("read"))})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(Model)
+
+	if got := m.runtime.FilterEpoch(); got != 1 {
+		t.Fatalf("filter epoch after apply = %d, want 1", got)
+	}
+	if got := m.runtime.Recorder(); got != initialRecorder {
+		t.Fatalf("expected runtime recorder to survive filter restart")
+	}
+	if !m.runtime.Recorder().Status().Active {
+		t.Fatalf("expected active recording to survive filter restart")
 	}
 }
 
