@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -706,6 +707,106 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	updated := next.(Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open on e key")
+	}
+}
+
+func TestRecordKeyOpensRecordingModalOnDashboard(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'R'}[0], Text: "R"})
+	updated := next.(Model)
+	if !updated.recordModal.Visible() {
+		t.Fatalf("expected recording modal to open on R key")
+	}
+}
+
+func TestStartRecordingUpdatesDashboardStatus(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 30
+
+	path := filepath.Join(t.TempDir(), "capture.parquet")
+	if err := m.startRecording(path); err != nil {
+		t.Fatalf("startRecording() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := m.stopRecording(); err != nil {
+			t.Fatalf("stopRecording() cleanup error = %v", err)
+		}
+	})
+
+	status := m.runtime.Recorder().Status()
+	if !status.Active {
+		t.Fatalf("expected recorder to be active after startRecording()")
+	}
+
+	view := m.View().Content
+	if !strings.Contains(view, "rec:") || !strings.Contains(view, "capture") {
+		t.Fatalf("expected dashboard view to show recording status, got %q", view)
+	}
+}
+
+func TestRecordKeyStopsActiveRecording(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	path := filepath.Join(t.TempDir(), "capture.parquet")
+	if err := m.startRecording(path); err != nil {
+		t.Fatalf("startRecording() error = %v", err)
+	}
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'R'}[0], Text: "R"})
+	updated := next.(Model)
+	if updated.runtime.Recorder().Status().Active {
+		t.Fatalf("expected R key to stop active recording")
+	}
+}
+
+func TestQuitStopsActiveRecording(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	path := filepath.Join(t.TempDir(), "capture.parquet")
+	if err := m.startRecording(path); err != nil {
+		t.Fatalf("startRecording() error = %v", err)
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: "q"})
+	updated := next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected quit command")
+	}
+	if updated.runtime.Recorder().Status().Active {
+		t.Fatalf("expected quit to stop active recording")
+	}
+}
+
+func TestSelectPIDStopsActiveRecording(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+
+	path := filepath.Join(t.TempDir(), "capture.parquet")
+	if err := m.startRecording(path); err != nil {
+		t.Fatalf("startRecording() error = %v", err)
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
+	updated := next.(Model)
+	if cmd == nil {
+		t.Fatalf("expected picker init command")
+	}
+	if updated.screen != ScreenPIDPicker {
+		t.Fatalf("expected p to switch to pid picker, got %v", updated.screen)
+	}
+	if updated.runtime.Recorder().Status().Active {
+		t.Fatalf("expected pid reselect to stop active recording")
 	}
 }
 

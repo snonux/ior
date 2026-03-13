@@ -49,7 +49,7 @@ type helpSection struct {
 func (m Model) helpSections() []helpSection {
 	globalLines := []string{
 		"H help  esc/? close help  q quit",
-		"f filter  p pid picker  t tid picker  o probes",
+		"f filter  p pid picker  t tid picker  o probes  R parquet rec",
 	}
 	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
 		globalLines[1] += "  e stream export"
@@ -63,7 +63,7 @@ func (m Model) helpSections() []helpSection {
 		{
 			title: "Dashboard Tabs",
 			lines: []string{
-				"tab/shift+tab tabs  1..7 jump tab  r reset baseline",
+				"tab/shift+tab tabs  1..7 jump tab  r reset baseline  R parquet rec",
 				"sys/files/proc/stream tables: arrows or hjkl move  pgup/pgdown page  g/G top/bottom",
 				"sys/files/proc tables: s sort  S reverse sort",
 				"sys/proc: v bubbles  b metric events/bytes",

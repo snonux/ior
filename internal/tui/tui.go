@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -270,6 +271,7 @@ type Model struct {
 	exporter    tuiexport.Model
 	probeModal  probes.Model
 	filterModal tracefilterui.Model
+	recordModal recordingModal
 	runtime     *runtimeBindings
 
 	keys KeyMap
@@ -359,6 +361,7 @@ func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter
 		exporter:      tuiexport.NewModel(),
 		probeModal:    probes.NewModel(runtime.currentProbeManager()).SetDarkMode(true),
 		filterModal:   tracefilterui.NewModel().SetDarkMode(true),
+		recordModal:   newRecordingModal().SetDarkMode(true),
 		runtime:       runtime,
 		keys:          keys,
 		spin:          spin,
@@ -460,6 +463,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
 		m.dashboard.SetGlobalFilter(m.globalFilter)
+		m.syncDashboardFilterState()
 		width, height := common.EffectiveViewport(m.width, m.height)
 		next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
 		m.dashboard = next.(dashboardui.Model)
@@ -491,6 +495,7 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 		m.lastErr == nil &&
 		!m.filterModal.Visible() &&
 		!m.exporter.Visible() &&
+		!m.recordModal.Visible() &&
 		!m.probeModal.Visible() &&
 		!m.dashboard.BlocksGlobalShortcuts(msg)
 }
@@ -501,6 +506,7 @@ func (m Model) canQuitFromMainDashboard(msg tea.KeyPressMsg) bool {
 		m.lastErr == nil &&
 		!m.filterModal.Visible() &&
 		!m.exporter.Visible() &&
+		!m.recordModal.Visible() &&
 		!m.probeModal.Visible() &&
 		!m.dashboard.BlocksGlobalShortcuts(msg)
 }
@@ -516,7 +522,7 @@ func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 		return false
 	}
 	return m.screen == ScreenDashboard &&
-		(m.filterModal.Visible() || m.exporter.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
+		(m.filterModal.Visible() || m.exporter.Visible() || m.recordModal.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
 }
 
 func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
@@ -532,6 +538,10 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 	}
 	if key.Matches(msg, m.keys.Quit) {
 		if m.canQuitFromMainDashboard(msg) {
+			if err := m.stopRecording(); err != nil {
+				m.lastErr = err
+				return m, nil, true
+			}
 			m.quitting = true
 			m.stopTrace()
 			return m, tea.Quit, true
@@ -544,6 +554,10 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 			}
 			if m.filterModal.Visible() {
 				next, cmd := m.updateFilterModal(esc)
+				return next, cmd, true
+			}
+			if m.recordModal.Visible() {
+				next, cmd := m.updateRecordModal(esc)
 				return next, cmd, true
 			}
 			if m.exporter.Visible() {
@@ -562,6 +576,16 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 	}
 	if m.exportEnabled && m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Export) {
 		m.exporter = m.exporter.Open()
+		return m, nil, true
+	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Record) {
+		if m.recordingActive() {
+			if err := m.stopRecording(); err != nil {
+				m.lastErr = err
+			}
+			return m, nil, true
+		}
+		m.recordModal = m.recordModal.Open(defaultParquetRecordingFilename())
 		return m, nil, true
 	}
 	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Probes) {
@@ -621,6 +645,24 @@ func (m Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(dashboardCmd, cmd)
 }
 
+func (m Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, dashboardCmd := m.updateDashboardForModal(msg)
+	var (
+		path   string
+		submit bool
+	)
+	m.recordModal, path, submit = m.recordModal.Update(msg)
+	if !submit {
+		return m, dashboardCmd
+	}
+	if err := m.startRecording(path); err != nil {
+		m.recordModal = m.recordModal.SetError(err)
+		return m, dashboardCmd
+	}
+	m.recordModal = m.recordModal.Close()
+	return m, dashboardCmd
+}
+
 func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	if m.attaching {
 		var cmd tea.Cmd
@@ -629,6 +671,10 @@ func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	}
 	if m.filterModal.Visible() {
 		next, cmd := m.updateFilterModal(msg)
+		return next, cmd, true
+	}
+	if m.recordModal.Visible() {
+		next, cmd := m.updateRecordModal(msg)
 		return next, cmd, true
 	}
 	if m.probeModal.Visible() {
@@ -659,6 +705,10 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
+	if err := m.stopRecording(); err != nil {
+		m.lastErr = err
+		return m, nil
+	}
 	m.stopTrace()
 	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, -1)
@@ -675,6 +725,10 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	if msg.Pid > 0 {
 		pid = msg.Pid
 	}
+	if err := m.stopRecording(); err != nil {
+		m.lastErr = err
+		return m, nil
+	}
 	m.stopTrace()
 	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, tid)
@@ -686,6 +740,10 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) reselectPID() (tea.Model, tea.Cmd) {
+	if err := m.stopRecording(); err != nil {
+		m.lastErr = err
+		return m, nil
+	}
 	m.pickerReturn = &pickerReturnState{
 		pidFilter: m.pidFilter,
 		tidFilter: m.tidFilter,
@@ -697,6 +755,7 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
+	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
 	m.pidPicker = pidpicker.New().SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
@@ -712,6 +771,10 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 func (m Model) reselectTID() (tea.Model, tea.Cmd) {
 	pid := m.pidFilter
 
+	if err := m.stopRecording(); err != nil {
+		m.lastErr = err
+		return m, nil
+	}
 	m.pickerReturn = &pickerReturnState{
 		pidFilter: m.pidFilter,
 		tidFilter: m.tidFilter,
@@ -723,6 +786,7 @@ func (m Model) reselectTID() (tea.Model, tea.Cmd) {
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
+	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
 	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap()).SetDarkMode(m.isDark)
 
 	var sizeCmd tea.Cmd
@@ -744,6 +808,10 @@ func selectedPIDFilter(pid int) int {
 
 func (m Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 	if m.pickerReturn == nil {
+		return m, nil
+	}
+	if err := m.stopRecording(); err != nil {
+		m.lastErr = err
 		return m, nil
 	}
 	returnState := *m.pickerReturn
@@ -830,6 +898,7 @@ func (m *Model) syncDashboardFilterState() {
 	m.dashboard.SetPidFilter(m.pidFilter)
 	m.dashboard.SetGlobalFilter(m.globalFilter)
 	m.dashboard.SetFilterStack(m.filterStack)
+	m.dashboard.SetRecordingStatus(m.recordingStatus())
 }
 
 func applyProcessFilters(filter globalfilter.Filter, pid, tid int) globalfilter.Filter {
@@ -975,6 +1044,7 @@ func (m *Model) applyTheme(isDark bool) {
 	m.pidPicker = m.pidPicker.SetDarkMode(isDark)
 	m.probeModal = m.probeModal.SetDarkMode(isDark)
 	m.filterModal = m.filterModal.SetDarkMode(isDark)
+	m.recordModal = m.recordModal.SetDarkMode(isDark)
 }
 
 func (m Model) windowTitle() string {
@@ -1023,6 +1093,9 @@ func (m Model) View() tea.View {
 		if m.filterModal.Visible() {
 			return altScreenView(placeToViewport(width, height, m.filterModal.View(width, height)), title)
 		}
+		if m.recordModal.Visible() {
+			return altScreenView(placeToViewport(width, height, m.recordModal.View(width, height)), title)
+		}
 		if m.probeModal.Visible() {
 			return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)), title)
 		}
@@ -1067,6 +1140,80 @@ func runExportCmd(exportEnabled bool, option tuiexport.Option, dashboard dashboa
 			return tuiexport.FailedMsg{Err: errors.New("unknown export option")}
 		}
 	}
+}
+
+func (m *Model) startRecording(path string) error {
+	recorder := m.runtime.Recorder()
+	if recorder == nil {
+		return errors.New("recording runtime is unavailable")
+	}
+	if err := recorder.Start(path, parquet.StartOptions{Metadata: tuiParquetMetadata()}); err != nil {
+		m.syncDashboardFilterState()
+		return err
+	}
+	m.syncDashboardFilterState()
+	return nil
+}
+
+func (m *Model) stopRecording() error {
+	recorder := m.runtime.Recorder()
+	if recorder == nil {
+		return nil
+	}
+	if !m.recordingActive() {
+		m.syncDashboardFilterState()
+		return nil
+	}
+	err := recorder.Stop()
+	m.syncDashboardFilterState()
+	return err
+}
+
+func (m Model) recordingActive() bool {
+	recorder := m.runtime.Recorder()
+	if recorder == nil {
+		return false
+	}
+	return recorder.Status().Active
+}
+
+func (m Model) recordingStatus() string {
+	recorder := m.runtime.Recorder()
+	if recorder == nil {
+		return "rec: unavailable"
+	}
+	status := recorder.Status()
+	if status.Active {
+		return "rec: " + shortenRecordingPath(status.Path)
+	}
+	if status.LastError != nil {
+		return "rec err: " + status.LastError.Error()
+	}
+	return "rec: off"
+}
+
+func defaultParquetRecordingFilename() string {
+	return fmt.Sprintf("ior-recording-%s.parquet", time.Now().Format("20060102-150405"))
+}
+
+func tuiParquetMetadata() parquet.FileMetadata {
+	meta := parquet.FileMetadata{
+		StartedAtUnixNano: uint64(time.Now().UnixNano()),
+		Mode:              "tui",
+		IORVersion:        flags.Version,
+	}
+	if hostname, err := os.Hostname(); err == nil {
+		meta.Hostname = hostname
+	}
+	return meta
+}
+
+func shortenRecordingPath(path string) string {
+	const maxLen = 36
+	if len(path) <= maxLen {
+		return path
+	}
+	return "..." + path[len(path)-maxLen+3:]
 }
 
 type lateBoundDashboardSource struct {

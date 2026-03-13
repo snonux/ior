@@ -68,6 +68,7 @@ type Model struct {
 	keys                     common.KeyMap
 	globalFilter             globalfilter.Filter
 	filterStack              []string
+	recordingStatus          string
 	pidFilter                int
 	syscallsOffset           int
 	syscallsCol              int
@@ -936,6 +937,11 @@ func (m *Model) SetFilterStack(stack []string) {
 	m.streamModel.SetFilterStack(stack)
 }
 
+// SetRecordingStatus updates the visible recording state summary rendered in the dashboard chrome.
+func (m *Model) SetRecordingStatus(status string) {
+	m.recordingStatus = status
+}
+
 // SetLiveTrie updates the live trie source used by the flamegraph tab.
 func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 	m.liveTrie = liveTrie
@@ -1012,9 +1018,16 @@ func (m Model) View() tea.View {
 func (m Model) filterSummary() string {
 	summary := "filter: " + m.globalFilter.Summary()
 	if len(m.filterStack) == 0 {
+		if m.recordingStatus == "" {
+			return summary
+		}
+		return summary + " | " + m.recordingStatus
+	}
+	summary += " | stack: " + strings.Join(m.filterStack, " | ")
+	if m.recordingStatus == "" {
 		return summary
 	}
-	return summary + " | stack: " + strings.Join(m.filterStack, " | ")
+	return summary + " | " + m.recordingStatus
 }
 
 func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
