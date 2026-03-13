@@ -107,6 +107,54 @@ Flamegraphs are available only inside the TUI dashboard.
 Use `-fields` to change the stack order and `-count` to choose the metric.
 The default stack order is `comm,path,tracepoint` (bottom to top).
 
+## Recording Modes
+
+`ior` has three distinct output flows. They are intentionally different:
+
+| Mode | How to use it | What it writes | Filter behavior |
+| --- | --- | --- | --- |
+| TUI dashboard | default startup | nothing continuously; data stays in memory unless you export | current TUI/global filters drive what you see |
+| TUI CSV snapshot export | press `e` in the dashboard | one `ior-stream-<timestamp>.csv` snapshot of the current filtered stream view | exports only the currently filtered in-memory rows |
+| Parquet recording | press `R` in the TUI, or start with `-parquet <file>` | a streaming Parquet file of traced syscall rows | TUI mode records rows that pass the active TUI filter; headless `-parquet` records all traced rows |
+
+Important distinction:
+
+- CSV export is a point-in-time snapshot of the ring buffer.
+- Parquet recording is a streaming capture from start to stop.
+- The ring buffer is capped, so CSV export is not a replacement for Parquet recording.
+
+### TUI Parquet Recording
+
+Start a recording from the dashboard with `R`.
+
+- First `R`: open a filename prompt (`ior-recording-<timestamp>.parquet` by default).
+- `Enter`: start recording to that file.
+- Second `R`: stop and finalize the active Parquet file.
+- Recording stops automatically when you quit the TUI or reselect PID/TID/session scope.
+
+Lifecycle details:
+
+- TUI recording uses the active TUI global filter at emission time.
+- If a filter change restarts tracing, the recorder stays alive and continues writing matching rows after the restart.
+- The dashboard footer shows the active recording path or the last recording error.
+
+### Headless Parquet Recording
+
+Use `-parquet` to skip the TUI and stream traced syscall rows directly to a Parquet file:
+
+```shell
+sudo ./ior -parquet trace.parquet -duration 60
+```
+
+Headless Parquet mode behavior:
+
+- skips the TUI completely
+- records all traced rows
+- rejects content filters such as `-comm`, `-path`, `-pid`, and `-tid`
+- cannot be combined with `-plain`, `-flamegraph`, `--testflames`, or `--testliveflames`
+
+Use headless mode when you want a full recording, and TUI mode when you want interactive filtering plus optional start/stop recording from the dashboard.
+
 ## TUI Navigation
 
 The TUI interface provides an in‑screen help panel (toggle with **H**) that lists all available keys. Use this help screen to discover navigation shortcuts.
@@ -148,6 +196,7 @@ Help visibility:
 - `6`: `Stream` tab.
 - `7`: `Stream` tab (alias).
 - `e`: export filtered stream rows to CSV (`ior-stream-<timestamp>.csv`) in current working directory.
+- `R`: start or stop Parquet recording from the TUI dashboard.
 - `p`: re-open process selector (PID selection flow).
 - `t`: open TID selector flow.
 - `o`: open probe selection/toggling dialog.
