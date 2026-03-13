@@ -38,6 +38,12 @@ func TestShouldRunTraceMode(t *testing.T) {
 		t.Fatalf("expected plain mode to use trace mode")
 	}
 
+	withParquet := base
+	withParquet.ParquetPath = "trace.parquet"
+	if !shouldRunTraceMode(withParquet) {
+		t.Fatalf("expected parquet mode to use trace mode")
+	}
+
 	withPprof := base
 	withPprof.PprofEnable = true
 	if shouldRunTraceMode(withPprof) {
@@ -69,6 +75,12 @@ func TestShouldAutoStopByDuration(t *testing.T) {
 		t.Fatalf("expected plain mode to auto-stop by duration")
 	}
 
+	withParquet := base
+	withParquet.ParquetPath = "trace.parquet"
+	if !shouldAutoStopByDuration(withParquet) {
+		t.Fatalf("expected parquet mode to auto-stop by duration")
+	}
+
 	withPprof := base
 	withPprof.PprofEnable = true
 	if shouldAutoStopByDuration(withPprof) {
@@ -79,11 +91,13 @@ func TestShouldAutoStopByDuration(t *testing.T) {
 
 func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 	origRunTrace := runTraceFn
+	origRunParquet := runParquetFn
 	origRunTUI := runTUIFn
 	origRunTUITestFlames := runTUITestFlamesFn
 	origRunTUITestLiveFlames := runTUITestLiveFlamesFn
 	defer func() {
 		runTraceFn = origRunTrace
+		runParquetFn = origRunParquet
 		runTUIFn = origRunTUI
 		runTUITestFlamesFn = origRunTUITestFlames
 		runTUITestLiveFlamesFn = origRunTUITestLiveFlames
@@ -93,6 +107,10 @@ func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 	tuiCalled := false
 	runTraceFn = func(flags.Config) error {
 		traceCalled = true
+		return nil
+	}
+	runParquetFn = func(flags.Config) error {
+		t.Fatalf("runParquetFn should not be called in plain trace mode")
 		return nil
 	}
 	runTUIFn = func(flags.Config, tui.TraceStarter) error {
@@ -114,6 +132,59 @@ func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 	}
 	if !traceCalled {
 		t.Fatalf("expected runTraceFn to be called")
+	}
+	if tuiCalled {
+		t.Fatalf("did not expect runTUIFn to be called")
+	}
+}
+
+func TestDispatchRunUsesHeadlessParquetModeWhenRequested(t *testing.T) {
+	origRunTrace := runTraceFn
+	origRunParquet := runParquetFn
+	origRunTUI := runTUIFn
+	origRunTUITestFlames := runTUITestFlamesFn
+	origRunTUITestLiveFlames := runTUITestLiveFlamesFn
+	defer func() {
+		runTraceFn = origRunTrace
+		runParquetFn = origRunParquet
+		runTUIFn = origRunTUI
+		runTUITestFlamesFn = origRunTUITestFlames
+		runTUITestLiveFlamesFn = origRunTUITestLiveFlames
+	}()
+
+	traceCalled := false
+	parquetCalled := false
+	tuiCalled := false
+	runTraceFn = func(flags.Config) error {
+		traceCalled = true
+		return nil
+	}
+	runParquetFn = func(flags.Config) error {
+		parquetCalled = true
+		return nil
+	}
+	runTUIFn = func(flags.Config, tui.TraceStarter) error {
+		tuiCalled = true
+		return nil
+	}
+	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
+		t.Fatalf("runTUITestFlamesFn should not be called in parquet mode")
+		return nil
+	}
+	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
+		t.Fatalf("runTUITestLiveFlamesFn should not be called in parquet mode")
+		return nil
+	}
+
+	cfg := flags.Config{ParquetPath: "trace.parquet"}
+	if err := dispatchRun(cfg); err != nil {
+		t.Fatalf("dispatchRun returned error: %v", err)
+	}
+	if !parquetCalled {
+		t.Fatalf("expected runParquetFn to be called")
+	}
+	if traceCalled {
+		t.Fatalf("did not expect runTraceFn to be called")
 	}
 	if tuiCalled {
 		t.Fatalf("did not expect runTUIFn to be called")
@@ -353,6 +424,31 @@ func TestValidateRunConfigRejectsBothTestModes(t *testing.T) {
 	}
 }
 
+func TestValidateRunConfigRejectsParquetWithPlain(t *testing.T) {
+	cfg := flags.Config{ParquetPath: "trace.parquet", PlainMode: true}
+	err := validateRunConfig(cfg)
+	if err == nil {
+		t.Fatalf("expected error for -parquet with -plain")
+	}
+	if err.Error() != "-parquet and -plain are mutually exclusive" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRunConfigRejectsParquetWithContentFilters(t *testing.T) {
+	cfg := flags.Config{
+		ParquetPath: "trace.parquet",
+		CommFilter:  "nginx",
+	}
+	err := validateRunConfig(cfg)
+	if err == nil {
+		t.Fatalf("expected error for -parquet with content filters")
+	}
+	if err.Error() != "-parquet cannot be combined with content filters (-comm, -path, -pid, -tid)" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildTestFlamesRuntimeSeedsLiveTrie(t *testing.T) {
 	cfg := flags.NewFlags()
 	_, streamBuf, liveTrie := buildTestFlamesRuntime(cfg)
@@ -558,6 +654,30 @@ func TestTuiTraceStarterFromRunTraceRespectsCancel(t *testing.T) {
 	err := starter(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestHeadlessParquetTraceConfigClearsContentFilters(t *testing.T) {
+	cfg := flags.Config{
+		ParquetPath: "trace.parquet",
+		PidFilter:   1234,
+		TidFilter:   5678,
+		CommFilter:  "nginx",
+		PathFilter:  "/var/log",
+		GlobalFilter: globalfilter.Filter{
+			Syscall: &globalfilter.StringFilter{Pattern: "read"},
+		},
+	}
+
+	got := headlessParquetTraceConfig(cfg)
+	if got.PidFilter != -1 || got.TidFilter != -1 {
+		t.Fatalf("pid/tid filters = %d/%d, want -1/-1", got.PidFilter, got.TidFilter)
+	}
+	if got.CommFilter != "" || got.PathFilter != "" {
+		t.Fatalf("comm/path filters = %q/%q, want empty", got.CommFilter, got.PathFilter)
+	}
+	if got.GlobalFilter.IsActive() {
+		t.Fatalf("expected sanitized global filter to be empty, got %+v", got.GlobalFilter)
 	}
 }
 

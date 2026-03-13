@@ -115,6 +115,16 @@ func TestParseFlamegraphOutputFlags(t *testing.T) {
 	}
 }
 
+func TestParseParquetOutputFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "--parquet", "trace-run")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if got, want := cfg.ParquetPath, "trace-run"; got != want {
+		t.Fatalf("parquet path = %q, want %q", got, want)
+	}
+}
+
 func TestParseDefaultCollapsedFieldsOrder(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {
