@@ -16,17 +16,6 @@ import (
 	"ior/internal/globalfilter"
 )
 
-var (
-	current  atomic.Pointer[Config]
-	once     sync.Once
-	parseErr error
-)
-
-func init() {
-	defaults := NewFlags()
-	current.Store(&defaults)
-}
-
 // Config captures runtime configuration parsed from CLI flags.
 type Config struct {
 	PidFilter    int
@@ -53,6 +42,17 @@ type Config struct {
 	CollapsedFields  []string
 	CountField       string
 	GlobalFilter     globalfilter.Filter
+}
+
+var (
+	current  atomic.Pointer[Config]
+	once     sync.Once
+	parseErr error
+)
+
+func init() {
+	defaults := NewFlags()
+	current.Store(&defaults)
 }
 
 // NewFlags returns a configuration instance initialized with project defaults.
