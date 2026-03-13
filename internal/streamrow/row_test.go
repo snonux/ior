@@ -3,6 +3,10 @@ package streamrow
 import (
 	"sync"
 	"testing"
+
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/types"
 )
 
 func TestSequencerStartsAfterSeed(t *testing.T) {
@@ -44,5 +48,53 @@ func TestSequencerIsMonotonicUnderConcurrency(t *testing.T) {
 	}
 	if got, want := len(seen), workers*perWorker; got != want {
 		t.Fatalf("unique sequence count = %d, want %d", got, want)
+	}
+}
+
+func TestNewPopulatesFieldsFromPair(t *testing.T) {
+	enter := &types.OpenEvent{TraceId: types.SYS_ENTER_OPENAT, Time: 1234, Pid: 42, Tid: 84}
+	exit := &types.RetEvent{TraceId: types.SYS_EXIT_OPENAT, Time: 1300, Ret: -2, Pid: 42, Tid: 84}
+	pair := event.NewPair(enter)
+	pair.ExitEv = exit
+	pair.File = file.NewFd(7, "/tmp/test.txt", 0)
+	pair.Comm = "cat"
+	pair.Duration = 66
+	pair.DurationToPrev = 19
+	pair.Bytes = 512
+
+	got := New(9, pair)
+	if got.Seq != 9 || got.TimeNs != 1234 {
+		t.Fatalf("Seq/TimeNs = %d/%d, want 9/1234", got.Seq, got.TimeNs)
+	}
+	if got.Syscall != "openat" || got.Comm != "cat" {
+		t.Fatalf("Syscall/Comm = %q/%q, want openat/cat", got.Syscall, got.Comm)
+	}
+	if got.PID != 42 || got.TID != 84 {
+		t.Fatalf("PID/TID = %d/%d, want 42/84", got.PID, got.TID)
+	}
+	if got.FileName != "/tmp/test.txt" || got.FD != 7 {
+		t.Fatalf("FileName/FD = %q/%d, want /tmp/test.txt/7", got.FileName, got.FD)
+	}
+	if got.DurationNs != 66 || got.GapNs != 19 || got.Bytes != 512 {
+		t.Fatalf("DurationNs/GapNs/Bytes = %d/%d/%d, want 66/19/512", got.DurationNs, got.GapNs, got.Bytes)
+	}
+	if got.RetVal != -2 || !got.IsError {
+		t.Fatalf("RetVal/IsError = %d/%v, want -2/true", got.RetVal, got.IsError)
+	}
+}
+
+func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
+	got := NewWarning(7, "Dropped malformed event")
+	if got.Seq != 7 || got.TimeNs == 0 {
+		t.Fatalf("Seq/TimeNs = %d/%d, want 7/non-zero", got.Seq, got.TimeNs)
+	}
+	if got.Syscall != "warning" || got.Comm != "ior" {
+		t.Fatalf("Syscall/Comm = %q/%q, want warning/ior", got.Syscall, got.Comm)
+	}
+	if got.FileName != "Dropped malformed event" || got.FD != UnknownFD {
+		t.Fatalf("FileName/FD = %q/%d, want warning text/%d", got.FileName, got.FD, UnknownFD)
+	}
+	if got.RetVal != -1 || !got.IsError {
+		t.Fatalf("RetVal/IsError = %d/%v, want -1/true", got.RetVal, got.IsError)
 	}
 }
