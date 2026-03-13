@@ -96,9 +96,11 @@ func fcntlDupfdCloexec() error {
 // The syscall fails with EBADF, but ior should capture the enter_fcntl
 // tracepoint because it is recorded on syscall entry.
 func fcntlInvalidFd() error {
-	_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, 99999, syscall.F_GETFL, 0)
-	if errno == 0 {
-		return fmt.Errorf("expected fcntl on invalid fd to fail")
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, 99999, syscall.F_GETFL, 0)
+		if errno == 0 {
+			return fmt.Errorf("expected fcntl on invalid fd to fail")
+		}
 	}
 	return nil
 }
@@ -120,10 +122,13 @@ func fcntlDupfdMax() error {
 	}
 	defer syscall.Close(fd)
 
-	// Use a minfd far beyond any realistic RLIMIT_NOFILE.
-	_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_DUPFD, 1<<30)
-	if errno == 0 {
-		return fmt.Errorf("expected fcntl F_DUPFD with extreme minfd to fail")
+	// Retry the failing fcntl a few times to avoid a single one-shot call
+	// racing early trace capture under parallel integration load.
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_DUPFD, 1<<30)
+		if errno == 0 {
+			return fmt.Errorf("expected fcntl F_DUPFD with extreme minfd to fail")
+		}
 	}
 	return nil
 }

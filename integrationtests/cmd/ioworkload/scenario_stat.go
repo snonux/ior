@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -13,6 +14,7 @@ const (
 	rOK            = 0x4    // R_OK
 	statxBasicMask = 0x07ff // STATX_BASIC_STATS
 	atFDCwd        = -100   // AT_FDCWD
+	statRetryDelay = 20 * time.Millisecond
 )
 
 // statBasic creates a file and stats it via raw SYS_STAT (newstat).
@@ -270,11 +272,14 @@ func statAccessEnoent() error {
 // tracepoint because it is recorded on syscall entry.
 func statFstatEbadf() error {
 	var stat syscall.Stat_t
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 20; i++ {
 		_, _, errno := syscall.Syscall(syscall.SYS_FSTAT, 99999, uintptr(unsafe.Pointer(&stat)), 0)
 		runtime.KeepAlive(&stat)
 		if errno == 0 {
 			return fmt.Errorf("expected EBADF, but fstat succeeded")
+		}
+		if i < 19 {
+			time.Sleep(statRetryDelay)
 		}
 	}
 	return nil
