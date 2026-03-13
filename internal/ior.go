@@ -244,14 +244,6 @@ func tuiTraceStarterFromRunTrace(
 			bindings.SetEventStreamSource(streamSource)
 			bindings.SetLiveTrie(liveTrie)
 		}
-		streamEvents := make(chan eventstream.StreamEvent, appconfig.DefaultChannelBufferSize)
-
-		go func() {
-			for ev := range streamEvents {
-				streamBuf.Push(ev)
-			}
-		}()
-
 		startedCh := make(chan struct{})
 		errCh := make(chan error, 1)
 
@@ -264,7 +256,7 @@ func tuiTraceStarterFromRunTrace(
 					}
 					row := eventstream.NewStreamEvent(streamSeq.Next(), ep)
 					engine.Ingest(ep)
-					streamEvents <- row
+					streamBuf.Push(row)
 					if recorder != nil {
 						if err := recorder.Record(row, filterEpoch); err != nil {
 							recorderWarningOnce.Do(func() {
@@ -280,14 +272,9 @@ func tuiTraceStarterFromRunTrace(
 					ep.Recycle()
 				}
 				el.warningCb = func(message string) {
-					// Drop warning notifications if the stream channel is saturated.
-					select {
-					case streamEvents <- eventstream.NewWarningEvent(streamSeq.Next(), message):
-					default:
-					}
+					streamBuf.Push(eventstream.NewWarningEvent(streamSeq.Next(), message))
 				}
 			})
-			close(streamEvents)
 			errCh <- err
 			close(errCh)
 		}()

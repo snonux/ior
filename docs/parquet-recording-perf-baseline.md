@@ -84,3 +84,30 @@ These are the highest-value targets for the follow-up optimization task:
 - Lower TUI recording allocations by reusing stream fanout buffers and reducing ring-buffer/session setup churn.
 - Revisit recorder/session and parquet writer setup costs if recordings are started frequently in short sessions.
 - Only optimize parquet compression or flush behavior after confirming they dominate a focused headless profile; they are not currently the primary cost center.
+
+## Verified Follow-up Win
+
+After profiling, the first optimization pass removed the extra TUI `streamEvents` channel hop and pushed directly into the mutex-protected ring buffer.
+
+Re-run command:
+
+```bash
+env GOTOOLCHAIN=auto mage benchProf
+```
+
+Optimized pipeline artifacts:
+
+- `bench-profiles/pipeline-20260313-055321-cpu.prof`
+- `bench-profiles/pipeline-20260313-055321-mem.prof`
+- `bench-profiles/pipeline-20260313-055321-block.prof`
+
+Benchmark comparison for the changed path:
+
+| Benchmark | Before | After | Change |
+| --- | --- | --- | --- |
+| `BenchmarkPipelineTUIParquetRecording` | `19.13 ms/op`, `994016 B/op`, `19873 allocs/op` | `16.51 ms/op`, `992334 B/op`, `19866 allocs/op` | about `13.7%` faster with a small allocation reduction |
+
+Notes:
+
+- `BenchmarkPipelineHeadlessParquetCapture` also moved between runs, but that path was not changed; treat that difference as benchmark noise rather than a verified optimization win.
+- Post-change CPU samples still show the event loop and fd/path resolution dominating overall cost, so the next optimization pass should stay focused on those areas instead of tuning parquet compression first.
