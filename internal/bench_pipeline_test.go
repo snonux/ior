@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"ior/internal/benchutil"
@@ -202,16 +201,6 @@ func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, n
 		streamBuf := eventstream.NewRingBuffer()
 		streamSeq := eventstream.NewSequencer(0)
 		liveTrie := flamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
-		streamEvents := make(chan eventstream.StreamEvent, events)
-
-		var streamWG sync.WaitGroup
-		streamWG.Add(1)
-		go func() {
-			defer streamWG.Done()
-			for row := range streamEvents {
-				streamBuf.Push(row)
-			}
-		}()
 
 		recorder := parquet.NewRecorder(parquet.RecorderConfig{})
 		path := filepath.Join(dir, fmt.Sprintf("tui-%d.parquet", i))
@@ -225,7 +214,7 @@ func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, n
 		el.printCb = func(ep *event.Pair) {
 			row := eventstream.NewStreamEvent(streamSeq.Next(), ep)
 			engine.Ingest(ep)
-			streamEvents <- row
+			streamBuf.Push(row)
 			if recordErr == nil {
 				recordErr = recorder.Record(row, 0)
 			}
@@ -237,8 +226,6 @@ func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, n
 		el.run(context.Background(), rawCh)
 		b.StopTimer()
 
-		close(streamEvents)
-		streamWG.Wait()
 		if recordErr != nil {
 			b.Fatalf("recorder.Record() error = %v", recordErr)
 		}
