@@ -3,15 +3,22 @@ package internal
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	"ior/internal/benchutil"
 	"ior/internal/event"
+	"ior/internal/flamegraph"
+	"ior/internal/parquet"
+	"ior/internal/statsengine"
+	"ior/internal/tui/eventstream"
 )
 
 const (
 	benchPipelineBaseTid = 2000
 	benchPipelineSize    = 10_000
+	benchParquetSize     = 2_000
 )
 
 func BenchmarkPipelineReadHeavy(b *testing.B) {
@@ -46,6 +53,14 @@ func BenchmarkPipelineThreadScaling(b *testing.B) {
 			benchmarkPipelineMix(b, benchutil.DiverseAllTypes, benchPipelineSize, threads)
 		})
 	}
+}
+
+func BenchmarkPipelineHeadlessParquetCapture(b *testing.B) {
+	benchmarkPipelineHeadlessParquet(b, benchutil.DiverseAllTypes, benchParquetSize, 10)
+}
+
+func BenchmarkPipelineTUIParquetRecording(b *testing.B) {
+	benchmarkPipelineTUIParquet(b, benchutil.DiverseAllTypes, benchParquetSize, 10)
 }
 
 func benchmarkPipelineMix(b *testing.B, mix benchutil.EventMix, events, numThreads int) {
@@ -88,6 +103,152 @@ func benchmarkPipelineMix(b *testing.B, mix benchutil.EventMix, events, numThrea
 
 		cancel()
 		totalPairs += pairCount
+	}
+
+	if b.N > 0 {
+		b.ReportMetric(float64(totalPairs)/float64(b.N), "pairs/op")
+	}
+}
+
+func benchmarkPipelineHeadlessParquet(b *testing.B, mix benchutil.EventMix, events, numThreads int) {
+	b.Helper()
+	b.ReportAllocs()
+
+	gen := benchutil.NewEventGenerator()
+	stream, err := mix.GenerateStream(gen, events, numThreads)
+	if err != nil {
+		b.Fatalf("generate stream: %v", err)
+	}
+	if len(stream) == 0 {
+		b.Fatal("generated empty benchmark stream")
+	}
+
+	dir := b.TempDir()
+	var totalPairs int64
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+
+		rawCh := make(chan []byte, len(stream))
+		for _, raw := range stream {
+			rawCh <- raw
+		}
+		close(rawCh)
+
+		el := mustNewEventLoop(b, eventLoopConfig{})
+		preseedBenchComms(el, numThreads)
+
+		recorder := parquet.NewRecorder(parquet.RecorderConfig{})
+		path := filepath.Join(dir, fmt.Sprintf("headless-%d.parquet", i))
+		if err := recorder.Start(path, parquet.StartOptions{
+			Metadata: parquet.FileMetadata{Mode: "headless"},
+		}); err != nil {
+			b.Fatalf("recorder.Start() error = %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		sink := newHeadlessParquetSink(recorder, cancel)
+		sink.configure(el)
+
+		b.StartTimer()
+		el.run(ctx, rawCh)
+		b.StopTimer()
+
+		cancel()
+		if err := recorder.Stop(); err != nil {
+			b.Fatalf("recorder.Stop() error = %v", err)
+		}
+		if err := sink.err(); err != nil {
+			b.Fatalf("sink.err() = %v", err)
+		}
+		totalPairs += int64(events)
+	}
+
+	if b.N > 0 {
+		b.ReportMetric(float64(totalPairs)/float64(b.N), "pairs/op")
+	}
+}
+
+func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, numThreads int) {
+	b.Helper()
+	b.ReportAllocs()
+
+	gen := benchutil.NewEventGenerator()
+	stream, err := mix.GenerateStream(gen, events, numThreads)
+	if err != nil {
+		b.Fatalf("generate stream: %v", err)
+	}
+	if len(stream) == 0 {
+		b.Fatal("generated empty benchmark stream")
+	}
+
+	dir := b.TempDir()
+	var totalPairs int64
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+
+		rawCh := make(chan []byte, len(stream))
+		for _, raw := range stream {
+			rawCh <- raw
+		}
+		close(rawCh)
+
+		el := mustNewEventLoop(b, eventLoopConfig{})
+		preseedBenchComms(el, numThreads)
+
+		engine := statsengine.NewEngine(64)
+		streamBuf := eventstream.NewRingBuffer()
+		streamSeq := eventstream.NewSequencer(0)
+		liveTrie := flamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
+		streamEvents := make(chan eventstream.StreamEvent, events)
+
+		var streamWG sync.WaitGroup
+		streamWG.Add(1)
+		go func() {
+			defer streamWG.Done()
+			for row := range streamEvents {
+				streamBuf.Push(row)
+			}
+		}()
+
+		recorder := parquet.NewRecorder(parquet.RecorderConfig{})
+		path := filepath.Join(dir, fmt.Sprintf("tui-%d.parquet", i))
+		if err := recorder.Start(path, parquet.StartOptions{
+			Metadata: parquet.FileMetadata{Mode: "tui"},
+		}); err != nil {
+			b.Fatalf("recorder.Start() error = %v", err)
+		}
+
+		var recordErr error
+		el.printCb = func(ep *event.Pair) {
+			row := eventstream.NewStreamEvent(streamSeq.Next(), ep)
+			engine.Ingest(ep)
+			streamEvents <- row
+			if recordErr == nil {
+				recordErr = recorder.Record(row, 0)
+			}
+			liveTrie.Ingest(ep)
+			ep.Recycle()
+		}
+
+		b.StartTimer()
+		el.run(context.Background(), rawCh)
+		b.StopTimer()
+
+		close(streamEvents)
+		streamWG.Wait()
+		if recordErr != nil {
+			b.Fatalf("recorder.Record() error = %v", recordErr)
+		}
+		if err := recorder.Stop(); err != nil {
+			b.Fatalf("recorder.Stop() error = %v", err)
+		}
+		totalPairs += int64(events)
+		_ = engine
+		_ = liveTrie
+		_ = streamBuf
 	}
 
 	if b.N > 0 {
