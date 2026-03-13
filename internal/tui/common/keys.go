@@ -30,6 +30,7 @@ type KeyMap struct {
 	Filter      key.Binding
 	FilterUndo  key.Binding
 	Export      key.Binding
+	Record      key.Binding
 	Quit        key.Binding
 	Enter       key.Binding
 	Esc         key.Binding
@@ -66,6 +67,7 @@ func DefaultKeyMap() KeyMap {
 		Filter:      keyBinding("filter", "f"),
 		FilterUndo:  keyBinding("undo filter", "F"),
 		Export:      keyBinding("stream export", "e"),
+		Record:      keyBinding("parquet rec", "R"),
 		Quit:        keyBinding("quit", "q", "ctrl+c"),
 		Enter:       keyBinding("select", "enter"),
 		Esc:         keyBinding("back", "esc"),
@@ -109,6 +111,7 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 		k.SelectPID,
 		k.SelectTID,
 		k.Probes,
+		k.Record,
 		k.Refresh,
 		k.Quit,
 	}
@@ -149,7 +152,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
 		controls = append(controls, k.Export)
 	}
-	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Refresh, k.Quit)
+	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Record, k.Refresh, k.Quit)
 	controls = append(controls, k.Visualize, k.Metric, k.Sort, k.ReverseSort, k.Filter, k.FilterUndo)
 
 	return [][]key.Binding{
