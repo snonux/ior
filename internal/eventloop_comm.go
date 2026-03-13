@@ -1,10 +1,13 @@
 package internal
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 )
 
 type commResolver struct {
@@ -16,7 +19,8 @@ type commResolver struct {
 
 	lookupQueue      chan uint32
 	lookupWorkers    int
-	resolveFn        func(uint32) string
+	resolveFn        func(uint32) (string, error)
+	warningFn        func(string)
 	startWorkersOnce sync.Once
 	workersWG        sync.WaitGroup
 	shutdownOnce     sync.Once
@@ -42,7 +46,7 @@ func (r *commResolver) ensureLookupConfig() {
 		r.lookupQueue = make(chan uint32, defaultCommLookupQueueSize)
 	}
 	if r.resolveFn == nil {
-		r.resolveFn = resolveCommFromProc
+		r.resolveFn = resolveCommFromProcWithError
 	}
 }
 
@@ -65,13 +69,14 @@ func (r *commResolver) startLookupWorkers() {
 func (r *commResolver) lookupWorker() {
 	defer r.workersWG.Done()
 	for tid := range r.lookupQueue {
-		comm := r.resolveFn(tid)
+		comm, err := r.resolveFn(tid)
 		r.mu.Lock()
 		delete(r.pending, tid)
 		if comm != "" {
 			r.comms[tid] = comm
 		}
 		r.mu.Unlock()
+		r.notifyResolveFailure(tid, err)
 	}
 }
 
@@ -90,10 +95,12 @@ func (r *commResolver) seedTrackedPidComm(pidFilter int) {
 			continue
 		}
 		seen[tid] = struct{}{}
-		if comm := resolveCommFromProc(tid); comm != "" {
+		comm, err := r.resolveFn(tid)
+		if comm != "" {
 			r.setCached(tid, comm)
 			continue
 		}
+		r.notifyResolveFailure(tid, err)
 		r.queueLookup(tid)
 	}
 }
@@ -167,6 +174,20 @@ func (r *commResolver) shutdown() {
 	})
 }
 
+func (r *commResolver) notifyResolveFailure(tid uint32, err error) {
+	if err == nil {
+		return
+	}
+	r.notifyWarning(fmt.Sprintf("failed to resolve comm for tid %d: %v", tid, err))
+}
+
+func (r *commResolver) notifyWarning(message string) {
+	if r.warningFn == nil || message == "" {
+		return
+	}
+	r.warningFn(message)
+}
+
 func (e *eventLoop) shutdownCommResolver() {
 	if e.commResolver == nil {
 		return
@@ -195,19 +216,43 @@ func procTidPathPrefix(tid uint32) string {
 }
 
 func resolveCommFromProc(tid uint32) string {
+	comm, _ := resolveCommFromProcWithError(tid)
+	return comm
+}
+
+func resolveCommFromProcWithError(tid uint32) (string, error) {
 	procPath := procTidPathPrefix(tid)
-	if data, err := os.ReadFile(procPath + "/comm"); err == nil {
+	commPath := procPath + "/comm"
+	data, commErr := os.ReadFile(commPath)
+	if commErr == nil {
 		comm := string(data)
 		if len(comm) > 0 && comm[len(comm)-1] == '\n' {
 			comm = comm[:len(comm)-1]
 		}
 		if comm != "" {
-			return comm
+			return comm, nil
 		}
+	} else if isTransientProcError(commErr) {
+		commErr = nil
+	} else {
+		commErr = fmt.Errorf("read %s: %w", commPath, commErr)
 	}
-	if linkName, err := os.Readlink(procPath + "/exe"); err == nil {
-		linkName = filepath.Base(linkName)
-		return linkName
+
+	exePath := procPath + "/exe"
+	linkName, linkErr := os.Readlink(exePath)
+	if linkErr == nil {
+		if base := filepath.Base(linkName); base != "" {
+			return base, nil
+		}
+	} else if isTransientProcError(linkErr) {
+		linkErr = nil
+	} else {
+		linkErr = fmt.Errorf("readlink %s: %w", exePath, linkErr)
 	}
-	return ""
+
+	return "", errors.Join(commErr, linkErr)
+}
+
+func isTransientProcError(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ESRCH)
 }

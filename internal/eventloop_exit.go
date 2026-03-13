@@ -251,8 +251,12 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 			return false
 		}
 		if retEvent.Ret > 0 {
-			if cwd, err := os.Readlink(procTidPathPrefix(nullEv.GetTid()) + "/cwd"); err == nil {
+			cwd, err := os.Readlink(procTidPathPrefix(nullEv.GetTid()) + "/cwd")
+			switch {
+			case err == nil:
 				ep.File = file.NewPathname([]byte(cwd))
+			case !isTransientProcError(err):
+				e.notifyWarning(fmt.Sprintf("failed to resolve cwd for tid %d: %v", nullEv.GetTid(), err))
 			}
 		}
 	}

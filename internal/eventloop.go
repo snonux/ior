@@ -146,6 +146,9 @@ func (e *eventLoop) commState() *commResolver {
 	if e.commResolver.pending == nil {
 		e.commResolver.pending = make(map[uint32]struct{})
 	}
+	if e.commResolver.warningFn == nil {
+		e.commResolver.warningFn = e.notifyWarning
+	}
 	e.commResolver.ensureLookupConfig()
 	return e.commResolver
 }
