@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,14 +26,14 @@ func TestCommResolverQueueLookupRespectsWorkerLimit(t *testing.T) {
 	defer resolver.shutdown()
 	resolver.lookupWorkers = workers
 	resolver.lookupQueue = make(chan uint32, lookups)
-	resolver.resolveFn = func(tid uint32) string {
+	resolver.resolveFn = func(tid uint32) (string, error) {
 		current := atomic.AddInt32(&running, 1)
 		setMaxInt32(&maxRunning, current)
 		started <- struct{}{}
 		<-release
 		atomic.AddInt32(&running, -1)
 		wg.Done()
-		return fmt.Sprintf("comm-%d", tid)
+		return fmt.Sprintf("comm-%d", tid), nil
 	}
 
 	for i := 1; i <= lookups; i++ {
@@ -84,13 +86,13 @@ func TestCommResolverQueueLookupQueueFullClearsPending(t *testing.T) {
 	defer resolver.shutdown()
 	resolver.lookupWorkers = 1
 	resolver.lookupQueue = make(chan uint32, 1)
-	resolver.resolveFn = func(tid uint32) string {
+	resolver.resolveFn = func(tid uint32) (string, error) {
 		select {
 		case started <- struct{}{}:
 		default:
 		}
 		<-release
-		return fmt.Sprintf("comm-%d", tid)
+		return fmt.Sprintf("comm-%d", tid), nil
 	}
 
 	const tid1 uint32 = 101
@@ -139,10 +141,10 @@ func TestCommResolverShutdownStopsWorkersAndPreventsNewLookups(t *testing.T) {
 	resolver := newCommResolver(nil)
 	resolver.lookupWorkers = 1
 	resolver.lookupQueue = make(chan uint32, 1)
-	resolver.resolveFn = func(tid uint32) string {
+	resolver.resolveFn = func(tid uint32) (string, error) {
 		started <- struct{}{}
 		<-release
-		return fmt.Sprintf("comm-%d", tid)
+		return fmt.Sprintf("comm-%d", tid), nil
 	}
 
 	const activeTID uint32 = 201
@@ -179,6 +181,48 @@ func TestCommResolverShutdownStopsWorkersAndPreventsNewLookups(t *testing.T) {
 	}
 	if pending := pendingCount(resolver); pending != 0 {
 		t.Fatalf("expected no pending lookups after shutdown, got %d", pending)
+	}
+}
+
+func TestCommResolverLookupWarnsOnUnexpectedResolveError(t *testing.T) {
+	const tid uint32 = 301
+
+	warnings := make(chan string, 1)
+	resolver := newCommResolver(nil)
+	defer resolver.shutdown()
+	resolver.lookupWorkers = 1
+	resolver.lookupQueue = make(chan uint32, 1)
+	resolver.warningFn = func(message string) { warnings <- message }
+	resolver.resolveFn = func(uint32) (string, error) {
+		return "", errors.New("boom")
+	}
+
+	resolver.queueLookup(tid)
+
+	waitForCondition(t, 2*time.Second, "expected failed lookup to clear pending state", func() bool {
+		return pendingCount(resolver) == 0
+	})
+	if _, ok := resolver.cached(tid); ok {
+		t.Fatalf("did not expect tid %d to be cached after resolve failure", tid)
+	}
+
+	select {
+	case message := <-warnings:
+		if message == "" || !strings.Contains(message, "boom") {
+			t.Fatalf("expected warning to mention boom, got %q", message)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for resolve warning")
+	}
+}
+
+func TestResolveCommFromProcWithErrorIgnoresMissingProcess(t *testing.T) {
+	comm, err := resolveCommFromProcWithError(^uint32(0))
+	if err != nil {
+		t.Fatalf("expected missing procfs entries to be handled without error, got %v", err)
+	}
+	if comm != "" {
+		t.Fatalf("expected no comm for missing pid, got %q", comm)
 	}
 }
 
