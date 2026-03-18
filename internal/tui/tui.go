@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -231,28 +230,12 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 	return filters.filter.Clone(), true
 }
 
-// Run starts the TUI program in alternate screen mode.
-func Run() error {
-	return RunWithTraceStarter(defaultTraceStarter)
-}
-
-// RunWithTraceStarter starts the TUI program with a custom trace starter.
-func RunWithTraceStarter(starter TraceStarter) error {
-	return RunWithTraceStarterConfig(flags.Get(), starter)
-}
-
 // RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
 func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	model := newModelWithRuntimeConfig(cfg.PidFilter, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
-}
-
-// RunTestFlamesWithTraceStarter starts the TUI directly on dashboard/flame view
-// with a synthetic static flamegraph source.
-func RunTestFlamesWithTraceStarter(starter TraceStarter) error {
-	return RunTestFlamesWithTraceStarterConfig(flags.Get(), starter)
 }
 
 // RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
@@ -317,9 +300,10 @@ type pickerReturnState struct {
 	tidFilter int
 }
 
-// NewModel creates the top-level TUI model.
+// NewModel creates the top-level TUI model with default runtime flags.
+// Prefer NewModelWithConfig to pass parsed CLI config explicitly.
 func NewModel(initialPID int, startTrace TraceStarter) Model {
-	return NewModelWithConfig(flags.Get(), initialPID, startTrace)
+	return NewModelWithConfig(flags.NewFlags(), initialPID, startTrace)
 }
 
 // NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
@@ -500,17 +484,6 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 		!m.dashboard.BlocksGlobalShortcuts(msg)
 }
 
-func (m Model) canQuitFromMainDashboard(msg tea.KeyPressMsg) bool {
-	return m.screen == ScreenDashboard &&
-		!m.attaching &&
-		m.lastErr == nil &&
-		!m.filterModal.Visible() &&
-		!m.exporter.Visible() &&
-		!m.recordModal.Visible() &&
-		!m.probeModal.Visible() &&
-		!m.dashboard.BlocksGlobalShortcuts(msg)
-}
-
 func (m Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
 	return m.screen == ScreenPIDPicker &&
 		m.pickerReturn != nil &&
@@ -537,7 +510,7 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		return next, cmd, true
 	}
 	if key.Matches(msg, m.keys.Quit) {
-		if m.canQuitFromMainDashboard(msg) {
+		if m.canHandleDashboardShortcut(msg) {
 			if err := m.stopRecording(); err != nil {
 				m.lastErr = err
 				return m, nil, true
@@ -848,31 +821,9 @@ func defaultTraceStarter(context.Context) error {
 	return nil
 }
 
+// filterFromConfig delegates to the canonical Config.TraceFilter method.
 func filterFromConfig(cfg flags.Config) globalfilter.Filter {
-	filter := cfg.GlobalFilter.Clone()
-	if filter.IsActive() {
-		return filter
-	}
-	if cfg.CommFilter != "" {
-		filter.Comm = &globalfilter.StringFilter{Pattern: cfg.CommFilter}
-	}
-	if cfg.PathFilter != "" {
-		filter.File = &globalfilter.StringFilter{Pattern: cfg.PathFilter}
-	}
-	if cfg.PidFilter > 0 {
-		filter.PID = eqNumericFilter(cfg.PidFilter)
-	}
-	if cfg.TidFilter > 0 {
-		filter.TID = eqNumericFilter(cfg.TidFilter)
-	}
-	return filter
-}
-
-func eqNumericFilter(value int) *globalfilter.NumericFilter {
-	if value <= 0 {
-		return nil
-	}
-	return &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(value)}
+	return cfg.TraceFilter()
 }
 
 func (m *Model) setProcessFilters(pid, tid int) {
@@ -887,10 +838,12 @@ func (m *Model) setProcessFilters(pid, tid int) {
 
 func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
 	m.globalFilter = filter.Clone()
-	pid, _ := eqNumericFilterValue(m.globalFilter.PID)
-	tid, _ := eqNumericFilterValue(m.globalFilter.TID)
-	m.pidFilter = pid
-	m.tidFilter = tid
+	// EqValue returns (0, false) when no equality filter is set;
+	// selectedPIDFilter maps non-positive values to -1 ("no filter").
+	pid, _ := m.globalFilter.PID.EqValue()
+	tid, _ := m.globalFilter.TID.EqValue()
+	m.pidFilter = selectedPIDFilter(pid)
+	m.tidFilter = selectedPIDFilter(tid)
 	m.syncDashboardFilterState()
 }
 
@@ -903,8 +856,8 @@ func (m *Model) syncDashboardFilterState() {
 
 func applyProcessFilters(filter globalfilter.Filter, pid, tid int) globalfilter.Filter {
 	out := filter.Clone()
-	out.PID = eqNumericFilter(pid)
-	out.TID = eqNumericFilter(tid)
+	out.PID = globalfilter.NewEqFilter(int64(pid))
+	out.TID = globalfilter.NewEqFilter(int64(tid))
 	return out
 }
 
@@ -948,13 +901,6 @@ func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	m.attaching = true
 	m.lastErr = nil
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
-}
-
-func eqNumericFilterValue(filter *globalfilter.NumericFilter) (int, bool) {
-	if filter == nil || filter.Op != globalfilter.OpEq || filter.Value <= 0 {
-		return -1, false
-	}
-	return int(filter.Value), true
 }
 
 func globalFilterActionLabel(prev, next globalfilter.Filter, action string) string {
@@ -1196,16 +1142,9 @@ func defaultParquetRecordingFilename() string {
 	return fmt.Sprintf("ior-recording-%s.parquet", time.Now().Format("20060102-150405"))
 }
 
+// tuiParquetMetadata delegates to the canonical parquet.NewFileMetadata.
 func tuiParquetMetadata() parquet.FileMetadata {
-	meta := parquet.FileMetadata{
-		StartedAtUnixNano: uint64(time.Now().UnixNano()),
-		Mode:              "tui",
-		IORVersion:        flags.Version,
-	}
-	if hostname, err := os.Hostname(); err == nil {
-		meta.Hostname = hostname
-	}
-	return meta
+	return parquet.NewFileMetadata("tui")
 }
 
 func shortenRecordingPath(path string) string {

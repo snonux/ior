@@ -1,7 +1,5 @@
 package internal
 
-import "C"
-
 import (
 	"context"
 	"errors"
@@ -38,7 +36,7 @@ var (
 	runTraceWithContextFn  = runTraceWithContext
 	runTUIFn               = tui.RunWithTraceStarterConfig
 	runTUITestFlamesFn     = tui.RunTestFlamesWithTraceStarterConfig
-	runTUITestLiveFlamesFn = tui.RunTestFlamesWithTraceStarterConfig
+	runTUITestLiveFlamesFn = tui.RunTestFlamesWithTraceStarterConfig // same runner; starter differs (static vs live)
 	getEUID                = os.Geteuid
 
 	errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
@@ -70,9 +68,10 @@ func (m libbpfTracepointModule) GetProgram(progName string) (probemanager.Progra
 }
 
 // Run is the main entry point for the ior binary.
-func Run() error {
+// cfg must be provided by the caller; it should not be fetched from the global singleton here.
+func Run(cfg flags.Config) error {
 	flags.PrintVersion()
-	return dispatchRun(flags.Get())
+	return dispatchRun(cfg)
 }
 
 func dispatchRun(cfg flags.Config) error {
@@ -303,19 +302,12 @@ func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filt
 	}
 	cfg.PidFilter = -1
 	cfg.TidFilter = -1
-	if pid, ok := eqFilterValue(filter.PID); ok {
+	if pid, ok := filter.PID.EqValue(); ok {
 		cfg.PidFilter = pid
 	}
-	if tid, ok := eqFilterValue(filter.TID); ok {
+	if tid, ok := filter.TID.EqValue(); ok {
 		cfg.TidFilter = tid
 	}
-}
-
-func eqFilterValue(filter *globalfilter.NumericFilter) (int, bool) {
-	if filter == nil || filter.Op != globalfilter.OpEq || filter.Value <= 0 {
-		return 0, false
-	}
-	return int(filter.Value), true
 }
 
 func runTrace(cfg flags.Config) error {
@@ -398,24 +390,9 @@ func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	}
 }
 
+// traceFilterFromConfig delegates to the canonical Config.TraceFilter method.
 func traceFilterFromConfig(cfg flags.Config) globalfilter.Filter {
-	filter := cfg.GlobalFilter.Clone()
-	if filter.IsActive() {
-		return filter
-	}
-	if cfg.CommFilter != "" {
-		filter.Comm = &globalfilter.StringFilter{Pattern: cfg.CommFilter}
-	}
-	if cfg.PathFilter != "" {
-		filter.File = &globalfilter.StringFilter{Pattern: cfg.PathFilter}
-	}
-	if cfg.PidFilter > 0 {
-		filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(cfg.PidFilter)}
-	}
-	if cfg.TidFilter > 0 {
-		filter.TID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(cfg.TidFilter)}
-	}
-	return filter
+	return cfg.TraceFilter()
 }
 
 type profilingControl struct {
@@ -730,16 +707,9 @@ func headlessParquetTraceConfig(cfg flags.Config) flags.Config {
 	return out
 }
 
+// parquetMetadata delegates to the canonical parquet.NewFileMetadata.
 func parquetMetadata(mode string) parquet.FileMetadata {
-	meta := parquet.FileMetadata{
-		StartedAtUnixNano: uint64(time.Now().UnixNano()),
-		Mode:              mode,
-		IORVersion:        flags.Version,
-	}
-	if hostname, err := os.Hostname(); err == nil {
-		meta.Hostname = hostname
-	}
-	return meta
+	return parquet.NewFileMetadata(mode)
 }
 
 type headlessParquetSink struct {
