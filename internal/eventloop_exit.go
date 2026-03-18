@@ -3,7 +3,6 @@ package internal
 import (
 	"fmt"
 	"os"
-	"reflect"
 	"syscall"
 
 	"ior/internal/event"
@@ -11,58 +10,30 @@ import (
 	"ior/internal/types"
 )
 
-func (e *eventLoop) initExitHandlers() {
-	e.exitHandlers = map[reflect.Type]tracepointExitHandler{
-		typeKey[*types.OpenEvent]():           newTypedExitHandler(e, "Dropped malformed open enter event", e.handleOpenExit),
-		typeKey[*types.NameEvent]():           newTypedExitHandler(e, "Dropped malformed name enter event", e.handleNameExit),
-		typeKey[*types.PathEvent]():           newTypedExitHandler(e, "Dropped malformed path enter event", e.handlePathExit),
-		typeKey[*types.FdEvent]():             newTypedExitHandler(e, "Dropped malformed fd enter event", e.handleFdExit),
-		typeKey[*types.Dup3Event]():           newTypedExitHandler(e, "Dropped malformed dup3 enter event", e.handleDup3Exit),
-		typeKey[*types.OpenByHandleAtEvent](): newTypedExitHandler(e, "Dropped malformed open_by_handle_at enter event", e.handleOpenByHandleAtExit),
-		typeKey[*types.NullEvent]():           newTypedExitHandler(e, "Dropped malformed null enter event", e.handleNullExit),
-		typeKey[*types.FcntlEvent]():          newTypedExitHandler(e, "Dropped malformed fcntl enter event", e.handleFcntlExit),
-	}
-}
-
-func mustBeType[T event.Event](e *eventLoop, ep *event.Pair, message string) (T, bool) {
-	enterEv, ok := ep.EnterEv.(T)
-	if !ok {
-		e.recyclePair(ep, message)
-		var zero T
-		return zero, false
-	}
-	return enterEv, true
-}
-
-func newTypedExitHandler[T event.Event](e *eventLoop, message string, handle func(*event.Pair, T) bool) tracepointExitHandler {
-	return func(ep *event.Pair) bool {
-		enterEv, ok := mustBeType[T](e, ep, message)
-		if !ok {
-			return false
-		}
-		return handle(ep, enterEv)
-	}
-}
-
-func typeKey[T any]() reflect.Type {
-	var zero T
-	return reflect.TypeOf(zero)
-}
-
-func (e *eventLoop) exitHandlerRegistry() map[reflect.Type]tracepointExitHandler {
-	if e.exitHandlers == nil {
-		e.initExitHandlers()
-	}
-	return e.exitHandlers
-}
-
+// handleTracepointExit routes a completed enter/exit pair to the appropriate
+// handler using a type switch, avoiding reflection on the hot event path.
 func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
-	handler, ok := e.exitHandlerRegistry()[reflect.TypeOf(ep.EnterEv)]
-	if !ok {
+	switch ev := ep.EnterEv.(type) {
+	case *types.OpenEvent:
+		return e.handleOpenExit(ep, ev)
+	case *types.NameEvent:
+		return e.handleNameExit(ep, ev)
+	case *types.PathEvent:
+		return e.handlePathExit(ep, ev)
+	case *types.FdEvent:
+		return e.handleFdExit(ep, ev)
+	case *types.Dup3Event:
+		return e.handleDup3Exit(ep, ev)
+	case *types.OpenByHandleAtEvent:
+		return e.handleOpenByHandleAtExit(ep, ev)
+	case *types.NullEvent:
+		return e.handleNullExit(ep, ev)
+	case *types.FcntlEvent:
+		return e.handleFcntlExit(ep, ev)
+	default:
 		e.recyclePair(ep, "Dropped malformed enter event")
 		return false
 	}
-	return handler(ep)
 }
 
 func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool {

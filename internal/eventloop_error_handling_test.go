@@ -166,44 +166,38 @@ func TestDecodeRawEventMalformedNotifies(t *testing.T) {
 	}
 }
 
-func TestMustBeTypeReturnsTypedEnterEvent(t *testing.T) {
-	el := mustNewEventLoop(t, eventLoopConfig{})
-	enterEv, enterRaw := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
-	ep := event.NewPair(types.NewOpenEvent(enterRaw))
-	defer ep.Recycle()
+// unknownEvent is a minimal event.Event stub used to exercise the default
+// branch of handleTracepointExit (an enter-event type not covered by any case).
+type unknownEvent struct{}
 
-	typed, ok := mustBeType[*types.OpenEvent](el, ep, "ignored")
-	if !ok {
-		t.Fatal("expected mustBeType to return the typed enter event")
-	}
-	if typed.GetTid() != enterEv.Tid {
-		t.Fatalf("mustBeType() returned tid %d, want %d", typed.GetTid(), enterEv.Tid)
-	}
-}
+func (unknownEvent) String() string            { return "unknownEvent" }
+func (unknownEvent) GetTraceId() types.TraceId { return 0 }
+func (unknownEvent) GetPid() uint32            { return 0 }
+func (unknownEvent) GetTid() uint32            { return 0 }
+func (unknownEvent) GetTime() uint64           { return 0 }
+func (unknownEvent) Equals(other any) bool     { return false }
+func (unknownEvent) Recycle()                  {}
 
-func TestMustBeTypeRecyclesMalformedPairAndNotifies(t *testing.T) {
+func TestHandleTracepointExitUnknownTypeDropsMalformedEvent(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	warnings := make(chan string, 1)
 	el.warningCb = func(message string) { warnings <- message }
 
-	_, enterRaw := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_SYNC)
-	ep := event.NewPair(types.NewNullEvent(enterRaw))
+	// Wrap an unknown enter-event type to hit the default branch of the type switch.
+	ep := event.NewPair(unknownEvent{})
 
-	typed, ok := mustBeType[*types.OpenEvent](el, ep, "Dropped malformed open enter event")
-	if ok || typed != nil {
-		t.Fatalf("expected mustBeType mismatch to fail, got ok=%v typed=%v", ok, typed)
-	}
-	if ep.EnterEv != nil || ep.ExitEv != nil {
-		t.Fatalf("expected malformed pair to be recycled")
+	ok := el.handleTracepointExit(ep)
+	if ok {
+		t.Fatal("expected handleTracepointExit to return false for unknown enter-event type")
 	}
 
 	select {
 	case msg := <-warnings:
-		if msg != "Dropped malformed open enter event" {
+		if msg != "Dropped malformed enter event" {
 			t.Fatalf("unexpected warning %q", msg)
 		}
 	default:
-		t.Fatalf("expected warning notification")
+		t.Fatal("expected warning notification for unknown enter-event type")
 	}
 }
 
