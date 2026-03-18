@@ -102,11 +102,11 @@ func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
 	}
-	if updated.pidFilter != 42 {
-		t.Fatalf("expected pid filter 42, got %d", updated.pidFilter)
+	if updated.proc.pid != 42 {
+		t.Fatalf("expected pid filter 42, got %d", updated.proc.pid)
 	}
-	if updated.tidFilter != -1 {
-		t.Fatalf("expected tid filter reset to -1, got %d", updated.tidFilter)
+	if updated.proc.tid != -1 {
+		t.Fatalf("expected tid filter reset to -1, got %d", updated.proc.tid)
 	}
 }
 
@@ -129,8 +129,8 @@ func TestPidSelectedAllSetsNoFilter(t *testing.T) {
 	next, _ := m.Update(PidSelectedMsg{Pid: 0})
 	updated := next.(Model)
 
-	if updated.pidFilter != -1 {
-		t.Fatalf("expected pid filter -1 for all pids, got %d", updated.pidFilter)
+	if updated.proc.pid != -1 {
+		t.Fatalf("expected pid filter -1 for all pids, got %d", updated.proc.pid)
 	}
 }
 
@@ -264,8 +264,8 @@ func TestQuitKeyOnReselectPIDPickerReturnsToDashboardLikeEsc(t *testing.T) {
 	m.attaching = false
 	m.width = 120
 	m.height = 30
-	m.pidFilter = 1111
-	m.tidFilter = 2222
+	m.proc.pid = 1111
+	m.proc.tid = 2222
 	m.dashboard.SetPidFilter(1111)
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
@@ -291,11 +291,11 @@ func TestQuitKeyOnReselectPIDPickerReturnsToDashboardLikeEsc(t *testing.T) {
 	if updated.quitting {
 		t.Fatalf("expected q in reselect picker to behave like esc, not quit")
 	}
-	if updated.pickerReturn != nil {
+	if updated.proc.pickerReturn != nil {
 		t.Fatalf("expected picker return context to clear after cancel")
 	}
-	if updated.pidFilter != 1111 || updated.tidFilter != 2222 {
-		t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.pidFilter, updated.tidFilter)
+	if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
+		t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.proc.pid, updated.proc.tid)
 	}
 }
 
@@ -305,8 +305,8 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 	m.attaching = false
 	m.width = 120
 	m.height = 30
-	m.pidFilter = 3333
-	m.tidFilter = 4444
+	m.proc.pid = 3333
+	m.proc.tid = 4444
 	m.dashboard.SetPidFilter(3333)
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
@@ -332,11 +332,11 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 	if updated.quitting {
 		t.Fatalf("expected esc in reselect picker not to quit app")
 	}
-	if updated.pickerReturn != nil {
+	if updated.proc.pickerReturn != nil {
 		t.Fatalf("expected picker return context to clear after cancel")
 	}
-	if updated.pidFilter != 3333 || updated.tidFilter != 4444 {
-		t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.pidFilter, updated.tidFilter)
+	if updated.proc.pid != 3333 || updated.proc.tid != 4444 {
+		t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.proc.pid, updated.proc.tid)
 	}
 }
 
@@ -993,7 +993,7 @@ func TestNormalizeKeyEventReleaseFallbackSuppressesImmediatePressOnly(t *testing
 	}
 
 	// Expire suppression deterministically instead of waiting on wall clock time.
-	m.suppressPressUntil = time.Now().Add(-time.Nanosecond)
+	m.kb.suppressUntil = time.Now().Add(-time.Nanosecond)
 	if normalized, ok = m.normalizeKeyEvent(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); !ok {
 		t.Fatalf("expected press to be accepted after suppression window")
 	}
@@ -1180,11 +1180,11 @@ func TestTidSelectedTransitionsToDashboardAndSetsTIDFilter(t *testing.T) {
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
 	}
-	if updated.tidFilter != 3333 {
-		t.Fatalf("expected tid filter 3333, got %d", updated.tidFilter)
+	if updated.proc.tid != 3333 {
+		t.Fatalf("expected tid filter 3333, got %d", updated.proc.tid)
 	}
-	if updated.pidFilter != 2222 {
-		t.Fatalf("expected pid filter to remain 2222, got %d", updated.pidFilter)
+	if updated.proc.pid != 2222 {
+		t.Fatalf("expected pid filter to remain 2222, got %d", updated.proc.pid)
 	}
 }
 
@@ -1199,11 +1199,11 @@ func TestTidSelectedFromAllPIDModeSetsOwningPID(t *testing.T) {
 	if updated.screen != ScreenDashboard {
 		t.Fatalf("expected dashboard screen, got %v", updated.screen)
 	}
-	if updated.pidFilter != 4444 {
-		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", updated.pidFilter)
+	if updated.proc.pid != 4444 {
+		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", updated.proc.pid)
 	}
-	if updated.tidFilter != 5555 {
-		t.Fatalf("expected tid filter 5555, got %d", updated.tidFilter)
+	if updated.proc.tid != 5555 {
+		t.Fatalf("expected tid filter 5555, got %d", updated.proc.tid)
 	}
 }
 
@@ -1245,8 +1245,8 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	if m.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed while stream filter modal handles typing")
 	}
-	if m.globalFilter.Syscall == nil || m.globalFilter.Syscall.Pattern != "ope" {
-		t.Fatalf("expected typed syscall filter to be stored globally, got %+v", m.globalFilter.Syscall)
+	if m.filter.global.Syscall == nil || m.filter.global.Syscall.Pattern != "ope" {
+		t.Fatalf("expected typed syscall filter to be stored globally, got %+v", m.filter.global.Syscall)
 	}
 }
 
@@ -1416,7 +1416,7 @@ func TestGlobalFilterModalOpensFromDashboardShortcut(t *testing.T) {
 func TestQuitClosesGlobalFilterModalWithoutQuitting(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
-	m.filterModal = m.filterModal.Open(m.globalFilter)
+	m.filterModal = m.filterModal.Open(m.filter.global)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	m = next.(Model)
@@ -1455,8 +1455,8 @@ func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
 	if m.filterModal.Visible() {
 		t.Fatalf("expected global filter modal to close after esc")
 	}
-	if m.globalFilter.Syscall == nil || m.globalFilter.Syscall.Pattern != "read" {
-		t.Fatalf("expected stored global filter updated from modal, got %+v", m.globalFilter.Syscall)
+	if m.filter.global.Syscall == nil || m.filter.global.Syscall.Pattern != "read" {
+		t.Fatalf("expected stored global filter updated from modal, got %+v", m.filter.global.Syscall)
 	}
 	if !stopped {
 		t.Fatalf("expected filter apply to stop the active trace")
@@ -1540,8 +1540,8 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected applying selected-cell global filter to restart tracing")
 	}
-	if m.globalFilter.Comm == nil || m.globalFilter.Comm.Pattern != "systemd" {
-		t.Fatalf("expected selected comm applied globally, got %+v", m.globalFilter.Comm)
+	if m.filter.global.Comm == nil || m.filter.global.Comm.Pattern != "systemd" {
+		t.Fatalf("expected selected comm applied globally, got %+v", m.filter.global.Comm)
 	}
 	if !stopped {
 		t.Fatalf("expected selected-cell global filter to stop the active trace")
@@ -1549,8 +1549,8 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if !m.attaching {
 		t.Fatalf("expected selected-cell global filter to restart tracing")
 	}
-	if len(m.filterStack) != 1 || m.filterStack[0] != "comm~systemd" {
-		t.Fatalf("expected selected-cell action pushed to filter stack, got %+v", m.filterStack)
+	if len(m.filter.stack) != 1 || m.filter.stack[0] != "comm~systemd" {
+		t.Fatalf("expected selected-cell action pushed to filter stack, got %+v", m.filter.stack)
 	}
 }
 
@@ -1577,11 +1577,11 @@ func TestGlobalFilterUndoKeyPopsLatestStackEntry(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected F to trigger global filter undo")
 	}
-	if m.globalFilter.IsActive() {
-		t.Fatalf("expected undo to restore the previous all-filter state, got %+v", m.globalFilter)
+	if m.filter.global.IsActive() {
+		t.Fatalf("expected undo to restore the previous all-filter state, got %+v", m.filter.global)
 	}
-	if len(m.filterStack) != 0 || len(m.filterHistory) != 0 {
-		t.Fatalf("expected filter stack/history cleared after undo, got stack=%+v history=%d", m.filterStack, len(m.filterHistory))
+	if len(m.filter.stack) != 0 || len(m.filter.history) != 0 {
+		t.Fatalf("expected filter stack/history cleared after undo, got stack=%+v history=%d", m.filter.stack, len(m.filter.history))
 	}
 	if !stopped {
 		t.Fatalf("expected undo to stop the active trace")
@@ -1631,11 +1631,11 @@ func TestPausedStreamEscUndoesLatestGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected esc undo to restart tracing")
 	}
-	if m.globalFilter.IsActive() {
-		t.Fatalf("expected esc undo to restore all-filter state, got %+v", m.globalFilter)
+	if m.filter.global.IsActive() {
+		t.Fatalf("expected esc undo to restore all-filter state, got %+v", m.filter.global)
 	}
-	if len(m.filterStack) != 0 {
-		t.Fatalf("expected filter stack cleared after esc undo, got %+v", m.filterStack)
+	if len(m.filter.stack) != 0 {
+		t.Fatalf("expected filter stack cleared after esc undo, got %+v", m.filter.stack)
 	}
 	if !stopped {
 		t.Fatalf("expected esc undo to stop the active trace")
@@ -1706,11 +1706,11 @@ func TestProcessesTabEnterAppliesSelectedProcessAsGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected selected process filter to restart tracing")
 	}
-	if m.globalFilter.PID == nil || m.globalFilter.PID.Value != 222 {
-		t.Fatalf("expected selected process pid applied globally, got %+v", m.globalFilter.PID)
+	if m.filter.global.PID == nil || m.filter.global.PID.Value != 222 {
+		t.Fatalf("expected selected process pid applied globally, got %+v", m.filter.global.PID)
 	}
-	if len(m.filterStack) != 1 || m.filterStack[0] != "pid=222" {
-		t.Fatalf("expected pid filter pushed to stack, got %+v", m.filterStack)
+	if len(m.filter.stack) != 1 || m.filter.stack[0] != "pid=222" {
+		t.Fatalf("expected pid filter pushed to stack, got %+v", m.filter.stack)
 	}
 	if !stopped {
 		t.Fatalf("expected selected process filter to stop the active trace")
@@ -2051,10 +2051,10 @@ func TestKeyboardEnhancementsMsgHandledGracefully(t *testing.T) {
 	}
 
 	updated := next.(Model)
-	if !updated.keyboardEnhancementsKnown {
+	if !updated.kb.enhancementsKnown {
 		t.Fatalf("expected keyboard enhancements to be marked as known")
 	}
-	if !updated.keyboardEnhancements.SupportsKeyDisambiguation() {
+	if !updated.kb.enhancements.SupportsKeyDisambiguation() {
 		t.Fatalf("expected non-zero flags to report key disambiguation support")
 	}
 }
@@ -2069,13 +2069,13 @@ func TestViewSetsDynamicWindowTitle(t *testing.T) {
 	}
 
 	m.screen = ScreenDashboard
-	m.pidFilter = 1234
+	m.proc.pid = 1234
 	view = m.View()
 	if view.WindowTitle != "ior - tracing PID 1234" {
 		t.Fatalf("unexpected tracing window title: %q", view.WindowTitle)
 	}
 
-	m.pidFilter = -1
+	m.proc.pid = -1
 	view = m.View()
 	if view.WindowTitle != "ior - I/O Riot" {
 		t.Fatalf("unexpected default window title: %q", view.WindowTitle)

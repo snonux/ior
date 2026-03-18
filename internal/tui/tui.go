@@ -270,6 +270,37 @@ func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter)
 	return err
 }
 
+// keyboardState groups keyboard event tracking and press-suppression fields.
+// These fields are read and written exclusively by keys_normalize.go methods.
+type keyboardState struct {
+	enhancements      tea.KeyboardEnhancementsMsg
+	enhancementsKnown bool
+	lastEventID       string
+	lastEventAt       time.Time
+	lastEventWasPress bool
+	// Some terminals emit release+press for a single physical key event.
+	// When we fallback-handle a release as a press, suppress the immediate
+	// matching press to avoid double-handling.
+	suppressID    string
+	suppressUntil time.Time
+}
+
+// filterState groups the trace filter chain: the active filter, the undo
+// history, and the human-readable label stack used in the status bar.
+type filterState struct {
+	global  globalfilter.Filter
+	history []globalfilter.Filter
+	stack   []string
+}
+
+// processState groups PID/TID filter values and the picker navigation
+// return bookmark used to restore the dashboard after re-selecting a process.
+type processState struct {
+	pid          int
+	tid          int
+	pickerReturn *pickerReturnState
+}
+
 // Model is the top-level Bubble Tea model that routes between PID picker and dashboard.
 type Model struct {
 	screen      Screen
@@ -296,27 +327,13 @@ type Model struct {
 	startTrace TraceStarter
 	traceStop  context.CancelFunc
 
-	pidFilter     int
-	tidFilter     int
-	globalFilter  globalfilter.Filter
-	filterHistory []globalfilter.Filter
-	filterStack   []string
-	pickerReturn  *pickerReturnState
+	kb     keyboardState
+	filter filterState
+	proc   processState
+
 	exportEnabled bool
 	isDark        bool
 	focused       bool
-
-	keyboardEnhancements      tea.KeyboardEnhancementsMsg
-	keyboardEnhancementsKnown bool
-
-	lastKeyEventID       string
-	lastKeyEventAt       time.Time
-	lastKeyEventWasPress bool
-	// Some terminals emit release+press for a single physical key event.
-	// When we fallback-handle a release as a press, suppress the immediate
-	// matching press to avoid double-handling.
-	suppressPressKeyID string
-	suppressPressUntil time.Time
 }
 
 type pickerReturnState struct {
@@ -374,7 +391,7 @@ func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter
 		keys:          keys,
 		spin:          spin,
 		startTrace:    startTrace,
-		globalFilter:  startupFilter.Clone(),
+		filter:        filterState{global: startupFilter.Clone()},
 		exportEnabled: exportEnabled,
 		isDark:        true,
 		focused:       true,
@@ -422,8 +439,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyTheme(msg.IsDark())
 		return m, nil
 	case tea.KeyboardEnhancementsMsg:
-		m.keyboardEnhancements = msg
-		m.keyboardEnhancementsKnown = true
+		m.kb.enhancements = msg
+		m.kb.enhancementsKnown = true
 		if msg.SupportsKeyDisambiguation() {
 			log.Printf("tui: keyboard enhancements enabled (flags=%d, eventTypes=%t)", msg.Flags, msg.SupportsEventTypes())
 		}
@@ -470,7 +487,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attaching = false
 		m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
-		m.dashboard.SetGlobalFilter(m.globalFilter)
+		m.dashboard.SetGlobalFilter(m.filter.global)
 		m.syncDashboardFilterState()
 		width, height := common.EffectiveViewport(m.width, m.height)
 		next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
@@ -510,7 +527,7 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 
 func (m Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
 	return m.screen == ScreenPIDPicker &&
-		m.pickerReturn != nil &&
+		m.proc.pickerReturn != nil &&
 		(isEscKey(msg) || key.Matches(msg, m.keys.Quit))
 }
 
@@ -590,7 +607,7 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		return m, nil, true
 	}
 	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Filter) {
-		m.filterModal = m.filterModal.Open(m.globalFilter)
+		m.filterModal = m.filterModal.Open(m.filter.global)
 		return m, nil, true
 	}
 	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.FilterUndo) {
@@ -709,7 +726,7 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.stopTrace()
 	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, -1)
-	m.pickerReturn = nil
+	m.proc.pickerReturn = nil
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -718,7 +735,7 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	tid := selectedPIDFilter(msg.Tid)
-	pid := m.pidFilter
+	pid := m.proc.pid
 	if msg.Pid > 0 {
 		pid = msg.Pid
 	}
@@ -729,7 +746,7 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.stopTrace()
 	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, tid)
-	m.pickerReturn = nil
+	m.proc.pickerReturn = nil
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.lastErr = nil
@@ -741,9 +758,9 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 		m.lastErr = err
 		return m, nil
 	}
-	m.pickerReturn = &pickerReturnState{
-		pidFilter: m.pidFilter,
-		tidFilter: m.tidFilter,
+	m.proc.pickerReturn = &pickerReturnState{
+		pidFilter: m.proc.pid,
+		tidFilter: m.proc.tid,
 	}
 	m.stopTrace()
 	m.screen = ScreenPIDPicker
@@ -766,15 +783,15 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) reselectTID() (tea.Model, tea.Cmd) {
-	pid := m.pidFilter
+	pid := m.proc.pid
 
 	if err := m.stopRecording(); err != nil {
 		m.lastErr = err
 		return m, nil
 	}
-	m.pickerReturn = &pickerReturnState{
-		pidFilter: m.pidFilter,
-		tidFilter: m.tidFilter,
+	m.proc.pickerReturn = &pickerReturnState{
+		pidFilter: m.proc.pid,
+		tidFilter: m.proc.tid,
 	}
 	m.stopTrace()
 	m.screen = ScreenPIDPicker
@@ -804,15 +821,15 @@ func selectedPIDFilter(pid int) int {
 }
 
 func (m Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
-	if m.pickerReturn == nil {
+	if m.proc.pickerReturn == nil {
 		return m, nil
 	}
 	if err := m.stopRecording(); err != nil {
 		m.lastErr = err
 		return m, nil
 	}
-	returnState := *m.pickerReturn
-	m.pickerReturn = nil
+	returnState := *m.proc.pickerReturn
+	m.proc.pickerReturn = nil
 	m.stopTrace()
 	m.setProcessFilters(returnState.pidFilter, returnState.tidFilter)
 	m.screen = ScreenDashboard
@@ -825,7 +842,7 @@ func (m *Model) beginTraceCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.traceStop = cancel
 	ctx = ContextWithRuntimeBindings(ctx, m.runtime)
-	ctx = ContextWithTraceFilters(ctx, m.globalFilter)
+	ctx = ContextWithTraceFilters(ctx, m.filter.global)
 	return startTraceCmd(m.startTrace, ctx)
 }
 
@@ -851,30 +868,30 @@ func filterFromConfig(cfg flags.Config) globalfilter.Filter {
 }
 
 func (m *Model) setProcessFilters(pid, tid int) {
-	m.pidFilter = pid
-	m.tidFilter = tid
-	m.globalFilter = applyProcessFilters(m.globalFilter, pid, tid)
-	for i := range m.filterHistory {
-		m.filterHistory[i] = applyProcessFilters(m.filterHistory[i], pid, tid)
+	m.proc.pid = pid
+	m.proc.tid = tid
+	m.filter.global = applyProcessFilters(m.filter.global, pid, tid)
+	for i := range m.filter.history {
+		m.filter.history[i] = applyProcessFilters(m.filter.history[i], pid, tid)
 	}
 	m.syncDashboardFilterState()
 }
 
 func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
-	m.globalFilter = filter.Clone()
+	m.filter.global = filter.Clone()
 	// EqValue returns (0, false) when no equality filter is set;
 	// selectedPIDFilter maps non-positive values to -1 ("no filter").
-	pid, _ := m.globalFilter.PID.EqValue()
-	tid, _ := m.globalFilter.TID.EqValue()
-	m.pidFilter = selectedPIDFilter(pid)
-	m.tidFilter = selectedPIDFilter(tid)
+	pid, _ := m.filter.global.PID.EqValue()
+	tid, _ := m.filter.global.TID.EqValue()
+	m.proc.pid = selectedPIDFilter(pid)
+	m.proc.tid = selectedPIDFilter(tid)
 	m.syncDashboardFilterState()
 }
 
 func (m *Model) syncDashboardFilterState() {
-	m.dashboard.SetPidFilter(m.pidFilter)
-	m.dashboard.SetGlobalFilter(m.globalFilter)
-	m.dashboard.SetFilterStack(m.filterStack)
+	m.dashboard.SetPidFilter(m.proc.pid)
+	m.dashboard.SetGlobalFilter(m.filter.global)
+	m.dashboard.SetFilterStack(m.filter.stack)
 	m.dashboard.SetRecordingStatus(m.recordingStatus())
 }
 
@@ -887,10 +904,10 @@ func applyProcessFilters(filter globalfilter.Filter, pid, tid int) globalfilter.
 
 func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
 	nextFilter := filter.Clone()
-	changed := !m.globalFilter.Equal(nextFilter)
+	changed := !m.filter.global.Equal(nextFilter)
 	if changed {
-		m.filterHistory = append(m.filterHistory, m.globalFilter.Clone())
-		m.filterStack = append(m.filterStack, globalFilterActionLabel(m.globalFilter, nextFilter, action))
+		m.filter.history = append(m.filter.history, m.filter.global.Clone())
+		m.filter.stack = append(m.filter.stack, globalFilterActionLabel(m.filter.global, nextFilter, action))
 	}
 	m.setGlobalFilter(nextFilter)
 	if !changed || m.screen != ScreenDashboard {
@@ -906,13 +923,13 @@ func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea
 }
 
 func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
-	if len(m.filterHistory) == 0 {
+	if len(m.filter.history) == 0 {
 		return m, nil
 	}
-	prev := m.filterHistory[len(m.filterHistory)-1]
-	m.filterHistory = m.filterHistory[:len(m.filterHistory)-1]
-	if len(m.filterStack) > 0 {
-		m.filterStack = m.filterStack[:len(m.filterStack)-1]
+	prev := m.filter.history[len(m.filter.history)-1]
+	m.filter.history = m.filter.history[:len(m.filter.history)-1]
+	if len(m.filter.stack) > 0 {
+		m.filter.stack = m.filter.stack[:len(m.filter.stack)-1]
 	}
 	m.setGlobalFilter(prev)
 	if m.screen != ScreenDashboard {
@@ -1022,8 +1039,8 @@ func (m Model) windowTitle() string {
 	case ScreenPIDPicker:
 		return "ior - select process"
 	case ScreenDashboard:
-		if m.pidFilter > 0 {
-			return fmt.Sprintf("ior - tracing PID %d", m.pidFilter)
+		if m.proc.pid > 0 {
+			return fmt.Sprintf("ior - tracing PID %d", m.proc.pid)
 		}
 	}
 	return "ior - I/O Riot"
