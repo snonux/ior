@@ -25,20 +25,13 @@ type Pair struct {
 	Comm            string
 	Duration        uint64
 	DurationToPrev  uint64
-	Bytes           uint64 // Number of bytes transferred (read/write/transfer syscalls only)
-	Equals          bool
+	Bytes          uint64 // Number of bytes transferred (read/write/transfer syscalls only)
 }
 
 func NewPair(enterEv Event) *Pair {
 	e := poolOfEventPairs.Get().(*Pair)
-	e.EnterEv = enterEv
-	e.ExitEv = nil
-	e.File = nil
-	e.Comm = ""
-	e.Duration = 0
-	e.DurationToPrev = 0
-	e.Bytes = 0
-	e.Equals = false
+	// Zero all fields via struct literal to prevent stale data from previous pool reuse.
+	*e = Pair{EnterEv: enterEv}
 	return e
 }
 
@@ -126,13 +119,7 @@ func (e *Pair) Recycle() {
 	if e.ExitEv != nil {
 		e.ExitEv.Recycle()
 	}
-	e.EnterEv = nil
-	e.ExitEv = nil
-	e.File = nil
-	e.Comm = ""
-	e.Duration = 0
-	e.DurationToPrev = 0
-	e.Bytes = 0
-	e.Equals = false
+	// Zero all fields via struct literal to prevent stale data on pool reuse.
+	*e = Pair{}
 	poolOfEventPairs.Put(e)
 }

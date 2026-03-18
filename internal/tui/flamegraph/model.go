@@ -1,11 +1,11 @@
 package flamegraph
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"image/color"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -727,8 +727,8 @@ func framesAtDepthFiltered(frames []tuiFrame, depth int, include map[int]bool) [
 			indices = append(indices, idx)
 		}
 	}
-	sort.Slice(indices, func(i, j int) bool {
-		return frames[indices[i]].Col < frames[indices[j]].Col
+	slices.SortFunc(indices, func(a, b int) int {
+		return cmp.Compare(frames[a].Col, frames[b].Col)
 	})
 	return indices
 }
@@ -878,19 +878,19 @@ func (m Model) visibleTraversalOrder() []int {
 		}
 		indices = append(indices, idx)
 	}
-	sort.Slice(indices, func(i, j int) bool {
-		left := m.frames[indices[i]]
-		right := m.frames[indices[j]]
+	slices.SortFunc(indices, func(a, b int) int {
+		left := m.frames[a]
+		right := m.frames[b]
 		if left.Depth != right.Depth {
-			return left.Depth < right.Depth
+			return cmp.Compare(left.Depth, right.Depth)
 		}
 		if left.Col != right.Col {
-			return left.Col < right.Col
+			return cmp.Compare(left.Col, right.Col)
 		}
 		if left.Row != right.Row {
-			return left.Row < right.Row
+			return cmp.Compare(left.Row, right.Row)
 		}
-		return indices[i] < indices[j]
+		return cmp.Compare(a, b)
 	})
 	return indices
 }

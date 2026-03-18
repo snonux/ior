@@ -23,6 +23,26 @@ type NumericFilter struct {
 	Value int64
 }
 
+// NewEqFilter creates an equality NumericFilter for a positive value.
+// Returns nil if value is not positive.
+func NewEqFilter(value int64) *NumericFilter {
+	if value <= 0 {
+		return nil
+	}
+	return &NumericFilter{Op: OpEq, Value: value}
+}
+
+// EqValue returns the filter's positive equality value if the filter
+// represents an exact-match constraint (Op == OpEq and Value > 0).
+// Returns (0, false) when the filter is nil, uses a different operator,
+// or has a non-positive value.
+func (f *NumericFilter) EqValue() (int, bool) {
+	if f == nil || f.Op != OpEq || f.Value <= 0 {
+		return 0, false
+	}
+	return int(f.Value), true
+}
+
 type StringFilter struct {
 	Pattern string
 }

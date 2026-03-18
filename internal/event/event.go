@@ -7,7 +7,7 @@ import (
 )
 
 var poolOfEventPairs = sync.Pool{
-	New: func() interface{} { return &Pair{} },
+	New: func() any { return &Pair{} },
 }
 
 // Event is the common contract implemented by decoded syscall trace events.

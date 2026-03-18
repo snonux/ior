@@ -1,7 +1,8 @@
 package statsengine
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"time"
 
 	"ior/internal/event"
@@ -115,14 +116,14 @@ func buildProcessSnapshots(inputs []processSnapshotInput, elapsed time.Duration)
 	for _, in := range inputs {
 		result = append(result, in.toSnapshot(rateDiv))
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Syscalls != result[j].Syscalls {
-			return result[i].Syscalls > result[j].Syscalls
+	slices.SortFunc(result, func(a, b ProcessSnapshot) int {
+		if a.Syscalls != b.Syscalls {
+			return cmp.Compare(b.Syscalls, a.Syscalls)
 		}
-		if result[i].Bytes != result[j].Bytes {
-			return result[i].Bytes > result[j].Bytes
+		if a.Bytes != b.Bytes {
+			return cmp.Compare(b.Bytes, a.Bytes)
 		}
-		return result[i].PID < result[j].PID
+		return cmp.Compare(a.PID, b.PID)
 	})
 	return result
 }
@@ -136,8 +137,14 @@ func (a *processAccumulator) compactIfNeeded() {
 	for _, stats := range a.byPID {
 		ordered = append(ordered, stats)
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		return betterProcessRank(ordered[i], ordered[j])
+	slices.SortFunc(ordered, func(a, b *processStats) int {
+		if betterProcessRank(a, b) {
+			return -1
+		}
+		if betterProcessRank(b, a) {
+			return 1
+		}
+		return 0
 	})
 	if len(ordered) > a.topN {
 		ordered = ordered[:a.topN]

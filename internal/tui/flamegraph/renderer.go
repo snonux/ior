@@ -1,11 +1,12 @@
 package flamegraph
 
 import (
+	"cmp"
 	"fmt"
 	"hash/fnv"
 	"image/color"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -129,11 +130,11 @@ func allocateChildWidths(children []*snapshotNode, parentTotal uint64, span int)
 	// If proportional rounding culled every child, surface top contributors so
 	// the user can still navigate beyond the root frame.
 	if used == 0 {
-		sort.Slice(items, func(i, j int) bool {
-			if items[i].total == items[j].total {
-				return items[i].idx < items[j].idx
+		slices.SortFunc(items, func(a, b childWidth) int {
+			if a.total != b.total {
+				return cmp.Compare(b.total, a.total)
 			}
-			return items[i].total > items[j].total
+			return cmp.Compare(a.idx, b.idx)
 		})
 		visible := min(span, len(items))
 		for i := 0; i < visible; i++ {
@@ -334,8 +335,8 @@ func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, ava
 	rows := make([]string, 0, (maxRow-rowOffset+1)*barHeight)
 	for row := maxRow; row >= rowOffset; row-- {
 		framesAtRow := rowsByDepth[row]
-		sort.Slice(framesAtRow, func(i, j int) bool {
-			return framesAtRow[i].frame.Col < framesAtRow[j].frame.Col
+		slices.SortFunc(framesAtRow, func(a, b indexedFrame) int {
+			return cmp.Compare(a.frame.Col, b.frame.Col)
 		})
 		for repeat := 0; repeat < barHeight; repeat++ {
 			showLabels := repeat == barHeight/2
@@ -680,8 +681,8 @@ func compactMatchRoots(frames []tuiFrame, matchSet map[int]bool) []matchRoot {
 			total: frames[idx].Total,
 		})
 	}
-	sort.Slice(roots, func(i, j int) bool {
-		return len(roots[i].path) < len(roots[j].path)
+	slices.SortFunc(roots, func(a, b matchRoot) int {
+		return cmp.Compare(len(a.path), len(b.path))
 	})
 	merged := make([]matchRoot, 0, len(roots))
 	for _, candidate := range roots {

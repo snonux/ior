@@ -338,7 +338,7 @@ func (o *OpenEvent) GetTime() uint64 {
 }
 
 var poolOfOpenEvents = sync.Pool{
-	New: func() interface{} { return &OpenEvent{} },
+	New: func() any { return &OpenEvent{} },
 }
 
 func NewOpenEvent(raw []byte) *OpenEvent {
@@ -405,7 +405,7 @@ func (n *NullEvent) GetTime() uint64 {
 }
 
 var poolOfNullEvents = sync.Pool{
-	New: func() interface{} { return &NullEvent{} },
+	New: func() any { return &NullEvent{} },
 }
 
 func NewNullEvent(raw []byte) *NullEvent {
@@ -473,7 +473,7 @@ func (f *FdEvent) GetTime() uint64 {
 }
 
 var poolOfFdEvents = sync.Pool{
-	New: func() interface{} { return &FdEvent{} },
+	New: func() any { return &FdEvent{} },
 }
 
 func NewFdEvent(raw []byte) *FdEvent {
@@ -542,7 +542,7 @@ func (r *RetEvent) GetTime() uint64 {
 }
 
 var poolOfRetEvents = sync.Pool{
-	New: func() interface{} { return &RetEvent{} },
+	New: func() any { return &RetEvent{} },
 }
 
 func NewRetEvent(raw []byte) *RetEvent {
@@ -611,7 +611,7 @@ func (n *NameEvent) GetTime() uint64 {
 }
 
 var poolOfNameEvents = sync.Pool{
-	New: func() interface{} { return &NameEvent{} },
+	New: func() any { return &NameEvent{} },
 }
 
 func NewNameEvent(raw []byte) *NameEvent {
@@ -679,7 +679,7 @@ func (p *PathEvent) GetTime() uint64 {
 }
 
 var poolOfPathEvents = sync.Pool{
-	New: func() interface{} { return &PathEvent{} },
+	New: func() any { return &PathEvent{} },
 }
 
 func NewPathEvent(raw []byte) *PathEvent {
@@ -749,7 +749,7 @@ func (f *FcntlEvent) GetTime() uint64 {
 }
 
 var poolOfFcntlEvents = sync.Pool{
-	New: func() interface{} { return &FcntlEvent{} },
+	New: func() any { return &FcntlEvent{} },
 }
 
 func NewFcntlEvent(raw []byte) *FcntlEvent {
@@ -818,7 +818,7 @@ func (d *Dup3Event) GetTime() uint64 {
 }
 
 var poolOfDup3Events = sync.Pool{
-	New: func() interface{} { return &Dup3Event{} },
+	New: func() any { return &Dup3Event{} },
 }
 
 func NewDup3Event(raw []byte) *Dup3Event {
@@ -886,7 +886,7 @@ func (o *OpenByHandleAtEvent) GetTime() uint64 {
 }
 
 var poolOfOpenByHandleAtEvents = sync.Pool{
-	New: func() interface{} { return &OpenByHandleAtEvent{} },
+	New: func() any { return &OpenByHandleAtEvent{} },
 }
 
 func NewOpenByHandleAtEvent(raw []byte) *OpenByHandleAtEvent {

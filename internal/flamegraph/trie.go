@@ -1,6 +1,9 @@
 package flamegraph
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 type trieNode struct {
 	name     string
@@ -35,8 +38,8 @@ func (t *trie) computeTotals() {
 			t.maxDepth = depth
 		}
 
-		sort.Slice(node.children, func(i, j int) bool {
-			return node.children[i].name < node.children[j].name
+		slices.SortFunc(node.children, func(a, b *trieNode) int {
+			return cmp.Compare(a.name, b.name)
 		})
 
 		total := node.value

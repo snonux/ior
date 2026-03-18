@@ -1,10 +1,11 @@
 package dashboard
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"ior/internal/statsengine"
@@ -169,13 +170,13 @@ func sortedIcicleChildren(node *icicleNode, metric bubbleMetric) []*icicleNode {
 	for _, child := range node.children {
 		out = append(out, child)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		vi := icicleValue(out[i], metric)
-		vj := icicleValue(out[j], metric)
-		if vi != vj {
-			return vi > vj
+	slices.SortFunc(out, func(a, b *icicleNode) int {
+		va := icicleValue(a, metric)
+		vb := icicleValue(b, metric)
+		if va != vb {
+			return cmp.Compare(vb, va)
 		}
-		return out[i].name < out[j].name
+		return cmp.Compare(a.name, b.name)
 	})
 	return out
 }

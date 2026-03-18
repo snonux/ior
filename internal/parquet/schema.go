@@ -1,7 +1,9 @@
 package parquet
 
 import (
+	"os"
 	"strconv"
+	"time"
 
 	"ior/internal/flags"
 	"ior/internal/streamrow"
@@ -33,6 +35,20 @@ type FileMetadata struct {
 	StartedAtUnixNano uint64
 	Mode              string
 	IORVersion        string
+}
+
+// NewFileMetadata constructs file-level metadata for a parquet trace file,
+// populating the hostname, timestamp, version, and recording mode.
+func NewFileMetadata(mode string) FileMetadata {
+	meta := FileMetadata{
+		StartedAtUnixNano: uint64(time.Now().UnixNano()),
+		Mode:              mode,
+		IORVersion:        flags.Version,
+	}
+	if hostname, err := os.Hostname(); err == nil {
+		meta.Hostname = hostname
+	}
+	return meta
 }
 
 // RecordFromStream converts one shared stream row into the persisted format.

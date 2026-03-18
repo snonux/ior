@@ -1,9 +1,9 @@
 package dashboard
 
 import (
+	"cmp"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 
 	"ior/internal/statsengine"
@@ -425,11 +425,11 @@ func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
 		out = append(out, s)
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Accesses != out[j].Accesses {
-			return out[i].Accesses > out[j].Accesses
+	slices.SortFunc(out, func(a, b DirSnapshot) int {
+		if a.Accesses != b.Accesses {
+			return cmp.Compare(b.Accesses, a.Accesses)
 		}
-		return out[i].Dir < out[j].Dir
+		return cmp.Compare(a.Dir, b.Dir)
 	})
 	return out
 }

@@ -90,7 +90,7 @@ func TestMerge(t *testing.T) {
 	t.Log("iod2", iod2)
 	t.Log("iod3", iod3)
 	t.Log("iod4", iod4)
-	merged := iod1.merge(iod2).merge(iod3).merge(iod4)
+	merged := *iod1.merge(iod2).merge(iod3).merge(iod4)
 	t.Log("merged", merged)
 
 	t.Run("Merged correctly", func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestMergeEmpty(t *testing.T) {
 	})
 
 	empty := newIorData()
-	merged := iod.merge(empty)
+	merged := *iod.merge(empty)
 
 	if len(merged.records) != 1 {
 		t.Errorf("Expected 1 record, got %d", len(merged.records))

@@ -2,11 +2,12 @@ package pidpicker
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,8 +51,8 @@ func scanProcessesFrom(procRoot string) ([]ProcessInfo, error) {
 		processes = append(processes, process)
 	}
 
-	sort.Slice(processes, func(i, j int) bool {
-		return processes[i].Pid < processes[j].Pid
+	slices.SortFunc(processes, func(a, b ProcessInfo) int {
+		return cmp.Compare(a.Pid, b.Pid)
 	})
 	return processes, nil
 }
@@ -145,8 +146,8 @@ func scanThreadsFrom(procRoot string, pid int) ([]ProcessInfo, error) {
 		threads = append(threads, thread)
 	}
 
-	sort.Slice(threads, func(i, j int) bool {
-		return threads[i].Pid < threads[j].Pid
+	slices.SortFunc(threads, func(a, b ProcessInfo) int {
+		return cmp.Compare(a.Pid, b.Pid)
 	})
 	return threads, nil
 }
@@ -209,11 +210,11 @@ func scanAllThreadsFrom(procRoot string) ([]ProcessInfo, error) {
 	}
 	wg.Wait()
 
-	sort.Slice(threads, func(i, j int) bool {
-		if threads[i].Pid == threads[j].Pid {
-			return threads[i].ParentPID < threads[j].ParentPID
+	slices.SortFunc(threads, func(a, b ProcessInfo) int {
+		if a.Pid != b.Pid {
+			return cmp.Compare(a.Pid, b.Pid)
 		}
-		return threads[i].Pid < threads[j].Pid
+		return cmp.Compare(a.ParentPID, b.ParentPID)
 	})
 	return threads, nil
 }

@@ -14,8 +14,7 @@ import (
 	"ior/internal/file"
 	"ior/internal/types"
 
-	// Is there a zstd library part of Go 1.25
-	"github.com/DataDog/zstd"
+	"github.com/DataDog/zstd" // Go stdlib does not include zstd; third-party dep required
 )
 
 type pathType = string
@@ -61,19 +60,13 @@ func LoadFromFile(filename string) (iter.Seq[IterRecord], error) {
 	return iod.iter(), nil
 }
 
-func cloneString(s string) string {
-	// Clone the string by creating a new string with the same content
-	// This is a workaround to avoid using unsafe package
-	return string([]byte(s))
-}
-
-func (iod iorData) addEventPair(ev *event.Pair) {
+func (iod *iorData) addEventPair(ev *event.Pair) {
 	cnt := Counter{Count: 1, Duration: ev.Duration, DurationToPrev: ev.DurationToPrev, Bytes: ev.Bytes}
 	iod.add(ev.FileName(), ev.EnterEv.GetTraceId(), strings.TrimSpace(ev.Comm), ev.EnterEv.GetPid(),
 		ev.EnterEv.GetTid(), ev.Flags(), cnt)
 }
 
-func (iod iorData) add(path pathType, traceId traceIdType, comm commType,
+func (iod *iorData) add(path pathType, traceId traceIdType, comm commType,
 	pid pidType, tid tidType, flags flagsType, addCnt Counter) {
 
 	key := recordKey{
@@ -92,14 +85,14 @@ func (iod iorData) add(path pathType, traceId traceIdType, comm commType,
 	iod.records[key] = cnt.add(addCnt)
 }
 
-func (iod iorData) merge(other iorData) iorData {
+func (iod *iorData) merge(other iorData) *iorData {
 	for key, cnt := range other.records {
 		iod.add(key.Path, key.TraceID, key.Comm, key.Pid, key.Tid, key.Flags, cnt)
 	}
 	return iod
 }
 
-func (iod iorData) serializeToFile(flamegraphName string) (retErr error) {
+func (iod *iorData) serializeToFile(flamegraphName string) (retErr error) {
 	hostname, err := hostnameFn()
 	if err != nil {
 		return fmt.Errorf("get hostname: %w", err)
@@ -118,24 +111,25 @@ func (iod iorData) serializeToFile(flamegraphName string) (retErr error) {
 		return fmt.Errorf("create temp file %s: %w", tmpFilename, err)
 	}
 	defer func() {
-		if err := file.Close(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("close temp file %s: %w", tmpFilename, err))
+		// Close file on error paths; on success it is already closed before rename.
+		if retErr != nil {
+			file.Close()
 		}
 	}()
 
 	encoder := zstd.NewWriter(file)
-	defer func() {
-		if err := encoder.Close(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("close zstd writer for %s: %w", tmpFilename, err))
-		}
-	}()
 
 	gobEncoder := gob.NewEncoder(encoder)
 	if err := gobEncoder.Encode(iod.records); err != nil {
 		return fmt.Errorf("encode ior records: %w", err)
 	}
-	if err := encoder.Flush(); err != nil {
-		return fmt.Errorf("flush ior records: %w", err)
+	// Close encoder before file to flush the final zstd frame, then close
+	// the file to flush OS buffers. Both must complete before rename.
+	if err := encoder.Close(); err != nil {
+		return fmt.Errorf("close zstd writer for %s: %w", tmpFilename, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close temp file %s: %w", tmpFilename, err)
 	}
 
 	if err := os.Rename(tmpFilename, filename); err != nil {
@@ -173,7 +167,7 @@ func (iod *iorData) loadFromFile(filename string) (retErr error) {
 	return nil
 }
 
-func (iod iorData) serialize() ([]byte, error) {
+func (iod *iorData) serialize() ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	err := enc.Encode(iod.records)
@@ -224,7 +218,7 @@ func (ir IterRecord) StringByName(name string) (string, error) {
 	}
 }
 
-func (iod iorData) iter() iter.Seq[IterRecord] {
+func (iod *iorData) iter() iter.Seq[IterRecord] {
 	return func(yield func(IterRecord) bool) {
 		for key, cnt := range iod.records {
 			record := IterRecord{

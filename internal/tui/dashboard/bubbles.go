@@ -1,11 +1,12 @@
 package dashboard
 
 import (
+	"cmp"
 	"fmt"
 	"hash/fnv"
 	"image/color"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -422,8 +423,8 @@ func (c *bubbleChart) renderBubblesToGrid(grid [][]bubbleCell, width, height int
 	for idx := range c.nodes {
 		order = append(order, idx)
 	}
-	sort.Slice(order, func(i, j int) bool {
-		return c.nodes[order[i]].radius < c.nodes[order[j]].radius
+	slices.SortFunc(order, func(a, b int) int {
+		return cmp.Compare(c.nodes[a].radius, c.nodes[b].radius)
 	})
 	if c.selected >= 0 && c.selected < len(c.nodes) {
 		filtered := order[:0]
@@ -641,13 +642,13 @@ func buildBubbleTargets(data []bubbleDatum, metric bubbleMetric, width, height i
 	if len(filtered) == 0 {
 		return nil
 	}
-	sort.Slice(filtered, func(i, j int) bool {
-		vi := bubbleValue(filtered[i], metric)
-		vj := bubbleValue(filtered[j], metric)
-		if vi != vj {
-			return vi > vj
+	slices.SortFunc(filtered, func(a, b bubbleDatum) int {
+		va := bubbleValue(a, metric)
+		vb := bubbleValue(b, metric)
+		if va != vb {
+			return cmp.Compare(vb, va)
 		}
-		return filtered[i].Label < filtered[j].Label
+		return cmp.Compare(a.Label, b.Label)
 	})
 	if len(filtered) > bubbleMaxItems {
 		filtered = filtered[:bubbleMaxItems]

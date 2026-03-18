@@ -26,7 +26,7 @@ type Config struct {
 	PprofEnable  bool
 	Duration     int
 
-	// Tracepints flags
+	// Tracepoints flags
 	TracepointsToAttach  []*regexp.Regexp
 	TracepointsToExclude []*regexp.Regexp
 
@@ -232,6 +232,30 @@ func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp, err e
 		regexes = append(regexes, re)
 	}
 	return regexes, nil
+}
+
+// TraceFilter builds a globalfilter.Filter from the config's filter fields.
+// If GlobalFilter is already active, it is returned as-is. Otherwise,
+// individual CLI-level filters (CommFilter, PathFilter, PidFilter, TidFilter)
+// are merged into a new filter.
+func (cfg Config) TraceFilter() globalfilter.Filter {
+	filter := cfg.GlobalFilter.Clone()
+	if filter.IsActive() {
+		return filter
+	}
+	if cfg.CommFilter != "" {
+		filter.Comm = &globalfilter.StringFilter{Pattern: cfg.CommFilter}
+	}
+	if cfg.PathFilter != "" {
+		filter.File = &globalfilter.StringFilter{Pattern: cfg.PathFilter}
+	}
+	if cfg.PidFilter > 0 {
+		filter.PID = globalfilter.NewEqFilter(int64(cfg.PidFilter))
+	}
+	if cfg.TidFilter > 0 {
+		filter.TID = globalfilter.NewEqFilter(int64(cfg.TidFilter))
+	}
+	return filter
 }
 
 func (flags Config) ShouldIAttachTracepoint(tracepointName string) bool {
