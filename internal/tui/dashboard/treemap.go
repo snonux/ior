@@ -1,10 +1,11 @@
 package dashboard
 
 import (
+	"cmp"
 	"fmt"
 	"image/color"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -131,11 +132,11 @@ func buildSyscallTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) [
 	if len(items) == 0 {
 		return nil
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Value != items[j].Value {
-			return items[i].Value > items[j].Value
+	slices.SortFunc(items, func(a, b syscallTreemapItem) int {
+		if a.Value != b.Value {
+			return cmp.Compare(b.Value, a.Value)
 		}
-		return items[i].Name < items[j].Name
+		return cmp.Compare(a.Name, b.Name)
 	})
 	if len(items) > maxSyscallTreemapItems {
 		items = items[:maxSyscallTreemapItems]
@@ -174,11 +175,11 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 	if len(items) == 0 {
 		return nil
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Value != items[j].Value {
-			return items[i].Value > items[j].Value
+	slices.SortFunc(items, func(a, b syscallTreemapItem) int {
+		if a.Value != b.Value {
+			return cmp.Compare(b.Value, a.Value)
 		}
-		return items[i].Name < items[j].Name
+		return cmp.Compare(a.Name, b.Name)
 	})
 	if len(items) > maxSyscallTreemapItems {
 		items = items[:maxSyscallTreemapItems]
@@ -217,11 +218,11 @@ func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric)
 	if len(items) == 0 {
 		return nil
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Value != items[j].Value {
-			return items[i].Value > items[j].Value
+	slices.SortFunc(items, func(a, b syscallTreemapItem) int {
+		if a.Value != b.Value {
+			return cmp.Compare(b.Value, a.Value)
 		}
-		return items[i].Name < items[j].Name
+		return cmp.Compare(a.Name, b.Name)
 	})
 	if len(items) > maxSyscallTreemapItems {
 		items = items[:maxSyscallTreemapItems]

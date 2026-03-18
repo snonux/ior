@@ -1,7 +1,7 @@
 package statsengine
 
 import (
-	"math/rand"
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -9,7 +9,7 @@ import (
 )
 
 func BenchmarkSyscallAccumulatorSnapshot(b *testing.B) {
-	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewSource(123)))
+	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewPCG(123, 0)))
 	traceIDs := []types.TraceId{
 		types.SYS_ENTER_READ,
 		types.SYS_ENTER_WRITE,

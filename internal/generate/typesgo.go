@@ -295,7 +295,7 @@ func writeGetterMethods(b *strings.Builder, goName, selfRef string) {
 }
 
 func writeSyncPool(b *strings.Builder, goName, selfRef string) {
-	fmt.Fprintf(b, "var poolOf%ss = sync.Pool{\n\tNew: func() interface{} { return &%s{} },\n}\n\n", goName, goName)
+	fmt.Fprintf(b, "var poolOf%ss = sync.Pool{\n\tNew: func() any { return &%s{} },\n}\n\n", goName, goName)
 	fmt.Fprintf(b, "func New%s(raw []byte) *%s {\n", goName, goName)
 	fmt.Fprintf(b, "\t%s := poolOf%ss.Get().(*%s)\n", selfRef, goName, goName)
 	fmt.Fprintf(b, "\tif err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, %s); err != nil {\n", selfRef)

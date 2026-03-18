@@ -1,8 +1,9 @@
 package generate
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -37,8 +38,8 @@ func GenerateTracepointsC(formats []Format) string {
 		accepted = append(accepted, tracepoints...)
 	}
 
-	sort.Slice(accepted, func(i, j int) bool {
-		return accepted[i].Format.ID > accepted[j].Format.ID
+	slices.SortFunc(accepted, func(a, b GeneratedTracepoint) int {
+		return cmp.Compare(b.Format.ID, a.Format.ID)
 	})
 
 	b.WriteString("\n")
@@ -147,6 +148,6 @@ func syscallFormatNames(sc Syscall) []string {
 	if sc.Exit != nil {
 		names = append(names, sc.Exit.Name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }

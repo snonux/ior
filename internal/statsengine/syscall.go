@@ -1,9 +1,10 @@
 package statsengine
 
 import (
+	"cmp"
 	"math"
-	"math/rand"
-	"sort"
+	"math/rand/v2"
+	"slices"
 	"time"
 
 	"ior/internal/event"
@@ -55,15 +56,17 @@ type syscallSnapshotInput struct {
 }
 
 func newSyscallAccumulator() *syscallAccumulator {
-	return newSyscallAccumulatorWithConfig(syscallReservoirSampleCapDefault, rand.New(rand.NewSource(time.Now().UnixNano())))
+	return newSyscallAccumulatorWithConfig(syscallReservoirSampleCapDefault, nil)
 }
 
+// newSyscallAccumulatorWithConfig creates a syscall accumulator with the given
+// sample capacity and optional RNG. A nil rng uses the auto-seeded default.
 func newSyscallAccumulatorWithConfig(sampleCap int, rng *rand.Rand) *syscallAccumulator {
 	if sampleCap <= 0 {
 		sampleCap = syscallReservoirSampleCapDefault
 	}
 	if rng == nil {
-		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+		rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	}
 
 	return &syscallAccumulator{
@@ -135,11 +138,11 @@ func buildSyscallSnapshots(inputs []syscallSnapshotInput, elapsed time.Duration)
 	for _, in := range inputs {
 		result = append(result, in.toSnapshot(rateDiv))
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Count != result[j].Count {
-			return result[i].Count > result[j].Count
+	slices.SortFunc(result, func(a, b SyscallSnapshot) int {
+		if a.Count != b.Count {
+			return cmp.Compare(b.Count, a.Count)
 		}
-		return result[i].Name < result[j].Name
+		return cmp.Compare(a.Name, b.Name)
 	})
 	return result
 }
@@ -161,8 +164,8 @@ func (s *syscallStats) addSample(duration uint64, cap int, rng *rand.Rand) {
 		return
 	}
 
-	idx := rng.Int63n(int64(s.seenLatencies))
-	if idx >= int64(cap) {
+	idx := rng.IntN(int(s.seenLatencies))
+	if idx >= cap {
 		return
 	}
 	s.samples[idx] = duration
@@ -183,7 +186,7 @@ func (s *syscallStats) ensurePercentiles() {
 	}
 
 	sorted := append([]uint64(nil), s.samples...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	s.cachedP50 = samplePercentile(sorted, 0.50)
 	s.cachedP95 = samplePercentile(sorted, 0.95)
 	s.cachedP99 = samplePercentile(sorted, 0.99)

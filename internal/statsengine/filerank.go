@@ -1,8 +1,9 @@
 package statsengine
 
 import (
+	"cmp"
 	"container/heap"
-	"sort"
+	"slices"
 
 	"ior/internal/event"
 	"ior/internal/types"
@@ -123,11 +124,11 @@ func buildFileSnapshots(inputs []fileSnapshotInput) []FileSnapshot {
 	for _, in := range inputs {
 		out = append(out, in.toSnapshot())
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Accesses != out[j].Accesses {
-			return out[i].Accesses > out[j].Accesses
+	slices.SortFunc(out, func(a, b FileSnapshot) int {
+		if a.Accesses != b.Accesses {
+			return cmp.Compare(b.Accesses, a.Accesses)
 		}
-		return out[i].Path < out[j].Path
+		return cmp.Compare(a.Path, b.Path)
 	})
 	return out
 }

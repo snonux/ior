@@ -99,8 +99,11 @@ func parseFlagsFromFdInfo(data []byte) (Flags, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "flags:") {
-			flagsStr := strings.Fields(line)[1]
-			flags, err := strconv.ParseUint(flagsStr, 8, 32)
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				return unknownFlag, fmt.Errorf("malformed flags line in fdinfo: %q", line)
+			}
+			flags, err := strconv.ParseUint(fields[1], 8, 32)
 			return Flags(flags), err
 		}
 	}
@@ -118,7 +121,7 @@ func (f *FdFile) String() string {
 	var sb strings.Builder
 
 	if len(f.name) == 0 {
-		sb.WriteString("E:name") // Emtpy name string
+		sb.WriteString("E:name") // Empty name string
 	} else {
 		sb.WriteString(f.name)
 	}

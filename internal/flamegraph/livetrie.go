@@ -1,10 +1,10 @@
 package flamegraph
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -277,8 +277,8 @@ type childSnapshotState struct {
 func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*trieSnapshot, uint64) {
 	total := node.value
 	children := slices.Clone(node.children)
-	sort.Slice(children, func(i, j int) bool {
-		return children[i].name < children[j].name
+	slices.SortFunc(children, func(a, b *trieNode) int {
+		return cmp.Compare(a.name, b.name)
 	})
 
 	childStates := make([]childSnapshotState, 0, len(children))
@@ -335,13 +335,13 @@ func ensureFallbackVisibleChildren(children []childSnapshotState, depth int, min
 			candidates = append(candidates, idx)
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		left := children[candidates[i]]
-		right := children[candidates[j]]
-		if left.total == right.total {
-			return left.node.name < right.node.name
+	slices.SortFunc(candidates, func(a, b int) int {
+		left := children[a]
+		right := children[b]
+		if left.total != right.total {
+			return cmp.Compare(right.total, left.total)
 		}
-		return left.total > right.total
+		return cmp.Compare(left.node.name, right.node.name)
 	})
 
 	limit := liveTrieMinVisibleChildrenWhenPruned

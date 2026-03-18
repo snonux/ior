@@ -2,7 +2,7 @@ package statsengine
 
 import (
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -11,7 +11,7 @@ import (
 )
 
 func TestSyscallAccumulatorBasicStats(t *testing.T) {
-	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewSource(1)))
+	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewPCG(1, 0)))
 	traceID := types.SYS_ENTER_READ
 
 	acc.Add(newPair(traceID, 10, 100, 0))
@@ -54,7 +54,7 @@ func TestSyscallAccumulatorBasicStats(t *testing.T) {
 }
 
 func TestSyscallAccumulatorSortsByCountThenName(t *testing.T) {
-	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewSource(2)))
+	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewPCG(2, 0)))
 
 	idA := types.SYS_ENTER_OPENAT
 	idB := types.SYS_ENTER_READ
@@ -76,7 +76,7 @@ func TestSyscallAccumulatorSortsByCountThenName(t *testing.T) {
 }
 
 func TestSyscallAccumulatorReservoirPercentilesAccuracy(t *testing.T) {
-	acc := newSyscallAccumulatorWithConfig(100, rand.New(rand.NewSource(7)))
+	acc := newSyscallAccumulatorWithConfig(100, rand.New(rand.NewPCG(7, 0)))
 	traceID := types.SYS_ENTER_WRITE
 
 	for d := uint64(1); d <= 10_000; d++ {
@@ -95,7 +95,7 @@ func TestSyscallAccumulatorReservoirPercentilesAccuracy(t *testing.T) {
 }
 
 func TestSyscallAccumulatorZeroElapsedRate(t *testing.T) {
-	acc := newSyscallAccumulatorWithConfig(32, rand.New(rand.NewSource(9)))
+	acc := newSyscallAccumulatorWithConfig(32, rand.New(rand.NewPCG(9, 0)))
 	acc.Add(newPair(types.SYS_ENTER_READ, 9, 0, 0))
 
 	snap := acc.Snapshot(0)
@@ -108,7 +108,7 @@ func TestSyscallAccumulatorZeroElapsedRate(t *testing.T) {
 }
 
 func TestSyscallAccumulatorPercentilesRecomputeAfterThreshold(t *testing.T) {
-	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewSource(11)))
+	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewPCG(11, 0)))
 	traceID := types.SYS_ENTER_READ
 
 	for i := 1; i <= 1000; i++ {

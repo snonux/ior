@@ -1,9 +1,10 @@
 package probemanager
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -244,7 +245,7 @@ func (m *Manager) States() []ProbeState {
 		}
 		out = append(out, state)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Syscall < out[j].Syscall })
+	slices.SortFunc(out, func(a, b ProbeState) int { return cmp.Compare(a.Syscall, b.Syscall) })
 	return out
 }
 

@@ -35,19 +35,17 @@ func GroupTracepoints(names []string) map[string]TracepointPair {
 }
 
 func parseSyscallTracepoint(name string) (base string, isEnter bool, ok bool) {
-	if strings.HasPrefix(name, sysEnterPrefix) {
-		base = strings.TrimPrefix(name, sysEnterPrefix)
-		if base == "" {
+	if after, found := strings.CutPrefix(name, sysEnterPrefix); found {
+		if after == "" {
 			return "", false, false
 		}
-		return base, true, true
+		return after, true, true
 	}
-	if strings.HasPrefix(name, sysExitPrefix) {
-		base = strings.TrimPrefix(name, sysExitPrefix)
-		if base == "" {
+	if after, found := strings.CutPrefix(name, sysExitPrefix); found {
+		if after == "" {
 			return "", false, false
 		}
-		return base, false, true
+		return after, false, true
 	}
 	return "", false, false
 }
