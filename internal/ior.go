@@ -108,7 +108,8 @@ func validateRunConfig(cfg flags.Config) error {
 func tuiTestFlamesStarter(cfg flags.Config) tui.TraceStarter {
 	return func(ctx context.Context) error {
 		engine, streamBuf, liveTrie := buildTestFlamesRuntime(cfg)
-		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+		// Only setter methods are needed here; use the narrower publisher interface.
+		if bindings, ok := tui.RuntimePublisherFromContext(ctx); ok {
 			bindings.SetDashboardSnapshotSource(engine)
 			bindings.SetEventStreamSource(streamBuf)
 			bindings.SetLiveTrie(liveTrie)
@@ -120,7 +121,8 @@ func tuiTestFlamesStarter(cfg flags.Config) tui.TraceStarter {
 func tuiTestLiveFlamesStarter(cfg flags.Config) tui.TraceStarter {
 	return func(ctx context.Context) error {
 		engine, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, cfg)
-		if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+		// Only setter methods are needed here; use the narrower publisher interface.
+		if bindings, ok := tui.RuntimePublisherFromContext(ctx); ok {
 			bindings.SetDashboardSnapshotSource(engine)
 			bindings.SetEventStreamSource(streamBuf)
 			bindings.SetLiveTrie(liveTrie)

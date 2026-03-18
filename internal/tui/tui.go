@@ -58,17 +58,29 @@ type ProbeManager interface {
 	ActiveCount() (int, int)
 }
 
-// TraceRuntimeBindings allows a trace starter to publish runtime dependencies
-// (snapshot source, stream source, probe manager) into the active TUI model.
-type TraceRuntimeBindings interface {
+// RuntimePublisher is the write side of the TUI runtime contract.
+// A trace starter calls these methods to inject live data into the active TUI.
+type RuntimePublisher interface {
 	SetDashboardSnapshotSource(source SnapshotSource)
 	SetEventStreamSource(source eventstream.Source)
 	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
 	SetProbeManager(manager ProbeManager)
+}
+
+// RuntimeState is the read side of the TUI runtime contract.
+// A trace starter calls these methods to obtain persistent state owned by the TUI.
+type RuntimeState interface {
 	StreamBuffer() eventstream.Source
 	Recorder() *parquet.Recorder
 	StreamSequencer() *eventstream.Sequencer
 	FilterEpoch() uint64
+}
+
+// TraceRuntimeBindings composes RuntimePublisher and RuntimeState so a trace
+// starter can both inject live data and read persistent TUI-owned state.
+type TraceRuntimeBindings interface {
+	RuntimePublisher
+	RuntimeState
 }
 
 type runtimeBindingsContextKey struct{}
@@ -200,10 +212,22 @@ func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 	return nil
 }
 
-// RuntimeBindingsFromContext returns model-scoped trace bindings when the
-// context was created by the TUI.
+// RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the
+// context was created by the TUI. Use RuntimePublisherFromContext when only
+// write access is needed.
 func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool) {
 	bindings, ok := ctx.Value(runtimeBindingsContextKey{}).(TraceRuntimeBindings)
+	if !ok || bindings == nil {
+		return nil, false
+	}
+	return bindings, true
+}
+
+// RuntimePublisherFromContext returns only the RuntimePublisher side of the
+// TUI bindings. Use this when the caller only injects data and does not need
+// to read persistent TUI state.
+func RuntimePublisherFromContext(ctx context.Context) (RuntimePublisher, bool) {
+	bindings, ok := ctx.Value(runtimeBindingsContextKey{}).(RuntimePublisher)
 	if !ok || bindings == nil {
 		return nil, false
 	}
