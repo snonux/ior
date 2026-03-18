@@ -19,9 +19,9 @@ func (m *Model) normalizeKeyEvent(msg tea.Msg) (tea.Msg, bool) {
 	case tea.KeyReleaseMsg:
 		pressMsg := tea.KeyPressMsg(keyMsg)
 		keyID := keyEventID(pressMsg)
-		if m.lastKeyEventWasPress && keyID != "" && keyID == m.lastKeyEventID && time.Since(m.lastKeyEventAt) <= 500*time.Millisecond {
+		if m.kb.lastEventWasPress && keyID != "" && keyID == m.kb.lastEventID && time.Since(m.kb.lastEventAt) <= 500*time.Millisecond {
 			// Some terminals emit both press+release; avoid handling release as a duplicate.
-			m.lastKeyEventWasPress = false
+			m.kb.lastEventWasPress = false
 			return nil, false
 		}
 		if !releaseHasIdentity(pressMsg) {
@@ -41,14 +41,14 @@ func (m *Model) normalizeKeyEvent(msg tea.Msg) (tea.Msg, bool) {
 }
 
 func (m *Model) shouldSuppressPress(keyID string) bool {
-	if m.suppressPressKeyID == "" {
+	if m.kb.suppressID == "" {
 		return false
 	}
-	if time.Now().After(m.suppressPressUntil) {
+	if time.Now().After(m.kb.suppressUntil) {
 		m.clearPressSuppression()
 		return false
 	}
-	if keyID == "" || keyID != m.suppressPressKeyID {
+	if keyID == "" || keyID != m.kb.suppressID {
 		return false
 	}
 	m.clearPressSuppression()
@@ -60,19 +60,19 @@ func (m *Model) armPressSuppression(keyID string) {
 		return
 	}
 	// Keep this short so fast repeated key presses still work naturally.
-	m.suppressPressKeyID = keyID
-	m.suppressPressUntil = time.Now().Add(60 * time.Millisecond)
+	m.kb.suppressID = keyID
+	m.kb.suppressUntil = time.Now().Add(60 * time.Millisecond)
 }
 
 func (m *Model) clearPressSuppression() {
-	m.suppressPressKeyID = ""
-	m.suppressPressUntil = time.Time{}
+	m.kb.suppressID = ""
+	m.kb.suppressUntil = time.Time{}
 }
 
 func (m *Model) recordKeyEvent(msg tea.KeyPressMsg, wasPress bool) {
-	m.lastKeyEventID = keyEventID(msg)
-	m.lastKeyEventAt = time.Now()
-	m.lastKeyEventWasPress = wasPress
+	m.kb.lastEventID = keyEventID(msg)
+	m.kb.lastEventAt = time.Now()
+	m.kb.lastEventWasPress = wasPress
 }
 
 func keyEventID(msg tea.KeyPressMsg) string {
