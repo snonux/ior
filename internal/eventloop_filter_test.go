@@ -450,12 +450,11 @@ func TestCommFilterToggle(t *testing.T) {
 
 		// Create eventloop without comm filter
 		el := &eventLoop{
-			filter:        globalfilter.Filter{},
-			enterEvs:      make(map[uint32]*event.Pair),
-			fdTracker:     newFDTracker(make(map[int32]file.File)),
-			commResolver:  newCommResolver(make(map[uint32]string)),
-			prevPairTimes: make(map[uint32]uint64),
-			cfg:           eventLoopConfig{synchronousRawProcessing: true},
+			filter:       globalfilter.Filter{},
+			pairs:        newPairTracker(),
+			fdTracker:    newFDTracker(make(map[int32]file.File)),
+			commResolver: newCommResolver(make(map[uint32]string)),
+			cfg:          eventLoopConfig{synchronousRawProcessing: true},
 			printCb: func(ep *event.Pair) {
 				next := synchronizedPair{pair: ep, ack: make(chan struct{})}
 				outCh <- next
@@ -495,11 +494,10 @@ func TestCommFilterToggle(t *testing.T) {
 			filter: globalfilter.Filter{
 				Comm: &globalfilter.StringFilter{Pattern: "test"},
 			},
-			enterEvs:      make(map[uint32]*event.Pair),
-			fdTracker:     newFDTracker(make(map[int32]file.File)),
-			commResolver:  newCommResolver(make(map[uint32]string)),
-			prevPairTimes: make(map[uint32]uint64),
-			cfg:           eventLoopConfig{synchronousRawProcessing: true},
+			pairs:        newPairTracker(),
+			fdTracker:    newFDTracker(make(map[int32]file.File)),
+			commResolver: newCommResolver(make(map[uint32]string)),
+			cfg:          eventLoopConfig{synchronousRawProcessing: true},
 			printCb: func(ep *event.Pair) {
 				next := synchronizedPair{pair: ep, ack: make(chan struct{})}
 				outCh <- next
@@ -529,14 +527,13 @@ func TestCommFilterToggle(t *testing.T) {
 
 func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 	el := &eventLoop{
-		filter:        testFilter(commFilter, pathFilter),
-		enterEvs:      make(map[uint32]*event.Pair),
-		fdTracker:     newFDTracker(make(map[int32]file.File)),
-		commResolver:  newCommResolver(make(map[uint32]string)),
-		prevPairTimes: make(map[uint32]uint64),
-		cfg:           eventLoopConfig{synchronousRawProcessing: true},
-		printCb:       func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		done:          make(chan struct{}),
+		filter:       testFilter(commFilter, pathFilter),
+		pairs:        newPairTracker(),
+		fdTracker:    newFDTracker(make(map[int32]file.File)),
+		commResolver: newCommResolver(make(map[uint32]string)),
+		cfg:          eventLoopConfig{synchronousRawProcessing: true},
+		printCb:      func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
+		done:         make(chan struct{}),
 	}
 	return el
 }

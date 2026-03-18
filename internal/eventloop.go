@@ -37,22 +37,15 @@ type eventLoopConfig struct {
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
 
 type eventLoop struct {
-	filter             globalfilter.Filter
-	enterEvs           map[uint32]*event.Pair // Temp. store of sys_enter tracepoints per Tid.
-	enterEvAges        map[uint32]uint64
-	pendingHandles     map[uint32]string // map of TID to pathname from name_to_handle_at
-	fdTracker          *fdTracker
-	procFdCache        map[uint64]*file.FdFile // Cache procfs-resolved metadata for unknown fds.
-	procFdCacheAges    map[uint64]uint64
-	commResolver       *commResolver
-	prevPairTimes      map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
-	rawHandlers        map[types.EventType]rawEventHandler
-	printCb            func(ep *event.Pair) // Callback to print the event
-	warningCb          func(message string) // Optional callback for non-fatal event processing warnings
-	cfg                eventLoopConfig
-	cacheAge           uint64
-	maxPendingEnterEvs int
-	maxProcFdCacheSize int
+	filter         globalfilter.Filter
+	pairs          pairTracker       // enter/exit pairing state and inter-syscall duration tracking
+	pendingHandles map[uint32]string // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
+	fdTracker      *fdTracker        // fd table and procfs resolution cache
+	commResolver   *commResolver
+	rawHandlers    map[types.EventType]rawEventHandler
+	printCb        func(ep *event.Pair) // Callback to print the event
+	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
+	cfg            eventLoopConfig
 
 	// Statistics
 	numTracepoints          uint
@@ -71,19 +64,15 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	}
 
 	el := &eventLoop{
-		filter:          cfg.filter.Clone(),
-		enterEvs:        make(map[uint32]*event.Pair),
-		enterEvAges:     make(map[uint32]uint64),
-		pendingHandles:  make(map[uint32]string),
-		fdTracker:       fdState,
-		procFdCache:     make(map[uint64]*file.FdFile),
-		procFdCacheAges: make(map[uint64]uint64),
-		commResolver:    commState,
-		prevPairTimes:   make(map[uint32]uint64),
-		rawHandlers:     make(map[types.EventType]rawEventHandler),
-		printCb:         func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		cfg:             cfg,
-		done:            make(chan struct{}),
+		filter:         cfg.filter.Clone(),
+		pairs:          newPairTracker(),
+		pendingHandles: make(map[uint32]string),
+		fdTracker:      fdState,
+		commResolver:   commState,
+		rawHandlers:    make(map[types.EventType]rawEventHandler),
+		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
+		cfg:            cfg,
+		done:           make(chan struct{}),
 	}
 	el.initRawHandlers()
 	el.configureOutputCallback()

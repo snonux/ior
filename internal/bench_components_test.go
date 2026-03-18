@@ -130,8 +130,8 @@ func BenchmarkTracepointEntered(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		enterEv := types.NewOpenEvent(raw)
 		el.tracepointEntered(enterEv)
-		if ep, ok := el.enterEvs[componentBenchTID]; ok {
-			delete(el.enterEvs, componentBenchTID)
+		if ep, ok := el.pairs.enters[componentBenchTID]; ok {
+			delete(el.pairs.enters, componentBenchTID)
 			// tracepointEntered stores only EnterEv; provide a placeholder so Pair.Recycle can return to the pool.
 			ep.ExitEv = &types.NullEvent{}
 			ep.Recycle()
@@ -157,7 +157,7 @@ func BenchmarkTracepointExited(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		enterEv := types.NewNullEvent(enterRaw)
-		el.enterEvs[componentBenchTID] = event.NewPair(enterEv)
+		el.pairs.enters[componentBenchTID] = event.NewPair(enterEv)
 		exitEv := types.NewNullEvent(exitRaw)
 		el.tracepointExited(exitEv, out)
 		(<-out).Recycle()

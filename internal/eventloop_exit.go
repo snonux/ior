@@ -96,10 +96,10 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
-	ep.File = e.resolveFdFile(fd, fdEv.Pid)
+	ep.File = e.fdState().resolve(fd, fdEv.Pid)
 	if ep.Is(types.SYS_ENTER_CLOSE) {
 		e.fdState().delete(fd)
-		e.deleteProcFdCache(fd, fdEv.Pid)
+		e.fdState().deleteProcFdCache(fd, fdEv.Pid)
 	}
 	if ep.Is(types.SYS_ENTER_CLOSE_RANGE) {
 		// close_range provides (first, last), but fd_event only carries the first
@@ -107,7 +107,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if ok && retEv.Ret == 0 {
 			e.fdState().closeRangeFrom(fd)
-			e.deleteProcFdCacheFrom(fd, fdEv.Pid)
+			e.fdState().deleteProcFdCacheFrom(fd, fdEv.Pid)
 		}
 	}
 	ep.Comm = e.comm(fdEv.GetTid())
@@ -150,7 +150,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 
 func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool {
 	fd := int32(dup3Ev.Fd)
-	ep.File = e.resolveFdFile(fd, dup3Ev.Pid)
+	ep.File = e.fdState().resolve(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
 	if !e.filter.MatchPair(ep) {
 		ep.Recycle()
@@ -242,7 +242,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
-	ep.File = e.resolveFdFile(fd, fcntlEv.Pid)
+	ep.File = e.fdState().resolve(fd, fcntlEv.Pid)
 	if !e.filter.MatchPair(ep) {
 		ep.Recycle()
 		return false
