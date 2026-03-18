@@ -1,10 +1,7 @@
 package internal
 
-import "C"
-
 import (
 	"fmt"
-	"reflect"
 	"time"
 
 	"ior/internal/event"
@@ -38,7 +35,6 @@ type eventLoopConfig struct {
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
-type tracepointExitHandler func(ep *event.Pair) bool
 
 type eventLoop struct {
 	filter             globalfilter.Filter
@@ -51,7 +47,6 @@ type eventLoop struct {
 	commResolver       *commResolver
 	prevPairTimes      map[uint32]uint64 // Previous event's time (to calculate time differences between two events)
 	rawHandlers        map[types.EventType]rawEventHandler
-	exitHandlers       map[reflect.Type]tracepointExitHandler
 	printCb            func(ep *event.Pair) // Callback to print the event
 	warningCb          func(message string) // Optional callback for non-fatal event processing warnings
 	cfg                eventLoopConfig
@@ -86,13 +81,11 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		commResolver:    commState,
 		prevPairTimes:   make(map[uint32]uint64),
 		rawHandlers:     make(map[types.EventType]rawEventHandler),
-		exitHandlers:    make(map[reflect.Type]tracepointExitHandler),
 		printCb:         func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		cfg:             cfg,
 		done:            make(chan struct{}),
 	}
 	el.initRawHandlers()
-	el.initExitHandlers()
 	el.configureOutputCallback()
 	el.seedTrackedPidComm()
 	return el, nil
@@ -167,6 +160,19 @@ func (e *eventLoop) stats() string {
 	<-e.done
 	duration := time.Since(e.startTime)
 
+	secs := duration.Seconds()
+	// Guard against division by zero when called immediately after start.
+	rate := func(n uint64) float64 {
+		if secs <= 0 {
+			return 0
+		}
+		return float64(n) / secs
+	}
+	mismatchPct := 0.0
+	if e.numTracepoints > 0 {
+		mismatchPct = (float64(e.numTracepointMismatches) / float64(e.numTracepoints)) * 100
+	}
+
 	stats := fmt.Sprintf(
 		"Statistics:\n"+
 			"\tduration: %v\n"+
@@ -174,9 +180,9 @@ func (e *eventLoop) stats() string {
 			"\tsyscalls: %d (%.2f/s)\n"+
 			"\tsyscalls after filter: %d (%.2f/s)\n",
 		duration,
-		e.numTracepoints, float64(e.numTracepoints)/duration.Seconds(), e.numTracepointMismatches, (float64(e.numTracepointMismatches)/float64(e.numTracepoints))*100,
-		e.numSyscalls, float64(e.numSyscalls)/duration.Seconds(),
-		e.numSyscallsAfterFilter, float64(e.numSyscallsAfterFilter)/duration.Seconds(),
+		e.numTracepoints, rate(uint64(e.numTracepoints)), e.numTracepointMismatches, mismatchPct,
+		e.numSyscalls, rate(uint64(e.numSyscalls)),
+		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 	)
 
 	return stats
