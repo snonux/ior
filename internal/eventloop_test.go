@@ -163,7 +163,7 @@ func TestHandleFdExitCloseClearsProcFdCache(t *testing.T) {
 	pid := uint32(1001)
 	fd := int32(55)
 
-	el.setProcFdCache(fd, pid, file.NewFd(fd, "stale", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(fd, pid, file.NewFd(fd, "stale", syscall.O_RDONLY))
 	verifyProcFdCached(t, el, pid, fd)
 
 	enter := &types.FdEvent{
@@ -190,10 +190,10 @@ func TestHandleFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	pid := uint32(2002)
 
-	el.setProcFdCache(10, pid, file.NewFd(10, "keep", syscall.O_RDONLY))
-	el.setProcFdCache(20, pid, file.NewFd(20, "drop", syscall.O_RDONLY))
-	el.setProcFdCache(30, pid, file.NewFd(30, "drop", syscall.O_RDONLY))
-	el.setProcFdCache(20, pid+1, file.NewFd(20, "other-pid", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(10, pid, file.NewFd(10, "keep", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(20, pid, file.NewFd(20, "drop", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(30, pid, file.NewFd(30, "drop", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(20, pid+1, file.NewFd(20, "other-pid", syscall.O_RDONLY))
 
 	enter := &types.FdEvent{
 		TraceId: types.SYS_ENTER_CLOSE_RANGE,
@@ -1720,13 +1720,13 @@ func verifyFdNotTracked(t *testing.T, el *eventLoop, fd int32) {
 }
 
 func verifyProcFdCached(t *testing.T, el *eventLoop, pid uint32, fd int32) {
-	if _, ok := el.cachedProcFdFile(fd, pid); !ok {
+	if _, ok := el.fdState().cachedProcFdFile(fd, pid); !ok {
 		t.Errorf("Expected proc fd cache to contain pid=%d fd=%d", pid, fd)
 	}
 }
 
 func verifyProcFdNotCached(t *testing.T, el *eventLoop, pid uint32, fd int32) {
-	if _, ok := el.cachedProcFdFile(fd, pid); ok {
+	if _, ok := el.fdState().cachedProcFdFile(fd, pid); ok {
 		t.Errorf("Expected proc fd cache to not contain pid=%d fd=%d", pid, fd)
 	}
 }
@@ -1742,13 +1742,13 @@ func verifyNoEventOutput(t *testing.T, outCh <-chan *event.Pair, timeout time.Du
 }
 
 func verifyEnterEventPending(t *testing.T, el *eventLoop, tid uint32) {
-	if _, ok := el.enterEvs[tid]; !ok {
+	if _, ok := el.pairs.enters[tid]; !ok {
 		t.Errorf("Expected enter event for tid %d to be pending but it wasn't found", tid)
 	}
 }
 
 func verifyNoEnterEventPending(t *testing.T, el *eventLoop, tid uint32) {
-	if _, ok := el.enterEvs[tid]; ok {
+	if _, ok := el.pairs.enters[tid]; ok {
 		t.Errorf("Expected no enter event for tid %d but one was found", tid)
 	}
 }

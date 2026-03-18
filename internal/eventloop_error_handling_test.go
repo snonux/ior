@@ -43,7 +43,7 @@ func TestTracepointExitedMalformedOpenExitDoesNotPanicAndNotifies(t *testing.T) 
 		t.Fatalf("expected warning notification")
 	}
 
-	if _, ok := el.enterEvs[enterEv.Tid]; ok {
+	if _, ok := el.pairs.enters[enterEv.Tid]; ok {
 		t.Fatalf("expected enter event to be removed for tid %d", enterEv.Tid)
 	}
 }
@@ -229,7 +229,7 @@ func TestTracepointEnteredMissingCommWithCommFilterNotifies(t *testing.T) {
 		t.Fatalf("expected warning notification")
 	}
 
-	if _, ok := el.enterEvs[defaultTid]; ok {
+	if _, ok := el.pairs.enters[defaultTid]; ok {
 		t.Fatalf("expected no enter event to be stored for tid %d", defaultTid)
 	}
 }
