@@ -88,8 +88,6 @@ func TestRuntimeBindingsContextRoundTrip(t *testing.T) {
 }
 
 func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
-	flags.SetPidFilter(-1)
-	flags.SetTidFilter(99)
 	m := NewModel(-1, func(context.Context) error { return nil })
 
 	next, cmd := m.Update(PidSelectedMsg{Pid: 42})
@@ -113,7 +111,6 @@ func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 }
 
 func TestInitialPIDSkipsPickerAndStartsTracing(t *testing.T) {
-	flags.SetPidFilter(-1)
 	m := NewModel(7, func(context.Context) error { return nil })
 
 	if m.screen != ScreenDashboard {
@@ -127,7 +124,6 @@ func TestInitialPIDSkipsPickerAndStartsTracing(t *testing.T) {
 }
 
 func TestPidSelectedAllSetsNoFilter(t *testing.T) {
-	flags.SetPidFilter(999)
 	m := NewModel(-1, func(context.Context) error { return nil })
 
 	next, _ := m.Update(PidSelectedMsg{Pid: 0})
@@ -696,9 +692,6 @@ func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
 }
 
 func TestExportKeyOpensModalOnDashboard(t *testing.T) {
-	flags.SetTUIExportEnable(true)
-	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
-
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
@@ -1118,8 +1111,6 @@ func TestPidSelectedClearsPersistentStreamBuffer(t *testing.T) {
 }
 
 func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
-	flags.SetPidFilter(-1)
-	flags.SetTidFilter(-1)
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
@@ -1146,9 +1137,9 @@ func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
 }
 
 func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
-	flags.SetPidFilter(1234)
-	flags.SetTidFilter(-1)
-	m := NewModel(-1, func(context.Context) error { return nil })
+	cfg := flags.NewFlags()
+	cfg.PidFilter = 1234
+	m := NewModelWithConfig(cfg, -1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.width = 120
@@ -1174,9 +1165,9 @@ func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
 }
 
 func TestTidSelectedTransitionsToDashboardAndSetsTIDFilter(t *testing.T) {
-	flags.SetPidFilter(2222)
-	flags.SetTidFilter(-1)
-	m := NewModel(-1, func(context.Context) error { return nil })
+	cfg := flags.NewFlags()
+	cfg.PidFilter = 2222
+	m := NewModelWithConfig(cfg, -1, func(context.Context) error { return nil })
 
 	next, cmd := m.Update(TidSelectedMsg{Pid: 0, Tid: 3333})
 	if cmd == nil {
@@ -1198,8 +1189,6 @@ func TestTidSelectedTransitionsToDashboardAndSetsTIDFilter(t *testing.T) {
 }
 
 func TestTidSelectedFromAllPIDModeSetsOwningPID(t *testing.T) {
-	flags.SetPidFilter(-1)
-	flags.SetTidFilter(-1)
 	m := NewModel(-1, func(context.Context) error { return nil })
 
 	next, cmd := m.Update(TidSelectedMsg{Pid: 4444, Tid: 5555})
@@ -1219,10 +1208,9 @@ func TestTidSelectedFromAllPIDModeSetsOwningPID(t *testing.T) {
 }
 
 func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
-	flags.SetTUIExportEnable(false)
-	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
-
-	m := NewModel(-1, func(context.Context) error { return nil })
+	cfg := flags.NewFlags()
+	cfg.TUIExportEnable = false
+	m := NewModelWithConfig(cfg, -1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 
@@ -1234,8 +1222,6 @@ func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
 }
 
 func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
-	flags.SetTUIExportEnable(true)
-	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
 
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
@@ -1925,8 +1911,6 @@ func advanceFlameSelection(t *testing.T, m *Model) string {
 }
 
 func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
-	flags.SetTUIExportEnable(true)
-	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
 
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
@@ -1951,10 +1935,9 @@ func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
 }
 
 func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
-	flags.SetTUIExportEnable(false)
-	t.Cleanup(func() { flags.SetTUIExportEnable(true) })
-
-	m := NewModel(-1, func(context.Context) error { return nil })
+	cfg := flags.NewFlags()
+	cfg.TUIExportEnable = false
+	m := NewModelWithConfig(cfg, -1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.width = 100
 	m.height = 30
