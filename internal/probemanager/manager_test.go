@@ -9,13 +9,28 @@ import (
 )
 
 type fakeLink struct {
+	mu        sync.Mutex
 	destroyed int
 	err       error
+	onDestroy func()
 }
 
 func (l *fakeLink) Destroy() error {
+	l.mu.Lock()
 	l.destroyed++
+	onDestroy := l.onDestroy
+	l.mu.Unlock()
+
+	if onDestroy != nil {
+		onDestroy()
+	}
 	return l.err
+}
+
+func (l *fakeLink) destroyCalls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.destroyed
 }
 
 type fakeProgram struct {
@@ -172,6 +187,142 @@ func TestManagerAttachSerializesConcurrentCalls(t *testing.T) {
 	}
 	if !mgr.IsActive("close") {
 		t.Fatalf("expected probe to remain active after concurrent attach calls")
+	}
+}
+
+func TestManagerAttachWaitsForDetachBeforeReturning(t *testing.T) {
+	enterDestroyStarted := make(chan struct{})
+	releaseDestroy := make(chan struct{})
+	var enterDestroyOnce sync.Once
+	enter := &fakeLink{}
+	enter.onDestroy = func() {
+		enterDestroyOnce.Do(func() { close(enterDestroyStarted) })
+		<-releaseDestroy
+	}
+	exit := &fakeLink{}
+	enterProg := &fakeProgram{link: enter}
+	exitProg := &fakeProgram{link: exit}
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": enterProg,
+			"handle_sys_exit_close":  exitProg,
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}); err != nil {
+		t.Fatalf("AttachAll returned error: %v", err)
+	}
+
+	detachErrCh := make(chan error, 1)
+	go func() {
+		detachErrCh <- mgr.Detach("close")
+	}()
+
+	select {
+	case <-enterDestroyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("detach did not start destroying the enter link")
+	}
+
+	attachErrCh := make(chan error, 1)
+	go func() {
+		attachErrCh <- mgr.Attach("close")
+	}()
+
+	select {
+	case err := <-attachErrCh:
+		t.Fatalf("Attach returned before Detach completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseDestroy)
+
+	if err := <-detachErrCh; err != nil {
+		t.Fatalf("Detach returned error: %v", err)
+	}
+	if err := <-attachErrCh; err != nil {
+		t.Fatalf("Attach returned error: %v", err)
+	}
+	if got := enterProg.attachCalls(); got != 2 {
+		t.Fatalf("expected enter attach to run twice, got %d", got)
+	}
+	if got := exitProg.attachCalls(); got != 2 {
+		t.Fatalf("expected exit attach to run twice, got %d", got)
+	}
+	if got := enter.destroyCalls(); got != 1 {
+		t.Fatalf("expected enter link to be destroyed once, got %d", got)
+	}
+	if got := exit.destroyCalls(); got != 1 {
+		t.Fatalf("expected exit link to be destroyed once, got %d", got)
+	}
+	if !mgr.IsActive("close") {
+		t.Fatalf("expected probe to be active after detach followed by attach")
+	}
+}
+
+func TestManagerCloseWaitsForDetachAndDoesNotDoubleDestroy(t *testing.T) {
+	enterDestroyStarted := make(chan struct{})
+	releaseDestroy := make(chan struct{})
+	var enterDestroyOnce sync.Once
+	enter := &fakeLink{}
+	enter.onDestroy = func() {
+		enterDestroyOnce.Do(func() { close(enterDestroyStarted) })
+		<-releaseDestroy
+	}
+	exit := &fakeLink{}
+	enterProg := &fakeProgram{link: enter}
+	exitProg := &fakeProgram{link: exit}
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": enterProg,
+			"handle_sys_exit_close":  exitProg,
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}); err != nil {
+		t.Fatalf("AttachAll returned error: %v", err)
+	}
+
+	detachErrCh := make(chan error, 1)
+	go func() {
+		detachErrCh <- mgr.Detach("close")
+	}()
+
+	select {
+	case <-enterDestroyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("detach did not start destroying the enter link")
+	}
+
+	closeErrCh := make(chan error, 1)
+	go func() {
+		closeErrCh <- mgr.Close()
+	}()
+
+	select {
+	case err := <-closeErrCh:
+		t.Fatalf("Close returned before Detach completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseDestroy)
+
+	if err := <-detachErrCh; err != nil {
+		t.Fatalf("Detach returned error: %v", err)
+	}
+	if err := <-closeErrCh; err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if got := enter.destroyCalls(); got != 1 {
+		t.Fatalf("expected enter link to be destroyed once, got %d", got)
+	}
+	if got := exit.destroyCalls(); got != 1 {
+		t.Fatalf("expected exit link to be destroyed once, got %d", got)
+	}
+	if mgr.IsActive("close") {
+		t.Fatalf("expected probe to be inactive after Close")
 	}
 }
 
