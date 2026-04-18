@@ -2143,7 +2143,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 	fcntlEnterEv2, fcntlEnterBytes2 := makeEnterFcntlEvent(t, defaulTime+400, defaultPid, defaultTid, fd, syscall.F_SETFL, uint64(syscall.O_NONBLOCK))
 	td.rawTracepoints = append(td.rawTracepoints, fcntlEnterBytes2)
 
-	fcntlExitEv2, fcntlExitBytes2 := makeExitRetEvent(t, defaulTime+500, defaultPid, defaultTid, types.SYS_EXIT_FCNTL, -1) // Error return
+	fcntlExitEv2, fcntlExitBytes2 := makeExitRetEvent(t, defaulTime+500, defaultPid, defaultTid, types.SYS_EXIT_FCNTL, -9) // Realistic kernel errno return
 	td.rawTracepoints = append(td.rawTracepoints, fcntlExitBytes2)
 
 	// Validate F_SETFL error didn't change flags
