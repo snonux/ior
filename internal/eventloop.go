@@ -13,11 +13,12 @@ import (
 const sysEnterNameToHandleAtName = "name_to_handle_at"
 
 const (
-	defaultCommLookupWorkers   = 4
-	defaultCommLookupQueueSize = 512
-	defaultMaxPendingEnterEvs  = 16384
-	defaultMaxProcFdCacheSize  = 8192
-	cacheTrimDivisor           = 4
+	defaultCommLookupWorkers       = 4
+	defaultCommLookupQueueSize     = 512
+	defaultMaxPendingEnterEvs      = 16384
+	defaultMaxPendingHandleEntries = 8192
+	defaultMaxProcFdCacheSize      = 8192
+	cacheTrimDivisor               = 4
 )
 
 type eventLoopConfig struct {
@@ -38,9 +39,9 @@ type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
 
 type eventLoop struct {
 	filter         globalfilter.Filter
-	pairs          pairTracker       // enter/exit pairing state and inter-syscall duration tracking
-	pendingHandles map[uint32]string // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
-	fdTracker      *fdTracker        // fd table and procfs resolution cache
+	pairs          pairTracker           // enter/exit pairing state and inter-syscall duration tracking
+	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
+	fdTracker      *fdTracker            // fd table and procfs resolution cache
 	commResolver   *commResolver
 	rawHandlers    map[types.EventType]rawEventHandler
 	printCb        func(ep *event.Pair) // Callback to print the event
@@ -66,7 +67,7 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	el := &eventLoop{
 		filter:         cfg.filter.Clone(),
 		pairs:          newPairTracker(),
-		pendingHandles: make(map[uint32]string),
+		pendingHandles: newPendingHandleTracker(),
 		fdTracker:      fdState,
 		commResolver:   commState,
 		rawHandlers:    make(map[types.EventType]rawEventHandler),
@@ -116,6 +117,19 @@ func (e *eventLoop) fdState() *fdTracker {
 		e.fdTracker.files = make(map[int32]file.File)
 	}
 	return e.fdTracker
+}
+
+func (e *eventLoop) pendingHandleState() *pendingHandleTracker {
+	if e.pendingHandles == nil {
+		e.pendingHandles = newPendingHandleTracker()
+	}
+	if e.pendingHandles.paths == nil {
+		e.pendingHandles.paths = make(map[uint32]string)
+	}
+	if e.pendingHandles.pathAges == nil {
+		e.pendingHandles.pathAges = make(map[uint32]uint64)
+	}
+	return e.pendingHandles
 }
 
 func (e *eventLoop) commState() *commResolver {

@@ -18,6 +18,15 @@ type fdTracker struct {
 	age          uint64                  // monotonic counter for LRU ordering
 }
 
+// pendingHandleTracker holds unresolved name_to_handle_at pathnames keyed by
+// TID until the corresponding open_by_handle_at exit consumes them.
+type pendingHandleTracker struct {
+	paths        map[uint32]string
+	pathAges     map[uint32]uint64
+	maxCacheSize int
+	age          uint64
+}
+
 func newFDTracker(files map[int32]file.File) *fdTracker {
 	if files == nil {
 		files = make(map[int32]file.File)
@@ -26,6 +35,13 @@ func newFDTracker(files map[int32]file.File) *fdTracker {
 		files:       files,
 		procFdCache: make(map[uint64]*file.FdFile),
 		procFdAges:  make(map[uint64]uint64),
+	}
+}
+
+func newPendingHandleTracker() *pendingHandleTracker {
+	return &pendingHandleTracker{
+		paths:    make(map[uint32]string),
+		pathAges: make(map[uint32]uint64),
 	}
 }
 
@@ -133,6 +149,50 @@ func (t *fdTracker) cacheLimit() int {
 func (t *fdTracker) deleteCacheKey(key uint64) {
 	delete(t.procFdCache, key)
 	delete(t.procFdAges, key)
+}
+
+func (t *pendingHandleTracker) set(tid uint32, pathname string) {
+	if t.paths == nil {
+		t.paths = make(map[uint32]string)
+		t.pathAges = make(map[uint32]uint64)
+	}
+	t.age++
+	t.paths[tid] = pathname
+	t.pathAges[tid] = t.age
+	t.prune()
+}
+
+func (t *pendingHandleTracker) consume(tid uint32) (string, bool) {
+	pathname, ok := t.paths[tid]
+	if !ok {
+		return "", false
+	}
+	delete(t.paths, tid)
+	delete(t.pathAges, tid)
+	return pathname, true
+}
+
+func (t *pendingHandleTracker) delete(tid uint32) {
+	delete(t.paths, tid)
+	delete(t.pathAges, tid)
+}
+
+func (t *pendingHandleTracker) prune() {
+	if t.paths == nil {
+		return
+	}
+	limit := t.limit()
+	if len(t.paths) <= limit {
+		return
+	}
+	trimOldestPendingHandles(t.paths, t.pathAges, trimTarget(limit))
+}
+
+func (t *pendingHandleTracker) limit() int {
+	if t.maxCacheSize > 0 {
+		return t.maxCacheSize
+	}
+	return defaultMaxPendingHandleEntries
 }
 
 // pairTracker holds the state for matching sys_enter events to their sys_exit
@@ -254,6 +314,26 @@ func trimOldestProcFdEntries(state map[uint64]*file.FdFile, ages map[uint64]uint
 	for _, entry := range oldest[:excess] {
 		delete(state, entry.key)
 		delete(ages, entry.key)
+	}
+}
+
+func trimOldestPendingHandles(state map[uint32]string, ages map[uint32]uint64, targetSize int) {
+	excess := len(state) - targetSize
+	if excess <= 0 {
+		return
+	}
+	type pendingHandleAge struct {
+		tid uint32
+		age uint64
+	}
+	oldest := make([]pendingHandleAge, 0, len(state))
+	for tid := range state {
+		oldest = append(oldest, pendingHandleAge{tid: tid, age: ages[tid]})
+	}
+	slices.SortFunc(oldest, func(a, b pendingHandleAge) int { return cmp.Compare(a.age, b.age) })
+	for _, entry := range oldest[:excess] {
+		delete(state, entry.tid)
+		delete(ages, entry.tid)
 	}
 }
 

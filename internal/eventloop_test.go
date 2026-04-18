@@ -2339,7 +2339,7 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, fd, pathname)
 
 		// Verify that the pending handle has been consumed
-		if _, ok := el.pendingHandles[defaultTid]; ok {
+		if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
 			t.Errorf("Expected pending handle for tid %d to be consumed", defaultTid)
 		}
 	})
@@ -2376,7 +2376,7 @@ func makeNameToHandleAtFailureTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected open_by_handle_at to not use failed name_to_handle_at path")
 		}
 
-		if _, ok := el.pendingHandles[defaultTid]; ok {
+		if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
 			t.Errorf("Expected no pending handle for tid %d after failure", defaultTid)
 		}
 	})

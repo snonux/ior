@@ -70,7 +70,7 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 			ep.Recycle()
 			return false
 		}
-		e.pendingHandles[pathEv.GetTid()] = types.StringValue(pathEv.Pathname[:])
+		e.pendingHandleState().set(pathEv.GetTid(), types.StringValue(pathEv.Pathname[:]))
 		ep.Recycle()
 		return false
 	}
@@ -175,18 +175,19 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	tid := openByHandleEv.GetTid()
 	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
+		e.pendingHandleState().delete(tid)
 		e.recyclePair(ep, "Dropped malformed open_by_handle_at exit event")
 		return false
 	}
 
 	fd := int32(retEvent.Ret)
 	if fd < 0 {
+		e.pendingHandleState().delete(tid)
 		ep.Recycle()
 		return false
 	}
 
-	if pathname, ok := e.pendingHandles[tid]; ok {
-		delete(e.pendingHandles, tid)
+	if pathname, ok := e.pendingHandleState().consume(tid); ok {
 		fdFile := file.NewFd(fd, pathname, openByHandleEv.Flags)
 		e.fdState().set(fd, fdFile)
 		ep.File = fdFile
