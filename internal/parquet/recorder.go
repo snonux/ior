@@ -73,6 +73,7 @@ type recordingSession struct {
 	mu        sync.Mutex
 	accepting bool
 	stopCause error
+	doneErr   error
 	stopOnce  sync.Once
 }
 
@@ -161,7 +162,10 @@ func (r *Recorder) Stop() error {
 	}
 
 	session.stop(nil)
-	return <-session.doneC
+	if err := <-session.doneC; err != nil {
+		return err
+	}
+	return session.doneErr
 }
 
 // Status returns a snapshot of the recorder state.
@@ -268,6 +272,7 @@ func (r *Recorder) abortSession(session *recordingSession, writer rowWriter, err
 
 func (r *Recorder) completeSession(session *recordingSession, err error) {
 	r.finishSession(session, err)
+	session.doneErr = err
 	session.doneC <- err
 	close(session.doneC)
 }
