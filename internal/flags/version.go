@@ -3,7 +3,7 @@ package flags
 import "fmt"
 
 // Version is the current application version.
-const Version = "v0.0.0"
+const Version = "v0.0.1"
 
 const asciiBannerTemplate = ` ___   _____    ___ _     _
 |_ _| / / _ \  | _ (_)___| |_ 
