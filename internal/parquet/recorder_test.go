@@ -111,6 +111,27 @@ func TestRecorderFailsOnQueueOverflow(t *testing.T) {
 	}
 }
 
+func TestRecorderStopReturnsTerminalErrorOnRepeatedCalls(t *testing.T) {
+	recorder := NewRecorder(RecorderConfig{})
+	session := newRecordingSession(1)
+	session.doneErr = ErrRecorderQueueFull
+	close(session.doneC)
+
+	recorder.mu.Lock()
+	recorder.active = session
+	recorder.status = Status{
+		Active:    true,
+		LastError: ErrRecorderQueueFull,
+	}
+	recorder.mu.Unlock()
+
+	for i := 0; i < 2; i++ {
+		if err := recorder.Stop(); !errors.Is(err, ErrRecorderQueueFull) {
+			t.Fatalf("Stop() call %d error = %v, want %v", i+1, err, ErrRecorderQueueFull)
+		}
+	}
+}
+
 func testStreamRow(seq uint64, syscall string, isError bool) streamrow.Row {
 	return streamrow.Row{
 		Seq:        seq,
