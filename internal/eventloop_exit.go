@@ -253,8 +253,8 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) b
 		e.recyclePair(ep, "Dropped malformed fcntl exit event")
 		return false
 	}
-	// Syscall returned -1, nothing was changed with the fd
-	if retEvent.Ret == -1 {
+	// Syscall returned a negative errno, nothing was changed with the fd.
+	if retEvent.Ret < 0 {
 		return true
 	}
 
