@@ -136,14 +136,6 @@ func (m *Manager) Attach(syscall string) error {
 		m.mu.Unlock()
 		return err
 	}
-	if entry.active {
-		m.mu.Unlock()
-		return nil
-	}
-
-	enterTP := entry.enterTP
-	exitTP := entry.exitTP
-	attacher := m.attacher
 	m.mu.Unlock()
 	entry.attachMu.Lock()
 	defer entry.attachMu.Unlock()
@@ -158,6 +150,9 @@ func (m *Manager) Attach(syscall string) error {
 		m.mu.Unlock()
 		return nil
 	}
+	enterTP := entry.enterTP
+	exitTP := entry.exitTP
+	attacher := m.attacher
 	m.mu.Unlock()
 
 	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
@@ -230,10 +225,6 @@ func (m *Manager) Detach(syscall string) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entry, err = m.entryLocked(syscall)
-	if err != nil {
-		return err
-	}
 	if enterErr == nil {
 		entry.enterLink = nil
 	}
@@ -319,39 +310,47 @@ func (m *Manager) Close() error {
 		m.mu.Unlock()
 		return nil
 	}
-	type pairLinks struct {
-		syscall   string
-		enterLink Link
-		exitLink  Link
+	type pairEntry struct {
+		syscall  string
+		entry    *probeEntry
+		hasLinks bool
 	}
-	links := make([]pairLinks, 0, len(m.probes))
+	entries := make([]pairEntry, 0, len(m.probes))
 	for syscall, entry := range m.probes {
-		links = append(links, pairLinks{
-			syscall:   syscall,
-			enterLink: entry.enterLink,
-			exitLink:  entry.exitLink,
+		entries = append(entries, pairEntry{
+			syscall:  syscall,
+			entry:    entry,
+			hasLinks: entry.enterLink != nil || entry.exitLink != nil,
 		})
-		entry.enterLink = nil
-		entry.exitLink = nil
-		entry.active = false
-		entry.lastErr = nil
 	}
 	m.closed = true
 	m.mu.Unlock()
 
 	var firstErr error
-	for _, l := range links {
+	for _, item := range entries {
+		if item.hasLinks {
+			item.entry.attachMu.Lock()
+		}
 		var errForSyscall error
-		if l.enterLink != nil {
-			if err := l.enterLink.Destroy(); err != nil {
+		m.mu.Lock()
+		enterLink := item.entry.enterLink
+		exitLink := item.entry.exitLink
+		item.entry.enterLink = nil
+		item.entry.exitLink = nil
+		item.entry.active = false
+		item.entry.lastErr = nil
+		m.mu.Unlock()
+
+		if enterLink != nil {
+			if err := enterLink.Destroy(); err != nil {
 				errForSyscall = err
 				if firstErr == nil {
 					firstErr = err
 				}
 			}
 		}
-		if l.exitLink != nil {
-			if err := l.exitLink.Destroy(); err != nil {
+		if exitLink != nil {
+			if err := exitLink.Destroy(); err != nil {
 				if errForSyscall == nil {
 					errForSyscall = err
 				}
@@ -360,7 +359,10 @@ func (m *Manager) Close() error {
 				}
 			}
 		}
-		m.setLastError(l.syscall, errForSyscall)
+		m.setLastError(item.syscall, errForSyscall)
+		if item.hasLinks {
+			item.entry.attachMu.Unlock()
+		}
 	}
 	return firstErr
 }
