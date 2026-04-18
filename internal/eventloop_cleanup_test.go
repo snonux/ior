@@ -3,7 +3,9 @@ package internal
 import (
 	"testing"
 
+	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/types"
 )
 
 func TestTracepointEnteredPrunesOldestPendingPairs(t *testing.T) {
@@ -86,5 +88,45 @@ func TestProcFdCacheRetainsRecentlyUsedEntries(t *testing.T) {
 	}
 	if got := len(el.fdTracker.procFdAges); got != 2 {
 		t.Fatalf("proc fd cache metadata size = %d, want 2", got)
+	}
+}
+
+func TestPendingHandleTrackerRetainsRecentlyUsedEntries(t *testing.T) {
+	tracker := newPendingHandleTracker()
+	tracker.maxCacheSize = 2
+
+	tracker.set(defaultTid, "/tmp/handle-one")
+	tracker.set(defaultTid+1, "/tmp/handle-two")
+	tracker.set(defaultTid+2, "/tmp/handle-three")
+
+	if _, ok := tracker.paths[defaultTid]; ok {
+		t.Fatalf("expected oldest pending handle to be evicted")
+	}
+	if _, ok := tracker.paths[defaultTid+1]; !ok {
+		t.Fatalf("expected newer pending handle to be retained")
+	}
+	if _, ok := tracker.paths[defaultTid+2]; !ok {
+		t.Fatalf("expected newest pending handle to be retained")
+	}
+	if got := len(tracker.pathAges); got != 2 {
+		t.Fatalf("pending handle metadata size = %d, want 2", got)
+	}
+}
+
+func TestOpenByHandleAtFailureClearsPendingHandle(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+
+	_, enterNameRaw := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, "/tmp/handle.txt", types.SYS_ENTER_NAME_TO_HANDLE_AT)
+	el.tracepointEntered(types.NewPathEvent(enterNameRaw))
+	_, exitNameRaw := makeExitRetEvent(t, defaulTime+1, defaultPid, defaultTid, types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
+	el.tracepointExited(types.NewRetEvent(exitNameRaw), make(chan *event.Pair, 1))
+
+	_, enterOpenRaw := makeEnterOpenByHandleAtEvent(t, defaulTime+2, defaultPid, defaultTid, 0)
+	el.tracepointEntered(types.NewOpenByHandleAtEvent(enterOpenRaw))
+	_, exitOpenRaw := makeExitRetEvent(t, defaulTime+3, defaultPid, defaultTid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, -1)
+	el.tracepointExited(types.NewRetEvent(exitOpenRaw), make(chan *event.Pair, 1))
+
+	if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
+		t.Fatalf("expected pending handle to be cleared after failed open_by_handle_at")
 	}
 }
