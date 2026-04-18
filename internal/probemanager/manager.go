@@ -38,6 +38,7 @@ type probeEntry struct {
 
 	enterLink Link
 	exitLink  Link
+	attachMu  sync.Mutex
 
 	active  bool
 	lastErr error
@@ -144,6 +145,20 @@ func (m *Manager) Attach(syscall string) error {
 	exitTP := entry.exitTP
 	attacher := m.attacher
 	m.mu.Unlock()
+	entry.attachMu.Lock()
+	defer entry.attachMu.Unlock()
+
+	m.mu.Lock()
+	entry, err = m.entryLocked(syscall)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if entry.active {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
 
 	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
 
@@ -179,6 +194,16 @@ func (m *Manager) Detach(syscall string) error {
 
 	m.mu.Lock()
 	entry, err := m.entryLocked(syscall)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	m.mu.Unlock()
+	entry.attachMu.Lock()
+	defer entry.attachMu.Unlock()
+
+	m.mu.Lock()
+	entry, err = m.entryLocked(syscall)
 	if err != nil {
 		m.mu.Unlock()
 		return err

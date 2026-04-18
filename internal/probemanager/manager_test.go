@@ -3,7 +3,9 @@ package probemanager
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeLink struct {
@@ -17,16 +19,23 @@ func (l *fakeLink) Destroy() error {
 }
 
 type fakeProgram struct {
+	mu         sync.Mutex
 	tracepoint string
+	attachs    int
 	link       *fakeLink
 	err        error
 	onAttach   func()
 }
 
 func (p *fakeProgram) AttachTracepoint(_, name string) (Link, error) {
+	p.mu.Lock()
 	p.tracepoint = name
-	if p.onAttach != nil {
-		p.onAttach()
+	p.attachs++
+	onAttach := p.onAttach
+	p.mu.Unlock()
+
+	if onAttach != nil {
+		onAttach()
 	}
 	if p.err != nil {
 		return nil, p.err
@@ -35,6 +44,12 @@ func (p *fakeProgram) AttachTracepoint(_, name string) (Link, error) {
 		p.link = &fakeLink{}
 	}
 	return p.link, nil
+}
+
+func (p *fakeProgram) attachCalls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.attachs
 }
 
 type fakeAttacher struct {
@@ -94,6 +109,69 @@ func TestManagerAttachAllToggleAndCounts(t *testing.T) {
 	active, total = mgr.ActiveCount()
 	if active != 2 || total != 2 {
 		t.Fatalf("unexpected counts after toggle active=%d total=%d", active, total)
+	}
+}
+
+func TestManagerAttachSerializesConcurrentCalls(t *testing.T) {
+	enterBlocked := make(chan struct{})
+	releaseEnter := make(chan struct{})
+	enter := &fakeProgram{link: &fakeLink{}}
+	var enteredOnce sync.Once
+	enter.onAttach = func() {
+		enteredOnce.Do(func() { close(enterBlocked) })
+		<-releaseEnter
+	}
+	exit := &fakeProgram{link: &fakeLink{}}
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": enter,
+			"handle_sys_exit_close":  exit,
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
+
+	errCh1 := make(chan error, 1)
+	go func() {
+		errCh1 <- mgr.Attach("close")
+	}()
+
+	select {
+	case <-enterBlocked:
+	case <-time.After(time.Second):
+		t.Fatal("first attach did not start")
+	}
+
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh2 <- mgr.Attach("close")
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if got := enter.attachCalls(); got != 1 {
+		t.Fatalf("expected only one enter attach while first call was in flight, got %d", got)
+	}
+	if got := exit.attachCalls(); got != 0 {
+		t.Fatalf("expected exit attach to wait for enter completion, got %d", got)
+	}
+
+	close(releaseEnter)
+
+	if err := <-errCh1; err != nil {
+		t.Fatalf("first Attach returned error: %v", err)
+	}
+	if err := <-errCh2; err != nil {
+		t.Fatalf("second Attach returned error: %v", err)
+	}
+	if got := enter.attachCalls(); got != 1 {
+		t.Fatalf("expected enter attach to run once, got %d", got)
+	}
+	if got := exit.attachCalls(); got != 1 {
+		t.Fatalf("expected exit attach to run once, got %d", got)
+	}
+	if !mgr.IsActive("close") {
+		t.Fatalf("expected probe to remain active after concurrent attach calls")
 	}
 }
 
