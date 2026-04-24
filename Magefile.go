@@ -34,7 +34,7 @@ const (
 	bpfSourcePath        = "internal/c/ior.bpf.c"
 	bpfObjectPath        = "internal/c/ior.bpf.o"
 	bpfOutputPath        = "ior.bpf.o"
-	workloadSourcePath   = "./integrationtests/cmd/ioworkload"
+	workloadSourcePath   = "./cmd/ioworkload"
 	tracepointsCPath     = "internal/c/generated_tracepoints.c"
 	tracepointsResult    = "internal/c/generated_tracepoints_result.txt"
 	tracepointsResultNew = "internal/c/generated_tracepoints_result.txt.new"
