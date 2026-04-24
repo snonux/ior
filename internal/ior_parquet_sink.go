@@ -119,6 +119,11 @@ func runHeadlessParquet(cfg flags.Config) error {
 	if err != nil {
 		return err
 	}
+	// Guarantee the profiling file descriptors (cpu/mem/exec-trace profiles) are
+	// closed even if a later setup step fails before the shutdown watcher is
+	// registered. profiling.stop is idempotent via sync.Once, so double-calling
+	// it from the watcher goroutine and from this defer is safe.
+	defer profiling.stop(logln)
 
 	el, err := newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
