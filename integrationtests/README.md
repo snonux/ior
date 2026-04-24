@@ -58,7 +58,7 @@ If the suite fails before tracing starts, check for these common causes:
 
 ## Structure
 
-- `cmd/ioworkload/` — Standalone binary performing known I/O patterns
+- `../cmd/ioworkload/` — Standalone binary performing known I/O patterns (lives at repo-root `cmd/`)
 - `harness.go` — Test orchestration (start ior + workload, collect output)
 - `parse.go` — Parse `.ior.zst` into assertable `TestResult`
 - `expectations.go` — `ExpectedEvent` type and assertion helpers
