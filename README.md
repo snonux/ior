@@ -12,6 +12,16 @@ Maybe this is a spiritual successor of one of my previous projects, I/O Riot htt
 
 This works only on Linux!
 
+## Demo
+
+A short guided tour with animated GIFs of every major surface lives in [`demo/TUTORIAL.md`](./demo/TUTORIAL.md). Two teasers:
+
+<img src=demo/assets/01-launch.gif width=720 alt="Cold start: PID picker, then the dashboard appears" />
+
+<img src=demo/assets/13-tui-flamegraph.gif width=720 alt="Live in-TUI flamegraph rebuilding from real workload" />
+
+The demo is fully reproducible: `mage installDemoTools` once, then `sudo -v && mage demo` regenerates every GIF and screenshot. See the [tutorial](./demo/TUTORIAL.md) for the full walkthrough.
+
 ## Requirements
 
 - Go 1.26 or newer (ior relies on cgo via libbpfgo).
@@ -100,6 +110,90 @@ rm -Rf ~/rpmbuild
 make
 sudo cp -v ./libelf/libelf.a /usr/lib64/
 ```
+
+## Rocky Linux 9
+
+Verified on a fresh Rocky Linux 9.7 install (kernel `5.14.0-611.5.1.el9_7`). Two
+caveats up front before the steps:
+
+1. The stock RHEL 9 kernel (`5.14`) ships a partial backport of BPF features. Specifically,
+   `BPF_LINK_CREATE` for `BPF_PERF_EVENT` returns `EACCES` even as root, so `ior` can load
+   the BPF object but cannot attach tracepoints. This is a kernel-side issue, not an `ior`
+   issue (`bpftrace` works because it uses the older `PERF_EVENT_IOC_SET_BPF` ioctl path).
+   The fix below installs `kernel-ml` from ElRepo (`7.0.x` mainline) and reboots into it.
+2. Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no `*-static` packages). Both have
+   to be built from source — the elfutils dance is the same as the Fedora section above;
+   `libzstd.a` needs an extra `make` from the upstream tarball.
+
+```shell
+# 1) Enable repos and install build dependencies (CRB ships static libs).
+sudo dnf config-manager --set-enabled crb
+sudo dnf install -y epel-release
+sudo dnf install -y gcc clang bpftool elfutils-libelf-devel zlib-static \
+    glibc-static libzstd-devel git make cmake wget rpmdevtools strace bpftrace
+sudo dnf builddep -y elfutils
+
+# 2) Install Go 1.26 from go.dev (Rocky 9 ships only Go 1.25; ior needs 1.26+).
+cd /tmp
+wget -q https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
+sudo tar -C /usr/local -xf go1.26.2.linux-amd64.tar.gz
+echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' | sudo tee /etc/profile.d/go.sh
+source /etc/profile.d/go.sh
+
+# 3) Build libelf.a from elfutils source (same trick as the Fedora section).
+mkdir -p ~/src && cd ~
+dnf download --source elfutils-libelf
+rpm -ivh elfutils-*.src.rpm
+tar -C ~/src -xjf rpmbuild/SOURCES/elfutils-*.tar.bz2
+cd ~/src/elfutils-*
+./configure --enable-deterministic-archives --disable-debuginfod --disable-libdebuginfod
+make -C lib -j$(nproc)
+make -C libelf -j$(nproc)
+sudo cp -v libelf/libelf.a /usr/lib64/
+
+# 4) Build libzstd.a from upstream (libzstd-devel does not ship the static archive).
+cd /tmp
+wget -q https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz
+tar xzf zstd-1.5.5.tar.gz
+make -C zstd-1.5.5/lib -j$(nproc) libzstd.a
+sudo cp -v zstd-1.5.5/lib/libzstd.a /usr/lib64/
+
+# 5) Install kernel-ml from ElRepo and reboot into it.
+sudo rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+sudo dnf install -y https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
+sudo dnf --enablerepo=elrepo-kernel install -y kernel-ml
+# kernel-ml becomes the default boot entry automatically (grubby --default-kernel
+# after install reports /boot/vmlinuz-7.x...). Old kernel stays available as a
+# fallback boot entry in case the new one misbehaves.
+sudo reboot
+
+# After reboot:
+uname -r   # should be 7.x.x-... (kernel-ml), not 5.14.x
+
+# 6) Clone ior + libbpfgo, pin libbpfgo, build the static archive, install mage.
+mkdir -p ~/git
+git clone https://codeberg.org/snonux/ior ~/git/ior
+git clone https://github.com/aquasecurity/libbpfgo ~/git/libbpfgo
+git -C ~/git/libbpfgo checkout v0.9.2-libbpf-1.5.1
+git -C ~/git/libbpfgo submodule update --init --recursive
+make -C ~/git/libbpfgo libbpfgo-static
+go install github.com/magefile/mage@latest
+
+# 7) Generate against the live kernel (the syscall-coverage audit is
+# kernel-specific; IOR_FORCE_GENERATE skips the strict diff against the
+# committed audit which was generated on a different kernel build).
+cd ~/git/ior
+env IOR_FORCE_GENERATE=1 GOTOOLCHAIN=auto mage generate
+env GOTOOLCHAIN=auto mage all
+
+# 8) Smoke test.
+sudo ./ior -plain -duration 5
+```
+
+If `./ior -plain -duration 5` prints `Probing for 5s` and a stream of CSV rows, the
+install is good. If it instead prints `permission denied` on tracepoint attach, you
+are still on the stock RHEL kernel — verify with `uname -r` and check
+`grubby --default-kernel`.
 
 ## TUI Flamegraphs
 

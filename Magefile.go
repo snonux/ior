@@ -1145,3 +1145,165 @@ func runParquetChecks(dir, file string) error {
 
 	return nil
 }
+
+// --- Demo (VHS-driven TUI recordings) ---------------------------------------
+//
+// Demo regenerates GIFs and PNG screenshots under demo/assets/ by running every
+// VHS tape under demo/tapes/. Each tape is wrapped by demo/scripts/run-tape.sh
+// which spins up the background workload generator. A sudo keep-alive loop in
+// the background of `mage demo` keeps the sudo timestamp warm so no tape ever
+// blocks on a password prompt.
+
+const (
+	demoDir         = "demo"
+	demoTapesDir    = "demo/tapes"
+	demoScriptsDir  = "demo/scripts"
+	demoRunTape     = "demo/scripts/run-tape.sh"
+	demoSudoKeepers = "demo/scripts/sudo-keepalive.sh"
+)
+
+// Demo regenerates every demo asset (full ~14-tape run, ~10 minutes).
+// Pre-flight: vhs + ttyd on PATH, sudo timestamp live (`sudo -v`).
+// Safe to run in the background — VHS records headlessly with no real window.
+func Demo() error {
+	mg.SerialDeps(Build)
+	if err := buildWorkloadBinary(); err != nil {
+		return err
+	}
+	if err := ensureDemoTooling(); err != nil {
+		return err
+	}
+	if err := ensureSudoTimestamp(); err != nil {
+		return err
+	}
+
+	tapes, err := filepath.Glob(filepath.Join(demoTapesDir, "*.tape"))
+	if err != nil {
+		return fmt.Errorf("glob tapes: %w", err)
+	}
+	if len(tapes) == 0 {
+		return fmt.Errorf("no tape files found under %s", demoTapesDir)
+	}
+	slices.Sort(tapes)
+
+	stopKeepalive, err := startSudoKeepalive()
+	if err != nil {
+		return fmt.Errorf("start sudo keep-alive: %w", err)
+	}
+	defer stopKeepalive()
+
+	fmt.Printf("Demo: regenerating %d tapes...\n", len(tapes))
+	for i, tape := range tapes {
+		fmt.Printf("Demo: [%d/%d] %s\n", i+1, len(tapes), tape)
+		if err := sh.RunV(demoRunTape, tape); err != nil {
+			return fmt.Errorf("tape %s: %w", tape, err)
+		}
+	}
+	fmt.Println("Demo: done.")
+	return nil
+}
+
+// DemoOne regenerates a single tape. Pass TAPE=07-stream-live (basename without
+// .tape) or TAPE=demo/tapes/07-stream-live.tape (full path).
+func DemoOne() error {
+	mg.SerialDeps(Build)
+	if err := buildWorkloadBinary(); err != nil {
+		return err
+	}
+	if err := ensureDemoTooling(); err != nil {
+		return err
+	}
+	if err := ensureSudoTimestamp(); err != nil {
+		return err
+	}
+
+	tape := os.Getenv("TAPE")
+	if tape == "" {
+		return fmt.Errorf("TAPE env var is required (e.g. TAPE=07-stream-live)")
+	}
+	resolved, err := resolveDemoTape(tape)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Demo: regenerating %s\n", resolved)
+	return sh.RunV(demoRunTape, resolved)
+}
+
+// InstallDemoTools installs VHS via `go install` and ttyd via dnf. Idempotent.
+func InstallDemoTools() error {
+	if _, err := exec.LookPath("vhs"); err != nil {
+		fmt.Println("InstallDemoTools: installing vhs via `go install`...")
+		if err := sh.RunV("go", "install", "github.com/charmbracelet/vhs@latest"); err != nil {
+			return fmt.Errorf("install vhs: %w", err)
+		}
+	} else {
+		fmt.Println("InstallDemoTools: vhs already installed.")
+	}
+	if _, err := exec.LookPath("ttyd"); err != nil {
+		fmt.Println("InstallDemoTools: installing ttyd via dnf (sudo)...")
+		if err := sh.RunV("sudo", "dnf", "install", "-y", "ttyd"); err != nil {
+			return fmt.Errorf("install ttyd: %w", err)
+		}
+	} else {
+		fmt.Println("InstallDemoTools: ttyd already installed.")
+	}
+	if err := sh.RunV("vhs", "--version"); err != nil {
+		return err
+	}
+	return sh.RunV("ttyd", "--version")
+}
+
+func ensureDemoTooling() error {
+	for _, bin := range []string{"vhs", "ttyd"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			return fmt.Errorf("%s not on PATH (run `mage installDemoTools`)", bin)
+		}
+	}
+	return nil
+}
+
+// ensureSudoTimestamp returns nil only if `sudo -n true` succeeds. Otherwise it
+// asks the user to pre-warm sudo and aborts.
+func ensureSudoTimestamp() error {
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	if err := sh.Run("sudo", "-n", "true"); err != nil {
+		return fmt.Errorf("sudo timestamp not warm — run `sudo -v` once and re-invoke this target")
+	}
+	return nil
+}
+
+// startSudoKeepalive launches the sudo-keepalive script in the background and
+// returns a stop function that terminates it.
+func startSudoKeepalive() (func(), error) {
+	if os.Geteuid() == 0 {
+		return func() {}, nil
+	}
+	cmd := exec.Command("bash", demoSudoKeepers)
+	cmd.Stdout = nil
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return func() {
+		_ = cmd.Process.Signal(os.Interrupt)
+		_, _ = cmd.Process.Wait()
+	}, nil
+}
+
+// resolveDemoTape accepts a bare tape stem ("07-stream-live") or a full path
+// and returns the existing tape file under demo/tapes/.
+func resolveDemoTape(tape string) (string, error) {
+	candidates := []string{
+		tape,
+		filepath.Join(demoTapesDir, tape),
+		filepath.Join(demoTapesDir, tape+".tape"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("tape not found: tried %v", candidates)
+}
