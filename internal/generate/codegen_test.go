@@ -16,7 +16,7 @@ func TestGenerateFdHandler(t *testing.T) {
 	output := generateFromPair(t, FormatRead, FormatExitRead)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_read")`)
-	requireContains(t, output, "struct trace_event_raw_sys_enter *ctx")
+	requireContains(t, output, "struct syscall_trace_enter *ctx")
 	requireContains(t, output, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
 	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_READ;")
@@ -70,7 +70,7 @@ func TestGenerateRetHandlerRead(t *testing.T) {
 	output := generateFromPair(t, FormatRead, FormatExitRead)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_read")`)
-	requireContains(t, output, "struct trace_event_raw_sys_exit *ctx")
+	requireContains(t, output, "struct syscall_trace_exit *ctx")
 	requireContains(t, output, "struct ret_event *ev")
 	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_EXIT_READ;")
@@ -226,7 +226,7 @@ func TestGenerateDefinesSortedByIDDesc(t *testing.T) {
 func TestGenerateHandlerStructure(t *testing.T) {
 	output := generateFromPair(t, FormatClose, FormatExitClose)
 
-	requireContains(t, output, "int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {")
+	requireContains(t, output, "int handle_sys_enter_close(struct syscall_trace_enter *ctx) {")
 	requireContains(t, output, "__u32 pid, tid;")
 	requireContains(t, output, "if (filter(&pid, &tid))")
 	requireContains(t, output, "ev->pid = pid;")

@@ -9,9 +9,17 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 	f := tp.Format
 	isEnter := strings.Split(f.Name, "_")[1] == "enter"
 
-	ctxStruct := "trace_event_raw_sys_exit"
+	// Use the kernel's actual tracepoint context structs (syscall_trace_enter/exit)
+	// rather than the BTF-emitted trace_event_raw_sys_enter/exit aliases. On RHEL 9
+	// kernels (5.14 with the rt-merge backport that added preempt_lazy_count to
+	// trace_entry) the two diverge: trace_event_raw_sys_* grows by 8 bytes and
+	// the args/ret offsets shift, but the real context handed to the BPF program
+	// is still syscall_trace_*. Reading via the wider alias trips the verifier's
+	// max_ctx_offset check and the attach fails with EACCES. The two structs are
+	// identical on non-RHEL kernels, so this is a no-op everywhere else.
+	ctxStruct := "syscall_trace_exit"
 	if isEnter {
-		ctxStruct = "trace_event_raw_sys_enter"
+		ctxStruct = "syscall_trace_enter"
 	}
 
 	eventStruct := eventStructName(tp.Classification.Kind)

@@ -86,6 +86,7 @@
 /// Ignoring sys_enter_landlock_restrict_self sys_exit_landlock_restrict_self as possibly not file I/O related
 /// Ignoring sys_enter_listen sys_exit_listen as possibly not file I/O related
 /// Ignoring sys_enter_listmount sys_exit_listmount as possibly not file I/O related
+/// Ignoring sys_enter_listns sys_exit_listns as possibly not file I/O related
 /// Ignoring sys_enter_lsm_get_self_attr sys_exit_lsm_get_self_attr as possibly not file I/O related
 /// Ignoring sys_enter_lsm_list_modules sys_exit_lsm_list_modules as possibly not file I/O related
 /// Ignoring sys_enter_lsm_set_self_attr sys_exit_lsm_set_self_attr as possibly not file I/O related
@@ -250,236 +251,236 @@
 /// Ignoring sys_enter_wait4 sys_exit_wait4 as possibly not file I/O related
 /// Ignoring sys_enter_waitid sys_exit_waitid as possibly not file I/O related
 
-#define SYS_ENTER_IO_URING_REGISTER 1515
-#define SYS_EXIT_IO_URING_REGISTER 1514
-#define SYS_ENTER_IO_URING_ENTER 1496
-#define SYS_EXIT_IO_URING_ENTER 1495
-#define SYS_ENTER_IO_URING_SETUP 1494
-#define SYS_EXIT_IO_URING_SETUP 1493
-#define SYS_ENTER_QUOTACTL_FD 1151
-#define SYS_EXIT_QUOTACTL_FD 1150
-#define SYS_ENTER_NAME_TO_HANDLE_AT 1135
-#define SYS_EXIT_NAME_TO_HANDLE_AT 1134
-#define SYS_ENTER_OPEN_BY_HANDLE_AT 1133
-#define SYS_EXIT_OPEN_BY_HANDLE_AT 1132
-#define SYS_ENTER_FLOCK 1119
-#define SYS_EXIT_FLOCK 1118
-#define SYS_ENTER_IO_SETUP 1105
-#define SYS_EXIT_IO_SETUP 1104
-#define SYS_ENTER_IO_DESTROY 1103
-#define SYS_EXIT_IO_DESTROY 1102
-#define SYS_ENTER_IO_SUBMIT 1101
-#define SYS_EXIT_IO_SUBMIT 1100
-#define SYS_ENTER_IO_CANCEL 1099
-#define SYS_EXIT_IO_CANCEL 1098
-#define SYS_ENTER_IO_GETEVENTS 1097
-#define SYS_EXIT_IO_GETEVENTS 1096
-#define SYS_ENTER_IO_PGETEVENTS 1095
-#define SYS_EXIT_IO_PGETEVENTS 1094
-#define SYS_ENTER_FANOTIFY_MARK 1063
-#define SYS_EXIT_FANOTIFY_MARK 1062
-#define SYS_ENTER_FILE_GETATTR 1053
-#define SYS_EXIT_FILE_GETATTR 1052
-#define SYS_ENTER_FILE_SETATTR 1051
-#define SYS_EXIT_FILE_SETATTR 1050
-#define SYS_ENTER_FSPICK 1047
-#define SYS_EXIT_FSPICK 1046
-#define SYS_ENTER_FSCONFIG 1045
-#define SYS_EXIT_FSCONFIG 1044
-#define SYS_ENTER_STATFS 1043
-#define SYS_EXIT_STATFS 1042
-#define SYS_ENTER_FSTATFS 1041
-#define SYS_EXIT_FSTATFS 1040
-#define SYS_ENTER_GETCWD 1037
-#define SYS_EXIT_GETCWD 1036
-#define SYS_ENTER_UTIMENSAT 1035
-#define SYS_EXIT_UTIMENSAT 1034
-#define SYS_ENTER_FUTIMESAT 1033
-#define SYS_EXIT_FUTIMESAT 1032
-#define SYS_ENTER_SYNC 1027
-#define SYS_EXIT_SYNC 1026
-#define SYS_ENTER_SYNCFS 1025
-#define SYS_EXIT_SYNCFS 1024
-#define SYS_ENTER_FSYNC 1023
-#define SYS_EXIT_FSYNC 1022
-#define SYS_ENTER_FDATASYNC 1021
-#define SYS_EXIT_FDATASYNC 1020
-#define SYS_ENTER_SYNC_FILE_RANGE 1019
-#define SYS_EXIT_SYNC_FILE_RANGE 1018
-#define SYS_ENTER_VMSPLICE 1017
-#define SYS_EXIT_VMSPLICE 1016
-#define SYS_ENTER_SETXATTRAT 978
-#define SYS_EXIT_SETXATTRAT 977
-#define SYS_ENTER_SETXATTR 976
-#define SYS_EXIT_SETXATTR 975
-#define SYS_ENTER_LSETXATTR 974
-#define SYS_EXIT_LSETXATTR 973
-#define SYS_ENTER_FSETXATTR 972
-#define SYS_EXIT_FSETXATTR 971
-#define SYS_ENTER_GETXATTRAT 970
-#define SYS_EXIT_GETXATTRAT 969
-#define SYS_ENTER_GETXATTR 968
-#define SYS_EXIT_GETXATTR 967
-#define SYS_ENTER_LGETXATTR 966
-#define SYS_EXIT_LGETXATTR 965
-#define SYS_ENTER_FGETXATTR 964
-#define SYS_EXIT_FGETXATTR 963
-#define SYS_ENTER_LISTXATTRAT 962
-#define SYS_EXIT_LISTXATTRAT 961
-#define SYS_ENTER_LISTXATTR 960
-#define SYS_EXIT_LISTXATTR 959
-#define SYS_ENTER_LLISTXATTR 958
-#define SYS_EXIT_LLISTXATTR 957
-#define SYS_ENTER_FLISTXATTR 956
-#define SYS_EXIT_FLISTXATTR 955
-#define SYS_ENTER_REMOVEXATTRAT 954
-#define SYS_EXIT_REMOVEXATTRAT 953
-#define SYS_ENTER_REMOVEXATTR 952
-#define SYS_EXIT_REMOVEXATTR 951
-#define SYS_ENTER_LREMOVEXATTR 950
-#define SYS_EXIT_LREMOVEXATTR 949
-#define SYS_ENTER_FREMOVEXATTR 948
-#define SYS_EXIT_FREMOVEXATTR 947
-#define SYS_ENTER_OPEN_TREE 944
-#define SYS_EXIT_OPEN_TREE 943
-#define SYS_ENTER_MOUNT_SETATTR 934
-#define SYS_EXIT_MOUNT_SETATTR 933
-#define SYS_ENTER_OPEN_TREE_ATTR 932
-#define SYS_EXIT_OPEN_TREE_ATTR 931
-#define SYS_ENTER_CLOSE_RANGE 924
-#define SYS_EXIT_CLOSE_RANGE 923
-#define SYS_ENTER_DUP3 922
-#define SYS_EXIT_DUP3 921
-#define SYS_ENTER_DUP2 920
-#define SYS_EXIT_DUP2 919
-#define SYS_ENTER_DUP 918
-#define SYS_EXIT_DUP 917
-#define SYS_ENTER_GETDENTS 904
-#define SYS_EXIT_GETDENTS 903
-#define SYS_ENTER_GETDENTS64 902
-#define SYS_EXIT_GETDENTS64 901
-#define SYS_ENTER_IOCTL 900
-#define SYS_EXIT_IOCTL 899
-#define SYS_ENTER_FCNTL 898
-#define SYS_EXIT_FCNTL 897
-#define SYS_ENTER_MKDIRAT 892
-#define SYS_EXIT_MKDIRAT 891
-#define SYS_ENTER_MKDIR 890
-#define SYS_EXIT_MKDIR 889
-#define SYS_ENTER_RMDIR 888
-#define SYS_EXIT_RMDIR 887
-#define SYS_ENTER_UNLINKAT 886
-#define SYS_EXIT_UNLINKAT 885
-#define SYS_ENTER_UNLINK 884
-#define SYS_EXIT_UNLINK 883
-#define SYS_ENTER_SYMLINKAT 882
-#define SYS_EXIT_SYMLINKAT 881
-#define SYS_ENTER_SYMLINK 880
-#define SYS_EXIT_SYMLINK 879
-#define SYS_ENTER_LINKAT 878
-#define SYS_EXIT_LINKAT 877
-#define SYS_ENTER_LINK 876
-#define SYS_EXIT_LINK 875
-#define SYS_ENTER_RENAMEAT2 874
-#define SYS_EXIT_RENAMEAT2 873
-#define SYS_ENTER_RENAMEAT 872
-#define SYS_EXIT_RENAMEAT 871
-#define SYS_ENTER_RENAME 870
-#define SYS_EXIT_RENAME 869
-#define SYS_ENTER_NEWSTAT 860
-#define SYS_EXIT_NEWSTAT 859
-#define SYS_ENTER_NEWLSTAT 858
-#define SYS_EXIT_NEWLSTAT 857
-#define SYS_ENTER_NEWFSTATAT 856
-#define SYS_EXIT_NEWFSTATAT 855
-#define SYS_ENTER_NEWFSTAT 854
-#define SYS_EXIT_NEWFSTAT 853
-#define SYS_ENTER_READLINKAT 852
-#define SYS_EXIT_READLINKAT 851
-#define SYS_ENTER_READLINK 850
-#define SYS_EXIT_READLINK 849
-#define SYS_ENTER_STATX 848
-#define SYS_EXIT_STATX 847
-#define SYS_ENTER_LSEEK 846
-#define SYS_EXIT_LSEEK 845
-#define SYS_ENTER_READ 844
-#define SYS_EXIT_READ 843
-#define SYS_ENTER_WRITE 842
-#define SYS_EXIT_WRITE 841
-#define SYS_ENTER_PREAD64 840
-#define SYS_EXIT_PREAD64 839
-#define SYS_ENTER_PWRITE64 838
-#define SYS_EXIT_PWRITE64 837
-#define SYS_ENTER_READV 836
-#define SYS_EXIT_READV 835
-#define SYS_ENTER_WRITEV 834
-#define SYS_EXIT_WRITEV 833
-#define SYS_ENTER_PREADV 832
-#define SYS_EXIT_PREADV 831
-#define SYS_ENTER_PREADV2 830
-#define SYS_EXIT_PREADV2 829
-#define SYS_ENTER_PWRITEV 828
-#define SYS_EXIT_PWRITEV 827
-#define SYS_ENTER_PWRITEV2 826
-#define SYS_EXIT_PWRITEV2 825
-#define SYS_ENTER_COPY_FILE_RANGE 822
-#define SYS_EXIT_COPY_FILE_RANGE 821
-#define SYS_ENTER_TRUNCATE 820
-#define SYS_EXIT_TRUNCATE 819
-#define SYS_ENTER_FTRUNCATE 818
-#define SYS_EXIT_FTRUNCATE 817
-#define SYS_ENTER_FALLOCATE 816
-#define SYS_EXIT_FALLOCATE 815
-#define SYS_ENTER_FACCESSAT 814
-#define SYS_EXIT_FACCESSAT 813
-#define SYS_ENTER_FACCESSAT2 812
-#define SYS_EXIT_FACCESSAT2 811
-#define SYS_ENTER_ACCESS 810
-#define SYS_EXIT_ACCESS 809
-#define SYS_ENTER_CHDIR 808
-#define SYS_EXIT_CHDIR 807
-#define SYS_ENTER_FCHDIR 806
-#define SYS_EXIT_FCHDIR 805
-#define SYS_ENTER_CHROOT 804
-#define SYS_EXIT_CHROOT 803
-#define SYS_ENTER_FCHMOD 802
-#define SYS_EXIT_FCHMOD 801
-#define SYS_ENTER_FCHMODAT2 800
-#define SYS_EXIT_FCHMODAT2 799
-#define SYS_ENTER_FCHMODAT 798
-#define SYS_EXIT_FCHMODAT 797
-#define SYS_ENTER_CHMOD 796
-#define SYS_EXIT_CHMOD 795
-#define SYS_ENTER_FCHOWNAT 794
-#define SYS_EXIT_FCHOWNAT 793
-#define SYS_ENTER_CHOWN 792
-#define SYS_EXIT_CHOWN 791
-#define SYS_ENTER_LCHOWN 790
-#define SYS_EXIT_LCHOWN 789
-#define SYS_ENTER_FCHOWN 788
-#define SYS_EXIT_FCHOWN 787
-#define SYS_ENTER_OPEN 786
-#define SYS_EXIT_OPEN 785
-#define SYS_ENTER_OPENAT 784
-#define SYS_EXIT_OPENAT 783
-#define SYS_ENTER_OPENAT2 782
-#define SYS_EXIT_OPENAT2 781
-#define SYS_ENTER_CREAT 780
-#define SYS_EXIT_CREAT 779
-#define SYS_ENTER_CLOSE 778
-#define SYS_EXIT_CLOSE 777
-#define SYS_ENTER_MSYNC 707
-#define SYS_EXIT_MSYNC 706
-#define SYS_ENTER_READAHEAD 613
-#define SYS_EXIT_READAHEAD 612
-#define SYS_ENTER_FADVISE64 611
-#define SYS_EXIT_FADVISE64 610
-#define SYS_ENTER_CACHESTAT 592
-#define SYS_EXIT_CACHESTAT 591
-#define SYS_ENTER_FINIT_MODULE 403
-#define SYS_EXIT_FINIT_MODULE 402
-#define SYS_ENTER_SYSLOG 347
-#define SYS_EXIT_SYSLOG 346
+#define SYS_ENTER_IO_URING_REGISTER 1521
+#define SYS_EXIT_IO_URING_REGISTER 1520
+#define SYS_ENTER_IO_URING_ENTER 1502
+#define SYS_EXIT_IO_URING_ENTER 1501
+#define SYS_ENTER_IO_URING_SETUP 1500
+#define SYS_EXIT_IO_URING_SETUP 1499
+#define SYS_ENTER_QUOTACTL_FD 1155
+#define SYS_EXIT_QUOTACTL_FD 1154
+#define SYS_ENTER_NAME_TO_HANDLE_AT 1139
+#define SYS_EXIT_NAME_TO_HANDLE_AT 1138
+#define SYS_ENTER_OPEN_BY_HANDLE_AT 1137
+#define SYS_EXIT_OPEN_BY_HANDLE_AT 1136
+#define SYS_ENTER_FLOCK 1123
+#define SYS_EXIT_FLOCK 1122
+#define SYS_ENTER_IO_SETUP 1109
+#define SYS_EXIT_IO_SETUP 1108
+#define SYS_ENTER_IO_DESTROY 1107
+#define SYS_EXIT_IO_DESTROY 1106
+#define SYS_ENTER_IO_SUBMIT 1105
+#define SYS_EXIT_IO_SUBMIT 1104
+#define SYS_ENTER_IO_CANCEL 1103
+#define SYS_EXIT_IO_CANCEL 1102
+#define SYS_ENTER_IO_GETEVENTS 1101
+#define SYS_EXIT_IO_GETEVENTS 1100
+#define SYS_ENTER_IO_PGETEVENTS 1099
+#define SYS_EXIT_IO_PGETEVENTS 1098
+#define SYS_ENTER_FANOTIFY_MARK 1067
+#define SYS_EXIT_FANOTIFY_MARK 1066
+#define SYS_ENTER_FILE_GETATTR 1057
+#define SYS_EXIT_FILE_GETATTR 1056
+#define SYS_ENTER_FILE_SETATTR 1055
+#define SYS_EXIT_FILE_SETATTR 1054
+#define SYS_ENTER_FSPICK 1051
+#define SYS_EXIT_FSPICK 1050
+#define SYS_ENTER_FSCONFIG 1049
+#define SYS_EXIT_FSCONFIG 1048
+#define SYS_ENTER_STATFS 1047
+#define SYS_EXIT_STATFS 1046
+#define SYS_ENTER_FSTATFS 1045
+#define SYS_EXIT_FSTATFS 1044
+#define SYS_ENTER_GETCWD 1041
+#define SYS_EXIT_GETCWD 1040
+#define SYS_ENTER_UTIMENSAT 1039
+#define SYS_EXIT_UTIMENSAT 1038
+#define SYS_ENTER_FUTIMESAT 1037
+#define SYS_EXIT_FUTIMESAT 1036
+#define SYS_ENTER_SYNC 1031
+#define SYS_EXIT_SYNC 1030
+#define SYS_ENTER_SYNCFS 1029
+#define SYS_EXIT_SYNCFS 1028
+#define SYS_ENTER_FSYNC 1027
+#define SYS_EXIT_FSYNC 1026
+#define SYS_ENTER_FDATASYNC 1025
+#define SYS_EXIT_FDATASYNC 1024
+#define SYS_ENTER_SYNC_FILE_RANGE 1023
+#define SYS_EXIT_SYNC_FILE_RANGE 1022
+#define SYS_ENTER_VMSPLICE 1021
+#define SYS_EXIT_VMSPLICE 1020
+#define SYS_ENTER_SETXATTRAT 982
+#define SYS_EXIT_SETXATTRAT 981
+#define SYS_ENTER_SETXATTR 980
+#define SYS_EXIT_SETXATTR 979
+#define SYS_ENTER_LSETXATTR 978
+#define SYS_EXIT_LSETXATTR 977
+#define SYS_ENTER_FSETXATTR 976
+#define SYS_EXIT_FSETXATTR 975
+#define SYS_ENTER_GETXATTRAT 974
+#define SYS_EXIT_GETXATTRAT 973
+#define SYS_ENTER_GETXATTR 972
+#define SYS_EXIT_GETXATTR 971
+#define SYS_ENTER_LGETXATTR 970
+#define SYS_EXIT_LGETXATTR 969
+#define SYS_ENTER_FGETXATTR 968
+#define SYS_EXIT_FGETXATTR 967
+#define SYS_ENTER_LISTXATTRAT 966
+#define SYS_EXIT_LISTXATTRAT 965
+#define SYS_ENTER_LISTXATTR 964
+#define SYS_EXIT_LISTXATTR 963
+#define SYS_ENTER_LLISTXATTR 962
+#define SYS_EXIT_LLISTXATTR 961
+#define SYS_ENTER_FLISTXATTR 960
+#define SYS_EXIT_FLISTXATTR 959
+#define SYS_ENTER_REMOVEXATTRAT 958
+#define SYS_EXIT_REMOVEXATTRAT 957
+#define SYS_ENTER_REMOVEXATTR 956
+#define SYS_EXIT_REMOVEXATTR 955
+#define SYS_ENTER_LREMOVEXATTR 954
+#define SYS_EXIT_LREMOVEXATTR 953
+#define SYS_ENTER_FREMOVEXATTR 952
+#define SYS_EXIT_FREMOVEXATTR 951
+#define SYS_ENTER_OPEN_TREE 948
+#define SYS_EXIT_OPEN_TREE 947
+#define SYS_ENTER_MOUNT_SETATTR 938
+#define SYS_EXIT_MOUNT_SETATTR 937
+#define SYS_ENTER_OPEN_TREE_ATTR 936
+#define SYS_EXIT_OPEN_TREE_ATTR 935
+#define SYS_ENTER_CLOSE_RANGE 928
+#define SYS_EXIT_CLOSE_RANGE 927
+#define SYS_ENTER_DUP3 926
+#define SYS_EXIT_DUP3 925
+#define SYS_ENTER_DUP2 924
+#define SYS_EXIT_DUP2 923
+#define SYS_ENTER_DUP 922
+#define SYS_EXIT_DUP 921
+#define SYS_ENTER_GETDENTS 908
+#define SYS_EXIT_GETDENTS 907
+#define SYS_ENTER_GETDENTS64 906
+#define SYS_EXIT_GETDENTS64 905
+#define SYS_ENTER_IOCTL 904
+#define SYS_EXIT_IOCTL 903
+#define SYS_ENTER_FCNTL 902
+#define SYS_EXIT_FCNTL 901
+#define SYS_ENTER_MKDIRAT 896
+#define SYS_EXIT_MKDIRAT 895
+#define SYS_ENTER_MKDIR 894
+#define SYS_EXIT_MKDIR 893
+#define SYS_ENTER_RMDIR 892
+#define SYS_EXIT_RMDIR 891
+#define SYS_ENTER_UNLINKAT 890
+#define SYS_EXIT_UNLINKAT 889
+#define SYS_ENTER_UNLINK 888
+#define SYS_EXIT_UNLINK 887
+#define SYS_ENTER_SYMLINKAT 886
+#define SYS_EXIT_SYMLINKAT 885
+#define SYS_ENTER_SYMLINK 884
+#define SYS_EXIT_SYMLINK 883
+#define SYS_ENTER_LINKAT 882
+#define SYS_EXIT_LINKAT 881
+#define SYS_ENTER_LINK 880
+#define SYS_EXIT_LINK 879
+#define SYS_ENTER_RENAMEAT2 878
+#define SYS_EXIT_RENAMEAT2 877
+#define SYS_ENTER_RENAMEAT 876
+#define SYS_EXIT_RENAMEAT 875
+#define SYS_ENTER_RENAME 874
+#define SYS_EXIT_RENAME 873
+#define SYS_ENTER_NEWSTAT 864
+#define SYS_EXIT_NEWSTAT 863
+#define SYS_ENTER_NEWLSTAT 862
+#define SYS_EXIT_NEWLSTAT 861
+#define SYS_ENTER_NEWFSTATAT 860
+#define SYS_EXIT_NEWFSTATAT 859
+#define SYS_ENTER_NEWFSTAT 858
+#define SYS_EXIT_NEWFSTAT 857
+#define SYS_ENTER_READLINKAT 856
+#define SYS_EXIT_READLINKAT 855
+#define SYS_ENTER_READLINK 854
+#define SYS_EXIT_READLINK 853
+#define SYS_ENTER_STATX 852
+#define SYS_EXIT_STATX 851
+#define SYS_ENTER_LSEEK 850
+#define SYS_EXIT_LSEEK 849
+#define SYS_ENTER_READ 848
+#define SYS_EXIT_READ 847
+#define SYS_ENTER_WRITE 846
+#define SYS_EXIT_WRITE 845
+#define SYS_ENTER_PREAD64 844
+#define SYS_EXIT_PREAD64 843
+#define SYS_ENTER_PWRITE64 842
+#define SYS_EXIT_PWRITE64 841
+#define SYS_ENTER_READV 840
+#define SYS_EXIT_READV 839
+#define SYS_ENTER_WRITEV 838
+#define SYS_EXIT_WRITEV 837
+#define SYS_ENTER_PREADV 836
+#define SYS_EXIT_PREADV 835
+#define SYS_ENTER_PREADV2 834
+#define SYS_EXIT_PREADV2 833
+#define SYS_ENTER_PWRITEV 832
+#define SYS_EXIT_PWRITEV 831
+#define SYS_ENTER_PWRITEV2 830
+#define SYS_EXIT_PWRITEV2 829
+#define SYS_ENTER_COPY_FILE_RANGE 826
+#define SYS_EXIT_COPY_FILE_RANGE 825
+#define SYS_ENTER_TRUNCATE 824
+#define SYS_EXIT_TRUNCATE 823
+#define SYS_ENTER_FTRUNCATE 822
+#define SYS_EXIT_FTRUNCATE 821
+#define SYS_ENTER_FALLOCATE 820
+#define SYS_EXIT_FALLOCATE 819
+#define SYS_ENTER_FACCESSAT 818
+#define SYS_EXIT_FACCESSAT 817
+#define SYS_ENTER_FACCESSAT2 816
+#define SYS_EXIT_FACCESSAT2 815
+#define SYS_ENTER_ACCESS 814
+#define SYS_EXIT_ACCESS 813
+#define SYS_ENTER_CHDIR 812
+#define SYS_EXIT_CHDIR 811
+#define SYS_ENTER_FCHDIR 810
+#define SYS_EXIT_FCHDIR 809
+#define SYS_ENTER_CHROOT 808
+#define SYS_EXIT_CHROOT 807
+#define SYS_ENTER_FCHMOD 806
+#define SYS_EXIT_FCHMOD 805
+#define SYS_ENTER_FCHMODAT2 804
+#define SYS_EXIT_FCHMODAT2 803
+#define SYS_ENTER_FCHMODAT 802
+#define SYS_EXIT_FCHMODAT 801
+#define SYS_ENTER_CHMOD 800
+#define SYS_EXIT_CHMOD 799
+#define SYS_ENTER_FCHOWNAT 798
+#define SYS_EXIT_FCHOWNAT 797
+#define SYS_ENTER_CHOWN 796
+#define SYS_EXIT_CHOWN 795
+#define SYS_ENTER_LCHOWN 794
+#define SYS_EXIT_LCHOWN 793
+#define SYS_ENTER_FCHOWN 792
+#define SYS_EXIT_FCHOWN 791
+#define SYS_ENTER_OPEN 790
+#define SYS_EXIT_OPEN 789
+#define SYS_ENTER_OPENAT 788
+#define SYS_EXIT_OPENAT 787
+#define SYS_ENTER_OPENAT2 786
+#define SYS_EXIT_OPENAT2 785
+#define SYS_ENTER_CREAT 784
+#define SYS_EXIT_CREAT 783
+#define SYS_ENTER_CLOSE 782
+#define SYS_EXIT_CLOSE 781
+#define SYS_ENTER_MSYNC 710
+#define SYS_EXIT_MSYNC 709
+#define SYS_ENTER_READAHEAD 616
+#define SYS_EXIT_READAHEAD 615
+#define SYS_ENTER_FADVISE64 614
+#define SYS_EXIT_FADVISE64 613
+#define SYS_ENTER_CACHESTAT 595
+#define SYS_EXIT_CACHESTAT 594
+#define SYS_ENTER_FINIT_MODULE 406
+#define SYS_EXIT_FINIT_MODULE 405
+#define SYS_ENTER_SYSLOG 350
+#define SYS_EXIT_SYSLOG 349
 #define SYS_ENTER_PIDFD_GETFD 271
 #define SYS_EXIT_PIDFD_GETFD 270
 #define SYS_ENTER_MMAP 100
@@ -487,7 +488,7 @@
 
 /// sys_enter_io_uring_register is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_io_uring_register")
-int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_uring_register(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -509,7 +510,7 @@ int handle_sys_enter_io_uring_register(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_uring_register is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_uring_register")
-int handle_sys_exit_io_uring_register(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_uring_register(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -532,7 +533,7 @@ int handle_sys_exit_io_uring_register(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_uring_enter is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_io_uring_enter")
-int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_uring_enter(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -554,7 +555,7 @@ int handle_sys_enter_io_uring_enter(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_uring_enter is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_uring_enter")
-int handle_sys_exit_io_uring_enter(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_uring_enter(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -577,7 +578,7 @@ int handle_sys_exit_io_uring_enter(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_uring_setup is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_io_uring_setup")
-int handle_sys_enter_io_uring_setup(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_uring_setup(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -598,7 +599,7 @@ int handle_sys_enter_io_uring_setup(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_uring_setup is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_uring_setup")
-int handle_sys_exit_io_uring_setup(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_uring_setup(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -621,7 +622,7 @@ int handle_sys_exit_io_uring_setup(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_quotactl_fd is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_quotactl_fd")
-int handle_sys_enter_quotactl_fd(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_quotactl_fd(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -643,7 +644,7 @@ int handle_sys_enter_quotactl_fd(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_quotactl_fd is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_quotactl_fd")
-int handle_sys_exit_quotactl_fd(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_quotactl_fd(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -666,7 +667,7 @@ int handle_sys_exit_quotactl_fd(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_name_to_handle_at is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_name_to_handle_at")
-int handle_sys_enter_name_to_handle_at(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_name_to_handle_at(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -689,7 +690,7 @@ int handle_sys_enter_name_to_handle_at(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_name_to_handle_at is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_name_to_handle_at")
-int handle_sys_exit_name_to_handle_at(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_name_to_handle_at(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -712,7 +713,7 @@ int handle_sys_exit_name_to_handle_at(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_open_by_handle_at is a struct open_by_handle_at_event
 SEC("tracepoint/syscalls/sys_enter_open_by_handle_at")
-int handle_sys_enter_open_by_handle_at(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_open_by_handle_at(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -734,7 +735,7 @@ int handle_sys_enter_open_by_handle_at(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_open_by_handle_at is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_open_by_handle_at")
-int handle_sys_exit_open_by_handle_at(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_open_by_handle_at(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -757,7 +758,7 @@ int handle_sys_exit_open_by_handle_at(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_flock is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_flock")
-int handle_sys_enter_flock(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_flock(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -779,7 +780,7 @@ int handle_sys_enter_flock(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_flock is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_flock")
-int handle_sys_exit_flock(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_flock(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -802,7 +803,7 @@ int handle_sys_exit_flock(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_setup is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_io_setup")
-int handle_sys_enter_io_setup(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_setup(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -823,7 +824,7 @@ int handle_sys_enter_io_setup(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_setup is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_setup")
-int handle_sys_exit_io_setup(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_setup(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -846,7 +847,7 @@ int handle_sys_exit_io_setup(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_destroy is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_io_destroy")
-int handle_sys_enter_io_destroy(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_destroy(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -867,7 +868,7 @@ int handle_sys_enter_io_destroy(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_destroy is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_destroy")
-int handle_sys_exit_io_destroy(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_destroy(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -890,7 +891,7 @@ int handle_sys_exit_io_destroy(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_submit is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_io_submit")
-int handle_sys_enter_io_submit(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_submit(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -911,7 +912,7 @@ int handle_sys_enter_io_submit(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_submit is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_submit")
-int handle_sys_exit_io_submit(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_submit(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -934,7 +935,7 @@ int handle_sys_exit_io_submit(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_cancel is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_io_cancel")
-int handle_sys_enter_io_cancel(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_cancel(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -955,7 +956,7 @@ int handle_sys_enter_io_cancel(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_cancel is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_cancel")
-int handle_sys_exit_io_cancel(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_cancel(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -978,7 +979,7 @@ int handle_sys_exit_io_cancel(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_getevents is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_io_getevents")
-int handle_sys_enter_io_getevents(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_getevents(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -999,7 +1000,7 @@ int handle_sys_enter_io_getevents(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_getevents is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_getevents")
-int handle_sys_exit_io_getevents(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_getevents(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1022,7 +1023,7 @@ int handle_sys_exit_io_getevents(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_io_pgetevents is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_io_pgetevents")
-int handle_sys_enter_io_pgetevents(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_io_pgetevents(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1043,7 +1044,7 @@ int handle_sys_enter_io_pgetevents(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_io_pgetevents is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_io_pgetevents")
-int handle_sys_exit_io_pgetevents(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_io_pgetevents(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1066,7 +1067,7 @@ int handle_sys_exit_io_pgetevents(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fanotify_mark is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_fanotify_mark")
-int handle_sys_enter_fanotify_mark(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fanotify_mark(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1089,7 +1090,7 @@ int handle_sys_enter_fanotify_mark(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fanotify_mark is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fanotify_mark")
-int handle_sys_exit_fanotify_mark(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fanotify_mark(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1112,7 +1113,7 @@ int handle_sys_exit_fanotify_mark(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_file_getattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_file_getattr")
-int handle_sys_enter_file_getattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_file_getattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1135,7 +1136,7 @@ int handle_sys_enter_file_getattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_file_getattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_file_getattr")
-int handle_sys_exit_file_getattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_file_getattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1158,7 +1159,7 @@ int handle_sys_exit_file_getattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_file_setattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_file_setattr")
-int handle_sys_enter_file_setattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_file_setattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1181,7 +1182,7 @@ int handle_sys_enter_file_setattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_file_setattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_file_setattr")
-int handle_sys_exit_file_setattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_file_setattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1204,7 +1205,7 @@ int handle_sys_exit_file_setattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fspick is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_fspick")
-int handle_sys_enter_fspick(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fspick(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1227,7 +1228,7 @@ int handle_sys_enter_fspick(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fspick is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fspick")
-int handle_sys_exit_fspick(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fspick(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1250,7 +1251,7 @@ int handle_sys_exit_fspick(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fsconfig is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fsconfig")
-int handle_sys_enter_fsconfig(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fsconfig(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1272,7 +1273,7 @@ int handle_sys_enter_fsconfig(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fsconfig is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fsconfig")
-int handle_sys_exit_fsconfig(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fsconfig(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1295,7 +1296,7 @@ int handle_sys_exit_fsconfig(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_statfs is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_statfs")
-int handle_sys_enter_statfs(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_statfs(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1318,7 +1319,7 @@ int handle_sys_enter_statfs(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_statfs is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_statfs")
-int handle_sys_exit_statfs(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_statfs(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1341,7 +1342,7 @@ int handle_sys_exit_statfs(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fstatfs is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fstatfs")
-int handle_sys_enter_fstatfs(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fstatfs(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1363,7 +1364,7 @@ int handle_sys_enter_fstatfs(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fstatfs is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fstatfs")
-int handle_sys_exit_fstatfs(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fstatfs(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1386,7 +1387,7 @@ int handle_sys_exit_fstatfs(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_getcwd is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_getcwd")
-int handle_sys_enter_getcwd(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_getcwd(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1407,7 +1408,7 @@ int handle_sys_enter_getcwd(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_getcwd is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_getcwd")
-int handle_sys_exit_getcwd(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_getcwd(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1430,7 +1431,7 @@ int handle_sys_exit_getcwd(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_utimensat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_utimensat")
-int handle_sys_enter_utimensat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_utimensat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1453,7 +1454,7 @@ int handle_sys_enter_utimensat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_utimensat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_utimensat")
-int handle_sys_exit_utimensat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_utimensat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1476,7 +1477,7 @@ int handle_sys_exit_utimensat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_futimesat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_futimesat")
-int handle_sys_enter_futimesat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_futimesat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1499,7 +1500,7 @@ int handle_sys_enter_futimesat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_futimesat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_futimesat")
-int handle_sys_exit_futimesat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_futimesat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1522,7 +1523,7 @@ int handle_sys_exit_futimesat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_sync is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_sync")
-int handle_sys_enter_sync(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_sync(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1543,7 +1544,7 @@ int handle_sys_enter_sync(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_sync is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_sync")
-int handle_sys_exit_sync(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_sync(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1566,7 +1567,7 @@ int handle_sys_exit_sync(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_syncfs is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_syncfs")
-int handle_sys_enter_syncfs(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_syncfs(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1588,7 +1589,7 @@ int handle_sys_enter_syncfs(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_syncfs is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_syncfs")
-int handle_sys_exit_syncfs(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_syncfs(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1611,7 +1612,7 @@ int handle_sys_exit_syncfs(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fsync is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fsync")
-int handle_sys_enter_fsync(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fsync(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1633,7 +1634,7 @@ int handle_sys_enter_fsync(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fsync is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fsync")
-int handle_sys_exit_fsync(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fsync(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1656,7 +1657,7 @@ int handle_sys_exit_fsync(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fdatasync is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fdatasync")
-int handle_sys_enter_fdatasync(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fdatasync(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1678,7 +1679,7 @@ int handle_sys_enter_fdatasync(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fdatasync is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fdatasync")
-int handle_sys_exit_fdatasync(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fdatasync(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1701,7 +1702,7 @@ int handle_sys_exit_fdatasync(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_sync_file_range is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_sync_file_range")
-int handle_sys_enter_sync_file_range(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_sync_file_range(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1723,7 +1724,7 @@ int handle_sys_enter_sync_file_range(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_sync_file_range is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_sync_file_range")
-int handle_sys_exit_sync_file_range(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_sync_file_range(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1746,7 +1747,7 @@ int handle_sys_exit_sync_file_range(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_vmsplice is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_vmsplice")
-int handle_sys_enter_vmsplice(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_vmsplice(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1768,7 +1769,7 @@ int handle_sys_enter_vmsplice(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_vmsplice is a struct ret_event (TRANSFER_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_vmsplice")
-int handle_sys_exit_vmsplice(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_vmsplice(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1791,7 +1792,7 @@ int handle_sys_exit_vmsplice(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_setxattrat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_setxattrat")
-int handle_sys_enter_setxattrat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_setxattrat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1814,7 +1815,7 @@ int handle_sys_enter_setxattrat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_setxattrat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_setxattrat")
-int handle_sys_exit_setxattrat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_setxattrat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1837,7 +1838,7 @@ int handle_sys_exit_setxattrat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_setxattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_setxattr")
-int handle_sys_enter_setxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_setxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1860,7 +1861,7 @@ int handle_sys_enter_setxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_setxattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_setxattr")
-int handle_sys_exit_setxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_setxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1883,7 +1884,7 @@ int handle_sys_exit_setxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_lsetxattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_lsetxattr")
-int handle_sys_enter_lsetxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_lsetxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1906,7 +1907,7 @@ int handle_sys_enter_lsetxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_lsetxattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_lsetxattr")
-int handle_sys_exit_lsetxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_lsetxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1929,7 +1930,7 @@ int handle_sys_exit_lsetxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fsetxattr is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fsetxattr")
-int handle_sys_enter_fsetxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fsetxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1951,7 +1952,7 @@ int handle_sys_enter_fsetxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fsetxattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fsetxattr")
-int handle_sys_exit_fsetxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fsetxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1974,7 +1975,7 @@ int handle_sys_exit_fsetxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_getxattrat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_getxattrat")
-int handle_sys_enter_getxattrat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_getxattrat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -1997,7 +1998,7 @@ int handle_sys_enter_getxattrat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_getxattrat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_getxattrat")
-int handle_sys_exit_getxattrat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_getxattrat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2020,7 +2021,7 @@ int handle_sys_exit_getxattrat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_getxattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_getxattr")
-int handle_sys_enter_getxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_getxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2043,7 +2044,7 @@ int handle_sys_enter_getxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_getxattr is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_getxattr")
-int handle_sys_exit_getxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_getxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2066,7 +2067,7 @@ int handle_sys_exit_getxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_lgetxattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_lgetxattr")
-int handle_sys_enter_lgetxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_lgetxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2089,7 +2090,7 @@ int handle_sys_enter_lgetxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_lgetxattr is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_lgetxattr")
-int handle_sys_exit_lgetxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_lgetxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2112,7 +2113,7 @@ int handle_sys_exit_lgetxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fgetxattr is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fgetxattr")
-int handle_sys_enter_fgetxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fgetxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2134,7 +2135,7 @@ int handle_sys_enter_fgetxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fgetxattr is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fgetxattr")
-int handle_sys_exit_fgetxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fgetxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2157,7 +2158,7 @@ int handle_sys_exit_fgetxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_listxattrat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_listxattrat")
-int handle_sys_enter_listxattrat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_listxattrat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2180,7 +2181,7 @@ int handle_sys_enter_listxattrat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_listxattrat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_listxattrat")
-int handle_sys_exit_listxattrat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_listxattrat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2203,7 +2204,7 @@ int handle_sys_exit_listxattrat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_listxattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_listxattr")
-int handle_sys_enter_listxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_listxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2226,7 +2227,7 @@ int handle_sys_enter_listxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_listxattr is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_listxattr")
-int handle_sys_exit_listxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_listxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2249,7 +2250,7 @@ int handle_sys_exit_listxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_llistxattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_llistxattr")
-int handle_sys_enter_llistxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_llistxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2272,7 +2273,7 @@ int handle_sys_enter_llistxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_llistxattr is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_llistxattr")
-int handle_sys_exit_llistxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_llistxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2295,7 +2296,7 @@ int handle_sys_exit_llistxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_flistxattr is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_flistxattr")
-int handle_sys_enter_flistxattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_flistxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2317,7 +2318,7 @@ int handle_sys_enter_flistxattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_flistxattr is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_flistxattr")
-int handle_sys_exit_flistxattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_flistxattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2340,7 +2341,7 @@ int handle_sys_exit_flistxattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_removexattrat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_removexattrat")
-int handle_sys_enter_removexattrat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_removexattrat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2363,7 +2364,7 @@ int handle_sys_enter_removexattrat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_removexattrat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_removexattrat")
-int handle_sys_exit_removexattrat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_removexattrat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2386,7 +2387,7 @@ int handle_sys_exit_removexattrat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_removexattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_removexattr")
-int handle_sys_enter_removexattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_removexattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2409,7 +2410,7 @@ int handle_sys_enter_removexattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_removexattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_removexattr")
-int handle_sys_exit_removexattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_removexattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2432,7 +2433,7 @@ int handle_sys_exit_removexattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_lremovexattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_lremovexattr")
-int handle_sys_enter_lremovexattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_lremovexattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2455,7 +2456,7 @@ int handle_sys_enter_lremovexattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_lremovexattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_lremovexattr")
-int handle_sys_exit_lremovexattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_lremovexattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2478,7 +2479,7 @@ int handle_sys_exit_lremovexattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fremovexattr is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fremovexattr")
-int handle_sys_enter_fremovexattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fremovexattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2500,7 +2501,7 @@ int handle_sys_enter_fremovexattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fremovexattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fremovexattr")
-int handle_sys_exit_fremovexattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fremovexattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2523,7 +2524,7 @@ int handle_sys_exit_fremovexattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_open_tree is a struct open_event
 SEC("tracepoint/syscalls/sys_enter_open_tree")
-int handle_sys_enter_open_tree(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_open_tree(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2548,7 +2549,7 @@ int handle_sys_enter_open_tree(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_open_tree is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_open_tree")
-int handle_sys_exit_open_tree(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_open_tree(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2571,7 +2572,7 @@ int handle_sys_exit_open_tree(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_mount_setattr is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_mount_setattr")
-int handle_sys_enter_mount_setattr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_mount_setattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2594,7 +2595,7 @@ int handle_sys_enter_mount_setattr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_mount_setattr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_mount_setattr")
-int handle_sys_exit_mount_setattr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_mount_setattr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2617,7 +2618,7 @@ int handle_sys_exit_mount_setattr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_open_tree_attr is a struct open_event
 SEC("tracepoint/syscalls/sys_enter_open_tree_attr")
-int handle_sys_enter_open_tree_attr(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_open_tree_attr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2642,7 +2643,7 @@ int handle_sys_enter_open_tree_attr(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_open_tree_attr is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_open_tree_attr")
-int handle_sys_exit_open_tree_attr(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_open_tree_attr(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2665,7 +2666,7 @@ int handle_sys_exit_open_tree_attr(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_close_range is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_close_range")
-int handle_sys_enter_close_range(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_close_range(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2687,7 +2688,7 @@ int handle_sys_enter_close_range(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_close_range is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_close_range")
-int handle_sys_exit_close_range(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_close_range(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2710,7 +2711,7 @@ int handle_sys_exit_close_range(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_dup3 is a struct dup3_event
 SEC("tracepoint/syscalls/sys_enter_dup3")
-int handle_sys_enter_dup3(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_dup3(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2733,7 +2734,7 @@ int handle_sys_enter_dup3(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_dup3 is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_dup3")
-int handle_sys_exit_dup3(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_dup3(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2756,7 +2757,7 @@ int handle_sys_exit_dup3(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_dup2 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_dup2")
-int handle_sys_enter_dup2(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_dup2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2778,7 +2779,7 @@ int handle_sys_enter_dup2(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_dup2 is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_dup2")
-int handle_sys_exit_dup2(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_dup2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2801,7 +2802,7 @@ int handle_sys_exit_dup2(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_dup is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_dup")
-int handle_sys_enter_dup(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_dup(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2823,7 +2824,7 @@ int handle_sys_enter_dup(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_dup is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_dup")
-int handle_sys_exit_dup(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_dup(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2846,7 +2847,7 @@ int handle_sys_exit_dup(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_getdents is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_getdents")
-int handle_sys_enter_getdents(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_getdents(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2868,7 +2869,7 @@ int handle_sys_enter_getdents(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_getdents is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_getdents")
-int handle_sys_exit_getdents(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_getdents(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2891,7 +2892,7 @@ int handle_sys_exit_getdents(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_getdents64 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_getdents64")
-int handle_sys_enter_getdents64(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_getdents64(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2913,7 +2914,7 @@ int handle_sys_enter_getdents64(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_getdents64 is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_getdents64")
-int handle_sys_exit_getdents64(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_getdents64(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2936,7 +2937,7 @@ int handle_sys_exit_getdents64(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_ioctl is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_ioctl")
-int handle_sys_enter_ioctl(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_ioctl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2958,7 +2959,7 @@ int handle_sys_enter_ioctl(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_ioctl is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_ioctl")
-int handle_sys_exit_ioctl(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_ioctl(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -2981,7 +2982,7 @@ int handle_sys_exit_ioctl(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fcntl is a struct fcntl_event
 SEC("tracepoint/syscalls/sys_enter_fcntl")
-int handle_sys_enter_fcntl(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fcntl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3005,7 +3006,7 @@ int handle_sys_enter_fcntl(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fcntl is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fcntl")
-int handle_sys_exit_fcntl(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fcntl(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3028,7 +3029,7 @@ int handle_sys_exit_fcntl(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_mkdirat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_mkdirat")
-int handle_sys_enter_mkdirat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_mkdirat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3051,7 +3052,7 @@ int handle_sys_enter_mkdirat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_mkdirat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_mkdirat")
-int handle_sys_exit_mkdirat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_mkdirat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3074,7 +3075,7 @@ int handle_sys_exit_mkdirat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_mkdir is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_mkdir")
-int handle_sys_enter_mkdir(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_mkdir(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3097,7 +3098,7 @@ int handle_sys_enter_mkdir(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_mkdir is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_mkdir")
-int handle_sys_exit_mkdir(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_mkdir(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3120,7 +3121,7 @@ int handle_sys_exit_mkdir(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_rmdir is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_rmdir")
-int handle_sys_enter_rmdir(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_rmdir(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3143,7 +3144,7 @@ int handle_sys_enter_rmdir(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_rmdir is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_rmdir")
-int handle_sys_exit_rmdir(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_rmdir(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3166,7 +3167,7 @@ int handle_sys_exit_rmdir(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_unlinkat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_unlinkat")
-int handle_sys_enter_unlinkat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_unlinkat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3189,7 +3190,7 @@ int handle_sys_enter_unlinkat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_unlinkat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_unlinkat")
-int handle_sys_exit_unlinkat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_unlinkat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3212,7 +3213,7 @@ int handle_sys_exit_unlinkat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_unlink is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_unlink")
-int handle_sys_enter_unlink(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_unlink(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3235,7 +3236,7 @@ int handle_sys_enter_unlink(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_unlink is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_unlink")
-int handle_sys_exit_unlink(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_unlink(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3258,7 +3259,7 @@ int handle_sys_exit_unlink(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_symlinkat is a struct name_event
 SEC("tracepoint/syscalls/sys_enter_symlinkat")
-int handle_sys_enter_symlinkat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_symlinkat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3282,7 +3283,7 @@ int handle_sys_enter_symlinkat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_symlinkat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_symlinkat")
-int handle_sys_exit_symlinkat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_symlinkat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3305,7 +3306,7 @@ int handle_sys_exit_symlinkat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_symlink is a struct name_event
 SEC("tracepoint/syscalls/sys_enter_symlink")
-int handle_sys_enter_symlink(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_symlink(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3329,7 +3330,7 @@ int handle_sys_enter_symlink(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_symlink is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_symlink")
-int handle_sys_exit_symlink(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_symlink(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3352,7 +3353,7 @@ int handle_sys_exit_symlink(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_linkat is a struct name_event
 SEC("tracepoint/syscalls/sys_enter_linkat")
-int handle_sys_enter_linkat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_linkat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3376,7 +3377,7 @@ int handle_sys_enter_linkat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_linkat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_linkat")
-int handle_sys_exit_linkat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_linkat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3399,7 +3400,7 @@ int handle_sys_exit_linkat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_link is a struct name_event
 SEC("tracepoint/syscalls/sys_enter_link")
-int handle_sys_enter_link(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_link(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3423,7 +3424,7 @@ int handle_sys_enter_link(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_link is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_link")
-int handle_sys_exit_link(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_link(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3446,7 +3447,7 @@ int handle_sys_exit_link(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_renameat2 is a struct name_event
 SEC("tracepoint/syscalls/sys_enter_renameat2")
-int handle_sys_enter_renameat2(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_renameat2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3470,7 +3471,7 @@ int handle_sys_enter_renameat2(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_renameat2 is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_renameat2")
-int handle_sys_exit_renameat2(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_renameat2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3493,7 +3494,7 @@ int handle_sys_exit_renameat2(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_renameat is a struct name_event
 SEC("tracepoint/syscalls/sys_enter_renameat")
-int handle_sys_enter_renameat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_renameat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3517,7 +3518,7 @@ int handle_sys_enter_renameat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_renameat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_renameat")
-int handle_sys_exit_renameat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_renameat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3540,7 +3541,7 @@ int handle_sys_exit_renameat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_rename is a struct name_event
 SEC("tracepoint/syscalls/sys_enter_rename")
-int handle_sys_enter_rename(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_rename(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3564,7 +3565,7 @@ int handle_sys_enter_rename(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_rename is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_rename")
-int handle_sys_exit_rename(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_rename(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3587,7 +3588,7 @@ int handle_sys_exit_rename(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_newstat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_newstat")
-int handle_sys_enter_newstat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_newstat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3610,7 +3611,7 @@ int handle_sys_enter_newstat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_newstat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_newstat")
-int handle_sys_exit_newstat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_newstat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3633,7 +3634,7 @@ int handle_sys_exit_newstat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_newlstat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_newlstat")
-int handle_sys_enter_newlstat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_newlstat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3656,7 +3657,7 @@ int handle_sys_enter_newlstat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_newlstat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_newlstat")
-int handle_sys_exit_newlstat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_newlstat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3679,7 +3680,7 @@ int handle_sys_exit_newlstat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_newfstatat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_newfstatat")
-int handle_sys_enter_newfstatat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_newfstatat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3702,7 +3703,7 @@ int handle_sys_enter_newfstatat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_newfstatat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_newfstatat")
-int handle_sys_exit_newfstatat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_newfstatat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3725,7 +3726,7 @@ int handle_sys_exit_newfstatat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_newfstat is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_newfstat")
-int handle_sys_enter_newfstat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_newfstat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3747,7 +3748,7 @@ int handle_sys_enter_newfstat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_newfstat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_newfstat")
-int handle_sys_exit_newfstat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_newfstat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3770,7 +3771,7 @@ int handle_sys_exit_newfstat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_readlinkat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_readlinkat")
-int handle_sys_enter_readlinkat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_readlinkat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3793,7 +3794,7 @@ int handle_sys_enter_readlinkat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_readlinkat is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_readlinkat")
-int handle_sys_exit_readlinkat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_readlinkat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3816,7 +3817,7 @@ int handle_sys_exit_readlinkat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_readlink is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_readlink")
-int handle_sys_enter_readlink(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_readlink(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3839,7 +3840,7 @@ int handle_sys_enter_readlink(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_readlink is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_readlink")
-int handle_sys_exit_readlink(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_readlink(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3862,7 +3863,7 @@ int handle_sys_exit_readlink(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_statx is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_statx")
-int handle_sys_enter_statx(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_statx(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3885,7 +3886,7 @@ int handle_sys_enter_statx(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_statx is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_statx")
-int handle_sys_exit_statx(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_statx(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3908,7 +3909,7 @@ int handle_sys_exit_statx(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_lseek is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_lseek")
-int handle_sys_enter_lseek(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_lseek(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3930,7 +3931,7 @@ int handle_sys_enter_lseek(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_lseek is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_lseek")
-int handle_sys_exit_lseek(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_lseek(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3953,7 +3954,7 @@ int handle_sys_exit_lseek(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_read is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_read")
-int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_read(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3975,7 +3976,7 @@ int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_read is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_read")
-int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_read(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -3998,7 +3999,7 @@ int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_write is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_write")
-int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_write(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4020,7 +4021,7 @@ int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_write is a struct ret_event (WRITE_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_write")
-int handle_sys_exit_write(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_write(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4043,7 +4044,7 @@ int handle_sys_exit_write(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_pread64 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_pread64")
-int handle_sys_enter_pread64(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_pread64(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4065,7 +4066,7 @@ int handle_sys_enter_pread64(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_pread64 is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_pread64")
-int handle_sys_exit_pread64(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_pread64(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4088,7 +4089,7 @@ int handle_sys_exit_pread64(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_pwrite64 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_pwrite64")
-int handle_sys_enter_pwrite64(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_pwrite64(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4110,7 +4111,7 @@ int handle_sys_enter_pwrite64(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_pwrite64 is a struct ret_event (WRITE_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_pwrite64")
-int handle_sys_exit_pwrite64(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_pwrite64(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4133,7 +4134,7 @@ int handle_sys_exit_pwrite64(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_readv is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_readv")
-int handle_sys_enter_readv(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_readv(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4155,7 +4156,7 @@ int handle_sys_enter_readv(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_readv is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_readv")
-int handle_sys_exit_readv(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_readv(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4178,7 +4179,7 @@ int handle_sys_exit_readv(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_writev is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_writev")
-int handle_sys_enter_writev(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_writev(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4200,7 +4201,7 @@ int handle_sys_enter_writev(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_writev is a struct ret_event (WRITE_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_writev")
-int handle_sys_exit_writev(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_writev(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4223,7 +4224,7 @@ int handle_sys_exit_writev(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_preadv is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_preadv")
-int handle_sys_enter_preadv(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_preadv(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4245,7 +4246,7 @@ int handle_sys_enter_preadv(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_preadv is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_preadv")
-int handle_sys_exit_preadv(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_preadv(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4268,7 +4269,7 @@ int handle_sys_exit_preadv(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_preadv2 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_preadv2")
-int handle_sys_enter_preadv2(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_preadv2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4290,7 +4291,7 @@ int handle_sys_enter_preadv2(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_preadv2 is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_preadv2")
-int handle_sys_exit_preadv2(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_preadv2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4313,7 +4314,7 @@ int handle_sys_exit_preadv2(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_pwritev is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_pwritev")
-int handle_sys_enter_pwritev(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_pwritev(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4335,7 +4336,7 @@ int handle_sys_enter_pwritev(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_pwritev is a struct ret_event (WRITE_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_pwritev")
-int handle_sys_exit_pwritev(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_pwritev(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4358,7 +4359,7 @@ int handle_sys_exit_pwritev(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_pwritev2 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_pwritev2")
-int handle_sys_enter_pwritev2(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_pwritev2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4380,7 +4381,7 @@ int handle_sys_enter_pwritev2(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_pwritev2 is a struct ret_event (WRITE_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_pwritev2")
-int handle_sys_exit_pwritev2(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_pwritev2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4403,7 +4404,7 @@ int handle_sys_exit_pwritev2(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_copy_file_range is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_copy_file_range")
-int handle_sys_enter_copy_file_range(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_copy_file_range(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4425,7 +4426,7 @@ int handle_sys_enter_copy_file_range(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_copy_file_range is a struct ret_event (TRANSFER_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_copy_file_range")
-int handle_sys_exit_copy_file_range(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_copy_file_range(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4448,7 +4449,7 @@ int handle_sys_exit_copy_file_range(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_truncate is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_truncate")
-int handle_sys_enter_truncate(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_truncate(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4471,7 +4472,7 @@ int handle_sys_enter_truncate(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_truncate is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_truncate")
-int handle_sys_exit_truncate(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_truncate(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4494,7 +4495,7 @@ int handle_sys_exit_truncate(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_ftruncate is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_ftruncate")
-int handle_sys_enter_ftruncate(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_ftruncate(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4516,7 +4517,7 @@ int handle_sys_enter_ftruncate(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_ftruncate is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_ftruncate")
-int handle_sys_exit_ftruncate(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_ftruncate(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4539,7 +4540,7 @@ int handle_sys_exit_ftruncate(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fallocate is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fallocate")
-int handle_sys_enter_fallocate(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fallocate(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4561,7 +4562,7 @@ int handle_sys_enter_fallocate(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fallocate is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fallocate")
-int handle_sys_exit_fallocate(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fallocate(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4584,7 +4585,7 @@ int handle_sys_exit_fallocate(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_faccessat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_faccessat")
-int handle_sys_enter_faccessat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_faccessat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4607,7 +4608,7 @@ int handle_sys_enter_faccessat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_faccessat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_faccessat")
-int handle_sys_exit_faccessat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_faccessat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4630,7 +4631,7 @@ int handle_sys_exit_faccessat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_faccessat2 is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_faccessat2")
-int handle_sys_enter_faccessat2(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_faccessat2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4653,7 +4654,7 @@ int handle_sys_enter_faccessat2(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_faccessat2 is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_faccessat2")
-int handle_sys_exit_faccessat2(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_faccessat2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4676,7 +4677,7 @@ int handle_sys_exit_faccessat2(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_access is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_access")
-int handle_sys_enter_access(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_access(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4699,7 +4700,7 @@ int handle_sys_enter_access(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_access is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_access")
-int handle_sys_exit_access(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_access(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4722,7 +4723,7 @@ int handle_sys_exit_access(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_chdir is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_chdir")
-int handle_sys_enter_chdir(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_chdir(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4745,7 +4746,7 @@ int handle_sys_enter_chdir(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_chdir is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_chdir")
-int handle_sys_exit_chdir(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_chdir(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4768,7 +4769,7 @@ int handle_sys_exit_chdir(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fchdir is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fchdir")
-int handle_sys_enter_fchdir(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fchdir(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4790,7 +4791,7 @@ int handle_sys_enter_fchdir(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fchdir is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fchdir")
-int handle_sys_exit_fchdir(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fchdir(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4813,7 +4814,7 @@ int handle_sys_exit_fchdir(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_chroot is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_chroot")
-int handle_sys_enter_chroot(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_chroot(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4836,7 +4837,7 @@ int handle_sys_enter_chroot(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_chroot is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_chroot")
-int handle_sys_exit_chroot(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_chroot(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4859,7 +4860,7 @@ int handle_sys_exit_chroot(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fchmod is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fchmod")
-int handle_sys_enter_fchmod(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fchmod(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4881,7 +4882,7 @@ int handle_sys_enter_fchmod(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fchmod is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fchmod")
-int handle_sys_exit_fchmod(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fchmod(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4904,7 +4905,7 @@ int handle_sys_exit_fchmod(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fchmodat2 is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_fchmodat2")
-int handle_sys_enter_fchmodat2(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fchmodat2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4927,7 +4928,7 @@ int handle_sys_enter_fchmodat2(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fchmodat2 is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fchmodat2")
-int handle_sys_exit_fchmodat2(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fchmodat2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4950,7 +4951,7 @@ int handle_sys_exit_fchmodat2(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fchmodat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_fchmodat")
-int handle_sys_enter_fchmodat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fchmodat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4973,7 +4974,7 @@ int handle_sys_enter_fchmodat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fchmodat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fchmodat")
-int handle_sys_exit_fchmodat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fchmodat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -4996,7 +4997,7 @@ int handle_sys_exit_fchmodat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_chmod is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_chmod")
-int handle_sys_enter_chmod(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_chmod(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5019,7 +5020,7 @@ int handle_sys_enter_chmod(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_chmod is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_chmod")
-int handle_sys_exit_chmod(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_chmod(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5042,7 +5043,7 @@ int handle_sys_exit_chmod(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fchownat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_fchownat")
-int handle_sys_enter_fchownat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fchownat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5065,7 +5066,7 @@ int handle_sys_enter_fchownat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fchownat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fchownat")
-int handle_sys_exit_fchownat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fchownat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5088,7 +5089,7 @@ int handle_sys_exit_fchownat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_chown is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_chown")
-int handle_sys_enter_chown(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_chown(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5111,7 +5112,7 @@ int handle_sys_enter_chown(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_chown is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_chown")
-int handle_sys_exit_chown(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_chown(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5134,7 +5135,7 @@ int handle_sys_exit_chown(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_lchown is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_lchown")
-int handle_sys_enter_lchown(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_lchown(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5157,7 +5158,7 @@ int handle_sys_enter_lchown(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_lchown is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_lchown")
-int handle_sys_exit_lchown(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_lchown(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5180,7 +5181,7 @@ int handle_sys_exit_lchown(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fchown is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fchown")
-int handle_sys_enter_fchown(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fchown(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5202,7 +5203,7 @@ int handle_sys_enter_fchown(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fchown is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fchown")
-int handle_sys_exit_fchown(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fchown(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5225,7 +5226,7 @@ int handle_sys_exit_fchown(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_open is a struct open_event
 SEC("tracepoint/syscalls/sys_enter_open")
-int handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_open(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5250,7 +5251,7 @@ int handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_open is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_open")
-int handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_open(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5273,7 +5274,7 @@ int handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_openat is a struct open_event
 SEC("tracepoint/syscalls/sys_enter_openat")
-int handle_sys_enter_openat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_openat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5298,7 +5299,7 @@ int handle_sys_enter_openat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_openat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_openat")
-int handle_sys_exit_openat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_openat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5321,7 +5322,7 @@ int handle_sys_exit_openat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_openat2 is a struct open_event
 SEC("tracepoint/syscalls/sys_enter_openat2")
-int handle_sys_enter_openat2(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_openat2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5346,7 +5347,7 @@ int handle_sys_enter_openat2(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_openat2 is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_openat2")
-int handle_sys_exit_openat2(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_openat2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5369,7 +5370,7 @@ int handle_sys_exit_openat2(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_creat is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_creat")
-int handle_sys_enter_creat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_creat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5392,7 +5393,7 @@ int handle_sys_enter_creat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_creat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_creat")
-int handle_sys_exit_creat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_creat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5415,7 +5416,7 @@ int handle_sys_exit_creat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_close is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_close")
-int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_close(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5437,7 +5438,7 @@ int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_close is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_close")
-int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_close(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5460,7 +5461,7 @@ int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_msync is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_msync")
-int handle_sys_enter_msync(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_msync(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5481,7 +5482,7 @@ int handle_sys_enter_msync(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_msync is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_msync")
-int handle_sys_exit_msync(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_msync(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5504,7 +5505,7 @@ int handle_sys_exit_msync(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_readahead is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_readahead")
-int handle_sys_enter_readahead(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_readahead(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5526,7 +5527,7 @@ int handle_sys_enter_readahead(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_readahead is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_readahead")
-int handle_sys_exit_readahead(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_readahead(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5549,7 +5550,7 @@ int handle_sys_exit_readahead(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_fadvise64 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_fadvise64")
-int handle_sys_enter_fadvise64(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_fadvise64(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5571,7 +5572,7 @@ int handle_sys_enter_fadvise64(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_fadvise64 is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_fadvise64")
-int handle_sys_exit_fadvise64(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_fadvise64(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5594,7 +5595,7 @@ int handle_sys_exit_fadvise64(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_cachestat is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_cachestat")
-int handle_sys_enter_cachestat(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_cachestat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5616,7 +5617,7 @@ int handle_sys_enter_cachestat(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_cachestat is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_cachestat")
-int handle_sys_exit_cachestat(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_cachestat(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5639,7 +5640,7 @@ int handle_sys_exit_cachestat(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_finit_module is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_finit_module")
-int handle_sys_enter_finit_module(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_finit_module(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5661,7 +5662,7 @@ int handle_sys_enter_finit_module(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_finit_module is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_finit_module")
-int handle_sys_exit_finit_module(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_finit_module(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5684,7 +5685,7 @@ int handle_sys_exit_finit_module(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_syslog is a struct null_event
 SEC("tracepoint/syscalls/sys_enter_syslog")
-int handle_sys_enter_syslog(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_syslog(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5705,7 +5706,7 @@ int handle_sys_enter_syslog(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_syslog is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_syslog")
-int handle_sys_exit_syslog(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_syslog(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5728,7 +5729,7 @@ int handle_sys_exit_syslog(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_pidfd_getfd is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_pidfd_getfd")
-int handle_sys_enter_pidfd_getfd(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_pidfd_getfd(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5750,7 +5751,7 @@ int handle_sys_enter_pidfd_getfd(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_pidfd_getfd is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_pidfd_getfd")
-int handle_sys_exit_pidfd_getfd(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_pidfd_getfd(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5773,7 +5774,7 @@ int handle_sys_exit_pidfd_getfd(struct trace_event_raw_sys_exit *ctx) {
 
 /// sys_enter_mmap is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_mmap")
-int handle_sys_enter_mmap(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_mmap(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
@@ -5795,7 +5796,7 @@ int handle_sys_enter_mmap(struct trace_event_raw_sys_enter *ctx) {
 
 /// sys_exit_mmap is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_mmap")
-int handle_sys_exit_mmap(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_mmap(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
