@@ -84,6 +84,7 @@ Ignoring sys_enter_landlock_create_ruleset sys_exit_landlock_create_ruleset as p
 Ignoring sys_enter_landlock_restrict_self sys_exit_landlock_restrict_self as possibly not file I/O related
 Ignoring sys_enter_listen sys_exit_listen as possibly not file I/O related
 Ignoring sys_enter_listmount sys_exit_listmount as possibly not file I/O related
+Ignoring sys_enter_listns sys_exit_listns as possibly not file I/O related
 Ignoring sys_enter_lsm_get_self_attr sys_exit_lsm_get_self_attr as possibly not file I/O related
 Ignoring sys_enter_lsm_list_modules sys_exit_lsm_list_modules as possibly not file I/O related
 Ignoring sys_enter_lsm_set_self_attr sys_exit_lsm_set_self_attr as possibly not file I/O related

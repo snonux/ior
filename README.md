@@ -78,52 +78,26 @@ Important details:
 - `durationToPrevNs` is attributed to the current syscall pair (the one whose `enter` closes the gap).
 - There is no separate "idle" pseudo-event bucket; use the `durationToPrev` count field when aggregated flamegraph output should emphasize inter-syscall time.
 
-## Fedora
-
-To get this running on Fedora 42, run:
-
-```shell
-mkdir -p ~/git
-git clone https://codeberg.org/snonux/ior ~/git/ior
-git clone https://github.com/aquasecurity/libbpfgo ~/git/libbpfgo
-sudo dnf install -y golang clang bpftool elfutils-libelf-devel zlib-static glibc-static libzstd-static
-git -C ~/git/libbpfgo checkout v0.9.2-libbpf-1.5.1
-git -C ~/git/libbpfgo submodule update --init --recursive
-make -C ~/git/libbpfgo libbpfgo-static
-```
-
-Need libelf static, which isn't in any repos. So we need to compile it ourselves.
-
-```
-sudo dnf install rpmdevtools dnf-utils
-dnf download --source elfutils-libelf
-rpm -ivh elfutils-*.src.rpm
-cd ~
-sudo dnf builddep rpmbuild/SPECS/*.spec
-cd ~/rpmbuild/SPECS
-rpmbuild -ba *.spec
-mkdir ~/src
-tar -C ~/src -xvjpf ~/rpmbuild/SOURCES/elfutils-*.tar.bz2
-cd ~/src/elfutils-*
-rm -Rf ~/rpmbuild
-./configure
-make
-sudo cp -v ./libelf/libelf.a /usr/lib64/
-```
-
 ## Rocky Linux 9
 
-Verified on a fresh Rocky Linux 9.7 install (kernel `5.14.0-611.5.1.el9_7`). Two
-caveats up front before the steps:
+Verified on a fresh Rocky Linux 9.7 install (e.g. kernel `5.14.0-611.5.1.el9_7`,
+exact stamp not required). Runs on the **stock RHEL 9 kernel** — no kernel
+upgrade needed. One build-time caveat:
 
-1. The stock RHEL 9 kernel (`5.14`) ships a partial backport of BPF features. Specifically,
-   `BPF_LINK_CREATE` for `BPF_PERF_EVENT` returns `EACCES` even as root, so `ior` can load
-   the BPF object but cannot attach tracepoints. This is a kernel-side issue, not an `ior`
-   issue (`bpftrace` works because it uses the older `PERF_EVENT_IOC_SET_BPF` ioctl path).
-   The fix below installs `kernel-ml` from ElRepo (`7.0.x` mainline) and reboots into it.
-2. Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no `*-static` packages). Both have
-   to be built from source — the elfutils dance is the same as the Fedora section above;
-   `libzstd.a` needs an extra `make` from the upstream tarball.
+- Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no `*-static` packages). Both have
+  to be built from source — the elfutils dance is the same as the Fedora section above;
+  `libzstd.a` needs an extra `make` from the upstream tarball.
+
+> Historical note. Earlier versions of `ior` typed BPF tracepoint context as
+> `struct trace_event_raw_sys_enter`/`_exit` (the BTF-emitted alias). RHEL 9
+> backports an `rt`-tree patch that adds `preempt_lazy_count` to `struct
+> trace_entry`, which widens those aliases by 8 bytes and shifts the `args`/`ret`
+> offsets — but the actual context the kernel hands the program is still
+> `struct syscall_trace_enter`/`_exit`, where the offsets did not move. The
+> verifier saw the program reading past `max_ctx_offset` and rejected the
+> attach with `EACCES`. `ior` now uses `syscall_trace_*` directly (matching
+> the [bcc fix](https://github.com/iovisor/bcc/pull/4920) and inspektor-gadget),
+> so the stock kernel works with no workaround.
 
 ```shell
 # 1) Enable repos and install build dependencies (CRB ships static libs).
@@ -158,19 +132,7 @@ tar xzf zstd-1.5.5.tar.gz
 make -C zstd-1.5.5/lib -j$(nproc) libzstd.a
 sudo cp -v zstd-1.5.5/lib/libzstd.a /usr/lib64/
 
-# 5) Install kernel-ml from ElRepo and reboot into it.
-sudo rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
-sudo dnf install -y https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
-sudo dnf --enablerepo=elrepo-kernel install -y kernel-ml
-# kernel-ml becomes the default boot entry automatically (grubby --default-kernel
-# after install reports /boot/vmlinuz-7.x...). Old kernel stays available as a
-# fallback boot entry in case the new one misbehaves.
-sudo reboot
-
-# After reboot:
-uname -r   # should be 7.x.x-... (kernel-ml), not 5.14.x
-
-# 6) Clone ior + libbpfgo, pin libbpfgo, build the static archive, install mage.
+# 5) Clone ior + libbpfgo, pin libbpfgo, build the static archive, install mage.
 mkdir -p ~/git
 git clone https://codeberg.org/snonux/ior ~/git/ior
 git clone https://github.com/aquasecurity/libbpfgo ~/git/libbpfgo
@@ -179,21 +141,45 @@ git -C ~/git/libbpfgo submodule update --init --recursive
 make -C ~/git/libbpfgo libbpfgo-static
 go install github.com/magefile/mage@latest
 
-# 7) Generate against the live kernel (the syscall-coverage audit is
+# 6) Generate against the live kernel (the syscall-coverage audit is
 # kernel-specific; IOR_FORCE_GENERATE skips the strict diff against the
 # committed audit which was generated on a different kernel build).
 cd ~/git/ior
 env IOR_FORCE_GENERATE=1 GOTOOLCHAIN=auto mage generate
 env GOTOOLCHAIN=auto mage all
 
-# 8) Smoke test.
+# 7) Smoke test.
 sudo ./ior -plain -duration 5
 ```
 
-If `./ior -plain -duration 5` prints `Probing for 5s` and a stream of CSV rows, the
-install is good. If it instead prints `permission denied` on tracepoint attach, you
-are still on the stock RHEL kernel — verify with `uname -r` and check
-`grubby --default-kernel`.
+If `./ior -plain -duration 5` prints `Probing for 5s` and a stream of CSV rows,
+the install is good.
+
+## Compile once, run everywhere
+
+The full build dance above only has to happen on **one** machine. The resulting
+`ior` binary is portable across Linux hosts: `scp ior other-host:/usr/local/bin/`
+and run it there. Two reasons it works:
+
+- The Go binary is compiled with `-extldflags "-static"` and links libbpf,
+  libelf, libzstd, and zlib as static archives. There is no runtime dependency
+  on the build host's library versions (a couple of glibc resolver functions —
+  `getpwnam_r` and friends — fall back to the target's libc, which is fine on
+  any reasonable distro).
+- The BPF object inside the binary is built with libbpf's CO-RE
+  (Compile-Once, Run-Everywhere) machinery. Field offsets are not baked into
+  the bytecode; libbpf reads the target kernel's BTF
+  (`/sys/kernel/btf/vmlinux`) at load time and patches the program for that
+  kernel. As long as the target ships BTF — true on every Debian, Ubuntu,
+  Fedora, Arch, RHEL, and now ElRepo `kernel-ml` build at the time of
+  writing — the same `ior` binary runs without recompilation.
+
+So in practice: pick one Rocky 9 / Fedora box, do the build dance once, then
+distribute the 23 MB binary to wherever you want to trace. The build host needs
+all the dev tooling; the trace hosts need only a BTF-enabled kernel and `sudo`.
+
+For the eBPF + CO-RE explanation, see Part 2 of the I/O Riot NG blog series:
+[Unveiling I/O Riot NG — Part 2: under the hood](https://foo.zone/gemfeed/unveiling-ior-ng-part-2.html).
 
 ## TUI Flamegraphs
 

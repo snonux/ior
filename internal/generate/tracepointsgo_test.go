@@ -16,25 +16,25 @@ const sampleGeneratedC = `// Code generated - don't change manually!
 
 /// sys_enter_read is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_read")
-int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_read(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
 /// sys_exit_read is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_read")
-int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_read(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
 /// sys_enter_close is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_close")
-int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
+int handle_sys_enter_close(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
 /// sys_exit_close is a struct ret_event (UNCLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_close")
-int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
+int handle_sys_exit_close(struct syscall_trace_exit *ctx) {
     return 0;
 }
 `
@@ -93,7 +93,7 @@ func TestExtractTracepointsPackageHeader(t *testing.T) {
 
 func TestExtractTracepointsMalformedSEC(t *testing.T) {
 	input := `SEC("tracepoint/not_matching_pattern")
-int handle_something(struct trace_event_raw_sys_enter *ctx) {
+int handle_something(struct syscall_trace_enter *ctx) {
     return 0;
 }
 SEC("some/garbage")
