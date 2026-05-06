@@ -1,5 +1,3 @@
-> **🚧 PRE-ALPHA SOFTWARE:** This project is in a pre-alpha state and is intended for my own personal use only. Use at your own risk.
-
 # I/O Riot NG (aka ior)
 
 <img src=assets/ior-small.png />
@@ -14,13 +12,13 @@ This works only on Linux!
 
 ## Demo
 
-A short guided tour with animated GIFs of every major surface lives in [`demo/TUTORIAL.md`](./demo/TUTORIAL.md). Two teasers:
+A short guided tour with animated GIFs of every major surface lives in [`docs/tutorial/TUTORIAL.md`](./docs/tutorial/TUTORIAL.md). Two teasers:
 
-<img src=demo/assets/01-launch.gif width=720 alt="Cold start: PID picker, then the dashboard appears" />
+<img src=docs/tutorial/assets/01-launch.gif width=720 alt="Cold start: PID picker, then the dashboard appears" />
 
-<img src=demo/assets/13-tui-flamegraph.gif width=720 alt="Live in-TUI flamegraph rebuilding from real workload" />
+<img src=docs/tutorial/assets/13-tui-flamegraph.gif width=720 alt="Live in-TUI flamegraph rebuilding from real workload" />
 
-The demo is fully reproducible: `mage installDemoTools` once, then `sudo -v && mage demo` regenerates every GIF and screenshot. See the [tutorial](./demo/TUTORIAL.md) for the full walkthrough.
+The demo is fully reproducible: `mage installDemoTools` once, then `sudo -v && mage demo` regenerates every GIF and screenshot. See the [tutorial](./docs/tutorial/TUTORIAL.md) for the full walkthrough.
 
 ## Requirements
 
@@ -80,7 +78,7 @@ explanation.
 
 Press **H** inside the dashboard to toggle the built-in help panel. Tabs are
 reachable with **tab/shift+tab** or number keys **1–6**. Full hotkey reference:
-[docs/tui-reference.md](./docs/tui-reference.md).
+[docs/tutorial/TUTORIAL.md](./docs/tutorial/TUTORIAL.md#hotkey-quick-reference).
 
 ## Recording Modes
 
@@ -94,4 +92,4 @@ reachable with **tab/shift+tab** or number keys **1–6**. Full hotkey reference
 | Parquet recording | press `R` in TUI, or `-parquet <file>` | streaming Parquet file |
 
 Full details and the `.ior.zst` vs Parquet trade-off:
-[docs/tui-reference.md](./docs/tui-reference.md).
+[docs/tutorial/TUTORIAL.md](./docs/tutorial/TUTORIAL.md#recording-for-offline-analysis).

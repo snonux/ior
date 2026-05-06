@@ -28,22 +28,23 @@ Every GIF in this document is regenerated from a [VHS](https://github.com/charmb
 
 ## Installing ior
 
-See the [main README](../README.md) for full install steps. In short:
+See the [main README](../../README.md) for full install steps. The quickest path from any Docker-capable Linux host:
 
 ```shell
 git clone https://codeberg.org/snonux/ior ~/git/ior
-git clone https://github.com/aquasecurity/libbpfgo ~/git/libbpfgo
-sudo dnf install -y golang clang bpftool elfutils-libelf-devel zlib-static glibc-static libzstd-static
-git -C ~/git/libbpfgo checkout v0.9.2-libbpf-1.5.1
-git -C ~/git/libbpfgo submodule update --init --recursive
-make -C ~/git/libbpfgo libbpfgo-static
 cd ~/git/ior
-env GOTOOLCHAIN=auto mage all
+mage buildDocker          # builds inside a Rocky 9 container, ~15 min on first run
+```
+
+For a native build (libbpfgo must be cloned alongside the repo first — see the README):
+
+```shell
+mage all
 ```
 
 ior needs `CAP_BPF`, so every invocation below uses `sudo`.
 
-The build dance only has to happen once: the resulting `ior` binary is fully statically linked (libbpf, libelf, libzstd, zlib are baked in) **and** the embedded BPF object uses CO-RE, so libbpf relocates field offsets against the target kernel's BTF at load time. Build it on one box, then `scp ior` to any other Linux host with a BTF-enabled kernel and run it there. See the [Compile once, run everywhere](../README.md#compile-once-run-everywhere) section in the main README for details.
+The build dance only has to happen once: the resulting `ior` binary is fully statically linked and uses CO-RE, so the same binary runs on any BTF-enabled Linux kernel without recompilation. See the [Compile once, run everywhere](../../README.md#compile-once-run-everywhere) section for details.
 
 ## First launch: the PID picker
 
@@ -197,4 +198,48 @@ Or rebuild a single tape after editing it:
 TAPE=07-stream-live mage demoOne
 ```
 
-Tapes live in [`demo/tapes/`](./tapes), the background workload that drives them is [`demo/scripts/workload.sh`](./scripts/workload.sh), and the resulting assets land in [`demo/assets/`](./assets). VHS records headlessly under `ttyd` + Chromium — no real terminal window opens, so `mage demo` is safe to run in the background while you keep working.
+Tapes live in [`tapes/`](./tapes), the background workload that drives them is [`scripts/workload.sh`](./scripts/workload.sh), and the resulting assets land in [`assets/`](./assets). VHS records headlessly under `ttyd` + Chromium — no real terminal window opens, so `mage demo` is safe to run in the background while you keep working.
+
+## Hotkey Quick Reference
+
+### Global keys
+
+| Key | Action |
+|-----|--------|
+| `tab` / `shift+tab` | next / previous tab |
+| `1`–`6` (`7` = alias for `6`) | jump to tab by number |
+| `H` | toggle bottom help panel |
+| `e` | export filtered stream snapshot to CSV |
+| `R` | start / stop Parquet recording |
+| `p` | re-open PID picker |
+| `t` | open TID picker |
+| `o` | open probe selection dialog |
+| `r` | refresh dashboard snapshot |
+| `q` / `ctrl+c` | quit |
+
+### Tab-specific keys (`2:Syscalls`, `3:Files`, `4:Processes`)
+
+| Key | Action |
+|-----|--------|
+| `s` | sort by selected column (default direction) |
+| `S` | reverse-sort by selected column |
+| `j`/`k` or `↑`/`↓` | scroll list |
+| `d` (Files only) | toggle directory grouping |
+
+### Stream tab (`7:Stream`)
+
+| Key | Action |
+|-----|--------|
+| `space` | toggle live / pause mode |
+| `g` / `G` | jump to top / tail |
+| `j`/`k` or `↑`/`↓` | move row (pause) / scroll (live) |
+| `←`/`→` or `h`/`l` | move selected column (pause only) |
+| `enter` | push cell value as filter (pause) |
+| `esc` | pop most recent filter (LIFO) |
+| `c` | clear all stream filters |
+| `f` | open advanced filter modal |
+| `/` / `?` | regex search forward / backward |
+| `n` / `N` | next / previous search match |
+| `x` | quick CSV export of paused view |
+| `X` | CSV export with filename prompt |
+| `E` | open last CSV export in `$EDITOR` |
