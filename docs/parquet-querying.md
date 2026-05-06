@@ -1,6 +1,6 @@
 # Querying ior Parquet recordings with ClickHouse
 
-ior can record I/O events to a Parquet file (see `--record` flag). This document explains
+ior can record I/O events to a Parquet file (press `R` in TUI, or use the `-parquet` flag in headless mode). This document explains
 how to explore those recordings interactively using `clickhouse local`, which is bundled
 inside the standard `clickhouse/clickhouse-server` Docker image — no server, no persistent
 state, no installation needed beyond Docker.

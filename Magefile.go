@@ -67,10 +67,9 @@ func GoBuildRace() error {
 		"-race", "-o", binaryName, "./cmd/ior/main.go")
 }
 
-// All builds the BPF object and the Go binary.
+// All is an alias for Build (BPF object + Go binary).
 func All() error {
-	mg.SerialDeps(Build)
-	return nil
+	return Build()
 }
 
 // BuildDocker builds the ior binary inside a Rocky Linux 9 Docker container
@@ -403,7 +402,8 @@ func Clean() error {
 // Mrproper removes build artifacts and generated output files.
 func Mrproper() error {
 	mg.SerialDeps(Clean)
-	patterns := []string{"*.zst", "*.svg", "*profile", "*.pdf", "*.tmp", "palette.map"}
+	// *.prof covers flame-cpu.prof / flame-mem.prof written by benchFlameProf.
+	patterns := []string{"*.zst", "*.svg", "*profile", "*.prof", "*.pdf", "*.tmp", "palette.map"}
 	for _, pattern := range patterns {
 		if err := removeFilesByGlob(pattern); err != nil {
 			return err
@@ -435,19 +435,14 @@ func World() error {
 }
 
 // IntegrationTest builds everything and runs integration tests in parallel.
+// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: NumCPU, minimum 1).
 func IntegrationTest() error {
 	return runIntegrationTests(true)
 }
 
-// IntegrationTestSerial builds everything and runs integration tests serially.
+// IntegrationTestSerial builds everything and runs integration tests one at a time.
 func IntegrationTestSerial() error {
 	return runIntegrationTests(false)
-}
-
-// IntegrationTestParallel builds everything and runs integration tests in parallel.
-// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: NumCPU*2, minimum 1).
-func IntegrationTestParallel() error {
-	return runIntegrationTests(true)
 }
 
 func runIntegrationTests(parallel bool) error {
@@ -1215,7 +1210,7 @@ func Demo() error {
 }
 
 // DemoOne regenerates a single tape. Pass TAPE=07-stream-live (basename without
-// .tape) or TAPE=demo/tapes/07-stream-live.tape (full path).
+// .tape) or TAPE=docs/tutorial/tapes/07-stream-live.tape (full path).
 func DemoOne() error {
 	mg.SerialDeps(Build)
 	if err := buildWorkloadBinary(); err != nil {
