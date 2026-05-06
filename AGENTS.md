@@ -29,7 +29,7 @@ mage mrproper     # Clean + remove generated outputs (*.zst, *.svg, *.prof, *.pd
 mage world        # Clean + generate + test + build (recommended reset path)
 mage demo         # Regen docs/tutorial/ GIFs + screenshots (needs vhs+ttyd, sudo -v warmed)
 TAPE=07-stream-live mage demoOne       # Regen one demo tape only
-mage installDemoTools  # One-time: install vhs (go install) and ttyd (dnf)
+mage installDemoTools  # One-time: install vhs (go install) + ttyd (dnf) — Fedora/RHEL/Rocky only
 ```
 
 ## Demo Pipeline

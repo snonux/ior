@@ -24,19 +24,16 @@ A short guided tour with animated GIFs of every major surface lives in [`docs/tu
 
 The demo is fully reproducible: `mage installDemoTools` once, then `sudo -v && mage demo` regenerates every GIF and screenshot. See the [tutorial](./docs/tutorial/tutorial.md) for the full walkthrough.
 
+> **Note:** `mage installDemoTools` uses `dnf` to install `ttyd` and is only supported on Fedora / RHEL / Rocky / Alma Linux. On other distros install `ttyd` manually (binary releases are on its GitHub page) and then `go install github.com/charmbracelet/vhs@latest` for VHS; `mage demo` will find them on `PATH`.
+
 ## Requirements
 
-- Docker (for the official build) **or** a Linux host with Go 1.26+, clang, and libbpfgo for native development builds.
-- Linux with a BTF-enabled kernel (`/sys/kernel/btf/vmlinux` present) to run `ior`.
+- Docker and a Linux host with a BTF-enabled kernel (`/sys/kernel/btf/vmlinux` present).
 
 ## Build
 
-The officially supported build method is Docker — no local Go, clang, or libbpfgo setup needed. Native builds are supported for contributors who want to iterate quickly without Docker.
-
-### Docker build (official)
-
 Builds a fully static `ior` binary inside a Rocky Linux 9 container and writes
-it to the repo root:
+it to the repo root — no local Go, clang, or libbpfgo setup required:
 
 ```shell
 mage buildDocker
@@ -49,21 +46,9 @@ cached image and finish in under a minute. To skip the image rebuild:
 ./scripts/build-with-docker.sh --run
 ```
 
-### Native build (development)
-
-For local development, `ior` links against a locally built `libbpfgo`. Clone it
-as a sibling of this repo and build the static archive once:
-
-```shell
-git clone https://github.com/aquasecurity/libbpfgo ../libbpfgo
-git -C ../libbpfgo checkout v0.9.2-libbpf-1.5.1
-git -C ../libbpfgo submodule update --init --recursive
-make -C ../libbpfgo libbpfgo-static
-mage world
-```
-
-For Rocky Linux 9 specific steps (building static libelf/libzstd, installing Go
-1.26) see [docs/build-rocky-linux-9.md](./docs/build-rocky-linux-9.md).
+For contributors who need a native build (Fedora / Rocky Linux 9), see
+[docs/build-rocky-linux-9.md](./docs/build-rocky-linux-9.md) and
+[AGENTS.md](./AGENTS.md).
 
 ## Compile once, run everywhere
 
@@ -78,19 +63,6 @@ explanation.
 ## TUI
 
 Press **H** inside the dashboard to toggle the built-in help panel. Tabs are
-reachable with **tab/shift+tab** or number keys **1–7**. Full hotkey reference:
-[docs/tutorial/tutorial.md](./docs/tutorial/tutorial.md#hotkey-quick-reference).
-
-## Recording Modes
-
-`ior` has four distinct output flows:
-
-| Mode | How to use it | What it writes |
-| --- | --- | --- |
-| TUI dashboard | default startup | nothing — data stays in memory until export |
-| TUI CSV snapshot | press `e` | `ior-stream-<timestamp>.csv` of filtered stream |
-| Headless `.ior.zst` | `-flamegraph -name <name>` | aggregated native trace artifact |
-| Parquet recording | press `R` in TUI, or `-parquet <file>` | streaming Parquet file |
-
-Full details and the `.ior.zst` vs Parquet trade-off:
-[docs/tutorial/tutorial.md](./docs/tutorial/tutorial.md#recording-for-offline-analysis).
+reachable with **tab/shift+tab** or number keys **1–7**. For the full hotkey
+reference, recording modes, and the `.ior.zst` vs Parquet trade-off see the
+[tutorial](./docs/tutorial/tutorial.md).
