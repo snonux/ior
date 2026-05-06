@@ -40,6 +40,7 @@ const (
 	tracepointsResultNew = "internal/c/generated_tracepoints_result.txt.new"
 	tracepointsGoPath    = "internal/tracepoints/generated_tracepoints.go"
 	typesGoPath          = "internal/types/generated_types.go"
+	dockerBuildScript    = "scripts/build-with-docker.sh"
 	typesHeaderPath      = "internal/c/types.h"
 	VMLINUXPath          = "internal/c/vmlinux.h"
 	benchProfilesDir     = "bench-profiles"
@@ -70,6 +71,16 @@ func GoBuildRace() error {
 func All() error {
 	mg.SerialDeps(Build)
 	return nil
+}
+
+// BuildDocker builds the ior binary inside a Rocky Linux 9 Docker container
+// and writes the resulting static binary to the repo root.  The container
+// image is built on the first run (~15-20 min) and reused thereafter.
+// The Go version baked into the image is taken from go.mod automatically.
+// Requires Docker and a host kernel with tracefs and BTF enabled.
+// Pass --run to skip the image rebuild and only recompile ior.
+func BuildDocker() error {
+	return sh.RunV("bash", dockerBuildScript)
 }
 
 // BpfBuild builds the embedded BPF object used by the Go binary.

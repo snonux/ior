@@ -12,22 +12,23 @@ git -C ../libbpfgo submodule update --init --recursive
 make -C ../libbpfgo libbpfgo-static
 ```
 
-If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), rerun the commands above and then run `env GOTOOLCHAIN=auto mage world`. Prefer Mage targets over raw `go test` for packages that import `libbpfgo`; Mage wires the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
+If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), rerun the commands above and then run `mage world`. Prefer Mage targets over raw `go test` for packages that import `libbpfgo`; Mage wires the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
 
 ```bash
-env GOTOOLCHAIN=auto mage all          # Build everything (BPF objects and Go binary)
-env GOTOOLCHAIN=auto mage test         # Run all tests
-GOTOOLCHAIN=auto TEST_NAME=TestEventloop mage testWithName  # Run specific test
-env GOTOOLCHAIN=auto mage integrationTest  # Build + run integration tests (default parallelism is capped)
-GOTOOLCHAIN=auto INTEGRATION_PARALLEL=1 mage integrationTest  # Force serial integration tests
-env GOTOOLCHAIN=auto mage generate     # Generate code (required after modifying tracepoint definitions)
-env GOTOOLCHAIN=auto mage bench        # Run benchmarks
-env GOTOOLCHAIN=auto mage prReview     # Run PR review baseline: world + benchProf
-env GOTOOLCHAIN=auto mage clean        # Clean build artifacts
-env GOTOOLCHAIN=auto mage world        # Clean + generate + test + build (recommended reset path)
-env GOTOOLCHAIN=auto mage demo         # Regen demo/ GIFs + screenshots (needs vhs+ttyd, sudo -v warmed)
+mage all          # Build everything (BPF objects and Go binary)
+mage buildDocker                       # Build ior inside a Rocky Linux 9 container (writes binary to repo root)
+mage test         # Run all tests
+TEST_NAME=TestEventloop mage testWithName  # Run specific test
+mage integrationTest  # Build + run integration tests (default parallelism is capped)
+INTEGRATION_PARALLEL=1 mage integrationTest  # Force serial integration tests
+mage generate     # Generate code (required after modifying tracepoint definitions)
+mage bench        # Run benchmarks
+mage prReview     # Run PR review baseline: world + benchProf
+mage clean        # Clean build artifacts
+mage world        # Clean + generate + test + build (recommended reset path)
+mage demo         # Regen demo/ GIFs + screenshots (needs vhs+ttyd, sudo -v warmed)
 TAPE=07-stream-live mage demoOne       # Regen one demo tape only
-env GOTOOLCHAIN=auto mage installDemoTools  # One-time: install vhs (go install) and ttyd (dnf)
+mage installDemoTools  # One-time: install vhs (go install) and ttyd (dnf)
 ```
 
 ## Demo Pipeline
