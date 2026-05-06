@@ -1,4 +1,4 @@
-FROM rockylinux:9-minimal
+FROM --platform=linux/amd64 rockylinux:9-minimal
 
 # Update GO_VERSION here to upgrade the Go toolchain baked into the image.
 ARG GO_VERSION=1.26.2
