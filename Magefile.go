@@ -1159,18 +1159,18 @@ func runParquetChecks(dir, file string) error {
 
 // --- Demo (VHS-driven TUI recordings) ---------------------------------------
 //
-// Demo regenerates GIFs and PNG screenshots under demo/assets/ by running every
-// VHS tape under demo/tapes/. Each tape is wrapped by demo/scripts/run-tape.sh
-// which spins up the background workload generator. A sudo keep-alive loop in
-// the background of `mage demo` keeps the sudo timestamp warm so no tape ever
-// blocks on a password prompt.
+// Demo regenerates GIFs and PNG screenshots under docs/tutorial/assets/ by
+// running every VHS tape under docs/tutorial/tapes/. Each tape is wrapped by
+// docs/tutorial/scripts/run-tape.sh which spins up the background workload
+// generator. A sudo keep-alive loop keeps the sudo timestamp warm so no tape
+// ever blocks on a password prompt.
 
 const (
-	demoDir         = "demo"
-	demoTapesDir    = "demo/tapes"
-	demoScriptsDir  = "demo/scripts"
-	demoRunTape     = "demo/scripts/run-tape.sh"
-	demoSudoKeepers = "demo/scripts/sudo-keepalive.sh"
+	demoDir         = "docs/tutorial"
+	demoTapesDir    = "docs/tutorial/tapes"
+	demoScriptsDir  = "docs/tutorial/scripts"
+	demoRunTape     = "docs/tutorial/scripts/run-tape.sh"
+	demoSudoKeepers = "docs/tutorial/scripts/sudo-keepalive.sh"
 )
 
 // Demo regenerates every demo asset (full ~14-tape run, ~10 minutes).
