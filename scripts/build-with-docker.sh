@@ -29,7 +29,7 @@ done
 
 if $BUILD_IMAGE; then
     echo "==> Building Docker image ${IMAGE} (this takes ~15-20 min on first run)..."
-    docker build --build-arg "GO_VERSION=${GO_VERSION}" -t "${IMAGE}" "${REPO_ROOT}"
+    docker build --platform=linux/amd64 --build-arg "GO_VERSION=${GO_VERSION}" -t "${IMAGE}" "${REPO_ROOT}"
     echo "==> Image build complete."
 fi
 
@@ -41,6 +41,7 @@ if $RUN_BUILD; then
     #   - /sys/kernel/tracing  : mage generate reads available syscall tracepoints
     #   - /sys/kernel/btf      : mage bpfBuild reads vmlinux BTF for vmlinux.h
     docker run --rm \
+        --platform=linux/amd64 \
         --privileged \
         -v /sys/kernel/tracing:/sys/kernel/tracing \
         -v /sys/kernel/btf:/sys/kernel/btf \
