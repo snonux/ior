@@ -10,6 +10,8 @@ A spiritual successor to one of my previous projects, I/O Riot (https://codeberg
 
 Linux only.
 
+You can read a blog post series about this here: https://foo.zone/gemfeed/2026-05-08-unveiling-ior-ng-part-1.html
+
 ## Demo
 
 A short guided tour with animated GIFs of every major surface lives in [`docs/tutorial/tutorial.md`](./docs/tutorial/tutorial.md). Two teasers:
