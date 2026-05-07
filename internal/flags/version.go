@@ -5,11 +5,14 @@ import "fmt"
 // Version is the current application version.
 const Version = "v0.0.1"
 
-const asciiBannerTemplate = ` ___   _____    ___ _     _
-|_ _| / / _ \  | _ (_)___| |_ 
- | | / / (_) | |   / / _ \  _|
-|___/_/ \___/  |_|_\_\___/\__| NG
-               %s`
+const asciiBannerTemplate = ` ██╗    ██╗  ██████╗     ██████╗  ██╗  ██████╗  ████████╗
+ ██║   ██╔╝ ██╔═══██╗    ██╔══██╗ ██║ ██╔═══██╗ ╚══██╔══╝
+ ██║  ██╔╝  ██║   ██║    ██████╔╝ ██║ ██║   ██║    ██║   
+ ██║ ██╔╝   ██║   ██║    ██╔══██╗ ██║ ██║   ██║    ██║   
+ ██║██╔╝    ╚██████╔╝    ██║  ██║ ██║ ╚██████╔╝    ██║   
+ ╚═╝╚═╝      ╚═════╝     ╚═╝  ╚═╝ ╚═╝  ╚═════╝     ╚═╝   
+       ⚡ Next-Generation BPF I/O Syscall Tracer ⚡
+                          %s`
 
 // PrintVersion prints the banner with the current version.
 func PrintVersion() {

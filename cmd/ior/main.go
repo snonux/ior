@@ -23,9 +23,17 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Run the internal logic of the application.
 	// flags.Get() is called here at the CLI boundary so internal code never reads the singleton.
-	if err := internal.Run(flags.Get()); err != nil {
+	cfg := flags.Get()
+
+	// Handle -version: print the banner plus version and exit.
+	if cfg.ShowVersion {
+		flags.PrintVersion()
+		return
+	}
+
+	// Run the internal logic of the application.
+	if err := internal.Run(cfg); err != nil {
 		fmt.Printf("Failed to run: %v\n", err)
 		os.Exit(2)
 	}

@@ -1,7 +1,7 @@
 # Building ior on Rocky Linux 9
 
 Verified on a fresh Rocky Linux 9.7 install (kernel `5.14.0-611.5.1.el9_7` or
-newer). Runs on the **stock RHEL 9 kernel** — no kernel upgrade needed.
+newer). Runs on the **stock RHEL 9 kernel**, no kernel upgrade needed.
 
 One build-time caveat: Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no
 `*-static` packages). Both must be built from source.
@@ -10,7 +10,7 @@ One build-time caveat: Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no
 > `struct trace_event_raw_sys_enter`/`_exit` (the BTF-emitted alias). RHEL 9
 > backports an `rt`-tree patch that adds `preempt_lazy_count` to `struct
 > trace_entry`, which widens those aliases by 8 bytes and shifts the `args`/`ret`
-> offsets — but the actual context the kernel hands the program is still
+> offsets, but the actual context the kernel hands the program is still
 > `struct syscall_trace_enter`/`_exit`, where the offsets did not move. The
 > verifier saw the program reading past `max_ctx_offset` and rejected the
 > attach with `EACCES`. `ior` now uses `syscall_trace_*` directly (matching
@@ -19,7 +19,7 @@ One build-time caveat: Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no
 
 ## Docker build (no Rocky 9 host required)
 
-The easiest path — builds entirely inside a container from any Docker-capable
+The easiest path. Builds entirely inside a container from any Docker-capable
 Linux host:
 
 ```shell
@@ -140,15 +140,15 @@ Two reasons it works:
 
 - The Go binary is compiled with `-extldflags "-static"` and links libbpf,
   libelf, libzstd, and zlib as static archives. There is no runtime dependency
-  on the build host's library versions (a couple of glibc resolver functions —
-  `getpwnam_r` and friends — fall back to the target's libc, which is fine on
+  on the build host's library versions (a couple of glibc resolver functions,
+  `getpwnam_r` and friends, fall back to the target's libc, which is fine on
   any reasonable distro).
 - The BPF object inside the binary is built with libbpf's CO-RE
   (Compile-Once, Run-Everywhere) machinery. Field offsets are not baked into
   the bytecode; libbpf reads the target kernel's BTF (`/sys/kernel/btf/vmlinux`)
   at load time and patches the program for that kernel. As long as the target
-  ships BTF — true on every Debian, Ubuntu, Fedora, Arch, RHEL, and ElRepo
-  `kernel-ml` build at the time of writing — the same `ior` binary runs without
+  ships BTF (true on every Debian, Ubuntu, Fedora, Arch, RHEL, and ElRepo
+  `kernel-ml` build at the time of writing) the same `ior` binary runs without
   recompilation.
 
 Pick one Rocky 9 / Fedora box, do the build dance once, then distribute the
