@@ -1,6 +1,6 @@
 # I/O Riot NG: a guided tour
 
-This tutorial walks through every major surface of `ior` — the dashboard tabs, the live stream, recording, headless modes, and the in-TUI flamegraph — using short animated GIFs so you can *see* what the keys actually do.
+This tutorial walks through every major surface of `ior` (the dashboard tabs, the live stream, recording, headless modes, and the in-TUI flamegraph) using short animated GIFs so you can *see* what the keys actually do.
 
 Every GIF in this document is regenerated from a [VHS](https://github.com/charmbracelet/vhs) tape under [`tapes/`](./tapes). To rebuild them all, run `sudo -v && mage demo` (see [Regenerating the demo](#regenerating-the-demo)).
 
@@ -36,7 +36,7 @@ cd ~/git/ior
 mage buildDocker          # builds inside a Rocky 9 container, ~15 min on first run
 ```
 
-For a native build (libbpfgo must be cloned alongside the repo first — see the README):
+For a native build (libbpfgo must be cloned alongside the repo first; see the README):
 
 ```shell
 mage all
@@ -44,7 +44,7 @@ mage all
 
 ior needs `CAP_BPF`, so every invocation below uses `sudo`.
 
-The build dance only has to happen once: the resulting `ior` binary is fully statically linked and uses CO-RE, so the same binary runs on any BTF-enabled Linux kernel without recompilation. See the [Compile once, run everywhere](../../README.md#compile-once-run-everywhere) section for details.
+The build dance only has to happen once. The resulting `ior` binary is fully statically linked and uses CO-RE, so the same binary runs on any BTF-enabled Linux kernel without recompilation. See the [Compile once, run everywhere](../../README.md#compile-once-run-everywhere) section for details.
 
 ## First launch: the PID picker
 
@@ -90,7 +90,7 @@ Press `3`. A sortable table of every traced syscall (count, average latency, tot
 
 ### 4 · Files
 
-Press `4`. Per-path counters. The most useful key here is `d`, which toggles **directory grouping** — paths roll up into their parent directory, which is essential when one process touches thousands of files in `/usr/share/...`.
+Press `4`. Per-path counters. The most useful key here is `d`, which toggles **directory grouping**: paths roll up into their parent directory, which is essential when one process touches thousands of files in `/usr/share/...`.
 
 ![Files tab toggling directory grouping](./assets/04-files-tab.gif)
 
@@ -108,7 +108,7 @@ Press `6`. Two histograms: syscall **latency** (how long the syscall ran) and th
 
 ### 7 · Stream
 
-Press `7`. A live tail of every traced event row — comm, PID, TID, syscall, file, FD, return value, bytes, latency, gap. This is the workhorse view; the next section explores it in depth.
+Press `7`. A live tail of every traced event row: comm, PID, TID, syscall, file, FD, return value, bytes, latency, gap. This is the workhorse view; the next section explores it in depth.
 
 ![Stream tab live-tailing rows](./assets/07-stream-live.gif)
 
@@ -118,7 +118,7 @@ Stream has two modes: **Live** (rows scroll past) and **Pause** (`space` toggles
 
 ### Pause + stacked filters
 
-In pause mode, navigate with `j`/`k` (rows) and `←` / `→` (columns). Pressing `Enter` on the selected cell **pushes a new filter onto a stack** and immediately re-filters the ring buffer. Filters are stackable, so you can drill down — first by `Comm`, then by `Syscall`, then by `File`. `Esc` pops the most recent filter (LIFO); keep hitting `Esc` to undo all the way back.
+In pause mode, navigate with `j`/`k` (rows) and `←` / `→` (columns). Pressing `Enter` on the selected cell **pushes a new filter onto a stack** and immediately re-filters the ring buffer. Filters are stackable, so you can drill down: first by `Comm`, then by `Syscall`, then by `File`. `Esc` pops the most recent filter (LIFO); keep hitting `Esc` to undo all the way back.
 
 ![Pause, push two filters, undo with Esc](./assets/08-stream-pause-filter.gif)
 
@@ -134,10 +134,10 @@ The filter is reflected in the bottom status line, and matches the same syntax y
 
 Four keys, four flavours:
 
-- `e` — quick export of the **current TUI-filter snapshot** to `ior-stream-<timestamp>.csv` in the current working directory. Works from any tab, not just Stream.
-- `x` — quick export of the **paused stream view** specifically (preserves your filter stack).
-- `X` — same as `x`, but prompts for a filename first.
-- `E` — open the most recent stream-exported CSV in your `$EDITOR` (`hx` / `vi` fallback).
+- `e`: quick export of the **current TUI-filter snapshot** to `ior-stream-<timestamp>.csv` in the current working directory. Works from any tab, not just Stream.
+- `x`: quick export of the **paused stream view** specifically (preserves your filter stack).
+- `X`: same as `x`, but prompts for a filename first.
+- `E`: open the most recent stream-exported CSV in your `$EDITOR` (`hx` / `vi` fallback).
 
 ![Press 'e', then ls the resulting CSV](./assets/10-stream-csv-export.gif)
 
@@ -147,9 +147,9 @@ If you don't want CSV export at all, start ior with `-tuiExport=false`; the help
 
 Three modal pickers reshape what the rest of the TUI sees:
 
-- `p` — **PID picker** (re-opens the launch picker).
-- `t` — **TID picker** for thread-level focus.
-- `o` — **Probes** dialog: enable / disable individual syscall tracepoints.
+- `p`: **PID picker** (re-opens the launch picker).
+- `t`: **TID picker** for thread-level focus.
+- `o`: **Probes** dialog: enable / disable individual syscall tracepoints.
 
 ![PID, TID, and probe pickers](./assets/11-pid-tid-probe.gif)
 
@@ -172,7 +172,7 @@ Press `R` in the dashboard, accept the default filename (`ior-recording-<timesta
 
 ![Start, run, and stop a parquet recording](./assets/12-parquet-recording.gif)
 
-The recorder follows your *current* TUI global filter — narrow with `p`/`t`/`o` first if you want a focused capture.
+The recorder follows your *current* TUI global filter. Narrow with `p`/`t`/`o` first if you want a focused capture.
 
 ### Headless modes
 
@@ -180,7 +180,7 @@ For unattended captures or scripting, skip the TUI entirely. The demo runs all t
 
 ![Three headless flows in one tape](./assets/14-headless-modes.gif)
 
-`-flamegraph` writes one aggregated `.ior.zst` artifact at shutdown — ideal for `ior`'s native flamegraph and integration workflows. `-parquet` streams every row, so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe into anything.
+`-flamegraph` writes one aggregated `.ior.zst` artifact at shutdown, ideal for `ior`'s native flamegraph and integration workflows. `-parquet` streams every row, so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe into anything.
 
 ## Regenerating the demo
 
@@ -198,7 +198,7 @@ Or rebuild a single tape after editing it:
 TAPE=07-stream-live mage demoOne
 ```
 
-Tapes live in [`tapes/`](./tapes), the background workload that drives them is [`scripts/workload.sh`](./scripts/workload.sh), and the resulting assets land in [`assets/`](./assets). VHS records headlessly under `ttyd` + Chromium — no real terminal window opens, so `mage demo` is safe to run in the background while you keep working.
+Tapes live in [`tapes/`](./tapes), the background workload that drives them is [`scripts/workload.sh`](./scripts/workload.sh), and the resulting assets land in [`assets/`](./assets). VHS records headlessly under `ttyd` + Chromium, so no real terminal window opens; `mage demo` is safe to run in the background while you keep working.
 
 ## Hotkey Quick Reference
 

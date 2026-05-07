@@ -57,6 +57,11 @@ func dispatchRun(cfg flags.Config) error {
 	if cfg.TestLiveFlames {
 		return runTUITestLiveFlamesFn(cfg, tuiTestLiveFlamesStarter(cfg))
 	}
+	// All remaining modes require tracing, which needs root. Fail fast here so
+	// the TUI never starts (and hangs) when we already know it cannot trace.
+	if getEUID() != 0 {
+		return errRootPrivilegesRequired
+	}
 	if isHeadlessParquetMode(cfg) {
 		return runParquetFn(cfg)
 	}

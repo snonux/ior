@@ -95,13 +95,16 @@ func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 	origRunTUI := runTUIFn
 	origRunTUITestFlames := runTUITestFlamesFn
 	origRunTUITestLiveFlames := runTUITestLiveFlamesFn
+	origGetEUID := getEUID
 	defer func() {
 		runTraceFn = origRunTrace
 		runParquetFn = origRunParquet
 		runTUIFn = origRunTUI
 		runTUITestFlamesFn = origRunTUITestFlames
 		runTUITestLiveFlamesFn = origRunTUITestLiveFlames
+		getEUID = origGetEUID
 	}()
+	getEUID = func() int { return 0 }
 
 	traceCalled := false
 	tuiCalled := false
@@ -144,13 +147,16 @@ func TestDispatchRunUsesHeadlessParquetModeWhenRequested(t *testing.T) {
 	origRunTUI := runTUIFn
 	origRunTUITestFlames := runTUITestFlamesFn
 	origRunTUITestLiveFlames := runTUITestLiveFlamesFn
+	origGetEUID := getEUID
 	defer func() {
 		runTraceFn = origRunTrace
 		runParquetFn = origRunParquet
 		runTUIFn = origRunTUI
 		runTUITestFlamesFn = origRunTUITestFlames
 		runTUITestLiveFlamesFn = origRunTUITestLiveFlames
+		getEUID = origGetEUID
 	}()
+	getEUID = func() int { return 0 }
 
 	traceCalled := false
 	parquetCalled := false
@@ -196,12 +202,15 @@ func TestDispatchRunUsesTUIWhenOnlyPprofEnabled(t *testing.T) {
 	origRunTUI := runTUIFn
 	origRunTUITestFlames := runTUITestFlamesFn
 	origRunTUITestLiveFlames := runTUITestLiveFlamesFn
+	origGetEUID := getEUID
 	defer func() {
 		runTraceFn = origRunTrace
 		runTUIFn = origRunTUI
 		runTUITestFlamesFn = origRunTUITestFlames
 		runTUITestLiveFlamesFn = origRunTUITestLiveFlames
+		getEUID = origGetEUID
 	}()
+	getEUID = func() int { return 0 }
 
 	traceCalled := false
 	tuiCalled := false
@@ -239,12 +248,15 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	origRunTUI := runTUIFn
 	origRunTUITestFlames := runTUITestFlamesFn
 	origRunTUITestLiveFlames := runTUITestLiveFlamesFn
+	origGetEUID := getEUID
 	defer func() {
 		runTraceWithContextFn = origRunTraceWithContext
 		runTUIFn = origRunTUI
 		runTUITestFlamesFn = origRunTUITestFlames
 		runTUITestLiveFlamesFn = origRunTUITestLiveFlames
+		getEUID = origGetEUID
 	}()
+	getEUID = func() int { return 0 }
 
 	traceDone := make(chan struct{}, 1)
 	runTraceWithContextFn = func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {

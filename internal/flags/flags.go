@@ -42,6 +42,9 @@ type Config struct {
 	CollapsedFields  []string
 	CountField       string
 	GlobalFilter     globalfilter.Filter
+
+	// ShowVersion prints the banner plus version and exits without running.
+	ShowVersion bool
 }
 
 var (
@@ -177,6 +180,7 @@ func parse() error {
 	flag.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
 	flag.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI CSV snapshot export files (separate from Parquet recording)")
+	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	flag.StringVar(&cfg.CountField, "count", cfg.CountField,
