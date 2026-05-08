@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -832,12 +833,82 @@ func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T)
 	}
 }
 
+// TestTuiTraceStarterAppliesLiveFilterSwapInPlace exercises the in-place
+// filter swap path: after the trace is running, calling the registered
+// SetLiveFilterSetter callback should change which events the eventloop's
+// printCb admits, without any restart of the trace pipeline.
+func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer: eventstream.NewRingBuffer(),
+		streamSeq:    eventstream.NewSequencer(0),
+	}
+	base := flags.NewFlags()
+	base.GlobalFilter = globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "keep"}}
+
+	// release lets the test hold the fake starter open while assertions
+	// run. In production, startTrace blocks on el.run for the trace's
+	// lifetime, so the runtime bindings keep their live filter setter
+	// registered the whole time. Returning immediately would race against
+	// the trace starter's deferred SetLiveFilterSetter(nil) cleanup.
+	release := make(chan struct{})
+	captured := make(chan *eventLoop, 1)
+	starter := tuiTraceStarterFromRunTrace(
+		base,
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+			el := &eventLoop{}
+			configure(el)
+			captured <- el
+			close(started)
+			<-release
+			return nil
+		},
+	)
+
+	ctx := tui.ContextWithRuntimeBindings(context.Background(), bindings)
+	starterErr := make(chan error, 1)
+	go func() { starterErr <- starter(ctx) }()
+
+	el := <-captured
+
+	// Initial filter from base.GlobalFilter accepts only comm=="keep".
+	el.printCb(testTracePair(1, "keep"))
+	el.printCb(testTracePair(2, "drop"))
+	if got := bindings.streamBuffer.Len(); got != 1 {
+		t.Fatalf("stream rows after initial filter = %d, want 1", got)
+	}
+
+	// Trace starter must have registered an in-place filter setter.
+	setter := bindings.currentLiveFilterSetter()
+	if setter == nil {
+		t.Fatalf("expected SetLiveFilterSetter to receive a non-nil callback")
+	}
+
+	// Swap to a filter that accepts only comm=="drop". No restart should
+	// happen — the same eventloop now emits the previously-dropped events.
+	setter(globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "drop"}})
+	el.printCb(testTracePair(3, "keep"))
+	el.printCb(testTracePair(4, "drop"))
+	if got := bindings.streamBuffer.Len(); got != 2 {
+		t.Fatalf("stream rows after live swap = %d, want 2", got)
+	}
+
+	close(release)
+	if err := <-starterErr; err != nil {
+		t.Fatalf("starter() error = %v", err)
+	}
+}
+
 type traceRuntimeBindingsStub struct {
 	streamBuffer *eventstream.RingBuffer
 	streamSource eventstream.Source
 	streamSeq    *eventstream.Sequencer
 	recorder     *parquet.Recorder
 	filterEpoch  uint64
+	// mu guards liveFilterSetter, which is mutated from the trace-starter
+	// goroutine (via SetLiveFilterSetter) and read from the test
+	// goroutine when invoking the in-place swap.
+	mu               sync.Mutex
+	liveFilterSetter func(globalfilter.Filter)
 }
 
 func (b *traceRuntimeBindingsStub) SetDashboardSnapshotSource(tui.SnapshotSource) {}
@@ -849,6 +920,18 @@ func (b *traceRuntimeBindingsStub) SetEventStreamSource(source eventstream.Sourc
 func (b *traceRuntimeBindingsStub) SetLiveTrie(flamegraphtui.LiveTrieSource) {}
 
 func (b *traceRuntimeBindingsStub) SetProbeManager(tui.ProbeManager) {}
+
+func (b *traceRuntimeBindingsStub) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
+	b.mu.Lock()
+	b.liveFilterSetter = setter
+	b.mu.Unlock()
+}
+
+func (b *traceRuntimeBindingsStub) currentLiveFilterSetter() func(globalfilter.Filter) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.liveFilterSetter
+}
 
 func (b *traceRuntimeBindingsStub) StreamBuffer() eventstream.Source {
 	return b.streamBuffer

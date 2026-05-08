@@ -111,7 +111,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 		}
 	}
 	ep.Comm = e.comm(fdEv.GetTid())
-	if !e.filter.MatchPair(ep) {
+	if !e.Filter().MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}
@@ -152,7 +152,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 	fd := int32(dup3Ev.Fd)
 	ep.File = e.fdState().resolve(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
-	if !e.filter.MatchPair(ep) {
+	if !e.Filter().MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}
@@ -233,7 +233,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 		}
 	}
 	ep.Comm = e.comm(nullEv.GetTid())
-	if !e.filter.MatchPair(ep) {
+	if !e.Filter().MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}
@@ -244,7 +244,7 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) b
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.fdState().resolve(fd, fcntlEv.Pid)
-	if !e.filter.MatchPair(ep) {
+	if !e.Filter().MatchPair(ep) {
 		ep.Recycle()
 		return false
 	}

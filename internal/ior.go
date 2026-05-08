@@ -228,8 +228,16 @@ func tuiTraceStarterFromRunTrace(
 
 		go func() {
 			err := startTrace(ctx, cfg, startedCh, func(el *eventLoop) {
+				// Seed the eventloop's filter from the config so subsequent
+				// reads via el.Filter() see the same filter the trace was
+				// started with. The TUI can later replace it in place via
+				// runtimeBindings.applyLiveFilter, which calls el.SetFilter.
+				el.SetFilter(cfg.GlobalFilter)
+				// Read the live filter on each event so the TUI can swap
+				// filters in place via runtimeBindings.applyLiveFilter
+				// without restarting the BPF probes.
 				el.printCb = func(ep *event.Pair) {
-					if !shouldIngestTracePair(cfg.GlobalFilter, ep) {
+					if !shouldIngestTracePair(el.Filter(), ep) {
 						ep.Recycle()
 						return
 					}
@@ -253,7 +261,13 @@ func tuiTraceStarterFromRunTrace(
 				el.warningCb = func(message string) {
 					streamBuf.Push(eventstream.NewWarningEvent(streamSeq.Next(), message))
 				}
+				if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+					bindings.SetLiveFilterSetter(el.SetFilter)
+				}
 			})
+			if bindings, ok := tui.RuntimeBindingsFromContext(ctx); ok {
+				bindings.SetLiveFilterSetter(nil)
+			}
 			errCh <- err
 			close(errCh)
 		}()

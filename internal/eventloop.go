@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"ior/internal/event"
@@ -38,7 +39,11 @@ type eventLoopConfig struct {
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
 
 type eventLoop struct {
-	filter         globalfilter.Filter
+	// filterPtr holds the active global filter. Stored as atomic.Pointer so
+	// the TUI can swap filters in place via SetFilter without tearing down
+	// and reattaching the BPF probes (the previous behavior caused a multi-
+	// second 'Attaching tracepoints' overlay every time the filter changed).
+	filterPtr      atomic.Pointer[globalfilter.Filter]
 	pairs          pairTracker           // enter/exit pairing state and inter-syscall duration tracking
 	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
 	fdTracker      *fdTracker            // fd table and procfs resolution cache
@@ -57,6 +62,24 @@ type eventLoop struct {
 	done                    chan struct{}
 }
 
+// Filter returns a snapshot of the currently active global filter. Each call
+// loads a single atomic pointer and returns the underlying value, so the
+// caller observes a consistent filter even if SetFilter races concurrently.
+func (e *eventLoop) Filter() globalfilter.Filter {
+	if p := e.filterPtr.Load(); p != nil {
+		return *p
+	}
+	return globalfilter.Filter{}
+}
+
+// SetFilter atomically replaces the active global filter. The replacement is
+// cloned so the caller can keep mutating its own filter without affecting
+// what the eventloop sees.
+func (e *eventLoop) SetFilter(filter globalfilter.Filter) {
+	cloned := filter.Clone()
+	e.filterPtr.Store(&cloned)
+}
+
 func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	fdState := configuredFDTracker(cfg.fdTracker)
 	commState := configuredCommResolver(cfg.commResolver)
@@ -65,7 +88,6 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	}
 
 	el := &eventLoop{
-		filter:         cfg.filter.Clone(),
 		pairs:          newPairTracker(),
 		pendingHandles: newPendingHandleTracker(),
 		fdTracker:      fdState,
@@ -75,6 +97,7 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		cfg:            cfg,
 		done:           make(chan struct{}),
 	}
+	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
 	el.configureOutputCallback()
 	el.seedTrackedPidComm()
