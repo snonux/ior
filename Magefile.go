@@ -41,6 +41,7 @@ const (
 	tracepointsGoPath    = "internal/tracepoints/generated_tracepoints.go"
 	typesGoPath          = "internal/types/generated_types.go"
 	dockerBuildScript    = "scripts/build-with-docker.sh"
+	dockerBuildScriptEl8 = "scripts/build-with-docker-el8.sh"
 	typesHeaderPath      = "internal/c/types.h"
 	VMLINUXPath          = "internal/c/vmlinux.h"
 	benchProfilesDir     = "bench-profiles"
@@ -80,6 +81,15 @@ func All() error {
 // Pass --run to skip the image rebuild and only recompile ior.
 func BuildDocker() error {
 	return sh.RunV("bash", dockerBuildScript)
+}
+
+// BuildDockerEl8 builds the ior binary inside a Rocky Linux 8 Docker container
+// and writes it as ior.el8 in the repo root, alongside the el9 ior binary
+// produced by BuildDocker. Use this when targeting hosts with the older glibc
+// shipped on RHEL/Rocky/Alma 8.  The container image is built on the first
+// run (~15-20 min) and reused thereafter.
+func BuildDockerEl8() error {
+	return sh.RunV("bash", dockerBuildScriptEl8)
 }
 
 // BpfBuild builds the embedded BPF object used by the Go binary.

@@ -1,0 +1,85 @@
+FROM rockylinux:8
+
+# Update GO_VERSION here to upgrade the Go toolchain baked into the image.
+ARG GO_VERSION=1.26.2
+
+# Rocky 8 ships full dnf already; just add plugin support for config-manager
+# and builddep below. The default Rocky 8 mirrors at dl.rockylinux.org/pub/
+# stay live until 2029-05-31, so no vault redirect is needed here.
+RUN dnf install -y dnf-plugins-core && \
+    dnf clean all
+
+# Rocky 8 calls the equivalent of Rocky 9's "crb" repo "powertools"; it carries
+# zlib-static / glibc-static / elfutils-libelf-devel. The baseos-source repo is
+# needed to fetch the elfutils source RPM for the libelf.a build below.
+RUN dnf config-manager --set-enabled powertools && \
+    dnf config-manager --set-enabled baseos-source && \
+    dnf install -y epel-release && \
+    dnf clean all
+
+# Rocky 8 default clang is too old for BPF CO-RE — enable the llvm-toolset
+# module stream (ships clang 17 / LLVM 17 on the latest Rocky 8 vault).
+RUN dnf module enable -y llvm-toolset && \
+    dnf clean all
+
+# Build-time toolchain: C compiler, clang/LLVM (for BPF), bpftool, BPF/elf
+# headers, static archives for zlib and glibc, and packaging helpers.
+# Rocky 8 ships bpftool inside the bpftool package (same as Rocky 9).
+RUN dnf install -y \
+        gcc clang llvm bpftool \
+        elfutils-libelf-devel \
+        zlib-static glibc-static libzstd-devel \
+        git make cmake wget rpmdevtools && \
+    dnf builddep -y elfutils && \
+    dnf clean all
+
+# Install Go from go.dev — Rocky 8 ships an older release, ior needs 1.26+.
+RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz && \
+    tar -C /usr/local -xf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz
+
+ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
+ENV GOPATH="/root/go"
+
+# Build libelf.a from the Rocky 8 elfutils source RPM.
+# Rocky 8 (like 9) does not ship libelf.a in any binary package.
+RUN mkdir -p /root/src && cd /root && \
+    dnf download --source elfutils-libelf && \
+    rpm -ivh elfutils-*.src.rpm && \
+    tar -C /root/src -xjf rpmbuild/SOURCES/elfutils-*.tar.bz2 && \
+    cd /root/src/elfutils-* && \
+    ./configure --enable-deterministic-archives --disable-debuginfod --disable-libdebuginfod && \
+    make -C lib -j$(nproc) && \
+    make -C libelf -j$(nproc) && \
+    cp -v libelf/libelf.a /usr/lib64/ && \
+    rm -rf /root/src /root/rpmbuild /root/elfutils-*.src.rpm
+
+# Build libzstd.a from upstream — libzstd-devel does not ship the static archive.
+RUN wget -q https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz \
+        -O /tmp/zstd.tar.gz && \
+    tar -C /tmp -xzf /tmp/zstd.tar.gz && \
+    make -C /tmp/zstd-1.5.5/lib -j$(nproc) libzstd.a && \
+    cp -v /tmp/zstd-1.5.5/lib/libzstd.a /usr/lib64/ && \
+    rm -rf /tmp/zstd-1.5.5 /tmp/zstd.tar.gz
+
+# Clone libbpfgo at the required tag and build the static archive.
+# Placed at /git/libbpfgo so it is a sibling of the ior mount at /git/ior,
+# matching the default LIBBPFGO=../libbpfgo path used by Magefile.go.
+RUN mkdir -p /git && \
+    git clone https://github.com/aquasecurity/libbpfgo /git/libbpfgo && \
+    git -C /git/libbpfgo checkout v0.9.2-libbpf-1.5.1 && \
+    git -C /git/libbpfgo submodule update --init --recursive && \
+    make -C /git/libbpfgo libbpfgo-static
+
+# Install the mage build tool
+RUN go install github.com/magefile/mage@latest
+
+# The ior source tree is mounted at /git/ior at runtime (see build-with-docker-el8.sh).
+WORKDIR /git/ior
+
+# Generate kernel-specific tracepoint code, compile ior, then publish the
+# binary as ior.el8 so it lives alongside the el9 build artifact in the repo.
+# IOR_FORCE_GENERATE=1 skips the strict diff against the committed syscall-coverage
+# audit, which was generated on a different kernel build than the container host.
+# The container runs as root so bpftool and /sys/kernel/tracing are used directly.
+CMD ["sh", "-c", "IOR_FORCE_GENERATE=1 mage generate && mage all && mv -v ior ior.el8"]

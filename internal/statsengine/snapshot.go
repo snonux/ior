@@ -68,12 +68,13 @@ type SyscallSnapshot struct {
 	Errors     uint64
 	Bytes      uint64
 
-	LatencyMinNs  uint64
-	LatencyMaxNs  uint64
-	LatencyMeanNs float64
-	LatencyP50Ns  uint64
-	LatencyP95Ns  uint64
-	LatencyP99Ns  uint64
+	LatencyMinNs   uint64
+	LatencyMaxNs   uint64
+	LatencyMeanNs  float64
+	TotalLatencyNs uint64
+	LatencyP50Ns   uint64
+	LatencyP95Ns   uint64
+	LatencyP99Ns   uint64
 }
 
 // FileSnapshot is an aggregated per-file ranking entry.
@@ -84,8 +85,9 @@ type FileSnapshot struct {
 	BytesRead    uint64
 	BytesWritten uint64
 
-	AvgLatencyNs float64
-	MaxLatencyNs uint64
+	AvgLatencyNs   float64
+	MaxLatencyNs   uint64
+	TotalLatencyNs uint64
 }
 
 // ProcessSnapshot is an aggregated per-process entry.
@@ -97,7 +99,8 @@ type ProcessSnapshot struct {
 	RatePerSec float64
 	Bytes      uint64
 
-	AvgLatencyNs float64
+	AvgLatencyNs   float64
+	TotalLatencyNs uint64
 }
 
 // HistogramBucketSnapshot is one bucket of a histogram snapshot.

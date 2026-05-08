@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"os"
 
 	appconfig "ior/internal/config"
 	"ior/internal/flags"
@@ -65,7 +66,14 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	}
 
 	mgr := probemanager.NewManager(libbpfTracepointModule{module: bpfModule})
-	if err := mgr.AttachAll(cfg.ShouldIAttachTracepoint, tracepoints.List); err != nil {
+	// Per-syscall attach failures are non-fatal: on older kernels the
+	// tracepoint may be absent (e.g. binary built against a newer kernel).
+	// We log and skip; the affected probe stays in the manager with its
+	// lastErr set, so States() and the TUI surface the failure.
+	warn := func(syscall string, err error) {
+		fmt.Fprintf(os.Stderr, "ior: skipping tracepoint for %s: %v\n", syscall, err)
+	}
+	if err := mgr.AttachAll(cfg.ShouldIAttachTracepoint, tracepoints.List, warn); err != nil {
 		mgr.Close()
 		bpfModule.Close()
 		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)

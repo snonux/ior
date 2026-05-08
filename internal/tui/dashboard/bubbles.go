@@ -19,8 +19,9 @@ import (
 type bubbleMetric string
 
 const (
-	bubbleMetricCount bubbleMetric = "count"
-	bubbleMetricBytes bubbleMetric = "bytes"
+	bubbleMetricCount    bubbleMetric = "count"
+	bubbleMetricBytes    bubbleMetric = "bytes"
+	bubbleMetricDuration bubbleMetric = "duration"
 )
 
 const (
@@ -32,20 +33,22 @@ const (
 )
 
 type bubbleDatum struct {
-	ID     string
-	Label  string
-	Count  uint64
-	Bytes  uint64
-	Detail string
+	ID       string
+	Label    string
+	Count    uint64
+	Bytes    uint64
+	Duration uint64
+	Detail   string
 }
 
 type bubbleNode struct {
-	ID     string
-	Label  string
-	Detail string
-	Count  uint64
-	Bytes  uint64
-	Value  uint64
+	ID       string
+	Label    string
+	Detail   string
+	Count    uint64
+	Bytes    uint64
+	Duration uint64
+	Value    uint64
 
 	radiusSpring harmonica.Spring
 	xSpring      harmonica.Spring
@@ -114,28 +117,35 @@ func (c *bubbleChart) SetViewport(width, height int) {
 	data := make([]bubbleDatum, 0, len(c.nodes))
 	for _, node := range c.nodes {
 		data = append(data, bubbleDatum{
-			ID:     node.ID,
-			Label:  node.Label,
-			Count:  node.Count,
-			Bytes:  node.Bytes,
-			Detail: node.Detail,
+			ID:       node.ID,
+			Label:    node.Label,
+			Count:    node.Count,
+			Bytes:    node.Bytes,
+			Duration: node.Duration,
+			Detail:   node.Detail,
 		})
 	}
 	c.SetData(data)
 }
 
 func (c *bubbleChart) SetMetric(metric bubbleMetric) {
-	if metric != bubbleMetricBytes {
-		metric = bubbleMetricCount
+	switch metric {
+	case bubbleMetricBytes, bubbleMetricDuration:
+		c.metric = metric
+	default:
+		c.metric = bubbleMetricCount
 	}
-	c.metric = metric
 }
 
 func (c *bubbleChart) Metric() bubbleMetric {
-	if c.metric == bubbleMetricBytes {
+	switch c.metric {
+	case bubbleMetricBytes:
 		return bubbleMetricBytes
+	case bubbleMetricDuration:
+		return bubbleMetricDuration
+	default:
+		return bubbleMetricCount
 	}
-	return bubbleMetricCount
 }
 
 func (c *bubbleChart) SetStatusHint(hint string) {
@@ -543,17 +553,25 @@ func (c *bubbleChart) statusLine(width int) string {
 }
 
 func (c *bubbleChart) metricLabel() string {
-	if c.Metric() == bubbleMetricBytes {
+	switch c.Metric() {
+	case bubbleMetricBytes:
 		return "bytes"
+	case bubbleMetricDuration:
+		return "duration"
+	default:
+		return "events"
 	}
-	return "events"
 }
 
 func (c *bubbleChart) formatMetricValue(node bubbleNode) string {
-	if c.Metric() == bubbleMetricBytes {
+	switch c.Metric() {
+	case bubbleMetricBytes:
 		return formatBytes(float64(node.Bytes))
+	case bubbleMetricDuration:
+		return formatDurationUintNs(node.Duration)
+	default:
+		return fmt.Sprintf("%d", node.Count)
 	}
-	return fmt.Sprintf("%d", node.Count)
 }
 
 func (c *bubbleChart) palette() []color.Color {
@@ -687,6 +705,7 @@ func buildBubbleTargets(data []bubbleDatum, metric bubbleMetric, width, height i
 			Detail:       datum.Detail,
 			Count:        datum.Count,
 			Bytes:        datum.Bytes,
+			Duration:     datum.Duration,
 			Value:        value,
 			targetRadius: targetRadius,
 			targetX:      targetX,
@@ -767,10 +786,14 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 }
 
 func bubbleValue(d bubbleDatum, metric bubbleMetric) uint64 {
-	if metric == bubbleMetricBytes {
+	switch metric {
+	case bubbleMetricBytes:
 		return d.Bytes
+	case bubbleMetricDuration:
+		return d.Duration
+	default:
+		return d.Count
 	}
-	return d.Count
 }
 
 func syscallBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
@@ -782,11 +805,12 @@ func syscallBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 	for _, syscall := range rows {
 		detail := fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, formatDurationUintNs(syscall.LatencyP95Ns))
 		data = append(data, bubbleDatum{
-			ID:     syscall.Name,
-			Label:  syscall.Name,
-			Count:  syscall.Count,
-			Bytes:  syscall.Bytes,
-			Detail: detail,
+			ID:       syscall.Name,
+			Label:    syscall.Name,
+			Count:    syscall.Count,
+			Bytes:    syscall.Bytes,
+			Duration: syscall.TotalLatencyNs,
+			Detail:   detail,
 		})
 	}
 	return data
@@ -802,11 +826,12 @@ func filesDirBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", dir.Dir, dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
 		data = append(data, bubbleDatum{
-			ID:     dir.Dir,
-			Label:  rootPathLabelFromFSPath(dir.Dir),
-			Count:  dir.Accesses,
-			Bytes:  totalBytes,
-			Detail: detail,
+			ID:       dir.Dir,
+			Label:    rootPathLabelFromFSPath(dir.Dir),
+			Count:    dir.Accesses,
+			Bytes:    totalBytes,
+			Duration: dir.TotalLatencyNs,
+			Detail:   detail,
 		})
 	}
 	return data
@@ -825,11 +850,12 @@ func processBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 		}
 		detail := fmt.Sprintf("pid %d, rate %.1f/s, avg %s", proc.PID, proc.RatePerSec, formatDurationNs(proc.AvgLatencyNs))
 		data = append(data, bubbleDatum{
-			ID:     fmt.Sprintf("%d/%s", proc.PID, proc.Comm),
-			Label:  label,
-			Count:  proc.Syscalls,
-			Bytes:  proc.Bytes,
-			Detail: detail,
+			ID:       fmt.Sprintf("%d/%s", proc.PID, proc.Comm),
+			Label:    label,
+			Count:    proc.Syscalls,
+			Bytes:    proc.Bytes,
+			Duration: proc.TotalLatencyNs,
+			Detail:   detail,
 		})
 	}
 	return data

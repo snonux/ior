@@ -97,7 +97,7 @@ func TestManagerAttachAllToggleAndCounts(t *testing.T) {
 
 	err := mgr.AttachAll(func(tp string) bool { return tp == "sys_enter_read" || tp == "sys_exit_read" }, []string{
 		"sys_enter_read", "sys_exit_read", "sys_enter_write", "sys_exit_write",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AttachAll returned error: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestManagerAttachWaitsForDetachBeforeReturning(t *testing.T) {
 		errs: map[string]error{},
 	}
 	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}, nil); err != nil {
 		t.Fatalf("AttachAll returned error: %v", err)
 	}
 
@@ -281,7 +281,7 @@ func TestManagerCloseWaitsForDetachAndDoesNotDoubleDestroy(t *testing.T) {
 		errs: map[string]error{},
 	}
 	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}, nil); err != nil {
 		t.Fatalf("AttachAll returned error: %v", err)
 	}
 
@@ -337,7 +337,7 @@ func TestManagerDetachDestroysLinks(t *testing.T) {
 		errs: map[string]error{},
 	}
 	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}, nil); err != nil {
 		t.Fatalf("AttachAll returned error: %v", err)
 	}
 	if err := mgr.Detach("close"); err != nil {
@@ -359,7 +359,7 @@ func TestManagerDetachFailureKeepsActiveStateForUndetachedLink(t *testing.T) {
 		errs: map[string]error{},
 	}
 	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}, nil); err != nil {
 		t.Fatalf("AttachAll returned error: %v", err)
 	}
 
@@ -388,7 +388,7 @@ func TestManagerClosePreventsFurtherOperations(t *testing.T) {
 		errs: map[string]error{},
 	}
 	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_open", "sys_exit_open"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_open", "sys_exit_open"}, nil); err != nil {
 		t.Fatalf("AttachAll returned error: %v", err)
 	}
 	if err := mgr.Close(); err != nil {
@@ -407,13 +407,52 @@ func TestManagerAttachAllReturnsProgramError(t *testing.T) {
 		},
 	}
 	mgr := NewManager(attacher)
-	err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"})
+	err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"}, nil)
 	if err == nil {
 		t.Fatalf("expected attach error")
 	}
 	states := mgr.States()
 	if len(states) != 1 || states[0].Error == "" {
 		t.Fatalf("expected state to capture attach error, got %+v", states)
+	}
+}
+
+// When onAttachError is supplied, AttachAll should report each per-syscall
+// failure through the callback and continue attaching the remaining probes.
+// This is the path that lets a binary built on a newer kernel run on an older
+// one where some tracepoints don't exist.
+func TestManagerAttachAllWarnAndContinue(t *testing.T) {
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_write": {},
+			"handle_sys_exit_write":  {},
+		},
+		errs: map[string]error{
+			"handle_sys_enter_read": errors.New("no such tracepoint"),
+		},
+	}
+	mgr := NewManager(attacher)
+
+	var warned []string
+	warn := func(syscall string, err error) {
+		warned = append(warned, syscall+":"+err.Error())
+	}
+	err := mgr.AttachAll(nil, []string{
+		"sys_enter_read", "sys_exit_read",
+		"sys_enter_write", "sys_exit_write",
+	}, warn)
+	if err != nil {
+		t.Fatalf("AttachAll returned error despite warn callback: %v", err)
+	}
+	if len(warned) != 1 {
+		t.Fatalf("expected exactly 1 warning, got %d (%v)", len(warned), warned)
+	}
+	if !strings.Contains(warned[0], "read") || !strings.Contains(warned[0], "no such tracepoint") {
+		t.Fatalf("unexpected warning text: %q", warned[0])
+	}
+	active, total := mgr.ActiveCount()
+	if active != 1 || total != 2 {
+		t.Fatalf("expected write attached and read skipped, got active=%d total=%d", active, total)
 	}
 }
 
@@ -429,7 +468,7 @@ func TestManagerAttachAllPicksUpNewTracepointsOnLaterCall(t *testing.T) {
 	}
 	mgr := NewManager(attacher)
 
-	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"}, nil); err != nil {
 		t.Fatalf("AttachAll(read) returned error: %v", err)
 	}
 	states := mgr.States()
@@ -437,7 +476,7 @@ func TestManagerAttachAllPicksUpNewTracepointsOnLaterCall(t *testing.T) {
 		t.Fatalf("expected only read after first call, got %+v", states)
 	}
 
-	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read", "sys_enter_write", "sys_exit_write"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read", "sys_enter_write", "sys_exit_write"}, nil); err != nil {
 		t.Fatalf("AttachAll(read+write) returned error: %v", err)
 	}
 	states = mgr.States()
@@ -458,7 +497,7 @@ func TestManagerIsActiveReflectsCurrentState(t *testing.T) {
 		errs: map[string]error{},
 	}
 	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"}); err != nil {
+	if err := mgr.AttachAll(nil, []string{"sys_enter_read", "sys_exit_read"}, nil); err != nil {
 		t.Fatalf("AttachAll returned error: %v", err)
 	}
 	if !mgr.IsActive("read") {

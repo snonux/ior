@@ -195,18 +195,19 @@ func (s *syscallStats) ensurePercentiles() {
 
 func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
 	return SyscallSnapshot{
-		TraceID:       s.traceID,
-		Name:          s.name,
-		Count:         s.count,
-		RatePerSec:    safeRate(s.count, rateDiv),
-		Errors:        s.errorCount,
-		Bytes:         s.totalBytes,
-		LatencyMinNs:  s.minLatency,
-		LatencyMaxNs:  s.maxLatency,
-		LatencyMeanNs: float64(s.totalLatency) / float64(maxU64(s.count, 1)),
-		LatencyP50Ns:  s.p50Latency,
-		LatencyP95Ns:  s.p95Latency,
-		LatencyP99Ns:  s.p99Latency,
+		TraceID:        s.traceID,
+		Name:           s.name,
+		Count:          s.count,
+		RatePerSec:     safeRate(s.count, rateDiv),
+		Errors:         s.errorCount,
+		Bytes:          s.totalBytes,
+		LatencyMinNs:   s.minLatency,
+		LatencyMaxNs:   s.maxLatency,
+		LatencyMeanNs:  float64(s.totalLatency) / float64(maxU64(s.count, 1)),
+		TotalLatencyNs: s.totalLatency,
+		LatencyP50Ns:   s.p50Latency,
+		LatencyP95Ns:   s.p95Latency,
+		LatencyP99Ns:   s.p99Latency,
 	}
 }
 

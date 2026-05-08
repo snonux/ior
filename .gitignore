@@ -11,6 +11,7 @@ perltidy.ERR
 *.new
 *.tmp
 /ior
+/ior.el8
 *.ior.zst
 *.collapsed
 *.collapsed.zst
