@@ -31,6 +31,18 @@ The demo is fully reproducible: `mage installDemoTools` once, then `sudo -v && m
 ## Requirements
 
 - Docker and a Linux host with a BTF-enabled kernel (`/sys/kernel/btf/vmlinux` present).
+- Go (any 1.x version on `PATH`) for installing the [Mage](https://magefile.org) build tool.
+
+## Install Mage
+
+The build orchestration uses Mage. Install the `mage` binary once before any of
+the build commands below:
+
+```shell
+go install github.com/magefile/mage@latest
+```
+
+Make sure `$(go env GOPATH)/bin` (typically `$HOME/go/bin`) is on your `PATH`.
 
 ## Build
 
@@ -46,6 +58,13 @@ cached image and finish in under a minute. To skip the image rebuild:
 
 ```shell
 ./scripts/build-with-docker.sh --run
+```
+
+To target hosts with the older glibc on RHEL/Rocky/Alma 8, build a sibling
+binary called `ior.el8` from a Rocky Linux 8 container:
+
+```shell
+mage buildDockerEl8
 ```
 
 For contributors who need a native build (Fedora / Rocky Linux 9), see

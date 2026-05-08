@@ -987,11 +987,19 @@ func TestControlMetricToggleReconfiguresLiveTrieCountField(t *testing.T) {
 	}
 
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'b'}[0], Text: "b"})
-	if got, want := m.countField, "count"; got != want {
+	if got, want := m.countField, "duration"; got != want {
 		t.Fatalf("expected model count field %q after second toggle, got %q", want, got)
 	}
-	if got, want := liveTrie.CountField(), "count"; got != want {
+	if got, want := liveTrie.CountField(), "duration"; got != want {
 		t.Fatalf("expected live trie count field %q after second toggle, got %q", want, got)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'b'}[0], Text: "b"})
+	if got, want := m.countField, "count"; got != want {
+		t.Fatalf("expected model count field %q after third toggle, got %q", want, got)
+	}
+	if got, want := liveTrie.CountField(), "count"; got != want {
+		t.Fatalf("expected live trie count field %q after third toggle, got %q", want, got)
 	}
 }
 

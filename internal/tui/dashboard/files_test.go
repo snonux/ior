@@ -65,9 +65,9 @@ func TestFilePathWidthExpandsOnWideTerminal(t *testing.T) {
 
 func TestAggregateFilesByDir(t *testing.T) {
 	files := []statsengine.FileSnapshot{
-		{Path: "/var/log/a.log", Accesses: 10, BytesRead: 100, BytesWritten: 40, AvgLatencyNs: 100, MaxLatencyNs: 300},
-		{Path: "/var/log/b.log", Accesses: 20, BytesRead: 200, BytesWritten: 60, AvgLatencyNs: 200, MaxLatencyNs: 500},
-		{Path: "/tmp/c.log", Accesses: 5, BytesRead: 50, BytesWritten: 10, AvgLatencyNs: 1000, MaxLatencyNs: 1200},
+		{Path: "/var/log/a.log", Accesses: 10, BytesRead: 100, BytesWritten: 40, AvgLatencyNs: 100, MaxLatencyNs: 300, TotalLatencyNs: 1000},
+		{Path: "/var/log/b.log", Accesses: 20, BytesRead: 200, BytesWritten: 60, AvgLatencyNs: 200, MaxLatencyNs: 500, TotalLatencyNs: 4000},
+		{Path: "/tmp/c.log", Accesses: 5, BytesRead: 50, BytesWritten: 10, AvgLatencyNs: 1000, MaxLatencyNs: 1200, TotalLatencyNs: 5000},
 	}
 
 	got := aggregateFilesByDir(files)

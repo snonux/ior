@@ -57,8 +57,16 @@ func (m *Model) cycleFieldOrder() {
 }
 
 func (m *Model) toggleCountField() {
-	next := "bytes"
-	if m.countField == "bytes" {
+	// 3-way cycle: count → bytes → duration → count.
+	// durationToPrev (inter-syscall gap) is reachable via the CLI flag but
+	// kept out of the toolbar cycle for now.
+	var next string
+	switch m.countField {
+	case "count":
+		next = "bytes"
+	case "bytes":
+		next = "duration"
+	default:
 		next = "count"
 	}
 	if m.liveTrie != nil {
@@ -168,6 +176,8 @@ func (m Model) countFieldLabel() string {
 		return "events"
 	case "bytes":
 		return "bytes"
+	case "duration":
+		return "duration"
 	default:
 		return m.countField
 	}

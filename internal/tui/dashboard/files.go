@@ -17,9 +17,10 @@ type DirSnapshot struct {
 	BytesRead    uint64
 	BytesWritten uint64
 
-	AvgLatencyNs float64
-	MaxLatencyNs uint64
-	FileCount    uint64
+	AvgLatencyNs   float64
+	MaxLatencyNs   uint64
+	TotalLatencyNs uint64
+	FileCount      uint64
 }
 
 type fileSortKey uint8
@@ -401,7 +402,6 @@ func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
 	}
 
 	dirs := make(map[string]DirSnapshot, len(files))
-	weightedLatency := make(map[string]float64, len(files))
 	for _, f := range files {
 		dir := filepath.Dir(f.Path)
 		s := dirs[dir]
@@ -413,14 +413,14 @@ func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
 			s.MaxLatencyNs = f.MaxLatencyNs
 		}
 		s.FileCount++
-		weightedLatency[dir] += f.AvgLatencyNs * float64(f.Accesses)
+		s.TotalLatencyNs += f.TotalLatencyNs
 		dirs[dir] = s
 	}
 
 	out := make([]DirSnapshot, 0, len(dirs))
-	for dir, s := range dirs {
+	for _, s := range dirs {
 		if s.Accesses > 0 {
-			s.AvgLatencyNs = weightedLatency[dir] / float64(s.Accesses)
+			s.AvgLatencyNs = float64(s.TotalLatencyNs) / float64(s.Accesses)
 		}
 		out = append(out, s)
 	}

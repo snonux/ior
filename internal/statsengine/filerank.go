@@ -191,12 +191,13 @@ func (s fileSnapshotInput) toSnapshot() FileSnapshot {
 	}
 
 	return FileSnapshot{
-		Path:         s.path,
-		Accesses:     s.accesses,
-		BytesRead:    s.bytesRead,
-		BytesWritten: s.bytesWritten,
-		AvgLatencyNs: avg,
-		MaxLatencyNs: s.maxLatency,
+		Path:           s.path,
+		Accesses:       s.accesses,
+		BytesRead:      s.bytesRead,
+		BytesWritten:   s.bytesWritten,
+		AvgLatencyNs:   avg,
+		MaxLatencyNs:   s.maxLatency,
+		TotalLatencyNs: s.totalLatency,
 	}
 }
 

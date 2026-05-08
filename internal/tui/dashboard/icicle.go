@@ -16,6 +16,7 @@ type icicleNode struct {
 	fullPath string
 	accesses uint64
 	bytes    uint64
+	duration uint64
 	children map[string]*icicleNode
 }
 
@@ -123,6 +124,7 @@ func buildIcicleTree(dirs []DirSnapshot) *icicleNode {
 		metricBytes := dir.BytesRead + dir.BytesWritten
 		current.accesses += dir.Accesses
 		current.bytes += metricBytes
+		current.duration += dir.TotalLatencyNs
 		currentPath := "/"
 		for _, segment := range segments {
 			if segment == "" {
@@ -144,6 +146,7 @@ func buildIcicleTree(dirs []DirSnapshot) *icicleNode {
 			}
 			child.accesses += dir.Accesses
 			child.bytes += metricBytes
+			child.duration += dir.TotalLatencyNs
 			current = child
 		}
 	}
@@ -297,9 +300,14 @@ func icicleStatusLine(tiles []icicleTile, selected int, metric bubbleMetric) str
 	selected = clampOffset(selected, len(tiles))
 	tile := tiles[selected]
 	metricValue := icicleValue(tile.node, metric)
-	metricText := fmt.Sprintf("%d", metricValue)
-	if metric == bubbleMetricBytes {
+	var metricText string
+	switch metric {
+	case bubbleMetricBytes:
 		metricText = formatBytes(float64(metricValue))
+	case bubbleMetricDuration:
+		metricText = formatDurationUintNs(metricValue)
+	default:
+		metricText = fmt.Sprintf("%d", metricValue)
 	}
 	return fmt.Sprintf(
 		"sel:%d/%d %s | %s=%s | accesses=%d | bytes=%s",
@@ -317,8 +325,12 @@ func icicleValue(node *icicleNode, metric bubbleMetric) uint64 {
 	if node == nil {
 		return 0
 	}
-	if metric == bubbleMetricBytes {
+	switch metric {
+	case bubbleMetricBytes:
 		return node.bytes
+	case bubbleMetricDuration:
+		return node.duration
+	default:
+		return node.accesses
 	}
-	return node.accesses
 }

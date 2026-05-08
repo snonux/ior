@@ -713,10 +713,14 @@ func sortedProcessSnapshots(rows []statsengine.ProcessSnapshot, metric bubbleMet
 }
 
 func processMetricValue(proc statsengine.ProcessSnapshot, metric bubbleMetric) uint64 {
-	if metric == bubbleMetricBytes {
+	switch metric {
+	case bubbleMetricBytes:
 		return proc.Bytes
+	case bubbleMetricDuration:
+		return proc.TotalLatencyNs
+	default:
+		return proc.Syscalls
 	}
-	return proc.Syscalls
 }
 
 func processSelectionLabel(proc statsengine.ProcessSnapshot) string {
@@ -1289,10 +1293,15 @@ func nextVizMode(current tabVizMode, allowed []tabVizMode) tabVizMode {
 }
 
 func nextBubbleMetric(metric bubbleMetric) bubbleMetric {
-	if metric == bubbleMetricBytes {
+	// 3-way cycle: count (events) → bytes → duration → count.
+	switch metric {
+	case bubbleMetricCount:
+		return bubbleMetricBytes
+	case bubbleMetricBytes:
+		return bubbleMetricDuration
+	default:
 		return bubbleMetricCount
 	}
-	return bubbleMetricBytes
 }
 
 func tickCmd(d time.Duration) tea.Cmd {

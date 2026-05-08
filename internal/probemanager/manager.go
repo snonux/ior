@@ -79,7 +79,17 @@ func (m *Manager) Register(syscall string, pair TracepointPair) {
 }
 
 // AttachAll registers and attaches all tracepoint pairs selected by shouldAttach.
-func (m *Manager) AttachAll(shouldAttach func(string) bool, tpNames []string) error {
+//
+// If onAttachError is non-nil, per-syscall attach failures are reported through
+// the callback and AttachAll continues with the remaining tracepoints. This is
+// the desired mode in production: when running a binary built on a newer kernel
+// against an older one, some syscalls' tracepoints may be absent and the
+// corresponding attach call returns ENOENT. The error is recorded on the
+// probe entry (visible via States()) regardless of the callback.
+//
+// If onAttachError is nil, AttachAll preserves the strict legacy behavior and
+// returns the first attach error to the caller. Tests rely on this mode.
+func (m *Manager) AttachAll(shouldAttach func(string) bool, tpNames []string, onAttachError func(syscall string, err error)) error {
 	if m == nil {
 		return errors.New("probe manager is nil")
 	}
@@ -94,7 +104,10 @@ func (m *Manager) AttachAll(shouldAttach func(string) bool, tpNames []string) er
 			continue
 		}
 		if err := m.Attach(syscall); err != nil {
-			return err
+			if onAttachError == nil {
+				return err
+			}
+			onAttachError(syscall, err)
 		}
 	}
 	return nil

@@ -174,11 +174,12 @@ func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
 	}
 
 	return ProcessSnapshot{
-		PID:          s.pid,
-		Comm:         s.comm,
-		Syscalls:     s.count,
-		RatePerSec:   safeRate(s.count, rateDiv),
-		Bytes:        s.totalBytes,
-		AvgLatencyNs: avg,
+		PID:            s.pid,
+		Comm:           s.comm,
+		Syscalls:       s.count,
+		RatePerSec:     safeRate(s.count, rateDiv),
+		Bytes:          s.totalBytes,
+		AvgLatencyNs:   avg,
+		TotalLatencyNs: s.totalLatency,
 	}
 }
