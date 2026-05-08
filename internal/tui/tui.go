@@ -949,6 +949,12 @@ func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea
 	// the multi-second 'Attaching tracepoints' overlay on filter changes.
 	if m.runtime.applyLiveFilter(nextFilter) {
 		m.dashboard.PrepareForTraceRestart()
+		// PrepareForTraceRestart nils the dashboard's live-trie reference
+		// because the full-restart path expects TracingStartedMsg to
+		// rebind it. We skip that message on in-place swaps, so reconnect
+		// the flamegraph to the still-running trace's live trie here.
+		// Without this the Flame tab gets stuck on 'waiting for data...'.
+		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
 		m.lastErr = nil
 		return m, nil
 	}
@@ -981,6 +987,7 @@ func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	// Same in-place swap path as applyGlobalFilter — see comment there.
 	if m.runtime.applyLiveFilter(prev) {
 		m.dashboard.PrepareForTraceRestart()
+		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
 		m.lastErr = nil
 		return m, nil
 	}
