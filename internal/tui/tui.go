@@ -65,6 +65,11 @@ type RuntimePublisher interface {
 	SetEventStreamSource(source eventstream.Source)
 	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
 	SetProbeManager(manager ProbeManager)
+	// SetLiveFilterSetter registers (or, with nil, unregisters) a callback that
+	// applies a new global filter to the running trace pipeline in place. The
+	// trace starter passes its eventloop's SetFilter; the TUI calls it on every
+	// filter change to avoid restarting the BPF probes.
+	SetLiveFilterSetter(setter func(globalfilter.Filter))
 }
 
 // RuntimeState is the read side of the TUI runtime contract.
@@ -89,14 +94,15 @@ type traceFiltersContextKey struct{}
 type runtimeBindings struct {
 	mu sync.RWMutex
 
-	snapshotSource SnapshotSource
-	streamSource   eventstream.Source
-	streamBuffer   *eventstream.RingBuffer
-	streamSeq      *eventstream.Sequencer
-	recorder       *parquet.Recorder
-	liveTrieSource flamegraphtui.LiveTrieSource
-	probeManager   ProbeManager
-	filterEpoch    atomic.Uint64
+	snapshotSource   SnapshotSource
+	streamSource     eventstream.Source
+	streamBuffer     *eventstream.RingBuffer
+	streamSeq        *eventstream.Sequencer
+	recorder         *parquet.Recorder
+	liveTrieSource   flamegraphtui.LiveTrieSource
+	probeManager     ProbeManager
+	liveFilterSetter func(globalfilter.Filter)
+	filterEpoch      atomic.Uint64
 }
 
 type traceFilters struct {
@@ -157,6 +163,27 @@ func (r *runtimeBindings) SetProbeManager(manager ProbeManager) {
 	r.mu.Lock()
 	r.probeManager = manager
 	r.mu.Unlock()
+}
+
+func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
+	r.mu.Lock()
+	r.liveFilterSetter = setter
+	r.mu.Unlock()
+}
+
+// applyLiveFilter swaps the active global filter in place via the setter
+// registered by the trace starter, returning true if a setter was available.
+// Returning false tells the caller it must fall back to a full trace restart
+// (typically because no trace is currently running).
+func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
+	r.mu.RLock()
+	setter := r.liveFilterSetter
+	r.mu.RUnlock()
+	if setter == nil {
+		return false
+	}
+	setter(filter)
+	return true
 }
 
 func (r *runtimeBindings) dashboardSnapshotSource() SnapshotSource {
@@ -915,6 +942,20 @@ func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea
 	}
 
 	m.runtime.advanceFilterEpoch()
+	// Try the in-place swap first: hand the new filter to the running
+	// eventloop via the registered setter and only reset the dashboard
+	// aggregates so the displayed counts reflect the new filter going
+	// forward. The BPF probes stay attached, so the user no longer sees
+	// the multi-second 'Attaching tracepoints' overlay on filter changes.
+	if m.runtime.applyLiveFilter(nextFilter) {
+		m.dashboard.PrepareForTraceRestart()
+		m.lastErr = nil
+		return m, nil
+	}
+
+	// Fallback: no trace currently running (e.g. first invocation), so
+	// restart the pipeline so the new filter takes effect on the next
+	// trace start.
 	m.stopTrace()
 	m.dashboard.PrepareForTraceRestart()
 	m.attaching = true
@@ -937,6 +978,13 @@ func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	}
 
 	m.runtime.advanceFilterEpoch()
+	// Same in-place swap path as applyGlobalFilter — see comment there.
+	if m.runtime.applyLiveFilter(prev) {
+		m.dashboard.PrepareForTraceRestart()
+		m.lastErr = nil
+		return m, nil
+	}
+
 	m.stopTrace()
 	m.dashboard.PrepareForTraceRestart()
 	m.attaching = true

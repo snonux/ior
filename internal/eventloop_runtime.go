@@ -123,7 +123,7 @@ func (e *eventLoop) initRawHandlers() {
 		if !ok {
 			return
 		}
-		if e.filter.MatchOpenEvent(openEv) {
+		if e.Filter().MatchOpenEvent(openEv) {
 			e.tracepointEntered(openEv)
 		}
 	}
@@ -174,7 +174,7 @@ func (e *eventLoop) initRawHandlers() {
 		if !ok {
 			return
 		}
-		if e.filter.MatchNameEvent(nameEv) {
+		if e.Filter().MatchNameEvent(nameEv) {
 			e.tracepointEntered(nameEv)
 		}
 	}
@@ -183,7 +183,7 @@ func (e *eventLoop) initRawHandlers() {
 		if !ok {
 			return
 		}
-		if e.filter.MatchPathEvent(pathEv) {
+		if e.Filter().MatchPathEvent(pathEv) {
 			e.tracepointEntered(pathEv)
 		}
 	}
@@ -223,7 +223,7 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	tid := enterEv.GetTid()
 	// Schedule comm lookup as early as possible to reduce races for short-lived processes.
 	e.queueCommLookup(tid)
-	if !e.filter.UsesCommFilter() {
+	if !e.Filter().UsesCommFilter() {
 		e.pairs.set(enterEv)
 		return
 	}

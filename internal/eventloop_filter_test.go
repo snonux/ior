@@ -450,7 +450,6 @@ func TestCommFilterToggle(t *testing.T) {
 
 		// Create eventloop without comm filter
 		el := &eventLoop{
-			filter:       globalfilter.Filter{},
 			pairs:        newPairTracker(),
 			fdTracker:    newFDTracker(make(map[int32]file.File)),
 			commResolver: newCommResolver(make(map[uint32]string)),
@@ -462,6 +461,7 @@ func TestCommFilterToggle(t *testing.T) {
 			},
 			done: make(chan struct{}),
 		}
+		el.SetFilter(globalfilter.Filter{})
 		go el.run(ctx, inCh)
 
 		go func() {
@@ -491,9 +491,6 @@ func TestCommFilterToggle(t *testing.T) {
 
 		// Create eventloop with comm filter enabled
 		el := &eventLoop{
-			filter: globalfilter.Filter{
-				Comm: &globalfilter.StringFilter{Pattern: "test"},
-			},
 			pairs:        newPairTracker(),
 			fdTracker:    newFDTracker(make(map[int32]file.File)),
 			commResolver: newCommResolver(make(map[uint32]string)),
@@ -505,6 +502,9 @@ func TestCommFilterToggle(t *testing.T) {
 			},
 			done: make(chan struct{}),
 		}
+		el.SetFilter(globalfilter.Filter{
+			Comm: &globalfilter.StringFilter{Pattern: "test"},
+		})
 		go el.run(ctx, inCh)
 
 		go func() {
@@ -527,7 +527,6 @@ func TestCommFilterToggle(t *testing.T) {
 
 func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 	el := &eventLoop{
-		filter:       testFilter(commFilter, pathFilter),
 		pairs:        newPairTracker(),
 		fdTracker:    newFDTracker(make(map[int32]file.File)),
 		commResolver: newCommResolver(make(map[uint32]string)),
@@ -535,6 +534,7 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 		printCb:      func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		done:         make(chan struct{}),
 	}
+	el.SetFilter(testFilter(commFilter, pathFilter))
 	return el
 }
 
