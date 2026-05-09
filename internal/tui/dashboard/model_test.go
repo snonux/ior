@@ -1699,14 +1699,20 @@ func TestSetFocusedReturnsNilWhenTimerDisabled(t *testing.T) {
 }
 
 // TestAutoResetStatusAddsPausedSuffixWhenBlurred locks in the chrome
-// label contract: enabled+focused -> "auto-reset: 30s",
-// enabled+blurred -> "auto-reset: 30s (paused)", disabled stays "off"
-// regardless of focus.
+// label contract:
+//   - enabled+focused -> "auto-reset: <remaining>/30s" (countdown).
+//   - enabled+blurred -> "auto-reset: 30s (paused)".
+//   - disabled stays "auto-reset: off" regardless of focus.
+//
+// The countdown value can fluctuate by a second between SetAutoResetInterval
+// and the status read, so we accept "30s/30s" or "29s/30s" rather than
+// pinning an exact remaining string.
 func TestAutoResetStatusAddsPausedSuffixWhenBlurred(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
 	m.SetAutoResetInterval(30 * time.Second)
-	if got, want := m.autoResetStatus(), "auto-reset: 30s"; got != want {
-		t.Fatalf("focused enabled status = %q, want %q", got, want)
+	got := m.autoResetStatus()
+	if got != "auto-reset: 30s/30s" && got != "auto-reset: 29s/30s" {
+		t.Fatalf("focused enabled status = %q, want auto-reset: 30s/30s or 29s/30s", got)
 	}
 
 	m.SetFocused(false)
@@ -1722,5 +1728,34 @@ func TestAutoResetStatusAddsPausedSuffixWhenBlurred(t *testing.T) {
 	m.SetFocused(true)
 	if got, want := m.autoResetStatus(), "auto-reset: off"; got != want {
 		t.Fatalf("focused disabled status = %q, want %q", got, want)
+	}
+}
+
+// TestFormatAutoResetRemainingFormats exercises the duration formatter
+// used by the chrome countdown: sub-minute durations stay in seconds,
+// whole minutes drop the trailing "0s", and mixed values use "MmSs".
+// Zero/negative remaining (deadline elapsed before the next tick) and
+// the zero armedAt sentinel both render "0s" so the status line never
+// shows an empty placeholder.
+func TestFormatAutoResetRemainingFormats(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name    string
+		armedAt time.Time
+		every   time.Duration
+		want    string
+	}{
+		{"sub-minute", now, 12 * time.Second, "12s"},
+		{"whole minute", now, 2 * time.Minute, "2m"},
+		{"mixed", now, time.Minute + 23*time.Second, "1m23s"},
+		{"zero armedAt", time.Time{}, 30 * time.Second, "0s"},
+		{"elapsed deadline", now.Add(-5 * time.Second), 1 * time.Second, "0s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatAutoResetRemaining(tc.armedAt, tc.every); got != tc.want {
+				t.Fatalf("formatAutoResetRemaining(%v, %v) = %q, want %q", tc.armedAt, tc.every, got, tc.want)
+			}
+		})
 	}
 }

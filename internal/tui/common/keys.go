@@ -78,7 +78,7 @@ func DefaultKeyMap() KeyMap {
 		Enter:       keyBinding("select", "enter"),
 		Esc:         keyBinding("back", "esc"),
 		Refresh:     keyBinding("reset baseline", "r"),
-		AutoReset:   keyBinding("auto-reset", "I"),
+		AutoReset:   keyBinding("cycle auto-reset", "I"),
 	}
 }
 

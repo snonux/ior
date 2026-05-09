@@ -78,6 +78,12 @@ type Model struct {
 	// autoResetGen is incremented every time autoResetEvery changes so
 	// in-flight ticks scheduled under the previous cadence can be ignored.
 	autoResetGen uint64
+	// autoResetArmedAt is the wall-clock instant the current tick was
+	// scheduled. The next reset is expected at autoResetArmedAt +
+	// autoResetEvery; autoResetStatus uses this to render the live
+	// countdown ("12s/30s") in the chrome. Updated on every arm
+	// (SetAutoResetInterval, focus regain, tick re-arm).
+	autoResetArmedAt time.Time
 	keys         common.KeyMap
 	globalFilter             globalfilter.Filter
 	filterStack              []string
@@ -939,6 +945,7 @@ func (m Model) handleAutoResetTick(msg autoResetTickMsg) (tea.Model, tea.Cmd) {
 	if msg.generation != m.autoResetGen || m.autoResetEvery <= 0 || !m.focused {
 		return m, nil
 	}
+	m.autoResetArmedAt = time.Now()
 	resetCmd := m.resetBaselineCmd()
 	nextTick := m.autoResetTickCmd()
 	switch {
@@ -963,6 +970,11 @@ func (m *Model) SetAutoResetInterval(d time.Duration) tea.Cmd {
 	}
 	m.autoResetEvery = d
 	m.autoResetGen++
+	if d > 0 {
+		m.autoResetArmedAt = time.Now()
+	} else {
+		m.autoResetArmedAt = time.Time{}
+	}
 	return m.autoResetTickCmd()
 }
 
@@ -1069,6 +1081,9 @@ func (m *Model) SetFocused(focused bool) tea.Cmd {
 	if !focused {
 		return nil
 	}
+	if m.autoResetEvery > 0 {
+		m.autoResetArmedAt = time.Now()
+	}
 	return m.autoResetTickCmd()
 }
 
@@ -1123,11 +1138,15 @@ func (m Model) filterSummary() string {
 }
 
 // autoResetStatus is the human-readable label for the current
-// auto-reset cadence shown in the dashboard chrome. "off" when the
-// timer is disabled, otherwise the configured interval (e.g. "30s").
-// When the timer is enabled but the TUI has lost focus, a "(paused)"
-// suffix is appended so the user knows the timer will not fire until
-// focus returns. Disabled timers stay "off" regardless of focus.
+// auto-reset cadence shown in the dashboard chrome.
+//   - "off" when the timer is disabled.
+//   - "<remaining>/<total>" while running and focused, e.g. "12s/30s".
+//     The countdown updates on every render (driven by the periodic
+//     refresh tick) so users can see when the next reset will fire.
+//   - "<total> (paused)" when enabled but the TUI has lost focus, so
+//     the user knows the timer will not fire until focus returns.
+//
+// Disabled timers stay "off" regardless of focus.
 func (m Model) autoResetStatus() string {
 	if m.autoResetEvery <= 0 {
 		return "auto-reset: off"
@@ -1135,7 +1154,32 @@ func (m Model) autoResetStatus() string {
 	if !m.focused {
 		return "auto-reset: " + m.autoResetEvery.String() + " (paused)"
 	}
-	return "auto-reset: " + m.autoResetEvery.String()
+	return "auto-reset: " + formatAutoResetRemaining(m.autoResetArmedAt, m.autoResetEvery) + "/" + m.autoResetEvery.String()
+}
+
+// formatAutoResetRemaining renders the time left until the next
+// scheduled tick as a compact whole-second duration string ("12s",
+// "1m23s"). When armedAt is the zero value (e.g. just after enabling)
+// or the deadline has already elapsed, it returns "0s" so the chrome
+// always shows a value rather than an empty placeholder.
+func formatAutoResetRemaining(armedAt time.Time, every time.Duration) string {
+	if armedAt.IsZero() || every <= 0 {
+		return "0s"
+	}
+	remaining := time.Until(armedAt.Add(every))
+	if remaining < 0 {
+		remaining = 0
+	}
+	seconds := int(remaining.Round(time.Second).Seconds())
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	secs := seconds % 60
+	if secs == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm%ds", minutes, secs)
 }
 
 func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
