@@ -42,6 +42,7 @@ type Config struct {
 	CollapsedFields  []string
 	CountField       string
 	GlobalFilter     globalfilter.Filter
+	ResetTimer       time.Duration
 
 	// ShowVersion prints the banner plus version and exits without running.
 	ShowVersion bool
@@ -58,6 +59,12 @@ func init() {
 	current.Store(&defaults)
 }
 
+// DefaultResetTimer is the default cadence for the dashboard's auto-reset
+// timer. It periodically clears aggregate state (live flamegraph trie and
+// stats engine) — the same effect as pressing `r` — to prevent unbounded
+// growth during long traces. A value of 0 disables auto-reset entirely.
+const DefaultResetTimer = 30 * time.Second
+
 // NewFlags returns a configuration instance initialized with project defaults.
 func NewFlags() Config {
 	return Config{
@@ -69,6 +76,7 @@ func NewFlags() Config {
 		TUIExportEnable: true,
 		CollapsedFields: []string{"comm", "tracepoint", "path"},
 		CountField:      "count",
+		ResetTimer:      DefaultResetTimer,
 	}
 }
 
@@ -180,6 +188,8 @@ func parse() error {
 	flag.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	flag.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
 	flag.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI CSV snapshot export files (separate from Parquet recording)")
+	flag.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
+		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
 	fields := flag.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
@@ -218,6 +228,12 @@ func parse() error {
 
 	if !collapse.IsValidCountField(cfg.CountField) {
 		return fmt.Errorf("invalid count field: %s", cfg.CountField)
+	}
+
+	// A negative reset timer would imply auto-resets in the past, which is
+	// nonsensical. 0 disables, anything positive enables.
+	if cfg.ResetTimer < 0 {
+		return fmt.Errorf("invalid resetTimer: %s (must be >= 0; 0 disables)", cfg.ResetTimer)
 	}
 
 	setCurrent(cfg)

@@ -284,6 +284,7 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 // RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
 func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	model := newModelWithRuntimeConfig(cfg.PidFilter, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
+	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -292,6 +293,7 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
 func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	model := newModelWithRuntimeConfig(1, filterFromConfig(cfg), 1, -1, cfg.TUIExportEnable, starter)
+	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -376,7 +378,12 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 
 // NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
 func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) Model {
-	return newModelWithRuntimeConfig(initialPID, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
+	model := newModelWithRuntimeConfig(initialPID, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
+	// Seed the dashboard's auto-reset cadence from the parsed CLI flag
+	// (default DefaultResetTimer; 0 disables). Init() will arm the
+	// underlying tea.Tick when the dashboard becomes active.
+	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
+	return model
 }
 
 func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
@@ -649,7 +656,51 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		next, cmd := m.reselectTID()
 		return next, cmd, true
 	}
+	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.AutoReset) {
+		next, cmd := m.cycleAutoResetInterval()
+		return next, cmd, true
+	}
 	return m, nil, false
+}
+
+// autoResetCycle is the ordered set of cadences exposed via the `I`
+// hotkey. The first entry (0) disables the timer; the rest are
+// progressively longer to give users a quick way to slow auto-resets
+// down on long traces or turn them off entirely.
+var autoResetCycle = []time.Duration{
+	0,
+	15 * time.Second,
+	30 * time.Second,
+	60 * time.Second,
+	5 * time.Minute,
+}
+
+// nextAutoResetInterval returns the next entry in autoResetCycle after
+// `current`. If `current` is not in the cycle (e.g. the user passed a
+// custom -resetTimer like 47s), the next entry is the first cycle value
+// strictly greater than current; if there is none, we wrap to 0 (off).
+func nextAutoResetInterval(current time.Duration) time.Duration {
+	for i, d := range autoResetCycle {
+		if d == current {
+			return autoResetCycle[(i+1)%len(autoResetCycle)]
+		}
+	}
+	for _, d := range autoResetCycle {
+		if d > current {
+			return d
+		}
+	}
+	return autoResetCycle[0]
+}
+
+// cycleAutoResetInterval advances the dashboard's auto-reset cadence to
+// the next preset and re-arms the timer. The new cadence takes effect
+// on the next tick; any in-flight tick from the previous cadence is
+// dropped via the dashboard model's generation counter.
+func (m Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
+	next := nextAutoResetInterval(m.dashboard.AutoResetInterval())
+	cmd := m.dashboard.SetAutoResetInterval(next)
+	return m, cmd
 }
 
 func (m Model) updateDashboardForModal(msg tea.Msg) (Model, tea.Cmd) {

@@ -40,6 +40,13 @@ type refreshTickMsg struct{}
 type streamTickMsg struct{}
 type flameTickMsg struct{}
 type bubbleTickMsg struct{}
+
+// autoResetTickMsg fires when the auto-reset timer elapses. It carries the
+// generation it was scheduled for so that stale ticks (from a previous
+// interval setting) are ignored rather than triggering a wrong-cadence reset.
+type autoResetTickMsg struct {
+	generation uint64
+}
 type streamEditorDoneMsg struct {
 	err error
 }
@@ -64,8 +71,14 @@ type Model struct {
 	width  int
 	height int
 
-	refreshEvery             time.Duration
-	keys                     common.KeyMap
+	refreshEvery time.Duration
+	// autoResetEvery is the cadence for the periodic auto-reset of
+	// aggregate state (live trie + stats engine). Zero disables it.
+	autoResetEvery time.Duration
+	// autoResetGen is incremented every time autoResetEvery changes so
+	// in-flight ticks scheduled under the previous cadence can be ignored.
+	autoResetGen uint64
+	keys         common.KeyMap
 	globalFilter             globalfilter.Filter
 	filterStack              []string
 	recordingStatus          string
@@ -141,6 +154,9 @@ func (m Model) Init() tea.Cmd {
 			cmds = append(cmds, bubbleTickCmdFn())
 		}
 	}
+	if cmd := m.autoResetTickCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if len(cmds) == 1 {
 		return cmds[0]
 	}
@@ -160,6 +176,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleFlameTick()
 	case bubbleTickMsg:
 		return m.handleBubbleTick()
+	case autoResetTickMsg:
+		return m.handleAutoResetTick(msg)
 	case messages.StatsTickMsg:
 		return m.handleStatsTick(msg)
 	case tea.KeyPressMsg:
@@ -896,6 +914,60 @@ func (m *Model) resetBaselineCmd() tea.Cmd {
 	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 }
 
+// autoResetTickCmd returns a command that fires an autoResetTickMsg after
+// the current auto-reset interval. Returns nil when the timer is disabled
+// (interval <= 0), so callers can compose it without extra branching.
+func (m Model) autoResetTickCmd() tea.Cmd {
+	if m.autoResetEvery <= 0 {
+		return nil
+	}
+	gen := m.autoResetGen
+	return tea.Tick(m.autoResetEvery, func(time.Time) tea.Msg {
+		return autoResetTickMsg{generation: gen}
+	})
+}
+
+// handleAutoResetTick fires the same reset path as the `r` key (live trie
+// + stats engine) and re-arms the timer for the next tick. Stale ticks
+// from a previous cadence are dropped via the generation counter so that
+// changing the interval does not double-fire.
+func (m Model) handleAutoResetTick(msg autoResetTickMsg) (tea.Model, tea.Cmd) {
+	if msg.generation != m.autoResetGen || m.autoResetEvery <= 0 {
+		return m, nil
+	}
+	resetCmd := m.resetBaselineCmd()
+	nextTick := m.autoResetTickCmd()
+	switch {
+	case resetCmd == nil && nextTick == nil:
+		return m, nil
+	case resetCmd == nil:
+		return m, nextTick
+	case nextTick == nil:
+		return m, resetCmd
+	default:
+		return m, tea.Batch(resetCmd, nextTick)
+	}
+}
+
+// SetAutoResetInterval reconfigures the auto-reset cadence. A zero or
+// negative value disables the timer. Returns a tea.Cmd that arms the new
+// timer (or nil when disabling). The generation counter is bumped so any
+// in-flight tick scheduled under the previous interval is ignored.
+func (m *Model) SetAutoResetInterval(d time.Duration) tea.Cmd {
+	if d < 0 {
+		d = 0
+	}
+	m.autoResetEvery = d
+	m.autoResetGen++
+	return m.autoResetTickCmd()
+}
+
+// AutoResetInterval reports the current auto-reset cadence. Zero means
+// the timer is disabled.
+func (m Model) AutoResetInterval() time.Duration {
+	return m.autoResetEvery
+}
+
 // LatestSnapshot returns the most recently received snapshot.
 func (m Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
@@ -1021,17 +1093,24 @@ func (m Model) View() tea.View {
 
 func (m Model) filterSummary() string {
 	summary := "filter: " + m.globalFilter.Summary()
-	if len(m.filterStack) == 0 {
-		if m.recordingStatus == "" {
-			return summary
-		}
-		return summary + " | " + m.recordingStatus
+	if len(m.filterStack) > 0 {
+		summary += " | stack: " + strings.Join(m.filterStack, " | ")
 	}
-	summary += " | stack: " + strings.Join(m.filterStack, " | ")
-	if m.recordingStatus == "" {
-		return summary
+	if m.recordingStatus != "" {
+		summary += " | " + m.recordingStatus
 	}
-	return summary + " | " + m.recordingStatus
+	summary += " | " + m.autoResetStatus()
+	return summary
+}
+
+// autoResetStatus is the human-readable label for the current
+// auto-reset cadence shown in the dashboard chrome. "off" when the
+// timer is disabled, otherwise the configured interval (e.g. "30s").
+func (m Model) autoResetStatus() string {
+	if m.autoResetEvery <= 0 {
+		return "auto-reset: off"
+	}
+	return "auto-reset: " + m.autoResetEvery.String()
 }
 
 func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
