@@ -171,3 +171,43 @@ func TestParseInvalidTracepointRegexReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestParseResetTimerDefault(t *testing.T) {
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.ResetTimer != DefaultResetTimer {
+		t.Fatalf("default reset timer = %v, want %v", cfg.ResetTimer, DefaultResetTimer)
+	}
+}
+
+func TestParseResetTimerOverride(t *testing.T) {
+	cfg, err := parseForTest(t, "-resetTimer", "45s")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.ResetTimer != 45*time.Second {
+		t.Fatalf("reset timer = %v, want 45s", cfg.ResetTimer)
+	}
+}
+
+func TestParseResetTimerZeroDisables(t *testing.T) {
+	cfg, err := parseForTest(t, "-resetTimer", "0")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.ResetTimer != 0 {
+		t.Fatalf("reset timer = %v, want 0 (disabled)", cfg.ResetTimer)
+	}
+}
+
+func TestParseResetTimerNegativeReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-resetTimer", "-5s")
+	if err == nil {
+		t.Fatalf("expected parse error for negative reset timer")
+	}
+	if !strings.Contains(err.Error(), "invalid resetTimer") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

@@ -35,6 +35,12 @@ type KeyMap struct {
 	Enter       key.Binding
 	Esc         key.Binding
 	Refresh     key.Binding
+	// AutoReset toggles/cycles the dashboard's auto-reset timer. The
+	// timer periodically clears aggregate state (same as Refresh) to
+	// prevent unbounded growth of the flamegraph trie and stats engine.
+	// Bound to capital `I` because lowercase `t` is the TID picker; we
+	// keep `i` unbound so future use isn't blocked.
+	AutoReset key.Binding
 }
 
 // Keys contains the default shared key map.
@@ -72,6 +78,7 @@ func DefaultKeyMap() KeyMap {
 		Enter:       keyBinding("select", "enter"),
 		Esc:         keyBinding("back", "esc"),
 		Refresh:     keyBinding("reset baseline", "r"),
+		AutoReset:   keyBinding("auto-reset", "I"),
 	}
 }
 
@@ -113,6 +120,7 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 		k.Probes,
 		k.Record,
 		k.Refresh,
+		k.AutoReset,
 		k.Quit,
 	}
 	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
@@ -152,7 +160,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
 		controls = append(controls, k.Export)
 	}
-	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Record, k.Refresh, k.Quit)
+	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Record, k.Refresh, k.AutoReset, k.Quit)
 	controls = append(controls, k.Visualize, k.Metric, k.Sort, k.ReverseSort, k.Filter, k.FilterUndo)
 
 	return [][]key.Binding{
