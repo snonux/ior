@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/statsengine"
@@ -1585,5 +1586,141 @@ func TestTranslateFlamegraphMsgLeavesNonMouseUnchanged(t *testing.T) {
 	translated := translateFlamegraphMsg(msg)
 	if _, ok := translated.(messages.StatsTickMsg); !ok {
 		t.Fatalf("expected non-mouse message to remain unchanged, got %T", translated)
+	}
+}
+
+// TestAutoResetTickIgnoredWhileBlurred drives the same tick the
+// tea.Tick scheduler would deliver after the cadence elapses, but
+// from a blurred state. The expected behavior is: no reset fires
+// (no Reset() call on the engine), and no new tick is re-armed —
+// SetFocused will arm a fresh one when focus returns.
+func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
+	engine := &fakeResettableSnapshotSource{}
+	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	if cmd := m.SetAutoResetInterval(50 * time.Millisecond); cmd == nil {
+		t.Fatalf("SetAutoResetInterval should return a tick command for a positive interval")
+	}
+	gen := m.autoResetGen
+
+	// Simulate blur. The returned cmd must be nil (no rearm).
+	if cmd := m.SetFocused(false); cmd != nil {
+		t.Fatalf("SetFocused(false) should not return a tick command, got %v", cmd)
+	}
+	if m.autoResetGen == gen {
+		t.Fatalf("SetFocused(false) should bump autoResetGen so in-flight ticks are dropped")
+	}
+
+	// Deliver the in-flight tick that was scheduled before the blur. It
+	// carries the pre-blur generation, so it must be silently dropped.
+	staleTick := autoResetTickMsg{generation: gen}
+	next, cmd := m.Update(staleTick)
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("blurred dashboard should not re-arm the timer on a stale tick, got %v", cmd)
+	}
+	if engine.resetCount != 0 {
+		t.Fatalf("blurred dashboard should not reset the engine, got resetCount=%d", engine.resetCount)
+	}
+
+	// Even a tick crafted with the current generation must not fire
+	// while blurred — handleAutoResetTick gates on m.focused.
+	currentTick := autoResetTickMsg{generation: m.autoResetGen}
+	next, cmd = m.Update(currentTick)
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("blurred dashboard must not re-arm even on a current-gen tick, got %v", cmd)
+	}
+	if engine.resetCount != 0 {
+		t.Fatalf("blurred dashboard must not reset on a current-gen tick, got resetCount=%d", engine.resetCount)
+	}
+}
+
+// TestAutoResetTickResumesOnFocusRegain checks that focus regain arms
+// a fresh tick at the configured cadence, and that the next tick fires
+// the reset path. We deliver the tick by direct injection (the same
+// payload tea.Tick would deliver) rather than waiting on real time.
+func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
+	engine := &fakeResettableSnapshotSource{}
+	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	m.SetAutoResetInterval(50 * time.Millisecond)
+	m.SetFocused(false)
+
+	// Focus regain must return a non-nil tick cmd because the timer is
+	// still configured, and bump the generation again.
+	preGen := m.autoResetGen
+	cmd := m.SetFocused(true)
+	if cmd == nil {
+		t.Fatalf("SetFocused(true) should return a fresh tick cmd when timer is enabled")
+	}
+	if m.autoResetGen == preGen {
+		t.Fatalf("SetFocused(true) should bump autoResetGen to invalidate any leftover ticks")
+	}
+
+	// Deliver a tick at the post-regain generation: the reset must fire
+	// and a fresh tick must be re-armed for the next interval.
+	tick := autoResetTickMsg{generation: m.autoResetGen}
+	next, cmd := m.Update(tick)
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("focused dashboard should re-arm timer and emit reset cmd, got nil")
+	}
+	if engine.resetCount != 1 {
+		t.Fatalf("focused tick should reset engine exactly once, got resetCount=%d", engine.resetCount)
+	}
+}
+
+// TestSetFocusedNoOpWhenStateUnchanged guards against accidental
+// generation churn when focus messages arrive without an actual state
+// change (e.g. a duplicate FocusMsg). Bumping the generation in that
+// case would silently invalidate a healthy in-flight tick.
+func TestSetFocusedNoOpWhenStateUnchanged(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.SetAutoResetInterval(50 * time.Millisecond)
+	gen := m.autoResetGen
+
+	if cmd := m.SetFocused(true); cmd != nil {
+		t.Fatalf("SetFocused(true) on already-focused model should be a no-op, got %v", cmd)
+	}
+	if m.autoResetGen != gen {
+		t.Fatalf("autoResetGen should not change on no-op focus call, was %d now %d", gen, m.autoResetGen)
+	}
+}
+
+// TestSetFocusedReturnsNilWhenTimerDisabled is the corner case where
+// focus returns but the user has the auto-reset timer turned off. No
+// tick should be armed (it would never fire anyway).
+func TestSetFocusedReturnsNilWhenTimerDisabled(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	// Timer disabled by default.
+	m.SetFocused(false)
+	if cmd := m.SetFocused(true); cmd != nil {
+		t.Fatalf("SetFocused(true) with disabled timer should return nil, got %v", cmd)
+	}
+}
+
+// TestAutoResetStatusAddsPausedSuffixWhenBlurred locks in the chrome
+// label contract: enabled+focused -> "auto-reset: 30s",
+// enabled+blurred -> "auto-reset: 30s (paused)", disabled stays "off"
+// regardless of focus.
+func TestAutoResetStatusAddsPausedSuffixWhenBlurred(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m.SetAutoResetInterval(30 * time.Second)
+	if got, want := m.autoResetStatus(), "auto-reset: 30s"; got != want {
+		t.Fatalf("focused enabled status = %q, want %q", got, want)
+	}
+
+	m.SetFocused(false)
+	if got, want := m.autoResetStatus(), "auto-reset: 30s (paused)"; got != want {
+		t.Fatalf("blurred enabled status = %q, want %q", got, want)
+	}
+
+	m.SetAutoResetInterval(0)
+	if got, want := m.autoResetStatus(), "auto-reset: off"; got != want {
+		t.Fatalf("blurred disabled status = %q, want %q", got, want)
+	}
+
+	m.SetFocused(true)
+	if got, want := m.autoResetStatus(), "auto-reset: off"; got != want {
+		t.Fatalf("focused disabled status = %q, want %q", got, want)
 	}
 }

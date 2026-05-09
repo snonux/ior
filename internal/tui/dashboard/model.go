@@ -916,9 +916,11 @@ func (m *Model) resetBaselineCmd() tea.Cmd {
 
 // autoResetTickCmd returns a command that fires an autoResetTickMsg after
 // the current auto-reset interval. Returns nil when the timer is disabled
-// (interval <= 0), so callers can compose it without extra branching.
+// (interval <= 0) or while the dashboard is blurred, so callers can
+// compose it without extra branching. SetFocused re-arms the tick when
+// focus returns.
 func (m Model) autoResetTickCmd() tea.Cmd {
-	if m.autoResetEvery <= 0 {
+	if m.autoResetEvery <= 0 || !m.focused {
 		return nil
 	}
 	gen := m.autoResetGen
@@ -930,9 +932,11 @@ func (m Model) autoResetTickCmd() tea.Cmd {
 // handleAutoResetTick fires the same reset path as the `r` key (live trie
 // + stats engine) and re-arms the timer for the next tick. Stale ticks
 // from a previous cadence are dropped via the generation counter so that
-// changing the interval does not double-fire.
+// changing the interval does not double-fire. While the dashboard is
+// blurred the tick is also dropped without re-arming; SetFocused will
+// arm a fresh tick on focus regain.
 func (m Model) handleAutoResetTick(msg autoResetTickMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.autoResetGen || m.autoResetEvery <= 0 {
+	if msg.generation != m.autoResetGen || m.autoResetEvery <= 0 || !m.focused {
 		return m, nil
 	}
 	resetCmd := m.resetBaselineCmd()
@@ -1048,9 +1052,24 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.processesChart.SetDarkMode(isDark)
 }
 
-// SetFocused controls whether periodic refresh ticks are processed.
-func (m *Model) SetFocused(focused bool) {
+// SetFocused controls whether periodic refresh ticks are processed and
+// returns a tea.Cmd that arms a fresh auto-reset tick when focus returns
+// (or nil otherwise). The auto-reset generation counter is bumped on
+// every focus change so any in-flight tick scheduled before a blur is
+// dropped when it eventually arrives — the tick payload's generation
+// will no longer match. Without bumping, a tick that was already in
+// flight when blur occurred could fire moments after the user re-focuses
+// and surprise them with a reset.
+func (m *Model) SetFocused(focused bool) tea.Cmd {
+	if m.focused == focused {
+		return nil
+	}
 	m.focused = focused
+	m.autoResetGen++
+	if !focused {
+		return nil
+	}
+	return m.autoResetTickCmd()
 }
 
 // SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
@@ -1106,9 +1125,15 @@ func (m Model) filterSummary() string {
 // autoResetStatus is the human-readable label for the current
 // auto-reset cadence shown in the dashboard chrome. "off" when the
 // timer is disabled, otherwise the configured interval (e.g. "30s").
+// When the timer is enabled but the TUI has lost focus, a "(paused)"
+// suffix is appended so the user knows the timer will not fire until
+// focus returns. Disabled timers stay "off" regardless of focus.
 func (m Model) autoResetStatus() string {
 	if m.autoResetEvery <= 0 {
 		return "auto-reset: off"
+	}
+	if !m.focused {
+		return "auto-reset: " + m.autoResetEvery.String() + " (paused)"
 	}
 	return "auto-reset: " + m.autoResetEvery.String()
 }
