@@ -481,13 +481,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.FocusMsg:
 		m.focused = true
-		m.dashboard.SetFocused(true)
+		// SetFocused returns a tea.Cmd that arms a fresh auto-reset tick
+		// when focus returns (or nil if the timer is disabled). It also
+		// bumps the dashboard's autoResetGen so any tick that was scheduled
+		// before the blur and is still in flight is dropped on arrival.
+		focusCmd := m.dashboard.SetFocused(true)
 		if m.screen == ScreenDashboard && !m.attaching {
+			// Init() arms its own auto-reset tick at the post-bump
+			// generation, so discard focusCmd here to avoid two
+			// concurrently-live ticks racing the cadence.
 			return m, tea.Batch(m.dashboard.Init(), m.dashboard.SnapshotCmd())
 		}
-		return m, nil
+		return m, focusCmd
 	case tea.BlurMsg:
 		m.focused = false
+		// SetFocused returns nil on blur but still bumps autoResetGen so
+		// that any in-flight tick scheduled before the blur is ignored.
 		m.dashboard.SetFocused(false)
 		return m, nil
 	case tea.KeyPressMsg:
@@ -666,12 +675,14 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 // autoResetCycle is the ordered set of cadences exposed via the `I`
 // hotkey. The first entry (0) disables the timer; the rest are
 // progressively longer to give users a quick way to slow auto-resets
-// down on long traces or turn them off entirely.
+// down on long traces or turn them off entirely. The cycle wraps so
+// pressing `I` past the last preset returns to off.
 var autoResetCycle = []time.Duration{
 	0,
-	15 * time.Second,
+	10 * time.Second,
 	30 * time.Second,
 	60 * time.Second,
+	2 * time.Minute,
 	5 * time.Minute,
 }
 

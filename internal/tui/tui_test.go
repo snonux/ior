@@ -2130,3 +2130,55 @@ func TestGlobalHelpOverlayFitsStandardTerminal(t *testing.T) {
 		t.Fatalf("expected overlay to include bubble dashboard hotkeys")
 	}
 }
+
+// TestNextAutoResetIntervalCyclesThroughPresets walks the full preset
+// sequence (off -> 10s -> 30s -> 60s -> 2m -> 5m -> off) to lock in the
+// user-facing behavior of the `I` hotkey. The cycle wraps so the user
+// can press `I` repeatedly without overshooting into surprise states.
+func TestNextAutoResetIntervalCyclesThroughPresets(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{"off->10s", 0, 10 * time.Second},
+		{"10s->30s", 10 * time.Second, 30 * time.Second},
+		{"30s->60s", 30 * time.Second, 60 * time.Second},
+		{"60s->2m", 60 * time.Second, 2 * time.Minute},
+		{"2m->5m", 2 * time.Minute, 5 * time.Minute},
+		{"5m->off", 5 * time.Minute, 0},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := nextAutoResetInterval(tc.in)
+			if got != tc.want {
+				t.Fatalf("nextAutoResetInterval(%s) = %s, want %s", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNextAutoResetIntervalAdvancesCustomValueToNextPreset covers the
+// custom-value passthrough: when the user passes a -resetTimer value
+// that is not in the preset cycle (e.g. 47s), pressing `I` should jump
+// to the smallest preset strictly greater than the current cadence
+// rather than restarting from the top of the cycle.
+func TestNextAutoResetIntervalAdvancesCustomValueToNextPreset(t *testing.T) {
+	t.Parallel()
+	if got := nextAutoResetInterval(47 * time.Second); got != 60*time.Second {
+		t.Fatalf("nextAutoResetInterval(47s) = %s, want 60s", got)
+	}
+	if got := nextAutoResetInterval(90 * time.Second); got != 2*time.Minute {
+		t.Fatalf("nextAutoResetInterval(90s) = %s, want 2m", got)
+	}
+	if got := nextAutoResetInterval(3 * time.Minute); got != 5*time.Minute {
+		t.Fatalf("nextAutoResetInterval(3m) = %s, want 5m", got)
+	}
+	// A custom value larger than every preset wraps to off.
+	if got := nextAutoResetInterval(10 * time.Minute); got != 0 {
+		t.Fatalf("nextAutoResetInterval(10m) = %s, want 0 (off)", got)
+	}
+}
