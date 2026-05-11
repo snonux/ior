@@ -582,60 +582,96 @@ func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 		(m.filterModal.Visible() || m.exporter.Visible() || m.recordModal.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
 }
 
+// handleGlobalKeyPress intercepts keys that apply regardless of the active
+// screen: help overlay toggle, quit, and dashboard-level shortcuts. Returns
+// (model, cmd, handled); when handled is false the caller falls through to
+// screen-specific routing.
 func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.helpOverlayVisible {
-		if isHelpOverlayQuitKey(msg) || isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
-			m.helpOverlayVisible = false
-		}
-		return m, nil, true
+		return m.handleHelpOverlayKeyPress(msg)
 	}
 	if m.shouldCancelPickerToDashboard(msg) {
 		next, cmd := m.cancelPickerToDashboard()
 		return next, cmd, true
 	}
 	if key.Matches(msg, m.keys.Quit) {
-		if m.canHandleDashboardShortcut(msg) {
-			if err := m.stopRecording(); err != nil {
-				m.lastErr = err
-				return m, nil, true
-			}
-			m.quitting = true
-			m.stopTrace()
-			return m, tea.Quit, true
-		}
-		if m.shouldRouteQuitToEsc(msg) {
-			esc := tea.KeyPressMsg{Code: tea.KeyEsc}
-			if m.probeModal.Visible() {
-				next, cmd := m.updateProbeModal(esc)
-				return next, cmd, true
-			}
-			if m.filterModal.Visible() {
-				next, cmd := m.updateFilterModal(esc)
-				return next, cmd, true
-			}
-			if m.recordModal.Visible() {
-				next, cmd := m.updateRecordModal(esc)
-				return next, cmd, true
-			}
-			if m.exporter.Visible() {
-				next, cmd := m.updateExportModal(esc)
-				return next, cmd, true
-			}
-			next, cmd := m.dashboard.Update(esc)
-			m.dashboard = next.(dashboardui.Model)
-			return m, cmd, true
-		}
-		return m, nil, true
+		return m.handleQuitKeyPress(msg)
 	}
 	if isHelpOverlayOpenKey(msg) && !m.attaching && m.lastErr == nil {
 		m.helpOverlayVisible = true
 		return m, nil, true
 	}
-	if m.exportEnabled && m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Export) {
+	if m.canHandleDashboardShortcut(msg) {
+		if next, cmd, handled := m.handleDashboardShortcutKeys(msg); handled {
+			return next, cmd, true
+		}
+	}
+	return m, nil, false
+}
+
+// handleHelpOverlayKeyPress closes the help overlay on any quit/close/open
+// key and consumes the event so it does not reach the underlying screen.
+func (m Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if isHelpOverlayQuitKey(msg) || isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
+		m.helpOverlayVisible = false
+	}
+	return m, nil, true
+}
+
+// handleQuitKeyPress handles the quit key. On the dashboard it stops the
+// trace and quits; when a modal is active the quit key is re-routed as Esc
+// so modals close before the user needs to press q again.
+func (m Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.canHandleDashboardShortcut(msg) {
+		if err := m.stopRecording(); err != nil {
+			m.lastErr = err
+			return m, nil, true
+		}
+		m.quitting = true
+		m.stopTrace()
+		return m, tea.Quit, true
+	}
+	if m.shouldRouteQuitToEsc(msg) {
+		return m.routeQuitAsEsc()
+	}
+	return m, nil, true
+}
+
+// routeQuitAsEsc synthesises an Esc key press and forwards it to whichever
+// modal is currently visible, allowing quit to act as an intuitive close
+// shortcut while a modal or sub-view is in focus.
+func (m Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
+	esc := tea.KeyPressMsg{Code: tea.KeyEsc}
+	if m.probeModal.Visible() {
+		next, cmd := m.updateProbeModal(esc)
+		return next, cmd, true
+	}
+	if m.filterModal.Visible() {
+		next, cmd := m.updateFilterModal(esc)
+		return next, cmd, true
+	}
+	if m.recordModal.Visible() {
+		next, cmd := m.updateRecordModal(esc)
+		return next, cmd, true
+	}
+	if m.exporter.Visible() {
+		next, cmd := m.updateExportModal(esc)
+		return next, cmd, true
+	}
+	next, cmd := m.dashboard.Update(esc)
+	m.dashboard = next.(dashboardui.Model)
+	return m, cmd, true
+}
+
+// handleDashboardShortcutKeys handles all dashboard-level hotkeys (export,
+// record, probes, filter, undo, PID/TID reselect, auto-reset). The caller
+// must verify canHandleDashboardShortcut before calling this method.
+func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.exportEnabled && key.Matches(msg, m.keys.Export) {
 		m.exporter = m.exporter.Open()
 		return m, nil, true
 	}
-	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Record) {
+	if key.Matches(msg, m.keys.Record) {
 		if m.recordingActive() {
 			if err := m.stopRecording(); err != nil {
 				m.lastErr = err
@@ -645,27 +681,27 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 		m.recordModal = m.recordModal.Open(defaultParquetRecordingFilename())
 		return m, nil, true
 	}
-	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Probes) {
+	if key.Matches(msg, m.keys.Probes) {
 		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
 		return m, nil, true
 	}
-	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.Filter) {
+	if key.Matches(msg, m.keys.Filter) {
 		m.filterModal = m.filterModal.Open(m.filter.global)
 		return m, nil, true
 	}
-	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.FilterUndo) {
+	if key.Matches(msg, m.keys.FilterUndo) {
 		next, cmd := m.undoGlobalFilter()
 		return next, cmd, true
 	}
-	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectPID) {
+	if key.Matches(msg, m.keys.SelectPID) {
 		next, cmd := m.reselectPID()
 		return next, cmd, true
 	}
-	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.SelectTID) {
+	if key.Matches(msg, m.keys.SelectTID) {
 		next, cmd := m.reselectTID()
 		return next, cmd, true
 	}
-	if m.canHandleDashboardShortcut(msg) && key.Matches(msg, m.keys.AutoReset) {
+	if key.Matches(msg, m.keys.AutoReset) {
 		next, cmd := m.cycleAutoResetInterval()
 		return next, cmd, true
 	}
