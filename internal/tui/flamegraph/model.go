@@ -259,89 +259,107 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the view and defer / unanimate accordingly.
 		m.lastKeyAt = time.Now()
 		if m.searchActive {
-			handled := false
-			switch msg.String() {
-			case "esc":
-				handled = true
-				m.clearSearch()
-				m.recordKeyDebug(msg, handled, false)
-				return m, nil
-			case "enter":
-				handled = true
-				m.applySearchQuery(m.searchInput.Value())
-				m.searchActive = false
-				m.searchInput.Blur()
-				m.recordKeyDebug(msg, handled, false)
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.searchInput, cmd = m.searchInput.Update(msg)
-			_ = cmd
-			m.recordKeyDebug(msg, true, false)
-			return m, nil
+			return m.handleSearchInput(msg)
 		}
-
-		prev := m.selectedIdx
-		handled := false
-		switch {
-		case isSearchOpenKey(msg):
-			handled = true
-			m.openSearch()
-		case isNextMatchKey(msg):
-			handled = true
-			m.jumpMatch(1)
-		case isPrevMatchKey(msg):
-			handled = true
-			m.jumpMatch(-1)
-		case isPauseKey(msg):
-			handled = true
-			m.togglePause()
-		case isResetBaselineKey(msg):
-			handled = true
-			m.resetBaseline()
-		case isCycleOrderKey(msg):
-			handled = true
-			m.cycleFieldOrder()
-		case isCycleMetricKey(msg):
-			handled = true
-			m.toggleCountField()
-		case isHelpToggleKey(msg):
-			handled = true
-			m.toggleHelp()
-		case isZoomInKey(msg, m.keys):
-			handled = true
-			m.zoomIn()
-		case isZoomUndoKey(msg, m.keys):
-			handled = true
-			m.zoomUndo()
-		case isZoomResetKey(msg, m.keys):
-			handled = true
-			m.zoomReset()
-		case isMoveShallowerKey(msg, m.keys):
-			handled = true
-			m.moveVerticalWithFallback(-1, 1, -1)
-		case isMoveDeeperKey(msg, m.keys):
-			handled = true
-			m.moveVerticalWithFallback(1, -1, 1)
-		case isPrevSiblingKey(msg, m.keys):
-			handled = true
-			m.moveSibling(-1)
-		case isNextSiblingKey(msg, m.keys):
-			handled = true
-			m.moveSibling(1)
-		case isJumpTopKey(msg, m.keys):
-			handled = true
-			m.jumpToTop()
-		case isJumpRootKey(msg, m.keys):
-			handled = true
-			m.jumpToRoot()
-		}
-		if m.selectedIdx != prev {
-			m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
-		}
-		m.recordKeyDebug(msg, handled, m.selectedIdx != prev)
+		return m.handleKeyNavigation(msg)
 	}
 	return m, nil
+}
+
+// handleSearchInput processes key events while search mode is active.
+// Handles escape (cancel search), enter (apply query), and delegates
+// all other keys to the text input component for in-place editing.
+func (m Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	handled := false
+	switch msg.String() {
+	case "esc":
+		handled = true
+		m.clearSearch()
+		m.recordKeyDebug(msg, handled, false)
+		return m, nil
+	case "enter":
+		handled = true
+		m.applySearchQuery(m.searchInput.Value())
+		m.searchActive = false
+		m.searchInput.Blur()
+		m.recordKeyDebug(msg, handled, false)
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+	_ = cmd
+	m.recordKeyDebug(msg, true, false)
+	return m, nil
+}
+
+// handleKeyNavigation processes navigation key events when search is not active.
+// Delegates mode-toggle and zoom actions to handleModeKey, movement actions to
+// handleMovementKey, then updates the subtree highlight when selection changes.
+func (m Model) handleKeyNavigation(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	prev := m.selectedIdx
+	handled := m.handleModeKey(msg)
+	if !handled {
+		handled = m.handleMovementKey(msg)
+	}
+	if m.selectedIdx != prev {
+		m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
+	}
+	m.recordKeyDebug(msg, handled, m.selectedIdx != prev)
+	return m, nil
+}
+
+// handleModeKey dispatches search, pause, zoom, and view-toggle key actions.
+// Returns true when a key was handled so handleKeyNavigation can skip movement.
+func (m *Model) handleModeKey(msg tea.KeyPressMsg) bool {
+	switch {
+	case isSearchOpenKey(msg):
+		m.openSearch()
+	case isNextMatchKey(msg):
+		m.jumpMatch(1)
+	case isPrevMatchKey(msg):
+		m.jumpMatch(-1)
+	case isPauseKey(msg):
+		m.togglePause()
+	case isResetBaselineKey(msg):
+		m.resetBaseline()
+	case isCycleOrderKey(msg):
+		m.cycleFieldOrder()
+	case isCycleMetricKey(msg):
+		m.toggleCountField()
+	case isHelpToggleKey(msg):
+		m.toggleHelp()
+	case isZoomInKey(msg, m.keys):
+		m.zoomIn()
+	case isZoomUndoKey(msg, m.keys):
+		m.zoomUndo()
+	case isZoomResetKey(msg, m.keys):
+		m.zoomReset()
+	default:
+		return false
+	}
+	return true
+}
+
+// handleMovementKey dispatches directional and jump key actions.
+// Returns true when a key was handled, false otherwise.
+func (m *Model) handleMovementKey(msg tea.KeyPressMsg) bool {
+	switch {
+	case isMoveShallowerKey(msg, m.keys):
+		m.moveVerticalWithFallback(-1, 1, -1)
+	case isMoveDeeperKey(msg, m.keys):
+		m.moveVerticalWithFallback(1, -1, 1)
+	case isPrevSiblingKey(msg, m.keys):
+		m.moveSibling(-1)
+	case isNextSiblingKey(msg, m.keys):
+		m.moveSibling(1)
+	case isJumpTopKey(msg, m.keys):
+		m.jumpToTop()
+	case isJumpRootKey(msg, m.keys):
+		m.jumpToRoot()
+	default:
+		return false
+	}
+	return true
 }
 
 // handleSnapshotReady applies the result of a background snapshot+layout job.
@@ -1362,6 +1380,9 @@ func buildZoomStack(path string) []zoomState {
 	return stack
 }
 
+// frameIndexAt returns the index of the frame rendered at terminal coordinates
+// (x, y), or -1 if no frame occupies that cell. Delegates boundary validation
+// to frameCoordToTargetRow and frame scanning to findFrameAtRow.
 func (m Model) frameIndexAt(x, y int) int {
 	if len(m.frames) == 0 || m.width <= 0 || m.height <= 0 {
 		return -1
@@ -1387,8 +1408,18 @@ func (m Model) frameIndexAt(x, y int) int {
 	if y < 1 || y > availableRows {
 		return -1
 	}
-	dataRow := y - 1
 
+	targetRow := m.frameCoordToTargetRow(y-1, availableRows)
+	if targetRow < 0 {
+		return -1
+	}
+	return findFrameAtRow(m.frames, targetRow, x, m.width)
+}
+
+// frameCoordToTargetRow converts a data-area row offset (0-based, after
+// stripping the toolbar row) into the logical frame row index. Returns -1 when
+// the coordinate falls in the top padding area above the first visible row.
+func (m Model) frameCoordToTargetRow(dataRow, availableRows int) int {
 	maxRow := maxFrameRowForSet(m.frames, nil)
 	barHeight := computeBarHeight(availableRows, maxRow+1, maxBarVisualHeight)
 	visibleDepthRows := availableRows / barHeight
@@ -1407,17 +1438,21 @@ func (m Model) frameIndexAt(x, y int) int {
 	if dataRow < padTop {
 		return -1
 	}
-
 	depthFromTop := (dataRow - padTop) / barHeight
-	targetRow := maxRow - depthFromTop
+	return maxRow - depthFromTop
+}
 
+// findFrameAtRow scans frames for the narrowest one that occupies logical row
+// targetRow and contains pixel column x within [0, width). Returning the
+// narrowest frame resolves overlap between wide parent and narrow child bars.
+func findFrameAtRow(frames []tuiFrame, targetRow, x, width int) int {
 	best := -1
 	bestWidth := int(^uint(0) >> 1)
-	for idx, frame := range m.frames {
-		if frame.Row != targetRow || frame.Col >= m.width {
+	for idx, frame := range frames {
+		if frame.Row != targetRow || frame.Col >= width {
 			continue
 		}
-		right := min(m.width, frame.Col+frame.Width)
+		right := min(width, frame.Col+frame.Width)
 		if x < frame.Col || x >= right {
 			continue
 		}
