@@ -2,13 +2,13 @@ package flamegraph
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"image/color"
 	"slices"
 	"strings"
 	"time"
 
+	coreflamegraph "ior/internal/flamegraph"
 	common "ior/internal/tui/common"
 
 	"charm.land/bubbles/v2/key"
@@ -16,19 +16,68 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-type snapshotNode struct {
-	Name     string          `json:"n"`
-	Value    uint64          `json:"v"`
-	Total    uint64          `json:"t"`
-	Children []*snapshotNode `json:"c,omitempty"`
-}
+// snapshotNode aliases the live trie's snapshot type so the TUI can consume
+// trees directly via SnapshotTree() without paying for a JSON marshal+unmarshal
+// round-trip. The JSON tags on SnapshotNode keep the legacy SnapshotJSON path
+// working unchanged.
+type snapshotNode = coreflamegraph.SnapshotNode
 
 type animTickMsg struct{}
+
+// flameViewCacheKey captures the View() inputs that determine the rendered
+// output. When two consecutive calls produce the same key, the cached content
+// string is reused instead of re-running RenderTerminalView.
+type flameViewCacheKey struct {
+	version       uint64
+	selectedIdx   int
+	width         int
+	height        int
+	framesLen     int
+	matchCount    int
+	visibleCount  int
+	searchQuery   string
+	statusMessage string
+	zoomPath      string
+	searchActive  bool
+	showHelp      bool
+	paused        bool
+	isDark        bool
+}
+
+type flameViewCache struct {
+	key     flameViewCacheKey
+	content string
+	valid   bool
+}
+
+// flameSnapshotReadyMsg carries the result of a background snapshot+layout
+// job. It is emitted by RefreshFromLiveTrieCmd and consumed by Update so the
+// Bubble Tea goroutine can swap in the new state without blocking on JSON or
+// frame layout work.
+type flameSnapshotReadyMsg struct {
+	version      uint64
+	layoutWidth  int
+	layoutHeight int
+	zoomPath     string
+	snapshot     *snapshotNode
+	zoomRoot     *snapshotNode
+	targetFrames []tuiFrame
+	ancestry     frameAncestry
+	globalTotal  uint64
+}
 
 const animFrameDuration = 33 * time.Millisecond
 const flameKeyDebugEnabled = false
 
+// driveWindow defines how recently a key must have been pressed to count as
+// "user is actively driving". While inside this window, the flamegraph defers
+// snapshot refresh and skips animation so keystrokes land without waiting on
+// JSON+layout work or a 1-second animation chain.
+const driveWindow = 250 * time.Millisecond
+
 // LiveTrieSource is the minimal trie contract needed by the flamegraph TUI model.
+// SnapshotJSON is retained for tests and external callers; SnapshotTree is the
+// fast path used by the model's background refresh.
 type LiveTrieSource interface {
 	Fields() []string
 	CountField() string
@@ -37,6 +86,7 @@ type LiveTrieSource interface {
 	Reset()
 	Version() uint64
 	SnapshotJSON() ([]byte, uint64)
+	SnapshotTree() (*snapshotNode, uint64)
 }
 
 type zoomState struct {
@@ -78,8 +128,14 @@ type Model struct {
 	snapshot    *snapshotNode
 	globalTotal uint64
 
+	// refreshInFlight is true while a background snapshot+layout job is
+	// running. It coalesces flameTickMsg dispatches so we never queue more
+	// than one snapshot rebuild concurrently.
+	refreshInFlight bool
+
 	frames       []tuiFrame
 	targetFrames []tuiFrame
+	ancestry     frameAncestry
 	width        int
 	height       int
 
@@ -106,6 +162,19 @@ type Model struct {
 	animation AnimationState
 	animating bool
 	paused    bool
+
+	// lastKeyAt records when the user most recently pressed a key. While the
+	// user is actively driving the view (lastKeyAt within driveWindow ago),
+	// the background snapshot refresh is suppressed and snapshot-ready
+	// messages snap directly to target frames without animating. This keeps
+	// keystrokes feeling instant under heavy event load.
+	lastKeyAt time.Time
+
+	// viewCache memoizes the last rendered string keyed on the inputs that
+	// produce it. Bubble Tea may call View() multiple times per state change;
+	// caching avoids re-running RenderTerminalView when nothing visible has
+	// moved. Lives behind a pointer so the value-receiver View() can update it.
+	viewCache *flameViewCache
 	// hasNavigableSnapshot flips once we have at least one selectable non-root frame.
 	hasNavigableSnapshot bool
 	isDark               bool
@@ -139,6 +208,7 @@ func NewModel(liveTrie LiveTrieSource) Model {
 		filterVisible: make(map[int]bool),
 		subtreeSet:    make(map[int]bool),
 		searchInput:   searchInput,
+		viewCache:     &flameViewCache{},
 		fieldPresets: [][]string{
 			{"comm", "tracepoint", "path"},
 			{"path", "tracepoint", "comm"},
@@ -171,8 +241,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.animating = m.animation.Tick(0)
 		m.frames = m.animation.CurrentFrames()
 		m.clampSelection()
-		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+		m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
 		return m, m.animationTickCmd()
+	case flameSnapshotReadyMsg:
+		return m.handleSnapshotReady(msg)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -182,6 +254,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = m.handleMouseClick(msg)
 		return m, nil
 	case tea.KeyPressMsg:
+		// Stamp every keypress so RefreshFromLiveTrieCmd and the
+		// snapshot-ready handler can detect that the user is actively driving
+		// the view and defer / unanimate accordingly.
+		m.lastKeyAt = time.Now()
 		if m.searchActive {
 			handled := false
 			switch msg.String() {
@@ -261,11 +337,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.jumpToRoot()
 		}
 		if m.selectedIdx != prev {
-			m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+			m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
 		}
 		m.recordKeyDebug(msg, handled, m.selectedIdx != prev)
 	}
 	return m, nil
+}
+
+// handleSnapshotReady applies the result of a background snapshot+layout job.
+// Discards the result if viewport or zoom changed while the job was in flight
+// (the next tick will dispatch a fresh refresh), or if the user paused after a
+// snapshot already exists. Always clears refreshInFlight so subsequent ticks
+// can dispatch the next refresh.
+func (m Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cmd) {
+	m.refreshInFlight = false
+	if msg.snapshot == nil {
+		return m, nil
+	}
+	if msg.layoutWidth != m.width || msg.layoutHeight != m.height || msg.zoomPath != m.zoomPath {
+		return m, nil
+	}
+	if m.paused && m.snapshot != nil {
+		return m, nil
+	}
+
+	prevPath := ""
+	if len(m.frames) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.frames) {
+		prevPath = m.frames[m.selectedIdx].Path
+	}
+
+	m.snapshot = msg.snapshot
+	m.globalTotal = msg.globalTotal
+	m.zoomRoot = msg.zoomRoot
+	m.lastVersion = msg.version
+	// Snap directly to target frames while the user is actively pressing keys
+	// — animation would just add latency on top of the work the user wants to
+	// see. Animation resumes on the next refresh after the drive window
+	// expires.
+	animate := !m.userDriving()
+	m.applyTargetFrames(msg.targetFrames, msg.ancestry, prevPath, animate)
+	if !m.animating {
+		return m, nil
+	}
+	return m, m.animationTickCmd()
+}
+
+// userDriving reports whether the user has pressed a key within the recent
+// drive window. Used to skip snapshot refresh and animation while keystrokes
+// are arriving.
+func (m Model) userDriving() bool {
+	if m.lastKeyAt.IsZero() {
+		return false
+	}
+	return time.Since(m.lastKeyAt) < driveWindow
 }
 
 // ConsumesKey reports whether the flamegraph should handle a key press before
@@ -299,8 +423,27 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 	}
 }
 
-// View renders the flamegraph viewport.
+// View renders the flamegraph viewport. Caches the rendered string keyed on
+// the inputs that affect output; skips the cache while animating (frames
+// change every 33 ms anyway, so cache hits are impossible).
 func (m Model) View() tea.View {
+	if !m.animating && m.viewCache != nil {
+		key := m.currentViewCacheKey()
+		if m.viewCache.valid && m.viewCache.key == key {
+			return tea.NewView(m.viewCache.content)
+		}
+		content := m.renderViewContent()
+		m.viewCache.key = key
+		m.viewCache.content = content
+		m.viewCache.valid = true
+		return tea.NewView(content)
+	}
+	return tea.NewView(m.renderViewContent())
+}
+
+// renderViewContent assembles the flamegraph string. Pure function over Model
+// state — pulled out so View() can decide whether to memoize the result.
+func (m Model) renderViewContent() string {
 	extraLines := 1 // selection status line
 	if m.showHelp {
 		extraLines++
@@ -322,7 +465,29 @@ func (m Model) View() tea.View {
 	if m.showHelp {
 		content += "\n" + m.helpOverlay()
 	}
-	return tea.NewView(content)
+	return content
+}
+
+// currentViewCacheKey snapshots every Model field that influences View()
+// output. If any of these differ between successive View() invocations, the
+// cache misses and the content is rebuilt.
+func (m Model) currentViewCacheKey() flameViewCacheKey {
+	return flameViewCacheKey{
+		version:       m.lastVersion,
+		selectedIdx:   m.selectedIdx,
+		width:         m.width,
+		height:        m.height,
+		framesLen:     len(m.frames),
+		matchCount:    len(m.matchIndices),
+		visibleCount:  len(m.filterVisible),
+		searchQuery:   m.searchQuery,
+		statusMessage: m.statusMessage,
+		zoomPath:      m.zoomPath,
+		searchActive:  m.searchActive,
+		showHelp:      m.showHelp,
+		paused:        m.paused,
+		isDark:        m.isDark,
+	}
 }
 
 // SetLiveTrie updates the data source used by the flamegraph model.
@@ -342,6 +507,7 @@ func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
 	m.zoomLineWidth = 0
 	m.subtreeSet = make(map[int]bool)
 	m.filterVisible = make(map[int]bool)
+	m.ancestry = frameAncestry{}
 	m.animation = NewAnimationState(30, 6.0, 1.0)
 	m.animating = false
 	m.hasNavigableSnapshot = false
@@ -380,7 +546,10 @@ func (m *Model) syncCountFieldToTrie() {
 	m.countField = field
 }
 
-// RefreshFromLiveTrie loads a new snapshot when the source version changes.
+// RefreshFromLiveTrie loads a new snapshot synchronously and returns true when
+// a new snapshot was applied. Retained as a simple facade for tests; the
+// production TUI now uses RefreshFromLiveTrieCmd to do the heavy lifting on a
+// background goroutine.
 func (m *Model) RefreshFromLiveTrie() bool {
 	if m.liveTrie == nil {
 		return false
@@ -395,12 +564,11 @@ func (m *Model) RefreshFromLiveTrie() bool {
 		return false
 	}
 
-	payload, version := m.liveTrie.SnapshotJSON()
-	var snapshot snapshotNode
-	if err := json.Unmarshal(payload, &snapshot); err != nil {
+	tree, version := m.liveTrie.SnapshotTree()
+	if tree == nil {
 		return false
 	}
-	m.snapshot = &snapshot
+	m.snapshot = tree
 	m.globalTotal = snapshotTotal(m.snapshot)
 	if m.zoomPath != "" {
 		m.zoomRoot = findNodeByPath(m.snapshot, m.zoomPath)
@@ -410,6 +578,77 @@ func (m *Model) RefreshFromLiveTrie() bool {
 	m.rebuildFrames(true)
 	m.lastVersion = version
 	return true
+}
+
+// RefreshFromLiveTrieCmd returns a tea.Cmd that fetches a snapshot, lays out
+// frames, and builds the ancestry index on a background goroutine, then
+// dispatches a flameSnapshotReadyMsg back to the Bubble Tea Update loop.
+//
+// Returns nil if no refresh is needed: no live trie configured, paused with an
+// existing snapshot, version unchanged, another refresh already in flight, or
+// the user is actively pressing keys. Skipping while driving keeps keystrokes
+// responsive — the next idle tick picks up the latest version.
+//
+// Coalescing via refreshInFlight ensures we never queue more than one
+// background job at a time. Newer ticks just no-op until the in-flight result
+// lands, and the version gate then catches the freshest state.
+func (m *Model) RefreshFromLiveTrieCmd() tea.Cmd {
+	if m.liveTrie == nil {
+		return nil
+	}
+	if m.paused && m.snapshot != nil {
+		return nil
+	}
+	if m.refreshInFlight {
+		return nil
+	}
+	if m.userDriving() && m.snapshot != nil {
+		return nil
+	}
+	version := m.liveTrie.Version()
+	if version == m.lastVersion && m.snapshot != nil {
+		return nil
+	}
+	m.refreshInFlight = true
+
+	// Capture fields the goroutine needs. Avoids reading Model fields
+	// concurrently with the Update goroutine.
+	liveTrie := m.liveTrie
+	width := m.width
+	height := m.height
+	zoomPath := m.zoomPath
+	return func() tea.Msg {
+		tree, ver := liveTrie.SnapshotTree()
+		if tree == nil {
+			return flameSnapshotReadyMsg{version: ver, layoutWidth: width, layoutHeight: height, zoomPath: zoomPath}
+		}
+		var zoomRoot *snapshotNode
+		layoutRoot := tree
+		rootPath := ""
+		if zoomPath != "" {
+			zoomRoot = findNodeByPath(tree, zoomPath)
+			if zoomRoot != nil {
+				layoutRoot = zoomRoot
+				rootPath = zoomPath
+			}
+		}
+		targetFrames := buildTerminalLayoutWithPath(layoutRoot, width, height, rootPath)
+		if zoomPath != "" {
+			targetFrames = applyZoomLineage(targetFrames, tree, zoomPath, width)
+		}
+		ancestry := buildFrameAncestry(targetFrames)
+		return flameSnapshotReadyMsg{
+			version:      ver,
+			layoutWidth:  width,
+			layoutHeight: height,
+			zoomPath:     zoomPath,
+			snapshot:     tree,
+			zoomRoot:     zoomRoot,
+			targetFrames: targetFrames,
+			ancestry:     ancestry,
+			globalTotal:  snapshotTotal(tree),
+		}
+	}
 }
 
 // LastVersion returns the latest snapshot version loaded into the model.
@@ -466,7 +705,18 @@ func (m *Model) rebuildFrames(animate bool) {
 	if m.zoomPath != "" {
 		targetFrames = m.withZoomLineage(targetFrames)
 	}
+	ancestry := buildFrameAncestry(targetFrames)
+	m.applyTargetFrames(targetFrames, ancestry, prevPath, animate)
+}
+
+// applyTargetFrames installs a prebuilt frame layout and ancestry index,
+// optionally animating from the previous frames. Shared between the
+// synchronous rebuildFrames path and the async snapshot-ready handler so
+// post-swap state stays consistent (animation kickoff, selection restore,
+// filter recompute, subtree highlight).
+func (m *Model) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestry, prevPath string, animate bool) {
 	m.targetFrames = targetFrames
+	m.ancestry = ancestry
 	m.animation.SetTargets(m.targetFrames)
 	if animate && len(m.frames) > 0 && !m.animation.Settled() {
 		m.animating = true
@@ -483,7 +733,7 @@ func (m *Model) rebuildFrames(animate bool) {
 	m.recomputeFilterState()
 	m.ensureSelectionNavigable()
 	m.ensureSelectionVisible()
-	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+	m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
 }
 
 func (m *Model) restoreSelectionByPath(path string) {
@@ -1044,7 +1294,7 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 	currentRoot := m.currentRootPath()
 	if clickedPath == currentRoot {
 		m.selectedIdx = idx
-		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+		m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
 		return true
 	}
 	if m.zoomPath != "" && hasPathBoundaryPrefix(currentRoot, clickedPath) {
@@ -1062,7 +1312,7 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 	if sel := m.frameIndexByPath(clickedPath); sel >= 0 {
 		m.selectedIdx = sel
 	}
-	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+	m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
 	m.statusMessage = "Zoom: " + compactFramePath(clickedPath)
 	return true
 }
@@ -1180,10 +1430,17 @@ func (m Model) frameIndexAt(x, y int) int {
 }
 
 func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
-	if len(frames) == 0 || m.snapshot == nil {
+	return applyZoomLineage(frames, m.snapshot, m.zoomPath, m.width)
+}
+
+// applyZoomLineage prepends the zoom path's ancestors to a zoomed frame
+// layout. Extracted as a free function so the async snapshot refresh can
+// reuse it on a background goroutine without referencing Model state directly.
+func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string, width int) []tuiFrame {
+	if len(frames) == 0 || snapshot == nil {
 		return frames
 	}
-	parts := strings.Split(m.zoomPath, pathSeparator)
+	parts := strings.Split(zoomPath, pathSeparator)
 	if len(parts) <= 1 {
 		return frames
 	}
@@ -1191,7 +1448,7 @@ func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 	rowShift := len(parts) - 1
 	out := make([]tuiFrame, 0, len(frames)+len(parts))
 	for _, frame := range frames {
-		if frame.Path == m.zoomPath {
+		if frame.Path == zoomPath {
 			continue
 		}
 		frame.Row += rowShift
@@ -1199,10 +1456,10 @@ func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 		out = append(out, frame)
 	}
 
-	rootTotal := snapshotTotal(m.snapshot)
+	rootTotal := snapshotTotal(snapshot)
 	for depth := range parts {
 		path := strings.Join(parts[:depth+1], pathSeparator)
-		node := findNodeByPath(m.snapshot, path)
+		node := findNodeByPath(snapshot, path)
 		total := uint64(0)
 		if node != nil {
 			total = snapshotTotal(node)
@@ -1216,7 +1473,7 @@ func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 			Name:    name,
 			Col:     0,
 			Row:     depth,
-			Width:   m.width,
+			Width:   width,
 			Total:   total,
 			Percent: percent,
 			Fill:    terminalFrameColor(name),

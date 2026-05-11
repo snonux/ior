@@ -371,7 +371,7 @@ func TestLiveTrieConcurrentIngestAndSnapshot(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 500; i++ {
 			payload, _ := lt.SnapshotJSON()
-			var snap trieSnapshot
+			var snap SnapshotNode
 			if err := json.Unmarshal(payload, &snap); err != nil {
 				t.Errorf("unmarshal snapshot: %v", err)
 				return
@@ -416,7 +416,7 @@ func TestLiveTrieStressHighRateConcurrentSnapshot(t *testing.T) {
 					return
 				case <-ticker.C:
 					payload, _ := lt.SnapshotJSON()
-					var snap trieSnapshot
+					var snap SnapshotNode
 					if err := json.Unmarshal(payload, &snap); err != nil {
 						errCh <- fmt.Errorf("snapshot json invalid: %w", err)
 						return
@@ -486,17 +486,17 @@ func newTestPair(comm string, pid uint32, tid uint32, path string, duration uint
 	return pair
 }
 
-func decodeLiveSnapshot(t *testing.T, lt *LiveTrie) trieSnapshot {
+func decodeLiveSnapshot(t *testing.T, lt *LiveTrie) SnapshotNode {
 	t.Helper()
 	payload, _ := lt.SnapshotJSON()
-	var snap trieSnapshot
+	var snap SnapshotNode
 	if err := json.Unmarshal(payload, &snap); err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
 	return snap
 }
 
-func findSnapshotPath(t *testing.T, root *trieSnapshot, names ...string) *trieSnapshot {
+func findSnapshotPath(t *testing.T, root *SnapshotNode, names ...string) *SnapshotNode {
 	t.Helper()
 	node := root
 	for _, name := range names {
@@ -508,7 +508,7 @@ func findSnapshotPath(t *testing.T, root *trieSnapshot, names ...string) *trieSn
 	return node
 }
 
-func findSnapshotChild(node *trieSnapshot, name string) *trieSnapshot {
+func findSnapshotChild(node *SnapshotNode, name string) *SnapshotNode {
 	for _, child := range node.Children {
 		if child.Name == name {
 			return child

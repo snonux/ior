@@ -53,7 +53,7 @@ func (m *Model) jumpMatch(direction int) {
 		} else {
 			m.selectedIdx = matches[0]
 		}
-		m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+		m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
 		return
 	}
 
@@ -65,7 +65,7 @@ func (m *Model) jumpMatch(direction int) {
 		next = 0
 	}
 	m.selectedIdx = matches[next]
-	m.subtreeSet = computeSubtreeSetInto(m.frames, m.selectedIdx, m.subtreeSet)
+	m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
 }
 
 func (m *Model) recomputeFilterState() {
@@ -88,7 +88,7 @@ func (m *Model) recomputeFilterState() {
 			m.matchIndices[idx] = true
 		}
 	}
-	m.filterVisible = computeFilterVisibleSetInto(m.frames, m.matchIndices, m.filterVisible)
+	m.filterVisible = filterVisibleSetUsingAncestry(m.frames, m.matchIndices, m.ancestry, m.filterVisible)
 }
 
 func orderedMatchIndices(matchSet map[int]bool) []int {
