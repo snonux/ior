@@ -1185,62 +1185,72 @@ func formatAutoResetRemaining(armedAt time.Time, every time.Duration) string {
 	return fmt.Sprintf("%dm%ds", minutes, secs)
 }
 
+// renderActiveContent dispatches rendering to the appropriate sub-renderer
+// based on the active tab and its current visualization mode. It tries the
+// specialized viz modes (treemap/icicle/bubble) first, then the plain table
+// renderers with sort state, and finally falls back to the generic tab renderer
+// for tabs that have no mode-specific override (overview, latency, stream, flame).
 func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
-	if m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap {
-		return renderSyscallsTreemap(m.latest, width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark)
+	if s, ok := m.renderActiveContentViz(width, activeHeight); ok {
+		return s
 	}
-	if m.activeTab == TabFiles && m.filesVizMode == tabVizModeTreemap && m.filesDirGrouped {
-		return renderFilesTreemap(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark)
+	if s, ok := m.renderActiveContentTable(width, activeHeight); ok {
+		return s
 	}
-	if m.activeTab == TabFiles && m.filesVizMode == tabVizModeIcicle && m.filesDirGrouped {
-		return renderFilesIcicle(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark)
-	}
-	if m.activeTab == TabProcesses && m.processesVizMode == tabVizModeTreemap {
-		return renderProcessesTreemap(m.latest, width, activeHeight, m.processesChart.Metric(), m.processesOffset, m.isDark)
+	return renderActiveTab(
+		m.activeTab, m.latest, streamModel, flameModel,
+		width, activeHeight, m.pidFilter,
+		m.syscallsOffset, m.syscallsCol,
+		m.filesOffset, m.filesCol,
+		m.filesDirGrouped, m.filesDirOffset, m.filesDirCol,
+		m.processesOffset, m.processesCol,
+	)
+}
+
+// renderActiveContentViz handles treemap, icicle, and bubble chart rendering
+// for the tabs that support alternative visualization modes. Returns the
+// rendered content and true when a viz-mode override applies; otherwise
+// returns "", false so the caller can fall through to the next renderer.
+func (m Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
+	switch {
+	case m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap:
+		return renderSyscallsTreemap(m.latest, width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark), true
+	case m.activeTab == TabFiles && m.filesVizMode == tabVizModeTreemap && m.filesDirGrouped:
+		return renderFilesTreemap(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark), true
+	case m.activeTab == TabFiles && m.filesVizMode == tabVizModeIcicle && m.filesDirGrouped:
+		return renderFilesIcicle(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark), true
+	case m.activeTab == TabProcesses && m.processesVizMode == tabVizModeTreemap:
+		return renderProcessesTreemap(m.latest, width, activeHeight, m.processesChart.Metric(), m.processesOffset, m.isDark), true
 	}
 	if m.bubbleEnabledForTab(m.activeTab) {
 		switch m.activeTab {
 		case TabSyscalls:
-			chart := m.syscallsChart
-			return chart.Render("Syscalls", width, activeHeight)
+			return m.syscallsChart.Render("Syscalls", width, activeHeight), true
 		case TabFiles:
-			chart := m.filesChart
-			return chart.Render("Files/Dirs", width, activeHeight)
+			return m.filesChart.Render("Files/Dirs", width, activeHeight), true
 		case TabProcesses:
-			chart := m.processesChart
-			return chart.Render("Processes", width, activeHeight)
+			return m.processesChart.Render("Processes", width, activeHeight), true
 		}
 	}
-	if m.activeTab == TabSyscalls && m.latest != nil {
-		return renderSyscallsWithSort(m.latest, width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort)
-	}
-	if m.activeTab == TabFiles && m.latest != nil && m.filesVizMode == tabVizModeTable {
+	return "", false
+}
+
+// renderActiveContentTable handles table rendering with live sort state for
+// the syscalls, files, and processes tabs. Returns the rendered content and
+// true when a table override applies; otherwise returns "", false.
+func (m Model) renderActiveContentTable(width, activeHeight int) (string, bool) {
+	switch {
+	case m.activeTab == TabSyscalls && m.latest != nil:
+		return renderSyscallsWithSort(m.latest, width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort), true
+	case m.activeTab == TabFiles && m.latest != nil && m.filesVizMode == tabVizModeTable:
 		if m.filesDirGrouped {
-			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirOffset, m.filesDirCol, m.filesDirSort)
+			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirOffset, m.filesDirCol, m.filesDirSort), true
 		}
-		return renderFilesWithSort(m.latest, width, activeHeight, m.filesOffset, m.filesCol, m.filesSort)
+		return renderFilesWithSort(m.latest, width, activeHeight, m.filesOffset, m.filesCol, m.filesSort), true
+	case m.activeTab == TabProcesses && m.latest != nil && m.processesVizMode == tabVizModeTable:
+		return renderProcessesWithSort(m.latest, width, activeHeight, m.processesOffset, m.processesCol, m.pidFilter, m.processesSort), true
 	}
-	if m.activeTab == TabProcesses && m.latest != nil && m.processesVizMode == tabVizModeTable {
-		return renderProcessesWithSort(m.latest, width, activeHeight, m.processesOffset, m.processesCol, m.pidFilter, m.processesSort)
-	}
-	return renderActiveTab(
-		m.activeTab,
-		m.latest,
-		streamModel,
-		flameModel,
-		width,
-		activeHeight,
-		m.pidFilter,
-		m.syscallsOffset,
-		m.syscallsCol,
-		m.filesOffset,
-		m.filesCol,
-		m.filesDirGrouped,
-		m.filesDirOffset,
-		m.filesDirCol,
-		m.processesOffset,
-		m.processesCol,
-	)
+	return "", false
 }
 
 func (m Model) activeTableHeight() int {
