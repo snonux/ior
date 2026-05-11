@@ -232,14 +232,17 @@ func (m Model) handleFlameTick() (tea.Model, tea.Cmd) {
 	if !m.focused || m.activeTab != TabFlame {
 		return m, nil
 	}
-	var animCmd tea.Cmd
-	if m.liveTrie != nil && m.flamegraphModel.RefreshFromLiveTrie() {
-		animCmd = m.flamegraphModel.AnimationCmd()
+	// Always re-arm the 200 ms tick. The snapshot refresh itself runs on a
+	// background goroutine via RefreshFromLiveTrieCmd, so even when a previous
+	// refresh is still in flight (the cmd returns nil and skips), the tick
+	// channel stays alive.
+	cmds := []tea.Cmd{flameTickCmd()}
+	if m.liveTrie != nil {
+		if refreshCmd := m.flamegraphModel.RefreshFromLiveTrieCmd(); refreshCmd != nil {
+			cmds = append(cmds, refreshCmd)
+		}
 	}
-	if animCmd == nil {
-		return m, flameTickCmd()
-	}
-	return m, tea.Batch(flameTickCmd(), animCmd)
+	return m, tea.Batch(cmds...)
 }
 
 func (m Model) handleBubbleTick() (tea.Model, tea.Cmd) {

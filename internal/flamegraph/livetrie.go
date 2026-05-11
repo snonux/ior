@@ -19,11 +19,11 @@ const (
 	liveTrieVisibleChildrenFallbackMaxDepth = 1
 )
 
-type trieSnapshot struct {
+type SnapshotNode struct {
 	Name     string          `json:"n"`
 	Value    uint64          `json:"v"`
 	Total    uint64          `json:"t"`
-	Children []*trieSnapshot `json:"c,omitempty"`
+	Children []*SnapshotNode `json:"c,omitempty"`
 }
 
 // LiveTrie is a thread-safe, append-only trie used for live flamegraph snapshots.
@@ -39,6 +39,13 @@ type LiveTrie struct {
 	cacheMu      sync.Mutex
 	cacheVersion uint64
 	cacheJSON    []byte
+
+	// Tree cache lets the TUI fetch the snapshot tree without a JSON
+	// marshal+unmarshal round-trip. Built lazily; invalidated on reset and
+	// on field/metric reconfiguration.
+	treeCacheMu sync.Mutex
+	treeVersion uint64
+	treeCache   *SnapshotNode
 }
 
 // NewLiveTrie constructs an empty live trie with the configured frame/count fields.
@@ -75,6 +82,10 @@ func (lt *LiveTrie) invalidateCache() {
 	lt.cacheVersion = 0
 	lt.cacheJSON = nil
 	lt.cacheMu.Unlock()
+	lt.treeCacheMu.Lock()
+	lt.treeVersion = 0
+	lt.treeCache = nil
+	lt.treeCacheMu.Unlock()
 }
 
 // Ingest adds one event pair into the live trie.
@@ -161,6 +172,8 @@ func (lt *LiveTrie) Version() uint64 {
 }
 
 // SnapshotJSON returns a compact JSON snapshot for the current trie version.
+// Layered on top of SnapshotTree so the tree-building work is shared with
+// callers that want the typed form directly.
 func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 	version := lt.Version()
 	lt.cacheMu.Lock()
@@ -171,12 +184,7 @@ func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 	}
 	lt.cacheMu.Unlock()
 
-	lt.mu.RLock()
-	version = lt.version.Load()
-	rootTotal := subtreeTotal(lt.root)
-	snapshot := buildSnapshot(lt.root, 0, liveTrieMinFraction, rootTotal)
-	lt.mu.RUnlock()
-
+	snapshot, version := lt.SnapshotTree()
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return []byte(`{}`), version
@@ -188,6 +196,37 @@ func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 	lt.cacheMu.Unlock()
 
 	return payload, version
+}
+
+// SnapshotTree returns the live trie snapshot as a typed node tree, bypassing
+// the JSON round-trip. The pointer is safe to retain — buildSnapshot allocates
+// fresh nodes per snapshot, and the trie never mutates a previously returned
+// tree. The TUI uses this on a background goroutine so per-tick refreshes don't
+// block the Bubble Tea update loop.
+func (lt *LiveTrie) SnapshotTree() (*SnapshotNode, uint64) {
+	version := lt.Version()
+	lt.treeCacheMu.Lock()
+	if lt.treeVersion == version && lt.treeCache != nil {
+		tree := lt.treeCache
+		lt.treeCacheMu.Unlock()
+		return tree, version
+	}
+	lt.treeCacheMu.Unlock()
+
+	lt.mu.RLock()
+	version = lt.version.Load()
+	rootTotal := subtreeTotal(lt.root)
+	tree := buildSnapshot(lt.root, 0, liveTrieMinFraction, rootTotal)
+	lt.mu.RUnlock()
+
+	lt.treeCacheMu.Lock()
+	// Only commit if no concurrent caller stored a newer version.
+	if version >= lt.treeVersion {
+		lt.treeVersion = version
+		lt.treeCache = tree
+	}
+	lt.treeCacheMu.Unlock()
+	return tree, version
 }
 
 func eventPairToRecord(ep *event.Pair) IterRecord {
@@ -263,18 +302,18 @@ func subtreeTotal(node *trieNode) uint64 {
 	return total
 }
 
-func buildSnapshot(node *trieNode, depth int, minFraction float64, rootTotal uint64) *trieSnapshot {
+func buildSnapshot(node *trieNode, depth int, minFraction float64, rootTotal uint64) *SnapshotNode {
 	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal, false)
 	return snapshot
 }
 
 type childSnapshotState struct {
 	node     *trieNode
-	snapshot *trieSnapshot
+	snapshot *SnapshotNode
 	total    uint64
 }
 
-func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*trieSnapshot, uint64) {
+func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*SnapshotNode, uint64) {
 	total := node.value
 	children := slices.Clone(node.children)
 	slices.SortFunc(children, func(a, b *trieNode) int {
@@ -297,14 +336,14 @@ func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, root
 	}
 	ensureFallbackVisibleChildren(childStates, depth, minFraction, rootTotal)
 
-	childSnapshots := make([]*trieSnapshot, 0, len(childStates))
+	childSnapshots := make([]*SnapshotNode, 0, len(childStates))
 	for _, child := range childStates {
 		if child.snapshot != nil {
 			childSnapshots = append(childSnapshots, child.snapshot)
 		}
 	}
 
-	snapshot := &trieSnapshot{
+	snapshot := &SnapshotNode{
 		Name:  node.name,
 		Value: node.value,
 		Total: total,
