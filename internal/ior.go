@@ -163,29 +163,28 @@ func tuiTestLiveFlamesStarter(cfg flags.Config) runtime.TraceStarter {
 }
 
 // buildTestFlamesRuntime allocates a stats engine, stream buffer, and seeded
-// live trie for static test-flames mode.
+// live trie for static test-flames mode. Component allocation is delegated to
+// RuntimeBuilder so this function focuses on the seed step only.
 func buildTestFlamesRuntime(cfg flags.Config) (*statsengine.Engine, *streamrow.RingBuffer, *flamegraph.LiveTrie) {
-	engine := statsengine.NewEngine(64)
-	streamBuf := streamrow.NewRingBuffer()
-	liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
-	flamegraph.SeedTestFlameData(liveTrie)
-	return engine, streamBuf, liveTrie
+	components := newRuntimeBuilder(cfg).Build()
+	flamegraph.SeedTestFlameData(components.liveTrie)
+	return components.engine, components.streamBuf, components.liveTrie
 }
 
 // buildTestLiveFlamesRuntime allocates a stats engine, stream buffer, and live
 // trie for live test-flames mode, then launches a goroutine to update the trie.
+// Component allocation is delegated to RuntimeBuilder; this function handles
+// only the seed step and the background updater goroutine.
 func buildTestLiveFlamesRuntime(ctx context.Context, cfg flags.Config) (*statsengine.Engine, *streamrow.RingBuffer, *flamegraph.LiveTrie) {
-	engine := statsengine.NewEngine(64)
-	streamBuf := streamrow.NewRingBuffer()
-	liveTrie := flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField)
-	flamegraph.SeedTestLiveFlameData(liveTrie, 0)
+	components := newRuntimeBuilder(cfg).Build()
+	flamegraph.SeedTestLiveFlameData(components.liveTrie, 0)
 
 	interval := cfg.LiveInterval
 	if interval <= 0 {
 		interval = 200 * time.Millisecond
 	}
-	go runSyntheticLiveFlames(ctx, liveTrie, interval)
-	return engine, streamBuf, liveTrie
+	go runSyntheticLiveFlames(ctx, components.liveTrie, interval)
+	return components.engine, components.streamBuf, components.liveTrie
 }
 
 func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, interval time.Duration) {
@@ -225,38 +224,52 @@ type tuiRuntime struct {
 	filterEpoch uint64
 }
 
-// buildTUIRuntime allocates fresh trace-session state and, when persistent
-// runtime bindings exist in ctx, wires them in (reusing the existing stream
-// buffer / sequencer and reading the parquet recorder and filter epoch).
+// buildTUIRuntime constructs fresh trace-session components via RuntimeBuilder
+// and then wires them into any persistent runtime bindings found in ctx.
+// Construction (allocating engine, buffer, sequencer, trie) is handled by
+// RuntimeBuilder; this function focuses on the wiring: reusing the persistent
+// stream buffer and sequencer from the TUI, reading the recorder and filter
+// epoch, and publishing the new components back to the runtime bindings.
 func buildTUIRuntime(ctx context.Context, cfg flags.Config) (*tuiRuntime, error) {
+	components := newRuntimeBuilder(cfg).Build()
 	rt := &tuiRuntime{
-		engine:    statsengine.NewEngine(64),
-		streamSeq: streamrow.NewSequencer(0),
-		liveTrie:  flamegraph.NewLiveTrie(cfg.CollapsedFields, cfg.CountField),
+		engine:    components.engine,
+		streamBuf: components.streamBuf,
+		streamSrc: components.streamBuf,
+		streamSeq: components.streamSeq,
+		liveTrie:  components.liveTrie,
 	}
-	buf := streamrow.NewRingBuffer()
-	rt.streamBuf = buf
-	rt.streamSrc = buf
 
 	if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
-		if persistent := bindings.StreamBuffer(); persistent != nil {
-			rt.streamSrc = persistent
-			sink, ok := persistent.(streamEventSink)
-			if !ok {
-				return nil, fmt.Errorf("runtime stream source does not support event pushes")
-			}
-			rt.streamBuf = sink
+		if err := wireRuntimeBindings(rt, bindings); err != nil {
+			return nil, err
 		}
-		if persistentSeq := bindings.StreamSequencer(); persistentSeq != nil {
-			rt.streamSeq = persistentSeq
-		}
-		rt.recorder = bindings.Recorder()
-		rt.filterEpoch = bindings.FilterEpoch()
-		bindings.SetDashboardSnapshotSource(rt.engine)
-		bindings.SetEventStreamSource(rt.streamSrc)
-		bindings.SetLiveTrie(rt.liveTrie)
 	}
 	return rt, nil
+}
+
+// wireRuntimeBindings reuses persistent TUI-owned state (stream buffer,
+// sequencer, recorder, filter epoch) from bindings and publishes the freshly
+// built components back to the TUI so the new trace session is visible.
+// It is called only when a TraceRuntimeBindings is present in the context.
+func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) error {
+	if persistent := bindings.StreamBuffer(); persistent != nil {
+		rt.streamSrc = persistent
+		sink, ok := persistent.(streamEventSink)
+		if !ok {
+			return fmt.Errorf("runtime stream source does not support event pushes")
+		}
+		rt.streamBuf = sink
+	}
+	if persistentSeq := bindings.StreamSequencer(); persistentSeq != nil {
+		rt.streamSeq = persistentSeq
+	}
+	rt.recorder = bindings.Recorder()
+	rt.filterEpoch = bindings.FilterEpoch()
+	bindings.SetDashboardSnapshotSource(rt.engine)
+	bindings.SetEventStreamSource(rt.streamSrc)
+	bindings.SetLiveTrie(rt.liveTrie)
+	return nil
 }
 
 // makeTUIEventLoopConfigurer returns the func(*eventLoop) callback that wires
