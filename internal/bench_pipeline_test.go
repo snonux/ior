@@ -11,7 +11,7 @@ import (
 	"ior/internal/flamegraph"
 	"ior/internal/parquet"
 	"ior/internal/statsengine"
-	"ior/internal/tui/eventstream"
+	"ior/internal/streamrow"
 )
 
 const (
@@ -198,8 +198,8 @@ func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, n
 		preseedBenchComms(el, numThreads)
 
 		engine := statsengine.NewEngine(64)
-		streamBuf := eventstream.NewRingBuffer()
-		streamSeq := eventstream.NewSequencer(0)
+		streamBuf := streamrow.NewRingBuffer()
+		streamSeq := streamrow.NewSequencer(0)
 		liveTrie := flamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
 
 		recorder := parquet.NewRecorder(parquet.RecorderConfig{})
@@ -212,7 +212,7 @@ func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, n
 
 		var recordErr error
 		el.printCb = func(ep *event.Pair) {
-			row := eventstream.NewStreamEvent(streamSeq.Next(), ep)
+			row := streamrow.New(streamSeq.Next(), ep)
 			engine.Ingest(ep)
 			streamBuf.Push(row)
 			if recordErr == nil {

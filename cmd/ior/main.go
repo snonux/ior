@@ -7,6 +7,7 @@ import (
 
 	"ior/internal"
 	"ior/internal/flags"
+	"ior/internal/tui"
 )
 
 // main is the entry point for the application. It checks if the OS is Linux,
@@ -31,6 +32,15 @@ func main() {
 		flags.PrintVersion()
 		return
 	}
+
+	// Wire the concrete TUI runner functions into the core internal package.
+	// This is the only place that imports both internal and internal/tui, which
+	// breaks the cycle: internal no longer imports internal/tui.
+	internal.SetTUIRunners(
+		tui.RunWithTraceStarterConfig,
+		tui.RunTestFlamesWithTraceStarterConfig,
+		tui.RunTestFlamesWithTraceStarterConfig, // same runner; starter differs (static vs live)
+	)
 
 	// Run the internal logic of the application.
 	if err := internal.Run(cfg); err != nil {

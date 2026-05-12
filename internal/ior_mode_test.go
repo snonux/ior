@@ -18,9 +18,8 @@ import (
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
-	"ior/internal/tui"
-	"ior/internal/tui/eventstream"
-	flamegraphtui "ior/internal/tui/flamegraph"
+	"ior/internal/runtime"
+	"ior/internal/streamrow"
 	"ior/internal/types"
 
 	parquetgo "github.com/parquet-go/parquet-go"
@@ -117,15 +116,15 @@ func TestDispatchRunUsesTraceModeWhenRequested(t *testing.T) {
 		t.Fatalf("runParquetFn should not be called in plain trace mode")
 		return nil
 	}
-	runTUIFn = func(flags.Config, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, runtime.TraceStarter) error {
 		tuiCalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called in trace mode")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called in trace mode")
 		return nil
 	}
@@ -170,15 +169,15 @@ func TestDispatchRunUsesHeadlessParquetModeWhenRequested(t *testing.T) {
 		parquetCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Config, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, runtime.TraceStarter) error {
 		tuiCalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called in parquet mode")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called in parquet mode")
 		return nil
 	}
@@ -219,15 +218,15 @@ func TestDispatchRunUsesTUIWhenOnlyPprofEnabled(t *testing.T) {
 		traceCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Config, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, runtime.TraceStarter) error {
 		tuiCalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called for regular TUI mode")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called for regular TUI mode")
 		return nil
 	}
@@ -270,7 +269,7 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	}
 
 	tuiCalled := false
-	runTUIFn = func(_ flags.Config, starter tui.TraceStarter) error {
+	runTUIFn = func(_ flags.Config, starter runtime.TraceStarter) error {
 		tuiCalled = true
 		if starter == nil {
 			t.Fatalf("expected non-nil starter")
@@ -280,11 +279,11 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 		}
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called for normal starter path")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called for normal starter path")
 		return nil
 	}
@@ -323,18 +322,18 @@ func TestDispatchRunUsesTestFlamesModeWhenRequested(t *testing.T) {
 		traceCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Config, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, runtime.TraceStarter) error {
 		regularTUICalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(_ flags.Config, starter tui.TraceStarter) error {
+	runTUITestFlamesFn = func(_ flags.Config, starter runtime.TraceStarter) error {
 		testFlamesCalled = true
 		if starter == nil {
 			t.Fatalf("expected non-nil starter for test flames mode")
 		}
 		return starter(context.Background())
 	}
-	runTUITestLiveFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlamesFn should not be called for --testflames")
 		return nil
 	}
@@ -373,15 +372,15 @@ func TestDispatchRunUsesTestLiveFlamesModeWhenRequested(t *testing.T) {
 		traceCalled = true
 		return nil
 	}
-	runTUIFn = func(flags.Config, tui.TraceStarter) error {
+	runTUIFn = func(flags.Config, runtime.TraceStarter) error {
 		regularTUICalled = true
 		return nil
 	}
-	runTUITestFlamesFn = func(flags.Config, tui.TraceStarter) error {
+	runTUITestFlamesFn = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestFlamesFn should not be called for --testliveflames")
 		return nil
 	}
-	runTUITestLiveFlamesFn = func(_ flags.Config, starter tui.TraceStarter) error {
+	runTUITestLiveFlamesFn = func(_ flags.Config, starter runtime.TraceStarter) error {
 		testLiveFlamesCalled = true
 		if starter == nil {
 			t.Fatalf("expected non-nil starter for test live flames mode")
@@ -577,7 +576,7 @@ func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
 		},
 	)
 
-	ctx := tui.ContextWithTraceFilters(context.Background(), globalfilter.Filter{
+	ctx := runtime.ContextWithTraceFilters(context.Background(), globalfilter.Filter{
 		PID:     &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 2222},
 		TID:     &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 3333},
 		Comm:    &globalfilter.StringFilter{Pattern: "nginx"},
@@ -766,8 +765,8 @@ func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T)
 	}
 
 	bindings := &traceRuntimeBindingsStub{
-		streamBuffer: eventstream.NewRingBuffer(),
-		streamSeq:    eventstream.NewSequencer(0),
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
 		recorder:     recorder,
 	}
 	base := flags.NewFlags()
@@ -797,7 +796,7 @@ func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T)
 		},
 	)
 
-	ctx := tui.ContextWithRuntimeBindings(context.Background(), bindings)
+	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
 	if err := starter(ctx); err != nil {
 		t.Fatalf("first starter() error = %v", err)
 	}
@@ -839,8 +838,8 @@ func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T)
 // printCb admits, without any restart of the trace pipeline.
 func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 	bindings := &traceRuntimeBindingsStub{
-		streamBuffer: eventstream.NewRingBuffer(),
-		streamSeq:    eventstream.NewSequencer(0),
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
 	}
 	base := flags.NewFlags()
 	base.GlobalFilter = globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "keep"}}
@@ -864,7 +863,7 @@ func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 		},
 	)
 
-	ctx := tui.ContextWithRuntimeBindings(context.Background(), bindings)
+	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
 	starterErr := make(chan error, 1)
 	go func() { starterErr <- starter(ctx) }()
 
@@ -898,28 +897,31 @@ func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 	}
 }
 
+// traceRuntimeBindingsStub is a test double for runtime.TraceRuntimeBindings
+// that records injected stream sources and exposes the live-filter setter for
+// assertions.
 type traceRuntimeBindingsStub struct {
-	streamBuffer *eventstream.RingBuffer
-	streamSource eventstream.Source
-	streamSeq    *eventstream.Sequencer
+	streamBuffer *streamrow.RingBuffer
+	streamSource runtime.StreamSource
+	streamSeq    *streamrow.Sequencer
 	recorder     *parquet.Recorder
 	filterEpoch  uint64
 	// mu guards liveFilterSetter, which is mutated from the trace-starter
-	// goroutine (via SetLiveFilterSetter) and read from the test
-	// goroutine when invoking the in-place swap.
+	// goroutine (via SetLiveFilterSetter) and read from the test goroutine
+	// when invoking the in-place swap.
 	mu               sync.Mutex
 	liveFilterSetter func(globalfilter.Filter)
 }
 
-func (b *traceRuntimeBindingsStub) SetDashboardSnapshotSource(tui.SnapshotSource) {}
+func (b *traceRuntimeBindingsStub) SetDashboardSnapshotSource(runtime.SnapshotSource) {}
 
-func (b *traceRuntimeBindingsStub) SetEventStreamSource(source eventstream.Source) {
+func (b *traceRuntimeBindingsStub) SetEventStreamSource(source runtime.StreamSource) {
 	b.streamSource = source
 }
 
-func (b *traceRuntimeBindingsStub) SetLiveTrie(flamegraphtui.LiveTrieSource) {}
+func (b *traceRuntimeBindingsStub) SetLiveTrie(runtime.LiveTrieSource) {}
 
-func (b *traceRuntimeBindingsStub) SetProbeManager(tui.ProbeManager) {}
+func (b *traceRuntimeBindingsStub) SetProbeManager(runtime.ProbeManager) {}
 
 func (b *traceRuntimeBindingsStub) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
 	b.mu.Lock()
@@ -933,7 +935,7 @@ func (b *traceRuntimeBindingsStub) currentLiveFilterSetter() func(globalfilter.F
 	return b.liveFilterSetter
 }
 
-func (b *traceRuntimeBindingsStub) StreamBuffer() eventstream.Source {
+func (b *traceRuntimeBindingsStub) StreamBuffer() runtime.StreamSource {
 	return b.streamBuffer
 }
 
@@ -941,7 +943,7 @@ func (b *traceRuntimeBindingsStub) Recorder() *parquet.Recorder {
 	return b.recorder
 }
 
-func (b *traceRuntimeBindingsStub) StreamSequencer() *eventstream.Sequencer {
+func (b *traceRuntimeBindingsStub) StreamSequencer() *streamrow.Sequencer {
 	return b.streamSeq
 }
 
@@ -962,7 +964,7 @@ func testTracePair(seq uint64, comm string) *event.Pair {
 	return pair
 }
 
-func waitForStreamRows(t *testing.T, buffer *eventstream.RingBuffer, want int) {
+func waitForStreamRows(t *testing.T, buffer *streamrow.RingBuffer, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

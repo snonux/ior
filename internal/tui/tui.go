@@ -14,13 +14,12 @@ import (
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
-	"ior/internal/probemanager"
+	"ior/internal/runtime"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/eventstream"
 	tuiexport "ior/internal/tui/export"
-	flamegraphtui "ior/internal/tui/flamegraph"
 	"ior/internal/tui/messages"
 	"ior/internal/tui/pidpicker"
 	"ior/internal/tui/probes"
@@ -43,70 +42,61 @@ const (
 )
 
 // TraceStarter starts tracing and returns when startup succeeds or fails.
+// It is a type alias for runtime.TraceStarter so TUI callers need not import
+// the runtime package directly.
 // Long-lived tracing work should continue in background goroutines.
-type TraceStarter func(context.Context) error
+type TraceStarter = runtime.TraceStarter
 
 // SnapshotSource provides dashboard snapshots for TUI rendering.
-type SnapshotSource interface {
-	Snapshot() *statsengine.Snapshot
-}
+// It is a type alias for runtime.SnapshotSource.
+type SnapshotSource = runtime.SnapshotSource
 
 // ProbeManager exposes runtime probe controls to TUI layers.
-type ProbeManager interface {
-	States() []probemanager.ProbeState
-	Toggle(syscall string) error
-	ActiveCount() (int, int)
-}
+// It is a type alias for runtime.ProbeManager.
+type ProbeManager = runtime.ProbeManager
 
 // RuntimePublisher is the write side of the TUI runtime contract.
-// A trace starter calls these methods to inject live data into the active TUI.
-type RuntimePublisher interface {
-	SetDashboardSnapshotSource(source SnapshotSource)
-	SetEventStreamSource(source eventstream.Source)
-	SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource)
-	SetProbeManager(manager ProbeManager)
-	// SetLiveFilterSetter registers (or, with nil, unregisters) a callback that
-	// applies a new global filter to the running trace pipeline in place. The
-	// trace starter passes its eventloop's SetFilter; the TUI calls it on every
-	// filter change to avoid restarting the BPF probes.
-	SetLiveFilterSetter(setter func(globalfilter.Filter))
-}
+// It is a type alias for runtime.RuntimePublisher; the runtime package owns
+// the canonical definition so the core tracing layer can depend on it without
+// importing internal/tui.
+type RuntimePublisher = runtime.RuntimePublisher
 
 // RuntimeState is the read side of the TUI runtime contract.
-// A trace starter calls these methods to obtain persistent state owned by the TUI.
-type RuntimeState interface {
-	StreamBuffer() eventstream.Source
-	Recorder() *parquet.Recorder
-	StreamSequencer() *eventstream.Sequencer
-	FilterEpoch() uint64
-}
+// It is a type alias for runtime.RuntimeState.
+type RuntimeState = runtime.RuntimeState
 
 // TraceRuntimeBindings composes RuntimePublisher and RuntimeState so a trace
 // starter can both inject live data and read persistent TUI-owned state.
-type TraceRuntimeBindings interface {
-	RuntimePublisher
-	RuntimeState
-}
+// It is a type alias for runtime.TraceRuntimeBindings.
+type TraceRuntimeBindings = runtime.TraceRuntimeBindings
 
-type runtimeBindingsContextKey struct{}
-type traceFiltersContextKey struct{}
-
+// runtimeBindings is the TUI-owned concrete implementation of
+// runtime.TraceRuntimeBindings. It guards all fields with a read-write mutex so
+// the trace starter goroutine and the Bubble Tea update loop can safely exchange
+// live data.
 type runtimeBindings struct {
 	mu sync.RWMutex
 
-	snapshotSource   SnapshotSource
-	streamSource     eventstream.Source
-	streamBuffer     *eventstream.RingBuffer
-	streamSeq        *eventstream.Sequencer
-	recorder         *parquet.Recorder
-	liveTrieSource   flamegraphtui.LiveTrieSource
-	probeManager     ProbeManager
+	// snapshotSource is the stats engine injected by the trace starter.
+	snapshotSource runtime.SnapshotSource
+	// streamSource is the active read-side source (may be swapped on reset).
+	streamSource runtime.StreamSource
+	// streamBuffer is the TUI-owned ring buffer; it always satisfies both
+	// runtime.StreamSource (Len/Snapshot) and runtime.EventSink (Push).
+	streamBuffer *eventstream.RingBuffer
+	// streamSeq is the shared monotonic counter for stream row sequencing.
+	streamSeq *eventstream.Sequencer
+	// recorder handles optional parquet stream recording.
+	recorder *parquet.Recorder
+	// liveTrieSource is the flamegraph trie injected by the trace starter.
+	liveTrieSource runtime.LiveTrieSource
+	// probeManager is the BPF probe manager injected by the trace starter.
+	probeManager runtime.ProbeManager
+	// liveFilterSetter, when non-nil, applies filter changes to the running
+	// event loop in-place so BPF probes need not be restarted.
 	liveFilterSetter func(globalfilter.Filter)
-	filterEpoch      atomic.Uint64
-}
-
-type traceFilters struct {
-	filter globalfilter.Filter
+	// filterEpoch increments on every filter change and is stored in parquet rows.
+	filterEpoch atomic.Uint64
 }
 
 func newRuntimeBindings() *runtimeBindings {
@@ -119,52 +109,62 @@ func newRuntimeBindings() *runtimeBindings {
 	}
 }
 
-func (r *runtimeBindings) SetDashboardSnapshotSource(source SnapshotSource) {
+// SetDashboardSnapshotSource wires the stats engine into the dashboard.
+func (r *runtimeBindings) SetDashboardSnapshotSource(source runtime.SnapshotSource) {
 	r.mu.Lock()
 	r.snapshotSource = source
 	r.mu.Unlock()
 }
 
-func (r *runtimeBindings) SetEventStreamSource(source eventstream.Source) {
+// SetEventStreamSource wires the stream buffer into the TUI stream view.
+func (r *runtimeBindings) SetEventStreamSource(source runtime.StreamSource) {
 	r.mu.Lock()
 	r.streamSource = source
 	r.mu.Unlock()
 }
 
-func (r *runtimeBindings) StreamBuffer() eventstream.Source {
+// StreamBuffer returns the TUI-owned ring buffer, which satisfies runtime.StreamSource.
+func (r *runtimeBindings) StreamBuffer() runtime.StreamSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamBuffer
 }
 
+// Recorder returns the parquet recorder for optional stream recording.
 func (r *runtimeBindings) Recorder() *parquet.Recorder {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.recorder
 }
 
+// StreamSequencer returns the shared monotonic counter for stream row sequencing.
 func (r *runtimeBindings) StreamSequencer() *eventstream.Sequencer {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamSeq
 }
 
+// FilterEpoch returns the current filter epoch used for parquet recording.
 func (r *runtimeBindings) FilterEpoch() uint64 {
 	return r.filterEpoch.Load()
 }
 
-func (r *runtimeBindings) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
+// SetLiveTrie wires the live flamegraph trie into the TUI flamegraph view.
+func (r *runtimeBindings) SetLiveTrie(liveTrie runtime.LiveTrieSource) {
 	r.mu.Lock()
 	r.liveTrieSource = liveTrie
 	r.mu.Unlock()
 }
 
-func (r *runtimeBindings) SetProbeManager(manager ProbeManager) {
+// SetProbeManager wires the BPF probe manager into the TUI probes modal.
+func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) {
 	r.mu.Lock()
 	r.probeManager = manager
 	r.mu.Unlock()
 }
 
+// SetLiveFilterSetter registers (or, with nil, unregisters) the live filter
+// callback so the TUI can update the running trace pipeline in-place.
 func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
 	r.mu.Lock()
 	r.liveFilterSetter = setter
@@ -186,25 +186,29 @@ func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	return true
 }
 
-func (r *runtimeBindings) dashboardSnapshotSource() SnapshotSource {
+// dashboardSnapshotSource returns the currently wired stats engine source.
+func (r *runtimeBindings) dashboardSnapshotSource() runtime.SnapshotSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.snapshotSource
 }
 
-func (r *runtimeBindings) eventStreamSource() eventstream.Source {
+// eventStreamSource returns the currently active stream read source.
+func (r *runtimeBindings) eventStreamSource() runtime.StreamSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.streamSource
 }
 
-func (r *runtimeBindings) liveTrie() flamegraphtui.LiveTrieSource {
+// liveTrie returns the currently wired flamegraph trie source.
+func (r *runtimeBindings) liveTrie() runtime.LiveTrieSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.liveTrieSource
 }
 
-func (r *runtimeBindings) currentProbeManager() ProbeManager {
+// currentProbeManager returns the currently wired probe manager.
+func (r *runtimeBindings) currentProbeManager() runtime.ProbeManager {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.probeManager
@@ -241,44 +245,34 @@ func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 
 // RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the
 // context was created by the TUI. Use RuntimePublisherFromContext when only
-// write access is needed.
+// write access is needed. Delegates to runtime.RuntimeBindingsFromContext.
 func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool) {
-	bindings, ok := ctx.Value(runtimeBindingsContextKey{}).(TraceRuntimeBindings)
-	if !ok || bindings == nil {
-		return nil, false
-	}
-	return bindings, true
+	return runtime.RuntimeBindingsFromContext(ctx)
 }
 
-// RuntimePublisherFromContext returns only the RuntimePublisher side of the
-// TUI bindings. Use this when the caller only injects data and does not need
-// to read persistent TUI state.
+// RuntimePublisherFromContext returns only the RuntimePublisher side of the TUI
+// bindings. Use this when the caller only injects data and does not need to
+// read persistent TUI state. Delegates to runtime.RuntimePublisherFromContext.
 func RuntimePublisherFromContext(ctx context.Context) (RuntimePublisher, bool) {
-	bindings, ok := ctx.Value(runtimeBindingsContextKey{}).(RuntimePublisher)
-	if !ok || bindings == nil {
-		return nil, false
-	}
-	return bindings, true
+	return runtime.RuntimePublisherFromContext(ctx)
 }
 
 // ContextWithRuntimeBindings stores trace runtime bindings on the context.
+// Delegates to runtime.ContextWithRuntimeBindings.
 func ContextWithRuntimeBindings(ctx context.Context, bindings TraceRuntimeBindings) context.Context {
-	return context.WithValue(ctx, runtimeBindingsContextKey{}, bindings)
+	return runtime.ContextWithRuntimeBindings(ctx, bindings)
 }
 
 // ContextWithTraceFilters stores the active trace filters for the trace starter.
+// Delegates to runtime.ContextWithTraceFilters.
 func ContextWithTraceFilters(ctx context.Context, filter globalfilter.Filter) context.Context {
-	filters := traceFilters{filter: filter.Clone()}
-	return context.WithValue(ctx, traceFiltersContextKey{}, filters)
+	return runtime.ContextWithTraceFilters(ctx, filter)
 }
 
 // TraceFiltersFromContext returns the active trace filters when provided by the TUI model.
+// Delegates to runtime.TraceFiltersFromContext.
 func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
-	filters, ok := ctx.Value(traceFiltersContextKey{}).(traceFilters)
-	if !ok {
-		return globalfilter.Filter{}, false
-	}
-	return filters.filter.Clone(), true
+	return runtime.TraceFiltersFromContext(ctx)
 }
 
 // RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
