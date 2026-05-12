@@ -946,7 +946,10 @@ func TestPausedFlameDashboardViewPreservesZoomedSelectedLine(t *testing.T) {
 	}
 }
 
-func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
+// newPausedStreamModel creates a stream tab model with 300 events, sized at
+// 120x30, and already paused — ready for scroll key assertions.
+func newPausedStreamModel(t *testing.T) Model {
+	t.Helper()
 	rb := eventstream.NewRingBuffer()
 	for i := 0; i < 300; i++ {
 		rb.Push(eventstream.StreamEvent{
@@ -958,21 +961,22 @@ func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
 			FileName: fmt.Sprintf("/tmp/file-%03d", i),
 		})
 	}
-
 	m := NewModelWithConfig(nil, rb, 250, common.DefaultKeyMap())
 	m.activeTab = TabStream
 	m.showHelp = true
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = next.(Model)
-
 	m.streamModel.Refresh()
 	_ = m.View()
-
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace}) // pause
-	m = next.(Model)
+	return next.(Model)
+}
+
+func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
+	m := newPausedStreamModel(t)
 	before := rowFromStreamView(t, m.View().Content)
 
-	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'k'}[0], Text: string([]rune{'k'})})
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'k'}[0], Text: string([]rune{'k'})})
 	m = next.(Model)
 	afterK := rowFromStreamView(t, m.View().Content)
 	if afterK >= before {
@@ -1093,6 +1097,12 @@ func TestMetricToggleAppliesInFilesTreemapMode(t *testing.T) {
 	}
 }
 
+// pressKey sends a single rune key to model and returns the updated model.
+func pressKey(m Model, r rune) Model {
+	next, _ := m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	return next.(Model)
+}
+
 func TestFilesVisualizationRequiresDirectoryMode(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/tmp/a", Accesses: 3},
@@ -1102,45 +1112,43 @@ func TestFilesVisualizationRequiresDirectoryMode(t *testing.T) {
 	m.activeTab = TabFiles
 	m.latest = &snap
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model := next.(Model)
-	if got := model.filesVizMode; got != tabVizModeTable {
+	// v should not cycle viz mode when directory mode is off.
+	m = pressKey(m, 'v')
+	if got := m.filesVizMode; got != tabVizModeTable {
 		t.Fatalf("expected files treemap mode to stay disabled without directory mode")
 	}
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
-	model = next.(Model)
-	if !model.filesDirGrouped {
+	// Enable directory mode; cycling should now work.
+	m = pressKey(m, 'd')
+	if !m.filesDirGrouped {
 		t.Fatalf("expected files dir mode enabled")
 	}
 
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model = next.(Model)
-	if got := model.filesVizMode; got != tabVizModeBubbles {
+	assertFilesVizCycle(t, m)
+}
+
+// assertFilesVizCycle verifies the full table→bubbles→treemap→icicle→table
+// cycle when directory mode is on, and that leaving dir mode resets to table.
+func assertFilesVizCycle(t *testing.T, m Model) {
+	t.Helper()
+	m = pressKey(m, 'v')
+	if got := m.filesVizMode; got != tabVizModeBubbles {
 		t.Fatalf("expected files bubbles mode enabled in directory mode")
 	}
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model = next.(Model)
-	if got := model.filesVizMode; got != tabVizModeTreemap {
+	m = pressKey(m, 'v')
+	if got := m.filesVizMode; got != tabVizModeTreemap {
 		t.Fatalf("expected files treemap mode enabled in directory mode")
 	}
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model = next.(Model)
-	if got := model.filesVizMode; got != tabVizModeIcicle {
+	m = pressKey(m, 'v')
+	if got := m.filesVizMode; got != tabVizModeIcicle {
 		t.Fatalf("expected files icicle mode enabled in directory mode")
 	}
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model = next.(Model)
-	if got := model.filesVizMode; got != tabVizModeTable {
+	m = pressKey(m, 'v')
+	if got := m.filesVizMode; got != tabVizModeTable {
 		t.Fatalf("expected files mode cycled back to table")
 	}
-
-	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
-	model = next.(Model)
-	if got := model.filesVizMode; got != tabVizModeTable {
+	m = pressKey(m, 'd') // leave dir mode
+	if got := m.filesVizMode; got != tabVizModeTable {
 		t.Fatalf("expected files mode reset to table when leaving directory mode")
 	}
 }
@@ -1516,7 +1524,10 @@ func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 		statsengine.HistogramSnapshot{},
 	)
-	out := renderActiveTab(TabFiles, &snap, nil, nil, 120, 30, -1, 0, 0, 0, 0, true, 0, 0, 0, 0)
+	// Build a minimal model with dir-grouped mode enabled so the registry
+	// render function routes to the directory view.
+	m := Model{filesDirGrouped: true, pidFilter: -1}
+	out := renderActiveTabContent(&m, TabFiles, &snap, nil, nil, 120, 30)
 	if !strings.Contains(out, "Directory") {
 		t.Fatalf("expected grouped directory files view header, got %q", out)
 	}
