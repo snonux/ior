@@ -42,19 +42,46 @@ type SnapshotSource interface {
 	Snapshot() *statsengine.Snapshot
 }
 
-// LiveTrieSource is the minimal flamegraph-trie contract needed by the tracing
-// engine and the flamegraph TUI model. It mirrors the interface defined in
-// internal/tui/flamegraph but lives here so the core package need not import
-// that TUI sub-package. Both interfaces are satisfied by *flamegraph.LiveTrie.
-type LiveTrieSource interface {
-	Fields() []string
-	CountField() string
-	Reconfigure([]string) error
-	SetCountField(string) error
-	Reset()
+// Snapshotter is the read-only subset of the trie contract used by consumers
+// that only need to poll the version and retrieve snapshot data. It mirrors the
+// Snapshotter interface in internal/tui/flamegraph but lives here so the core
+// package need not import that TUI sub-package.
+// *flamegraph.LiveTrie satisfies this interface.
+type Snapshotter interface {
+	// Version returns the monotonically-increasing snapshot generation counter.
 	Version() uint64
+	// SnapshotJSON serialises the current trie to JSON for external consumers.
 	SnapshotJSON() ([]byte, uint64)
+	// SnapshotTree returns a ready-to-render snapshot tree without a JSON round-trip.
 	SnapshotTree() (*flamegraph.SnapshotNode, uint64)
+}
+
+// Configurator is the write/mutating subset of the trie contract used by
+// consumers that need to change field layout, metric, or reset the baseline.
+// It mirrors the Configurator interface in internal/tui/flamegraph but lives
+// here so the core package need not import that TUI sub-package.
+// *flamegraph.LiveTrie satisfies this interface.
+type Configurator interface {
+	// Fields returns the current ordered list of grouping fields.
+	Fields() []string
+	// CountField returns the active aggregation metric name.
+	CountField() string
+	// Reconfigure replaces the grouping fields and resets accumulated data.
+	Reconfigure([]string) error
+	// SetCountField changes the active aggregation metric and starts a fresh baseline.
+	SetCountField(string) error
+	// Reset clears all accumulated data, starting a new baseline.
+	Reset()
+}
+
+// LiveTrieSource is the full flamegraph-trie contract needed by the tracing
+// engine and the flamegraph TUI model. It embeds Snapshotter (read-only
+// snapshot access) and Configurator (mutating operations) so each can be used
+// independently where a narrower interface suffices. Both interfaces are
+// satisfied by *flamegraph.LiveTrie.
+type LiveTrieSource interface {
+	Snapshotter
+	Configurator
 }
 
 // ProbeManager exposes runtime probe controls to the TUI probes modal.
