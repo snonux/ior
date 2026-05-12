@@ -1,96 +1,12 @@
 package flamegraph
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 )
 
-func (m *Model) openSearch() {
-	m.searchActive = true
-	m.searchInput.SetValue(m.searchQuery)
-	m.searchInput.CursorEnd()
-	m.searchInput.Focus()
-}
-
-func (m *Model) clearSearch() {
-	m.searchActive = false
-	m.searchQuery = ""
-	clearBoolMap(m.matchIndices)
-	clearBoolMap(m.filterVisible)
-	m.searchInput.SetValue("")
-	m.searchInput.Blur()
-	m.statusMessage = "Filter cleared"
-}
-
-func (m *Model) applySearchQuery(raw string) {
-	m.searchQuery = strings.ToLower(strings.TrimSpace(raw))
-	m.recomputeFilterState()
-	query := m.searchQuery
-	if query == "" {
-		m.ensureSelectionNavigable()
-		m.statusMessage = "Filter cleared"
-		return
-	}
-
-	if len(m.matchIndices) > 0 {
-		m.jumpMatch(1)
-		m.statusMessage = fmt.Sprintf("Filter %q: %d matches", query, len(m.matchIndices))
-		return
-	}
-	m.statusMessage = fmt.Sprintf("Filter %q: no matches", query)
-}
-
-func (m *Model) jumpMatch(direction int) {
-	matches := orderedMatchIndices(m.matchIndices)
-	if len(matches) == 0 {
-		return
-	}
-	currentPos := indexOf(matches, m.selectedIdx)
-	if currentPos == -1 {
-		if direction < 0 {
-			m.selectedIdx = matches[len(matches)-1]
-		} else {
-			m.selectedIdx = matches[0]
-		}
-		m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
-		return
-	}
-
-	next := currentPos + direction
-	if next < 0 {
-		next = len(matches) - 1
-	}
-	if next >= len(matches) {
-		next = 0
-	}
-	m.selectedIdx = matches[next]
-	m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
-}
-
-func (m *Model) recomputeFilterState() {
-	if m.matchIndices == nil {
-		m.matchIndices = make(map[int]bool)
-	} else {
-		clearBoolMap(m.matchIndices)
-	}
-	if m.filterVisible == nil {
-		m.filterVisible = make(map[int]bool)
-	} else {
-		clearBoolMap(m.filterVisible)
-	}
-	if m.searchQuery == "" {
-		return
-	}
-
-	for idx, frame := range m.frames {
-		if strings.Contains(strings.ToLower(frame.Name), m.searchQuery) {
-			m.matchIndices[idx] = true
-		}
-	}
-	m.filterVisible = filterVisibleSetUsingAncestry(m.frames, m.matchIndices, m.ancestry, m.filterVisible)
-}
-
+// orderedMatchIndices returns the keys of matchSet as a sorted int slice.
+// Used by search navigation and the search footer to determine match position.
 func orderedMatchIndices(matchSet map[int]bool) []int {
 	matches := make([]int, 0, len(matchSet))
 	for idx := range matchSet {
@@ -100,16 +16,42 @@ func orderedMatchIndices(matchSet map[int]bool) []int {
 	return matches
 }
 
-func (m Model) searchFooter() string {
-	matches := orderedMatchIndices(m.matchIndices)
-	pos := 0
-	if len(matches) > 0 {
-		idx := indexOf(matches, m.selectedIdx)
-		if idx >= 0 {
-			pos = idx + 1
-		}
+// openSearch activates search mode on the Model by delegating to SearchController.
+func (m *Model) openSearch() {
+	m.SearchController.open()
+}
+
+// clearSearch deactivates search mode and clears all search state.
+// Delegates to SearchController and updates the Model status message.
+func (m *Model) clearSearch() {
+	m.statusMessage = m.SearchController.clear()
+}
+
+// applySearchQuery applies a new search query, rebuilds filter state, and jumps
+// to the first match. Delegates to SearchController.applyQuery, then applies
+// any resulting selection change via the shared jumpMatch helper.
+func (m *Model) applySearchQuery(raw string) {
+	statusMsg, jumpDir := m.SearchController.applyQuery(raw, m.frames, m.ancestry)
+	m.statusMessage = statusMsg
+	if jumpDir != 0 {
+		m.selectedIdx, m.subtreeSet = jumpMatch(
+			m.frames, m.matchIndices, m.ancestry, m.selectedIdx, jumpDir,
+		)
+	} else {
+		m.SelectionManager.ensureNavigable(m.frames, m.matchIndices, m.searchQuery, m.filterVisible)
 	}
-	return fmt.Sprintf("%s  %d/%d matches", m.searchInput.View(), pos, len(matches))
+}
+
+// recomputeFilterState rebuilds the match and filter-visible sets after a
+// frame layout change. Delegates to SearchController.recomputeFilterState.
+func (m *Model) recomputeFilterState() {
+	m.SearchController.recomputeFilterState(m.frames, m.ancestry)
+}
+
+// searchFooter renders the search bar with match position info. Delegates to
+// SearchController.footerLine.
+func (m Model) searchFooter() string {
+	return m.SearchController.footerLine(m.frames, m.selectedIdx)
 }
 
 func replaceFooterLine(content, footer string) string {

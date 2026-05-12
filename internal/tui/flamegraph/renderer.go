@@ -206,41 +206,21 @@ func semanticFrameColor(name string) (color.Color, bool) {
 	}
 }
 
-// RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
-func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet, filterSet map[int]bool, globalTotal uint64, metricLabel string, isDark, searchActive bool, searchQuery string) string {
-	if width < minFlameWidth {
-		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
-	}
-	if height < 3 {
-		return common.PanelStyle.Render("Flame: viewport too short")
-	}
-	if len(frames) == 0 {
-		return common.PanelStyle.Render("Flame: waiting for data...")
-	}
-	if strings.TrimSpace(metricLabel) == "" {
-		metricLabel = "events"
-	}
+// renderViewParams bundles the pre-computed layout parameters used by
+// RenderTerminalView helpers to avoid threading many individual arguments.
+type renderViewParams struct {
+	rowOffset    int
+	maxRow       int
+	barHeight    int
+	availableRows int
+	visibleFrames int
+	truncated    bool
+}
 
-	filterActive := strings.TrimSpace(searchQuery) != ""
-	if filterActive {
-		if filterSet == nil {
-			filterSet = computeFilterVisibleSetInto(frames, matchSet, nil)
-		}
-		if len(filterSet) == 0 {
-			return common.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", searchQuery))
-		}
-	} else {
-		filterSet = nil
-	}
-
-	selectedIdx = normalizeSelectedIndex(frames, selectedIdx, filterSet)
-	selected := frames[selectedIdx]
-	viewPath := compactFramePath(frames[0].Path)
-	if subtreeSet == nil {
-		subtreeSet = computeSubtreeSet(frames, selectedIdx)
-	}
-
-	availableRows := height - 2 // toolbar + status
+// computeRenderParams derives the row-layout parameters for a given frame set
+// and viewport height.
+func computeRenderParams(frames []tuiFrame, height int) renderViewParams {
+	availableRows := height - 2 // toolbar + frame-status line
 	maxRow := maxFrameRowForSet(frames, nil)
 	totalDepthRows := maxRow + 1
 	barHeight := computeBarHeight(availableRows, totalDepthRows, maxBarVisualHeight)
@@ -254,46 +234,106 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 		rowOffset = maxRow + 1 - visibleDepthRows
 		truncated = true
 	}
+	return renderViewParams{
+		rowOffset:     rowOffset,
+		maxRow:        maxRow,
+		barHeight:     barHeight,
+		availableRows: availableRows,
+		visibleFrames: countVisibleFrames(frames, nil),
+		truncated:     truncated,
+	}
+}
 
-	visibleFrames := countVisibleFrames(frames, nil)
-	toolbar := fmt.Sprintf("Flame | view:%s | frames:%d", viewPath, visibleFrames)
-	toolbar += fmt.Sprintf(" | rows:%d", availableRows)
-	if truncated {
+// buildToolbar assembles the top-of-view toolbar string and pads/trims it to
+// width. The toolbar is replaced by the caller via replaceHeaderLine.
+func buildToolbar(frames []tuiFrame, width int, params renderViewParams) string {
+	viewPath := compactFramePath(frames[0].Path)
+	toolbar := fmt.Sprintf("Flame | view:%s | frames:%d | rows:%d",
+		viewPath, params.visibleFrames, params.availableRows)
+	if params.truncated {
 		toolbar += " | showing deepest levels"
 	}
-	toolbar = padOrTrim(toolbar, width)
+	return padOrTrim(toolbar, width)
+}
+
+// buildFilteredStatus builds the per-selection status line when a search filter
+// is active. The searchQuery is embedded in the status so the user can see
+// which pattern is applied.
+func buildFilteredStatus(frames []tuiFrame, selected tuiFrame, selectedIdx int, matchSet map[int]bool, metricLabel, searchQuery string, globalTotal uint64, visibleFrames int) string {
+	filterCoveredTotal, filterBaseTotal := filterCoverageTotals(frames, matchSet, globalTotal)
+	filterSystemShare := percentOfTotal(filterCoveredTotal, filterBaseTotal)
+	selectedFilterShare := 0.0
+	if filterCoveredTotal > 0 {
+		selectedMatchTotal := filterCoverageTotalForPath(frames, matchSet, selected.Path)
+		selectedFilterShare = percentOfTotal(selectedMatchTotal, filterCoveredTotal)
+	}
+	matches := orderedMatchIndices(matchSet)
+	pos := 0
+	if len(matches) > 0 {
+		if idx := indexOf(matches, selectedIdx); idx >= 0 {
+			pos = idx + 1
+		}
+	}
+	frameCoverage := 0.0
+	if len(frames) > 0 {
+		frameCoverage = 100 * float64(visibleFrames) / float64(len(frames))
+	}
+	return fmt.Sprintf("Filter %q: %.1f%% %s (%d/%d matches, %.1f%% frames shown) | Selected: %s total(%s)=%d depth=%d %.2f%% filtered %s",
+		searchQuery, filterSystemShare, metricLabel, pos, len(matches), frameCoverage,
+		selected.Name, metricLabel, selected.Total, selected.Depth, selectedFilterShare, metricLabel)
+}
+
+// buildNormalStatus builds the per-selection status line when no filter is active.
+func buildNormalStatus(selected tuiFrame, metricLabel string, globalTotal uint64) string {
 	selectedSystemShare := selected.Percent
 	if globalTotal > 0 {
 		selectedSystemShare = percentOfTotal(selected.Total, globalTotal)
 	}
-	if filterActive {
-		filterCoveredTotal, filterBaseTotal := filterCoverageTotals(frames, matchSet, globalTotal)
-		filterSystemShare := percentOfTotal(filterCoveredTotal, filterBaseTotal)
-		selectedFilterShare := 0.0
-		if filterCoveredTotal > 0 {
-			selectedMatchTotal := filterCoverageTotalForPath(frames, matchSet, selected.Path)
-			selectedFilterShare = percentOfTotal(selectedMatchTotal, filterCoveredTotal)
-		}
-		matches := orderedMatchIndices(matchSet)
-		pos := 0
-		if len(matches) > 0 {
-			if idx := indexOf(matches, selectedIdx); idx >= 0 {
-				pos = idx + 1
-			}
-		}
-		frameCoverage := 0.0
-		if len(frames) > 0 {
-			frameCoverage = 100 * float64(visibleFrames) / float64(len(frames))
-		}
-		status := fmt.Sprintf("Filter %q: %.1f%% %s (%d/%d matches, %.1f%% frames shown) | Selected: %s total(%s)=%d depth=%d %.2f%% filtered %s",
-			searchQuery, filterSystemShare, metricLabel, pos, len(matches), frameCoverage,
-			selected.Name, metricLabel, selected.Total, selected.Depth, selectedFilterShare, metricLabel)
-		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, barHeight, availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
-	} else {
-		status := fmt.Sprintf("Selected: %s [%s] total(%s)=%d depth=%d col=%d width=%d share=%.2f%% %s",
-			selected.Name, compactFramePath(selected.Path), metricLabel, selected.Total, selected.Depth, selected.Col, selected.Width, selectedSystemShare, metricLabel)
-		return renderViewRows(toolbar, status, rowsForRender(frames, width, rowOffset, maxRow, barHeight, availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive), width)
+	return fmt.Sprintf("Selected: %s [%s] total(%s)=%d depth=%d col=%d width=%d share=%.2f%% %s",
+		selected.Name, compactFramePath(selected.Path), metricLabel, selected.Total, selected.Depth, selected.Col, selected.Width, selectedSystemShare, metricLabel)
+}
+
+// RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
+// The function is split into helpers (computeRenderParams, buildToolbar,
+// buildFilteredStatus, buildNormalStatus) to keep each piece under 50 lines.
+func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet, filterSet map[int]bool, globalTotal uint64, metricLabel string, isDark, searchActive bool, searchQuery string) string {
+	if width < minFlameWidth {
+		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
+	if height < 3 {
+		return common.PanelStyle.Render("Flame: viewport too short")
+	}
+	if len(frames) == 0 {
+		return common.PanelStyle.Render("Flame: waiting for data...")
+	}
+	if strings.TrimSpace(metricLabel) == "" {
+		metricLabel = "events"
+	}
+	filterIsActive := strings.TrimSpace(searchQuery) != ""
+	if filterIsActive {
+		if filterSet == nil {
+			filterSet = computeFilterVisibleSetInto(frames, matchSet, nil)
+		}
+		if len(filterSet) == 0 {
+			return common.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", searchQuery))
+		}
+	} else {
+		filterSet = nil
+	}
+	selectedIdx = normalizeSelectedIndex(frames, selectedIdx, filterSet)
+	selected := frames[selectedIdx]
+	if subtreeSet == nil {
+		subtreeSet = computeSubtreeSet(frames, selectedIdx)
+	}
+	params := computeRenderParams(frames, height)
+	toolbar := buildToolbar(frames, width, params)
+	var status string
+	if filterIsActive {
+		status = buildFilteredStatus(frames, selected, selectedIdx, matchSet, metricLabel, searchQuery, globalTotal, params.visibleFrames)
+	} else {
+		status = buildNormalStatus(selected, metricLabel, globalTotal)
+	}
+	return renderViewRows(toolbar, status, rowsForRender(frames, width, params.rowOffset, params.maxRow, params.barHeight, params.availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterIsActive), width)
 }
 
 func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow, barHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
