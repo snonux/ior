@@ -226,7 +226,7 @@ func TestQuitInvokesTraceStop(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 	done := make(chan struct{})
-	m.traceStop = func() {
+	m.tracer.traceStop = func() {
 		close(done)
 	}
 
@@ -291,7 +291,7 @@ func TestQuitKeyOnReselectPIDPickerReturnsToDashboardLikeEsc(t *testing.T) {
 	if updated.quitting {
 		t.Fatalf("expected q in reselect picker to behave like esc, not quit")
 	}
-	if updated.proc.pickerReturn != nil {
+	if updated.router.pickerReturn != nil {
 		t.Fatalf("expected picker return context to clear after cancel")
 	}
 	if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
@@ -332,7 +332,7 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 	if updated.quitting {
 		t.Fatalf("expected esc in reselect picker not to quit app")
 	}
-	if updated.proc.pickerReturn != nil {
+	if updated.router.pickerReturn != nil {
 		t.Fatalf("expected picker return context to clear after cancel")
 	}
 	if updated.proc.pid != 3333 || updated.proc.tid != 4444 {
@@ -1073,7 +1073,7 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	m.width = 120
 	m.height = 30
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	m = next.(Model)
@@ -1090,7 +1090,7 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	if updated.attaching {
 		t.Fatalf("expected attaching=false on picker screen")
 	}
-	if updated.traceStop != nil {
+	if updated.tracer.traceStop != nil {
 		t.Fatalf("expected traceStop to be cleared after stopping")
 	}
 	if cmd == nil {
@@ -1118,7 +1118,7 @@ func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
 	m.height = 30
 
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	m = next.(Model)
@@ -1146,7 +1146,7 @@ func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
 	m.height = 30
 
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	m = next.(Model)
@@ -1245,8 +1245,8 @@ func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 	if m.exporter.Visible() {
 		t.Fatalf("expected export modal to remain closed while stream filter modal handles typing")
 	}
-	if m.filter.global.Syscall == nil || m.filter.global.Syscall.Pattern != "ope" {
-		t.Fatalf("expected typed syscall filter to be stored globally, got %+v", m.filter.global.Syscall)
+	if m.filters.global.Syscall == nil || m.filters.global.Syscall.Pattern != "ope" {
+		t.Fatalf("expected typed syscall filter to be stored globally, got %+v", m.filters.global.Syscall)
 	}
 }
 
@@ -1416,7 +1416,7 @@ func TestGlobalFilterModalOpensFromDashboardShortcut(t *testing.T) {
 func TestQuitClosesGlobalFilterModalWithoutQuitting(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
-	m.filterModal = m.filterModal.Open(m.filter.global)
+	m.filterModal = m.filterModal.Open(m.filters.global)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	m = next.(Model)
@@ -1437,7 +1437,7 @@ func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
 	m.attaching = false
 
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(Model)
@@ -1455,8 +1455,8 @@ func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
 	if m.filterModal.Visible() {
 		t.Fatalf("expected global filter modal to close after esc")
 	}
-	if m.filter.global.Syscall == nil || m.filter.global.Syscall.Pattern != "read" {
-		t.Fatalf("expected stored global filter updated from modal, got %+v", m.filter.global.Syscall)
+	if m.filters.global.Syscall == nil || m.filters.global.Syscall.Pattern != "read" {
+		t.Fatalf("expected stored global filter updated from modal, got %+v", m.filters.global.Syscall)
 	}
 	if !stopped {
 		t.Fatalf("expected filter apply to stop the active trace")
@@ -1472,7 +1472,7 @@ func TestGlobalFilterCloseWithoutChangesDoesNotRestartTrace(t *testing.T) {
 	m.attaching = false
 
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(Model)
@@ -1502,7 +1502,7 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	m.height = 30
 
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	rb := eventstream.NewRingBuffer()
 	rb.Push(eventstream.StreamEvent{
@@ -1540,8 +1540,8 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected applying selected-cell global filter to restart tracing")
 	}
-	if m.filter.global.Comm == nil || m.filter.global.Comm.Pattern != "systemd" {
-		t.Fatalf("expected selected comm applied globally, got %+v", m.filter.global.Comm)
+	if m.filters.global.Comm == nil || m.filters.global.Comm.Pattern != "systemd" {
+		t.Fatalf("expected selected comm applied globally, got %+v", m.filters.global.Comm)
 	}
 	if !stopped {
 		t.Fatalf("expected selected-cell global filter to stop the active trace")
@@ -1549,8 +1549,8 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if !m.attaching {
 		t.Fatalf("expected selected-cell global filter to restart tracing")
 	}
-	if len(m.filter.stack) != 1 || m.filter.stack[0] != "comm~systemd" {
-		t.Fatalf("expected selected-cell action pushed to filter stack, got %+v", m.filter.stack)
+	if len(m.filters.stack) != 1 || m.filters.stack[0] != "comm~systemd" {
+		t.Fatalf("expected selected-cell action pushed to filter stack, got %+v", m.filters.stack)
 	}
 }
 
@@ -1570,18 +1570,18 @@ func TestGlobalFilterUndoKeyPopsLatestStackEntry(t *testing.T) {
 
 	m.attaching = false
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'F'}[0], Text: string([]rune{'F'})})
 	m = next.(Model)
 	if cmd == nil {
 		t.Fatalf("expected F to trigger global filter undo")
 	}
-	if m.filter.global.IsActive() {
-		t.Fatalf("expected undo to restore the previous all-filter state, got %+v", m.filter.global)
+	if m.filters.global.IsActive() {
+		t.Fatalf("expected undo to restore the previous all-filter state, got %+v", m.filters.global)
 	}
-	if len(m.filter.stack) != 0 || len(m.filter.history) != 0 {
-		t.Fatalf("expected filter stack/history cleared after undo, got stack=%+v history=%d", m.filter.stack, len(m.filter.history))
+	if len(m.filters.stack) != 0 || len(m.filters.history) != 0 {
+		t.Fatalf("expected filter stack/history cleared after undo, got stack=%+v history=%d", m.filters.stack, len(m.filters.history))
 	}
 	if !stopped {
 		t.Fatalf("expected undo to stop the active trace")
@@ -1612,7 +1612,7 @@ func TestPausedStreamEscUndoesLatestGlobalFilter(t *testing.T) {
 	m.dashboard.SetStreamSource(rb)
 	m.attaching = false
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = next.(Model)
@@ -1631,11 +1631,11 @@ func TestPausedStreamEscUndoesLatestGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected esc undo to restart tracing")
 	}
-	if m.filter.global.IsActive() {
-		t.Fatalf("expected esc undo to restore all-filter state, got %+v", m.filter.global)
+	if m.filters.global.IsActive() {
+		t.Fatalf("expected esc undo to restore all-filter state, got %+v", m.filters.global)
 	}
-	if len(m.filter.stack) != 0 {
-		t.Fatalf("expected filter stack cleared after esc undo, got %+v", m.filter.stack)
+	if len(m.filters.stack) != 0 {
+		t.Fatalf("expected filter stack cleared after esc undo, got %+v", m.filters.stack)
 	}
 	if !stopped {
 		t.Fatalf("expected esc undo to stop the active trace")
@@ -1681,7 +1681,7 @@ func TestProcessesTabEnterAppliesSelectedProcessAsGlobalFilter(t *testing.T) {
 	m.height = 30
 
 	stopped := false
-	m.traceStop = func() { stopped = true }
+	m.tracer.traceStop = func() { stopped = true }
 
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
 		{PID: 111, Comm: "alpha", Syscalls: 9},
@@ -1706,11 +1706,11 @@ func TestProcessesTabEnterAppliesSelectedProcessAsGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected selected process filter to restart tracing")
 	}
-	if m.filter.global.PID == nil || m.filter.global.PID.Value != 222 {
-		t.Fatalf("expected selected process pid applied globally, got %+v", m.filter.global.PID)
+	if m.filters.global.PID == nil || m.filters.global.PID.Value != 222 {
+		t.Fatalf("expected selected process pid applied globally, got %+v", m.filters.global.PID)
 	}
-	if len(m.filter.stack) != 1 || m.filter.stack[0] != "pid=222" {
-		t.Fatalf("expected pid filter pushed to stack, got %+v", m.filter.stack)
+	if len(m.filters.stack) != 1 || m.filters.stack[0] != "pid=222" {
+		t.Fatalf("expected pid filter pushed to stack, got %+v", m.filters.stack)
 	}
 	if !stopped {
 		t.Fatalf("expected selected process filter to stop the active trace")
