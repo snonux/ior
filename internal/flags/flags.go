@@ -306,16 +306,20 @@ func (cfg Config) TraceFilter() globalfilter.Filter {
 	return filter
 }
 
-func (flags Config) ShouldIAttachTracepoint(tracepointName string) bool {
-	for _, re := range flags.TracepointsToExclude {
+// ShouldIAttachTracepoint reports whether the given tracepoint name passes the
+// attach/exclude regex filters. Exclusions are checked first; if the name
+// matches any exclude pattern it is rejected regardless of the attach list.
+// When the attach list is empty, all non-excluded tracepoints are accepted.
+func (f Config) ShouldIAttachTracepoint(tracepointName string) bool {
+	for _, re := range f.TracepointsToExclude {
 		if re.MatchString(tracepointName) {
 			return false
 		}
 	}
-	if len(flags.TracepointsToAttach) == 0 {
+	if len(f.TracepointsToAttach) == 0 {
 		return true
 	}
-	for _, re := range flags.TracepointsToAttach {
+	for _, re := range f.TracepointsToAttach {
 		if re.MatchString(tracepointName) {
 			return true
 		}
