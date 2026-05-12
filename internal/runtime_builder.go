@@ -7,8 +7,6 @@ import (
 	"ior/internal/streamrow"
 )
 
-const defaultEngineCapacity = 64
-
 // runtimeComponents holds the freshly allocated trace-session components
 // produced by RuntimeBuilder.Build. All fields are non-nil after a successful
 // build. The caller is responsible for wiring these into the runtime bindings
@@ -41,7 +39,7 @@ func newRuntimeBuilder(cfg flags.Config) RuntimeBuilder {
 // concurrent trace sessions.
 func (b RuntimeBuilder) Build() runtimeComponents {
 	return runtimeComponents{
-		engine:    statsengine.NewEngine(defaultEngineCapacity),
+		engine:    statsengine.NewEngine(statsengine.DefaultTopN),
 		streamBuf: streamrow.NewRingBuffer(),
 		streamSeq: streamrow.NewSequencer(0),
 		liveTrie:  flamegraph.NewLiveTrie(b.cfg.CollapsedFields, b.cfg.CountField),

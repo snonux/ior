@@ -197,7 +197,7 @@ func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, n
 		el := mustNewEventLoop(b, eventLoopConfig{})
 		preseedBenchComms(el, numThreads)
 
-		engine := statsengine.NewEngine(64)
+		engine := statsengine.NewEngine(statsengine.DefaultTopN)
 		streamBuf := streamrow.NewRingBuffer()
 		streamSeq := streamrow.NewSequencer(0)
 		liveTrie := flamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")

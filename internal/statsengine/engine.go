@@ -9,7 +9,17 @@ import (
 	"ior/internal/types"
 )
 
-const trendWindowSlots = 20
+const (
+	// trendWindowSlots is the number of slots used for trend detection in ring
+	// time series. Two consecutive windows of this size are compared to detect
+	// rising, falling, or stable throughput/latency trends.
+	trendWindowSlots = 20
+
+	// DefaultTopN is the default maximum number of top entries tracked per
+	// category (files, processes). It is exported so callers can use it as the
+	// standard capacity when constructing a new Engine via NewEngine.
+	DefaultTopN = 64
+)
 
 // Engine aggregates streaming syscall data into immutable snapshots.
 type Engine struct {
