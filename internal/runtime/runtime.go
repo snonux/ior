@@ -186,3 +186,31 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 	}
 	return filters.filter.Clone(), true
 }
+
+// --- compile-time interface satisfaction assertions ---
+//
+// These blank-identifier assignments cause a build error if any concrete type
+// drifts out of sync with the interface it claims to satisfy. They are grouped
+// here because the runtime package already imports every relevant package
+// (*flamegraph.LiveTrie, *probemanager.Manager, *statsengine.Engine, and
+// *streamrow.RingBuffer), keeping the assertions co-located with the interface
+// definitions without introducing new import cycles.
+
+var (
+	// *flamegraph.LiveTrie must satisfy both the read-only and mutating sides of
+	// the trie contract as well as the combined LiveTrieSource interface.
+	_ Snapshotter   = (*flamegraph.LiveTrie)(nil)
+	_ Configurator  = (*flamegraph.LiveTrie)(nil)
+	_ LiveTrieSource = (*flamegraph.LiveTrie)(nil)
+
+	// *probemanager.Manager must satisfy the probe-control surface exposed to the TUI.
+	_ ProbeManager = (*probemanager.Manager)(nil)
+
+	// *statsengine.Engine must satisfy the snapshot-source contract used by the
+	// dashboard and the TUI runtime.
+	_ SnapshotSource = (*statsengine.Engine)(nil)
+
+	// *streamrow.RingBuffer must satisfy the full event-sink contract (read +
+	// write sides), which is a superset of StreamSource.
+	_ EventSink = (*streamrow.RingBuffer)(nil)
+)

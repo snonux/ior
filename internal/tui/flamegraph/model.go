@@ -113,6 +113,19 @@ type LiveTrieSource interface {
 	Configurator
 }
 
+// --- compile-time interface satisfaction assertions ---
+//
+// *coreflamegraph.LiveTrie is the sole production implementation of all three
+// trie interfaces. The assertions are placed here rather than in the
+// flamegraph package itself to avoid an import cycle: runtime imports
+// flamegraph, so flamegraph cannot import runtime. The tui/flamegraph package
+// already imports coreflamegraph, making it the natural home.
+var (
+	_ Snapshotter    = (*coreflamegraph.LiveTrie)(nil)
+	_ Configurator   = (*coreflamegraph.LiveTrie)(nil)
+	_ LiveTrieSource = (*coreflamegraph.LiveTrie)(nil)
+)
+
 type zoomState struct {
 	path                string
 	previousSelectedIdx int

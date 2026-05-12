@@ -1247,6 +1247,23 @@ func placeToViewport(width, height int, content string) string {
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
 }
 
+// --- compile-time interface satisfaction assertions ---
+//
+// These blank-identifier assignments cause a build error if any concrete type
+// drifts out of sync with the interface it claims to satisfy.
+
+var (
+	// *runtimeBindings must satisfy the full TUI runtime contract, which
+	// composes RuntimePublisher (write side) and RuntimeState (read side).
+	_ runtime.TraceRuntimeBindings = (*runtimeBindings)(nil)
+
+	// lateBoundDashboardSource must satisfy the SnapshotSource contract used
+	// by the dashboard model. It wraps the injected stats engine and forwards
+	// calls through runtimeBindings so the dashboard source can be wired
+	// before the actual engine is available.
+	_ dashboardui.SnapshotSource = (*lateBoundDashboardSource)(nil)
+)
+
 func altScreenView(content, title string) tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
