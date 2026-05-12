@@ -73,18 +73,44 @@ const flameKeyDebugEnabled = false
 // JSON+layout work or a 1-second animation chain.
 const driveWindow = 250 * time.Millisecond
 
-// LiveTrieSource is the minimal trie contract needed by the flamegraph TUI model.
-// SnapshotJSON is retained for tests and external callers; SnapshotTree is the
-// fast path used by the model's background refresh.
-type LiveTrieSource interface {
-	Fields() []string
-	CountField() string
-	Reconfigure([]string) error
-	SetCountField(string) error
-	Reset()
+// Snapshotter is the read-only subset of the trie contract: version polling and
+// snapshot retrieval. buildSnapshotMsg and background refresh goroutines use
+// only this narrower interface so they cannot accidentally mutate trie state.
+type Snapshotter interface {
+	// Version returns the monotonically-increasing snapshot generation counter.
+	// Callers use it to avoid re-rendering an unchanged trie.
 	Version() uint64
+	// SnapshotJSON serialises the current trie to JSON for external consumers
+	// (retained for tests and CLI callers; not used by the TUI render path).
 	SnapshotJSON() ([]byte, uint64)
+	// SnapshotTree returns a ready-to-render snapshot tree without a
+	// JSON round-trip. It is the fast path used by the background refresh.
 	SnapshotTree() (*snapshotNode, uint64)
+}
+
+// Configurator is the write/mutating subset of the trie contract: field layout,
+// metric selection, and baseline reset. The flamegraph controls (cycleFieldOrder,
+// toggleCountField, resetBaseline) call only these methods.
+type Configurator interface {
+	// Fields returns the current ordered list of grouping fields (e.g. ["comm","path"]).
+	Fields() []string
+	// CountField returns the active aggregation metric name (e.g. "count", "bytes").
+	CountField() string
+	// Reconfigure replaces the grouping fields and resets accumulated data so a
+	// new baseline begins with the new field order.
+	Reconfigure([]string) error
+	// SetCountField changes the active aggregation metric and starts a fresh baseline.
+	SetCountField(string) error
+	// Reset clears all accumulated data so the next ingested event starts a new baseline.
+	Reset()
+}
+
+// LiveTrieSource is the full trie contract needed by the flamegraph TUI model.
+// It embeds Snapshotter (read-only snapshot access) and Configurator (mutating
+// operations) so each can be used independently where a narrower interface suffices.
+type LiveTrieSource interface {
+	Snapshotter
+	Configurator
 }
 
 type zoomState struct {
@@ -581,7 +607,9 @@ func (m *Model) RefreshFromLiveTrie() bool {
 // buildSnapshotMsg performs the CPU-heavy snapshot+layout work on a background
 // goroutine. It returns a flameSnapshotReadyMsg that the Update loop consumes
 // to apply the new frame layout without blocking the UI goroutine.
-func buildSnapshotMsg(liveTrie LiveTrieSource, width, height int, zoomPath string) tea.Msg {
+// Only snapshot reads are needed here, so the parameter is narrowed to
+// Snapshotter rather than the full LiveTrieSource.
+func buildSnapshotMsg(liveTrie Snapshotter, width, height int, zoomPath string) tea.Msg {
 	tree, ver := liveTrie.SnapshotTree()
 	if tree == nil {
 		return flameSnapshotReadyMsg{version: ver, layoutWidth: width, layoutHeight: height, zoomPath: zoomPath}
