@@ -19,7 +19,9 @@ const (
 )
 
 type NumericFilter struct {
-	Op    CompareOp
+	// Op is the comparison operator applied when matching a candidate value.
+	Op CompareOp
+	// Value is the reference operand compared against the candidate value.
 	Value int64
 }
 
@@ -44,6 +46,8 @@ func (f *NumericFilter) EqValue() (int, bool) {
 }
 
 type StringFilter struct {
+	// Pattern is the substring (or anchored prefix/suffix) matched against the
+	// candidate string value; matching is case-insensitive.
 	Pattern string
 }
 
@@ -62,16 +66,27 @@ type Candidate interface {
 }
 
 type Filter struct {
-	Syscall    *StringFilter
-	Comm       *StringFilter
-	File       *StringFilter
-	PID        *NumericFilter
-	TID        *NumericFilter
-	FD         *NumericFilter
-	LatencyNs  *NumericFilter
-	GapNs      *NumericFilter
-	Bytes      *NumericFilter
-	RetVal     *NumericFilter
+	// Syscall filters events by syscall/tracepoint name substring.
+	Syscall *StringFilter
+	// Comm filters events by process command name substring.
+	Comm *StringFilter
+	// File filters events by the file path involved in the syscall.
+	File *StringFilter
+	// PID filters events by process ID using a numeric comparison.
+	PID *NumericFilter
+	// TID filters events by thread ID using a numeric comparison.
+	TID *NumericFilter
+	// FD filters events by file descriptor number using a numeric comparison.
+	FD *NumericFilter
+	// LatencyNs filters events by syscall latency in nanoseconds.
+	LatencyNs *NumericFilter
+	// GapNs filters events by inter-syscall gap duration in nanoseconds.
+	GapNs *NumericFilter
+	// Bytes filters events by the number of bytes transferred.
+	Bytes *NumericFilter
+	// RetVal filters events by the syscall return value.
+	RetVal *NumericFilter
+	// ErrorsOnly restricts the filter to events where the syscall returned an error.
 	ErrorsOnly bool
 }
 

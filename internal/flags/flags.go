@@ -18,31 +18,59 @@ import (
 
 // Config captures runtime configuration parsed from CLI flags.
 type Config struct {
-	PidFilter    int
-	TidFilter    int
+	// PidFilter restricts tracing to the given process ID; -1 means no filter.
+	PidFilter int
+	// TidFilter restricts tracing to the given thread ID; -1 means no filter.
+	TidFilter int
+	// EventMapSize controls the BPF ring-buffer map size for kernel events.
 	EventMapSize int
-	CommFilter   string
-	PathFilter   string
-	PprofEnable  bool
-	Duration     int
+	// CommFilter is a command-name substring filter applied at the CLI level.
+	CommFilter string
+	// PathFilter is a file-path substring filter applied at the CLI level.
+	PathFilter string
+	// PprofEnable turns on pprof profiling endpoints during the trace run.
+	PprofEnable bool
+	// Duration is the maximum tracing duration in seconds.
+	Duration int
 
-	// Tracepoints flags
-	TracepointsToAttach  []*regexp.Regexp
+	// TracepointsToAttach is the list of compiled regexes that select which
+	// tracepoints to load; an empty list means attach all tracepoints.
+	TracepointsToAttach []*regexp.Regexp
+	// TracepointsToExclude is the list of compiled regexes that suppress
+	// specific tracepoints even when they match TracepointsToAttach.
 	TracepointsToExclude []*regexp.Regexp
 
-	// Output/runtime flags
-	PlainMode        bool
+	// PlainMode disables the TUI and writes raw CSV rows to stdout.
+	PlainMode bool
+	// FlamegraphOutput writes aggregated .ior.zst output for offline workflows.
 	FlamegraphOutput bool
-	ParquetPath      string
-	OutputName       string
-	TestFlames       bool
-	TestLiveFlames   bool
-	LiveInterval     time.Duration
-	TUIExportEnable  bool
-	CollapsedFields  []string
-	CountField       string
-	GlobalFilter     globalfilter.Filter
-	ResetTimer       time.Duration
+	// ParquetPath is the file path for writing all traced syscall rows to
+	// Parquet in headless mode; empty string disables Parquet output.
+	ParquetPath string
+	// OutputName is the base name used for .ior.zst trace output files.
+	OutputName string
+	// TestFlames runs the TUI with static synthetic flamegraph data for
+	// keyboard-navigation testing without a live BPF trace.
+	TestFlames bool
+	// TestLiveFlames runs the TUI with continuously-updating synthetic
+	// flamegraph data for live keyboard-navigation testing.
+	TestLiveFlames bool
+	// LiveInterval is the refresh interval for the synthetic live flamegraph
+	// used when TestLiveFlames is active.
+	LiveInterval time.Duration
+	// TUIExportEnable allows the TUI to write CSV snapshot export files.
+	TUIExportEnable bool
+	// CollapsedFields lists the event fields used as flamegraph collapse keys.
+	CollapsedFields []string
+	// CountField is the event field used as the numeric weight in flamegraph
+	// collapse aggregation.
+	CountField string
+	// GlobalFilter is the structured event filter applied across all dashboards
+	// and output modes; takes precedence over the individual CLI filter flags.
+	GlobalFilter globalfilter.Filter
+	// ResetTimer is the interval at which aggregate dashboard state (flamegraph
+	// trie and stats engine) is automatically cleared; 0 disables auto-reset.
+	ResetTimer time.Duration
 
 	// ShowVersion prints the banner plus version and exits without running.
 	ShowVersion bool
