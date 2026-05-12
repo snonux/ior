@@ -97,3 +97,16 @@ func setupEventChannel(bpfModule *bpf.Module) (chan []byte, error) {
 	rb.Poll(300)
 	return ch, nil
 }
+
+// --- compile-time interface satisfaction assertions ---
+//
+// These blank-identifier assignments cause a build error if the libbpf wrapper
+// types drift out of sync with the probemanager interfaces they satisfy.
+
+var (
+	// libbpfTracepointProgram wraps a *bpf.BPFProg as a probemanager.Program.
+	_ probemanager.Program = (*libbpfTracepointProgram)(nil)
+
+	// libbpfTracepointModule wraps a *bpf.Module as a probemanager.Attacher.
+	_ probemanager.Attacher = (*libbpfTracepointModule)(nil)
+)
