@@ -274,67 +274,49 @@ func (p *pairTracker) limit() int {
 	return defaultMaxPendingEnterEvs
 }
 
-func trimOldestPendingPairs(state map[uint32]*event.Pair, ages map[uint32]uint64, targetSize int) {
+// trimLRU evicts the oldest entries from state (and their corresponding ages
+// entries) until len(state) == targetSize. Keys are compared by their age
+// value in ages; smaller age means older. The optional cleanup callback is
+// called with each evicted value before it is removed from state — use it to
+// recycle pooled objects (e.g. event.Pair.Recycle).
+func trimLRU[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize int, cleanup func(V)) {
 	excess := len(state) - targetSize
 	if excess <= 0 {
 		return
 	}
-	type pendingPairAge struct {
-		tid uint32
+	type entry struct {
+		key K
 		age uint64
 	}
-	oldest := make([]pendingPairAge, 0, len(state))
-	for tid := range state {
-		oldest = append(oldest, pendingPairAge{tid: tid, age: ages[tid]})
+	oldest := make([]entry, 0, len(state))
+	for k := range state {
+		oldest = append(oldest, entry{key: k, age: ages[k]})
 	}
-	slices.SortFunc(oldest, func(a, b pendingPairAge) int { return cmp.Compare(a.age, b.age) })
-	for _, entry := range oldest[:excess] {
-		if pair, ok := state[entry.tid]; ok && pair != nil {
+	slices.SortFunc(oldest, func(a, b entry) int { return cmp.Compare(a.age, b.age) })
+	for _, e := range oldest[:excess] {
+		if cleanup != nil {
+			cleanup(state[e.key])
+		}
+		delete(state, e.key)
+		delete(ages, e.key)
+	}
+}
+
+func trimOldestPendingPairs(state map[uint32]*event.Pair, ages map[uint32]uint64, targetSize int) {
+	// Recycle evicted pairs back to the pool before deletion.
+	trimLRU(state, ages, targetSize, func(pair *event.Pair) {
+		if pair != nil {
 			pair.Recycle()
 		}
-		delete(state, entry.tid)
-		delete(ages, entry.tid)
-	}
+	})
 }
 
 func trimOldestProcFdEntries(state map[uint64]*file.FdFile, ages map[uint64]uint64, targetSize int) {
-	excess := len(state) - targetSize
-	if excess <= 0 {
-		return
-	}
-	type procFdAge struct {
-		key uint64
-		age uint64
-	}
-	oldest := make([]procFdAge, 0, len(state))
-	for key := range state {
-		oldest = append(oldest, procFdAge{key: key, age: ages[key]})
-	}
-	slices.SortFunc(oldest, func(a, b procFdAge) int { return cmp.Compare(a.age, b.age) })
-	for _, entry := range oldest[:excess] {
-		delete(state, entry.key)
-		delete(ages, entry.key)
-	}
+	trimLRU(state, ages, targetSize, nil)
 }
 
 func trimOldestPendingHandles(state map[uint32]string, ages map[uint32]uint64, targetSize int) {
-	excess := len(state) - targetSize
-	if excess <= 0 {
-		return
-	}
-	type pendingHandleAge struct {
-		tid uint32
-		age uint64
-	}
-	oldest := make([]pendingHandleAge, 0, len(state))
-	for tid := range state {
-		oldest = append(oldest, pendingHandleAge{tid: tid, age: ages[tid]})
-	}
-	slices.SortFunc(oldest, func(a, b pendingHandleAge) int { return cmp.Compare(a.age, b.age) })
-	for _, entry := range oldest[:excess] {
-		delete(state, entry.tid)
-		delete(ages, entry.tid)
-	}
+	trimLRU(state, ages, targetSize, nil)
 }
 
 func trimTarget(limit int) int {
