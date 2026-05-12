@@ -147,18 +147,16 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 	return m
 }
 
-// Init starts periodic refresh ticks.
+// Init starts periodic refresh ticks. The tab registry's InitCmd field is
+// consulted to start any additional high-frequency tick the active tab needs
+// (e.g. stream and flame use 200 ms cadence ticks beyond the base 1 s tick).
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
-	switch m.activeTab {
-	case TabStream:
-		cmds = append(cmds, streamTickCmd())
-	case TabFlame:
-		cmds = append(cmds, flameTickCmd())
-	default:
-		if m.bubbleEnabledForTab(m.activeTab) {
-			cmds = append(cmds, bubbleTickCmdFn())
-		}
+	d := lookupTab(m.activeTab)
+	if d.InitCmd != nil {
+		cmds = append(cmds, d.InitCmd())
+	} else if m.bubbleEnabledForTab(m.activeTab) {
+		cmds = append(cmds, bubbleTickCmdFn())
 	}
 	if cmd := m.autoResetTickCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
@@ -758,17 +756,19 @@ func processSelectionLabel(proc statsengine.ProcessSnapshot) string {
 	return label
 }
 
+// postKeyTransitionCmd assembles the commands needed when the active tab
+// changes after a key press. Each tab's InitCmd is started when we first
+// enter that tab so high-frequency ticks (stream, flame) resume correctly.
 func (m Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 4)
 	cmds = append(cmds, cmd)
-	if prevActiveTab != TabStream && m.activeTab == TabStream {
-		cmds = append(cmds, streamTickCmd())
-	}
-	if prevActiveTab != TabFlame && m.activeTab == TabFlame {
-		cmds = append(cmds, flameTickCmd())
-	}
-	if prevActiveTab != m.activeTab && m.bubbleEnabledForTab(m.activeTab) {
-		cmds = append(cmds, bubbleTickCmdFn())
+	if prevActiveTab != m.activeTab {
+		d := lookupTab(m.activeTab)
+		if d.InitCmd != nil {
+			cmds = append(cmds, d.InitCmd())
+		} else if m.bubbleEnabledForTab(m.activeTab) {
+			cmds = append(cmds, bubbleTickCmdFn())
+		}
 	}
 	return batchCmds(cmds...)
 }
@@ -795,52 +795,27 @@ func batchCmds(cmds ...tea.Cmd) tea.Cmd {
 	}
 }
 
+// handleScrollKey dispatches navigation key presses to the active tab's
+// registered scroll handler. Bubble-chart scroll is handled first since it
+// applies regardless of which tab-specific handler is registered.
 func (m *Model) handleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	keyStr := msg.String()
 	if m.bubbleEnabledForTab(m.activeTab) {
-		switch keyStr {
-		case "down", "j", "right", "l":
-			return m.moveBubbleSelection(1), nil
-		case "up", "k", "left", "h":
-			return m.moveBubbleSelection(-1), nil
-		default:
-			return false, nil
-		}
+		return m.handleBubbleScrollKey(msg)
 	}
-	switch m.activeTab {
-	case TabSyscalls:
-		if m.syscallsVizMode == tabVizModeTreemap {
-			return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.maxSyscallsRows()), nil
-		}
-		return common.HandleTableNavigationKey(keyStr, &m.syscallsOffset, &m.syscallsCol, m.maxSyscallsRows(), len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
-	case TabFiles:
-		if m.filesDirGrouped {
-			return common.HandleTableNavigationKey(keyStr, &m.filesDirOffset, &m.filesDirCol, m.maxFilesDirRowsForMode(), len(fileDirColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
-		}
-		return common.HandleTableNavigationKey(keyStr, &m.filesOffset, &m.filesCol, m.maxFilesRows(), len(fileColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
-	case TabProcesses:
-		return common.HandleTableNavigationKey(keyStr, &m.processesOffset, &m.processesCol, m.maxProcessesRows(), len(processColumns()), tablePageStep(m.activeTableHeight())), nil
-	case TabStream:
-		streamWidth, streamHeight := streamViewport(m.width, m.height)
-		m.streamModel.SetViewport(streamWidth, streamHeight)
-		handled := m.streamModel.HandleTeaKey(msg)
-		if m.streamModel.ConsumeGlobalFilterUndoRequest() {
-			return true, func() tea.Msg { return messages.GlobalFilterUndoRequestedMsg{} }
-		}
-		if filter, action, ok := m.streamModel.ConsumeGlobalFilterRequest(); ok {
-			return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
-		}
-		if path, ok := m.streamModel.ConsumeOpenEditorRequest(); ok {
-			editorCmd, err := eventstream.EditorCommandForPath(path)
-			if err != nil {
-				m.streamModel.SetStatusMessage("Open failed: " + err.Error())
-				return true, nil
-			}
-			return true, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
-				return streamEditorDoneMsg{err: err}
-			})
-		}
-		return handled, nil
+	d := lookupTab(m.activeTab)
+	if d.HandleScroll == nil {
+		return false, nil
+	}
+	return d.HandleScroll(m, msg)
+}
+
+// handleBubbleScrollKey handles directional keys when a bubble chart is active.
+func (m *Model) handleBubbleScrollKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "down", "j", "right", "l":
+		return m.moveBubbleSelection(1), nil
+	case "up", "k", "left", "h":
+		return m.moveBubbleSelection(-1), nil
 	default:
 		return false, nil
 	}
@@ -1197,13 +1172,9 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 	if s, ok := m.renderActiveContentTable(width, activeHeight); ok {
 		return s
 	}
-	return renderActiveTab(
-		m.activeTab, m.latest, streamModel, flameModel,
-		width, activeHeight, m.pidFilter,
-		m.syscallsOffset, m.syscallsCol,
-		m.filesOffset, m.filesCol,
-		m.filesDirGrouped, m.filesDirOffset, m.filesDirCol,
-		m.processesOffset, m.processesCol,
+	return renderActiveTabContent(
+		&m, m.activeTab, m.latest, streamModel, flameModel,
+		width, activeHeight,
 	)
 }
 
@@ -1264,85 +1235,92 @@ func (m *Model) setBubbleViewports(width, height int) {
 	m.processesChart.SetViewport(width, height)
 }
 
+// refreshBubbleData pushes the latest snapshot data into all three bubble
+// charts and returns whether the currently active tab's chart is still
+// animating. This drives the bubble tick loop.
 func (m *Model) refreshBubbleData() bool {
 	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
 	m.setBubbleViewports(flameWidth, flameHeight)
 
 	syscallsAnimating := m.syscallsChart.SetData(syscallBubbleData(m.latest))
-
-	if m.filesDirGrouped {
-		m.filesChart.SetStatusHint("")
-	} else {
-		m.filesChart.SetStatusHint("Files bubble view requires directory mode (press d).")
-	}
-	filesAnimating := false
-	if m.filesDirGrouped {
-		filesAnimating = m.filesChart.SetData(filesDirBubbleData(m.latest))
-	} else {
-		m.filesChart.SetData(nil)
-	}
+	filesAnimating := m.refreshFilesBubbleData()
 	processesAnimating := m.processesChart.SetData(processBubbleData(m.latest))
 
+	// Return whether the active tab's chart is animating; the caller uses this
+	// to decide whether to schedule another bubble tick.
+	if !m.bubbleEnabledForTab(m.activeTab) {
+		return false
+	}
 	switch m.activeTab {
 	case TabSyscalls:
-		return m.syscallsVizMode == tabVizModeBubbles && syscallsAnimating
+		return syscallsAnimating
 	case TabFiles:
-		return m.filesVizMode == tabVizModeBubbles && filesAnimating
+		return filesAnimating
 	case TabProcesses:
-		return m.processesVizMode == tabVizModeBubbles && processesAnimating
+		return processesAnimating
 	default:
 		return false
 	}
 }
 
-func (m *Model) tickActiveBubbleChart() bool {
-	switch m.activeTab {
+// refreshFilesBubbleData updates the files bubble chart. When not in
+// dir-grouped mode the chart is cleared with a status hint explaining why.
+func (m *Model) refreshFilesBubbleData() bool {
+	if m.filesDirGrouped {
+		m.filesChart.SetStatusHint("")
+		return m.filesChart.SetData(filesDirBubbleData(m.latest))
+	}
+	m.filesChart.SetStatusHint("Files bubble view requires directory mode (press d).")
+	m.filesChart.SetData(nil)
+	return false
+}
+
+// bubbleChartFor returns a pointer to the bubble chart for the given tab, or
+// nil when that tab has no bubble chart. This eliminates repeated switch
+// statements over tab identity for chart operations.
+func (m *Model) bubbleChartFor(tab Tab) *bubbleChart {
+	switch tab {
 	case TabSyscalls:
-		if m.syscallsVizMode != tabVizModeBubbles {
-			return false
-		}
-		return m.syscallsChart.Tick(0)
+		return &m.syscallsChart
 	case TabFiles:
-		if m.filesVizMode != tabVizModeBubbles {
-			return false
-		}
-		return m.filesChart.Tick(0)
+		return &m.filesChart
 	case TabProcesses:
-		if m.processesVizMode != tabVizModeBubbles {
-			return false
-		}
-		return m.processesChart.Tick(0)
+		return &m.processesChart
 	default:
-		return false
+		return nil
 	}
 }
 
-func (m *Model) moveBubbleSelection(delta int) bool {
-	switch m.activeTab {
+// tabVizModeFor returns the current visualization mode for tab. Only the three
+// bubble-capable tabs (syscalls, files, processes) carry per-tab mode state;
+// all other tabs implicitly use tabVizModeTable.
+func (m Model) tabVizModeFor(tab Tab) tabVizMode {
+	switch tab {
 	case TabSyscalls:
-		return m.syscallsChart.MoveSelection(delta)
+		return m.syscallsVizMode
 	case TabFiles:
-		return m.filesChart.MoveSelection(delta)
+		return m.filesVizMode
 	case TabProcesses:
-		return m.processesChart.MoveSelection(delta)
+		return m.processesVizMode
 	default:
-		return false
+		return tabVizModeTable
 	}
 }
 
-func (m Model) activeBubbleChartHasNodes() bool {
-	switch m.activeTab {
+// setTabVizMode updates the stored viz mode for tab.
+func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
+	switch tab {
 	case TabSyscalls:
-		return m.syscallsChart.HasNodes()
+		m.syscallsVizMode = mode
 	case TabFiles:
-		return m.filesChart.HasNodes()
+		m.filesVizMode = mode
 	case TabProcesses:
-		return m.processesChart.HasNodes()
-	default:
-		return false
+		m.processesVizMode = mode
 	}
 }
 
+// bubbleEnabledForTab reports whether the bubble chart is the active view for
+// tab. The Files tab additionally requires dir-grouped mode to be on.
 func (m Model) bubbleEnabledForTab(tab Tab) bool {
 	switch tab {
 	case TabSyscalls:
@@ -1354,6 +1332,39 @@ func (m Model) bubbleEnabledForTab(tab Tab) bool {
 	default:
 		return false
 	}
+}
+
+// tickActiveBubbleChart advances the animation frame for the active tab's
+// bubble chart. Returns false when bubbles are not active for the current tab.
+func (m *Model) tickActiveBubbleChart() bool {
+	if !m.bubbleEnabledForTab(m.activeTab) {
+		return false
+	}
+	ch := m.bubbleChartFor(m.activeTab)
+	if ch == nil {
+		return false
+	}
+	return ch.Tick(0)
+}
+
+// moveBubbleSelection shifts the bubble selection by delta for the active tab.
+func (m *Model) moveBubbleSelection(delta int) bool {
+	ch := m.bubbleChartFor(m.activeTab)
+	if ch == nil {
+		return false
+	}
+	return ch.MoveSelection(delta)
+}
+
+// activeBubbleChartHasNodes reports whether the active tab's bubble chart
+// has any nodes to display.
+func (m Model) activeBubbleChartHasNodes() bool {
+	mutable := m
+	ch := mutable.bubbleChartFor(m.activeTab)
+	if ch == nil {
+		return false
+	}
+	return ch.HasNodes()
 }
 
 func (m *Model) cycleVisualizationMode() tea.Cmd {
@@ -1374,71 +1385,29 @@ func (m *Model) cycleVisualizationMode() tea.Cmd {
 	return nil
 }
 
+// toggleBubbleMetric cycles the bubble metric for the active tab's chart.
+// The Files tab additionally requires dir-grouped mode to accept metric changes.
 func (m *Model) toggleBubbleMetric() tea.Cmd {
-	switch m.activeTab {
-	case TabSyscalls:
-		m.syscallsChart.SetMetric(nextBubbleMetric(m.syscallsChart.Metric()))
-		m.refreshBubbleData()
-		if m.syscallsVizMode == tabVizModeBubbles && m.activeBubbleChartHasNodes() {
-			return bubbleTickCmdFn()
-		}
-	case TabFiles:
-		if !m.filesDirGrouped {
-			return nil
-		}
-		m.filesChart.SetMetric(nextBubbleMetric(m.filesChart.Metric()))
-		m.refreshBubbleData()
-		if m.filesVizMode == tabVizModeBubbles && m.activeBubbleChartHasNodes() {
-			return bubbleTickCmdFn()
-		}
-	case TabProcesses:
-		m.processesChart.SetMetric(nextBubbleMetric(m.processesChart.Metric()))
-		m.refreshBubbleData()
-		if m.processesVizMode == tabVizModeBubbles && m.activeBubbleChartHasNodes() {
-			return bubbleTickCmdFn()
-		}
+	if m.activeTab == TabFiles && !m.filesDirGrouped {
+		return nil
+	}
+	ch := m.bubbleChartFor(m.activeTab)
+	if ch == nil {
+		return nil
+	}
+	ch.SetMetric(nextBubbleMetric(ch.Metric()))
+	m.refreshBubbleData()
+	if m.bubbleEnabledForTab(m.activeTab) && m.activeBubbleChartHasNodes() {
+		return bubbleTickCmdFn()
 	}
 	return nil
 }
 
-func (m Model) tabVizModeFor(tab Tab) tabVizMode {
-	switch tab {
-	case TabSyscalls:
-		return m.syscallsVizMode
-	case TabFiles:
-		return m.filesVizMode
-	case TabProcesses:
-		return m.processesVizMode
-	default:
-		return tabVizModeTable
-	}
-}
-
-func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
-	switch tab {
-	case TabSyscalls:
-		m.syscallsVizMode = mode
-	case TabFiles:
-		m.filesVizMode = mode
-	case TabProcesses:
-		m.processesVizMode = mode
-	}
-}
-
+// allowedVizModes returns the visualization modes available for tab. It
+// delegates to the tab registry so that new tabs need no changes here;
+// only the Files tab has a runtime condition (requires dir-grouped mode).
 func (m Model) allowedVizModes(tab Tab) []tabVizMode {
-	switch tab {
-	case TabSyscalls:
-		return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
-	case TabProcesses:
-		return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap}
-	case TabFiles:
-		if m.filesDirGrouped {
-			return []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap, tabVizModeIcicle}
-		}
-		return []tabVizMode{tabVizModeTable}
-	default:
-		return []tabVizMode{tabVizModeTable}
-	}
+	return tabAllowedVizModes(tab, m.filesDirGrouped)
 }
 
 func nextVizMode(current tabVizMode, allowed []tabVizMode) tabVizMode {
@@ -1469,41 +1438,20 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-func renderActiveTab(tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height, pidFilter, syscallsOffset, syscallsCol, filesOffset, filesCol int, filesDirGrouped bool, filesDirOffset, filesDirCol, processesOffset, processesCol int) string {
-	if tab == TabStream {
-		if streamModel == nil {
-			return common.PanelStyle.Render("Stream: waiting for source...")
-		}
-		return streamModel.View(width, height)
-	}
-	if tab == TabFlame {
-		if flameModel == nil {
-			return common.PanelStyle.Render("Flame: waiting for model...")
-		}
-		return flameModel.View().Content
-	}
-
-	if snap == nil {
-		return common.PanelStyle.Render(tab.String() + ": waiting for stats...")
-	}
-
-	switch tab {
-	case TabOverview:
-		return renderOverview(snap, width, height)
-	case TabSyscalls:
-		return renderSyscallsWithOffset(snap, width, height, syscallsOffset, syscallsCol)
-	case TabFiles:
-		if filesDirGrouped {
-			return renderFilesDirGrouped(snap, width, height, filesDirOffset, filesDirCol)
-		}
-		return renderFilesWithOffset(snap, width, height, filesOffset, filesCol)
-	case TabProcesses:
-		return renderProcessesWithOffset(snap, width, height, processesOffset, processesCol, pidFilter)
-	case TabLatency:
-		return renderLatencyGapsTab(snap, width, height)
-	default:
+// renderActiveTabContent dispatches to the registered render function for tab.
+// It handles the common waiting-for-stats guard for snapshot-dependent tabs, so
+// individual render functions can assume snap is non-nil (stream and flame
+// tabs receive snap=nil and handle the absent-model case themselves).
+func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height int) string {
+	d := lookupTab(tab)
+	if d.Render == nil {
 		return common.PanelStyle.Render("Unknown tab")
 	}
+	// Stream and flame manage their own "waiting" state; all others need a snapshot.
+	if tab != TabStream && tab != TabFlame && snap == nil {
+		return common.PanelStyle.Render(tab.String() + ": waiting for stats...")
+	}
+	return d.Render(m, snap, streamModel, flameModel, width, height)
 }
 
 func streamTickCmd() tea.Cmd {

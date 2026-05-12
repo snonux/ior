@@ -30,52 +30,29 @@ const (
 	TabFlame
 )
 
-var allTabs = []Tab{
-	TabFlame,
-	TabOverview,
-	TabSyscalls,
-	TabFiles,
-	TabProcesses,
-	TabLatency,
-	TabStream,
-}
-
+// String returns the full display name of the tab, looked up from the
+// central tabDescriptors registry so new tabs need no switch edits here.
 func (t Tab) String() string {
-	switch t {
-	case TabOverview:
-		return "Overview"
-	case TabSyscalls:
-		return "Syscalls"
-	case TabFiles:
-		return "Files"
-	case TabProcesses:
-		return "Processes"
-	case TabLatency:
-		return "Latency+Gaps"
-	case TabStream:
-		return "Stream"
-	case TabFlame:
-		return "Flame"
-	default:
-		return "Unknown"
-	}
+	return lookupTab(t).Name
 }
 
 func nextTab(tab Tab) Tab {
-	idx := tabIndex(tab)
-	return allTabs[(idx+1)%len(allTabs)]
+	tabs := orderedTabs()
+	idx := tabIndex(tab, tabs)
+	return tabs[(idx+1)%len(tabs)]
 }
 
 func prevTab(tab Tab) Tab {
-	idx := tabIndex(tab)
+	tabs := orderedTabs()
+	idx := tabIndex(tab, tabs)
 	if idx == 0 {
-		return allTabs[len(allTabs)-1]
+		return tabs[len(tabs)-1]
 	}
-	return allTabs[idx-1]
+	return tabs[idx-1]
 }
 
-func tabIndex(tab Tab) int {
-	for i, candidate := range allTabs {
+func tabIndex(tab Tab, tabs []Tab) int {
+	for i, candidate := range tabs {
 		if candidate == tab {
 			return i
 		}
@@ -83,13 +60,17 @@ func tabIndex(tab Tab) int {
 	return 0
 }
 
+// renderTabBar renders the full-width styled tab bar. It falls back to the
+// plain renderer when the terminal is narrow, and further degrades to showing
+// only the active tab label when even the abbreviated labels do not fit.
 func renderTabBar(active Tab, width int) string {
 	if width > 0 && width < 90 {
 		return renderTabBarPlain(active, width)
 	}
+	tabs := orderedTabs()
 	build := func(short bool) string {
-		parts := make([]string, 0, len(allTabs))
-		for i, tab := range allTabs {
+		parts := make([]string, 0, len(tabs))
+		for i, tab := range tabs {
 			label := fmt.Sprintf("%d:%s", i+1, tabLabel(tab, short))
 			if tab == active {
 				parts = append(parts, common.TabActiveStyle.Render(label))
@@ -105,7 +86,7 @@ func renderTabBar(active Tab, width int) string {
 		bar = build(true)
 	}
 	if width > 0 && lipgloss.Width(bar) > width {
-		label := fmt.Sprintf("%d:%s", tabIndex(active)+1, tabLabel(active, false))
+		label := fmt.Sprintf("%d:%s", tabIndex(active, tabs)+1, tabLabel(active, false))
 		bar = common.TabActiveStyle.Render(label)
 	}
 	if width <= 0 {
@@ -206,28 +187,13 @@ func wrapHelpLines(parts []string, width int) (string, string) {
 	return lines[0], lines[1]
 }
 
+// tabLabel returns the display label for tab. When short is true the
+// abbreviated name from the registry is used; otherwise the full name.
 func tabLabel(tab Tab, short bool) string {
 	if !short {
 		return tab.String()
 	}
-	switch tab {
-	case TabOverview:
-		return "Ovr"
-	case TabSyscalls:
-		return "Sys"
-	case TabFiles:
-		return "Fil"
-	case TabProcesses:
-		return "Pro"
-	case TabLatency:
-		return "Lat"
-	case TabStream:
-		return "Str"
-	case TabFlame:
-		return "Flm"
-	default:
-		return "Unk"
-	}
+	return lookupTab(tab).ShortName
 }
 
 func truncatePlain(s string, width int) string {
@@ -244,9 +210,13 @@ func truncatePlain(s string, width int) string {
 	return string(r[:width-1]) + "…"
 }
 
+// renderTabBarPlain renders a plain-text tab bar suitable for narrow terminals.
+// Tab order and labels are derived from the registry so no edits are needed
+// when new tabs are registered.
 func renderTabBarPlain(active Tab, width int) string {
-	parts := make([]string, 0, len(allTabs))
-	for i, tab := range allTabs {
+	tabs := orderedTabs()
+	parts := make([]string, 0, len(tabs))
+	for i, tab := range tabs {
 		label := fmt.Sprintf("%d:%s", i+1, tabLabel(tab, true))
 		if tab == active {
 			label = "[" + label + "]"
