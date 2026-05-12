@@ -69,67 +69,18 @@ func Run(cfg flags.Config) error {
 	return dispatchRun(cfg)
 }
 
+// dispatchRun delegates to the defaultRegistry, which validates all
+// mode-combination constraints and then runs the first matching handler.
 func dispatchRun(cfg flags.Config) error {
-	if err := validateRunConfig(cfg); err != nil {
-		return err
-	}
-	if cfg.TestFlames {
-		return runTUITestFlamesFn(cfg, tuiTestFlamesStarter(cfg))
-	}
-	if cfg.TestLiveFlames {
-		return runTUITestLiveFlamesFn(cfg, tuiTestLiveFlamesStarter(cfg))
-	}
-	// All remaining modes require tracing, which needs root. Fail fast here so
-	// the TUI never starts (and hangs) when we already know it cannot trace.
-	if getEUID() != 0 {
-		return errRootPrivilegesRequired
-	}
-	if isHeadlessParquetMode(cfg) {
-		return runParquetFn(cfg)
-	}
-	if shouldRunTraceMode(cfg) {
-		return runTraceFn(cfg)
-	}
-	return runTUIFn(cfg, tuiTraceStarterFromRunTrace(cfg, runTraceWithContextFn))
+	return defaultRegistry.dispatch(cfg)
 }
 
+// validateRunConfig runs all cross-mode constraint checks without running
+// any mode. It is a thin wrapper around defaultRegistry.validate so that
+// callers (and tests) that only want validation do not need to know about
+// the registry.
 func validateRunConfig(cfg flags.Config) error {
-	if isHeadlessParquetMode(cfg) {
-		if cfg.TestFlames {
-			return errors.New("--testflames cannot be combined with -parquet")
-		}
-		if cfg.TestLiveFlames {
-			return errors.New("--testliveflames cannot be combined with -parquet")
-		}
-		if cfg.PlainMode {
-			return errors.New("-parquet and -plain are mutually exclusive")
-		}
-		if cfg.FlamegraphOutput {
-			return errors.New("-parquet and -flamegraph are mutually exclusive")
-		}
-		if hasHeadlessParquetContentFilters(cfg) {
-			return errors.New("-parquet cannot be combined with content filters (-comm, -path, -pid, -tid)")
-		}
-	}
-	if cfg.TestFlames && cfg.PlainMode {
-		return errors.New("--testflames cannot be combined with -plain")
-	}
-	if cfg.TestFlames && cfg.FlamegraphOutput {
-		return errors.New("--testflames cannot be combined with -flamegraph")
-	}
-	if cfg.TestLiveFlames && cfg.PlainMode {
-		return errors.New("--testliveflames cannot be combined with -plain")
-	}
-	if cfg.TestLiveFlames && cfg.FlamegraphOutput {
-		return errors.New("--testliveflames cannot be combined with -flamegraph")
-	}
-	if cfg.PlainMode && cfg.FlamegraphOutput {
-		return errors.New("-plain and -flamegraph are mutually exclusive")
-	}
-	if cfg.TestFlames && cfg.TestLiveFlames {
-		return errors.New("--testflames and --testliveflames are mutually exclusive")
-	}
-	return nil
+	return defaultRegistry.validate(cfg)
 }
 
 // tuiTestFlamesStarter returns a TraceStarter that seeds static test flame data
@@ -208,6 +159,9 @@ func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, 
 	}
 }
 
+// shouldRunTraceMode reports whether cfg selects a headless trace path
+// (plain CSV, flamegraph output, or headless Parquet). It is retained for
+// use by the test suite; the dispatch path uses modeRegistry instead.
 func shouldRunTraceMode(cfg flags.Config) bool {
 	return cfg.PlainMode || cfg.FlamegraphOutput || isHeadlessParquetMode(cfg)
 }
