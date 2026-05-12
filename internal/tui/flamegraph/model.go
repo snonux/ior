@@ -1,7 +1,6 @@
 package flamegraph
 
 import (
-	"cmp"
 	"fmt"
 	"image/color"
 	"slices"
@@ -12,7 +11,6 @@ import (
 	common "ior/internal/tui/common"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -122,7 +120,17 @@ func defaultFlameKeyMap() flameKeyMap {
 }
 
 // Model is the Bubble Tea model for the TUI flamegraph tab.
+// It delegates zoom, selection, animation, and search concerns to four focused
+// sub-controllers: ZoomNavigator, SelectionManager, FrameAnimator, and
+// SearchController. The sub-controllers are embedded so existing field names
+// (e.g. m.selectedIdx, m.zoomPath) remain accessible directly.
 type Model struct {
+	// Sub-controllers — each owns a single concern.
+	ZoomNavigator    // zoom path, stack, and root node management
+	SelectionManager // selected frame index and subtree highlight
+	FrameAnimator    // animated frame transitions and ancestry index
+	SearchController // search query, match indices, filter-visible set
+
 	liveTrie    LiveTrieSource
 	lastVersion uint64
 	snapshot    *snapshotNode
@@ -133,24 +141,9 @@ type Model struct {
 	// than one snapshot rebuild concurrently.
 	refreshInFlight bool
 
-	frames       []tuiFrame
-	targetFrames []tuiFrame
-	ancestry     frameAncestry
-	width        int
-	height       int
+	width  int
+	height int
 
-	selectedIdx   int
-	zoomStack     []zoomState
-	zoomRoot      *snapshotNode
-	zoomPath      string
-	zoomLineWidth int
-
-	searchActive  bool
-	searchInput   textinput.Model
-	searchQuery   string
-	matchIndices  map[int]bool
-	filterVisible map[int]bool
-	subtreeSet    map[int]bool
 	showHelp      bool
 	statusMessage string
 	lastKeyDebug  string
@@ -159,9 +152,7 @@ type Model struct {
 	fieldIndex   int
 	countField   string
 
-	animation AnimationState
-	animating bool
-	paused    bool
+	paused bool
 
 	// lastKeyAt records when the user most recently pressed a key. While the
 	// user is actively driving the view (lastKeyAt within driveWindow ago),
@@ -175,10 +166,8 @@ type Model struct {
 	// caching avoids re-running RenderTerminalView when nothing visible has
 	// moved. Lives behind a pointer so the value-receiver View() can update it.
 	viewCache *flameViewCache
-	// hasNavigableSnapshot flips once we have at least one selectable non-root frame.
-	hasNavigableSnapshot bool
-	isDark               bool
-	keys                 flameKeyMap
+	isDark    bool
+	keys      flameKeyMap
 }
 
 // tuiFrame stores one terminal flamegraph frame cell.
@@ -195,20 +184,17 @@ type tuiFrame struct {
 }
 
 // NewModel constructs a flamegraph tab model with default state.
+// The four embedded sub-controllers (ZoomNavigator, SelectionManager,
+// FrameAnimator, SearchController) are initialised here; the Model delegates
+// their respective concerns to them.
 func NewModel(liveTrie LiveTrieSource) Model {
-	searchInput := textinput.New()
-	searchInput.Prompt = "/"
-	searchInput.CharLimit = 0
-	searchInput.SetWidth(32)
-	searchInput.SetStyles(textinput.DefaultStyles(true))
-
 	m := Model{
-		liveTrie:      liveTrie,
-		matchIndices:  make(map[int]bool),
-		filterVisible: make(map[int]bool),
-		subtreeSet:    make(map[int]bool),
-		searchInput:   searchInput,
-		viewCache:     &flameViewCache{},
+		ZoomNavigator:    ZoomNavigator{},
+		SelectionManager: newSelectionManager(),
+		FrameAnimator:    newFrameAnimator(),
+		SearchController: newSearchController(true),
+		liveTrie:         liveTrie,
+		viewCache:        &flameViewCache{},
 		fieldPresets: [][]string{
 			{"comm", "tracepoint", "path"},
 			{"path", "tracepoint", "comm"},
@@ -218,7 +204,6 @@ func NewModel(liveTrie LiveTrieSource) Model {
 		},
 		isDark:     true,
 		keys:       defaultFlameKeyMap(),
-		animation:  NewAnimationState(30, 6.0, 1.0),
 		countField: "count",
 	}
 	m.syncFieldPresetToTrie()
@@ -231,17 +216,18 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
-// Update handles incoming messages.
+// Update handles incoming messages. Delegates animation ticks to FrameAnimator,
+// snapshot arrivals to handleSnapshotReady, and key/mouse events to the
+// appropriate handler.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case animTickMsg:
 		if !m.animating {
 			return m, nil
 		}
-		m.animating = m.animation.Tick(0)
-		m.frames = m.animation.CurrentFrames()
-		m.clampSelection()
-		m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
+		// Delegate animation tick to FrameAnimator; it advances springs,
+		// refreshes the frame slice, and updates the subtree highlight.
+		m.FrameAnimator.tickAnimation(&m.SelectionManager, &m.SearchController)
 		return m, m.animationTickCmd()
 	case flameSnapshotReadyMsg:
 		return m.handleSnapshotReady(msg)
@@ -267,28 +253,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleSearchInput processes key events while search mode is active.
-// Handles escape (cancel search), enter (apply query), and delegates
-// all other keys to the text input component for in-place editing.
+// Delegates key dispatch (esc/enter/text) to SearchController, then updates
+// match state and status message on the Model.
 func (m Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	handled := false
-	switch msg.String() {
-	case "esc":
-		handled = true
-		m.clearSearch()
-		m.recordKeyDebug(msg, handled, false)
-		return m, nil
-	case "enter":
-		handled = true
-		m.applySearchQuery(m.searchInput.Value())
-		m.searchActive = false
-		m.searchInput.Blur()
-		m.recordKeyDebug(msg, handled, false)
-		return m, nil
+	_, committed, query, cancelled := m.SearchController.handleInput(msg)
+	switch {
+	case cancelled:
+		// ESC: clear search state and close search mode.
+		m.statusMessage = m.SearchController.clear()
+		m.recordKeyDebug(msg, true, false)
+	case committed:
+		// Enter: apply query, close search mode, jump to first match.
+		m.SearchController.searchActive = false
+		statusMsg, jumpDir := m.SearchController.applyQuery(query, m.frames, m.ancestry)
+		m.statusMessage = statusMsg
+		if jumpDir != 0 {
+			m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, jumpDir)
+		} else {
+			m.SelectionManager.ensureNavigable(m.frames, m.matchIndices, m.searchQuery, m.filterVisible)
+		}
+		m.recordKeyDebug(msg, true, false)
+	default:
+		m.recordKeyDebug(msg, true, false)
 	}
-	var cmd tea.Cmd
-	m.searchInput, cmd = m.searchInput.Update(msg)
-	_ = cmd
-	m.recordKeyDebug(msg, true, false)
 	return m, nil
 }
 
@@ -315,9 +302,10 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg) bool {
 	case isSearchOpenKey(msg):
 		m.openSearch()
 	case isNextMatchKey(msg):
-		m.jumpMatch(1)
+		// Delegate match jump to package-level helper; update selection and subtree.
+		m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, 1)
 	case isPrevMatchKey(msg):
-		m.jumpMatch(-1)
+		m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, -1)
 	case isPauseKey(msg):
 		m.togglePause()
 	case isResetBaselineKey(msg):
@@ -340,22 +328,26 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg) bool {
 	return true
 }
 
-// handleMovementKey dispatches directional and jump key actions.
-// Returns true when a key was handled, false otherwise.
+// handleMovementKey dispatches directional and jump key actions to
+// SelectionManager. Returns true when a key was handled, false otherwise.
 func (m *Model) handleMovementKey(msg tea.KeyPressMsg) bool {
+	sel := &m.SelectionManager
+	frames := m.frames
+	sq := m.searchQuery
+	fv := m.filterVisible
 	switch {
 	case isMoveShallowerKey(msg, m.keys):
-		m.moveVerticalWithFallback(-1, 1, -1)
+		sel.moveVerticalWithFallback(frames, sq, fv, -1, 1, -1)
 	case isMoveDeeperKey(msg, m.keys):
-		m.moveVerticalWithFallback(1, -1, 1)
+		sel.moveVerticalWithFallback(frames, sq, fv, 1, -1, 1)
 	case isPrevSiblingKey(msg, m.keys):
-		m.moveSibling(-1)
+		sel.moveSibling(frames, -1, sq, fv)
 	case isNextSiblingKey(msg, m.keys):
-		m.moveSibling(1)
+		sel.moveSibling(frames, 1, sq, fv)
 	case isJumpTopKey(msg, m.keys):
-		m.jumpToTop()
+		sel.jumpToTop(frames, sq, fv)
 	case isJumpRootKey(msg, m.keys):
-		m.jumpToRoot()
+		sel.jumpToRoot(frames, m.currentRootPath(), sq, fv)
 	default:
 		return false
 	}
@@ -400,14 +392,10 @@ func (m Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cm
 	return m, m.animationTickCmd()
 }
 
-// userDriving reports whether the user has pressed a key within the recent
-// drive window. Used to skip snapshot refresh and animation while keystrokes
-// are arriving.
+// userDriving delegates to the FrameAnimator helper that checks whether the user
+// pressed a key within the drive window.
 func (m Model) userDriving() bool {
-	if m.lastKeyAt.IsZero() {
-		return false
-	}
-	return time.Since(m.lastKeyAt) < driveWindow
+	return driveWindowActive(m.lastKeyAt)
 }
 
 // ConsumesKey reports whether the flamegraph should handle a key press before
@@ -508,7 +496,8 @@ func (m Model) currentViewCacheKey() flameViewCacheKey {
 	}
 }
 
-// SetLiveTrie updates the data source used by the flamegraph model.
+// SetLiveTrie updates the data source. Resets all sub-controllers and clears
+// snapshot state so the new trie starts fresh.
 func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.syncFieldPresetToTrie()
@@ -516,19 +505,10 @@ func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
 	m.lastVersion = 0
 	m.snapshot = nil
 	m.globalTotal = 0
-	m.selectedIdx = 0
-	m.frames = nil
-	m.targetFrames = nil
-	m.zoomStack = nil
-	m.zoomRoot = nil
-	m.zoomPath = ""
-	m.zoomLineWidth = 0
-	m.subtreeSet = make(map[int]bool)
-	m.filterVisible = make(map[int]bool)
-	m.ancestry = frameAncestry{}
-	m.animation = NewAnimationState(30, 6.0, 1.0)
-	m.animating = false
-	m.hasNavigableSnapshot = false
+	m.ZoomNavigator = ZoomNavigator{}
+	m.SelectionManager = newSelectionManager()
+	m.FrameAnimator.reset()
+	m.SearchController.reset(false)
 }
 
 func (m *Model) syncFieldPresetToTrie() {
@@ -598,26 +578,50 @@ func (m *Model) RefreshFromLiveTrie() bool {
 	return true
 }
 
+// buildSnapshotMsg performs the CPU-heavy snapshot+layout work on a background
+// goroutine. It returns a flameSnapshotReadyMsg that the Update loop consumes
+// to apply the new frame layout without blocking the UI goroutine.
+func buildSnapshotMsg(liveTrie LiveTrieSource, width, height int, zoomPath string) tea.Msg {
+	tree, ver := liveTrie.SnapshotTree()
+	if tree == nil {
+		return flameSnapshotReadyMsg{version: ver, layoutWidth: width, layoutHeight: height, zoomPath: zoomPath}
+	}
+	var zoomRoot *snapshotNode
+	layoutRoot := tree
+	rootPath := ""
+	if zoomPath != "" {
+		zoomRoot = findNodeByPath(tree, zoomPath)
+		if zoomRoot != nil {
+			layoutRoot = zoomRoot
+			rootPath = zoomPath
+		}
+	}
+	targetFrames := buildTerminalLayoutWithPath(layoutRoot, width, height, rootPath)
+	if zoomPath != "" {
+		targetFrames = applyZoomLineage(targetFrames, tree, zoomPath, width)
+	}
+	return flameSnapshotReadyMsg{
+		version:      ver,
+		layoutWidth:  width,
+		layoutHeight: height,
+		zoomPath:     zoomPath,
+		snapshot:     tree,
+		zoomRoot:     zoomRoot,
+		targetFrames: targetFrames,
+		ancestry:     buildFrameAncestry(targetFrames),
+		globalTotal:  snapshotTotal(tree),
+	}
+}
+
 // RefreshFromLiveTrieCmd returns a tea.Cmd that fetches a snapshot, lays out
 // frames, and builds the ancestry index on a background goroutine, then
 // dispatches a flameSnapshotReadyMsg back to the Bubble Tea Update loop.
 //
-// Returns nil if no refresh is needed: no live trie configured, paused with an
-// existing snapshot, version unchanged, another refresh already in flight, or
-// the user is actively pressing keys. Skipping while driving keeps keystrokes
-// responsive — the next idle tick picks up the latest version.
-//
-// Coalescing via refreshInFlight ensures we never queue more than one
-// background job at a time. Newer ticks just no-op until the in-flight result
-// lands, and the version gate then catches the freshest state.
+// Returns nil when no refresh is needed: no live trie, paused with an existing
+// snapshot, version unchanged, another refresh in flight, or user driving.
+// Coalescing via refreshInFlight ensures at most one background job at a time.
 func (m *Model) RefreshFromLiveTrieCmd() tea.Cmd {
-	if m.liveTrie == nil {
-		return nil
-	}
-	if m.paused && m.snapshot != nil {
-		return nil
-	}
-	if m.refreshInFlight {
+	if m.liveTrie == nil || (m.paused && m.snapshot != nil) || m.refreshInFlight {
 		return nil
 	}
 	if m.userDriving() && m.snapshot != nil {
@@ -628,44 +632,11 @@ func (m *Model) RefreshFromLiveTrieCmd() tea.Cmd {
 		return nil
 	}
 	m.refreshInFlight = true
-
-	// Capture fields the goroutine needs. Avoids reading Model fields
-	// concurrently with the Update goroutine.
-	liveTrie := m.liveTrie
-	width := m.width
-	height := m.height
-	zoomPath := m.zoomPath
+	// Capture the fields needed by the goroutine to avoid concurrent reads of
+	// Model fields from outside the Bubble Tea Update goroutine.
+	liveTrie, width, height, zoomPath := m.liveTrie, m.width, m.height, m.zoomPath
 	return func() tea.Msg {
-		tree, ver := liveTrie.SnapshotTree()
-		if tree == nil {
-			return flameSnapshotReadyMsg{version: ver, layoutWidth: width, layoutHeight: height, zoomPath: zoomPath}
-		}
-		var zoomRoot *snapshotNode
-		layoutRoot := tree
-		rootPath := ""
-		if zoomPath != "" {
-			zoomRoot = findNodeByPath(tree, zoomPath)
-			if zoomRoot != nil {
-				layoutRoot = zoomRoot
-				rootPath = zoomPath
-			}
-		}
-		targetFrames := buildTerminalLayoutWithPath(layoutRoot, width, height, rootPath)
-		if zoomPath != "" {
-			targetFrames = applyZoomLineage(targetFrames, tree, zoomPath, width)
-		}
-		ancestry := buildFrameAncestry(targetFrames)
-		return flameSnapshotReadyMsg{
-			version:      ver,
-			layoutWidth:  width,
-			layoutHeight: height,
-			zoomPath:     zoomPath,
-			snapshot:     tree,
-			zoomRoot:     zoomRoot,
-			targetFrames: targetFrames,
-			ancestry:     ancestry,
-			globalTotal:  snapshotTotal(tree),
-		}
+		return buildSnapshotMsg(liveTrie, width, height, zoomPath)
 	}
 }
 
@@ -699,10 +670,11 @@ func (m *Model) SetViewport(width, height int) {
 	m.rebuildFrames(true)
 }
 
-// SetDarkMode sets the active color theme mode.
+// SetDarkMode sets the active color theme mode. Delegates the text input style
+// update to SearchController.
 func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
-	m.searchInput.SetStyles(textinput.DefaultStyles(isDark))
+	m.SearchController.setDarkMode(isDark)
 }
 
 func (m *Model) rebuildFrames(animate bool) {
@@ -728,46 +700,17 @@ func (m *Model) rebuildFrames(animate bool) {
 }
 
 // applyTargetFrames installs a prebuilt frame layout and ancestry index,
-// optionally animating from the previous frames. Shared between the
-// synchronous rebuildFrames path and the async snapshot-ready handler so
-// post-swap state stays consistent (animation kickoff, selection restore,
-// filter recompute, subtree highlight).
+// optionally animating from the previous frames. Delegates the swap, selection
+// restore, filter recompute, and subtree-highlight update to FrameAnimator so
+// the post-swap invariants are enforced in one place.
 func (m *Model) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestry, prevPath string, animate bool) {
-	m.targetFrames = targetFrames
-	m.ancestry = ancestry
-	m.animation.SetTargets(m.targetFrames)
-	if animate && len(m.frames) > 0 && !m.animation.Settled() {
-		m.animating = true
-		m.frames = m.animation.CurrentFrames()
-	} else {
-		m.animating = false
-		m.frames = append(m.frames[:0], m.targetFrames...)
-	}
-	if len(m.frames) > 1 {
-		m.hasNavigableSnapshot = true
-	}
-	m.restoreSelectionByPath(prevPath)
-	m.clampSelection()
-	m.recomputeFilterState()
-	m.ensureSelectionNavigable()
-	m.ensureSelectionVisible()
-	m.subtreeSet = subtreeSetUsingAncestry(m.frames, m.selectedIdx, m.ancestry, m.subtreeSet)
+	m.FrameAnimator.applyTargetFrames(targetFrames, ancestry, prevPath, animate, &m.SelectionManager, &m.SearchController, m.height)
 }
 
+// restoreSelectionByPath delegates to SelectionManager to restore the selection
+// after a frame layout swap.
 func (m *Model) restoreSelectionByPath(path string) {
-	if path == "" || len(m.frames) == 0 {
-		return
-	}
-	if idx := m.frameIndexByPath(path); idx >= 0 {
-		m.selectedIdx = idx
-		return
-	}
-	for idx, frame := range m.frames {
-		if hasPathBoundaryPrefix(path, frame.Path) || hasPathBoundaryPrefix(frame.Path, path) {
-			m.selectedIdx = idx
-			return
-		}
-	}
+	m.SelectionManager.restoreByPath(m.frames, path)
 }
 
 func (m Model) frameIndexByPath(path string) int {
@@ -818,209 +761,20 @@ func (m *Model) zoomUndo() {
 	m.statusMessage = "Zoom: " + compactFramePath(m.zoomPath)
 }
 
+// zoomReset resets the zoom to the full tree. Delegates the "already at root"
+// check to ZoomNavigator.alreadyAtRoot, and the state clear to ZoomNavigator.reset.
 func (m *Model) zoomReset() {
-	if m.zoomRoot == nil && len(m.zoomStack) == 0 {
+	if m.ZoomNavigator.alreadyAtRoot() {
 		m.statusMessage = "Zoom already at root"
 		return
 	}
-	m.zoomRoot = nil
-	m.zoomPath = ""
-	m.zoomStack = nil
-	m.zoomLineWidth = 0
+	m.statusMessage = m.ZoomNavigator.reset()
 	m.rebuildFrames(false)
-	m.statusMessage = "Zoom reset to root"
 }
 
-func (m *Model) moveVertical(delta int) {
-	if len(m.frames) == 0 {
-		return
-	}
-	m.clampSelection()
-	m.ensureSelectionNavigable()
-	current := m.frames[m.selectedIdx]
-	targetDepth := current.Depth + delta
-	targets := m.framesAtDepth(targetDepth)
-	if len(targets) == 0 {
-		return
-	}
-	best := targets[0]
-	bestDist := abs(m.frames[best].Col - current.Col)
-	for _, idx := range targets[1:] {
-		dist := abs(m.frames[idx].Col - current.Col)
-		if dist < bestDist {
-			best = idx
-			bestDist = dist
-		}
-	}
-	m.selectedIdx = best
-}
-
-func (m *Model) moveVerticalWithFallback(primaryDelta, fallbackDelta, traversalDelta int) {
-	before := m.selectedIdx
-	m.moveVertical(primaryDelta)
-	if m.selectedIdx == before && fallbackDelta != 0 {
-		m.moveVertical(fallbackDelta)
-	}
-	if m.selectedIdx == before && traversalDelta != 0 {
-		m.moveTraversal(traversalDelta)
-	}
-}
-
-func (m *Model) moveSibling(delta int) {
-	if len(m.frames) == 0 {
-		return
-	}
-	before := m.selectedIdx
-	m.clampSelection()
-	m.ensureSelectionNavigable()
-	current := m.frames[m.selectedIdx]
-	siblings := m.framesAtDepth(current.Depth)
-	if len(siblings) <= 1 {
-		m.moveTraversal(delta)
-		return
-	}
-	pos := indexOf(siblings, m.selectedIdx)
-	if pos < 0 {
-		m.moveTraversal(delta)
-		return
-	}
-	next := pos + delta
-	if next < 0 {
-		next = 0
-	}
-	if next >= len(siblings) {
-		next = len(siblings) - 1
-	}
-	m.selectedIdx = siblings[next]
-	if m.selectedIdx == before {
-		m.moveTraversal(delta)
-	}
-}
-
-func (m *Model) jumpToTop() {
-	if len(m.frames) == 0 {
-		return
-	}
-	m.clampSelection()
-	m.ensureSelectionNavigable()
-
-	include := m.navigableFrameSet()
-	currentCol := m.frames[m.selectedIdx].Col
-	bestIdx := -1
-	bestDepth := -1
-	bestDist := int(^uint(0) >> 1)
-
-	for idx, frame := range m.frames {
-		if include != nil && !include[idx] {
-			continue
-		}
-		dist := abs(frame.Col - currentCol)
-		if frame.Depth > bestDepth {
-			bestDepth = frame.Depth
-			bestIdx = idx
-			bestDist = dist
-			continue
-		}
-		if frame.Depth == bestDepth {
-			if dist < bestDist || (dist == bestDist && frame.Col < m.frames[bestIdx].Col) {
-				bestIdx = idx
-				bestDist = dist
-			}
-		}
-	}
-	if bestIdx >= 0 {
-		m.selectedIdx = bestIdx
-	}
-}
-
-func (m *Model) jumpToRoot() {
-	if len(m.frames) == 0 {
-		return
-	}
-	m.clampSelection()
-	m.ensureSelectionNavigable()
-
-	rootPath := m.currentRootPath()
-	if rootPath != "" {
-		if idx := m.frameIndexByPath(rootPath); idx >= 0 {
-			if !m.filterActive() || m.frameNavigable(idx) {
-				m.selectedIdx = idx
-				return
-			}
-		}
-	}
-
-	include := m.navigableFrameSet()
-	currentCol := m.frames[m.selectedIdx].Col
-	bestIdx := -1
-	bestDepth := int(^uint(0) >> 1)
-	bestDist := int(^uint(0) >> 1)
-	for idx, frame := range m.frames {
-		if include != nil && !include[idx] {
-			continue
-		}
-		dist := abs(frame.Col - currentCol)
-		if frame.Depth < bestDepth {
-			bestDepth = frame.Depth
-			bestDist = dist
-			bestIdx = idx
-			continue
-		}
-		if frame.Depth == bestDepth {
-			if dist < bestDist || (dist == bestDist && frame.Col < m.frames[bestIdx].Col) {
-				bestDist = dist
-				bestIdx = idx
-			}
-		}
-	}
-	if bestIdx >= 0 {
-		m.selectedIdx = bestIdx
-	}
-}
-
-func framesAtDepth(frames []tuiFrame, depth int) []int {
-	return framesAtDepthFiltered(frames, depth, nil)
-}
-
-func framesAtDepthFiltered(frames []tuiFrame, depth int, include map[int]bool) []int {
-	if depth < 0 {
-		return nil
-	}
-	indices := make([]int, 0)
-	for idx, frame := range frames {
-		if include != nil && !include[idx] {
-			continue
-		}
-		if frame.Depth == depth {
-			indices = append(indices, idx)
-		}
-	}
-	slices.SortFunc(indices, func(a, b int) int {
-		return cmp.Compare(frames[a].Col, frames[b].Col)
-	})
-	return indices
-}
-
-func indexOf(values []int, target int) int {
-	for idx, value := range values {
-		if value == target {
-			return idx
-		}
-	}
-	return -1
-}
-
+// clampSelection delegates to SelectionManager to keep selectedIdx in bounds.
 func (m *Model) clampSelection() {
-	if len(m.frames) == 0 {
-		m.selectedIdx = 0
-		return
-	}
-	if m.selectedIdx < 0 {
-		m.selectedIdx = 0
-	}
-	if m.selectedIdx >= len(m.frames) {
-		m.selectedIdx = len(m.frames) - 1
-	}
+	m.SelectionManager.clamp(m.frames)
 }
 
 func abs(v int) int {
@@ -1037,66 +791,36 @@ func (m Model) animationTickCmd() tea.Cmd {
 	return tea.Tick(animFrameDuration, func(time.Time) tea.Msg { return animTickMsg{} })
 }
 
+// currentRootPath delegates to ZoomNavigator to return the current view root path.
 func (m Model) currentRootPath() string {
-	if m.zoomPath != "" {
-		return m.zoomPath
-	}
-	if len(m.frames) == 0 {
-		return ""
-	}
-	return m.frames[0].Path
+	return m.ZoomNavigator.currentRootPath(m.frames)
 }
 
+// filterActive reports whether a search filter is applied.
 func (m Model) filterActive() bool {
-	return strings.TrimSpace(m.searchQuery) != ""
+	return filterActive(m.searchQuery)
 }
 
+// navigableFrameSet returns the filter-visible set when a filter is active, else nil.
 func (m Model) navigableFrameSet() map[int]bool {
-	if !m.filterActive() {
-		return nil
-	}
-	return m.filterVisible
+	return navigableSet(m.searchQuery, m.filterVisible)
 }
 
+// framesAtDepth returns frame indices at the given depth filtered by the
+// current search.
 func (m Model) framesAtDepth(depth int) []int {
 	return framesAtDepthFiltered(m.frames, depth, m.navigableFrameSet())
 }
 
+// frameNavigable reports whether a frame can be selected under the current filter.
 func (m Model) frameNavigable(idx int) bool {
-	if idx < 0 || idx >= len(m.frames) {
-		return false
-	}
-	if !m.filterActive() {
-		return true
-	}
-	return m.filterVisible[idx]
+	return frameNavigable(idx, m.frames, m.searchQuery, m.filterVisible)
 }
 
+// ensureSelectionNavigable delegates to SelectionManager to keep the selection
+// on a frame that is visible under the current filter.
 func (m *Model) ensureSelectionNavigable() {
-	if len(m.frames) == 0 {
-		m.selectedIdx = 0
-		return
-	}
-	m.clampSelection()
-	if m.frameNavigable(m.selectedIdx) {
-		return
-	}
-
-	if len(m.matchIndices) > 0 {
-		for _, idx := range orderedMatchIndices(m.matchIndices) {
-			if m.frameNavigable(idx) {
-				m.selectedIdx = idx
-				return
-			}
-		}
-	}
-
-	for idx := range m.frames {
-		if m.frameNavigable(idx) {
-			m.selectedIdx = idx
-			return
-		}
-	}
+	m.SelectionManager.ensureNavigable(m.frames, m.matchIndices, m.searchQuery, m.filterVisible)
 }
 
 func (m *Model) recordKeyDebug(msg tea.KeyPressMsg, handled, moved bool) {
@@ -1115,52 +839,14 @@ func (m *Model) recordKeyDebug(msg tea.KeyPressMsg, handled, moved bool) {
 	m.lastKeyDebug = fmt.Sprintf("dbg frames=%d idx=%d key=%q code=%d handled=%t moved=%t sel=%s", len(m.frames), selIdx, keyID, msg.Code, handled, moved, sel)
 }
 
+// moveTraversal delegates depth-then-column traversal to SelectionManager.
 func (m *Model) moveTraversal(delta int) {
-	if len(m.frames) == 0 || delta == 0 {
-		return
-	}
-	order := m.visibleTraversalOrder()
-	if len(order) == 0 {
-		return
-	}
-	pos := indexOf(order, m.selectedIdx)
-	if pos < 0 {
-		pos = 0
-	}
-	next := pos + delta
-	if next < 0 {
-		next = 0
-	}
-	if next >= len(order) {
-		next = len(order) - 1
-	}
-	m.selectedIdx = order[next]
+	m.SelectionManager.moveTraversal(m.frames, delta, m.searchQuery, m.filterVisible)
 }
 
+// visibleTraversalOrder delegates to SelectionManager for the sorted traversal order.
 func (m Model) visibleTraversalOrder() []int {
-	indices := make([]int, 0, len(m.frames))
-	include := m.navigableFrameSet()
-	for idx := range m.frames {
-		if include != nil && !include[idx] {
-			continue
-		}
-		indices = append(indices, idx)
-	}
-	slices.SortFunc(indices, func(a, b int) int {
-		left := m.frames[a]
-		right := m.frames[b]
-		if left.Depth != right.Depth {
-			return cmp.Compare(left.Depth, right.Depth)
-		}
-		if left.Col != right.Col {
-			return cmp.Compare(left.Col, right.Col)
-		}
-		if left.Row != right.Row {
-			return cmp.Compare(left.Row, right.Row)
-		}
-		return cmp.Compare(a, b)
-	})
-	return indices
+	return visibleTraversalOrder(m.frames, m.searchQuery, m.filterVisible)
 }
 
 func keyString(msg tea.KeyPressMsg) string {
@@ -1250,54 +936,15 @@ func isArrowEscapeSequence(value string, ansiFinal byte) bool {
 	}
 }
 
+// visibleRowOffset delegates row offset calculation to SelectionManager.
 func (m Model) visibleRowOffset() int {
-	if len(m.frames) == 0 {
-		return 0
-	}
-	availableRows := m.height - 2 // toolbar + status
-	if availableRows <= 0 {
-		return 0
-	}
-	maxRow := maxFrameRowForSet(m.frames, m.navigableFrameSet())
-	if maxRow+1 <= availableRows {
-		return 0
-	}
-	return maxRow + 1 - availableRows
+	return visibleRowOffset(m.frames, m.height, m.searchQuery, m.filterVisible)
 }
 
+// ensureSelectionVisible delegates to SelectionManager to adjust the selection
+// so it falls within the visible rendered rows.
 func (m *Model) ensureSelectionVisible() {
-	if len(m.frames) == 0 {
-		return
-	}
-	m.clampSelection()
-	m.ensureSelectionNavigable()
-	if !m.frameNavigable(m.selectedIdx) {
-		return
-	}
-	rowOffset := m.visibleRowOffset()
-	selected := m.frames[m.selectedIdx]
-	if selected.Row >= rowOffset {
-		return
-	}
-
-	bestIdx := -1
-	bestScore := int(^uint(0) >> 1)
-	for idx, frame := range m.frames {
-		if !m.frameNavigable(idx) {
-			continue
-		}
-		if frame.Row < rowOffset {
-			continue
-		}
-		score := abs(frame.Row-rowOffset)*1000 + abs(frame.Col-selected.Col)
-		if score < bestScore {
-			bestIdx = idx
-			bestScore = score
-		}
-	}
-	if bestIdx >= 0 {
-		m.selectedIdx = bestIdx
-	}
+	m.SelectionManager.ensureVisible(m.frames, m.height, m.searchQuery, m.filterVisible)
 }
 
 func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
@@ -1358,111 +1005,23 @@ func (m *Model) setZoomPath(path string) bool {
 	return true
 }
 
+// rootSnapshotPath delegates to ZoomNavigator to derive the canonical root path.
 func (m Model) rootSnapshotPath() string {
-	if m.snapshot != nil {
-		return frameName(m.snapshot.Name, 0)
-	}
-	if len(m.frames) > 0 {
-		return m.frames[0].Path
-	}
-	return ""
+	return m.ZoomNavigator.rootSnapshotPath(m.snapshot, m.frames)
 }
 
-func buildZoomStack(path string) []zoomState {
-	parts := strings.Split(path, pathSeparator)
-	if len(parts) <= 1 {
-		return nil
-	}
-	stack := []zoomState{{path: ""}}
-	for idx := 1; idx < len(parts)-1; idx++ {
-		stack = append(stack, zoomState{path: strings.Join(parts[:idx+1], pathSeparator)})
-	}
-	return stack
-}
 
-// frameIndexAt returns the index of the frame rendered at terminal coordinates
-// (x, y), or -1 if no frame occupies that cell. Delegates boundary validation
-// to frameCoordToTargetRow and frame scanning to findFrameAtRow.
+// frameIndexAt delegates to the FrameAnimator package-level helper to convert
+// terminal coordinates (x, y) to a frame index, accounting for UI chrome.
 func (m Model) frameIndexAt(x, y int) int {
-	if len(m.frames) == 0 || m.width <= 0 || m.height <= 0 {
-		return -1
-	}
-	if x < 0 || x >= m.width || y < 0 {
-		return -1
-	}
-
-	extraLines := 1 // selection status line
-	if m.showHelp {
-		extraLines++
-	}
-	renderHeight := m.height - extraLines
-	if renderHeight < 3 {
-		renderHeight = 3
-	}
-	availableRows := renderHeight - 2 // flame toolbar + frame-status line
-	if availableRows < 1 {
-		return -1
-	}
-
-	// Row 0 is flame toolbar, rows 1..availableRows are bars, last row is status.
-	if y < 1 || y > availableRows {
-		return -1
-	}
-
-	targetRow := m.frameCoordToTargetRow(y-1, availableRows)
-	if targetRow < 0 {
-		return -1
-	}
-	return findFrameAtRow(m.frames, targetRow, x, m.width)
+	return frameIndexAt(m.frames, x, y, m.width, m.height, m.showHelp)
 }
 
-// frameCoordToTargetRow converts a data-area row offset (0-based, after
-// stripping the toolbar row) into the logical frame row index. Returns -1 when
-// the coordinate falls in the top padding area above the first visible row.
+// frameCoordToTargetRow delegates to the FrameAnimator package-level helper.
 func (m Model) frameCoordToTargetRow(dataRow, availableRows int) int {
-	maxRow := maxFrameRowForSet(m.frames, nil)
-	barHeight := computeBarHeight(availableRows, maxRow+1, maxBarVisualHeight)
-	visibleDepthRows := availableRows / barHeight
-	if visibleDepthRows < 1 {
-		visibleDepthRows = 1
-	}
-	rowOffset := 0
-	if maxRow+1 > visibleDepthRows {
-		rowOffset = maxRow + 1 - visibleDepthRows
-	}
-	renderedRows := (maxRow - rowOffset + 1) * barHeight
-	padTop := 0
-	if renderedRows < availableRows {
-		padTop = availableRows - renderedRows
-	}
-	if dataRow < padTop {
-		return -1
-	}
-	depthFromTop := (dataRow - padTop) / barHeight
-	return maxRow - depthFromTop
+	return frameCoordToTargetRow(m.frames, dataRow, availableRows)
 }
 
-// findFrameAtRow scans frames for the narrowest one that occupies logical row
-// targetRow and contains pixel column x within [0, width). Returning the
-// narrowest frame resolves overlap between wide parent and narrow child bars.
-func findFrameAtRow(frames []tuiFrame, targetRow, x, width int) int {
-	best := -1
-	bestWidth := int(^uint(0) >> 1)
-	for idx, frame := range frames {
-		if frame.Row != targetRow || frame.Col >= width {
-			continue
-		}
-		right := min(width, frame.Col+frame.Width)
-		if x < frame.Col || x >= right {
-			continue
-		}
-		if frame.Width < bestWidth {
-			best = idx
-			bestWidth = frame.Width
-		}
-	}
-	return best
-}
 
 func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 	return applyZoomLineage(frames, m.snapshot, m.zoomPath, m.width)
