@@ -8,8 +8,8 @@ import (
 	appconfig "ior/internal/config"
 	"ior/internal/flags"
 	"ior/internal/probemanager"
+	"ior/internal/runtime"
 	"ior/internal/tracepoints"
-	"ior/internal/tui"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -80,7 +80,7 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	}
 	// setupBPFModule only injects the probe manager; it does not read TUI state,
 	// so RuntimePublisher is the correct narrower interface to use here.
-	if bindings, ok := tui.RuntimePublisherFromContext(parentCtx); ok {
+	if bindings, ok := runtime.RuntimePublisherFromContext(parentCtx); ok {
 		bindings.SetProbeManager(mgr)
 		releaseBindings = func() { bindings.SetProbeManager(nil) }
 	}

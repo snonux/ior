@@ -1,69 +1,17 @@
 package eventstream
 
-import "sync"
+import "ior/internal/streamrow"
 
-const ringBufferCapacity = 10000
+// RingBuffer is a type alias for streamrow.RingBuffer. The concrete
+// implementation lives in the lower-level streamrow package so the core
+// tracing engine can use it without importing internal/tui/eventstream.
+type RingBuffer = streamrow.RingBuffer
 
-type RingBuffer struct {
-	mu          sync.RWMutex
-	buf         []StreamEvent
-	start       int
-	size        int
-	totalPushed uint64
-}
+// ringBufferCapacity mirrors the capacity constant for use in this package
+// (e.g. stream table rendering).
+const ringBufferCapacity = streamrow.RingBufferCapacity
 
+// NewRingBuffer allocates an empty RingBuffer with the default capacity.
 func NewRingBuffer() *RingBuffer {
-	return &RingBuffer{buf: make([]StreamEvent, ringBufferCapacity)}
-}
-
-func (r *RingBuffer) Push(ev StreamEvent) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.size < ringBufferCapacity {
-		idx := (r.start + r.size) % ringBufferCapacity
-		r.buf[idx] = ev
-		r.size++
-	} else {
-		r.buf[r.start] = ev
-		r.start = (r.start + 1) % ringBufferCapacity
-	}
-	r.totalPushed++
-}
-
-func (r *RingBuffer) Snapshot() []StreamEvent {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if r.size == 0 {
-		return make([]StreamEvent, 0)
-	}
-
-	out := make([]StreamEvent, r.size)
-	for i := 0; i < r.size; i++ {
-		out[i] = r.buf[(r.start+i)%ringBufferCapacity]
-	}
-	return out
-}
-
-func (r *RingBuffer) Len() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.size
-}
-
-func (r *RingBuffer) TotalPushed() uint64 {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.totalPushed
-}
-
-func (r *RingBuffer) Reset() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	clear(r.buf)
-	r.start = 0
-	r.size = 0
-	r.totalPushed = 0
+	return streamrow.NewRingBuffer()
 }
