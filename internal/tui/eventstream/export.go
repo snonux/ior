@@ -11,6 +11,92 @@ import (
 	"time"
 )
 
+// shellSplit tokenizes s using POSIX-like shell quoting rules so that paths
+// containing spaces (e.g. EDITOR='/My Editor/hx') are preserved as a single
+// token.  It supports:
+//   - single-quoted strings  : no escape processing inside ' … '
+//   - double-quoted strings  : \" and \\ are recognised; other backslashes
+//     are kept verbatim
+//   - unquoted tokens        : backslash escapes the next character
+//
+// Unterminated quotes are treated as if the closing delimiter is implicit at
+// end-of-string, matching common shell lenient behaviour.
+func shellSplit(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	inToken := false
+
+	i := 0
+	for i < len(s) {
+		ch := s[i]
+		switch {
+		case ch == '\'':
+			// Single-quote: copy until the matching closing quote verbatim.
+			inToken = true
+			i++
+			for i < len(s) && s[i] != '\'' {
+				current.WriteByte(s[i])
+				i++
+			}
+			// Skip closing quote if present; if missing we just fall through.
+			if i < len(s) {
+				i++ // consume the closing '
+			}
+
+		case ch == '"':
+			// Double-quote: process backslash escapes for \" and \\.
+			inToken = true
+			i++
+			for i < len(s) && s[i] != '"' {
+				if s[i] == '\\' && i+1 < len(s) {
+					next := s[i+1]
+					if next == '"' || next == '\\' {
+						current.WriteByte(next)
+						i += 2
+						continue
+					}
+				}
+				current.WriteByte(s[i])
+				i++
+			}
+			if i < len(s) {
+				i++ // consume the closing "
+			}
+
+		case ch == '\\':
+			// Backslash outside quotes: escape the next character.
+			inToken = true
+			if i+1 < len(s) {
+				current.WriteByte(s[i+1])
+				i += 2
+			} else {
+				// Trailing backslash: keep it.
+				current.WriteByte('\\')
+				i++
+			}
+
+		case ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r':
+			// Whitespace: flush current token if any.
+			if inToken {
+				tokens = append(tokens, current.String())
+				current.Reset()
+				inToken = false
+			}
+			i++
+
+		default:
+			inToken = true
+			current.WriteByte(ch)
+			i++
+		}
+	}
+
+	if inToken {
+		tokens = append(tokens, current.String())
+	}
+	return tokens
+}
+
 func defaultStreamExportFilename() string {
 	return fmt.Sprintf("ior-stream-%s.csv", time.Now().Format("20060102-150405"))
 }
@@ -144,7 +230,10 @@ func resolveEditorCommand() ([]string, string, error) {
 		if value == "" {
 			continue
 		}
-		parts := strings.Fields(value)
+		// Use shellSplit instead of strings.Fields so that quoted paths with
+		// spaces (e.g. EDITOR='/My Editor/hx') are not broken into multiple
+		// tokens.
+		parts := shellSplit(value)
 		if len(parts) == 0 {
 			continue
 		}
