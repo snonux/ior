@@ -111,10 +111,16 @@ func runHeadlessParquet(cfg flags.Config) error {
 	}()
 	defer releaseBindings()
 
-	ch, err := setupEventChannel(bpfModule)
+	ch, rb, err := setupEventChannel(bpfModule)
 	if err != nil {
 		return err
 	}
+	// Stop the ring-buffer polling goroutine before the module is closed.
+	// rb.Stop() signals the background goroutine, drains the channel, and
+	// waits for the goroutine to exit; bpfModule.Close() (deferred above)
+	// then calls rb.Close() which frees the C ring_buffer struct. Both are
+	// idempotent so double-calling is safe.
+	defer rb.Stop()
 	ctx, cancel, stopSignals := setupTraceContext(context.Background(), cfg, logln)
 	defer cancel()
 	defer stopSignals()
