@@ -23,6 +23,8 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	}
 
 	e.startTime = time.Now()
+	// emit() already handles a nil printCb safely, but guard here so that
+	// hot-path event emission never pays for a nil check inside the loop.
 	if e.printCb == nil {
 		e.printCb = func(ep *event.Pair) { ep.Recycle() }
 	}
@@ -32,7 +34,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		return
 	}
 	for ep := range e.events(ctx, rawCh) {
-		e.printCb(ep)
+		e.emit(ep)
 		e.numSyscallsAfterFilter++
 	}
 }
@@ -58,12 +60,13 @@ func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
 	}
 }
 
-// drainPairs consumes all immediately available pairs from the buffered channel.
+// drainPairs consumes all immediately available pairs from the buffered channel,
+// routing each completed pair through the outputFormatter.
 func (e *eventLoop) drainPairs(pairs <-chan *event.Pair) {
 	for {
 		select {
 		case ep := <-pairs:
-			e.printCb(ep)
+			e.emit(ep)
 			e.numSyscallsAfterFilter++
 		default:
 			return

@@ -48,9 +48,8 @@ type eventLoop struct {
 	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
 	fdTracker      *fdTracker            // fd table and procfs resolution cache
 	commResolver   *commResolver
+	outputFormatter                      // pair-emission and warning-notification callbacks (embedded collaborator)
 	rawHandlers    map[types.EventType]rawEventHandler
-	printCb        func(ep *event.Pair) // Callback to print the event
-	warningCb      func(message string) // Optional callback for non-fatal event processing warnings
 	cfg            eventLoopConfig
 
 	// Statistics
@@ -92,10 +91,14 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		pendingHandles: newPendingHandleTracker(),
 		fdTracker:      fdState,
 		commResolver:   commState,
-		rawHandlers:    make(map[types.EventType]rawEventHandler),
-		printCb:        func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
-		cfg:            cfg,
-		done:           make(chan struct{}),
+		// Default printCb prints each pair to stdout then recycles it; callers
+		// (e.g. TUI, headless-parquet) replace this via configureEventLoopOutput.
+		outputFormatter: outputFormatter{
+			printCb: func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
+		},
+		rawHandlers: make(map[types.EventType]rawEventHandler),
+		cfg:         cfg,
+		done:        make(chan struct{}),
 	}
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
