@@ -18,14 +18,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Parse command-line flags
-	if err := flags.Parse(); err != nil {
+	// Parse command-line flags; Parse returns the Config directly so there is no
+	// global singleton to read from after this point.
+	cfg, err := flags.Parse()
+	if err != nil {
 		fmt.Printf("Failed to parse flags: %v\n", err)
 		os.Exit(2)
 	}
-
-	// flags.Get() is called here at the CLI boundary so internal code never reads the singleton.
-	cfg := flags.Get()
 
 	// Handle -version: print the banner plus version and exit.
 	if cfg.ShowVersion {

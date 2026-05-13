@@ -3,39 +3,19 @@ package flags
 import (
 	"flag"
 	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
+// parseForTest builds a fresh FlagSet and parses the given args, returning
+// the resulting Config. It avoids touching any global state so tests can run
+// in parallel without interfering with each other.
 func parseForTest(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
-
-	oldCommandLine := flag.CommandLine
-	oldArgs := os.Args
-	oldCurrent := Get()
-	oldParseErr := parseErr
-
 	fs := flag.NewFlagSet("ior-test", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	flag.CommandLine = fs
-	os.Args = append([]string{"ior"}, args...)
-
-	setCurrent(NewFlags())
-	parseErr = nil
-
-	err := parse()
-	cfg := Get()
-
-	t.Cleanup(func() {
-		flag.CommandLine = oldCommandLine
-		os.Args = oldArgs
-		setCurrent(oldCurrent)
-		parseErr = oldParseErr
-	})
-
-	return cfg, err
+	return parseFromFlagSet(fs, args)
 }
 
 func TestParseLiveIntervalAndPID(t *testing.T) {
@@ -50,8 +30,8 @@ func TestParseLiveIntervalAndPID(t *testing.T) {
 	if cfg.PidFilter != 1234 {
 		t.Fatalf("pid filter = %d, want 1234", cfg.PidFilter)
 	}
-	if got := Get().GetPidFilter(); got != 1234 {
-		t.Fatalf("Get().GetPidFilter() = %d, want 1234", got)
+	if got := cfg.GetPidFilter(); got != 1234 {
+		t.Fatalf("cfg.GetPidFilter() = %d, want 1234", got)
 	}
 }
 
