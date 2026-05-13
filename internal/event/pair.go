@@ -36,12 +36,29 @@ func NewPair(enterEv Event) *Pair {
 }
 
 func (e *Pair) CalculateDurations(prevPairTime uint64) {
-	// Duration is syscall runtime: exit(current) - enter(current).
-	e.Duration = e.ExitEv.GetTime() - e.EnterEv.GetTime()
+	exitTime := e.ExitEv.GetTime()
+	enterTime := e.EnterEv.GetTime()
+
+	// Guard against uint64 underflow caused by non-monotonic BPF timestamps
+	// (e.g. cross-CPU clock skew or NTP adjustments). When exit < enter the
+	// syscall duration cannot be measured reliably; treat it as zero rather
+	// than wrapping around to an astronomically large value.
+	if exitTime >= enterTime {
+		e.Duration = exitTime - enterTime
+	} else {
+		e.Duration = 0
+	}
+
 	if prevPairTime > 0 {
 		// DurationToPrev is the inter-syscall gap on the same TID:
 		// enter(current) - exit(previous).
-		e.DurationToPrev = e.EnterEv.GetTime() - prevPairTime
+		// Apply the same underflow guard: if the previous exit timestamp
+		// is ahead of this enter (clock skew), clamp the gap to zero.
+		if enterTime >= prevPairTime {
+			e.DurationToPrev = enterTime - prevPairTime
+		} else {
+			e.DurationToPrev = 0
+		}
 	}
 }
 
