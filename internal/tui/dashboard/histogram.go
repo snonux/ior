@@ -47,43 +47,20 @@ func renderLatencyGapsTab(snap *statsengine.Snapshot, width, height int) string 
 	return strings.Join([]string{lat, gap}, "\n")
 }
 
+// renderHistogram renders a histogram snapshot as a bar chart panel.
 func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, height int) string {
 	buckets := hist.Buckets()
 	if len(buckets) == 0 {
 		return common.PanelStyle.Render(title + ": no data")
 	}
-
 	if width <= 0 {
 		width = 80
 	}
 	panelW := panelWidth(width)
 	panelInner := panelInnerWidth(width)
 
-	if height > 0 {
-		maxRows := height - 3
-		if maxRows < 1 {
-			maxRows = 1
-		}
-		if len(buckets) > maxRows {
-			buckets = buckets[:maxRows]
-		}
-	}
-
-	maxCount := uint64(0)
-	labelWidth := 0
-	countWidth := len(strconv.FormatUint(hist.Total, 10))
-	for _, bucket := range buckets {
-		if bucket.Count > maxCount {
-			maxCount = bucket.Count
-		}
-		if len(bucket.Label) > labelWidth {
-			labelWidth = len(bucket.Label)
-		}
-		if digits := len(strconv.FormatUint(bucket.Count, 10)); digits > countWidth {
-			countWidth = digits
-		}
-	}
-
+	buckets = clampHistogramBuckets(buckets, height)
+	maxCount, labelWidth, countWidth := histogramMetrics(hist, buckets)
 	barWidth := panelInner - labelWidth - countWidth - 6
 	if barWidth < 8 {
 		barWidth = 8
@@ -96,8 +73,40 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 		lines = append(lines, fmt.Sprintf("%-*s | %-*s %*d", labelWidth, bucket.Label, barWidth, bar, countWidth, bucket.Count))
 	}
 	lines = append(lines, "Scale: █▓▒░")
-
 	return common.PanelStyle.Width(panelW).Render(strings.Join(lines, "\n"))
+}
+
+// clampHistogramBuckets trims the bucket slice to fit within the available rows.
+func clampHistogramBuckets(buckets []statsengine.HistogramBucketSnapshot, height int) []statsengine.HistogramBucketSnapshot {
+	if height <= 0 {
+		return buckets
+	}
+	maxRows := height - 3
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	if len(buckets) > maxRows {
+		return buckets[:maxRows]
+	}
+	return buckets
+}
+
+// histogramMetrics computes the maximum count, maximum label width, and maximum
+// count-digit width needed to align the histogram columns.
+func histogramMetrics(hist statsengine.HistogramSnapshot, buckets []statsengine.HistogramBucketSnapshot) (maxCount uint64, labelWidth, countWidth int) {
+	countWidth = len(strconv.FormatUint(hist.Total, 10))
+	for _, bucket := range buckets {
+		if bucket.Count > maxCount {
+			maxCount = bucket.Count
+		}
+		if len(bucket.Label) > labelWidth {
+			labelWidth = len(bucket.Label)
+		}
+		if digits := len(strconv.FormatUint(bucket.Count, 10)); digits > countWidth {
+			countWidth = digits
+		}
+	}
+	return maxCount, labelWidth, countWidth
 }
 
 func renderHistogramBar(count, maxCount uint64, width int) string {

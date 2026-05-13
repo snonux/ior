@@ -94,12 +94,33 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 	return true
 }
 
+// handleFdExit processes exit events for fd-based syscalls. It resolves the fd
+// to a file, applies close/close_range state transitions, filters the pair, and
+// handles dup/pidfd_getfd fd-transfer operations before finalising bytes.
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	ep.File = e.fdState().resolve(fd, fdEv.Pid)
+	e.applyFdCloseState(ep, fd, fdEv.Pid)
+	ep.Comm = e.comm(fdEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
+		return false
+	}
+	if retEv, ok := ep.ExitEv.(*types.RetEvent); ok {
+		ep.Bytes = bytesFromRet(retEv)
+	}
+	return true
+}
+
+// applyFdCloseState updates fd-tracking state for close and close_range syscalls.
+func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 	if ep.Is(types.SYS_ENTER_CLOSE) {
 		e.fdState().delete(fd)
-		e.fdState().deleteProcFdCache(fd, fdEv.Pid)
+		e.fdState().deleteProcFdCache(fd, pid)
+		return
 	}
 	if ep.Is(types.SYS_ENTER_CLOSE_RANGE) {
 		// close_range provides (first, last), but fd_event only carries the first
@@ -107,15 +128,14 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if ok && retEv.Ret == 0 {
 			e.fdState().closeRangeFrom(fd)
-			e.fdState().deleteProcFdCacheFrom(fd, fdEv.Pid)
+			e.fdState().deleteProcFdCacheFrom(fd, pid)
 		}
 	}
-	ep.Comm = e.comm(fdEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
+}
 
+// applyFdTransferOp handles dup/dup2 and pidfd_getfd fd-transfer operations.
+// Returns false if the pair should be dropped due to a malformed event.
+func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool {
 	if ep.Is(types.SYS_ENTER_DUP) || ep.Is(types.SYS_ENTER_DUP2) {
 		fdFile, ok := ep.File.(*file.FdFile)
 		if !ok {
@@ -127,7 +147,6 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 			e.recyclePair(ep, "Dropped malformed dup exit event")
 			return false
 		}
-		// Duplicating fd
 		e.registerDup(fdFile, int32(retEvent.Ret), 0)
 	}
 	if ep.Is(types.SYS_ENTER_PIDFD_GETFD) {
@@ -141,9 +160,6 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 			e.fdState().set(newFd, transferredFile)
 			ep.File = transferredFile
 		}
-	}
-	if retEv, ok := ep.ExitEv.(*types.RetEvent); ok {
-		ep.Bytes = bytesFromRet(retEv)
 	}
 	return true
 }

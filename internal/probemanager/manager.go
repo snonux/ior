@@ -138,6 +138,7 @@ func (m *Manager) Toggle(syscall string) error {
 }
 
 // Attach attaches enter/exit tracepoints for a registered syscall.
+// Attach attaches enter/exit tracepoints for a registered syscall.
 func (m *Manager) Attach(syscall string) error {
 	if syscall == "" {
 		return errors.New("syscall is required")
@@ -153,25 +154,47 @@ func (m *Manager) Attach(syscall string) error {
 	entry.attachMu.Lock()
 	defer entry.attachMu.Unlock()
 
+	// Re-acquire the lock after the per-entry mutex to prevent races with
+	// concurrent Detach calls on the same syscall.
+	enterTP, exitTP, attacher, err := m.snapshotAttachParams(syscall, entry)
+	if err != nil {
+		return err
+	}
+	if attacher == nil {
+		return nil // entry was already active
+	}
+
+	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
+	return m.commitAttach(syscall, entry, enterLink, exitLink, attachErr)
+}
+
+// snapshotAttachParams re-validates the entry under the manager lock and
+// returns the tracepoint names and attacher needed for attachPair. It returns
+// (nil attacher, nil error) when the probe is already active.
+func (m *Manager) snapshotAttachParams(syscall string, entry *probeEntry) (enterTP, exitTP string, attacher Attacher, err error) {
 	m.mu.Lock()
 	entry, err = m.entryLocked(syscall)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return "", "", nil, err
 	}
 	if entry.active {
 		m.mu.Unlock()
-		return nil
+		return "", "", nil, nil
 	}
-	enterTP := entry.enterTP
-	exitTP := entry.exitTP
-	attacher := m.attacher
+	enterTP = entry.enterTP
+	exitTP = entry.exitTP
+	attacher = m.attacher
 	m.mu.Unlock()
+	return enterTP, exitTP, attacher, nil
+}
 
-	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
-
+// commitAttach stores the newly attached link pair in entry under the manager
+// lock, recording any attach error or cleaning up on a concurrent manager close.
+func (m *Manager) commitAttach(syscall string, entry *probeEntry, enterLink, exitLink Link, attachErr error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var err error
 	entry, err = m.entryLocked(syscall)
 	if err != nil {
 		return errors.Join(
@@ -180,13 +203,11 @@ func (m *Manager) Attach(syscall string) error {
 			destroyLink(fmt.Sprintf("cleanup exit %s", syscall), exitLink),
 		)
 	}
-
 	if attachErr != nil {
 		entry.lastErr = attachErr
 		entry.active = entry.enterLink != nil || entry.exitLink != nil
 		return attachErr
 	}
-
 	entry.enterLink = enterLink
 	entry.exitLink = exitLink
 	entry.lastErr = nil
@@ -210,6 +231,8 @@ func (m *Manager) Detach(syscall string) error {
 	entry.attachMu.Lock()
 	defer entry.attachMu.Unlock()
 
+	// Re-acquire the lock after the per-entry mutex to prevent races with
+	// concurrent Attach calls on the same syscall.
 	m.mu.Lock()
 	entry, err = m.entryLocked(syscall)
 	if err != nil {
@@ -220,22 +243,31 @@ func (m *Manager) Detach(syscall string) error {
 	exitLink := entry.exitLink
 	m.mu.Unlock()
 
-	var errs []string
-	enterErr := error(nil)
+	enterErr, exitErr, errs := destroyLinkPair(syscall, enterLink, exitLink)
+	return m.commitDetach(entry, enterErr, exitErr, errs)
+}
+
+// destroyLinkPair destroys both BPF links and collects any errors into a slice.
+// It returns each link's error separately so partial-success can be recorded.
+func destroyLinkPair(syscall string, enterLink, exitLink Link) (enterErr, exitErr error, errs []string) {
 	if enterLink != nil {
 		if err := enterLink.Destroy(); err != nil {
 			enterErr = err
 			errs = append(errs, fmt.Sprintf("detach enter %s: %v", syscall, err))
 		}
 	}
-	exitErr := error(nil)
 	if exitLink != nil {
 		if err := exitLink.Destroy(); err != nil {
 			exitErr = err
 			errs = append(errs, fmt.Sprintf("detach exit %s: %v", syscall, err))
 		}
 	}
+	return enterErr, exitErr, errs
+}
 
+// commitDetach updates entry link pointers and active flag under the manager
+// lock, then returns a combined error if any link destroy failed.
+func (m *Manager) commitDetach(entry *probeEntry, enterErr, exitErr error, errs []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if enterErr == nil {
@@ -313,20 +345,40 @@ func (m *Manager) IsActive(syscall string) bool {
 }
 
 // Close detaches all registered probes and marks the manager closed.
+// It returns the first detach error encountered (subsequent errors are
+// recorded on the probe entry but not returned).
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil
 	}
-
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return nil
+	entries, ok := m.snapshotAndMarkClosed()
+	if !ok {
+		return nil // already closed
 	}
-	type pairEntry struct {
-		syscall  string
-		entry    *probeEntry
-		hasLinks bool
+
+	var firstErr error
+	for _, item := range entries {
+		if err := m.detachProbeEntry(item); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// pairEntry groups a probe entry with its syscall name for use during Close.
+type pairEntry struct {
+	syscall  string
+	entry    *probeEntry
+	hasLinks bool
+}
+
+// snapshotAndMarkClosed atomically marks the manager as closed and returns a
+// snapshot of all probe entries. Returns (nil, false) if already closed.
+func (m *Manager) snapshotAndMarkClosed() ([]pairEntry, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, false
 	}
 	entries := make([]pairEntry, 0, len(m.probes))
 	for syscall, entry := range m.probes {
@@ -337,47 +389,39 @@ func (m *Manager) Close() error {
 		})
 	}
 	m.closed = true
+	return entries, true
+}
+
+// detachProbeEntry destroys the BPF links for a single probe entry under its
+// per-entry mutex, clears the link pointers, and records any error.
+func (m *Manager) detachProbeEntry(item pairEntry) error {
+	if item.hasLinks {
+		item.entry.attachMu.Lock()
+		defer item.entry.attachMu.Unlock()
+	}
+
+	m.mu.Lock()
+	enterLink := item.entry.enterLink
+	exitLink := item.entry.exitLink
+	item.entry.enterLink = nil
+	item.entry.exitLink = nil
+	item.entry.active = false
+	item.entry.lastErr = nil
 	m.mu.Unlock()
 
-	var firstErr error
-	for _, item := range entries {
-		if item.hasLinks {
-			item.entry.attachMu.Lock()
-		}
-		var errForSyscall error
-		m.mu.Lock()
-		enterLink := item.entry.enterLink
-		exitLink := item.entry.exitLink
-		item.entry.enterLink = nil
-		item.entry.exitLink = nil
-		item.entry.active = false
-		item.entry.lastErr = nil
-		m.mu.Unlock()
-
-		if enterLink != nil {
-			if err := enterLink.Destroy(); err != nil {
-				errForSyscall = err
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-		}
-		if exitLink != nil {
-			if err := exitLink.Destroy(); err != nil {
-				if errForSyscall == nil {
-					errForSyscall = err
-				}
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-		}
-		m.setLastError(item.syscall, errForSyscall)
-		if item.hasLinks {
-			item.entry.attachMu.Unlock()
+	var errForSyscall error
+	if enterLink != nil {
+		if err := enterLink.Destroy(); err != nil {
+			errForSyscall = err
 		}
 	}
-	return firstErr
+	if exitLink != nil {
+		if err := exitLink.Destroy(); err != nil && errForSyscall == nil {
+			errForSyscall = err
+		}
+	}
+	m.setLastError(item.syscall, errForSyscall)
+	return errForSyscall
 }
 
 func (m *Manager) entryLocked(syscall string) (*probeEntry, error) {

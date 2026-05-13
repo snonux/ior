@@ -31,50 +31,14 @@ func shellSplit(s string) []string {
 		ch := s[i]
 		switch {
 		case ch == '\'':
-			// Single-quote: copy until the matching closing quote verbatim.
 			inToken = true
-			i++
-			for i < len(s) && s[i] != '\'' {
-				current.WriteByte(s[i])
-				i++
-			}
-			// Skip closing quote if present; if missing we just fall through.
-			if i < len(s) {
-				i++ // consume the closing '
-			}
-
+			i = consumeSingleQuoted(s, i+1, &current)
 		case ch == '"':
-			// Double-quote: process backslash escapes for \" and \\.
 			inToken = true
-			i++
-			for i < len(s) && s[i] != '"' {
-				if s[i] == '\\' && i+1 < len(s) {
-					next := s[i+1]
-					if next == '"' || next == '\\' {
-						current.WriteByte(next)
-						i += 2
-						continue
-					}
-				}
-				current.WriteByte(s[i])
-				i++
-			}
-			if i < len(s) {
-				i++ // consume the closing "
-			}
-
+			i = consumeDoubleQuoted(s, i+1, &current)
 		case ch == '\\':
-			// Backslash outside quotes: escape the next character.
 			inToken = true
-			if i+1 < len(s) {
-				current.WriteByte(s[i+1])
-				i += 2
-			} else {
-				// Trailing backslash: keep it.
-				current.WriteByte('\\')
-				i++
-			}
-
+			i = consumeBackslash(s, i, &current)
 		case ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r':
 			// Whitespace: flush current token if any.
 			if inToken {
@@ -83,7 +47,6 @@ func shellSplit(s string) []string {
 				inToken = false
 			}
 			i++
-
 		default:
 			inToken = true
 			current.WriteByte(ch)
@@ -95,6 +58,55 @@ func shellSplit(s string) []string {
 		tokens = append(tokens, current.String())
 	}
 	return tokens
+}
+
+// consumeSingleQuoted copies characters verbatim from s starting at i until
+// the closing single-quote (or end-of-string). Returns the index after the
+// closing quote.
+func consumeSingleQuoted(s string, i int, out *strings.Builder) int {
+	for i < len(s) && s[i] != '\'' {
+		out.WriteByte(s[i])
+		i++
+	}
+	if i < len(s) {
+		i++ // consume the closing '
+	}
+	return i
+}
+
+// consumeDoubleQuoted copies characters from s starting at i until the
+// closing double-quote, processing \" and \\ escape sequences. Returns the
+// index after the closing quote.
+func consumeDoubleQuoted(s string, i int, out *strings.Builder) int {
+	for i < len(s) && s[i] != '"' {
+		if s[i] == '\\' && i+1 < len(s) {
+			next := s[i+1]
+			if next == '"' || next == '\\' {
+				out.WriteByte(next)
+				i += 2
+				continue
+			}
+		}
+		out.WriteByte(s[i])
+		i++
+	}
+	if i < len(s) {
+		i++ // consume the closing "
+	}
+	return i
+}
+
+// consumeBackslash handles a backslash outside any quoted context: if a next
+// character exists it is treated as escaped; a trailing backslash is kept as-is.
+// i must point at the backslash character. Returns the index after consumed bytes.
+func consumeBackslash(s string, i int, out *strings.Builder) int {
+	if i+1 < len(s) {
+		out.WriteByte(s[i+1])
+		return i + 2
+	}
+	// Trailing backslash: keep it.
+	out.WriteByte('\\')
+	return i + 1
 }
 
 func defaultStreamExportFilename() string {
@@ -122,6 +134,8 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 	return exportRowsToCSV(rows, exportDir, name)
 }
 
+// exportRowsToCSV writes rows to a CSV file under exportDir with the given
+// filename (which is validated and sanitised by ensureCSVFilename).
 func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, error) {
 	name, err := ensureCSVFilename(filename)
 	if err != nil {
@@ -136,6 +150,7 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 	if err != nil {
 		return "", err
 	}
+	// closeFile is idempotent; fail wraps any write error with a best-effort close.
 	closed := false
 	closeFile := func() error {
 		if closed {
@@ -151,11 +166,26 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 		return "", baseErr
 	}
 
-	w := csv.NewWriter(f)
+	if err := writeStreamCSV(csv.NewWriter(f), rows, fail); err != nil {
+		return "", err
+	}
+	if err := closeFile(); err != nil {
+		return "", err
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return path, nil
+	}
+	return absPath, nil
+}
 
+// writeStreamCSV writes the CSV header and all event rows to w, calling fail
+// on the first write error to close the underlying file before returning.
+func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string, error)) error {
 	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error"}
 	if err := w.Write(header); err != nil {
-		return fail(err)
+		_, err = fail(err)
+		return err
 	}
 	for i := range rows {
 		ev := rows[i]
@@ -175,21 +205,16 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 			fmt.Sprintf("%t", ev.IsError),
 		}
 		if err := w.Write(record); err != nil {
-			return fail(err)
+			_, err = fail(err)
+			return err
 		}
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
-		return fail(err)
+		_, err = fail(err)
+		return err
 	}
-	if err := closeFile(); err != nil {
-		return "", err
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return path, nil
-	}
-	return absPath, nil
+	return nil
 }
 
 // ensureCSVFilename validates and normalises a user-supplied export filename.

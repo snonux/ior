@@ -83,55 +83,68 @@ func (m Model) SetDarkMode(isDark bool) Model {
 	return m
 }
 
+// Update dispatches Bubble Tea messages to the appropriate handler.
+// ProbeToggledMsg refreshes the probe list; key presses are forwarded to
+// the search or navigation handlers.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if !m.visible {
 		return m, nil
 	}
-
 	switch msg := msg.(type) {
 	case ProbeToggledMsg:
-		m.reload()
-		if msg.Err != nil {
-			m.lastErr = msg.Err.Error()
-		} else {
-			m.lastErr = ""
-		}
-		m.clampCursor()
-		return m, nil
+		return m.handleProbeToggled(msg)
 	case tea.KeyPressMsg:
 		if m.searching {
 			return m.updateSearch(msg)
 		}
-		switch msg.String() {
-		case "esc":
-			return m.Close(), nil
-		case "j", "down":
-			if m.cursor < len(m.filtered())-1 {
-				m.cursor++
-			}
-			return m, nil
-		case "k", "up":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-			return m, nil
-		case "/", "f":
-			m.searching = true
-			m.textInput.SetValue(m.search)
-			m.textInput.CursorEnd()
-			m.textInput.Focus()
-			return m, nil
-		case " ", "space", "enter":
-			selected := m.selectedSyscall()
-			if selected == "" {
-				return m, nil
-			}
-			return m, toggleCmd(m.manager, selected)
-		case "a":
-			return m, bulkToggleCmd(m.manager, m.probes, false)
-		case "n":
-			return m, bulkToggleCmd(m.manager, m.probes, true)
+		return m.handleKeyPress(msg)
+	}
+	return m, nil
+}
+
+// handleProbeToggled refreshes probe state after an async toggle completes.
+func (m Model) handleProbeToggled(msg ProbeToggledMsg) (Model, tea.Cmd) {
+	m.reload()
+	if msg.Err != nil {
+		m.lastErr = msg.Err.Error()
+	} else {
+		m.lastErr = ""
+	}
+	m.clampCursor()
+	return m, nil
+}
+
+// handleKeyPress processes navigation and toggle keys while not in search mode.
+func (m Model) handleKeyPress(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		return m.Close(), nil
+	case "j", "down":
+		if m.cursor < len(m.filtered())-1 {
+			m.cursor++
 		}
+		return m, nil
+	case "k", "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		return m, nil
+	case "/", "f":
+		m.searching = true
+		m.textInput.SetValue(m.search)
+		m.textInput.CursorEnd()
+		m.textInput.Focus()
+		return m, nil
+	case " ", "space", "enter":
+		selected := m.selectedSyscall()
+		if selected == "" {
+			return m, nil
+		}
+		return m, toggleCmd(m.manager, selected)
+	case "a":
+		return m, bulkToggleCmd(m.manager, m.probes, false)
+	case "n":
+		return m, bulkToggleCmd(m.manager, m.probes, true)
 	}
 	return m, nil
 }
@@ -223,6 +236,8 @@ func (m Model) visibleRows() int {
 	return rows
 }
 
+// View renders the probe modal centered on the terminal. It returns an empty
+// string when the modal is not visible.
 func (m Model) View(width, height int) string {
 	if !m.visible {
 		return ""
@@ -235,20 +250,39 @@ func (m Model) View(width, height int) string {
 	}
 	m.height = height
 
-	active, total := 0, len(m.probes)
-	if m.manager != nil {
-		active, total = m.manager.ActiveCount()
-	}
+	modalWidth := probeModalWidth(width)
+	lines := m.buildProbeLines()
 
-	rows := m.visibleRows()
-	items := m.filtered()
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(modalWidth).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// probeModalWidth returns the clamped modal width for the given terminal width.
+func probeModalWidth(termWidth int) int {
 	modalWidth := 66
-	if width < modalWidth+4 {
-		modalWidth = width - 4
+	if termWidth < modalWidth+4 {
+		modalWidth = termWidth - 4
 		if modalWidth < 44 {
 			modalWidth = 44
 		}
 	}
+	return modalWidth
+}
+
+// buildProbeLines assembles the text lines that make up the modal content:
+// header, optional search bar, probe rows, and the help footer.
+func (m Model) buildProbeLines() []string {
+	active, total := 0, len(m.probes)
+	if m.manager != nil {
+		active, total = m.manager.ActiveCount()
+	}
+	rows := m.visibleRows()
+	items := m.filtered()
 
 	lines := []string{fmt.Sprintf("Probes (%d/%d active)", active, total)}
 	if m.searching {
@@ -267,24 +301,7 @@ func (m Model) View(width, height int) string {
 		end = len(items)
 	}
 	for i := start; i < end; i++ {
-		p := items[i]
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "> "
-		}
-		check := "[ ]"
-		if p.Active {
-			check = "[x]"
-		}
-		// Use a Builder to avoid an extra allocation for the optional error suffix
-		// emitted per probe row on every render call.
-		var lb strings.Builder
-		lb.WriteString(fmt.Sprintf("%s%s %-24s", prefix, check, p.Syscall))
-		if p.Error != "" {
-			lb.WriteString(" ! ")
-			lb.WriteString(truncateText(sanitizeOneLine(p.Error), 28))
-		}
-		lines = append(lines, lb.String())
+		lines = append(lines, m.renderProbeRow(items[i], i == m.cursor))
 	}
 	if len(items) == 0 {
 		lines = append(lines, "  (no probes)")
@@ -293,14 +310,29 @@ func (m Model) View(width, height int) string {
 		lines = append(lines, "", "Error: "+m.lastErr)
 	}
 	lines = append(lines, "", "j/k move • space|enter toggle • a all-on • n all-off • / search • esc close")
+	return lines
+}
 
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+// renderProbeRow formats a single probe entry with selection prefix, checkbox,
+// syscall name, and an optional truncated error annotation.
+func (m Model) renderProbeRow(p probemanager.ProbeState, selected bool) string {
+	prefix := "  "
+	if selected {
+		prefix = "> "
+	}
+	check := "[ ]"
+	if p.Active {
+		check = "[x]"
+	}
+	// Use a Builder to avoid an extra allocation for the optional error suffix
+	// emitted per probe row on every render call.
+	var lb strings.Builder
+	lb.WriteString(fmt.Sprintf("%s%s %-24s", prefix, check, p.Syscall))
+	if p.Error != "" {
+		lb.WriteString(" ! ")
+		lb.WriteString(truncateText(sanitizeOneLine(p.Error), 28))
+	}
+	return lb.String()
 }
 
 func toggleCmd(manager Manager, syscall string) tea.Cmd {

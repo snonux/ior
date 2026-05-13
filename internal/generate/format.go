@@ -44,50 +44,58 @@ func ParseFormats(r io.Reader) ([]Format, error) {
 	isExternal := false
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-
-		switch {
-		case strings.HasPrefix(trimmed, "name:"):
-			f := Format{}
-			f.Name = strings.TrimSpace(strings.TrimPrefix(trimmed, "name:"))
-			formats = append(formats, f)
-			current = &formats[len(formats)-1]
-			isExternal = false
-
-		case strings.HasPrefix(trimmed, "ID:"):
-			if current == nil {
-				return nil, fmt.Errorf("ID without name")
-			}
-			id, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trimmed, "ID:")))
-			if err != nil {
-				return nil, fmt.Errorf("parsing ID: %w", err)
-			}
-			current.ID = id
-
-		case strings.HasPrefix(trimmed, "field:"):
-			if current == nil {
-				return nil, fmt.Errorf("field without name")
-			}
-			field, err := parseField(trimmed)
-			if err != nil {
-				return nil, fmt.Errorf("parsing field in %s: %w", current.Name, err)
-			}
-			if field.Name == "__syscall_nr" {
-				isExternal = true
-			}
-			if isExternal {
-				current.ExternalFields = append(current.ExternalFields, field)
-			} else {
-				current.InternalFields = append(current.InternalFields, field)
-			}
+		var err error
+		current, isExternal, err = applyFormatLine(scanner.Text(), formats, current, isExternal, &formats)
+		if err != nil {
+			return nil, err
 		}
 	}
-
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scanning input: %w", err)
 	}
 	return formats, nil
+}
+
+// applyFormatLine processes one line from the format file, updating the
+// running parse state (current format, isExternal flag, and formats slice).
+func applyFormatLine(line string, _ []Format, current *Format, isExternal bool, formats *[]Format) (*Format, bool, error) {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "name:"):
+		f := Format{}
+		f.Name = strings.TrimSpace(strings.TrimPrefix(trimmed, "name:"))
+		*formats = append(*formats, f)
+		current = &(*formats)[len(*formats)-1]
+		isExternal = false
+
+	case strings.HasPrefix(trimmed, "ID:"):
+		if current == nil {
+			return nil, false, fmt.Errorf("ID without name")
+		}
+		id, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trimmed, "ID:")))
+		if err != nil {
+			return nil, false, fmt.Errorf("parsing ID: %w", err)
+		}
+		current.ID = id
+
+	case strings.HasPrefix(trimmed, "field:"):
+		if current == nil {
+			return nil, false, fmt.Errorf("field without name")
+		}
+		field, err := parseField(trimmed)
+		if err != nil {
+			return nil, false, fmt.Errorf("parsing field in %s: %w", current.Name, err)
+		}
+		if field.Name == "__syscall_nr" {
+			isExternal = true
+		}
+		if isExternal {
+			current.ExternalFields = append(current.ExternalFields, field)
+		} else {
+			current.InternalFields = append(current.InternalFields, field)
+		}
+	}
+	return current, isExternal, nil
 }
 
 func parseField(line string) (Field, error) {

@@ -127,19 +127,34 @@ func renameRenameat2() error {
 		return fmt.Errorf("close: %w", err)
 	}
 
+	errno, err := doRenameat2(dir, oldName, newName, 0)
+	if err != nil {
+		return err
+	}
+	if errno != 0 {
+		return fmt.Errorf("renameat2: %w", errno)
+	}
+	return nil
+}
+
+// doRenameat2 opens dir as a directory fd, builds name byte pointers, calls
+// renameat2(2) with the given flags, and returns the raw errno. Zero means
+// success. It is shared by renameRenameat2 and renameNoreplace to avoid
+// duplicating the dir-open + byte-pointer + syscall6 boilerplate.
+func doRenameat2(dir, oldName, newName string, flags uintptr) (syscall.Errno, error) {
 	dirFD, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
 	if err != nil {
-		return fmt.Errorf("open dir: %w", err)
+		return 0, fmt.Errorf("open dir: %w", err)
 	}
 	defer syscall.Close(dirFD)
 
 	oldBytes, err := syscall.BytePtrFromString(oldName)
 	if err != nil {
-		return fmt.Errorf("old name bytes: %w", err)
+		return 0, fmt.Errorf("old name bytes: %w", err)
 	}
 	newBytes, err := syscall.BytePtrFromString(newName)
 	if err != nil {
-		return fmt.Errorf("new name bytes: %w", err)
+		return 0, fmt.Errorf("new name bytes: %w", err)
 	}
 
 	_, _, errno := syscall.Syscall6(
@@ -148,15 +163,12 @@ func renameRenameat2() error {
 		uintptr(unsafe.Pointer(oldBytes)),
 		uintptr(dirFD),
 		uintptr(unsafe.Pointer(newBytes)),
-		0, // flags=0: plain rename
+		flags,
 		0,
 	)
 	runtime.KeepAlive(oldBytes)
 	runtime.KeepAlive(newBytes)
-	if errno != 0 {
-		return fmt.Errorf("renameat2: %w", errno)
-	}
-	return nil
+	return errno, nil
 }
 
 // renameEnoent attempts to rename a nonexistent file via raw SYS_RENAME.
@@ -220,32 +232,10 @@ func renameNoreplace() error {
 		}
 	}
 
-	dirFD, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	errno, err := doRenameat2(dir, srcName, dstName, renameNoreplaceFlag)
 	if err != nil {
-		return fmt.Errorf("open dir: %w", err)
+		return err
 	}
-	defer syscall.Close(dirFD)
-
-	srcBytes, err := syscall.BytePtrFromString(srcName)
-	if err != nil {
-		return fmt.Errorf("src name bytes: %w", err)
-	}
-	dstBytes, err := syscall.BytePtrFromString(dstName)
-	if err != nil {
-		return fmt.Errorf("dst name bytes: %w", err)
-	}
-
-	_, _, errno := syscall.Syscall6(
-		sysRenameat2,
-		uintptr(dirFD),
-		uintptr(unsafe.Pointer(srcBytes)),
-		uintptr(dirFD),
-		uintptr(unsafe.Pointer(dstBytes)),
-		renameNoreplaceFlag,
-		0,
-	)
-	runtime.KeepAlive(srcBytes)
-	runtime.KeepAlive(dstBytes)
 	if errno == 0 {
 		return fmt.Errorf("expected EEXIST, but renameat2 NOREPLACE succeeded")
 	}

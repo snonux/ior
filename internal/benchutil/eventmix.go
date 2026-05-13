@@ -184,63 +184,114 @@ func sumWeights(entries []MixEntry) int {
 	return total
 }
 
+// pair generates a matched enter/exit raw event pair for the mix event type.
+// fd/seq provide per-call identity for fd-based and path-based events.
 func (e MixEvent) pair(gen EventGenerator, time uint64, pid, tid uint32, fd int32, seq int) ([]byte, []byte, error) {
 	switch e {
-	case MixRead:
-		return gen.FdPair(time, pid, tid, fd, types.SYS_ENTER_READ, types.SYS_EXIT_READ, 128)
-	case MixWrite:
-		return gen.FdPair(time, pid, tid, fd, types.SYS_ENTER_WRITE, types.SYS_EXIT_WRITE, 256)
+	case MixRead, MixWrite, MixFsync:
+		return e.pairFd(gen, time, pid, tid, fd)
 	case MixOpen:
 		return gen.OpenPair(time, pid, tid)
 	case MixClose:
-		_, enter, err := gen.EnterFdEvent(time, pid, tid, fd, types.SYS_ENTER_CLOSE)
-		if err != nil {
-			return nil, nil, err
-		}
-		_, exit, err := gen.ExitFdEvent(time+gen.pairDelta(), pid, tid, fd, types.SYS_EXIT_CLOSE)
-		if err != nil {
-			return nil, nil, err
-		}
-		return enter, exit, nil
-	case MixStat:
-		path := fmt.Sprintf("/tmp/ior-stat-%d-%d", tid, seq)
-		return gen.PathPair(time, pid, tid, path, types.SYS_ENTER_NEWSTAT, types.SYS_EXIT_NEWSTAT, 0)
+		return pairClose(gen, time, pid, tid, fd)
+	case MixStat, MixAccess, MixMkdir, MixUnlink:
+		return e.pairPath(gen, time, pid, tid, tid, seq)
 	case MixSync:
 		return gen.NullPair(time, pid, tid, types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
-	case MixFsync:
-		return gen.FdPair(time, pid, tid, fd, types.SYS_ENTER_FSYNC, types.SYS_EXIT_FSYNC, 0)
-	case MixAccess:
-		path := fmt.Sprintf("/tmp/ior-access-%d-%d", tid, seq)
-		return gen.PathPair(time, pid, tid, path, types.SYS_ENTER_ACCESS, types.SYS_EXIT_ACCESS, 0)
-	case MixMkdir:
-		path := fmt.Sprintf("/tmp/ior-mkdir-%d-%d", tid, seq)
-		return gen.PathPair(time, pid, tid, path, types.SYS_ENTER_MKDIR, types.SYS_EXIT_MKDIR, 0)
-	case MixUnlink:
-		path := fmt.Sprintf("/tmp/ior-unlink-%d-%d", tid, seq)
-		return gen.PathPair(time, pid, tid, path, types.SYS_ENTER_UNLINK, types.SYS_EXIT_UNLINK, 0)
-	case MixRename:
-		oldname := fmt.Sprintf("/tmp/ior-old-%d-%d", tid, seq)
-		newname := fmt.Sprintf("/tmp/ior-new-%d-%d", tid, seq)
-		return gen.NamePair(time, pid, tid, oldname, newname, types.SYS_ENTER_RENAME, types.SYS_EXIT_RENAME, 0)
-	case MixLink:
-		oldname := fmt.Sprintf("/tmp/ior-link-old-%d-%d", tid, seq)
-		newname := fmt.Sprintf("/tmp/ior-link-new-%d-%d", tid, seq)
-		return gen.NamePair(time, pid, tid, oldname, newname, types.SYS_ENTER_LINK, types.SYS_EXIT_LINK, 0)
+	case MixRename, MixLink:
+		return e.pairName(gen, time, pid, tid, tid, seq)
 	case MixFcntl:
 		return gen.FcntlPair(time, pid, tid, uint32(fd), syscall.F_SETFL, syscall.O_NONBLOCK, types.SYS_EXIT_FCNTL, 0)
 	case MixDup3:
 		return gen.Dup3Pair(time, pid, tid, fd, syscall.O_CLOEXEC, types.SYS_EXIT_DUP3, int64(fd+1))
 	case MixOpenByHandleAt:
-		_, enter, err := gen.EnterOpenByHandleAtEvent(time, pid, tid, syscall.O_RDWR)
-		if err != nil {
-			return nil, nil, err
-		}
-		_, exit, err := gen.ExitRetEvent(time+gen.pairDelta(), pid, tid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
-		if err != nil {
-			return nil, nil, err
-		}
-		return enter, exit, nil
+		return pairOpenByHandleAt(gen, time, pid, tid, fd)
 	default:
 		return gen.NullPair(time, pid, tid, types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
 	}
+}
+
+// pairFd generates fd-based pairs for read/write/fsync-like events.
+func (e MixEvent) pairFd(gen EventGenerator, time uint64, pid, tid uint32, fd int32) ([]byte, []byte, error) {
+	switch e {
+	case MixRead:
+		return gen.FdPair(time, pid, tid, fd, types.SYS_ENTER_READ, types.SYS_EXIT_READ, 128)
+	case MixWrite:
+		return gen.FdPair(time, pid, tid, fd, types.SYS_ENTER_WRITE, types.SYS_EXIT_WRITE, 256)
+	default: // MixFsync
+		return gen.FdPair(time, pid, tid, fd, types.SYS_ENTER_FSYNC, types.SYS_EXIT_FSYNC, 0)
+	}
+}
+
+// pairPath generates path-based pairs for stat/access/mkdir/unlink-like events.
+func (e MixEvent) pairPath(gen EventGenerator, time uint64, pid, tid uint32, seqTid uint32, seq int) ([]byte, []byte, error) {
+	name := mixEventPathName(e, seqTid, seq)
+	enterEv, exitEv := mixEventPathTraceIDs(e)
+	return gen.PathPair(time, pid, tid, name, enterEv, exitEv, 0)
+}
+
+// mixEventPathTraceIDs returns the enter/exit TraceId constants for a path-based mix event.
+func mixEventPathTraceIDs(e MixEvent) (types.TraceId, types.TraceId) {
+	switch e {
+	case MixStat:
+		return types.SYS_ENTER_NEWSTAT, types.SYS_EXIT_NEWSTAT
+	case MixAccess:
+		return types.SYS_ENTER_ACCESS, types.SYS_EXIT_ACCESS
+	case MixMkdir:
+		return types.SYS_ENTER_MKDIR, types.SYS_EXIT_MKDIR
+	default: // MixUnlink
+		return types.SYS_ENTER_UNLINK, types.SYS_EXIT_UNLINK
+	}
+}
+
+// mixEventPathName returns the synthetic /tmp path for path-based mix events.
+func mixEventPathName(e MixEvent, tid uint32, seq int) string {
+	switch e {
+	case MixStat:
+		return fmt.Sprintf("/tmp/ior-stat-%d-%d", tid, seq)
+	case MixAccess:
+		return fmt.Sprintf("/tmp/ior-access-%d-%d", tid, seq)
+	case MixMkdir:
+		return fmt.Sprintf("/tmp/ior-mkdir-%d-%d", tid, seq)
+	default: // MixUnlink
+		return fmt.Sprintf("/tmp/ior-unlink-%d-%d", tid, seq)
+	}
+}
+
+// pairName generates name-pair (two-path) events for rename/link-like events.
+func (e MixEvent) pairName(gen EventGenerator, time uint64, pid, tid uint32, seqTid uint32, seq int) ([]byte, []byte, error) {
+	if e == MixRename {
+		oldname := fmt.Sprintf("/tmp/ior-old-%d-%d", seqTid, seq)
+		newname := fmt.Sprintf("/tmp/ior-new-%d-%d", seqTid, seq)
+		return gen.NamePair(time, pid, tid, oldname, newname, types.SYS_ENTER_RENAME, types.SYS_EXIT_RENAME, 0)
+	}
+	oldname := fmt.Sprintf("/tmp/ior-link-old-%d-%d", seqTid, seq)
+	newname := fmt.Sprintf("/tmp/ior-link-new-%d-%d", seqTid, seq)
+	return gen.NamePair(time, pid, tid, oldname, newname, types.SYS_ENTER_LINK, types.SYS_EXIT_LINK, 0)
+}
+
+// pairClose generates a close syscall pair (not available as a single gen helper).
+func pairClose(gen EventGenerator, time uint64, pid, tid uint32, fd int32) ([]byte, []byte, error) {
+	_, enter, err := gen.EnterFdEvent(time, pid, tid, fd, types.SYS_ENTER_CLOSE)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, exit, err := gen.ExitFdEvent(time+gen.pairDelta(), pid, tid, fd, types.SYS_EXIT_CLOSE)
+	if err != nil {
+		return nil, nil, err
+	}
+	return enter, exit, nil
+}
+
+// pairOpenByHandleAt generates an open_by_handle_at pair using enter and ret events.
+func pairOpenByHandleAt(gen EventGenerator, time uint64, pid, tid uint32, fd int32) ([]byte, []byte, error) {
+	_, enter, err := gen.EnterOpenByHandleAtEvent(time, pid, tid, syscall.O_RDWR)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, exit, err := gen.ExitRetEvent(time+gen.pairDelta(), pid, tid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
+	if err != nil {
+		return nil, nil, err
+	}
+	return enter, exit, nil
 }

@@ -251,79 +251,80 @@ func layoutSyscallTreemap(items []syscallTreemapItem, x, y, w, h int) []syscallT
 	return tiles
 }
 
+// layoutSyscallTreemapInto recursively partitions items into tiles using a
+// binary split strategy. Items are bisected near the median value and placed
+// into the left/right (vertical split) or top/bottom (horizontal split) halves.
 func layoutSyscallTreemapInto(items []syscallTreemapItem, x, y, w, h, baseIndex int, out *[]syscallTreemapTile) {
 	if len(items) == 0 || w <= 0 || h <= 0 {
 		return
 	}
-	if len(items) == 1 {
-		*out = append(*out, syscallTreemapTile{
-			item:  items[0],
-			index: baseIndex,
-			x:     x,
-			y:     y,
-			w:     w,
-			h:     h,
-		})
-		return
-	}
 
-	total := uint64(0)
-	for _, item := range items {
-		total += item.Value
-	}
-	if total == 0 {
+	total := sumTreemapValues(items)
+	if len(items) == 1 || total == 0 {
+		// Degenerate case: single item or all-zero values — fill the whole rect.
 		*out = append(*out, syscallTreemapTile{
-			item:  items[0],
-			index: baseIndex,
-			x:     x,
-			y:     y,
-			w:     w,
-			h:     h,
+			item: items[0], index: baseIndex,
+			x: x, y: y, w: w, h: h,
 		})
 		return
 	}
 
 	splitAt := findTreemapSplitIndex(items, total)
-	first := items[:splitAt]
-	second := items[splitAt:]
-	firstTotal := uint64(0)
-	for _, item := range first {
-		firstTotal += item.Value
-	}
+	first, second := items[:splitAt], items[splitAt:]
+	firstTotal := sumTreemapValues(first)
 
+	if chooseSplitVertical(w, h) {
+		layoutTreemapVertical(first, second, x, y, w, h, baseIndex, splitAt, firstTotal, total, out)
+	} else {
+		layoutTreemapHorizontal(first, second, x, y, w, h, baseIndex, splitAt, firstTotal, total, out)
+	}
+}
+
+// sumTreemapValues returns the sum of Value fields across items.
+func sumTreemapValues(items []syscallTreemapItem) uint64 {
+	total := uint64(0)
+	for _, item := range items {
+		total += item.Value
+	}
+	return total
+}
+
+// chooseSplitVertical returns true when the rectangle should be split along
+// the vertical axis (left/right), using aspect-ratio heuristics.
+func chooseSplitVertical(w, h int) bool {
 	splitVertical := w >= h
 	if splitVertical && w <= 1 {
-		splitVertical = false
+		return false
 	}
 	if !splitVertical && h <= 1 {
-		splitVertical = true
+		return true
 	}
+	return splitVertical
+}
 
-	if splitVertical {
-		w1 := int(math.Round(float64(w) * float64(firstTotal) / float64(total)))
-		if w1 < 1 {
-			w1 = 1
-		}
-		if w1 >= w {
-			w1 = w - 1
-		}
-		if w1 <= 0 {
-			w1 = 1
-		}
-		layoutSyscallTreemapInto(first, x, y, w1, h, baseIndex, out)
-		layoutSyscallTreemapInto(second, x+w1, y, w-w1, h, baseIndex+splitAt, out)
-		return
+// layoutTreemapVertical splits the items into left (first) and right (second)
+// columns proportional to their value totals and recurses into each column.
+func layoutTreemapVertical(first, second []syscallTreemapItem, x, y, w, h, baseIndex, splitAt int, firstTotal, total uint64, out *[]syscallTreemapTile) {
+	w1 := int(math.Round(float64(w) * float64(firstTotal) / float64(total)))
+	if w1 < 1 {
+		w1 = 1
 	}
+	if w1 >= w {
+		w1 = w - 1
+	}
+	layoutSyscallTreemapInto(first, x, y, w1, h, baseIndex, out)
+	layoutSyscallTreemapInto(second, x+w1, y, w-w1, h, baseIndex+splitAt, out)
+}
 
+// layoutTreemapHorizontal splits items into top (first) and bottom (second)
+// rows proportional to their value totals and recurses into each row.
+func layoutTreemapHorizontal(first, second []syscallTreemapItem, x, y, w, h, baseIndex, splitAt int, firstTotal, total uint64, out *[]syscallTreemapTile) {
 	h1 := int(math.Round(float64(h) * float64(firstTotal) / float64(total)))
 	if h1 < 1 {
 		h1 = 1
 	}
 	if h1 >= h {
 		h1 = h - 1
-	}
-	if h1 <= 0 {
-		h1 = 1
 	}
 	layoutSyscallTreemapInto(first, x, y, w, h1, baseIndex, out)
 	layoutSyscallTreemapInto(second, x, y+h1, w, h-h1, baseIndex+splitAt, out)

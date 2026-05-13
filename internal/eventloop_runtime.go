@@ -129,6 +129,10 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	handler(raw, ch)
 }
 
+// initRawHandlers registers all BPF event-type dispatch callbacks. It is
+// idempotent: a second call after the map is populated is a no-op. Handlers
+// are grouped by event class (open, fd, null, ret, name/path, misc) so that
+// each helper stays under 30 lines.
 func (e *eventLoop) initRawHandlers() {
 	if e.rawHandlers == nil {
 		e.rawHandlers = make(map[types.EventType]rawEventHandler)
@@ -136,7 +140,16 @@ func (e *eventLoop) initRawHandlers() {
 	if len(e.rawHandlers) != 0 {
 		return
 	}
+	e.registerOpenHandlers()
+	e.registerFdHandlers()
+	e.registerNullHandlers()
+	e.registerRetHandlers()
+	e.registerNamePathHandlers()
+	e.registerMiscHandlers()
+}
 
+// registerOpenHandlers wires enter/exit handlers for open-family events.
+func (e *eventLoop) registerOpenHandlers() {
 	e.rawHandlers[types.ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		openEv, ok := decodeRawEvent(e, types.ENTER_OPEN_EVENT, raw, types.NewOpenEventFast)
 		if !ok {
@@ -153,6 +166,10 @@ func (e *eventLoop) initRawHandlers() {
 		}
 		e.tracepointExited(retEv, ch)
 	}
+}
+
+// registerFdHandlers wires enter/exit handlers for fd-family events (read/write/close…).
+func (e *eventLoop) registerFdHandlers() {
 	e.rawHandlers[types.ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		fdEv, ok := decodeRawEvent(e, types.ENTER_FD_EVENT, raw, types.NewFdEventFast)
 		if !ok {
@@ -167,6 +184,10 @@ func (e *eventLoop) initRawHandlers() {
 		}
 		e.tracepointExited(fdEv, ch)
 	}
+}
+
+// registerNullHandlers wires enter/exit handlers for syscalls with no interesting arguments.
+func (e *eventLoop) registerNullHandlers() {
 	e.rawHandlers[types.ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		nullEv, ok := decodeRawEvent(e, types.ENTER_NULL_EVENT, raw, types.NewNullEventFast)
 		if !ok {
@@ -181,6 +202,10 @@ func (e *eventLoop) initRawHandlers() {
 		}
 		e.tracepointExited(nullEv, ch)
 	}
+}
+
+// registerRetHandlers wires the exit handler for generic return-value events.
+func (e *eventLoop) registerRetHandlers() {
 	e.rawHandlers[types.EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
 		retEv, ok := decodeRawEvent(e, types.EXIT_RET_EVENT, raw, types.NewRetEventFast)
 		if !ok {
@@ -188,6 +213,10 @@ func (e *eventLoop) initRawHandlers() {
 		}
 		e.tracepointExited(retEv, ch)
 	}
+}
+
+// registerNamePathHandlers wires enter handlers for name- and path-carrying events.
+func (e *eventLoop) registerNamePathHandlers() {
 	e.rawHandlers[types.ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		nameEv, ok := decodeRawEvent(e, types.ENTER_NAME_EVENT, raw, types.NewNameEventFast)
 		if !ok {
@@ -206,6 +235,10 @@ func (e *eventLoop) initRawHandlers() {
 			e.tracepointEntered(pathEv)
 		}
 	}
+}
+
+// registerMiscHandlers wires enter handlers for fcntl, open_by_handle_at, and dup3.
+func (e *eventLoop) registerMiscHandlers() {
 	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		fcntlEv, ok := decodeRawEvent(e, types.ENTER_FCNTL_EVENT, raw, types.NewFcntlEventFast)
 		if !ok {

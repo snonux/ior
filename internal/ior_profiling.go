@@ -37,50 +37,21 @@ func setupProfiling(ctx context.Context, cfg flags.Config, started chan<- struct
 	}
 
 	control.enabled = true
-	isTUIMode := started != nil
-	cpuProfilePath, memProfilePath, execTracePath, execTraceDuration := profilingFilesForMode(isTUIMode)
+	cpuProfilePath, memProfilePath, execTracePath, execTraceDuration := profilingFilesForMode(started != nil)
 
-	cpuProfile, err := os.Create(cpuProfilePath)
+	cpuProfile, memProfile, err := openProfilingFiles(cpuProfilePath, memProfilePath)
 	if err != nil {
-		return nil, err
-	}
-	memProfile, err := os.Create(memProfilePath)
-	if err != nil {
-		_ = cpuProfile.Close()
 		return nil, err
 	}
 	control.cpuProfile = cpuProfile
 	control.memProfile = memProfile
 
 	if execTracePath != "" {
-		execTraceProfile, err := os.Create(execTracePath)
-		if err != nil {
+		if err := startExecTrace(ctx, execTracePath, execTraceDuration, control); err != nil {
 			_ = cpuProfile.Close()
 			_ = memProfile.Close()
 			return nil, err
 		}
-		if err := trace.Start(execTraceProfile); err != nil {
-			_ = cpuProfile.Close()
-			_ = memProfile.Close()
-			_ = execTraceProfile.Close()
-			return nil, err
-		}
-		var stopOnce sync.Once
-		control.stopExecTrace = func() {
-			stopOnce.Do(func() {
-				trace.Stop()
-				_ = execTraceProfile.Close()
-			})
-		}
-		go func() {
-			timer := time.NewTimer(execTraceDuration)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-			case <-timer.C:
-			}
-			control.stopExecTrace()
-		}()
 	}
 
 	if err := pprof.StartCPUProfile(cpuProfile); err != nil {
@@ -90,6 +61,52 @@ func setupProfiling(ctx context.Context, cfg flags.Config, started chan<- struct
 		return nil, err
 	}
 	return control, nil
+}
+
+// openProfilingFiles creates the CPU and memory profile output files. On
+// error any successfully opened file is closed before returning.
+func openProfilingFiles(cpuPath, memPath string) (*os.File, *os.File, error) {
+	cpuProfile, err := os.Create(cpuPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	memProfile, err := os.Create(memPath)
+	if err != nil {
+		_ = cpuProfile.Close()
+		return nil, nil, err
+	}
+	return cpuProfile, memProfile, nil
+}
+
+// startExecTrace creates the execution-trace output file, starts the runtime
+// tracer, and wires a goroutine that stops it on context cancellation or after
+// execTraceDuration, whichever comes first.
+func startExecTrace(ctx context.Context, tracePath string, execTraceDuration time.Duration, control *profilingControl) error {
+	execTraceProfile, err := os.Create(tracePath)
+	if err != nil {
+		return err
+	}
+	if err := trace.Start(execTraceProfile); err != nil {
+		_ = execTraceProfile.Close()
+		return err
+	}
+	var stopOnce sync.Once
+	control.stopExecTrace = func() {
+		stopOnce.Do(func() {
+			trace.Stop()
+			_ = execTraceProfile.Close()
+		})
+	}
+	go func() {
+		timer := time.NewTimer(execTraceDuration)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+		control.stopExecTrace()
+	}()
+	return nil
 }
 
 func (p *profilingControl) stop(logln func(...any)) {

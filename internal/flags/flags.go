@@ -131,6 +131,23 @@ func Parse() (Config, error) {
 // fresh FlagSet and custom argument slices without touching global state.
 func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	cfg := NewFlags()
+	tpsAttach, tpsExclude, fields := registerFlags(fs, &cfg)
+
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if err := resolvePostParseFields(&cfg, tpsAttach, tpsExclude, fields); err != nil {
+		return Config{}, err
+	}
+	if err := validateConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// registerFlags binds all CLI flags to cfg and returns the string pointers for
+// fields that require post-parse resolution (tracepoint regexes, collapse fields).
+func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields *string) {
 	validFields := collapse.ValidFields()
 	validCounts := collapse.ValidCountFields()
 
@@ -141,11 +158,10 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 
 	fs.StringVar(&cfg.CommFilter, "comm", "", "Command to filter for")
 	fs.StringVar(&cfg.PathFilter, "path", "", "Path to filter for")
-
 	fs.BoolVar(&cfg.PprofEnable, "pprof", false, "Enable profiling")
 
-	tpsAttach := fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
-	tpsExclude := fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
+	tpsAttach = fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
+	tpsExclude = fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
 	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
@@ -158,20 +174,21 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
-	fields := fs.String("fields", "",
+	fields = fs.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	fs.StringVar(&cfg.CountField, "count", cfg.CountField,
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCounts))
+	return tpsAttach, tpsExclude, fields
+}
 
-	if err := fs.Parse(args); err != nil {
-		return Config{}, err
-	}
-
+// resolvePostParseFields compiles the tracepoint selector and collapse field
+// list from the raw string flags that cannot be bound directly to cfg fields.
+func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string) error {
 	// Parse the tracepoint include/exclude regex lists into a Selector.
 	// The Selector owns all matching logic; Config is purely a data carrier.
 	sel, err := tracepoints.ParseSelector(*tpsAttach, *tpsExclude)
 	if err != nil {
-		return Config{}, err
+		return err
 	}
 	cfg.TracepointSelector = sel
 
@@ -179,7 +196,6 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	// As of February 23, 2026, open_by_handle_at and name_to_handle_at were
 	// re-evaluated on newer kernels and do not require CO-RE-based exclusions.
 	// If future kernels regress, add targeted exclusions here.
-
 	if *fields == "" {
 		cfg.CollapsedFields = []string{"comm", "tracepoint", "path"}
 	} else {
@@ -188,32 +204,33 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 
 	for _, field := range cfg.CollapsedFields {
 		if !collapse.IsValidField(field) {
-			return Config{}, fmt.Errorf("invalid field for collapse: %s", field)
+			return fmt.Errorf("invalid field for collapse: %s", field)
 		}
 	}
-
 	if !collapse.IsValidCountField(cfg.CountField) {
-		return Config{}, fmt.Errorf("invalid count field: %s", cfg.CountField)
+		return fmt.Errorf("invalid count field: %s", cfg.CountField)
 	}
+	return nil
+}
 
+// validateConfig checks numeric/duration bounds that cannot be enforced by the
+// flag package itself and returns a descriptive error on the first violation.
+func validateConfig(cfg Config) error {
 	// A zero or negative duration would cause the trace context to cancel
 	// immediately, capturing no events. Require at least one second.
 	if cfg.Duration <= 0 {
-		return Config{}, fmt.Errorf("invalid duration: %d (must be > 0)", cfg.Duration)
+		return fmt.Errorf("invalid duration: %d (must be > 0)", cfg.Duration)
 	}
-
 	// A negative reset timer would imply auto-resets in the past, which is
 	// nonsensical. 0 disables, anything positive enables.
 	if cfg.ResetTimer < 0 {
-		return Config{}, fmt.Errorf("invalid resetTimer: %s (must be >= 0; 0 disables)", cfg.ResetTimer)
+		return fmt.Errorf("invalid resetTimer: %s (must be >= 0; 0 disables)", cfg.ResetTimer)
 	}
-
 	// A non-positive mapSize would wrap to a huge uint32 when cast in
 	// resizeBPFMaps, causing libbpf to fail with a confusing "map too large"
 	// error. Reject it here with a clear diagnostic instead.
 	if cfg.EventMapSize <= 0 {
-		return Config{}, fmt.Errorf("invalid mapSize: %d (must be > 0)", cfg.EventMapSize)
+		return fmt.Errorf("invalid mapSize: %d (must be > 0)", cfg.EventMapSize)
 	}
-
-	return cfg, nil
+	return nil
 }

@@ -62,75 +62,91 @@ func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra 
 	return b.String()
 }
 
+// generateExtra returns the kind-specific C body lines for a tracepoint handler,
+// dispatching to a per-kind helper so that each case stays concise.
 func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 	f := tp.Format
-
 	switch tp.Classification.Kind {
 	case KindFd:
-		if f.Name == "sys_enter_pidfd_getfd" {
-			return "    ev->fd = (__s32)ctx->args[0];\n"
-		}
-		fdIdx := f.FieldNumber("fd")
-		if fdIdx >= 0 {
-			return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdIdx)
-		}
-		return "    ev->fd = (__s32)ctx->args[0];\n"
-
+		return generateExtraFd(f)
 	case KindDup3:
 		return "    ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"
-
 	case KindOpenByHandleAt:
 		return "    ev->flags = (__s32)ctx->args[2];\n"
-
 	case KindOpen:
-		filenameIdx := f.FieldNumber("filename")
-		flagsIdx := f.FieldNumber("flags")
-		var b strings.Builder
-		b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
-		fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]);\n", filenameIdx)
-		b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
-		if flagsIdx > -1 {
-			fmt.Fprintf(&b, "    ev->flags = ctx->args[%d];\n", flagsIdx)
-		} else {
-			b.WriteString("    ev->flags = -1; // Probably OK\n")
-		}
-		return b.String()
-
+		return generateExtraOpen(f)
 	case KindPathname:
-		fieldName := tp.Classification.PathnameField
-		fieldIdx := f.FieldNumber(fieldName)
-		var b strings.Builder
-		b.WriteString("    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));\n")
-		fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[%d]);\n", fieldIdx)
-		return b.String()
-
+		return generateExtraPathname(tp, f)
 	case KindName:
-		oldIdx := f.FieldNumber("oldname")
-		newIdx := f.FieldNumber("newname")
-		var b strings.Builder
-		b.WriteString("    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));\n")
-		fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[%d]);\n", oldIdx)
-		fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[%d]);\n", newIdx)
-		return b.String()
-
+		return generateExtraName(f)
 	case KindFcntl:
-		fdIdx := f.FieldNumber("fd")
-		cmdIdx := f.FieldNumber("cmd")
-		argIdx := f.FieldNumber("arg")
-		return fmt.Sprintf(
-			"    ev->fd = ctx->args[%d];\n    ev->cmd = ctx->args[%d];\n    ev->arg = ctx->args[%d];\n",
-			fdIdx, cmdIdx, argIdx,
-		)
-
+		return generateExtraFcntl(f)
 	case KindRet:
-		classification := ClassifyRet(f.Name)
-		return fmt.Sprintf("    ev->ret = ctx->ret;\n    ev->ret_type = %s;\n", classification)
-
+		return fmt.Sprintf("    ev->ret = ctx->ret;\n    ev->ret_type = %s;\n", ClassifyRet(f.Name))
 	case KindNull:
 		return ""
 	}
-
 	return ""
+}
+
+// generateExtraFd returns the fd-capture lines for fd-family events.
+func generateExtraFd(f *Format) string {
+	if f.Name == "sys_enter_pidfd_getfd" {
+		return "    ev->fd = (__s32)ctx->args[0];\n"
+	}
+	fdIdx := f.FieldNumber("fd")
+	if fdIdx >= 0 {
+		return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdIdx)
+	}
+	return "    ev->fd = (__s32)ctx->args[0];\n"
+}
+
+// generateExtraOpen returns the filename/comm/flags capture lines for open-family events.
+func generateExtraOpen(f *Format) string {
+	filenameIdx := f.FieldNumber("filename")
+	flagsIdx := f.FieldNumber("flags")
+	var b strings.Builder
+	b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
+	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]);\n", filenameIdx)
+	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
+	if flagsIdx > -1 {
+		fmt.Fprintf(&b, "    ev->flags = ctx->args[%d];\n", flagsIdx)
+	} else {
+		b.WriteString("    ev->flags = -1; // Probably OK\n")
+	}
+	return b.String()
+}
+
+// generateExtraPathname returns the pathname capture lines for path-family events.
+func generateExtraPathname(tp GeneratedTracepoint, f *Format) string {
+	fieldName := tp.Classification.PathnameField
+	fieldIdx := f.FieldNumber(fieldName)
+	var b strings.Builder
+	b.WriteString("    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));\n")
+	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[%d]);\n", fieldIdx)
+	return b.String()
+}
+
+// generateExtraName returns the oldname/newname capture lines for rename/link-family events.
+func generateExtraName(f *Format) string {
+	oldIdx := f.FieldNumber("oldname")
+	newIdx := f.FieldNumber("newname")
+	var b strings.Builder
+	b.WriteString("    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));\n")
+	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[%d]);\n", oldIdx)
+	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[%d]);\n", newIdx)
+	return b.String()
+}
+
+// generateExtraFcntl returns the fd/cmd/arg capture lines for fcntl events.
+func generateExtraFcntl(f *Format) string {
+	fdIdx := f.FieldNumber("fd")
+	cmdIdx := f.FieldNumber("cmd")
+	argIdx := f.FieldNumber("arg")
+	return fmt.Sprintf(
+		"    ev->fd = ctx->args[%d];\n    ev->cmd = ctx->args[%d];\n    ev->arg = ctx->args[%d];\n",
+		fdIdx, cmdIdx, argIdx,
+	)
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

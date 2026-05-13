@@ -98,40 +98,35 @@ func (k KeyMap) DashboardStatusHelp() []key.Binding {
 
 // DashboardStatusHelpSections returns grouped bindings for dashboard status bars.
 func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
-	global := []key.Binding{
+	return []HelpSection{
+		{Title: "Global", Bindings: k.globalStatusBindings()},
+		{Title: "Dashboard", Bindings: dashboardStatusBindings(k)},
+	}
+}
+
+// globalStatusBindings returns the global key bindings shown in the status bar,
+// appending the optional export binding when it has a non-empty label.
+func (k KeyMap) globalStatusBindings() []key.Binding {
+	bindings := []key.Binding{
 		helpTextBinding("H", "toggle help"),
-		k.Tab,
-		k.ShiftTab,
-		k.One,
-		k.Two,
-		k.Three,
-		k.Four,
-		k.Five,
-		k.Six,
-		k.Seven,
-		k.Visualize,
-		k.Metric,
-		k.Sort,
-		k.ReverseSort,
-		k.Filter,
-		k.FilterUndo,
-		k.SelectPID,
-		k.SelectTID,
-		k.Probes,
-		k.Record,
-		k.Refresh,
-		k.AutoReset,
-		k.Quit,
+		k.Tab, k.ShiftTab,
+		k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven,
+		k.Visualize, k.Metric, k.Sort, k.ReverseSort,
+		k.Filter, k.FilterUndo,
+		k.SelectPID, k.SelectTID,
+		k.Probes, k.Record, k.Refresh, k.AutoReset, k.Quit,
 	}
 	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
-		global = append(global, k.Export)
+		bindings = append(bindings, k.Export)
 	}
-	dashboard := []key.Binding{
-		k.DirGroup,
-		k.Visualize,
-		k.Metric,
-		k.Sort,
-		k.ReverseSort,
+	return bindings
+}
+
+// dashboardStatusBindings returns the dashboard-specific bindings shown in
+// the status bar (table navigation, stream controls, and export shortcuts).
+func dashboardStatusBindings(k KeyMap) []key.Binding {
+	return []key.Binding{
+		k.DirGroup, k.Visualize, k.Metric, k.Sort, k.ReverseSort,
 		helpTextBinding("space", "stream pause"),
 		helpTextBinding("enter", "selected filter"),
 		helpTextBinding("esc", "stream undo filter"),
@@ -146,11 +141,6 @@ func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 		helpTextBinding("x", "stream export"),
 		helpTextBinding("X", "stream export as"),
 		helpTextBinding("E", "stream open last"),
-	}
-
-	return []HelpSection{
-		{Title: "Global", Bindings: global},
-		{Title: "Dashboard", Bindings: dashboard},
 	}
 }
 
