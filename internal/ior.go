@@ -367,9 +367,10 @@ func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	}
 }
 
-// traceFilterFromConfig delegates to the canonical Config.TraceFilter method.
+// traceFilterFromConfig delegates to flags.BuildTraceFilter to resolve the
+// active event filter from the CLI configuration fields.
 func traceFilterFromConfig(cfg flags.Config) globalfilter.Filter {
-	return cfg.TraceFilter()
+	return flags.BuildTraceFilter(cfg)
 }
 
 func newLogger(verbose bool) func(...any) {
