@@ -1,10 +1,7 @@
 package tui
 
 import (
-	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	"ior/internal/globalfilter"
 )
@@ -132,6 +129,9 @@ func globalFilterActionLabel(prev, next globalfilter.Filter, action string) stri
 	return strings.Join(parts, " ")
 }
 
+// appendStringFilterChange appends a change token to parts for a string
+// filter field. It emits "clear name" when the filter is removed, or delegates
+// to globalfilter.AppendStringSummary for the canonical "name~pattern" format.
 func appendStringFilterChange(parts []string, name string, prev, next *globalfilter.StringFilter) []string {
 	if sameStringFilter(prev, next) {
 		return parts
@@ -139,9 +139,12 @@ func appendStringFilterChange(parts []string, name string, prev, next *globalfil
 	if next == nil || strings.TrimSpace(next.Pattern) == "" {
 		return append(parts, "clear "+name)
 	}
-	return append(parts, fmt.Sprintf("%s~%s", name, strings.TrimSpace(next.Pattern)))
+	return globalfilter.AppendStringSummary(parts, name, next)
 }
 
+// appendNumericFilterChange appends a change token to parts for a numeric
+// filter field. It emits "clear name" when the filter is removed, or delegates
+// to globalfilter.AppendNumericSummary for the canonical "nameOPvalue" format.
 func appendNumericFilterChange(parts []string, name string, prev, next *globalfilter.NumericFilter, duration bool) []string {
 	if sameNumericFilter(prev, next) {
 		return parts
@@ -149,11 +152,7 @@ func appendNumericFilterChange(parts []string, name string, prev, next *globalfi
 	if next == nil {
 		return append(parts, "clear "+name)
 	}
-	value := strconv.FormatInt(next.Value, 10)
-	if duration {
-		value = time.Duration(next.Value).String()
-	}
-	return append(parts, fmt.Sprintf("%s%s%s", name, globalfilter.CompareOpSymbol(next.Op), value))
+	return globalfilter.AppendNumericSummary(parts, name, next, duration)
 }
 
 func sameStringFilter(a, b *globalfilter.StringFilter) bool {
