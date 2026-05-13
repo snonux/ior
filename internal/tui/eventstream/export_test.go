@@ -123,6 +123,79 @@ func TestResolveEditorCommandDoubleQuotedPathWithArgs(t *testing.T) {
 	}
 }
 
+// TestEnsureCSVFilenamePathTraversal verifies that path traversal attempts are
+// rejected or stripped so that the resulting filename stays within exportDir.
+func TestEnsureCSVFilenamePathTraversal(t *testing.T) {
+	cases := []struct {
+		input   string
+		want    string // empty string means an error is expected
+		wantErr bool
+	}{
+		// Normal names — should pass through unchanged (with .csv if needed).
+		{"report", "report.csv", false},
+		{"report.csv", "report.csv", false},
+		{"Report.CSV", "Report.CSV", false},
+		// Directory separators must be stripped — only the base name survives.
+		{"../../etc/passwd", "passwd.csv", false},
+		{"../secret", "secret.csv", false},
+		{"subdir/file.csv", "file.csv", false},
+		{"/absolute/path.csv", "path.csv", false},
+		// Pure directory references must be rejected.
+		{"..", "", true},
+		{"some/../..", "", true},
+		// Empty / whitespace-only must be rejected.
+		{"", "", true},
+		{"   ", "", true},
+	}
+
+	for _, tc := range cases {
+		got, err := ensureCSVFilename(tc.input)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ensureCSVFilename(%q): expected error, got %q", tc.input, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ensureCSVFilename(%q): unexpected error: %v", tc.input, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ensureCSVFilename(%q): got %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+// TestExportRowsToCSVPathTraversal verifies that exportRowsToCSV writes the
+// output file inside exportDir even when the caller passes a path-traversal
+// filename.
+func TestExportRowsToCSVPathTraversal(t *testing.T) {
+	exportDir := t.TempDir()
+	outside := t.TempDir()
+
+	// Craft a filename that would escape exportDir without sanitisation.
+	traversal := "../" + outside[len(outside)-1:] // relative path targeting outside dir
+
+	// Use a clearly recognisable traversal pattern.
+	maliciousName := "../../escape.csv"
+
+	path, err := exportRowsToCSV(nil, exportDir, maliciousName)
+	if err != nil {
+		t.Fatalf("exportRowsToCSV returned unexpected error: %v", err)
+	}
+
+	// The written file must live inside exportDir, not outside it.
+	rel, err := filepath.Rel(exportDir, path)
+	if err != nil {
+		t.Fatalf("filepath.Rel: %v", err)
+	}
+	if len(rel) >= 2 && rel[:2] == ".." {
+		t.Errorf("output path %q escapes exportDir %q (rel=%q)", path, exportDir, rel)
+	}
+
+	_ = traversal // silence unused-variable warning
+}
+
 // TestShellSplitVariousCases covers the tokenizer with a table-driven approach.
 func TestShellSplitVariousCases(t *testing.T) {
 	cases := []struct {

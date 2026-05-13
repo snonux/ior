@@ -192,15 +192,30 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 	return absPath, nil
 }
 
+// ensureCSVFilename validates and normalises a user-supplied export filename.
+// It strips any directory components (preventing path traversal outside
+// exportDir) and rejects names that resolve to "." or "..".  A ".csv"
+// extension is appended when the caller omits it.
 func ensureCSVFilename(name string) (string, error) {
 	clean := strings.TrimSpace(name)
 	if clean == "" {
 		return "", errors.New("filename cannot be empty")
 	}
-	if strings.HasSuffix(strings.ToLower(clean), ".csv") {
-		return clean, nil
+
+	// Strip all directory components so that inputs such as
+	// "../../etc/passwd" or "/absolute/path.csv" cannot escape exportDir.
+	base := filepath.Base(clean)
+
+	// filepath.Base returns "." for empty/dot inputs and ".." for a raw ".."
+	// component — both are unusable as a plain filename.
+	if base == "." || base == ".." {
+		return "", errors.New("filename must not be a directory reference")
 	}
-	return clean + ".csv", nil
+
+	if strings.HasSuffix(strings.ToLower(base), ".csv") {
+		return base, nil
+	}
+	return base + ".csv", nil
 }
 
 // ExportSnapshotToCSV exports a fresh filtered snapshot from the current source
