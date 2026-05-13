@@ -177,41 +177,11 @@ func fileDirColumns(width int) []common.TableColumn {
 }
 
 func sortedFileSnapshots(rows []statsengine.FileSnapshot, sortState tableSortState[fileSortKey]) []statsengine.FileSnapshot {
-	if len(rows) == 0 {
-		return nil
-	}
-	if !sortState.active {
-		return rows
-	}
-
-	sorted := slices.Clone(rows)
-	slices.SortFunc(sorted, func(left, right statsengine.FileSnapshot) int {
-		cmp := compareFileBySort(left, right, sortState.key)
-		if cmp == 0 {
-			cmp = compareFileDefault(left, right)
-		}
-		return sortState.apply(cmp)
-	})
-	return sorted
+	return sortedWithState(rows, sortState, compareFileBySort, compareFileDefault)
 }
 
 func sortedDirSnapshots(rows []DirSnapshot, sortState tableSortState[fileDirSortKey]) []DirSnapshot {
-	if len(rows) == 0 {
-		return nil
-	}
-	if !sortState.active {
-		return rows
-	}
-
-	sorted := slices.Clone(rows)
-	slices.SortFunc(sorted, func(left, right DirSnapshot) int {
-		cmp := compareDirBySort(left, right, sortState.key)
-		if cmp == 0 {
-			cmp = compareDirDefault(left, right)
-		}
-		return sortState.apply(cmp)
-	})
-	return sorted
+	return sortedWithState(rows, sortState, compareDirBySort, compareDirDefault)
 }
 
 func compareFileBySort(left, right statsengine.FileSnapshot, key fileSortKey) int {
