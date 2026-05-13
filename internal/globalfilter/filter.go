@@ -176,21 +176,24 @@ func (f Filter) IsActive() bool {
 	return false
 }
 
+// Summary returns a compact human-readable description of the active filter
+// predicates, e.g. "syscall~read pid=1234". Returns "all" when no predicates
+// are set.
 func (f Filter) Summary() string {
 	parts := make([]string, 0, 10)
 	if f.ErrorsOnly {
 		parts = append(parts, "errors")
 	}
-	parts = appendStringSummary(parts, "syscall", f.Syscall)
-	parts = appendStringSummary(parts, "comm", f.Comm)
-	parts = appendStringSummary(parts, "file", f.File)
-	parts = appendNumericSummary(parts, "pid", f.PID, false)
-	parts = appendNumericSummary(parts, "tid", f.TID, false)
-	parts = appendNumericSummary(parts, "fd", f.FD, false)
-	parts = appendNumericSummary(parts, "latency", f.LatencyNs, true)
-	parts = appendNumericSummary(parts, "gap", f.GapNs, true)
-	parts = appendNumericSummary(parts, "bytes", f.Bytes, false)
-	parts = appendNumericSummary(parts, "ret", f.RetVal, false)
+	parts = AppendStringSummary(parts, "syscall", f.Syscall)
+	parts = AppendStringSummary(parts, "comm", f.Comm)
+	parts = AppendStringSummary(parts, "file", f.File)
+	parts = AppendNumericSummary(parts, "pid", f.PID, false)
+	parts = AppendNumericSummary(parts, "tid", f.TID, false)
+	parts = AppendNumericSummary(parts, "fd", f.FD, false)
+	parts = AppendNumericSummary(parts, "latency", f.LatencyNs, true)
+	parts = AppendNumericSummary(parts, "gap", f.GapNs, true)
+	parts = AppendNumericSummary(parts, "bytes", f.Bytes, false)
+	parts = AppendNumericSummary(parts, "ret", f.RetVal, false)
 	if len(parts) == 0 {
 		return "all"
 	}
@@ -218,7 +221,9 @@ func ParseDurationNs(input string) (int64, error) {
 	return d.Nanoseconds(), nil
 }
 
-func appendStringSummary(parts []string, name string, sf *StringFilter) []string {
+// AppendStringSummary appends a "name~pattern" token to parts when the filter
+// is non-nil and non-empty, then returns the updated slice.
+func AppendStringSummary(parts []string, name string, sf *StringFilter) []string {
 	if sf == nil {
 		return parts
 	}
@@ -229,7 +234,9 @@ func appendStringSummary(parts []string, name string, sf *StringFilter) []string
 	return append(parts, fmt.Sprintf("%s~%s", name, pattern))
 }
 
-func appendNumericSummary(parts []string, name string, nf *NumericFilter, duration bool) []string {
+// AppendNumericSummary appends a "nameOPvalue" token to parts when the filter
+// is non-nil, formatting the value as a duration string when duration is true.
+func AppendNumericSummary(parts []string, name string, nf *NumericFilter, duration bool) []string {
 	if nf == nil {
 		return parts
 	}
