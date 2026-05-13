@@ -377,7 +377,7 @@ func (c *bubbleChart) MoveSelection(delta int) bool {
 	return true
 }
 
-func (c bubbleChart) HasNodes() bool {
+func (c *bubbleChart) HasNodes() bool {
 	return len(c.nodes) > 0
 }
 

@@ -126,7 +126,7 @@ func (a *AnimationState) CurrentFrames() []tuiFrame {
 }
 
 // Settled reports whether all active springs are at rest.
-func (a AnimationState) Settled() bool {
+func (a *AnimationState) Settled() bool {
 	return a.settled
 }
 
