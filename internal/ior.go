@@ -268,6 +268,12 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 // makeTUIEventLoopConfigurer, and starts the trace in a goroutine, signalling
 // the TUI once BPF probes are attached (via startedCh) or returning an error
 // if startup fails.
+//
+// A dedicated done channel is closed by a defer when the outer function
+// returns for any reason (ctx cancellation, successful start, or startup
+// error).  The trace goroutine selects on both errCh and done when delivering
+// its result, so it can always exit regardless of which exit arm the outer
+// caller took.
 func tuiTraceStarterFromRunTrace(
 	baseCfg flags.Config,
 	startTrace func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error,
@@ -288,14 +294,26 @@ func tuiTraceStarterFromRunTrace(
 		configureEl := makeTUIEventLoopConfigurer(ctx, cfg, rt)
 
 		startedCh := make(chan struct{})
-		errCh := make(chan error, 1)
+		// errCh carries at most one result from the trace goroutine to the
+		// outer select below.  done is closed on return so the goroutine can
+		// always exit even when the outer caller already left via startedCh or
+		// ctx.Done() and nobody is draining errCh.
+		errCh := make(chan error)
+		done := make(chan struct{})
+		defer close(done)
+
 		go func() {
 			err := startTrace(ctx, cfg, startedCh, configureEl)
 			if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
 				bindings.SetLiveFilterSetter(nil)
 			}
-			errCh <- err
-			close(errCh)
+			// Deliver the result only if the caller is still selecting.
+			// done is closed when the outer function returns, so the goroutine
+			// will always proceed through this select and never block.
+			select {
+			case errCh <- err:
+			case <-done:
+			}
 		}()
 
 		select {
