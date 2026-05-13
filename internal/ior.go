@@ -29,32 +29,20 @@ import (
 // never imports the TUI layer.
 type tuiRunFunc func(flags.Config, runtime.TraceStarter) error
 
-var (
-	runTraceFn            = runTrace
-	runParquetFn          = runHeadlessParquet
-	runTraceWithContextFn = runTraceWithContext
-	// runTUIFn, runTUITestFlamesFn, runTUITestLiveFlamesFn are injected by
-	// main (via SetTUIRunners) before Run is called. They default to nil so
-	// that test files can replace individual runners without importing tui.
-	runTUIFn               tuiRunFunc
-	runTUITestFlamesFn     tuiRunFunc
-	runTUITestLiveFlamesFn tuiRunFunc
-	getEUID                = os.Geteuid
-
-	errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
-)
+var errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
 
 // SetTUIRunners injects the concrete TUI runner functions from the cmd layer
-// so the core internal package does not need to import the TUI packages.
-// This must be called before Run when running in TUI mode.
+// into the default registry so the core internal package does not need to
+// import the TUI packages. This must be called before Run when running in
+// TUI mode.
 func SetTUIRunners(
 	runTUI tuiRunFunc,
 	runTUITestFlames tuiRunFunc,
 	runTUITestLiveFlames tuiRunFunc,
 ) {
-	runTUIFn = runTUI
-	runTUITestFlamesFn = runTUITestFlames
-	runTUITestLiveFlamesFn = runTUITestLiveFlames
+	defaultRegistry.deps.runTUI = runTUI
+	defaultRegistry.deps.runTUITestFlames = runTUITestFlames
+	defaultRegistry.deps.runTUITestLiveFlames = runTUITestLiveFlames
 }
 
 // streamEventSink is the write-side contract for the stream ring buffer used
@@ -73,6 +61,13 @@ func Run(cfg flags.Config) error {
 // mode-combination constraints and then runs the first matching handler.
 func dispatchRun(cfg flags.Config) error {
 	return defaultRegistry.dispatch(cfg)
+}
+
+// dispatchRunWithDeps constructs an isolated registry from the given deps and
+// dispatches cfg through it. Used by tests to inject stub functions without
+// mutating the global defaultRegistry.
+func dispatchRunWithDeps(cfg flags.Config, deps runnerDeps) error {
+	return newModeRegistry(deps).dispatch(cfg)
 }
 
 // validateRunConfig runs all cross-mode constraint checks without running
@@ -448,10 +443,10 @@ func finaliseTrace(recorder *flamegraph.Recorder, profiling *profilingControl, t
 	return nil
 }
 
+// runTraceWithContext is the concrete BPF trace implementation. Root privilege
+// is checked by the mode handler (via runnerDeps.getEUID) before calling this
+// function; the handler is the authoritative place for the EUID gate.
 func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
-	if getEUID() != 0 {
-		return errRootPrivilegesRequired
-	}
 
 	verbose := started == nil
 	logln := newLogger(verbose)
