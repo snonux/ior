@@ -1725,6 +1725,27 @@ func TestDashboardFooterShowsGlobalFilterStack(t *testing.T) {
 	}
 }
 
+func TestFilterStackHistoryCapEvictsOldestEntries(t *testing.T) {
+	// Push maxFilterHistory+10 distinct filters and verify the slices never
+	// exceed the cap. The oldest entries must be evicted, and the most-recent
+	// maxFilterHistory entries must be retained.
+	fs := newFilterStack(globalfilter.Filter{})
+	for i := 0; i < maxFilterHistory+10; i++ {
+		f := globalfilter.Filter{}
+		f.FD = globalfilter.NewEqFilter(int64(i + 1)) // unique per iteration
+		fs.push(f, "")
+	}
+	if len(fs.history) > maxFilterHistory {
+		t.Fatalf("history exceeds cap: got %d, want <= %d", len(fs.history), maxFilterHistory)
+	}
+	if len(fs.stack) > maxFilterHistory {
+		t.Fatalf("stack exceeds cap: got %d, want <= %d", len(fs.stack), maxFilterHistory)
+	}
+	if len(fs.history) != len(fs.stack) {
+		t.Fatalf("history and stack lengths must match: history=%d stack=%d", len(fs.history), len(fs.stack))
+	}
+}
+
 func TestProcessesTabEnterAppliesSelectedProcessAsGlobalFilter(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard

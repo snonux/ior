@@ -7,6 +7,11 @@ import (
 	"ior/internal/globalfilter/presenter"
 )
 
+// maxFilterHistory is the maximum number of undo levels retained by filterStack.
+// Once this cap is reached, the oldest entry is evicted so the slices never
+// grow without bound across long-running sessions or automated filter changes.
+const maxFilterHistory = 50
+
 // filterStack manages the trace filter chain: the active filter, the undo
 // history, and the human-readable label stack displayed in the status bar.
 // It owns all filter mutation and label-generation logic so the top-level
@@ -29,6 +34,8 @@ func (f *filterStack) current() globalfilter.Filter {
 
 // push records oldFilter in the history stack, sets global to newFilter, and
 // appends an action label. Returns true when the filter actually changed.
+// When the history depth would exceed maxFilterHistory the oldest entry is
+// evicted from both slices to keep memory usage bounded.
 func (f *filterStack) push(newFilter globalfilter.Filter, action string) bool {
 	next := newFilter.Clone()
 	if f.global.Equal(next) {
@@ -36,6 +43,12 @@ func (f *filterStack) push(newFilter globalfilter.Filter, action string) bool {
 	}
 	f.history = append(f.history, f.global.Clone())
 	f.stack = append(f.stack, globalFilterActionLabel(f.global, next, action))
+	// Evict the oldest undo level once the cap is exceeded so the slices
+	// never grow without bound across long-running sessions.
+	if len(f.history) > maxFilterHistory {
+		f.history = f.history[1:]
+		f.stack = f.stack[1:]
+	}
 	f.global = next
 	return true
 }
