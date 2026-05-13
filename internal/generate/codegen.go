@@ -131,13 +131,11 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 	return result, ""
 }
 
+// isEnterRejected reports whether kind must not appear on a syscall-enter
+// tracepoint. The answer comes from the kindRegistry so no switch statement
+// needs updating when a new TracepointKind is added.
 func isEnterRejected(kind TracepointKind) bool {
-	switch kind {
-	case KindFd, KindName, KindOpen, KindPathname, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt:
-		return false
-	default:
-		return true
-	}
+	return !lookupKind(kind).enterAccepted
 }
 
 func syscallFormatNames(sc Syscall) []string {

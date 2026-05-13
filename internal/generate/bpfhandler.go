@@ -133,29 +133,10 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 	return ""
 }
 
+// eventStructName returns the C struct name for a TracepointKind. The mapping
+// is driven by kindRegistry so adding a new kind only requires a registry entry.
 func eventStructName(kind TracepointKind) string {
-	switch kind {
-	case KindFd:
-		return "fd_event"
-	case KindOpen:
-		return "open_event"
-	case KindPathname:
-		return "path_event"
-	case KindName:
-		return "name_event"
-	case KindRet:
-		return "ret_event"
-	case KindFcntl:
-		return "fcntl_event"
-	case KindNull:
-		return "null_event"
-	case KindDup3:
-		return "dup3_event"
-	case KindOpenByHandleAt:
-		return "open_by_handle_at_event"
-	default:
-		return "unknown_event"
-	}
+	return lookupKind(kind).structName
 }
 
 func eventTypeConstant(kind TracepointKind, isEnter bool) string {
