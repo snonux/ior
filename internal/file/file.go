@@ -217,3 +217,11 @@ func (f pathnameFile) String() string {
 
 	return sb.String()
 }
+
+// --- compile-time interface satisfaction assertions ---
+//
+// *FdFile is the primary public implementation of File used throughout the
+// codebase. The assertion causes a build error if FdFile drifts out of sync
+// with the File interface contract.
+
+var _ File = (*FdFile)(nil)

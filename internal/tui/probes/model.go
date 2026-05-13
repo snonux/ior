@@ -346,3 +346,11 @@ func truncateText(s string, limit int) string {
 	}
 	return string(runes[:limit-3]) + "..."
 }
+
+// --- compile-time interface satisfaction assertion ---
+//
+// *probemanager.Manager must satisfy the Manager interface defined in this
+// package. The tui/probes package already imports probemanager, so this
+// assertion adds no new dependency.
+
+var _ Manager = (*probemanager.Manager)(nil)
