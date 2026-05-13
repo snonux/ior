@@ -40,9 +40,19 @@ type EventSink interface {
 // behind this interface so the dashboard can retrieve live snapshots.
 // Snapshot returns (nil, nil) when the engine is nil. A non-nil error
 // indicates that snapshot construction failed and the result must be discarded.
+// This is the read side of the stats engine; the write side is
+// statsengine.Accumulator.
 type SnapshotSource interface {
 	Snapshot() (*statsengine.Snapshot, error)
 }
+
+// EventIngester is the write-only, event-feeding side of the stats engine,
+// as needed by the trace event loop. It is an alias for the statsengine.Accumulator
+// contract so callers in the runtime layer can reference a single type without
+// importing statsengine directly. Callers that only push events should hold an
+// EventIngester; callers that only read statistics should hold a SnapshotSource.
+// *statsengine.Engine satisfies both interfaces.
+type EventIngester = statsengine.Accumulator
 
 // Snapshotter is the read-only subset of the trie contract used by consumers
 // that only need to poll the version and retrieve snapshot data. It mirrors the
@@ -208,9 +218,11 @@ var (
 	// *probemanager.Manager must satisfy the probe-control surface exposed to the TUI.
 	_ ProbeManager = (*probemanager.Manager)(nil)
 
-	// *statsengine.Engine must satisfy the snapshot-source contract used by the
-	// dashboard and the TUI runtime.
+	// *statsengine.Engine must satisfy both the snapshot-source contract (read
+	// side) and the event-ingestion contract (write side). These interfaces
+	// represent the two distinct responsibilities of the engine.
 	_ SnapshotSource = (*statsengine.Engine)(nil)
+	_ EventIngester  = (*statsengine.Engine)(nil)
 
 	// *streamrow.RingBuffer must satisfy the full event-sink contract (read +
 	// write sides), which is a superset of StreamSource.
