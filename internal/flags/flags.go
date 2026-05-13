@@ -54,6 +54,10 @@ type Config struct {
 	// LiveInterval is the refresh interval for the synthetic live flamegraph
 	// used when TestLiveFlames is active.
 	LiveInterval time.Duration
+	// TUIFastRefreshInterval is the high-frequency refresh cadence for the TUI
+	// flamegraph and stream tabs. A value of 0 disables high-frequency refresh,
+	// falling back to the standard Bubble Tea tick rate.
+	TUIFastRefreshInterval time.Duration
 	// TUIExportEnable allows the TUI to write CSV snapshot export files.
 	TUIExportEnable bool
 	// CollapsedFields lists the event fields used as flamegraph collapse keys.
@@ -82,15 +86,16 @@ const DefaultResetTimer = 30 * time.Second
 // NewFlags returns a configuration instance initialized with project defaults.
 func NewFlags() Config {
 	return Config{
-		PidFilter:       -1,
-		TidFilter:       -1,
-		EventMapSize:    appconfig.DefaultEventMapSize,
-		Duration:        900,
-		LiveInterval:    200 * time.Millisecond,
-		TUIExportEnable: true,
-		CollapsedFields: []string{"comm", "tracepoint", "path"},
-		CountField:      "count",
-		ResetTimer:      DefaultResetTimer,
+		PidFilter:              -1,
+		TidFilter:              -1,
+		EventMapSize:           appconfig.DefaultEventMapSize,
+		Duration:               900,
+		LiveInterval:           200 * time.Millisecond,
+		TUIFastRefreshInterval: 250 * time.Millisecond,
+		TUIExportEnable:        true,
+		CollapsedFields:        []string{"comm", "tracepoint", "path"},
+		CountField:             "count",
+		ResetTimer:             DefaultResetTimer,
 	}
 }
 
@@ -170,6 +175,8 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
 	fs.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	fs.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
+	fs.DurationVar(&cfg.TUIFastRefreshInterval, "tui-fast-refresh", cfg.TUIFastRefreshInterval,
+		"High-frequency refresh interval for TUI flamegraph and stream tabs (0 = disable high-frequency refresh)")
 	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI CSV snapshot export files (separate from Parquet recording)")
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
