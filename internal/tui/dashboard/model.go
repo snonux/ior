@@ -27,14 +27,18 @@ const dashboardHelpHintRows = 1
 const dashboardExpandedHelpRows = 2
 const dashboardTabBarRows = 1
 
-// SnapshotSource is the dashboard data source.
+// SnapshotSource is the dashboard data source. Snapshot returns nil, nil when
+// the engine is nil. A non-nil error indicates that snapshot construction
+// failed and the caller should discard the result.
 type SnapshotSource interface {
-	Snapshot() *statsengine.Snapshot
+	Snapshot() (*statsengine.Snapshot, error)
 }
 
+// resettableSnapshotSource extends SnapshotSource with a Reset method that
+// clears accumulated state and restarts the series baselines.
 type resettableSnapshotSource interface {
 	Reset()
-	Snapshot() *statsengine.Snapshot
+	Snapshot() (*statsengine.Snapshot, error)
 }
 
 type refreshTickMsg struct{}
@@ -1105,15 +1109,22 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) filterSummary() string {
-	summary := "filter: " + presenter.FilterSummary(m.globalFilter)
+	// Use a Builder to avoid repeated string copies for the optional suffix segments
+	// (filter stack, recording status, auto-reset label) on every render tick.
+	var b strings.Builder
+	b.WriteString("filter: ")
+	b.WriteString(presenter.FilterSummary(m.globalFilter))
 	if len(m.filterStack) > 0 {
-		summary += " | stack: " + strings.Join(m.filterStack, " | ")
+		b.WriteString(" | stack: ")
+		b.WriteString(strings.Join(m.filterStack, " | "))
 	}
 	if m.recordingStatus != "" {
-		summary += " | " + m.recordingStatus
+		b.WriteString(" | ")
+		b.WriteString(m.recordingStatus)
 	}
-	summary += " | " + m.autoResetStatus()
-	return summary
+	b.WriteString(" | ")
+	b.WriteString(m.autoResetStatus())
+	return b.String()
 }
 
 // autoResetStatus is the human-readable label for the current

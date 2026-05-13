@@ -500,9 +500,15 @@ func (m *Model) View(width, height int) string {
 	if m.paused && m.selectedIdx >= 0 {
 		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | Esc/F undo", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount)
 	}
-	out := base + "\n" + status
+	// Use a Builder to avoid a redundant allocation for the optional status-message
+	// line appended conditionally on every render call.
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString("\n")
+	b.WriteString(status)
 	if m.statusMessage != "" {
-		out += "\n" + m.statusMessage
+		b.WriteString("\n")
+		b.WriteString(m.statusMessage)
 	}
 
 	if m.exportModal.Visible() {
@@ -511,7 +517,7 @@ func (m *Model) View(width, height int) string {
 	if m.searchModal.Visible() {
 		return m.searchModal.View(width, height)
 	}
-	return out
+	return b.String()
 }
 
 func (m *Model) Refresh() {

@@ -246,14 +246,16 @@ func computeRenderParams(frames []tuiFrame, height int) renderViewParams {
 
 // buildToolbar assembles the top-of-view toolbar string and pads/trims it to
 // width. The toolbar is replaced by the caller via replaceHeaderLine.
+// A Builder is used to avoid an extra allocation for the optional truncation suffix.
 func buildToolbar(frames []tuiFrame, width int, params renderViewParams) string {
 	viewPath := compactFramePath(frames[0].Path)
-	toolbar := fmt.Sprintf("Flame | view:%s | frames:%d | rows:%d",
-		viewPath, params.visibleFrames, params.availableRows)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Flame | view:%s | frames:%d | rows:%d",
+		viewPath, params.visibleFrames, params.availableRows))
 	if params.truncated {
-		toolbar += " | showing deepest levels"
+		b.WriteString(" | showing deepest levels")
 	}
-	return padOrTrim(toolbar, width)
+	return padOrTrim(b.String(), width)
 }
 
 // buildFilteredStatus builds the per-selection status line when a search filter

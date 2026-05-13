@@ -276,11 +276,15 @@ func (m Model) View(width, height int) string {
 		if p.Active {
 			check = "[x]"
 		}
-		line := fmt.Sprintf("%s%s %-24s", prefix, check, p.Syscall)
+		// Use a Builder to avoid an extra allocation for the optional error suffix
+		// emitted per probe row on every render call.
+		var lb strings.Builder
+		lb.WriteString(fmt.Sprintf("%s%s %-24s", prefix, check, p.Syscall))
 		if p.Error != "" {
-			line += " ! " + truncateText(sanitizeOneLine(p.Error), 28)
+			lb.WriteString(" ! ")
+			lb.WriteString(truncateText(sanitizeOneLine(p.Error), 28))
 		}
-		lines = append(lines, line)
+		lines = append(lines, lb.String())
 	}
 	if len(items) == 0 {
 		lines = append(lines, "  (no probes)")

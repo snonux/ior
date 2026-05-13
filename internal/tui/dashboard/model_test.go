@@ -24,9 +24,9 @@ type fakeSnapshotSource struct {
 	snap      *statsengine.Snapshot
 }
 
-func (f *fakeSnapshotSource) Snapshot() *statsengine.Snapshot {
+func (f *fakeSnapshotSource) Snapshot() (*statsengine.Snapshot, error) {
 	f.snapshots++
-	return f.snap
+	return f.snap, nil
 }
 
 type fakeResettableSnapshotSource struct {
@@ -39,9 +39,9 @@ func (f *fakeResettableSnapshotSource) Reset() {
 	f.resetCount++
 }
 
-func (f *fakeResettableSnapshotSource) Snapshot() *statsengine.Snapshot {
+func (f *fakeResettableSnapshotSource) Snapshot() (*statsengine.Snapshot, error) {
 	f.snapCount++
-	return f.snap
+	return f.snap, nil
 }
 
 func stripANSIEscape(value string) string {
