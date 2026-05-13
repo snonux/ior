@@ -100,7 +100,11 @@ func (p *profilingControl) stop(logln func(...any)) {
 		logln("Stopping profiling and writing profile files")
 		pprof.StopCPUProfile()
 		runtime.GC()
-		_ = pprof.WriteHeapProfile(p.memProfile)
+		// Log any failure writing the heap profile (e.g. full disk, permission
+		// denied) so it is not silently swallowed.
+		if err := pprof.WriteHeapProfile(p.memProfile); err != nil {
+			logln("ERROR: failed to write heap profile:", err)
+		}
 		p.stopExecTrace()
 		_ = p.cpuProfile.Close()
 		_ = p.memProfile.Close()
