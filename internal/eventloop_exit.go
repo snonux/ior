@@ -291,18 +291,16 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int
 	e.fdState().set(newFd, duppedFdFile)
 }
 
+// recyclePair notifies about the problem described by warning, then returns ep
+// to the pool. It is a convenience helper used throughout the exit handlers to
+// keep the error path concise.
 func (e *eventLoop) recyclePair(ep *event.Pair, warning string) {
 	e.notifyWarning(warning)
 	ep.Recycle()
 }
 
-func (e *eventLoop) notifyWarning(message string) {
-	if e.warningCb == nil || message == "" {
-		return
-	}
-	e.warningCb(message)
-}
-
+// dropMalformedRawEvent records a warning when a raw BPF event cannot be
+// decoded, keeping the error visible without crashing the event loop.
 func (e *eventLoop) dropMalformedRawEvent(evType types.EventType, raw []byte) {
 	e.notifyWarning(fmt.Sprintf("Dropped malformed raw event type %d (len=%d)", evType, len(raw)))
 }
