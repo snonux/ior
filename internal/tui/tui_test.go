@@ -459,8 +459,8 @@ type fakeDashboardSource struct {
 	snap *statsengine.Snapshot
 }
 
-func (f fakeDashboardSource) Snapshot() *statsengine.Snapshot {
-	return f.snap
+func (f fakeDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
+	return f.snap, nil
 }
 
 type fakeResettableDashboardSource struct {
@@ -468,8 +468,8 @@ type fakeResettableDashboardSource struct {
 	resetCalls int
 }
 
-func (f *fakeResettableDashboardSource) Snapshot() *statsengine.Snapshot {
-	return f.snap
+func (f *fakeResettableDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
+	return f.snap, nil
 }
 
 func (f *fakeResettableDashboardSource) Reset() {
@@ -484,7 +484,10 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	want := &statsengine.Snapshot{TotalSyscalls: 77}
 	runtime.SetDashboardSnapshotSource(fakeDashboardSource{snap: want})
 
-	got := source.Snapshot()
+	got, err := source.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
 	if got != want {
 		t.Fatalf("expected late-bound source to use latest runtime source")
 	}

@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"ior/internal/event"
 	"ior/internal/types"
 )
@@ -206,22 +208,45 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 }
 
 // buildSubSnapshots runs all five per-category snapshot builders concurrently
-// and returns their results bundled together.
-func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) subSnapshots {
+// using errgroup so that any error from a sub-builder is captured and returned
+// to the caller instead of being silently dropped.
+func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) (subSnapshots, error) {
 	var (
 		ss subSnapshots
-		wg sync.WaitGroup
+		eg errgroup.Group
 	)
 
-	wg.Add(5)
-	go func() { defer wg.Done(); ss.syscalls = buildSyscallSnapshots(in.syscalls, elapsed) }()
-	go func() { defer wg.Done(); ss.files = buildFileSnapshots(in.files) }()
-	go func() { defer wg.Done(); ss.processes = buildProcessSnapshots(in.processes, elapsed) }()
-	go func() { defer wg.Done(); ss.latencyHist = buildHistogramSnapshot(in.latencyHist) }()
-	go func() { defer wg.Done(); ss.gapHist = buildHistogramSnapshot(in.gapHist) }()
-	wg.Wait()
+	eg.Go(func() error {
+		var err error
+		ss.syscalls, err = buildSyscallSnapshots(in.syscalls, elapsed)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		ss.files, err = buildFileSnapshots(in.files)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		ss.processes, err = buildProcessSnapshots(in.processes, elapsed)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		ss.latencyHist, err = buildHistogramSnapshot(in.latencyHist)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		ss.gapHist, err = buildHistogramSnapshot(in.gapHist)
+		return err
+	})
 
-	return ss
+	if err := eg.Wait(); err != nil {
+		return subSnapshots{}, err
+	}
+
+	return ss, nil
 }
 
 // populateSnapshotFields fills in the scalar fields of the snapshot from the
@@ -247,15 +272,20 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 
 // Snapshot returns an immutable point-in-time view of all stats.
 // It captures engine state under the lock, then builds sub-snapshots
-// concurrently, and finally assembles the result without holding the lock.
-func (e *Engine) Snapshot() *Snapshot {
+// concurrently via errgroup, and finally assembles the result without holding
+// the lock. An error is returned if any sub-builder fails.
+func (e *Engine) Snapshot() (*Snapshot, error) {
 	if e == nil {
-		return nil
+		return nil, nil
 	}
 
 	in := e.captureSnapshotInputs()
 	elapsed := nonNegativeDuration(in.now.Sub(in.startedAt))
-	ss := buildSubSnapshots(in, elapsed)
+
+	ss, err := buildSubSnapshots(in, elapsed)
+	if err != nil {
+		return nil, err
+	}
 
 	snap := NewSnapshot(
 		in.latencySeries, in.gapSeries, in.throughputSeries,
@@ -264,7 +294,7 @@ func (e *Engine) Snapshot() *Snapshot {
 	)
 	populateSnapshotFields(&snap, in, elapsed)
 
-	return &snap
+	return &snap, nil
 }
 
 func safeMean(total uint64, count uint64) float64 {

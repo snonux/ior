@@ -84,12 +84,18 @@ func (a *processAccumulator) Add(pair *event.Pair) {
 	a.compactIfNeeded()
 }
 
+// Snapshot returns a slice of ProcessSnapshots for all tracked processes.
+// It panics on build error, which should never happen for a valid accumulator.
 func (a *processAccumulator) Snapshot(elapsed time.Duration) []ProcessSnapshot {
 	if a == nil {
 		return nil
 	}
 
-	return buildProcessSnapshots(a.snapshotInputs(), elapsed)
+	snap, err := buildProcessSnapshots(a.snapshotInputs(), elapsed)
+	if err != nil {
+		panic("buildProcessSnapshots: " + err.Error())
+	}
+	return snap
 }
 
 func (a *processAccumulator) snapshotInputs() []processSnapshotInput {
@@ -110,7 +116,10 @@ func (a *processAccumulator) snapshotInputs() []processSnapshotInput {
 	return inputs
 }
 
-func buildProcessSnapshots(inputs []processSnapshotInput, elapsed time.Duration) []ProcessSnapshot {
+// buildProcessSnapshots converts raw process accumulator inputs into sorted
+// ProcessSnapshot slices. The error return is reserved for future validation;
+// currently this function always succeeds.
+func buildProcessSnapshots(inputs []processSnapshotInput, elapsed time.Duration) ([]ProcessSnapshot, error) {
 	rateDiv := elapsed.Seconds()
 	result := make([]ProcessSnapshot, 0, len(inputs))
 	for _, in := range inputs {
@@ -125,7 +134,7 @@ func buildProcessSnapshots(inputs []processSnapshotInput, elapsed time.Duration)
 		}
 		return cmp.Compare(a.PID, b.PID)
 	})
-	return result
+	return result, nil
 }
 
 func (a *processAccumulator) compactIfNeeded() {

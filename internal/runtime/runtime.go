@@ -38,8 +38,10 @@ type EventSink interface {
 // SnapshotSource provides statsengine snapshots for the TUI dashboard.
 // The core tracing engine passes a *statsengine.Engine; the TUI stores it
 // behind this interface so the dashboard can retrieve live snapshots.
+// Snapshot returns (nil, nil) when the engine is nil. A non-nil error
+// indicates that snapshot construction failed and the result must be discarded.
 type SnapshotSource interface {
-	Snapshot() *statsengine.Snapshot
+	Snapshot() (*statsengine.Snapshot, error)
 }
 
 // Snapshotter is the read-only subset of the trie contract used by consumers

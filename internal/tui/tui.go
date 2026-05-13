@@ -225,6 +225,9 @@ func (r *runtimeBindings) advanceFilterEpoch() uint64 {
 	return r.filterEpoch.Add(1)
 }
 
+// resetDashboardSnapshotSource resets the dashboard snapshot source if it
+// implements the resettable interface, then returns a fresh snapshot. Errors
+// from Snapshot are silently dropped since callers handle a nil snapshot.
 func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 	src := r.dashboardSnapshotSource()
 	if src == nil {
@@ -232,10 +235,11 @@ func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 	}
 	if resettable, ok := src.(interface {
 		Reset()
-		Snapshot() *statsengine.Snapshot
+		Snapshot() (*statsengine.Snapshot, error)
 	}); ok {
 		resettable.Reset()
-		return resettable.Snapshot()
+		snap, _ := resettable.Snapshot()
+		return snap
 	}
 	return nil
 }
@@ -1216,13 +1220,16 @@ type lateBoundDashboardSource struct {
 	runtime *runtimeBindings
 }
 
-func (s lateBoundDashboardSource) Snapshot() *statsengine.Snapshot {
+// Snapshot returns a point-in-time dashboard snapshot from the underlying
+// source, or (nil, nil) when no source is available. Errors are forwarded to
+// the caller so they can decide how to handle a failed snapshot build.
+func (s lateBoundDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
 	if s.runtime == nil {
-		return nil
+		return nil, nil
 	}
 	source := s.runtime.dashboardSnapshotSource()
 	if source == nil {
-		return nil
+		return nil, nil
 	}
 	return source.Snapshot()
 }
