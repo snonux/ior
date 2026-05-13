@@ -158,18 +158,26 @@ func TestManagerAttachSerializesConcurrentCalls(t *testing.T) {
 		t.Fatal("first attach did not start")
 	}
 
+	// Goroutine 1 is now blocked inside AttachTracepoint for the enter probe.
+	// Enter has been called exactly once; exit has not been called yet because
+	// attachPair calls enter then exit sequentially.  These assertions are safe
+	// without any sleep: enterBlocked being closed is a happens-before edge that
+	// makes the attach-count writes visible here.
+	if got := enter.attachCalls(); got != 1 {
+		t.Fatalf("expected enter attach to be in flight (called once), got %d", got)
+	}
+	if got := exit.attachCalls(); got != 0 {
+		t.Fatalf("expected exit attach to not have started while enter is blocked, got %d", got)
+	}
+
+	// Start a second concurrent Attach.  It will acquire m.mu briefly then
+	// block on entry.attachMu (held by goroutine 1) before it can reach
+	// AttachTracepoint.  The final count assertions below confirm it never ran
+	// a second attach.
 	errCh2 := make(chan error, 1)
 	go func() {
 		errCh2 <- mgr.Attach("close")
 	}()
-
-	time.Sleep(50 * time.Millisecond)
-	if got := enter.attachCalls(); got != 1 {
-		t.Fatalf("expected only one enter attach while first call was in flight, got %d", got)
-	}
-	if got := exit.attachCalls(); got != 0 {
-		t.Fatalf("expected exit attach to wait for enter completion, got %d", got)
-	}
 
 	close(releaseEnter)
 
