@@ -112,8 +112,12 @@ func (iod *iorData) serializeToFile(flamegraphName string) (retErr error) {
 	}
 	defer func() {
 		// Close file on error paths; on success it is already closed before rename.
+		// Capture the close error and join it with retErr so filesystem issues
+		// (e.g. full disk detected only on close) are not silently discarded.
 		if retErr != nil {
-			file.Close()
+			if closeErr := file.Close(); closeErr != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("close temp file %s: %w", tmpFilename, closeErr))
+			}
 		}
 	}()
 
