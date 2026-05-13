@@ -180,6 +180,21 @@ func readThreadInfo(taskRoot string, entry fs.DirEntry, cmdline string) (Process
 	}, true
 }
 
+// scanThreadsWorker fetches threads for one pid and appends results under mu.
+// It acquires the semaphore slot before doing I/O and releases it explicitly
+// on return, avoiding defer-inside-goroutine-in-loop anti-patterns.
+func scanThreadsWorker(procRoot string, pid int, sem chan struct{}, mu *sync.Mutex, threads *[]ProcessInfo) {
+	sem <- struct{}{} // acquire semaphore slot to cap concurrency
+	perProc, err := scanThreadsFrom(procRoot, pid)
+	<-sem // release semaphore slot regardless of outcome
+	if err != nil {
+		return
+	}
+	mu.Lock()
+	*threads = append(*threads, perProc...)
+	mu.Unlock()
+}
+
 func scanAllThreadsFrom(procRoot string) ([]ProcessInfo, error) {
 	processes, err := scanProcessesFrom(procRoot)
 	if err != nil {
@@ -189,23 +204,17 @@ func scanAllThreadsFrom(procRoot string) ([]ProcessInfo, error) {
 	threads := make([]ProcessInfo, 0, len(processes)*8)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	// sem caps the number of goroutines doing /proc I/O simultaneously.
 	sem := make(chan struct{}, 16)
 
 	for _, p := range processes {
 		pid := p.Pid
 		wg.Add(1)
+		// Each goroutine calls a named helper so no defer is registered inside
+		// an anonymous closure that is itself inside a for loop.
 		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			perProc, err := scanThreadsFrom(procRoot, pid)
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			threads = append(threads, perProc...)
-			mu.Unlock()
+			scanThreadsWorker(procRoot, pid, sem, &mu, &threads)
+			wg.Done()
 		}()
 	}
 	wg.Wait()
