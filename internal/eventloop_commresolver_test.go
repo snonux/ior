@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,7 +27,7 @@ func TestCommResolverQueueLookupRespectsWorkerLimit(t *testing.T) {
 	defer resolver.shutdown()
 	resolver.lookupWorkers = workers
 	resolver.lookupQueue = make(chan uint32, lookups)
-	resolver.resolveFn = func(tid uint32) (string, error) {
+	resolver.resolveFn = func(_ context.Context, tid uint32) (string, error) {
 		current := atomic.AddInt32(&running, 1)
 		setMaxInt32(&maxRunning, current)
 		started <- struct{}{}
@@ -86,7 +87,7 @@ func TestCommResolverQueueLookupQueueFullClearsPending(t *testing.T) {
 	defer resolver.shutdown()
 	resolver.lookupWorkers = 1
 	resolver.lookupQueue = make(chan uint32, 1)
-	resolver.resolveFn = func(tid uint32) (string, error) {
+	resolver.resolveFn = func(_ context.Context, tid uint32) (string, error) {
 		select {
 		case started <- struct{}{}:
 		default:
@@ -141,7 +142,7 @@ func TestCommResolverShutdownStopsWorkersAndPreventsNewLookups(t *testing.T) {
 	resolver := newCommResolver(nil)
 	resolver.lookupWorkers = 1
 	resolver.lookupQueue = make(chan uint32, 1)
-	resolver.resolveFn = func(tid uint32) (string, error) {
+	resolver.resolveFn = func(_ context.Context, tid uint32) (string, error) {
 		started <- struct{}{}
 		<-release
 		return fmt.Sprintf("comm-%d", tid), nil
@@ -193,7 +194,7 @@ func TestCommResolverLookupWarnsOnUnexpectedResolveError(t *testing.T) {
 	resolver.lookupWorkers = 1
 	resolver.lookupQueue = make(chan uint32, 1)
 	resolver.warningFn = func(message string) { warnings <- message }
-	resolver.resolveFn = func(uint32) (string, error) {
+	resolver.resolveFn = func(context.Context, uint32) (string, error) {
 		return "", errors.New("boom")
 	}
 
@@ -223,6 +224,45 @@ func TestResolveCommFromProcWithErrorIgnoresMissingProcess(t *testing.T) {
 	}
 	if comm != "" {
 		t.Fatalf("expected no comm for missing pid, got %q", comm)
+	}
+}
+
+// TestCommResolverLookupWorkerRespectsTimeout verifies that a resolveFn that
+// blocks longer than resolveCommTimeout is interrupted and the pending entry
+// is cleared so shutdown is not stalled.
+func TestCommResolverLookupWorkerRespectsTimeout(t *testing.T) {
+	const tid uint32 = 401
+
+	// blockUntilCtxDone blocks until the context passed by the worker expires.
+	blockUntilCtxDone := make(chan struct{})
+	resolver := newCommResolver(nil)
+	defer resolver.shutdown()
+	resolver.lookupWorkers = 1
+	resolver.lookupQueue = make(chan uint32, 1)
+	resolver.resolveFn = func(ctx context.Context, _ uint32) (string, error) {
+		close(blockUntilCtxDone)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+
+	resolver.queueLookup(tid)
+
+	// Wait until the resolver fn has started and confirmed it is blocking.
+	select {
+	case <-blockUntilCtxDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for resolver fn to start")
+	}
+
+	// The pending entry must be cleared once the context times out and the
+	// worker loop continues to the next iteration.
+	waitForCondition(t, resolveCommTimeout+2*time.Second,
+		"expected pending entry to be cleared after context timeout",
+		func() bool { return pendingCount(resolver) == 0 },
+	)
+
+	if _, ok := resolver.cached(tid); ok {
+		t.Fatalf("did not expect tid %d to be cached after a timed-out resolve", tid)
 	}
 }
 
