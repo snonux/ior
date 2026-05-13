@@ -148,6 +148,9 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 		isDark:           true,
 		focused:          true,
 	}
+	// showHelp starts false; align the stream footer visibility so it matches
+	// from the first render without relying on View() to fix up the mismatch.
+	m.streamModel.SetFooterVisible(false)
 	m.SetDarkMode(true)
 	return m
 }
@@ -203,6 +206,9 @@ func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.clampTableColumns()
 	streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
 	m.streamModel.SetViewport(streamWidth, streamHeight)
+	// Sync stream footer visibility so it matches the current help-bar state.
+	// This covers the case where showHelp was set before the first resize event.
+	m.streamModel.SetFooterVisible(m.showHelp)
 	flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
 	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 	m.setBubbleViewports(flameWidth, flameHeight)
@@ -332,6 +338,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if !handled {
 		return m.handleUnhandledKey(msg)
+	}
+	// When the user switches to the flame tab from any other tab, the flamegraph
+	// model needs its viewport updated to reflect the current dimensions.
+	// Window-resize and help-toggle already call SetViewport; tab switching does
+	// not, so we compensate here before returning the updated model to the runtime.
+	if prevActiveTab != m.activeTab && m.activeTab == TabFlame {
+		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
+		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 	}
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
 }
@@ -576,8 +590,12 @@ func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cm
 		return false, m, nil
 	}
 	m.showHelp = !m.showHelp
+	// Keep sub-model state in sync so View() stays a pure render pass.
+	// The flamegraph viewport shrinks/grows when the help bar expands/collapses;
+	// the stream footer row is only shown when the full help bar is visible.
 	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
 	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+	m.streamModel.SetFooterVisible(m.showHelp)
 	return true, m, nil
 }
 
@@ -590,34 +608,17 @@ func (m Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	return true, m, cmd
 }
 
+// handleShortcutKey processes tab-navigation and action shortcuts. Numeric
+// shortcuts are resolved via the tab registry so that adding a new tab with a
+// shortcut key requires only a new tabDescriptor entry — this function never
+// needs to be modified (OCP).
 func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch {
-	case key.Matches(msg, m.keys.One):
-		m.activeTab = TabFlame
-		return true, nil
 	case key.Matches(msg, m.keys.Tab):
 		m.activeTab = nextTab(m.activeTab)
 		return true, nil
 	case key.Matches(msg, m.keys.ShiftTab):
 		m.activeTab = prevTab(m.activeTab)
-		return true, nil
-	case key.Matches(msg, m.keys.Two):
-		m.activeTab = TabOverview
-		return true, nil
-	case key.Matches(msg, m.keys.Three):
-		m.activeTab = TabSyscalls
-		return true, nil
-	case key.Matches(msg, m.keys.Four):
-		m.activeTab = TabFiles
-		return true, nil
-	case key.Matches(msg, m.keys.Five):
-		m.activeTab = TabProcesses
-		return true, nil
-	case key.Matches(msg, m.keys.Six):
-		m.activeTab = TabLatency
-		return true, nil
-	case key.Matches(msg, m.keys.Seven):
-		m.activeTab = TabStream
 		return true, nil
 	case key.Matches(msg, m.keys.Visualize):
 		return true, m.cycleVisualizationMode()
@@ -630,9 +631,15 @@ func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return false, nil
 		}
 		return true, m.toggleFilesDirGrouping()
-	default:
-		return false, nil
 	}
+	// Fall through to registry-driven numeric tab shortcuts. Each tab
+	// registers its own key binding in tabDescriptors; no changes here
+	// are needed when new tabs are added.
+	if tab, ok := tabForShortcutKey(msg, m.keys); ok {
+		m.activeTab = tab
+		return true, nil
+	}
+	return false, nil
 }
 
 func (m *Model) toggleFilesDirGrouping() tea.Cmd {
@@ -1091,23 +1098,21 @@ func (m *Model) SetPidFilter(pid int) {
 }
 
 // View renders the tab bar, active tab scaffold, and help bar.
+// This is a pure render pass: it reads model state but never mutates it.
+// Sub-model state (stream footer visibility, flamegraph viewport dimensions)
+// is kept in sync by the Update() handlers that trigger each state change,
+// so no fixup is needed here.
 func (m Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
 	_, activeHeight := flameViewport(width, height, m.showHelp)
-	streamModel := m.streamModel
-	flameModel := m.flamegraphModel
-	streamModel.SetFooterVisible(m.showHelp)
 	if m.activeTab == TabStream {
 		_, activeHeight = streamViewport(width, height)
-	}
-	if m.activeTab == TabFlame {
-		flameModel.SetViewport(width, activeHeight)
 	}
 
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, width))
 	b.WriteString("\n")
-	b.WriteString(m.renderActiveContent(width, activeHeight, &streamModel, &flameModel))
+	b.WriteString(m.renderActiveContent(width, activeHeight, &m.streamModel, &m.flamegraphModel))
 	b.WriteString("\n")
 	if m.showHelp {
 		b.WriteString(renderHelpBarWithStatus(m.keys, width, m.filterSummary()))
