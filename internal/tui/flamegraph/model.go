@@ -506,11 +506,17 @@ func (m Model) renderViewContent() string {
 	if m.snapshot != nil && len(m.frames) == 0 {
 		content = common.PanelStyle.Render(fmt.Sprintf("Flame: snapshot v%d has no visible frames", m.lastVersion))
 	}
-	content += "\n" + m.selectionStatusLine()
+	// Assemble the final output using a Builder to avoid repeated string copies
+	// for the optional help-overlay suffix.
+	var b strings.Builder
+	b.WriteString(content)
+	b.WriteString("\n")
+	b.WriteString(m.selectionStatusLine())
 	if m.showHelp {
-		content += "\n" + m.helpOverlay()
+		b.WriteString("\n")
+		b.WriteString(m.helpOverlay())
 	}
-	return content
+	return b.String()
 }
 
 // currentViewCacheKey snapshots every Model field that influences View()

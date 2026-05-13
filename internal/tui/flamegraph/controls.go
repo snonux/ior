@@ -90,21 +90,27 @@ func (m Model) toolbarLine() string {
 		state = lipgloss.NewStyle().Foreground(common.ColorDanger).Bold(true).Render("[PAUSED]")
 	}
 	order := m.currentFieldPresetLabel()
-	line := fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause", state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel())
+	// Use a Builder to avoid repeated allocations for the optional suffix segments.
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause",
+		state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel()))
 	if m.searchQuery != "" {
-		line += " | filter:" + m.searchQuery
+		b.WriteString(" | filter:")
+		b.WriteString(m.searchQuery)
 	}
 	if m.statusMessage != "" {
-		line += " | " + m.statusMessage
+		b.WriteString(" | ")
+		b.WriteString(m.statusMessage)
 	}
 	if flameKeyDebugEnabled && m.lastKeyDebug != "" {
-		line += " | " + m.lastKeyDebug
+		b.WriteString(" | ")
+		b.WriteString(m.lastKeyDebug)
 	}
 	width := m.width
 	if width <= 0 {
 		width = 80
 	}
-	return padOrTrim(line, width)
+	return padOrTrim(b.String(), width)
 }
 
 func (m Model) helpOverlay() string {
@@ -148,12 +154,15 @@ func (m Model) selectionStatusLine() string {
 			shareLabel = fmt.Sprintf("%.2f%% of filtered %s", filterShare, metric)
 		}
 	}
-	line := fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s",
-		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel)
+	// Use a Builder to avoid a separate allocation for the optional filter suffix.
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s",
+		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel))
 	if m.searchQuery != "" {
-		line += " | filter:" + m.searchQuery
+		b.WriteString(" | filter:")
+		b.WriteString(m.searchQuery)
 	}
-	return common.HelpBarStyle.Width(width).Render(padOrTrim(line, width))
+	return common.HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
 }
 
 func (m Model) currentFieldPresetLabel() string {

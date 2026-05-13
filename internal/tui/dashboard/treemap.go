@@ -438,7 +438,10 @@ func treemapStatusLine(items []syscallTreemapItem, selected int, metric bubbleMe
 	default:
 		metricText = fmt.Sprintf("%d", item.Count)
 	}
-	status := fmt.Sprintf(
+	// Use a Builder to avoid a redundant allocation for the optional detail suffix
+	// appended conditionally on every render call.
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(
 		"sel:%d/%d %s | %s=%s | bytes=%s",
 		selected+1,
 		len(items),
@@ -446,11 +449,12 @@ func treemapStatusLine(items []syscallTreemapItem, selected int, metric bubbleMe
 		treemapMetricLabel(metric),
 		metricText,
 		formatBytes(float64(item.Bytes)),
-	)
+	))
 	if detail := strings.TrimSpace(item.Detail); detail != "" {
-		status += " | " + detail
+		b.WriteString(" | ")
+		b.WriteString(detail)
 	}
-	return status
+	return b.String()
 }
 
 func treemapMetricLabel(metric bubbleMetric) string {

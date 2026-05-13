@@ -42,7 +42,11 @@ func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, 
 	columns := processColumns()
 	out := renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
 	if pidFilter > 0 {
-		out += "\n" + "Note: this tab is most useful with All PIDs."
+		// Use a Builder to avoid an extra allocation for the PID-filter note suffix.
+		var b strings.Builder
+		b.WriteString(out)
+		b.WriteString("\nNote: this tab is most useful with All PIDs.")
+		return b.String()
 	}
 	return out
 }

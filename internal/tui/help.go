@@ -47,12 +47,18 @@ type helpSection struct {
 }
 
 func (m Model) helpSections() []helpSection {
+	line1 := "f filter  p pid picker  t tid picker  o probes  R parquet rec"
+	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
+		// Use a Builder to append the optional export hint without reallocating
+		// the base string on each render when help is visible.
+		var b strings.Builder
+		b.WriteString(line1)
+		b.WriteString("  e stream export")
+		line1 = b.String()
+	}
 	globalLines := []string{
 		"H help  esc/? close help  q quit",
-		"f filter  p pid picker  t tid picker  o probes  R parquet rec",
-	}
-	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
-		globalLines[1] += "  e stream export"
+		line1,
 	}
 
 	return []helpSection{

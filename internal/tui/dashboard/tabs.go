@@ -228,7 +228,12 @@ func renderTabBarPlain(active Tab, width int) string {
 		text = truncatePlain(text, width)
 		padding := width - utf8.RuneCountInString(text)
 		if padding > 0 {
-			text += strings.Repeat(" ", padding)
+			// Use a Builder to avoid a redundant allocation when right-padding to width.
+			var b strings.Builder
+			b.Grow(len(text) + padding)
+			b.WriteString(text)
+			b.WriteString(strings.Repeat(" ", padding))
+			return b.String()
 		}
 	}
 	return text

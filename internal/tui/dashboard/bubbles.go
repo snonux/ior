@@ -542,14 +542,19 @@ func (c *bubbleChart) statusLine(width int) string {
 	}
 	node := c.nodes[c.selected]
 	metricText := fmt.Sprintf("%s=%s", c.metricLabel(), c.formatMetricValue(node))
-	base := fmt.Sprintf("sel:%d/%d %s | %s | bytes=%s", c.selected+1, len(c.nodes), node.Label, metricText, formatBytes(float64(node.Bytes)))
+	// Use a Builder to avoid extra allocations for the optional hint/detail suffixes
+	// that are appended conditionally on every render.
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("sel:%d/%d %s | %s | bytes=%s", c.selected+1, len(c.nodes), node.Label, metricText, formatBytes(float64(node.Bytes))))
 	if c.statusHint != "" {
-		base += " | " + c.statusHint
+		b.WriteString(" | ")
+		b.WriteString(c.statusHint)
 	}
 	if node.Detail != "" {
-		base += " | " + node.Detail
+		b.WriteString(" | ")
+		b.WriteString(node.Detail)
 	}
-	return padOrTrim(base, width)
+	return padOrTrim(b.String(), width)
 }
 
 func (c *bubbleChart) metricLabel() string {
