@@ -943,16 +943,17 @@ func testTracePair(seq uint64, comm string) *event.Pair {
 	return pair
 }
 
+// waitForStreamRows asserts that buffer.Len() equals want immediately.
+// starter() returns only after the trace goroutine closes the started channel,
+// which happens after all printCb calls have completed and pushed their rows
+// into the buffer. The channel close forms a happens-before edge that makes all
+// prior writes visible to the test goroutine, so no polling or sleeping is
+// needed.
 func waitForStreamRows(t *testing.T, buffer *streamrow.RingBuffer, want int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if buffer.Len() == want {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	if got := buffer.Len(); got != want {
+		t.Fatalf("stream buffer len = %d, want %d", got, want)
 	}
-	t.Fatalf("stream buffer len = %d, want %d", buffer.Len(), want)
 }
 
 func readRecordedParquet(t *testing.T, path string) []parquet.Record {
