@@ -87,15 +87,20 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	return bpfModule, mgr, releaseBindings, nil
 }
 
-// setupEventChannel initialises the BPF ring-buffer and returns the event channel.
-func setupEventChannel(bpfModule *bpf.Module) (chan []byte, error) {
+// setupEventChannel initialises the BPF ring-buffer and returns both the event
+// channel and the ring-buffer handle. The caller must call rb.Stop() when the
+// trace ends (before bpfModule.Close()) to promptly halt the background polling
+// goroutine and release the C ring_buffer struct. bpfModule.Close() also closes
+// all ring buffers it owns, but only calling Stop() first ensures the goroutine
+// exits without waiting for the module teardown path.
+func setupEventChannel(bpfModule *bpf.Module) (chan []byte, *bpf.RingBuffer, error) {
 	ch := make(chan []byte, appconfig.DefaultChannelBufferSize)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rb.Poll(300)
-	return ch, nil
+	return ch, rb, nil
 }
 
 // --- compile-time interface satisfaction assertions ---
