@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"ior/internal/event"
@@ -85,7 +86,9 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 				if len(raw) == 0 {
 					continue
 				}
-				e.processRawEvent(raw, ch)
+				// Recover from any panic inside a callback so a single
+				// bad event cannot crash the entire process.
+				e.processRawEventSafe(raw, ch)
 			case <-ctx.Done():
 				fmt.Println("Stopping event loop")
 				return
@@ -94,6 +97,19 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 	}()
 
 	return ch
+}
+
+// processRawEventSafe calls processRawEvent and recovers from any panic,
+// converting it into a warning notification so that one misbehaving event
+// does not crash the whole process.
+func (e *eventLoop) processRawEventSafe(raw []byte, ch chan<- *event.Pair) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			e.notifyWarning(fmt.Sprintf("Recovered panic in processRawEvent: %v\n%s", r, stack))
+		}
+	}()
+	e.processRawEvent(raw, ch)
 }
 
 func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
