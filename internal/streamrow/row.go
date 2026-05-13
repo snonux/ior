@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"ior/internal/event"
+	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
 
@@ -120,6 +121,15 @@ func New(seq uint64, pair *event.Pair) Row {
 
 	return row
 }
+
+// --- compile-time interface satisfaction assertion ---
+//
+// Row must satisfy globalfilter.Candidate so the TUI eventstream model can
+// pass stream rows directly into Filter.Matches for live filtering. All
+// Candidate methods are defined on the value receiver so both Row and *Row
+// satisfy the interface; we assert the value form as it is the common usage.
+
+var _ globalfilter.Candidate = Row{}
 
 // NewWarning creates a synthetic row for non-fatal runtime warnings.
 func NewWarning(seq uint64, message string) Row {

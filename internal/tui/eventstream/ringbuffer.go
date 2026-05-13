@@ -15,3 +15,11 @@ const ringBufferCapacity = streamrow.RingBufferCapacity
 func NewRingBuffer() *RingBuffer {
 	return streamrow.NewRingBuffer()
 }
+
+// --- compile-time interface satisfaction assertion ---
+//
+// *RingBuffer (= *streamrow.RingBuffer) must satisfy the Source contract so
+// the TUI dashboard and stream views can receive live events without importing
+// the lower-level streamrow package directly.
+
+var _ Source = (*RingBuffer)(nil)
