@@ -341,10 +341,12 @@ func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filt
 	cfg.PidFilter = -1
 	cfg.TidFilter = -1
 	if pid, ok := filter.PID.EqValue(); ok {
-		cfg.PidFilter = pid
+		// EqValue returns int64; PID values are always within int range (Linux PID_MAX ≤ 4194304).
+		cfg.PidFilter = int(pid)
 	}
 	if tid, ok := filter.TID.EqValue(); ok {
-		cfg.TidFilter = tid
+		// EqValue returns int64; TID values are always within int range (Linux PID_MAX ≤ 4194304).
+		cfg.TidFilter = int(tid)
 	}
 }
 

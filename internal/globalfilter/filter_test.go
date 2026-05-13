@@ -1,6 +1,7 @@
 package globalfilter
 
 import (
+	"math"
 	"testing"
 )
 
@@ -156,5 +157,39 @@ func TestFilterEqual(t *testing.T) {
 	mutated.Bytes = nil
 	if mutated.Equal(base) {
 		t.Fatalf("expected missing numeric filter to compare unequal")
+	}
+}
+
+// TestEqValueReturnsInt64PreservesLargeValues verifies that EqValue returns
+// int64 so that values larger than math.MaxInt32 are not silently truncated on
+// 32-bit architectures (where int is 32 bits wide).
+func TestEqValueReturnsInt64PreservesLargeValues(t *testing.T) {
+	// A value that would be truncated to a different number if cast to int32.
+	large := int64(math.MaxInt32) + 1
+	f := &NumericFilter{Op: OpEq, Value: large}
+	got, ok := f.EqValue()
+	if !ok {
+		t.Fatalf("EqValue() returned ok=false for a valid positive value")
+	}
+	if got != large {
+		t.Fatalf("EqValue() = %d, want %d (int64 value must not be truncated)", got, large)
+	}
+
+	// Nil filter must return (0, false).
+	var nilFilter *NumericFilter
+	if v, ok := nilFilter.EqValue(); ok || v != 0 {
+		t.Fatalf("EqValue() on nil filter: got (%d, %v), want (0, false)", v, ok)
+	}
+
+	// Non-OpEq filter must return (0, false).
+	neqFilter := &NumericFilter{Op: OpNeq, Value: 1}
+	if v, ok := neqFilter.EqValue(); ok || v != 0 {
+		t.Fatalf("EqValue() on OpNeq filter: got (%d, %v), want (0, false)", v, ok)
+	}
+
+	// Non-positive value must return (0, false).
+	zeroFilter := &NumericFilter{Op: OpEq, Value: 0}
+	if v, ok := zeroFilter.EqValue(); ok || v != 0 {
+		t.Fatalf("EqValue() on zero value: got (%d, %v), want (0, false)", v, ok)
 	}
 }
