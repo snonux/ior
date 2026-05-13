@@ -88,13 +88,23 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 }
 
 // setupEventChannel initialises the BPF ring-buffer and returns the event channel.
+// It starts polling the ring buffer and logs any fatal poll error to stderr so
+// that a background ring-buffer failure does not go completely unnoticed.
 func setupEventChannel(bpfModule *bpf.Module) (chan []byte, error) {
 	ch := make(chan []byte, appconfig.DefaultChannelBufferSize)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)
 	if err != nil {
 		return nil, err
 	}
-	rb.Poll(300)
+	// Poll returns a channel that receives any fatal error from the background
+	// polling goroutine. Monitor it in a goroutine so the error is logged and
+	// does not silently drop events.
+	pollErrCh := rb.Poll(300)
+	go func() {
+		if err := <-pollErrCh; err != nil {
+			fmt.Fprintf(os.Stderr, "ior: ring buffer poll failed: %v\n", err)
+		}
+	}()
 	return ch, nil
 }
 
