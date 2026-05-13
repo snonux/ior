@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ior/internal/globalfilter"
+	"ior/internal/globalfilter/parser"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -323,7 +324,7 @@ func parseNumericFilter(value string, opIndex int, duration bool) (*globalfilter
 		err    error
 	)
 	if duration {
-		number, err = globalfilter.ParseDurationNs(value)
+		number, err = parser.ParseDurationNs(value)
 	} else {
 		number, err = strconv.ParseInt(value, 10, 64)
 	}

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
@@ -75,7 +76,7 @@ func renderStatusLine(paused bool, totalCount, filteredCount, bufferLen, bufferC
 }
 
 func renderFilterLine(filter Filter) string {
-	summary := filter.Summary()
+	summary := presenter.FilterSummary(filter)
 	if summary == "all" {
 		summary = common.HighlightStyle.Render(summary)
 	}
