@@ -98,3 +98,64 @@ func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 		t.Fatalf("RetVal/IsError = %d/%v, want -1/true", got.RetVal, got.IsError)
 	}
 }
+
+// TestRowValueAccessors verifies that all typed accessor methods return the
+// underlying field values set on a Row.
+func TestRowValueAccessors(t *testing.T) {
+	r := Row{
+		Syscall:    "read",
+		Comm:       "cat",
+		FileName:   "/etc/hosts",
+		PID:        10,
+		TID:        11,
+		FD:         3,
+		DurationNs: 500,
+		GapNs:      200,
+		Bytes:      1024,
+		RetVal:     -1,
+		IsError:    true,
+	}
+
+	if r.SyscallValue() != "read" {
+		t.Fatalf("SyscallValue = %q, want read", r.SyscallValue())
+	}
+	if r.CommValue() != "cat" {
+		t.Fatalf("CommValue = %q, want cat", r.CommValue())
+	}
+	if r.FileValue() != "/etc/hosts" {
+		t.Fatalf("FileValue = %q, want /etc/hosts", r.FileValue())
+	}
+	if r.PIDValue() != 10 {
+		t.Fatalf("PIDValue = %d, want 10", r.PIDValue())
+	}
+	if r.TIDValue() != 11 {
+		t.Fatalf("TIDValue = %d, want 11", r.TIDValue())
+	}
+	if r.FDValue() != 3 {
+		t.Fatalf("FDValue = %d, want 3", r.FDValue())
+	}
+	if r.LatencyValue() != 500 {
+		t.Fatalf("LatencyValue = %d, want 500", r.LatencyValue())
+	}
+	if r.GapValue() != 200 {
+		t.Fatalf("GapValue = %d, want 200", r.GapValue())
+	}
+	if r.BytesValue() != 1024 {
+		t.Fatalf("BytesValue = %d, want 1024", r.BytesValue())
+	}
+	if r.ReturnValue() != -1 {
+		t.Fatalf("ReturnValue = %d, want -1", r.ReturnValue())
+	}
+	if !r.ErrorValue() {
+		t.Fatal("ErrorValue = false, want true")
+	}
+}
+
+// TestSequencerNilSafeNext verifies that calling Next on a nil Sequencer returns
+// 0 without panicking.
+func TestSequencerNilSafeNext(t *testing.T) {
+	var s *Sequencer
+	if got := s.Next(); got != 0 {
+		t.Fatalf("nil Sequencer.Next() = %d, want 0", got)
+	}
+}
