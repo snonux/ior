@@ -90,11 +90,9 @@ func headlessParquetTraceConfig(cfg flags.Config) flags.Config {
 }
 
 // runHeadlessParquet records all traced syscalls directly to a Parquet file
-// without starting the TUI.
+// without starting the TUI. Root privilege is checked by the mode handler
+// (via runnerDeps.getEUID) before this function is invoked.
 func runHeadlessParquet(cfg flags.Config) error {
-	if getEUID() != 0 {
-		return errRootPrivilegesRequired
-	}
 
 	cfg = headlessParquetTraceConfig(cfg)
 	logln := newLogger(true)

@@ -1,10 +1,54 @@
 package internal
 
 import (
+	"context"
 	"errors"
+	"os"
 
 	"ior/internal/flags"
 )
+
+// runnerDeps bundles all injectable function dependencies used by the mode
+// registry and its handlers. Using a struct instead of package-level vars
+// allows tests to substitute individual functions without mutating global
+// state (Dependency Inversion Principle).
+type runnerDeps struct {
+	// getEUID returns the effective user ID of the calling process.
+	// Overridden in tests to simulate root or non-root execution.
+	getEUID func() int
+
+	// runTrace executes a headless plain/flamegraph trace (no TUI).
+	runTrace func(flags.Config) error
+
+	// runParquet executes a headless Parquet recording run (no TUI).
+	runParquet func(flags.Config) error
+
+	// runTraceWithContext drives a BPF trace with a parent context, started
+	// signal channel, and event-loop configurator. Used by the TUI starter.
+	runTraceWithContext func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error
+
+	// runTUI launches the interactive TUI backed by a live BPF trace.
+	// Injected at startup via SetTUIRunners so that the core package never
+	// imports the TUI layer.
+	runTUI tuiRunFunc
+
+	// runTUITestFlames launches the TUI seeded with static synthetic flame data.
+	runTUITestFlames tuiRunFunc
+
+	// runTUITestLiveFlames launches the TUI fed by a live synthetic flame goroutine.
+	runTUITestLiveFlames tuiRunFunc
+}
+
+// defaultRunnerDeps returns the production function set.
+func defaultRunnerDeps() runnerDeps {
+	return runnerDeps{
+		getEUID:            os.Geteuid,
+		runTrace:           runTrace,
+		runParquet:         runHeadlessParquet,
+		runTraceWithContext: runTraceWithContext,
+		// TUI runners are nil until SetTUIRunners is called from cmd/ior/main.go.
+	}
+}
 
 // modeHandler describes a single execution mode for the ior binary.
 // Each mode knows how to recognise itself (match), enforce its
@@ -18,23 +62,37 @@ type modeHandler interface {
 	// (pre-root modes are checked first and return early before requiring root).
 	validate(cfg flags.Config) error
 	// run executes the mode using the supplied config.
-	run(cfg flags.Config) error
+	run(cfg flags.Config, deps runnerDeps) error
 }
 
-// modeRegistry is an ordered list of modeHandlers.
-// dispatchRun and validateRunConfig iterate through it.
-type modeRegistry []modeHandler
+// modeRegistry is an ordered list of modeHandlers paired with the
+// injectable function dependencies they share. Storing deps on the registry
+// (rather than as package-level vars) lets tests construct isolated
+// registries without mutating global state.
+type modeRegistry struct {
+	handlers []modeHandler
+	deps     runnerDeps
+}
+
+// newModeRegistry constructs a registry with the standard handler order and
+// the provided dependencies.
+// Modes are evaluated first-match-wins, so more specific modes (e.g.,
+// testFlames) must be registered before more general ones (e.g., TUI default).
+func newModeRegistry(deps runnerDeps) modeRegistry {
+	return modeRegistry{
+		handlers: []modeHandler{
+			&testFlamesModeHandler{},
+			&testLiveFlamesModeHandler{},
+			&headlessParquetModeHandler{},
+			&plainTraceModeHandler{},
+			&tuiModeHandler{},
+		},
+		deps: deps,
+	}
+}
 
 // defaultRegistry is the canonical ordered registry used at runtime.
-// Modes are evaluated first-match-wins, so more specific modes (e.g.,
-// testFlames) are registered before more general ones (e.g., TUI default).
-var defaultRegistry = modeRegistry{
-	&testFlamesModeHandler{},
-	&testLiveFlamesModeHandler{},
-	&headlessParquetModeHandler{},
-	&plainTraceModeHandler{},
-	&tuiModeHandler{},
-}
+var defaultRegistry = newModeRegistry(defaultRunnerDeps())
 
 // dispatch validates cross-mode constraints, requires root when necessary,
 // then delegates to the first matching handler in the registry.
@@ -42,9 +100,9 @@ func (reg modeRegistry) dispatch(cfg flags.Config) error {
 	if err := reg.validate(cfg); err != nil {
 		return err
 	}
-	for _, h := range reg {
+	for _, h := range reg.handlers {
 		if h.match(cfg) {
-			return h.run(cfg)
+			return h.run(cfg, reg.deps)
 		}
 	}
 	// Registry must always include a catch-all (tuiModeHandler matches everything).
@@ -56,7 +114,7 @@ func (reg modeRegistry) dispatch(cfg flags.Config) error {
 // combination errors (e.g., parquet + plain is rejected regardless of which
 // handler ultimately runs).
 func (reg modeRegistry) validate(cfg flags.Config) error {
-	for _, h := range reg {
+	for _, h := range reg.handlers {
 		if err := h.validate(cfg); err != nil {
 			return err
 		}
@@ -93,8 +151,8 @@ func (h *testFlamesModeHandler) validate(cfg flags.Config) error {
 	return nil
 }
 
-func (h *testFlamesModeHandler) run(cfg flags.Config) error {
-	return runTUITestFlamesFn(cfg, tuiTestFlamesStarter(cfg))
+func (h *testFlamesModeHandler) run(cfg flags.Config, deps runnerDeps) error {
+	return deps.runTUITestFlames(cfg, tuiTestFlamesStarter(cfg))
 }
 
 // --- testLiveFlamesModeHandler ---
@@ -123,8 +181,8 @@ func (h *testLiveFlamesModeHandler) validate(cfg flags.Config) error {
 	return nil
 }
 
-func (h *testLiveFlamesModeHandler) run(cfg flags.Config) error {
-	return runTUITestLiveFlamesFn(cfg, tuiTestLiveFlamesStarter(cfg))
+func (h *testLiveFlamesModeHandler) run(cfg flags.Config, deps runnerDeps) error {
+	return deps.runTUITestLiveFlames(cfg, tuiTestLiveFlamesStarter(cfg))
 }
 
 // --- headlessParquetModeHandler ---
@@ -161,11 +219,11 @@ func (h *headlessParquetModeHandler) validate(cfg flags.Config) error {
 	return nil
 }
 
-func (h *headlessParquetModeHandler) run(cfg flags.Config) error {
-	if getEUID() != 0 {
+func (h *headlessParquetModeHandler) run(cfg flags.Config, deps runnerDeps) error {
+	if deps.getEUID() != 0 {
 		return errRootPrivilegesRequired
 	}
-	return runParquetFn(cfg)
+	return deps.runParquet(cfg)
 }
 
 // --- plainTraceModeHandler ---
@@ -186,11 +244,11 @@ func (h *plainTraceModeHandler) validate(cfg flags.Config) error {
 	return nil
 }
 
-func (h *plainTraceModeHandler) run(cfg flags.Config) error {
-	if getEUID() != 0 {
+func (h *plainTraceModeHandler) run(cfg flags.Config, deps runnerDeps) error {
+	if deps.getEUID() != 0 {
 		return errRootPrivilegesRequired
 	}
-	return runTraceFn(cfg)
+	return deps.runTrace(cfg)
 }
 
 // --- tuiModeHandler ---
@@ -208,9 +266,9 @@ func (h *tuiModeHandler) validate(_ flags.Config) error {
 	return nil
 }
 
-func (h *tuiModeHandler) run(cfg flags.Config) error {
-	if getEUID() != 0 {
+func (h *tuiModeHandler) run(cfg flags.Config, deps runnerDeps) error {
+	if deps.getEUID() != 0 {
 		return errRootPrivilegesRequired
 	}
-	return runTUIFn(cfg, tuiTraceStarterFromRunTrace(cfg, runTraceWithContextFn))
+	return deps.runTUI(cfg, tuiTraceStarterFromRunTrace(cfg, deps.runTraceWithContext))
 }
