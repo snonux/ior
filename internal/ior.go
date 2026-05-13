@@ -403,14 +403,22 @@ func configureEventLoopOutput(el *eventLoop, mgr *probemanager.Manager, configur
 	}
 }
 
-func startTraceShutdownWatcher(ctx context.Context, verbose bool, el *eventLoop, profiling *profilingControl, logln func(...any)) {
+// startTraceShutdownWatcher launches a goroutine that waits for ctx to be
+// cancelled, then flushes stats and stops profiling. It returns a done channel
+// that is closed once the goroutine has finished all cleanup. Callers must
+// drain this channel before returning to avoid a goroutine leak when the
+// context is cancelled but the caller exits before the goroutine runs.
+func startTraceShutdownWatcher(ctx context.Context, verbose bool, el *eventLoop, profiling *profilingControl, logln func(...any)) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		<-ctx.Done()
 		if verbose {
 			fmt.Println(el.stats())
 		}
 		profiling.stop(logln)
 	}()
+	return done
 }
 
 // maybePrependFlamegraphConfigure wraps configure so that, when flamegraph
@@ -430,9 +438,13 @@ func maybePrependFlamegraphConfigure(cfg flags.Config, configure func(*eventLoop
 	return chainEventLoopConfigure(recordOutput, configure), recorder
 }
 
-// finaliseTrace waits for profiling to finish, flushes the flamegraph recorder
-// if one was created, and logs the total run duration.
-func finaliseTrace(recorder *flamegraph.Recorder, profiling *profilingControl, totalDuration time.Duration, logln func(...any)) error {
+// finaliseTrace waits for the shutdown-watcher goroutine and profiling to
+// finish, flushes the flamegraph recorder if one was created, and logs the
+// total run duration. watcherDone must be the channel returned by
+// startTraceShutdownWatcher; draining it here prevents a goroutine leak when
+// the caller's context is cancelled but the goroutine has not yet exited.
+func finaliseTrace(watcherDone <-chan struct{}, recorder *flamegraph.Recorder, profiling *profilingControl, totalDuration time.Duration, logln func(...any)) error {
+	<-watcherDone
 	<-profiling.done
 	if recorder != nil {
 		if err := recorder.Write(); err != nil {
@@ -457,7 +469,13 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 		return err
 	}
 	defer bpfModule.Close()
-	defer mgr.Close()
+	// mgr.Close() detaches BPF probes and releases kernel resources; log any
+	// error so that probe-detach failures are not silently discarded.
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			logln("BPF probe manager close error:", err)
+		}
+	}()
 	defer releaseBindings()
 
 	ch, err := setupEventChannel(bpfModule)
@@ -485,11 +503,11 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 		return err
 	}
 	configureEventLoopOutput(el, mgr, configure)
-	startTraceShutdownWatcher(ctx, verbose, el, profiling, logln)
+	watcherDone := startTraceShutdownWatcher(ctx, verbose, el, profiling, logln)
 
 	startTime := time.Now()
 	el.run(ctx, ch)
-	return finaliseTrace(recorder, profiling, time.Since(startTime), logln)
+	return finaliseTrace(watcherDone, recorder, profiling, time.Since(startTime), logln)
 }
 
 func chainEventLoopConfigure(fns ...func(*eventLoop)) func(*eventLoop) {
