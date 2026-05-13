@@ -24,22 +24,24 @@ func setBPFGlobals(cfg flags.Config, bpfModule *bpf.Module) error {
 }
 
 func resizeBPFMaps(cfg flags.Config, bpfModule *bpf.Module) error {
-	if err := resizeBPFMap(bpfModule, "event_map", uint32(cfg.EventMapSize)); err != nil {
-		return fmt.Errorf("event_map: %w", err)
-	}
-	return nil
+	// resizeBPFMap already includes the map name in any error it returns,
+	// so no additional wrapping is needed here.
+	return resizeBPFMap(bpfModule, "event_map", uint32(cfg.EventMapSize))
 }
 
 func resizeBPFMap(module *bpf.Module, name string, size uint32) error {
 	m, err := module.GetMap(name)
 	if err != nil {
-		return err
+		// Wrap with map name so callers know which map lookup failed.
+		return fmt.Errorf("resize map %s: get map: %w", name, err)
 	}
 	if err = m.SetMaxEntries(size); err != nil {
-		return err
+		// Wrap with map name and target size so callers know which map failed
+		// and what size was requested.
+		return fmt.Errorf("resize map %s to %d: %w", name, size, err)
 	}
 	if actual := m.MaxEntries(); actual != size {
-		return fmt.Errorf("map resize to %d failed, expected %v, actual %v", size, size, actual)
+		return fmt.Errorf("resize map %s to %d failed: actual size is %d", name, size, actual)
 	}
 	return nil
 }
