@@ -51,18 +51,51 @@ func (t *traceLifecycle) stop() {
 	}
 }
 
+// defaultStartupTimeout is the maximum time allowed for BPF probe attachment.
+// If the trace starter does not return within this window the TUI surfaces
+// a TracingErrorMsg instead of spinning in the "Attaching tracepoints..."
+// state indefinitely. The stuck goroutine is left running until the caller
+// cancels the trace context (e.g. via traceLifecycle.stop on the next
+// user action) so no goroutine is leaked permanently.
+const defaultStartupTimeout = 30 * time.Second
+
 // startTraceCmd wraps a TraceStarter in a tea.Cmd that handles context
 // cancellation gracefully (returns nil so the caller does not treat a
-// user-initiated stop as an error).
+// user-initiated stop as an error). It uses defaultStartupTimeout to
+// prevent the TUI from hanging indefinitely when BPF probe attachment stalls.
 func startTraceCmd(starter TraceStarter, ctx context.Context) tea.Cmd {
+	return startTraceCmdWithTimeout(starter, ctx, defaultStartupTimeout)
+}
+
+// startTraceCmdWithTimeout is the testable core of startTraceCmd. It races
+// the starter goroutine against a caller-supplied timeout so that tests can
+// use a short deadline without waiting 30 seconds.
+func startTraceCmdWithTimeout(starter TraceStarter, ctx context.Context, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		if err := starter(ctx); err != nil {
-			if errors.Is(err, context.Canceled) {
-				return nil
+		type starterResult struct{ err error }
+		ch := make(chan starterResult, 1)
+		go func() {
+			err := starter(ctx)
+			ch <- starterResult{err: err}
+		}()
+		select {
+		case res := <-ch:
+			if res.err != nil {
+				if errors.Is(res.err, context.Canceled) {
+					return nil
+				}
+				return TracingErrorMsg{Err: res.err}
 			}
-			return TracingErrorMsg{Err: err}
+			return TracingStartedMsg{}
+		case <-time.After(timeout):
+			// BPF probe attachment did not complete in time. The stuck
+			// goroutine will be cleaned up when the caller cancels ctx
+			// (e.g. on the next traceLifecycle.stop call).
+			return TracingErrorMsg{Err: fmt.Errorf(
+				"trace startup timed out after %s: BPF probe attachment did not complete",
+				timeout,
+			)}
 		}
-		return TracingStartedMsg{}
 	}
 }
 

@@ -221,6 +221,58 @@ func TestStartTraceCmdEmitsErrorMsg(t *testing.T) {
 	}
 }
 
+// TestStartTraceCmdTimeoutEmitsErrorMsg verifies that a starter that never
+// returns causes startTraceCmdWithTimeout to surface a TracingErrorMsg once
+// the deadline expires, rather than blocking the TUI indefinitely.
+func TestStartTraceCmdTimeoutEmitsErrorMsg(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Starter that blocks until ctx is cancelled, simulating a hung BPF attach.
+	blocker := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	// Use a short timeout so the test finishes quickly.
+	cmd := startTraceCmdWithTimeout(blocker, ctx, 50*time.Millisecond)
+	msg := cmd()
+
+	traceErr, ok := msg.(TracingErrorMsg)
+	if !ok {
+		t.Fatalf("expected TracingErrorMsg on timeout, got %T", msg)
+	}
+	if traceErr.Err == nil {
+		t.Fatal("expected non-nil error in TracingErrorMsg")
+	}
+	if !strings.Contains(traceErr.Err.Error(), "timed out") {
+		t.Fatalf("expected timeout message, got: %v", traceErr.Err)
+	}
+}
+
+// TestStartTraceCmdContextCancelledBeforeTimeoutReturnsNil verifies that
+// cancelling ctx before the timeout fires is treated as a user-initiated stop
+// (returns nil, not an error).
+func TestStartTraceCmdContextCancelledBeforeTimeoutReturnsNil(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Starter that blocks until ctx is cancelled.
+	blocker := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	// Cancel ctx immediately so the starter exits before the timeout.
+	cancel()
+
+	cmd := startTraceCmdWithTimeout(blocker, ctx, 5*time.Second)
+	msg := cmd()
+
+	if msg != nil {
+		t.Fatalf("expected nil msg on context cancel, got %T: %v", msg, msg)
+	}
+}
+
 func TestQuitInvokesTraceStop(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
