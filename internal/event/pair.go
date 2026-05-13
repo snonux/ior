@@ -25,7 +25,7 @@ type Pair struct {
 	Comm            string
 	Duration        uint64
 	DurationToPrev  uint64
-	Bytes          uint64 // Number of bytes transferred (read/write/transfer syscalls only)
+	Bytes           uint64 // Number of bytes transferred (read/write/transfer syscalls only)
 }
 
 func NewPair(enterEv Event) *Pair {

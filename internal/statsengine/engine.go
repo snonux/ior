@@ -209,8 +209,8 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 // and returns their results bundled together.
 func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) subSnapshots {
 	var (
-		ss  subSnapshots
-		wg  sync.WaitGroup
+		ss subSnapshots
+		wg sync.WaitGroup
 	)
 
 	wg.Add(5)

@@ -42,9 +42,9 @@ type runnerDeps struct {
 // defaultRunnerDeps returns the production function set.
 func defaultRunnerDeps() runnerDeps {
 	return runnerDeps{
-		getEUID:            os.Geteuid,
-		runTrace:           runTrace,
-		runParquet:         runHeadlessParquet,
+		getEUID:             os.Geteuid,
+		runTrace:            runTrace,
+		runParquet:          runHeadlessParquet,
 		runTraceWithContext: runTraceWithContext,
 		// TUI runners are nil until SetTUIRunners is called from cmd/ior/main.go.
 	}
