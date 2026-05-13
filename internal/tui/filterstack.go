@@ -87,15 +87,17 @@ func (f *filterStack) rebindProcessFilters(pid, tid int) {
 // pidFromFilter extracts the PID equality value from the active filter.
 // Returns -1 (meaning "no filter") when no equality constraint is set.
 func (f *filterStack) pidFromFilter() int {
+	// EqValue returns int64; PID values are always within int range (Linux PID_MAX ≤ 4194304).
 	pid, _ := f.global.PID.EqValue()
-	return selectedPIDFilter(pid)
+	return selectedPIDFilter(int(pid))
 }
 
 // tidFromFilter extracts the TID equality value from the active filter.
 // Returns -1 (meaning "no filter") when no equality constraint is set.
 func (f *filterStack) tidFromFilter() int {
+	// EqValue returns int64; TID values are always within int range (Linux PID_MAX ≤ 4194304).
 	tid, _ := f.global.TID.EqValue()
-	return selectedPIDFilter(tid)
+	return selectedPIDFilter(int(tid))
 }
 
 // labelStack returns the current human-readable filter label stack (read-only).
