@@ -217,19 +217,19 @@ func betterFileRank(a, b *fileRankStats) bool {
 	return a.path < b.path
 }
 
-func (h fileRankHeap) Len() int {
-	return len(h)
+func (h *fileRankHeap) Len() int {
+	return len(*h)
 }
 
-func (h fileRankHeap) Less(i, j int) bool {
+func (h *fileRankHeap) Less(i, j int) bool {
 	// Keep the worst-ranked item at root for O(log N) eviction.
-	return betterFileRank(h[j], h[i])
+	return betterFileRank((*h)[j], (*h)[i])
 }
 
-func (h fileRankHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].heapIndex = i
-	h[j].heapIndex = j
+func (h *fileRankHeap) Swap(i, j int) {
+	(*h)[i], (*h)[j] = (*h)[j], (*h)[i]
+	(*h)[i].heapIndex = i
+	(*h)[j].heapIndex = j
 }
 
 func (h *fileRankHeap) Push(x any) {
