@@ -1507,8 +1507,11 @@ func TestViewRendersTabBarAndHelp(t *testing.T) {
 func TestFlameTabRendersWaitingForDataPlaceholder(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
 	m.activeTab = TabFlame
-	m.width = 120
-	m.height = 30
+	// Dimensions must flow through Update so that sub-model viewports are
+	// kept in sync. Direct field assignment bypasses the sync logic in
+	// handleWindowSize, so use a WindowSizeMsg instead.
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
 
 	out := m.View().Content
 	if !strings.Contains(out, "Flame: waiting for data...") {

@@ -2043,15 +2043,17 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
-	m.width = 120
-	m.height = 30
+	// Dimensions must flow through Update so that sub-model viewports are
+	// kept in sync with the new pure-View contract.
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(Model)
 
 	out := m.View().Content
 	if !strings.Contains(out, "Flame: waiting for data") {
 		t.Fatalf("expected flame waiting view by default")
 	}
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	updated := next.(Model)
 	out = updated.View().Content
 	if !strings.Contains(out, "Overview: waiting for stats") {

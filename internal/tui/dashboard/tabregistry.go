@@ -9,6 +9,7 @@ import (
 	flamegraphtui "ior/internal/tui/flamegraph"
 	"ior/internal/tui/messages"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -47,6 +48,11 @@ type tabDescriptor struct {
 	// HandleScroll handles direction keys for this tab when bubbles are off.
 	// Nil means the tab does not process scroll/navigation keys.
 	HandleScroll tabScrollFn
+	// ShortcutKey extracts the numeric shortcut key binding for this tab from
+	// a KeyMap. It is called at runtime against the model's configured key map
+	// so that custom key maps (e.g. in tests) are respected. Nil means the tab
+	// has no direct numeric shortcut; it is still reachable via tab/shift+tab.
+	ShortcutKey func(keys common.KeyMap) key.Binding
 }
 
 // tabDescriptors is the central registry mapping every known Tab to its
@@ -61,6 +67,7 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		InitCmd:         flameTickCmd,
 		Render:          tabRenderFlame,
 		HandleScroll:    nil,
+		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.One },
 	},
 	TabOverview: {
 		Name:            "Overview",
@@ -69,6 +76,7 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		AllowedVizModes: []tabVizMode{tabVizModeTable},
 		Render:          tabRenderOverview,
 		HandleScroll:    nil,
+		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Two },
 	},
 	TabSyscalls: {
 		Name:            "Syscalls",
@@ -77,6 +85,7 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		AllowedVizModes: []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
 		Render:          tabRenderSyscalls,
 		HandleScroll:    tabScrollSyscalls,
+		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Three },
 	},
 	TabFiles: {
 		Name:            "Files",
@@ -85,6 +94,7 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		AllowedVizModes: []tabVizMode{tabVizModeTable},
 		Render:          tabRenderFiles,
 		HandleScroll:    tabScrollFiles,
+		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Four },
 	},
 	TabProcesses: {
 		Name:            "Processes",
@@ -93,6 +103,7 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		AllowedVizModes: []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
 		Render:          tabRenderProcesses,
 		HandleScroll:    tabScrollProcesses,
+		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Five },
 	},
 	TabLatency: {
 		Name:            "Latency+Gaps",
@@ -101,6 +112,7 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		AllowedVizModes: []tabVizMode{tabVizModeTable},
 		Render:          tabRenderLatency,
 		HandleScroll:    nil,
+		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Six },
 	},
 	TabStream: {
 		Name:            "Stream",
@@ -110,6 +122,7 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		InitCmd:         streamTickCmd,
 		Render:          tabRenderStream,
 		HandleScroll:    tabScrollStream,
+		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Seven },
 	},
 }
 
@@ -135,6 +148,24 @@ func lookupTab(tab Tab) tabDescriptor {
 		return d
 	}
 	return tabDescriptor{Name: "Unknown", ShortName: "Unk", AllowedVizModes: []tabVizMode{tabVizModeTable}}
+}
+
+// tabForShortcutKey searches the registry for the first tab whose ShortcutKey
+// matches the given key press message. It returns the tab and true when a match
+// is found; otherwise the zero Tab value and false. Using the registry here
+// means adding a new tab with a shortcut only requires a new entry in
+// tabDescriptors — handleShortcutKey in model.go never needs updating.
+func tabForShortcutKey(msg tea.KeyPressMsg, keys common.KeyMap) (Tab, bool) {
+	for _, tab := range orderedTabs() {
+		d := tabDescriptors[tab]
+		if d.ShortcutKey == nil {
+			continue
+		}
+		if key.Matches(msg, d.ShortcutKey(keys)) {
+			return tab, true
+		}
+	}
+	return 0, false
 }
 
 // tabAllowedVizModes returns the visualisation modes allowed for tab,
