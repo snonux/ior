@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -63,22 +62,7 @@ func processColumns() []common.TableColumn {
 }
 
 func sortedProcessTableRows(rows []statsengine.ProcessSnapshot, sortState tableSortState[processSortKey]) []statsengine.ProcessSnapshot {
-	if len(rows) == 0 {
-		return nil
-	}
-	if !sortState.active {
-		return rows
-	}
-
-	sorted := slices.Clone(rows)
-	slices.SortFunc(sorted, func(left, right statsengine.ProcessSnapshot) int {
-		cmp := compareProcessBySort(left, right, sortState.key)
-		if cmp == 0 {
-			cmp = compareProcessDefault(left, right)
-		}
-		return sortState.apply(cmp)
-	})
-	return sorted
+	return sortedWithState(rows, sortState, compareProcessBySort, compareProcessDefault)
 }
 
 func compareProcessBySort(left, right statsengine.ProcessSnapshot, key processSortKey) int {

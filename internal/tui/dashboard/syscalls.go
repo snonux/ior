@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"time"
 
@@ -96,22 +95,7 @@ func syscallColumns(width int) []common.TableColumn {
 }
 
 func sortedSyscallSnapshots(rows []statsengine.SyscallSnapshot, sortState tableSortState[syscallSortKey]) []statsengine.SyscallSnapshot {
-	if len(rows) == 0 {
-		return nil
-	}
-	if !sortState.active {
-		return rows
-	}
-
-	sorted := slices.Clone(rows)
-	slices.SortFunc(sorted, func(left, right statsengine.SyscallSnapshot) int {
-		cmp := compareSyscallBySort(left, right, sortState.key)
-		if cmp == 0 {
-			cmp = compareSyscallDefault(left, right)
-		}
-		return sortState.apply(cmp)
-	})
-	return sorted
+	return sortedWithState(rows, sortState, compareSyscallBySort, compareSyscallDefault)
 }
 
 func compareSyscallBySort(left, right statsengine.SyscallSnapshot, key syscallSortKey) int {
