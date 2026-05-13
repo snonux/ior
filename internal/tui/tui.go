@@ -226,22 +226,24 @@ func (r *runtimeBindings) advanceFilterEpoch() uint64 {
 }
 
 // resetDashboardSnapshotSource resets the dashboard snapshot source if it
-// implements the resettable interface, then returns a fresh snapshot. Errors
-// from Snapshot are silently dropped since callers handle a nil snapshot.
+// implements the Resetter contract (i.e. exposes Reset()), then returns a
+// fresh snapshot. The check is intentionally narrow — only Reset() is required
+// so that test doubles and future sources can satisfy it without also
+// implementing Ingest (which belongs to statsengine.Accumulator and is not
+// needed here). Errors from Snapshot are silently dropped since callers handle
+// a nil snapshot.
 func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 	src := r.dashboardSnapshotSource()
 	if src == nil {
 		return nil
 	}
-	if resettable, ok := src.(interface {
-		Reset()
-		Snapshot() (*statsengine.Snapshot, error)
-	}); ok {
+	// statsengine.Accumulator satisfies this interface; any other source that
+	// exposes Reset() (e.g. test fakes) also qualifies.
+	if resettable, ok := src.(interface{ Reset() }); ok {
 		resettable.Reset()
-		snap, _ := resettable.Snapshot()
-		return snap
 	}
-	return nil
+	snap, _ := src.Snapshot()
+	return snap
 }
 
 // RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the

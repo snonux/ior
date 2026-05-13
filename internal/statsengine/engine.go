@@ -23,6 +23,22 @@ const (
 	DefaultTopN = 64
 )
 
+// Accumulator is the event-ingestion side of the stats engine.
+// It accepts incoming event pairs (Ingest) and supports resetting all
+// accumulated state back to zero (Reset). Snapshot building is a separate
+// responsibility expressed by runtime.SnapshotSource; separating the two
+// satisfies SRP — callers that only push events hold an Accumulator, while
+// callers that only read statistics hold a SnapshotSource.
+type Accumulator interface {
+	// Ingest records one event pair into the in-memory aggregates.
+	Ingest(pair *event.Pair)
+	// Reset clears all accumulated stats and restarts series baselines.
+	Reset()
+}
+
+// compile-time assertion: *Engine must satisfy Accumulator.
+var _ Accumulator = (*Engine)(nil)
+
 // Engine aggregates streaming syscall data into immutable snapshots.
 type Engine struct {
 	mu sync.Mutex

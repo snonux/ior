@@ -163,8 +163,18 @@ func shouldRunTraceMode(cfg flags.Config) bool {
 
 // tuiRuntime holds all the per-restart state that the TUI trace starter
 // allocates and wires into the runtime bindings before each trace goroutine.
+//
+// The stats engine is split into two narrower interfaces to honour SRP:
+//   - accumulator accepts incoming event pairs (statsengine.Accumulator)
+//   - snapSource serves read-only snapshot queries (runtime.SnapshotSource)
+//
+// Both are satisfied by the same *statsengine.Engine instance, but holding
+// them separately makes each consumer's dependency explicit and prevents
+// callers from accidentally calling Ingest from snapshot-only paths or vice
+// versa.
 type tuiRuntime struct {
-	engine      *statsengine.Engine
+	accumulator statsengine.Accumulator
+	snapSource  runtime.SnapshotSource
 	streamBuf   streamEventSink
 	streamSrc   runtime.StreamSource
 	streamSeq   *streamrow.Sequencer
@@ -182,11 +192,14 @@ type tuiRuntime struct {
 func buildTUIRuntime(ctx context.Context, cfg flags.Config) (*tuiRuntime, error) {
 	components := newRuntimeBuilder(cfg).Build()
 	rt := &tuiRuntime{
-		engine:    components.engine,
-		streamBuf: components.streamBuf,
-		streamSrc: components.streamBuf,
-		streamSeq: components.streamSeq,
-		liveTrie:  components.liveTrie,
+		// Wire the same engine instance into both roles: accumulator for
+		// event ingestion, snapSource for dashboard snapshot queries.
+		accumulator: components.engine,
+		snapSource:  components.engine,
+		streamBuf:   components.streamBuf,
+		streamSrc:   components.streamBuf,
+		streamSeq:   components.streamSeq,
+		liveTrie:    components.liveTrie,
 	}
 
 	if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
@@ -215,7 +228,9 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	}
 	rt.recorder = bindings.Recorder()
 	rt.filterEpoch = bindings.FilterEpoch()
-	bindings.SetDashboardSnapshotSource(rt.engine)
+	// Expose the snapshot-read side to the dashboard; the accumulator (write
+	// side) is used only by the event-loop callback below.
+	bindings.SetDashboardSnapshotSource(rt.snapSource)
 	bindings.SetEventStreamSource(rt.streamSrc)
 	bindings.SetLiveTrie(rt.liveTrie)
 	return nil
@@ -237,7 +252,7 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 				return
 			}
 			row := streamrow.New(rt.streamSeq.Next(), ep)
-			rt.engine.Ingest(ep)
+			rt.accumulator.Ingest(ep)
 			rt.streamBuf.Push(row)
 			if rt.recorder != nil {
 				if err := rt.recorder.Record(row, rt.filterEpoch); err != nil {
