@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"ior/internal/collapse"
 	appconfig "ior/internal/config"
 	"ior/internal/globalfilter"
+	"ior/internal/tracepoints"
 )
 
 // Config captures runtime configuration parsed from CLI flags.
@@ -31,12 +31,10 @@ type Config struct {
 	// Duration is the maximum tracing duration in seconds.
 	Duration int
 
-	// TracepointsToAttach is the list of compiled regexes that select which
-	// tracepoints to load; an empty list means attach all tracepoints.
-	TracepointsToAttach []*regexp.Regexp
-	// TracepointsToExclude is the list of compiled regexes that suppress
-	// specific tracepoints even when they match TracepointsToAttach.
-	TracepointsToExclude []*regexp.Regexp
+	// TracepointSelector holds the compiled include/exclude regexes that
+	// decide which BPF tracepoints to attach. The selection logic lives in
+	// tracepoints.Selector.ShouldAttach rather than on Config itself.
+	TracepointSelector tracepoints.Selector
 
 	// PlainMode disables the TUI and writes raw CSV rows to stdout.
 	PlainMode bool
@@ -65,6 +63,7 @@ type Config struct {
 	CountField string
 	// GlobalFilter is the structured event filter applied across all dashboards
 	// and output modes; takes precedence over the individual CLI filter flags.
+	// Use BuildTraceFilter(cfg) to obtain a resolved globalfilter.Filter.
 	GlobalFilter globalfilter.Filter
 	// ResetTimer is the interval at which aggregate dashboard state (flamegraph
 	// trie and stats engine) is automatically cleared; 0 disables auto-reset.
@@ -114,8 +113,7 @@ func (f Config) GetTUIExportEnable() bool {
 // fields so that modifications to the copy do not affect the original.
 func (f Config) Clone() Config {
 	out := f
-	out.TracepointsToAttach = slices.Clone(f.TracepointsToAttach)
-	out.TracepointsToExclude = slices.Clone(f.TracepointsToExclude)
+	out.TracepointSelector = f.TracepointSelector.Clone()
 	out.CollapsedFields = slices.Clone(f.CollapsedFields)
 	out.GlobalFilter = f.GlobalFilter.Clone()
 	return out
@@ -146,8 +144,8 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 
 	fs.BoolVar(&cfg.PprofEnable, "pprof", false, "Enable profiling")
 
-	tracepointsToAttach := fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
-	tracepointsToExclude := fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
+	tpsAttach := fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
+	tpsExclude := fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 
 	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
@@ -169,15 +167,13 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 		return Config{}, err
 	}
 
-	var err error
-	cfg.TracepointsToAttach, err = extractTracepointFlags(*tracepointsToAttach)
+	// Parse the tracepoint include/exclude regex lists into a Selector.
+	// The Selector owns all matching logic; Config is purely a data carrier.
+	sel, err := tracepoints.ParseSelector(*tpsAttach, *tpsExclude)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.TracepointsToExclude, err = extractTracepointFlags(*tracepointsToExclude)
-	if err != nil {
-		return Config{}, err
-	}
+	cfg.TracepointSelector = sel
 
 	// Keep this list empty by default.
 	// As of February 23, 2026, open_by_handle_at and name_to_handle_at were
@@ -220,64 +216,4 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	}
 
 	return cfg, nil
-}
-
-func extractTracepointFlags(tracepoints string) (regexes []*regexp.Regexp, err error) {
-	if len(tracepoints) == 0 {
-		return regexes, nil
-	}
-	for _, name := range strings.Split(tracepoints, ",") {
-		re, err := regexp.Compile(name)
-		if err != nil {
-			return nil, fmt.Errorf("unable to compile regex %q: %w", name, err)
-		}
-		regexes = append(regexes, re)
-	}
-	return regexes, nil
-}
-
-// TraceFilter builds a globalfilter.Filter from the config's filter fields.
-// If GlobalFilter is already active, it is returned as-is. Otherwise,
-// individual CLI-level filters (CommFilter, PathFilter, PidFilter, TidFilter)
-// are merged into a new filter.
-func (cfg Config) TraceFilter() globalfilter.Filter {
-	filter := cfg.GlobalFilter.Clone()
-	if filter.IsActive() {
-		return filter
-	}
-	if cfg.CommFilter != "" {
-		filter.Comm = &globalfilter.StringFilter{Pattern: cfg.CommFilter}
-	}
-	if cfg.PathFilter != "" {
-		filter.File = &globalfilter.StringFilter{Pattern: cfg.PathFilter}
-	}
-	if cfg.PidFilter > 0 {
-		filter.PID = globalfilter.NewEqFilter(int64(cfg.PidFilter))
-	}
-	if cfg.TidFilter > 0 {
-		filter.TID = globalfilter.NewEqFilter(int64(cfg.TidFilter))
-	}
-	return filter
-}
-
-// ShouldIAttachTracepoint reports whether the given tracepoint name passes the
-// attach/exclude regex filters. Exclusions are checked first; if the name
-// matches any exclude pattern it is rejected regardless of the attach list.
-// When the attach list is empty, all non-excluded tracepoints are accepted.
-func (f Config) ShouldIAttachTracepoint(tracepointName string) bool {
-	for _, re := range f.TracepointsToExclude {
-		if re.MatchString(tracepointName) {
-			return false
-		}
-	}
-	if len(f.TracepointsToAttach) == 0 {
-		return true
-	}
-	for _, re := range f.TracepointsToAttach {
-		if re.MatchString(tracepointName) {
-			return true
-		}
-	}
-
-	return false
 }

@@ -1050,7 +1050,6 @@ func shouldPrintTestLog(msg string) bool {
 		"|___",
 		"v0.0.0",
 		"libbpf:",
-		"ShouldIAttachTracepoint called with ",
 		"Attaching tracepoint ",
 		"Attached prog handle_ ",
 		"Attached tracepoint",

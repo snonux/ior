@@ -986,9 +986,10 @@ func (m *Model) beginTraceCmd() tea.Cmd {
 	return m.tracer.beginCmd(m.runtime, m.filters.current())
 }
 
-// filterFromConfig delegates to the canonical Config.TraceFilter method.
+// filterFromConfig delegates to flags.BuildTraceFilter to resolve the active
+// event filter from the CLI configuration fields.
 func filterFromConfig(cfg flags.Config) globalfilter.Filter {
-	return cfg.TraceFilter()
+	return flags.BuildTraceFilter(cfg)
 }
 
 // setProcessFilters updates the proc pid/tid, rebinds filter process constraints,

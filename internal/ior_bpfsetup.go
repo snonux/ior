@@ -73,7 +73,7 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	warn := func(syscall string, err error) {
 		fmt.Fprintf(os.Stderr, "ior: skipping tracepoint for %s: %v\n", syscall, err)
 	}
-	if err := mgr.AttachAll(cfg.ShouldIAttachTracepoint, tracepoints.List, warn); err != nil {
+	if err := mgr.AttachAll(cfg.TracepointSelector.ShouldAttach, tracepoints.List, warn); err != nil {
 		mgr.Close()
 		bpfModule.Close()
 		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)
