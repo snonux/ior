@@ -191,3 +191,67 @@ func TestParseResetTimerNegativeReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestParseDurationNegativeReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-duration", "-1")
+	if err == nil {
+		t.Fatalf("expected parse error for negative duration")
+	}
+	if !strings.Contains(err.Error(), "invalid duration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDurationZeroReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-duration", "0")
+	if err == nil {
+		t.Fatalf("expected parse error for zero duration")
+	}
+	if !strings.Contains(err.Error(), "invalid duration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDurationPositiveAccepted(t *testing.T) {
+	cfg, err := parseForTest(t, "-duration", "60")
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if cfg.Duration != 60 {
+		t.Fatalf("duration = %d, want 60", cfg.Duration)
+	}
+}
+
+func TestParseNegativeMapSizeReturnsError(t *testing.T) {
+	// A negative mapSize wraps to a huge uint32 when cast in resizeBPFMaps,
+	// causing a confusing BPF load failure. Parse must catch it early.
+	_, err := parseForTest(t, "-mapSize", "-1")
+	if err == nil {
+		t.Fatalf("expected parse error for negative mapSize")
+	}
+	if !strings.Contains(err.Error(), "invalid mapSize") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseZeroMapSizeReturnsError(t *testing.T) {
+	// A zero mapSize would allocate an empty BPF ring buffer, which is
+	// equally invalid. Parse must catch it early.
+	_, err := parseForTest(t, "-mapSize", "0")
+	if err == nil {
+		t.Fatalf("expected parse error for zero mapSize")
+	}
+	if !strings.Contains(err.Error(), "invalid mapSize") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePositiveMapSizeAccepted(t *testing.T) {
+	cfg, err := parseForTest(t, "-mapSize", "8192")
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if cfg.EventMapSize != 8192 {
+		t.Fatalf("EventMapSize = %d, want 8192", cfg.EventMapSize)
+	}
+}

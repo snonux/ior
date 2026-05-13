@@ -200,10 +200,23 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 		return Config{}, fmt.Errorf("invalid count field: %s", cfg.CountField)
 	}
 
+	// A zero or negative duration would cause the trace context to cancel
+	// immediately, capturing no events. Require at least one second.
+	if cfg.Duration <= 0 {
+		return Config{}, fmt.Errorf("invalid duration: %d (must be > 0)", cfg.Duration)
+	}
+
 	// A negative reset timer would imply auto-resets in the past, which is
 	// nonsensical. 0 disables, anything positive enables.
 	if cfg.ResetTimer < 0 {
 		return Config{}, fmt.Errorf("invalid resetTimer: %s (must be >= 0; 0 disables)", cfg.ResetTimer)
+	}
+
+	// A non-positive mapSize would wrap to a huge uint32 when cast in
+	// resizeBPFMaps, causing libbpf to fail with a confusing "map too large"
+	// error. Reject it here with a clear diagnostic instead.
+	if cfg.EventMapSize <= 0 {
+		return Config{}, fmt.Errorf("invalid mapSize: %d (must be > 0)", cfg.EventMapSize)
 	}
 
 	return cfg, nil
