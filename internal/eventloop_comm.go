@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,7 +9,12 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 )
+
+// resolveCommTimeout caps each procfs read so a frozen cgroup cannot stall
+// a lookup worker indefinitely and block clean shutdown.
+const resolveCommTimeout = time.Second
 
 type commResolver struct {
 	comms map[uint32]string
@@ -19,7 +25,7 @@ type commResolver struct {
 
 	lookupQueue      chan uint32
 	lookupWorkers    int
-	resolveFn        func(uint32) (string, error)
+	resolveFn        func(context.Context, uint32) (string, error)
 	warningFn        func(string)
 	startWorkersOnce sync.Once
 	workersWG        sync.WaitGroup
@@ -46,7 +52,16 @@ func (r *commResolver) ensureLookupConfig() {
 		r.lookupQueue = make(chan uint32, defaultCommLookupQueueSize)
 	}
 	if r.resolveFn == nil {
-		r.resolveFn = resolveCommFromProcWithError
+		// Default resolver wraps resolveCommFromProcWithError, which does not
+		// accept a context itself, so we honour cancellation by returning early
+		// when the context deadline is already exceeded before the call returns.
+		r.resolveFn = func(ctx context.Context, tid uint32) (string, error) {
+			comm, err := resolveCommFromProcWithError(tid)
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return comm, err
+		}
 	}
 }
 
@@ -69,7 +84,12 @@ func (r *commResolver) startLookupWorkers() {
 func (r *commResolver) lookupWorker() {
 	defer r.workersWG.Done()
 	for tid := range r.lookupQueue {
-		comm, err := r.resolveFn(tid)
+		// Each procfs read gets an independent timeout so that a frozen cgroup
+		// or a slow /proc entry cannot block a worker goroutine indefinitely
+		// and stall shutdown (which waits on workersWG).
+		ctx, cancel := context.WithTimeout(context.Background(), resolveCommTimeout)
+		comm, err := r.resolveFn(ctx, tid)
+		cancel()
 		r.mu.Lock()
 		delete(r.pending, tid)
 		if comm != "" {
@@ -95,7 +115,11 @@ func (r *commResolver) seedTrackedPidComm(pidFilter int) {
 			continue
 		}
 		seen[tid] = struct{}{}
-		comm, err := r.resolveFn(tid)
+		// Use a short timeout here too; seeding happens at startup and a stall
+		// would delay the entire event loop initialisation.
+		ctx, cancel := context.WithTimeout(context.Background(), resolveCommTimeout)
+		comm, err := r.resolveFn(ctx, tid)
+		cancel()
 		if comm != "" {
 			r.setCached(tid, comm)
 			continue
