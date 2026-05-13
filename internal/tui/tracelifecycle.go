@@ -39,7 +39,7 @@ func (t *traceLifecycle) beginCmd(runtime *runtimeBindings, filter globalfilter.
 	t.traceStop = cancel
 	ctx = ContextWithRuntimeBindings(ctx, runtime)
 	ctx = ContextWithTraceFilters(ctx, filter)
-	return startTraceCmd(t.startTrace, ctx)
+	return startTraceCmd(ctx, t.startTrace)
 }
 
 // stop cancels the running trace and clears the cancel function. Safe to call
@@ -63,14 +63,16 @@ const defaultStartupTimeout = 30 * time.Second
 // cancellation gracefully (returns nil so the caller does not treat a
 // user-initiated stop as an error). It uses defaultStartupTimeout to
 // prevent the TUI from hanging indefinitely when BPF probe attachment stalls.
-func startTraceCmd(starter TraceStarter, ctx context.Context) tea.Cmd {
-	return startTraceCmdWithTimeout(starter, ctx, defaultStartupTimeout)
+// ctx is first per Go convention (context.Context always leads the parameter list).
+func startTraceCmd(ctx context.Context, starter TraceStarter) tea.Cmd {
+	return startTraceCmdWithTimeout(ctx, starter, defaultStartupTimeout)
 }
 
 // startTraceCmdWithTimeout is the testable core of startTraceCmd. It races
 // the starter goroutine against a caller-supplied timeout so that tests can
 // use a short deadline without waiting 30 seconds.
-func startTraceCmdWithTimeout(starter TraceStarter, ctx context.Context, timeout time.Duration) tea.Cmd {
+// ctx is first per Go convention (context.Context always leads the parameter list).
+func startTraceCmdWithTimeout(ctx context.Context, starter TraceStarter, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		type starterResult struct{ err error }
 		ch := make(chan starterResult, 1)
