@@ -202,7 +202,7 @@ func TestQuitKeyMatchesSingleBindingWithoutPanic(t *testing.T) {
 }
 
 func TestStartTraceCmdLaunchesBeforeStarterReturns(t *testing.T) {
-	cmd := startTraceCmd(func(context.Context) error { return nil }, context.Background())
+	cmd := startTraceCmd(context.Background(), func(context.Context) error { return nil })
 	msg := cmd()
 	if _, ok := msg.(TracingStartedMsg); !ok {
 		t.Fatalf("expected TracingStartedMsg, got %T", msg)
@@ -210,7 +210,7 @@ func TestStartTraceCmdLaunchesBeforeStarterReturns(t *testing.T) {
 }
 
 func TestStartTraceCmdEmitsErrorMsg(t *testing.T) {
-	cmd := startTraceCmd(func(context.Context) error { return errors.New("trace failed") }, context.Background())
+	cmd := startTraceCmd(context.Background(), func(context.Context) error { return errors.New("trace failed") })
 	msg := cmd()
 	traceErr, ok := msg.(TracingErrorMsg)
 	if !ok {
@@ -235,7 +235,7 @@ func TestStartTraceCmdTimeoutEmitsErrorMsg(t *testing.T) {
 	}
 
 	// Use a short timeout so the test finishes quickly.
-	cmd := startTraceCmdWithTimeout(blocker, ctx, 50*time.Millisecond)
+	cmd := startTraceCmdWithTimeout(ctx, blocker, 50*time.Millisecond)
 	msg := cmd()
 
 	traceErr, ok := msg.(TracingErrorMsg)
@@ -265,7 +265,7 @@ func TestStartTraceCmdContextCancelledBeforeTimeoutReturnsNil(t *testing.T) {
 	// Cancel ctx immediately so the starter exits before the timeout.
 	cancel()
 
-	cmd := startTraceCmdWithTimeout(blocker, ctx, 5*time.Second)
+	cmd := startTraceCmdWithTimeout(ctx, blocker, 5*time.Second)
 	msg := cmd()
 
 	if msg != nil {
