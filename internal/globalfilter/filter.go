@@ -1,10 +1,7 @@
 package globalfilter
 
 import (
-	"fmt"
-	"strconv"
 	"strings"
-	"time"
 )
 
 type CompareOp int
@@ -176,77 +173,6 @@ func (f Filter) IsActive() bool {
 	return false
 }
 
-// Summary returns a compact human-readable description of the active filter
-// predicates, e.g. "syscall~read pid=1234". Returns "all" when no predicates
-// are set.
-func (f Filter) Summary() string {
-	parts := make([]string, 0, 10)
-	if f.ErrorsOnly {
-		parts = append(parts, "errors")
-	}
-	parts = AppendStringSummary(parts, "syscall", f.Syscall)
-	parts = AppendStringSummary(parts, "comm", f.Comm)
-	parts = AppendStringSummary(parts, "file", f.File)
-	parts = AppendNumericSummary(parts, "pid", f.PID, false)
-	parts = AppendNumericSummary(parts, "tid", f.TID, false)
-	parts = AppendNumericSummary(parts, "fd", f.FD, false)
-	parts = AppendNumericSummary(parts, "latency", f.LatencyNs, true)
-	parts = AppendNumericSummary(parts, "gap", f.GapNs, true)
-	parts = AppendNumericSummary(parts, "bytes", f.Bytes, false)
-	parts = AppendNumericSummary(parts, "ret", f.RetVal, false)
-	if len(parts) == 0 {
-		return "all"
-	}
-	return strings.Join(parts, " ")
-}
-
-func ParseDurationNs(input string) (int64, error) {
-	s := strings.TrimSpace(strings.ToLower(input))
-	if s == "" {
-		return 0, fmt.Errorf("empty duration")
-	}
-	s = strings.ReplaceAll(s, "µs", "us")
-	s = strings.ReplaceAll(s, "μs", "us")
-	if onlyDigits(s) || strings.HasPrefix(s, "-") && onlyDigits(s[1:]) {
-		v, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			return 0, err
-		}
-		return v, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, err
-	}
-	return d.Nanoseconds(), nil
-}
-
-// AppendStringSummary appends a "name~pattern" token to parts when the filter
-// is non-nil and non-empty, then returns the updated slice.
-func AppendStringSummary(parts []string, name string, sf *StringFilter) []string {
-	if sf == nil {
-		return parts
-	}
-	pattern := strings.TrimSpace(sf.Pattern)
-	if pattern == "" {
-		return parts
-	}
-	return append(parts, fmt.Sprintf("%s~%s", name, pattern))
-}
-
-// AppendNumericSummary appends a "nameOPvalue" token to parts when the filter
-// is non-nil, formatting the value as a duration string when duration is true.
-func AppendNumericSummary(parts []string, name string, nf *NumericFilter, duration bool) []string {
-	if nf == nil {
-		return parts
-	}
-	value := strconv.FormatInt(nf.Value, 10)
-	if duration {
-		value = time.Duration(nf.Value).String()
-	}
-	return append(parts, fmt.Sprintf("%s%s%s", name, CompareOpSymbol(nf.Op), value))
-}
-
 func matchString(sf *StringFilter, value string) bool {
 	if sf == nil {
 		return true
@@ -298,26 +224,6 @@ func matchNumeric(nf *NumericFilter, value int64) bool {
 	}
 }
 
-// CompareOpSymbol returns the summary/render symbol for a numeric comparison operator.
-func CompareOpSymbol(op CompareOp) string {
-	switch op {
-	case OpEq:
-		return "="
-	case OpNeq:
-		return "!="
-	case OpGt:
-		return ">"
-	case OpGte:
-		return ">="
-	case OpLt:
-		return "<"
-	case OpLte:
-		return "<="
-	default:
-		return "?"
-	}
-}
-
 func cloneFilter[T any](in *T) *T {
 	if in == nil {
 		return nil
@@ -337,14 +243,3 @@ func sameFilter[T comparable](left, right *T) bool {
 	}
 }
 
-func onlyDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, ch := range s {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
-}

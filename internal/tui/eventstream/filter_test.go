@@ -3,6 +3,8 @@ package eventstream
 import (
 	"strings"
 	"testing"
+
+	"ior/internal/globalfilter/presenter"
 )
 
 func sampleEvent() StreamEvent {
@@ -31,8 +33,8 @@ func TestFilterZeroValueMatchesAll(t *testing.T) {
 	if f.IsActive() {
 		t.Fatalf("zero-value filter should be inactive")
 	}
-	if got := f.Summary(); got != "all" {
-		t.Fatalf("Summary() = %q, want all", got)
+	if got := presenter.FilterSummary(f); got != "all" {
+		t.Fatalf("FilterSummary() = %q, want all", got)
 	}
 }
 
@@ -120,7 +122,7 @@ func TestFilterSummaryIncludesActivePredicates(t *testing.T) {
 		PID:        &NumericFilter{Op: OpEq, Value: 1234},
 		LatencyNs:  &NumericFilter{Op: OpGt, Value: 1000000},
 	}
-	got := f.Summary()
+	got := presenter.FilterSummary(f)
 	for _, wantPart := range []string{"errors", "syscall~read", "pid=1234", "latency>1ms"} {
 		if !strings.Contains(got, wantPart) {
 			t.Fatalf("Summary() = %q, missing %q", got, wantPart)

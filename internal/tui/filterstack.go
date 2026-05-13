@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"ior/internal/globalfilter"
+	"ior/internal/globalfilter/presenter"
 )
 
 // filterStack manages the trace filter chain: the active filter, the undo
@@ -124,14 +125,14 @@ func globalFilterActionLabel(prev, next globalfilter.Filter, action string) stri
 	parts = appendNumericFilterChange(parts, "bytes", prev.Bytes, next.Bytes, false)
 	parts = appendNumericFilterChange(parts, "ret", prev.RetVal, next.RetVal, false)
 	if len(parts) == 0 {
-		return next.Summary()
+		return presenter.FilterSummary(next)
 	}
 	return strings.Join(parts, " ")
 }
 
 // appendStringFilterChange appends a change token to parts for a string
 // filter field. It emits "clear name" when the filter is removed, or delegates
-// to globalfilter.AppendStringSummary for the canonical "name~pattern" format.
+// to presenter.AppendStringSummary for the canonical "name~pattern" format.
 func appendStringFilterChange(parts []string, name string, prev, next *globalfilter.StringFilter) []string {
 	if sameStringFilter(prev, next) {
 		return parts
@@ -139,12 +140,12 @@ func appendStringFilterChange(parts []string, name string, prev, next *globalfil
 	if next == nil || strings.TrimSpace(next.Pattern) == "" {
 		return append(parts, "clear "+name)
 	}
-	return globalfilter.AppendStringSummary(parts, name, next)
+	return presenter.AppendStringSummary(parts, name, next)
 }
 
 // appendNumericFilterChange appends a change token to parts for a numeric
 // filter field. It emits "clear name" when the filter is removed, or delegates
-// to globalfilter.AppendNumericSummary for the canonical "nameOPvalue" format.
+// to presenter.AppendNumericSummary for the canonical "nameOPvalue" format.
 func appendNumericFilterChange(parts []string, name string, prev, next *globalfilter.NumericFilter, duration bool) []string {
 	if sameNumericFilter(prev, next) {
 		return parts
@@ -152,7 +153,7 @@ func appendNumericFilterChange(parts []string, name string, prev, next *globalfi
 	if next == nil {
 		return append(parts, "clear "+name)
 	}
-	return globalfilter.AppendNumericSummary(parts, name, next, duration)
+	return presenter.AppendNumericSummary(parts, name, next, duration)
 }
 
 func sameStringFilter(a, b *globalfilter.StringFilter) bool {

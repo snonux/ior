@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ior/internal/globalfilter"
+	"ior/internal/globalfilter/presenter"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/eventstream"
@@ -1104,7 +1105,7 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) filterSummary() string {
-	summary := "filter: " + m.globalFilter.Summary()
+	summary := "filter: " + presenter.FilterSummary(m.globalFilter)
 	if len(m.filterStack) > 0 {
 		summary += " | stack: " + strings.Join(m.filterStack, " | ")
 	}

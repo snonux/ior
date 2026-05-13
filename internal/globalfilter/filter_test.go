@@ -1,7 +1,6 @@
 package globalfilter
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -55,9 +54,6 @@ func TestFilterZeroValueMatchesAll(t *testing.T) {
 	}
 	if filter.IsActive() {
 		t.Fatalf("zero-value filter should be inactive")
-	}
-	if got := filter.Summary(); got != "all" {
-		t.Fatalf("Summary() = %q, want all", got)
 	}
 }
 
@@ -129,62 +125,6 @@ func TestFilterErrorsOnlyAndClone(t *testing.T) {
 	candidate.isError = false
 	if filter.Matches(candidate) {
 		t.Fatalf("errors-only filter should reject non-error candidate")
-	}
-}
-
-func TestFilterSummaryAndDurationParsing(t *testing.T) {
-	filter := Filter{
-		ErrorsOnly: true,
-		Syscall:    &StringFilter{Pattern: "read"},
-		PID:        &NumericFilter{Op: OpEq, Value: 1234},
-		LatencyNs:  &NumericFilter{Op: OpGt, Value: 1_000_000},
-	}
-	got := filter.Summary()
-	for _, want := range []string{"errors", "syscall~read", "pid=1234", "latency>1ms"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("Summary() = %q, missing %q", got, want)
-		}
-	}
-
-	for _, tc := range []struct {
-		in   string
-		want int64
-	}{
-		{in: "1ms", want: 1_000_000},
-		{in: "10us", want: 10_000},
-		{in: "500ns", want: 500},
-		{in: "42", want: 42},
-	} {
-		gotNs, err := ParseDurationNs(tc.in)
-		if err != nil {
-			t.Fatalf("ParseDurationNs(%q) err = %v", tc.in, err)
-		}
-		if gotNs != tc.want {
-			t.Fatalf("ParseDurationNs(%q) = %d, want %d", tc.in, gotNs, tc.want)
-		}
-	}
-	if _, err := ParseDurationNs("garbage"); err == nil {
-		t.Fatalf("ParseDurationNs(garbage) expected error")
-	}
-}
-
-func TestCompareOpSymbol(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		op   CompareOp
-		want string
-	}{
-		{name: "eq", op: OpEq, want: "="},
-		{name: "neq", op: OpNeq, want: "!="},
-		{name: "gt", op: OpGt, want: ">"},
-		{name: "gte", op: OpGte, want: ">="},
-		{name: "lt", op: OpLt, want: "<"},
-		{name: "lte", op: OpLte, want: "<="},
-		{name: "unknown", op: CompareOp(99), want: "?"},
-	} {
-		if got := CompareOpSymbol(tc.op); got != tc.want {
-			t.Fatalf("%s: CompareOpSymbol(%v) = %q, want %q", tc.name, tc.op, got, tc.want)
-		}
 	}
 }
 

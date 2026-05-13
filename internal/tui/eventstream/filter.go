@@ -1,6 +1,9 @@
 package eventstream
 
-import "ior/internal/globalfilter"
+import (
+	"ior/internal/globalfilter"
+	"ior/internal/globalfilter/parser"
+)
 
 type CompareOp = globalfilter.CompareOp
 type NumericFilter = globalfilter.NumericFilter
@@ -16,6 +19,8 @@ const (
 	OpLte = globalfilter.OpLte
 )
 
+// ParseDurationNs delegates to parser.ParseDurationNs, re-exporting the
+// duration parsing helper for eventstream callers.
 func ParseDurationNs(input string) (int64, error) {
-	return globalfilter.ParseDurationNs(input)
+	return parser.ParseDurationNs(input)
 }
