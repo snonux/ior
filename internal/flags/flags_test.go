@@ -255,3 +255,38 @@ func TestParsePositiveMapSizeAccepted(t *testing.T) {
 		t.Fatalf("EventMapSize = %d, want 8192", cfg.EventMapSize)
 	}
 }
+
+func TestParseTUIFastRefreshDefault(t *testing.T) {
+	// Default should be 250ms — the high-frequency refresh cadence used by
+	// the flamegraph and stream tabs when no explicit flag is provided.
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.TUIFastRefreshInterval != 250*time.Millisecond {
+		t.Fatalf("default TUIFastRefreshInterval = %v, want 250ms", cfg.TUIFastRefreshInterval)
+	}
+}
+
+func TestParseTUIFastRefreshOverride(t *testing.T) {
+	// An explicit -tui-fast-refresh value must be respected and stored on cfg.
+	cfg, err := parseForTest(t, "-tui-fast-refresh", "100ms")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.TUIFastRefreshInterval != 100*time.Millisecond {
+		t.Fatalf("TUIFastRefreshInterval = %v, want 100ms", cfg.TUIFastRefreshInterval)
+	}
+}
+
+func TestParseTUIFastRefreshZeroDisables(t *testing.T) {
+	// A zero value is valid and means "disable high-frequency refresh",
+	// falling back to the default Bubble Tea tick rate.
+	cfg, err := parseForTest(t, "-tui-fast-refresh", "0")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.TUIFastRefreshInterval != 0 {
+		t.Fatalf("TUIFastRefreshInterval = %v, want 0 (disabled)", cfg.TUIFastRefreshInterval)
+	}
+}
