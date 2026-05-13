@@ -102,7 +102,13 @@ func runHeadlessParquet(cfg flags.Config) error {
 		return err
 	}
 	defer bpfModule.Close()
-	defer mgr.Close()
+	// mgr.Close() detaches BPF probes and releases kernel resources; log any
+	// error so that probe-detach failures are not silently discarded.
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			logln("BPF probe manager close error:", err)
+		}
+	}()
 	defer releaseBindings()
 
 	ch, err := setupEventChannel(bpfModule)
@@ -135,11 +141,15 @@ func runHeadlessParquet(cfg flags.Config) error {
 
 	sink := newHeadlessParquetSink(recorder, cancel)
 	configureEventLoopOutput(el, mgr, sink.configure)
-	startTraceShutdownWatcher(ctx, true, el, profiling, logln)
+	// startTraceShutdownWatcher returns a done channel that must be drained
+	// before returning to prevent a goroutine leak when ctx is cancelled but
+	// the goroutine has not yet exited.
+	watcherDone := startTraceShutdownWatcher(ctx, true, el, profiling, logln)
 
 	startTime := time.Now()
 	el.run(ctx, ch)
 	totalDuration := time.Since(startTime)
+	<-watcherDone
 	<-profiling.done
 
 	stopErr := recorder.Stop()
