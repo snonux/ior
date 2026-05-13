@@ -199,8 +199,8 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 var (
 	// *flamegraph.LiveTrie must satisfy both the read-only and mutating sides of
 	// the trie contract as well as the combined LiveTrieSource interface.
-	_ Snapshotter   = (*flamegraph.LiveTrie)(nil)
-	_ Configurator  = (*flamegraph.LiveTrie)(nil)
+	_ Snapshotter    = (*flamegraph.LiveTrie)(nil)
+	_ Configurator   = (*flamegraph.LiveTrie)(nil)
 	_ LiveTrieSource = (*flamegraph.LiveTrie)(nil)
 
 	// *probemanager.Manager must satisfy the probe-control surface exposed to the TUI.

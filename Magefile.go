@@ -124,6 +124,63 @@ func TestRace() error {
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-race", "-failfast", "-timeout=90m")
 }
 
+// Fmt runs gofmt -w on all Go source files to enforce canonical formatting.
+func Fmt() error {
+	return fmtGoFiles(false)
+}
+
+// FmtCheck verifies that all Go source files are gofmt-formatted.
+// It exits with a non-zero status if any file needs reformatting,
+// making it suitable for use as a CI gate (e.g. mage fmtCheck).
+func FmtCheck() error {
+	return fmtGoFiles(true)
+}
+
+// fmtGoFiles walks the repo tree and either formats or checks every .go file.
+// When checkOnly is true, any file that needs reformatting is reported as an
+// error without writing to disk. When false, files are rewritten in place.
+func fmtGoFiles(checkOnly bool) error {
+	var unformatted []string
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// Skip vendor and hidden directories (e.g. .git).
+		if d.IsDir() && (d.Name() == "vendor" || strings.HasPrefix(d.Name(), ".")) {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		formatted, err := format.Source(src)
+		if err != nil {
+			// Syntax errors are reported but don't abort the walk.
+			fmt.Printf("gofmt: syntax error in %s: %v\n", path, err)
+			return nil
+		}
+		if string(src) == string(formatted) {
+			return nil
+		}
+		if checkOnly {
+			unformatted = append(unformatted, path)
+			return nil
+		}
+		return os.WriteFile(path, formatted, d.Type().Perm())
+	})
+	if err != nil {
+		return err
+	}
+	if len(unformatted) > 0 {
+		return fmt.Errorf("gofmt: %d file(s) need formatting:\n  %s\nRun `mage fmt` to fix.",
+			len(unformatted), strings.Join(unformatted, "\n  "))
+	}
+	return nil
+}
+
 // TestWithName runs a specific test by name.
 func TestWithName() error {
 	mg.Deps(BpfBuild)

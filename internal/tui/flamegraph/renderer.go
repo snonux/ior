@@ -209,12 +209,12 @@ func semanticFrameColor(name string) (color.Color, bool) {
 // renderViewParams bundles the pre-computed layout parameters used by
 // RenderTerminalView helpers to avoid threading many individual arguments.
 type renderViewParams struct {
-	rowOffset    int
-	maxRow       int
-	barHeight    int
+	rowOffset     int
+	maxRow        int
+	barHeight     int
 	availableRows int
 	visibleFrames int
-	truncated    bool
+	truncated     bool
 }
 
 // computeRenderParams derives the row-layout parameters for a given frame set

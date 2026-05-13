@@ -31,12 +31,12 @@ import (
 // updating every test.
 func stubDeps() runnerDeps {
 	return runnerDeps{
-		getEUID:             func() int { return 0 },
-		runTrace:            func(flags.Config) error { return nil },
-		runParquet:          func(flags.Config) error { return nil },
-		runTraceWithContext: func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error { return nil },
-		runTUI:              func(flags.Config, runtime.TraceStarter) error { return nil },
-		runTUITestFlames:    func(flags.Config, runtime.TraceStarter) error { return nil },
+		getEUID:              func() int { return 0 },
+		runTrace:             func(flags.Config) error { return nil },
+		runParquet:           func(flags.Config) error { return nil },
+		runTraceWithContext:  func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error { return nil },
+		runTUI:               func(flags.Config, runtime.TraceStarter) error { return nil },
+		runTUITestFlames:     func(flags.Config, runtime.TraceStarter) error { return nil },
 		runTUITestLiveFlames: func(flags.Config, runtime.TraceStarter) error { return nil },
 	}
 }

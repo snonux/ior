@@ -84,8 +84,8 @@ type Model struct {
 	// autoResetEvery; autoResetStatus uses this to render the live
 	// countdown ("12s/30s") in the chrome. Updated on every arm
 	// (SetAutoResetInterval, focus regain, tick re-arm).
-	autoResetArmedAt time.Time
-	keys         common.KeyMap
+	autoResetArmedAt         time.Time
+	keys                     common.KeyMap
 	globalFilter             globalfilter.Filter
 	filterStack              []string
 	recordingStatus          string
