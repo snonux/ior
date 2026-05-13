@@ -93,12 +93,18 @@ func (r *fileRanker) Add(pair *event.Pair) {
 	r.compactIfNeeded()
 }
 
+// Snapshot returns a slice of FileSnapshots for all tracked files.
+// It panics on build error, which should never happen for a valid ranker.
 func (r *fileRanker) Snapshot() []FileSnapshot {
 	if r == nil {
 		return nil
 	}
 
-	return buildFileSnapshots(r.snapshotInputs())
+	snap, err := buildFileSnapshots(r.snapshotInputs())
+	if err != nil {
+		panic("buildFileSnapshots: " + err.Error())
+	}
+	return snap
 }
 
 func (r *fileRanker) snapshotInputs() []fileSnapshotInput {
@@ -119,7 +125,10 @@ func (r *fileRanker) snapshotInputs() []fileSnapshotInput {
 	return inputs
 }
 
-func buildFileSnapshots(inputs []fileSnapshotInput) []FileSnapshot {
+// buildFileSnapshots converts raw file ranker inputs into sorted FileSnapshot
+// slices. The error return is reserved for future validation; currently this
+// function always succeeds.
+func buildFileSnapshots(inputs []fileSnapshotInput) ([]FileSnapshot, error) {
 	out := make([]FileSnapshot, 0, len(inputs))
 	for _, in := range inputs {
 		out = append(out, in.toSnapshot())
@@ -130,7 +139,7 @@ func buildFileSnapshots(inputs []fileSnapshotInput) []FileSnapshot {
 		}
 		return cmp.Compare(a.Path, b.Path)
 	})
-	return out
+	return out, nil
 }
 
 func (r *fileRanker) addBytes(stats *fileRankStats, pair *event.Pair) {

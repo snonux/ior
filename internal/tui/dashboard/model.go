@@ -874,11 +874,18 @@ func (m Model) maxProcessesRows() int {
 	return m.snapshotOrZero().ProcessesCount()
 }
 
+// snapshot returns the latest engine snapshot, or nil if the engine is nil or
+// returns an error. Errors are silently dropped here because the dashboard
+// renders the last successful snapshot on transient failures.
 func (m Model) snapshot() *statsengine.Snapshot {
 	if m.engine == nil {
 		return nil
 	}
-	return m.engine.Snapshot()
+	snap, err := m.engine.Snapshot()
+	if err != nil {
+		return nil
+	}
+	return snap
 }
 
 func (m Model) snapshotOrZero() statsengine.Snapshot {
@@ -893,10 +900,12 @@ func (m *Model) resetBaselineCmd() tea.Cmd {
 		m.liveTrie.Reset()
 	}
 
+	// Errors from Snapshot are silently dropped here; the dashboard will
+	// continue to display the last successful snapshot.
 	var snap *statsengine.Snapshot
 	if resettable, ok := m.engine.(resettableSnapshotSource); ok {
 		resettable.Reset()
-		snap = resettable.Snapshot()
+		snap, _ = resettable.Snapshot()
 	} else {
 		snap = m.snapshot()
 	}

@@ -99,12 +99,18 @@ func (a *syscallAccumulator) Add(pair *event.Pair) {
 	}
 }
 
+// Snapshot returns a slice of SyscallSnapshots for all tracked syscalls.
+// It panics on build error, which should never happen for a valid accumulator.
 func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 	if a == nil {
 		return nil
 	}
 
-	return buildSyscallSnapshots(a.snapshotInputs(), elapsed)
+	snap, err := buildSyscallSnapshots(a.snapshotInputs(), elapsed)
+	if err != nil {
+		panic("buildSyscallSnapshots: " + err.Error())
+	}
+	return snap
 }
 
 func (a *syscallAccumulator) snapshotInputs() []syscallSnapshotInput {
@@ -132,7 +138,10 @@ func (a *syscallAccumulator) snapshotInputs() []syscallSnapshotInput {
 	return inputs
 }
 
-func buildSyscallSnapshots(inputs []syscallSnapshotInput, elapsed time.Duration) []SyscallSnapshot {
+// buildSyscallSnapshots converts raw syscall accumulator inputs into sorted
+// SyscallSnapshot slices. The error return is reserved for future validation;
+// currently this function always succeeds.
+func buildSyscallSnapshots(inputs []syscallSnapshotInput, elapsed time.Duration) ([]SyscallSnapshot, error) {
 	rateDiv := elapsed.Seconds()
 	result := make([]SyscallSnapshot, 0, len(inputs))
 	for _, in := range inputs {
@@ -144,7 +153,7 @@ func buildSyscallSnapshots(inputs []syscallSnapshotInput, elapsed time.Duration)
 		}
 		return cmp.Compare(a.Name, b.Name)
 	})
-	return result
+	return result, nil
 }
 
 func (s *syscallStats) updateMinMax(duration uint64) {

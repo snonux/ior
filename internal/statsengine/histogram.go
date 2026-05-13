@@ -47,12 +47,18 @@ func (h *histogram) Increment(durationNs uint64) {
 	h.total++
 }
 
+// Snapshot returns a HistogramSnapshot of the current histogram state.
+// It panics on build error, which should never happen for a valid histogram.
 func (h *histogram) Snapshot() HistogramSnapshot {
 	if h == nil {
 		return NewHistogramSnapshot(0, nil)
 	}
 
-	return buildHistogramSnapshot(h.snapshotInputs())
+	snap, err := buildHistogramSnapshot(h.snapshotInputs())
+	if err != nil {
+		panic("buildHistogramSnapshot: " + err.Error())
+	}
+	return snap
 }
 
 func (h *histogram) snapshotInputs() histogramSnapshotInput {
@@ -65,7 +71,10 @@ func (h *histogram) snapshotInputs() histogramSnapshotInput {
 	}
 }
 
-func buildHistogramSnapshot(in histogramSnapshotInput) HistogramSnapshot {
+// buildHistogramSnapshot converts a histogramSnapshotInput into a
+// HistogramSnapshot. The error return is reserved for future validation;
+// currently this function always succeeds.
+func buildHistogramSnapshot(in histogramSnapshotInput) (HistogramSnapshot, error) {
 	buckets := make([]HistogramBucketSnapshot, 0, histogramBucketCount)
 	for i := 0; i < histogramBucketCount; i++ {
 		lower, upper := histogramBucketRange(i)
@@ -77,7 +86,7 @@ func buildHistogramSnapshot(in histogramSnapshotInput) HistogramSnapshot {
 		})
 	}
 
-	return NewHistogramSnapshot(in.total, buckets)
+	return NewHistogramSnapshot(in.total, buckets), nil
 }
 
 func histogramBucketIndex(durationNs uint64) int {

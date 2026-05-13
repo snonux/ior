@@ -33,7 +33,10 @@ func TestEngineIngestAndSnapshotIntegration(t *testing.T) {
 	engine.Ingest(newEnginePair(types.SYS_ENTER_COPY_FILE_RANGE, 80, types.TRANSFER_CLASSIFIED, "proc-b", 2, "/tmp/b", 20, 40, 8))
 	clock.Advance(1 * time.Second)
 
-	snap := engine.Snapshot()
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
 	if snap == nil {
 		t.Fatalf("expected snapshot")
 	}
@@ -79,7 +82,10 @@ func TestEngineSnapshotWithNoEvents(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(2000, 0)}
 	engine := newEngineWithClock(10, clock.Now)
 
-	snap := engine.Snapshot()
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
 	if snap == nil {
 		t.Fatalf("expected snapshot")
 	}
