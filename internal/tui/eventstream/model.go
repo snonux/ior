@@ -174,72 +174,136 @@ func (m Model) Paused() bool {
 	return m.paused
 }
 
+// HandleKey dispatches keyStr to the active modal or live/paused stream handlers.
+// It returns true if the key was consumed, false if the caller should handle it.
 func (m *Model) HandleKey(keyStr string) bool {
 	if m.searchModal.Visible() {
-		m.statusMessage = ""
-		var (
-			term   string
-			submit bool
-		)
-		m.searchModal, term, submit = m.searchModal.Update(keyMsgFromString(keyStr))
-		if !submit {
-			return true
-		}
-		return m.submitSearch(term, m.searchModal.Direction())
+		return m.handleSearchModalKey(keyStr)
 	}
 	if m.exportModal.Visible() {
-		m.statusMessage = ""
-		var (
-			filename string
-			submit   bool
-		)
-		m.exportModal, filename, submit = m.exportModal.Update(keyMsgFromString(keyStr))
-		if !submit {
-			return true
+		return m.handleExportModalKey(keyStr)
+	}
+	if m.fdTraceView.visible {
+		return m.handleFDTraceKey(keyStr)
+	}
+	return m.handleStreamKey(keyStr)
+}
+
+// handleSearchModalKey routes a key press while the search modal is open.
+func (m *Model) handleSearchModalKey(keyStr string) bool {
+	m.statusMessage = ""
+	var (
+		term   string
+		submit bool
+	)
+	m.searchModal, term, submit = m.searchModal.Update(keyMsgFromString(keyStr))
+	if !submit {
+		return true
+	}
+	return m.submitSearch(term, m.searchModal.Direction())
+}
+
+// handleExportModalKey routes a key press while the export modal is open.
+func (m *Model) handleExportModalKey(keyStr string) bool {
+	m.statusMessage = ""
+	var (
+		filename string
+		submit   bool
+	)
+	m.exportModal, filename, submit = m.exportModal.Update(keyMsgFromString(keyStr))
+	if !submit {
+		return true
+	}
+	path, err := m.exportFilteredToCSV(filename)
+	if err != nil {
+		m.statusMessage = fmt.Sprintf("Export failed: %v", err)
+		return true
+	}
+	m.lastExportPath = path
+	m.statusMessage = "Exported: " + path
+	return true
+}
+
+// handleFDTraceKey routes a key press while the FD-trace overlay is visible.
+func (m *Model) handleFDTraceKey(keyStr string) bool {
+	switch keyStr {
+	case "enter", " ", "space":
+		return true
+	case "j", "down":
+		m.scrollFDTraceByLines(1)
+		return true
+	case "k", "up":
+		m.scrollFDTraceByLines(-1)
+		return true
+	case "left", "h":
+		return true
+	case "right", "l":
+		return true
+	case "pgdown", "pgdn", "pagedown":
+		m.scrollFDTraceByLines(m.pageStep())
+		return true
+	case "pgup", "pageup":
+		m.scrollFDTraceByLines(-m.pageStep())
+		return true
+	case "g":
+		m.fdTraceView.offset = 0
+		return true
+	case "G":
+		m.fdTraceView.offset = m.maxFDTraceOffset()
+		return true
+	case "esc", "q":
+		m.fdTraceView.visible = false
+		m.fdTraceView.events = nil
+		m.fdTraceView.offset = 0
+		return true
+	default:
+		return false
+	}
+}
+
+// handleStreamExportKey handles x/X/E export shortcuts while the stream is paused.
+func (m *Model) handleStreamExportKey(keyStr string) (bool, bool) {
+	switch keyStr {
+	case "x":
+		if !m.paused {
+			return false, true
 		}
-		path, err := m.exportFilteredToCSV(filename)
+		m.statusMessage = ""
+		path, err := m.exportFilteredToCSV(defaultStreamExportFilename())
 		if err != nil {
 			m.statusMessage = fmt.Sprintf("Export failed: %v", err)
-			return true
+			return true, true
 		}
 		m.lastExportPath = path
 		m.statusMessage = "Exported: " + path
-		return true
-	}
-	if m.fdTraceView.visible {
-		switch keyStr {
-		case "enter", " ", "space":
-			return true
-		case "j", "down":
-			m.scrollFDTraceByLines(1)
-			return true
-		case "k", "up":
-			m.scrollFDTraceByLines(-1)
-			return true
-		case "left", "h":
-			return true
-		case "right", "l":
-			return true
-		case "pgdown", "pgdn", "pagedown":
-			m.scrollFDTraceByLines(m.pageStep())
-			return true
-		case "pgup", "pageup":
-			m.scrollFDTraceByLines(-m.pageStep())
-			return true
-		case "g":
-			m.fdTraceView.offset = 0
-			return true
-		case "G":
-			m.fdTraceView.offset = m.maxFDTraceOffset()
-			return true
-		case "esc", "q":
-			m.fdTraceView.visible = false
-			m.fdTraceView.events = nil
-			m.fdTraceView.offset = 0
-			return true
-		default:
-			return false
+		return true, true
+	case "X":
+		if !m.paused {
+			return false, true
 		}
+		m.statusMessage = ""
+		m.exportModal = m.exportModal.Open(defaultStreamExportFilename())
+		return true, true
+	case "E":
+		if !m.paused {
+			return false, true
+		}
+		m.statusMessage = ""
+		if m.lastExportPath == "" {
+			m.statusMessage = "No stream export yet"
+			return true, true
+		}
+		m.pendingOpenPath = m.lastExportPath
+		m.statusMessage = "Opening in editor: " + m.lastExportPath
+		return true, true
+	}
+	return false, false
+}
+
+// handleStreamKey handles keys for the main live/paused stream table.
+func (m *Model) handleStreamKey(keyStr string) bool {
+	if consumed, handled := m.handleStreamExportKey(keyStr); handled {
+		return consumed
 	}
 
 	switch keyStr {
@@ -276,110 +340,78 @@ func (m *Model) HandleKey(keyStr string) bool {
 			return false
 		}
 		return m.jumpSearch(-m.searchDirection)
-	case "x":
-		if !m.paused {
-			return false
-		}
-		m.statusMessage = ""
-		path, err := m.exportFilteredToCSV(defaultStreamExportFilename())
-		if err != nil {
-			m.statusMessage = fmt.Sprintf("Export failed: %v", err)
-			return true
-		}
-		m.lastExportPath = path
-		m.statusMessage = "Exported: " + path
-		return true
-	case "X":
-		if !m.paused {
-			return false
-		}
-		m.statusMessage = ""
-		m.exportModal = m.exportModal.Open(defaultStreamExportFilename())
-		return true
-	case "E":
-		if !m.paused {
-			return false
-		}
-		m.statusMessage = ""
-		if m.lastExportPath == "" {
-			m.statusMessage = "No stream export yet"
-			return true
-		}
-		m.pendingOpenPath = m.lastExportPath
-		m.statusMessage = "Opening in editor: " + m.lastExportPath
-		return true
 	case " ", "space":
-		m.paused = !m.paused
-		if !m.paused {
-			// Resuming should return to live-tail behavior immediately.
-			m.autoScroll = true
-			m.selectedIdx = -1
-			m.Refresh()
-		} else {
-			m.ensureSelection()
-			m.ensureSelectedCol()
-			m.centerSelection()
-		}
-		return true
-	case "G":
-		if m.paused {
-			return m.handlePausedTableNavigation("G")
-		} else {
-			m.autoScroll = true
-			m.viewport.GotoBottom()
-			m.scrollOffset = clamp(m.viewport.YOffset(), 0, m.maxScrollOffset())
-		}
-		return true
-	case "g":
-		if m.paused {
-			return m.handlePausedTableNavigation("g")
-		} else {
-			m.autoScroll = false
-			m.viewport.GotoTop()
-			m.scrollOffset = 0
-		}
-		return true
-	case "j", "down":
-		if m.paused {
-			return m.handlePausedTableNavigation(keyStr)
-		} else {
-			m.handleViewportUpdate(keyMsgFromString("down"))
-		}
-		return true
-	case "k", "up":
-		if m.paused {
-			return m.handlePausedTableNavigation(keyStr)
-		} else {
-			m.handleViewportUpdate(keyMsgFromString("up"))
-		}
-		return true
-	case "left", "h":
-		if m.paused {
-			return m.handlePausedTableNavigation(keyStr)
-		}
-		return m.handleViewportUpdate(keyMsgFromString("left"))
-	case "right", "l":
-		if m.paused {
-			return m.handlePausedTableNavigation(keyStr)
-		}
-		return m.handleViewportUpdate(keyMsgFromString("right"))
-	case "pgdown", "pgdn", "pagedown":
-		if m.paused {
-			return m.handlePausedTableNavigation(keyStr)
-		} else {
-			m.handleViewportUpdate(keyMsgFromString("pgdown"))
-		}
-		return true
-	case "pgup", "pageup":
-		if m.paused {
-			return m.handlePausedTableNavigation(keyStr)
-		} else {
-			m.handleViewportUpdate(keyMsgFromString("pgup"))
-		}
-		return true
+		return m.handleSpaceKey()
+	case "G", "g", "j", "down", "k", "up", "left", "h", "right", "l",
+		"pgdown", "pgdn", "pagedown", "pgup", "pageup":
+		return m.handleNavigationKey(keyStr)
 	default:
 		return false
 	}
+}
+
+// handleSpaceKey toggles the paused/live state of the stream.
+func (m *Model) handleSpaceKey() bool {
+	m.paused = !m.paused
+	if !m.paused {
+		// Resuming returns to live-tail behavior immediately.
+		m.autoScroll = true
+		m.selectedIdx = -1
+		m.Refresh()
+	} else {
+		m.ensureSelection()
+		m.ensureSelectedCol()
+		m.centerSelection()
+	}
+	return true
+}
+
+// handleNavigationKey dispatches scroll/cursor navigation in live and paused
+// modes. It delegates g/G (goto edges) to handleGotoKey and directional keys
+// (arrows, hjkl, page up/down) to handleDirectionalKey.
+func (m *Model) handleNavigationKey(keyStr string) bool {
+	switch keyStr {
+	case "G", "g":
+		return m.handleGotoKey(keyStr)
+	case "j", "down", "k", "up", "left", "h", "right", "l",
+		"pgdown", "pgdn", "pagedown", "pgup", "pageup":
+		return m.handleDirectionalKey(keyStr)
+	default:
+		return false
+	}
+}
+
+// handleGotoKey handles g (top) and G (bottom) in both live and paused modes.
+func (m *Model) handleGotoKey(keyStr string) bool {
+	if m.paused {
+		return m.handlePausedTableNavigation(keyStr)
+	}
+	if keyStr == "G" {
+		m.autoScroll = true
+		m.viewport.GotoBottom()
+		m.scrollOffset = clamp(m.viewport.YOffset(), 0, m.maxScrollOffset())
+	} else {
+		m.autoScroll = false
+		m.viewport.GotoTop()
+		m.scrollOffset = 0
+	}
+	return true
+}
+
+// handleDirectionalKey handles arrow/hjkl/page keys in both live and paused modes.
+func (m *Model) handleDirectionalKey(keyStr string) bool {
+	if m.paused {
+		return m.handlePausedTableNavigation(keyStr)
+	}
+	// Map multi-word key names to canonical viewport key strings.
+	vpKey := keyStr
+	switch keyStr {
+	case "pgdown", "pgdn", "pagedown":
+		vpKey = "pgdown"
+	case "pgup", "pageup":
+		vpKey = "pgup"
+	}
+	return m.handleViewportUpdate(keyMsgFromString(vpKey))
 }
 
 // HandleTeaKey handles stream keys based on Bubble Tea key message types first,
@@ -447,6 +479,8 @@ func (m *Model) handleViewportUpdate(msg tea.KeyPressMsg) bool {
 	return true
 }
 
+// View renders the stream table (or FD-trace overlay) for the given dimensions.
+// It also renders any open modal on top of the base view.
 func (m *Model) View(width, height int) string {
 	if width <= 0 {
 		width = 100
@@ -463,6 +497,24 @@ func (m *Model) View(width, height int) string {
 		return m.viewFDTrace(width)
 	}
 
+	base, start := m.renderStreamBase(width)
+
+	// Modals overlay the full view regardless of footer visibility.
+	if m.exportModal.Visible() {
+		return m.exportModal.View(width, height)
+	}
+	if m.searchModal.Visible() {
+		return m.searchModal.View(width, height)
+	}
+	if !m.showFooter {
+		return base
+	}
+	return m.appendStreamFooter(base, start)
+}
+
+// renderStreamBase computes the visible row slice and renders the stream table.
+// It returns the rendered string and the start index used for the status line.
+func (m *Model) renderStreamBase(width int) (string, int) {
 	rows := m.visibleRows()
 	start := clamp(m.viewport.YOffset(), 0, m.maxScrollOffset())
 	m.scrollOffset = start
@@ -475,30 +527,27 @@ func (m *Model) View(width, height int) string {
 	if m.paused && m.selectedIdx >= start && m.selectedIdx < end {
 		selectedVisibleIdx = m.selectedIdx - start
 	}
-
 	bufferLen := 0
 	if m.source != nil {
 		bufferLen = m.source.Len()
 	}
-
 	selectedCol := -1
 	if m.paused && selectedVisibleIdx >= 0 {
 		selectedCol = m.selectedCol
 	}
 	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, m.filterStack, visible, selectedVisibleIdx, selectedCol)
-	if !m.showFooter {
-		if m.exportModal.Visible() {
-			return m.exportModal.View(width, height)
-		}
-		if m.searchModal.Visible() {
-			return m.searchModal.View(width, height)
-		}
-		return base
-	}
+	return base, start
+}
 
+// appendStreamFooter appends the status line (and optional status message) to
+// the rendered table string using a Builder to minimise allocations.
+func (m *Model) appendStreamFooter(base string, start int) string {
 	status := fmt.Sprintf("Row %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | Esc/F undo", rowNumber(start, len(m.filtered)), len(m.filtered), rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered), m.selectedCol+1, streamColumnCount)
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | Esc/F undo",
+			rowNumber(start, len(m.filtered)), len(m.filtered),
+			rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered),
+			m.selectedCol+1, streamColumnCount)
 	}
 	// Use a Builder to avoid a redundant allocation for the optional status-message
 	// line appended conditionally on every render call.
@@ -509,13 +558,6 @@ func (m *Model) View(width, height int) string {
 	if m.statusMessage != "" {
 		b.WriteString("\n")
 		b.WriteString(m.statusMessage)
-	}
-
-	if m.exportModal.Visible() {
-		return m.exportModal.View(width, height)
-	}
-	if m.searchModal.Visible() {
-		return m.searchModal.View(width, height)
 	}
 	return b.String()
 }

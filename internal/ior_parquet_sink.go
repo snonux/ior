@@ -11,6 +11,7 @@ import (
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
+	"ior/internal/probemanager"
 	"ior/internal/streamrow"
 )
 
@@ -93,52 +94,16 @@ func headlessParquetTraceConfig(cfg flags.Config) flags.Config {
 // without starting the TUI. Root privilege is checked by the mode handler
 // (via runnerDeps.getEUID) before this function is invoked.
 func runHeadlessParquet(cfg flags.Config) error {
-
 	cfg = headlessParquetTraceConfig(cfg)
 	logln := newLogger(true)
 
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(context.Background(), cfg)
+	ch, ctx, cancel, profiling, el, mgr, cleanup, err := setupHeadlessParquetInfra(cfg, logln)
 	if err != nil {
 		return err
 	}
-	defer bpfModule.Close()
-	// mgr.Close() detaches BPF probes and releases kernel resources; log any
-	// error so that probe-detach failures are not silently discarded.
-	defer func() {
-		if err := mgr.Close(); err != nil {
-			logln("BPF probe manager close error:", err)
-		}
-	}()
-	defer releaseBindings()
-
-	ch, rb, err := setupEventChannel(bpfModule)
-	if err != nil {
-		return err
-	}
-	// Stop the ring-buffer polling goroutine before the module is closed.
-	// rb.Stop() signals the background goroutine, drains the channel, and
-	// waits for the goroutine to exit; bpfModule.Close() (deferred above)
-	// then calls rb.Close() which frees the C ring_buffer struct. Both are
-	// idempotent so double-calling is safe.
-	defer rb.Stop()
-	ctx, cancel, stopSignals := setupTraceContext(context.Background(), cfg, logln)
-	defer cancel()
-	defer stopSignals()
-
-	profiling, err := setupProfiling(ctx, cfg, nil)
-	if err != nil {
-		return err
-	}
-	// Guarantee the profiling file descriptors (cpu/mem/exec-trace profiles) are
-	// closed even if a later setup step fails before the shutdown watcher is
-	// registered. profiling.stop is idempotent via sync.Once, so double-calling
-	// it from the watcher goroutine and from this defer is safe.
+	defer cleanup()
 	defer profiling.stop(logln)
-
-	el, err := newEventLoop(newEventLoopConfig(cfg))
-	if err != nil {
-		return err
-	}
+	defer cancel()
 
 	recorder := parquet.NewRecorder(parquet.RecorderConfig{})
 	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: parquet.NewFileMetadata("headless")}); err != nil {
@@ -146,6 +111,8 @@ func runHeadlessParquet(cfg flags.Config) error {
 	}
 
 	sink := newHeadlessParquetSink(recorder, cancel)
+	// sink.configure wires the event loop's print callback to record each pair
+	// to Parquet; the mgr filter wraps it to skip inactive probes.
 	configureEventLoopOutput(el, mgr, sink.configure)
 	// startTraceShutdownWatcher returns a done channel that must be drained
 	// before returning to prevent a goroutine leak when ctx is cancelled but
@@ -168,7 +135,67 @@ func runHeadlessParquet(cfg flags.Config) error {
 	if stopErr != nil {
 		return stopErr
 	}
-
 	logln("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
 	return nil
+}
+
+// setupHeadlessParquetInfra creates the BPF module, event channel, trace
+// context, profiling control, and event loop for a headless Parquet run.
+// mgr is returned so the caller can pass it to configureEventLoopOutput with
+// the sink callback after the Parquet recorder has been started.
+// cleanup must be deferred by the caller; it stops ring-buffer polling,
+// detaches probes, releases BPF bindings, and stops signal handling.
+func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (
+	ch <-chan []byte,
+	ctx context.Context,
+	cancel context.CancelFunc,
+	profiling *profilingControl,
+	el *eventLoop,
+	mgr *probemanager.Manager,
+	cleanup func(),
+	err error,
+) {
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(context.Background(), cfg)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	eventCh, rb, err := setupEventChannel(bpfModule)
+	if err != nil {
+		bpfModule.Close()
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	ctx, cancel, stopSignals := setupTraceContext(context.Background(), cfg, logln)
+
+	profiling, err = setupProfiling(ctx, cfg, nil)
+	if err != nil {
+		cancel()
+		stopSignals()
+		rb.Stop()
+		bpfModule.Close()
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	el, err = newEventLoop(newEventLoopConfig(cfg))
+	if err != nil {
+		cancel()
+		stopSignals()
+		rb.Stop()
+		bpfModule.Close()
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	cleanup = func() {
+		// Stop the ring-buffer polling goroutine before the module is closed.
+		// rb.Stop() is idempotent; bpfModule.Close() calls rb.Close() for the C struct.
+		rb.Stop()
+		if err := mgr.Close(); err != nil {
+			logln("BPF probe manager close error:", err)
+		}
+		releaseBindings()
+		bpfModule.Close()
+		stopSignals()
+	}
+	return eventCh, ctx, cancel, profiling, el, mgr, cleanup, nil
 }

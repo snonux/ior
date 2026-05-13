@@ -99,81 +99,92 @@ func (m Model) Close() Model {
 	return m
 }
 
+// Update processes a Bubble Tea message and returns the updated model.
+// Key handling is split between an active text-edit state and navigation state.
 func (m Model) Update(msg tea.Msg) Model {
 	if !m.visible {
 		return m
 	}
+	keyMsg, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m
+	}
+	if m.editing {
+		return m.updateEditing(keyMsg)
+	}
+	return m.updateNavigating(keyMsg)
+}
 
-	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
-		if m.editing {
-			switch keyMsg.String() {
-			case "esc":
-				m.commitEdit()
-				m.filter = m.buildFilterFromFields()
-				return m.Close()
-			case "enter":
-				if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
-					if strings.TrimSpace(m.fields[m.activeField].value) == "true" {
-						m.fields[m.activeField].value = "false"
-					} else {
-						m.fields[m.activeField].value = "true"
-					}
-					return m
-				}
-				m.commitEdit()
-				return m
-			}
-			var cmd tea.Cmd
-			m.textInput, cmd = m.textInput.Update(msg)
-			_ = cmd
+// updateEditing handles key presses while the user is typing into the text
+// input for the active field. Esc commits and closes; Enter confirms the value.
+func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
+	switch keyMsg.String() {
+	case "esc":
+		m.commitEdit()
+		m.filter = m.buildFilterFromFields()
+		return m.Close()
+	case "enter":
+		if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
+			m.toggleBoolField(m.activeField)
 			return m
 		}
+		m.commitEdit()
+		return m
+	}
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(keyMsg)
+	_ = cmd
+	return m
+}
 
-		switch keyMsg.String() {
-		case "esc":
-			m.filter = m.buildFilterFromFields()
-			return m.Close()
-		case "c":
-			m.clearAll()
-			return m
-		case "j", "down":
-			if !m.editing && m.activeField < len(m.fields)-1 {
-				m.activeField++
-			}
-			return m
-		case "k", "up":
-			if !m.editing && m.activeField > 0 {
-				m.activeField--
-			}
-			return m
-		case "tab":
-			if !m.editing && m.isNumericField(m.activeField) {
-				m.fields[m.activeField].opIndex = (m.fields[m.activeField].opIndex + 1) % len(compareOps)
-			}
-			return m
-		case " ", "space":
-			if !m.editing && m.fields[m.activeField].fieldKey == fieldErrorsOnly {
-				if strings.TrimSpace(m.fields[m.activeField].value) == "true" {
-					m.fields[m.activeField].value = "false"
-				} else {
-					m.fields[m.activeField].value = "true"
-				}
-			}
-			return m
-		case "enter":
-			if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
-				if strings.TrimSpace(m.fields[m.activeField].value) == "true" {
-					m.fields[m.activeField].value = "false"
-				} else {
-					m.fields[m.activeField].value = "true"
-				}
-				return m
-			}
-			m.startEdit()
+// updateNavigating handles key presses while the user is navigating the field
+// list (not actively editing a text input).
+func (m Model) updateNavigating(keyMsg tea.KeyPressMsg) Model {
+	switch keyMsg.String() {
+	case "esc":
+		m.filter = m.buildFilterFromFields()
+		return m.Close()
+	case "c":
+		m.clearAll()
+		return m
+	case "j", "down":
+		if m.activeField < len(m.fields)-1 {
+			m.activeField++
+		}
+		return m
+	case "k", "up":
+		if m.activeField > 0 {
+			m.activeField--
+		}
+		return m
+	case "tab":
+		if m.isNumericField(m.activeField) {
+			m.fields[m.activeField].opIndex = (m.fields[m.activeField].opIndex + 1) % len(compareOps)
+		}
+		return m
+	case " ", "space":
+		if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
+			m.toggleBoolField(m.activeField)
+		}
+		return m
+	case "enter":
+		if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
+			m.toggleBoolField(m.activeField)
 			return m
 		}
+		m.startEdit()
+		return m
 	}
 	return m
+}
+
+// toggleBoolField flips the string "true"/"false" value for a boolean field.
+func (m *Model) toggleBoolField(index int) {
+	if strings.TrimSpace(m.fields[index].value) == "true" {
+		m.fields[index].value = "false"
+	} else {
+		m.fields[index].value = "true"
+	}
 }
 
 func (m Model) View(width, height int) string {
@@ -259,56 +270,64 @@ func (m Model) renderField(field filterField, active bool) string {
 	return fmt.Sprintf("%-8s %s", field.label+":", value)
 }
 
+// buildFilterFromFields converts the current field values into a globalfilter.Filter.
+// String fields use substring matching; numeric fields use the selected compare op.
 func (m Model) buildFilterFromFields() globalfilter.Filter {
 	var out globalfilter.Filter
 	for _, field := range m.fields {
 		value := strings.TrimSpace(field.value)
-		switch field.fieldKey {
-		case fieldSyscall:
-			if value != "" {
-				out.Syscall = &globalfilter.StringFilter{Pattern: value}
-			}
-		case fieldComm:
-			if value != "" {
-				out.Comm = &globalfilter.StringFilter{Pattern: value}
-			}
-		case fieldFile:
-			if value != "" {
-				out.File = &globalfilter.StringFilter{Pattern: value}
-			}
-		case fieldPID:
-			if filter, ok := parseNumericFilter(value, field.opIndex, false); ok {
-				out.PID = filter
-			}
-		case fieldTID:
-			if filter, ok := parseNumericFilter(value, field.opIndex, false); ok {
-				out.TID = filter
-			}
-		case fieldFD:
-			if filter, ok := parseNumericFilter(value, field.opIndex, false); ok {
-				out.FD = filter
-			}
-		case fieldLatency:
-			if filter, ok := parseNumericFilter(value, field.opIndex, true); ok {
-				out.LatencyNs = filter
-			}
-		case fieldGap:
-			if filter, ok := parseNumericFilter(value, field.opIndex, true); ok {
-				out.GapNs = filter
-			}
-		case fieldBytes:
-			if filter, ok := parseNumericFilter(value, field.opIndex, false); ok {
-				out.Bytes = filter
-			}
-		case fieldReturn:
-			if filter, ok := parseNumericFilter(value, field.opIndex, false); ok {
-				out.RetVal = filter
-			}
-		case fieldErrorsOnly:
-			out.ErrorsOnly = strings.EqualFold(value, "true")
-		}
+		applyFieldToFilter(field, value, &out)
 	}
 	return out
+}
+
+// applyFieldToFilter writes a single field value into the appropriate slot of
+// out. It is split out of buildFilterFromFields to keep each function concise.
+func applyFieldToFilter(field filterField, value string, out *globalfilter.Filter) {
+	switch field.fieldKey {
+	case fieldSyscall:
+		if value != "" {
+			out.Syscall = &globalfilter.StringFilter{Pattern: value}
+		}
+	case fieldComm:
+		if value != "" {
+			out.Comm = &globalfilter.StringFilter{Pattern: value}
+		}
+	case fieldFile:
+		if value != "" {
+			out.File = &globalfilter.StringFilter{Pattern: value}
+		}
+	case fieldPID:
+		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
+			out.PID = f
+		}
+	case fieldTID:
+		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
+			out.TID = f
+		}
+	case fieldFD:
+		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
+			out.FD = f
+		}
+	case fieldLatency:
+		if f, ok := parseNumericFilter(value, field.opIndex, true); ok {
+			out.LatencyNs = f
+		}
+	case fieldGap:
+		if f, ok := parseNumericFilter(value, field.opIndex, true); ok {
+			out.GapNs = f
+		}
+	case fieldBytes:
+		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
+			out.Bytes = f
+		}
+	case fieldReturn:
+		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
+			out.RetVal = f
+		}
+	case fieldErrorsOnly:
+		out.ErrorsOnly = strings.EqualFold(value, "true")
+	}
 }
 
 func parseNumericFilter(value string, opIndex int, duration bool) (*globalfilter.NumericFilter, bool) {

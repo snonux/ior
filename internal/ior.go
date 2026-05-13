@@ -495,61 +495,92 @@ func finaliseTrace(watcherDone <-chan struct{}, recorder *flamegraph.Recorder, p
 // is checked by the mode handler (via runnerDeps.getEUID) before calling this
 // function; the handler is the authoritative place for the EUID gate.
 func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
-
 	verbose := started == nil
 	logln := newLogger(verbose)
 	configure, recorder := maybePrependFlamegraphConfigure(cfg, configure)
 
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg)
+	ch, ctx, cancel, profiling, el, mgr, teardown, err := setupTraceInfra(parentCtx, cfg, started, logln)
 	if err != nil {
 		return err
 	}
-	defer bpfModule.Close()
-	// mgr.Close() detaches BPF probes and releases kernel resources; log any
-	// error so that probe-detach failures are not silently discarded.
-	defer func() {
-		if err := mgr.Close(); err != nil {
-			logln("BPF probe manager close error:", err)
-		}
-	}()
-	defer releaseBindings()
-
-	ch, rb, err := setupEventChannel(bpfModule)
-	if err != nil {
-		return err
-	}
-	// Stop the ring-buffer polling goroutine before the module is closed.
-	// rb.Stop() signals the background goroutine, drains the channel, and
-	// waits for the goroutine to exit; bpfModule.Close() (deferred above)
-	// then calls rb.Close() which frees the C ring_buffer struct. Both are
-	// idempotent so double-calling is safe.
-	defer rb.Stop()
-	ctx, cancel, stopSignals := setupTraceContext(parentCtx, cfg, logln)
-	defer cancel()
-	defer stopSignals()
-
-	profiling, err := setupProfiling(ctx, cfg, started)
-	if err != nil {
-		return err
-	}
-	// Guarantee the profiling file descriptors (cpu/mem/exec-trace profiles) are
-	// closed even if a later setup step fails before the shutdown watcher is
-	// registered. profiling.stop is idempotent via sync.Once, so double-calling
-	// it from the watcher goroutine and from this defer is safe.
+	defer teardown()
 	defer profiling.stop(logln)
+	defer cancel()
 
-	signalTraceStarted(started)
-
-	el, err := newEventLoop(newEventLoopConfig(cfg))
-	if err != nil {
-		return err
-	}
 	configureEventLoopOutput(el, mgr, configure)
 	watcherDone := startTraceShutdownWatcher(ctx, verbose, el, profiling, logln)
 
 	startTime := time.Now()
 	el.run(ctx, ch)
 	return finaliseTrace(watcherDone, recorder, profiling, time.Since(startTime), logln)
+}
+
+// setupTraceInfra creates all the BPF/runtime infrastructure for a trace run:
+// BPF module + probe manager, event channel + ring buffer, trace context,
+// profiling control, and event loop. teardown must be deferred by the caller.
+// started is signalled once setup completes (nil in non-TUI modes).
+func setupTraceInfra(
+	parentCtx context.Context,
+	cfg flags.Config,
+	started chan<- struct{},
+	logln func(...any),
+) (
+	ch <-chan []byte,
+	ctx context.Context,
+	cancel context.CancelFunc,
+	profiling *profilingControl,
+	el *eventLoop,
+	mgr *probemanager.Manager,
+	teardown func(),
+	err error,
+) {
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	eventCh, rb, err := setupEventChannel(bpfModule)
+	if err != nil {
+		bpfModule.Close()
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	ctx, cancel, stopSignals := setupTraceContext(parentCtx, cfg, logln)
+
+	profiling, err = setupProfiling(ctx, cfg, started)
+	if err != nil {
+		cancel()
+		stopSignals()
+		rb.Stop()
+		bpfModule.Close()
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	signalTraceStarted(started)
+
+	el, err = newEventLoop(newEventLoopConfig(cfg))
+	if err != nil {
+		cancel()
+		stopSignals()
+		rb.Stop()
+		bpfModule.Close()
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
+	teardown = func() {
+		// Stop the ring-buffer polling goroutine before the module is closed.
+		// rb.Stop() is idempotent; bpfModule.Close() calls rb.Close() for the C struct.
+		rb.Stop()
+		// mgr.Close() detaches BPF probes and releases kernel resources; log any
+		// error so that probe-detach failures are not silently discarded.
+		if err := mgr.Close(); err != nil {
+			logln("BPF probe manager close error:", err)
+		}
+		releaseBindings()
+		bpfModule.Close()
+		stopSignals()
+	}
+	return eventCh, ctx, cancel, profiling, el, mgr, teardown, nil
 }
 
 func chainEventLoopConfigure(fns ...func(*eventLoop)) func(*eventLoop) {

@@ -76,38 +76,7 @@ func (m Model) Close() Model {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if !m.visible {
-			return m, nil
-		}
-		if m.exporting {
-			if msg.String() == "esc" {
-				return m.Close(), nil
-			}
-			return m, nil
-		}
-
-		switch msg.String() {
-		case "esc":
-			return m.Close(), nil
-		case "up", "k":
-			if m.selected > 0 {
-				m.selected--
-			}
-			return m, nil
-		case "down", "j":
-			if m.selected < len(optionValues)-1 {
-				m.selected++
-			}
-			return m, nil
-		case "enter":
-			option := optionValues[m.selected]
-			if option == OptionCancel {
-				return m.Close(), nil
-			}
-			m.exporting = true
-			m.status = fmt.Sprintf("Exporting %s...", optionLabels[m.selected])
-			return m, func() tea.Msg { return RequestMsg{Option: option} }
-		}
+		return m.handleKeyMsg(msg)
 	case CompletedMsg:
 		m.exporting = false
 		if msg.Path == "" {
@@ -123,7 +92,43 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.status = "Export failed: " + msg.Err.Error()
 		return m, nil
 	}
+	return m, nil
+}
 
+// handleKeyMsg processes key presses when the modal is visible. It delegates
+// to the export-in-progress handler or the navigation handler as appropriate.
+func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if !m.visible {
+		return m, nil
+	}
+	if m.exporting {
+		if msg.String() == "esc" {
+			return m.Close(), nil
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "esc":
+		return m.Close(), nil
+	case "up", "k":
+		if m.selected > 0 {
+			m.selected--
+		}
+		return m, nil
+	case "down", "j":
+		if m.selected < len(optionValues)-1 {
+			m.selected++
+		}
+		return m, nil
+	case "enter":
+		option := optionValues[m.selected]
+		if option == OptionCancel {
+			return m.Close(), nil
+		}
+		m.exporting = true
+		m.status = fmt.Sprintf("Exporting %s...", optionLabels[m.selected])
+		return m, func() tea.Msg { return RequestMsg{Option: option} }
+	}
 	return m, nil
 }
 

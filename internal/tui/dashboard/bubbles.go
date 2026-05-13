@@ -156,6 +156,9 @@ func (c *bubbleChart) SetDarkMode(isDark bool) {
 	c.isDark = isDark
 }
 
+// SetData recomputes bubble targets from data and merges them with existing
+// animation state so that live updates animate smoothly. Returns true when
+// at least one node has motion and a Tick should be scheduled.
 func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 	targets := buildBubbleTargets(data, c.Metric(), c.width, c.height)
 
@@ -169,6 +172,23 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 		existing[node.ID] = node
 	}
 
+	c.nodes = c.mergeTargetNodes(targets, existing)
+	if len(c.nodes) == 0 {
+		c.selected = 0
+		c.animating = false
+		return false
+	}
+	c.selected = c.selectIndexByID(selectedID)
+	c.animating = c.hasMotion()
+	if c.animating {
+		c.Tick(0)
+	}
+	return c.animating
+}
+
+// mergeTargetNodes converts target positions into live nodes, carrying over
+// spring velocities and drift state from existing nodes where available.
+func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string]bubbleNode) []bubbleNode {
 	next := make([]bubbleNode, 0, len(targets))
 	for _, target := range targets {
 		node := bubbleNode{
@@ -188,25 +208,7 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 			ySpring:      harmonica.NewSpring(harmonica.FPS(bubbleFPS), bubbleAngularVelocity, bubbleDamping),
 		}
 		if prev, ok := existing[target.ID]; ok {
-			node.radius = prev.radius
-			node.x = prev.x
-			node.y = prev.y
-			node.velocityRadius = prev.velocityRadius
-			node.velocityX = prev.velocityX
-			node.velocityY = prev.velocityY
-			node.driftPhase = prev.driftPhase
-			node.driftSpeed = prev.driftSpeed
-			node.driftAmpX = prev.driftAmpX
-			node.driftAmpY = prev.driftAmpY
-			// New metrics or topology can otherwise produce stale springs.
-			if node.radius == 0 {
-				node.radius = target.targetRadius
-			}
-			if node.driftSpeed == 0 {
-				c.initNodeDrift(&node)
-			} else {
-				c.updateNodeDriftAmplitude(&node)
-			}
+			c.inheritPrevNodeState(&node, prev, target)
 		} else {
 			node.radius = target.targetRadius
 			node.x = target.targetX
@@ -216,18 +218,31 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 		node.applyDrift(c.driftTime, c.width, c.height)
 		next = append(next, node)
 	}
-	c.nodes = next
-	if len(c.nodes) == 0 {
-		c.selected = 0
-		c.animating = false
-		return false
+	return next
+}
+
+// inheritPrevNodeState copies physics and drift state from a previous node
+// into node so that the transition animates rather than snapping.
+func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, target bubbleNode) {
+	node.radius = prev.radius
+	node.x = prev.x
+	node.y = prev.y
+	node.velocityRadius = prev.velocityRadius
+	node.velocityX = prev.velocityX
+	node.velocityY = prev.velocityY
+	node.driftPhase = prev.driftPhase
+	node.driftSpeed = prev.driftSpeed
+	node.driftAmpX = prev.driftAmpX
+	node.driftAmpY = prev.driftAmpY
+	// New metrics or topology can otherwise produce stale springs.
+	if node.radius == 0 {
+		node.radius = target.targetRadius
 	}
-	c.selected = c.selectIndexByID(selectedID)
-	c.animating = c.hasMotion()
-	if c.animating {
-		c.Tick(0)
+	if node.driftSpeed == 0 {
+		c.initNodeDrift(node)
+	} else {
+		c.updateNodeDriftAmplitude(node)
 	}
-	return c.animating
 }
 
 func (c *bubbleChart) selectIndexByID(id string) int {
@@ -641,10 +656,10 @@ func renderBubbleRow(cells []bubbleCell, palette []color.Color) string {
 	return b.String()
 }
 
+// buildBubbleTargets computes initial target positions and radii for each
+// bubble, then runs a short relaxation pass to reduce overlap. Returns nil
+// when there is nothing to render.
 func buildBubbleTargets(data []bubbleDatum, metric bubbleMetric, width, height int) []bubbleNode {
-	if len(data) == 0 {
-		return nil
-	}
 	if width <= 0 {
 		width = 80
 	}
@@ -655,15 +670,26 @@ func buildBubbleTargets(data []bubbleDatum, metric bubbleMetric, width, height i
 	if chartHeight < 4 {
 		chartHeight = 4
 	}
+
+	filtered := filterAndSortBubbleData(data, metric)
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	targets := placeBubbleNodes(filtered, metric, width, chartHeight)
+	relaxTargets(targets, width, chartHeight)
+	return targets
+}
+
+// filterAndSortBubbleData removes datums without an ID, sorts by descending
+// metric value (ties broken by label), and caps the result to bubbleMaxItems.
+func filterAndSortBubbleData(data []bubbleDatum, metric bubbleMetric) []bubbleDatum {
 	filtered := make([]bubbleDatum, 0, len(data))
 	for _, datum := range data {
 		if datum.ID == "" {
 			continue
 		}
 		filtered = append(filtered, datum)
-	}
-	if len(filtered) == 0 {
-		return nil
 	}
 	slices.SortFunc(filtered, func(a, b bubbleDatum) int {
 		va := bubbleValue(a, metric)
@@ -676,34 +702,40 @@ func buildBubbleTargets(data []bubbleDatum, metric bubbleMetric, width, height i
 	if len(filtered) > bubbleMaxItems {
 		filtered = filtered[:bubbleMaxItems]
 	}
+	return filtered
+}
+
+// placeBubbleNodes converts sorted bubble data into node structs with target
+// positions arranged in a golden-angle spiral around the chart centre.
+func placeBubbleNodes(filtered []bubbleDatum, metric bubbleMetric, width, chartHeight int) []bubbleNode {
 	maxValue := uint64(0)
 	for _, datum := range filtered {
-		value := bubbleValue(datum, metric)
-		if value > maxValue {
-			maxValue = value
+		if v := bubbleValue(datum, metric); v > maxValue {
+			maxValue = v
 		}
 	}
 	if maxValue == 0 {
 		maxValue = 1
 	}
+
 	minRadius := 1.7
 	maxRadius := math.Min(float64(width)/6.0, float64(chartHeight)/2.6)
 	if maxRadius < 2.4 {
 		maxRadius = 2.4
 	}
-	targets := make([]bubbleNode, 0, len(filtered))
+
 	cx := float64(width-1) / 2.0
 	cy := float64(chartHeight-1) / 2.0
 	goldenAngle := math.Pi * (3.0 - math.Sqrt(5.0))
 	spacingBase := maxRadius * 0.95
+
+	targets := make([]bubbleNode, 0, len(filtered))
 	for idx, datum := range filtered {
 		value := bubbleValue(datum, metric)
 		ratio := math.Sqrt(float64(value) / float64(maxValue))
 		targetRadius := minRadius + ratio*(maxRadius-minRadius)
 		distance := spacingBase * math.Sqrt(float64(idx)+0.6)
 		angle := float64(idx) * goldenAngle
-		targetX := cx + math.Cos(angle)*distance
-		targetY := cy + math.Sin(angle)*distance*0.68
 		targets = append(targets, bubbleNode{
 			ID:           datum.ID,
 			Label:        datum.Label,
@@ -713,11 +745,10 @@ func buildBubbleTargets(data []bubbleDatum, metric bubbleMetric, width, height i
 			Duration:     datum.Duration,
 			Value:        value,
 			targetRadius: targetRadius,
-			targetX:      targetX,
-			targetY:      targetY,
+			targetX:      cx + math.Cos(angle)*distance,
+			targetY:      cy + math.Sin(angle)*distance*0.68,
 		})
 	}
-	relaxTargets(targets, width, chartHeight)
 	return targets
 }
 

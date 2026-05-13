@@ -28,6 +28,7 @@ type icicleTile struct {
 	colorSlot int
 }
 
+// renderFilesIcicle renders the icicle chart for directory-based file stats.
 func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
 		return "Files icicle: waiting for stats..."
@@ -39,28 +40,44 @@ func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bub
 		height = 18
 	}
 	header := fmt.Sprintf("Files icicle | metric:%s | v mode | b metric | j/k select", treemapMetricLabel(metric))
-	dirs := aggregateFilesByDir(snap.Files())
-	if len(dirs) == 0 {
+
+	tiles, ok := buildIcicleTiles(snap, width, height, metric)
+	if !ok {
 		return header + "\nFiles icicle: no directory data\nsel: none"
 	}
+	if len(tiles) == 0 {
+		return header + "\nFiles icicle: no visible tiles\nsel: none"
+	}
+	return renderIcicleGrid(header, tiles, width, height, metric, selected, isDark)
+}
 
+// buildIcicleTiles constructs the icicle tile layout from the snapshot's file data.
+// Returns (nil, false) when there is no data to display.
+func buildIcicleTiles(snap *statsengine.Snapshot, width, height int, metric bubbleMetric) ([]icicleTile, bool) {
+	dirs := aggregateFilesByDir(snap.Files())
+	if len(dirs) == 0 {
+		return nil, false
+	}
 	root := buildIcicleTree(dirs)
 	children := sortedIcicleChildren(root, metric)
 	if len(children) == 0 {
-		return header + "\nFiles icicle: no directory data\nsel: none"
+		return nil, false
 	}
-
 	chartHeight := height - 2
 	if chartHeight < 4 {
 		chartHeight = 4
 	}
-
 	tiles := make([]icicleTile, 0, 64)
 	layoutIcicle(children, 0, width, 0, chartHeight, 0, metric, &tiles)
-	if len(tiles) == 0 {
-		return header + "\nFiles icicle: no visible tiles\nsel: none"
-	}
+	return tiles, true
+}
 
+// renderIcicleGrid fills a 2-D grid with icicle tiles and assembles the final string.
+func renderIcicleGrid(header string, tiles []icicleTile, width, height int, metric bubbleMetric, selected int, isDark bool) string {
+	chartHeight := height - 2
+	if chartHeight < 4 {
+		chartHeight = 4
+	}
 	selected = clampOffset(selected, len(tiles))
 	grid := make([][]treemapCell, chartHeight)
 	for row := 0; row < chartHeight; row++ {
@@ -71,7 +88,6 @@ func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bub
 	}
 	fillIcicleGrid(grid, tiles, selected)
 	palette := treemapPalette(isDark)
-
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
 	for _, row := range grid {
@@ -184,14 +200,13 @@ func sortedIcicleChildren(node *icicleNode, metric bubbleMetric) []*icicleNode {
 	return out
 }
 
+// layoutIcicle recursively lays out icicle chart tiles for one depth level,
+// distributing the available width among nodes proportional to their metric values.
 func layoutIcicle(nodes []*icicleNode, x, width, depth, maxDepth, rootSlot int, metric bubbleMetric, out *[]icicleTile) {
 	if len(nodes) == 0 || width <= 0 || depth >= maxDepth {
 		return
 	}
-	total := uint64(0)
-	for _, node := range nodes {
-		total += icicleValue(node, metric)
-	}
+	total := icicleNodeTotal(nodes, metric)
 	if total == 0 {
 		return
 	}
@@ -201,17 +216,7 @@ func layoutIcicle(nodes []*icicleNode, x, width, depth, maxDepth, rootSlot int, 
 	cursor := x
 	for idx, node := range nodes {
 		value := icicleValue(node, metric)
-		tileWidth := remainingWidth
-		if idx < len(nodes)-1 {
-			tileWidth = int(math.Round(float64(remainingWidth) * float64(value) / float64(remainingValue)))
-			minRemaining := len(nodes) - idx - 1
-			if tileWidth < 1 {
-				tileWidth = 1
-			}
-			if tileWidth > remainingWidth-minRemaining {
-				tileWidth = remainingWidth - minRemaining
-			}
-		}
+		tileWidth := icicleTileWidth(idx, len(nodes), value, remainingWidth, remainingValue)
 		if tileWidth <= 0 {
 			continue
 		}
@@ -219,17 +224,10 @@ func layoutIcicle(nodes []*icicleNode, x, width, depth, maxDepth, rootSlot int, 
 		if depth == 0 {
 			colorSlot = idx
 		}
-		*out = append(*out, icicleTile{
-			node:      node,
-			depth:     depth,
-			x:         cursor,
-			w:         tileWidth,
-			colorSlot: colorSlot,
-		})
+		*out = append(*out, icicleTile{node: node, depth: depth, x: cursor, w: tileWidth, colorSlot: colorSlot})
 		if depth+1 < maxDepth {
 			layoutIcicle(sortedIcicleChildren(node, metric), cursor, tileWidth, depth+1, maxDepth, colorSlot, metric, out)
 		}
-
 		cursor += tileWidth
 		remainingWidth -= tileWidth
 		remainingValue -= value
@@ -237,6 +235,32 @@ func layoutIcicle(nodes []*icicleNode, x, width, depth, maxDepth, rootSlot int, 
 			break
 		}
 	}
+}
+
+// icicleNodeTotal sums the metric values of all nodes in the slice.
+func icicleNodeTotal(nodes []*icicleNode, metric bubbleMetric) uint64 {
+	total := uint64(0)
+	for _, node := range nodes {
+		total += icicleValue(node, metric)
+	}
+	return total
+}
+
+// icicleTileWidth computes the pixel width to allocate to the node at idx.
+// The last node gets the full remaining width to avoid rounding gaps.
+func icicleTileWidth(idx, total int, value uint64, remainingWidth int, remainingValue uint64) int {
+	if idx == total-1 {
+		return remainingWidth
+	}
+	tileWidth := int(math.Round(float64(remainingWidth) * float64(value) / float64(remainingValue)))
+	minRemaining := total - idx - 1
+	if tileWidth < 1 {
+		tileWidth = 1
+	}
+	if tileWidth > remainingWidth-minRemaining {
+		tileWidth = remainingWidth - minRemaining
+	}
+	return tileWidth
 }
 
 func fillIcicleGrid(grid [][]treemapCell, tiles []icicleTile, selected int) {
