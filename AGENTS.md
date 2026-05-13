@@ -19,6 +19,7 @@ mage build                             # Build BPF object + Go binary (all is an
 mage buildDocker                       # Build ior inside a Rocky Linux 9 container (writes binary to repo root)
 mage buildDockerEl8                    # Build ior inside a Rocky Linux 8 container (writes ior.el8 to repo root)
 mage test                              # Run all tests
+mage testRace                          # Run all tests with the race detector enabled (-race)
 TEST_NAME=TestEventloop mage testWithName  # Run specific test
 mage integrationTest                   # Build + run integration tests in parallel (parallelism capped to NumCPU)
 mage integrationTestSerial             # Build + run integration tests one at a time
