@@ -77,7 +77,7 @@ func TestFlameViewportClampsHeightWithExpandedHelp(t *testing.T) {
 }
 
 func TestSnapshotOrZeroReturnsZeroSnapshotWhenLatestMissing(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 
 	snap := m.snapshotOrZero()
 	if snap.SyscallsCount() != 0 || snap.FilesCount() != 0 || snap.ProcessesCount() != 0 {
@@ -86,7 +86,7 @@ func TestSnapshotOrZeroReturnsZeroSnapshotWhenLatestMissing(t *testing.T) {
 }
 
 func TestKeySwitchingChangesActiveTab(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
 	model := next.(Model)
@@ -120,7 +120,7 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 }
 
 func TestArrowAndViKeysDoNotCycleTabs(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabOverview
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -149,7 +149,7 @@ func TestArrowAndViKeysDoNotCycleTabs(t *testing.T) {
 }
 
 func TestSyscallsTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}, {Name: "write", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -168,7 +168,7 @@ func TestSyscallsTabScrollsWithJK(t *testing.T) {
 }
 
 func TestProcessesTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{{PID: 1}, {PID: 2}}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -187,7 +187,7 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 }
 
 func TestSyscallsTabSupportsHorizontalColumnNavigation(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -206,7 +206,7 @@ func TestSyscallsTabSupportsHorizontalColumnNavigation(t *testing.T) {
 }
 
 func TestFilesTabSupportsHorizontalColumnNavigation(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{{Path: "/a"}}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -225,7 +225,7 @@ func TestFilesTabSupportsHorizontalColumnNavigation(t *testing.T) {
 }
 
 func TestProcessesTabSupportsHorizontalColumnNavigation(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{{PID: 1, Comm: "alpha"}}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -244,7 +244,7 @@ func TestProcessesTabSupportsHorizontalColumnNavigation(t *testing.T) {
 }
 
 func TestProcessesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
 		{PID: 111, Comm: "alpha", Syscalls: 9},
@@ -272,7 +272,7 @@ func TestProcessesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 }
 
 func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
 		{PID: 111, Comm: "alpha", Syscalls: 9},
@@ -301,7 +301,7 @@ func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
 }
 
 func TestProcessesSortKeyTogglesOnSelectedColumn(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
 		{PID: 200, Comm: "worker", Syscalls: 9},
@@ -324,7 +324,7 @@ func TestProcessesSortKeyTogglesOnSelectedColumn(t *testing.T) {
 }
 
 func TestProcessesReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
 		{PID: 200, Comm: "worker", Syscalls: 9},
@@ -347,7 +347,7 @@ func TestProcessesReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
 }
 
 func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
 		{PID: 200, Comm: "worker", Syscalls: 9},
@@ -375,7 +375,7 @@ func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
 }
 
 func TestProcessesSortIgnoredOutsideTableMode(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	m.processesVizMode = tabVizModeTreemap
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
@@ -391,7 +391,7 @@ func TestProcessesSortIgnoredOutsideTableMode(t *testing.T) {
 }
 
 func TestStatsTickReanchorsSortedProcessSelectionByPID(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	m.processesSort = tableSortState[processSortKey]{active: true, key: processSortKeyComm}
 	oldSnap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
@@ -419,7 +419,7 @@ func TestStatsTickReanchorsSortedProcessSelectionByPID(t *testing.T) {
 }
 
 func TestFilesTabScrollsWithJK(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{{Path: "/a"}, {Path: "/b"}}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -438,7 +438,7 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 }
 
 func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "read", Count: 9},
@@ -466,7 +466,7 @@ func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 }
 
 func TestSyscallsSortKeyTogglesOnSelectedColumn(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "write", Count: 9},
@@ -488,7 +488,7 @@ func TestSyscallsSortKeyTogglesOnSelectedColumn(t *testing.T) {
 }
 
 func TestSyscallsReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "write", Count: 9},
@@ -510,7 +510,7 @@ func TestSyscallsReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
 }
 
 func TestSyscallsSortReanchorsSelectedSyscall(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "write", Count: 9},
@@ -530,7 +530,7 @@ func TestSyscallsSortReanchorsSelectedSyscall(t *testing.T) {
 }
 
 func TestSyscallsSortEnterUsesSortedVisibleRow(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "write", Count: 9},
@@ -557,7 +557,7 @@ func TestSyscallsSortEnterUsesSortedVisibleRow(t *testing.T) {
 }
 
 func TestSyscallsSortIgnoredOutsideTableMode(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.syscallsVizMode = tabVizModeTreemap
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
@@ -573,7 +573,7 @@ func TestSyscallsSortIgnoredOutsideTableMode(t *testing.T) {
 }
 
 func TestSyscallsP95SortSurvivesWidthExpansion(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.width = 120
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
@@ -597,7 +597,7 @@ func TestSyscallsP95SortSurvivesWidthExpansion(t *testing.T) {
 }
 
 func TestStatsTickReanchorsSortedSyscallSelectionByName(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.syscallsSort = tableSortState[syscallSortKey]{active: true, key: syscallSortKeyName}
 	oldSnap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
@@ -624,7 +624,7 @@ func TestStatsTickReanchorsSortedSyscallSelectionByName(t *testing.T) {
 }
 
 func TestFilesTabGroupedScrollUsesDirectoryOffset(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.filesDirGrouped = true
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
@@ -645,7 +645,7 @@ func TestFilesTabGroupedScrollUsesDirectoryOffset(t *testing.T) {
 }
 
 func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/tmp/a"},
@@ -673,7 +673,7 @@ func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 }
 
 func TestFilesSortKeyTogglesFlatMode(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/tmp/z.log", Accesses: 9},
@@ -696,7 +696,7 @@ func TestFilesSortKeyTogglesFlatMode(t *testing.T) {
 }
 
 func TestFilesReverseSortKeyTogglesFlatMode(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/tmp/z.log", Accesses: 9},
@@ -719,7 +719,7 @@ func TestFilesReverseSortKeyTogglesFlatMode(t *testing.T) {
 }
 
 func TestFilesDirReverseSortKeyTogglesGroupedMode(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.filesDirGrouped = true
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
@@ -743,7 +743,7 @@ func TestFilesDirReverseSortKeyTogglesGroupedMode(t *testing.T) {
 }
 
 func TestFilesSortEnterUsesSortedVisibleRow(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/tmp/z.log", Accesses: 9},
@@ -771,7 +771,7 @@ func TestFilesSortEnterUsesSortedVisibleRow(t *testing.T) {
 }
 
 func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.filesDirGrouped = true
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
@@ -800,7 +800,7 @@ func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
 }
 
 func TestFilesSortStatesPersistAcrossDirToggle(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/var/log/z.log", Accesses: 9},
@@ -833,7 +833,7 @@ func TestFilesSortStatesPersistAcrossDirToggle(t *testing.T) {
 
 func TestStreamSpaceUnpauseSchedulesStreamTick(t *testing.T) {
 	rb := eventstream.NewRingBuffer()
-	m := NewModelWithConfig(nil, rb, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, rb, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabStream
 	m.streamModel.HandleKey("space") // pause
 
@@ -848,7 +848,7 @@ func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
 	liveTrie.Reset()
 
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabFlame
 
@@ -865,7 +865,7 @@ func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
 func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
 
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabFlame
 	if !m.flamegraphModel.HasSnapshot() {
@@ -881,7 +881,7 @@ func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
 
 func TestFlameTickPausedFreezesAfterInitialSnapshot(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabFlame
 
@@ -908,7 +908,7 @@ func TestPausedFlameDashboardViewPreservesZoomedSelectedLine(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
 	coreflamegraph.SeedTestFlameData(liveTrie)
 
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFlame
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -961,7 +961,7 @@ func newPausedStreamModel(t *testing.T) Model {
 			FileName: fmt.Sprintf("/tmp/file-%03d", i),
 		})
 	}
-	m := NewModelWithConfig(nil, rb, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, rb, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabStream
 	m.showHelp = true
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -1020,7 +1020,7 @@ func rowFromStreamView(t *testing.T, view string) int {
 }
 
 func TestDirGroupKeyTogglesOnlyOnFilesTab(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
@@ -1042,7 +1042,7 @@ func TestVisualizationCycleForSyscallsTab(t *testing.T) {
 		{Name: "read", Count: 9, Bytes: 512},
 		{Name: "write", Count: 3, Bytes: 1024},
 	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.latest = &snap
 
@@ -1069,7 +1069,7 @@ func TestBubbleMetricToggleForSyscallsTab(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
 		{Name: "read", Count: 9, Bytes: 512},
 	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.latest = &snap
 
@@ -1084,7 +1084,7 @@ func TestMetricToggleAppliesInFilesTreemapMode(t *testing.T) {
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, []statsengine.FileSnapshot{
 		{Path: "/var/log/a", Accesses: 5, BytesRead: 120, BytesWritten: 40},
 	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.latest = &snap
 	m.filesDirGrouped = true
@@ -1108,7 +1108,7 @@ func TestFilesVisualizationRequiresDirectoryMode(t *testing.T) {
 		{Path: "/tmp/a", Accesses: 3},
 		{Path: "/tmp/b", Accesses: 1},
 	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.latest = &snap
 
@@ -1158,7 +1158,7 @@ func TestBubbleModeUsesJKForSelection(t *testing.T) {
 		{Name: "read", Count: 9, Bytes: 512},
 		{Name: "write", Count: 3, Bytes: 1024},
 	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.latest = &snap
 	m.syscallsVizMode = tabVizModeBubbles
@@ -1179,7 +1179,7 @@ func TestTreemapModeUsesJKForSelection(t *testing.T) {
 		{Name: "read", Count: 9, Bytes: 512},
 		{Name: "write", Count: 3, Bytes: 1024},
 	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.latest = &snap
 	m.syscallsVizMode = tabVizModeTreemap
@@ -1196,7 +1196,7 @@ func TestFilesIcicleModeSelectionUsesIcicleTileCount(t *testing.T) {
 		{Path: "/a/b/c/file1", Accesses: 9},
 		{Path: "/a/d/e/file2", Accesses: 7},
 	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.latest = &snap
 	m.filesDirGrouped = true
@@ -1223,7 +1223,7 @@ func TestTreemapModeRendersTreemapHeader(t *testing.T) {
 		{Name: "read", Count: 9, Bytes: 512},
 		{Name: "write", Count: 3, Bytes: 1024},
 	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	m.latest = &snap
 	m.syscallsVizMode = tabVizModeTreemap
@@ -1241,7 +1241,7 @@ func TestTreemapModeRendersFilesHeader(t *testing.T) {
 		{Path: "/srv/log/a", Accesses: 9, BytesRead: 400, BytesWritten: 200},
 		{Path: "/srv/log/b", Accesses: 4, BytesRead: 100, BytesWritten: 40},
 	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.latest = &snap
 	m.filesDirGrouped = true
@@ -1260,7 +1260,7 @@ func TestIcicleModeRendersFilesHeader(t *testing.T) {
 		{Path: "/srv/log/a", Accesses: 9, BytesRead: 400, BytesWritten: 200},
 		{Path: "/srv/log/b", Accesses: 4, BytesRead: 100, BytesWritten: 40},
 	}, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFiles
 	m.latest = &snap
 	m.filesDirGrouped = true
@@ -1279,7 +1279,7 @@ func TestTreemapModeRendersProcessesHeader(t *testing.T) {
 		{PID: 10, Comm: "worker", Syscalls: 12, Bytes: 500},
 		{PID: 11, Comm: "agent", Syscalls: 4, Bytes: 120},
 	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabProcesses
 	m.latest = &snap
 	m.processesVizMode = tabVizModeTreemap
@@ -1293,7 +1293,7 @@ func TestTreemapModeRendersProcessesHeader(t *testing.T) {
 }
 
 func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabSyscalls
 	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{{Name: "read", Count: 1}, {Name: "write", Count: 1}}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
@@ -1310,7 +1310,7 @@ func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
 func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 13}
 	engine := &fakeSnapshotSource{snap: snap}
-	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabOverview
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
 	_ = next
@@ -1330,7 +1330,7 @@ func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 func TestRefreshKeyResetsBaselineWhenSourceSupportsReset(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 5}
 	engine := &fakeResettableSnapshotSource{snap: snap}
-	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabOverview
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
@@ -1353,7 +1353,7 @@ func TestRefreshKeyResetsBaselineWhenSourceSupportsReset(t *testing.T) {
 
 func TestRefreshKeyResetsLiveTrieOutsideFlameTab(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabSyscalls
 	before := liveTrie.Version()
@@ -1369,7 +1369,7 @@ func TestRefreshKeyResetsLiveTrieOutsideFlameTab(t *testing.T) {
 }
 
 func TestFlameTabReceivesSlashKey(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFlame
 	m.width = 120
 	m.height = 30
@@ -1385,7 +1385,7 @@ func TestFlameTabReceivesSlashKey(t *testing.T) {
 }
 
 func TestFlameTabReceivesResetAndPauseKeys(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFlame
 	m.width = 120
 	m.height = 30
@@ -1407,7 +1407,7 @@ func TestFlameTabReceivesResetAndPauseKeys(t *testing.T) {
 }
 
 func TestFlameSearchConsumesNumericTabKeys(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabFlame
 	m.width = 120
 	m.height = 30
@@ -1428,7 +1428,7 @@ func TestFlameSearchConsumesNumericTabKeys(t *testing.T) {
 func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 	snap := &statsengine.Snapshot{TotalSyscalls: 9}
 	engine := &fakeSnapshotSource{snap: snap}
-	m := NewModelWithConfig(engine, nil, 100, common.DefaultKeyMap())
+	m := NewModelWithConfig(engine, nil, 100, 200, common.DefaultKeyMap())
 
 	next, cmd := m.Update(refreshTickMsg{})
 	if cmd == nil {
@@ -1491,7 +1491,7 @@ func TestStatsTickClampsGroupedFilesOffset(t *testing.T) {
 }
 
 func TestViewRendersTabBarAndHelp(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
 	out := m.View().Content
 	if !strings.Contains(out, "Flame") {
 		t.Fatalf("expected flame tab label in view")
@@ -1505,7 +1505,7 @@ func TestViewRendersTabBarAndHelp(t *testing.T) {
 }
 
 func TestFlameTabRendersWaitingForDataPlaceholder(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
 	m.activeTab = TabFlame
 	// Dimensions must flow through Update so that sub-model viewports are
 	// kept in sync. Direct field assignment bypasses the sync logic in
@@ -1542,7 +1542,7 @@ func TestStreamTabViewKeepsTabAndHelpChromeVisible(t *testing.T) {
 		rb.Push(eventstream.StreamEvent{Syscall: "read"})
 	}
 
-	m := NewModelWithConfig(nil, rb, 1000, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, rb, 1000, 200, common.DefaultKeyMap())
 	m.activeTab = TabStream
 	m.width = 120
 	m.height = 30
@@ -1559,7 +1559,7 @@ func TestStreamTabViewKeepsTabAndHelpChromeVisible(t *testing.T) {
 }
 
 func TestHelpToggleWithH(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 1000, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
 	out := m.View().Content
 	if !strings.Contains(out, "press H for help") {
 		t.Fatalf("expected default help hint")
@@ -1610,7 +1610,7 @@ func TestTranslateFlamegraphMsgLeavesNonMouseUnchanged(t *testing.T) {
 // SetFocused will arm a fresh one when focus returns.
 func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 	engine := &fakeResettableSnapshotSource{}
-	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	if cmd := m.SetAutoResetInterval(50 * time.Millisecond); cmd == nil {
 		t.Fatalf("SetAutoResetInterval should return a tick command for a positive interval")
 	}
@@ -1655,7 +1655,7 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 // payload tea.Tick would deliver) rather than waiting on real time.
 func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
 	engine := &fakeResettableSnapshotSource{}
-	m := NewModelWithConfig(engine, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	m.SetAutoResetInterval(50 * time.Millisecond)
 	m.SetFocused(false)
 
@@ -1688,7 +1688,7 @@ func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
 // change (e.g. a duplicate FocusMsg). Bumping the generation in that
 // case would silently invalidate a healthy in-flight tick.
 func TestSetFocusedNoOpWhenStateUnchanged(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetAutoResetInterval(50 * time.Millisecond)
 	gen := m.autoResetGen
 
@@ -1704,7 +1704,7 @@ func TestSetFocusedNoOpWhenStateUnchanged(t *testing.T) {
 // focus returns but the user has the auto-reset timer turned off. No
 // tick should be armed (it would never fire anyway).
 func TestSetFocusedReturnsNilWhenTimerDisabled(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	// Timer disabled by default.
 	m.SetFocused(false)
 	if cmd := m.SetFocused(true); cmd != nil {
@@ -1722,7 +1722,7 @@ func TestSetFocusedReturnsNilWhenTimerDisabled(t *testing.T) {
 // and the status read, so we accept "30s/30s" or "29s/30s" rather than
 // pinning an exact remaining string.
 func TestAutoResetStatusAddsPausedSuffixWhenBlurred(t *testing.T) {
-	m := NewModelWithConfig(nil, nil, 250, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetAutoResetInterval(30 * time.Second)
 	got := m.autoResetStatus()
 	if got != "auto-reset: 30s/30s" && got != "auto-reset: 29s/30s" {
@@ -1742,6 +1742,60 @@ func TestAutoResetStatusAddsPausedSuffixWhenBlurred(t *testing.T) {
 	m.SetFocused(true)
 	if got, want := m.autoResetStatus(), "auto-reset: off"; got != want {
 		t.Fatalf("focused disabled status = %q, want %q", got, want)
+	}
+}
+
+// TestNewModelWithConfigZeroFastRefreshUsesDefault verifies that passing 0 for
+// fastRefreshMs results in the model using the package-level constant cadence
+// (streamRefreshMs / flameRefreshMs) rather than a zero-duration tick, keeping
+// backward-compatibility for callers that do not supply a fast refresh interval.
+func TestNewModelWithConfigZeroFastRefreshUsesDefault(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 0, common.DefaultKeyMap())
+	if m.fastRefreshEvery != 0 {
+		t.Fatalf("expected fastRefreshEvery=0 (use constant default), got %v", m.fastRefreshEvery)
+	}
+	// streamTickCmd and flameTickCmd should return non-nil commands even when
+	// fastRefreshEvery is zero, falling back to the constant cadence.
+	if cmd := m.streamTickCmd(); cmd == nil {
+		t.Fatalf("streamTickCmd() returned nil with zero fastRefreshEvery")
+	}
+	if cmd := m.flameTickCmd(); cmd == nil {
+		t.Fatalf("flameTickCmd() returned nil with zero fastRefreshEvery")
+	}
+}
+
+// TestNewModelWithConfigFastRefreshStored verifies that a positive fastRefreshMs
+// value is stored on the model and that the tick commands return non-nil commands.
+func TestNewModelWithConfigFastRefreshStored(t *testing.T) {
+	const fastMs = 150
+	m := NewModelWithConfig(nil, nil, 1000, fastMs, common.DefaultKeyMap())
+	want := time.Duration(fastMs) * time.Millisecond
+	if m.fastRefreshEvery != want {
+		t.Fatalf("expected fastRefreshEvery=%v, got %v", want, m.fastRefreshEvery)
+	}
+	if cmd := m.streamTickCmd(); cmd == nil {
+		t.Fatalf("streamTickCmd() returned nil with fastRefreshEvery=%v", want)
+	}
+	if cmd := m.flameTickCmd(); cmd == nil {
+		t.Fatalf("flameTickCmd() returned nil with fastRefreshEvery=%v", want)
+	}
+}
+
+// TestSetFastRefreshIntervalUpdatesModel verifies that SetFastRefreshInterval
+// overwrites fastRefreshEvery and that negative values are clamped to zero
+// (which restores the constant fallback).
+func TestSetFastRefreshIntervalUpdatesModel(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
+
+	m.SetFastRefreshInterval(500 * time.Millisecond)
+	if m.fastRefreshEvery != 500*time.Millisecond {
+		t.Fatalf("expected fastRefreshEvery=500ms after Set, got %v", m.fastRefreshEvery)
+	}
+
+	// Negative value should be clamped to zero (constant fallback).
+	m.SetFastRefreshInterval(-1 * time.Millisecond)
+	if m.fastRefreshEvery != 0 {
+		t.Fatalf("expected fastRefreshEvery=0 after negative Set, got %v", m.fastRefreshEvery)
 	}
 }
 

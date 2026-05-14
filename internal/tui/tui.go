@@ -282,6 +282,9 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	model := newModelWithRuntimeConfig(cfg.PidFilter, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
+	// Apply the configurable fast-refresh cadence from the CLI flag so the
+	// stream and flame tabs honour the -tui-fast-refresh value.
+	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -291,6 +294,8 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	model := newModelWithRuntimeConfig(1, filterFromConfig(cfg), 1, -1, cfg.TUIExportEnable, starter)
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
+	// Apply the configurable fast-refresh cadence from the CLI flag.
+	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
 	return err
@@ -390,7 +395,10 @@ func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter
 
 	rt := newRuntimeBindings()
 	pidFilter, tidFilter := resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter)
-	dashboard := newDashboardWithRuntime(rt, pidFilter, keys)
+	// Pass 0 for fastRefreshMs so the dashboard uses the package-level default
+	// (200 ms). Callers that hold a flags.Config can override this via
+	// SetFastRefreshInterval after construction.
+	dashboard := newDashboardWithRuntime(rt, pidFilter, keys, 0)
 
 	spin := spinner.New()
 	spin.Spinner = spinner.MiniDot
@@ -437,9 +445,11 @@ func resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter int
 }
 
 // newDashboardWithRuntime creates a dark-mode dashboard bound to the given
-// runtime and pre-configured with the initial PID filter.
-func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap) dashboardui.Model {
-	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{runtime: rt}, rt.eventStreamSource(), 1000, keys)
+// runtime and pre-configured with the initial PID filter. fastRefreshMs
+// controls the high-frequency tick cadence for stream and flame tabs; pass 0
+// to use the package-level default (200 ms).
+func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fastRefreshMs int) dashboardui.Model {
+	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{runtime: rt}, rt.eventStreamSource(), 1000, fastRefreshMs, keys)
 	dashboard.SetDarkMode(true)
 	dashboard.SetPidFilter(pidFilter)
 	return dashboard

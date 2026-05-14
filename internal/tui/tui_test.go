@@ -2091,7 +2091,7 @@ func TestBlurPausesDashboardRefreshAndFocusResumesIt(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
-	m.dashboard = dashboardui.NewModelWithConfig(nil, nil, 1, m.keys)
+	m.dashboard = dashboardui.NewModelWithConfig(nil, nil, 1, 200, m.keys)
 	m.focused = true
 
 	next, _ := m.Update(tea.BlurMsg{})

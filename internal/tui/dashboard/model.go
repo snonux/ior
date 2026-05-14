@@ -77,6 +77,11 @@ type Model struct {
 	height int
 
 	refreshEvery time.Duration
+	// fastRefreshEvery is the high-frequency tick cadence for the stream and
+	// flame tabs. When zero it falls back to the streamRefreshMs / flameRefreshMs
+	// package-level constants so the model is backwards-compatible with callers
+	// that do not supply a fast-refresh interval.
+	fastRefreshEvery time.Duration
 	// autoResetEvery is the cadence for the periodic auto-reset of
 	// aggregate state (live trie + stats engine). Zero disables it.
 	autoResetEvery time.Duration
@@ -123,11 +128,15 @@ type Model struct {
 
 // NewModel creates a dashboard model with default refresh cadence.
 func NewModel(engine SnapshotSource, streamSource eventstream.Source) Model {
-	return NewModelWithConfig(engine, streamSource, defaultRefreshMs, common.Keys)
+	return NewModelWithConfig(engine, streamSource, defaultRefreshMs, 0, common.Keys)
 }
 
 // NewModelWithConfig creates a dashboard model with explicit refresh and keys.
-func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, refreshMs int, keys common.KeyMap) Model {
+// fastRefreshMs controls the high-frequency tick cadence for the stream and
+// flame tabs (e.g. 200 ms). A value of 0 uses the package-level constants
+// streamRefreshMs / flameRefreshMs (200 ms) so existing call sites are
+// backwards-compatible.
+func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, refreshMs int, fastRefreshMs int, keys common.KeyMap) Model {
 	if refreshMs <= 0 {
 		refreshMs = defaultRefreshMs
 	}
@@ -135,6 +144,7 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 		activeTab:        TabFlame,
 		engine:           engine,
 		refreshEvery:     time.Duration(refreshMs) * time.Millisecond,
+		fastRefreshEvery: time.Duration(fastRefreshMs) * time.Millisecond,
 		keys:             keys,
 		pidFilter:        -1,
 		syscallsVizMode:  tabVizModeTable,
@@ -157,7 +167,8 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 
 // Init starts periodic refresh ticks. The tab registry's InitCmd field is
 // consulted to start any additional high-frequency tick the active tab needs
-// (e.g. stream and flame use 200 ms cadence ticks beyond the base 1 s tick).
+// (e.g. stream and flame use a fast cadence controlled by fastRefreshEvery,
+// defaulting to streamRefreshMs / flameRefreshMs when not explicitly set).
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
 	d := lookupTab(m.activeTab)
@@ -234,18 +245,19 @@ func (m Model) handleStreamTick() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.streamModel.Refresh()
-	return m, streamTickCmd()
+	// Re-arm with the configurable fast-refresh cadence (fastRefreshEvery).
+	return m, m.streamTickCmd()
 }
 
 func (m Model) handleFlameTick() (tea.Model, tea.Cmd) {
 	if !m.focused || m.activeTab != TabFlame {
 		return m, nil
 	}
-	// Always re-arm the 200 ms tick. The snapshot refresh itself runs on a
+	// Always re-arm the fast tick. The snapshot refresh itself runs on a
 	// background goroutine via RefreshFromLiveTrieCmd, so even when a previous
 	// refresh is still in flight (the cmd returns nil and skips), the tick
-	// channel stays alive.
-	cmds := []tea.Cmd{flameTickCmd()}
+	// channel stays alive. The cadence is controlled by fastRefreshEvery.
+	cmds := []tea.Cmd{m.flameTickCmd()}
 	if m.liveTrie != nil {
 		if refreshCmd := m.flamegraphModel.RefreshFromLiveTrieCmd(); refreshCmd != nil {
 			cmds = append(cmds, refreshCmd)
@@ -325,7 +337,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	handled, cmd := m.handleScrollKey(msg)
 	if handled && isStreamResumeKey(msg) && m.activeTab == TabStream && !m.streamModel.Paused() {
-		cmd = streamTickCmd()
+		// Re-arm the stream tick with the configurable fast-refresh cadence after
+		// the user unpauses the stream with a scroll/space key.
+		cmd = m.streamTickCmd()
 	}
 	if !handled {
 		handled, cmd = m.handleEnterKey(msg)
@@ -983,6 +997,18 @@ func (m Model) AutoResetInterval() time.Duration {
 	return m.autoResetEvery
 }
 
+// SetFastRefreshInterval overrides the high-frequency tick cadence used by the
+// stream and flame tabs. A zero or negative value resets the behaviour to the
+// package-level constants (streamRefreshMs / flameRefreshMs). Callers such as
+// RunWithTraceStarterConfig use this to wire in cfg.TUIFastRefreshInterval
+// after construction without changing the NewModelWithConfig call chain.
+func (m *Model) SetFastRefreshInterval(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	m.fastRefreshEvery = d
+}
+
 // LatestSnapshot returns the most recently received snapshot.
 func (m Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
@@ -1480,11 +1506,41 @@ func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, strea
 	return d.Render(m, snap, streamModel, flameModel, width, height)
 }
 
-func streamTickCmd() tea.Cmd {
+// streamTickCmd schedules the next high-frequency stream tab refresh tick.
+// It uses m.fastRefreshEvery when set; otherwise it falls back to the
+// streamRefreshMs constant so the behaviour is unchanged for callers that
+// did not supply a fast-refresh interval.
+func (m Model) streamTickCmd() tea.Cmd {
+	d := m.fastRefreshEvery
+	if d <= 0 {
+		d = streamRefreshMs * time.Millisecond
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg { return streamTickMsg{} })
+}
+
+// flameTickCmd schedules the next high-frequency flame tab refresh tick.
+// It uses m.fastRefreshEvery when set; otherwise it falls back to the
+// flameRefreshMs constant so the behaviour is unchanged for callers that
+// did not supply a fast-refresh interval.
+func (m Model) flameTickCmd() tea.Cmd {
+	d := m.fastRefreshEvery
+	if d <= 0 {
+		d = flameRefreshMs * time.Millisecond
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg { return flameTickMsg{} })
+}
+
+// streamTickCmdFn is a package-level adapter used by the tab registry's InitCmd
+// field. It uses the constant cadence and is replaced on subsequent ticks by
+// the model-method version that respects fastRefreshEvery.
+func streamTickCmdFn() tea.Cmd {
 	return tea.Tick(streamRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return streamTickMsg{} })
 }
 
-func flameTickCmd() tea.Cmd {
+// flameTickCmdFn is a package-level adapter used by the tab registry's InitCmd
+// field. It uses the constant cadence and is replaced on subsequent ticks by
+// the model-method version that respects fastRefreshEvery.
+func flameTickCmdFn() tea.Cmd {
 	return tea.Tick(flameRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return flameTickMsg{} })
 }
 
