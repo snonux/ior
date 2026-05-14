@@ -173,7 +173,9 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
 	d := lookupTab(m.activeTab)
 	if d.InitCmd != nil {
-		cmds = append(cmds, d.InitCmd())
+		// Pass the model so the closure can read fastRefreshEvery and use
+		// the configured cadence rather than falling back to a constant.
+		cmds = append(cmds, d.InitCmd(&m))
 	} else if m.bubbleEnabledForTab(m.activeTab) {
 		cmds = append(cmds, bubbleTickCmdFn())
 	}
@@ -791,7 +793,9 @@ func (m Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
 	if prevActiveTab != m.activeTab {
 		d := lookupTab(m.activeTab)
 		if d.InitCmd != nil {
-			cmds = append(cmds, d.InitCmd())
+			// Pass the model so the closure reads fastRefreshEvery and honours
+			// the configured cadence from the first tick after a tab switch.
+			cmds = append(cmds, d.InitCmd(&m))
 		} else if m.bubbleEnabledForTab(m.activeTab) {
 			cmds = append(cmds, bubbleTickCmdFn())
 		}
@@ -1528,20 +1532,6 @@ func (m Model) flameTickCmd() tea.Cmd {
 		d = flameRefreshMs * time.Millisecond
 	}
 	return tea.Tick(d, func(time.Time) tea.Msg { return flameTickMsg{} })
-}
-
-// streamTickCmdFn is a package-level adapter used by the tab registry's InitCmd
-// field. It uses the constant cadence and is replaced on subsequent ticks by
-// the model-method version that respects fastRefreshEvery.
-func streamTickCmdFn() tea.Cmd {
-	return tea.Tick(streamRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return streamTickMsg{} })
-}
-
-// flameTickCmdFn is a package-level adapter used by the tab registry's InitCmd
-// field. It uses the constant cadence and is replaced on subsequent ticks by
-// the model-method version that respects fastRefreshEvery.
-func flameTickCmdFn() tea.Cmd {
-	return tea.Tick(flameRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return flameTickMsg{} })
 }
 
 func bubbleTickCmdFn() tea.Cmd {

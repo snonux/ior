@@ -40,8 +40,9 @@ type tabDescriptor struct {
 	// InitCmd is an optional extra Bubble Tea command to start alongside the
 	// global refresh tick when this tab is the active tab on Init. Tabs that
 	// need their own high-frequency tick (stream, flame) set this; others leave
-	// it nil.
-	InitCmd func() tea.Cmd
+	// it nil. The model is passed so the closure can use the configured
+	// fastRefreshEvery interval rather than a hardcoded constant.
+	InitCmd func(*Model) tea.Cmd
 	// Render draws the tab body. Nil means the tab has no registered renderer
 	// (used for tabs that handle rendering via other paths).
 	Render tabRenderFn
@@ -64,10 +65,12 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		ShortName:       "Flm",
 		Position:        10,
 		AllowedVizModes: []tabVizMode{tabVizModeTable},
-		InitCmd:         flameTickCmdFn,
-		Render:          tabRenderFlame,
-		HandleScroll:    nil,
-		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.One },
+		// Use the model method so the configured fastRefreshEvery interval
+		// is honoured on the very first tick, not just on subsequent ticks.
+		InitCmd:      func(m *Model) tea.Cmd { return m.flameTickCmd() },
+		Render:       tabRenderFlame,
+		HandleScroll: nil,
+		ShortcutKey:  func(k common.KeyMap) key.Binding { return k.One },
 	},
 	TabOverview: {
 		Name:            "Overview",
@@ -119,10 +122,12 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		ShortName:       "Str",
 		Position:        70,
 		AllowedVizModes: []tabVizMode{tabVizModeTable},
-		InitCmd:         streamTickCmdFn,
-		Render:          tabRenderStream,
-		HandleScroll:    tabScrollStream,
-		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Seven },
+		// Use the model method so the configured fastRefreshEvery interval
+		// is honoured on the very first tick, not just on subsequent ticks.
+		InitCmd:      func(m *Model) tea.Cmd { return m.streamTickCmd() },
+		Render:       tabRenderStream,
+		HandleScroll: tabScrollStream,
+		ShortcutKey:  func(k common.KeyMap) key.Binding { return k.Seven },
 	},
 }
 
