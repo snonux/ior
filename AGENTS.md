@@ -76,6 +76,7 @@ Generator source code:
 - **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime.
 - **Tab navigation** supports `tab/shift+tab`, numeric keys `1..7`, and directional keys `left/right` and `h/l`.
 - **When export is disabled**, export key hints are hidden from dashboard help and `e` does not open export modal.
+- **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to disable high-frequency refresh and fall back to the standard dashboard cadence.
 
 ## Code Style
 
