@@ -12,12 +12,22 @@ import (
 const (
 	sysProcessVMReadv  = 310
 	sysProcessVMWritev = 311
+	sysSendmmsg        = 307
 	retbytesPayloadLen = 18
 )
+
+type mmsghdr struct {
+	hdr syscall.Msghdr
+	len uint32
+	_   uint32
+}
 
 // retbytesPhaseA exercises byte-classified syscalls that use generic ret_event exits.
 func retbytesPhaseA() error {
 	if err := retbytesSocketIO(); err != nil {
+		return err
+	}
+	if err := retbytesBatchSocketIO(); err != nil {
 		return err
 	}
 	if err := retbytesSendfile(); err != nil {
@@ -65,6 +75,44 @@ func retbytesSocketIO() error {
 	if n != len(payload) {
 		return fmt.Errorf("recvmsg read %d bytes, want %d", n, len(payload))
 	}
+	return nil
+}
+
+func retbytesBatchSocketIO() error {
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_DGRAM, 0)
+	if err != nil {
+		return fmt.Errorf("batch socketpair: %w", err)
+	}
+	defer syscall.Close(fds[0])
+	defer syscall.Close(fds[1])
+
+	payloadA := []byte("batch-one")
+	payloadB := []byte("batch-two")
+	sendMsgs := mmsgSlice(payloadA, payloadB)
+	n, _, errno := syscall.Syscall6(sysSendmmsg, uintptr(fds[0]), uintptr(unsafe.Pointer(&sendMsgs[0])), uintptr(len(sendMsgs)), 0, 0, 0)
+	if errno != 0 {
+		return fmt.Errorf("sendmmsg: %w", errno)
+	}
+	if n != uintptr(len(sendMsgs)) {
+		return fmt.Errorf("sendmmsg sent %d messages, want %d", n, len(sendMsgs))
+	}
+	runtime.KeepAlive(payloadA)
+	runtime.KeepAlive(payloadB)
+	runtime.KeepAlive(sendMsgs)
+
+	recvA := make([]byte, len(payloadA))
+	recvB := make([]byte, len(payloadB))
+	recvMsgs := mmsgSlice(recvA, recvB)
+	n, _, errno = syscall.Syscall6(syscall.SYS_RECVMMSG, uintptr(fds[1]), uintptr(unsafe.Pointer(&recvMsgs[0])), uintptr(len(recvMsgs)), 0, 0, 0)
+	if errno != 0 {
+		return fmt.Errorf("recvmmsg: %w", errno)
+	}
+	if n != uintptr(len(recvMsgs)) {
+		return fmt.Errorf("recvmmsg received %d messages, want %d", n, len(recvMsgs))
+	}
+	runtime.KeepAlive(recvA)
+	runtime.KeepAlive(recvB)
+	runtime.KeepAlive(recvMsgs)
 	return nil
 }
 
@@ -200,6 +248,17 @@ func openPayloadFile(path string) (int, error) {
 		return 0, fmt.Errorf("seek payload: %w", err)
 	}
 	return fd, nil
+}
+
+func mmsgSlice(bufs ...[]byte) []mmsghdr {
+	msgs := make([]mmsghdr, len(bufs))
+	iovs := make([]syscall.Iovec, len(bufs))
+	for i := range bufs {
+		iovs[i] = syscall.Iovec{Base: &bufs[i][0], Len: uint64(len(bufs[i]))}
+		msgs[i].hdr.Iov = &iovs[i]
+		msgs[i].hdr.Iovlen = 1
+	}
+	return msgs
 }
 
 func processVMReadv(pid int, local, remote []byte) (int, error) {
