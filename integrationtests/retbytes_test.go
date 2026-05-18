@@ -10,6 +10,8 @@ func TestRetbytesPhaseA(t *testing.T) {
 		{Tracepoint: "enter_recvfrom", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_sendmsg", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_recvmsg", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_sendmmsg", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_recvmmsg", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_sendfile64", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_splice", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_tee", Comm: "ioworkload", MinCount: 1},
@@ -30,6 +32,12 @@ func TestRetbytesPhaseA(t *testing.T) {
 	} {
 		exp := ExpectedEvent{Tracepoint: tracepoint, Comm: "ioworkload"}
 		assertEventBytesAtLeast(t, result, exp, payloadLen)
+		assertEventDurationPositive(t, result, exp)
+	}
+
+	for _, tracepoint := range []string{"enter_sendmmsg", "enter_recvmmsg"} {
+		exp := ExpectedEvent{Tracepoint: tracepoint, Comm: "ioworkload"}
+		assertEventBytesEqual(t, result, exp, 0)
 		assertEventDurationPositive(t, result, exp)
 	}
 }

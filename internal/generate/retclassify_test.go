@@ -7,7 +7,7 @@ func TestClassifyRetRead(t *testing.T) {
 		"fgetxattr", "flistxattr", "getdents", "getdents64", "getxattr",
 		"lgetxattr", "listxattr", "llistxattr", "pread64", "preadv",
 		"preadv2", "process_vm_readv", "read", "readlink", "readlinkat",
-		"readv", "recvmmsg", "recvmsg", "recvfrom", "syslog",
+		"readv", "recvmsg", "recvfrom", "syslog",
 	}
 	for _, name := range reads {
 		if got := ClassifyRet("sys_exit_" + name); got != ReadClassified {
@@ -19,7 +19,7 @@ func TestClassifyRetRead(t *testing.T) {
 func TestClassifyRetWrite(t *testing.T) {
 	writes := []string{
 		"process_vm_writev", "pwrite64", "pwritev", "pwritev2",
-		"sendmmsg", "sendmsg", "sendto", "write", "writev",
+		"sendmsg", "sendto", "write", "writev",
 	}
 	for _, name := range writes {
 		if got := ClassifyRet("sys_exit_" + name); got != WriteClassified {
@@ -43,12 +43,23 @@ func TestClassifyRetUnclassified(t *testing.T) {
 	unclassified := []string{
 		"openat", "close", "rename", "unlink", "fcntl", "dup", "dup2", "dup3",
 		"mkdir", "rmdir", "chmod", "chown", "chdir", "stat", "lseek",
-		"truncate", "fallocate", "mmap", "fsync", "flock",
+		"truncate", "fallocate", "mmap", "fsync", "flock", "recvmmsg", "sendmmsg",
 	}
 	for _, name := range unclassified {
 		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
 			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want UNCLASSIFIED", name, got)
 		}
+	}
+}
+
+func TestBatchMessageSyscallsDeferredFromRetByteClassification(t *testing.T) {
+	tests := []string{"recvmmsg", "sendmmsg"}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
+				t.Fatalf("ClassifyRet(sys_exit_%s) = %q, want %q", name, got, Unclassified)
+			}
+		})
 	}
 }
 

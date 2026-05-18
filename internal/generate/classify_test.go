@@ -372,11 +372,27 @@ func TestClassifyPhaseAByteSyscallPairsAccepted(t *testing.T) {
 	}
 }
 
+func TestBatchMessageSyscallPairsDeferByteClassification(t *testing.T) {
+	tests := []string{"sendmmsg", "recvmmsg"}
+	for i, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			output := GenerateTracepointsC(phaseAFormats(name, 9100+i*2))
+			if strings.Contains(output, "Ignoring") || strings.Contains(output, "Skipping") {
+				t.Fatalf("syscall %s was not accepted:\n%s", name, output)
+			}
+			if !strings.Contains(output, "/// sys_exit_"+name+" is a struct ret_event (UNCLASSIFIED)") {
+				t.Fatalf("sys_exit_%s should be generated without byte classification:\n%s", name, output)
+			}
+		})
+	}
+}
+
 func phaseAFormats(name string, enterID int) []Format {
 	enterFields := []Field{
 		{Type: "long", Name: "__syscall_nr"},
 	}
-	if name == "sendto" || name == "recvfrom" || name == "sendmsg" || name == "recvmsg" {
+	if name == "sendto" || name == "recvfrom" || name == "sendmsg" || name == "recvmsg" ||
+		name == "sendmmsg" || name == "recvmmsg" {
 		enterFields = append(enterFields, Field{Type: "int", Name: "fd"})
 	}
 

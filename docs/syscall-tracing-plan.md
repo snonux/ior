@@ -98,15 +98,15 @@ These are conspicuously absent from ior (which already has read/write but not so
 | `setsockopt` | yes | no | yes (optlen) | extend `KindFd` | level/optname | P2 |
 | `sendto` | yes | no | **yes** (len) | `KindRet` + `WriteClassified` (already in `retClassifications`!) | sockaddr family | P1 |
 | `sendmsg` | yes | no | **yes** (iov total) | `KindRet` + `WriteClassified` (already mapped) | flags | P1 |
-| `sendmmsg` | yes | no | **yes** (sum of msgs) | `KindRet` + `WriteClassified` (already mapped) | vlen, flags | P1 |
+| `sendmmsg` | yes | no | **yes** (sum of msgs) | defer byte classification until payload bytes can be computed from message vectors | vlen, flags | P1 |
 | `recvfrom` | yes | no | **yes** (len) | `KindRet` + `ReadClassified` (already mapped) | sockaddr family | P1 |
 | `recvmsg` | yes | no | **yes** (iov total) | `KindRet` + `ReadClassified` (already mapped) | flags | P1 |
-| `recvmmsg` | yes | no | **yes** (sum of msgs) | `KindRet` + `ReadClassified` (already mapped) | vlen, flags, timeout | P1 |
+| `recvmmsg` | yes | no | **yes** (sum of msgs) | defer byte classification until payload bytes can be computed from message vectors | vlen, flags, timeout | P1 |
 | `sendfile64` | yes (both in/out fd) | no | **yes** (count) | `KindRet` + `TransferClassified` (already mapped) | both fds | P1 |
 | `splice` | yes (both fds) | no | **yes** (len) | `KindRet` + `TransferClassified` (already mapped) | both fds, flags | P1 |
 | `tee` | yes (both fds) | no | **yes** (len) | `KindRet` + `TransferClassified` (already mapped) | both fds, flags | P1 |
 
-> Note: `RetClassification` already lists the recv/send/sendfile/splice/tee/process_vm_* families. The classifier just refuses them today because `shouldIgnore`/`exactIgnores` short-circuits earlier in `classify.go`. **Removing those ignores is the cheapest possible win** — bytes accounting drops in for free.
+> Note: `RetClassification` covers single-message recv/send, sendfile/splice/tee, and process_vm_* families. Batched `sendmmsg`/`recvmmsg` are not safe to classify through generic return-value byte accounting because their return value is message count, not payload bytes.
 
 ### 3.2 IPC — pipes, eventfd, signalfd, message queues, shared mem, semaphores
 
@@ -355,7 +355,7 @@ Out of the ~230 currently-ignored syscalls, **fd as argument** appears in:
 - Security: `landlock_add_rule` (ruleset_fd), `landlock_restrict_self`, `kexec_file_load`
 - Mount: `move_mount` (two), `fsmount` (fsfd)
 - Perf: `perf_event_open` (group_fd)
-- Already-mapped Ret-classified bytes-carrying entries that block on `shouldIgnore` only: all send/recv variants, `sendfile64`, `splice`, `tee`, `vmsplice` (already traced), `process_vm_readv`, `process_vm_writev`
+- Already-mapped Ret-classified bytes-carrying entries that block on `shouldIgnore` only: single-message send/recv variants, `sendfile64`, `splice`, `tee`, `vmsplice` (already traced), `process_vm_readv`, `process_vm_writev`. `sendmmsg`/`recvmmsg` need message-vector byte accounting before they can join this set.
 
 ### 4.2 Which syscalls return an fd? (Summary)
 
@@ -442,7 +442,7 @@ Tracing `futex`, `clock_gettime`, `epoll_wait`, `nanosleep`, and `read`/`write` 
 A pragmatic, low-risk order of work — each step ships independent value:
 
 **Phase A — "free wins"** (no new kind needed, just unblock ignores)
-- Network read/write bytes: enable `sendto`/`sendmsg`/`sendmmsg`/`recvfrom`/`recvmsg`/`recvmmsg`, `sendfile64`, `splice`, `tee`, `process_vm_readv`, `process_vm_writev`. These already appear in `retClassifications`; only `shouldIgnore` blocks them. Need a `KindRet` exit handler and minimal enter wiring.
+- Network read/write bytes: enable `sendto`/`sendmsg`/`recvfrom`/`recvmsg`, `sendfile64`, `splice`, `tee`, `process_vm_readv`, `process_vm_writev`. These can use `retClassifications` directly because their return values are payload bytes. Defer `sendmmsg`/`recvmmsg` byte totals until enter-state/iovec accounting can compute payload bytes rather than message counts.
 
 **Phase B — high-impact families** (new kinds, but small set, very visible payoff)
 - `socket`/`socketpair`/`accept[4]`/`bind`/`connect`/`listen`/`shutdown` + getsock*/setsock*
