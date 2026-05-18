@@ -314,6 +314,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	if !e.handleTracepointExit(ep) {
 		return
 	}
+	applyRetBytes(ep)
 	tid := ep.EnterEv.GetTid()
 	ep.CalculateDurations(e.pairs.prevTime(tid))
 	e.pairs.setPrevTime(tid, ep.ExitEv.GetTime())

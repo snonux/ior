@@ -57,3 +57,28 @@ func TestClassifyRetCaseInsensitive(t *testing.T) {
 		t.Errorf("ClassifyRet(sys_exit_READ) = %q, want READ_CLASSIFIED", got)
 	}
 }
+
+func TestPhaseAByteClassifiedSyscallsUseExistingRetClassifications(t *testing.T) {
+	tests := []struct {
+		name string
+		want RetClassification
+	}{
+		{"recvfrom", ReadClassified},
+		{"recvmsg", ReadClassified},
+		{"sendto", WriteClassified},
+		{"sendmsg", WriteClassified},
+		{"sendfile64", TransferClassified},
+		{"splice", TransferClassified},
+		{"tee", TransferClassified},
+		{"process_vm_readv", ReadClassified},
+		{"process_vm_writev", WriteClassified},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ClassifyRet("sys_exit_" + tt.name); got != tt.want {
+				t.Fatalf("ClassifyRet(sys_exit_%s) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
