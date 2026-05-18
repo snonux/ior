@@ -223,77 +223,38 @@ func TestClassifyRetExitSymlink(t *testing.T) {
 	}
 }
 
-// --- Ignore tests ---
-
-func TestIgnoreMknod(t *testing.T) {
+func TestClassifyPathnameMknod(t *testing.T) {
 	r := classifyFromData(t, FormatMknod)
-	if r.Kind != KindNone {
-		t.Errorf("mknod: got kind %d, want KindNone (ignored)", r.Kind)
+	if r.Kind != KindPathname {
+		t.Errorf("mknod: got kind %d, want KindPathname", r.Kind)
 	}
 }
 
-func TestIgnoreExecve(t *testing.T) {
+func TestClassifyPathnameExecve(t *testing.T) {
 	r := classifyFromData(t, FormatExecve)
-	if r.Kind != KindNone {
-		t.Errorf("execve: got kind %d, want KindNone (ignored)", r.Kind)
+	if r.Kind != KindPathname {
+		t.Errorf("execve: got kind %d, want KindPathname", r.Kind)
 	}
 }
 
-func TestIgnoreAccept(t *testing.T) {
+func TestClassifyFdAccept(t *testing.T) {
 	r := classifyFromData(t, FormatAccept)
-	if r.Kind != KindNone {
-		t.Errorf("accept: got kind %d, want KindNone (ignored)", r.Kind)
+	if r.Kind != KindFd {
+		t.Errorf("accept: got kind %d, want KindFd", r.Kind)
 	}
 }
 
-func TestIgnoreSocket(t *testing.T) {
+func TestClassifySocketRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatSocket)
 	if r.Kind != KindNone {
-		t.Errorf("socket: got kind %d, want KindNone (ignored)", r.Kind)
+		t.Errorf("socket: got kind %d, want KindNone before generation fallback", r.Kind)
 	}
 }
 
-func TestIgnoreKill(t *testing.T) {
+func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {
-		t.Errorf("kill: got kind %d, want KindNone (no matching type)", r.Kind)
-	}
-}
-
-func TestShouldIgnorePatterns(t *testing.T) {
-	ignoreNames := []string{
-		"sys_enter_mknod", "sys_enter_mknodat",
-		"sys_enter_execve", "sys_enter_execveat",
-		"sys_enter_accept", "sys_enter_accept4",
-		"sys_enter_listen",
-		"sys_enter_epoll_ctl", "sys_enter_epoll_pwait",
-		"sys_enter_recvfrom", "sys_enter_recvmsg", "sys_enter_recvmmsg",
-		"sys_enter_sendto", "sys_enter_sendmsg", "sys_enter_sendmmsg",
-		"sys_enter_socket", "sys_enter_socketpair", "sys_enter_getsockname",
-		"sys_enter_inotify_init", "sys_enter_inotify_add_watch",
-		"sys_enter_bind", "sys_enter_setns", "sys_enter_shutdown",
-		"sys_enter_connect", "sys_enter_fanotify_init", "sys_enter_getpeername",
-	}
-	for _, name := range ignoreNames {
-		if !shouldIgnore(name) {
-			t.Errorf("shouldIgnore(%q) = false, want true", name)
-		}
-	}
-}
-
-func TestShouldNotIgnore(t *testing.T) {
-	noIgnore := []string{
-		"sys_enter_read", "sys_enter_write", "sys_enter_openat",
-		"sys_enter_close", "sys_enter_rename", "sys_enter_unlink",
-		"sys_enter_copy_file_range",
-		"sys_enter_msync",
-		"sys_enter_pidfd_getfd",
-		"sys_exit_read", "sys_exit_openat",
-	}
-	for _, name := range noIgnore {
-		if shouldIgnore(name) {
-			t.Errorf("shouldIgnore(%q) = true, want false", name)
-		}
+		t.Errorf("kill: got kind %d, want KindNone before generation fallback", r.Kind)
 	}
 }
 
@@ -324,6 +285,11 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"io_uring_register", FormatIoUringRegister, FormatExitIoUringRegister, KindFd},
 		{"pread64", FormatPread64, FormatExitPread64, KindFd},
 		{"symlink", FormatSymlink, FormatExitSymlink, KindName},
+		{"mknod", FormatMknod, FormatExitMknod, KindPathname},
+		{"execve", FormatExecve, FormatExitExecve, KindPathname},
+		{"accept", FormatAccept, FormatExitAccept, KindFd},
+		{"socket", FormatSocket, FormatExitSocket, KindNull},
+		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
 	for _, tt := range tests {
@@ -337,25 +303,36 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 	}
 }
 
-func TestClassifySyscallPairIgnored(t *testing.T) {
+func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 	tests := []struct {
-		name  string
-		enter string
-		exit  string
+		name   string
+		enter  string
+		exit   string
+		family SyscallFamily
 	}{
-		{"mknod", FormatMknod, FormatExitMknod},
-		{"execve", FormatExecve, FormatExitExecve},
-		{"accept", FormatAccept, FormatExitAccept},
-		{"socket", FormatSocket, FormatExitSocket},
-		{"kill", FormatKill, FormatExitKill},
+		{"mknod", FormatMknod, FormatExitMknod, FamilyFS},
+		{"execve", FormatExecve, FormatExitExecve, FamilyProcess},
+		{"accept", FormatAccept, FormatExitAccept, FamilyNetwork},
+		{"socket", FormatSocket, FormatExitSocket, FamilyNetwork},
+		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			input := tt.enter + "\n" + tt.exit
-			output := GenerateTracepointsC(mustParseAll(t, input))
-			if !strings.Contains(output, "Ignoring") {
-				t.Errorf("syscall %s was accepted, expected ignored", tt.name)
+			formats := mustParseAll(t, input)
+			if formats[0].Family != tt.family {
+				t.Fatalf("%s family = %s, want %s", tt.name, formats[0].Family, tt.family)
+			}
+			output := GenerateTracepointsC(formats)
+			if strings.Contains(output, "Ignoring") {
+				t.Errorf("syscall %s was ignored, expected accepted", tt.name)
+			}
+			if !strings.Contains(output, `SEC("tracepoint/syscalls/sys_enter_`+tt.name+`")`) {
+				t.Errorf("syscall %s missing enter handler", tt.name)
+			}
+			if !strings.Contains(output, `SEC("tracepoint/syscalls/sys_exit_`+tt.name+`")`) {
+				t.Errorf("syscall %s missing exit handler", tt.name)
 			}
 		})
 	}

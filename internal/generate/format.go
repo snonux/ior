@@ -19,6 +19,7 @@ type Field struct {
 type Format struct {
 	Name           string
 	ID             int
+	Family         SyscallFamily
 	InternalFields []Field
 	ExternalFields []Field
 }
@@ -64,6 +65,7 @@ func applyFormatLine(line string, _ []Format, current *Format, isExternal bool, 
 	case strings.HasPrefix(trimmed, "name:"):
 		f := Format{}
 		f.Name = strings.TrimSpace(strings.TrimPrefix(trimmed, "name:"))
+		f.Family = ClassifySyscallFamily(f.Name)
 		*formats = append(*formats, f)
 		current = &(*formats)[len(*formats)-1]
 		isExternal = false

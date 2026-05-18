@@ -94,7 +94,7 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 	allCanGenerate := true
 
 	if sc.Enter != nil {
-		enterClass = ClassifyFormat(sc.Enter)
+		enterClass = classifyEnterForGeneration(sc.Enter)
 		if enterClass.Kind == KindNone {
 			allCanGenerate = false
 		}
@@ -113,7 +113,7 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 
 	if !allCanGenerate {
 		names := syscallFormatNames(sc)
-		return nil, fmt.Sprintf("Ignoring %s as possibly not file I/O related", strings.Join(names, " "))
+		return nil, fmt.Sprintf("Skipping %s as incomplete or unclassifiable", strings.Join(names, " "))
 	}
 
 	if isEnterRejected(enterClass.Kind) {
@@ -129,6 +129,14 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 		result = append(result, GeneratedTracepoint{Format: sc.Exit, Classification: exitClass})
 	}
 	return result, ""
+}
+
+func classifyEnterForGeneration(f *Format) ClassificationResult {
+	classification := ClassifyFormat(f)
+	if classification.Kind != KindNone || len(f.ExternalFields) == 0 {
+		return classification
+	}
+	return ClassificationResult{Kind: KindNull}
 }
 
 // isEnterRejected reports whether kind must not appear on a syscall-enter

@@ -195,10 +195,50 @@ func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
 }
 
-func TestGenerateIgnoredComment(t *testing.T) {
+func TestGenerateFallbackNullHandler(t *testing.T) {
 	output := generateFromPair(t, FormatKill, FormatExitKill)
 
-	requireContains(t, output, "/// Ignoring sys_enter_kill sys_exit_kill as possibly not file I/O related")
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_kill")`)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_kill")`)
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+func TestGenerateHandlersForEverySyscallFamily(t *testing.T) {
+	tests := []struct {
+		syscall string
+		family  SyscallFamily
+	}{
+		{"accept", FamilyNetwork},
+		{"pipe2", FamilyIPC},
+		{"munmap", FamilyMemory},
+		{"execve", FamilyProcess},
+		{"kill", FamilySignals},
+		{"nanosleep", FamilyTime},
+		{"sched_yield", FamilySched},
+		{"mknod", FamilyFS},
+		{"epoll_wait", FamilyPolling},
+		{"io_setup", FamilyAIO},
+		{"bpf", FamilySecurity},
+		{"sysinfo", FamilyMisc},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.syscall, func(t *testing.T) {
+			input := syntheticPair(tt.syscall)
+			formats := mustParseAll(t, input)
+			if formats[0].Family != tt.family {
+				t.Fatalf("%s family = %s, want %s", tt.syscall, formats[0].Family, tt.family)
+			}
+			output := GenerateTracepointsC(formats)
+			if strings.Contains(output, "Skipping") {
+				t.Fatalf("%s was skipped: %s", tt.syscall, output)
+			}
+			requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_`+tt.syscall+`")`)
+			requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_`+tt.syscall+`")`)
+		})
+	}
 }
 
 func TestGenerateDefineConstants(t *testing.T) {
@@ -333,10 +373,18 @@ func TestGroupBySyscallInvalid(t *testing.T) {
 func TestClassifySyscallNoExit(t *testing.T) {
 	formats := mustParseAll(t, FormatRead)
 	output := GenerateTracepointsC(formats)
-	requireContains(t, output, "Ignoring")
+	requireContains(t, output, "Skipping")
 	if strings.Contains(output, "SEC(") {
 		t.Error("syscall with only enter and no exit should be ignored")
 	}
+}
+
+func syntheticPair(syscall string) string {
+	enter := strings.Replace(FormatKill, "sys_enter_kill", "sys_enter_"+syscall, 1)
+	enter = strings.Replace(enter, "ID: 183", "ID: 1001", 1)
+	exit := strings.Replace(FormatExitKill, "sys_exit_kill", "sys_exit_"+syscall, 1)
+	exit = strings.Replace(exit, "ID: 182", "ID: 1000", 1)
+	return enter + "\n" + exit
 }
 
 func requireContains(t *testing.T, haystack, needle string) {
