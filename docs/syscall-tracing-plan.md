@@ -366,7 +366,8 @@ Out of the ~230 currently-ignored syscalls, **fd as argument** appears in:
 Two distinct cases:
 
 1. **True payload bytes** (move data) — these should plug into the existing `RetClassification` (Read/Write/Transfer):
-   - Already mapped but blocked by `shouldIgnore`: all socket send/recv, `sendfile64`, `splice`, `tee`, `process_vm_readv/writev`.
+   - Covered by Phase A's generic return-value byte path: single-message socket send/recv (`sendto`, `sendmsg`, `recvfrom`, `recvmsg`), `sendfile64`, `splice`, `tee`, `process_vm_readv/writev`.
+   - Deferred from return-value byte classification: batched socket mmsg calls (`sendmmsg`, `recvmmsg`) return message count, not payload bytes, so they need message-vector accounting first.
    - New candidates worth adding to `retClassifications`:
      - `getrandom` → ReadClassified
      - `mq_timedsend` → WriteClassified
@@ -469,10 +470,10 @@ A pragmatic, low-risk order of work — each step ships independent value:
 | Phase | New syscalls covered | Running total / 250 |
 |---|---|---|
 | Baseline (today) | 0 | 117 |
-| Phase A | +12 (recv/send/sendfile/splice/tee/process_vm_*) | 129 |
-| Phase B | +~40 (sockets, pipes, fds-from-air, polling, futex, sleep, memory) | ~170 |
-| Phase C | +~15 (process lifecycle) | ~185 |
-| Phase D | +~15 (security, modules, keys) | ~200 |
+| Phase A | +9 (single-message recv/send, sendfile64, splice, tee, process_vm_*; mmsg deferred) | 126 |
+| Phase B | +~40 (sockets, pipes, fds-from-air, polling, futex, sleep, memory) | ~166 |
+| Phase C | +~15 (process lifecycle) | ~181 |
+| Phase D | +~15 (security, modules, keys) | ~196 |
 | Phase E | +~50 (long tail) | ~250 |
 
 When all phases ship, the generator should also stop emitting `Ignoring ...` comments for these and instead emit a per-syscall family tag.
