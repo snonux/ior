@@ -730,6 +730,9 @@ func TestHeadlessParquetSinkRecordsRows(t *testing.T) {
 	if rows[0].Comm != "keep" || rows[1].Syscall != "openat" {
 		t.Fatalf("unexpected recorded rows: %+v %+v", rows[0], rows[1])
 	}
+	if rows[0].Family != "FS" || rows[1].Family != "FS" {
+		t.Fatalf("recorded family tags = %q,%q, want FS,FS", rows[0].Family, rows[1].Family)
+	}
 }
 
 func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T) {

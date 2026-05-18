@@ -21,6 +21,7 @@ type Record struct {
 	PID         uint32 `parquet:"pid"`
 	TID         uint32 `parquet:"tid"`
 	Syscall     string `parquet:"syscall"`
+	Family      string `parquet:"family"`
 	FD          int32  `parquet:"fd"`
 	Ret         int64  `parquet:"ret"`
 	Bytes       uint64 `parquet:"bytes"`
@@ -62,6 +63,7 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		PID:         row.PID,
 		TID:         row.TID,
 		Syscall:     row.Syscall,
+		Family:      row.Family,
 		FD:          row.FD,
 		Ret:         row.RetVal,
 		Bytes:       row.Bytes,

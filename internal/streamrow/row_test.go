@@ -66,8 +66,8 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	if got.Seq != 9 || got.TimeNs != 1234 {
 		t.Fatalf("Seq/TimeNs = %d/%d, want 9/1234", got.Seq, got.TimeNs)
 	}
-	if got.Syscall != "openat" || got.Comm != "cat" {
-		t.Fatalf("Syscall/Comm = %q/%q, want openat/cat", got.Syscall, got.Comm)
+	if got.Syscall != "openat" || got.Family != "FS" || got.Comm != "cat" {
+		t.Fatalf("Syscall/Family/Comm = %q/%q/%q, want openat/FS/cat", got.Syscall, got.Family, got.Comm)
 	}
 	if got.PID != 42 || got.TID != 84 {
 		t.Fatalf("PID/TID = %d/%d, want 42/84", got.PID, got.TID)
@@ -88,8 +88,8 @@ func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 	if got.Seq != 7 || got.TimeNs == 0 {
 		t.Fatalf("Seq/TimeNs = %d/%d, want 7/non-zero", got.Seq, got.TimeNs)
 	}
-	if got.Syscall != "warning" || got.Comm != "ior" {
-		t.Fatalf("Syscall/Comm = %q/%q, want warning/ior", got.Syscall, got.Comm)
+	if got.Syscall != "warning" || got.Family != "Misc" || got.Comm != "ior" {
+		t.Fatalf("Syscall/Family/Comm = %q/%q/%q, want warning/Misc/ior", got.Syscall, got.Family, got.Comm)
 	}
 	if got.FileName != "Dropped malformed event" || got.FD != UnknownFD {
 		t.Fatalf("FileName/FD = %q/%d, want warning text/%d", got.FileName, got.FD, UnknownFD)

@@ -67,6 +67,13 @@ func TestEngineIngestAndSnapshotIntegration(t *testing.T) {
 	if len(snap.Syscalls()) != 3 {
 		t.Fatalf("expected 3 syscall rows, got %d", len(snap.Syscalls()))
 	}
+	families := familyRowsByName(snap.Families())
+	if len(families) != 1 {
+		t.Fatalf("expected 1 family row, got %d", len(families))
+	}
+	if fs := families["FS"]; fs.Count != 3 || fs.Errors != 1 || fs.Bytes != 170 {
+		t.Fatalf("FS family = %+v, want count=3 errors=1 bytes=170", fs)
+	}
 	if len(snap.Files()) != 2 {
 		t.Fatalf("expected top 2 files due to topN=2, got %d", len(snap.Files()))
 	}
@@ -76,6 +83,50 @@ func TestEngineIngestAndSnapshotIntegration(t *testing.T) {
 	if snap.LatencyHistogram.Total != 3 || snap.GapHistogram.Total != 3 {
 		t.Fatalf("unexpected histogram totals: latency=%d gap=%d", snap.LatencyHistogram.Total, snap.GapHistogram.Total)
 	}
+}
+
+func TestEngineAggregatesSyscallFamilies(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(3000, 0)}
+	engine := newEngineWithClock(10, clock.Now)
+
+	engine.Ingest(newEnginePair(types.SYS_ENTER_EPOLL_WAIT, 0, types.UNCLASSIFIED, "poller", 1, "", 0, 100, 1))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_POLL, -1, types.UNCLASSIFIED, "poller", 1, "", 0, 300, 2))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_GETPID, 0, types.UNCLASSIFIED, "proc", 2, "", 0, 50, 3))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 4, types.READ_CLASSIFIED, "reader", 3, "/tmp/a", 4, 25, 4))
+	clock.Advance(time.Second)
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+
+	families := familyRowsByName(snap.Families())
+	polling := families["Polling"]
+	if polling.Count != 2 || polling.Errors != 1 || polling.LatencyMeanNs != 200 {
+		t.Fatalf("Polling family = %+v, want count=2 errors=1 mean=200ns", polling)
+	}
+	if families["Process"].Count != 1 {
+		t.Fatalf("Process family = %+v, want count=1", families["Process"])
+	}
+	if families["FS"].Count != 1 || families["FS"].Bytes != 4 {
+		t.Fatalf("FS family = %+v, want count=1 bytes=4", families["FS"])
+	}
+
+	nonIO := familyRowsByName(snap.NonIOFamilies())
+	if _, ok := nonIO["FS"]; ok {
+		t.Fatalf("NonIOFamilies should not include FS: %+v", nonIO["FS"])
+	}
+	if nonIO["Polling"].Count != 2 || nonIO["Process"].Count != 1 {
+		t.Fatalf("NonIOFamilies missing expected rows: %+v", nonIO)
+	}
+}
+
+func familyRowsByName(rows []FamilySnapshot) map[string]FamilySnapshot {
+	result := make(map[string]FamilySnapshot, len(rows))
+	for _, row := range rows {
+		result[row.Name] = row
+	}
+	return result
 }
 
 func TestEngineSnapshotWithNoEvents(t *testing.T) {

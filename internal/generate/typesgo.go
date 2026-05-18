@@ -149,6 +149,7 @@ func parseMember(line string) (CMember, bool) {
 func writeTypeDefsAndMaps(b *strings.Builder, constants []CConstant) {
 	b.WriteString("type EventType uint32\n")
 	b.WriteString("type TraceId uint32\n\n")
+	writeSyscallFamilyDefs(b)
 
 	var sysConstants []CConstant
 	for _, c := range constants {
@@ -166,10 +167,34 @@ func writeTypeDefsAndMaps(b *strings.Builder, constants []CConstant) {
 		s = strings.TrimPrefix(s, "SYS_EXIT_")
 		return strings.ToLower(s)
 	})
+	writeTraceIdFamilyMap(b, sysConstants)
 
 	writeTraceIdStringMethod(b)
 	writeTraceIdNameMethod(b)
+	writeTraceIdFamilyMethod(b)
 	b.WriteString("\n")
+}
+
+func writeSyscallFamilyDefs(b *strings.Builder) {
+	b.WriteString(`// SyscallFamily is the broad runtime grouping for a syscall tracepoint.
+type SyscallFamily string
+
+const (
+	FamilyNetwork  SyscallFamily = "Network"
+	FamilyMemory   SyscallFamily = "Memory"
+	FamilySignals  SyscallFamily = "Signals"
+	FamilySched    SyscallFamily = "Sched"
+	FamilyIPC      SyscallFamily = "IPC"
+	FamilyTime     SyscallFamily = "Time"
+	FamilyProcess  SyscallFamily = "Process"
+	FamilySecurity SyscallFamily = "Security"
+	FamilyFS       SyscallFamily = "FS"
+	FamilyPolling  SyscallFamily = "Polling"
+	FamilyAIO      SyscallFamily = "AIO"
+	FamilyMisc     SyscallFamily = "Misc"
+)
+
+`)
 }
 
 func writeTraceIdMap(b *strings.Builder, mapName string, constants []CConstant, transform func(string) string) {
@@ -180,6 +205,48 @@ func writeTraceIdMap(b *strings.Builder, mapName string, constants []CConstant, 
 	}
 	b.WriteString(strings.Join(entries, ", "))
 	b.WriteString(",\n}\n\n")
+}
+
+func writeTraceIdFamilyMap(b *strings.Builder, constants []CConstant) {
+	b.WriteString("var traceId2Family = map[TraceId]SyscallFamily{\n\t")
+	entries := make([]string, 0, len(constants))
+	for _, c := range constants {
+		tracepoint := strings.ToLower(c.Name)
+		tracepoint = strings.TrimPrefix(tracepoint, "sys_")
+		family := ClassifySyscallFamily("sys_" + tracepoint)
+		entries = append(entries, fmt.Sprintf("%s: %s", c.Value, syscallFamilyConstName(family)))
+	}
+	b.WriteString(strings.Join(entries, ", "))
+	b.WriteString(",\n}\n\n")
+}
+
+func syscallFamilyConstName(family SyscallFamily) string {
+	switch family {
+	case FamilyNetwork:
+		return "FamilyNetwork"
+	case FamilyMemory:
+		return "FamilyMemory"
+	case FamilySignals:
+		return "FamilySignals"
+	case FamilySched:
+		return "FamilySched"
+	case FamilyIPC:
+		return "FamilyIPC"
+	case FamilyTime:
+		return "FamilyTime"
+	case FamilyProcess:
+		return "FamilyProcess"
+	case FamilySecurity:
+		return "FamilySecurity"
+	case FamilyFS:
+		return "FamilyFS"
+	case FamilyPolling:
+		return "FamilyPolling"
+	case FamilyAIO:
+		return "FamilyAIO"
+	default:
+		return "FamilyMisc"
+	}
 }
 
 func writeTraceIdStringMethod(b *strings.Builder) {
@@ -201,6 +268,19 @@ func writeTraceIdNameMethod(b *strings.Builder) {
 		return fmt.Sprintf("unknown_trace_id_%d", s)
 	}
 	return str
+}
+
+`)
+}
+
+func writeTraceIdFamilyMethod(b *strings.Builder) {
+	b.WriteString(`// Family returns the broad syscall family for this tracepoint.
+func (s TraceId) Family() SyscallFamily {
+	family, ok := traceId2Family[s]
+	if !ok {
+		return FamilyMisc
+	}
+	return family
 }
 
 `)

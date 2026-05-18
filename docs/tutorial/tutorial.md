@@ -58,7 +58,7 @@ The same picker can be re-opened later from the dashboard with `p`.
 
 ## Touring the dashboard tabs
 
-The dashboard has seven tabs, addressable by number key. The default landing tab is **Flamegraph**. `tab` / `shift+tab` step forward / back.
+The dashboard has eight tabs, addressable by number key. The default landing tab is **Flamegraph**. `tab` / `shift+tab` step forward / back.
 
 | Key | Tab               | What it shows                                                            |
 |-----|-------------------|--------------------------------------------------------------------------|
@@ -69,6 +69,7 @@ The dashboard has seven tabs, addressable by number key. The default landing tab
 | `5` | Processes (`Pro`) | Per-process / per-comm counters                                          |
 | `6` | Latency (`Lat`)   | Latency + inter-syscall gap histograms                                   |
 | `7` | Stream (`Str`)    | Live tail of individual traced events                                    |
+| `8` | Non-IO (`NIO`)    | Broad non-file syscall family counters                                   |
 
 ### 1 · Flamegraph (default landing tab)
 
@@ -108,9 +109,13 @@ Press `6`. Two histograms: syscall **latency** (how long the syscall ran) and th
 
 ### 7 · Stream
 
-Press `7`. A live tail of every traced event row: comm, PID, TID, syscall, file, FD, return value, bytes, latency, gap. This is the workhorse view; the next section explores it in depth.
+Press `7`. A live tail of every traced event row: comm, PID, TID, syscall, family, file, FD, return value, bytes, latency, gap. This is the workhorse view; the next section explores it in depth.
 
 ![Stream tab live-tailing rows](./assets/07-stream-live.gif)
+
+### 8 · Non-IO
+
+Press `8`. This groups traced non-file syscall activity by broad family: network, memory, signals, scheduler, IPC, time, process, security, polling, AIO, and miscellaneous.
 
 ## Mastering the Stream tab
 

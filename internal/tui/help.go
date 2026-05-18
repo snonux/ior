@@ -69,7 +69,7 @@ func (m Model) helpSections() []helpSection {
 		{
 			title: "Dashboard Tabs",
 			lines: []string{
-				"tab/shift+tab tabs  1..7 jump tab  r reset baseline  R parquet rec",
+				"tab/shift+tab tabs  1..8 jump tab  r reset baseline  R parquet rec",
 				"I cycle auto-reset (off → 10s → 30s → 1m → 2m → 5m); status shows remaining/total",
 				"sys/files/proc/stream tables: arrows or hjkl move  pgup/pgdown page  g/G top/bottom",
 				"sys/files/proc tables: s sort  S reverse sort",

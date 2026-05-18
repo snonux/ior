@@ -18,6 +18,8 @@ const (
 	TabOverview Tab = iota
 	// TabSyscalls is the syscall table tab.
 	TabSyscalls
+	// TabNonIO is the syscall-family summary tab for non-FS families.
+	TabNonIO
 	// TabFiles is the file ranking tab.
 	TabFiles
 	// TabProcesses is the process breakdown tab.
