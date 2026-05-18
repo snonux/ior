@@ -3,6 +3,7 @@ package internal
 import (
 	"testing"
 
+	"ior/internal/event"
 	"ior/internal/types"
 )
 
@@ -69,5 +70,22 @@ func TestBytesFromRet(t *testing.T) {
 				t.Errorf("bytesFromRet() = %d, want %d", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestApplyRetBytesForNullEnterRetExitPair(t *testing.T) {
+	pair := &event.Pair{
+		EnterEv: &types.NullEvent{TraceId: types.SYS_ENTER_SPLICE},
+		ExitEv: &types.RetEvent{
+			TraceId: types.SYS_EXIT_SPLICE,
+			Ret:     4096,
+			RetType: types.TRANSFER_CLASSIFIED,
+		},
+	}
+
+	applyRetBytes(pair)
+
+	if pair.Bytes != 4096 {
+		t.Fatalf("pair.Bytes = %d, want 4096", pair.Bytes)
 	}
 }

@@ -109,9 +109,6 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
 		return false
 	}
-	if retEv, ok := ep.ExitEv.(*types.RetEvent); ok {
-		ep.Bytes = bytesFromRet(retEv)
-	}
 	return true
 }
 
@@ -313,6 +310,14 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int
 func (e *eventLoop) recyclePair(ep *event.Pair, warning string) {
 	e.notifyWarning(warning)
 	ep.Recycle()
+}
+
+func applyRetBytes(ep *event.Pair) {
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		return
+	}
+	ep.Bytes = bytesFromRet(retEv)
 }
 
 // dropMalformedRawEvent records a warning when a raw BPF event cannot be

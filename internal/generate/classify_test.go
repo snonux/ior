@@ -338,6 +338,67 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 	}
 }
 
+func TestClassifyPhaseAByteSyscallPairsAccepted(t *testing.T) {
+	tests := []struct {
+		name          string
+		enterKindText string
+		retText       string
+	}{
+		{"recvfrom", "struct fd_event", "READ_CLASSIFIED"},
+		{"recvmsg", "struct fd_event", "READ_CLASSIFIED"},
+		{"sendto", "struct fd_event", "WRITE_CLASSIFIED"},
+		{"sendmsg", "struct fd_event", "WRITE_CLASSIFIED"},
+		{"sendfile64", "struct null_event", "TRANSFER_CLASSIFIED"},
+		{"splice", "struct null_event", "TRANSFER_CLASSIFIED"},
+		{"tee", "struct null_event", "TRANSFER_CLASSIFIED"},
+		{"process_vm_readv", "struct null_event", "READ_CLASSIFIED"},
+		{"process_vm_writev", "struct null_event", "WRITE_CLASSIFIED"},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			formats := phaseAFormats(tt.name, 9000+i*2)
+			output := GenerateTracepointsC(formats)
+			if strings.Contains(output, "Ignoring") || strings.Contains(output, "Skipping") {
+				t.Fatalf("syscall %s was not accepted:\n%s", tt.name, output)
+			}
+			if !strings.Contains(output, "/// sys_enter_"+tt.name+" is a "+tt.enterKindText) {
+				t.Fatalf("sys_enter_%s did not use %s:\n%s", tt.name, tt.enterKindText, output)
+			}
+			if !strings.Contains(output, "/// sys_exit_"+tt.name+" is a struct ret_event ("+tt.retText+")") {
+				t.Fatalf("sys_exit_%s did not use %s:\n%s", tt.name, tt.retText, output)
+			}
+		})
+	}
+}
+
+func phaseAFormats(name string, enterID int) []Format {
+	enterFields := []Field{
+		{Type: "long", Name: "__syscall_nr"},
+	}
+	if name == "sendto" || name == "recvfrom" || name == "sendmsg" || name == "recvmsg" {
+		enterFields = append(enterFields, Field{Type: "int", Name: "fd"})
+	}
+
+	return []Format{
+		{
+			Name:           "sys_enter_" + name,
+			ID:             enterID,
+			Family:         ClassifySyscallFamily("sys_enter_" + name),
+			ExternalFields: enterFields,
+		},
+		{
+			Name:   "sys_exit_" + name,
+			ID:     enterID - 1,
+			Family: ClassifySyscallFamily("sys_exit_" + name),
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "long", Name: "ret"},
+			},
+		},
+	}
+}
+
 func TestClassifyFormatNoExternalFields(t *testing.T) {
 	f := &Format{
 		Name:           "sys_enter_test",

@@ -228,3 +228,22 @@ func assertEventBytesReasonable(t *testing.T, result TestResult, exp ExpectedEve
 		t.Fatalf("expected event not found while asserting byte range: %+v", exp)
 	}
 }
+
+func assertEventDurationPositive(t *testing.T, result TestResult, exp ExpectedEvent) {
+	t.Helper()
+	var matched bool
+	var totalDuration uint64
+	for _, rec := range result.Records {
+		if !matchesExpectation(rec, exp) {
+			continue
+		}
+		matched = true
+		totalDuration += rec.Cnt.Duration
+	}
+	if !matched {
+		t.Fatalf("expected event not found while asserting duration: %+v", exp)
+	}
+	if totalDuration == 0 {
+		t.Fatalf("duration for %+v is zero", exp)
+	}
+}
