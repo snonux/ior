@@ -40,10 +40,6 @@ func ClassifyFormat(f *Format) ClassificationResult {
 		return ClassificationResult{Kind: KindNone}
 	}
 
-	if shouldIgnore(f.Name) {
-		return ClassificationResult{Kind: KindNone}
-	}
-
 	if r, ok := classifyNameOnly(f.Name); ok {
 		return r
 	}
@@ -61,40 +57,6 @@ func ClassifyFormat(f *Format) ClassificationResult {
 	}
 
 	return ClassificationResult{Kind: KindNone}
-}
-
-func shouldIgnore(name string) bool {
-	prefixIgnores := []string{
-		"sys_enter_mknod",
-		"sys_enter_execve",
-		"sys_enter_accept",
-		"sys_enter_listen",
-		"sys_enter_epoll",
-	}
-	for _, p := range prefixIgnores {
-		if strings.HasPrefix(name, p) {
-			return true
-		}
-	}
-
-	if strings.HasPrefix(name, "sys_enter_") {
-		containsIgnores := []string{"recv", "send", "sock", "inotify"}
-		for _, sub := range containsIgnores {
-			if strings.Contains(name, sub) {
-				return true
-			}
-		}
-	}
-
-	exactIgnores := map[string]bool{
-		"sys_enter_bind":          true,
-		"sys_enter_setns":         true,
-		"sys_enter_shutdown":      true,
-		"sys_enter_connect":       true,
-		"sys_enter_fanotify_init": true,
-		"sys_enter_getpeername":   true,
-	}
-	return exactIgnores[name]
 }
 
 // classifyNameOnly handles tracepoints classified by name alone,
