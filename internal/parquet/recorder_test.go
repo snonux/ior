@@ -137,6 +137,7 @@ func testStreamRow(seq uint64, syscall string, isError bool) streamrow.Row {
 		Seq:        seq,
 		TimeNs:     seq * 10,
 		Syscall:    syscall,
+		Family:     "FS",
 		Comm:       "ior-test",
 		PID:        100 + uint32(seq),
 		TID:        200 + uint32(seq),

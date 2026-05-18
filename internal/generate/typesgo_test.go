@@ -47,6 +47,8 @@ struct fd_event {
 
 const testDefines = `#define SYS_ENTER_OPENAT 784
 #define SYS_EXIT_OPENAT 783
+#define SYS_ENTER_EPOLL_WAIT 782
+#define SYS_EXIT_EPOLL_WAIT 781
 `
 
 func TestParseCTypesInput(t *testing.T) {
@@ -72,7 +74,7 @@ func TestParseCTypesInput(t *testing.T) {
 	}
 
 	// Check constants
-	expectedConsts := 8 // MAX_FILENAME_LENGTH, MAX_PROGNAME_LENGTH, 2 event types, 2 classified, 2 SYS_
+	expectedConsts := 10 // MAX_FILENAME_LENGTH, MAX_PROGNAME_LENGTH, 2 event types, 2 classified, 4 SYS_
 	if len(constants) != expectedConsts {
 		t.Errorf("constants = %d, want %d", len(constants), expectedConsts)
 	}
@@ -232,6 +234,9 @@ func TestGenerateTypesGoTraceIdMaps(t *testing.T) {
 	requireContains(t, output, "var traceId2Name = map[TraceId]string{")
 	requireContains(t, output, `784: "openat"`)
 	requireContains(t, output, `783: "openat"`)
+	requireContains(t, output, "var traceId2Family = map[TraceId]SyscallFamily{")
+	requireContains(t, output, `784: FamilyFS`)
+	requireContains(t, output, `782: FamilyPolling`)
 }
 
 func TestGenerateTypesGoTraceIdMethods(t *testing.T) {
@@ -244,6 +249,7 @@ func TestGenerateTypesGoTraceIdMethods(t *testing.T) {
 
 	requireContains(t, output, "func (s TraceId) String() string")
 	requireContains(t, output, "func (s TraceId) Name() string")
+	requireContains(t, output, "func (s TraceId) Family() SyscallFamily")
 	requireContains(t, output, `return fmt.Sprintf("unknown_trace_id_%d", s)`)
 }
 

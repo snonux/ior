@@ -76,6 +76,7 @@ comm          String
 pid           UInt32
 tid           UInt32
 syscall       String
+family        String
 fd            Int32
 ret           Int64
 bytes         UInt64

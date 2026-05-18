@@ -1,22 +1,28 @@
 package statsengine
 
-import "testing"
+import (
+	"testing"
+
+	"ior/internal/types"
+)
 
 func TestNewSnapshotDefensivelyCopiesSlices(t *testing.T) {
 	latency := []float64{1, 2, 3}
 	gap := []float64{4, 5, 6}
 	throughput := []float64{7, 8, 9}
 	syscalls := []SyscallSnapshot{{Name: "read", Count: 1}}
+	families := []FamilySnapshot{{Family: types.FamilyPolling, Name: "Polling", Count: 3}}
 	files := []FileSnapshot{{Path: "/tmp/a", Accesses: 2}}
 	processes := []ProcessSnapshot{{PID: 10, Comm: "cmd"}}
 	latencyBuckets := []HistogramBucketSnapshot{{Label: "[0,1)", Count: 3}}
 	gapBuckets := []HistogramBucketSnapshot{{Label: "[1,10)", Count: 4}}
 
-	s := NewSnapshot(
+	s := NewSnapshotWithFamilies(
 		latency,
 		gap,
 		throughput,
 		syscalls,
+		families,
 		files,
 		processes,
 		NewHistogramSnapshot(3, latencyBuckets),
@@ -27,6 +33,7 @@ func TestNewSnapshotDefensivelyCopiesSlices(t *testing.T) {
 	gap[0] = 99
 	throughput[0] = 99
 	syscalls[0].Name = "write"
+	families[0].Name = "FS"
 	files[0].Path = "/tmp/b"
 	processes[0].Comm = "mutated"
 	latencyBuckets[0].Count = 99
@@ -44,6 +51,9 @@ func TestNewSnapshotDefensivelyCopiesSlices(t *testing.T) {
 	if got := s.Syscalls()[0].Name; got != "read" {
 		t.Fatalf("syscalls mutated through input slice: got %q", got)
 	}
+	if got := s.Families()[0].Name; got != "Polling" {
+		t.Fatalf("families mutated through input slice: got %q", got)
+	}
 	if got := s.Files()[0].Path; got != "/tmp/a" {
 		t.Fatalf("files mutated through input slice: got %q", got)
 	}
@@ -59,11 +69,12 @@ func TestNewSnapshotDefensivelyCopiesSlices(t *testing.T) {
 }
 
 func TestSnapshotAccessorsReturnReadOnlyViews(t *testing.T) {
-	s := NewSnapshot(
+	s := NewSnapshotWithFamilies(
 		[]float64{1},
 		[]float64{2},
 		[]float64{3},
 		[]SyscallSnapshot{{Name: "read"}},
+		[]FamilySnapshot{{Family: types.FamilyPolling, Name: "Polling"}},
 		[]FileSnapshot{{Path: "/tmp/a"}},
 		[]ProcessSnapshot{{Comm: "cmd"}},
 		NewHistogramSnapshot(1, []HistogramBucketSnapshot{{Label: "a", Count: 1}}),
@@ -82,6 +93,12 @@ func TestSnapshotAccessorsReturnReadOnlyViews(t *testing.T) {
 		t.Fatalf("expected accessor to return backing slice view, got %q", got)
 	}
 
+	families := s.Families()
+	families[0].Name = "Process"
+	if got := s.Families()[0].Name; got != "Process" {
+		t.Fatalf("expected family accessor to return backing slice view, got %q", got)
+	}
+
 	buckets := s.LatencyHistogram.Buckets()
 	buckets[0].Count = 99
 	if got := s.LatencyHistogram.Buckets()[0].Count; got != 99 {
@@ -97,10 +114,42 @@ func TestNilAccessorsRemainNil(t *testing.T) {
 	if got := s.Syscalls(); got != nil {
 		t.Fatalf("expected nil syscalls, got %#v", got)
 	}
+	if got := s.Families(); got != nil {
+		t.Fatalf("expected nil families, got %#v", got)
+	}
 
 	h := HistogramSnapshot{}
 	if got := h.Buckets(); got != nil {
 		t.Fatalf("expected nil buckets, got %#v", got)
+	}
+}
+
+func TestSnapshotNonIOFamilies(t *testing.T) {
+	s := NewSnapshotWithFamilies(
+		nil,
+		nil,
+		nil,
+		nil,
+		[]FamilySnapshot{
+			{Family: types.FamilyFS, Name: "FS"},
+			{Family: types.FamilyPolling, Name: "Polling"},
+			{Family: types.FamilyProcess, Name: "Process"},
+		},
+		nil,
+		nil,
+		HistogramSnapshot{},
+		HistogramSnapshot{},
+	)
+
+	rows := s.NonIOFamilies()
+	if len(rows) != 2 {
+		t.Fatalf("NonIOFamilies len = %d, want 2", len(rows))
+	}
+	if rows[0].Family == types.FamilyFS || rows[1].Family == types.FamilyFS {
+		t.Fatalf("NonIOFamilies included FS: %+v", rows)
+	}
+	if got := s.NonIOFamiliesCount(); got != 2 {
+		t.Fatalf("NonIOFamiliesCount = %d, want 2", got)
 	}
 }
 

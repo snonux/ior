@@ -74,7 +74,7 @@ Generator source code:
 - **TUI trace flow** ingests events into the in-memory stats engine; it does **not** continuously write trace rows to disk.
 - **File output in TUI** is explicit export only (`e`), writing `ior-stream-<timestamp>.csv` in the current directory from the current filtered stream snapshot.
 - **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime.
-- **Tab navigation** supports `tab/shift+tab`, numeric keys `1..7`, and directional keys `left/right` and `h/l`.
+- **Tab navigation** supports `tab/shift+tab`, numeric keys `1..8`, and directional keys `left/right` and `h/l`.
 - **When export is disabled**, export key hints are hidden from dashboard help and `e` does not open export modal.
 - **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to disable high-frequency refresh and fall back to the standard dashboard cadence.
 

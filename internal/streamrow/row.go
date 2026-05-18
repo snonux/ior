@@ -15,6 +15,7 @@ type Row struct {
 	Seq        uint64
 	TimeNs     uint64
 	Syscall    string
+	Family     string
 	Comm       string
 	PID        uint32
 	TID        uint32
@@ -101,6 +102,7 @@ func New(seq uint64, pair *event.Pair) Row {
 		Seq:        seq,
 		TimeNs:     pair.EnterEv.GetTime(),
 		Syscall:    pair.EnterEv.GetTraceId().Name(),
+		Family:     string(pair.EnterEv.GetTraceId().Family()),
 		Comm:       pair.Comm,
 		PID:        pair.EnterEv.GetPid(),
 		TID:        pair.EnterEv.GetTid(),
@@ -138,6 +140,7 @@ func NewWarning(seq uint64, message string) Row {
 		Seq:      seq,
 		TimeNs:   now,
 		Syscall:  "warning",
+		Family:   string(types.FamilyMisc),
 		Comm:     "ior",
 		FileName: message,
 		FD:       UnknownFD,

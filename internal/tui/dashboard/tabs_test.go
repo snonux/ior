@@ -11,8 +11,14 @@ func TestTabNavigationWraps(t *testing.T) {
 	if got := nextTab(TabLatency); got != TabStream {
 		t.Fatalf("expected next after latency+gaps to be stream, got %v", got)
 	}
-	if got := nextTab(TabStream); got != TabFlame {
-		t.Fatalf("expected next after stream to be flame, got %v", got)
+	if got := nextTab(TabStream); got != TabNonIO {
+		t.Fatalf("expected next after stream to be non-io, got %v", got)
+	}
+	if got := prevTab(TabFlame); got != TabNonIO {
+		t.Fatalf("expected prev before flame to be non-io, got %v", got)
+	}
+	if got := nextTab(TabNonIO); got != TabFlame {
+		t.Fatalf("expected next after non-io to be flame, got %v", got)
 	}
 	if got := nextTab(TabFlame); got != TabOverview {
 		t.Fatalf("expected wrap to overview from flame, got %v", got)
@@ -23,8 +29,8 @@ func TestTabNavigationWraps(t *testing.T) {
 }
 
 func TestRenderTabBarContainsLabels(t *testing.T) {
-	out := renderTabBar(TabOverview, 100)
-	for _, label := range []string{"Overview", "Syscalls", "Files", "Processes", "Latency+Gaps", "Stream", "Flame"} {
+	out := renderTabBar(TabOverview, 140)
+	for _, label := range []string{"Overview", "Syscalls", "Files", "Processes", "Latency+Gaps", "Stream", "Non-IO", "Flame"} {
 		if !strings.Contains(out, label) {
 			t.Fatalf("expected tab label %q in tab bar", label)
 		}
