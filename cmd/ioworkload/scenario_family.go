@@ -4,11 +4,27 @@ import (
 	"fmt"
 	"path/filepath"
 	"syscall"
+	"time"
 )
+
+const familyMixedEmitFor = 3 * time.Second
 
 // familyMixed emits representative syscalls from multiple broad families so
 // integration tests can verify family tagging and aggregation from a real trace.
 func familyMixed() error {
+	deadline := time.Now().Add(familyMixedEmitFor)
+	for {
+		if err := familyMixedOnce(); err != nil {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func familyMixedOnce() error {
 	if err := familyMixedFS(); err != nil {
 		return err
 	}
@@ -21,10 +37,7 @@ func familyMixed() error {
 	if err := familyMixedNetwork(); err != nil {
 		return err
 	}
-	if err := familyMixedProcessSchedTime(); err != nil {
-		return err
-	}
-	return nil
+	return familyMixedProcessSchedTime()
 }
 
 func familyMixedFS() error {
@@ -83,7 +96,7 @@ func familyMixedProcessSchedTime() error {
 	if _, _, errno := syscall.RawSyscall(syscall.SYS_SCHED_YIELD, 0, 0, 0); errno != 0 {
 		return fmt.Errorf("sched_yield: %w", errno)
 	}
-	if err := syscall.Nanosleep(&syscall.Timespec{Nsec: 1000}, nil); err != nil {
+	if err := syscall.Nanosleep(&syscall.Timespec{Nsec: 1000}, nil); err != nil && err != syscall.EINTR {
 		return fmt.Errorf("nanosleep: %w", err)
 	}
 	return nil

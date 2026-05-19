@@ -446,8 +446,15 @@ func TestValidateRunConfigRejectsParquetWithContentFilters(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for -parquet with content filters")
 	}
-	if err.Error() != "-parquet cannot be combined with content filters (-comm, -path, -pid, -tid)" {
+	if err.Error() != "-parquet cannot be combined with content filters (-comm, -path, -tid)" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRunConfigAllowsParquetWithPIDFilter(t *testing.T) {
+	cfg := flags.Config{ParquetPath: "trace.parquet", PidFilter: 42}
+	if err := validateRunConfig(cfg); err != nil {
+		t.Fatalf("expected -parquet with -pid to be accepted, got %v", err)
 	}
 }
 
@@ -462,7 +469,7 @@ func TestValidateRunConfigRejectsParquetWithGlobalFilter(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for -parquet with global filter")
 	}
-	if err.Error() != "-parquet cannot be combined with content filters (-comm, -path, -pid, -tid)" {
+	if err.Error() != "-parquet cannot be combined with content filters (-comm, -path, -tid)" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -664,7 +671,7 @@ func TestTuiTraceStarterFromRunTraceRespectsCancel(t *testing.T) {
 	}
 }
 
-func TestHeadlessParquetTraceConfigClearsContentFilters(t *testing.T) {
+func TestHeadlessParquetTraceConfigPreservesPIDAndClearsContentFilters(t *testing.T) {
 	cfg := flags.Config{
 		ParquetPath: "trace.parquet",
 		PidFilter:   1234,
@@ -677,8 +684,8 @@ func TestHeadlessParquetTraceConfigClearsContentFilters(t *testing.T) {
 	}
 
 	got := headlessParquetTraceConfig(cfg)
-	if got.PidFilter != -1 || got.TidFilter != -1 {
-		t.Fatalf("pid/tid filters = %d/%d, want -1/-1", got.PidFilter, got.TidFilter)
+	if got.PidFilter != 1234 || got.TidFilter != -1 {
+		t.Fatalf("pid/tid filters = %d/%d, want 1234/-1", got.PidFilter, got.TidFilter)
 	}
 	if got.CommFilter != "" || got.PathFilter != "" {
 		t.Fatalf("comm/path filters = %q/%q, want empty", got.CommFilter, got.PathFilter)

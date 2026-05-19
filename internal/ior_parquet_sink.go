@@ -67,24 +67,23 @@ func isHeadlessParquetMode(cfg flags.Config) bool {
 }
 
 // hasHeadlessParquetContentFilters reports whether cfg carries filters that are
-// incompatible with headless Parquet mode (all events must be recorded unfiltered).
+// incompatible with headless Parquet mode. PID filtering is still allowed so
+// focused headless recordings can avoid tracing unrelated system activity.
 func hasHeadlessParquetContentFilters(cfg flags.Config) bool {
 	return cfg.CommFilter != "" ||
 		cfg.PathFilter != "" ||
-		cfg.PidFilter > 0 ||
 		cfg.TidFilter > 0 ||
 		cfg.GlobalFilter.IsActive()
 }
 
 // headlessParquetTraceConfig strips TUI-only flags from cfg so that the
-// headless Parquet run records a clean, unfiltered event stream.
+// headless Parquet run records a clean event stream, optionally scoped by PID.
 func headlessParquetTraceConfig(cfg flags.Config) flags.Config {
 	out := cfg
 	out.PlainMode = false
 	out.FlamegraphOutput = false
 	out.CommFilter = ""
 	out.PathFilter = ""
-	out.PidFilter = -1
 	out.TidFilter = -1
 	out.GlobalFilter = globalfilter.Filter{}
 	return out

@@ -25,6 +25,7 @@ type TestHarness struct {
 	WorkloadBinary string // path to built ioworkload binary
 	BpfObject      string // optional path to external BPF object override
 	OutputDir      string // temp dir for .ior.zst output
+	WorkloadEnv    []string
 }
 
 // Run executes a single integration test scenario. It starts the ioworkload
@@ -79,7 +80,7 @@ func (h *TestHarness) RunParquet(scenario string, duration int) (string, int, er
 		return "", 0, err
 	}
 
-	iorCmd, err := h.startIorParquet(parquetPath, duration)
+	iorCmd, err := h.startIorParquet(workloadPID, parquetPath, duration)
 	if err != nil {
 		workloadCmd.Process.Kill()
 		workloadCmd.Wait()
@@ -99,6 +100,9 @@ func (h *TestHarness) RunParquet(scenario string, duration int) (string, int, er
 func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 	cmd := exec.Command(h.WorkloadBinary, "--scenario="+scenario)
 	cmd.Stderr = os.Stderr
+	if len(h.WorkloadEnv) > 0 {
+		cmd.Env = append(os.Environ(), h.WorkloadEnv...)
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -157,8 +161,9 @@ func (h *TestHarness) startIor(pid int, scenario string, duration int, extraArgs
 	return h.startIorArgs(args)
 }
 
-func (h *TestHarness) startIorParquet(parquetPath string, duration int) (*exec.Cmd, error) {
+func (h *TestHarness) startIorParquet(pid int, parquetPath string, duration int) (*exec.Cmd, error) {
 	args := []string{
+		"-pid", strconv.Itoa(pid),
 		"-parquet", parquetPath,
 		"-duration", strconv.Itoa(duration),
 	}
