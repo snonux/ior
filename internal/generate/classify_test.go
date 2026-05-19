@@ -313,6 +313,62 @@ func TestClassifyExitSocketpair(t *testing.T) {
 	}
 }
 
+func TestClassifyPipe(t *testing.T) {
+	r := classifyFromData(t, FormatPipe)
+	if r.Kind != KindPipe {
+		t.Errorf("pipe: got kind %d, want KindPipe", r.Kind)
+	}
+}
+
+func TestClassifyPipe2(t *testing.T) {
+	r := classifyFromData(t, FormatPipe2)
+	if r.Kind != KindPipe {
+		t.Errorf("pipe2: got kind %d, want KindPipe", r.Kind)
+	}
+}
+
+func TestClassifyExitPipe(t *testing.T) {
+	r := classifyFromData(t, FormatExitPipe)
+	if r.Kind != KindPipe {
+		t.Errorf("exit_pipe: got kind %d, want KindPipe", r.Kind)
+	}
+}
+
+func TestClassifyExitPipe2(t *testing.T) {
+	r := classifyFromData(t, FormatExitPipe2)
+	if r.Kind != KindPipe {
+		t.Errorf("exit_pipe2: got kind %d, want KindPipe", r.Kind)
+	}
+}
+
+func TestClassifyEventfd(t *testing.T) {
+	r := classifyFromData(t, FormatEventfd)
+	if r.Kind != KindEventfd {
+		t.Errorf("eventfd: got kind %d, want KindEventfd", r.Kind)
+	}
+}
+
+func TestClassifyEventfd2(t *testing.T) {
+	r := classifyFromData(t, FormatEventfd2)
+	if r.Kind != KindEventfd {
+		t.Errorf("eventfd2: got kind %d, want KindEventfd", r.Kind)
+	}
+}
+
+func TestClassifyExitEventfd(t *testing.T) {
+	r := classifyFromData(t, FormatExitEventfd)
+	if r.Kind != KindEventfd {
+		t.Errorf("exit_eventfd: got kind %d, want KindEventfd", r.Kind)
+	}
+}
+
+func TestClassifyExitEventfd2(t *testing.T) {
+	r := classifyFromData(t, FormatExitEventfd2)
+	if r.Kind != KindEventfd {
+		t.Errorf("exit_eventfd2: got kind %d, want KindEventfd", r.Kind)
+	}
+}
+
 func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {
@@ -353,6 +409,10 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"accept4", FormatAccept4, FormatExitAccept4, KindAccept},
 		{"socket", FormatSocket, FormatExitSocket, KindSocket},
 		{"socketpair", FormatSocketpair, FormatExitSocketpair, KindSocketpair},
+		{"pipe", FormatPipe, FormatExitPipe, KindPipe},
+		{"pipe2", FormatPipe2, FormatExitPipe2, KindPipe},
+		{"eventfd", FormatEventfd, FormatExitEventfd, KindEventfd},
+		{"eventfd2", FormatEventfd2, FormatExitEventfd2, KindEventfd},
 		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
@@ -380,6 +440,10 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"accept4", FormatAccept4, FormatExitAccept4, FamilyNetwork},
 		{"socket", FormatSocket, FormatExitSocket, FamilyNetwork},
 		{"socketpair", FormatSocketpair, FormatExitSocketpair, FamilyNetwork},
+		{"pipe", FormatPipe, FormatExitPipe, FamilyIPC},
+		{"pipe2", FormatPipe2, FormatExitPipe2, FamilyIPC},
+		{"eventfd", FormatEventfd, FormatExitEventfd, FamilyIPC},
+		{"eventfd2", FormatEventfd2, FormatExitEventfd2, FamilyIPC},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 

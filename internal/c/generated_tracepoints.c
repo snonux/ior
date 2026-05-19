@@ -3571,89 +3571,109 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_eventfd2 is a struct null_event
+/// sys_enter_eventfd2 is a struct eventfd_event
 SEC("tracepoint/syscalls/sys_enter_eventfd2")
 int handle_sys_enter_eventfd2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_EVENTFD_EVENT;
     ev->trace_id = SYS_ENTER_EVENTFD2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = (__s32)ctx->args[1];
+    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
+    ev->flags = flags;
+    ev->ret = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_eventfd2 is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_eventfd2 is a struct eventfd_event
 SEC("tracepoint/syscalls/sys_exit_eventfd2")
 int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_EVENTFD_EVENT;
     ev->trace_id = SYS_EXIT_EVENTFD2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+    ev->flags = flags;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_enter_eventfd is a struct null_event
+/// sys_enter_eventfd is a struct eventfd_event
 SEC("tracepoint/syscalls/sys_enter_eventfd")
 int handle_sys_enter_eventfd(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_EVENTFD_EVENT;
     ev->trace_id = SYS_ENTER_EVENTFD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = 0;
+    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
+    ev->flags = flags;
+    ev->ret = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_eventfd is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_eventfd is a struct eventfd_event
 SEC("tracepoint/syscalls/sys_exit_eventfd")
 int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_EVENTFD_EVENT;
     ev->trace_id = SYS_EXIT_EVENTFD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+    ev->flags = flags;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7771,89 +7791,139 @@ int handle_sys_exit_rename(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_pipe2 is a struct null_event
+/// sys_enter_pipe2 is a struct pipe_event
 SEC("tracepoint/syscalls/sys_enter_pipe2")
 int handle_sys_enter_pipe2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PIPE_EVENT;
     ev->trace_id = SYS_ENTER_PIPE2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    struct pipe_ctx pending;
+    pending.upipefd = ctx->args[0];
+    pending.flags = (__s32)ctx->args[1];
+    bpf_map_update_elem(&pipe_ctx_map, &tid, &pending, BPF_ANY);
+    ev->flags = pending.flags;
+    ev->fd0 = -1;
+    ev->fd1 = -1;
+    ev->ret = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_pipe2 is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_pipe2 is a struct pipe_event
 SEC("tracepoint/syscalls/sys_exit_pipe2")
 int handle_sys_exit_pipe2(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_PIPE_EVENT;
     ev->trace_id = SYS_EXIT_PIPE2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = 0;
+    __s32 fd0 = -1;
+    __s32 fd1 = -1;
+    struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);
+    if (pending) {
+        flags = pending->flags;
+        if (ctx->ret == 0 && pending->upipefd != 0) {
+            int pipefd[2];
+            if (bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd) == 0) {
+                fd0 = (__s32)pipefd[0];
+                fd1 = (__s32)pipefd[1];
+            }
+        }
+        bpf_map_delete_elem(&pipe_ctx_map, &tid);
+    }
+    ev->flags = flags;
+    ev->fd0 = fd0;
+    ev->fd1 = fd1;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_enter_pipe is a struct null_event
+/// sys_enter_pipe is a struct pipe_event
 SEC("tracepoint/syscalls/sys_enter_pipe")
 int handle_sys_enter_pipe(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PIPE_EVENT;
     ev->trace_id = SYS_ENTER_PIPE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    struct pipe_ctx pending;
+    pending.upipefd = ctx->args[0];
+    pending.flags = 0;
+    bpf_map_update_elem(&pipe_ctx_map, &tid, &pending, BPF_ANY);
+    ev->flags = pending.flags;
+    ev->fd0 = -1;
+    ev->fd1 = -1;
+    ev->ret = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_pipe is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_pipe is a struct pipe_event
 SEC("tracepoint/syscalls/sys_exit_pipe")
 int handle_sys_exit_pipe(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_PIPE_EVENT;
     ev->trace_id = SYS_EXIT_PIPE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = 0;
+    __s32 fd0 = -1;
+    __s32 fd1 = -1;
+    struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);
+    if (pending) {
+        flags = pending->flags;
+        if (ctx->ret == 0 && pending->upipefd != 0) {
+            int pipefd[2];
+            if (bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd) == 0) {
+                fd0 = (__s32)pipefd[0];
+                fd1 = (__s32)pipefd[1];
+            }
+        }
+        bpf_map_delete_elem(&pipe_ctx_map, &tid);
+    }
+    ev->flags = flags;
+    ev->fd0 = fd0;
+    ev->fd1 = fd1;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

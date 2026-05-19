@@ -92,6 +92,10 @@ const ENTER_SOCKETPAIR_EVENT = 21
 const EXIT_SOCKETPAIR_EVENT = 22
 const ENTER_ACCEPT_EVENT = 23
 const EXIT_ACCEPT_EVENT = 24
+const ENTER_PIPE_EVENT = 25
+const EXIT_PIPE_EVENT = 26
+const ENTER_EVENTFD_EVENT = 27
+const EXIT_EVENTFD_EVENT = 28
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -1659,4 +1663,144 @@ func (a *AcceptEvent) Bytes() ([]byte, error) {
 
 func (a *AcceptEvent) Recycle() {
 	poolOfAcceptEvents.Put(a)
+}
+
+type PipeEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Flags     int32
+	Fd0       int32
+	Fd1       int32
+	Ret       int64
+}
+
+func (p PipeEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Fd0:%v Fd1:%v Ret:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.Flags, p.Fd0, p.Fd1, p.Ret)
+}
+
+func (p PipeEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*PipeEvent)
+	if !ok {
+		return false
+	}
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Flags == otherConcrete.Flags && p.Fd0 == otherConcrete.Fd0 && p.Fd1 == otherConcrete.Fd1 && p.Ret == otherConcrete.Ret
+}
+
+func (p *PipeEvent) GetEventType() EventType {
+	return p.EventType
+}
+
+func (p *PipeEvent) GetTraceId() TraceId {
+	return p.TraceId
+}
+
+func (p *PipeEvent) GetPid() uint32 {
+	return p.Pid
+}
+
+func (p *PipeEvent) GetTid() uint32 {
+	return p.Tid
+}
+
+func (p *PipeEvent) GetTime() uint64 {
+	return p.Time
+}
+
+var poolOfPipeEvents = sync.Pool{
+	New: func() any { return &PipeEvent{} },
+}
+
+func NewPipeEvent(raw []byte) *PipeEvent {
+	p := poolOfPipeEvents.Get().(*PipeEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, p); err != nil {
+		*p = PipeEvent{}
+		poolOfPipeEvents.Put(p)
+		return nil
+	}
+	return p
+}
+
+func (p *PipeEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, p)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (p *PipeEvent) Recycle() {
+	poolOfPipeEvents.Put(p)
+}
+
+type EventfdEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Flags     int32
+	Ret       int64
+}
+
+func (e EventfdEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Ret:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Flags, e.Ret)
+}
+
+func (e EventfdEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*EventfdEvent)
+	if !ok {
+		return false
+	}
+	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Flags == otherConcrete.Flags && e.Ret == otherConcrete.Ret
+}
+
+func (e *EventfdEvent) GetEventType() EventType {
+	return e.EventType
+}
+
+func (e *EventfdEvent) GetTraceId() TraceId {
+	return e.TraceId
+}
+
+func (e *EventfdEvent) GetPid() uint32 {
+	return e.Pid
+}
+
+func (e *EventfdEvent) GetTid() uint32 {
+	return e.Tid
+}
+
+func (e *EventfdEvent) GetTime() uint64 {
+	return e.Time
+}
+
+var poolOfEventfdEvents = sync.Pool{
+	New: func() any { return &EventfdEvent{} },
+}
+
+func NewEventfdEvent(raw []byte) *EventfdEvent {
+	e := poolOfEventfdEvents.Get().(*EventfdEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, e); err != nil {
+		*e = EventfdEvent{}
+		poolOfEventfdEvents.Put(e)
+		return nil
+	}
+	return e
+}
+
+func (e *EventfdEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, e)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (e *EventfdEvent) Recycle() {
+	poolOfEventfdEvents.Put(e)
 }

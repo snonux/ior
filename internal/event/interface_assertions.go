@@ -50,4 +50,10 @@ var (
 
 	// *types.AcceptEvent carries listening-fd input and accepted-fd return metadata.
 	_ Event = (*types.AcceptEvent)(nil)
+
+	// *types.PipeEvent carries pipe flags plus the two returned pipe descriptors.
+	_ Event = (*types.PipeEvent)(nil)
+
+	// *types.EventfdEvent carries eventfd flags and the returned descriptor.
+	_ Event = (*types.EventfdEvent)(nil)
 )

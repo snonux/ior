@@ -32,6 +32,10 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		return e.handleSocketpairExit(ep, ev)
 	case *types.AcceptEvent:
 		return e.handleAcceptExit(ep, ev)
+	case *types.PipeEvent:
+		return e.handlePipeExit(ep, ev)
+	case *types.EventfdEvent:
+		return e.handleEventfdExit(ep, ev)
 	case *types.NullEvent:
 		return e.handleNullExit(ep, ev)
 	case *types.FcntlEvent:
@@ -320,6 +324,71 @@ func acceptedSocketDescriptorName(listening file.File) string {
 		return "socket:accepted"
 	}
 	return name
+}
+
+func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool {
+	exitEv, ok := ep.ExitEv.(*types.PipeEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed pipe exit event")
+		return false
+	}
+
+	flags := exitEv.Flags
+	if flags == 0 {
+		flags = pipeEv.Flags
+	}
+	if exitEv.Ret == 0 {
+		if exitEv.Fd0 >= 0 {
+			fdFile := file.NewFd(exitEv.Fd0, pipeDescriptorName(flags, exitEv.Fd0, exitEv.Fd1), flags)
+			e.fdState().set(exitEv.Fd0, fdFile)
+			ep.File = fdFile
+		}
+		if exitEv.Fd1 >= 0 {
+			fdFile := file.NewFd(exitEv.Fd1, pipeDescriptorName(flags, exitEv.Fd0, exitEv.Fd1), flags)
+			e.fdState().set(exitEv.Fd1, fdFile)
+			if ep.File == nil {
+				ep.File = fdFile
+			}
+		}
+	}
+	ep.Comm = e.comm(pipeEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
+func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEvent) bool {
+	exitEv, ok := ep.ExitEv.(*types.EventfdEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed eventfd exit event")
+		return false
+	}
+
+	flags := exitEv.Flags
+	if flags == 0 {
+		flags = eventfdEv.Flags
+	}
+	if fd := int32(exitEv.Ret); fd >= 0 {
+		fdFile := file.NewFd(fd, eventfdDescriptorName(flags), flags)
+		e.fdState().set(fd, fdFile)
+		ep.File = fdFile
+	}
+	ep.Comm = e.comm(eventfdEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
+func pipeDescriptorName(flags, fd0, fd1 int32) string {
+	return fmt.Sprintf("pipe:%d:%d:%d", flags, fd0, fd1)
+}
+
+func eventfdDescriptorName(flags int32) string {
+	return fmt.Sprintf("eventfd:%d", flags)
 }
 
 func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool {

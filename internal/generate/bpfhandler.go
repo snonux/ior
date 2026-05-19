@@ -79,6 +79,10 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraSocketpair(isEnter)
 	case KindAccept:
 		return generateExtraAccept(isEnter)
+	case KindPipe:
+		return generateExtraPipe(f, isEnter)
+	case KindEventfd:
+		return generateExtraEventfd(f, isEnter)
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindPathname:
@@ -171,6 +175,28 @@ func generateExtraAccept(isEnter bool) string {
 		return "    ev->fd = (__s32)ctx->args[0];\n    ev->ret = -1;\n"
 	}
 	return "    ev->fd = -1;\n    ev->ret = ctx->ret;\n"
+}
+
+func generateExtraPipe(f *Format, isEnter bool) string {
+	if isEnter {
+		flagsExpr := "0"
+		if f.Name == "sys_enter_pipe2" {
+			flagsExpr = "(__s32)ctx->args[1]"
+		}
+		return "    struct pipe_ctx pending;\n    pending.upipefd = ctx->args[0];\n    pending.flags = " + flagsExpr + ";\n    bpf_map_update_elem(&pipe_ctx_map, &tid, &pending, BPF_ANY);\n    ev->flags = pending.flags;\n    ev->fd0 = -1;\n    ev->fd1 = -1;\n    ev->ret = 0;\n"
+	}
+	return "    __s32 flags = 0;\n    __s32 fd0 = -1;\n    __s32 fd1 = -1;\n    struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);\n    if (pending) {\n        flags = pending->flags;\n        if (ctx->ret == 0 && pending->upipefd != 0) {\n            int pipefd[2];\n            if (bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd) == 0) {\n                fd0 = (__s32)pipefd[0];\n                fd1 = (__s32)pipefd[1];\n            }\n        }\n        bpf_map_delete_elem(&pipe_ctx_map, &tid);\n    }\n    ev->flags = flags;\n    ev->fd0 = fd0;\n    ev->fd1 = fd1;\n    ev->ret = ctx->ret;\n"
+}
+
+func generateExtraEventfd(f *Format, isEnter bool) string {
+	if isEnter {
+		flagsExpr := "0"
+		if f.Name == "sys_enter_eventfd2" {
+			flagsExpr = "(__s32)ctx->args[1]"
+		}
+		return "    __s32 flags = " + flagsExpr + ";\n    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n    ev->flags = flags;\n    ev->ret = -1;\n"
+	}
+	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n"
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

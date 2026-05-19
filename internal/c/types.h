@@ -27,6 +27,10 @@
 #define EXIT_SOCKETPAIR_EVENT 22
 #define ENTER_ACCEPT_EVENT 23
 #define EXIT_ACCEPT_EVENT 24
+#define ENTER_PIPE_EVENT 25
+#define EXIT_PIPE_EVENT 26
+#define ENTER_EVENTFD_EVENT 27
+#define EXIT_EVENTFD_EVENT 28
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -153,5 +157,27 @@ struct accept_event {
     __u32 pid;
     __u32 tid;
     __s32 fd;
+    __s64 ret;
+};
+
+struct pipe_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 flags;
+    __s32 fd0;
+    __s32 fd1;
+    __s64 ret;
+};
+
+struct eventfd_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 flags;
     __s64 ret;
 };
