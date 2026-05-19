@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"syscall"
@@ -29,6 +30,7 @@ func pollingEpoll() error {
 		return fmt.Errorf("epoll_ctl add: %w", err)
 	}
 
+	pwait2Supported := true
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := waitAndDrain(epfd, pipefd, callEpollWait); err != nil {
@@ -37,8 +39,16 @@ func pollingEpoll() error {
 		if err := waitAndDrain(epfd, pipefd, callEpollPwait); err != nil {
 			return err
 		}
-		if err := waitAndDrain(epfd, pipefd, callEpollPwait2); err != nil {
-			return err
+		if pwait2Supported {
+			if err := waitAndDrain(epfd, pipefd, callEpollPwait2); err != nil {
+				if !isUnsupportedEpollPwait2Err(err) {
+					return err
+				}
+				if drainErr := drainWakeByte(pipefd[0]); drainErr != nil {
+					return drainErr
+				}
+				pwait2Supported = false
+			}
 		}
 	}
 
@@ -57,8 +67,12 @@ func waitAndDrain(epfd int, pipefd [2]int, waitFn func(int, []unix.EpollEvent) (
 	if ready < 1 {
 		return fmt.Errorf("epoll wait returned %d ready events", ready)
 	}
+	return drainWakeByte(pipefd[0])
+}
+
+func drainWakeByte(readFD int) error {
 	var buf [1]byte
-	if _, err := syscall.Read(pipefd[0], buf[:]); err != nil {
+	if _, err := syscall.Read(readFD, buf[:]); err != nil {
 		return fmt.Errorf("drain wake byte: %w", err)
 	}
 	return nil
@@ -118,4 +132,15 @@ func callEpollPwait2(epfd int, events []unix.EpollEvent) (int, error) {
 		return 0, fmt.Errorf("epoll_pwait2: %w", errno)
 	}
 	return int(r1), nil
+}
+
+func isUnsupportedEpollPwait2Err(err error) bool {
+	if err == nil {
+		return false
+	}
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == syscall.ENOSYS || errno == syscall.ENOTSUP
 }
