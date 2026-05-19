@@ -139,6 +139,40 @@ func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 	verifyFileDescriptor(t, el, 77, "socket:1:1:0")
 }
 
+func TestHandleAcceptExitAppliesPairFilter(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{
+		filter: globalfilter.Filter{
+			Syscall: &globalfilter.StringFilter{Pattern: "openat"},
+		},
+	})
+
+	el.fdState().set(11, file.NewFd(11, "socket:1:1:0", -1))
+
+	enter := &types.AcceptEvent{
+		EventType: types.ENTER_ACCEPT_EVENT,
+		TraceId:   types.SYS_ENTER_ACCEPT,
+		Time:      100,
+		Pid:       91,
+		Tid:       92,
+		Fd:        11,
+		Ret:       -1,
+	}
+	exit := &types.AcceptEvent{
+		EventType: types.EXIT_ACCEPT_EVENT,
+		TraceId:   types.SYS_EXIT_ACCEPT,
+		Time:      200,
+		Pid:       91,
+		Tid:       92,
+		Fd:        -1,
+		Ret:       77,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleAcceptExit(ep, enter); ok {
+		t.Fatal("handleAcceptExit should reject pair due to filter mismatch")
+	}
+}
+
 func TestInitRawHandlersRegistersSocketEvents(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	if _, ok := el.rawHandlers[types.ENTER_SOCKET_EVENT]; !ok {
