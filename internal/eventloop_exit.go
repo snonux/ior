@@ -30,6 +30,8 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		return e.handleSocketExit(ep, ev)
 	case *types.SocketpairEvent:
 		return e.handleSocketpairExit(ep, ev)
+	case *types.AcceptEvent:
+		return e.handleAcceptExit(ep, ev)
 	case *types.NullEvent:
 		return e.handleNullExit(ep, ev)
 	case *types.FcntlEvent:
@@ -282,8 +284,42 @@ func (e *eventLoop) handleSocketpairExit(ep *event.Pair, socketpairEv *types.Soc
 	return true
 }
 
+func (e *eventLoop) handleAcceptExit(ep *event.Pair, acceptEv *types.AcceptEvent) bool {
+	exitEv, ok := ep.ExitEv.(*types.AcceptEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed accept exit event")
+		return false
+	}
+
+	listening := e.fdState().resolve(acceptEv.Fd, acceptEv.Pid)
+	if fd := int32(exitEv.Ret); fd >= 0 {
+		fdFile := file.NewFd(fd, acceptedSocketDescriptorName(listening), -1)
+		e.fdState().set(fd, fdFile)
+		ep.File = fdFile
+	} else {
+		ep.File = listening
+	}
+	ep.Comm = e.comm(acceptEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
 func socketDescriptorName(family, typ, protocol int32) string {
 	return fmt.Sprintf("socket:%d:%d:%d", family, typ, protocol)
+}
+
+func acceptedSocketDescriptorName(listening file.File) string {
+	if listening == nil {
+		return "socket:accepted"
+	}
+	name := listening.Name()
+	if name == "" {
+		return "socket:accepted"
+	}
+	return name
 }
 
 func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool {

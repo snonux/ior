@@ -285,6 +285,20 @@ func (e *eventLoop) registerSocketHandlers() {
 		}
 		e.tracepointExited(socketpairEv, ch)
 	}
+	e.rawHandlers[types.ENTER_ACCEPT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		acceptEv, ok := decodeRawEvent(e, types.ENTER_ACCEPT_EVENT, raw, types.NewAcceptEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(acceptEv)
+	}
+	e.rawHandlers[types.EXIT_ACCEPT_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		acceptEv, ok := decodeRawEvent(e, types.EXIT_ACCEPT_EVENT, raw, types.NewAcceptEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointExited(acceptEv, ch)
+	}
 }
 
 func decodeRawEvent[T any](e *eventLoop, eventType types.EventType, raw []byte, decode func([]byte) *T) (*T, bool) {

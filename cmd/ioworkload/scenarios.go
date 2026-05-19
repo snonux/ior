@@ -27,6 +27,7 @@ var scenarios = map[string]func() error{
 	"retbytes-phase-a":            retbytesPhaseA,
 	"socket-basic":                socketBasic,
 	"socketpair-basic":            socketpairBasic,
+	"socket-accept-lifecycle":     socketAcceptLifecycle,
 	"family-mixed":                familyMixed,
 	"close-basic":                 closeBasic,
 	"close-range":                 closeRange,

@@ -952,91 +952,93 @@ int handle_sys_exit_listen(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_accept4 is a struct fd_event
+/// sys_enter_accept4 is a struct accept_event
 SEC("tracepoint/syscalls/sys_enter_accept4")
 int handle_sys_enter_accept4(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct accept_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct accept_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_ACCEPT_EVENT;
     ev->trace_id = SYS_ENTER_ACCEPT4;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->ret = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_accept4 is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_accept4 is a struct accept_event
 SEC("tracepoint/syscalls/sys_exit_accept4")
 int handle_sys_exit_accept4(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct accept_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct accept_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_ACCEPT_EVENT;
     ev->trace_id = SYS_EXIT_ACCEPT4;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = -1;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_enter_accept is a struct fd_event
+/// sys_enter_accept is a struct accept_event
 SEC("tracepoint/syscalls/sys_enter_accept")
 int handle_sys_enter_accept(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct accept_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct accept_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_ACCEPT_EVENT;
     ev->trace_id = SYS_ENTER_ACCEPT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->ret = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_accept is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_accept is a struct accept_event
 SEC("tracepoint/syscalls/sys_exit_accept")
 int handle_sys_exit_accept(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct accept_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct accept_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_ACCEPT_EVENT;
     ev->trace_id = SYS_EXIT_ACCEPT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = -1;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
