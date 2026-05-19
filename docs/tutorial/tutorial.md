@@ -212,7 +212,7 @@ Tapes live in [`tapes/`](./tapes), the background workload that drives them is [
 | Key | Action |
 |-----|--------|
 | `tab` / `shift+tab` | next / previous tab |
-| `1`–`7` | jump to tab by number (1=Flame, 2=Overview, 3=Syscalls, 4=Files, 5=Processes, 6=Latency, 7=Stream) |
+| `1`–`8` | jump to tab by number (1=Flame, 2=Overview, 3=Syscalls, 4=Files, 5=Processes, 6=Latency, 7=Stream, 8=Non-IO) |
 | `H` | toggle bottom help panel |
 | `e` | export filtered stream snapshot to CSV |
 | `R` | start / stop Parquet recording |
