@@ -34,10 +34,10 @@ sys_enter_dup2 is a struct fd_event
 sys_enter_dup3 is a struct dup3_event
 sys_enter_epoll_create is a struct null_event
 sys_enter_epoll_create1 is a struct null_event
-sys_enter_epoll_ctl is a struct fd_event
-sys_enter_epoll_pwait is a struct null_event
-sys_enter_epoll_pwait2 is a struct null_event
-sys_enter_epoll_wait is a struct null_event
+sys_enter_epoll_ctl is a struct epoll_ctl_event
+sys_enter_epoll_pwait is a struct fd_event
+sys_enter_epoll_pwait2 is a struct fd_event
+sys_enter_epoll_wait is a struct fd_event
 sys_enter_eventfd is a struct eventfd_event
 sys_enter_eventfd2 is a struct eventfd_event
 sys_enter_execve is a struct path_event

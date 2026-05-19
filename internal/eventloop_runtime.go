@@ -148,6 +148,7 @@ func (e *eventLoop) initRawHandlers() {
 	e.registerMiscHandlers()
 	e.registerSocketHandlers()
 	e.registerIPCHandlers()
+	e.registerPollingHandlers()
 }
 
 // registerOpenHandlers wires enter/exit handlers for open-family events.
@@ -330,6 +331,16 @@ func (e *eventLoop) registerIPCHandlers() {
 			return
 		}
 		e.tracepointExited(eventfdEv, ch)
+	}
+}
+
+func (e *eventLoop) registerPollingHandlers() {
+	e.rawHandlers[types.ENTER_EPOLL_CTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		epollCtlEv, ok := decodeRawEvent(e, types.ENTER_EPOLL_CTL_EVENT, raw, types.NewEpollCtlEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(epollCtlEv)
 	}
 }
 

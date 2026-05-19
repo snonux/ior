@@ -255,6 +255,29 @@ func TestGenerateEventfdHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 }
 
+func TestGenerateEpollCtlHandler(t *testing.T) {
+	output := generateFromPair(t, FormatEpollCtl, FormatExitEpollCtl)
+
+	requireContains(t, output, "struct epoll_ctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EPOLL_CTL_EVENT;")
+	requireContains(t, output, "ev->epfd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->op = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[2];")
+	requireContains(t, output, "ev->events = 0;")
+	requireContains(t, output, "if (ctx->args[3] != 0) {")
+	requireContains(t, output, "bpf_probe_read_user(&user_events, sizeof(user_events), (void *)ctx->args[3])")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+func TestGenerateEpollWaitHandlerUsesEpollFd(t *testing.T) {
+	output := generateFromPair(t, FormatEpollWait, FormatExitEpollWait)
+
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_EPOLL_WAIT;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+}
+
 func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	output := generateFromPair(t, FormatNameToHandleAt, FormatExitNameToHandleAt)
 
@@ -367,6 +390,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindAccept, "ENTER_ACCEPT_EVENT", "EXIT_ACCEPT_EVENT"},
 		{KindPipe, "ENTER_PIPE_EVENT", "EXIT_PIPE_EVENT"},
 		{KindEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
+		{KindEpollCtl, "ENTER_EPOLL_CTL_EVENT", "EXIT_EPOLL_CTL_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -398,6 +422,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindAccept, "accept_event"},
 		{KindPipe, "pipe_event"},
 		{KindEventfd, "eventfd_event"},
+		{KindEpollCtl, "epoll_ctl_event"},
 	}
 
 	for _, tt := range tests {
@@ -416,7 +441,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd}
+	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

@@ -3987,23 +3987,32 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_epoll_ctl is a struct fd_event
+/// sys_enter_epoll_ctl is a struct epoll_ctl_event
 SEC("tracepoint/syscalls/sys_enter_epoll_ctl")
 int handle_sys_enter_epoll_ctl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct epoll_ctl_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct epoll_ctl_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_EPOLL_CTL_EVENT;
     ev->trace_id = SYS_ENTER_EPOLL_CTL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->epfd = (__s32)ctx->args[0];
+    ev->op = (__s32)ctx->args[1];
     ev->fd = (__s32)ctx->args[2];
+    ev->events = 0;
+    if (ctx->args[3] != 0) {
+        __u32 user_events = 0;
+        if (bpf_probe_read_user(&user_events, sizeof(user_events), (void *)ctx->args[3]) == 0) {
+            ev->events = user_events;
+        }
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4032,22 +4041,23 @@ int handle_sys_exit_epoll_ctl(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_epoll_wait is a struct null_event
+/// sys_enter_epoll_wait is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_epoll_wait")
 int handle_sys_enter_epoll_wait(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_EPOLL_WAIT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4076,22 +4086,23 @@ int handle_sys_exit_epoll_wait(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_epoll_pwait is a struct null_event
+/// sys_enter_epoll_pwait is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_epoll_pwait")
 int handle_sys_enter_epoll_pwait(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_EPOLL_PWAIT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4120,22 +4131,23 @@ int handle_sys_exit_epoll_pwait(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_epoll_pwait2 is a struct null_event
+/// sys_enter_epoll_pwait2 is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_epoll_pwait2")
 int handle_sys_enter_epoll_pwait2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_EPOLL_PWAIT2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

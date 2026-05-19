@@ -56,4 +56,7 @@ var (
 
 	// *types.EventfdEvent carries eventfd flags and the returned descriptor.
 	_ Event = (*types.EventfdEvent)(nil)
+
+	// *types.EpollCtlEvent carries epoll control metadata (epfd/op/target-fd/events).
+	_ Event = (*types.EpollCtlEvent)(nil)
 )

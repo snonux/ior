@@ -1058,3 +1058,131 @@ format:
 
 print fmt: "0x%lx", REC->ret
 `
+
+const FormatEpollCtl = `name: sys_enter_epoll_ctl
+ID: 1079
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int epfd;	offset:16;	size:8;	signed:0;
+	field:int op;	offset:24;	size:8;	signed:0;
+	field:int fd;	offset:32;	size:8;	signed:0;
+	field:struct epoll_event * event;	offset:40;	size:8;	signed:0;
+
+print fmt: "epfd: 0x%08lx, op: 0x%08lx, fd: 0x%08lx, event: 0x%08lx", ((unsigned long)(REC->epfd)), ((unsigned long)(REC->op)), ((unsigned long)(REC->fd)), ((unsigned long)(REC->event))
+`
+
+const FormatExitEpollCtl = `name: sys_exit_epoll_ctl
+ID: 1078
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatEpollWait = `name: sys_enter_epoll_wait
+ID: 1077
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int epfd;	offset:16;	size:8;	signed:0;
+	field:struct epoll_event * events;	offset:24;	size:8;	signed:0;
+	field:int maxevents;	offset:32;	size:8;	signed:0;
+	field:int timeout;	offset:40;	size:8;	signed:0;
+
+print fmt: "epfd: 0x%08lx, events: 0x%08lx, maxevents: 0x%08lx, timeout: 0x%08lx", ((unsigned long)(REC->epfd)), ((unsigned long)(REC->events)), ((unsigned long)(REC->maxevents)), ((unsigned long)(REC->timeout))
+`
+
+const FormatExitEpollWait = `name: sys_exit_epoll_wait
+ID: 1076
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatEpollPwait = `name: sys_enter_epoll_pwait
+ID: 1075
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int epfd;	offset:16;	size:8;	signed:0;
+	field:struct epoll_event * events;	offset:24;	size:8;	signed:0;
+	field:int maxevents;	offset:32;	size:8;	signed:0;
+	field:int timeout;	offset:40;	size:8;	signed:0;
+	field:sigset_t * sigmask;	offset:48;	size:8;	signed:0;
+	field:size_t sigsetsize;	offset:56;	size:8;	signed:0;
+
+print fmt: "epfd: 0x%08lx, events: 0x%08lx, maxevents: 0x%08lx, timeout: 0x%08lx, sigmask: 0x%08lx, sigsetsize: 0x%08lx", ((unsigned long)(REC->epfd)), ((unsigned long)(REC->events)), ((unsigned long)(REC->maxevents)), ((unsigned long)(REC->timeout)), ((unsigned long)(REC->sigmask)), ((unsigned long)(REC->sigsetsize))
+`
+
+const FormatExitEpollPwait = `name: sys_exit_epoll_pwait
+ID: 1074
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatEpollPwait2 = `name: sys_enter_epoll_pwait2
+ID: 1073
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int epfd;	offset:16;	size:8;	signed:0;
+	field:struct epoll_event * events;	offset:24;	size:8;	signed:0;
+	field:int maxevents;	offset:32;	size:8;	signed:0;
+	field:const struct __kernel_timespec * timeout;	offset:40;	size:8;	signed:0;
+	field:const sigset_t * sigmask;	offset:48;	size:8;	signed:0;
+	field:size_t sigsetsize;	offset:56;	size:8;	signed:0;
+
+print fmt: "epfd: 0x%08lx, events: 0x%08lx, maxevents: 0x%08lx, timeout: 0x%08lx, sigmask: 0x%08lx, sigsetsize: 0x%08lx", ((unsigned long)(REC->epfd)), ((unsigned long)(REC->events)), ((unsigned long)(REC->maxevents)), ((unsigned long)(REC->timeout)), ((unsigned long)(REC->sigmask)), ((unsigned long)(REC->sigsetsize))
+`
+
+const FormatExitEpollPwait2 = `name: sys_exit_epoll_pwait2
+ID: 1072
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
