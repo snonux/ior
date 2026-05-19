@@ -214,7 +214,7 @@ func (h *headlessParquetModeHandler) validate(cfg flags.Config) error {
 		return errors.New("-parquet and -flamegraph are mutually exclusive")
 	}
 	if hasHeadlessParquetContentFilters(cfg) {
-		return errors.New("-parquet cannot be combined with content filters (-comm, -path, -pid, -tid)")
+		return errors.New("-parquet cannot be combined with content filters (-comm, -path, -tid)")
 	}
 	return nil
 }

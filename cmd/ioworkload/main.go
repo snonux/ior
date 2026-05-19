@@ -8,13 +8,17 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 )
 
 // Give ior enough time to attach tracepoints before scenarios emit syscalls.
 // Under slower CI or locally saturated systems, 5s can still miss first-call
 // events for single-shot scenarios. Use a slightly larger delay for stability.
-const startupDelay = 8 * time.Second
+const (
+	defaultStartupDelay = 8 * time.Second
+	startupDelayEnv     = "IOR_WORKLOAD_STARTUP_DELAY_MS"
+)
 
 func main() {
 	scenario := flag.String("scenario", "", "I/O scenario to execute")
@@ -40,10 +44,22 @@ func main() {
 	}
 
 	fmt.Println(os.Getpid())
-	time.Sleep(startupDelay)
+	time.Sleep(configuredStartupDelay())
 
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "scenario %s failed: %v\n", *scenario, err)
 		os.Exit(1)
 	}
+}
+
+func configuredStartupDelay() time.Duration {
+	raw := os.Getenv(startupDelayEnv)
+	if raw == "" {
+		return defaultStartupDelay
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms < 0 {
+		return defaultStartupDelay
+	}
+	return time.Duration(ms) * time.Millisecond
 }

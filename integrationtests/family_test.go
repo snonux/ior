@@ -10,9 +10,15 @@ import (
 	parquetgo "github.com/parquet-go/parquet-go"
 )
 
+const (
+	familyParquetDuration    = 6
+	familyWorkloadStartupEnv = "IOR_WORKLOAD_STARTUP_DELAY_MS=1000"
+)
+
 func TestFamilyParquetRecordingAndAggregation(t *testing.T) {
 	h := newTestHarness(t)
-	path, pid, err := h.RunParquet("family-mixed", defaultDuration)
+	h.WorkloadEnv = []string{familyWorkloadStartupEnv}
+	path, pid, err := h.RunParquet("family-mixed", familyParquetDuration)
 	if err != nil {
 		t.Fatalf("run family-mixed parquet scenario: %v", err)
 	}
