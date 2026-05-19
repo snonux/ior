@@ -153,6 +153,19 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("socketpair decode mismatch")
 		}
 	})
+
+	t.Run("AcceptEvent", func(t *testing.T) {
+		ev := &AcceptEvent{EventType: ENTER_ACCEPT_EVENT, TraceId: SYS_ENTER_ACCEPT4, Time: 1, Pid: 2, Tid: 3, Fd: 4, Ret: -1}
+		raw, _ := ev.Bytes()
+
+		slow := NewAcceptEvent(raw)
+		fast := NewAcceptEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("accept decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -190,6 +203,33 @@ func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+func TestNewAcceptEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, acceptEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(EXIT_ACCEPT_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_EXIT_ACCEPT4))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(10))
+	binary.LittleEndian.PutUint64(raw[32:40], uint64(42))
+
+	fast := NewAcceptEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded accept event for kernel layout payload")
+	}
+	defer fast.Recycle()
+
+	if fast.EventType != EXIT_ACCEPT_EVENT ||
+		fast.TraceId != SYS_EXIT_ACCEPT4 ||
+		fast.Time != 1 ||
+		fast.Pid != 2 ||
+		fast.Tid != 3 ||
+		fast.Fd != 10 ||
+		fast.Ret != 42 {
+		t.Fatalf("unexpected accept decode: %#v", fast)
+	}
+}
+
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -206,6 +246,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "OpenByHandleAtEvent", decode: func(raw []byte) bool { return NewOpenByHandleAtEventFast(raw) == nil }},
 		{name: "SocketEvent", decode: func(raw []byte) bool { return NewSocketEventFast(raw) == nil }},
 		{name: "SocketpairEvent", decode: func(raw []byte) bool { return NewSocketpairEventFast(raw) == nil }},
+		{name: "AcceptEvent", decode: func(raw []byte) bool { return NewAcceptEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {

@@ -1,5 +1,5 @@
-sys_enter_accept is a struct fd_event
-sys_enter_accept4 is a struct fd_event
+sys_enter_accept is a struct accept_event
+sys_enter_accept4 is a struct accept_event
 sys_enter_access is a struct path_event
 sys_enter_acct is a struct null_event
 sys_enter_add_key is a struct null_event
@@ -365,8 +365,8 @@ sys_enter_wait4 is a struct null_event
 sys_enter_waitid is a struct null_event
 sys_enter_write is a struct fd_event
 sys_enter_writev is a struct fd_event
-sys_exit_accept is a struct ret_event (UNCLASSIFIED)
-sys_exit_accept4 is a struct ret_event (UNCLASSIFIED)
+sys_exit_accept is a struct accept_event
+sys_exit_accept4 is a struct accept_event
 sys_exit_access is a struct ret_event (UNCLASSIFIED)
 sys_exit_acct is a struct ret_event (UNCLASSIFIED)
 sys_exit_add_key is a struct ret_event (UNCLASSIFIED)

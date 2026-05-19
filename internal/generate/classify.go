@@ -17,6 +17,7 @@ const (
 	KindOpenByHandleAt
 	KindSocket
 	KindSocketpair
+	KindAccept
 )
 
 type RetClassification string
@@ -87,6 +88,22 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindSocketpair}, true
 	case "sys_exit_socketpair":
 		return ClassificationResult{Kind: KindSocketpair}, true
+	case "sys_enter_accept":
+		return ClassificationResult{Kind: KindAccept}, true
+	case "sys_exit_accept":
+		return ClassificationResult{Kind: KindAccept}, true
+	case "sys_enter_accept4":
+		return ClassificationResult{Kind: KindAccept}, true
+	case "sys_exit_accept4":
+		return ClassificationResult{Kind: KindAccept}, true
+	case "sys_enter_bind":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_connect":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_listen":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_shutdown":
+		return ClassificationResult{Kind: KindFd}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true

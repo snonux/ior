@@ -25,6 +25,8 @@
 #define EXIT_SOCKET_EVENT 20
 #define ENTER_SOCKETPAIR_EVENT 21
 #define EXIT_SOCKETPAIR_EVENT 22
+#define ENTER_ACCEPT_EVENT 23
+#define EXIT_ACCEPT_EVENT 24
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -141,5 +143,15 @@ struct socketpair_event {
     __s32 protocol;
     __s32 sv0;
     __s32 sv1;
+    __s64 ret;
+};
+
+struct accept_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd;
     __s64 ret;
 };

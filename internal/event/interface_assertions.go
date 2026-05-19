@@ -47,4 +47,7 @@ var (
 
 	// *types.SocketpairEvent carries socketpair domain/type/protocol metadata.
 	_ Event = (*types.SocketpairEvent)(nil)
+
+	// *types.AcceptEvent carries listening-fd input and accepted-fd return metadata.
+	_ Event = (*types.AcceptEvent)(nil)
 )

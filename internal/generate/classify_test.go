@@ -237,10 +237,49 @@ func TestClassifyPathnameExecve(t *testing.T) {
 	}
 }
 
-func TestClassifyFdAccept(t *testing.T) {
+func TestClassifyAccept(t *testing.T) {
 	r := classifyFromData(t, FormatAccept)
-	if r.Kind != KindFd {
-		t.Errorf("accept: got kind %d, want KindFd", r.Kind)
+	if r.Kind != KindAccept {
+		t.Errorf("accept: got kind %d, want KindAccept", r.Kind)
+	}
+}
+
+func TestClassifyAccept4(t *testing.T) {
+	r := classifyFromData(t, FormatAccept4)
+	if r.Kind != KindAccept {
+		t.Errorf("accept4: got kind %d, want KindAccept", r.Kind)
+	}
+}
+
+func TestClassifyExitAccept(t *testing.T) {
+	r := classifyFromData(t, FormatExitAccept)
+	if r.Kind != KindAccept {
+		t.Errorf("exit_accept: got kind %d, want KindAccept", r.Kind)
+	}
+}
+
+func TestClassifyExitAccept4(t *testing.T) {
+	r := classifyFromData(t, FormatExitAccept4)
+	if r.Kind != KindAccept {
+		t.Errorf("exit_accept4: got kind %d, want KindAccept", r.Kind)
+	}
+}
+
+func TestClassifySocketLifecycleFdSyscallsByName(t *testing.T) {
+	tests := []string{"bind", "connect", "listen", "shutdown"}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: "sys_enter_" + name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "int", Name: "sockfd"},
+				},
+			})
+			if r.Kind != KindFd {
+				t.Errorf("%s: got kind %d, want KindFd", name, r.Kind)
+			}
+		})
 	}
 }
 
@@ -301,7 +340,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"symlink", FormatSymlink, FormatExitSymlink, KindName},
 		{"mknod", FormatMknod, FormatExitMknod, KindPathname},
 		{"execve", FormatExecve, FormatExitExecve, KindPathname},
-		{"accept", FormatAccept, FormatExitAccept, KindFd},
+		{"accept", FormatAccept, FormatExitAccept, KindAccept},
+		{"accept4", FormatAccept4, FormatExitAccept4, KindAccept},
 		{"socket", FormatSocket, FormatExitSocket, KindSocket},
 		{"socketpair", FormatSocketpair, FormatExitSocketpair, KindSocketpair},
 		{"kill", FormatKill, FormatExitKill, KindNull},
@@ -328,6 +368,7 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"mknod", FormatMknod, FormatExitMknod, FamilyFS},
 		{"execve", FormatExecve, FormatExitExecve, FamilyProcess},
 		{"accept", FormatAccept, FormatExitAccept, FamilyNetwork},
+		{"accept4", FormatAccept4, FormatExitAccept4, FamilyNetwork},
 		{"socket", FormatSocket, FormatExitSocket, FamilyNetwork},
 		{"socketpair", FormatSocketpair, FormatExitSocketpair, FamilyNetwork},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},

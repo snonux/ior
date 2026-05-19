@@ -77,6 +77,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraSocket()
 	case KindSocketpair:
 		return generateExtraSocketpair(isEnter)
+	case KindAccept:
+		return generateExtraAccept(isEnter)
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindPathname:
@@ -162,6 +164,13 @@ func generateExtraSocketpair(isEnter bool) string {
 		return "    struct socketpair_ctx pending;\n    pending.usockvec = ctx->args[3];\n    pending.family = (__s32)ctx->args[0];\n    pending.type = (__s32)ctx->args[1];\n    pending.protocol = (__s32)ctx->args[2];\n    bpf_map_update_elem(&socketpair_ctx_map, &tid, &pending, BPF_ANY);\n    ev->family = pending.family;\n    ev->type = pending.type;\n    ev->protocol = pending.protocol;\n    ev->sv0 = -1;\n    ev->sv1 = -1;\n    ev->ret = 0;\n"
 	}
 	return "    __s32 family = -1;\n    __s32 type = -1;\n    __s32 protocol = -1;\n    __s32 sv0 = -1;\n    __s32 sv1 = -1;\n    struct socketpair_ctx *pending = bpf_map_lookup_elem(&socketpair_ctx_map, &tid);\n    if (pending) {\n        family = pending->family;\n        type = pending->type;\n        protocol = pending->protocol;\n        if (ctx->ret == 0 && pending->usockvec != 0) {\n            int sv[2];\n            if (bpf_probe_read_user(&sv, sizeof(sv), (void *)pending->usockvec) == 0) {\n                sv0 = (__s32)sv[0];\n                sv1 = (__s32)sv[1];\n            }\n        }\n        bpf_map_delete_elem(&socketpair_ctx_map, &tid);\n    }\n    ev->family = family;\n    ev->type = type;\n    ev->protocol = protocol;\n    ev->sv0 = sv0;\n    ev->sv1 = sv1;\n    ev->ret = ctx->ret;\n"
+}
+
+func generateExtraAccept(isEnter bool) string {
+	if isEnter {
+		return "    ev->fd = (__s32)ctx->args[0];\n    ev->ret = -1;\n"
+	}
+	return "    ev->fd = -1;\n    ev->ret = ctx->ret;\n"
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

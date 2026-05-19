@@ -90,6 +90,8 @@ const ENTER_SOCKET_EVENT = 19
 const EXIT_SOCKET_EVENT = 20
 const ENTER_SOCKETPAIR_EVENT = 21
 const EXIT_SOCKETPAIR_EVENT = 22
+const ENTER_ACCEPT_EVENT = 23
+const EXIT_ACCEPT_EVENT = 24
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -1588,4 +1590,73 @@ func (s *SocketpairEvent) Bytes() ([]byte, error) {
 
 func (s *SocketpairEvent) Recycle() {
 	poolOfSocketpairEvents.Put(s)
+}
+
+type AcceptEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Fd        int32
+	Ret       int64
+}
+
+func (a AcceptEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Ret:%v", a.EventType, a.TraceId, a.Time, a.Pid, a.Tid, a.Fd, a.Ret)
+}
+
+func (a AcceptEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*AcceptEvent)
+	if !ok {
+		return false
+	}
+	return a.EventType == otherConcrete.EventType && a.TraceId == otherConcrete.TraceId && a.Time == otherConcrete.Time && a.Pid == otherConcrete.Pid && a.Tid == otherConcrete.Tid && a.Fd == otherConcrete.Fd && a.Ret == otherConcrete.Ret
+}
+
+func (a *AcceptEvent) GetEventType() EventType {
+	return a.EventType
+}
+
+func (a *AcceptEvent) GetTraceId() TraceId {
+	return a.TraceId
+}
+
+func (a *AcceptEvent) GetPid() uint32 {
+	return a.Pid
+}
+
+func (a *AcceptEvent) GetTid() uint32 {
+	return a.Tid
+}
+
+func (a *AcceptEvent) GetTime() uint64 {
+	return a.Time
+}
+
+var poolOfAcceptEvents = sync.Pool{
+	New: func() any { return &AcceptEvent{} },
+}
+
+func NewAcceptEvent(raw []byte) *AcceptEvent {
+	a := poolOfAcceptEvents.Get().(*AcceptEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, a); err != nil {
+		*a = AcceptEvent{}
+		poolOfAcceptEvents.Put(a)
+		return nil
+	}
+	return a
+}
+
+func (a *AcceptEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, a)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (a *AcceptEvent) Recycle() {
+	poolOfAcceptEvents.Put(a)
 }

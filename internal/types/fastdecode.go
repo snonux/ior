@@ -15,6 +15,8 @@ const (
 	socketEventSize         = 36
 	socketpairEventSize     = 56
 	socketpairEventSizeV1   = 52
+	acceptEventSize         = 40
+	acceptEventSizeV1       = 36
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -219,4 +221,26 @@ func NewSocketpairEventFast(raw []byte) *SocketpairEvent {
 	}
 	s.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
 	return s
+}
+
+func NewAcceptEventFast(raw []byte) *AcceptEvent {
+	if len(raw) < acceptEventSizeV1 {
+		return nil
+	}
+	if len(raw) != acceptEventSize && len(raw) != acceptEventSizeV1 {
+		return NewAcceptEvent(raw)
+	}
+	a := poolOfAcceptEvents.Get().(*AcceptEvent)
+	a.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	a.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	a.Time = binary.LittleEndian.Uint64(raw[8:16])
+	a.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	a.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	a.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	retOffset := 28
+	if len(raw) == acceptEventSize {
+		retOffset = 32
+	}
+	a.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
+	return a
 }
