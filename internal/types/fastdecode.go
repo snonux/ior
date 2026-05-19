@@ -13,7 +13,8 @@ const (
 	dup3EventSize           = 32
 	openByHandleAtEventSize = 28
 	socketEventSize         = 36
-	socketpairEventSize     = 44
+	socketpairEventSize     = 56
+	socketpairEventSizeV1   = 52
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -195,10 +196,10 @@ func NewSocketEventFast(raw []byte) *SocketEvent {
 }
 
 func NewSocketpairEventFast(raw []byte) *SocketpairEvent {
-	if len(raw) < socketpairEventSize {
+	if len(raw) < socketpairEventSizeV1 {
 		return nil
 	}
-	if len(raw) != socketpairEventSize {
+	if len(raw) != socketpairEventSize && len(raw) != socketpairEventSizeV1 {
 		return NewSocketpairEvent(raw)
 	}
 	s := poolOfSocketpairEvents.Get().(*SocketpairEvent)
@@ -212,5 +213,10 @@ func NewSocketpairEventFast(raw []byte) *SocketpairEvent {
 	s.Protocol = int32(binary.LittleEndian.Uint32(raw[32:36]))
 	s.Sv0 = int32(binary.LittleEndian.Uint32(raw[36:40]))
 	s.Sv1 = int32(binary.LittleEndian.Uint32(raw[40:44]))
+	retOffset := 44
+	if len(raw) == socketpairEventSize {
+		retOffset = 48
+	}
+	s.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
 	return s
 }

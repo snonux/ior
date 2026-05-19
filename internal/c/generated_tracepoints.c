@@ -799,39 +799,64 @@ int handle_sys_enter_socketpair(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    int sv[2];
-    __builtin_memset(&sv, 0xff, sizeof(sv));
-    if (ctx->args[3] != 0) {
-        bpf_probe_read_user(&sv, sizeof(sv), (void *)ctx->args[3]);
-    }
-    ev->family = (__s32)ctx->args[0];
-    ev->type = (__s32)ctx->args[1];
-    ev->protocol = (__s32)ctx->args[2];
-    ev->sv0 = (__s32)sv[0];
-    ev->sv1 = (__s32)sv[1];
+    struct socketpair_ctx pending;
+    pending.usockvec = ctx->args[3];
+    pending.family = (__s32)ctx->args[0];
+    pending.type = (__s32)ctx->args[1];
+    pending.protocol = (__s32)ctx->args[2];
+    bpf_map_update_elem(&socketpair_ctx_map, &tid, &pending, BPF_ANY);
+    ev->family = pending.family;
+    ev->type = pending.type;
+    ev->protocol = pending.protocol;
+    ev->sv0 = -1;
+    ev->sv1 = -1;
+    ev->ret = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_socketpair is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_socketpair is a struct socketpair_event
 SEC("tracepoint/syscalls/sys_exit_socketpair")
 int handle_sys_exit_socketpair(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct socketpair_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct socketpair_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_SOCKETPAIR_EVENT;
     ev->trace_id = SYS_EXIT_SOCKETPAIR;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 family = -1;
+    __s32 type = -1;
+    __s32 protocol = -1;
+    __s32 sv0 = -1;
+    __s32 sv1 = -1;
+    struct socketpair_ctx *pending = bpf_map_lookup_elem(&socketpair_ctx_map, &tid);
+    if (pending) {
+        family = pending->family;
+        type = pending->type;
+        protocol = pending->protocol;
+        if (ctx->ret == 0 && pending->usockvec != 0) {
+            int sv[2];
+            if (bpf_probe_read_user(&sv, sizeof(sv), (void *)pending->usockvec) == 0) {
+                sv0 = (__s32)sv[0];
+                sv1 = (__s32)sv[1];
+            }
+        }
+        bpf_map_delete_elem(&socketpair_ctx_map, &tid);
+    }
+    ev->family = family;
+    ev->type = type;
+    ev->protocol = protocol;
+    ev->sv0 = sv0;
+    ev->sv1 = sv1;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

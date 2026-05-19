@@ -200,11 +200,16 @@ func TestGenerateSocketpairHandler(t *testing.T) {
 
 	requireContains(t, output, "struct socketpair_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_SOCKETPAIR_EVENT;")
-	requireContains(t, output, "int sv[2];")
-	requireContains(t, output, "bpf_probe_read_user(&sv, sizeof(sv), (void *)ctx->args[3]);")
-	requireContains(t, output, "ev->family = (__s32)ctx->args[0];")
-	requireContains(t, output, "ev->sv0 = (__s32)sv[0];")
-	requireContains(t, output, "ev->sv1 = (__s32)sv[1];")
+	requireContains(t, output, "struct socketpair_ctx pending;")
+	requireContains(t, output, "bpf_map_update_elem(&socketpair_ctx_map, &tid, &pending, BPF_ANY);")
+	requireContains(t, output, "ev->sv0 = -1;")
+	requireContains(t, output, "ev->ret = 0;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_socketpair\")")
+	requireContains(t, output, "ev->event_type = EXIT_SOCKETPAIR_EVENT;")
+	requireContains(t, output, "struct socketpair_ctx *pending = bpf_map_lookup_elem(&socketpair_ctx_map, &tid);")
+	requireContains(t, output, "if (ctx->ret == 0 && pending->usockvec != 0) {")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->family = pending.family;")
 }
 
 func TestGenerateNameToHandleAtHandler(t *testing.T) {

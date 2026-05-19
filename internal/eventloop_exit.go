@@ -233,25 +233,42 @@ func (e *eventLoop) handleSocketExit(ep *event.Pair, socketEv *types.SocketEvent
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(socketEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
 	return true
 }
 
 func (e *eventLoop) handleSocketpairExit(ep *event.Pair, socketpairEv *types.SocketpairEvent) bool {
-	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	exitEv, ok := ep.ExitEv.(*types.SocketpairEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed socketpair exit event")
 		return false
 	}
 
-	if retEvent.Ret == 0 {
-		if socketpairEv.Sv0 >= 0 {
-			fdFile := file.NewFd(socketpairEv.Sv0, socketDescriptorName(socketpairEv.Family, socketpairEv.Type, socketpairEv.Protocol), -1)
-			e.fdState().set(socketpairEv.Sv0, fdFile)
+	family := exitEv.Family
+	typ := exitEv.Type
+	protocol := exitEv.Protocol
+	if family < 0 {
+		family = socketpairEv.Family
+	}
+	if typ < 0 {
+		typ = socketpairEv.Type
+	}
+	if protocol < 0 {
+		protocol = socketpairEv.Protocol
+	}
+
+	if exitEv.Ret == 0 {
+		if exitEv.Sv0 >= 0 {
+			fdFile := file.NewFd(exitEv.Sv0, socketDescriptorName(family, typ, protocol), -1)
+			e.fdState().set(exitEv.Sv0, fdFile)
 			ep.File = fdFile
 		}
-		if socketpairEv.Sv1 >= 0 {
-			fdFile := file.NewFd(socketpairEv.Sv1, socketDescriptorName(socketpairEv.Family, socketpairEv.Type, socketpairEv.Protocol), -1)
-			e.fdState().set(socketpairEv.Sv1, fdFile)
+		if exitEv.Sv1 >= 0 {
+			fdFile := file.NewFd(exitEv.Sv1, socketDescriptorName(family, typ, protocol), -1)
+			e.fdState().set(exitEv.Sv1, fdFile)
 			if ep.File == nil {
 				ep.File = fdFile
 			}

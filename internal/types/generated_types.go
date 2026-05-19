@@ -1528,10 +1528,11 @@ type SocketpairEvent struct {
 	Protocol  int32
 	Sv0       int32
 	Sv1       int32
+	Ret       int64
 }
 
 func (s SocketpairEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Family:%v Type:%v Protocol:%v Sv0:%v Sv1:%v", s.EventType, s.TraceId, s.Time, s.Pid, s.Tid, s.Family, s.Type, s.Protocol, s.Sv0, s.Sv1)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Family:%v Type:%v Protocol:%v Sv0:%v Sv1:%v Ret:%v", s.EventType, s.TraceId, s.Time, s.Pid, s.Tid, s.Family, s.Type, s.Protocol, s.Sv0, s.Sv1, s.Ret)
 }
 
 func (s SocketpairEvent) Equals(other any) bool {
@@ -1539,7 +1540,7 @@ func (s SocketpairEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return s.EventType == otherConcrete.EventType && s.TraceId == otherConcrete.TraceId && s.Time == otherConcrete.Time && s.Pid == otherConcrete.Pid && s.Tid == otherConcrete.Tid && s.Family == otherConcrete.Family && s.Type == otherConcrete.Type && s.Protocol == otherConcrete.Protocol && s.Sv0 == otherConcrete.Sv0 && s.Sv1 == otherConcrete.Sv1
+	return s.EventType == otherConcrete.EventType && s.TraceId == otherConcrete.TraceId && s.Time == otherConcrete.Time && s.Pid == otherConcrete.Pid && s.Tid == otherConcrete.Tid && s.Family == otherConcrete.Family && s.Type == otherConcrete.Type && s.Protocol == otherConcrete.Protocol && s.Sv0 == otherConcrete.Sv0 && s.Sv1 == otherConcrete.Sv1 && s.Ret == otherConcrete.Ret
 }
 
 func (s *SocketpairEvent) GetEventType() EventType {
