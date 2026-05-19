@@ -55,6 +55,26 @@ func TestSocketAcceptLifecycle(t *testing.T) {
 	assertTracepointPathPrefix(t, result, "enter_shutdown", "socket:1:")
 }
 
+func TestSocketAcceptLifecyclePlain(t *testing.T) {
+	result, _ := runScenarioResult(t, "socket-accept-lifecycle-plain", []ExpectedEvent{
+		{Tracepoint: "enter_bind", MinCount: 1},
+		{Tracepoint: "enter_connect", MinCount: 1},
+		{Tracepoint: "enter_listen", MinCount: 1},
+		{Tracepoint: "enter_accept", MinCount: 1},
+		{Tracepoint: "enter_shutdown", MinCount: 1},
+	})
+
+	assertTracepointPathPrefix(t, result, "enter_bind", "socket:1:")
+	assertTracepointPathPrefix(t, result, "enter_connect", "socket:1:")
+	assertTracepointPathPrefix(t, result, "enter_listen", "socket:1:")
+	assertTracepointPathPrefix(t, result, "enter_accept", "socket:1:")
+	assertTracepointPathPrefix(t, result, "enter_shutdown", "socket:1:")
+
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_accept4"},
+	})
+}
+
 func assertTracepointPathPrefix(t *testing.T, result TestResult, tracepoint, wantPrefix string) {
 	t.Helper()
 	if got := countTracepointPathPrefix(result, tracepoint, wantPrefix); got == 0 {
