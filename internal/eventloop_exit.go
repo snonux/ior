@@ -26,6 +26,10 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		return e.handleDup3Exit(ep, ev)
 	case *types.OpenByHandleAtEvent:
 		return e.handleOpenByHandleAtExit(ep, ev)
+	case *types.SocketEvent:
+		return e.handleSocketExit(ep, ev)
+	case *types.SocketpairEvent:
+		return e.handleSocketpairExit(ep, ev)
 	case *types.NullEvent:
 		return e.handleNullExit(ep, ev)
 	case *types.FcntlEvent:
@@ -214,6 +218,55 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	}
 	ep.Comm = e.comm(tid)
 	return true
+}
+
+func (e *eventLoop) handleSocketExit(ep *event.Pair, socketEv *types.SocketEvent) bool {
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed socket exit event")
+		return false
+	}
+
+	if fd := int32(retEvent.Ret); fd >= 0 {
+		fdFile := file.NewFd(fd, socketDescriptorName(socketEv.Family, socketEv.Type, socketEv.Protocol), -1)
+		e.fdState().set(fd, fdFile)
+		ep.File = fdFile
+	}
+	ep.Comm = e.comm(socketEv.GetTid())
+	return true
+}
+
+func (e *eventLoop) handleSocketpairExit(ep *event.Pair, socketpairEv *types.SocketpairEvent) bool {
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed socketpair exit event")
+		return false
+	}
+
+	if retEvent.Ret == 0 {
+		if socketpairEv.Sv0 >= 0 {
+			fdFile := file.NewFd(socketpairEv.Sv0, socketDescriptorName(socketpairEv.Family, socketpairEv.Type, socketpairEv.Protocol), -1)
+			e.fdState().set(socketpairEv.Sv0, fdFile)
+			ep.File = fdFile
+		}
+		if socketpairEv.Sv1 >= 0 {
+			fdFile := file.NewFd(socketpairEv.Sv1, socketDescriptorName(socketpairEv.Family, socketpairEv.Type, socketpairEv.Protocol), -1)
+			e.fdState().set(socketpairEv.Sv1, fdFile)
+			if ep.File == nil {
+				ep.File = fdFile
+			}
+		}
+	}
+	ep.Comm = e.comm(socketpairEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
+func socketDescriptorName(family, typ, protocol int32) string {
+	return fmt.Sprintf("socket:%d:%d:%d", family, typ, protocol)
 }
 
 func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool {

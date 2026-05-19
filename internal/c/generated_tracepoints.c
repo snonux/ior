@@ -736,22 +736,25 @@
 #define SYS_ENTER_RT_SIGRETURN 57
 #define SYS_EXIT_RT_SIGRETURN 56
 
-/// sys_enter_socket is a struct null_event
+/// sys_enter_socket is a struct socket_event
 SEC("tracepoint/syscalls/sys_enter_socket")
 int handle_sys_enter_socket(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct socket_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct socket_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_SOCKET_EVENT;
     ev->trace_id = SYS_ENTER_SOCKET;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->family = (__s32)ctx->args[0];
+    ev->type = (__s32)ctx->args[1];
+    ev->protocol = (__s32)ctx->args[2];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -780,22 +783,32 @@ int handle_sys_exit_socket(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_socketpair is a struct null_event
+/// sys_enter_socketpair is a struct socketpair_event
 SEC("tracepoint/syscalls/sys_enter_socketpair")
 int handle_sys_enter_socketpair(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct socketpair_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct socketpair_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_SOCKETPAIR_EVENT;
     ev->trace_id = SYS_ENTER_SOCKETPAIR;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    int sv[2];
+    __builtin_memset(&sv, 0xff, sizeof(sv));
+    if (ctx->args[3] != 0) {
+        bpf_probe_read_user(&sv, sizeof(sv), (void *)ctx->args[3]);
+    }
+    ev->family = (__s32)ctx->args[0];
+    ev->type = (__s32)ctx->args[1];
+    ev->protocol = (__s32)ctx->args[2];
+    ev->sv0 = (__s32)sv[0];
+    ev->sv1 = (__s32)sv[1];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

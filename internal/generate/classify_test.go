@@ -244,10 +244,17 @@ func TestClassifyFdAccept(t *testing.T) {
 	}
 }
 
-func TestClassifySocketRequiresGenerationFallback(t *testing.T) {
+func TestClassifySocket(t *testing.T) {
 	r := classifyFromData(t, FormatSocket)
-	if r.Kind != KindNone {
-		t.Errorf("socket: got kind %d, want KindNone before generation fallback", r.Kind)
+	if r.Kind != KindSocket {
+		t.Errorf("socket: got kind %d, want KindSocket", r.Kind)
+	}
+}
+
+func TestClassifySocketpair(t *testing.T) {
+	r := classifyFromData(t, FormatSocketpair)
+	if r.Kind != KindSocketpair {
+		t.Errorf("socketpair: got kind %d, want KindSocketpair", r.Kind)
 	}
 }
 
@@ -288,7 +295,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"mknod", FormatMknod, FormatExitMknod, KindPathname},
 		{"execve", FormatExecve, FormatExitExecve, KindPathname},
 		{"accept", FormatAccept, FormatExitAccept, KindFd},
-		{"socket", FormatSocket, FormatExitSocket, KindNull},
+		{"socket", FormatSocket, FormatExitSocket, KindSocket},
+		{"socketpair", FormatSocketpair, FormatExitSocketpair, KindSocketpair},
 		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
@@ -314,6 +322,7 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"execve", FormatExecve, FormatExitExecve, FamilyProcess},
 		{"accept", FormatAccept, FormatExitAccept, FamilyNetwork},
 		{"socket", FormatSocket, FormatExitSocket, FamilyNetwork},
+		{"socketpair", FormatSocketpair, FormatExitSocketpair, FamilyNetwork},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 

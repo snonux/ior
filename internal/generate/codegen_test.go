@@ -185,6 +185,28 @@ func TestGenerateOpenByHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
 }
 
+func TestGenerateSocketHandler(t *testing.T) {
+	output := generateFromPair(t, FormatSocket, FormatExitSocket)
+
+	requireContains(t, output, "struct socket_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_SOCKET_EVENT;")
+	requireContains(t, output, "ev->family = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->type = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->protocol = (__s32)ctx->args[2];")
+}
+
+func TestGenerateSocketpairHandler(t *testing.T) {
+	output := generateFromPair(t, FormatSocketpair, FormatExitSocketpair)
+
+	requireContains(t, output, "struct socketpair_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_SOCKETPAIR_EVENT;")
+	requireContains(t, output, "int sv[2];")
+	requireContains(t, output, "bpf_probe_read_user(&sv, sizeof(sv), (void *)ctx->args[3]);")
+	requireContains(t, output, "ev->family = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->sv0 = (__s32)sv[0];")
+	requireContains(t, output, "ev->sv1 = (__s32)sv[1];")
+}
+
 func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	output := generateFromPair(t, FormatNameToHandleAt, FormatExitNameToHandleAt)
 
@@ -292,6 +314,8 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindNull, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindDup3, "ENTER_DUP3_EVENT", "EXIT_DUP3_EVENT"},
 		{KindOpenByHandleAt, "ENTER_OPEN_BY_HANDLE_AT_EVENT", "EXIT_OPEN_BY_HANDLE_AT_EVENT"},
+		{KindSocket, "ENTER_SOCKET_EVENT", "EXIT_SOCKET_EVENT"},
+		{KindSocketpair, "ENTER_SOCKETPAIR_EVENT", "EXIT_SOCKETPAIR_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -318,6 +342,8 @@ func TestEventStructNames(t *testing.T) {
 		{KindNull, "null_event"},
 		{KindDup3, "dup3_event"},
 		{KindOpenByHandleAt, "open_by_handle_at_event"},
+		{KindSocket, "socket_event"},
+		{KindSocketpair, "socketpair_event"},
 	}
 
 	for _, tt := range tests {
@@ -336,7 +362,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt}
+	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

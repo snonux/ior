@@ -124,6 +124,32 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("open_by_handle_at decode mismatch")
 		}
 	})
+
+	t.Run("SocketEvent", func(t *testing.T) {
+		ev := &SocketEvent{EventType: ENTER_SOCKET_EVENT, TraceId: SYS_ENTER_SOCKET, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 3}
+		raw, _ := ev.Bytes()
+
+		slow := NewSocketEvent(raw)
+		fast := NewSocketEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("socket decode mismatch")
+		}
+	})
+
+	t.Run("SocketpairEvent", func(t *testing.T) {
+		ev := &SocketpairEvent{EventType: ENTER_SOCKETPAIR_EVENT, TraceId: SYS_ENTER_SOCKETPAIR, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 0, Sv0: 10, Sv1: 11}
+		raw, _ := ev.Bytes()
+
+		slow := NewSocketpairEvent(raw)
+		fast := NewSocketpairEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("socketpair decode mismatch")
+		}
+	})
 }
 
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
@@ -140,6 +166,8 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "FcntlEvent", decode: func(raw []byte) bool { return NewFcntlEventFast(raw) == nil }},
 		{name: "Dup3Event", decode: func(raw []byte) bool { return NewDup3EventFast(raw) == nil }},
 		{name: "OpenByHandleAtEvent", decode: func(raw []byte) bool { return NewOpenByHandleAtEventFast(raw) == nil }},
+		{name: "SocketEvent", decode: func(raw []byte) bool { return NewSocketEventFast(raw) == nil }},
+		{name: "SocketpairEvent", decode: func(raw []byte) bool { return NewSocketpairEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {

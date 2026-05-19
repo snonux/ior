@@ -823,6 +823,37 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatSocketpair = `name: sys_enter_socketpair
+ID: 1816
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int family;	offset:16;	size:8;	signed:0;
+	field:int type;	offset:24;	size:8;	signed:0;
+	field:int protocol;	offset:32;	size:8;	signed:0;
+	field:int * usockvec;	offset:40;	size:8;	signed:0;
+
+print fmt: "family: 0x%08lx, type: 0x%08lx, protocol: 0x%08lx, usockvec: 0x%08lx", ((unsigned long)(REC->family)), ((unsigned long)(REC->type)), ((unsigned long)(REC->protocol)), ((unsigned long)(REC->usockvec))
+`
+
+const FormatExitSocketpair = `name: sys_exit_socketpair
+ID: 1815
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatPread64 = `name: sys_enter_pread64
 ID: 840
 format:

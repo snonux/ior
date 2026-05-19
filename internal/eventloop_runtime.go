@@ -146,6 +146,7 @@ func (e *eventLoop) initRawHandlers() {
 	e.registerRetHandlers()
 	e.registerNamePathHandlers()
 	e.registerMiscHandlers()
+	e.registerSocketHandlers()
 }
 
 // registerOpenHandlers wires enter/exit handlers for open-family events.
@@ -259,6 +260,23 @@ func (e *eventLoop) registerMiscHandlers() {
 			return
 		}
 		e.tracepointEntered(dup3Ev)
+	}
+}
+
+func (e *eventLoop) registerSocketHandlers() {
+	e.rawHandlers[types.ENTER_SOCKET_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		socketEv, ok := decodeRawEvent(e, types.ENTER_SOCKET_EVENT, raw, types.NewSocketEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(socketEv)
+	}
+	e.rawHandlers[types.ENTER_SOCKETPAIR_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		socketpairEv, ok := decodeRawEvent(e, types.ENTER_SOCKETPAIR_EVENT, raw, types.NewSocketpairEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(socketpairEv)
 	}
 }
 

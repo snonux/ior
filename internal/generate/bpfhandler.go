@@ -73,6 +73,10 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return "    ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"
 	case KindOpenByHandleAt:
 		return "    ev->flags = (__s32)ctx->args[2];\n"
+	case KindSocket:
+		return generateExtraSocket()
+	case KindSocketpair:
+		return generateExtraSocketpair()
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindPathname:
@@ -147,6 +151,14 @@ func generateExtraFcntl(f *Format) string {
 		"    ev->fd = ctx->args[%d];\n    ev->cmd = ctx->args[%d];\n    ev->arg = ctx->args[%d];\n",
 		fdIdx, cmdIdx, argIdx,
 	)
+}
+
+func generateExtraSocket() string {
+	return "    ev->family = (__s32)ctx->args[0];\n    ev->type = (__s32)ctx->args[1];\n    ev->protocol = (__s32)ctx->args[2];\n"
+}
+
+func generateExtraSocketpair() string {
+	return "    int sv[2];\n    __builtin_memset(&sv, 0xff, sizeof(sv));\n    if (ctx->args[3] != 0) {\n        bpf_probe_read_user(&sv, sizeof(sv), (void *)ctx->args[3]);\n    }\n    ev->family = (__s32)ctx->args[0];\n    ev->type = (__s32)ctx->args[1];\n    ev->protocol = (__s32)ctx->args[2];\n    ev->sv0 = (__s32)sv[0];\n    ev->sv1 = (__s32)sv[1];\n"
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

@@ -12,6 +12,8 @@ const (
 	fcntlEventSize          = 40
 	dup3EventSize           = 32
 	openByHandleAtEventSize = 28
+	socketEventSize         = 36
+	socketpairEventSize     = 44
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -171,4 +173,44 @@ func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
 	o.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	o.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	return o
+}
+
+func NewSocketEventFast(raw []byte) *SocketEvent {
+	if len(raw) < socketEventSize {
+		return nil
+	}
+	if len(raw) != socketEventSize {
+		return NewSocketEvent(raw)
+	}
+	s := poolOfSocketEvents.Get().(*SocketEvent)
+	s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	s.Time = binary.LittleEndian.Uint64(raw[8:16])
+	s.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	s.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	s.Family = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	s.Type = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	s.Protocol = int32(binary.LittleEndian.Uint32(raw[32:36]))
+	return s
+}
+
+func NewSocketpairEventFast(raw []byte) *SocketpairEvent {
+	if len(raw) < socketpairEventSize {
+		return nil
+	}
+	if len(raw) != socketpairEventSize {
+		return NewSocketpairEvent(raw)
+	}
+	s := poolOfSocketpairEvents.Get().(*SocketpairEvent)
+	s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	s.Time = binary.LittleEndian.Uint64(raw[8:16])
+	s.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	s.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	s.Family = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	s.Type = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	s.Protocol = int32(binary.LittleEndian.Uint32(raw[32:36]))
+	s.Sv0 = int32(binary.LittleEndian.Uint32(raw[36:40]))
+	s.Sv1 = int32(binary.LittleEndian.Uint32(raw[40:44]))
+	return s
 }

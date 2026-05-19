@@ -15,6 +15,8 @@ const (
 	KindNull
 	KindDup3
 	KindOpenByHandleAt
+	KindSocket
+	KindSocketpair
 )
 
 type RetClassification string
@@ -79,6 +81,10 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_getcwd":
 		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_socket":
+		return ClassificationResult{Kind: KindSocket}, true
+	case "sys_enter_socketpair":
+		return ClassificationResult{Kind: KindSocketpair}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true
