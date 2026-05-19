@@ -25,6 +25,8 @@ var scenarios = map[string]func() error{
 	"readwrite-pread-invalid":     readwritePreadInvalid,
 	"readwrite-pwrite-invalid":    readwritePwriteInvalid,
 	"retbytes-phase-a":            retbytesPhaseA,
+	"socket-basic":                socketBasic,
+	"socketpair-basic":            socketpairBasic,
 	"family-mixed":                familyMixed,
 	"close-basic":                 closeBasic,
 	"close-range":                 closeRange,

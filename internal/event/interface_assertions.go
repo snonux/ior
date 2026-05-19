@@ -41,4 +41,10 @@ var (
 	// *types.OpenByHandleAtEvent carries the mount-fd and flags for
 	// open_by_handle_at syscalls.
 	_ Event = (*types.OpenByHandleAtEvent)(nil)
+
+	// *types.SocketEvent carries socket domain/type/protocol metadata.
+	_ Event = (*types.SocketEvent)(nil)
+
+	// *types.SocketpairEvent carries socketpair domain/type/protocol metadata.
+	_ Event = (*types.SocketpairEvent)(nil)
 )

@@ -86,6 +86,10 @@ const ENTER_DUP3_EVENT = 15
 const EXIT_DUP3_EVENT = 16
 const ENTER_OPEN_BY_HANDLE_AT_EVENT = 17
 const EXIT_OPEN_BY_HANDLE_AT_EVENT = 18
+const ENTER_SOCKET_EVENT = 19
+const EXIT_SOCKET_EVENT = 20
+const ENTER_SOCKETPAIR_EVENT = 21
+const EXIT_SOCKETPAIR_EVENT = 22
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -1441,4 +1445,146 @@ func (o *OpenByHandleAtEvent) Bytes() ([]byte, error) {
 
 func (o *OpenByHandleAtEvent) Recycle() {
 	poolOfOpenByHandleAtEvents.Put(o)
+}
+
+type SocketEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Family    int32
+	Type      int32
+	Protocol  int32
+}
+
+func (s SocketEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Family:%v Type:%v Protocol:%v", s.EventType, s.TraceId, s.Time, s.Pid, s.Tid, s.Family, s.Type, s.Protocol)
+}
+
+func (s SocketEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*SocketEvent)
+	if !ok {
+		return false
+	}
+	return s.EventType == otherConcrete.EventType && s.TraceId == otherConcrete.TraceId && s.Time == otherConcrete.Time && s.Pid == otherConcrete.Pid && s.Tid == otherConcrete.Tid && s.Family == otherConcrete.Family && s.Type == otherConcrete.Type && s.Protocol == otherConcrete.Protocol
+}
+
+func (s *SocketEvent) GetEventType() EventType {
+	return s.EventType
+}
+
+func (s *SocketEvent) GetTraceId() TraceId {
+	return s.TraceId
+}
+
+func (s *SocketEvent) GetPid() uint32 {
+	return s.Pid
+}
+
+func (s *SocketEvent) GetTid() uint32 {
+	return s.Tid
+}
+
+func (s *SocketEvent) GetTime() uint64 {
+	return s.Time
+}
+
+var poolOfSocketEvents = sync.Pool{
+	New: func() any { return &SocketEvent{} },
+}
+
+func NewSocketEvent(raw []byte) *SocketEvent {
+	s := poolOfSocketEvents.Get().(*SocketEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, s); err != nil {
+		*s = SocketEvent{}
+		poolOfSocketEvents.Put(s)
+		return nil
+	}
+	return s
+}
+
+func (s *SocketEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, s)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (s *SocketEvent) Recycle() {
+	poolOfSocketEvents.Put(s)
+}
+
+type SocketpairEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Family    int32
+	Type      int32
+	Protocol  int32
+	Sv0       int32
+	Sv1       int32
+}
+
+func (s SocketpairEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Family:%v Type:%v Protocol:%v Sv0:%v Sv1:%v", s.EventType, s.TraceId, s.Time, s.Pid, s.Tid, s.Family, s.Type, s.Protocol, s.Sv0, s.Sv1)
+}
+
+func (s SocketpairEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*SocketpairEvent)
+	if !ok {
+		return false
+	}
+	return s.EventType == otherConcrete.EventType && s.TraceId == otherConcrete.TraceId && s.Time == otherConcrete.Time && s.Pid == otherConcrete.Pid && s.Tid == otherConcrete.Tid && s.Family == otherConcrete.Family && s.Type == otherConcrete.Type && s.Protocol == otherConcrete.Protocol && s.Sv0 == otherConcrete.Sv0 && s.Sv1 == otherConcrete.Sv1
+}
+
+func (s *SocketpairEvent) GetEventType() EventType {
+	return s.EventType
+}
+
+func (s *SocketpairEvent) GetTraceId() TraceId {
+	return s.TraceId
+}
+
+func (s *SocketpairEvent) GetPid() uint32 {
+	return s.Pid
+}
+
+func (s *SocketpairEvent) GetTid() uint32 {
+	return s.Tid
+}
+
+func (s *SocketpairEvent) GetTime() uint64 {
+	return s.Time
+}
+
+var poolOfSocketpairEvents = sync.Pool{
+	New: func() any { return &SocketpairEvent{} },
+}
+
+func NewSocketpairEvent(raw []byte) *SocketpairEvent {
+	s := poolOfSocketpairEvents.Get().(*SocketpairEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, s); err != nil {
+		*s = SocketpairEvent{}
+		poolOfSocketpairEvents.Put(s)
+		return nil
+	}
+	return s
+}
+
+func (s *SocketpairEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, s)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (s *SocketpairEvent) Recycle() {
+	poolOfSocketpairEvents.Put(s)
 }

@@ -316,8 +316,8 @@ sys_enter_shutdown is a struct fd_event
 sys_enter_sigaltstack is a struct null_event
 sys_enter_signalfd is a struct null_event
 sys_enter_signalfd4 is a struct null_event
-sys_enter_socket is a struct null_event
-sys_enter_socketpair is a struct null_event
+sys_enter_socket is a struct socket_event
+sys_enter_socketpair is a struct socketpair_event
 sys_enter_splice is a struct null_event
 sys_enter_statfs is a struct path_event
 sys_enter_statmount is a struct null_event

@@ -21,6 +21,10 @@
 #define EXIT_DUP3_EVENT 16
 #define ENTER_OPEN_BY_HANDLE_AT_EVENT 17
 #define EXIT_OPEN_BY_HANDLE_AT_EVENT 18
+#define ENTER_SOCKET_EVENT 19
+#define EXIT_SOCKET_EVENT 20
+#define ENTER_SOCKETPAIR_EVENT 21
+#define EXIT_SOCKETPAIR_EVENT 22
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -113,4 +117,28 @@ struct open_by_handle_at_event {
     __u32 pid;
     __u32 tid;
     __s32 flags;
+};
+
+struct socket_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 family;
+    __s32 type;
+    __s32 protocol;
+};
+
+struct socketpair_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 family;
+    __s32 type;
+    __s32 protocol;
+    __s32 sv0;
+    __s32 sv1;
 };

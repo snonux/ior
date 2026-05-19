@@ -130,6 +130,64 @@ func TestNullEventSerialization(t *testing.T) {
 	t.Log("NullEvent could be serialized correctly")
 }
 
+func TestSocketEventSerialization(t *testing.T) {
+	socketEv1 := SocketEvent{
+		EventType: ENTER_SOCKET_EVENT,
+		TraceId:   SYS_ENTER_SOCKET,
+		Time:      1234,
+		Pid:       30,
+		Tid:       31,
+		Family:    1,
+		Type:      2,
+		Protocol:  0,
+	}
+	bytes, err := socketEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	socketEv2 := NewSocketEvent(bytes)
+
+	assertEquals(t, socketEv1.EventType, socketEv2.EventType)
+	assertEquals(t, socketEv1.TraceId, socketEv2.TraceId)
+	assertEquals(t, socketEv1.Time, socketEv2.Time)
+	assertEquals(t, socketEv1.Pid, socketEv2.Pid)
+	assertEquals(t, socketEv1.Tid, socketEv2.Tid)
+	assertEquals(t, socketEv1.Family, socketEv2.Family)
+	assertEquals(t, socketEv1.Type, socketEv2.Type)
+	assertEquals(t, socketEv1.Protocol, socketEv2.Protocol)
+}
+
+func TestSocketpairEventSerialization(t *testing.T) {
+	socketpairEv1 := SocketpairEvent{
+		EventType: ENTER_SOCKETPAIR_EVENT,
+		TraceId:   SYS_ENTER_SOCKETPAIR,
+		Time:      2345,
+		Pid:       32,
+		Tid:       33,
+		Family:    1,
+		Type:      1,
+		Protocol:  0,
+		Sv0:       42,
+		Sv1:       43,
+	}
+	bytes, err := socketpairEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	socketpairEv2 := NewSocketpairEvent(bytes)
+
+	assertEquals(t, socketpairEv1.EventType, socketpairEv2.EventType)
+	assertEquals(t, socketpairEv1.TraceId, socketpairEv2.TraceId)
+	assertEquals(t, socketpairEv1.Time, socketpairEv2.Time)
+	assertEquals(t, socketpairEv1.Pid, socketpairEv2.Pid)
+	assertEquals(t, socketpairEv1.Tid, socketpairEv2.Tid)
+	assertEquals(t, socketpairEv1.Family, socketpairEv2.Family)
+	assertEquals(t, socketpairEv1.Type, socketpairEv2.Type)
+	assertEquals(t, socketpairEv1.Protocol, socketpairEv2.Protocol)
+	assertEquals(t, socketpairEv1.Sv0, socketpairEv2.Sv0)
+	assertEquals(t, socketpairEv1.Sv1, socketpairEv2.Sv1)
+}
+
 func TestEqualsDifferentTypes(t *testing.T) {
 	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
 	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}
