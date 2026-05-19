@@ -109,7 +109,7 @@ Press `6`. Two histograms: syscall **latency** (how long the syscall ran) and th
 
 ### 7 · Stream
 
-Press `7`. A live tail of every traced event row: comm, PID, TID, syscall, family, file, FD, return value, bytes, latency, gap. This is the workhorse view; the next section explores it in depth.
+Press `7`. A live tail of every traced event row: comm, PID, TID, syscall, file, FD, return value, bytes, latency, gap. This is the workhorse view; the next section explores it in depth.
 
 ![Stream tab live-tailing rows](./assets/07-stream-live.gif)
 

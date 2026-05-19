@@ -70,6 +70,32 @@ func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs
 	return result, workloadPID, nil
 }
 
+// RunParquet executes a scenario in headless Parquet mode and returns the
+// recorded Parquet path.
+func (h *TestHarness) RunParquet(scenario string, duration int) (string, int, error) {
+	parquetPath := filepath.Join(h.OutputDir, scenario+".parquet")
+	workloadCmd, workloadPID, err := h.startWorkload(scenario)
+	if err != nil {
+		return "", 0, err
+	}
+
+	iorCmd, err := h.startIorParquet(parquetPath, duration)
+	if err != nil {
+		workloadCmd.Process.Kill()
+		workloadCmd.Wait()
+		return "", workloadPID, err
+	}
+
+	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, duration, iorShutdownGrace)
+	if iorErr != nil {
+		return "", workloadPID, fmt.Errorf("ior: %w", iorErr)
+	}
+	if workloadErr != nil {
+		return "", workloadPID, fmt.Errorf("workload: %w", workloadErr)
+	}
+	return parquetPath, workloadPID, nil
+}
+
 func (h *TestHarness) startWorkload(scenario string) (*exec.Cmd, int, error) {
 	cmd := exec.Command(h.WorkloadBinary, "--scenario="+scenario)
 	cmd.Stderr = os.Stderr
@@ -128,6 +154,18 @@ func (h *TestHarness) startIor(pid int, scenario string, duration int, extraArgs
 		"-duration", strconv.Itoa(duration),
 	}
 	args = append(args, extraArgs...)
+	return h.startIorArgs(args)
+}
+
+func (h *TestHarness) startIorParquet(parquetPath string, duration int) (*exec.Cmd, error) {
+	args := []string{
+		"-parquet", parquetPath,
+		"-duration", strconv.Itoa(duration),
+	}
+	return h.startIorArgs(args)
+}
+
+func (h *TestHarness) startIorArgs(args []string) (*exec.Cmd, error) {
 	cmd := exec.Command(h.IorBinary, args...)
 	cmd.Dir = h.OutputDir
 	cmd.Stdout = os.Stdout

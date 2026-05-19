@@ -26,6 +26,7 @@ state, no installation needed beyond Docker.
 | `pid` | UInt32 | Process ID |
 | `tid` | UInt32 | Thread ID |
 | `syscall` | String | Syscall name (e.g. `read`, `openat`) |
+| `family` | String | Broad syscall family (e.g. `FS`, `Network`, `Memory`) |
 | `fd` | Int32 | File descriptor |
 | `ret` | Int64 | Return value (negative = errno) |
 | `bytes` | UInt64 | Bytes transferred (0 if not applicable) |
