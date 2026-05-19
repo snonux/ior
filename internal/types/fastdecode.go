@@ -21,6 +21,7 @@ const (
 	pipeEventSizeV1         = 44
 	eventfdEventSize        = 40
 	eventfdEventSizeV1      = 36
+	epollCtlEventSize       = 40
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -292,5 +293,25 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 		retOffset = 32
 	}
 	e.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
+	return e
+}
+
+func NewEpollCtlEventFast(raw []byte) *EpollCtlEvent {
+	if len(raw) < epollCtlEventSize {
+		return nil
+	}
+	if len(raw) != epollCtlEventSize {
+		return NewEpollCtlEvent(raw)
+	}
+	e := poolOfEpollCtlEvents.Get().(*EpollCtlEvent)
+	e.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	e.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	e.Time = binary.LittleEndian.Uint64(raw[8:16])
+	e.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	e.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	e.Epfd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	e.Op = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	e.Fd = int32(binary.LittleEndian.Uint32(raw[32:36]))
+	e.Events = binary.LittleEndian.Uint32(raw[36:40])
 	return e
 }

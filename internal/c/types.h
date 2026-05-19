@@ -31,6 +31,8 @@
 #define EXIT_PIPE_EVENT 26
 #define ENTER_EVENTFD_EVENT 27
 #define EXIT_EVENTFD_EVENT 28
+#define ENTER_EPOLL_CTL_EVENT 29
+#define EXIT_EPOLL_CTL_EVENT 30
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -180,4 +182,16 @@ struct eventfd_event {
     __u32 tid;
     __s32 flags;
     __s64 ret;
+};
+
+struct epoll_ctl_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 epfd;
+    __s32 op;
+    __s32 fd;
+    __u32 events;
 };

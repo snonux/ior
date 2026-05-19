@@ -83,6 +83,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraPipe(f, isEnter)
 	case KindEventfd:
 		return generateExtraEventfd(f, isEnter)
+	case KindEpollCtl:
+		return generateExtraEpollCtl()
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindPathname:
@@ -197,6 +199,10 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 		return "    __s32 flags = " + flagsExpr + ";\n    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n    ev->flags = flags;\n    ev->ret = -1;\n"
 	}
 	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n"
+}
+
+func generateExtraEpollCtl() string {
+	return "    ev->epfd = (__s32)ctx->args[0];\n    ev->op = (__s32)ctx->args[1];\n    ev->fd = (__s32)ctx->args[2];\n    ev->events = 0;\n    if (ctx->args[3] != 0) {\n        __u32 user_events = 0;\n        if (bpf_probe_read_user(&user_events, sizeof(user_events), (void *)ctx->args[3]) == 0) {\n            ev->events = user_events;\n        }\n    }\n"
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

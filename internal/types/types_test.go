@@ -269,6 +269,35 @@ func TestEventfdEventSerialization(t *testing.T) {
 	assertEquals(t, eventfdEv1.Ret, eventfdEv2.Ret)
 }
 
+func TestEpollCtlEventSerialization(t *testing.T) {
+	epollCtlEv1 := EpollCtlEvent{
+		EventType: ENTER_EPOLL_CTL_EVENT,
+		TraceId:   SYS_ENTER_EPOLL_CTL,
+		Time:      6789,
+		Pid:       40,
+		Tid:       41,
+		Epfd:      9,
+		Op:        1,
+		Fd:        12,
+		Events:    0x5,
+	}
+	bytes, err := epollCtlEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	epollCtlEv2 := NewEpollCtlEvent(bytes)
+
+	assertEquals(t, epollCtlEv1.EventType, epollCtlEv2.EventType)
+	assertEquals(t, epollCtlEv1.TraceId, epollCtlEv2.TraceId)
+	assertEquals(t, epollCtlEv1.Time, epollCtlEv2.Time)
+	assertEquals(t, epollCtlEv1.Pid, epollCtlEv2.Pid)
+	assertEquals(t, epollCtlEv1.Tid, epollCtlEv2.Tid)
+	assertEquals(t, epollCtlEv1.Epfd, epollCtlEv2.Epfd)
+	assertEquals(t, epollCtlEv1.Op, epollCtlEv2.Op)
+	assertEquals(t, epollCtlEv1.Fd, epollCtlEv2.Fd)
+	assertEquals(t, epollCtlEv1.Events, epollCtlEv2.Events)
+}
+
 func TestEqualsDifferentTypes(t *testing.T) {
 	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
 	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}

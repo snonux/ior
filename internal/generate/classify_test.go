@@ -369,6 +369,34 @@ func TestClassifyExitEventfd2(t *testing.T) {
 	}
 }
 
+func TestClassifyEpollCtl(t *testing.T) {
+	r := classifyFromData(t, FormatEpollCtl)
+	if r.Kind != KindEpollCtl {
+		t.Errorf("epoll_ctl: got kind %d, want KindEpollCtl", r.Kind)
+	}
+}
+
+func TestClassifyEpollWait(t *testing.T) {
+	r := classifyFromData(t, FormatEpollWait)
+	if r.Kind != KindFd {
+		t.Errorf("epoll_wait: got kind %d, want KindFd", r.Kind)
+	}
+}
+
+func TestClassifyEpollPwait(t *testing.T) {
+	r := classifyFromData(t, FormatEpollPwait)
+	if r.Kind != KindFd {
+		t.Errorf("epoll_pwait: got kind %d, want KindFd", r.Kind)
+	}
+}
+
+func TestClassifyEpollPwait2(t *testing.T) {
+	r := classifyFromData(t, FormatEpollPwait2)
+	if r.Kind != KindFd {
+		t.Errorf("epoll_pwait2: got kind %d, want KindFd", r.Kind)
+	}
+}
+
 func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {
@@ -413,6 +441,10 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"pipe2", FormatPipe2, FormatExitPipe2, KindPipe},
 		{"eventfd", FormatEventfd, FormatExitEventfd, KindEventfd},
 		{"eventfd2", FormatEventfd2, FormatExitEventfd2, KindEventfd},
+		{"epoll_ctl", FormatEpollCtl, FormatExitEpollCtl, KindEpollCtl},
+		{"epoll_wait", FormatEpollWait, FormatExitEpollWait, KindFd},
+		{"epoll_pwait", FormatEpollPwait, FormatExitEpollPwait, KindFd},
+		{"epoll_pwait2", FormatEpollPwait2, FormatExitEpollPwait2, KindFd},
 		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
@@ -444,6 +476,8 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"pipe2", FormatPipe2, FormatExitPipe2, FamilyIPC},
 		{"eventfd", FormatEventfd, FormatExitEventfd, FamilyIPC},
 		{"eventfd2", FormatEventfd2, FormatExitEventfd2, FamilyIPC},
+		{"epoll_ctl", FormatEpollCtl, FormatExitEpollCtl, FamilyPolling},
+		{"epoll_wait", FormatEpollWait, FormatExitEpollWait, FamilyPolling},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 

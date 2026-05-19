@@ -99,6 +99,25 @@ func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 	}
 }
 
+func TestNewCarriesReadyCountForEpollWait(t *testing.T) {
+	enter := &types.FdEvent{TraceId: types.SYS_ENTER_EPOLL_WAIT, Time: 2000, Pid: 15, Tid: 16, Fd: 9}
+	exit := &types.RetEvent{TraceId: types.SYS_EXIT_EPOLL_WAIT, Time: 2100, Ret: 3, Pid: 15, Tid: 16}
+	pair := event.NewPair(enter)
+	pair.ExitEv = exit
+	pair.File = file.NewFd(9, "anon_inode:[eventpoll]", -1)
+
+	got := New(17, pair)
+	if got.Syscall != "epoll_wait" || got.FD != 9 {
+		t.Fatalf("Syscall/FD = %q/%d, want epoll_wait/9", got.Syscall, got.FD)
+	}
+	if got.RetVal != 3 || got.IsError {
+		t.Fatalf("RetVal/IsError = %d/%v, want 3/false", got.RetVal, got.IsError)
+	}
+	if got.Bytes != 0 {
+		t.Fatalf("Bytes = %d, want 0 for epoll ready-count events", got.Bytes)
+	}
+}
+
 // TestRowValueAccessors verifies that all typed accessor methods return the
 // underlying field values set on a Row.
 func TestRowValueAccessors(t *testing.T) {

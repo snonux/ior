@@ -96,6 +96,8 @@ const ENTER_PIPE_EVENT = 25
 const EXIT_PIPE_EVENT = 26
 const ENTER_EVENTFD_EVENT = 27
 const EXIT_EVENTFD_EVENT = 28
+const ENTER_EPOLL_CTL_EVENT = 29
+const EXIT_EPOLL_CTL_EVENT = 30
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -1803,4 +1805,75 @@ func (e *EventfdEvent) Bytes() ([]byte, error) {
 
 func (e *EventfdEvent) Recycle() {
 	poolOfEventfdEvents.Put(e)
+}
+
+type EpollCtlEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Epfd      int32
+	Op        int32
+	Fd        int32
+	Events    uint32
+}
+
+func (e EpollCtlEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Epfd:%v Op:%v Fd:%v Events:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Epfd, e.Op, e.Fd, e.Events)
+}
+
+func (e EpollCtlEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*EpollCtlEvent)
+	if !ok {
+		return false
+	}
+	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Epfd == otherConcrete.Epfd && e.Op == otherConcrete.Op && e.Fd == otherConcrete.Fd && e.Events == otherConcrete.Events
+}
+
+func (e *EpollCtlEvent) GetEventType() EventType {
+	return e.EventType
+}
+
+func (e *EpollCtlEvent) GetTraceId() TraceId {
+	return e.TraceId
+}
+
+func (e *EpollCtlEvent) GetPid() uint32 {
+	return e.Pid
+}
+
+func (e *EpollCtlEvent) GetTid() uint32 {
+	return e.Tid
+}
+
+func (e *EpollCtlEvent) GetTime() uint64 {
+	return e.Time
+}
+
+var poolOfEpollCtlEvents = sync.Pool{
+	New: func() any { return &EpollCtlEvent{} },
+}
+
+func NewEpollCtlEvent(raw []byte) *EpollCtlEvent {
+	e := poolOfEpollCtlEvents.Get().(*EpollCtlEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, e); err != nil {
+		*e = EpollCtlEvent{}
+		poolOfEpollCtlEvents.Put(e)
+		return nil
+	}
+	return e
+}
+
+func (e *EpollCtlEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, e)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (e *EpollCtlEvent) Recycle() {
+	poolOfEpollCtlEvents.Put(e)
 }

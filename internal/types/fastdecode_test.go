@@ -192,6 +192,19 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("eventfd decode mismatch")
 		}
 	})
+
+	t.Run("EpollCtlEvent", func(t *testing.T) {
+		ev := &EpollCtlEvent{EventType: ENTER_EPOLL_CTL_EVENT, TraceId: SYS_ENTER_EPOLL_CTL, Time: 1, Pid: 2, Tid: 3, Epfd: 10, Op: 1, Fd: 11, Events: 5}
+		raw, _ := ev.Bytes()
+
+		slow := NewEpollCtlEvent(raw)
+		fast := NewEpollCtlEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("epoll_ctl decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -333,6 +346,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "AcceptEvent", decode: func(raw []byte) bool { return NewAcceptEventFast(raw) == nil }},
 		{name: "PipeEvent", decode: func(raw []byte) bool { return NewPipeEventFast(raw) == nil }},
 		{name: "EventfdEvent", decode: func(raw []byte) bool { return NewEventfdEventFast(raw) == nil }},
+		{name: "EpollCtlEvent", decode: func(raw []byte) bool { return NewEpollCtlEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {
