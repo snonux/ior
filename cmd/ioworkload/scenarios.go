@@ -29,6 +29,7 @@ var scenarios = map[string]func() error{
 	"socketpair-basic":              socketpairBasic,
 	"socket-accept-lifecycle":       socketAcceptLifecycle,
 	"socket-accept-lifecycle-plain": socketAcceptLifecyclePlain,
+	"socket-introspection":          socketIntrospection,
 	"family-mixed":                  familyMixed,
 	"close-basic":                   closeBasic,
 	"close-range":                   closeRange,

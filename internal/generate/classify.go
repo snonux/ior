@@ -104,6 +104,14 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_shutdown":
 		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_getsockname":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_getpeername":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_getsockopt":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_setsockopt":
+		return ClassificationResult{Kind: KindFd}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true
