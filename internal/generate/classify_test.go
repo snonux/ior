@@ -265,8 +265,17 @@ func TestClassifyExitAccept4(t *testing.T) {
 	}
 }
 
-func TestClassifySocketLifecycleFdSyscallsByName(t *testing.T) {
-	tests := []string{"bind", "connect", "listen", "shutdown"}
+func TestClassifySocketFdSyscallsByName(t *testing.T) {
+	tests := []string{
+		"bind",
+		"connect",
+		"listen",
+		"shutdown",
+		"getsockname",
+		"getpeername",
+		"getsockopt",
+		"setsockopt",
+	}
 	for _, name := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := ClassifyFormat(&Format{

@@ -120,3 +120,57 @@ func socketAcceptLifecyclePlain() error {
 	}
 	return nil
 }
+
+func socketIntrospection() error {
+	dir, cleanup, err := makeTempDir("socket-introspection")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	socketPath := filepath.Join(dir, "introspection.sock")
+
+	listenerFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return fmt.Errorf("listener socket: %w", err)
+	}
+	defer syscall.Close(listenerFD) //nolint:errcheck
+
+	if err := syscall.Bind(listenerFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
+		return fmt.Errorf("bind: %w", err)
+	}
+	if err := syscall.Listen(listenerFD, 1); err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+
+	clientFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return fmt.Errorf("client socket: %w", err)
+	}
+	defer syscall.Close(clientFD) //nolint:errcheck
+
+	if err := syscall.Connect(clientFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	acceptedFD, _, err := syscall.Accept4(listenerFD, 0)
+	if err != nil {
+		return fmt.Errorf("accept4: %w", err)
+	}
+	defer syscall.Close(acceptedFD) //nolint:errcheck
+
+	if _, err := syscall.Getsockname(acceptedFD); err != nil {
+		return fmt.Errorf("getsockname: %w", err)
+	}
+	if _, err := syscall.Getpeername(acceptedFD); err != nil {
+		return fmt.Errorf("getpeername: %w", err)
+	}
+	if err := syscall.SetsockoptInt(acceptedFD, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 32768); err != nil {
+		return fmt.Errorf("setsockopt: %w", err)
+	}
+	if _, err := syscall.GetsockoptInt(acceptedFD, syscall.SOL_SOCKET, syscall.SO_RCVBUF); err != nil {
+		return fmt.Errorf("getsockopt: %w", err)
+	}
+
+	return nil
+}
