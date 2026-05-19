@@ -141,4 +141,5 @@ struct socketpair_event {
     __s32 protocol;
     __s32 sv0;
     __s32 sv1;
+    __s64 ret;
 };

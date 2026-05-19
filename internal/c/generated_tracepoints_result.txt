@@ -684,7 +684,7 @@ sys_exit_sigaltstack is a struct ret_event (UNCLASSIFIED)
 sys_exit_signalfd is a struct ret_event (UNCLASSIFIED)
 sys_exit_signalfd4 is a struct ret_event (UNCLASSIFIED)
 sys_exit_socket is a struct ret_event (UNCLASSIFIED)
-sys_exit_socketpair is a struct ret_event (UNCLASSIFIED)
+sys_exit_socketpair is a struct socketpair_event
 sys_exit_splice is a struct ret_event (TRANSFER_CLASSIFIED)
 sys_exit_statfs is a struct ret_event (UNCLASSIFIED)
 sys_exit_statmount is a struct ret_event (UNCLASSIFIED)

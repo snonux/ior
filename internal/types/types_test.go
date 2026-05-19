@@ -169,6 +169,7 @@ func TestSocketpairEventSerialization(t *testing.T) {
 		Protocol:  0,
 		Sv0:       42,
 		Sv1:       43,
+		Ret:       -1,
 	}
 	bytes, err := socketpairEv1.Bytes()
 	if err != nil {
@@ -186,6 +187,7 @@ func TestSocketpairEventSerialization(t *testing.T) {
 	assertEquals(t, socketpairEv1.Protocol, socketpairEv2.Protocol)
 	assertEquals(t, socketpairEv1.Sv0, socketpairEv2.Sv0)
 	assertEquals(t, socketpairEv1.Sv1, socketpairEv2.Sv1)
+	assertEquals(t, socketpairEv1.Ret, socketpairEv2.Ret)
 }
 
 func TestEqualsDifferentTypes(t *testing.T) {

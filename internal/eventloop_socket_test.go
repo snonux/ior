@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"ior/internal/event"
+	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
 
@@ -36,7 +37,39 @@ func TestHandleSocketExitTracksReturnedFd(t *testing.T) {
 	verifyFileDescriptor(t, el, 55, "socket:1:2:0")
 }
 
-func TestHandleSocketpairExitTracksReturnedFds(t *testing.T) {
+func TestHandleSocketExitAppliesPairFilter(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{
+		filter: globalfilter.Filter{
+			Syscall: &globalfilter.StringFilter{Pattern: "openat"},
+		},
+	})
+
+	enter := &types.SocketEvent{
+		EventType: types.ENTER_SOCKET_EVENT,
+		TraceId:   types.SYS_ENTER_SOCKET,
+		Time:      100,
+		Pid:       42,
+		Tid:       43,
+		Family:    1,
+		Type:      2,
+		Protocol:  0,
+	}
+	exit := &types.RetEvent{
+		EventType: types.EXIT_SOCKET_EVENT,
+		TraceId:   types.SYS_EXIT_SOCKET,
+		Time:      200,
+		Ret:       55,
+		Pid:       42,
+		Tid:       43,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleSocketExit(ep, enter); ok {
+		t.Fatal("handleSocketExit should reject pair due to filter mismatch")
+	}
+}
+
+func TestHandleSocketpairExitTracksReturnedFdsFromExitEvent(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 
 	enter := &types.SocketpairEvent{
@@ -48,16 +81,22 @@ func TestHandleSocketpairExitTracksReturnedFds(t *testing.T) {
 		Family:    1,
 		Type:      1,
 		Protocol:  0,
-		Sv0:       61,
-		Sv1:       62,
+		Sv0:       -1,
+		Sv1:       -1,
+		Ret:       0,
 	}
-	exit := &types.RetEvent{
+	exit := &types.SocketpairEvent{
 		EventType: types.EXIT_SOCKETPAIR_EVENT,
 		TraceId:   types.SYS_EXIT_SOCKETPAIR,
 		Time:      200,
-		Ret:       0,
 		Pid:       77,
 		Tid:       78,
+		Family:    1,
+		Type:      1,
+		Protocol:  0,
+		Sv0:       61,
+		Sv1:       62,
+		Ret:       0,
 	}
 	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
 
@@ -75,5 +114,8 @@ func TestInitRawHandlersRegistersSocketEvents(t *testing.T) {
 	}
 	if _, ok := el.rawHandlers[types.ENTER_SOCKETPAIR_EVENT]; !ok {
 		t.Fatal("ENTER_SOCKETPAIR_EVENT handler is not registered")
+	}
+	if _, ok := el.rawHandlers[types.EXIT_SOCKETPAIR_EVENT]; !ok {
+		t.Fatal("EXIT_SOCKETPAIR_EVENT handler is not registered")
 	}
 }

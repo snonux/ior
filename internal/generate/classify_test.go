@@ -258,6 +258,13 @@ func TestClassifySocketpair(t *testing.T) {
 	}
 }
 
+func TestClassifyExitSocketpair(t *testing.T) {
+	r := classifyFromData(t, FormatExitSocketpair)
+	if r.Kind != KindSocketpair {
+		t.Errorf("exit_socketpair: got kind %d, want KindSocketpair", r.Kind)
+	}
+}
+
 func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {

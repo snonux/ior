@@ -1,6 +1,9 @@
 package types
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	t.Run("OpenEvent", func(t *testing.T) {
@@ -139,7 +142,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("SocketpairEvent", func(t *testing.T) {
-		ev := &SocketpairEvent{EventType: ENTER_SOCKETPAIR_EVENT, TraceId: SYS_ENTER_SOCKETPAIR, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 0, Sv0: 10, Sv1: 11}
+		ev := &SocketpairEvent{EventType: ENTER_SOCKETPAIR_EVENT, TraceId: SYS_ENTER_SOCKETPAIR, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 0, Sv0: 10, Sv1: 11, Ret: -1}
 		raw, _ := ev.Bytes()
 
 		slow := NewSocketpairEvent(raw)
@@ -150,6 +153,41 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("socketpair decode mismatch")
 		}
 	})
+}
+
+func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, socketpairEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(ENTER_SOCKETPAIR_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_SOCKETPAIR))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(1))
+	binary.LittleEndian.PutUint32(raw[28:32], uint32(2))
+	binary.LittleEndian.PutUint32(raw[32:36], uint32(0))
+	binary.LittleEndian.PutUint32(raw[36:40], uint32(10))
+	binary.LittleEndian.PutUint32(raw[40:44], uint32(11))
+	binary.LittleEndian.PutUint64(raw[48:56], uint64(0))
+
+	fast := NewSocketpairEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded socketpair event for kernel layout payload")
+	}
+	defer fast.Recycle()
+
+	if fast.EventType != ENTER_SOCKETPAIR_EVENT ||
+		fast.TraceId != SYS_ENTER_SOCKETPAIR ||
+		fast.Time != 1 ||
+		fast.Pid != 2 ||
+		fast.Tid != 3 ||
+		fast.Family != 1 ||
+		fast.Type != 2 ||
+		fast.Protocol != 0 ||
+		fast.Sv0 != 10 ||
+		fast.Sv1 != 11 ||
+		fast.Ret != 0 {
+		t.Fatalf("unexpected socketpair decode: %#v", fast)
+	}
 }
 
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {

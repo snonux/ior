@@ -85,6 +85,8 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindSocket}, true
 	case "sys_enter_socketpair":
 		return ClassificationResult{Kind: KindSocketpair}, true
+	case "sys_exit_socketpair":
+		return ClassificationResult{Kind: KindSocketpair}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true

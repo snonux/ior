@@ -278,6 +278,13 @@ func (e *eventLoop) registerSocketHandlers() {
 		}
 		e.tracepointEntered(socketpairEv)
 	}
+	e.rawHandlers[types.EXIT_SOCKETPAIR_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		socketpairEv, ok := decodeRawEvent(e, types.EXIT_SOCKETPAIR_EVENT, raw, types.NewSocketpairEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointExited(socketpairEv, ch)
+	}
 }
 
 func decodeRawEvent[T any](e *eventLoop, eventType types.EventType, raw []byte, decode func([]byte) *T) (*T, bool) {

@@ -6,7 +6,7 @@ import (
 )
 
 func socketBasic() error {
-	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return fmt.Errorf("socket: %w", err)
 	}
@@ -17,7 +17,7 @@ func socketBasic() error {
 }
 
 func socketpairBasic() error {
-	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return fmt.Errorf("socketpair: %w", err)
 	}
