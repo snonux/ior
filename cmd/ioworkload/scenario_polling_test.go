@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"syscall"
 	"testing"
@@ -30,4 +31,67 @@ func TestIsUnsupportedEpollPwait2Err(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFdSetSetMarksBit(t *testing.T) {
+	t.Parallel()
+
+	var set fdSet
+	set.set(65)
+	if set[1]&(1<<1) == 0 {
+		t.Fatalf("fd bit was not set: %#v", set)
+	}
+}
+
+func TestClassicPollingSyscallsReturnReadyCount(t *testing.T) {
+	var pipefd [2]int
+	if err := syscall.Pipe(pipefd[:]); err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer syscall.Close(pipefd[0]) //nolint:errcheck
+	defer syscall.Close(pipefd[1]) //nolint:errcheck
+
+	waiters := []struct {
+		name string
+		fn   readinessWaitFn
+	}{
+		{name: "poll", fn: callPoll},
+		{name: "ppoll", fn: callPpoll},
+		{name: "select", fn: callSelect},
+		{name: "pselect6", fn: callPselect6},
+	}
+
+	for _, waiter := range waiters {
+		t.Run(waiter.name, func(t *testing.T) {
+			if _, err := syscall.Write(pipefd[1], []byte{1}); err != nil {
+				t.Fatalf("write wake byte: %v", err)
+			}
+
+			ready, err := waiter.fn(pipefd)
+			if err != nil {
+				if isUnsupportedPollingErr(err) {
+					t.Skipf("%s unsupported on this kernel: %v", waiter.name, err)
+				}
+				t.Fatalf("%s: %v", waiter.name, err)
+			}
+			if ready < 1 {
+				t.Fatalf("%s ready count = %d, want >=1", waiter.name, ready)
+			}
+
+			if err := drainWakeByte(pipefd[0]); err != nil {
+				t.Fatalf("drain wake byte: %v", err)
+			}
+		})
+	}
+}
+
+func isUnsupportedPollingErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == syscall.ENOSYS || errno == syscall.ENOTSUP
 }

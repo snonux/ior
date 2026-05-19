@@ -342,6 +342,13 @@ func (e *eventLoop) registerPollingHandlers() {
 		}
 		e.tracepointEntered(epollCtlEv)
 	}
+	e.rawHandlers[types.ENTER_POLL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		pollEv, ok := decodeRawEvent(e, types.ENTER_POLL_EVENT, raw, types.NewPollEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(pollEv)
+	}
 }
 
 func decodeRawEvent[T any](e *eventLoop, eventType types.EventType, raw []byte, decode func([]byte) *T) (*T, bool) {

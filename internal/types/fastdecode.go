@@ -22,6 +22,8 @@ const (
 	eventfdEventSize        = 40
 	eventfdEventSizeV1      = 36
 	epollCtlEventSize       = 40
+	pollEventSize           = 40
+	pollEventSizeV1         = 36
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -314,4 +316,26 @@ func NewEpollCtlEventFast(raw []byte) *EpollCtlEvent {
 	e.Fd = int32(binary.LittleEndian.Uint32(raw[32:36]))
 	e.Events = binary.LittleEndian.Uint32(raw[36:40])
 	return e
+}
+
+func NewPollEventFast(raw []byte) *PollEvent {
+	if len(raw) < pollEventSizeV1 {
+		return nil
+	}
+	if len(raw) != pollEventSize && len(raw) != pollEventSizeV1 {
+		return NewPollEvent(raw)
+	}
+	p := poolOfPollEvents.Get().(*PollEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.Nfds = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	timeoutOffset := 28
+	if len(raw) == pollEventSize {
+		timeoutOffset = 32
+	}
+	p.TimeoutNs = int64(binary.LittleEndian.Uint64(raw[timeoutOffset : timeoutOffset+8]))
+	return p
 }

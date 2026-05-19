@@ -6794,22 +6794,33 @@ int handle_sys_exit_dup(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_select is a struct null_event
+/// sys_enter_select is a struct poll_event
 SEC("tracepoint/syscalls/sys_enter_select")
 int handle_sys_enter_select(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct poll_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct poll_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_POLL_EVENT;
     ev->trace_id = SYS_ENTER_SELECT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->nfds = (__s32)ctx->args[0];
+    ev->timeout_ns = -1;
+    if (ctx->args[4] != 0) {
+        struct __ior_timeval {
+            __s64 tv_sec;
+            __s64 tv_usec;
+        } tv = {};
+        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[4]) == 0) {
+            ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;
+        }
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6838,22 +6849,33 @@ int handle_sys_exit_select(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_pselect6 is a struct null_event
+/// sys_enter_pselect6 is a struct poll_event
 SEC("tracepoint/syscalls/sys_enter_pselect6")
 int handle_sys_enter_pselect6(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct poll_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct poll_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_POLL_EVENT;
     ev->trace_id = SYS_ENTER_PSELECT6;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->nfds = (__s32)ctx->args[0];
+    ev->timeout_ns = -1;
+    if (ctx->args[4] != 0) {
+        struct __ior_timespec {
+            __s64 tv_sec;
+            __s64 tv_nsec;
+        } ts = {};
+        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[4]) == 0) {
+            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6882,22 +6904,28 @@ int handle_sys_exit_pselect6(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_poll is a struct null_event
+/// sys_enter_poll is a struct poll_event
 SEC("tracepoint/syscalls/sys_enter_poll")
 int handle_sys_enter_poll(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct poll_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct poll_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_POLL_EVENT;
     ev->trace_id = SYS_ENTER_POLL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->nfds = (__s32)ctx->args[1];
+    ev->timeout_ns = -1;
+    __s32 timeout_ms = (__s32)ctx->args[2];
+    if (timeout_ms >= 0) {
+        ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6926,22 +6954,33 @@ int handle_sys_exit_poll(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_ppoll is a struct null_event
+/// sys_enter_ppoll is a struct poll_event
 SEC("tracepoint/syscalls/sys_enter_ppoll")
 int handle_sys_enter_ppoll(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct poll_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct poll_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_POLL_EVENT;
     ev->trace_id = SYS_ENTER_PPOLL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->nfds = (__s32)ctx->args[1];
+    ev->timeout_ns = -1;
+    if (ctx->args[2] != 0) {
+        struct __ior_timespec {
+            __s64 tv_sec;
+            __s64 tv_nsec;
+        } ts = {};
+        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {
+            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

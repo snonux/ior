@@ -50,9 +50,38 @@ func pollingEpoll() error {
 				pwait2Supported = false
 			}
 		}
+		if err := waitAndDrainReadiness(pipefd, callPoll); err != nil {
+			return err
+		}
+		if err := waitAndDrainReadiness(pipefd, callPpoll); err != nil {
+			return err
+		}
+		if err := waitAndDrainReadiness(pipefd, callSelect); err != nil {
+			return err
+		}
+		if err := waitAndDrainReadiness(pipefd, callPselect6); err != nil {
+			return err
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	return nil
+}
+
+type readinessWaitFn func(pipefd [2]int) (int, error)
+
+func waitAndDrainReadiness(pipefd [2]int, waitFn readinessWaitFn) error {
+	if _, err := syscall.Write(pipefd[1], []byte{1}); err != nil {
+		return fmt.Errorf("write wake byte: %w", err)
+	}
+	ready, err := waitFn(pipefd)
+	if err != nil {
+		return err
+	}
+	if ready < 1 {
+		return fmt.Errorf("polling wait returned %d ready events", ready)
+	}
+	return drainWakeByte(pipefd[0])
 }
 
 func waitAndDrain(epfd int, pipefd [2]int, waitFn func(int, []unix.EpollEvent) (int, error)) error {
@@ -130,6 +159,91 @@ func callEpollPwait2(epfd int, events []unix.EpollEvent) (int, error) {
 	runtime.KeepAlive(timeout)
 	if errno != 0 {
 		return 0, fmt.Errorf("epoll_pwait2: %w", errno)
+	}
+	return int(r1), nil
+}
+
+func callPoll(pipefd [2]int) (int, error) {
+	fds := []unix.PollFd{{Fd: int32(pipefd[0]), Events: unix.POLLIN}}
+	r1, _, errno := syscall.RawSyscall(
+		syscall.SYS_POLL,
+		uintptr(unsafe.Pointer(&fds[0])),
+		uintptr(len(fds)),
+		uintptr(100),
+	)
+	runtime.KeepAlive(fds)
+	if errno != 0 {
+		return 0, fmt.Errorf("poll: %w", errno)
+	}
+	return int(r1), nil
+}
+
+func callPpoll(pipefd [2]int) (int, error) {
+	fds := []unix.PollFd{{Fd: int32(pipefd[0]), Events: unix.POLLIN}}
+	timeout := unix.Timespec{Sec: 0, Nsec: 100 * 1_000_000}
+	r1, _, errno := syscall.RawSyscall6(
+		unix.SYS_PPOLL,
+		uintptr(unsafe.Pointer(&fds[0])),
+		uintptr(len(fds)),
+		uintptr(unsafe.Pointer(&timeout)),
+		0,
+		0,
+		0,
+	)
+	runtime.KeepAlive(fds)
+	runtime.KeepAlive(timeout)
+	if errno != 0 {
+		return 0, fmt.Errorf("ppoll: %w", errno)
+	}
+	return int(r1), nil
+}
+
+type fdSet [16]uint64
+
+func (s *fdSet) set(fd int) {
+	idx := fd / 64
+	bit := uint(fd % 64)
+	s[idx] |= 1 << bit
+}
+
+func callSelect(pipefd [2]int) (int, error) {
+	var readSet fdSet
+	readSet.set(pipefd[0])
+	timeout := syscall.Timeval{Sec: 0, Usec: 100000}
+	r1, _, errno := syscall.RawSyscall6(
+		syscall.SYS_SELECT,
+		uintptr(pipefd[0]+1),
+		uintptr(unsafe.Pointer(&readSet)),
+		0,
+		0,
+		uintptr(unsafe.Pointer(&timeout)),
+		0,
+	)
+	runtime.KeepAlive(readSet)
+	runtime.KeepAlive(timeout)
+	if errno != 0 {
+		return 0, fmt.Errorf("select: %w", errno)
+	}
+	return int(r1), nil
+}
+
+func callPselect6(pipefd [2]int) (int, error) {
+	var readSet fdSet
+	readSet.set(pipefd[0])
+	timeout := unix.Timespec{Sec: 0, Nsec: 100 * 1_000_000}
+	r1, _, errno := syscall.RawSyscall6(
+		unix.SYS_PSELECT6,
+		uintptr(pipefd[0]+1),
+		uintptr(unsafe.Pointer(&readSet)),
+		0,
+		0,
+		uintptr(unsafe.Pointer(&timeout)),
+		0,
+	)
+	runtime.KeepAlive(readSet)
+	runtime.KeepAlive(timeout)
+	if errno != 0 {
+		return 0, fmt.Errorf("pselect6: %w", errno)
 	}
 	return int(r1), nil
 }

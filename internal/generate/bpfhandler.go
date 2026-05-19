@@ -85,6 +85,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraEventfd(f, isEnter)
 	case KindEpollCtl:
 		return generateExtraEpollCtl()
+	case KindPoll:
+		return generateExtraPoll(f.Name)
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindPathname:
@@ -203,6 +205,21 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 
 func generateExtraEpollCtl() string {
 	return "    ev->epfd = (__s32)ctx->args[0];\n    ev->op = (__s32)ctx->args[1];\n    ev->fd = (__s32)ctx->args[2];\n    ev->events = 0;\n    if (ctx->args[3] != 0) {\n        __u32 user_events = 0;\n        if (bpf_probe_read_user(&user_events, sizeof(user_events), (void *)ctx->args[3]) == 0) {\n            ev->events = user_events;\n        }\n    }\n"
+}
+
+func generateExtraPoll(name string) string {
+	switch name {
+	case "sys_enter_poll":
+		return "    ev->nfds = (__s32)ctx->args[1];\n    ev->timeout_ns = -1;\n    __s32 timeout_ms = (__s32)ctx->args[2];\n    if (timeout_ms >= 0) {\n        ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;\n    }\n"
+	case "sys_enter_ppoll":
+		return "    ev->nfds = (__s32)ctx->args[1];\n    ev->timeout_ns = -1;\n    if (ctx->args[2] != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {\n            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
+	case "sys_enter_select":
+		return "    ev->nfds = (__s32)ctx->args[0];\n    ev->timeout_ns = -1;\n    if (ctx->args[4] != 0) {\n        struct __ior_timeval {\n            __s64 tv_sec;\n            __s64 tv_usec;\n        } tv = {};\n        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[4]) == 0) {\n            ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n        }\n    }\n"
+	case "sys_enter_pselect6":
+		return "    ev->nfds = (__s32)ctx->args[0];\n    ev->timeout_ns = -1;\n    if (ctx->args[4] != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[4]) == 0) {\n            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
+	default:
+		return "    ev->nfds = -1;\n    ev->timeout_ns = -1;\n"
+	}
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

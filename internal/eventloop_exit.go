@@ -38,6 +38,8 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		return e.handleEventfdExit(ep, ev)
 	case *types.EpollCtlEvent:
 		return e.handleEpollCtlExit(ep, ev)
+	case *types.PollEvent:
+		return e.handlePollExit(ep, ev)
 	case *types.NullEvent:
 		return e.handleNullExit(ep, ev)
 	case *types.FcntlEvent:
@@ -388,6 +390,15 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 func (e *eventLoop) handleEpollCtlExit(ep *event.Pair, epollCtlEv *types.EpollCtlEvent) bool {
 	ep.File = e.fdState().resolve(epollCtlEv.Epfd, epollCtlEv.Pid)
 	ep.Comm = e.comm(epollCtlEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
+func (e *eventLoop) handlePollExit(ep *event.Pair, pollEv *types.PollEvent) bool {
+	ep.Comm = e.comm(pollEv.GetTid())
 	if !e.Filter().MatchPair(ep) {
 		ep.Recycle()
 		return false

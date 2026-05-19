@@ -216,8 +216,8 @@ sys_enter_pivot_root is a struct null_event
 sys_enter_pkey_alloc is a struct null_event
 sys_enter_pkey_free is a struct null_event
 sys_enter_pkey_mprotect is a struct null_event
-sys_enter_poll is a struct null_event
-sys_enter_ppoll is a struct null_event
+sys_enter_poll is a struct poll_event
+sys_enter_ppoll is a struct poll_event
 sys_enter_prctl is a struct null_event
 sys_enter_pread64 is a struct fd_event
 sys_enter_preadv is a struct fd_event
@@ -227,7 +227,7 @@ sys_enter_process_madvise is a struct null_event
 sys_enter_process_mrelease is a struct null_event
 sys_enter_process_vm_readv is a struct null_event
 sys_enter_process_vm_writev is a struct null_event
-sys_enter_pselect6 is a struct null_event
+sys_enter_pselect6 is a struct poll_event
 sys_enter_ptrace is a struct null_event
 sys_enter_pwrite64 is a struct fd_event
 sys_enter_pwritev is a struct fd_event
@@ -274,7 +274,7 @@ sys_enter_sched_setparam is a struct null_event
 sys_enter_sched_setscheduler is a struct null_event
 sys_enter_sched_yield is a struct null_event
 sys_enter_seccomp is a struct null_event
-sys_enter_select is a struct null_event
+sys_enter_select is a struct poll_event
 sys_enter_semctl is a struct null_event
 sys_enter_semget is a struct null_event
 sys_enter_semop is a struct null_event

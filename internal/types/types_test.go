@@ -298,6 +298,31 @@ func TestEpollCtlEventSerialization(t *testing.T) {
 	assertEquals(t, epollCtlEv1.Events, epollCtlEv2.Events)
 }
 
+func TestPollEventSerialization(t *testing.T) {
+	pollEv1 := PollEvent{
+		EventType: ENTER_POLL_EVENT,
+		TraceId:   SYS_ENTER_POLL,
+		Time:      7890,
+		Pid:       42,
+		Tid:       43,
+		Nfds:      6,
+		TimeoutNs: 250_000_000,
+	}
+	bytes, err := pollEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	pollEv2 := NewPollEvent(bytes)
+
+	assertEquals(t, pollEv1.EventType, pollEv2.EventType)
+	assertEquals(t, pollEv1.TraceId, pollEv2.TraceId)
+	assertEquals(t, pollEv1.Time, pollEv2.Time)
+	assertEquals(t, pollEv1.Pid, pollEv2.Pid)
+	assertEquals(t, pollEv1.Tid, pollEv2.Tid)
+	assertEquals(t, pollEv1.Nfds, pollEv2.Nfds)
+	assertEquals(t, pollEv1.TimeoutNs, pollEv2.TimeoutNs)
+}
+
 func TestEqualsDifferentTypes(t *testing.T) {
 	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
 	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}
