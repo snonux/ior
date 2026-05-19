@@ -21,6 +21,7 @@ const (
 	KindPipe
 	KindEventfd
 	KindEpollCtl
+	KindPoll
 )
 
 type RetClassification string
@@ -139,6 +140,14 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_epoll_ctl":
 		return ClassificationResult{Kind: KindEpollCtl}, true
+	case "sys_enter_poll":
+		return ClassificationResult{Kind: KindPoll}, true
+	case "sys_enter_ppoll":
+		return ClassificationResult{Kind: KindPoll}, true
+	case "sys_enter_select":
+		return ClassificationResult{Kind: KindPoll}, true
+	case "sys_enter_pselect6":
+		return ClassificationResult{Kind: KindPoll}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true

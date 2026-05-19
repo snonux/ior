@@ -24,6 +24,10 @@ func TestPollingEpollTracepoints(t *testing.T) {
 		{Tracepoint: "enter_epoll_ctl", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_epoll_wait", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_epoll_pwait", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_poll", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_ppoll", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_select", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_pselect6", Comm: "ioworkload", MinCount: 1},
 	})
 
 	if !hasTracepoint(result, "enter_epoll_pwait2") {
@@ -44,12 +48,19 @@ func TestPollingEpollReadyCountInParquet(t *testing.T) {
 		t.Fatalf("expected parquet rows for workload PID %d", pid)
 	}
 
-	wantReadyCount := map[string]bool{"epoll_wait": false, "epoll_pwait": false}
+	wantReadyCount := map[string]bool{
+		"epoll_wait":  false,
+		"epoll_pwait": false,
+		"poll":        false,
+		"ppoll":       false,
+		"select":      false,
+		"pselect6":    false,
+	}
 	var sawPwait2 bool
 	var sawPwait2ReadyCount bool
 	for _, row := range rows {
 		switch row.Syscall {
-		case "epoll_wait", "epoll_pwait":
+		case "epoll_wait", "epoll_pwait", "poll", "ppoll", "select", "pselect6":
 			if row.Ret > 0 {
 				wantReadyCount[row.Syscall] = true
 			}

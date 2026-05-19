@@ -1186,3 +1186,114 @@ format:
 
 print fmt: "0x%lx", REC->ret
 `
+
+const FormatPoll = `name: sys_enter_poll
+ID: 915
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:struct pollfd * ufds;	offset:16;	size:8;	signed:0;
+	field:unsigned int nfds;	offset:24;	size:8;	signed:0;
+	field:int timeout;	offset:32;	size:8;	signed:0;
+`
+
+const FormatExitPoll = `name: sys_exit_poll
+ID: 914
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+`
+
+const FormatPpoll = `name: sys_enter_ppoll
+ID: 913
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:struct pollfd * ufds;	offset:16;	size:8;	signed:0;
+	field:unsigned int nfds;	offset:24;	size:8;	signed:0;
+	field:const struct __kernel_timespec * tmo_p;	offset:32;	size:8;	signed:0;
+	field:const sigset_t * sigmask;	offset:40;	size:8;	signed:0;
+	field:size_t sigsetsize;	offset:48;	size:8;	signed:0;
+`
+
+const FormatExitPpoll = `name: sys_exit_ppoll
+ID: 912
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+`
+
+const FormatSelect = `name: sys_enter_select
+ID: 919
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int n;	offset:16;	size:8;	signed:0;
+	field:fd_set * inp;	offset:24;	size:8;	signed:0;
+	field:fd_set * outp;	offset:32;	size:8;	signed:0;
+	field:fd_set * exp;	offset:40;	size:8;	signed:0;
+	field:struct timeval * tvp;	offset:48;	size:8;	signed:0;
+`
+
+const FormatExitSelect = `name: sys_exit_select
+ID: 918
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+`
+
+const FormatPselect6 = `name: sys_enter_pselect6
+ID: 917
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int n;	offset:16;	size:8;	signed:0;
+	field:fd_set * inp;	offset:24;	size:8;	signed:0;
+	field:fd_set * outp;	offset:32;	size:8;	signed:0;
+	field:fd_set * exp;	offset:40;	size:8;	signed:0;
+	field:const struct __kernel_timespec * tsp;	offset:48;	size:8;	signed:0;
+	field:void * sig;	offset:56;	size:8;	signed:0;
+`
+
+const FormatExitPselect6 = `name: sys_exit_pselect6
+ID: 916
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+`

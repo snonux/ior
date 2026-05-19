@@ -59,4 +59,7 @@ var (
 
 	// *types.EpollCtlEvent carries epoll control metadata (epfd/op/target-fd/events).
 	_ Event = (*types.EpollCtlEvent)(nil)
+
+	// *types.PollEvent carries poll/select argument metadata (nfds and timeout).
+	_ Event = (*types.PollEvent)(nil)
 )

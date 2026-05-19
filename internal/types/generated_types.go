@@ -98,6 +98,8 @@ const ENTER_EVENTFD_EVENT = 27
 const EXIT_EVENTFD_EVENT = 28
 const ENTER_EPOLL_CTL_EVENT = 29
 const EXIT_EPOLL_CTL_EVENT = 30
+const ENTER_POLL_EVENT = 31
+const EXIT_POLL_EVENT = 32
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -1876,4 +1878,73 @@ func (e *EpollCtlEvent) Bytes() ([]byte, error) {
 
 func (e *EpollCtlEvent) Recycle() {
 	poolOfEpollCtlEvents.Put(e)
+}
+
+type PollEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Nfds      int32
+	TimeoutNs int64
+}
+
+func (p PollEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Nfds:%v TimeoutNs:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.Nfds, p.TimeoutNs)
+}
+
+func (p PollEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*PollEvent)
+	if !ok {
+		return false
+	}
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Nfds == otherConcrete.Nfds && p.TimeoutNs == otherConcrete.TimeoutNs
+}
+
+func (p *PollEvent) GetEventType() EventType {
+	return p.EventType
+}
+
+func (p *PollEvent) GetTraceId() TraceId {
+	return p.TraceId
+}
+
+func (p *PollEvent) GetPid() uint32 {
+	return p.Pid
+}
+
+func (p *PollEvent) GetTid() uint32 {
+	return p.Tid
+}
+
+func (p *PollEvent) GetTime() uint64 {
+	return p.Time
+}
+
+var poolOfPollEvents = sync.Pool{
+	New: func() any { return &PollEvent{} },
+}
+
+func NewPollEvent(raw []byte) *PollEvent {
+	p := poolOfPollEvents.Get().(*PollEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, p); err != nil {
+		*p = PollEvent{}
+		poolOfPollEvents.Put(p)
+		return nil
+	}
+	return p
+}
+
+func (p *PollEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, p)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (p *PollEvent) Recycle() {
+	poolOfPollEvents.Put(p)
 }

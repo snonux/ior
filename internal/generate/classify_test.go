@@ -397,6 +397,34 @@ func TestClassifyEpollPwait2(t *testing.T) {
 	}
 }
 
+func TestClassifyPoll(t *testing.T) {
+	r := classifyFromData(t, FormatPoll)
+	if r.Kind != KindPoll {
+		t.Errorf("poll: got kind %d, want KindPoll", r.Kind)
+	}
+}
+
+func TestClassifyPpoll(t *testing.T) {
+	r := classifyFromData(t, FormatPpoll)
+	if r.Kind != KindPoll {
+		t.Errorf("ppoll: got kind %d, want KindPoll", r.Kind)
+	}
+}
+
+func TestClassifySelect(t *testing.T) {
+	r := classifyFromData(t, FormatSelect)
+	if r.Kind != KindPoll {
+		t.Errorf("select: got kind %d, want KindPoll", r.Kind)
+	}
+}
+
+func TestClassifyPselect6(t *testing.T) {
+	r := classifyFromData(t, FormatPselect6)
+	if r.Kind != KindPoll {
+		t.Errorf("pselect6: got kind %d, want KindPoll", r.Kind)
+	}
+}
+
 func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {
@@ -445,6 +473,10 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"epoll_wait", FormatEpollWait, FormatExitEpollWait, KindFd},
 		{"epoll_pwait", FormatEpollPwait, FormatExitEpollPwait, KindFd},
 		{"epoll_pwait2", FormatEpollPwait2, FormatExitEpollPwait2, KindFd},
+		{"poll", FormatPoll, FormatExitPoll, KindPoll},
+		{"ppoll", FormatPpoll, FormatExitPpoll, KindPoll},
+		{"select", FormatSelect, FormatExitSelect, KindPoll},
+		{"pselect6", FormatPselect6, FormatExitPselect6, KindPoll},
 		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
@@ -478,6 +510,10 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"eventfd2", FormatEventfd2, FormatExitEventfd2, FamilyIPC},
 		{"epoll_ctl", FormatEpollCtl, FormatExitEpollCtl, FamilyPolling},
 		{"epoll_wait", FormatEpollWait, FormatExitEpollWait, FamilyPolling},
+		{"poll", FormatPoll, FormatExitPoll, FamilyPolling},
+		{"ppoll", FormatPpoll, FormatExitPpoll, FamilyPolling},
+		{"select", FormatSelect, FormatExitSelect, FamilyPolling},
+		{"pselect6", FormatPselect6, FormatExitPselect6, FamilyPolling},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 

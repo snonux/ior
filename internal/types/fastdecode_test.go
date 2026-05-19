@@ -205,6 +205,19 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("epoll_ctl decode mismatch")
 		}
 	})
+
+	t.Run("PollEvent", func(t *testing.T) {
+		ev := &PollEvent{EventType: ENTER_POLL_EVENT, TraceId: SYS_ENTER_POLL, Time: 1, Pid: 2, Tid: 3, Nfds: 4, TimeoutNs: 5_000_000}
+		raw, _ := ev.Bytes()
+
+		slow := NewPollEvent(raw)
+		fast := NewPollEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("poll decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -327,6 +340,33 @@ func TestNewEventfdEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+func TestNewPollEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, pollEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(ENTER_POLL_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_POLL))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(8))
+	binary.LittleEndian.PutUint64(raw[32:40], uint64(75_000_000))
+
+	fast := NewPollEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded poll event for kernel layout payload")
+	}
+	defer fast.Recycle()
+
+	if fast.EventType != ENTER_POLL_EVENT ||
+		fast.TraceId != SYS_ENTER_POLL ||
+		fast.Time != 1 ||
+		fast.Pid != 2 ||
+		fast.Tid != 3 ||
+		fast.Nfds != 8 ||
+		fast.TimeoutNs != 75_000_000 {
+		t.Fatalf("unexpected poll decode: %#v", fast)
+	}
+}
+
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -347,6 +387,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "PipeEvent", decode: func(raw []byte) bool { return NewPipeEventFast(raw) == nil }},
 		{name: "EventfdEvent", decode: func(raw []byte) bool { return NewEventfdEventFast(raw) == nil }},
 		{name: "EpollCtlEvent", decode: func(raw []byte) bool { return NewEpollCtlEventFast(raw) == nil }},
+		{name: "PollEvent", decode: func(raw []byte) bool { return NewPollEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {

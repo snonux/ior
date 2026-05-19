@@ -33,6 +33,8 @@
 #define EXIT_EVENTFD_EVENT 28
 #define ENTER_EPOLL_CTL_EVENT 29
 #define EXIT_EPOLL_CTL_EVENT 30
+#define ENTER_POLL_EVENT 31
+#define EXIT_POLL_EVENT 32
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -194,4 +196,14 @@ struct epoll_ctl_event {
     __s32 op;
     __s32 fd;
     __u32 events;
+};
+
+struct poll_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 nfds;
+    __s64 timeout_ns;
 };

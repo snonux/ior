@@ -118,6 +118,24 @@ func TestNewCarriesReadyCountForEpollWait(t *testing.T) {
 	}
 }
 
+func TestNewCarriesReadyCountForPoll(t *testing.T) {
+	enter := &types.PollEvent{TraceId: types.SYS_ENTER_POLL, Time: 3000, Pid: 22, Tid: 23, Nfds: 1, TimeoutNs: 100_000_000}
+	exit := &types.RetEvent{TraceId: types.SYS_EXIT_POLL, Time: 3100, Ret: 1, Pid: 22, Tid: 23}
+	pair := event.NewPair(enter)
+	pair.ExitEv = exit
+
+	got := New(24, pair)
+	if got.Syscall != "poll" || got.FD != UnknownFD {
+		t.Fatalf("Syscall/FD = %q/%d, want poll/%d", got.Syscall, got.FD, UnknownFD)
+	}
+	if got.RetVal != 1 || got.IsError {
+		t.Fatalf("RetVal/IsError = %d/%v, want 1/false", got.RetVal, got.IsError)
+	}
+	if got.Bytes != 0 {
+		t.Fatalf("Bytes = %d, want 0 for poll ready-count events", got.Bytes)
+	}
+}
+
 // TestRowValueAccessors verifies that all typed accessor methods return the
 // underlying field values set on a Row.
 func TestRowValueAccessors(t *testing.T) {
