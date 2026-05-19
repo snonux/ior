@@ -885,6 +885,120 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatPipe = `name: sys_enter_pipe
+ID: 873
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int * fildes;	offset:16;	size:8;	signed:0;
+
+print fmt: "fildes: 0x%08lx", ((unsigned long)(REC->fildes))
+`
+
+const FormatExitPipe = `name: sys_exit_pipe
+ID: 872
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatPipe2 = `name: sys_enter_pipe2
+ID: 875
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int * fildes;	offset:16;	size:8;	signed:0;
+	field:int flags;	offset:24;	size:8;	signed:0;
+
+print fmt: "fildes: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->fildes)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitPipe2 = `name: sys_exit_pipe2
+ID: 874
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatEventfd = `name: sys_enter_eventfd
+ID: 1095
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned int count;	offset:16;	size:8;	signed:0;
+
+print fmt: "count: 0x%08lx", ((unsigned long)(REC->count))
+`
+
+const FormatExitEventfd = `name: sys_exit_eventfd
+ID: 1094
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatEventfd2 = `name: sys_enter_eventfd2
+ID: 1097
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned int count;	offset:16;	size:8;	signed:0;
+	field:int flags;	offset:24;	size:8;	signed:0;
+
+print fmt: "count: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->count)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitEventfd2 = `name: sys_exit_eventfd2
+ID: 1096
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatPread64 = `name: sys_enter_pread64
 ID: 840
 format:

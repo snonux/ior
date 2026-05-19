@@ -147,6 +147,7 @@ func (e *eventLoop) initRawHandlers() {
 	e.registerNamePathHandlers()
 	e.registerMiscHandlers()
 	e.registerSocketHandlers()
+	e.registerIPCHandlers()
 }
 
 // registerOpenHandlers wires enter/exit handlers for open-family events.
@@ -298,6 +299,37 @@ func (e *eventLoop) registerSocketHandlers() {
 			return
 		}
 		e.tracepointExited(acceptEv, ch)
+	}
+}
+
+func (e *eventLoop) registerIPCHandlers() {
+	e.rawHandlers[types.ENTER_PIPE_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		pipeEv, ok := decodeRawEvent(e, types.ENTER_PIPE_EVENT, raw, types.NewPipeEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(pipeEv)
+	}
+	e.rawHandlers[types.EXIT_PIPE_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		pipeEv, ok := decodeRawEvent(e, types.EXIT_PIPE_EVENT, raw, types.NewPipeEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointExited(pipeEv, ch)
+	}
+	e.rawHandlers[types.ENTER_EVENTFD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		eventfdEv, ok := decodeRawEvent(e, types.ENTER_EVENTFD_EVENT, raw, types.NewEventfdEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(eventfdEv)
+	}
+	e.rawHandlers[types.EXIT_EVENTFD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
+		eventfdEv, ok := decodeRawEvent(e, types.EXIT_EVENTFD_EVENT, raw, types.NewEventfdEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointExited(eventfdEv, ch)
 	}
 }
 

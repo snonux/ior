@@ -18,6 +18,8 @@ const (
 	KindSocket
 	KindSocketpair
 	KindAccept
+	KindPipe
+	KindEventfd
 )
 
 type RetClassification string
@@ -96,6 +98,22 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindAccept}, true
 	case "sys_exit_accept4":
 		return ClassificationResult{Kind: KindAccept}, true
+	case "sys_enter_pipe":
+		return ClassificationResult{Kind: KindPipe}, true
+	case "sys_exit_pipe":
+		return ClassificationResult{Kind: KindPipe}, true
+	case "sys_enter_pipe2":
+		return ClassificationResult{Kind: KindPipe}, true
+	case "sys_exit_pipe2":
+		return ClassificationResult{Kind: KindPipe}, true
+	case "sys_enter_eventfd":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_eventfd":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_eventfd2":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_eventfd2":
+		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_enter_bind":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_connect":

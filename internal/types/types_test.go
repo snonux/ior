@@ -215,6 +215,60 @@ func TestAcceptEventSerialization(t *testing.T) {
 	assertEquals(t, acceptEv1.Ret, acceptEv2.Ret)
 }
 
+func TestPipeEventSerialization(t *testing.T) {
+	pipeEv1 := PipeEvent{
+		EventType: ENTER_PIPE_EVENT,
+		TraceId:   SYS_ENTER_PIPE2,
+		Time:      4567,
+		Pid:       36,
+		Tid:       37,
+		Flags:     0x80000,
+		Fd0:       10,
+		Fd1:       11,
+		Ret:       0,
+	}
+	bytes, err := pipeEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	pipeEv2 := NewPipeEvent(bytes)
+
+	assertEquals(t, pipeEv1.EventType, pipeEv2.EventType)
+	assertEquals(t, pipeEv1.TraceId, pipeEv2.TraceId)
+	assertEquals(t, pipeEv1.Time, pipeEv2.Time)
+	assertEquals(t, pipeEv1.Pid, pipeEv2.Pid)
+	assertEquals(t, pipeEv1.Tid, pipeEv2.Tid)
+	assertEquals(t, pipeEv1.Flags, pipeEv2.Flags)
+	assertEquals(t, pipeEv1.Fd0, pipeEv2.Fd0)
+	assertEquals(t, pipeEv1.Fd1, pipeEv2.Fd1)
+	assertEquals(t, pipeEv1.Ret, pipeEv2.Ret)
+}
+
+func TestEventfdEventSerialization(t *testing.T) {
+	eventfdEv1 := EventfdEvent{
+		EventType: ENTER_EVENTFD_EVENT,
+		TraceId:   SYS_ENTER_EVENTFD2,
+		Time:      5678,
+		Pid:       38,
+		Tid:       39,
+		Flags:     0x800,
+		Ret:       12,
+	}
+	bytes, err := eventfdEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	eventfdEv2 := NewEventfdEvent(bytes)
+
+	assertEquals(t, eventfdEv1.EventType, eventfdEv2.EventType)
+	assertEquals(t, eventfdEv1.TraceId, eventfdEv2.TraceId)
+	assertEquals(t, eventfdEv1.Time, eventfdEv2.Time)
+	assertEquals(t, eventfdEv1.Pid, eventfdEv2.Pid)
+	assertEquals(t, eventfdEv1.Tid, eventfdEv2.Tid)
+	assertEquals(t, eventfdEv1.Flags, eventfdEv2.Flags)
+	assertEquals(t, eventfdEv1.Ret, eventfdEv2.Ret)
+}
+
 func TestEqualsDifferentTypes(t *testing.T) {
 	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
 	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}

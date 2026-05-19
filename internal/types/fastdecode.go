@@ -17,6 +17,10 @@ const (
 	socketpairEventSizeV1   = 52
 	acceptEventSize         = 40
 	acceptEventSizeV1       = 36
+	pipeEventSize           = 48
+	pipeEventSizeV1         = 44
+	eventfdEventSize        = 40
+	eventfdEventSizeV1      = 36
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -243,4 +247,50 @@ func NewAcceptEventFast(raw []byte) *AcceptEvent {
 	}
 	a.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
 	return a
+}
+
+func NewPipeEventFast(raw []byte) *PipeEvent {
+	if len(raw) < pipeEventSizeV1 {
+		return nil
+	}
+	if len(raw) != pipeEventSize && len(raw) != pipeEventSizeV1 {
+		return NewPipeEvent(raw)
+	}
+	p := poolOfPipeEvents.Get().(*PipeEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	p.Fd0 = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	p.Fd1 = int32(binary.LittleEndian.Uint32(raw[32:36]))
+	retOffset := 36
+	if len(raw) == pipeEventSize {
+		retOffset = 40
+	}
+	p.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
+	return p
+}
+
+func NewEventfdEventFast(raw []byte) *EventfdEvent {
+	if len(raw) < eventfdEventSizeV1 {
+		return nil
+	}
+	if len(raw) != eventfdEventSize && len(raw) != eventfdEventSizeV1 {
+		return NewEventfdEvent(raw)
+	}
+	e := poolOfEventfdEvents.Get().(*EventfdEvent)
+	e.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	e.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	e.Time = binary.LittleEndian.Uint64(raw[8:16])
+	e.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	e.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	e.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	retOffset := 28
+	if len(raw) == eventfdEventSize {
+		retOffset = 32
+	}
+	e.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
+	return e
 }

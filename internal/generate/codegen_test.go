@@ -225,6 +225,36 @@ func TestGenerateAcceptHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 }
 
+func TestGeneratePipeHandler(t *testing.T) {
+	output := generateFromPair(t, FormatPipe2, FormatExitPipe2)
+
+	requireContains(t, output, "struct pipe_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PIPE_EVENT;")
+	requireContains(t, output, "struct pipe_ctx pending;")
+	requireContains(t, output, "pending.upipefd = ctx->args[0];")
+	requireContains(t, output, "pending.flags = (__s32)ctx->args[1];")
+	requireContains(t, output, "bpf_map_update_elem(&pipe_ctx_map, &tid, &pending, BPF_ANY);")
+	requireContains(t, output, "ev->fd0 = -1;")
+	requireContains(t, output, "ev->fd1 = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_pipe2\")")
+	requireContains(t, output, "ev->event_type = EXIT_PIPE_EVENT;")
+	requireContains(t, output, "struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+func TestGenerateEventfdHandler(t *testing.T) {
+	output := generateFromPair(t, FormatEventfd2, FormatExitEventfd2)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);")
+	requireContains(t, output, "ev->flags = flags;")
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_eventfd2\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
 func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	output := generateFromPair(t, FormatNameToHandleAt, FormatExitNameToHandleAt)
 
@@ -335,6 +365,8 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindSocket, "ENTER_SOCKET_EVENT", "EXIT_SOCKET_EVENT"},
 		{KindSocketpair, "ENTER_SOCKETPAIR_EVENT", "EXIT_SOCKETPAIR_EVENT"},
 		{KindAccept, "ENTER_ACCEPT_EVENT", "EXIT_ACCEPT_EVENT"},
+		{KindPipe, "ENTER_PIPE_EVENT", "EXIT_PIPE_EVENT"},
+		{KindEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -364,6 +396,8 @@ func TestEventStructNames(t *testing.T) {
 		{KindSocket, "socket_event"},
 		{KindSocketpair, "socketpair_event"},
 		{KindAccept, "accept_event"},
+		{KindPipe, "pipe_event"},
+		{KindEventfd, "eventfd_event"},
 	}
 
 	for _, tt := range tests {
@@ -382,7 +416,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept}
+	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

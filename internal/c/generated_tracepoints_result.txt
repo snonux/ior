@@ -38,8 +38,8 @@ sys_enter_epoll_ctl is a struct fd_event
 sys_enter_epoll_pwait is a struct null_event
 sys_enter_epoll_pwait2 is a struct null_event
 sys_enter_epoll_wait is a struct null_event
-sys_enter_eventfd is a struct null_event
-sys_enter_eventfd2 is a struct null_event
+sys_enter_eventfd is a struct eventfd_event
+sys_enter_eventfd2 is a struct eventfd_event
 sys_enter_execve is a struct path_event
 sys_enter_execveat is a struct fd_event
 sys_enter_exit is a struct null_event
@@ -210,8 +210,8 @@ sys_enter_personality is a struct null_event
 sys_enter_pidfd_getfd is a struct fd_event
 sys_enter_pidfd_open is a struct null_event
 sys_enter_pidfd_send_signal is a struct null_event
-sys_enter_pipe is a struct null_event
-sys_enter_pipe2 is a struct null_event
+sys_enter_pipe is a struct pipe_event
+sys_enter_pipe2 is a struct pipe_event
 sys_enter_pivot_root is a struct null_event
 sys_enter_pkey_alloc is a struct null_event
 sys_enter_pkey_free is a struct null_event
@@ -405,8 +405,8 @@ sys_exit_epoll_ctl is a struct ret_event (UNCLASSIFIED)
 sys_exit_epoll_pwait is a struct ret_event (UNCLASSIFIED)
 sys_exit_epoll_pwait2 is a struct ret_event (UNCLASSIFIED)
 sys_exit_epoll_wait is a struct ret_event (UNCLASSIFIED)
-sys_exit_eventfd is a struct ret_event (UNCLASSIFIED)
-sys_exit_eventfd2 is a struct ret_event (UNCLASSIFIED)
+sys_exit_eventfd is a struct eventfd_event
+sys_exit_eventfd2 is a struct eventfd_event
 sys_exit_execve is a struct ret_event (UNCLASSIFIED)
 sys_exit_execveat is a struct ret_event (UNCLASSIFIED)
 sys_exit_exit is a struct ret_event (UNCLASSIFIED)
@@ -577,8 +577,8 @@ sys_exit_personality is a struct ret_event (UNCLASSIFIED)
 sys_exit_pidfd_getfd is a struct ret_event (UNCLASSIFIED)
 sys_exit_pidfd_open is a struct ret_event (UNCLASSIFIED)
 sys_exit_pidfd_send_signal is a struct ret_event (UNCLASSIFIED)
-sys_exit_pipe is a struct ret_event (UNCLASSIFIED)
-sys_exit_pipe2 is a struct ret_event (UNCLASSIFIED)
+sys_exit_pipe is a struct pipe_event
+sys_exit_pipe2 is a struct pipe_event
 sys_exit_pivot_root is a struct ret_event (UNCLASSIFIED)
 sys_exit_pkey_alloc is a struct ret_event (UNCLASSIFIED)
 sys_exit_pkey_free is a struct ret_event (UNCLASSIFIED)

@@ -166,6 +166,32 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("accept decode mismatch")
 		}
 	})
+
+	t.Run("PipeEvent", func(t *testing.T) {
+		ev := &PipeEvent{EventType: ENTER_PIPE_EVENT, TraceId: SYS_ENTER_PIPE2, Time: 1, Pid: 2, Tid: 3, Flags: 0x80000, Fd0: -1, Fd1: -1, Ret: 0}
+		raw, _ := ev.Bytes()
+
+		slow := NewPipeEvent(raw)
+		fast := NewPipeEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("pipe decode mismatch")
+		}
+	})
+
+	t.Run("EventfdEvent", func(t *testing.T) {
+		ev := &EventfdEvent{EventType: ENTER_EVENTFD_EVENT, TraceId: SYS_ENTER_EVENTFD2, Time: 1, Pid: 2, Tid: 3, Flags: 0x800, Ret: -1}
+		raw, _ := ev.Bytes()
+
+		slow := NewEventfdEvent(raw)
+		fast := NewEventfdEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("eventfd decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -230,6 +256,64 @@ func TestNewAcceptEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+func TestNewPipeEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, pipeEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(EXIT_PIPE_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_EXIT_PIPE2))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(0x80000))
+	binary.LittleEndian.PutUint32(raw[28:32], uint32(10))
+	binary.LittleEndian.PutUint32(raw[32:36], uint32(11))
+	binary.LittleEndian.PutUint64(raw[40:48], uint64(0))
+
+	fast := NewPipeEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded pipe event for kernel layout payload")
+	}
+	defer fast.Recycle()
+
+	if fast.EventType != EXIT_PIPE_EVENT ||
+		fast.TraceId != SYS_EXIT_PIPE2 ||
+		fast.Time != 1 ||
+		fast.Pid != 2 ||
+		fast.Tid != 3 ||
+		fast.Flags != 0x80000 ||
+		fast.Fd0 != 10 ||
+		fast.Fd1 != 11 ||
+		fast.Ret != 0 {
+		t.Fatalf("unexpected pipe decode: %#v", fast)
+	}
+}
+
+func TestNewEventfdEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, eventfdEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(EXIT_EVENTFD_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_EXIT_EVENTFD2))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(0x800))
+	binary.LittleEndian.PutUint64(raw[32:40], uint64(42))
+
+	fast := NewEventfdEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded eventfd event for kernel layout payload")
+	}
+	defer fast.Recycle()
+
+	if fast.EventType != EXIT_EVENTFD_EVENT ||
+		fast.TraceId != SYS_EXIT_EVENTFD2 ||
+		fast.Time != 1 ||
+		fast.Pid != 2 ||
+		fast.Tid != 3 ||
+		fast.Flags != 0x800 ||
+		fast.Ret != 42 {
+		t.Fatalf("unexpected eventfd decode: %#v", fast)
+	}
+}
+
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -247,6 +331,8 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "SocketEvent", decode: func(raw []byte) bool { return NewSocketEventFast(raw) == nil }},
 		{name: "SocketpairEvent", decode: func(raw []byte) bool { return NewSocketpairEventFast(raw) == nil }},
 		{name: "AcceptEvent", decode: func(raw []byte) bool { return NewAcceptEventFast(raw) == nil }},
+		{name: "PipeEvent", decode: func(raw []byte) bool { return NewPipeEventFast(raw) == nil }},
+		{name: "EventfdEvent", decode: func(raw []byte) bool { return NewEventfdEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {
