@@ -298,6 +298,33 @@ func TestEpollCtlEventSerialization(t *testing.T) {
 	assertEquals(t, epollCtlEv1.Events, epollCtlEv2.Events)
 }
 
+func TestTwoFdEventSerialization(t *testing.T) {
+	twoFdEv1 := TwoFdEvent{
+		EventType: ENTER_TWO_FD_EVENT,
+		TraceId:   SYS_ENTER_MOVE_MOUNT,
+		Time:      6790,
+		Pid:       40,
+		Tid:       41,
+		FdA:       12,
+		FdB:       34,
+		Extra:     0x20,
+	}
+	bytes, err := twoFdEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	twoFdEv2 := NewTwoFdEvent(bytes)
+
+	assertEquals(t, twoFdEv1.EventType, twoFdEv2.EventType)
+	assertEquals(t, twoFdEv1.TraceId, twoFdEv2.TraceId)
+	assertEquals(t, twoFdEv1.Time, twoFdEv2.Time)
+	assertEquals(t, twoFdEv1.Pid, twoFdEv2.Pid)
+	assertEquals(t, twoFdEv1.Tid, twoFdEv2.Tid)
+	assertEquals(t, twoFdEv1.FdA, twoFdEv2.FdA)
+	assertEquals(t, twoFdEv1.FdB, twoFdEv2.FdB)
+	assertEquals(t, twoFdEv1.Extra, twoFdEv2.Extra)
+}
+
 func TestPollEventSerialization(t *testing.T) {
 	pollEv1 := PollEvent{
 		EventType: ENTER_POLL_EVENT,

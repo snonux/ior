@@ -93,6 +93,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraEventfd(f, isEnter)
 	case KindEpollCtl:
 		return generateExtraEpollCtl()
+	case KindTwoFd:
+		return generateExtraTwoFd(f.Name)
 	case KindPoll:
 		return generateExtraPoll(f.Name)
 	case KindMem:
@@ -207,7 +209,12 @@ func generateExtraPipe(f *Format, isEnter bool) string {
 func generateExtraEventfd(f *Format, isEnter bool) string {
 	if isEnter {
 		flagsExpr := "0"
-		if f.Name == "sys_enter_eventfd2" {
+		switch f.Name {
+		case "sys_enter_eventfd2":
+			flagsExpr = "(__s32)ctx->args[1]"
+		case "sys_enter_fsmount":
+			flagsExpr = "(__s32)ctx->args[1]"
+		case "sys_enter_fsopen":
 			flagsExpr = "(__s32)ctx->args[1]"
 		}
 		return "    __s32 flags = " + flagsExpr + ";\n    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n    ev->flags = flags;\n    ev->ret = -1;\n"
@@ -217,6 +224,15 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 
 func generateExtraEpollCtl() string {
 	return "    ev->epfd = (__s32)ctx->args[0];\n    ev->op = (__s32)ctx->args[1];\n    ev->fd = (__s32)ctx->args[2];\n    ev->events = 0;\n    if (ctx->args[3] != 0) {\n        __u32 user_events = 0;\n        if (bpf_probe_read_user(&user_events, sizeof(user_events), (void *)ctx->args[3]) == 0) {\n            ev->events = user_events;\n        }\n    }\n"
+}
+
+func generateExtraTwoFd(name string) string {
+	switch name {
+	case "sys_enter_move_mount":
+		return "    ev->fd_a = (__s32)ctx->args[0];\n    ev->fd_b = (__s32)ctx->args[2];\n    ev->extra = (__u64)ctx->args[4];\n"
+	default:
+		return "    ev->fd_a = (__s32)ctx->args[0];\n    ev->fd_b = (__s32)ctx->args[1];\n    ev->extra = (__u64)ctx->args[2];\n"
+	}
 }
 
 func generateExtraPoll(name string) string {

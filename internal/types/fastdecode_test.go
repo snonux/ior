@@ -206,6 +206,19 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		}
 	})
 
+	t.Run("TwoFdEvent", func(t *testing.T) {
+		ev := &TwoFdEvent{EventType: ENTER_TWO_FD_EVENT, TraceId: SYS_ENTER_MOVE_MOUNT, Time: 1, Pid: 2, Tid: 3, FdA: 10, FdB: 11, Extra: 0x2}
+		raw, _ := ev.Bytes()
+
+		slow := NewTwoFdEvent(raw)
+		fast := NewTwoFdEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("two_fd decode mismatch")
+		}
+	})
+
 	t.Run("PollEvent", func(t *testing.T) {
 		ev := &PollEvent{EventType: ENTER_POLL_EVENT, TraceId: SYS_ENTER_POLL, Time: 1, Pid: 2, Tid: 3, Nfds: 4, TimeoutNs: 5_000_000}
 		raw, _ := ev.Bytes()
@@ -410,6 +423,35 @@ func TestNewPollEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+func TestNewTwoFdEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, twoFdEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(ENTER_TWO_FD_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_MOVE_MOUNT))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(10))
+	binary.LittleEndian.PutUint32(raw[28:32], uint32(11))
+	binary.LittleEndian.PutUint64(raw[32:40], uint64(0x80))
+
+	fast := NewTwoFdEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded two_fd event for kernel layout payload")
+	}
+	defer fast.Recycle()
+
+	if fast.EventType != ENTER_TWO_FD_EVENT ||
+		fast.TraceId != SYS_ENTER_MOVE_MOUNT ||
+		fast.Time != 1 ||
+		fast.Pid != 2 ||
+		fast.Tid != 3 ||
+		fast.FdA != 10 ||
+		fast.FdB != 11 ||
+		fast.Extra != 0x80 {
+		t.Fatalf("unexpected two_fd decode: %#v", fast)
+	}
+}
+
 func TestNewSleepEventFastKernelLayout(t *testing.T) {
 	raw := make([]byte, sleepEventSize)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(ENTER_SLEEP_EVENT))
@@ -455,6 +497,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "PipeEvent", decode: func(raw []byte) bool { return NewPipeEventFast(raw) == nil }},
 		{name: "EventfdEvent", decode: func(raw []byte) bool { return NewEventfdEventFast(raw) == nil }},
 		{name: "EpollCtlEvent", decode: func(raw []byte) bool { return NewEpollCtlEventFast(raw) == nil }},
+		{name: "TwoFdEvent", decode: func(raw []byte) bool { return NewTwoFdEventFast(raw) == nil }},
 		{name: "PollEvent", decode: func(raw []byte) bool { return NewPollEventFast(raw) == nil }},
 		{name: "SleepEvent", decode: func(raw []byte) bool { return NewSleepEventFast(raw) == nil }},
 	}

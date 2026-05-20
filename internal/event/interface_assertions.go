@@ -68,4 +68,7 @@ var (
 
 	// *types.SleepEvent carries requested sleep duration metadata.
 	_ Event = (*types.SleepEvent)(nil)
+
+	// *types.TwoFdEvent carries operations that include two fd inputs.
+	_ Event = (*types.TwoFdEvent)(nil)
 )

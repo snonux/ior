@@ -22,6 +22,7 @@ const (
 	eventfdEventSize        = 40
 	eventfdEventSizeV1      = 36
 	epollCtlEventSize       = 40
+	twoFdEventSize          = 40
 	pollEventSize           = 40
 	pollEventSizeV1         = 36
 	memEventSize            = 56
@@ -318,6 +319,25 @@ func NewEpollCtlEventFast(raw []byte) *EpollCtlEvent {
 	e.Fd = int32(binary.LittleEndian.Uint32(raw[32:36]))
 	e.Events = binary.LittleEndian.Uint32(raw[36:40])
 	return e
+}
+
+func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
+	if len(raw) < twoFdEventSize {
+		return nil
+	}
+	if len(raw) != twoFdEventSize {
+		return NewTwoFdEvent(raw)
+	}
+	t := poolOfTwoFdEvents.Get().(*TwoFdEvent)
+	t.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	t.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	t.Time = binary.LittleEndian.Uint64(raw[8:16])
+	t.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	t.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	t.FdA = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	t.FdB = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	t.Extra = binary.LittleEndian.Uint64(raw[32:40])
+	return t
 }
 
 func NewPollEventFast(raw []byte) *PollEvent {

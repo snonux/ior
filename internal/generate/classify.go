@@ -21,6 +21,7 @@ const (
 	KindPipe
 	KindEventfd
 	KindEpollCtl
+	KindTwoFd
 	KindPoll
 	KindMem
 	KindSleep
@@ -142,6 +143,18 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_epoll_ctl":
 		return ClassificationResult{Kind: KindEpollCtl}, true
+	case "sys_enter_move_mount":
+		return ClassificationResult{Kind: KindTwoFd}, true
+	case "sys_enter_fsmount":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_fsmount":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_statmount":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_listmount":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_listns":
+		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_poll":
 		return ClassificationResult{Kind: KindPoll}, true
 	case "sys_enter_ppoll":
@@ -182,18 +195,42 @@ func classifyNameAndField(name, fieldType, fieldName string) (ClassificationResu
 			return ClassificationResult{Kind: KindDup3}, true
 		}
 	case "sys_enter_name_to_handle_at":
-		if fieldType == "const char *" && fieldName == "name" {
+		if isCStringPtrType(fieldType) && fieldName == "name" {
 			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
 		}
 	case "sys_enter_copy_file_range":
 		if isFdType(fieldType) && fieldName == "fd_in" {
 			return ClassificationResult{Kind: KindFd}, true
 		}
+	case "sys_enter_mount":
+		if isCStringPtrType(fieldType) && fieldName == "dir_name" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "dir_name"}, true
+		}
+	case "sys_enter_umount":
+		if isCStringPtrType(fieldType) && fieldName == "name" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
+		}
+	case "sys_enter_pivot_root":
+		if isCStringPtrType(fieldType) && fieldName == "new_root" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "new_root"}, true
+		}
+	case "sys_enter_quotactl":
+		if isCStringPtrType(fieldType) && fieldName == "special" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "special"}, true
+		}
+	case "sys_enter_swapon":
+		if isCStringPtrType(fieldType) && fieldName == "specialfile" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "specialfile"}, true
+		}
+	case "sys_enter_swapoff":
+		if isCStringPtrType(fieldType) && fieldName == "specialfile" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "specialfile"}, true
+		}
 	}
 
 	if strings.HasPrefix(name, "sys_enter") &&
 		strings.Contains(name, "open") &&
-		fieldType == "const char *" && fieldName == "filename" {
+		isCStringPtrType(fieldType) && fieldName == "filename" {
 		return ClassificationResult{Kind: KindOpen}, true
 	}
 
@@ -204,13 +241,13 @@ func classifyByField(fieldType, fieldName string) (ClassificationResult, bool) {
 	switch {
 	case fieldName == "fd" && isFdType(fieldType):
 		return ClassificationResult{Kind: KindFd}, true
-	case fieldType == "const char *" && fieldName == "newname":
+	case isCStringPtrType(fieldType) && fieldName == "newname":
 		return ClassificationResult{Kind: KindName}, true
-	case fieldType == "const char *" && fieldName == "pathname":
+	case isCStringPtrType(fieldType) && fieldName == "pathname":
 		return ClassificationResult{Kind: KindPathname, PathnameField: "pathname"}, true
-	case fieldType == "const char *" && fieldName == "path":
+	case isCStringPtrType(fieldType) && fieldName == "path":
 		return ClassificationResult{Kind: KindPathname, PathnameField: "path"}, true
-	case fieldType == "const char *" && fieldName == "filename":
+	case isCStringPtrType(fieldType) && fieldName == "filename":
 		return ClassificationResult{Kind: KindPathname, PathnameField: "filename"}, true
 	case fieldType == "long" && fieldName == "ret":
 		return ClassificationResult{Kind: KindRet}, true
@@ -220,6 +257,10 @@ func classifyByField(fieldType, fieldName string) (ClassificationResult, bool) {
 
 func isFdType(t string) bool {
 	return t == "unsigned int" || t == "unsigned long" || t == "int"
+}
+
+func isCStringPtrType(t string) bool {
+	return t == "const char *" || t == "char *"
 }
 
 // ClassifyRet returns the RetClassification for a syscall exit name.

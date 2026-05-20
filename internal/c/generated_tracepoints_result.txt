@@ -68,7 +68,7 @@ sys_enter_fork is a struct null_event
 sys_enter_fremovexattr is a struct fd_event
 sys_enter_fsconfig is a struct fd_event
 sys_enter_fsetxattr is a struct fd_event
-sys_enter_fsmount is a struct null_event
+sys_enter_fsmount is a struct eventfd_event
 sys_enter_fsopen is a struct null_event
 sys_enter_fspick is a struct path_event
 sys_enter_fstatfs is a struct fd_event
@@ -170,9 +170,9 @@ sys_enter_mlock2 is a struct null_event
 sys_enter_mlockall is a struct null_event
 sys_enter_mmap is a struct fd_event
 sys_enter_modify_ldt is a struct null_event
-sys_enter_mount is a struct null_event
+sys_enter_mount is a struct path_event
 sys_enter_mount_setattr is a struct path_event
-sys_enter_move_mount is a struct null_event
+sys_enter_move_mount is a struct two_fd_event
 sys_enter_move_pages is a struct null_event
 sys_enter_mprotect is a struct null_event
 sys_enter_mq_getsetattr is a struct null_event
@@ -212,7 +212,7 @@ sys_enter_pidfd_open is a struct null_event
 sys_enter_pidfd_send_signal is a struct null_event
 sys_enter_pipe is a struct pipe_event
 sys_enter_pipe2 is a struct pipe_event
-sys_enter_pivot_root is a struct null_event
+sys_enter_pivot_root is a struct path_event
 sys_enter_pkey_alloc is a struct null_event
 sys_enter_pkey_free is a struct null_event
 sys_enter_pkey_mprotect is a struct null_event
@@ -232,7 +232,7 @@ sys_enter_ptrace is a struct null_event
 sys_enter_pwrite64 is a struct fd_event
 sys_enter_pwritev is a struct fd_event
 sys_enter_pwritev2 is a struct fd_event
-sys_enter_quotactl is a struct null_event
+sys_enter_quotactl is a struct path_event
 sys_enter_quotactl_fd is a struct fd_event
 sys_enter_read is a struct fd_event
 sys_enter_readahead is a struct fd_event
@@ -322,8 +322,8 @@ sys_enter_splice is a struct null_event
 sys_enter_statfs is a struct path_event
 sys_enter_statmount is a struct null_event
 sys_enter_statx is a struct path_event
-sys_enter_swapoff is a struct null_event
-sys_enter_swapon is a struct null_event
+sys_enter_swapoff is a struct path_event
+sys_enter_swapon is a struct path_event
 sys_enter_symlink is a struct name_event
 sys_enter_symlinkat is a struct name_event
 sys_enter_sync is a struct null_event
@@ -347,7 +347,7 @@ sys_enter_times is a struct null_event
 sys_enter_tkill is a struct null_event
 sys_enter_truncate is a struct path_event
 sys_enter_umask is a struct null_event
-sys_enter_umount is a struct null_event
+sys_enter_umount is a struct path_event
 sys_enter_unlink is a struct path_event
 sys_enter_unlinkat is a struct path_event
 sys_enter_unshare is a struct null_event
@@ -355,9 +355,9 @@ sys_enter_uprobe is a struct null_event
 sys_enter_uretprobe is a struct null_event
 sys_enter_userfaultfd is a struct null_event
 sys_enter_ustat is a struct null_event
-sys_enter_utime is a struct null_event
+sys_enter_utime is a struct path_event
 sys_enter_utimensat is a struct path_event
-sys_enter_utimes is a struct null_event
+sys_enter_utimes is a struct path_event
 sys_enter_vfork is a struct null_event
 sys_enter_vhangup is a struct null_event
 sys_enter_vmsplice is a struct fd_event
@@ -435,7 +435,7 @@ sys_exit_fork is a struct ret_event (UNCLASSIFIED)
 sys_exit_fremovexattr is a struct ret_event (UNCLASSIFIED)
 sys_exit_fsconfig is a struct ret_event (UNCLASSIFIED)
 sys_exit_fsetxattr is a struct ret_event (UNCLASSIFIED)
-sys_exit_fsmount is a struct ret_event (UNCLASSIFIED)
+sys_exit_fsmount is a struct eventfd_event
 sys_exit_fsopen is a struct ret_event (UNCLASSIFIED)
 sys_exit_fspick is a struct ret_event (UNCLASSIFIED)
 sys_exit_fstatfs is a struct ret_event (UNCLASSIFIED)
