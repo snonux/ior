@@ -13,21 +13,22 @@ import (
 
 // Record is the persisted Parquet schema for one syscall stream row.
 type Record struct {
-	Seq         uint64 `parquet:"seq"`
-	TimeNS      uint64 `parquet:"time_ns"`
-	GapNS       uint64 `parquet:"gap_ns"`
-	LatencyNS   uint64 `parquet:"latency_ns"`
-	Comm        string `parquet:"comm"`
-	PID         uint32 `parquet:"pid"`
-	TID         uint32 `parquet:"tid"`
-	Syscall     string `parquet:"syscall"`
-	Family      string `parquet:"family"`
-	FD          int32  `parquet:"fd"`
-	Ret         int64  `parquet:"ret"`
-	Bytes       uint64 `parquet:"bytes"`
-	File        string `parquet:"file"`
-	IsError     bool   `parquet:"is_error"`
-	FilterEpoch uint64 `parquet:"filter_epoch"`
+	Seq               uint64 `parquet:"seq"`
+	TimeNS            uint64 `parquet:"time_ns"`
+	GapNS             uint64 `parquet:"gap_ns"`
+	LatencyNS         uint64 `parquet:"latency_ns"`
+	Comm              string `parquet:"comm"`
+	PID               uint32 `parquet:"pid"`
+	TID               uint32 `parquet:"tid"`
+	Syscall           string `parquet:"syscall"`
+	Family            string `parquet:"family"`
+	FD                int32  `parquet:"fd"`
+	Ret               int64  `parquet:"ret"`
+	Bytes             uint64 `parquet:"bytes"`
+	AddressSpaceBytes uint64 `parquet:"address_space_bytes"`
+	File              string `parquet:"file"`
+	IsError           bool   `parquet:"is_error"`
+	FilterEpoch       uint64 `parquet:"filter_epoch"`
 }
 
 // FileMetadata captures constant metadata written once into the parquet file.
@@ -55,21 +56,22 @@ func NewFileMetadata(mode string) FileMetadata {
 // RecordFromStream converts one shared stream row into the persisted format.
 func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 	return Record{
-		Seq:         row.Seq,
-		TimeNS:      row.TimeNs,
-		GapNS:       row.GapNs,
-		LatencyNS:   row.DurationNs,
-		Comm:        row.Comm,
-		PID:         row.PID,
-		TID:         row.TID,
-		Syscall:     row.Syscall,
-		Family:      row.Family,
-		FD:          row.FD,
-		Ret:         row.RetVal,
-		Bytes:       row.Bytes,
-		File:        row.FileName,
-		IsError:     row.IsError,
-		FilterEpoch: filterEpoch,
+		Seq:               row.Seq,
+		TimeNS:            row.TimeNs,
+		GapNS:             row.GapNs,
+		LatencyNS:         row.DurationNs,
+		Comm:              row.Comm,
+		PID:               row.PID,
+		TID:               row.TID,
+		Syscall:           row.Syscall,
+		Family:            row.Family,
+		FD:                row.FD,
+		Ret:               row.RetVal,
+		Bytes:             row.Bytes,
+		AddressSpaceBytes: row.AddressSpaceBytes,
+		File:              row.FileName,
+		IsError:           row.IsError,
+		FilterEpoch:       filterEpoch,
 	}
 }
 

@@ -61,6 +61,7 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	pair.Duration = 66
 	pair.DurationToPrev = 19
 	pair.Bytes = 512
+	pair.AddressSpaceBytes = 2048
 
 	got := New(9, pair)
 	if got.Seq != 9 || got.TimeNs != 1234 {
@@ -77,6 +78,9 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	}
 	if got.DurationNs != 66 || got.GapNs != 19 || got.Bytes != 512 {
 		t.Fatalf("DurationNs/GapNs/Bytes = %d/%d/%d, want 66/19/512", got.DurationNs, got.GapNs, got.Bytes)
+	}
+	if got.AddressSpaceBytes != 2048 {
+		t.Fatalf("AddressSpaceBytes = %d, want 2048", got.AddressSpaceBytes)
 	}
 	if got.RetVal != -2 || !got.IsError {
 		t.Fatalf("RetVal/IsError = %d/%v, want -2/true", got.RetVal, got.IsError)

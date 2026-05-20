@@ -23,9 +23,11 @@ type Row struct {
 	DurationNs uint64
 	GapNs      uint64
 	Bytes      uint64
-	RetVal     int64
-	IsError    bool
-	FD         int32
+	// AddressSpaceBytes tracks memory-region extent for memory-management syscalls.
+	AddressSpaceBytes uint64
+	RetVal            int64
+	IsError           bool
+	FD                int32
 }
 
 func (r Row) SyscallValue() string {
@@ -99,18 +101,19 @@ func (s *Sequencer) Next() uint64 {
 // New converts one syscall pair into the shared row model.
 func New(seq uint64, pair *event.Pair) Row {
 	row := Row{
-		Seq:        seq,
-		TimeNs:     pair.EnterEv.GetTime(),
-		Syscall:    pair.EnterEv.GetTraceId().Name(),
-		Family:     string(pair.EnterEv.GetTraceId().Family()),
-		Comm:       pair.Comm,
-		PID:        pair.EnterEv.GetPid(),
-		TID:        pair.EnterEv.GetTid(),
-		FileName:   pair.FileName(),
-		DurationNs: pair.Duration,
-		GapNs:      pair.DurationToPrev,
-		Bytes:      pair.Bytes,
-		FD:         UnknownFD,
+		Seq:               seq,
+		TimeNs:            pair.EnterEv.GetTime(),
+		Syscall:           pair.EnterEv.GetTraceId().Name(),
+		Family:            string(pair.EnterEv.GetTraceId().Family()),
+		Comm:              pair.Comm,
+		PID:               pair.EnterEv.GetPid(),
+		TID:               pair.EnterEv.GetTid(),
+		FileName:          pair.FileName(),
+		DurationNs:        pair.Duration,
+		GapNs:             pair.DurationToPrev,
+		Bytes:             pair.Bytes,
+		AddressSpaceBytes: pair.AddressSpaceBytes,
+		FD:                UnknownFD,
 	}
 	if fd, ok := pair.FileDescriptor(); ok {
 		row.FD = fd
