@@ -250,6 +250,7 @@ func (e *eventLoop) initRawHandlers() {
 	e.registerTwoFdHandlers()
 	e.registerMemoryHandlers()
 	e.registerSleepHandlers()
+	e.registerProcessHandlers()
 	e.registerSecurityHandlers()
 }
 
@@ -483,6 +484,16 @@ func (e *eventLoop) registerSleepHandlers() {
 	}
 }
 
+func (e *eventLoop) registerProcessHandlers() {
+	e.rawHandlers[types.ENTER_EXEC_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		execEv, ok := decodeRawEvent(e, types.ENTER_EXEC_EVENT, raw, types.NewExecEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(execEv)
+	}
+}
+
 func (e *eventLoop) registerSecurityHandlers() {
 	e.rawHandlers[types.ENTER_KEYCTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
 		keyctlEv, ok := decodeRawEvent(e, types.ENTER_KEYCTL_EVENT, raw, types.NewKeyctlEventFast)
@@ -527,6 +538,8 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 
 	switch enterEv.(type) {
 	case *types.OpenEvent:
+		e.pairs.set(enterEv)
+	case *types.ExecEvent:
 		e.pairs.set(enterEv)
 	default:
 		// Only, when we have a comm name

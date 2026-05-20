@@ -64,6 +64,17 @@ func TestGenerateMqOpenHandler(t *testing.T) {
 	requireContains(t, output, "ev->flags = ctx->args[1];")
 }
 
+func TestGenerateExecHandler(t *testing.T) {
+	output := generateFromPair(t, FormatExecveat, FormatExitExecveat)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_execveat")`)
+	requireContains(t, output, "struct exec_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EXEC_EVENT;")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);")
+	requireContains(t, output, "ev->dirfd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->flags = (__s32)ctx->args[4];")
+}
+
 func TestGenerateOpenat2Handler(t *testing.T) {
 	f := mustParseOne(t, FormatOpenat2)
 	r := ClassifyFormat(&f)
@@ -515,6 +526,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindFd, "ENTER_FD_EVENT", "EXIT_FD_EVENT"},
 		{KindOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
 		{KindMqOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
+		{KindExec, "ENTER_EXEC_EVENT", "EXIT_EXEC_EVENT"},
 		{KindPathname, "ENTER_PATH_EVENT", "EXIT_PATH_EVENT"},
 		{KindName, "ENTER_NAME_EVENT", "EXIT_NAME_EVENT"},
 		{KindRet, "ENTER_RET_EVENT", "EXIT_RET_EVENT"},
@@ -555,6 +567,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindFd, "fd_event"},
 		{KindOpen, "open_event"},
 		{KindMqOpen, "open_event"},
+		{KindExec, "exec_event"},
 		{KindPathname, "path_event"},
 		{KindName, "name_event"},
 		{KindRet, "ret_event"},
@@ -593,7 +606,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

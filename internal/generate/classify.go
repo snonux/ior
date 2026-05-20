@@ -9,6 +9,7 @@ const (
 	KindFd
 	KindOpen
 	KindMqOpen
+	KindExec
 	KindPathname
 	KindName
 	KindRet
@@ -193,6 +194,14 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_mq_getsetattr":
 		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_execve":
+		return ClassificationResult{Kind: KindExec}, true
+	case "sys_enter_execveat":
+		return ClassificationResult{Kind: KindExec}, true
+	case "sys_enter_exit":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_exit_group":
+		return ClassificationResult{Kind: KindNull}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true

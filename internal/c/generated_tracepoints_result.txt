@@ -40,8 +40,8 @@ sys_enter_epoll_pwait2 is a struct fd_event
 sys_enter_epoll_wait is a struct fd_event
 sys_enter_eventfd is a struct eventfd_event
 sys_enter_eventfd2 is a struct eventfd_event
-sys_enter_execve is a struct path_event
-sys_enter_execveat is a struct fd_event
+sys_enter_execve is a struct exec_event
+sys_enter_execveat is a struct exec_event
 sys_enter_exit is a struct null_event
 sys_enter_exit_group is a struct null_event
 sys_enter_faccessat is a struct path_event

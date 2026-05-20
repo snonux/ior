@@ -21,6 +21,21 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		}
 	})
 
+	t.Run("ExecEvent", func(t *testing.T) {
+		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3, Dirfd: -100, Flags: 4}
+		copy(ev.Filename[:], "a")
+		copy(ev.Comm[:], "b")
+		raw, _ := ev.Bytes()
+
+		slow := NewExecEvent(raw)
+		fast := NewExecEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("exec decode mismatch")
+		}
+	})
+
 	t.Run("NullEvent", func(t *testing.T) {
 		ev := &NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 2, Tid: 3}
 		raw, _ := ev.Bytes()
@@ -535,6 +550,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		decode func([]byte) bool
 	}{
 		{name: "OpenEvent", decode: func(raw []byte) bool { return NewOpenEventFast(raw) == nil }},
+		{name: "ExecEvent", decode: func(raw []byte) bool { return NewExecEventFast(raw) == nil }},
 		{name: "NullEvent", decode: func(raw []byte) bool { return NewNullEventFast(raw) == nil }},
 		{name: "FdEvent", decode: func(raw []byte) bool { return NewFdEventFast(raw) == nil }},
 		{name: "RetEvent", decode: func(raw []byte) bool { return NewRetEventFast(raw) == nil }},
