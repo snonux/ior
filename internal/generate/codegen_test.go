@@ -53,6 +53,17 @@ func TestGenerateOpenHandlerDirect(t *testing.T) {
 	requireContains(t, output, "ev->flags = ctx->args[1];")
 }
 
+func TestGenerateMqOpenHandler(t *testing.T) {
+	output := GenerateTracepointsC(mqFormats("mq_open", 9300))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mq_open")`)
+	requireContains(t, output, "struct open_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MQ_OPEN;")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);")
+	requireContains(t, output, "ev->flags = ctx->args[1];")
+}
+
 func TestGenerateOpenat2Handler(t *testing.T) {
 	f := mustParseOne(t, FormatOpenat2)
 	r := ClassifyFormat(&f)
@@ -450,6 +461,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 	}{
 		{KindFd, "ENTER_FD_EVENT", "EXIT_FD_EVENT"},
 		{KindOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
+		{KindMqOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
 		{KindPathname, "ENTER_PATH_EVENT", "EXIT_PATH_EVENT"},
 		{KindName, "ENTER_NAME_EVENT", "EXIT_NAME_EVENT"},
 		{KindRet, "ENTER_RET_EVENT", "EXIT_RET_EVENT"},
@@ -486,6 +498,7 @@ func TestEventStructNames(t *testing.T) {
 	}{
 		{KindFd, "fd_event"},
 		{KindOpen, "open_event"},
+		{KindMqOpen, "open_event"},
 		{KindPathname, "path_event"},
 		{KindName, "name_event"},
 		{KindRet, "ret_event"},
@@ -521,7 +534,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)
