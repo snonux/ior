@@ -134,20 +134,21 @@ func TestRecorderStopReturnsTerminalErrorOnRepeatedCalls(t *testing.T) {
 
 func testStreamRow(seq uint64, syscall string, isError bool) streamrow.Row {
 	return streamrow.Row{
-		Seq:        seq,
-		TimeNs:     seq * 10,
-		Syscall:    syscall,
-		Family:     "FS",
-		Comm:       "ior-test",
-		PID:        100 + uint32(seq),
-		TID:        200 + uint32(seq),
-		FileName:   "/tmp/file",
-		DurationNs: seq + 1,
-		GapNs:      seq + 2,
-		Bytes:      seq + 3,
-		RetVal:     int64(seq),
-		IsError:    isError,
-		FD:         int32(seq),
+		Seq:               seq,
+		TimeNs:            seq * 10,
+		Syscall:           syscall,
+		Family:            "FS",
+		Comm:              "ior-test",
+		PID:               100 + uint32(seq),
+		TID:               200 + uint32(seq),
+		FileName:          "/tmp/file",
+		DurationNs:        seq + 1,
+		GapNs:             seq + 2,
+		Bytes:             seq + 3,
+		AddressSpaceBytes: seq + 4,
+		RetVal:            int64(seq),
+		IsError:           isError,
+		FD:                int32(seq),
 	}
 }
 
