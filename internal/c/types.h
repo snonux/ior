@@ -39,6 +39,8 @@
 #define EXIT_MEM_EVENT 34
 #define ENTER_SLEEP_EVENT 35
 #define EXIT_SLEEP_EVENT 36
+#define ENTER_TWO_FD_EVENT 37
+#define EXIT_TWO_FD_EVENT 38
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -231,4 +233,15 @@ struct sleep_event {
     __u32 pid;
     __u32 tid;
     __s64 requested_ns;
+};
+
+struct two_fd_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd_a;
+    __s32 fd_b;
+    __u64 extra;
 };

@@ -733,6 +733,339 @@ format:
 print fmt: "pathname: 0x%08lx, mode: 0x%08lx", ((unsigned long)(REC->pathname)), ((unsigned long)(REC->mode))
 `
 
+const FormatMount = `name: sys_enter_mount
+ID: 949
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * dev_name;	offset:16;	size:8;	signed:0;
+	field:const char * dir_name;	offset:24;	size:8;	signed:0;
+	field:const char * type;	offset:32;	size:8;	signed:0;
+	field:unsigned long flags;	offset:40;	size:8;	signed:0;
+	field:void * data;	offset:48;	size:8;	signed:0;
+
+print fmt: "dev_name: 0x%08lx, dir_name: 0x%08lx, type: 0x%08lx, flags: 0x%08lx, data: 0x%08lx", ((unsigned long)(REC->dev_name)), ((unsigned long)(REC->dir_name)), ((unsigned long)(REC->type)), ((unsigned long)(REC->flags)), ((unsigned long)(REC->data))
+`
+
+const FormatExitMount = `name: sys_exit_mount
+ID: 948
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatUmount = `name: sys_enter_umount
+ID: 953
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * name;	offset:16;	size:8;	signed:0;
+	field:int flags;	offset:24;	size:8;	signed:0;
+
+print fmt: "name: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->name)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitUmount = `name: sys_exit_umount
+ID: 952
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatMoveMount = `name: sys_enter_move_mount
+ID: 945
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int from_dfd;	offset:16;	size:8;	signed:0;
+	field:const char * from_pathname;	offset:24;	size:8;	signed:0;
+	field:int to_dfd;	offset:32;	size:8;	signed:0;
+	field:const char * to_pathname;	offset:40;	size:8;	signed:0;
+	field:unsigned int flags;	offset:48;	size:8;	signed:0;
+
+print fmt: "from_dfd: 0x%08lx, from_pathname: 0x%08lx, to_dfd: 0x%08lx, to_pathname: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->from_dfd)), ((unsigned long)(REC->from_pathname)), ((unsigned long)(REC->to_dfd)), ((unsigned long)(REC->to_pathname)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitMoveMount = `name: sys_exit_move_mount
+ID: 944
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatFsmount = `name: sys_enter_fsmount
+ID: 947
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int fs_fd;	offset:16;	size:8;	signed:0;
+	field:unsigned int flags;	offset:24;	size:8;	signed:0;
+	field:unsigned int attr_flags;	offset:32;	size:8;	signed:0;
+
+print fmt: "fs_fd: 0x%08lx, flags: 0x%08lx, attr_flags: 0x%08lx", ((unsigned long)(REC->fs_fd)), ((unsigned long)(REC->flags)), ((unsigned long)(REC->attr_flags))
+`
+
+const FormatExitFsmount = `name: sys_exit_fsmount
+ID: 946
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatPivotRoot = `name: sys_enter_pivot_root
+ID: 943
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * new_root;	offset:16;	size:8;	signed:0;
+	field:const char * put_old;	offset:24;	size:8;	signed:0;
+
+print fmt: "new_root: 0x%08lx, put_old: 0x%08lx", ((unsigned long)(REC->new_root)), ((unsigned long)(REC->put_old))
+`
+
+const FormatExitPivotRoot = `name: sys_exit_pivot_root
+ID: 942
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatQuotactl = `name: sys_enter_quotactl
+ID: 1164
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned int cmd;	offset:16;	size:8;	signed:0;
+	field:const char * special;	offset:24;	size:8;	signed:0;
+	field:qid_t id;	offset:32;	size:8;	signed:0;
+	field:void * addr;	offset:40;	size:8;	signed:0;
+
+print fmt: "cmd: 0x%08lx, special: 0x%08lx, id: 0x%08lx, addr: 0x%08lx", ((unsigned long)(REC->cmd)), ((unsigned long)(REC->special)), ((unsigned long)(REC->id)), ((unsigned long)(REC->addr))
+`
+
+const FormatExitQuotactl = `name: sys_exit_quotactl
+ID: 1163
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatStatmount = `name: sys_enter_statmount
+ID: 937
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:struct mnt_id_req * req;	offset:16;	size:8;	signed:0;
+	field:struct statmount * smbuf;	offset:24;	size:8;	signed:0;
+	field:size_t bufsize;	offset:32;	size:8;	signed:0;
+	field:unsigned long flags;	offset:40;	size:8;	signed:0;
+
+print fmt: "req: 0x%08lx, smbuf: 0x%08lx, bufsize: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->req)), ((unsigned long)(REC->smbuf)), ((unsigned long)(REC->bufsize)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitStatmount = `name: sys_exit_statmount
+ID: 936
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatListmount = `name: sys_enter_listmount
+ID: 935
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:struct mnt_id_req * req;	offset:16;	size:8;	signed:0;
+	field:u64 * mnt_ids;	offset:24;	size:8;	signed:0;
+	field:size_t nr_mnt_ids;	offset:32;	size:8;	signed:0;
+	field:unsigned long flags;	offset:40;	size:8;	signed:0;
+
+print fmt: "req: 0x%08lx, mnt_ids: 0x%08lx, nr_mnt_ids: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->req)), ((unsigned long)(REC->mnt_ids)), ((unsigned long)(REC->nr_mnt_ids)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitListmount = `name: sys_exit_listmount
+ID: 934
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatListns = `name: sys_enter_listns
+ID: 277
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const struct ns_id_req * req;	offset:16;	size:8;	signed:0;
+	field:u64 * ns_ids;	offset:24;	size:8;	signed:0;
+	field:size_t nr_ns_ids;	offset:32;	size:8;	signed:0;
+	field:unsigned long flags;	offset:40;	size:8;	signed:0;
+
+print fmt: "req: 0x%08lx, ns_ids: 0x%08lx, nr_ns_ids: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->req)), ((unsigned long)(REC->ns_ids)), ((unsigned long)(REC->nr_ns_ids)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitListns = `name: sys_exit_listns
+ID: 276
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatSwapon = `name: sys_enter_swapon
+ID: 731
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * specialfile;	offset:16;	size:8;	signed:0;
+	field:int swap_flags;	offset:24;	size:8;	signed:0;
+
+print fmt: "specialfile: 0x%08lx, swap_flags: 0x%08lx", ((unsigned long)(REC->specialfile)), ((unsigned long)(REC->swap_flags))
+`
+
+const FormatExitSwapon = `name: sys_exit_swapon
+ID: 730
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatSwapoff = `name: sys_enter_swapoff
+ID: 733
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * specialfile;	offset:16;	size:8;	signed:0;
+
+print fmt: "specialfile: 0x%08lx", ((unsigned long)(REC->specialfile))
+`
+
+const FormatExitSwapoff = `name: sys_exit_swapoff
+ID: 732
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 // Ignored tracepoints
 
 const FormatExecve = `name: sys_enter_execve

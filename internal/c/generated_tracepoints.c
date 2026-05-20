@@ -3344,7 +3344,7 @@ int handle_sys_exit_msgrcv(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_quotactl is a struct null_event
+/// sys_enter_quotactl is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_quotactl")
 int handle_sys_enter_quotactl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3354,15 +3354,17 @@ int handle_sys_enter_quotactl(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_QUOTACTL))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_QUOTACTL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5500,7 +5502,7 @@ int handle_sys_exit_futimesat(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_utimes is a struct null_event
+/// sys_enter_utimes is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_utimes")
 int handle_sys_enter_utimes(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -5510,15 +5512,17 @@ int handle_sys_enter_utimes(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_UTIMES))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_UTIMES;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5550,7 +5554,7 @@ int handle_sys_exit_utimes(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_utime is a struct null_event
+/// sys_enter_utime is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_utime")
 int handle_sys_enter_utime(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -5560,15 +5564,17 @@ int handle_sys_enter_utime(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_UTIME))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_UTIME;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6833,7 +6839,7 @@ int handle_sys_exit_fremovexattr(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_umount is a struct null_event
+/// sys_enter_umount is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_umount")
 int handle_sys_enter_umount(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -6843,15 +6849,17 @@ int handle_sys_enter_umount(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_UMOUNT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_UMOUNT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6937,7 +6945,7 @@ int handle_sys_exit_open_tree(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_mount is a struct null_event
+/// sys_enter_mount is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_mount")
 int handle_sys_enter_mount(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -6947,15 +6955,17 @@ int handle_sys_enter_mount(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MOUNT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_MOUNT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6987,7 +6997,7 @@ int handle_sys_exit_mount(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_fsmount is a struct null_event
+/// sys_enter_fsmount is a struct eventfd_event
 SEC("tracepoint/syscalls/sys_enter_fsmount")
 int handle_sys_enter_fsmount(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -6997,21 +7007,25 @@ int handle_sys_enter_fsmount(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_FSMOUNT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_EVENTFD_EVENT;
     ev->trace_id = SYS_ENTER_FSMOUNT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = (__s32)ctx->args[1];
+    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
+    ev->flags = flags;
+    ev->ret = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_fsmount is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_fsmount is a struct eventfd_event
 SEC("tracepoint/syscalls/sys_exit_fsmount")
 int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -7021,23 +7035,29 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_EXIT_FSMOUNT, ctx->ret))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_EVENTFD_EVENT;
     ev->trace_id = SYS_EXIT_FSMOUNT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+    ev->flags = flags;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_enter_move_mount is a struct null_event
+/// sys_enter_move_mount is a struct two_fd_event
 SEC("tracepoint/syscalls/sys_enter_move_mount")
 int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -7047,15 +7067,18 @@ int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MOVE_MOUNT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct two_fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct two_fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_TWO_FD_EVENT;
     ev->trace_id = SYS_ENTER_MOVE_MOUNT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd_a = (__s32)ctx->args[0];
+    ev->fd_b = (__s32)ctx->args[2];
+    ev->extra = (__u64)ctx->args[4];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7087,7 +7110,7 @@ int handle_sys_exit_move_mount(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_pivot_root is a struct null_event
+/// sys_enter_pivot_root is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_pivot_root")
 int handle_sys_enter_pivot_root(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -7097,15 +7120,17 @@ int handle_sys_enter_pivot_root(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_PIVOT_ROOT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_PIVOT_ROOT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11650,7 +11675,7 @@ int handle_sys_exit_get_mempolicy(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_swapoff is a struct null_event
+/// sys_enter_swapoff is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_swapoff")
 int handle_sys_enter_swapoff(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -11660,15 +11685,17 @@ int handle_sys_enter_swapoff(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_SWAPOFF))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_SWAPOFF;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11700,7 +11727,7 @@ int handle_sys_exit_swapoff(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_swapon is a struct null_event
+/// sys_enter_swapon is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_swapon")
 int handle_sys_enter_swapon(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -11710,15 +11737,17 @@ int handle_sys_enter_swapon(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_SWAPON))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_SWAPON;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

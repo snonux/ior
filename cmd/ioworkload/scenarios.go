@@ -34,6 +34,7 @@ var scenarios = map[string]func() error{
 	"pipe2-basic":                   pipe2Basic,
 	"eventfd-basic":                 eventfdBasic,
 	"eventfd2-basic":                eventfd2Basic,
+	"mountfs-management":            mountfsManagement,
 	"polling-epoll":                 pollingEpoll,
 	"sleep-syscalls":                sleepSyscalls,
 	"family-mixed":                  familyMixed,

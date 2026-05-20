@@ -31,6 +31,7 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindPipe:           {structName: "pipe_event", enterAccepted: true},
 	KindEventfd:        {structName: "eventfd_event", enterAccepted: true},
 	KindEpollCtl:       {structName: "epoll_ctl_event", enterAccepted: true},
+	KindTwoFd:          {structName: "two_fd_event", enterAccepted: true},
 	KindPoll:           {structName: "poll_event", enterAccepted: true},
 	KindMem:            {structName: "mem_event", enterAccepted: true},
 	KindSleep:          {structName: "sleep_event", enterAccepted: true},

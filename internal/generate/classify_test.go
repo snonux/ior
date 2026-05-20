@@ -453,6 +453,108 @@ func TestClassifyClockNanosleep(t *testing.T) {
 	}
 }
 
+func TestClassifyMount(t *testing.T) {
+	r := classifyFromData(t, FormatMount)
+	if r.Kind != KindPathname {
+		t.Errorf("mount: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "dir_name" {
+		t.Errorf("mount: PathnameField = %q, want dir_name", r.PathnameField)
+	}
+}
+
+func TestClassifyUmount(t *testing.T) {
+	r := classifyFromData(t, FormatUmount)
+	if r.Kind != KindPathname {
+		t.Errorf("umount: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "name" {
+		t.Errorf("umount: PathnameField = %q, want name", r.PathnameField)
+	}
+}
+
+func TestClassifyMoveMount(t *testing.T) {
+	r := classifyFromData(t, FormatMoveMount)
+	if r.Kind != KindTwoFd {
+		t.Errorf("move_mount: got kind %d, want KindTwoFd", r.Kind)
+	}
+}
+
+func TestClassifyFsmount(t *testing.T) {
+	r := classifyFromData(t, FormatFsmount)
+	if r.Kind != KindEventfd {
+		t.Errorf("fsmount: got kind %d, want KindEventfd", r.Kind)
+	}
+}
+
+func TestClassifyExitFsmount(t *testing.T) {
+	r := classifyFromData(t, FormatExitFsmount)
+	if r.Kind != KindEventfd {
+		t.Errorf("exit_fsmount: got kind %d, want KindEventfd", r.Kind)
+	}
+}
+
+func TestClassifyPivotRoot(t *testing.T) {
+	r := classifyFromData(t, FormatPivotRoot)
+	if r.Kind != KindPathname {
+		t.Errorf("pivot_root: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "new_root" {
+		t.Errorf("pivot_root: PathnameField = %q, want new_root", r.PathnameField)
+	}
+}
+
+func TestClassifyQuotactl(t *testing.T) {
+	r := classifyFromData(t, FormatQuotactl)
+	if r.Kind != KindPathname {
+		t.Errorf("quotactl: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "special" {
+		t.Errorf("quotactl: PathnameField = %q, want special", r.PathnameField)
+	}
+}
+
+func TestClassifyStatmount(t *testing.T) {
+	r := classifyFromData(t, FormatStatmount)
+	if r.Kind != KindNull {
+		t.Errorf("statmount: got kind %d, want KindNull", r.Kind)
+	}
+}
+
+func TestClassifyListmount(t *testing.T) {
+	r := classifyFromData(t, FormatListmount)
+	if r.Kind != KindNull {
+		t.Errorf("listmount: got kind %d, want KindNull", r.Kind)
+	}
+}
+
+func TestClassifyListns(t *testing.T) {
+	r := classifyFromData(t, FormatListns)
+	if r.Kind != KindNull {
+		t.Errorf("listns: got kind %d, want KindNull", r.Kind)
+	}
+}
+
+func TestClassifySwapon(t *testing.T) {
+	r := classifyFromData(t, FormatSwapon)
+	if r.Kind != KindPathname {
+		t.Errorf("swapon: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "specialfile" {
+		t.Errorf("swapon: PathnameField = %q, want specialfile", r.PathnameField)
+	}
+}
+
+func TestClassifySwapoff(t *testing.T) {
+	r := classifyFromData(t, FormatSwapoff)
+	if r.Kind != KindPathname {
+		t.Errorf("swapoff: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "specialfile" {
+		t.Errorf("swapoff: PathnameField = %q, want specialfile", r.PathnameField)
+	}
+}
+
 func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {
@@ -509,6 +611,17 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"mremap", FormatMremap, FormatExitMremap, KindMem},
 		{"nanosleep", FormatNanosleep, FormatExitNanosleep, KindSleep},
 		{"clock_nanosleep", FormatClockNanosleep, FormatExitClockNanosleep, KindSleep},
+		{"mount", FormatMount, FormatExitMount, KindPathname},
+		{"umount", FormatUmount, FormatExitUmount, KindPathname},
+		{"move_mount", FormatMoveMount, FormatExitMoveMount, KindTwoFd},
+		{"fsmount", FormatFsmount, FormatExitFsmount, KindEventfd},
+		{"pivot_root", FormatPivotRoot, FormatExitPivotRoot, KindPathname},
+		{"quotactl", FormatQuotactl, FormatExitQuotactl, KindPathname},
+		{"statmount", FormatStatmount, FormatExitStatmount, KindNull},
+		{"listmount", FormatListmount, FormatExitListmount, KindNull},
+		{"listns", FormatListns, FormatExitListns, KindNull},
+		{"swapon", FormatSwapon, FormatExitSwapon, KindPathname},
+		{"swapoff", FormatSwapoff, FormatExitSwapoff, KindPathname},
 		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
@@ -550,6 +663,16 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"mremap", FormatMremap, FormatExitMremap, FamilyMemory},
 		{"nanosleep", FormatNanosleep, FormatExitNanosleep, FamilyTime},
 		{"clock_nanosleep", FormatClockNanosleep, FormatExitClockNanosleep, FamilyTime},
+		{"mount", FormatMount, FormatExitMount, FamilyFS},
+		{"umount", FormatUmount, FormatExitUmount, FamilyFS},
+		{"move_mount", FormatMoveMount, FormatExitMoveMount, FamilyFS},
+		{"fsmount", FormatFsmount, FormatExitFsmount, FamilyFS},
+		{"quotactl", FormatQuotactl, FormatExitQuotactl, FamilyFS},
+		{"statmount", FormatStatmount, FormatExitStatmount, FamilyFS},
+		{"listmount", FormatListmount, FormatExitListmount, FamilyFS},
+		{"listns", FormatListns, FormatExitListns, FamilyFS},
+		{"swapon", FormatSwapon, FormatExitSwapon, FamilyFS},
+		{"swapoff", FormatSwapoff, FormatExitSwapoff, FamilyFS},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 

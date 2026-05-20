@@ -247,6 +247,7 @@ func (e *eventLoop) initRawHandlers() {
 	e.registerSocketHandlers()
 	e.registerIPCHandlers()
 	e.registerPollingHandlers()
+	e.registerTwoFdHandlers()
 	e.registerMemoryHandlers()
 	e.registerSleepHandlers()
 }
@@ -448,6 +449,16 @@ func (e *eventLoop) registerPollingHandlers() {
 			return
 		}
 		e.tracepointEntered(pollEv)
+	}
+}
+
+func (e *eventLoop) registerTwoFdHandlers() {
+	e.rawHandlers[types.ENTER_TWO_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		twoFdEv, ok := decodeRawEvent(e, types.ENTER_TWO_FD_EVENT, raw, types.NewTwoFdEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(twoFdEv)
 	}
 }
 
