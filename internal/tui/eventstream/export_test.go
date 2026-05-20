@@ -215,7 +215,7 @@ func TestWriteStreamCSVAppendsFamilyColumn(t *testing.T) {
 		FileName:         "/tmp/sock",
 		IsError:          false,
 		Family:           "Network",
-		RequestedSleepNs: 0,
+		RequestedSleepNs: 4_200_000,
 	}}
 	fail := func(err error) (string, error) { return "", err }
 
@@ -231,7 +231,7 @@ func TestWriteStreamCSVAppendsFamilyColumn(t *testing.T) {
 	if !reflect.DeepEqual(records[0], wantHeader) {
 		t.Fatalf("header = %#v, want %#v", records[0], wantHeader)
 	}
-	if records[1][8] != "4" || records[1][12] != "false" || records[1][13] != "Network" || records[1][14] != "0" {
+	if records[1][8] != "4" || records[1][12] != "false" || records[1][13] != "Network" || records[1][14] != "4200000" {
 		t.Fatalf("family should be appended without shifting legacy columns, got %#v", records[1])
 	}
 }
