@@ -218,6 +218,29 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("poll decode mismatch")
 		}
 	})
+
+	t.Run("MemEvent", func(t *testing.T) {
+		ev := &MemEvent{
+			EventType: ENTER_MEM_EVENT,
+			TraceId:   SYS_ENTER_MREMAP,
+			Time:      1,
+			Pid:       2,
+			Tid:       3,
+			Addr:      0x1000,
+			Length:    4096,
+			Length2:   8192,
+			Flags:     1,
+		}
+		raw, _ := ev.Bytes()
+
+		slow := NewMemEvent(raw)
+		fast := NewMemEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("mem decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {

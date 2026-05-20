@@ -26,6 +26,9 @@ type Pair struct {
 	Duration        uint64
 	DurationToPrev  uint64
 	Bytes           uint64 // Number of bytes transferred (read/write/transfer syscalls only)
+	// AddressSpaceBytes tracks memory-region extent for memory syscalls
+	// (e.g. munmap/mremap) and is intentionally separate from I/O bytes.
+	AddressSpaceBytes uint64
 }
 
 func NewPair(enterEv Event) *Pair {

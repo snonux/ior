@@ -89,3 +89,61 @@ func TestApplyRetBytesForNullEnterRetExitPair(t *testing.T) {
 		t.Fatalf("pair.Bytes = %d, want 4096", pair.Bytes)
 	}
 }
+
+func TestAddressSpaceBytesFromMem(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   *types.MemEvent
+		want uint64
+	}{
+		{
+			name: "munmap",
+			ev:   &types.MemEvent{TraceId: types.SYS_ENTER_MUNMAP, Length: 4096},
+			want: 4096,
+		},
+		{
+			name: "mremap uses larger extent",
+			ev:   &types.MemEvent{TraceId: types.SYS_ENTER_MREMAP, Length: 4096, Length2: 8192},
+			want: 8192,
+		},
+		{
+			name: "non-memory",
+			ev:   &types.MemEvent{TraceId: types.SYS_ENTER_READ, Length: 123},
+			want: 0,
+		},
+		{
+			name: "nil",
+			ev:   nil,
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := addressSpaceBytesFromMem(tt.ev); got != tt.want {
+				t.Fatalf("addressSpaceBytesFromMem() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyAddressSpaceBytes(t *testing.T) {
+	pair := &event.Pair{
+		EnterEv: &types.MemEvent{
+			TraceId: types.SYS_ENTER_MUNMAP,
+			Length:  16384,
+		},
+		ExitEv: &types.RetEvent{
+			TraceId: types.SYS_EXIT_MUNMAP,
+			Ret:     0,
+		},
+	}
+
+	applyAddressSpaceBytes(pair)
+	if pair.AddressSpaceBytes != 16384 {
+		t.Fatalf("pair.AddressSpaceBytes = %d, want 16384", pair.AddressSpaceBytes)
+	}
+	if pair.Bytes != 0 {
+		t.Fatalf("pair.Bytes = %d, want 0 (IO bytes must stay separate)", pair.Bytes)
+	}
+}

@@ -201,6 +201,67 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatMunmap = `name: sys_enter_munmap
+ID: 696
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned long addr;	offset:16;	size:8;	signed:0;
+	field:size_t len;	offset:24;	size:8;	signed:0;
+
+print fmt: "addr: 0x%08lx, len: 0x%08lx", ((unsigned long)(REC->addr)), ((unsigned long)(REC->len))
+`
+
+const FormatExitMunmap = `name: sys_exit_munmap
+ID: 695
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+const FormatMremap = `name: sys_enter_mremap
+ID: 710
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned long addr;	offset:16;	size:8;	signed:0;
+	field:unsigned long old_len;	offset:24;	size:8;	signed:0;
+	field:unsigned long new_len;	offset:32;	size:8;	signed:0;
+	field:unsigned long flags;	offset:40;	size:8;	signed:0;
+	field:unsigned long new_addr;	offset:48;	size:8;	signed:0;
+
+print fmt: "addr: 0x%08lx, old_len: 0x%08lx, new_len: 0x%08lx, flags: 0x%08lx, new_addr: 0x%08lx", ((unsigned long)(REC->addr)), ((unsigned long)(REC->old_len)), ((unsigned long)(REC->new_len)), ((unsigned long)(REC->flags)), ((unsigned long)(REC->new_addr))
+`
+
+const FormatExitMremap = `name: sys_exit_mremap
+ID: 709
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatExitMsync = `name: sys_exit_msync
 ID: 1028
 format:

@@ -10736,22 +10736,26 @@ int handle_sys_exit_msync(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_mremap is a struct null_event
+/// sys_enter_mremap is a struct mem_event
 SEC("tracepoint/syscalls/sys_enter_mremap")
 int handle_sys_enter_mremap(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct mem_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct mem_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_MEM_EVENT;
     ev->trace_id = SYS_ENTER_MREMAP;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->addr = (__u64)ctx->args[0];
+    ev->length = (__u64)ctx->args[1];
+    ev->length2 = (__u64)ctx->args[2];
+    ev->flags = (__u64)ctx->args[3];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11000,22 +11004,26 @@ int handle_sys_exit_brk(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_munmap is a struct null_event
+/// sys_enter_munmap is a struct mem_event
 SEC("tracepoint/syscalls/sys_enter_munmap")
 int handle_sys_enter_munmap(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
     if (filter(&pid, &tid))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct mem_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct mem_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_MEM_EVENT;
     ev->trace_id = SYS_ENTER_MUNMAP;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->addr = (__u64)ctx->args[0];
+    ev->length = (__u64)ctx->args[1];
+    ev->length2 = 0;
+    ev->flags = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

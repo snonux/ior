@@ -44,3 +44,27 @@ func TestMmapMsyncInvalidFlags(t *testing.T) {
 		},
 	})
 }
+
+func TestMmapMremapMunmap(t *testing.T) {
+	result, _ := runScenarioResult(t, "mmap-mremap-munmap", []ExpectedEvent{
+		{
+			Tracepoint: "enter_mremap",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+		{
+			Tracepoint: "enter_munmap",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+
+	assertEventBytesEqual(t, result, ExpectedEvent{
+		Tracepoint: "enter_mremap",
+		Comm:       "ioworkload",
+	}, 0)
+	assertEventBytesEqual(t, result, ExpectedEvent{
+		Tracepoint: "enter_munmap",
+		Comm:       "ioworkload",
+	}, 0)
+}

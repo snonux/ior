@@ -425,6 +425,20 @@ func TestClassifyPselect6(t *testing.T) {
 	}
 }
 
+func TestClassifyMunmap(t *testing.T) {
+	r := classifyFromData(t, FormatMunmap)
+	if r.Kind != KindMem {
+		t.Errorf("munmap: got kind %d, want KindMem", r.Kind)
+	}
+}
+
+func TestClassifyMremap(t *testing.T) {
+	r := classifyFromData(t, FormatMremap)
+	if r.Kind != KindMem {
+		t.Errorf("mremap: got kind %d, want KindMem", r.Kind)
+	}
+}
+
 func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {
@@ -477,6 +491,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"ppoll", FormatPpoll, FormatExitPpoll, KindPoll},
 		{"select", FormatSelect, FormatExitSelect, KindPoll},
 		{"pselect6", FormatPselect6, FormatExitPselect6, KindPoll},
+		{"munmap", FormatMunmap, FormatExitMunmap, KindMem},
+		{"mremap", FormatMremap, FormatExitMremap, KindMem},
 		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
@@ -514,6 +530,8 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"ppoll", FormatPpoll, FormatExitPpoll, FamilyPolling},
 		{"select", FormatSelect, FormatExitSelect, FamilyPolling},
 		{"pselect6", FormatPselect6, FormatExitPselect6, FamilyPolling},
+		{"munmap", FormatMunmap, FormatExitMunmap, FamilyMemory},
+		{"mremap", FormatMremap, FormatExitMremap, FamilyMemory},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 

@@ -149,6 +149,7 @@ func (e *eventLoop) initRawHandlers() {
 	e.registerSocketHandlers()
 	e.registerIPCHandlers()
 	e.registerPollingHandlers()
+	e.registerMemoryHandlers()
 }
 
 // registerOpenHandlers wires enter/exit handlers for open-family events.
@@ -351,6 +352,16 @@ func (e *eventLoop) registerPollingHandlers() {
 	}
 }
 
+func (e *eventLoop) registerMemoryHandlers() {
+	e.rawHandlers[types.ENTER_MEM_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		memEv, ok := decodeRawEvent(e, types.ENTER_MEM_EVENT, raw, types.NewMemEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(memEv)
+	}
+}
+
 func decodeRawEvent[T any](e *eventLoop, eventType types.EventType, raw []byte, decode func([]byte) *T) (*T, bool) {
 	decoded := decode(raw)
 	if decoded == nil {
@@ -404,6 +415,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		return
 	}
 	applyRetBytes(ep)
+	applyAddressSpaceBytes(ep)
 	tid := ep.EnterEv.GetTid()
 	ep.CalculateDurations(e.pairs.prevTime(tid))
 	e.pairs.setPrevTime(tid, ep.ExitEv.GetTime())

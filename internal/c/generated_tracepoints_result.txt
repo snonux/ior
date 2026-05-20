@@ -181,7 +181,7 @@ sys_enter_mq_open is a struct null_event
 sys_enter_mq_timedreceive is a struct null_event
 sys_enter_mq_timedsend is a struct null_event
 sys_enter_mq_unlink is a struct null_event
-sys_enter_mremap is a struct null_event
+sys_enter_mremap is a struct mem_event
 sys_enter_mseal is a struct null_event
 sys_enter_msgctl is a struct null_event
 sys_enter_msgget is a struct null_event
@@ -190,7 +190,7 @@ sys_enter_msgsnd is a struct null_event
 sys_enter_msync is a struct null_event
 sys_enter_munlock is a struct null_event
 sys_enter_munlockall is a struct null_event
-sys_enter_munmap is a struct null_event
+sys_enter_munmap is a struct mem_event
 sys_enter_name_to_handle_at is a struct path_event
 sys_enter_nanosleep is a struct null_event
 sys_enter_newfstat is a struct fd_event
