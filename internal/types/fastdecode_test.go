@@ -241,6 +241,26 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("mem decode mismatch")
 		}
 	})
+
+	t.Run("SleepEvent", func(t *testing.T) {
+		ev := &SleepEvent{
+			EventType:   ENTER_SLEEP_EVENT,
+			TraceId:     SYS_ENTER_NANOSLEEP,
+			Time:        1,
+			Pid:         2,
+			Tid:         3,
+			RequestedNs: 9_000_000,
+		}
+		raw, _ := ev.Bytes()
+
+		slow := NewSleepEvent(raw)
+		fast := NewSleepEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("sleep decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -390,6 +410,31 @@ func TestNewPollEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+func TestNewSleepEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, sleepEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(ENTER_SLEEP_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_CLOCK_NANOSLEEP))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint64(raw[24:32], uint64(125_000_000))
+
+	fast := NewSleepEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded sleep event for kernel layout payload")
+	}
+	defer fast.Recycle()
+
+	if fast.EventType != ENTER_SLEEP_EVENT ||
+		fast.TraceId != SYS_ENTER_CLOCK_NANOSLEEP ||
+		fast.Time != 1 ||
+		fast.Pid != 2 ||
+		fast.Tid != 3 ||
+		fast.RequestedNs != 125_000_000 {
+		t.Fatalf("unexpected sleep decode: %#v", fast)
+	}
+}
+
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -411,6 +456,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "EventfdEvent", decode: func(raw []byte) bool { return NewEventfdEventFast(raw) == nil }},
 		{name: "EpollCtlEvent", decode: func(raw []byte) bool { return NewEpollCtlEventFast(raw) == nil }},
 		{name: "PollEvent", decode: func(raw []byte) bool { return NewPollEventFast(raw) == nil }},
+		{name: "SleepEvent", decode: func(raw []byte) bool { return NewSleepEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {

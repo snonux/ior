@@ -37,6 +37,8 @@
 #define EXIT_POLL_EVENT 32
 #define ENTER_MEM_EVENT 33
 #define EXIT_MEM_EVENT 34
+#define ENTER_SLEEP_EVENT 35
+#define EXIT_SLEEP_EVENT 36
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -220,4 +222,13 @@ struct mem_event {
     __u64 length;
     __u64 length2;
     __u64 flags;
+};
+
+struct sleep_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s64 requested_ns;
 };

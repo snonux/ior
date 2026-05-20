@@ -25,6 +25,7 @@ const (
 	pollEventSize           = 40
 	pollEventSizeV1         = 36
 	memEventSize            = 56
+	sleepEventSize          = 32
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -359,4 +360,21 @@ func NewMemEventFast(raw []byte) *MemEvent {
 	m.Length2 = binary.LittleEndian.Uint64(raw[40:48])
 	m.Flags = binary.LittleEndian.Uint64(raw[48:56])
 	return m
+}
+
+func NewSleepEventFast(raw []byte) *SleepEvent {
+	if len(raw) < sleepEventSize {
+		return nil
+	}
+	if len(raw) != sleepEventSize {
+		return NewSleepEvent(raw)
+	}
+	s := poolOfSleepEvents.Get().(*SleepEvent)
+	s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	s.Time = binary.LittleEndian.Uint64(raw[8:16])
+	s.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	s.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	s.RequestedNs = int64(binary.LittleEndian.Uint64(raw[24:32]))
+	return s
 }

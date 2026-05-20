@@ -42,6 +42,8 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		return e.handlePollExit(ep, ev)
 	case *types.MemEvent:
 		return e.handleMemExit(ep, ev)
+	case *types.SleepEvent:
+		return e.handleSleepExit(ep, ev)
 	case *types.NullEvent:
 		return e.handleNullExit(ep, ev)
 	case *types.FcntlEvent:
@@ -417,6 +419,15 @@ func (e *eventLoop) handleMemExit(ep *event.Pair, memEv *types.MemEvent) bool {
 	return true
 }
 
+func (e *eventLoop) handleSleepExit(ep *event.Pair, sleepEv *types.SleepEvent) bool {
+	ep.Comm = e.comm(sleepEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
 func pipeDescriptorName(flags, fd0, fd1 int32) string {
 	return fmt.Sprintf("pipe:%d:%d:%d", flags, fd0, fd1)
 }
@@ -542,6 +553,17 @@ func applyAddressSpaceBytes(ep *event.Pair) {
 		return
 	}
 	ep.AddressSpaceBytes = addressSpaceBytesFromMem(memEv)
+}
+
+func applyRequestedSleepNs(ep *event.Pair) {
+	if ep == nil {
+		return
+	}
+	sleepEv, ok := ep.EnterEv.(*types.SleepEvent)
+	if !ok {
+		return
+	}
+	ep.RequestedSleepNs = sleepEv.RequestedNs
 }
 
 // dropMalformedRawEvent records a warning when a raw BPF event cannot be

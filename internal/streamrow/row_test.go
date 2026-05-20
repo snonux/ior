@@ -62,6 +62,7 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	pair.DurationToPrev = 19
 	pair.Bytes = 512
 	pair.AddressSpaceBytes = 2048
+	pair.RequestedSleepNs = 987_654
 
 	got := New(9, pair)
 	if got.Seq != 9 || got.TimeNs != 1234 {
@@ -81,6 +82,9 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	}
 	if got.AddressSpaceBytes != 2048 {
 		t.Fatalf("AddressSpaceBytes = %d, want 2048", got.AddressSpaceBytes)
+	}
+	if got.RequestedSleepNs != 987_654 {
+		t.Fatalf("RequestedSleepNs = %d, want 987654", got.RequestedSleepNs)
 	}
 	if got.RetVal != -2 || !got.IsError {
 		t.Fatalf("RetVal/IsError = %d/%v, want -2/true", got.RetVal, got.IsError)
@@ -137,6 +141,25 @@ func TestNewCarriesReadyCountForPoll(t *testing.T) {
 	}
 	if got.Bytes != 0 {
 		t.Fatalf("Bytes = %d, want 0 for poll ready-count events", got.Bytes)
+	}
+}
+
+func TestNewCarriesRequestedSleepNs(t *testing.T) {
+	enter := &types.SleepEvent{TraceId: types.SYS_ENTER_NANOSLEEP, Time: 3200, Pid: 31, Tid: 32, RequestedNs: 5_000_000}
+	exit := &types.RetEvent{TraceId: types.SYS_EXIT_NANOSLEEP, Time: 3300, Ret: 0, Pid: 31, Tid: 32}
+	pair := event.NewPair(enter)
+	pair.ExitEv = exit
+	pair.RequestedSleepNs = enter.RequestedNs
+
+	got := New(25, pair)
+	if got.Syscall != "nanosleep" || got.FD != UnknownFD {
+		t.Fatalf("Syscall/FD = %q/%d, want nanosleep/%d", got.Syscall, got.FD, UnknownFD)
+	}
+	if got.RequestedSleepNs != 5_000_000 {
+		t.Fatalf("RequestedSleepNs = %d, want 5000000", got.RequestedSleepNs)
+	}
+	if got.Bytes != 0 {
+		t.Fatalf("Bytes = %d, want 0 for sleep events", got.Bytes)
 	}
 }
 

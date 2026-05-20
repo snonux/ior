@@ -23,6 +23,7 @@ const (
 	KindEpollCtl
 	KindPoll
 	KindMem
+	KindSleep
 )
 
 type RetClassification string
@@ -153,6 +154,10 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindMem}, true
 	case "sys_enter_mremap":
 		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_nanosleep":
+		return ClassificationResult{Kind: KindSleep}, true
+	case "sys_enter_clock_nanosleep":
+		return ClassificationResult{Kind: KindSleep}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true

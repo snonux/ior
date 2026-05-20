@@ -201,20 +201,21 @@ func TestExportRowsToCSVPathTraversal(t *testing.T) {
 func TestWriteStreamCSVAppendsFamilyColumn(t *testing.T) {
 	var buf bytes.Buffer
 	rows := []StreamEvent{{
-		Seq:        7,
-		TimeNs:     100,
-		GapNs:      3,
-		DurationNs: 5,
-		Comm:       "worker",
-		PID:        10,
-		TID:        11,
-		Syscall:    "socketpair",
-		FD:         4,
-		RetVal:     0,
-		Bytes:      0,
-		FileName:   "/tmp/sock",
-		IsError:    false,
-		Family:     "Network",
+		Seq:              7,
+		TimeNs:           100,
+		GapNs:            3,
+		DurationNs:       5,
+		Comm:             "worker",
+		PID:              10,
+		TID:              11,
+		Syscall:          "socketpair",
+		FD:               4,
+		RetVal:           0,
+		Bytes:            0,
+		FileName:         "/tmp/sock",
+		IsError:          false,
+		Family:           "Network",
+		RequestedSleepNs: 0,
 	}}
 	fail := func(err error) (string, error) { return "", err }
 
@@ -226,11 +227,11 @@ func TestWriteStreamCSVAppendsFamilyColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read CSV: %v", err)
 	}
-	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family"}
+	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns"}
 	if !reflect.DeepEqual(records[0], wantHeader) {
 		t.Fatalf("header = %#v, want %#v", records[0], wantHeader)
 	}
-	if records[1][8] != "4" || records[1][12] != "false" || records[1][13] != "Network" {
+	if records[1][8] != "4" || records[1][12] != "false" || records[1][13] != "Network" || records[1][14] != "0" {
 		t.Fatalf("family should be appended without shifting legacy columns, got %#v", records[1])
 	}
 }

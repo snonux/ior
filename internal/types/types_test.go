@@ -323,6 +323,29 @@ func TestPollEventSerialization(t *testing.T) {
 	assertEquals(t, pollEv1.TimeoutNs, pollEv2.TimeoutNs)
 }
 
+func TestSleepEventSerialization(t *testing.T) {
+	sleepEv1 := SleepEvent{
+		EventType:   ENTER_SLEEP_EVENT,
+		TraceId:     SYS_ENTER_CLOCK_NANOSLEEP,
+		Time:        7901,
+		Pid:         44,
+		Tid:         45,
+		RequestedNs: 150_000_000,
+	}
+	bytes, err := sleepEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	sleepEv2 := NewSleepEvent(bytes)
+
+	assertEquals(t, sleepEv1.EventType, sleepEv2.EventType)
+	assertEquals(t, sleepEv1.TraceId, sleepEv2.TraceId)
+	assertEquals(t, sleepEv1.Time, sleepEv2.Time)
+	assertEquals(t, sleepEv1.Pid, sleepEv2.Pid)
+	assertEquals(t, sleepEv1.Tid, sleepEv2.Tid)
+	assertEquals(t, sleepEv1.RequestedNs, sleepEv2.RequestedNs)
+}
+
 func TestEqualsDifferentTypes(t *testing.T) {
 	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
 	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}

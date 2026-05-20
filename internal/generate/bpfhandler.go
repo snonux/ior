@@ -97,6 +97,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraPoll(f.Name)
 	case KindMem:
 		return generateExtraMem(f.Name)
+	case KindSleep:
+		return generateExtraSleep(f.Name)
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindPathname:
@@ -241,6 +243,17 @@ func generateExtraMem(name string) string {
 	default:
 		return "    ev->addr = 0;\n    ev->length = 0;\n    ev->length2 = 0;\n    ev->flags = 0;\n"
 	}
+}
+
+func generateExtraSleep(name string) string {
+	ptrExpr := "0"
+	switch name {
+	case "sys_enter_nanosleep":
+		ptrExpr = "ctx->args[0]"
+	case "sys_enter_clock_nanosleep":
+		ptrExpr = "ctx->args[2]"
+	}
+	return "    ev->requested_ns = -1;\n    if (" + ptrExpr + " != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)" + ptrExpr + ") == 0) {\n            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

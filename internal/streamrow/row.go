@@ -25,9 +25,11 @@ type Row struct {
 	Bytes      uint64
 	// AddressSpaceBytes tracks memory-region extent for memory-management syscalls.
 	AddressSpaceBytes uint64
-	RetVal            int64
-	IsError           bool
-	FD                int32
+	// RequestedSleepNs stores requested sleep duration metadata for sleep syscalls.
+	RequestedSleepNs int64
+	RetVal           int64
+	IsError          bool
+	FD               int32
 }
 
 func (r Row) SyscallValue() string {
@@ -113,6 +115,7 @@ func New(seq uint64, pair *event.Pair) Row {
 		GapNs:             pair.DurationToPrev,
 		Bytes:             pair.Bytes,
 		AddressSpaceBytes: pair.AddressSpaceBytes,
+		RequestedSleepNs:  pair.RequestedSleepNs,
 		FD:                UnknownFD,
 	}
 	if fd, ok := pair.FileDescriptor(); ok {

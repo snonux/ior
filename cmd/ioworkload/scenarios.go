@@ -35,6 +35,7 @@ var scenarios = map[string]func() error{
 	"eventfd-basic":                 eventfdBasic,
 	"eventfd2-basic":                eventfd2Basic,
 	"polling-epoll":                 pollingEpoll,
+	"sleep-syscalls":                sleepSyscalls,
 	"family-mixed":                  familyMixed,
 	"close-basic":                   closeBasic,
 	"close-range":                   closeRange,

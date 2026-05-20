@@ -102,6 +102,8 @@ const ENTER_POLL_EVENT = 31
 const EXIT_POLL_EVENT = 32
 const ENTER_MEM_EVENT = 33
 const EXIT_MEM_EVENT = 34
+const ENTER_SLEEP_EVENT = 35
+const EXIT_SLEEP_EVENT = 36
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -2020,4 +2022,72 @@ func (m *MemEvent) Bytes() ([]byte, error) {
 
 func (m *MemEvent) Recycle() {
 	poolOfMemEvents.Put(m)
+}
+
+type SleepEvent struct {
+	EventType   EventType
+	TraceId     TraceId
+	Time        uint64
+	Pid         uint32
+	Tid         uint32
+	RequestedNs int64
+}
+
+func (s SleepEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v RequestedNs:%v", s.EventType, s.TraceId, s.Time, s.Pid, s.Tid, s.RequestedNs)
+}
+
+func (s SleepEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*SleepEvent)
+	if !ok {
+		return false
+	}
+	return s.EventType == otherConcrete.EventType && s.TraceId == otherConcrete.TraceId && s.Time == otherConcrete.Time && s.Pid == otherConcrete.Pid && s.Tid == otherConcrete.Tid && s.RequestedNs == otherConcrete.RequestedNs
+}
+
+func (s *SleepEvent) GetEventType() EventType {
+	return s.EventType
+}
+
+func (s *SleepEvent) GetTraceId() TraceId {
+	return s.TraceId
+}
+
+func (s *SleepEvent) GetPid() uint32 {
+	return s.Pid
+}
+
+func (s *SleepEvent) GetTid() uint32 {
+	return s.Tid
+}
+
+func (s *SleepEvent) GetTime() uint64 {
+	return s.Time
+}
+
+var poolOfSleepEvents = sync.Pool{
+	New: func() any { return &SleepEvent{} },
+}
+
+func NewSleepEvent(raw []byte) *SleepEvent {
+	s := poolOfSleepEvents.Get().(*SleepEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, s); err != nil {
+		*s = SleepEvent{}
+		poolOfSleepEvents.Put(s)
+		return nil
+	}
+	return s
+}
+
+func (s *SleepEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, s)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (s *SleepEvent) Recycle() {
+	poolOfSleepEvents.Put(s)
 }
