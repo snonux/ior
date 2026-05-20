@@ -31,10 +31,10 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 	eventTypeConst := eventTypeConstant(tp.Classification.Kind, isEnter)
 	extra := generateExtra(tp, isEnter)
 
-	return renderHandler(f.Name, ctxStruct, eventStruct, comment, eventTypeConst, extra)
+	return renderHandler(f.Name, ctxStruct, eventStruct, comment, eventTypeConst, extra, isEnter)
 }
 
-func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra string) string {
+func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra string, isEnter bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "/// %s is a struct %s\n", name, comment)
 	fmt.Fprintf(&b, "SEC(\"tracepoint/syscalls/%s\")\n", name)
@@ -42,6 +42,14 @@ func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra 
 	b.WriteString("    __u32 pid, tid;\n")
 	b.WriteString("    if (filter(&pid, &tid))\n")
 	b.WriteString("        return 0;\n")
+	b.WriteString("\n")
+	if isEnter {
+		fmt.Fprintf(&b, "    if (!ior_on_syscall_enter(tid, %s))\n", strings.ToUpper(name))
+		b.WriteString("        return 0;\n")
+	} else {
+		fmt.Fprintf(&b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret))\n", strings.ToUpper(name))
+		b.WriteString("        return 0;\n")
+	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "    struct %s *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct %s), 0);\n", eventStruct, eventStruct)
 	b.WriteString("    if (!ev)\n")

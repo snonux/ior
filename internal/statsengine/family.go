@@ -59,6 +59,30 @@ func (a *familyAccumulator) Add(pair *event.Pair) {
 	}
 }
 
+func (a *familyAccumulator) AddAggregate(row SyscallAggregate) {
+	if a == nil || row.TraceID == 0 || row.Count == 0 {
+		return
+	}
+
+	family := row.TraceID.Family()
+	stats := a.byFamily[family]
+	if stats == nil {
+		stats = &familyStats{family: family}
+		a.byFamily[family] = stats
+	}
+
+	prevCount := stats.count
+	stats.count += row.Count
+	stats.errorCount += row.Errors
+	stats.totalLatency += row.TotalLatencyNs
+	if prevCount == 0 || row.MinLatencyNs < stats.minLatency {
+		stats.minLatency = row.MinLatencyNs
+	}
+	if row.MaxLatencyNs > stats.maxLatency {
+		stats.maxLatency = row.MaxLatencyNs
+	}
+}
+
 func (a *familyAccumulator) snapshotInputs() []familySnapshotInput {
 	if a == nil {
 		return nil

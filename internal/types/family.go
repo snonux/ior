@@ -1,5 +1,7 @@
 package types
 
+import "strings"
+
 // AllSyscallFamilies returns the dashboard display order for broad syscall families.
 func AllSyscallFamilies() []SyscallFamily {
 	return []SyscallFamily{
@@ -36,4 +38,15 @@ func SyscallFamilyRank(family SyscallFamily) int {
 		}
 	}
 	return len(AllSyscallFamilies())
+}
+
+// ParseSyscallFamily parses a user-supplied family name.
+func ParseSyscallFamily(raw string) (SyscallFamily, bool) {
+	needle := strings.TrimSpace(strings.ToLower(raw))
+	for _, family := range AllSyscallFamilies() {
+		if strings.ToLower(string(family)) == needle {
+			return family, true
+		}
+	}
+	return "", false
 }

@@ -12,6 +12,7 @@ import (
 	appconfig "ior/internal/config"
 	"ior/internal/globalfilter"
 	"ior/internal/tracepoints"
+	"ior/internal/types"
 )
 
 // Config captures runtime configuration parsed from CLI flags.
@@ -72,6 +73,13 @@ type Config struct {
 	// ResetTimer is the interval at which aggregate dashboard state (flamegraph
 	// trie and stats engine) is automatically cleared; 0 disables auto-reset.
 	ResetTimer time.Duration
+	// SyscallFamilySamplingRates controls in-kernel syscall sampling by family.
+	// Rate semantics: 0 aggregate-only, 1 emit every event, N>1 emit 1-in-N events.
+	SyscallFamilySamplingRates map[types.SyscallFamily]uint32
+	// SyscallSamplingRates controls in-kernel syscall sampling by syscall name.
+	// Keys use syscall names (for example "futex"), not tracepoint names.
+	// Rate semantics: 0 aggregate-only, 1 emit every event, N>1 emit 1-in-N events.
+	SyscallSamplingRates map[string]uint32
 
 	// ShowVersion prints the banner plus version and exits without running.
 	ShowVersion bool
@@ -86,16 +94,18 @@ const DefaultResetTimer = 30 * time.Second
 // NewFlags returns a configuration instance initialized with project defaults.
 func NewFlags() Config {
 	return Config{
-		PidFilter:              -1,
-		TidFilter:              -1,
-		EventMapSize:           appconfig.DefaultEventMapSize,
-		Duration:               900,
-		LiveInterval:           200 * time.Millisecond,
-		TUIFastRefreshInterval: 250 * time.Millisecond,
-		TUIExportEnable:        true,
-		CollapsedFields:        []string{"comm", "tracepoint", "path"},
-		CountField:             "count",
-		ResetTimer:             DefaultResetTimer,
+		PidFilter:                  -1,
+		TidFilter:                  -1,
+		EventMapSize:               appconfig.DefaultEventMapSize,
+		Duration:                   900,
+		LiveInterval:               200 * time.Millisecond,
+		TUIFastRefreshInterval:     250 * time.Millisecond,
+		TUIExportEnable:            true,
+		CollapsedFields:            []string{"comm", "tracepoint", "path"},
+		CountField:                 "count",
+		ResetTimer:                 DefaultResetTimer,
+		SyscallFamilySamplingRates: make(map[types.SyscallFamily]uint32),
+		SyscallSamplingRates:       make(map[string]uint32),
 	}
 }
 
@@ -121,6 +131,8 @@ func (f Config) Clone() Config {
 	out.TracepointSelector = f.TracepointSelector.Clone()
 	out.CollapsedFields = slices.Clone(f.CollapsedFields)
 	out.GlobalFilter = f.GlobalFilter.Clone()
+	out.SyscallFamilySamplingRates = cloneFamilySamplingRates(f.SyscallFamilySamplingRates)
+	out.SyscallSamplingRates = cloneSyscallSamplingRates(f.SyscallSamplingRates)
 	return out
 }
 
@@ -136,12 +148,15 @@ func Parse() (Config, error) {
 // fresh FlagSet and custom argument slices without touching global state.
 func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	cfg := NewFlags()
-	tpsAttach, tpsExclude, fields := registerFlags(fs, &cfg)
+	tpsAttach, tpsExclude, fields, familySampling, syscallSampling := registerFlags(fs, &cfg)
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 	if err := resolvePostParseFields(&cfg, tpsAttach, tpsExclude, fields); err != nil {
+		return Config{}, err
+	}
+	if err := resolveSamplingRates(&cfg, familySampling, syscallSampling); err != nil {
 		return Config{}, err
 	}
 	if err := validateConfig(cfg); err != nil {
@@ -152,7 +167,7 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 
 // registerFlags binds all CLI flags to cfg and returns the string pointers for
 // fields that require post-parse resolution (tracepoint regexes, collapse fields).
-func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields *string) {
+func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields, familySampling, syscallSampling *string) {
 	validFields := collapse.ValidFields()
 	validCounts := collapse.ValidCountFields()
 
@@ -180,12 +195,16 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI CSV snapshot export files (separate from Parquet recording)")
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
+	familySampling = fs.String("syscall-sampling-families", "",
+		"Per-family sampling rates, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N)")
+	syscallSampling = fs.String("syscall-sampling-syscalls", "",
+		"Per-syscall sampling rates, for example \"futex=0,clock_gettime=200\" (overrides family rates)")
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
 	fields = fs.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	fs.StringVar(&cfg.CountField, "count", cfg.CountField,
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCounts))
-	return tpsAttach, tpsExclude, fields
+	return tpsAttach, tpsExclude, fields, familySampling, syscallSampling
 }
 
 // resolvePostParseFields compiles the tracepoint selector and collapse field
@@ -217,6 +236,20 @@ func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string) 
 	if !collapse.IsValidCountField(cfg.CountField) {
 		return fmt.Errorf("invalid count field: %s", cfg.CountField)
 	}
+	return nil
+}
+
+func resolveSamplingRates(cfg *Config, familySampling, syscallSampling *string) error {
+	familyRates, err := parseFamilySamplingRates(*familySampling)
+	if err != nil {
+		return err
+	}
+	syscallRates, err := parseSyscallSamplingRates(*syscallSampling)
+	if err != nil {
+		return err
+	}
+	cfg.SyscallFamilySamplingRates = familyRates
+	cfg.SyscallSamplingRates = syscallRates
 	return nil
 }
 

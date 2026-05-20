@@ -242,6 +242,9 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 // live-filter setter so the TUI can swap filters without restarting BPF probes.
 func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRuntime) func(*eventLoop) {
 	var recorderWarningOnce sync.Once
+	type aggregateSink interface {
+		IngestSyscallAggregates([]statsengine.SyscallAggregate)
+	}
 	return func(el *eventLoop) {
 		// Seed the event loop's filter from config so subsequent reads via
 		// el.Filter() see the same filter the trace was started with.
@@ -270,6 +273,9 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 		}
 		el.warningCb = func(message string) {
 			rt.streamBuf.Push(streamrow.NewWarning(rt.streamSeq.Next(), message))
+		}
+		if sink, ok := rt.snapSource.(aggregateSink); ok {
+			el.aggregateSink = sink
 		}
 		if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
 			bindings.SetLiveFilterSetter(el.SetFilter)
@@ -566,6 +572,15 @@ func setupTraceInfra(
 		bpfModule.Close()
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
+	aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
+	if err != nil {
+		cancel()
+		stopSignals()
+		rb.Stop()
+		bpfModule.Close()
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+	el.aggregateSrc = aggregateConsumer
 
 	teardown = func() {
 		// Stop the ring-buffer polling goroutine before the module is closed.
