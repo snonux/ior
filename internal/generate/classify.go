@@ -8,6 +8,7 @@ const (
 	KindNone TracepointKind = iota
 	KindFd
 	KindOpen
+	KindMqOpen
 	KindPathname
 	KindName
 	KindRet
@@ -38,7 +39,7 @@ const (
 
 type ClassificationResult struct {
 	Kind          TracepointKind
-	PathnameField string // for KindPathname: "pathname", "path", "filename", or "name"
+	PathnameField string // for KindPathname: e.g. "pathname", "path", "filename", "name", "u_name"
 }
 
 // ClassifyFormat determines the tracepoint kind for a parsed format section.
@@ -171,6 +172,14 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindSleep}, true
 	case "sys_enter_clock_nanosleep":
 		return ClassificationResult{Kind: KindSleep}, true
+	case "sys_enter_mq_timedsend":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_mq_timedreceive":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_mq_notify":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_mq_getsetattr":
+		return ClassificationResult{Kind: KindFd}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true
@@ -225,6 +234,14 @@ func classifyNameAndField(name, fieldType, fieldName string) (ClassificationResu
 	case "sys_enter_swapoff":
 		if isCStringPtrType(fieldType) && fieldName == "specialfile" {
 			return ClassificationResult{Kind: KindPathname, PathnameField: "specialfile"}, true
+		}
+	case "sys_enter_mq_open":
+		if isCStringPtrType(fieldType) && fieldName == "u_name" {
+			return ClassificationResult{Kind: KindMqOpen}, true
+		}
+	case "sys_enter_mq_unlink":
+		if isCStringPtrType(fieldType) && fieldName == "u_name" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "u_name"}, true
 		}
 	}
 
@@ -292,6 +309,7 @@ var retClassifications = map[string]RetClassification{
 	"recvmsg":          ReadClassified,
 	"recvfrom":         ReadClassified,
 	"syslog":           ReadClassified,
+	"mq_timedreceive":  ReadClassified,
 
 	"copy_file_range": TransferClassified,
 	"sendfile64":      TransferClassified,
@@ -307,4 +325,5 @@ var retClassifications = map[string]RetClassification{
 	"sendto":            WriteClassified,
 	"write":             WriteClassified,
 	"writev":            WriteClassified,
+	"mq_timedsend":      WriteClassified,
 }

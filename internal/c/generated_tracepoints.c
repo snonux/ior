@@ -2444,7 +2444,7 @@ int handle_sys_exit_keyctl(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_mq_open is a struct null_event
+/// sys_enter_mq_open is a struct open_event
 SEC("tracepoint/syscalls/sys_enter_mq_open")
 int handle_sys_enter_mq_open(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2454,15 +2454,19 @@ int handle_sys_enter_mq_open(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_OPEN))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_OPEN_EVENT;
     ev->trace_id = SYS_ENTER_MQ_OPEN;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
+    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
+    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+    ev->flags = ctx->args[1];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2494,7 +2498,7 @@ int handle_sys_exit_mq_open(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_mq_unlink is a struct null_event
+/// sys_enter_mq_unlink is a struct path_event
 SEC("tracepoint/syscalls/sys_enter_mq_unlink")
 int handle_sys_enter_mq_unlink(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2504,15 +2508,17 @@ int handle_sys_enter_mq_unlink(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_UNLINK))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_MQ_UNLINK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2544,7 +2550,7 @@ int handle_sys_exit_mq_unlink(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_mq_timedsend is a struct null_event
+/// sys_enter_mq_timedsend is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_mq_timedsend")
 int handle_sys_enter_mq_timedsend(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2554,21 +2560,22 @@ int handle_sys_enter_mq_timedsend(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_TIMEDSEND))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_MQ_TIMEDSEND;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_mq_timedsend is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_mq_timedsend is a struct ret_event (WRITE_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_mq_timedsend")
 int handle_sys_exit_mq_timedsend(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -2588,13 +2595,13 @@ int handle_sys_exit_mq_timedsend(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
+    ev->ret_type = WRITE_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_enter_mq_timedreceive is a struct null_event
+/// sys_enter_mq_timedreceive is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_mq_timedreceive")
 int handle_sys_enter_mq_timedreceive(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2604,21 +2611,22 @@ int handle_sys_enter_mq_timedreceive(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_TIMEDRECEIVE))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_MQ_TIMEDRECEIVE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_mq_timedreceive is a struct ret_event (UNCLASSIFIED)
+/// sys_exit_mq_timedreceive is a struct ret_event (READ_CLASSIFIED)
 SEC("tracepoint/syscalls/sys_exit_mq_timedreceive")
 int handle_sys_exit_mq_timedreceive(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -2638,13 +2646,13 @@ int handle_sys_exit_mq_timedreceive(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
+    ev->ret_type = READ_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_enter_mq_notify is a struct null_event
+/// sys_enter_mq_notify is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_mq_notify")
 int handle_sys_enter_mq_notify(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2654,15 +2662,16 @@ int handle_sys_enter_mq_notify(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_NOTIFY))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_MQ_NOTIFY;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2694,7 +2703,7 @@ int handle_sys_exit_mq_notify(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_mq_getsetattr is a struct null_event
+/// sys_enter_mq_getsetattr is a struct fd_event
 SEC("tracepoint/syscalls/sys_enter_mq_getsetattr")
 int handle_sys_enter_mq_getsetattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2704,15 +2713,16 @@ int handle_sys_enter_mq_getsetattr(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_GETSETATTR))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_MQ_GETSETATTR;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

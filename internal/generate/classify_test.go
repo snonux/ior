@@ -453,6 +453,59 @@ func TestClassifyClockNanosleep(t *testing.T) {
 	}
 }
 
+func TestClassifyMqOpen(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_mq_open",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "u_name"},
+			{Type: "int", Name: "oflag"},
+		},
+	})
+	if r.Kind != KindMqOpen {
+		t.Errorf("mq_open: got kind %d, want KindMqOpen", r.Kind)
+	}
+}
+
+func TestClassifyMqUnlink(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_mq_unlink",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "u_name"},
+		},
+	})
+	if r.Kind != KindPathname {
+		t.Errorf("mq_unlink: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "u_name" {
+		t.Errorf("mq_unlink: PathnameField = %q, want u_name", r.PathnameField)
+	}
+}
+
+func TestClassifyMqFdSyscallsByName(t *testing.T) {
+	tests := []string{
+		"mq_timedsend",
+		"mq_timedreceive",
+		"mq_notify",
+		"mq_getsetattr",
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: "sys_enter_" + name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "mqd_t", Name: "mqdes"},
+				},
+			})
+			if r.Kind != KindFd {
+				t.Errorf("%s: got kind %d, want KindFd", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
@@ -746,6 +799,36 @@ func TestBatchMessageSyscallPairsDeferByteClassification(t *testing.T) {
 	}
 }
 
+func TestClassifyMqSyscallPairsAcceptedAndClassified(t *testing.T) {
+	tests := []struct {
+		name               string
+		enterKindText      string
+		exitClassification string
+	}{
+		{"mq_open", "struct open_event", "UNCLASSIFIED"},
+		{"mq_unlink", "struct path_event", "UNCLASSIFIED"},
+		{"mq_timedsend", "struct fd_event", "WRITE_CLASSIFIED"},
+		{"mq_timedreceive", "struct fd_event", "READ_CLASSIFIED"},
+		{"mq_notify", "struct fd_event", "UNCLASSIFIED"},
+		{"mq_getsetattr", "struct fd_event", "UNCLASSIFIED"},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := GenerateTracepointsC(mqFormats(tt.name, 9200+i*2))
+			if strings.Contains(output, "Ignoring") || strings.Contains(output, "Skipping") {
+				t.Fatalf("syscall %s was not accepted:\n%s", tt.name, output)
+			}
+			if !strings.Contains(output, "/// sys_enter_"+tt.name+" is a "+tt.enterKindText) {
+				t.Fatalf("sys_enter_%s did not use %s:\n%s", tt.name, tt.enterKindText, output)
+			}
+			if !strings.Contains(output, "/// sys_exit_"+tt.name+" is a struct ret_event ("+tt.exitClassification+")") {
+				t.Fatalf("sys_exit_%s did not use %s:\n%s", tt.name, tt.exitClassification, output)
+			}
+		})
+	}
+}
+
 func phaseAFormats(name string, enterID int) []Format {
 	enterFields := []Field{
 		{Type: "long", Name: "__syscall_nr"},
@@ -753,6 +836,42 @@ func phaseAFormats(name string, enterID int) []Format {
 	if name == "sendto" || name == "recvfrom" || name == "sendmsg" || name == "recvmsg" ||
 		name == "sendmmsg" || name == "recvmmsg" {
 		enterFields = append(enterFields, Field{Type: "int", Name: "fd"})
+	}
+
+	return []Format{
+		{
+			Name:           "sys_enter_" + name,
+			ID:             enterID,
+			Family:         ClassifySyscallFamily("sys_enter_" + name),
+			ExternalFields: enterFields,
+		},
+		{
+			Name:   "sys_exit_" + name,
+			ID:     enterID - 1,
+			Family: ClassifySyscallFamily("sys_exit_" + name),
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "long", Name: "ret"},
+			},
+		},
+	}
+}
+
+func mqFormats(name string, enterID int) []Format {
+	enterFields := []Field{
+		{Type: "long", Name: "__syscall_nr"},
+	}
+	switch name {
+	case "mq_open":
+		enterFields = append(enterFields,
+			Field{Type: "const char *", Name: "u_name"},
+			Field{Type: "int", Name: "oflag"},
+			Field{Type: "umode_t", Name: "mode"},
+		)
+	case "mq_unlink":
+		enterFields = append(enterFields, Field{Type: "const char *", Name: "u_name"})
+	default:
+		enterFields = append(enterFields, Field{Type: "mqd_t", Name: "mqdes"})
 	}
 
 	return []Format{

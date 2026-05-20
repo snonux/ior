@@ -7,7 +7,7 @@ func TestClassifyRetRead(t *testing.T) {
 		"fgetxattr", "flistxattr", "getdents", "getdents64", "getxattr",
 		"lgetxattr", "listxattr", "llistxattr", "pread64", "preadv",
 		"preadv2", "process_vm_readv", "read", "readlink", "readlinkat",
-		"readv", "recvmsg", "recvfrom", "syslog",
+		"readv", "recvmsg", "recvfrom", "syslog", "mq_timedreceive",
 	}
 	for _, name := range reads {
 		if got := ClassifyRet("sys_exit_" + name); got != ReadClassified {
@@ -19,7 +19,7 @@ func TestClassifyRetRead(t *testing.T) {
 func TestClassifyRetWrite(t *testing.T) {
 	writes := []string{
 		"process_vm_writev", "pwrite64", "pwritev", "pwritev2",
-		"sendmsg", "sendto", "write", "writev",
+		"sendmsg", "sendto", "write", "writev", "mq_timedsend",
 	}
 	for _, name := range writes {
 		if got := ClassifyRet("sys_exit_" + name); got != WriteClassified {

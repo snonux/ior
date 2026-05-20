@@ -103,6 +103,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraSleep(f.Name)
 	case KindOpen:
 		return generateExtraOpen(f)
+	case KindMqOpen:
+		return generateExtraMqOpen(f)
 	case KindPathname:
 		return generateExtraPathname(tp, f)
 	case KindName:
@@ -131,8 +133,16 @@ func generateExtraFd(f *Format) string {
 
 // generateExtraOpen returns the filename/comm/flags capture lines for open-family events.
 func generateExtraOpen(f *Format) string {
-	filenameIdx := f.FieldNumber("filename")
-	flagsIdx := f.FieldNumber("flags")
+	return generateExtraOpenWithFields(f, "filename", "flags")
+}
+
+func generateExtraMqOpen(f *Format) string {
+	return generateExtraOpenWithFields(f, "u_name", "oflag")
+}
+
+func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) string {
+	filenameIdx := f.FieldNumber(pathnameField)
+	flagsIdx := f.FieldNumber(flagsField)
 	var b strings.Builder
 	b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
 	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]);\n", filenameIdx)

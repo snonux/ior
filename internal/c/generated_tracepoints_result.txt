@@ -175,12 +175,12 @@ sys_enter_mount_setattr is a struct path_event
 sys_enter_move_mount is a struct two_fd_event
 sys_enter_move_pages is a struct null_event
 sys_enter_mprotect is a struct null_event
-sys_enter_mq_getsetattr is a struct null_event
-sys_enter_mq_notify is a struct null_event
-sys_enter_mq_open is a struct null_event
-sys_enter_mq_timedreceive is a struct null_event
-sys_enter_mq_timedsend is a struct null_event
-sys_enter_mq_unlink is a struct null_event
+sys_enter_mq_getsetattr is a struct fd_event
+sys_enter_mq_notify is a struct fd_event
+sys_enter_mq_open is a struct open_event
+sys_enter_mq_timedreceive is a struct fd_event
+sys_enter_mq_timedsend is a struct fd_event
+sys_enter_mq_unlink is a struct path_event
 sys_enter_mremap is a struct mem_event
 sys_enter_mseal is a struct null_event
 sys_enter_msgctl is a struct null_event
@@ -545,8 +545,8 @@ sys_exit_mprotect is a struct ret_event (UNCLASSIFIED)
 sys_exit_mq_getsetattr is a struct ret_event (UNCLASSIFIED)
 sys_exit_mq_notify is a struct ret_event (UNCLASSIFIED)
 sys_exit_mq_open is a struct ret_event (UNCLASSIFIED)
-sys_exit_mq_timedreceive is a struct ret_event (UNCLASSIFIED)
-sys_exit_mq_timedsend is a struct ret_event (UNCLASSIFIED)
+sys_exit_mq_timedreceive is a struct ret_event (READ_CLASSIFIED)
+sys_exit_mq_timedsend is a struct ret_event (WRITE_CLASSIFIED)
 sys_exit_mq_unlink is a struct ret_event (UNCLASSIFIED)
 sys_exit_mremap is a struct ret_event (UNCLASSIFIED)
 sys_exit_mseal is a struct ret_event (UNCLASSIFIED)
