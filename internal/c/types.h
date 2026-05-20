@@ -35,6 +35,8 @@
 #define EXIT_EPOLL_CTL_EVENT 30
 #define ENTER_POLL_EVENT 31
 #define EXIT_POLL_EVENT 32
+#define ENTER_MEM_EVENT 33
+#define EXIT_MEM_EVENT 34
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -206,4 +208,16 @@ struct poll_event {
     __u32 tid;
     __s32 nfds;
     __s64 timeout_ns;
+};
+
+struct mem_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u64 addr;
+    __u64 length;
+    __u64 length2;
+    __u64 flags;
 };

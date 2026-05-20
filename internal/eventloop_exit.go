@@ -40,6 +40,8 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		return e.handleEpollCtlExit(ep, ev)
 	case *types.PollEvent:
 		return e.handlePollExit(ep, ev)
+	case *types.MemEvent:
+		return e.handleMemExit(ep, ev)
 	case *types.NullEvent:
 		return e.handleNullExit(ep, ev)
 	case *types.FcntlEvent:
@@ -406,6 +408,15 @@ func (e *eventLoop) handlePollExit(ep *event.Pair, pollEv *types.PollEvent) bool
 	return true
 }
 
+func (e *eventLoop) handleMemExit(ep *event.Pair, memEv *types.MemEvent) bool {
+	ep.Comm = e.comm(memEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
 func pipeDescriptorName(flags, fd0, fd1 int32) string {
 	return fmt.Sprintf("pipe:%d:%d:%d", flags, fd0, fd1)
 }
@@ -518,6 +529,21 @@ func applyRetBytes(ep *event.Pair) {
 	ep.Bytes = bytesFromRet(retEv)
 }
 
+func applyAddressSpaceBytes(ep *event.Pair) {
+	if ep == nil {
+		return
+	}
+	memEv, ok := ep.EnterEv.(*types.MemEvent)
+	if !ok {
+		return
+	}
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok || retEv.Ret < 0 {
+		return
+	}
+	ep.AddressSpaceBytes = addressSpaceBytesFromMem(memEv)
+}
+
 // dropMalformedRawEvent records a warning when a raw BPF event cannot be
 // decoded, keeping the error visible without crashing the event loop.
 func (e *eventLoop) dropMalformedRawEvent(evType types.EventType, raw []byte) {
@@ -533,6 +559,23 @@ func bytesFromRet(retEv *types.RetEvent) uint64 {
 	switch retEv.RetType {
 	case types.READ_CLASSIFIED, types.WRITE_CLASSIFIED, types.TRANSFER_CLASSIFIED:
 		return uint64(retEv.Ret)
+	default:
+		return 0
+	}
+}
+
+func addressSpaceBytesFromMem(memEv *types.MemEvent) uint64 {
+	if memEv == nil {
+		return 0
+	}
+	switch memEv.GetTraceId() {
+	case types.SYS_ENTER_MUNMAP:
+		return memEv.Length
+	case types.SYS_ENTER_MREMAP:
+		if memEv.Length > memEv.Length2 {
+			return memEv.Length
+		}
+		return memEv.Length2
 	default:
 		return 0
 	}

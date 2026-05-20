@@ -168,6 +168,18 @@ func TestGenerateMmapHandlerUsesFdArgumentIndex(t *testing.T) {
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[4];")
 }
 
+func TestGenerateMemHandler(t *testing.T) {
+	output := generateFromPair(t, FormatMremap, FormatExitMremap)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mremap")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = (__u64)ctx->args[2];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[3];")
+}
+
 func TestGenerateDup3Handler(t *testing.T) {
 	output := generateFromPair(t, FormatDup3, FormatExitDup3)
 
@@ -412,6 +424,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
 		{KindEpollCtl, "ENTER_EPOLL_CTL_EVENT", "EXIT_EPOLL_CTL_EVENT"},
 		{KindPoll, "ENTER_POLL_EVENT", "EXIT_POLL_EVENT"},
+		{KindMem, "ENTER_MEM_EVENT", "EXIT_MEM_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -445,6 +458,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindEventfd, "eventfd_event"},
 		{KindEpollCtl, "epoll_ctl_event"},
 		{KindPoll, "poll_event"},
+		{KindMem, "mem_event"},
 	}
 
 	for _, tt := range tests {
@@ -463,7 +477,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindPoll}
+	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindPoll, KindMem}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

@@ -47,13 +47,14 @@ type Engine struct {
 	startedAt time.Time
 	topN      int
 
-	totalSyscalls   uint64
-	totalErrors     uint64
-	totalBytes      uint64
-	totalReadBytes  uint64
-	totalWriteBytes uint64
-	totalLatency    uint64
-	totalGap        uint64
+	totalSyscalls          uint64
+	totalErrors            uint64
+	totalBytes             uint64
+	totalAddressSpaceBytes uint64
+	totalReadBytes         uint64
+	totalWriteBytes        uint64
+	totalLatency           uint64
+	totalGap               uint64
 
 	syscalls         *syscallAccumulator
 	families         *familyAccumulator
@@ -70,13 +71,14 @@ type snapshotInputs struct {
 	now       time.Time
 	startedAt time.Time
 
-	totalSyscalls   uint64
-	totalErrors     uint64
-	totalBytes      uint64
-	totalReadBytes  uint64
-	totalWriteBytes uint64
-	totalLatency    uint64
-	totalGap        uint64
+	totalSyscalls          uint64
+	totalErrors            uint64
+	totalBytes             uint64
+	totalAddressSpaceBytes uint64
+	totalReadBytes         uint64
+	totalWriteBytes        uint64
+	totalLatency           uint64
+	totalGap               uint64
 
 	latencySeries    []float64
 	gapSeries        []float64
@@ -130,6 +132,7 @@ func (e *Engine) Reset() {
 	e.totalSyscalls = 0
 	e.totalErrors = 0
 	e.totalBytes = 0
+	e.totalAddressSpaceBytes = 0
 	e.totalReadBytes = 0
 	e.totalWriteBytes = 0
 	e.totalLatency = 0
@@ -157,6 +160,7 @@ func (e *Engine) Ingest(pair *event.Pair) {
 	now := e.now()
 	e.totalSyscalls++
 	e.totalBytes += pair.Bytes
+	e.totalAddressSpaceBytes += pair.AddressSpaceBytes
 	e.totalLatency += pair.Duration
 	e.totalGap += pair.DurationToPrev
 
@@ -209,24 +213,25 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 	defer e.mu.Unlock()
 
 	return snapshotInputs{
-		now:              e.now(),
-		startedAt:        e.startedAt,
-		totalSyscalls:    e.totalSyscalls,
-		totalErrors:      e.totalErrors,
-		totalBytes:       e.totalBytes,
-		totalReadBytes:   e.totalReadBytes,
-		totalWriteBytes:  e.totalWriteBytes,
-		totalLatency:     e.totalLatency,
-		totalGap:         e.totalGap,
-		latencySeries:    e.latencySeries.Values(),
-		gapSeries:        e.gapSeries.Values(),
-		throughputSeries: e.throughputSeries.Values(),
-		syscalls:         e.syscalls.snapshotInputs(),
-		families:         e.families.snapshotInputs(),
-		files:            e.files.snapshotInputs(),
-		processes:        e.processes.snapshotInputs(),
-		latencyHist:      e.latencyHist.snapshotInputs(),
-		gapHist:          e.gapHist.snapshotInputs(),
+		now:                    e.now(),
+		startedAt:              e.startedAt,
+		totalSyscalls:          e.totalSyscalls,
+		totalErrors:            e.totalErrors,
+		totalBytes:             e.totalBytes,
+		totalAddressSpaceBytes: e.totalAddressSpaceBytes,
+		totalReadBytes:         e.totalReadBytes,
+		totalWriteBytes:        e.totalWriteBytes,
+		totalLatency:           e.totalLatency,
+		totalGap:               e.totalGap,
+		latencySeries:          e.latencySeries.Values(),
+		gapSeries:              e.gapSeries.Values(),
+		throughputSeries:       e.throughputSeries.Values(),
+		syscalls:               e.syscalls.snapshotInputs(),
+		families:               e.families.snapshotInputs(),
+		files:                  e.files.snapshotInputs(),
+		processes:              e.processes.snapshotInputs(),
+		latencyHist:            e.latencyHist.snapshotInputs(),
+		gapHist:                e.gapHist.snapshotInputs(),
 	}
 }
 
@@ -287,8 +292,10 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 	snap.TotalSyscalls = in.totalSyscalls
 	snap.TotalErrors = in.totalErrors
 	snap.TotalBytes = in.totalBytes
+	snap.TotalAddressSpaceBytes = in.totalAddressSpaceBytes
 	snap.SyscallRatePerSec = safeRate(in.totalSyscalls, rateDiv)
 	snap.ErrorRatePerSec = safeRate(in.totalErrors, rateDiv)
+	snap.AddressSpaceBytesPerSec = safeRate(in.totalAddressSpaceBytes, rateDiv)
 	snap.ReadBytesPerSec = safeRate(in.totalReadBytes, rateDiv)
 	snap.WriteBytesPerSec = safeRate(in.totalWriteBytes, rateDiv)
 	snap.LatencyMeanNs = safeMean(in.totalLatency, in.totalSyscalls)

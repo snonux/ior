@@ -62,4 +62,7 @@ var (
 
 	// *types.PollEvent carries poll/select argument metadata (nfds and timeout).
 	_ Event = (*types.PollEvent)(nil)
+
+	// *types.MemEvent carries memory-operation metadata (addr/length/flags).
+	_ Event = (*types.MemEvent)(nil)
 )

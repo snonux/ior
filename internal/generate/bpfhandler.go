@@ -87,6 +87,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraEpollCtl()
 	case KindPoll:
 		return generateExtraPoll(f.Name)
+	case KindMem:
+		return generateExtraMem(f.Name)
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindPathname:
@@ -219,6 +221,17 @@ func generateExtraPoll(name string) string {
 		return "    ev->nfds = (__s32)ctx->args[0];\n    ev->timeout_ns = -1;\n    if (ctx->args[4] != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[4]) == 0) {\n            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
 	default:
 		return "    ev->nfds = -1;\n    ev->timeout_ns = -1;\n"
+	}
+}
+
+func generateExtraMem(name string) string {
+	switch name {
+	case "sys_enter_munmap":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
+	case "sys_enter_mremap":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = (__u64)ctx->args[2];\n    ev->flags = (__u64)ctx->args[3];\n"
+	default:
+		return "    ev->addr = 0;\n    ev->length = 0;\n    ev->length2 = 0;\n    ev->flags = 0;\n"
 	}
 }
 

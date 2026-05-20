@@ -26,11 +26,11 @@ func TestEngineIngestAndSnapshotIntegration(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	engine := newEngineWithClock(2, clock.Now)
 
-	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 100, types.READ_CLASSIFIED, "proc-a", 1, "/tmp/a", 100, 10, 3))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 100, types.READ_CLASSIFIED, "proc-a", 1, "/tmp/a", 100, 0, 10, 3))
 	clock.Advance(500 * time.Millisecond)
-	engine.Ingest(newEnginePair(types.SYS_ENTER_WRITE, -1, types.WRITE_CLASSIFIED, "proc-a", 1, "/tmp/a", 50, 20, 5))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_WRITE, -1, types.WRITE_CLASSIFIED, "proc-a", 1, "/tmp/a", 50, 0, 20, 5))
 	clock.Advance(500 * time.Millisecond)
-	engine.Ingest(newEnginePair(types.SYS_ENTER_COPY_FILE_RANGE, 80, types.TRANSFER_CLASSIFIED, "proc-b", 2, "/tmp/b", 20, 40, 8))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_COPY_FILE_RANGE, 80, types.TRANSFER_CLASSIFIED, "proc-b", 2, "/tmp/b", 20, 0, 40, 8))
 	clock.Advance(1 * time.Second)
 
 	snap, err := engine.Snapshot()
@@ -43,6 +43,9 @@ func TestEngineIngestAndSnapshotIntegration(t *testing.T) {
 
 	if snap.TotalSyscalls != 3 || snap.TotalErrors != 1 || snap.TotalBytes != 170 {
 		t.Fatalf("unexpected totals: syscalls=%d errors=%d bytes=%d", snap.TotalSyscalls, snap.TotalErrors, snap.TotalBytes)
+	}
+	if snap.TotalAddressSpaceBytes != 0 {
+		t.Fatalf("unexpected address-space total: %d", snap.TotalAddressSpaceBytes)
 	}
 	if snap.LatencyMeanNs != (10+20+40)/3.0 {
 		t.Fatalf("unexpected latency mean: %v", snap.LatencyMeanNs)
@@ -89,10 +92,10 @@ func TestEngineAggregatesSyscallFamilies(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(3000, 0)}
 	engine := newEngineWithClock(10, clock.Now)
 
-	engine.Ingest(newEnginePair(types.SYS_ENTER_EPOLL_WAIT, 0, types.UNCLASSIFIED, "poller", 1, "", 0, 100, 1))
-	engine.Ingest(newEnginePair(types.SYS_ENTER_POLL, -1, types.UNCLASSIFIED, "poller", 1, "", 0, 300, 2))
-	engine.Ingest(newEnginePair(types.SYS_ENTER_GETPID, 0, types.UNCLASSIFIED, "proc", 2, "", 0, 50, 3))
-	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 4, types.READ_CLASSIFIED, "reader", 3, "/tmp/a", 4, 25, 4))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_EPOLL_WAIT, 0, types.UNCLASSIFIED, "poller", 1, "", 0, 0, 100, 1))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_POLL, -1, types.UNCLASSIFIED, "poller", 1, "", 0, 0, 300, 2))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_GETPID, 0, types.UNCLASSIFIED, "proc", 2, "", 0, 0, 50, 3))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 4, types.READ_CLASSIFIED, "reader", 3, "/tmp/a", 4, 0, 25, 4))
 	clock.Advance(time.Second)
 
 	snap, err := engine.Snapshot()
@@ -148,6 +151,29 @@ func TestEngineSnapshotWithNoEvents(t *testing.T) {
 	}
 }
 
+func TestEngineTracksAddressSpaceBytesSeparately(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(4000, 0)}
+	engine := newEngineWithClock(10, clock.Now)
+
+	engine.Ingest(newEnginePair(types.SYS_ENTER_MUNMAP, 0, types.UNCLASSIFIED, "proc", 1, "", 0, 4096, 10, 1))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_MREMAP, 0, types.UNCLASSIFIED, "proc", 1, "", 0, 8192, 20, 2))
+	clock.Advance(2 * time.Second)
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snap.TotalBytes != 0 {
+		t.Fatalf("TotalBytes = %d, want 0 for non-IO memory operations", snap.TotalBytes)
+	}
+	if snap.TotalAddressSpaceBytes != 12288 {
+		t.Fatalf("TotalAddressSpaceBytes = %d, want 12288", snap.TotalAddressSpaceBytes)
+	}
+	if math.Abs(snap.AddressSpaceBytesPerSec-6144.0) > 1e-9 {
+		t.Fatalf("AddressSpaceBytesPerSec = %v, want 6144", snap.AddressSpaceBytesPerSec)
+	}
+}
+
 func TestEngineTrendDetection(t *testing.T) {
 	if got := detectTrend(make([]float64, trendWindowSlots*2)); got.Direction != TrendStable {
 		t.Fatalf("expected stable for flat data, got %+v", got)
@@ -175,14 +201,15 @@ func TestEngineTrendDetection(t *testing.T) {
 	}
 }
 
-func newEnginePair(traceID types.TraceId, ret int64, retType uint32, comm string, pid uint32, path string, bytes uint64, duration uint64, gap uint64) *event.Pair {
+func newEnginePair(traceID types.TraceId, ret int64, retType uint32, comm string, pid uint32, path string, bytes uint64, addressSpaceBytes uint64, duration uint64, gap uint64) *event.Pair {
 	return &event.Pair{
-		EnterEv:        &types.RetEvent{TraceId: traceID, Pid: pid},
-		ExitEv:         &types.RetEvent{TraceId: traceID, Pid: pid, Ret: ret, RetType: retType},
-		Comm:           comm,
-		Duration:       duration,
-		DurationToPrev: gap,
-		Bytes:          bytes,
-		File:           file.NewFd(3, path, -1),
+		EnterEv:           &types.RetEvent{TraceId: traceID, Pid: pid},
+		ExitEv:            &types.RetEvent{TraceId: traceID, Pid: pid, Ret: ret, RetType: retType},
+		Comm:              comm,
+		Duration:          duration,
+		DurationToPrev:    gap,
+		Bytes:             bytes,
+		AddressSpaceBytes: addressSpaceBytes,
+		File:              file.NewFd(3, path, -1),
 	}
 }

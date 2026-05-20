@@ -30,14 +30,16 @@ type Snapshot struct {
 	GeneratedAt time.Time
 	Elapsed     time.Duration
 
-	TotalSyscalls uint64
-	TotalErrors   uint64
-	TotalBytes    uint64
+	TotalSyscalls          uint64
+	TotalErrors            uint64
+	TotalBytes             uint64
+	TotalAddressSpaceBytes uint64
 
-	SyscallRatePerSec float64
-	ErrorRatePerSec   float64
-	ReadBytesPerSec   float64
-	WriteBytesPerSec  float64
+	SyscallRatePerSec       float64
+	ErrorRatePerSec         float64
+	AddressSpaceBytesPerSec float64
+	ReadBytesPerSec         float64
+	WriteBytesPerSec        float64
 
 	LatencyMeanNs float64
 	GapMeanNs     float64

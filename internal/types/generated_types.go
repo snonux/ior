@@ -100,6 +100,8 @@ const ENTER_EPOLL_CTL_EVENT = 29
 const EXIT_EPOLL_CTL_EVENT = 30
 const ENTER_POLL_EVENT = 31
 const EXIT_POLL_EVENT = 32
+const ENTER_MEM_EVENT = 33
+const EXIT_MEM_EVENT = 34
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -1947,4 +1949,75 @@ func (p *PollEvent) Bytes() ([]byte, error) {
 
 func (p *PollEvent) Recycle() {
 	poolOfPollEvents.Put(p)
+}
+
+type MemEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Addr      uint64
+	Length    uint64
+	Length2   uint64
+	Flags     uint64
+}
+
+func (m MemEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Addr:%v Length:%v Length2:%v Flags:%v", m.EventType, m.TraceId, m.Time, m.Pid, m.Tid, m.Addr, m.Length, m.Length2, m.Flags)
+}
+
+func (m MemEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*MemEvent)
+	if !ok {
+		return false
+	}
+	return m.EventType == otherConcrete.EventType && m.TraceId == otherConcrete.TraceId && m.Time == otherConcrete.Time && m.Pid == otherConcrete.Pid && m.Tid == otherConcrete.Tid && m.Addr == otherConcrete.Addr && m.Length == otherConcrete.Length && m.Length2 == otherConcrete.Length2 && m.Flags == otherConcrete.Flags
+}
+
+func (m *MemEvent) GetEventType() EventType {
+	return m.EventType
+}
+
+func (m *MemEvent) GetTraceId() TraceId {
+	return m.TraceId
+}
+
+func (m *MemEvent) GetPid() uint32 {
+	return m.Pid
+}
+
+func (m *MemEvent) GetTid() uint32 {
+	return m.Tid
+}
+
+func (m *MemEvent) GetTime() uint64 {
+	return m.Time
+}
+
+var poolOfMemEvents = sync.Pool{
+	New: func() any { return &MemEvent{} },
+}
+
+func NewMemEvent(raw []byte) *MemEvent {
+	m := poolOfMemEvents.Get().(*MemEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, m); err != nil {
+		*m = MemEvent{}
+		poolOfMemEvents.Put(m)
+		return nil
+	}
+	return m
+}
+
+func (m *MemEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, m)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *MemEvent) Recycle() {
+	poolOfMemEvents.Put(m)
 }
