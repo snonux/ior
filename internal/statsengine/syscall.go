@@ -99,6 +99,29 @@ func (a *syscallAccumulator) Add(pair *event.Pair) {
 	}
 }
 
+func (a *syscallAccumulator) AddAggregate(row SyscallAggregate) {
+	if a == nil || row.TraceID == 0 || row.Count == 0 {
+		return
+	}
+
+	stats := a.byID[row.TraceID]
+	if stats == nil {
+		stats = &syscallStats{traceID: row.TraceID, name: row.TraceID.Name()}
+		a.byID[row.TraceID] = stats
+	}
+
+	prevCount := stats.count
+	stats.count += row.Count
+	stats.errorCount += row.Errors
+	stats.totalLatency += row.TotalLatencyNs
+	if prevCount == 0 || row.MinLatencyNs < stats.minLatency {
+		stats.minLatency = row.MinLatencyNs
+	}
+	if row.MaxLatencyNs > stats.maxLatency {
+		stats.maxLatency = row.MaxLatencyNs
+	}
+}
+
 // Snapshot returns a slice of SyscallSnapshots for all tracked syscalls.
 // It panics on build error, which should never happen for a valid accumulator.
 func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {

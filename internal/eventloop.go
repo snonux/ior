@@ -8,6 +8,7 @@ import (
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/globalfilter"
+	"ior/internal/statsengine"
 	"ior/internal/types"
 )
 
@@ -20,7 +21,16 @@ const (
 	defaultMaxPendingHandleEntries = 8192
 	defaultMaxProcFdCacheSize      = 8192
 	cacheTrimDivisor               = 4
+	defaultAggregateDrainEvery     = time.Second
 )
+
+type syscallAggregateSource interface {
+	Drain() ([]statsengine.SyscallAggregate, error)
+}
+
+type syscallAggregateSink interface {
+	IngestSyscallAggregates([]statsengine.SyscallAggregate)
+}
 
 type eventLoopConfig struct {
 	pidFilter       int
@@ -34,6 +44,7 @@ type eventLoopConfig struct {
 	synchronousRawProcessing bool
 	fdTracker                *fdTracker
 	commResolver             *commResolver
+	aggregateDrainEvery      time.Duration
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
@@ -43,14 +54,16 @@ type eventLoop struct {
 	// the TUI can swap filters in place via SetFilter without tearing down
 	// and reattaching the BPF probes (the previous behavior caused a multi-
 	// second 'Attaching tracepoints' overlay every time the filter changed).
-	filterPtr      atomic.Pointer[globalfilter.Filter]
-	pairs          pairTracker           // enter/exit pairing state and inter-syscall duration tracking
-	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
-	fdTracker      *fdTracker            // fd table and procfs resolution cache
-	commResolver   *commResolver
-	outputFormatter                      // pair-emission and warning-notification callbacks (embedded collaborator)
-	rawHandlers    map[types.EventType]rawEventHandler
-	cfg            eventLoopConfig
+	filterPtr       atomic.Pointer[globalfilter.Filter]
+	pairs           pairTracker           // enter/exit pairing state and inter-syscall duration tracking
+	pendingHandles  *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
+	fdTracker       *fdTracker            // fd table and procfs resolution cache
+	commResolver    *commResolver
+	outputFormatter // pair-emission and warning-notification callbacks (embedded collaborator)
+	rawHandlers     map[types.EventType]rawEventHandler
+	cfg             eventLoopConfig
+	aggregateSink   syscallAggregateSink
+	aggregateSrc    syscallAggregateSource
 
 	// Statistics
 	numTracepoints          uint
@@ -99,6 +112,9 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		rawHandlers: make(map[types.EventType]rawEventHandler),
 		cfg:         cfg,
 		done:        make(chan struct{}),
+	}
+	if el.cfg.aggregateDrainEvery <= 0 {
+		el.cfg.aggregateDrainEvery = defaultAggregateDrainEvery
 	}
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()

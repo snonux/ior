@@ -64,6 +64,10 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 		bpfModule.Close()
 		return nil, nil, releaseBindings, setupBPFModuleError("load object", err)
 	}
+	if err := applySyscallSamplingRates(cfg, bpfModule); err != nil {
+		bpfModule.Close()
+		return nil, nil, releaseBindings, setupBPFModuleError("configure sampling rates", err)
+	}
 
 	mgr := probemanager.NewManager(libbpfTracepointModule{module: bpfModule})
 	// Per-syscall attach failures are non-fatal: on older kernels the

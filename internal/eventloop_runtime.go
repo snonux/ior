@@ -14,6 +14,8 @@ import (
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 	defer e.shutdownCommResolver()
+	stopAggregateLoop := e.startAggregateDrainLoop(ctx)
+	defer stopAggregateLoop()
 
 	if e.cfg.pprofEnable {
 		fmt.Println("Profiling, press Ctrl+C to stop")
@@ -36,6 +38,39 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	for ep := range e.events(ctx, rawCh) {
 		e.emit(ep)
 		e.numSyscallsAfterFilter++
+	}
+}
+
+func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
+	if e.aggregateSrc == nil || e.aggregateSink == nil {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	stop := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(e.cfg.aggregateDrainEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				rows, err := e.aggregateSrc.Drain()
+				if err != nil {
+					e.notifyWarning(fmt.Sprintf("syscall aggregate drain failed: %v", err))
+					continue
+				}
+				e.aggregateSink.IngestSyscallAggregates(rows)
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
 	}
 }
 
