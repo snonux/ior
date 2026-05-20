@@ -46,6 +46,12 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		return e.handleMemExit(ep, ev)
 	case *types.SleepEvent:
 		return e.handleSleepExit(ep, ev)
+	case *types.KeyctlEvent:
+		return e.handleKeyctlExit(ep, ev)
+	case *types.PtraceEvent:
+		return e.handlePtraceExit(ep, ev)
+	case *types.PerfOpenEvent:
+		return e.handlePerfOpenExit(ep, ev)
 	case *types.NullEvent:
 		return e.handleNullExit(ep, ev)
 	case *types.FcntlEvent:
@@ -440,12 +446,61 @@ func (e *eventLoop) handleSleepExit(ep *event.Pair, sleepEv *types.SleepEvent) b
 	return true
 }
 
+func (e *eventLoop) handleKeyctlExit(ep *event.Pair, keyctlEv *types.KeyctlEvent) bool {
+	ep.Comm = e.comm(keyctlEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
+func (e *eventLoop) handlePtraceExit(ep *event.Pair, ptraceEv *types.PtraceEvent) bool {
+	ep.Comm = e.comm(ptraceEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
+func (e *eventLoop) handlePerfOpenExit(ep *event.Pair, perfOpenEv *types.PerfOpenEvent) bool {
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed perf_event_open exit event")
+		return false
+	}
+
+	if fd := int32(retEvent.Ret); fd >= 0 {
+		fdFile := file.NewFd(fd, perfDescriptorName(perfOpenEv), -1)
+		e.fdState().set(fd, fdFile)
+		ep.File = fdFile
+	}
+	ep.Comm = e.comm(perfOpenEv.GetTid())
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
+	return true
+}
+
 func pipeDescriptorName(flags, fd0, fd1 int32) string {
 	return fmt.Sprintf("pipe:%d:%d:%d", flags, fd0, fd1)
 }
 
 func eventfdDescriptorName(flags int32) string {
 	return fmt.Sprintf("eventfd:%d", flags)
+}
+
+func perfDescriptorName(perfOpenEv *types.PerfOpenEvent) string {
+	return fmt.Sprintf(
+		"perf:%d:%d:%d:%d:%d",
+		perfOpenEv.AttrType,
+		perfOpenEv.Config,
+		perfOpenEv.TargetPid,
+		perfOpenEv.Cpu,
+		perfOpenEv.GroupFd,
+	)
 }
 
 func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool {

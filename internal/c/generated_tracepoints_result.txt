@@ -2,7 +2,7 @@ sys_enter_accept is a struct accept_event
 sys_enter_accept4 is a struct accept_event
 sys_enter_access is a struct path_event
 sys_enter_acct is a struct null_event
-sys_enter_add_key is a struct null_event
+sys_enter_add_key is a struct keyctl_event
 sys_enter_adjtimex is a struct null_event
 sys_enter_alarm is a struct null_event
 sys_enter_arch_prctl is a struct null_event
@@ -132,7 +132,7 @@ sys_enter_ioprio_set is a struct null_event
 sys_enter_kcmp is a struct null_event
 sys_enter_kexec_file_load is a struct null_event
 sys_enter_kexec_load is a struct null_event
-sys_enter_keyctl is a struct null_event
+sys_enter_keyctl is a struct keyctl_event
 sys_enter_kill is a struct null_event
 sys_enter_landlock_add_rule is a struct null_event
 sys_enter_landlock_create_ruleset is a struct null_event
@@ -205,7 +205,7 @@ sys_enter_open_tree_attr is a struct open_event
 sys_enter_openat is a struct open_event
 sys_enter_openat2 is a struct open_event
 sys_enter_pause is a struct null_event
-sys_enter_perf_event_open is a struct null_event
+sys_enter_perf_event_open is a struct perf_open_event
 sys_enter_personality is a struct null_event
 sys_enter_pidfd_getfd is a struct fd_event
 sys_enter_pidfd_open is a struct null_event
@@ -228,7 +228,7 @@ sys_enter_process_mrelease is a struct null_event
 sys_enter_process_vm_readv is a struct null_event
 sys_enter_process_vm_writev is a struct null_event
 sys_enter_pselect6 is a struct poll_event
-sys_enter_ptrace is a struct null_event
+sys_enter_ptrace is a struct ptrace_event
 sys_enter_pwrite64 is a struct fd_event
 sys_enter_pwritev is a struct fd_event
 sys_enter_pwritev2 is a struct fd_event
@@ -249,7 +249,7 @@ sys_enter_removexattrat is a struct path_event
 sys_enter_rename is a struct name_event
 sys_enter_renameat is a struct name_event
 sys_enter_renameat2 is a struct name_event
-sys_enter_request_key is a struct null_event
+sys_enter_request_key is a struct keyctl_event
 sys_enter_restart_syscall is a struct null_event
 sys_enter_rmdir is a struct path_event
 sys_enter_rseq is a struct null_event

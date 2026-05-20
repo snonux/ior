@@ -361,6 +361,59 @@ func TestGenerateClockNanosleepHandlerCapturesRequestedTimespec(t *testing.T) {
 	requireContains(t, output, "ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
 }
 
+func TestGenerateKeyctlHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("keyctl")))
+
+	requireContains(t, output, "struct keyctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_KEYCTL_EVENT;")
+	requireContains(t, output, "ev->option = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->key_serial = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->value = (__u64)ctx->args[2];")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+func TestGenerateAddKeyHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("add_key")))
+
+	requireContains(t, output, "struct keyctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_KEYCTL_EVENT;")
+	requireContains(t, output, "ev->option = -1;")
+	requireContains(t, output, "ev->key_serial = (__s32)ctx->args[4];")
+	requireContains(t, output, "ev->value = (__u64)ctx->args[3];")
+}
+
+func TestGenerateRequestKeyHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("request_key")))
+
+	requireContains(t, output, "struct keyctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_KEYCTL_EVENT;")
+	requireContains(t, output, "ev->option = -2;")
+	requireContains(t, output, "ev->key_serial = (__s32)ctx->args[3];")
+}
+
+func TestGeneratePtraceHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("ptrace")))
+
+	requireContains(t, output, "struct ptrace_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PTRACE_EVENT;")
+	requireContains(t, output, "ev->request = (__s64)ctx->args[0];")
+	requireContains(t, output, "ev->target_pid = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->data = (__u64)ctx->args[3];")
+}
+
+func TestGeneratePerfEventOpenHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("perf_event_open")))
+
+	requireContains(t, output, "struct perf_open_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PERF_OPEN_EVENT;")
+	requireContains(t, output, "struct __ior_perf_event_attr {")
+	requireContains(t, output, "ev->attr_type = attr.type;")
+	requireContains(t, output, "ev->config = attr.config;")
+	requireContains(t, output, "ev->target_pid = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->group_fd = (__s32)ctx->args[3];")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
 func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	output := generateFromPair(t, FormatNameToHandleAt, FormatExitNameToHandleAt)
 
@@ -479,6 +532,9 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindPoll, "ENTER_POLL_EVENT", "EXIT_POLL_EVENT"},
 		{KindMem, "ENTER_MEM_EVENT", "EXIT_MEM_EVENT"},
 		{KindSleep, "ENTER_SLEEP_EVENT", "EXIT_SLEEP_EVENT"},
+		{KindKeyctl, "ENTER_KEYCTL_EVENT", "EXIT_KEYCTL_EVENT"},
+		{KindPtrace, "ENTER_PTRACE_EVENT", "EXIT_PTRACE_EVENT"},
+		{KindPerfOpen, "ENTER_PERF_OPEN_EVENT", "EXIT_PERF_OPEN_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -516,6 +572,9 @@ func TestEventStructNames(t *testing.T) {
 		{KindPoll, "poll_event"},
 		{KindMem, "mem_event"},
 		{KindSleep, "sleep_event"},
+		{KindKeyctl, "keyctl_event"},
+		{KindPtrace, "ptrace_event"},
+		{KindPerfOpen, "perf_open_event"},
 	}
 
 	for _, tt := range tests {
@@ -534,7 +593,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

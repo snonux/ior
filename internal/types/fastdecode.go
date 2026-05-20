@@ -27,6 +27,9 @@ const (
 	pollEventSizeV1         = 36
 	memEventSize            = 56
 	sleepEventSize          = 32
+	keyctlEventSize         = 40
+	ptraceEventSize         = 48
+	perfOpenEventSize       = 56
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -397,4 +400,66 @@ func NewSleepEventFast(raw []byte) *SleepEvent {
 	s.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	s.RequestedNs = int64(binary.LittleEndian.Uint64(raw[24:32]))
 	return s
+}
+
+func NewKeyctlEventFast(raw []byte) *KeyctlEvent {
+	if len(raw) < keyctlEventSize {
+		return nil
+	}
+	if len(raw) != keyctlEventSize {
+		return NewKeyctlEvent(raw)
+	}
+	k := poolOfKeyctlEvents.Get().(*KeyctlEvent)
+	k.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	k.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	k.Time = binary.LittleEndian.Uint64(raw[8:16])
+	k.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	k.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	k.Option = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	k.KeySerial = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	k.Value = binary.LittleEndian.Uint64(raw[32:40])
+	return k
+}
+
+func NewPtraceEventFast(raw []byte) *PtraceEvent {
+	if len(raw) < ptraceEventSize {
+		return nil
+	}
+	if len(raw) != ptraceEventSize {
+		return NewPtraceEvent(raw)
+	}
+	p := poolOfPtraceEvents.Get().(*PtraceEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.Request = int64(binary.LittleEndian.Uint64(raw[24:32]))
+	p.TargetPid = int32(binary.LittleEndian.Uint32(raw[32:36]))
+	p.Pad = int32(binary.LittleEndian.Uint32(raw[36:40]))
+	p.Data = binary.LittleEndian.Uint64(raw[40:48])
+	return p
+}
+
+func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
+	if len(raw) < perfOpenEventSize {
+		return nil
+	}
+	if len(raw) != perfOpenEventSize {
+		return NewPerfOpenEvent(raw)
+	}
+	p := poolOfPerfOpenEvents.Get().(*PerfOpenEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.AttrType = binary.LittleEndian.Uint32(raw[24:28])
+	p.AttrSize = binary.LittleEndian.Uint32(raw[28:32])
+	p.Config = binary.LittleEndian.Uint64(raw[32:40])
+	p.TargetPid = int32(binary.LittleEndian.Uint32(raw[40:44]))
+	p.Cpu = int32(binary.LittleEndian.Uint32(raw[44:48]))
+	p.GroupFd = int32(binary.LittleEndian.Uint32(raw[48:52]))
+	p.Flags = binary.LittleEndian.Uint32(raw[52:56])
+	return p
 }

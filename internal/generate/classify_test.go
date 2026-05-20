@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -453,6 +454,84 @@ func TestClassifyClockNanosleep(t *testing.T) {
 	}
 }
 
+func TestClassifyKeyctl(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_keyctl",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "int", Name: "option"},
+			{Type: "key_serial_t", Name: "arg2"},
+		},
+	})
+	if r.Kind != KindKeyctl {
+		t.Errorf("keyctl: got kind %d, want KindKeyctl", r.Kind)
+	}
+}
+
+func TestClassifyAddKey(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_add_key",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "_type"},
+			{Type: "const char *", Name: "_description"},
+			{Type: "const void *", Name: "_payload"},
+			{Type: "size_t", Name: "plen"},
+			{Type: "key_serial_t", Name: "ringid"},
+		},
+	})
+	if r.Kind != KindKeyctl {
+		t.Errorf("add_key: got kind %d, want KindKeyctl", r.Kind)
+	}
+}
+
+func TestClassifyRequestKey(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_request_key",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "_type"},
+			{Type: "const char *", Name: "_description"},
+			{Type: "const char *", Name: "_callout_info"},
+			{Type: "key_serial_t", Name: "destringid"},
+		},
+	})
+	if r.Kind != KindKeyctl {
+		t.Errorf("request_key: got kind %d, want KindKeyctl", r.Kind)
+	}
+}
+
+func TestClassifyPtrace(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_ptrace",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "request"},
+			{Type: "long", Name: "pid"},
+		},
+	})
+	if r.Kind != KindPtrace {
+		t.Errorf("ptrace: got kind %d, want KindPtrace", r.Kind)
+	}
+}
+
+func TestClassifyPerfEventOpen(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_perf_event_open",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "struct perf_event_attr *", Name: "attr_uptr"},
+			{Type: "pid_t", Name: "pid"},
+			{Type: "int", Name: "cpu"},
+			{Type: "int", Name: "group_fd"},
+			{Type: "unsigned long", Name: "flags"},
+		},
+	})
+	if r.Kind != KindPerfOpen {
+		t.Errorf("perf_event_open: got kind %d, want KindPerfOpen", r.Kind)
+	}
+}
+
 func TestClassifyMqOpen(t *testing.T) {
 	r := ClassifyFormat(&Format{
 		Name: "sys_enter_mq_open",
@@ -664,6 +743,11 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"mremap", FormatMremap, FormatExitMremap, KindMem},
 		{"nanosleep", FormatNanosleep, FormatExitNanosleep, KindSleep},
 		{"clock_nanosleep", FormatClockNanosleep, FormatExitClockNanosleep, KindSleep},
+		{"keyctl", syntheticEnter("keyctl", 9200), syntheticExit("keyctl", 9199), KindKeyctl},
+		{"add_key", syntheticEnter("add_key", 9202), syntheticExit("add_key", 9201), KindKeyctl},
+		{"request_key", syntheticEnter("request_key", 9204), syntheticExit("request_key", 9203), KindKeyctl},
+		{"ptrace", syntheticEnter("ptrace", 9206), syntheticExit("ptrace", 9205), KindPtrace},
+		{"perf_event_open", syntheticEnter("perf_event_open", 9208), syntheticExit("perf_event_open", 9207), KindPerfOpen},
 		{"mount", FormatMount, FormatExitMount, KindPathname},
 		{"umount", FormatUmount, FormatExitUmount, KindPathname},
 		{"move_mount", FormatMoveMount, FormatExitMoveMount, KindTwoFd},
@@ -716,6 +800,11 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"mremap", FormatMremap, FormatExitMremap, FamilyMemory},
 		{"nanosleep", FormatNanosleep, FormatExitNanosleep, FamilyTime},
 		{"clock_nanosleep", FormatClockNanosleep, FormatExitClockNanosleep, FamilyTime},
+		{"keyctl", syntheticEnter("keyctl", 9300), syntheticExit("keyctl", 9299), FamilySecurity},
+		{"add_key", syntheticEnter("add_key", 9302), syntheticExit("add_key", 9301), FamilySecurity},
+		{"request_key", syntheticEnter("request_key", 9304), syntheticExit("request_key", 9303), FamilySecurity},
+		{"ptrace", syntheticEnter("ptrace", 9306), syntheticExit("ptrace", 9305), FamilySecurity},
+		{"perf_event_open", syntheticEnter("perf_event_open", 9308), syntheticExit("perf_event_open", 9307), FamilySecurity},
 		{"mount", FormatMount, FormatExitMount, FamilyFS},
 		{"umount", FormatUmount, FormatExitUmount, FamilyFS},
 		{"move_mount", FormatMoveMount, FormatExitMoveMount, FamilyFS},
@@ -891,6 +980,18 @@ func mqFormats(name string, enterID int) []Format {
 			},
 		},
 	}
+}
+
+func syntheticEnter(syscall string, id int) string {
+	return strings.Replace(strings.Replace(FormatKill, "sys_enter_kill", "sys_enter_"+syscall, 1), "ID: 183", "ID: "+itoa(id), 1)
+}
+
+func syntheticExit(syscall string, id int) string {
+	return strings.Replace(strings.Replace(FormatExitKill, "sys_exit_kill", "sys_exit_"+syscall, 1), "ID: 182", "ID: "+itoa(id), 1)
+}
+
+func itoa(v int) string {
+	return strconv.Itoa(v)
 }
 
 func TestClassifyFormatNoExternalFields(t *testing.T) {

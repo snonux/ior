@@ -250,6 +250,7 @@ func (e *eventLoop) initRawHandlers() {
 	e.registerTwoFdHandlers()
 	e.registerMemoryHandlers()
 	e.registerSleepHandlers()
+	e.registerSecurityHandlers()
 }
 
 // registerOpenHandlers wires enter/exit handlers for open-family events.
@@ -479,6 +480,30 @@ func (e *eventLoop) registerSleepHandlers() {
 			return
 		}
 		e.tracepointEntered(sleepEv)
+	}
+}
+
+func (e *eventLoop) registerSecurityHandlers() {
+	e.rawHandlers[types.ENTER_KEYCTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		keyctlEv, ok := decodeRawEvent(e, types.ENTER_KEYCTL_EVENT, raw, types.NewKeyctlEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(keyctlEv)
+	}
+	e.rawHandlers[types.ENTER_PTRACE_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		ptraceEv, ok := decodeRawEvent(e, types.ENTER_PTRACE_EVENT, raw, types.NewPtraceEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(ptraceEv)
+	}
+	e.rawHandlers[types.ENTER_PERF_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
+		perfOpenEv, ok := decodeRawEvent(e, types.ENTER_PERF_OPEN_EVENT, raw, types.NewPerfOpenEventFast)
+		if !ok {
+			return
+		}
+		e.tracepointEntered(perfOpenEv)
 	}
 }
 
