@@ -127,3 +127,13 @@ func buildSyscallSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 	}
 	return rates
 }
+
+func buildAggregateOnlyTraceIDs(cfg flags.Config) map[types.TraceId]struct{} {
+	ids := make(map[types.TraceId]struct{})
+	for traceID, rate := range buildSyscallSamplingRates(cfg) {
+		if rate == 0 {
+			ids[traceID] = struct{}{}
+		}
+	}
+	return ids
+}

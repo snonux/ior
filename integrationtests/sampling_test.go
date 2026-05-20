@@ -20,4 +20,11 @@ func TestPerSyscallSamplingAggregateOnlySuppressesRingbufEvents(t *testing.T) {
 			Comm:       "ioworkload",
 		},
 	})
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{
+			Tracepoint: "enter_close",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
 }

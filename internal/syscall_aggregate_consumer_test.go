@@ -23,6 +23,24 @@ func TestBuildSyscallSamplingRatesFamilyAndSyscallOverride(t *testing.T) {
 	}
 }
 
+func TestBuildAggregateOnlyTraceIDs(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 10
+	cfg.SyscallSamplingRates["futex"] = 0
+	cfg.SyscallSamplingRates["clock_gettime"] = 0
+
+	ids := buildAggregateOnlyTraceIDs(cfg)
+	if _, ok := ids[types.SYS_ENTER_FUTEX]; !ok {
+		t.Fatal("expected futex in aggregate-only set")
+	}
+	if _, ok := ids[types.SYS_ENTER_CLOCK_GETTIME]; !ok {
+		t.Fatal("expected clock_gettime in aggregate-only set")
+	}
+	if _, ok := ids[types.SYS_ENTER_NANOSLEEP]; ok {
+		t.Fatal("did not expect nanosleep in aggregate-only set")
+	}
+}
+
 func TestDecodeRawSyscallAggregate(t *testing.T) {
 	want := rawSyscallAggregate{
 		Count:         7,

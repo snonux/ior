@@ -45,6 +45,7 @@ type eventLoopConfig struct {
 	fdTracker                *fdTracker
 	commResolver             *commResolver
 	aggregateDrainEvery      time.Duration
+	aggregateOnlyTraceIDs    map[types.TraceId]struct{}
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
