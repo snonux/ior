@@ -231,10 +231,17 @@ func TestClassifyPathnameMknod(t *testing.T) {
 	}
 }
 
-func TestClassifyPathnameExecve(t *testing.T) {
+func TestClassifyExecExecve(t *testing.T) {
 	r := classifyFromData(t, FormatExecve)
-	if r.Kind != KindPathname {
-		t.Errorf("execve: got kind %d, want KindPathname", r.Kind)
+	if r.Kind != KindExec {
+		t.Errorf("execve: got kind %d, want KindExec", r.Kind)
+	}
+}
+
+func TestClassifyExecExecveat(t *testing.T) {
+	r := classifyFromData(t, FormatExecveat)
+	if r.Kind != KindExec {
+		t.Errorf("execveat: got kind %d, want KindExec", r.Kind)
 	}
 }
 
@@ -694,6 +701,24 @@ func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	}
 }
 
+func TestClassifyNullExitByName(t *testing.T) {
+	tests := []string{"sys_enter_exit", "sys_enter_exit_group"}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "int", Name: "error_code"},
+				},
+			})
+			if r.Kind != KindNull {
+				t.Errorf("%s: got kind %d, want KindNull", name, r.Kind)
+			}
+		})
+	}
+}
+
 // --- End-to-end classification with enter+exit pairs ---
 
 func TestClassifySyscallPairAccepted(t *testing.T) {
@@ -722,7 +747,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"pread64", FormatPread64, FormatExitPread64, KindFd},
 		{"symlink", FormatSymlink, FormatExitSymlink, KindName},
 		{"mknod", FormatMknod, FormatExitMknod, KindPathname},
-		{"execve", FormatExecve, FormatExitExecve, KindPathname},
+		{"execve", FormatExecve, FormatExitExecve, KindExec},
+		{"execveat", FormatExecveat, FormatExitExecveat, KindExec},
 		{"accept", FormatAccept, FormatExitAccept, KindAccept},
 		{"accept4", FormatAccept4, FormatExitAccept4, KindAccept},
 		{"socket", FormatSocket, FormatExitSocket, KindSocket},
@@ -760,6 +786,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"swapon", FormatSwapon, FormatExitSwapon, KindPathname},
 		{"swapoff", FormatSwapoff, FormatExitSwapoff, KindPathname},
 		{"kill", FormatKill, FormatExitKill, KindNull},
+		{"exit", syntheticEnter("exit", 9310), syntheticExit("exit", 9309), KindNull},
+		{"exit_group", syntheticEnter("exit_group", 9312), syntheticExit("exit_group", 9311), KindNull},
 	}
 
 	for _, tt := range tests {
@@ -782,6 +810,7 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 	}{
 		{"mknod", FormatMknod, FormatExitMknod, FamilyFS},
 		{"execve", FormatExecve, FormatExitExecve, FamilyProcess},
+		{"execveat", FormatExecveat, FormatExitExecveat, FamilyProcess},
 		{"accept", FormatAccept, FormatExitAccept, FamilyNetwork},
 		{"accept4", FormatAccept4, FormatExitAccept4, FamilyNetwork},
 		{"socket", FormatSocket, FormatExitSocket, FamilyNetwork},
@@ -816,6 +845,7 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"swapon", FormatSwapon, FormatExitSwapon, FamilyFS},
 		{"swapoff", FormatSwapoff, FormatExitSwapoff, FamilyFS},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
+		{"exit_group", syntheticEnter("exit_group", 9316), syntheticExit("exit_group", 9315), FamilyProcess},
 	}
 
 	for _, tt := range tests {

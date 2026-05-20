@@ -111,6 +111,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraOpen(f)
 	case KindMqOpen:
 		return generateExtraMqOpen(f)
+	case KindExec:
+		return generateExtraExec(f)
 	case KindPathname:
 		return generateExtraPathname(tp, f)
 	case KindName:
@@ -144,6 +146,30 @@ func generateExtraOpen(f *Format) string {
 
 func generateExtraMqOpen(f *Format) string {
 	return generateExtraOpenWithFields(f, "u_name", "oflag")
+}
+
+func generateExtraExec(f *Format) string {
+	filenameIdx := f.FieldNumber("filename")
+	dirfdIdx := f.FieldNumber("dfd")
+	flagsIdx := f.FieldNumber("flags")
+	if filenameIdx < 0 {
+		filenameIdx = 0
+	}
+	var b strings.Builder
+	b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
+	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]);\n", filenameIdx)
+	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
+	if dirfdIdx > -1 {
+		fmt.Fprintf(&b, "    ev->dirfd = (__s32)ctx->args[%d];\n", dirfdIdx)
+	} else {
+		b.WriteString("    ev->dirfd = -1;\n")
+	}
+	if flagsIdx > -1 {
+		fmt.Fprintf(&b, "    ev->flags = (__s32)ctx->args[%d];\n", flagsIdx)
+	} else {
+		b.WriteString("    ev->flags = 0;\n")
+	}
+	return b.String()
 }
 
 func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) string {

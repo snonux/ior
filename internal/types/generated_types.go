@@ -112,6 +112,8 @@ const ENTER_PTRACE_EVENT = 41
 const EXIT_PTRACE_EVENT = 42
 const ENTER_PERF_OPEN_EVENT = 43
 const EXIT_PERF_OPEN_EVENT = 44
+const ENTER_EXEC_EVENT = 45
+const EXIT_EXEC_EVENT = 46
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -919,6 +921,77 @@ func (o *OpenEvent) Bytes() ([]byte, error) {
 
 func (o *OpenEvent) Recycle() {
 	poolOfOpenEvents.Put(o)
+}
+
+type ExecEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Dirfd     int32
+	Flags     int32
+	Filename  [MAX_FILENAME_LENGTH]byte
+	Comm      [MAX_PROGNAME_LENGTH]byte
+}
+
+func (e ExecEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Dirfd:%v Flags:%v Filename:%v Comm:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Dirfd, e.Flags, string(e.Filename[:]), string(e.Comm[:]))
+}
+
+func (e ExecEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*ExecEvent)
+	if !ok {
+		return false
+	}
+	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Dirfd == otherConcrete.Dirfd && e.Flags == otherConcrete.Flags && e.Filename == otherConcrete.Filename && e.Comm == otherConcrete.Comm
+}
+
+func (e *ExecEvent) GetEventType() EventType {
+	return e.EventType
+}
+
+func (e *ExecEvent) GetTraceId() TraceId {
+	return e.TraceId
+}
+
+func (e *ExecEvent) GetPid() uint32 {
+	return e.Pid
+}
+
+func (e *ExecEvent) GetTid() uint32 {
+	return e.Tid
+}
+
+func (e *ExecEvent) GetTime() uint64 {
+	return e.Time
+}
+
+var poolOfExecEvents = sync.Pool{
+	New: func() any { return &ExecEvent{} },
+}
+
+func NewExecEvent(raw []byte) *ExecEvent {
+	e := poolOfExecEvents.Get().(*ExecEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, e); err != nil {
+		*e = ExecEvent{}
+		poolOfExecEvents.Put(e)
+		return nil
+	}
+	return e
+}
+
+func (e *ExecEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, e)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (e *ExecEvent) Recycle() {
+	poolOfExecEvents.Put(e)
 }
 
 type NullEvent struct {

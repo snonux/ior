@@ -38,6 +38,7 @@ var scenarios = map[string]func() error{
 	"mountfs-management":            mountfsManagement,
 	"polling-epoll":                 pollingEpoll,
 	"sleep-syscalls":                sleepSyscalls,
+	"process-exec-lifecycle":        processExecLifecycle,
 	"family-mixed":                  familyMixed,
 	"close-basic":                   closeBasic,
 	"close-range":                   closeRange,

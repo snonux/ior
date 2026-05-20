@@ -4,6 +4,7 @@ import "encoding/binary"
 
 const (
 	openEventSize           = 300
+	execEventSize           = 304
 	nullEventSize           = 24
 	fdEventSize             = 28
 	retEventSize            = 36
@@ -49,6 +50,26 @@ func NewOpenEventFast(raw []byte) *OpenEvent {
 	copy(o.Filename[:], raw[28:284])
 	copy(o.Comm[:], raw[284:300])
 	return o
+}
+
+func NewExecEventFast(raw []byte) *ExecEvent {
+	if len(raw) < execEventSize {
+		return nil
+	}
+	if len(raw) != execEventSize {
+		return NewExecEvent(raw)
+	}
+	e := poolOfExecEvents.Get().(*ExecEvent)
+	e.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	e.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	e.Time = binary.LittleEndian.Uint64(raw[8:16])
+	e.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	e.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	e.Dirfd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	e.Flags = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	copy(e.Filename[:], raw[32:288])
+	copy(e.Comm[:], raw[288:304])
+	return e
 }
 
 func NewNullEventFast(raw []byte) *NullEvent {

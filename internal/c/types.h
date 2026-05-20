@@ -47,6 +47,8 @@
 #define EXIT_PTRACE_EVENT 42
 #define ENTER_PERF_OPEN_EVENT 43
 #define EXIT_PERF_OPEN_EVENT 44
+#define ENTER_EXEC_EVENT 45
+#define EXIT_EXEC_EVENT 46
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -59,6 +61,18 @@ struct open_event {
     __u64 time;
     __u32 pid;
     __u32 tid;
+    __s32 flags;
+    char filename[MAX_FILENAME_LENGTH];
+    char comm[MAX_PROGNAME_LENGTH];
+};
+
+struct exec_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 dirfd;
     __s32 flags;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];

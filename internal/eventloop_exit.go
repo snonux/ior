@@ -16,6 +16,8 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 	switch ev := ep.EnterEv.(type) {
 	case *types.OpenEvent:
 		return e.handleOpenExit(ep, ev)
+	case *types.ExecEvent:
+		return e.handleExecExit(ep, ev)
 	case *types.NameEvent:
 		return e.handleNameExit(ep, ev)
 	case *types.PathEvent:
@@ -80,6 +82,22 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 		ep.File = file.NewPathname(openEv.Filename[:])
 	}
 	e.setCachedComm(openEv.Tid, comm)
+	return true
+}
+
+func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool {
+	if _, ok := ep.ExitEv.(*types.RetEvent); !ok {
+		e.recyclePair(ep, "Dropped malformed exec exit event")
+		return false
+	}
+	comm := types.StringValue(execEv.Comm[:])
+	ep.Comm = comm
+	ep.File = file.NewPathname(execEv.Filename[:])
+	e.setCachedComm(execEv.Tid, comm)
+	if !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return false
+	}
 	return true
 }
 

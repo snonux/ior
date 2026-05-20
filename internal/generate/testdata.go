@@ -1098,6 +1098,38 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatExecveat = `name: sys_enter_execveat
+ID: 869
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int dfd;	offset:16;	size:8;	signed:0;
+	field:const char * filename;	offset:24;	size:8;	signed:0;
+	field:const char *const * argv;	offset:32;	size:8;	signed:0;
+	field:const char *const * envp;	offset:40;	size:8;	signed:0;
+	field:int flags;	offset:48;	size:8;	signed:0;
+
+print fmt: "dfd: 0x%08lx, filename: 0x%08lx, argv: 0x%08lx, envp: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->dfd)), ((unsigned long)(REC->filename)), ((unsigned long)(REC->argv)), ((unsigned long)(REC->envp)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitExecveat = `name: sys_exit_execveat
+ID: 868
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatMknod = `name: sys_enter_mknod
 ID: 894
 format:
