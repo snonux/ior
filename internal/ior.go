@@ -379,12 +379,13 @@ func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	fields := make([]string, len(cfg.CollapsedFields))
 	copy(fields, cfg.CollapsedFields)
 	return eventLoopConfig{
-		pidFilter:       cfg.PidFilter,
-		filter:          traceFilterFromConfig(cfg),
-		collapsedFields: fields,
-		countField:      cfg.CountField,
-		pprofEnable:     cfg.PprofEnable,
-		plainMode:       cfg.PlainMode,
+		pidFilter:             cfg.PidFilter,
+		filter:                traceFilterFromConfig(cfg),
+		collapsedFields:       fields,
+		countField:            cfg.CountField,
+		pprofEnable:           cfg.PprofEnable,
+		plainMode:             cfg.PlainMode,
+		aggregateOnlyTraceIDs: buildAggregateOnlyTraceIDs(cfg),
 	}
 }
 
