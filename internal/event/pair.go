@@ -29,6 +29,8 @@ type Pair struct {
 	// AddressSpaceBytes tracks memory-region extent for memory syscalls
 	// (e.g. munmap/mremap) and is intentionally separate from I/O bytes.
 	AddressSpaceBytes uint64
+	// RequestedSleepNs tracks requested sleep duration for nanosleep-style syscalls.
+	RequestedSleepNs int64
 }
 
 func NewPair(enterEv Event) *Pair {

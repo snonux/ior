@@ -439,6 +439,20 @@ func TestClassifyMremap(t *testing.T) {
 	}
 }
 
+func TestClassifyNanosleep(t *testing.T) {
+	r := classifyFromData(t, FormatNanosleep)
+	if r.Kind != KindSleep {
+		t.Errorf("nanosleep: got kind %d, want KindSleep", r.Kind)
+	}
+}
+
+func TestClassifyClockNanosleep(t *testing.T) {
+	r := classifyFromData(t, FormatClockNanosleep)
+	if r.Kind != KindSleep {
+		t.Errorf("clock_nanosleep: got kind %d, want KindSleep", r.Kind)
+	}
+}
+
 func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNone {
@@ -493,6 +507,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"pselect6", FormatPselect6, FormatExitPselect6, KindPoll},
 		{"munmap", FormatMunmap, FormatExitMunmap, KindMem},
 		{"mremap", FormatMremap, FormatExitMremap, KindMem},
+		{"nanosleep", FormatNanosleep, FormatExitNanosleep, KindSleep},
+		{"clock_nanosleep", FormatClockNanosleep, FormatExitClockNanosleep, KindSleep},
 		{"kill", FormatKill, FormatExitKill, KindNull},
 	}
 
@@ -532,6 +548,8 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"pselect6", FormatPselect6, FormatExitPselect6, FamilyPolling},
 		{"munmap", FormatMunmap, FormatExitMunmap, FamilyMemory},
 		{"mremap", FormatMremap, FormatExitMremap, FamilyMemory},
+		{"nanosleep", FormatNanosleep, FormatExitNanosleep, FamilyTime},
+		{"clock_nanosleep", FormatClockNanosleep, FormatExitClockNanosleep, FamilyTime},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 	}
 

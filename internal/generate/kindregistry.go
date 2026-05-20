@@ -33,6 +33,7 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindEpollCtl:       {structName: "epoll_ctl_event", enterAccepted: true},
 	KindPoll:           {structName: "poll_event", enterAccepted: true},
 	KindMem:            {structName: "mem_event", enterAccepted: true},
+	KindSleep:          {structName: "sleep_event", enterAccepted: true},
 	// KindNone is intentionally absent: it represents "unclassified" and is
 	// never enter-accepted. lookupKind returns the zero kindMeta (enterAccepted=false)
 	// for any unregistered kind, so KindNone is implicitly rejected.

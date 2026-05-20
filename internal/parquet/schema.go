@@ -26,6 +26,7 @@ type Record struct {
 	Ret               int64  `parquet:"ret"`
 	Bytes             uint64 `parquet:"bytes"`
 	AddressSpaceBytes uint64 `parquet:"address_space_bytes"`
+	RequestedSleepNS  int64  `parquet:"requested_sleep_ns"`
 	File              string `parquet:"file"`
 	IsError           bool   `parquet:"is_error"`
 	FilterEpoch       uint64 `parquet:"filter_epoch"`
@@ -69,6 +70,7 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		Ret:               row.RetVal,
 		Bytes:             row.Bytes,
 		AddressSpaceBytes: row.AddressSpaceBytes,
+		RequestedSleepNS:  row.RequestedSleepNs,
 		File:              row.FileName,
 		IsError:           row.IsError,
 		FilterEpoch:       filterEpoch,

@@ -14261,7 +14261,7 @@ int handle_sys_exit_clock_getres(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_clock_nanosleep is a struct null_event
+/// sys_enter_clock_nanosleep is a struct sleep_event
 SEC("tracepoint/syscalls/sys_enter_clock_nanosleep")
 int handle_sys_enter_clock_nanosleep(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14271,15 +14271,25 @@ int handle_sys_enter_clock_nanosleep(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_CLOCK_NANOSLEEP))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct sleep_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct sleep_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_SLEEP_EVENT;
     ev->trace_id = SYS_ENTER_CLOCK_NANOSLEEP;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->requested_ns = -1;
+    if (ctx->args[2] != 0) {
+        struct __ior_timespec {
+            __s64 tv_sec;
+            __s64 tv_nsec;
+        } ts = {};
+        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {
+            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14311,7 +14321,7 @@ int handle_sys_exit_clock_nanosleep(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_nanosleep is a struct null_event
+/// sys_enter_nanosleep is a struct sleep_event
 SEC("tracepoint/syscalls/sys_enter_nanosleep")
 int handle_sys_enter_nanosleep(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14321,15 +14331,25 @@ int handle_sys_enter_nanosleep(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_NANOSLEEP))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct sleep_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct sleep_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_SLEEP_EVENT;
     ev->trace_id = SYS_ENTER_NANOSLEEP;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->requested_ns = -1;
+    if (ctx->args[0] != 0) {
+        struct __ior_timespec {
+            __s64 tv_sec;
+            __s64 tv_nsec;
+        } ts = {};
+        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[0]) == 0) {
+            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

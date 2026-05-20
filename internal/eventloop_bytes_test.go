@@ -147,3 +147,25 @@ func TestApplyAddressSpaceBytes(t *testing.T) {
 		t.Fatalf("pair.Bytes = %d, want 0 (IO bytes must stay separate)", pair.Bytes)
 	}
 }
+
+func TestApplyRequestedSleepNs(t *testing.T) {
+	pair := &event.Pair{
+		EnterEv: &types.SleepEvent{
+			TraceId:     types.SYS_ENTER_NANOSLEEP,
+			RequestedNs: 7_500_000,
+			EventType:   types.ENTER_SLEEP_EVENT,
+			Time:        10,
+			Pid:         1,
+			Tid:         2,
+		},
+		ExitEv: &types.RetEvent{
+			TraceId: types.SYS_EXIT_NANOSLEEP,
+			Ret:     0,
+		},
+	}
+
+	applyRequestedSleepNs(pair)
+	if pair.RequestedSleepNs != 7_500_000 {
+		t.Fatalf("pair.RequestedSleepNs = %d, want 7500000", pair.RequestedSleepNs)
+	}
+}

@@ -19,7 +19,7 @@ sys_enter_chroot is a struct path_event
 sys_enter_clock_adjtime is a struct null_event
 sys_enter_clock_getres is a struct null_event
 sys_enter_clock_gettime is a struct null_event
-sys_enter_clock_nanosleep is a struct null_event
+sys_enter_clock_nanosleep is a struct sleep_event
 sys_enter_clock_settime is a struct null_event
 sys_enter_clone is a struct null_event
 sys_enter_clone3 is a struct null_event
@@ -192,7 +192,7 @@ sys_enter_munlock is a struct null_event
 sys_enter_munlockall is a struct null_event
 sys_enter_munmap is a struct mem_event
 sys_enter_name_to_handle_at is a struct path_event
-sys_enter_nanosleep is a struct null_event
+sys_enter_nanosleep is a struct sleep_event
 sys_enter_newfstat is a struct fd_event
 sys_enter_newfstatat is a struct path_event
 sys_enter_newlstat is a struct path_event
