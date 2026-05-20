@@ -26,6 +26,9 @@ const (
 	KindPoll
 	KindMem
 	KindSleep
+	KindKeyctl
+	KindPtrace
+	KindPerfOpen
 )
 
 type RetClassification string
@@ -172,6 +175,16 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindSleep}, true
 	case "sys_enter_clock_nanosleep":
 		return ClassificationResult{Kind: KindSleep}, true
+	case "sys_enter_keyctl":
+		return ClassificationResult{Kind: KindKeyctl}, true
+	case "sys_enter_add_key":
+		return ClassificationResult{Kind: KindKeyctl}, true
+	case "sys_enter_request_key":
+		return ClassificationResult{Kind: KindKeyctl}, true
+	case "sys_enter_ptrace":
+		return ClassificationResult{Kind: KindPtrace}, true
+	case "sys_enter_perf_event_open":
+		return ClassificationResult{Kind: KindPerfOpen}, true
 	case "sys_enter_mq_timedsend":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_mq_timedreceive":

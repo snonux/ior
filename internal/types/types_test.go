@@ -373,6 +373,95 @@ func TestSleepEventSerialization(t *testing.T) {
 	assertEquals(t, sleepEv1.RequestedNs, sleepEv2.RequestedNs)
 }
 
+func TestKeyctlEventSerialization(t *testing.T) {
+	keyctlEv1 := KeyctlEvent{
+		EventType: ENTER_KEYCTL_EVENT,
+		TraceId:   SYS_ENTER_KEYCTL,
+		Time:      7902,
+		Pid:       46,
+		Tid:       47,
+		Option:    1,
+		KeySerial: 2,
+		Value:     3,
+	}
+	bytes, err := keyctlEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	keyctlEv2 := NewKeyctlEvent(bytes)
+
+	assertEquals(t, keyctlEv1.EventType, keyctlEv2.EventType)
+	assertEquals(t, keyctlEv1.TraceId, keyctlEv2.TraceId)
+	assertEquals(t, keyctlEv1.Time, keyctlEv2.Time)
+	assertEquals(t, keyctlEv1.Pid, keyctlEv2.Pid)
+	assertEquals(t, keyctlEv1.Tid, keyctlEv2.Tid)
+	assertEquals(t, keyctlEv1.Option, keyctlEv2.Option)
+	assertEquals(t, keyctlEv1.KeySerial, keyctlEv2.KeySerial)
+	assertEquals(t, keyctlEv1.Value, keyctlEv2.Value)
+}
+
+func TestPtraceEventSerialization(t *testing.T) {
+	ptraceEv1 := PtraceEvent{
+		EventType: ENTER_PTRACE_EVENT,
+		TraceId:   SYS_ENTER_PTRACE,
+		Time:      7903,
+		Pid:       48,
+		Tid:       49,
+		Request:   4,
+		TargetPid: 10,
+		Data:      5,
+	}
+	bytes, err := ptraceEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	ptraceEv2 := NewPtraceEvent(bytes)
+
+	assertEquals(t, ptraceEv1.EventType, ptraceEv2.EventType)
+	assertEquals(t, ptraceEv1.TraceId, ptraceEv2.TraceId)
+	assertEquals(t, ptraceEv1.Time, ptraceEv2.Time)
+	assertEquals(t, ptraceEv1.Pid, ptraceEv2.Pid)
+	assertEquals(t, ptraceEv1.Tid, ptraceEv2.Tid)
+	assertEquals(t, ptraceEv1.Request, ptraceEv2.Request)
+	assertEquals(t, ptraceEv1.TargetPid, ptraceEv2.TargetPid)
+	assertEquals(t, ptraceEv1.Data, ptraceEv2.Data)
+}
+
+func TestPerfOpenEventSerialization(t *testing.T) {
+	perfEv1 := PerfOpenEvent{
+		EventType: ENTER_PERF_OPEN_EVENT,
+		TraceId:   SYS_ENTER_PERF_EVENT_OPEN,
+		Time:      7904,
+		Pid:       50,
+		Tid:       51,
+		AttrType:  1,
+		AttrSize:  64,
+		Config:    2,
+		TargetPid: 0,
+		Cpu:       -1,
+		GroupFd:   -1,
+		Flags:     0,
+	}
+	bytes, err := perfEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	perfEv2 := NewPerfOpenEvent(bytes)
+
+	assertEquals(t, perfEv1.EventType, perfEv2.EventType)
+	assertEquals(t, perfEv1.TraceId, perfEv2.TraceId)
+	assertEquals(t, perfEv1.Time, perfEv2.Time)
+	assertEquals(t, perfEv1.Pid, perfEv2.Pid)
+	assertEquals(t, perfEv1.Tid, perfEv2.Tid)
+	assertEquals(t, perfEv1.AttrType, perfEv2.AttrType)
+	assertEquals(t, perfEv1.AttrSize, perfEv2.AttrSize)
+	assertEquals(t, perfEv1.Config, perfEv2.Config)
+	assertEquals(t, perfEv1.TargetPid, perfEv2.TargetPid)
+	assertEquals(t, perfEv1.Cpu, perfEv2.Cpu)
+	assertEquals(t, perfEv1.GroupFd, perfEv2.GroupFd)
+	assertEquals(t, perfEv1.Flags, perfEv2.Flags)
+}
+
 func TestEqualsDifferentTypes(t *testing.T) {
 	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
 	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}

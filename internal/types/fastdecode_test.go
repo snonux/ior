@@ -274,6 +274,58 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("sleep decode mismatch")
 		}
 	})
+
+	t.Run("KeyctlEvent", func(t *testing.T) {
+		ev := &KeyctlEvent{EventType: ENTER_KEYCTL_EVENT, TraceId: SYS_ENTER_KEYCTL, Time: 1, Pid: 2, Tid: 3, Option: 1, KeySerial: 2, Value: 3}
+		raw, _ := ev.Bytes()
+
+		slow := NewKeyctlEvent(raw)
+		fast := NewKeyctlEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("keyctl decode mismatch")
+		}
+	})
+
+	t.Run("PtraceEvent", func(t *testing.T) {
+		ev := &PtraceEvent{EventType: ENTER_PTRACE_EVENT, TraceId: SYS_ENTER_PTRACE, Time: 1, Pid: 2, Tid: 3, Request: 4, TargetPid: 5, Data: 6}
+		raw, _ := ev.Bytes()
+
+		slow := NewPtraceEvent(raw)
+		fast := NewPtraceEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("ptrace decode mismatch")
+		}
+	})
+
+	t.Run("PerfOpenEvent", func(t *testing.T) {
+		ev := &PerfOpenEvent{
+			EventType: ENTER_PERF_OPEN_EVENT,
+			TraceId:   SYS_ENTER_PERF_EVENT_OPEN,
+			Time:      1,
+			Pid:       2,
+			Tid:       3,
+			AttrType:  1,
+			AttrSize:  64,
+			Config:    5,
+			TargetPid: 0,
+			Cpu:       -1,
+			GroupFd:   -1,
+			Flags:     0,
+		}
+		raw, _ := ev.Bytes()
+
+		slow := NewPerfOpenEvent(raw)
+		fast := NewPerfOpenEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("perf_open decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -500,6 +552,9 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "TwoFdEvent", decode: func(raw []byte) bool { return NewTwoFdEventFast(raw) == nil }},
 		{name: "PollEvent", decode: func(raw []byte) bool { return NewPollEventFast(raw) == nil }},
 		{name: "SleepEvent", decode: func(raw []byte) bool { return NewSleepEventFast(raw) == nil }},
+		{name: "KeyctlEvent", decode: func(raw []byte) bool { return NewKeyctlEventFast(raw) == nil }},
+		{name: "PtraceEvent", decode: func(raw []byte) bool { return NewPtraceEventFast(raw) == nil }},
+		{name: "PerfOpenEvent", decode: func(raw []byte) bool { return NewPerfOpenEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {

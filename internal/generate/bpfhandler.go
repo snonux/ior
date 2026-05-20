@@ -101,6 +101,12 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraMem(f.Name)
 	case KindSleep:
 		return generateExtraSleep(f.Name)
+	case KindKeyctl:
+		return generateExtraKeyctl(f.Name)
+	case KindPtrace:
+		return generateExtraPtrace()
+	case KindPerfOpen:
+		return generateExtraPerfOpen()
 	case KindOpen:
 		return generateExtraOpen(f)
 	case KindMqOpen:
@@ -280,6 +286,27 @@ func generateExtraSleep(name string) string {
 		ptrExpr = "ctx->args[2]"
 	}
 	return "    ev->requested_ns = -1;\n    if (" + ptrExpr + " != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)" + ptrExpr + ") == 0) {\n            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
+}
+
+func generateExtraKeyctl(name string) string {
+	switch name {
+	case "sys_enter_keyctl":
+		return "    ev->option = (__s32)ctx->args[0];\n    ev->key_serial = (__s32)ctx->args[1];\n    ev->value = (__u64)ctx->args[2];\n"
+	case "sys_enter_add_key":
+		return "    ev->option = -1;\n    ev->key_serial = (__s32)ctx->args[4];\n    ev->value = (__u64)ctx->args[3];\n"
+	case "sys_enter_request_key":
+		return "    ev->option = -2;\n    ev->key_serial = (__s32)ctx->args[3];\n    ev->value = 0;\n"
+	default:
+		return "    ev->option = 0;\n    ev->key_serial = 0;\n    ev->value = 0;\n"
+	}
+}
+
+func generateExtraPtrace() string {
+	return "    ev->request = (__s64)ctx->args[0];\n    ev->target_pid = (__s32)ctx->args[1];\n    ev->data = (__u64)ctx->args[3];\n"
+}
+
+func generateExtraPerfOpen() string {
+	return "    ev->attr_type = 0;\n    ev->attr_size = 0;\n    ev->config = 0;\n    if (ctx->args[0] != 0) {\n        struct __ior_perf_event_attr {\n            __u32 type;\n            __u32 size;\n            __u64 config;\n        } attr = {};\n        if (bpf_probe_read_user(&attr, sizeof(attr), (void *)ctx->args[0]) == 0) {\n            ev->attr_type = attr.type;\n            ev->attr_size = attr.size;\n            ev->config = attr.config;\n        }\n    }\n    ev->target_pid = (__s32)ctx->args[1];\n    ev->cpu = (__s32)ctx->args[2];\n    ev->group_fd = (__s32)ctx->args[3];\n    ev->flags = (__u32)ctx->args[4];\n"
 }
 
 // eventStructName returns the C struct name for a TracepointKind. The mapping

@@ -106,6 +106,12 @@ const ENTER_SLEEP_EVENT = 35
 const EXIT_SLEEP_EVENT = 36
 const ENTER_TWO_FD_EVENT = 37
 const EXIT_TWO_FD_EVENT = 38
+const ENTER_KEYCTL_EVENT = 39
+const EXIT_KEYCTL_EVENT = 40
+const ENTER_PTRACE_EVENT = 41
+const EXIT_PTRACE_EVENT = 42
+const ENTER_PERF_OPEN_EVENT = 43
+const EXIT_PERF_OPEN_EVENT = 44
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -2162,4 +2168,219 @@ func (t *TwoFdEvent) Bytes() ([]byte, error) {
 
 func (t *TwoFdEvent) Recycle() {
 	poolOfTwoFdEvents.Put(t)
+}
+
+type KeyctlEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Option    int32
+	KeySerial int32
+	Value     uint64
+}
+
+func (k KeyctlEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Option:%v KeySerial:%v Value:%v", k.EventType, k.TraceId, k.Time, k.Pid, k.Tid, k.Option, k.KeySerial, k.Value)
+}
+
+func (k KeyctlEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*KeyctlEvent)
+	if !ok {
+		return false
+	}
+	return k.EventType == otherConcrete.EventType && k.TraceId == otherConcrete.TraceId && k.Time == otherConcrete.Time && k.Pid == otherConcrete.Pid && k.Tid == otherConcrete.Tid && k.Option == otherConcrete.Option && k.KeySerial == otherConcrete.KeySerial && k.Value == otherConcrete.Value
+}
+
+func (k *KeyctlEvent) GetEventType() EventType {
+	return k.EventType
+}
+
+func (k *KeyctlEvent) GetTraceId() TraceId {
+	return k.TraceId
+}
+
+func (k *KeyctlEvent) GetPid() uint32 {
+	return k.Pid
+}
+
+func (k *KeyctlEvent) GetTid() uint32 {
+	return k.Tid
+}
+
+func (k *KeyctlEvent) GetTime() uint64 {
+	return k.Time
+}
+
+var poolOfKeyctlEvents = sync.Pool{
+	New: func() any { return &KeyctlEvent{} },
+}
+
+func NewKeyctlEvent(raw []byte) *KeyctlEvent {
+	k := poolOfKeyctlEvents.Get().(*KeyctlEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, k); err != nil {
+		*k = KeyctlEvent{}
+		poolOfKeyctlEvents.Put(k)
+		return nil
+	}
+	return k
+}
+
+func (k *KeyctlEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, k)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (k *KeyctlEvent) Recycle() {
+	poolOfKeyctlEvents.Put(k)
+}
+
+type PtraceEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Request   int64
+	TargetPid int32
+	Pad       int32
+	Data      uint64
+}
+
+func (p PtraceEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Request:%v TargetPid:%v Pad:%v Data:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.Request, p.TargetPid, p.Pad, p.Data)
+}
+
+func (p PtraceEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*PtraceEvent)
+	if !ok {
+		return false
+	}
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Request == otherConcrete.Request && p.TargetPid == otherConcrete.TargetPid && p.Pad == otherConcrete.Pad && p.Data == otherConcrete.Data
+}
+
+func (p *PtraceEvent) GetEventType() EventType {
+	return p.EventType
+}
+
+func (p *PtraceEvent) GetTraceId() TraceId {
+	return p.TraceId
+}
+
+func (p *PtraceEvent) GetPid() uint32 {
+	return p.Pid
+}
+
+func (p *PtraceEvent) GetTid() uint32 {
+	return p.Tid
+}
+
+func (p *PtraceEvent) GetTime() uint64 {
+	return p.Time
+}
+
+var poolOfPtraceEvents = sync.Pool{
+	New: func() any { return &PtraceEvent{} },
+}
+
+func NewPtraceEvent(raw []byte) *PtraceEvent {
+	p := poolOfPtraceEvents.Get().(*PtraceEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, p); err != nil {
+		*p = PtraceEvent{}
+		poolOfPtraceEvents.Put(p)
+		return nil
+	}
+	return p
+}
+
+func (p *PtraceEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, p)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (p *PtraceEvent) Recycle() {
+	poolOfPtraceEvents.Put(p)
+}
+
+type PerfOpenEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	AttrType  uint32
+	AttrSize  uint32
+	Config    uint64
+	TargetPid int32
+	Cpu       int32
+	GroupFd   int32
+	Flags     uint32
+}
+
+func (p PerfOpenEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v AttrType:%v AttrSize:%v Config:%v TargetPid:%v Cpu:%v GroupFd:%v Flags:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.AttrType, p.AttrSize, p.Config, p.TargetPid, p.Cpu, p.GroupFd, p.Flags)
+}
+
+func (p PerfOpenEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*PerfOpenEvent)
+	if !ok {
+		return false
+	}
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.AttrType == otherConcrete.AttrType && p.AttrSize == otherConcrete.AttrSize && p.Config == otherConcrete.Config && p.TargetPid == otherConcrete.TargetPid && p.Cpu == otherConcrete.Cpu && p.GroupFd == otherConcrete.GroupFd && p.Flags == otherConcrete.Flags
+}
+
+func (p *PerfOpenEvent) GetEventType() EventType {
+	return p.EventType
+}
+
+func (p *PerfOpenEvent) GetTraceId() TraceId {
+	return p.TraceId
+}
+
+func (p *PerfOpenEvent) GetPid() uint32 {
+	return p.Pid
+}
+
+func (p *PerfOpenEvent) GetTid() uint32 {
+	return p.Tid
+}
+
+func (p *PerfOpenEvent) GetTime() uint64 {
+	return p.Time
+}
+
+var poolOfPerfOpenEvents = sync.Pool{
+	New: func() any { return &PerfOpenEvent{} },
+}
+
+func NewPerfOpenEvent(raw []byte) *PerfOpenEvent {
+	p := poolOfPerfOpenEvents.Get().(*PerfOpenEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, p); err != nil {
+		*p = PerfOpenEvent{}
+		poolOfPerfOpenEvents.Put(p)
+		return nil
+	}
+	return p
+}
+
+func (p *PerfOpenEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, p)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (p *PerfOpenEvent) Recycle() {
+	poolOfPerfOpenEvents.Put(p)
 }

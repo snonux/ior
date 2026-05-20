@@ -41,6 +41,12 @@
 #define EXIT_SLEEP_EVENT 36
 #define ENTER_TWO_FD_EVENT 37
 #define EXIT_TWO_FD_EVENT 38
+#define ENTER_KEYCTL_EVENT 39
+#define EXIT_KEYCTL_EVENT 40
+#define ENTER_PTRACE_EVENT 41
+#define EXIT_PTRACE_EVENT 42
+#define ENTER_PERF_OPEN_EVENT 43
+#define EXIT_PERF_OPEN_EVENT 44
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -244,4 +250,42 @@ struct two_fd_event {
     __s32 fd_a;
     __s32 fd_b;
     __u64 extra;
+};
+
+struct keyctl_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 option;
+    __s32 key_serial;
+    __u64 value;
+};
+
+struct ptrace_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s64 request;
+    __s32 target_pid;
+    __s32 _pad;
+    __u64 data;
+};
+
+struct perf_open_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u32 attr_type;
+    __u32 attr_size;
+    __u64 config;
+    __s32 target_pid;
+    __s32 cpu;
+    __s32 group_fd;
+    __u32 flags;
 };
