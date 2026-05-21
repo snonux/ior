@@ -634,6 +634,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindSysVOp, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindProc, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindBpf, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindFutex, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -682,6 +683,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindSysVOp, "null_event"},
 		{KindProc, "null_event"},
 		{KindBpf, "null_event"},
+		{KindFutex, "null_event"},
 	}
 
 	for _, tt := range tests {
@@ -700,7 +702,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

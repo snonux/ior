@@ -13658,7 +13658,7 @@ int handle_sys_exit_get_robust_list(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_futex is a struct null_event (kind=null)
+/// sys_enter_futex is a struct null_event (kind=futex)
 SEC("tracepoint/syscalls/sys_enter_futex")
 int handle_sys_enter_futex(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -13708,7 +13708,7 @@ int handle_sys_exit_futex(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_futex_waitv is a struct null_event (kind=null)
+/// sys_enter_futex_waitv is a struct null_event (kind=futex)
 SEC("tracepoint/syscalls/sys_enter_futex_waitv")
 int handle_sys_enter_futex_waitv(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -13758,7 +13758,7 @@ int handle_sys_exit_futex_waitv(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_futex_wake is a struct null_event (kind=null)
+/// sys_enter_futex_wake is a struct null_event (kind=futex)
 SEC("tracepoint/syscalls/sys_enter_futex_wake")
 int handle_sys_enter_futex_wake(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -13808,7 +13808,7 @@ int handle_sys_exit_futex_wake(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_futex_wait is a struct null_event (kind=null)
+/// sys_enter_futex_wait is a struct null_event (kind=futex)
 SEC("tracepoint/syscalls/sys_enter_futex_wait")
 int handle_sys_enter_futex_wait(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -13858,7 +13858,7 @@ int handle_sys_exit_futex_wait(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_futex_requeue is a struct null_event (kind=null)
+/// sys_enter_futex_requeue is a struct null_event (kind=futex)
 SEC("tracepoint/syscalls/sys_enter_futex_requeue")
 int handle_sys_enter_futex_requeue(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;

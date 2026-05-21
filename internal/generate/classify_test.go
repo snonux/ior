@@ -780,6 +780,31 @@ func TestClassifyL7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyJ7NameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_futex",
+		"sys_enter_futex_wait",
+		"sys_enter_futex_wake",
+		"sys_enter_futex_requeue",
+		"sys_enter_futex_waitv",
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindFutex {
+				t.Fatalf("%s: got kind %d, want KindFutex", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassify67NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string
