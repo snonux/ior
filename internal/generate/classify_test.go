@@ -377,6 +377,34 @@ func TestClassifyExitEventfd2(t *testing.T) {
 	}
 }
 
+func TestClassifyEventfdSpecializedFdFromAirSyscalls(t *testing.T) {
+	tests := []string{
+		"sys_enter_memfd_create",
+		"sys_exit_memfd_create",
+		"sys_enter_memfd_secret",
+		"sys_exit_memfd_secret",
+		"sys_enter_userfaultfd",
+		"sys_exit_userfaultfd",
+		"sys_enter_signalfd",
+		"sys_exit_signalfd",
+		"sys_enter_signalfd4",
+		"sys_exit_signalfd4",
+		"sys_enter_timerfd_create",
+		"sys_exit_timerfd_create",
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r, ok := classifyNameOnly(name)
+			if !ok {
+				t.Fatalf("classifyNameOnly(%q) did not match", name)
+			}
+			if r.Kind != KindEventfd {
+				t.Fatalf("classifyNameOnly(%q) kind = %v, want KindEventfd", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassifyEpollCtl(t *testing.T) {
 	r := classifyFromData(t, FormatEpollCtl)
 	if r.Kind != KindEpollCtl {

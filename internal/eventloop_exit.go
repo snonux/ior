@@ -405,7 +405,7 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 		flags = eventfdEv.Flags
 	}
 	if fd := int32(exitEv.Ret); fd >= 0 {
-		fdFile := file.NewFd(fd, eventfdDescriptorName(flags), flags)
+		fdFile := file.NewFd(fd, eventfdDescriptorName(eventfdEv.GetTraceId(), flags), flags)
 		e.fdState().set(fd, fdFile)
 		ep.File = fdFile
 	}
@@ -506,8 +506,21 @@ func pipeDescriptorName(flags, fd0, fd1 int32) string {
 	return fmt.Sprintf("pipe:%d:%d:%d", flags, fd0, fd1)
 }
 
-func eventfdDescriptorName(flags int32) string {
-	return fmt.Sprintf("eventfd:%d", flags)
+func eventfdDescriptorName(traceID types.TraceId, flags int32) string {
+	switch traceID {
+	case types.SYS_ENTER_MEMFD_CREATE:
+		return fmt.Sprintf("memfd:%d", flags)
+	case types.SYS_ENTER_MEMFD_SECRET:
+		return fmt.Sprintf("memfd-secret:%d", flags)
+	case types.SYS_ENTER_USERFAULTFD:
+		return fmt.Sprintf("userfaultfd:%d", flags)
+	case types.SYS_ENTER_SIGNALFD, types.SYS_ENTER_SIGNALFD4:
+		return fmt.Sprintf("signalfd:%d", flags)
+	case types.SYS_ENTER_TIMERFD_CREATE:
+		return fmt.Sprintf("timerfd:%d", flags)
+	default:
+		return fmt.Sprintf("eventfd:%d", flags)
+	}
 }
 
 func perfDescriptorName(perfOpenEv *types.PerfOpenEvent) string {

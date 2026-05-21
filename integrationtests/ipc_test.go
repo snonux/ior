@@ -51,6 +51,30 @@ func TestEventfd2Basic(t *testing.T) {
 	assertTracepointPathPrefix(t, result, "enter_close", "eventfd:")
 }
 
+func TestFdFromAirEventfdUsers(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	result, pid, err := h.RunWithIorArgs("fd-from-air-eventfd-users", defaultDuration, []string{
+		"-trace-families", "IPC",
+	})
+	if err != nil {
+		t.Fatalf("run scenario fd-from-air-eventfd-users: %v", err)
+	}
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_memfd_create", MinCount: 1},
+		{Tracepoint: "enter_memfd_secret", MinCount: 1},
+		{Tracepoint: "enter_userfaultfd", MinCount: 1},
+		{Tracepoint: "enter_signalfd", MinCount: 1},
+		{Tracepoint: "enter_signalfd4", MinCount: 1},
+		{Tracepoint: "enter_timerfd_create", MinCount: 1},
+	})
+
+	assertTracepointPathPrefix(t, result, "enter_memfd_create", "memfd:")
+	assertTracepointPathPrefix(t, result, "enter_timerfd_create", "timerfd:")
+}
+
 func TestPosixMqBasic(t *testing.T) {
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
