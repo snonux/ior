@@ -38,6 +38,7 @@ const (
 	KindProc
 	KindBpf
 	KindFutex
+	KindPrctl
 )
 
 func (k TracepointKind) MetadataName() string {
@@ -106,6 +107,8 @@ func (k TracepointKind) MetadataName() string {
 		return "bpf"
 	case KindFutex:
 		return "futex"
+	case KindPrctl:
+		return "prctl"
 	default:
 		return "none"
 	}
@@ -403,6 +406,10 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_process_mrelease":
 		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_wait4":
+		return ClassificationResult{Kind: KindProc}, true
+	case "sys_enter_waitid":
+		return ClassificationResult{Kind: KindProc}, true
 	case "sys_enter_clone":
 		return ClassificationResult{Kind: KindProc}, true
 	case "sys_enter_clone3":
@@ -411,6 +418,14 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindProc}, true
 	case "sys_enter_vfork":
 		return ClassificationResult{Kind: KindProc}, true
+	case "sys_enter_kill":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_prctl":
+		return ClassificationResult{Kind: KindPrctl}, true
+	case "sys_enter_setns":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_unshare":
+		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_bpf":
 		return ClassificationResult{Kind: KindBpf}, true
 	case "sys_enter_futex":

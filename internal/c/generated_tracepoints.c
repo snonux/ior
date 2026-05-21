@@ -17740,7 +17740,7 @@ int handle_sys_exit_umask(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_prctl is a struct null_event (kind=null)
+/// sys_enter_prctl is a struct null_event (kind=prctl)
 SEC("tracepoint/syscalls/sys_enter_prctl")
 int handle_sys_enter_prctl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -18844,7 +18844,7 @@ int handle_sys_exit_exit_group(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_waitid is a struct null_event (kind=null)
+/// sys_enter_waitid is a struct null_event (kind=proc)
 SEC("tracepoint/syscalls/sys_enter_waitid")
 int handle_sys_enter_waitid(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -18894,7 +18894,7 @@ int handle_sys_exit_waitid(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_wait4 is a struct null_event (kind=null)
+/// sys_enter_wait4 is a struct null_event (kind=proc)
 SEC("tracepoint/syscalls/sys_enter_wait4")
 int handle_sys_enter_wait4(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
