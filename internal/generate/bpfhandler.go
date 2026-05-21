@@ -151,6 +151,12 @@ func generateExtraMqOpen(f *Format) string {
 func generateExtraExec(f *Format) string {
 	filenameIdx := f.FieldNumber("filename")
 	dirfdIdx := f.FieldNumber("dfd")
+	if dirfdIdx < 0 {
+		dirfdIdx = f.FieldNumber("fd")
+	}
+	if dirfdIdx < 0 {
+		dirfdIdx = f.FieldNumber("dirfd")
+	}
 	flagsIdx := f.FieldNumber("flags")
 	if filenameIdx < 0 {
 		filenameIdx = 0
@@ -161,6 +167,8 @@ func generateExtraExec(f *Format) string {
 	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
 	if dirfdIdx > -1 {
 		fmt.Fprintf(&b, "    ev->dirfd = (__s32)ctx->args[%d];\n", dirfdIdx)
+	} else if f.Name == "sys_enter_execveat" {
+		b.WriteString("    ev->dirfd = (__s32)ctx->args[0];\n")
 	} else {
 		b.WriteString("    ev->dirfd = -1;\n")
 	}

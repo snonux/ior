@@ -75,6 +75,17 @@ func TestGenerateExecHandler(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[4];")
 }
 
+func TestGenerateExecHandlerDirfdFallbackForExecveat(t *testing.T) {
+	enter := strings.ReplaceAll(FormatExecveat, "dfd", "fd")
+	output := generateFromPair(t, enter, FormatExitExecveat)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_execveat")`)
+	requireContains(t, output, "ev->dirfd = (__s32)ctx->args[0];")
+	if strings.Contains(output, "ev->dirfd = -1;") {
+		t.Fatal("execveat handler unexpectedly falls back to ev->dirfd = -1")
+	}
+}
+
 func TestGenerateOpenat2Handler(t *testing.T) {
 	f := mustParseOne(t, FormatOpenat2)
 	r := ClassifyFormat(&f)
