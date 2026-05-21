@@ -111,6 +111,11 @@ func TestEventfdDescriptorNameByTraceID(t *testing.T) {
 		want    string
 	}{
 		{name: "eventfd", traceID: types.SYS_ENTER_EVENTFD2, flags: 1, want: "eventfd:1"},
+		{name: "epoll_create1", traceID: types.SYS_ENTER_EPOLL_CREATE1, flags: 11, want: "epollfd:11"},
+		{name: "inotify_init1", traceID: types.SYS_ENTER_INOTIFY_INIT1, flags: 12, want: "inotifyfd:12"},
+		{name: "fanotify_init", traceID: types.SYS_ENTER_FANOTIFY_INIT, flags: 13, want: "fanotifyfd:13"},
+		{name: "landlock_create_ruleset", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, flags: 14, want: "landlockfd:14"},
+		{name: "fsopen", traceID: types.SYS_ENTER_FSOPEN, flags: 15, want: "fsopenfd:15"},
 		{name: "memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, flags: 2, want: "memfd:2"},
 		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, flags: 3, want: "memfd-secret:3"},
 		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, flags: 4, want: "userfaultfd:4"},

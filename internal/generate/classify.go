@@ -206,6 +206,34 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_exit_timerfd_create":
 		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_epoll_create":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_epoll_create":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_epoll_create1":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_epoll_create1":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_inotify_init":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_inotify_init":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_inotify_init1":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_inotify_init1":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_fanotify_init":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_fanotify_init":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_landlock_create_ruleset":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_landlock_create_ruleset":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_fsopen":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_fsopen":
+		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_enter_pidfd_open":
 		return ClassificationResult{Kind: KindPidfd}, true
 	case "sys_exit_pidfd_open":

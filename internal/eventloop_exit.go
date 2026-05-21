@@ -508,6 +508,16 @@ func pipeDescriptorName(flags, fd0, fd1 int32) string {
 
 func eventfdDescriptorName(traceID types.TraceId, flags int32) string {
 	switch traceID {
+	case types.SYS_ENTER_EPOLL_CREATE, types.SYS_ENTER_EPOLL_CREATE1:
+		return fmt.Sprintf("epollfd:%d", flags)
+	case types.SYS_ENTER_INOTIFY_INIT, types.SYS_ENTER_INOTIFY_INIT1:
+		return fmt.Sprintf("inotifyfd:%d", flags)
+	case types.SYS_ENTER_FANOTIFY_INIT:
+		return fmt.Sprintf("fanotifyfd:%d", flags)
+	case types.SYS_ENTER_LANDLOCK_CREATE_RULESET:
+		return fmt.Sprintf("landlockfd:%d", flags)
+	case types.SYS_ENTER_FSOPEN:
+		return fmt.Sprintf("fsopenfd:%d", flags)
 	case types.SYS_ENTER_MEMFD_CREATE:
 		return fmt.Sprintf("memfd:%d", flags)
 	case types.SYS_ENTER_MEMFD_SECRET:
