@@ -46,6 +46,7 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindSysVId:         {structName: "null_event", enterAccepted: true},
 	KindSysVOp:         {structName: "null_event", enterAccepted: true},
 	KindProc:           {structName: "null_event", enterAccepted: true},
+	KindBpf:            {structName: "null_event", enterAccepted: true},
 	// KindNone is intentionally absent: it represents "unclassified" and is
 	// never enter-accepted. lookupKind returns the zero kindMeta (enterAccepted=false)
 	// for any unregistered kind, so KindNone is implicitly rejected.
