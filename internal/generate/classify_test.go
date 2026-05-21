@@ -828,6 +828,45 @@ func TestClassify97NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyA7NameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_sched_yield",
+		"sys_enter_sched_setaffinity",
+		"sys_enter_sched_getaffinity",
+		"sys_enter_sched_setparam",
+		"sys_enter_sched_getparam",
+		"sys_enter_sched_setscheduler",
+		"sys_enter_sched_getscheduler",
+		"sys_enter_sched_setattr",
+		"sys_enter_sched_getattr",
+		"sys_enter_sched_get_priority_max",
+		"sys_enter_sched_get_priority_min",
+		"sys_enter_sched_rr_get_interval",
+		"sys_enter_getcpu",
+		"sys_enter_getrusage",
+		"sys_enter_getrlimit",
+		"sys_enter_setrlimit",
+		"sys_enter_prlimit64",
+		"sys_enter_getpriority",
+		"sys_enter_setpriority",
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindNull {
+				t.Fatalf("%s: got kind %d, want KindNull", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
