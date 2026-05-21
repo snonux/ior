@@ -300,6 +300,14 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindPoll}, true
 	case "sys_enter_pselect6":
 		return ClassificationResult{Kind: KindPoll}, true
+	case "sys_enter_mprotect":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_madvise":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_pkey_mprotect":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_brk":
+		return ClassificationResult{Kind: KindMem}, true
 	case "sys_enter_munmap":
 		return ClassificationResult{Kind: KindMem}, true
 	case "sys_enter_mremap":

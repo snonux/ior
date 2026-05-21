@@ -328,6 +328,14 @@ func generateExtraPoll(name string) string {
 
 func generateExtraMem(name string) string {
 	switch name {
+	case "sys_enter_mprotect":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
+	case "sys_enter_madvise":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
+	case "sys_enter_pkey_mprotect":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = (__u64)ctx->args[3];\n    ev->flags = (__u64)ctx->args[2];\n"
+	case "sys_enter_brk":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = 0;\n    ev->length2 = 0;\n    ev->flags = 0;\n"
 	case "sys_enter_munmap":
 		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
 	case "sys_enter_mremap":

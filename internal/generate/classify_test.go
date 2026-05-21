@@ -721,6 +721,30 @@ func TestClassifyI7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyH7NameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_mprotect",
+		"sys_enter_madvise",
+		"sys_enter_pkey_mprotect",
+		"sys_enter_brk",
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindMem {
+				t.Fatalf("%s: got kind %d, want KindMem", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassify67NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string
