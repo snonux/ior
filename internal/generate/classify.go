@@ -354,6 +354,26 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_exit_group":
 		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_sigaction":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_sigprocmask":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_sigpending":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_sigsuspend":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_sigtimedwait":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_sigreturn":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sigaltstack":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_pause":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_sigqueueinfo":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rt_tgsigqueueinfo":
+		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_membarrier":
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_rseq":
