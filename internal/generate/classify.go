@@ -374,6 +374,62 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_rt_tgsigqueueinfo":
 		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getpid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_gettid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getppid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_geteuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getgid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getegid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getresuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getresgid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getgroups":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_seteuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setgid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setegid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setresuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setresgid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setreuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setregid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setfsuid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setfsgid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setgroups":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_umask":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setsid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getsid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setpgid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getpgid":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getpgrp":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_set_tid_address":
+		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_membarrier":
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_rseq":

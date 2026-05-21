@@ -780,6 +780,54 @@ func TestClassify87NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassify97NameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_getpid",
+		"sys_enter_gettid",
+		"sys_enter_getppid",
+		"sys_enter_getuid",
+		"sys_enter_geteuid",
+		"sys_enter_getgid",
+		"sys_enter_getegid",
+		"sys_enter_getresuid",
+		"sys_enter_getresgid",
+		"sys_enter_getgroups",
+		"sys_enter_setuid",
+		"sys_enter_seteuid",
+		"sys_enter_setgid",
+		"sys_enter_setegid",
+		"sys_enter_setresuid",
+		"sys_enter_setresgid",
+		"sys_enter_setreuid",
+		"sys_enter_setregid",
+		"sys_enter_setfsuid",
+		"sys_enter_setfsgid",
+		"sys_enter_setgroups",
+		"sys_enter_umask",
+		"sys_enter_setsid",
+		"sys_enter_getsid",
+		"sys_enter_setpgid",
+		"sys_enter_getpgid",
+		"sys_enter_getpgrp",
+		"sys_enter_set_tid_address",
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindNull {
+				t.Fatalf("%s: got kind %d, want KindNull", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
