@@ -518,6 +518,8 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32) string {
 		return fmt.Sprintf("signalfd:%d", flags)
 	case types.SYS_ENTER_TIMERFD_CREATE:
 		return fmt.Sprintf("timerfd:%d", flags)
+	case types.SYS_ENTER_PIDFD_OPEN:
+		return fmt.Sprintf("pidfd:%d", flags)
 	default:
 		return fmt.Sprintf("eventfd:%d", flags)
 	}

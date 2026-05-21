@@ -620,6 +620,40 @@ func TestClassifyMqFdSyscallsByName(t *testing.T) {
 	}
 }
 
+func TestClassifyN7NameOnlyKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_pidfd_open", KindPidfd},
+		{"sys_exit_pidfd_open", KindPidfd},
+		{"sys_enter_pidfd_send_signal", KindFd},
+		{"sys_enter_kexec_file_load", KindFd},
+		{"sys_enter_kcmp", KindTwoFd},
+		{"sys_enter_membarrier", KindNull},
+		{"sys_enter_rseq", KindNull},
+		{"sys_enter_set_robust_list", KindNull},
+		{"sys_enter_get_robust_list", KindNull},
+		{"sys_enter_mmap2", KindNull},
+		{"sys_enter_kexec_load", KindNull},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: tt.name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != tt.want {
+				t.Fatalf("%s: got kind %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
@@ -785,6 +819,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"pipe2", FormatPipe2, FormatExitPipe2, KindPipe},
 		{"eventfd", FormatEventfd, FormatExitEventfd, KindEventfd},
 		{"eventfd2", FormatEventfd2, FormatExitEventfd2, KindEventfd},
+		{"pidfd_open", syntheticEnter("pidfd_open", 9320), syntheticExit("pidfd_open", 9319), KindPidfd},
+		{"pidfd_send_signal", syntheticEnter("pidfd_send_signal", 9322), syntheticExit("pidfd_send_signal", 9321), KindFd},
 		{"epoll_ctl", FormatEpollCtl, FormatExitEpollCtl, KindEpollCtl},
 		{"epoll_wait", FormatEpollWait, FormatExitEpollWait, KindFd},
 		{"epoll_pwait", FormatEpollPwait, FormatExitEpollPwait, KindFd},
@@ -805,6 +841,14 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"mount", FormatMount, FormatExitMount, KindPathname},
 		{"umount", FormatUmount, FormatExitUmount, KindPathname},
 		{"move_mount", FormatMoveMount, FormatExitMoveMount, KindTwoFd},
+		{"kcmp", syntheticEnter("kcmp", 9324), syntheticExit("kcmp", 9323), KindTwoFd},
+		{"kexec_file_load", syntheticEnter("kexec_file_load", 9326), syntheticExit("kexec_file_load", 9325), KindFd},
+		{"membarrier", syntheticEnter("membarrier", 9328), syntheticExit("membarrier", 9327), KindNull},
+		{"rseq", syntheticEnter("rseq", 9330), syntheticExit("rseq", 9329), KindNull},
+		{"set_robust_list", syntheticEnter("set_robust_list", 9332), syntheticExit("set_robust_list", 9331), KindNull},
+		{"get_robust_list", syntheticEnter("get_robust_list", 9334), syntheticExit("get_robust_list", 9333), KindNull},
+		{"mmap2", syntheticEnter("mmap2", 9336), syntheticExit("mmap2", 9335), KindNull},
+		{"kexec_load", syntheticEnter("kexec_load", 9338), syntheticExit("kexec_load", 9337), KindNull},
 		{"fsmount", FormatFsmount, FormatExitFsmount, KindEventfd},
 		{"pivot_root", FormatPivotRoot, FormatExitPivotRoot, KindPathname},
 		{"quotactl", FormatQuotactl, FormatExitQuotactl, KindPathname},

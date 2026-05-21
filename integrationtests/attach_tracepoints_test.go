@@ -100,3 +100,24 @@ func TestAttachTraceSyscallsWithExclusion(t *testing.T) {
 		{Tracepoint: "enter_openat", Comm: "ioworkload"},
 	})
 }
+
+func TestAttachTraceKindsPidfdOnly(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("pidfd-getfd-success", defaultDuration, []string{
+		"-trace-kinds", "pidfd",
+	})
+	if err != nil {
+		t.Fatalf("run scenario pidfd-getfd-success with trace-kinds=pidfd: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_pidfd_open", Comm: "ioworkload", MinCount: 1},
+	})
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_pidfd_getfd", Comm: "ioworkload"},
+	})
+}

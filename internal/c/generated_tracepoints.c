@@ -1716,7 +1716,7 @@ int handle_sys_enter_getrandom(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_getrandom is a struct ret_event (UNCLASSIFIED) (kind=ret)
+/// sys_exit_getrandom is a struct ret_event (READ_CLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_getrandom")
 int handle_sys_exit_getrandom(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -1736,7 +1736,7 @@ int handle_sys_exit_getrandom(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
+    ev->ret_type = READ_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13295,7 +13295,7 @@ int handle_sys_exit_seccomp(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_kexec_file_load is a struct null_event (kind=null)
+/// sys_enter_kexec_file_load is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_kexec_file_load")
 int handle_sys_enter_kexec_file_load(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -13305,15 +13305,16 @@ int handle_sys_enter_kexec_file_load(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_KEXEC_FILE_LOAD))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_KEXEC_FILE_LOAD;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14715,7 +14716,7 @@ int handle_sys_exit_adjtimex(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_kcmp is a struct null_event (kind=null)
+/// sys_enter_kcmp is a struct two_fd_event (kind=two-fd)
 SEC("tracepoint/syscalls/sys_enter_kcmp")
 int handle_sys_enter_kcmp(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14725,15 +14726,18 @@ int handle_sys_enter_kcmp(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_KCMP))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct two_fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct two_fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_TWO_FD_EVENT;
     ev->trace_id = SYS_ENTER_KCMP;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd_a = (__s32)ctx->args[3];
+    ev->fd_b = (__s32)ctx->args[4];
+    ev->extra = (__u64)ctx->args[2];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15867,7 +15871,7 @@ int handle_sys_exit_setns(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_pidfd_open is a struct null_event (kind=null)
+/// sys_enter_pidfd_open is a struct eventfd_event (kind=pidfd)
 SEC("tracepoint/syscalls/sys_enter_pidfd_open")
 int handle_sys_enter_pidfd_open(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -15877,21 +15881,25 @@ int handle_sys_enter_pidfd_open(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_PIDFD_OPEN))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_EVENTFD_EVENT;
     ev->trace_id = SYS_ENTER_PIDFD_OPEN;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = (__s32)ctx->args[0];
+    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
+    ev->flags = flags;
+    ev->ret = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_exit_pidfd_open is a struct ret_event (UNCLASSIFIED) (kind=ret)
+/// sys_exit_pidfd_open is a struct eventfd_event (kind=pidfd)
 SEC("tracepoint/syscalls/sys_exit_pidfd_open")
 int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -15901,17 +15909,23 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_EXIT_PIDFD_OPEN, ctx->ret))
         return 0;
 
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
+    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_RET_EVENT;
+    ev->event_type = EXIT_EVENTFD_EVENT;
     ev->trace_id = SYS_EXIT_PIDFD_OPEN;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+    ev->flags = flags;
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18018,7 +18032,7 @@ int handle_sys_exit_kill(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_pidfd_send_signal is a struct null_event (kind=null)
+/// sys_enter_pidfd_send_signal is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_pidfd_send_signal")
 int handle_sys_enter_pidfd_send_signal(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -18028,15 +18042,16 @@ int handle_sys_enter_pidfd_send_signal(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_PIDFD_SEND_SIGNAL))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_PIDFD_SEND_SIGNAL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

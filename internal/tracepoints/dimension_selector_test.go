@@ -48,6 +48,21 @@ func TestParseSelectorWithDimensionsKindOnly(t *testing.T) {
 	}
 }
 
+func TestParseSelectorWithDimensionsPidfdKindOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "pidfd",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_pidfd_open") {
+		t.Fatal("expected pidfd_open to be attached for pidfd kind")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded when only pidfd kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceSyscalls: "openat",
