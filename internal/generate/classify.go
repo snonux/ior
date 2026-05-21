@@ -37,6 +37,7 @@ const (
 	KindSysVOp
 	KindProc
 	KindBpf
+	KindFutex
 )
 
 func (k TracepointKind) MetadataName() string {
@@ -103,6 +104,8 @@ func (k TracepointKind) MetadataName() string {
 		return "proc"
 	case KindBpf:
 		return "bpf"
+	case KindFutex:
+		return "futex"
 	default:
 		return "none"
 	}
@@ -410,6 +413,16 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindProc}, true
 	case "sys_enter_bpf":
 		return ClassificationResult{Kind: KindBpf}, true
+	case "sys_enter_futex":
+		return ClassificationResult{Kind: KindFutex}, true
+	case "sys_enter_futex_wait":
+		return ClassificationResult{Kind: KindFutex}, true
+	case "sys_enter_futex_wake":
+		return ClassificationResult{Kind: KindFutex}, true
+	case "sys_enter_futex_requeue":
+		return ClassificationResult{Kind: KindFutex}, true
+	case "sys_enter_futex_waitv":
+		return ClassificationResult{Kind: KindFutex}, true
 	case "sys_enter_pidfd_send_signal":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_kexec_file_load":

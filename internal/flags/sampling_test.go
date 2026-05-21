@@ -76,3 +76,29 @@ func TestCloneDeepCopiesSamplingMaps(t *testing.T) {
 		t.Fatalf("original syscall rate mutated: got %d, want 9", got)
 	}
 }
+
+func TestDefaultSamplingRatesIncludeFutexAggregateOnly(t *testing.T) {
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	for _, syscall := range []string{"futex", "futex_wait", "futex_wake", "futex_requeue", "futex_waitv"} {
+		rate, ok := cfg.SyscallSamplingRates[syscall]
+		if !ok {
+			t.Fatalf("expected default sampling entry for %s", syscall)
+		}
+		if rate != 0 {
+			t.Fatalf("%s default rate = %d, want 0 (aggregate-only)", syscall, rate)
+		}
+	}
+}
+
+func TestParseSamplingRatesOverrideDefaultFutexRate(t *testing.T) {
+	cfg, err := parseForTest(t, "-syscall-sampling-syscalls", "futex=7")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if got := cfg.SyscallSamplingRates["futex"]; got != 7 {
+		t.Fatalf("futex rate = %d, want 7", got)
+	}
+}

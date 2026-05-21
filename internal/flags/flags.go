@@ -265,7 +265,7 @@ func resolveSamplingRates(cfg *Config, familySampling, syscallSampling *string) 
 		return err
 	}
 	cfg.SyscallFamilySamplingRates = familyRates
-	cfg.SyscallSamplingRates = syscallRates
+	cfg.SyscallSamplingRates = mergeSyscallSamplingRates(syscallRates)
 	return nil
 }
 

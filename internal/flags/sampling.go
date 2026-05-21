@@ -8,6 +8,14 @@ import (
 	"ior/internal/types"
 )
 
+var defaultAggregateOnlySyscalls = []string{
+	"futex",
+	"futex_wait",
+	"futex_wake",
+	"futex_requeue",
+	"futex_waitv",
+}
+
 func cloneFamilySamplingRates(in map[types.SyscallFamily]uint32) map[types.SyscallFamily]uint32 {
 	out := make(map[types.SyscallFamily]uint32, len(in))
 	for family, rate := range in {
@@ -19,6 +27,22 @@ func cloneFamilySamplingRates(in map[types.SyscallFamily]uint32) map[types.Sysca
 func cloneSyscallSamplingRates(in map[string]uint32) map[string]uint32 {
 	out := make(map[string]uint32, len(in))
 	for syscall, rate := range in {
+		out[syscall] = rate
+	}
+	return out
+}
+
+func defaultSyscallSamplingRates() map[string]uint32 {
+	out := make(map[string]uint32, len(defaultAggregateOnlySyscalls))
+	for _, syscall := range defaultAggregateOnlySyscalls {
+		out[syscall] = 0
+	}
+	return out
+}
+
+func mergeSyscallSamplingRates(overrides map[string]uint32) map[string]uint32 {
+	out := defaultSyscallSamplingRates()
+	for syscall, rate := range overrides {
 		out[syscall] = rate
 	}
 	return out
