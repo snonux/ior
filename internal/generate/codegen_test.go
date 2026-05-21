@@ -43,6 +43,16 @@ func TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd(t *testing.T) {
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 }
 
+func TestGenerateLandlockAddRuleHandlerUsesFirstArgumentAsFd(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("landlock_add_rule")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_landlock_add_rule")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_LANDLOCK_ADD_RULE;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+}
+
 func TestGenerateOpenHandler(t *testing.T) {
 	output := generateFromPair(t, FormatOpenat, FormatExitOpenat)
 

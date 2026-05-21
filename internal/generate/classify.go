@@ -257,6 +257,10 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_exit_landlock_create_ruleset":
 		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_landlock_add_rule":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_landlock_restrict_self":
+		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_fsopen":
 		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_exit_fsopen":
