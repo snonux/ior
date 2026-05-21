@@ -805,6 +805,35 @@ func TestClassifyJ7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyK7NameOnlyKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_wait4", KindProc},
+		{"sys_enter_waitid", KindProc},
+		{"sys_enter_kill", KindNull},
+		{"sys_enter_prctl", KindPrctl},
+		{"sys_enter_setns", KindFd},
+		{"sys_enter_unshare", KindNull},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: tt.name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != tt.want {
+				t.Fatalf("%s: got kind %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassify67NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1182,10 +1211,10 @@ func TestClassifySwapoff(t *testing.T) {
 	}
 }
 
-func TestClassifyKillRequiresGenerationFallback(t *testing.T) {
+func TestClassifyKillExplicitNull(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
-	if r.Kind != KindNone {
-		t.Errorf("kill: got kind %d, want KindNone before generation fallback", r.Kind)
+	if r.Kind != KindNull {
+		t.Errorf("kill: got kind %d, want KindNull", r.Kind)
 	}
 }
 
