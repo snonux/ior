@@ -108,6 +108,21 @@ func TestParseSelectorWithDimensionsSeccompKindOnly(t *testing.T) {
 	}
 }
 
+func TestParseSelectorWithDimensionsSysVOpKindOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "sysv-op",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_msgsnd") {
+		t.Fatal("expected msgsnd to be attached for sysv-op kind")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded when only sysv-op kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceSyscalls: "openat",

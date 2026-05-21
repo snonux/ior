@@ -132,6 +132,7 @@ sys_enter_open_by_handle_at is a struct open_by_handle_at_event
 sys_enter_mq_open is a struct mq_open_event
 sys_enter_epoll_ctl is a struct epoll_ctl_event
 sys_enter_pidfd_open is a struct eventfd_event (kind=pidfd)
+sys_enter_msgsnd is a struct null_event (kind=sysv-op)
 `
 	output, err := ExtractTracepointsWithKinds(strings.NewReader(sampleGeneratedC), strings.NewReader(kindData))
 	if err != nil {
@@ -142,4 +143,5 @@ sys_enter_pidfd_open is a struct eventfd_event (kind=pidfd)
 	requireContains(t, output, `"mq_open": "mq-open",`)
 	requireContains(t, output, `"epoll_ctl": "epoll-ctl",`)
 	requireContains(t, output, `"pidfd_open": "pidfd",`)
+	requireContains(t, output, `"msgsnd": "sysv-op",`)
 }
