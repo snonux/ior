@@ -65,7 +65,7 @@ Generator source code:
 - **Core packages**: `/internal/event/` (BPF event handling), `/internal/flamegraph/` (FlameGraph generation), `/internal/c/` (BPF programs)  
 - **Output**: TUI dashboard and TUI flamegraphs (no embedded web flamegraph server mode)
 - **TUI package**: `/internal/tui/` contains top-level Bubble Tea orchestration (`tui.go`), shared key map (`keys.go`), and styles (`styles.go`).
-- **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (overview/syscalls/files/processes/latency/gaps) and tab framework model.
+- **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream/non-io) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
 
 ## TUI Behavior
@@ -75,8 +75,15 @@ Generator source code:
 - **File output in TUI** is explicit export only (`e`), writing `ior-stream-<timestamp>.csv` in the current directory from the current filtered stream snapshot.
 - **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime.
 - **Tab navigation** supports `tab/shift+tab`, numeric keys `1..8`, and directional keys `left/right` and `h/l`.
+- **Non-IO visibility**: dashboard includes a dedicated `Non-IO` tab backed by per-family aggregate rows (`Snapshot.Families` / `Snapshot.NonIOFamilies`).
 - **When export is disabled**, export key hints are hidden from dashboard help and `e` does not open export modal.
 - **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to disable high-frequency refresh and fall back to the standard dashboard cadence.
+- **Sampling / aggregate-only mode**:
+  - `-syscall-sampling-families` and `-syscall-sampling-syscalls` control per-family/per-syscall sampling (`0` = aggregate-only, `1` = all events, `N` = 1-in-N).
+  - Current defaults include aggregate-only (`0`) for `futex`, `futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`, and `clock_gettime`.
+- **Additional metric dimensions**:
+  - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
+  - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints).
 
 ## Code Style
 
