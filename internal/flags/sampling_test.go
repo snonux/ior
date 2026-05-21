@@ -82,7 +82,7 @@ func TestDefaultSamplingRatesIncludeFutexAggregateOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
-	for _, syscall := range []string{"futex", "futex_wait", "futex_wake", "futex_requeue", "futex_waitv"} {
+	for _, syscall := range []string{"futex", "futex_wait", "futex_wake", "futex_requeue", "futex_waitv", "clock_gettime"} {
 		rate, ok := cfg.SyscallSamplingRates[syscall]
 		if !ok {
 			t.Fatalf("expected default sampling entry for %s", syscall)

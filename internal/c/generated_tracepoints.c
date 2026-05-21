@@ -14058,7 +14058,7 @@ int handle_sys_exit_setitimer(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_timer_create is a struct null_event (kind=null)
+/// sys_enter_timer_create is a struct null_event (kind=timer-obj)
 SEC("tracepoint/syscalls/sys_enter_timer_create")
 int handle_sys_enter_timer_create(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14108,7 +14108,7 @@ int handle_sys_exit_timer_create(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_timer_gettime is a struct null_event (kind=null)
+/// sys_enter_timer_gettime is a struct null_event (kind=timer-obj)
 SEC("tracepoint/syscalls/sys_enter_timer_gettime")
 int handle_sys_enter_timer_gettime(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14158,7 +14158,7 @@ int handle_sys_exit_timer_gettime(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_timer_getoverrun is a struct null_event (kind=null)
+/// sys_enter_timer_getoverrun is a struct null_event (kind=timer-obj)
 SEC("tracepoint/syscalls/sys_enter_timer_getoverrun")
 int handle_sys_enter_timer_getoverrun(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14208,7 +14208,7 @@ int handle_sys_exit_timer_getoverrun(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_timer_settime is a struct null_event (kind=null)
+/// sys_enter_timer_settime is a struct null_event (kind=timer-obj)
 SEC("tracepoint/syscalls/sys_enter_timer_settime")
 int handle_sys_enter_timer_settime(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14258,7 +14258,7 @@ int handle_sys_exit_timer_settime(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_timer_delete is a struct null_event (kind=null)
+/// sys_enter_timer_delete is a struct null_event (kind=timer-obj)
 SEC("tracepoint/syscalls/sys_enter_timer_delete")
 int handle_sys_enter_timer_delete(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;

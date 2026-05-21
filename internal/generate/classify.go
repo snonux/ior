@@ -39,6 +39,7 @@ const (
 	KindBpf
 	KindFutex
 	KindPrctl
+	KindTimerObj
 )
 
 func (k TracepointKind) MetadataName() string {
@@ -109,6 +110,8 @@ func (k TracepointKind) MetadataName() string {
 		return "futex"
 	case KindPrctl:
 		return "prctl"
+	case KindTimerObj:
+		return "timer-obj"
 	default:
 		return "none"
 	}
@@ -336,6 +339,40 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindSleep}, true
 	case "sys_enter_clock_nanosleep":
 		return ClassificationResult{Kind: KindSleep}, true
+	case "sys_enter_clock_gettime":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_clock_settime":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_clock_getres":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_clock_adjtime":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_gettimeofday":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_settimeofday":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_time":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_times":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_adjtimex":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_alarm":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getitimer":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setitimer":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_timer_create":
+		return ClassificationResult{Kind: KindTimerObj}, true
+	case "sys_enter_timer_settime":
+		return ClassificationResult{Kind: KindTimerObj}, true
+	case "sys_enter_timer_gettime":
+		return ClassificationResult{Kind: KindTimerObj}, true
+	case "sys_enter_timer_getoverrun":
+		return ClassificationResult{Kind: KindTimerObj}, true
+	case "sys_enter_timer_delete":
+		return ClassificationResult{Kind: KindTimerObj}, true
 	case "sys_enter_keyctl":
 		return ClassificationResult{Kind: KindKeyctl}, true
 	case "sys_enter_add_key":
