@@ -19026,7 +19026,7 @@ int handle_sys_exit_set_tid_address(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_fork is a struct null_event (kind=null)
+/// sys_enter_fork is a struct null_event (kind=proc)
 SEC("tracepoint/syscalls/sys_enter_fork")
 int handle_sys_enter_fork(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -19076,7 +19076,7 @@ int handle_sys_exit_fork(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_vfork is a struct null_event (kind=null)
+/// sys_enter_vfork is a struct null_event (kind=proc)
 SEC("tracepoint/syscalls/sys_enter_vfork")
 int handle_sys_enter_vfork(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -19126,7 +19126,7 @@ int handle_sys_exit_vfork(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_clone is a struct null_event (kind=null)
+/// sys_enter_clone is a struct null_event (kind=proc)
 SEC("tracepoint/syscalls/sys_enter_clone")
 int handle_sys_enter_clone(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -19176,7 +19176,7 @@ int handle_sys_exit_clone(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_clone3 is a struct null_event (kind=null)
+/// sys_enter_clone3 is a struct null_event (kind=proc)
 SEC("tracepoint/syscalls/sys_enter_clone3")
 int handle_sys_enter_clone3(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;

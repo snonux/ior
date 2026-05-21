@@ -123,6 +123,21 @@ func TestParseSelectorWithDimensionsSysVOpKindOnly(t *testing.T) {
 	}
 }
 
+func TestParseSelectorWithDimensionsProcKindOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "proc",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_clone3") {
+		t.Fatal("expected clone3 to be attached for proc kind")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded when only proc kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceSyscalls: "openat",
