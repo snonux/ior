@@ -84,6 +84,47 @@ explanation.
 ## TUI
 
 Press **H** inside the dashboard to toggle the built-in help panel. Tabs are
-reachable with **tab/shift+tab** or number keys **1–7**. For the full hotkey
+reachable with **tab/shift+tab** or number keys **1–8** (including the Non-IO
+tab). For the full hotkey
 reference, recording modes, and the `.ior.zst` vs Parquet trade-off see the
 [tutorial](./docs/tutorial/tutorial.md).
+
+## Syscall Filtering
+
+`ior` supports attach-time dimension filters for syscall family, kind, and
+name, plus exclusion counterparts:
+
+```shell
+# Trace only Time + Polling families
+sudo ./ior -trace-families Time,Polling
+
+# Trace only fd/open kinds, but exclude a noisy syscall
+sudo ./ior -trace-kinds fd,open -no-trace-syscalls read
+
+# Trace explicit syscall names and exclude one kind globally
+sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
+```
+
+Discover valid values with:
+
+```shell
+./ior --help
+```
+
+## Bytes Classification
+
+Bytes accounting is syscall-specific:
+
+- `ReadClassified`: `fgetxattr`, `flistxattr`, `getdents`, `getdents64`,
+  `getrandom`, `getxattr`, `lgetxattr`, `listxattr`, `llistxattr`,
+  `mq_timedreceive`, `msgrcv`, `pread64`, `preadv`, `preadv2`,
+  `process_vm_readv`, `read`, `readlink`, `readlinkat`, `readv`, `recvfrom`,
+  `recvmsg`, `syslog`
+- `WriteClassified`: `mq_timedsend`, `msgsnd`, `process_vm_writev`, `pwrite64`,
+  `pwritev`, `pwritev2`, `sendmsg`, `sendto`, `write`, `writev`
+- `TransferClassified`: `copy_file_range`, `sendfile64`, `splice`, `tee`,
+  `vmsplice`
+- Non-bytes: all remaining traced syscalls
+
+For full coverage by family and TracepointKind, see
+[docs/syscall-tracing-plan.md](./docs/syscall-tracing-plan.md).
