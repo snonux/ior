@@ -867,6 +867,61 @@ func TestClassifyA7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyE7NullNameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_sysinfo",
+		"sys_enter_sysfs",
+		"sys_enter_ustat",
+		"sys_enter_newuname",
+		"sys_enter_sethostname",
+		"sys_enter_setdomainname",
+		"sys_enter_capget",
+		"sys_enter_capset",
+		"sys_enter_personality",
+		"sys_enter_reboot",
+		"sys_enter_restart_syscall",
+		"sys_enter_vhangup",
+		"sys_enter_arch_prctl",
+		"sys_enter_ioperm",
+		"sys_enter_iopl",
+		"sys_enter_modify_ldt",
+		"sys_enter_lsm_get_self_attr",
+		"sys_enter_lsm_set_self_attr",
+		"sys_enter_lsm_list_modules",
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindNull {
+				t.Fatalf("%s: got kind %d, want KindNull", name, r.Kind)
+			}
+		})
+	}
+}
+
+func TestClassifyAcctPathname(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_acct",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "name"},
+		},
+	})
+	if r.Kind != KindPathname {
+		t.Fatalf("acct: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "name" {
+		t.Fatalf("acct: PathnameField=%q, want name", r.PathnameField)
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {

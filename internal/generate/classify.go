@@ -480,6 +480,44 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_kexec_load":
 		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sysinfo":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sysfs":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_ustat":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_newuname":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sethostname":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setdomainname":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_capget":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_capset":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_personality":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_reboot":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_restart_syscall":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_vhangup":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_arch_prctl":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_ioperm":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_iopl":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_modify_ldt":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_lsm_get_self_attr":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_lsm_set_self_attr":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_lsm_list_modules":
+		return ClassificationResult{Kind: KindNull}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
 		return ClassificationResult{Kind: KindNull}, true
@@ -516,6 +554,10 @@ func classifyNameAndField(name, fieldType, fieldName string) (ClassificationResu
 			return ClassificationResult{Kind: KindPathname, PathnameField: "dir_name"}, true
 		}
 	case "sys_enter_umount":
+		if isCStringPtrType(fieldType) && fieldName == "name" {
+			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
+		}
+	case "sys_enter_acct":
 		if isCStringPtrType(fieldType) && fieldName == "name" {
 			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
 		}

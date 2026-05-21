@@ -1112,7 +1112,7 @@ var syscallKinds = map[string]string{
 	"accept":                  "accept",
 	"accept4":                 "accept",
 	"access":                  "pathname",
-	"acct":                    "null",
+	"acct":                    "pathname",
 	"add_key":                 "keyctl",
 	"adjtimex":                "null",
 	"alarm":                   "null",

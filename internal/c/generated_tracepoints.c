@@ -13488,7 +13488,7 @@ int handle_sys_exit_kexec_load(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_acct is a struct null_event (kind=null)
+/// sys_enter_acct is a struct path_event (kind=pathname)
 SEC("tracepoint/syscalls/sys_enter_acct")
 int handle_sys_enter_acct(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -13498,15 +13498,17 @@ int handle_sys_enter_acct(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_ACCT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_PATH_EVENT;
     ev->trace_id = SYS_ENTER_ACCT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

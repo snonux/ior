@@ -1,7 +1,7 @@
 sys_enter_accept is a struct accept_event (kind=accept)
 sys_enter_accept4 is a struct accept_event (kind=accept)
 sys_enter_access is a struct path_event (kind=pathname)
-sys_enter_acct is a struct null_event (kind=null)
+sys_enter_acct is a struct path_event (kind=pathname)
 sys_enter_add_key is a struct keyctl_event (kind=keyctl)
 sys_enter_adjtimex is a struct null_event (kind=null)
 sys_enter_alarm is a struct null_event (kind=null)
