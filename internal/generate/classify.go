@@ -22,6 +22,7 @@ const (
 	KindAccept
 	KindPipe
 	KindEventfd
+	KindPidfd
 	KindEpollCtl
 	KindTwoFd
 	KindPoll
@@ -66,6 +67,8 @@ func (k TracepointKind) MetadataName() string {
 		return "pipe"
 	case KindEventfd:
 		return "eventfd"
+	case KindPidfd:
+		return "pidfd"
 	case KindEpollCtl:
 		return "epoll-ctl"
 	case KindTwoFd:
@@ -203,6 +206,10 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_exit_timerfd_create":
 		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_pidfd_open":
+		return ClassificationResult{Kind: KindPidfd}, true
+	case "sys_exit_pidfd_open":
+		return ClassificationResult{Kind: KindPidfd}, true
 	case "sys_enter_bind":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_connect":
@@ -265,6 +272,12 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindPtrace}, true
 	case "sys_enter_perf_event_open":
 		return ClassificationResult{Kind: KindPerfOpen}, true
+	case "sys_enter_pidfd_send_signal":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_kexec_file_load":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_kcmp":
+		return ClassificationResult{Kind: KindTwoFd}, true
 	case "sys_enter_mq_timedsend":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_mq_timedreceive":
@@ -280,6 +293,18 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 	case "sys_enter_exit":
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_exit_group":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_membarrier":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_rseq":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_set_robust_list":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_get_robust_list":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_mmap2":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_kexec_load":
 		return ClassificationResult{Kind: KindNull}, true
 	}
 	if strings.HasPrefix(name, "sys_enter_io_") {
@@ -409,6 +434,7 @@ var retClassifications = map[string]RetClassification{
 	"readv":            ReadClassified,
 	"recvmsg":          ReadClassified,
 	"recvfrom":         ReadClassified,
+	"getrandom":        ReadClassified,
 	"syslog":           ReadClassified,
 	"mq_timedreceive":  ReadClassified,
 

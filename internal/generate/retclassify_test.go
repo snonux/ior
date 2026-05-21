@@ -7,7 +7,7 @@ func TestClassifyRetRead(t *testing.T) {
 		"fgetxattr", "flistxattr", "getdents", "getdents64", "getxattr",
 		"lgetxattr", "listxattr", "llistxattr", "pread64", "preadv",
 		"preadv2", "process_vm_readv", "read", "readlink", "readlinkat",
-		"readv", "recvmsg", "recvfrom", "syslog", "mq_timedreceive",
+		"readv", "recvmsg", "recvfrom", "syslog", "mq_timedreceive", "getrandom",
 	}
 	for _, name := range reads {
 		if got := ClassifyRet("sys_exit_" + name); got != ReadClassified {

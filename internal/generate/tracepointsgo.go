@@ -10,7 +10,7 @@ import (
 )
 
 var secRe = regexp.MustCompile(`^SEC.*sys_((?:enter|exit)_[a-z_0-9]+)`)
-var kindLineRe = regexp.MustCompile(`^(sys_enter_[a-z0-9_]+)\s+is a struct\s+([a-z0-9_]+)(?:\s+.*)?$`)
+var kindLineRe = regexp.MustCompile(`^(sys_enter_[a-z0-9_]+)\s+is a struct\s+([a-z0-9_]+)(?:.*\(kind=([a-z0-9-]+)\))?\s*$`)
 
 // ExtractTracepoints reads generated C code and extracts tracepoint names from
 // SEC annotations, producing the generated_tracepoints.go content.
@@ -66,7 +66,10 @@ func extractSyscallKinds(r io.Reader) (map[string]string, error) {
 			continue
 		}
 		syscall := strings.TrimPrefix(m[1], "sys_enter_")
-		kind := normalizeStructKind(m[2])
+		kind := strings.TrimSpace(m[3])
+		if kind == "" {
+			kind = normalizeStructKind(m[2])
+		}
 		if kind == "" {
 			continue
 		}

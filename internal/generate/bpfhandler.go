@@ -91,6 +91,8 @@ func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 		return generateExtraPipe(f, isEnter)
 	case KindEventfd:
 		return generateExtraEventfd(f, isEnter)
+	case KindPidfd:
+		return generateExtraEventfd(f, isEnter)
 	case KindEpollCtl:
 		return generateExtraEpollCtl()
 	case KindTwoFd:
@@ -272,6 +274,8 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 			flagsExpr = "(__s32)ctx->args[3]"
 		case "sys_enter_timerfd_create":
 			flagsExpr = "(__s32)ctx->args[1]"
+		case "sys_enter_pidfd_open":
+			flagsExpr = "(__s32)ctx->args[0]"
 		case "sys_enter_fsmount":
 			flagsExpr = "(__s32)ctx->args[1]"
 		case "sys_enter_fsopen":
@@ -290,6 +294,8 @@ func generateExtraTwoFd(name string) string {
 	switch name {
 	case "sys_enter_move_mount":
 		return "    ev->fd_a = (__s32)ctx->args[0];\n    ev->fd_b = (__s32)ctx->args[2];\n    ev->extra = (__u64)ctx->args[4];\n"
+	case "sys_enter_kcmp":
+		return "    ev->fd_a = (__s32)ctx->args[3];\n    ev->fd_b = (__s32)ctx->args[4];\n    ev->extra = (__u64)ctx->args[2];\n"
 	default:
 		return "    ev->fd_a = (__s32)ctx->args[0];\n    ev->fd_b = (__s32)ctx->args[1];\n    ev->extra = (__u64)ctx->args[2];\n"
 	}

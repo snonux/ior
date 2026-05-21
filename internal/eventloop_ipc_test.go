@@ -116,6 +116,7 @@ func TestEventfdDescriptorNameByTraceID(t *testing.T) {
 		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, flags: 4, want: "userfaultfd:4"},
 		{name: "signalfd", traceID: types.SYS_ENTER_SIGNALFD4, flags: 5, want: "signalfd:5"},
 		{name: "timerfd_create", traceID: types.SYS_ENTER_TIMERFD_CREATE, flags: 6, want: "timerfd:6"},
+		{name: "pidfd_open", traceID: types.SYS_ENTER_PIDFD_OPEN, flags: 7, want: "pidfd:7"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

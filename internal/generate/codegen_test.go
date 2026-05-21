@@ -550,6 +550,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindAccept, "ENTER_ACCEPT_EVENT", "EXIT_ACCEPT_EVENT"},
 		{KindPipe, "ENTER_PIPE_EVENT", "EXIT_PIPE_EVENT"},
 		{KindEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
+		{KindPidfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
 		{KindEpollCtl, "ENTER_EPOLL_CTL_EVENT", "EXIT_EPOLL_CTL_EVENT"},
 		{KindTwoFd, "ENTER_TWO_FD_EVENT", "EXIT_TWO_FD_EVENT"},
 		{KindPoll, "ENTER_POLL_EVENT", "EXIT_POLL_EVENT"},
@@ -591,6 +592,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindAccept, "accept_event"},
 		{KindPipe, "pipe_event"},
 		{KindEventfd, "eventfd_event"},
+		{KindPidfd, "eventfd_event"},
 		{KindEpollCtl, "epoll_ctl_event"},
 		{KindTwoFd, "two_fd_event"},
 		{KindPoll, "poll_event"},
@@ -617,7 +619,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)
