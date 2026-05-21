@@ -9049,7 +9049,7 @@ int handle_sys_enter_execveat(struct syscall_trace_enter *ctx) {
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
-    ev->dirfd = -1;
+    ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__s32)ctx->args[4];
 
     bpf_ringbuf_submit(ev, 0);
