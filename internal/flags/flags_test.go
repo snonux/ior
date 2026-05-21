@@ -152,6 +152,105 @@ func TestParseInvalidTracepointRegexReturnsError(t *testing.T) {
 	}
 }
 
+func TestParseDefaultTraceDimensionsFSOnly(t *testing.T) {
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat attached by default")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep excluded by default")
+	}
+}
+
+func TestParseTraceFamiliesFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-trace-families", "Time")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep attached for Time family")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat excluded when only Time family enabled")
+	}
+}
+
+func TestParseTraceKindsFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-trace-kinds", "sleep")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep attached for sleep kind")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat excluded for sleep-only selector")
+	}
+}
+
+func TestParseTraceSyscallsFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-trace-syscalls", "openat")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_openat") || !cfg.TracepointSelector.ShouldAttach("sys_exit_openat") {
+		t.Fatal("expected openat enter/exit attached")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_write") {
+		t.Fatal("expected write excluded when only openat enabled")
+	}
+}
+
+func TestParseTraceDimensionsUnionAndExclusions(t *testing.T) {
+	cfg, err := parseForTest(t,
+		"-trace-families", "Time",
+		"-trace-syscalls", "openat",
+		"-no-trace-syscalls", "openat",
+	)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat excluded by no-trace-syscalls")
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep still attached from trace-families")
+	}
+}
+
+func TestParseTraceFamiliesRejectsUnknown(t *testing.T) {
+	_, err := parseForTest(t, "-trace-families", "Nope")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall family") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseTraceKindsRejectsUnknown(t *testing.T) {
+	_, err := parseForTest(t, "-trace-kinds", "not-a-kind")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall kind") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseTraceSyscallsRejectsUnknown(t *testing.T) {
+	_, err := parseForTest(t, "-trace-syscalls", "definitely_not_syscall")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall in trace selector") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseResetTimerDefault(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {

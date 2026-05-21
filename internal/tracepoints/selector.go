@@ -2,6 +2,7 @@ package tracepoints
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,6 +19,12 @@ type Selector struct {
 	// Exclude is the list of compiled regexes that suppress specific
 	// tracepoints even when they match the Attach list.
 	Exclude []*regexp.Regexp
+	// Syscalls optionally restricts attach to an explicit syscall allowlist.
+	// Keys are bare syscall names (for example "openat", not "sys_enter_openat").
+	// When RestrictSyscalls is true, only entries in this map are attached.
+	Syscalls map[string]struct{}
+	// RestrictSyscalls gates whether Syscalls should be enforced.
+	RestrictSyscalls bool
 }
 
 // ParseSelector parses the comma-separated regex strings for the -tps and
@@ -65,11 +72,27 @@ func (s Selector) ShouldAttach(tracepointName string) bool {
 		}
 	}
 	if len(s.Attach) == 0 {
-		return true
+		if !s.RestrictSyscalls {
+			return true
+		}
+		syscall, ok := SyscallNameFromTracepoint(tracepointName)
+		if !ok {
+			return false
+		}
+		_, allowed := s.Syscalls[syscall]
+		return allowed
 	}
 	for _, re := range s.Attach {
 		if re.MatchString(tracepointName) {
-			return true
+			if !s.RestrictSyscalls {
+				return true
+			}
+			syscall, ok := SyscallNameFromTracepoint(tracepointName)
+			if !ok {
+				return false
+			}
+			_, allowed := s.Syscalls[syscall]
+			return allowed
 		}
 	}
 	return false
@@ -79,7 +102,22 @@ func (s Selector) ShouldAttach(tracepointName string) bool {
 // copy's slices do not affect the original.
 func (s Selector) Clone() Selector {
 	return Selector{
-		Attach:  slices.Clone(s.Attach),
-		Exclude: slices.Clone(s.Exclude),
+		Attach:           slices.Clone(s.Attach),
+		Exclude:          slices.Clone(s.Exclude),
+		Syscalls:         maps.Clone(s.Syscalls),
+		RestrictSyscalls: s.RestrictSyscalls,
+	}
+}
+
+// SyscallNameFromTracepoint returns the bare syscall name for a tracepoint
+// (for example "openat" from "sys_enter_openat").
+func SyscallNameFromTracepoint(tracepointName string) (string, bool) {
+	switch {
+	case strings.HasPrefix(tracepointName, "sys_enter_"):
+		return strings.TrimPrefix(tracepointName, "sys_enter_"), true
+	case strings.HasPrefix(tracepointName, "sys_exit_"):
+		return strings.TrimPrefix(tracepointName, "sys_exit_"), true
+	default:
+		return "", false
 	}
 }

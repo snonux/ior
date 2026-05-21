@@ -23,9 +23,9 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 	}
 
 	eventStruct := eventStructName(tp.Classification.Kind)
-	comment := eventStruct
+	comment := fmt.Sprintf("%s (kind=%s)", eventStruct, tp.Classification.Kind.MetadataName())
 	if tp.Classification.Kind == KindRet {
-		comment = fmt.Sprintf("%s (%s)", eventStruct, ClassifyRet(f.Name))
+		comment = fmt.Sprintf("%s (%s) (kind=%s)", eventStruct, ClassifyRet(f.Name), tp.Classification.Kind.MetadataName())
 	}
 
 	eventTypeConst := eventTypeConstant(tp.Classification.Kind, isEnter)
