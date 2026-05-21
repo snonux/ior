@@ -965,6 +965,21 @@ func TestClassify37NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassify57NameOnlyKinds(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_bpf",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "int", Name: "cmd"},
+			{Type: "union bpf_attr *", Name: "attr"},
+			{Type: "unsigned int", Name: "size"},
+		},
+	})
+	if r.Kind != KindBpf {
+		t.Fatalf("sys_enter_bpf: got kind %d, want KindBpf", r.Kind)
+	}
+}
+
 func TestClassifyAcctPathname(t *testing.T) {
 	r := ClassifyFormat(&Format{
 		Name: "sys_enter_acct",

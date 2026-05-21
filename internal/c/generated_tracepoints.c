@@ -13289,7 +13289,7 @@ int handle_sys_exit_perf_event_open(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_bpf is a struct null_event (kind=null)
+/// sys_enter_bpf is a struct null_event (kind=bpf)
 SEC("tracepoint/syscalls/sys_enter_bpf")
 int handle_sys_enter_bpf(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;

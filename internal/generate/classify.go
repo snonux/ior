@@ -36,6 +36,7 @@ const (
 	KindSysVId
 	KindSysVOp
 	KindProc
+	KindBpf
 )
 
 func (k TracepointKind) MetadataName() string {
@@ -100,6 +101,8 @@ func (k TracepointKind) MetadataName() string {
 		return "sysv-op"
 	case KindProc:
 		return "proc"
+	case KindBpf:
+		return "bpf"
 	default:
 		return "none"
 	}
@@ -373,6 +376,8 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindProc}, true
 	case "sys_enter_vfork":
 		return ClassificationResult{Kind: KindProc}, true
+	case "sys_enter_bpf":
+		return ClassificationResult{Kind: KindBpf}, true
 	case "sys_enter_pidfd_send_signal":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_kexec_file_load":

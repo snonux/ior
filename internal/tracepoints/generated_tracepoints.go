@@ -1118,7 +1118,7 @@ var syscallKinds = map[string]string{
 	"alarm":                   "null",
 	"arch_prctl":              "null",
 	"bind":                    "fd",
-	"bpf":                     "null",
+	"bpf":                     "bpf",
 	"brk":                     "null",
 	"cachestat":               "fd",
 	"capget":                  "null",
