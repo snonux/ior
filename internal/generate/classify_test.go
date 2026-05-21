@@ -721,6 +721,35 @@ func TestClassifyI7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassify67NameOnlyKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_seccomp", KindSeccomp},
+		{"sys_exit_seccomp", KindSeccomp},
+		{"sys_enter_init_module", KindModule},
+		{"sys_exit_init_module", KindModule},
+		{"sys_enter_delete_module", KindModule},
+		{"sys_exit_delete_module", KindModule},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: tt.name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != tt.want {
+				t.Fatalf("%s: got kind %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
@@ -919,6 +948,9 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"request_key", syntheticEnter("request_key", 9204), syntheticExit("request_key", 9203), KindKeyctl},
 		{"ptrace", syntheticEnter("ptrace", 9206), syntheticExit("ptrace", 9205), KindPtrace},
 		{"perf_event_open", syntheticEnter("perf_event_open", 9208), syntheticExit("perf_event_open", 9207), KindPerfOpen},
+		{"seccomp", syntheticEnter("seccomp", 9368), syntheticExit("seccomp", 9367), KindSeccomp},
+		{"init_module", syntheticEnter("init_module", 9370), syntheticExit("init_module", 9369), KindModule},
+		{"delete_module", syntheticEnter("delete_module", 9372), syntheticExit("delete_module", 9371), KindModule},
 		{"mount", FormatMount, FormatExitMount, KindPathname},
 		{"umount", FormatUmount, FormatExitUmount, KindPathname},
 		{"move_mount", FormatMoveMount, FormatExitMoveMount, KindTwoFd},

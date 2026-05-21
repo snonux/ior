@@ -93,6 +93,21 @@ func TestParseSelectorWithDimensionsMemKindIncludesMlock(t *testing.T) {
 	}
 }
 
+func TestParseSelectorWithDimensionsSeccompKindOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "seccomp",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_seccomp") {
+		t.Fatal("expected seccomp to be attached for seccomp kind")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded when only seccomp kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceSyscalls: "openat",
