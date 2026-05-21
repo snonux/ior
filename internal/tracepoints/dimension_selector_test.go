@@ -201,6 +201,21 @@ func TestParseSelectorWithDimensionsPrctlKindOnly(t *testing.T) {
 	}
 }
 
+func TestParseSelectorWithDimensionsTimerObjKindOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "timer-obj",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_timer_settime") {
+		t.Fatal("expected timer_settime to be attached for timer-obj kind")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded when only timer-obj kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceSyscalls: "openat",

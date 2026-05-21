@@ -14,6 +14,7 @@ var defaultAggregateOnlySyscalls = []string{
 	"futex_wake",
 	"futex_requeue",
 	"futex_waitv",
+	"clock_gettime",
 }
 
 func cloneFamilySamplingRates(in map[types.SyscallFamily]uint32) map[types.SyscallFamily]uint32 {

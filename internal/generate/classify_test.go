@@ -834,6 +834,59 @@ func TestClassifyK7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyM7NameOnlyKinds(t *testing.T) {
+	nullKinds := []string{
+		"sys_enter_clock_gettime",
+		"sys_enter_clock_settime",
+		"sys_enter_clock_getres",
+		"sys_enter_clock_adjtime",
+		"sys_enter_gettimeofday",
+		"sys_enter_settimeofday",
+		"sys_enter_time",
+		"sys_enter_times",
+		"sys_enter_adjtimex",
+		"sys_enter_alarm",
+		"sys_enter_getitimer",
+		"sys_enter_setitimer",
+	}
+	for _, name := range nullKinds {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindNull {
+				t.Fatalf("%s: got kind %d, want KindNull", name, r.Kind)
+			}
+		})
+	}
+
+	timerObjKinds := []string{
+		"sys_enter_timer_create",
+		"sys_enter_timer_settime",
+		"sys_enter_timer_gettime",
+		"sys_enter_timer_getoverrun",
+		"sys_enter_timer_delete",
+	}
+	for _, name := range timerObjKinds {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindTimerObj {
+				t.Fatalf("%s: got kind %d, want KindTimerObj", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassify67NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string
