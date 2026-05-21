@@ -33,6 +33,8 @@ const (
 	KindPerfOpen
 	KindSeccomp
 	KindModule
+	KindSysVId
+	KindSysVOp
 )
 
 func (k TracepointKind) MetadataName() string {
@@ -91,6 +93,10 @@ func (k TracepointKind) MetadataName() string {
 		return "seccomp"
 	case KindModule:
 		return "module"
+	case KindSysVId:
+		return "sysv-id"
+	case KindSysVOp:
+		return "sysv-op"
 	default:
 		return "none"
 	}
@@ -332,6 +338,30 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindModule}, true
 	case "sys_exit_delete_module":
 		return ClassificationResult{Kind: KindModule}, true
+	case "sys_enter_msgget":
+		return ClassificationResult{Kind: KindSysVId}, true
+	case "sys_enter_semget":
+		return ClassificationResult{Kind: KindSysVId}, true
+	case "sys_enter_shmget":
+		return ClassificationResult{Kind: KindSysVId}, true
+	case "sys_enter_msgsnd":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_msgrcv":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_msgctl":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_semop":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_semtimedop":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_semctl":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_shmat":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_shmdt":
+		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_shmctl":
+		return ClassificationResult{Kind: KindSysVOp}, true
 	case "sys_enter_pidfd_send_signal":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_kexec_file_load":
@@ -650,6 +680,7 @@ var retClassifications = map[string]RetClassification{
 	"readv":            ReadClassified,
 	"recvmsg":          ReadClassified,
 	"recvfrom":         ReadClassified,
+	"msgrcv":           ReadClassified,
 	"getrandom":        ReadClassified,
 	"syslog":           ReadClassified,
 	"mq_timedreceive":  ReadClassified,
@@ -666,6 +697,7 @@ var retClassifications = map[string]RetClassification{
 	"pwritev2":          WriteClassified,
 	"sendmsg":           WriteClassified,
 	"sendto":            WriteClassified,
+	"msgsnd":            WriteClassified,
 	"write":             WriteClassified,
 	"writev":            WriteClassified,
 	"mq_timedsend":      WriteClassified,

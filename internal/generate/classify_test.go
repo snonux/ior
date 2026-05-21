@@ -906,6 +906,41 @@ func TestClassifyE7NullNameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyB7NameOnlyKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_msgget", KindSysVId},
+		{"sys_enter_semget", KindSysVId},
+		{"sys_enter_shmget", KindSysVId},
+		{"sys_enter_msgsnd", KindSysVOp},
+		{"sys_enter_msgrcv", KindSysVOp},
+		{"sys_enter_msgctl", KindSysVOp},
+		{"sys_enter_semop", KindSysVOp},
+		{"sys_enter_semtimedop", KindSysVOp},
+		{"sys_enter_semctl", KindSysVOp},
+		{"sys_enter_shmat", KindSysVOp},
+		{"sys_enter_shmdt", KindSysVOp},
+		{"sys_enter_shmctl", KindSysVOp},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: tt.name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != tt.want {
+				t.Fatalf("%s: got kind %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyAcctPathname(t *testing.T) {
 	r := ClassifyFormat(&Format{
 		Name: "sys_enter_acct",
@@ -1123,6 +1158,18 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"seccomp", syntheticEnter("seccomp", 9368), syntheticExit("seccomp", 9367), KindSeccomp},
 		{"init_module", syntheticEnter("init_module", 9370), syntheticExit("init_module", 9369), KindModule},
 		{"delete_module", syntheticEnter("delete_module", 9372), syntheticExit("delete_module", 9371), KindModule},
+		{"msgget", syntheticEnter("msgget", 9394), syntheticExit("msgget", 9393), KindSysVId},
+		{"semget", syntheticEnter("semget", 9396), syntheticExit("semget", 9395), KindSysVId},
+		{"shmget", syntheticEnter("shmget", 9398), syntheticExit("shmget", 9397), KindSysVId},
+		{"msgsnd", syntheticEnter("msgsnd", 9400), syntheticExit("msgsnd", 9399), KindSysVOp},
+		{"msgrcv", syntheticEnter("msgrcv", 9402), syntheticExit("msgrcv", 9401), KindSysVOp},
+		{"msgctl", syntheticEnter("msgctl", 9404), syntheticExit("msgctl", 9403), KindSysVOp},
+		{"semop", syntheticEnter("semop", 9406), syntheticExit("semop", 9405), KindSysVOp},
+		{"semtimedop", syntheticEnter("semtimedop", 9408), syntheticExit("semtimedop", 9407), KindSysVOp},
+		{"semctl", syntheticEnter("semctl", 9410), syntheticExit("semctl", 9409), KindSysVOp},
+		{"shmat", syntheticEnter("shmat", 9412), syntheticExit("shmat", 9411), KindSysVOp},
+		{"shmdt", syntheticEnter("shmdt", 9414), syntheticExit("shmdt", 9413), KindSysVOp},
+		{"shmctl", syntheticEnter("shmctl", 9416), syntheticExit("shmctl", 9415), KindSysVOp},
 		{"mount", FormatMount, FormatExitMount, KindPathname},
 		{"umount", FormatUmount, FormatExitUmount, KindPathname},
 		{"move_mount", FormatMoveMount, FormatExitMoveMount, KindTwoFd},

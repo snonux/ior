@@ -2773,7 +2773,7 @@ int handle_sys_exit_mq_getsetattr(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_shmget is a struct null_event (kind=null)
+/// sys_enter_shmget is a struct null_event (kind=sysv-id)
 SEC("tracepoint/syscalls/sys_enter_shmget")
 int handle_sys_enter_shmget(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2823,7 +2823,7 @@ int handle_sys_exit_shmget(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_shmctl is a struct null_event (kind=null)
+/// sys_enter_shmctl is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_shmctl")
 int handle_sys_enter_shmctl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2873,7 +2873,7 @@ int handle_sys_exit_shmctl(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_shmat is a struct null_event (kind=null)
+/// sys_enter_shmat is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_shmat")
 int handle_sys_enter_shmat(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2923,7 +2923,7 @@ int handle_sys_exit_shmat(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_shmdt is a struct null_event (kind=null)
+/// sys_enter_shmdt is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_shmdt")
 int handle_sys_enter_shmdt(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -2973,7 +2973,7 @@ int handle_sys_exit_shmdt(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_semget is a struct null_event (kind=null)
+/// sys_enter_semget is a struct null_event (kind=sysv-id)
 SEC("tracepoint/syscalls/sys_enter_semget")
 int handle_sys_enter_semget(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3023,7 +3023,7 @@ int handle_sys_exit_semget(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_semctl is a struct null_event (kind=null)
+/// sys_enter_semctl is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_semctl")
 int handle_sys_enter_semctl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3073,7 +3073,7 @@ int handle_sys_exit_semctl(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_semtimedop is a struct null_event (kind=null)
+/// sys_enter_semtimedop is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_semtimedop")
 int handle_sys_enter_semtimedop(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3123,7 +3123,7 @@ int handle_sys_exit_semtimedop(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_semop is a struct null_event (kind=null)
+/// sys_enter_semop is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_semop")
 int handle_sys_enter_semop(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3173,7 +3173,7 @@ int handle_sys_exit_semop(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_msgget is a struct null_event (kind=null)
+/// sys_enter_msgget is a struct null_event (kind=sysv-id)
 SEC("tracepoint/syscalls/sys_enter_msgget")
 int handle_sys_enter_msgget(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3223,7 +3223,7 @@ int handle_sys_exit_msgget(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_msgctl is a struct null_event (kind=null)
+/// sys_enter_msgctl is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_msgctl")
 int handle_sys_enter_msgctl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3273,7 +3273,7 @@ int handle_sys_exit_msgctl(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_msgsnd is a struct null_event (kind=null)
+/// sys_enter_msgsnd is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_msgsnd")
 int handle_sys_enter_msgsnd(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3297,7 +3297,7 @@ int handle_sys_enter_msgsnd(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_msgsnd is a struct ret_event (UNCLASSIFIED) (kind=ret)
+/// sys_exit_msgsnd is a struct ret_event (WRITE_CLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_msgsnd")
 int handle_sys_exit_msgsnd(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -3317,13 +3317,13 @@ int handle_sys_exit_msgsnd(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
+    ev->ret_type = WRITE_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
 
-/// sys_enter_msgrcv is a struct null_event (kind=null)
+/// sys_enter_msgrcv is a struct null_event (kind=sysv-op)
 SEC("tracepoint/syscalls/sys_enter_msgrcv")
 int handle_sys_enter_msgrcv(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -3347,7 +3347,7 @@ int handle_sys_enter_msgrcv(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_msgrcv is a struct ret_event (UNCLASSIFIED) (kind=ret)
+/// sys_exit_msgrcv is a struct ret_event (READ_CLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_msgrcv")
 int handle_sys_exit_msgrcv(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -3367,7 +3367,7 @@ int handle_sys_exit_msgrcv(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
+    ev->ret_type = READ_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
