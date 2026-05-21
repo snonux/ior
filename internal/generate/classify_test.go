@@ -750,6 +750,36 @@ func TestClassify67NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassify87NameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_rt_sigaction",
+		"sys_enter_rt_sigprocmask",
+		"sys_enter_rt_sigpending",
+		"sys_enter_rt_sigsuspend",
+		"sys_enter_rt_sigtimedwait",
+		"sys_enter_rt_sigreturn",
+		"sys_enter_sigaltstack",
+		"sys_enter_pause",
+		"sys_enter_rt_sigqueueinfo",
+		"sys_enter_rt_tgsigqueueinfo",
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindNull {
+				t.Fatalf("%s: got kind %d, want KindNull", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
@@ -971,6 +1001,16 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"swapon", FormatSwapon, FormatExitSwapon, KindPathname},
 		{"swapoff", FormatSwapoff, FormatExitSwapoff, KindPathname},
 		{"kill", FormatKill, FormatExitKill, KindNull},
+		{"rt_sigaction", syntheticEnter("rt_sigaction", 9374), syntheticExit("rt_sigaction", 9373), KindNull},
+		{"rt_sigprocmask", syntheticEnter("rt_sigprocmask", 9376), syntheticExit("rt_sigprocmask", 9375), KindNull},
+		{"rt_sigpending", syntheticEnter("rt_sigpending", 9378), syntheticExit("rt_sigpending", 9377), KindNull},
+		{"rt_sigsuspend", syntheticEnter("rt_sigsuspend", 9380), syntheticExit("rt_sigsuspend", 9379), KindNull},
+		{"rt_sigtimedwait", syntheticEnter("rt_sigtimedwait", 9382), syntheticExit("rt_sigtimedwait", 9381), KindNull},
+		{"rt_sigreturn", syntheticEnter("rt_sigreturn", 9384), syntheticExit("rt_sigreturn", 9383), KindNull},
+		{"sigaltstack", syntheticEnter("sigaltstack", 9386), syntheticExit("sigaltstack", 9385), KindNull},
+		{"pause", syntheticEnter("pause", 9388), syntheticExit("pause", 9387), KindNull},
+		{"rt_sigqueueinfo", syntheticEnter("rt_sigqueueinfo", 9390), syntheticExit("rt_sigqueueinfo", 9389), KindNull},
+		{"rt_tgsigqueueinfo", syntheticEnter("rt_tgsigqueueinfo", 9392), syntheticExit("rt_tgsigqueueinfo", 9391), KindNull},
 		{"exit", syntheticEnter("exit", 9310), syntheticExit("exit", 9309), KindNull},
 		{"exit_group", syntheticEnter("exit_group", 9312), syntheticExit("exit_group", 9311), KindNull},
 	}
