@@ -31,6 +31,8 @@ const (
 	KindKeyctl
 	KindPtrace
 	KindPerfOpen
+	KindSeccomp
+	KindModule
 )
 
 func (k TracepointKind) MetadataName() string {
@@ -85,6 +87,10 @@ func (k TracepointKind) MetadataName() string {
 		return "ptrace"
 	case KindPerfOpen:
 		return "perf-open"
+	case KindSeccomp:
+		return "seccomp"
+	case KindModule:
+		return "module"
 	default:
 		return "none"
 	}
@@ -314,6 +320,18 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindPtrace}, true
 	case "sys_enter_perf_event_open":
 		return ClassificationResult{Kind: KindPerfOpen}, true
+	case "sys_enter_seccomp":
+		return ClassificationResult{Kind: KindSeccomp}, true
+	case "sys_exit_seccomp":
+		return ClassificationResult{Kind: KindSeccomp}, true
+	case "sys_enter_init_module":
+		return ClassificationResult{Kind: KindModule}, true
+	case "sys_exit_init_module":
+		return ClassificationResult{Kind: KindModule}, true
+	case "sys_enter_delete_module":
+		return ClassificationResult{Kind: KindModule}, true
+	case "sys_exit_delete_module":
+		return ClassificationResult{Kind: KindModule}, true
 	case "sys_enter_pidfd_send_signal":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_kexec_file_load":
