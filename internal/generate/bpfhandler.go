@@ -262,6 +262,16 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 		switch f.Name {
 		case "sys_enter_eventfd2":
 			flagsExpr = "(__s32)ctx->args[1]"
+		case "sys_enter_memfd_create":
+			flagsExpr = "(__s32)ctx->args[1]"
+		case "sys_enter_memfd_secret":
+			flagsExpr = "(__s32)ctx->args[0]"
+		case "sys_enter_userfaultfd":
+			flagsExpr = "(__s32)ctx->args[0]"
+		case "sys_enter_signalfd4":
+			flagsExpr = "(__s32)ctx->args[3]"
+		case "sys_enter_timerfd_create":
+			flagsExpr = "(__s32)ctx->args[1]"
 		case "sys_enter_fsmount":
 			flagsExpr = "(__s32)ctx->args[1]"
 		case "sys_enter_fsopen":

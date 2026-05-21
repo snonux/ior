@@ -103,6 +103,30 @@ func TestHandleEventfdExitAppliesPairFilter(t *testing.T) {
 	}
 }
 
+func TestEventfdDescriptorNameByTraceID(t *testing.T) {
+	tests := []struct {
+		name    string
+		traceID types.TraceId
+		flags   int32
+		want    string
+	}{
+		{name: "eventfd", traceID: types.SYS_ENTER_EVENTFD2, flags: 1, want: "eventfd:1"},
+		{name: "memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, flags: 2, want: "memfd:2"},
+		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, flags: 3, want: "memfd-secret:3"},
+		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, flags: 4, want: "userfaultfd:4"},
+		{name: "signalfd", traceID: types.SYS_ENTER_SIGNALFD4, flags: 5, want: "signalfd:5"},
+		{name: "timerfd_create", traceID: types.SYS_ENTER_TIMERFD_CREATE, flags: 6, want: "timerfd:6"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := eventfdDescriptorName(tt.traceID, tt.flags)
+			if got != tt.want {
+				t.Fatalf("eventfdDescriptorName(%s, %d) = %q, want %q", tt.traceID.String(), tt.flags, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInitRawHandlersRegistersIPCEvents(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	if _, ok := el.rawHandlers[types.ENTER_PIPE_EVENT]; !ok {

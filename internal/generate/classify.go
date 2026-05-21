@@ -179,6 +179,30 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_exit_eventfd2":
 		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_memfd_create":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_memfd_create":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_memfd_secret":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_memfd_secret":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_userfaultfd":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_userfaultfd":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_signalfd":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_signalfd":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_signalfd4":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_signalfd4":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_enter_timerfd_create":
+		return ClassificationResult{Kind: KindEventfd}, true
+	case "sys_exit_timerfd_create":
+		return ClassificationResult{Kind: KindEventfd}, true
 	case "sys_enter_bind":
 		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_connect":

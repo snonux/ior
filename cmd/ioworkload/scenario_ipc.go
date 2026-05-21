@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -53,4 +54,36 @@ func createEventfd(number uintptr, initval, flags uintptr) (int, error) {
 		return -1, fmt.Errorf("eventfd syscall %d: %w", number, errno)
 	}
 	return int(fd), nil
+}
+
+func fdFromAirEventfdUsers() error {
+	memfdName, err := syscall.BytePtrFromString("ior-memfd")
+	if err != nil {
+		return fmt.Errorf("memfd name: %w", err)
+	}
+	fd, _, _ := syscall.RawSyscall(unix.SYS_MEMFD_CREATE, uintptr(unsafe.Pointer(memfdName)), uintptr(unix.MFD_CLOEXEC), 0)
+	closeIfValid(int(fd))
+
+	fd, _, _ = syscall.RawSyscall(unix.SYS_MEMFD_SECRET, 0, 0, 0)
+	closeIfValid(int(fd))
+
+	fd, _, _ = syscall.RawSyscall(unix.SYS_USERFAULTFD, uintptr(unix.O_CLOEXEC), 0, 0)
+	closeIfValid(int(fd))
+
+	var mask unix.Sigset_t
+	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), uintptr(unsafe.Sizeof(mask)))
+	closeIfValid(int(fd))
+
+	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD4, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), uintptr(unsafe.Sizeof(mask)))
+	closeIfValid(int(fd))
+
+	fd, _, _ = syscall.RawSyscall(unix.SYS_TIMERFD_CREATE, uintptr(unix.CLOCK_MONOTONIC), uintptr(unix.TFD_CLOEXEC), 0)
+	closeIfValid(int(fd))
+	return nil
+}
+
+func closeIfValid(fd int) {
+	if fd >= 0 {
+		_ = syscall.Close(fd)
+	}
 }
