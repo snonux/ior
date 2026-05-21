@@ -941,6 +941,30 @@ func TestClassifyB7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassify37NameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_clone",
+		"sys_enter_clone3",
+		"sys_enter_fork",
+		"sys_enter_vfork",
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindProc {
+				t.Fatalf("%s: got kind %d, want KindProc", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassifyAcctPathname(t *testing.T) {
 	r := ClassifyFormat(&Format{
 		Name: "sys_enter_acct",
