@@ -430,6 +430,44 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_set_tid_address":
 		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_yield":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_setaffinity":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_getaffinity":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_setparam":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_getparam":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_setscheduler":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_getscheduler":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_setattr":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_getattr":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_get_priority_max":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_get_priority_min":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_sched_rr_get_interval":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getcpu":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getrusage":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getrlimit":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setrlimit":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_prlimit64":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_getpriority":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_setpriority":
+		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_membarrier":
 		return ClassificationResult{Kind: KindNull}, true
 	case "sys_enter_rseq":
