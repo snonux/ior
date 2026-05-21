@@ -2,6 +2,7 @@ package probemanager
 
 import (
 	"errors"
+	"ior/internal/tracepoints"
 	"strings"
 	"sync"
 	"testing"
@@ -124,6 +125,46 @@ func TestManagerAttachAllToggleAndCounts(t *testing.T) {
 	active, total = mgr.ActiveCount()
 	if active != 2 || total != 2 {
 		t.Fatalf("unexpected counts after toggle active=%d total=%d", active, total)
+	}
+}
+
+func TestManagerAttachAllWithDimensionSelectorAttachesOnlyEnabledSyscalls(t *testing.T) {
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_openat": {},
+			"handle_sys_exit_openat":  {},
+			"handle_sys_enter_write":  {},
+			"handle_sys_exit_write":   {},
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	selector, err := tracepoints.ParseSelectorWithDimensions("", "", tracepoints.DimensionSelectorConfig{
+		TraceSyscalls: "openat",
+	})
+	if err != nil {
+		t.Fatalf("build selector: %v", err)
+	}
+
+	err = mgr.AttachAll(selector.ShouldAttach, []string{
+		"sys_enter_openat", "sys_exit_openat",
+		"sys_enter_write", "sys_exit_write",
+	}, nil)
+	if err != nil {
+		t.Fatalf("AttachAll returned error: %v", err)
+	}
+
+	if got := attacher.programs["handle_sys_enter_openat"].attachCalls(); got != 1 {
+		t.Fatalf("openat enter attach calls = %d, want 1", got)
+	}
+	if got := attacher.programs["handle_sys_exit_openat"].attachCalls(); got != 1 {
+		t.Fatalf("openat exit attach calls = %d, want 1", got)
+	}
+	if got := attacher.programs["handle_sys_enter_write"].attachCalls(); got != 0 {
+		t.Fatalf("write enter attach calls = %d, want 0", got)
+	}
+	if got := attacher.programs["handle_sys_exit_write"].attachCalls(); got != 0 {
+		t.Fatalf("write exit attach calls = %d, want 0", got)
 	}
 }
 

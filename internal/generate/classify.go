@@ -32,6 +32,61 @@ const (
 	KindPerfOpen
 )
 
+func (k TracepointKind) MetadataName() string {
+	switch k {
+	case KindFd:
+		return "fd"
+	case KindOpen:
+		return "open"
+	case KindMqOpen:
+		return "mq-open"
+	case KindExec:
+		return "exec"
+	case KindPathname:
+		return "pathname"
+	case KindName:
+		return "name"
+	case KindRet:
+		return "ret"
+	case KindFcntl:
+		return "fcntl"
+	case KindNull:
+		return "null"
+	case KindDup3:
+		return "dup3"
+	case KindOpenByHandleAt:
+		return "open-by-handle-at"
+	case KindSocket:
+		return "socket"
+	case KindSocketpair:
+		return "socketpair"
+	case KindAccept:
+		return "accept"
+	case KindPipe:
+		return "pipe"
+	case KindEventfd:
+		return "eventfd"
+	case KindEpollCtl:
+		return "epoll-ctl"
+	case KindTwoFd:
+		return "two-fd"
+	case KindPoll:
+		return "poll"
+	case KindMem:
+		return "mem"
+	case KindSleep:
+		return "sleep"
+	case KindKeyctl:
+		return "keyctl"
+	case KindPtrace:
+		return "ptrace"
+	case KindPerfOpen:
+		return "perf-open"
+	default:
+		return "none"
+	}
+}
+
 type RetClassification string
 
 const (

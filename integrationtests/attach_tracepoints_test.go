@@ -59,3 +59,44 @@ func TestAttachTracepointsExcludeByInclusion(t *testing.T) {
 		},
 	})
 }
+
+func TestAttachTraceFamiliesTimeOnly(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("sleep-syscalls", defaultDuration, []string{
+		"-trace-families", "Time",
+	})
+	if err != nil {
+		t.Fatalf("run scenario sleep-syscalls with trace-families=Time: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_nanosleep", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_clock_nanosleep", Comm: "ioworkload", MinCount: 1},
+	})
+}
+
+func TestAttachTraceSyscallsWithExclusion(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("open-rdonly-write", defaultDuration, []string{
+		"-trace-syscalls", "openat,write",
+		"-no-trace-syscalls", "openat",
+	})
+	if err != nil {
+		t.Fatalf("run scenario open-rdonly-write with syscall include/exclude: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_write", Comm: "ioworkload", MinCount: 1},
+	})
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_openat", Comm: "ioworkload"},
+	})
+}

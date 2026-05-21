@@ -390,7 +390,14 @@ func GenerateTracepointsGo() error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", tracepointsCPath, err)
 	}
-	output, err := generate.ExtractTracepoints(strings.NewReader(string(input)))
+	kindsInput, err := os.ReadFile(tracepointsResult)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", tracepointsResult, err)
+	}
+	output, err := generate.ExtractTracepointsWithKinds(
+		strings.NewReader(string(input)),
+		strings.NewReader(string(kindsInput)),
+	)
 	if err != nil {
 		return err
 	}

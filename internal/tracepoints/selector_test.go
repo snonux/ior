@@ -82,3 +82,17 @@ func TestSelectorCloneIsIndependent(t *testing.T) {
 		t.Error("original Selector was mutated through clone")
 	}
 }
+
+func TestSelectorCloneCopiesSyscallAllowlist(t *testing.T) {
+	sel := Selector{
+		Syscalls: map[string]struct{}{
+			"openat": {},
+		},
+		RestrictSyscalls: true,
+	}
+	clone := sel.Clone()
+	delete(clone.Syscalls, "openat")
+	if !sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("original syscall allowlist mutated through clone")
+	}
+}

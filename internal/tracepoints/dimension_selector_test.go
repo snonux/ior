@@ -1,0 +1,147 @@
+package tracepoints
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestParseSelectorWithDimensionsDefaultFSOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected FS syscall openat to be attached by default")
+	}
+	if sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected non-FS syscall nanosleep to be excluded by default")
+	}
+}
+
+func TestParseSelectorWithDimensionsFamilyOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceFamilies: "Time",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep to be attached when Time family is enabled")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded when only Time family is enabled")
+	}
+}
+
+func TestParseSelectorWithDimensionsKindOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "sleep",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep to be attached for sleep kind")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded when only sleep kind is enabled")
+	}
+}
+
+func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceSyscalls: "openat",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_openat") || !sel.ShouldAttach("sys_exit_openat") {
+		t.Fatal("expected both openat enter/exit tracepoints to be attached")
+	}
+	if sel.ShouldAttach("sys_enter_write") {
+		t.Fatal("expected write to be excluded when only openat is selected")
+	}
+}
+
+func TestParseSelectorWithDimensionsUnionSemantics(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceFamilies: "Time",
+		TraceSyscalls: "openat",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat from syscall selector")
+	}
+	if !sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep from family selector")
+	}
+}
+
+func TestParseSelectorWithDimensionsExclusionsOverridePositives(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceFamilies:   "FS",
+		NoTraceSyscalls: "openat",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded by -no-trace-syscalls")
+	}
+	if !sel.ShouldAttach("sys_enter_read") {
+		t.Fatal("expected other FS syscall (read) to remain attached")
+	}
+}
+
+func TestParseSelectorWithDimensionsRegexStillApplies(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("^sys_enter_openat$,^sys_exit_openat$", "", DimensionSelectorConfig{
+		TraceFamilies: "FS",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to pass regex+dimension filters")
+	}
+	if sel.ShouldAttach("sys_enter_read") {
+		t.Fatal("expected read to fail regex attach filters")
+	}
+}
+
+func TestParseSelectorWithDimensionsRejectsInvalidFamily(t *testing.T) {
+	_, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceFamilies: "Nope",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall family") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseSelectorWithDimensionsRejectsInvalidKind(t *testing.T) {
+	_, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "not-a-kind",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall kind") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseSelectorWithDimensionsRejectsInvalidSyscall(t *testing.T) {
+	_, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceSyscalls: "not_a_syscall",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall in trace selector") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

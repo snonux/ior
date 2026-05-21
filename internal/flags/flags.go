@@ -148,12 +148,12 @@ func Parse() (Config, error) {
 // fresh FlagSet and custom argument slices without touching global state.
 func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	cfg := NewFlags()
-	tpsAttach, tpsExclude, fields, familySampling, syscallSampling := registerFlags(fs, &cfg)
+	tpsAttach, tpsExclude, fields, familySampling, syscallSampling, dims := registerFlags(fs, &cfg)
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	if err := resolvePostParseFields(&cfg, tpsAttach, tpsExclude, fields); err != nil {
+	if err := resolvePostParseFields(&cfg, tpsAttach, tpsExclude, fields, dims); err != nil {
 		return Config{}, err
 	}
 	if err := resolveSamplingRates(&cfg, familySampling, syscallSampling); err != nil {
@@ -167,9 +167,10 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 
 // registerFlags binds all CLI flags to cfg and returns the string pointers for
 // fields that require post-parse resolution (tracepoint regexes, collapse fields).
-func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields, familySampling, syscallSampling *string) {
+func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields, familySampling, syscallSampling *string, dims *tracepoints.DimensionSelectorConfig) {
 	validFields := collapse.ValidFields()
 	validCounts := collapse.ValidCountFields()
+	dimensionCfg := &tracepoints.DimensionSelectorConfig{}
 
 	fs.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
 	fs.IntVar(&cfg.TidFilter, "tid", cfg.TidFilter, "Filter for thread ID")
@@ -182,6 +183,18 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 
 	tpsAttach = fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
 	tpsExclude = fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
+	fs.StringVar(&dimensionCfg.TraceFamilies, "trace-families", "",
+		"Comma separated syscall families to attach (for example FS,Time,Network)")
+	fs.StringVar(&dimensionCfg.TraceKinds, "trace-kinds", "",
+		"Comma separated tracepoint kinds to attach (for example fd,open,sleep,epoll-ctl)")
+	fs.StringVar(&dimensionCfg.TraceSyscalls, "trace-syscalls", "",
+		"Comma separated syscall names to attach (for example openat,read,nanosleep)")
+	fs.StringVar(&dimensionCfg.NoTraceFamilies, "no-trace-families", "",
+		"Comma separated syscall families to exclude from attachment")
+	fs.StringVar(&dimensionCfg.NoTraceKinds, "no-trace-kinds", "",
+		"Comma separated tracepoint kinds to exclude from attachment")
+	fs.StringVar(&dimensionCfg.NoTraceSyscalls, "no-trace-syscalls", "",
+		"Comma separated syscall names to exclude from attachment")
 
 	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
@@ -204,15 +217,18 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	fs.StringVar(&cfg.CountField, "count", cfg.CountField,
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCounts))
-	return tpsAttach, tpsExclude, fields, familySampling, syscallSampling
+	return tpsAttach, tpsExclude, fields, familySampling, syscallSampling, dimensionCfg
 }
 
 // resolvePostParseFields compiles the tracepoint selector and collapse field
 // list from the raw string flags that cannot be bound directly to cfg fields.
-func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string) error {
+func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string, dims *tracepoints.DimensionSelectorConfig) error {
 	// Parse the tracepoint include/exclude regex lists into a Selector.
 	// The Selector owns all matching logic; Config is purely a data carrier.
-	sel, err := tracepoints.ParseSelector(*tpsAttach, *tpsExclude)
+	if dims == nil {
+		dims = &tracepoints.DimensionSelectorConfig{}
+	}
+	sel, err := tracepoints.ParseSelectorWithDimensions(*tpsAttach, *tpsExclude, *dims)
 	if err != nil {
 		return err
 	}
