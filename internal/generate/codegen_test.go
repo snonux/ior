@@ -236,6 +236,42 @@ func TestGenerateMemHandlerRemapFilePages(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__u64)ctx->args[4];")
 }
 
+func TestGenerateMemHandlerMprotect(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mprotect")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mprotect")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+func TestGenerateMemHandlerPkeyMprotect(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("pkey_mprotect")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_pkey_mprotect")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = (__u64)ctx->args[3];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+func TestGenerateMemHandlerBrk(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("brk")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_brk")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = 0;")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = 0;")
+}
+
 func TestGenerateDup3Handler(t *testing.T) {
 	output := generateFromPair(t, FormatDup3, FormatExitDup3)
 

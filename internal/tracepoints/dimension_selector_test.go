@@ -88,6 +88,9 @@ func TestParseSelectorWithDimensionsMemKindIncludesMlock(t *testing.T) {
 	if !sel.ShouldAttach("sys_enter_mlock") {
 		t.Fatal("expected mlock to be attached for mem kind")
 	}
+	if !sel.ShouldAttach("sys_enter_mprotect") {
+		t.Fatal("expected mprotect to be attached for mem kind")
+	}
 	if sel.ShouldAttach("sys_enter_nanosleep") {
 		t.Fatal("expected nanosleep to be excluded when only mem kind is enabled")
 	}

@@ -11935,7 +11935,7 @@ int handle_sys_exit_swapon(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_madvise is a struct null_event (kind=null)
+/// sys_enter_madvise is a struct mem_event (kind=mem)
 SEC("tracepoint/syscalls/sys_enter_madvise")
 int handle_sys_enter_madvise(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -11945,15 +11945,19 @@ int handle_sys_enter_madvise(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MADVISE))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct mem_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct mem_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_MEM_EVENT;
     ev->trace_id = SYS_ENTER_MADVISE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->addr = (__u64)ctx->args[0];
+    ev->length = (__u64)ctx->args[1];
+    ev->length2 = 0;
+    ev->flags = (__u64)ctx->args[2];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12293,7 +12297,7 @@ int handle_sys_exit_mremap(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_mprotect is a struct null_event (kind=null)
+/// sys_enter_mprotect is a struct mem_event (kind=mem)
 SEC("tracepoint/syscalls/sys_enter_mprotect")
 int handle_sys_enter_mprotect(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -12303,15 +12307,19 @@ int handle_sys_enter_mprotect(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MPROTECT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct mem_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct mem_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_MEM_EVENT;
     ev->trace_id = SYS_ENTER_MPROTECT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->addr = (__u64)ctx->args[0];
+    ev->length = (__u64)ctx->args[1];
+    ev->length2 = 0;
+    ev->flags = (__u64)ctx->args[2];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12343,7 +12351,7 @@ int handle_sys_exit_mprotect(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_pkey_mprotect is a struct null_event (kind=null)
+/// sys_enter_pkey_mprotect is a struct mem_event (kind=mem)
 SEC("tracepoint/syscalls/sys_enter_pkey_mprotect")
 int handle_sys_enter_pkey_mprotect(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -12353,15 +12361,19 @@ int handle_sys_enter_pkey_mprotect(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_PKEY_MPROTECT))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct mem_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct mem_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_MEM_EVENT;
     ev->trace_id = SYS_ENTER_PKEY_MPROTECT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->addr = (__u64)ctx->args[0];
+    ev->length = (__u64)ctx->args[1];
+    ev->length2 = (__u64)ctx->args[3];
+    ev->flags = (__u64)ctx->args[2];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12493,7 +12505,7 @@ int handle_sys_exit_pkey_free(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_brk is a struct null_event (kind=null)
+/// sys_enter_brk is a struct mem_event (kind=mem)
 SEC("tracepoint/syscalls/sys_enter_brk")
 int handle_sys_enter_brk(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -12503,15 +12515,19 @@ int handle_sys_enter_brk(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_BRK))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct mem_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct mem_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_MEM_EVENT;
     ev->trace_id = SYS_ENTER_BRK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->addr = (__u64)ctx->args[0];
+    ev->length = 0;
+    ev->length2 = 0;
+    ev->flags = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
