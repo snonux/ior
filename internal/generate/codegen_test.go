@@ -33,6 +33,16 @@ func TestGeneratePidfdGetfdHandlerUsesPidfdArgument(t *testing.T) {
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 }
 
+func TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("process_madvise")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_process_madvise")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_PROCESS_MADVISE;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+}
+
 func TestGenerateOpenHandler(t *testing.T) {
 	output := generateFromPair(t, FormatOpenat, FormatExitOpenat)
 

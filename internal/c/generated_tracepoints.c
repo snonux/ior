@@ -11989,7 +11989,7 @@ int handle_sys_exit_madvise(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_process_madvise is a struct null_event (kind=null)
+/// sys_enter_process_madvise is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_process_madvise")
 int handle_sys_enter_process_madvise(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -11999,15 +11999,16 @@ int handle_sys_enter_process_madvise(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_PROCESS_MADVISE))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_PROCESS_MADVISE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13085,7 +13086,7 @@ int handle_sys_exit_fadvise64(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_process_mrelease is a struct null_event (kind=null)
+/// sys_enter_process_mrelease is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_process_mrelease")
 int handle_sys_enter_process_mrelease(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -13095,15 +13096,16 @@ int handle_sys_enter_process_mrelease(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_PROCESS_MRELEASE))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_PROCESS_MRELEASE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

@@ -376,6 +376,30 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindSysVOp}, true
 	case "sys_enter_shmctl":
 		return ClassificationResult{Kind: KindSysVOp}, true
+	case "sys_enter_pkey_alloc":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_pkey_free":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_mbind":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_set_mempolicy":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_get_mempolicy":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_set_mempolicy_home_node":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_migrate_pages":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_move_pages":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_mlockall":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_munlockall":
+		return ClassificationResult{Kind: KindNull}, true
+	case "sys_enter_process_madvise":
+		return ClassificationResult{Kind: KindFd}, true
+	case "sys_enter_process_mrelease":
+		return ClassificationResult{Kind: KindFd}, true
 	case "sys_enter_clone":
 		return ClassificationResult{Kind: KindProc}, true
 	case "sys_enter_clone3":

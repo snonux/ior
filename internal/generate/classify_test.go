@@ -745,6 +745,41 @@ func TestClassifyH7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyL7NameOnlyKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_pkey_alloc", KindNull},
+		{"sys_enter_pkey_free", KindNull},
+		{"sys_enter_mbind", KindNull},
+		{"sys_enter_set_mempolicy", KindNull},
+		{"sys_enter_get_mempolicy", KindNull},
+		{"sys_enter_set_mempolicy_home_node", KindNull},
+		{"sys_enter_migrate_pages", KindNull},
+		{"sys_enter_move_pages", KindNull},
+		{"sys_enter_mlockall", KindNull},
+		{"sys_enter_munlockall", KindNull},
+		{"sys_enter_process_madvise", KindFd},
+		{"sys_enter_process_mrelease", KindFd},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: tt.name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != tt.want {
+				t.Fatalf("%s: got kind %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassify67NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string

@@ -63,6 +63,21 @@ func TestParseSelectorWithDimensionsPidfdKindOnly(t *testing.T) {
 	}
 }
 
+func TestParseSelectorWithDimensionsFdKindIncludesProcessMadvise(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "fd",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_process_madvise") {
+		t.Fatal("expected process_madvise to be attached for fd kind")
+	}
+	if sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep to be excluded when only fd kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsEventfdKindIncludesEpollCreate(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceKinds: "eventfd",
