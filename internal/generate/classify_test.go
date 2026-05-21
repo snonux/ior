@@ -691,6 +691,36 @@ func TestClassifyG7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyI7NameOnlyKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_mincore", KindMem},
+		{"sys_enter_remap_file_pages", KindMem},
+		{"sys_enter_mlock", KindMem},
+		{"sys_enter_mlock2", KindMem},
+		{"sys_enter_munlock", KindMem},
+		{"sys_enter_mseal", KindMem},
+		{"sys_enter_map_shadow_stack", KindMem},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: tt.name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != tt.want {
+				t.Fatalf("%s: got kind %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
@@ -875,6 +905,13 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"pselect6", FormatPselect6, FormatExitPselect6, KindPoll},
 		{"munmap", FormatMunmap, FormatExitMunmap, KindMem},
 		{"mremap", FormatMremap, FormatExitMremap, KindMem},
+		{"mincore", syntheticEnter("mincore", 9354), syntheticExit("mincore", 9353), KindMem},
+		{"remap_file_pages", syntheticEnter("remap_file_pages", 9356), syntheticExit("remap_file_pages", 9355), KindMem},
+		{"mlock", syntheticEnter("mlock", 9358), syntheticExit("mlock", 9357), KindMem},
+		{"mlock2", syntheticEnter("mlock2", 9360), syntheticExit("mlock2", 9359), KindMem},
+		{"munlock", syntheticEnter("munlock", 9362), syntheticExit("munlock", 9361), KindMem},
+		{"mseal", syntheticEnter("mseal", 9364), syntheticExit("mseal", 9363), KindMem},
+		{"map_shadow_stack", syntheticEnter("map_shadow_stack", 9366), syntheticExit("map_shadow_stack", 9365), KindMem},
 		{"nanosleep", FormatNanosleep, FormatExitNanosleep, KindSleep},
 		{"clock_nanosleep", FormatClockNanosleep, FormatExitClockNanosleep, KindSleep},
 		{"keyctl", syntheticEnter("keyctl", 9200), syntheticExit("keyctl", 9199), KindKeyctl},

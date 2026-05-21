@@ -286,6 +286,20 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 		return ClassificationResult{Kind: KindMem}, true
 	case "sys_enter_mremap":
 		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_mincore":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_remap_file_pages":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_mlock":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_mlock2":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_munlock":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_mseal":
+		return ClassificationResult{Kind: KindMem}, true
+	case "sys_enter_map_shadow_stack":
+		return ClassificationResult{Kind: KindMem}, true
 	case "sys_enter_nanosleep":
 		return ClassificationResult{Kind: KindSleep}, true
 	case "sys_enter_clock_nanosleep":

@@ -213,6 +213,29 @@ func TestGenerateMemHandler(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__u64)ctx->args[3];")
 }
 
+func TestGenerateMemHandlerMlock2(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mlock2")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mlock2")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+func TestGenerateMemHandlerRemapFilePages(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("remap_file_pages")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_remap_file_pages")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = (__u64)ctx->args[3];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[4];")
+}
+
 func TestGenerateDup3Handler(t *testing.T) {
 	output := generateFromPair(t, FormatDup3, FormatExitDup3)
 

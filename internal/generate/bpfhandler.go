@@ -332,6 +332,20 @@ func generateExtraMem(name string) string {
 		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
 	case "sys_enter_mremap":
 		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = (__u64)ctx->args[2];\n    ev->flags = (__u64)ctx->args[3];\n"
+	case "sys_enter_mincore":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
+	case "sys_enter_remap_file_pages":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = (__u64)ctx->args[3];\n    ev->flags = (__u64)ctx->args[4];\n"
+	case "sys_enter_mlock":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
+	case "sys_enter_mlock2":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
+	case "sys_enter_munlock":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
+	case "sys_enter_mseal":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
+	case "sys_enter_map_shadow_stack":
+		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
 	default:
 		return "    ev->addr = 0;\n    ev->length = 0;\n    ev->length2 = 0;\n    ev->flags = 0;\n"
 	}

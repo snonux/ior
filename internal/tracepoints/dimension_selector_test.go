@@ -78,6 +78,21 @@ func TestParseSelectorWithDimensionsEventfdKindIncludesEpollCreate(t *testing.T)
 	}
 }
 
+func TestParseSelectorWithDimensionsMemKindIncludesMlock(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "mem",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_mlock") {
+		t.Fatal("expected mlock to be attached for mem kind")
+	}
+	if sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep to be excluded when only mem kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceSyscalls: "openat",
