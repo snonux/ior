@@ -887,6 +887,27 @@ func TestClassifyM7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyO7NameOnlyKinds(t *testing.T) {
+	tests := []string{
+		"sys_enter_landlock_add_rule",
+		"sys_enter_landlock_restrict_self",
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != KindFd {
+				t.Fatalf("%s: got kind %d, want KindFd", name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassify67NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1333,6 +1354,8 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"inotify_init1", syntheticEnter("inotify_init1", 9346), syntheticExit("inotify_init1", 9345), KindEventfd},
 		{"fanotify_init", syntheticEnter("fanotify_init", 9348), syntheticExit("fanotify_init", 9347), KindEventfd},
 		{"landlock_create_ruleset", syntheticEnter("landlock_create_ruleset", 9350), syntheticExit("landlock_create_ruleset", 9349), KindEventfd},
+		{"landlock_add_rule", syntheticEnter("landlock_add_rule", 9418), syntheticExit("landlock_add_rule", 9417), KindFd},
+		{"landlock_restrict_self", syntheticEnter("landlock_restrict_self", 9420), syntheticExit("landlock_restrict_self", 9419), KindFd},
 		{"fsopen", syntheticEnter("fsopen", 9352), syntheticExit("fsopen", 9351), KindEventfd},
 		{"pidfd_open", syntheticEnter("pidfd_open", 9320), syntheticExit("pidfd_open", 9319), KindPidfd},
 		{"pidfd_send_signal", syntheticEnter("pidfd_send_signal", 9322), syntheticExit("pidfd_send_signal", 9321), KindFd},
