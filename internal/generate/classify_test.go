@@ -654,6 +654,43 @@ func TestClassifyN7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+func TestClassifyG7NameOnlyKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_epoll_create", KindEventfd},
+		{"sys_exit_epoll_create", KindEventfd},
+		{"sys_enter_epoll_create1", KindEventfd},
+		{"sys_exit_epoll_create1", KindEventfd},
+		{"sys_enter_inotify_init", KindEventfd},
+		{"sys_exit_inotify_init", KindEventfd},
+		{"sys_enter_inotify_init1", KindEventfd},
+		{"sys_exit_inotify_init1", KindEventfd},
+		{"sys_enter_fanotify_init", KindEventfd},
+		{"sys_exit_fanotify_init", KindEventfd},
+		{"sys_enter_landlock_create_ruleset", KindEventfd},
+		{"sys_exit_landlock_create_ruleset", KindEventfd},
+		{"sys_enter_fsopen", KindEventfd},
+		{"sys_exit_fsopen", KindEventfd},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: tt.name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "arg0"},
+				},
+			})
+			if r.Kind != tt.want {
+				t.Fatalf("%s: got kind %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
@@ -819,6 +856,13 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"pipe2", FormatPipe2, FormatExitPipe2, KindPipe},
 		{"eventfd", FormatEventfd, FormatExitEventfd, KindEventfd},
 		{"eventfd2", FormatEventfd2, FormatExitEventfd2, KindEventfd},
+		{"epoll_create", syntheticEnter("epoll_create", 9340), syntheticExit("epoll_create", 9339), KindEventfd},
+		{"epoll_create1", syntheticEnter("epoll_create1", 9342), syntheticExit("epoll_create1", 9341), KindEventfd},
+		{"inotify_init", syntheticEnter("inotify_init", 9344), syntheticExit("inotify_init", 9343), KindEventfd},
+		{"inotify_init1", syntheticEnter("inotify_init1", 9346), syntheticExit("inotify_init1", 9345), KindEventfd},
+		{"fanotify_init", syntheticEnter("fanotify_init", 9348), syntheticExit("fanotify_init", 9347), KindEventfd},
+		{"landlock_create_ruleset", syntheticEnter("landlock_create_ruleset", 9350), syntheticExit("landlock_create_ruleset", 9349), KindEventfd},
+		{"fsopen", syntheticEnter("fsopen", 9352), syntheticExit("fsopen", 9351), KindEventfd},
 		{"pidfd_open", syntheticEnter("pidfd_open", 9320), syntheticExit("pidfd_open", 9319), KindPidfd},
 		{"pidfd_send_signal", syntheticEnter("pidfd_send_signal", 9322), syntheticExit("pidfd_send_signal", 9321), KindFd},
 		{"epoll_ctl", FormatEpollCtl, FormatExitEpollCtl, KindEpollCtl},

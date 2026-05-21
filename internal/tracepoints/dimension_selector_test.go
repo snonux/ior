@@ -63,6 +63,21 @@ func TestParseSelectorWithDimensionsPidfdKindOnly(t *testing.T) {
 	}
 }
 
+func TestParseSelectorWithDimensionsEventfdKindIncludesEpollCreate(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
+		TraceKinds: "eventfd",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_epoll_create1") {
+		t.Fatal("expected epoll_create1 to be attached for eventfd kind")
+	}
+	if sel.ShouldAttach("sys_enter_epoll_wait") {
+		t.Fatal("expected epoll_wait to be excluded when only eventfd kind is enabled")
+	}
+}
+
 func TestParseSelectorWithDimensionsSyscallOnly(t *testing.T) {
 	sel, err := ParseSelectorWithDimensions("", "", DimensionSelectorConfig{
 		TraceSyscalls: "openat",

@@ -121,3 +121,24 @@ func TestAttachTraceKindsPidfdOnly(t *testing.T) {
 		{Tracepoint: "enter_pidfd_getfd", Comm: "ioworkload"},
 	})
 }
+
+func TestAttachTraceKindsEventfdOnly(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("polling-epoll", defaultDuration, []string{
+		"-trace-kinds", "eventfd",
+	})
+	if err != nil {
+		t.Fatalf("run scenario polling-epoll with trace-kinds=eventfd: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_epoll_create1", Comm: "ioworkload", MinCount: 1},
+	})
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_epoll_wait", Comm: "ioworkload"},
+	})
+}

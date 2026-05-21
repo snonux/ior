@@ -262,6 +262,16 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 	if isEnter {
 		flagsExpr := "0"
 		switch f.Name {
+		case "sys_enter_epoll_create":
+			flagsExpr = "(__s32)ctx->args[0]"
+		case "sys_enter_epoll_create1":
+			flagsExpr = "(__s32)ctx->args[0]"
+		case "sys_enter_inotify_init1":
+			flagsExpr = "(__s32)ctx->args[0]"
+		case "sys_enter_fanotify_init":
+			flagsExpr = "(__s32)ctx->args[0]"
+		case "sys_enter_landlock_create_ruleset":
+			flagsExpr = "(__s32)ctx->args[2]"
 		case "sys_enter_eventfd2":
 			flagsExpr = "(__s32)ctx->args[1]"
 		case "sys_enter_memfd_create":
