@@ -219,10 +219,9 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	handler(raw, ch)
 }
 
-// initRawHandlers registers all BPF event-type dispatch callbacks. It is
-// idempotent: a second call after the map is populated is a no-op. Handlers
-// are grouped by event class (open, fd, null, ret, name/path, misc) so that
-// each helper stays under 30 lines.
+// initRawHandlers registers all BPF event-type dispatch callbacks from the
+// runtime event-kind table. It is idempotent: a second call after the map is
+// populated is a no-op.
 func (e *eventLoop) initRawHandlers() {
 	if e.rawHandlers == nil {
 		e.rawHandlers = make(map[types.EventType]rawEventHandler)
@@ -230,290 +229,33 @@ func (e *eventLoop) initRawHandlers() {
 	if len(e.rawHandlers) != 0 {
 		return
 	}
-	e.registerOpenHandlers()
-	e.registerFdHandlers()
-	e.registerNullHandlers()
-	e.registerRetHandlers()
-	e.registerNamePathHandlers()
-	e.registerMiscHandlers()
-	e.registerSocketHandlers()
-	e.registerIPCHandlers()
-	e.registerPollingHandlers()
-	e.registerTwoFdHandlers()
-	e.registerMemoryHandlers()
-	e.registerSleepHandlers()
-	e.registerProcessHandlers()
-	e.registerSecurityHandlers()
-}
-
-// registerOpenHandlers wires enter/exit handlers for open-family events.
-func (e *eventLoop) registerOpenHandlers() {
-	e.rawHandlers[types.ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		openEv, ok := decodeRawEvent(e, types.ENTER_OPEN_EVENT, raw, types.NewOpenEventFast)
-		if !ok {
-			return
-		}
-		if e.Filter().MatchOpenEvent(openEv) {
-			e.tracepointEntered(openEv)
-		}
-	}
-	e.rawHandlers[types.EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		retEv, ok := decodeRawEvent(e, types.EXIT_OPEN_EVENT, raw, types.NewRetEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(retEv, ch)
+	for _, rawEvent := range rawRuntimeEvents() {
+		e.rawHandlers[rawEvent.eventType] = e.rawRuntimeEventHandler(rawEvent)
 	}
 }
 
-// registerFdHandlers wires enter/exit handlers for fd-family events (read/write/close…).
-func (e *eventLoop) registerFdHandlers() {
-	e.rawHandlers[types.ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		fdEv, ok := decodeRawEvent(e, types.ENTER_FD_EVENT, raw, types.NewFdEventFast)
+func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHandler {
+	return func(raw []byte, ch chan<- *event.Pair) {
+		ev, ok := e.decodeRuntimeEvent(rawEvent, raw)
 		if !ok {
 			return
 		}
-		e.tracepointEntered(fdEv)
-	}
-	e.rawHandlers[types.EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		fdEv, ok := decodeRawEvent(e, types.EXIT_FD_EVENT, raw, types.NewFdEventFast)
-		if !ok {
+		if rawEvent.direction == rawExitEvent {
+			e.tracepointExited(ev, ch)
 			return
 		}
-		e.tracepointExited(fdEv, ch)
-	}
-}
-
-// registerNullHandlers wires enter/exit handlers for syscalls with no interesting arguments.
-func (e *eventLoop) registerNullHandlers() {
-	e.rawHandlers[types.ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		nullEv, ok := decodeRawEvent(e, types.ENTER_NULL_EVENT, raw, types.NewNullEventFast)
-		if !ok {
+		if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), ev) {
+			ev.Recycle()
 			return
 		}
-		e.tracepointEntered(nullEv)
-	}
-	e.rawHandlers[types.EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		nullEv, ok := decodeRawEvent(e, types.EXIT_NULL_EVENT, raw, types.NewNullEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(nullEv, ch)
+		e.tracepointEntered(ev)
 	}
 }
 
-// registerRetHandlers wires the exit handler for generic return-value events.
-func (e *eventLoop) registerRetHandlers() {
-	e.rawHandlers[types.EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		retEv, ok := decodeRawEvent(e, types.EXIT_RET_EVENT, raw, types.NewRetEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(retEv, ch)
-	}
-}
-
-// registerNamePathHandlers wires enter handlers for name- and path-carrying events.
-func (e *eventLoop) registerNamePathHandlers() {
-	e.rawHandlers[types.ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		nameEv, ok := decodeRawEvent(e, types.ENTER_NAME_EVENT, raw, types.NewNameEventFast)
-		if !ok {
-			return
-		}
-		if e.Filter().MatchNameEvent(nameEv) {
-			e.tracepointEntered(nameEv)
-		}
-	}
-	e.rawHandlers[types.ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		pathEv, ok := decodeRawEvent(e, types.ENTER_PATH_EVENT, raw, types.NewPathEventFast)
-		if !ok {
-			return
-		}
-		if e.Filter().MatchPathEvent(pathEv) {
-			e.tracepointEntered(pathEv)
-		}
-	}
-}
-
-// registerMiscHandlers wires enter handlers for fcntl, open_by_handle_at, and dup3.
-func (e *eventLoop) registerMiscHandlers() {
-	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		fcntlEv, ok := decodeRawEvent(e, types.ENTER_FCNTL_EVENT, raw, types.NewFcntlEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(fcntlEv)
-	}
-	e.rawHandlers[types.ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		openByHandleEv, ok := decodeRawEvent(e, types.ENTER_OPEN_BY_HANDLE_AT_EVENT, raw, types.NewOpenByHandleAtEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(openByHandleEv)
-	}
-	e.rawHandlers[types.ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		dup3Ev, ok := decodeRawEvent(e, types.ENTER_DUP3_EVENT, raw, types.NewDup3EventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(dup3Ev)
-	}
-}
-
-func (e *eventLoop) registerSocketHandlers() {
-	e.rawHandlers[types.ENTER_SOCKET_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		socketEv, ok := decodeRawEvent(e, types.ENTER_SOCKET_EVENT, raw, types.NewSocketEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(socketEv)
-	}
-	e.rawHandlers[types.ENTER_SOCKETPAIR_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		socketpairEv, ok := decodeRawEvent(e, types.ENTER_SOCKETPAIR_EVENT, raw, types.NewSocketpairEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(socketpairEv)
-	}
-	e.rawHandlers[types.EXIT_SOCKETPAIR_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		socketpairEv, ok := decodeRawEvent(e, types.EXIT_SOCKETPAIR_EVENT, raw, types.NewSocketpairEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(socketpairEv, ch)
-	}
-	e.rawHandlers[types.ENTER_ACCEPT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		acceptEv, ok := decodeRawEvent(e, types.ENTER_ACCEPT_EVENT, raw, types.NewAcceptEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(acceptEv)
-	}
-	e.rawHandlers[types.EXIT_ACCEPT_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		acceptEv, ok := decodeRawEvent(e, types.EXIT_ACCEPT_EVENT, raw, types.NewAcceptEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(acceptEv, ch)
-	}
-}
-
-func (e *eventLoop) registerIPCHandlers() {
-	e.rawHandlers[types.ENTER_PIPE_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		pipeEv, ok := decodeRawEvent(e, types.ENTER_PIPE_EVENT, raw, types.NewPipeEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(pipeEv)
-	}
-	e.rawHandlers[types.EXIT_PIPE_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		pipeEv, ok := decodeRawEvent(e, types.EXIT_PIPE_EVENT, raw, types.NewPipeEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(pipeEv, ch)
-	}
-	e.rawHandlers[types.ENTER_EVENTFD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		eventfdEv, ok := decodeRawEvent(e, types.ENTER_EVENTFD_EVENT, raw, types.NewEventfdEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(eventfdEv)
-	}
-	e.rawHandlers[types.EXIT_EVENTFD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		eventfdEv, ok := decodeRawEvent(e, types.EXIT_EVENTFD_EVENT, raw, types.NewEventfdEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(eventfdEv, ch)
-	}
-}
-
-func (e *eventLoop) registerPollingHandlers() {
-	e.rawHandlers[types.ENTER_EPOLL_CTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		epollCtlEv, ok := decodeRawEvent(e, types.ENTER_EPOLL_CTL_EVENT, raw, types.NewEpollCtlEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(epollCtlEv)
-	}
-	e.rawHandlers[types.ENTER_POLL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		pollEv, ok := decodeRawEvent(e, types.ENTER_POLL_EVENT, raw, types.NewPollEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(pollEv)
-	}
-}
-
-func (e *eventLoop) registerTwoFdHandlers() {
-	e.rawHandlers[types.ENTER_TWO_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		twoFdEv, ok := decodeRawEvent(e, types.ENTER_TWO_FD_EVENT, raw, types.NewTwoFdEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(twoFdEv)
-	}
-}
-
-func (e *eventLoop) registerMemoryHandlers() {
-	e.rawHandlers[types.ENTER_MEM_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		memEv, ok := decodeRawEvent(e, types.ENTER_MEM_EVENT, raw, types.NewMemEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(memEv)
-	}
-}
-
-func (e *eventLoop) registerSleepHandlers() {
-	e.rawHandlers[types.ENTER_SLEEP_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		sleepEv, ok := decodeRawEvent(e, types.ENTER_SLEEP_EVENT, raw, types.NewSleepEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(sleepEv)
-	}
-}
-
-func (e *eventLoop) registerProcessHandlers() {
-	e.rawHandlers[types.ENTER_EXEC_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		execEv, ok := decodeRawEvent(e, types.ENTER_EXEC_EVENT, raw, types.NewExecEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(execEv)
-	}
-}
-
-func (e *eventLoop) registerSecurityHandlers() {
-	e.rawHandlers[types.ENTER_KEYCTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		keyctlEv, ok := decodeRawEvent(e, types.ENTER_KEYCTL_EVENT, raw, types.NewKeyctlEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(keyctlEv)
-	}
-	e.rawHandlers[types.ENTER_PTRACE_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		ptraceEv, ok := decodeRawEvent(e, types.ENTER_PTRACE_EVENT, raw, types.NewPtraceEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(ptraceEv)
-	}
-	e.rawHandlers[types.ENTER_PERF_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		perfOpenEv, ok := decodeRawEvent(e, types.ENTER_PERF_OPEN_EVENT, raw, types.NewPerfOpenEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(perfOpenEv)
-	}
-}
-
-func decodeRawEvent[T any](e *eventLoop, eventType types.EventType, raw []byte, decode func([]byte) *T) (*T, bool) {
-	decoded := decode(raw)
+func (e *eventLoop) decodeRuntimeEvent(rawEvent rawRuntimeEvent, raw []byte) (event.Event, bool) {
+	decoded := rawEvent.decode(raw)
 	if decoded == nil {
-		e.dropMalformedRawEvent(eventType, raw)
+		e.dropMalformedRawEvent(rawEvent.eventType, raw)
 		return nil, false
 	}
 	return decoded, true
@@ -564,6 +306,11 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	if !e.handleTracepointExit(ep) {
 		return
 	}
+	e.finalizeTracepointPair(ep)
+	ch <- ep
+}
+
+func (e *eventLoop) finalizeTracepointPair(ep *event.Pair) {
 	applyRetBytes(ep)
 	applyAddressSpaceBytes(ep)
 	applyRequestedSleepNs(ep)
@@ -571,7 +318,6 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	ep.CalculateDurations(e.pairs.prevTime(tid))
 	e.pairs.setPrevTime(tid, ep.ExitEv.GetTime())
 	e.freezePairForEmission(ep)
-	ch <- ep
 }
 
 func (e *eventLoop) freezePairForEmission(ep *event.Pair) {

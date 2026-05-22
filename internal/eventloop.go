@@ -62,6 +62,7 @@ type eventLoop struct {
 	commResolver    *commResolver
 	outputFormatter // pair-emission and warning-notification callbacks (embedded collaborator)
 	rawHandlers     map[types.EventType]rawEventHandler
+	exitHandlers    map[types.EventType]runtimeExitHandler
 	cfg             eventLoopConfig
 	aggregateSink   syscallAggregateSink
 	aggregateSrc    syscallAggregateSource
@@ -110,15 +111,17 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		outputFormatter: outputFormatter{
 			printCb: func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		},
-		rawHandlers: make(map[types.EventType]rawEventHandler),
-		cfg:         cfg,
-		done:        make(chan struct{}),
+		rawHandlers:  make(map[types.EventType]rawEventHandler),
+		exitHandlers: make(map[types.EventType]runtimeExitHandler),
+		cfg:          cfg,
+		done:         make(chan struct{}),
 	}
 	if el.cfg.aggregateDrainEvery <= 0 {
 		el.cfg.aggregateDrainEvery = defaultAggregateDrainEvery
 	}
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
+	el.initRuntimeEventKinds()
 	el.configureOutputCallback()
 	el.seedTrackedPidComm()
 	return el, nil
