@@ -165,8 +165,90 @@ func ClassifyFormat(f *Format) ClassificationResult {
 // Keep newly-added syscall expansion mappings in this table first to reduce
 // switch churn and merge conflicts across incremental tracing phases.
 var nameOnlyKindsTable = map[string]TracepointKind{
-	"sys_enter_landlock_add_rule":      KindFd,
-	"sys_enter_landlock_restrict_self": KindFd,
+	"sys_enter_open_by_handle_at": KindOpenByHandleAt,
+	"sys_enter_io_uring_enter":    KindFd,
+	"sys_enter_io_uring_register": KindFd,
+	"sys_enter_fcntl":             KindFcntl,
+	"sys_enter_syslog":            KindNull,
+	"sys_enter_sync":              KindNull,
+	"sys_enter_msync":             KindNull,
+	"sys_enter_getcwd":            KindNull,
+
+	"sys_enter_socket":     KindSocket,
+	"sys_enter_socketpair": KindSocketpair,
+	"sys_exit_socketpair":  KindSocketpair,
+	"sys_enter_accept":     KindAccept,
+	"sys_exit_accept":      KindAccept,
+	"sys_enter_accept4":    KindAccept,
+	"sys_exit_accept4":     KindAccept,
+	"sys_enter_pipe":       KindPipe,
+	"sys_exit_pipe":        KindPipe,
+	"sys_enter_pipe2":      KindPipe,
+	"sys_exit_pipe2":       KindPipe,
+
+	"sys_enter_eventfd":        KindEventfd,
+	"sys_exit_eventfd":         KindEventfd,
+	"sys_enter_eventfd2":       KindEventfd,
+	"sys_exit_eventfd2":        KindEventfd,
+	"sys_enter_memfd_create":   KindEventfd,
+	"sys_exit_memfd_create":    KindEventfd,
+	"sys_enter_memfd_secret":   KindEventfd,
+	"sys_exit_memfd_secret":    KindEventfd,
+	"sys_enter_userfaultfd":    KindEventfd,
+	"sys_exit_userfaultfd":     KindEventfd,
+	"sys_enter_signalfd":       KindEventfd,
+	"sys_exit_signalfd":        KindEventfd,
+	"sys_enter_signalfd4":      KindEventfd,
+	"sys_exit_signalfd4":       KindEventfd,
+	"sys_enter_timerfd_create": KindEventfd,
+	"sys_exit_timerfd_create":  KindEventfd,
+
+	"sys_enter_epoll_create":  KindEventfd,
+	"sys_exit_epoll_create":   KindEventfd,
+	"sys_enter_epoll_create1": KindEventfd,
+	"sys_exit_epoll_create1":  KindEventfd,
+	"sys_enter_inotify_init":  KindEventfd,
+	"sys_exit_inotify_init":   KindEventfd,
+	"sys_enter_inotify_init1": KindEventfd,
+	"sys_exit_inotify_init1":  KindEventfd,
+	"sys_enter_fanotify_init": KindEventfd,
+	"sys_exit_fanotify_init":  KindEventfd,
+
+	"sys_enter_landlock_create_ruleset": KindEventfd,
+	"sys_exit_landlock_create_ruleset":  KindEventfd,
+	"sys_enter_landlock_add_rule":       KindFd,
+	"sys_enter_landlock_restrict_self":  KindFd,
+	"sys_enter_fsopen":                  KindEventfd,
+	"sys_exit_fsopen":                   KindEventfd,
+	"sys_enter_fsmount":                 KindEventfd,
+	"sys_exit_fsmount":                  KindEventfd,
+
+	"sys_enter_pidfd_open": KindPidfd,
+	"sys_exit_pidfd_open":  KindPidfd,
+
+	"sys_enter_bind":        KindFd,
+	"sys_enter_connect":     KindFd,
+	"sys_enter_listen":      KindFd,
+	"sys_enter_shutdown":    KindFd,
+	"sys_enter_getsockname": KindFd,
+	"sys_enter_getpeername": KindFd,
+	"sys_enter_getsockopt":  KindFd,
+	"sys_enter_setsockopt":  KindFd,
+
+	"sys_enter_epoll_wait":   KindFd,
+	"sys_enter_epoll_pwait":  KindFd,
+	"sys_enter_epoll_pwait2": KindFd,
+	"sys_enter_epoll_ctl":    KindEpollCtl,
+
+	"sys_enter_move_mount": KindTwoFd,
+	"sys_enter_statmount":  KindNull,
+	"sys_enter_listmount":  KindNull,
+	"sys_enter_listns":     KindNull,
+
+	"sys_enter_poll":     KindPoll,
+	"sys_enter_ppoll":    KindPoll,
+	"sys_enter_select":   KindPoll,
+	"sys_enter_pselect6": KindPoll,
 
 	"sys_enter_msgget":     KindSysVId,
 	"sys_enter_semget":     KindSysVId,
@@ -190,10 +272,19 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 
 	"sys_enter_bpf": KindBpf,
 
-	"sys_enter_mprotect":      KindMem,
-	"sys_enter_madvise":       KindMem,
-	"sys_enter_pkey_mprotect": KindMem,
-	"sys_enter_brk":           KindMem,
+	"sys_enter_mprotect":         KindMem,
+	"sys_enter_madvise":          KindMem,
+	"sys_enter_pkey_mprotect":    KindMem,
+	"sys_enter_brk":              KindMem,
+	"sys_enter_munmap":           KindMem,
+	"sys_enter_mremap":           KindMem,
+	"sys_enter_mincore":          KindMem,
+	"sys_enter_remap_file_pages": KindMem,
+	"sys_enter_mlock":            KindMem,
+	"sys_enter_mlock2":           KindMem,
+	"sys_enter_munlock":          KindMem,
+	"sys_enter_mseal":            KindMem,
+	"sys_enter_map_shadow_stack": KindMem,
 
 	"sys_enter_pkey_alloc":              KindNull,
 	"sys_enter_pkey_free":               KindNull,
@@ -207,6 +298,28 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_munlockall":              KindNull,
 	"sys_enter_process_madvise":         KindFd,
 	"sys_enter_process_mrelease":        KindFd,
+	"sys_enter_pidfd_send_signal":       KindFd,
+	"sys_enter_kexec_file_load":         KindFd,
+	"sys_enter_kcmp":                    KindTwoFd,
+	"sys_enter_mq_timedsend":            KindFd,
+	"sys_enter_mq_timedreceive":         KindFd,
+	"sys_enter_mq_notify":               KindFd,
+	"sys_enter_mq_getsetattr":           KindFd,
+
+	"sys_enter_execve":            KindExec,
+	"sys_enter_execveat":          KindExec,
+	"sys_enter_exit":              KindNull,
+	"sys_enter_exit_group":        KindNull,
+	"sys_enter_rt_sigaction":      KindNull,
+	"sys_enter_rt_sigprocmask":    KindNull,
+	"sys_enter_rt_sigpending":     KindNull,
+	"sys_enter_rt_sigsuspend":     KindNull,
+	"sys_enter_rt_sigtimedwait":   KindNull,
+	"sys_enter_rt_sigreturn":      KindNull,
+	"sys_enter_sigaltstack":       KindNull,
+	"sys_enter_pause":             KindNull,
+	"sys_enter_rt_sigqueueinfo":   KindNull,
+	"sys_enter_rt_tgsigqueueinfo": KindNull,
 
 	"sys_enter_futex":         KindFutex,
 	"sys_enter_futex_wait":    KindFutex,
@@ -219,6 +332,8 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_setns":   KindFd,
 	"sys_enter_unshare": KindNull,
 
+	"sys_enter_nanosleep":        KindSleep,
+	"sys_enter_clock_nanosleep":  KindSleep,
 	"sys_enter_clock_gettime":    KindNull,
 	"sys_enter_clock_settime":    KindNull,
 	"sys_enter_clock_getres":     KindNull,
@@ -236,6 +351,17 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_timer_gettime":    KindTimerObj,
 	"sys_enter_timer_getoverrun": KindTimerObj,
 	"sys_enter_timer_delete":     KindTimerObj,
+	"sys_enter_keyctl":           KindKeyctl,
+	"sys_enter_add_key":          KindKeyctl,
+	"sys_enter_request_key":      KindKeyctl,
+	"sys_enter_ptrace":           KindPtrace,
+	"sys_enter_perf_event_open":  KindPerfOpen,
+	"sys_enter_seccomp":          KindSeccomp,
+	"sys_exit_seccomp":           KindSeccomp,
+	"sys_enter_init_module":      KindModule,
+	"sys_exit_init_module":       KindModule,
+	"sys_enter_delete_module":    KindModule,
+	"sys_exit_delete_module":     KindModule,
 
 	"sys_enter_getpid":          KindNull,
 	"sys_enter_gettid":          KindNull,
@@ -285,6 +411,12 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_prlimit64":              KindNull,
 	"sys_enter_getpriority":            KindNull,
 	"sys_enter_setpriority":            KindNull,
+	"sys_enter_membarrier":             KindNull,
+	"sys_enter_rseq":                   KindNull,
+	"sys_enter_set_robust_list":        KindNull,
+	"sys_enter_get_robust_list":        KindNull,
+	"sys_enter_mmap2":                  KindNull,
+	"sys_enter_kexec_load":             KindNull,
 
 	"sys_enter_sysinfo":           KindNull,
 	"sys_enter_sysfs":             KindNull,
@@ -307,518 +439,24 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_lsm_list_modules":  KindNull,
 }
 
+var nameOnlyPrefixKinds = []struct {
+	prefix string
+	kind   TracepointKind
+}{
+	{prefix: "sys_enter_io_", kind: KindNull},
+}
+
 func classifyNameOnly(name string) (ClassificationResult, bool) {
 	if kind, ok := nameOnlyKindsTable[name]; ok {
 		return ClassificationResult{Kind: kind}, true
 	}
 
-	switch name {
-	case "sys_enter_open_by_handle_at":
-		return ClassificationResult{Kind: KindOpenByHandleAt}, true
-	case "sys_enter_io_uring_enter":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_io_uring_register":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_fcntl":
-		return ClassificationResult{Kind: KindFcntl}, true
-	case "sys_enter_syslog":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sync":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_msync":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getcwd":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_socket":
-		return ClassificationResult{Kind: KindSocket}, true
-	case "sys_enter_socketpair":
-		return ClassificationResult{Kind: KindSocketpair}, true
-	case "sys_exit_socketpair":
-		return ClassificationResult{Kind: KindSocketpair}, true
-	case "sys_enter_accept":
-		return ClassificationResult{Kind: KindAccept}, true
-	case "sys_exit_accept":
-		return ClassificationResult{Kind: KindAccept}, true
-	case "sys_enter_accept4":
-		return ClassificationResult{Kind: KindAccept}, true
-	case "sys_exit_accept4":
-		return ClassificationResult{Kind: KindAccept}, true
-	case "sys_enter_pipe":
-		return ClassificationResult{Kind: KindPipe}, true
-	case "sys_exit_pipe":
-		return ClassificationResult{Kind: KindPipe}, true
-	case "sys_enter_pipe2":
-		return ClassificationResult{Kind: KindPipe}, true
-	case "sys_exit_pipe2":
-		return ClassificationResult{Kind: KindPipe}, true
-	case "sys_enter_eventfd":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_eventfd":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_eventfd2":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_eventfd2":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_memfd_create":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_memfd_create":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_memfd_secret":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_memfd_secret":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_userfaultfd":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_userfaultfd":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_signalfd":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_signalfd":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_signalfd4":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_signalfd4":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_timerfd_create":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_timerfd_create":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_epoll_create":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_epoll_create":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_epoll_create1":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_epoll_create1":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_inotify_init":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_inotify_init":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_inotify_init1":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_inotify_init1":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_fanotify_init":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_fanotify_init":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_landlock_create_ruleset":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_landlock_create_ruleset":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_landlock_add_rule":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_landlock_restrict_self":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_fsopen":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_fsopen":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_pidfd_open":
-		return ClassificationResult{Kind: KindPidfd}, true
-	case "sys_exit_pidfd_open":
-		return ClassificationResult{Kind: KindPidfd}, true
-	case "sys_enter_bind":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_connect":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_listen":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_shutdown":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_getsockname":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_getpeername":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_getsockopt":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_setsockopt":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_epoll_wait":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_epoll_pwait":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_epoll_pwait2":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_epoll_ctl":
-		return ClassificationResult{Kind: KindEpollCtl}, true
-	case "sys_enter_move_mount":
-		return ClassificationResult{Kind: KindTwoFd}, true
-	case "sys_enter_fsmount":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_exit_fsmount":
-		return ClassificationResult{Kind: KindEventfd}, true
-	case "sys_enter_statmount":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_listmount":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_listns":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_poll":
-		return ClassificationResult{Kind: KindPoll}, true
-	case "sys_enter_ppoll":
-		return ClassificationResult{Kind: KindPoll}, true
-	case "sys_enter_select":
-		return ClassificationResult{Kind: KindPoll}, true
-	case "sys_enter_pselect6":
-		return ClassificationResult{Kind: KindPoll}, true
-	case "sys_enter_mprotect":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_madvise":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_pkey_mprotect":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_brk":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_munmap":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_mremap":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_mincore":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_remap_file_pages":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_mlock":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_mlock2":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_munlock":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_mseal":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_map_shadow_stack":
-		return ClassificationResult{Kind: KindMem}, true
-	case "sys_enter_nanosleep":
-		return ClassificationResult{Kind: KindSleep}, true
-	case "sys_enter_clock_nanosleep":
-		return ClassificationResult{Kind: KindSleep}, true
-	case "sys_enter_clock_gettime":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_clock_settime":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_clock_getres":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_clock_adjtime":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_gettimeofday":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_settimeofday":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_time":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_times":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_adjtimex":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_alarm":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getitimer":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setitimer":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_timer_create":
-		return ClassificationResult{Kind: KindTimerObj}, true
-	case "sys_enter_timer_settime":
-		return ClassificationResult{Kind: KindTimerObj}, true
-	case "sys_enter_timer_gettime":
-		return ClassificationResult{Kind: KindTimerObj}, true
-	case "sys_enter_timer_getoverrun":
-		return ClassificationResult{Kind: KindTimerObj}, true
-	case "sys_enter_timer_delete":
-		return ClassificationResult{Kind: KindTimerObj}, true
-	case "sys_enter_keyctl":
-		return ClassificationResult{Kind: KindKeyctl}, true
-	case "sys_enter_add_key":
-		return ClassificationResult{Kind: KindKeyctl}, true
-	case "sys_enter_request_key":
-		return ClassificationResult{Kind: KindKeyctl}, true
-	case "sys_enter_ptrace":
-		return ClassificationResult{Kind: KindPtrace}, true
-	case "sys_enter_perf_event_open":
-		return ClassificationResult{Kind: KindPerfOpen}, true
-	case "sys_enter_seccomp":
-		return ClassificationResult{Kind: KindSeccomp}, true
-	case "sys_exit_seccomp":
-		return ClassificationResult{Kind: KindSeccomp}, true
-	case "sys_enter_init_module":
-		return ClassificationResult{Kind: KindModule}, true
-	case "sys_exit_init_module":
-		return ClassificationResult{Kind: KindModule}, true
-	case "sys_enter_delete_module":
-		return ClassificationResult{Kind: KindModule}, true
-	case "sys_exit_delete_module":
-		return ClassificationResult{Kind: KindModule}, true
-	case "sys_enter_msgget":
-		return ClassificationResult{Kind: KindSysVId}, true
-	case "sys_enter_semget":
-		return ClassificationResult{Kind: KindSysVId}, true
-	case "sys_enter_shmget":
-		return ClassificationResult{Kind: KindSysVId}, true
-	case "sys_enter_msgsnd":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_msgrcv":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_msgctl":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_semop":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_semtimedop":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_semctl":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_shmat":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_shmdt":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_shmctl":
-		return ClassificationResult{Kind: KindSysVOp}, true
-	case "sys_enter_pkey_alloc":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_pkey_free":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_mbind":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_set_mempolicy":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_get_mempolicy":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_set_mempolicy_home_node":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_migrate_pages":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_move_pages":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_mlockall":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_munlockall":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_process_madvise":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_process_mrelease":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_wait4":
-		return ClassificationResult{Kind: KindProc}, true
-	case "sys_enter_waitid":
-		return ClassificationResult{Kind: KindProc}, true
-	case "sys_enter_clone":
-		return ClassificationResult{Kind: KindProc}, true
-	case "sys_enter_clone3":
-		return ClassificationResult{Kind: KindProc}, true
-	case "sys_enter_fork":
-		return ClassificationResult{Kind: KindProc}, true
-	case "sys_enter_vfork":
-		return ClassificationResult{Kind: KindProc}, true
-	case "sys_enter_kill":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_prctl":
-		return ClassificationResult{Kind: KindPrctl}, true
-	case "sys_enter_setns":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_unshare":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_bpf":
-		return ClassificationResult{Kind: KindBpf}, true
-	case "sys_enter_futex":
-		return ClassificationResult{Kind: KindFutex}, true
-	case "sys_enter_futex_wait":
-		return ClassificationResult{Kind: KindFutex}, true
-	case "sys_enter_futex_wake":
-		return ClassificationResult{Kind: KindFutex}, true
-	case "sys_enter_futex_requeue":
-		return ClassificationResult{Kind: KindFutex}, true
-	case "sys_enter_futex_waitv":
-		return ClassificationResult{Kind: KindFutex}, true
-	case "sys_enter_pidfd_send_signal":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_kexec_file_load":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_kcmp":
-		return ClassificationResult{Kind: KindTwoFd}, true
-	case "sys_enter_mq_timedsend":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_mq_timedreceive":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_mq_notify":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_mq_getsetattr":
-		return ClassificationResult{Kind: KindFd}, true
-	case "sys_enter_execve":
-		return ClassificationResult{Kind: KindExec}, true
-	case "sys_enter_execveat":
-		return ClassificationResult{Kind: KindExec}, true
-	case "sys_enter_exit":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_exit_group":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_sigaction":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_sigprocmask":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_sigpending":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_sigsuspend":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_sigtimedwait":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_sigreturn":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sigaltstack":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_pause":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_sigqueueinfo":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rt_tgsigqueueinfo":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getpid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_gettid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getppid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_geteuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getgid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getegid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getresuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getresgid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getgroups":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_seteuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setgid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setegid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setresuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setresgid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setreuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setregid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setfsuid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setfsgid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setgroups":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_umask":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setsid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getsid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setpgid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getpgid":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getpgrp":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_set_tid_address":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_yield":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_setaffinity":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_getaffinity":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_setparam":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_getparam":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_setscheduler":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_getscheduler":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_setattr":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_getattr":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_get_priority_max":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_get_priority_min":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sched_rr_get_interval":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getcpu":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getrusage":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getrlimit":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setrlimit":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_prlimit64":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_getpriority":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setpriority":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_membarrier":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_rseq":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_set_robust_list":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_get_robust_list":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_mmap2":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_kexec_load":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sysinfo":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sysfs":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_ustat":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_newuname":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_sethostname":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_setdomainname":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_capget":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_capset":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_personality":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_reboot":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_restart_syscall":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_vhangup":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_arch_prctl":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_ioperm":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_iopl":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_modify_ldt":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_lsm_get_self_attr":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_lsm_set_self_attr":
-		return ClassificationResult{Kind: KindNull}, true
-	case "sys_enter_lsm_list_modules":
-		return ClassificationResult{Kind: KindNull}, true
+	for _, prefixKind := range nameOnlyPrefixKinds {
+		if strings.HasPrefix(name, prefixKind.prefix) {
+			return ClassificationResult{Kind: prefixKind.kind}, true
+		}
 	}
-	if strings.HasPrefix(name, "sys_enter_io_") {
-		return ClassificationResult{Kind: KindNull}, true
-	}
+
 	return ClassificationResult{}, false
 }
 

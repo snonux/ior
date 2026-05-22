@@ -1678,6 +1678,77 @@ func TestClassifyFormatNoExternalFields(t *testing.T) {
 	}
 }
 
+func TestClassifyNameOnlyTables(t *testing.T) {
+	tests := []struct {
+		name string
+		want TracepointKind
+	}{
+		{"sys_enter_open_by_handle_at", KindOpenByHandleAt},
+		{"sys_exit_socketpair", KindSocketpair},
+		{"sys_enter_pidfd_open", KindPidfd},
+		{"sys_enter_epoll_ctl", KindEpollCtl},
+		{"sys_enter_perf_event_open", KindPerfOpen},
+		{"sys_enter_futex", KindFutex},
+		{"sys_enter_clone", KindProc},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, ok := classifyNameOnly(tt.name)
+			if !ok {
+				t.Fatalf("classifyNameOnly(%q) did not match", tt.name)
+			}
+			if r.Kind != tt.want {
+				t.Fatalf("classifyNameOnly(%q) kind = %d, want %d", tt.name, r.Kind, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyNameOnlyPrefixKinds(t *testing.T) {
+	r, ok := classifyNameOnly("sys_enter_io_destroy")
+	if !ok {
+		t.Fatal("classifyNameOnly(sys_enter_io_destroy) did not match prefix metadata")
+	}
+	if r.Kind != KindNull {
+		t.Fatalf("classifyNameOnly(sys_enter_io_destroy) kind = %d, want KindNull", r.Kind)
+	}
+
+	r, ok = classifyNameOnly("sys_enter_io_uring_enter")
+	if !ok {
+		t.Fatal("classifyNameOnly(sys_enter_io_uring_enter) did not match exact metadata")
+	}
+	if r.Kind != KindFd {
+		t.Fatalf("classifyNameOnly(sys_enter_io_uring_enter) kind = %d, want KindFd", r.Kind)
+	}
+}
+
+func TestClassifyNameOnlyUnknown(t *testing.T) {
+	if r, ok := classifyNameOnly("sys_enter_not_real"); ok {
+		t.Fatalf("classifyNameOnly matched unknown syscall with kind %d", r.Kind)
+	}
+}
+
+func TestNameOnlyKindMetadataIsValid(t *testing.T) {
+	for name, kind := range nameOnlyKindsTable {
+		if name == "" {
+			t.Fatal("nameOnlyKindsTable contains an empty syscall name")
+		}
+		if kind == KindNone {
+			t.Fatalf("nameOnlyKindsTable[%q] = KindNone", name)
+		}
+	}
+
+	for _, prefixKind := range nameOnlyPrefixKinds {
+		if prefixKind.prefix == "" {
+			t.Fatal("nameOnlyPrefixKinds contains an empty prefix")
+		}
+		if prefixKind.kind == KindNone {
+			t.Fatalf("nameOnlyPrefixKinds[%q] = KindNone", prefixKind.prefix)
+		}
+	}
+}
+
 func TestIsFdTypeNonMatch(t *testing.T) {
 	nonFdTypes := []string{
 		"const char *",
