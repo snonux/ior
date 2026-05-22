@@ -81,23 +81,33 @@ func TestFilterAggregateRowsForIngestGatesWhenUnsupportedFilterActive(t *testing
 	}
 }
 
-func TestFilterAggregateRowsForIngestAllowsKernelEqPIDFilter(t *testing.T) {
-	el := &eventLoop{
-		cfg: eventLoopConfig{
-			aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
-				types.SYS_ENTER_FUTEX: {},
-			},
-		},
+func TestFilterAggregateRowsForIngestRejectsPIDAndTIDFilters(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter globalfilter.Filter
+	}{
+		{name: "pid", filter: globalfilter.Filter{PID: globalfilter.NewEqFilter(42)}},
+		{name: "tid", filter: globalfilter.Filter{TID: globalfilter.NewEqFilter(43)}},
 	}
-	el.SetFilter(globalfilter.Filter{
-		PID: globalfilter.NewEqFilter(42),
-	})
 
-	got := el.filterAggregateRowsForIngest([]statsengine.SyscallAggregate{
-		{TraceID: types.SYS_ENTER_FUTEX, Count: 2},
-	})
-	if len(got) != 1 {
-		t.Fatalf("expected row with PID eq filter, got %+v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			el := &eventLoop{
+				cfg: eventLoopConfig{
+					aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
+						types.SYS_ENTER_FUTEX: {},
+					},
+				},
+			}
+			el.SetFilter(tt.filter)
+
+			got := el.filterAggregateRowsForIngest([]statsengine.SyscallAggregate{
+				{TraceID: types.SYS_ENTER_FUTEX, Count: 2},
+			})
+			if len(got) != 0 {
+				t.Fatalf("expected no aggregate rows with %s filter, got %+v", tt.name, got)
+			}
+		})
 	}
 }
 
