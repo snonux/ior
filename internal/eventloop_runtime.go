@@ -116,21 +116,13 @@ func aggregateIngestAllowedForFilter(filter globalfilter.Filter) bool {
 	if filter.FD != nil || filter.LatencyNs != nil || filter.GapNs != nil || filter.Bytes != nil || filter.RetVal != nil {
 		return false
 	}
-	if !isKernelFilterNumericEq(filter.PID) {
+	if filter.PID != nil {
 		return false
 	}
-	if !isKernelFilterNumericEq(filter.TID) {
+	if filter.TID != nil {
 		return false
 	}
 	return true
-}
-
-func isKernelFilterNumericEq(filter *globalfilter.NumericFilter) bool {
-	if filter == nil {
-		return true
-	}
-	_, ok := filter.EqValue()
-	return ok
 }
 
 func hasPattern(filter *globalfilter.StringFilter) bool {
