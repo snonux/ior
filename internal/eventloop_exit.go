@@ -10,58 +10,41 @@ import (
 	"ior/internal/types"
 )
 
-// handleTracepointExit routes a completed enter/exit pair to the appropriate
-// handler using a type switch, avoiding reflection on the hot event path.
+func (e *eventLoop) initRuntimeEventKinds() {
+	if e.exitHandlers == nil {
+		e.exitHandlers = make(map[types.EventType]runtimeExitHandler)
+	}
+	if len(e.exitHandlers) != 0 {
+		return
+	}
+	for _, kind := range runtimeEventKinds() {
+		e.exitHandlers[kind.enterEventType] = kind.exit
+	}
+}
+
+// handleTracepointExit routes a completed enter/exit pair to the runtime
+// handler registered for the enter event kind.
 func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
-	switch ev := ep.EnterEv.(type) {
-	case *types.OpenEvent:
-		return e.handleOpenExit(ep, ev)
-	case *types.ExecEvent:
-		return e.handleExecExit(ep, ev)
-	case *types.NameEvent:
-		return e.handleNameExit(ep, ev)
-	case *types.PathEvent:
-		return e.handlePathExit(ep, ev)
-	case *types.FdEvent:
-		return e.handleFdExit(ep, ev)
-	case *types.Dup3Event:
-		return e.handleDup3Exit(ep, ev)
-	case *types.OpenByHandleAtEvent:
-		return e.handleOpenByHandleAtExit(ep, ev)
-	case *types.SocketEvent:
-		return e.handleSocketExit(ep, ev)
-	case *types.SocketpairEvent:
-		return e.handleSocketpairExit(ep, ev)
-	case *types.AcceptEvent:
-		return e.handleAcceptExit(ep, ev)
-	case *types.PipeEvent:
-		return e.handlePipeExit(ep, ev)
-	case *types.EventfdEvent:
-		return e.handleEventfdExit(ep, ev)
-	case *types.EpollCtlEvent:
-		return e.handleEpollCtlExit(ep, ev)
-	case *types.PollEvent:
-		return e.handlePollExit(ep, ev)
-	case *types.TwoFdEvent:
-		return e.handleTwoFdExit(ep, ev)
-	case *types.MemEvent:
-		return e.handleMemExit(ep, ev)
-	case *types.SleepEvent:
-		return e.handleSleepExit(ep, ev)
-	case *types.KeyctlEvent:
-		return e.handleKeyctlExit(ep, ev)
-	case *types.PtraceEvent:
-		return e.handlePtraceExit(ep, ev)
-	case *types.PerfOpenEvent:
-		return e.handlePerfOpenExit(ep, ev)
-	case *types.NullEvent:
-		return e.handleNullExit(ep, ev)
-	case *types.FcntlEvent:
-		return e.handleFcntlExit(ep, ev)
-	default:
+	e.initRuntimeEventKinds()
+	eventType, ok := eventTypeForRuntimeEvent(ep.EnterEv)
+	if !ok {
 		e.recyclePair(ep, "Dropped malformed enter event")
 		return false
 	}
+	handler, ok := e.exitHandlers[eventType]
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed enter event")
+		return false
+	}
+	return handler(e, ep)
+}
+
+func eventTypeForRuntimeEvent(ev event.Event) (types.EventType, bool) {
+	typed, ok := ev.(interface{ GetEventType() types.EventType })
+	if !ok {
+		return 0, false
+	}
+	return typed.GetEventType(), true
 }
 
 func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool {
@@ -94,11 +77,7 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 	ep.Comm = comm
 	ep.File = file.NewPathname(execEv.Filename[:])
 	e.setCachedComm(execEv.Tid, comm)
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool {
@@ -146,8 +125,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	ep.File = e.fdState().resolve(fd, fdEv.Pid)
 	e.applyFdCloseState(ep, fd, fdEv.Pid)
 	ep.Comm = e.comm(fdEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
+	if !e.finishPair(ep) {
 		return false
 	}
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
@@ -209,8 +187,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 	fd := int32(dup3Ev.Fd)
 	ep.File = e.fdState().resolve(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
+	if !e.finishPair(ep) {
 		return false
 	}
 
@@ -273,11 +250,7 @@ func (e *eventLoop) handleSocketExit(ep *event.Pair, socketEv *types.SocketEvent
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(socketEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleSocketpairExit(ep *event.Pair, socketpairEv *types.SocketpairEvent) bool {
@@ -315,11 +288,7 @@ func (e *eventLoop) handleSocketpairExit(ep *event.Pair, socketpairEv *types.Soc
 		}
 	}
 	ep.Comm = e.comm(socketpairEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleAcceptExit(ep *event.Pair, acceptEv *types.AcceptEvent) bool {
@@ -338,11 +307,7 @@ func (e *eventLoop) handleAcceptExit(ep *event.Pair, acceptEv *types.AcceptEvent
 		ep.File = listening
 	}
 	ep.Comm = e.comm(acceptEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func socketDescriptorName(family, typ, protocol int32) string {
@@ -386,11 +351,7 @@ func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool
 		}
 	}
 	ep.Comm = e.comm(pipeEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEvent) bool {
@@ -410,76 +371,37 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(eventfdEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleEpollCtlExit(ep *event.Pair, epollCtlEv *types.EpollCtlEvent) bool {
 	ep.File = e.fdState().resolve(epollCtlEv.Epfd, epollCtlEv.Pid)
-	ep.Comm = e.comm(epollCtlEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPairForTid(ep, epollCtlEv.GetTid())
 }
 
 func (e *eventLoop) handlePollExit(ep *event.Pair, pollEv *types.PollEvent) bool {
-	ep.Comm = e.comm(pollEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPairForTid(ep, pollEv.GetTid())
 }
 
 func (e *eventLoop) handleTwoFdExit(ep *event.Pair, twoFdEv *types.TwoFdEvent) bool {
 	ep.File = e.fdState().resolve(twoFdEv.FdA, twoFdEv.Pid)
-	ep.Comm = e.comm(twoFdEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPairForTid(ep, twoFdEv.GetTid())
 }
 
 func (e *eventLoop) handleMemExit(ep *event.Pair, memEv *types.MemEvent) bool {
-	ep.Comm = e.comm(memEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPairForTid(ep, memEv.GetTid())
 }
 
 func (e *eventLoop) handleSleepExit(ep *event.Pair, sleepEv *types.SleepEvent) bool {
-	ep.Comm = e.comm(sleepEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPairForTid(ep, sleepEv.GetTid())
 }
 
 func (e *eventLoop) handleKeyctlExit(ep *event.Pair, keyctlEv *types.KeyctlEvent) bool {
-	ep.Comm = e.comm(keyctlEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPairForTid(ep, keyctlEv.GetTid())
 }
 
 func (e *eventLoop) handlePtraceExit(ep *event.Pair, ptraceEv *types.PtraceEvent) bool {
-	ep.Comm = e.comm(ptraceEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPairForTid(ep, ptraceEv.GetTid())
 }
 
 func (e *eventLoop) handlePerfOpenExit(ep *event.Pair, perfOpenEv *types.PerfOpenEvent) bool {
@@ -495,11 +417,7 @@ func (e *eventLoop) handlePerfOpenExit(ep *event.Pair, perfOpenEv *types.PerfOpe
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(perfOpenEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func pipeDescriptorName(flags, fd0, fd1 int32) string {
@@ -576,19 +494,14 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 		}
 	}
 	ep.Comm = e.comm(nullEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
-	return true
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.fdState().resolve(fd, fcntlEv.Pid)
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
+	if !e.finishPair(ep) {
 		return false
 	}
 
@@ -632,6 +545,19 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int
 		duppedFdFile.AddFlags(extraFlags)
 	}
 	e.fdState().set(newFd, duppedFdFile)
+}
+
+func (e *eventLoop) finishPairForTid(ep *event.Pair, tid uint32) bool {
+	ep.Comm = e.comm(tid)
+	return e.finishPair(ep)
+}
+
+func (e *eventLoop) finishPair(ep *event.Pair) bool {
+	if e.Filter().MatchPair(ep) {
+		return true
+	}
+	ep.Recycle()
+	return false
 }
 
 // recyclePair notifies about the problem described by warning, then returns ep

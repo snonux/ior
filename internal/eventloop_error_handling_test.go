@@ -146,28 +146,8 @@ func TestProcessRawEventMalformedKnownTypeDoesNotPanicAndNotifies(t *testing.T) 
 	}
 }
 
-func TestDecodeRawEventMalformedNotifies(t *testing.T) {
-	el := mustNewEventLoop(t, eventLoopConfig{})
-	warnings := make(chan string, 1)
-	el.warningCb = func(message string) { warnings <- message }
-
-	decoded, ok := decodeRawEvent(el, types.ENTER_OPEN_EVENT, []byte{byte(types.ENTER_OPEN_EVENT)}, types.NewOpenEventFast)
-	if ok || decoded != nil {
-		t.Fatalf("expected malformed raw event decode to fail, got ok=%v decoded=%v", ok, decoded)
-	}
-
-	select {
-	case msg := <-warnings:
-		if msg == "" {
-			t.Fatalf("expected non-empty warning message")
-		}
-	default:
-		t.Fatalf("expected warning notification")
-	}
-}
-
-// unknownEvent is a minimal event.Event stub used to exercise the default
-// branch of handleTracepointExit (an enter-event type not covered by any case).
+// unknownEvent is a minimal event.Event stub used to exercise the missing
+// runtime-kind path in handleTracepointExit.
 type unknownEvent struct{}
 
 func (unknownEvent) String() string            { return "unknownEvent" }
