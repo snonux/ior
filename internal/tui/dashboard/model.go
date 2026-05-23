@@ -884,7 +884,7 @@ func (m Model) maxSyscallsRows() int {
 }
 
 func (m Model) maxNonIORows() int {
-	return m.snapshotOrZero().NonIOFamiliesCount()
+	return nonIOFamiliesCount(m.snapshotOrZero().Families())
 }
 
 func (m Model) maxFilesRows() int {

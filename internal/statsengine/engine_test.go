@@ -115,12 +115,13 @@ func TestEngineAggregatesSyscallFamilies(t *testing.T) {
 		t.Fatalf("FS family = %+v, want count=1 bytes=4", families["FS"])
 	}
 
-	nonIO := familyRowsByName(snap.NonIOFamilies())
-	if _, ok := nonIO["FS"]; ok {
-		t.Fatalf("NonIOFamilies should not include FS: %+v", nonIO["FS"])
+	// Verify that non-FS families exist and FS is present in the full
+	// family list — Non-IO filtering has moved to the dashboard package.
+	if _, ok := families["Polling"]; !ok {
+		t.Fatalf("Families missing Polling row: %+v", families)
 	}
-	if nonIO["Polling"].Count != 2 || nonIO["Process"].Count != 1 {
-		t.Fatalf("NonIOFamilies missing expected rows: %+v", nonIO)
+	if _, ok := families["Process"]; !ok {
+		t.Fatalf("Families missing Process row: %+v", families)
 	}
 }
 

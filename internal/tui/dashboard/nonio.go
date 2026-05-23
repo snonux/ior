@@ -6,6 +6,7 @@ import (
 
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
+	"ior/internal/types"
 )
 
 func renderNonIO(snap *statsengine.Snapshot, width, height int) string {
@@ -17,7 +18,7 @@ func renderNonIOWithOffset(snap *statsengine.Snapshot, width, height, offset, se
 		return "Non-IO: waiting for stats..."
 	}
 
-	rowsData := snap.NonIOFamilies()
+	rowsData := nonIOFamilies(snap.Families())
 	columns, rows := nonIOTableData(rowsData, width)
 	if len(rows) == 0 {
 		return "Non-IO: no data"
@@ -96,4 +97,38 @@ func nonIORowsCompact(families []statsengine.FamilySnapshot) [][]string {
 		})
 	}
 	return rows
+}
+
+// isFileSyscallFamily reports whether family belongs to file-system/fd views.
+// This is a dashboard presentation concept: the Non-IO tab excludes FS families.
+func isFileSyscallFamily(family types.SyscallFamily) bool {
+	return family == types.FamilyFS
+}
+
+// isNonIOSyscallFamily reports whether family should appear in the Non-IO tab.
+// This is a dashboard grouping policy kept out of the core stats/types packages.
+func isNonIOSyscallFamily(family types.SyscallFamily) bool {
+	return family != "" && !isFileSyscallFamily(family)
+}
+
+// nonIOFamilies filters family snapshot rows to those outside the FS family.
+func nonIOFamilies(all []statsengine.FamilySnapshot) []statsengine.FamilySnapshot {
+	rows := make([]statsengine.FamilySnapshot, 0, len(all))
+	for _, row := range all {
+		if isNonIOSyscallFamily(row.Family) {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// nonIOFamiliesCount returns the number of non-FS family rows.
+func nonIOFamiliesCount(all []statsengine.FamilySnapshot) int {
+	count := 0
+	for _, row := range all {
+		if isNonIOSyscallFamily(row.Family) {
+			count++
+		}
+	}
+	return count
 }
