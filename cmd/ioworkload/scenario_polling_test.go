@@ -37,9 +37,38 @@ func TestFdSetSetMarksBit(t *testing.T) {
 	t.Parallel()
 
 	var set fdSet
-	set.set(65)
+	if err := set.set(65); err != nil {
+		t.Fatalf("set(65) unexpected error: %v", err)
+	}
 	if set[1]&(1<<1) == 0 {
 		t.Fatalf("fd bit was not set: %#v", set)
+	}
+}
+
+func TestFdSetSetRejectsOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		fd   int
+	}{
+		{name: "exactly_1024", fd: 1024},
+		{name: "large_fd", fd: 4096},
+		{name: "negative_fd", fd: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var set fdSet
+			err := set.set(tt.fd)
+			if err == nil {
+				t.Fatalf("set(%d) should return error, got nil", tt.fd)
+			}
+			if !errors.Is(err, errFDOutOfRange) {
+				t.Fatalf("set(%d) error = %v, want %v", tt.fd, err, errFDOutOfRange)
+			}
+		})
 	}
 }
 

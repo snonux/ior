@@ -198,17 +198,33 @@ func callPpoll(pipefd [2]int) (int, error) {
 	return int(r1), nil
 }
 
+// fdSetBits is the maximum number of file descriptors an fdSet can represent.
+// This matches the Linux FD_SETSIZE constant (1024).
+const fdSetBits = 16 * 64
+
+// errFDOutOfRange is returned when a file descriptor is too large for the
+// fixed-size fd_set used by select/pselect6 (>= 1024).
+var errFDOutOfRange = fmt.Errorf("fd >= %d: too large for select fd_set", fdSetBits)
+
 type fdSet [16]uint64
 
-func (s *fdSet) set(fd int) {
+// set marks fd in the bitset. It returns errFDOutOfRange when fd falls
+// outside the fixed 1024-bit array, preventing an index-out-of-bounds panic.
+func (s *fdSet) set(fd int) error {
+	if fd < 0 || fd >= fdSetBits {
+		return errFDOutOfRange
+	}
 	idx := fd / 64
 	bit := uint(fd % 64)
 	s[idx] |= 1 << bit
+	return nil
 }
 
 func callSelect(pipefd [2]int) (int, error) {
 	var readSet fdSet
-	readSet.set(pipefd[0])
+	if err := readSet.set(pipefd[0]); err != nil {
+		return 0, fmt.Errorf("select: %w", err)
+	}
 	timeout := syscall.Timeval{Sec: 0, Usec: 100000}
 	r1, _, errno := syscall.RawSyscall6(
 		syscall.SYS_SELECT,
@@ -229,7 +245,9 @@ func callSelect(pipefd [2]int) (int, error) {
 
 func callPselect6(pipefd [2]int) (int, error) {
 	var readSet fdSet
-	readSet.set(pipefd[0])
+	if err := readSet.set(pipefd[0]); err != nil {
+		return 0, fmt.Errorf("pselect6: %w", err)
+	}
 	timeout := unix.Timespec{Sec: 0, Nsec: 100 * 1_000_000}
 	r1, _, errno := syscall.RawSyscall6(
 		unix.SYS_PSELECT6,
