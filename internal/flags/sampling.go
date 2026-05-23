@@ -49,6 +49,23 @@ func mergeSyscallSamplingRates(overrides map[string]uint32) map[string]uint32 {
 	return out
 }
 
+// promoteAggregateOnlyForRawOutput replaces default aggregate-only rates (0)
+// with rate 1 (emit every event) when running in a raw output mode that lacks
+// an aggregate sink. Without this promotion, BPF suppresses ring-buffer
+// events for these syscalls and no rows appear in -plain, -flamegraph, or
+// headless -parquet output. User-explicit overrides (present in userOverrides)
+// are preserved unchanged.
+func promoteAggregateOnlyForRawOutput(merged map[string]uint32, userOverrides map[string]uint32) {
+	for _, syscall := range defaultAggregateOnlySyscalls {
+		if _, explicit := userOverrides[syscall]; explicit {
+			continue
+		}
+		if merged[syscall] == 0 {
+			merged[syscall] = 1
+		}
+	}
+}
+
 func parseFamilySamplingRates(raw string) (map[types.SyscallFamily]uint32, error) {
 	entries, err := parseSamplingEntries(raw)
 	if err != nil {

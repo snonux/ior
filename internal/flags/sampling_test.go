@@ -102,3 +102,89 @@ func TestParseSamplingRatesOverrideDefaultFutexRate(t *testing.T) {
 		t.Fatalf("futex rate = %d, want 7", got)
 	}
 }
+
+func TestPlainModePromotesAggregateOnlyDefaults(t *testing.T) {
+	cfg, err := parseForTest(t, "-plain")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	for _, syscall := range []string{"futex", "futex_wait", "futex_wake", "futex_requeue", "futex_waitv", "clock_gettime"} {
+		rate, ok := cfg.SyscallSamplingRates[syscall]
+		if !ok {
+			t.Fatalf("expected sampling entry for %s in plain mode", syscall)
+		}
+		if rate != 1 {
+			t.Fatalf("%s rate in plain mode = %d, want 1 (promoted from aggregate-only)", syscall, rate)
+		}
+	}
+}
+
+func TestFlamegraphModePromotesAggregateOnlyDefaults(t *testing.T) {
+	cfg, err := parseForTest(t, "-flamegraph")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if got := cfg.SyscallSamplingRates["clock_gettime"]; got != 1 {
+		t.Fatalf("clock_gettime rate in flamegraph mode = %d, want 1", got)
+	}
+}
+
+func TestParquetModePromotesAggregateOnlyDefaults(t *testing.T) {
+	cfg, err := parseForTest(t, "-parquet", "trace.parquet")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if got := cfg.SyscallSamplingRates["futex"]; got != 1 {
+		t.Fatalf("futex rate in parquet mode = %d, want 1", got)
+	}
+}
+
+func TestPlainModePreservesExplicitAggregateOnly(t *testing.T) {
+	cfg, err := parseForTest(t, "-plain", "-syscall-sampling-syscalls", "futex=0")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	// User explicitly requested aggregate-only for futex; it should stay 0.
+	if got := cfg.SyscallSamplingRates["futex"]; got != 0 {
+		t.Fatalf("futex rate = %d, want 0 (explicit override preserved)", got)
+	}
+	// clock_gettime was not overridden, so it should be promoted to 1.
+	if got := cfg.SyscallSamplingRates["clock_gettime"]; got != 1 {
+		t.Fatalf("clock_gettime rate = %d, want 1 (default promoted)", got)
+	}
+}
+
+func TestTUIModeKeepsAggregateOnlyDefaults(t *testing.T) {
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	// In TUI mode (no -plain, -flamegraph, or -parquet), defaults should
+	// remain aggregate-only (rate 0) because the aggregate sink is present.
+	for _, syscall := range []string{"futex", "clock_gettime"} {
+		if got := cfg.SyscallSamplingRates[syscall]; got != 0 {
+			t.Fatalf("%s rate in TUI mode = %d, want 0 (aggregate-only default)", syscall, got)
+		}
+	}
+}
+
+func TestIsRawOutputMode(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{"default TUI", Config{}, false},
+		{"plain", Config{PlainMode: true}, true},
+		{"flamegraph", Config{FlamegraphOutput: true}, true},
+		{"parquet", Config{ParquetPath: "trace.parquet"}, true},
+		{"parquet whitespace", Config{ParquetPath: "  "}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.IsRawOutputMode(); got != tc.want {
+				t.Fatalf("IsRawOutputMode() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

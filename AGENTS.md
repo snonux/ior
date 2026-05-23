@@ -81,6 +81,7 @@ Generator source code:
 - **Sampling / aggregate-only mode**:
   - `-syscall-sampling-families` and `-syscall-sampling-syscalls` control per-family/per-syscall sampling (`0` = aggregate-only, `1` = all events, `N` = 1-in-N).
   - Current defaults include aggregate-only (`0`) for `futex`, `futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`, and `clock_gettime`.
+  - In raw output modes (`-plain`, `-flamegraph`, headless `-parquet`) the default aggregate-only rates are automatically promoted to `1` because these modes lack a TUI aggregate sink. User-explicit `-syscall-sampling-syscalls` overrides are preserved.
 - **Additional metric dimensions**:
   - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints).
