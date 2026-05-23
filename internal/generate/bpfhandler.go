@@ -281,7 +281,7 @@ func generateExtraPipe(f *Format, isEnter bool) string {
 // that captures the flags argument. Syscalls not listed here default to "0".
 // To add a new eventfd-like syscall, register its flags expression below.
 var eventfdFlagsExpr = map[string]string{
-	"sys_enter_epoll_create":          "(__s32)ctx->args[0]",
+	"sys_enter_epoll_create":          "0", // epoll_create(size) has no flags argument
 	"sys_enter_epoll_create1":         "(__s32)ctx->args[0]",
 	"sys_enter_inotify_init1":         "(__s32)ctx->args[0]",
 	"sys_enter_fanotify_init":         "(__s32)ctx->args[0]",
@@ -292,7 +292,7 @@ var eventfdFlagsExpr = map[string]string{
 	"sys_enter_userfaultfd":           "(__s32)ctx->args[0]",
 	"sys_enter_signalfd4":             "(__s32)ctx->args[3]",
 	"sys_enter_timerfd_create":        "(__s32)ctx->args[1]",
-	"sys_enter_pidfd_open":            "(__s32)ctx->args[0]",
+	"sys_enter_pidfd_open":            "(__s32)ctx->args[1]", // pidfd_open(pid, flags): flags at args[1]
 	"sys_enter_fsmount":               "(__s32)ctx->args[1]",
 	"sys_enter_fsopen":                "(__s32)ctx->args[1]",
 }
