@@ -85,6 +85,15 @@ type Config struct {
 	ShowVersion bool
 }
 
+// IsRawOutputMode reports whether the config selects a headless output path
+// (-plain, -flamegraph, or headless -parquet) that lacks a TUI aggregate
+// sink. In these modes, aggregate-only sampling (rate 0) would silently
+// suppress ring-buffer events, so callers should promote default aggregate-
+// only rates to 1.
+func (f Config) IsRawOutputMode() bool {
+	return f.PlainMode || f.FlamegraphOutput || strings.TrimSpace(f.ParquetPath) != ""
+}
+
 // DefaultResetTimer is the default cadence for the dashboard's auto-reset
 // timer. It periodically clears aggregate state (live flamegraph trie and
 // stats engine) — the same effect as pressing `r` — to prevent unbounded
@@ -266,6 +275,13 @@ func resolveSamplingRates(cfg *Config, familySampling, syscallSampling *string) 
 	}
 	cfg.SyscallFamilySamplingRates = familyRates
 	cfg.SyscallSamplingRates = mergeSyscallSamplingRates(syscallRates)
+	// In raw output modes (-plain, -flamegraph, headless -parquet) there is
+	// no aggregate sink, so aggregate-only defaults (rate 0) would silently
+	// suppress ring-buffer events. Promote those defaults to rate 1 unless
+	// the user explicitly requested rate 0 via -syscall-sampling-syscalls.
+	if cfg.IsRawOutputMode() {
+		promoteAggregateOnlyForRawOutput(cfg.SyscallSamplingRates, syscallRates)
+	}
 	return nil
 }
 
