@@ -124,35 +124,6 @@ func TestNilAccessorsRemainNil(t *testing.T) {
 	}
 }
 
-func TestSnapshotNonIOFamilies(t *testing.T) {
-	s := NewSnapshotWithFamilies(
-		nil,
-		nil,
-		nil,
-		nil,
-		[]FamilySnapshot{
-			{Family: types.FamilyFS, Name: "FS"},
-			{Family: types.FamilyPolling, Name: "Polling"},
-			{Family: types.FamilyProcess, Name: "Process"},
-		},
-		nil,
-		nil,
-		HistogramSnapshot{},
-		HistogramSnapshot{},
-	)
-
-	rows := s.NonIOFamilies()
-	if len(rows) != 2 {
-		t.Fatalf("NonIOFamilies len = %d, want 2", len(rows))
-	}
-	if rows[0].Family == types.FamilyFS || rows[1].Family == types.FamilyFS {
-		t.Fatalf("NonIOFamilies included FS: %+v", rows)
-	}
-	if got := s.NonIOFamiliesCount(); got != 2 {
-		t.Fatalf("NonIOFamiliesCount = %d, want 2", got)
-	}
-}
-
 func TestTopNAccessors(t *testing.T) {
 	s := NewSnapshot(
 		nil,

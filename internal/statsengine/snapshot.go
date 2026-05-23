@@ -237,28 +237,6 @@ func (s Snapshot) FamiliesCount() int {
 	return len(s.families)
 }
 
-// NonIOFamilies returns family rows outside the file-system/fd-focused family.
-func (s Snapshot) NonIOFamilies() []FamilySnapshot {
-	rows := make([]FamilySnapshot, 0, len(s.families))
-	for _, row := range s.families {
-		if types.IsNonIOSyscallFamily(row.Family) {
-			rows = append(rows, row)
-		}
-	}
-	return rows
-}
-
-// NonIOFamiliesCount returns number of non-FS syscall-family rows.
-func (s Snapshot) NonIOFamiliesCount() int {
-	count := 0
-	for _, row := range s.families {
-		if types.IsNonIOSyscallFamily(row.Family) {
-			count++
-		}
-	}
-	return count
-}
-
 // TopNSyscalls returns at most n per-syscall rows in ranking order.
 // Callers must treat returned data as read-only.
 func (s Snapshot) TopNSyscalls(n int) []SyscallSnapshot {

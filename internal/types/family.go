@@ -20,16 +20,6 @@ func AllSyscallFamilies() []SyscallFamily {
 	}
 }
 
-// IsFileSyscallFamily reports whether family belongs to file-system/syscall-fd views.
-func IsFileSyscallFamily(family SyscallFamily) bool {
-	return family == FamilyFS
-}
-
-// IsNonIOSyscallFamily reports whether family should appear in the Non-IO tab.
-func IsNonIOSyscallFamily(family SyscallFamily) bool {
-	return family != "" && !IsFileSyscallFamily(family)
-}
-
 // SyscallFamilyRank returns the stable display rank for a family.
 func SyscallFamilyRank(family SyscallFamily) int {
 	for idx, candidate := range AllSyscallFamilies() {

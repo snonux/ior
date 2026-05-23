@@ -102,7 +102,7 @@ Memory extent is tracked separately via address-space metrics.
 ## Runtime Notes
 
 - Dashboard ships with a dedicated `Non-IO` tab (shortcut `8`) backed by
-  per-family aggregates (`Snapshot.Families` / `Snapshot.NonIOFamilies`).
+  per-family aggregates (`Snapshot.Families`); Non-IO filtering is applied in `internal/tui/dashboard`.
 - Aggregate-only sampling mode is implemented (`rate=0`) via:
   - `-syscall-sampling-families`
   - `-syscall-sampling-syscalls`
