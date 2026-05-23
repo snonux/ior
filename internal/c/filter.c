@@ -78,7 +78,7 @@ static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id)
     return state.emit_event != 0;
 }
 
-static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 exit_trace_id, __s64 ret) {
+static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret) {
     __u64 now;
     __u64 duration = 0;
     __u8 emit_event = 1;
@@ -92,8 +92,10 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 exit_trace_id, _
     if (now >= state->start_ns)
         duration = now - state->start_ns;
 
-    // A tracepoint pair uses enter_id == exit_id + 1 in this codebase.
-    if (state->enter_trace_id == exit_trace_id + 1)
+    // Pair aggregate stats using the explicit enter_trace_id passed by the
+    // generated exit handler, avoiding any numeric adjacency assumption
+    // between kernel-assigned enter and exit tracepoint IDs.
+    if (state->enter_trace_id == enter_trace_id)
         ior_update_syscall_aggregate(state->enter_trace_id, duration, ret);
 
     emit_event = state->emit_event;

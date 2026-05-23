@@ -759,6 +759,65 @@ func TestClassifySyscallNoExit(t *testing.T) {
 	}
 }
 
+func TestEnterConstForHandler(t *testing.T) {
+	tests := []struct {
+		name    string
+		isEnter bool
+		want    string
+	}{
+		{"sys_enter_read", true, "SYS_ENTER_READ"},
+		{"sys_exit_read", false, "SYS_ENTER_READ"},
+		{"sys_enter_openat", true, "SYS_ENTER_OPENAT"},
+		{"sys_exit_openat", false, "SYS_ENTER_OPENAT"},
+		{"sys_exit_io_uring_enter", false, "SYS_ENTER_IO_URING_ENTER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := enterConstForHandler(tt.name, tt.isEnter)
+			if got != tt.want {
+				t.Errorf("enterConstForHandler(%q, %v) = %q, want %q", tt.name, tt.isEnter, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExitHandlerPassesEnterTraceID(t *testing.T) {
+	output := generateFromPair(t, FormatRead, FormatExitRead)
+
+	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret)")
+	if strings.Contains(output, "ior_on_syscall_exit(tid, SYS_EXIT_READ") {
+		t.Error("exit handler must pass the enter trace ID, not the exit trace ID")
+	}
+}
+
+func TestExitHandlerDoesNotRelyOnIDAdjacency(t *testing.T) {
+	input := FormatRead + "\n" + FormatExitRead
+	formats := mustParseAll(t, input)
+	enterID := -1
+	exitID := -1
+	for _, f := range formats {
+		if strings.HasPrefix(f.Name, "sys_enter_") {
+			enterID = f.ID
+		}
+		if strings.HasPrefix(f.Name, "sys_exit_") {
+			exitID = f.ID
+		}
+	}
+	if enterID < 0 || exitID < 0 {
+		t.Fatal("missing enter or exit format")
+	}
+	if enterID != exitID+1 {
+		t.Skipf("IDs are not adjacent (enter=%d, exit=%d), adjacency test not applicable", enterID, exitID)
+	}
+
+	output := GenerateTracepointsC(formats)
+	if strings.Contains(output, "ior_on_syscall_exit(tid, SYS_EXIT_") {
+		t.Error("generated exit handler passes exit trace ID; should pass enter trace ID to avoid adjacency dependency")
+	}
+	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret)")
+}
+
 func syntheticPair(syscall string) string {
 	enter := strings.Replace(FormatKill, "sys_enter_kill", "sys_enter_"+syscall, 1)
 	enter = strings.Replace(enter, "ID: 183", "ID: 1001", 1)
