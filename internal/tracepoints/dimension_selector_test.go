@@ -313,3 +313,83 @@ func TestParseSelectorWithDimensionsRejectsInvalidSyscall(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestParseSelectorWithDimensionsRegexOnlyNanosleep(t *testing.T) {
+	// Regression: when -tps provides an explicit regex and no -trace-*
+	// dimension selectors are given, the implicit FS-only allowlist must not
+	// reject non-FS tracepoints such as nanosleep. Legacy regex-only
+	// semantics should let the regex control attachment.
+	sel, err := ParseSelectorWithDimensions(
+		"^sys_enter_nanosleep$,^sys_exit_nanosleep$", "",
+		DimensionSelectorConfig{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected sys_enter_nanosleep to be attached by regex-only selector")
+	}
+	if !sel.ShouldAttach("sys_exit_nanosleep") {
+		t.Fatal("expected sys_exit_nanosleep to be attached by regex-only selector")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded by regex-only selector")
+	}
+}
+
+func TestParseSelectorWithDimensionsRegexPlusDimensionStillRestricts(t *testing.T) {
+	// When both a -tps regex and dimension selectors are provided, the
+	// dimension allowlist must still be enforced alongside the regex.
+	sel, err := ParseSelectorWithDimensions(
+		"^sys_enter_nanosleep$,^sys_exit_nanosleep$", "",
+		DimensionSelectorConfig{TraceFamilies: "Time"},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep to pass both regex and Time family filter")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat to be excluded by regex filter")
+	}
+}
+
+func TestParseSelectorWithDimensionsRegexOnlyExcludeStillWorks(t *testing.T) {
+	// When -tps is set with -tpsExclude but no dimension selectors, the
+	// exclude regex must still take effect.
+	sel, err := ParseSelectorWithDimensions(
+		"nanosleep", "sys_exit_nanosleep",
+		DimensionSelectorConfig{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sel.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected sys_enter_nanosleep to be attached")
+	}
+	if sel.ShouldAttach("sys_exit_nanosleep") {
+		t.Fatal("expected sys_exit_nanosleep to be excluded by -tpsExclude regex")
+	}
+}
+
+func TestDimensionSelectorConfigHasAnySelector(t *testing.T) {
+	// Empty config has no selectors.
+	if (DimensionSelectorConfig{}).hasAnySelector() {
+		t.Fatal("expected empty config to report no selectors")
+	}
+	// Each individual field should count as a selector.
+	fields := []DimensionSelectorConfig{
+		{TraceFamilies: "FS"},
+		{TraceKinds: "sleep"},
+		{TraceSyscalls: "openat"},
+		{NoTraceFamilies: "FS"},
+		{NoTraceKinds: "sleep"},
+		{NoTraceSyscalls: "openat"},
+	}
+	for _, cfg := range fields {
+		if !cfg.hasAnySelector() {
+			t.Fatalf("expected config %+v to report selectors present", cfg)
+		}
+	}
+}

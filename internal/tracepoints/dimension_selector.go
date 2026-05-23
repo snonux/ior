@@ -19,12 +19,35 @@ type DimensionSelectorConfig struct {
 	NoTraceSyscalls string
 }
 
+// hasAnySelector reports whether any positive or negative dimension selector
+// field is populated. When all fields are empty the caller provided no
+// -trace-* / -no-trace-* flags.
+func (d DimensionSelectorConfig) hasAnySelector() bool {
+	return d.TraceFamilies != "" ||
+		d.TraceKinds != "" ||
+		d.TraceSyscalls != "" ||
+		d.NoTraceFamilies != "" ||
+		d.NoTraceKinds != "" ||
+		d.NoTraceSyscalls != ""
+}
+
 // ParseSelectorWithDimensions compiles regex-based attach/exclude filters and
 // applies attach-time syscall dimension gating.
+//
+// Legacy semantics: when the caller supplies an explicit -tps regex but no
+// -trace-* / -no-trace-* dimension selectors, the syscall allowlist is skipped
+// entirely so that non-FS tracepoints matched by the regex are still attached.
 func ParseSelectorWithDimensions(attach, exclude string, dims DimensionSelectorConfig) (Selector, error) {
 	sel, err := ParseSelector(attach, exclude)
 	if err != nil {
 		return Selector{}, err
+	}
+
+	// When an explicit -tps regex is provided without any dimension selectors,
+	// preserve legacy behaviour: the regex alone controls attachment and the
+	// implicit FS-only default is not applied.
+	if attach != "" && !dims.hasAnySelector() {
+		return sel, nil
 	}
 
 	allow, err := buildAllowedSyscalls(dims)
