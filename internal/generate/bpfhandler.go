@@ -70,63 +70,65 @@ func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra 
 	return b.String()
 }
 
-// generateExtra returns the kind-specific C body lines for a tracepoint handler,
-// dispatching to a per-kind helper so that each case stays concise.
+// extraEmitter produces the kind-specific C body lines for a tracepoint handler.
+// Each TracepointKind that needs extra fields registers an emitter in
+// extraEmitters. Kinds not registered (or explicitly mapped to nil) emit nothing.
+type extraEmitter func(tp GeneratedTracepoint, isEnter bool) string
+
+// extraEmitters maps each TracepointKind to its emitter function.
+// Adding a new kind requires only a new entry here plus, if needed, a new
+// table-driven helper — no switch statement needs to grow.
+var extraEmitters = map[TracepointKind]extraEmitter{
+	KindFd:             func(tp GeneratedTracepoint, _ bool) string { return generateExtraFd(tp.Format) },
+	KindDup3:           func(_ GeneratedTracepoint, _ bool) string { return generateExtraDup3() },
+	KindOpenByHandleAt: func(_ GeneratedTracepoint, _ bool) string { return generateExtraOpenByHandleAt() },
+	KindSocket:         func(_ GeneratedTracepoint, _ bool) string { return generateExtraSocket() },
+	KindSocketpair:     func(_ GeneratedTracepoint, isEnter bool) string { return generateExtraSocketpair(isEnter) },
+	KindAccept:         func(_ GeneratedTracepoint, isEnter bool) string { return generateExtraAccept(isEnter) },
+	KindPipe:           func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraPipe(tp.Format, isEnter) },
+	KindEventfd:        func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
+	KindPidfd:          func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
+	KindEpollCtl:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraEpollCtl() },
+	KindTwoFd:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraTwoFd(tp.Format.Name) },
+	KindPoll:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraPoll(tp.Format.Name) },
+	KindMem:            func(tp GeneratedTracepoint, _ bool) string { return generateExtraMem(tp.Format.Name) },
+	KindSleep:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraSleep(tp.Format.Name) },
+	KindKeyctl:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraKeyctl(tp.Format.Name) },
+	KindPtrace:         func(_ GeneratedTracepoint, _ bool) string { return generateExtraPtrace() },
+	KindPerfOpen:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraPerfOpen() },
+	KindOpen:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
+	KindMqOpen:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraMqOpen(tp.Format) },
+	KindExec:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraExec(tp.Format) },
+	KindPathname:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraPathname(tp, tp.Format) },
+	KindName:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraName(tp.Format) },
+	KindFcntl:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraFcntl(tp.Format) },
+	KindRet:            func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp.Format) },
+	// KindNull emits no extra fields — absence from the map means empty output.
+}
+
+// generateExtra returns the kind-specific C body lines for a tracepoint handler
+// by looking up the emitter registered in extraEmitters. Kinds without a
+// registered emitter (e.g. KindNull) produce an empty string.
 func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
-	f := tp.Format
-	switch tp.Classification.Kind {
-	case KindFd:
-		return generateExtraFd(f)
-	case KindDup3:
-		return "    ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"
-	case KindOpenByHandleAt:
-		return "    ev->flags = (__s32)ctx->args[2];\n"
-	case KindSocket:
-		return generateExtraSocket()
-	case KindSocketpair:
-		return generateExtraSocketpair(isEnter)
-	case KindAccept:
-		return generateExtraAccept(isEnter)
-	case KindPipe:
-		return generateExtraPipe(f, isEnter)
-	case KindEventfd:
-		return generateExtraEventfd(f, isEnter)
-	case KindPidfd:
-		return generateExtraEventfd(f, isEnter)
-	case KindEpollCtl:
-		return generateExtraEpollCtl()
-	case KindTwoFd:
-		return generateExtraTwoFd(f.Name)
-	case KindPoll:
-		return generateExtraPoll(f.Name)
-	case KindMem:
-		return generateExtraMem(f.Name)
-	case KindSleep:
-		return generateExtraSleep(f.Name)
-	case KindKeyctl:
-		return generateExtraKeyctl(f.Name)
-	case KindPtrace:
-		return generateExtraPtrace()
-	case KindPerfOpen:
-		return generateExtraPerfOpen()
-	case KindOpen:
-		return generateExtraOpen(f)
-	case KindMqOpen:
-		return generateExtraMqOpen(f)
-	case KindExec:
-		return generateExtraExec(f)
-	case KindPathname:
-		return generateExtraPathname(tp, f)
-	case KindName:
-		return generateExtraName(f)
-	case KindFcntl:
-		return generateExtraFcntl(f)
-	case KindRet:
-		return fmt.Sprintf("    ev->ret = ctx->ret;\n    ev->ret_type = %s;\n", ClassifyRet(f.Name))
-	case KindNull:
-		return ""
+	if emit, ok := extraEmitters[tp.Classification.Kind]; ok {
+		return emit(tp, isEnter)
 	}
 	return ""
+}
+
+// generateExtraRet emits the ret/ret_type capture for exit-side ret events.
+func generateExtraRet(f *Format) string {
+	return fmt.Sprintf("    ev->ret = ctx->ret;\n    ev->ret_type = %s;\n", ClassifyRet(f.Name))
+}
+
+// generateExtraDup3 emits fd and flags from fixed argument positions.
+func generateExtraDup3() string {
+	return "    ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"
+}
+
+// generateExtraOpenByHandleAt emits flags from argument position 2.
+func generateExtraOpenByHandleAt() string {
+	return "    ev->flags = (__s32)ctx->args[2];\n"
 }
 
 // generateExtraFd returns the fd-capture lines for fd-family events.
@@ -258,38 +260,35 @@ func generateExtraPipe(f *Format, isEnter bool) string {
 	return "    __s32 flags = 0;\n    __s32 fd0 = -1;\n    __s32 fd1 = -1;\n    struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);\n    if (pending) {\n        flags = pending->flags;\n        if (ctx->ret == 0 && pending->upipefd != 0) {\n            int pipefd[2];\n            if (bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd) == 0) {\n                fd0 = (__s32)pipefd[0];\n                fd1 = (__s32)pipefd[1];\n            }\n        }\n        bpf_map_delete_elem(&pipe_ctx_map, &tid);\n    }\n    ev->flags = flags;\n    ev->fd0 = fd0;\n    ev->fd1 = fd1;\n    ev->ret = ctx->ret;\n"
 }
 
+// eventfdFlagsExpr maps eventfd-family enter syscall names to the C expression
+// that captures the flags argument. Syscalls not listed here default to "0".
+// To add a new eventfd-like syscall, register its flags expression below.
+var eventfdFlagsExpr = map[string]string{
+	"sys_enter_epoll_create":          "(__s32)ctx->args[0]",
+	"sys_enter_epoll_create1":         "(__s32)ctx->args[0]",
+	"sys_enter_inotify_init1":         "(__s32)ctx->args[0]",
+	"sys_enter_fanotify_init":         "(__s32)ctx->args[0]",
+	"sys_enter_landlock_create_ruleset": "(__s32)ctx->args[2]",
+	"sys_enter_eventfd2":              "(__s32)ctx->args[1]",
+	"sys_enter_memfd_create":          "(__s32)ctx->args[1]",
+	"sys_enter_memfd_secret":          "(__s32)ctx->args[0]",
+	"sys_enter_userfaultfd":           "(__s32)ctx->args[0]",
+	"sys_enter_signalfd4":             "(__s32)ctx->args[3]",
+	"sys_enter_timerfd_create":        "(__s32)ctx->args[1]",
+	"sys_enter_pidfd_open":            "(__s32)ctx->args[0]",
+	"sys_enter_fsmount":               "(__s32)ctx->args[1]",
+	"sys_enter_fsopen":                "(__s32)ctx->args[1]",
+}
+
+// generateExtraEventfd emits the enter/exit body for eventfd-family syscalls.
+// Enter: reads the flags expression from eventfdFlagsExpr (defaults to "0"),
+// stashes it in eventfd_flags_map, and sets ev->ret = -1.
+// Exit: retrieves the stashed flags from the map and captures ctx->ret.
 func generateExtraEventfd(f *Format, isEnter bool) string {
 	if isEnter {
-		flagsExpr := "0"
-		switch f.Name {
-		case "sys_enter_epoll_create":
-			flagsExpr = "(__s32)ctx->args[0]"
-		case "sys_enter_epoll_create1":
-			flagsExpr = "(__s32)ctx->args[0]"
-		case "sys_enter_inotify_init1":
-			flagsExpr = "(__s32)ctx->args[0]"
-		case "sys_enter_fanotify_init":
-			flagsExpr = "(__s32)ctx->args[0]"
-		case "sys_enter_landlock_create_ruleset":
-			flagsExpr = "(__s32)ctx->args[2]"
-		case "sys_enter_eventfd2":
-			flagsExpr = "(__s32)ctx->args[1]"
-		case "sys_enter_memfd_create":
-			flagsExpr = "(__s32)ctx->args[1]"
-		case "sys_enter_memfd_secret":
-			flagsExpr = "(__s32)ctx->args[0]"
-		case "sys_enter_userfaultfd":
-			flagsExpr = "(__s32)ctx->args[0]"
-		case "sys_enter_signalfd4":
-			flagsExpr = "(__s32)ctx->args[3]"
-		case "sys_enter_timerfd_create":
-			flagsExpr = "(__s32)ctx->args[1]"
-		case "sys_enter_pidfd_open":
-			flagsExpr = "(__s32)ctx->args[0]"
-		case "sys_enter_fsmount":
-			flagsExpr = "(__s32)ctx->args[1]"
-		case "sys_enter_fsopen":
-			flagsExpr = "(__s32)ctx->args[1]"
+		flagsExpr := eventfdFlagsExpr[f.Name] // empty string if not found
+		if flagsExpr == "" {
+			flagsExpr = "0"
 		}
 		return "    __s32 flags = " + flagsExpr + ";\n    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n    ev->flags = flags;\n    ev->ret = -1;\n"
 	}
@@ -300,87 +299,211 @@ func generateExtraEpollCtl() string {
 	return "    ev->epfd = (__s32)ctx->args[0];\n    ev->op = (__s32)ctx->args[1];\n    ev->fd = (__s32)ctx->args[2];\n    ev->events = 0;\n    if (ctx->args[3] != 0) {\n        __u32 user_events = 0;\n        if (bpf_probe_read_user(&user_events, sizeof(user_events), (void *)ctx->args[3]) == 0) {\n            ev->events = user_events;\n        }\n    }\n"
 }
 
-func generateExtraTwoFd(name string) string {
-	switch name {
-	case "sys_enter_move_mount":
-		return "    ev->fd_a = (__s32)ctx->args[0];\n    ev->fd_b = (__s32)ctx->args[2];\n    ev->extra = (__u64)ctx->args[4];\n"
-	case "sys_enter_kcmp":
-		return "    ev->fd_a = (__s32)ctx->args[3];\n    ev->fd_b = (__s32)ctx->args[4];\n    ev->extra = (__u64)ctx->args[2];\n"
-	default:
-		return "    ev->fd_a = (__s32)ctx->args[0];\n    ev->fd_b = (__s32)ctx->args[1];\n    ev->extra = (__u64)ctx->args[2];\n"
-	}
+// twoFdFieldSpec describes argument positions for a two-fd syscall.
+// Each expression is a C snippet for the corresponding event field.
+type twoFdFieldSpec struct {
+	fdA   string // expression for ev->fd_a
+	fdB   string // expression for ev->fd_b
+	extra string // expression for ev->extra
 }
 
+// twoFdOverrides maps syscall names that deviate from the default argument
+// layout (args[0], args[1], args[2]). To add a new two-fd syscall with
+// non-standard positions, register it here.
+var twoFdOverrides = map[string]twoFdFieldSpec{
+	"sys_enter_move_mount": {fdA: "(__s32)ctx->args[0]", fdB: "(__s32)ctx->args[2]", extra: "(__u64)ctx->args[4]"},
+	"sys_enter_kcmp":       {fdA: "(__s32)ctx->args[3]", fdB: "(__s32)ctx->args[4]", extra: "(__u64)ctx->args[2]"},
+}
+
+// twoFdDefault is the fallback for two-fd syscalls not in twoFdOverrides.
+var twoFdDefault = twoFdFieldSpec{
+	fdA:   "(__s32)ctx->args[0]",
+	fdB:   "(__s32)ctx->args[1]",
+	extra: "(__u64)ctx->args[2]",
+}
+
+// generateExtraTwoFd emits the three-field body for two-fd syscalls.
+// Syscalls with non-standard argument positions are in twoFdOverrides;
+// all others use twoFdDefault.
+func generateExtraTwoFd(name string) string {
+	spec, ok := twoFdOverrides[name]
+	if !ok {
+		spec = twoFdDefault
+	}
+	return fmt.Sprintf("    ev->fd_a = %s;\n    ev->fd_b = %s;\n    ev->extra = %s;\n",
+		spec.fdA, spec.fdB, spec.extra)
+}
+
+// pollTimeoutStyle describes how the poll-family syscall captures its timeout.
+type pollTimeoutStyle int
+
+const (
+	// pollTimeoutNone means no known timeout capture; emit defaults.
+	pollTimeoutNone pollTimeoutStyle = iota
+	// pollTimeoutMillis means the timeout is an __s32 millisecond value.
+	pollTimeoutMillis
+	// pollTimeoutTimespec means the timeout is a pointer to a timespec struct.
+	pollTimeoutTimespec
+	// pollTimeoutTimeval means the timeout is a pointer to a timeval struct.
+	pollTimeoutTimeval
+)
+
+// pollFieldSpec describes argument positions and timeout style for a poll
+// syscall. nfdsArgIdx is the ctx->args index for nfds; timeoutArgIdx is the
+// index for the timeout argument.
+type pollFieldSpec struct {
+	nfdsArgIdx    int
+	timeoutArgIdx int
+	timeoutStyle  pollTimeoutStyle
+}
+
+// pollOverrides maps poll-family syscall names to their argument layout.
+// To add a new poll variant, register it here instead of editing a switch.
+var pollOverrides = map[string]pollFieldSpec{
+	"sys_enter_poll":     {nfdsArgIdx: 1, timeoutArgIdx: 2, timeoutStyle: pollTimeoutMillis},
+	"sys_enter_ppoll":    {nfdsArgIdx: 1, timeoutArgIdx: 2, timeoutStyle: pollTimeoutTimespec},
+	"sys_enter_select":   {nfdsArgIdx: 0, timeoutArgIdx: 4, timeoutStyle: pollTimeoutTimeval},
+	"sys_enter_pselect6": {nfdsArgIdx: 0, timeoutArgIdx: 4, timeoutStyle: pollTimeoutTimespec},
+}
+
+// generateExtraPoll emits the nfds/timeout_ns capture body for poll-family
+// syscalls. Unregistered names get sensible defaults (-1, -1).
 func generateExtraPoll(name string) string {
-	switch name {
-	case "sys_enter_poll":
-		return "    ev->nfds = (__s32)ctx->args[1];\n    ev->timeout_ns = -1;\n    __s32 timeout_ms = (__s32)ctx->args[2];\n    if (timeout_ms >= 0) {\n        ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;\n    }\n"
-	case "sys_enter_ppoll":
-		return "    ev->nfds = (__s32)ctx->args[1];\n    ev->timeout_ns = -1;\n    if (ctx->args[2] != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {\n            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
-	case "sys_enter_select":
-		return "    ev->nfds = (__s32)ctx->args[0];\n    ev->timeout_ns = -1;\n    if (ctx->args[4] != 0) {\n        struct __ior_timeval {\n            __s64 tv_sec;\n            __s64 tv_usec;\n        } tv = {};\n        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[4]) == 0) {\n            ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n        }\n    }\n"
-	case "sys_enter_pselect6":
-		return "    ev->nfds = (__s32)ctx->args[0];\n    ev->timeout_ns = -1;\n    if (ctx->args[4] != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[4]) == 0) {\n            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
-	default:
+	spec, ok := pollOverrides[name]
+	if !ok {
 		return "    ev->nfds = -1;\n    ev->timeout_ns = -1;\n"
 	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "    ev->nfds = (__s32)ctx->args[%d];\n", spec.nfdsArgIdx)
+	b.WriteString("    ev->timeout_ns = -1;\n")
+	b.WriteString(pollTimeoutBody(spec.timeoutArgIdx, spec.timeoutStyle))
+	return b.String()
 }
 
-func generateExtraMem(name string) string {
-	switch name {
-	case "sys_enter_mprotect":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
-	case "sys_enter_madvise":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
-	case "sys_enter_pkey_mprotect":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = (__u64)ctx->args[3];\n    ev->flags = (__u64)ctx->args[2];\n"
-	case "sys_enter_brk":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = 0;\n    ev->length2 = 0;\n    ev->flags = 0;\n"
-	case "sys_enter_munmap":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
-	case "sys_enter_mremap":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = (__u64)ctx->args[2];\n    ev->flags = (__u64)ctx->args[3];\n"
-	case "sys_enter_mincore":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
-	case "sys_enter_remap_file_pages":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = (__u64)ctx->args[3];\n    ev->flags = (__u64)ctx->args[4];\n"
-	case "sys_enter_mlock":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
-	case "sys_enter_mlock2":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
-	case "sys_enter_munlock":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = 0;\n"
-	case "sys_enter_mseal":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
-	case "sys_enter_map_shadow_stack":
-		return "    ev->addr = (__u64)ctx->args[0];\n    ev->length = (__u64)ctx->args[1];\n    ev->length2 = 0;\n    ev->flags = (__u64)ctx->args[2];\n"
+// pollTimeoutBody returns the C snippet that reads the timeout from the
+// specified argument index using the given style (millis, timespec, timeval).
+func pollTimeoutBody(argIdx int, style pollTimeoutStyle) string {
+	switch style {
+	case pollTimeoutMillis:
+		return fmt.Sprintf(
+			"    __s32 timeout_ms = (__s32)ctx->args[%d];\n"+
+				"    if (timeout_ms >= 0) {\n"+
+				"        ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;\n"+
+				"    }\n", argIdx)
+	case pollTimeoutTimespec:
+		return fmt.Sprintf(
+			"    if (ctx->args[%d] != 0) {\n"+
+				"        struct __ior_timespec {\n"+
+				"            __s64 tv_sec;\n"+
+				"            __s64 tv_nsec;\n"+
+				"        } ts = {};\n"+
+				"        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[%d]) == 0) {\n"+
+				"            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+				"        }\n"+
+				"    }\n", argIdx, argIdx)
+	case pollTimeoutTimeval:
+		return fmt.Sprintf(
+			"    if (ctx->args[%d] != 0) {\n"+
+				"        struct __ior_timeval {\n"+
+				"            __s64 tv_sec;\n"+
+				"            __s64 tv_usec;\n"+
+				"        } tv = {};\n"+
+				"        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[%d]) == 0) {\n"+
+				"            ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
+				"        }\n"+
+				"    }\n", argIdx, argIdx)
 	default:
-		return "    ev->addr = 0;\n    ev->length = 0;\n    ev->length2 = 0;\n    ev->flags = 0;\n"
+		return ""
 	}
 }
 
+// memFieldSpec describes the four fields captured for a memory syscall.
+// Each expression is a C snippet; empty means the field defaults to "0".
+// To add a new memory syscall, register it in memFieldOverrides below.
+type memFieldSpec struct {
+	addr    string // expression for ev->addr   (default "0")
+	length  string // expression for ev->length  (default "0")
+	length2 string // expression for ev->length2 (default "0")
+	flags   string // expression for ev->flags   (default "0")
+}
+
+// memFieldOverrides maps syscall names to per-field C expressions.
+// Only syscalls whose arguments differ from all-zeros need an entry;
+// the default (unregistered) case emits all zeroes.
+var memFieldOverrides = map[string]memFieldSpec{
+	"sys_enter_mprotect":         {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
+	"sys_enter_madvise":          {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
+	"sys_enter_pkey_mprotect":    {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", length2: "(__u64)ctx->args[3]", flags: "(__u64)ctx->args[2]"},
+	"sys_enter_brk":              {addr: "(__u64)ctx->args[0]"},
+	"sys_enter_munmap":           {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]"},
+	"sys_enter_mremap":           {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", length2: "(__u64)ctx->args[2]", flags: "(__u64)ctx->args[3]"},
+	"sys_enter_mincore":          {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]"},
+	"sys_enter_remap_file_pages": {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", length2: "(__u64)ctx->args[3]", flags: "(__u64)ctx->args[4]"},
+	"sys_enter_mlock":            {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]"},
+	"sys_enter_mlock2":           {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
+	"sys_enter_munlock":          {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]"},
+	"sys_enter_mseal":            {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
+	"sys_enter_map_shadow_stack": {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
+}
+
+// generateExtraMem emits the four-field memory event body from memFieldOverrides.
+// Unregistered syscalls get all-zero defaults.
+func generateExtraMem(name string) string {
+	spec := memFieldOverrides[name] // zero-value memFieldSpec if not found
+	return fmt.Sprintf("    ev->addr = %s;\n    ev->length = %s;\n    ev->length2 = %s;\n    ev->flags = %s;\n",
+		memExpr(spec.addr), memExpr(spec.length), memExpr(spec.length2), memExpr(spec.flags))
+}
+
+// memExpr returns expr if non-empty, otherwise the literal "0".
+func memExpr(expr string) string {
+	if expr == "" {
+		return "0"
+	}
+	return expr
+}
+
+// sleepTimespecPtr maps sleep-family syscall names to the C expression pointing
+// at the user-space timespec struct. Syscalls not listed default to "0" (no
+// pointer), which makes the generated code skip the probe_read_user call.
+// To add a new sleep-like syscall, register its timespec pointer expression here.
+var sleepTimespecPtr = map[string]string{
+	"sys_enter_nanosleep":       "ctx->args[0]",
+	"sys_enter_clock_nanosleep": "ctx->args[2]",
+}
+
+// generateExtraSleep emits the requested_ns capture body for sleep-family
+// syscalls. The timespec pointer expression comes from sleepTimespecPtr.
 func generateExtraSleep(name string) string {
-	ptrExpr := "0"
-	switch name {
-	case "sys_enter_nanosleep":
-		ptrExpr = "ctx->args[0]"
-	case "sys_enter_clock_nanosleep":
-		ptrExpr = "ctx->args[2]"
+	ptrExpr := sleepTimespecPtr[name] // empty string if not found
+	if ptrExpr == "" {
+		ptrExpr = "0"
 	}
 	return "    ev->requested_ns = -1;\n    if (" + ptrExpr + " != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)" + ptrExpr + ") == 0) {\n            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
 }
 
+// keyctlFieldSpec describes the three fields captured for keyctl-family syscalls.
+// Each expression is a C snippet; empty means the field defaults to "0".
+type keyctlFieldSpec struct {
+	option    string // expression for ev->option    (default "0")
+	keySerial string // expression for ev->key_serial (default "0")
+	value     string // expression for ev->value      (default "0")
+}
+
+// keyctlOverrides maps keyctl-family syscall names to their per-field C
+// expressions. To add a new keyctl variant, register it here.
+var keyctlOverrides = map[string]keyctlFieldSpec{
+	"sys_enter_keyctl":      {option: "(__s32)ctx->args[0]", keySerial: "(__s32)ctx->args[1]", value: "(__u64)ctx->args[2]"},
+	"sys_enter_add_key":     {option: "-1", keySerial: "(__s32)ctx->args[4]", value: "(__u64)ctx->args[3]"},
+	"sys_enter_request_key": {option: "-2", keySerial: "(__s32)ctx->args[3]"},
+}
+
+// generateExtraKeyctl emits the three-field body for keyctl-family syscalls.
+// Unregistered syscalls get all-zero defaults.
 func generateExtraKeyctl(name string) string {
-	switch name {
-	case "sys_enter_keyctl":
-		return "    ev->option = (__s32)ctx->args[0];\n    ev->key_serial = (__s32)ctx->args[1];\n    ev->value = (__u64)ctx->args[2];\n"
-	case "sys_enter_add_key":
-		return "    ev->option = -1;\n    ev->key_serial = (__s32)ctx->args[4];\n    ev->value = (__u64)ctx->args[3];\n"
-	case "sys_enter_request_key":
-		return "    ev->option = -2;\n    ev->key_serial = (__s32)ctx->args[3];\n    ev->value = 0;\n"
-	default:
-		return "    ev->option = 0;\n    ev->key_serial = 0;\n    ev->value = 0;\n"
-	}
+	spec := keyctlOverrides[name] // zero-value keyctlFieldSpec if not found
+	return fmt.Sprintf("    ev->option = %s;\n    ev->key_serial = %s;\n    ev->value = %s;\n",
+		memExpr(spec.option), memExpr(spec.keySerial), memExpr(spec.value))
 }
 
 func generateExtraPtrace() string {
