@@ -379,6 +379,41 @@ func TestGenerateEventfdHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 }
 
+func TestGenerateEpollCreateHandlerUsesZeroFlags(t *testing.T) {
+	output := generateFromPair(t, FormatEpollCreate, FormatExitEpollCreate)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_EPOLL_CREATE;")
+	// epoll_create(size) has no flags argument; the generated code must
+	// hardcode flags to 0 instead of reading ctx->args[0] (which is size).
+	requireContains(t, output, "__s32 flags = 0;")
+	if strings.Contains(output, "flags = (__s32)ctx->args[0]") {
+		t.Error("epoll_create handler must not use ctx->args[0] (size) as flags")
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_epoll_create\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+func TestGeneratePidfdOpenHandlerUsesArg1Flags(t *testing.T) {
+	output := generateFromPair(t, FormatPidfdOpen, FormatExitPidfdOpen)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_PIDFD_OPEN;")
+	// pidfd_open(pid, flags): flags is at args[1], not args[0] (which is pid).
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[1];")
+	if strings.Contains(output, "flags = (__s32)ctx->args[0]") {
+		t.Error("pidfd_open handler must not use ctx->args[0] (pid) as flags")
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_pidfd_open\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
 func TestGenerateEpollCtlHandler(t *testing.T) {
 	output := generateFromPair(t, FormatEpollCtl, FormatExitEpollCtl)
 

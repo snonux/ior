@@ -770,7 +770,7 @@ int handle_sys_exit_socket(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SOCKET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SOCKET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -832,7 +832,7 @@ int handle_sys_exit_socketpair(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SOCKETPAIR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SOCKETPAIR, ctx->ret))
         return 0;
 
     struct socketpair_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct socketpair_event), 0);
@@ -906,7 +906,7 @@ int handle_sys_exit_bind(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_BIND, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_BIND, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -957,7 +957,7 @@ int handle_sys_exit_listen(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LISTEN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LISTEN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1009,7 +1009,7 @@ int handle_sys_exit_accept4(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ACCEPT4, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ACCEPT4, ctx->ret))
         return 0;
 
     struct accept_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct accept_event), 0);
@@ -1061,7 +1061,7 @@ int handle_sys_exit_accept(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ACCEPT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ACCEPT, ctx->ret))
         return 0;
 
     struct accept_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct accept_event), 0);
@@ -1112,7 +1112,7 @@ int handle_sys_exit_connect(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CONNECT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CONNECT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1163,7 +1163,7 @@ int handle_sys_exit_getsockname(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETSOCKNAME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETSOCKNAME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1214,7 +1214,7 @@ int handle_sys_exit_getpeername(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETPEERNAME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETPEERNAME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1265,7 +1265,7 @@ int handle_sys_exit_sendto(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SENDTO, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SENDTO, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1316,7 +1316,7 @@ int handle_sys_exit_recvfrom(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RECVFROM, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RECVFROM, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1367,7 +1367,7 @@ int handle_sys_exit_setsockopt(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETSOCKOPT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETSOCKOPT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1418,7 +1418,7 @@ int handle_sys_exit_getsockopt(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETSOCKOPT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETSOCKOPT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1469,7 +1469,7 @@ int handle_sys_exit_shutdown(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SHUTDOWN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SHUTDOWN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1520,7 +1520,7 @@ int handle_sys_exit_sendmsg(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SENDMSG, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SENDMSG, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1571,7 +1571,7 @@ int handle_sys_exit_sendmmsg(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SENDMMSG, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SENDMMSG, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1622,7 +1622,7 @@ int handle_sys_exit_recvmsg(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RECVMSG, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RECVMSG, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1673,7 +1673,7 @@ int handle_sys_exit_recvmmsg(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RECVMMSG, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RECVMMSG, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1723,7 +1723,7 @@ int handle_sys_exit_getrandom(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETRANDOM, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETRANDOM, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1774,7 +1774,7 @@ int handle_sys_exit_io_uring_register(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_URING_REGISTER, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_URING_REGISTER, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1825,7 +1825,7 @@ int handle_sys_exit_io_uring_enter(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_URING_ENTER, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_URING_ENTER, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1875,7 +1875,7 @@ int handle_sys_exit_io_uring_setup(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_URING_SETUP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_URING_SETUP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1925,7 +1925,7 @@ int handle_sys_exit_ioprio_set(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IOPRIO_SET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IOPRIO_SET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -1975,7 +1975,7 @@ int handle_sys_exit_ioprio_get(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IOPRIO_GET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IOPRIO_GET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2029,7 +2029,7 @@ int handle_sys_exit_landlock_create_ruleset(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LANDLOCK_CREATE_RULESET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LANDLOCK_CREATE_RULESET, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -2086,7 +2086,7 @@ int handle_sys_exit_landlock_add_rule(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LANDLOCK_ADD_RULE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LANDLOCK_ADD_RULE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2137,7 +2137,7 @@ int handle_sys_exit_landlock_restrict_self(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LANDLOCK_RESTRICT_SELF, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LANDLOCK_RESTRICT_SELF, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2187,7 +2187,7 @@ int handle_sys_exit_lsm_set_self_attr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LSM_SET_SELF_ATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LSM_SET_SELF_ATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2237,7 +2237,7 @@ int handle_sys_exit_lsm_get_self_attr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LSM_GET_SELF_ATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LSM_GET_SELF_ATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2287,7 +2287,7 @@ int handle_sys_exit_lsm_list_modules(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LSM_LIST_MODULES, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LSM_LIST_MODULES, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2340,7 +2340,7 @@ int handle_sys_exit_add_key(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ADD_KEY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ADD_KEY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2393,7 +2393,7 @@ int handle_sys_exit_request_key(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_REQUEST_KEY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_REQUEST_KEY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2446,7 +2446,7 @@ int handle_sys_exit_keyctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_KEYCTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_KEYCTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2500,7 +2500,7 @@ int handle_sys_exit_mq_open(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MQ_OPEN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_OPEN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2552,7 +2552,7 @@ int handle_sys_exit_mq_unlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MQ_UNLINK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_UNLINK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2603,7 +2603,7 @@ int handle_sys_exit_mq_timedsend(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MQ_TIMEDSEND, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_TIMEDSEND, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2654,7 +2654,7 @@ int handle_sys_exit_mq_timedreceive(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MQ_TIMEDRECEIVE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_TIMEDRECEIVE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2705,7 +2705,7 @@ int handle_sys_exit_mq_notify(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MQ_NOTIFY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_NOTIFY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2756,7 +2756,7 @@ int handle_sys_exit_mq_getsetattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MQ_GETSETATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_GETSETATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2806,7 +2806,7 @@ int handle_sys_exit_shmget(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SHMGET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SHMGET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2856,7 +2856,7 @@ int handle_sys_exit_shmctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SHMCTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SHMCTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2906,7 +2906,7 @@ int handle_sys_exit_shmat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SHMAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SHMAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -2956,7 +2956,7 @@ int handle_sys_exit_shmdt(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SHMDT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SHMDT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3006,7 +3006,7 @@ int handle_sys_exit_semget(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SEMGET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SEMGET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3056,7 +3056,7 @@ int handle_sys_exit_semctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SEMCTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SEMCTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3106,7 +3106,7 @@ int handle_sys_exit_semtimedop(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SEMTIMEDOP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SEMTIMEDOP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3156,7 +3156,7 @@ int handle_sys_exit_semop(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SEMOP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SEMOP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3206,7 +3206,7 @@ int handle_sys_exit_msgget(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MSGGET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MSGGET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3256,7 +3256,7 @@ int handle_sys_exit_msgctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MSGCTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MSGCTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3306,7 +3306,7 @@ int handle_sys_exit_msgsnd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MSGSND, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MSGSND, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3356,7 +3356,7 @@ int handle_sys_exit_msgrcv(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MSGRCV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MSGRCV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3408,7 +3408,7 @@ int handle_sys_exit_quotactl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_QUOTACTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_QUOTACTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3459,7 +3459,7 @@ int handle_sys_exit_quotactl_fd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_QUOTACTL_FD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_QUOTACTL_FD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3511,7 +3511,7 @@ int handle_sys_exit_name_to_handle_at(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_NAME_TO_HANDLE_AT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3562,7 +3562,7 @@ int handle_sys_exit_open_by_handle_at(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_OPEN_BY_HANDLE_AT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN_BY_HANDLE_AT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3613,7 +3613,7 @@ int handle_sys_exit_flock(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FLOCK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FLOCK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3663,7 +3663,7 @@ int handle_sys_exit_io_setup(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_SETUP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_SETUP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3713,7 +3713,7 @@ int handle_sys_exit_io_destroy(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_DESTROY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_DESTROY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3763,7 +3763,7 @@ int handle_sys_exit_io_submit(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_SUBMIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_SUBMIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3813,7 +3813,7 @@ int handle_sys_exit_io_cancel(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_CANCEL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_CANCEL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3863,7 +3863,7 @@ int handle_sys_exit_io_getevents(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_GETEVENTS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_GETEVENTS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3913,7 +3913,7 @@ int handle_sys_exit_io_pgetevents(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IO_PGETEVENTS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_PGETEVENTS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -3967,7 +3967,7 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_USERFAULTFD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_USERFAULTFD, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4027,7 +4027,7 @@ int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EVENTFD2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EVENTFD2, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4087,7 +4087,7 @@ int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EVENTFD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EVENTFD, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4147,7 +4147,7 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMERFD_CREATE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMERFD_CREATE, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4203,7 +4203,7 @@ int handle_sys_exit_timerfd_settime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMERFD_SETTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMERFD_SETTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -4253,7 +4253,7 @@ int handle_sys_exit_timerfd_gettime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMERFD_GETTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMERFD_GETTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -4307,7 +4307,7 @@ int handle_sys_exit_signalfd4(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SIGNALFD4, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SIGNALFD4, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4367,7 +4367,7 @@ int handle_sys_exit_signalfd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SIGNALFD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SIGNALFD, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4427,7 +4427,7 @@ int handle_sys_exit_epoll_create1(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EPOLL_CREATE1, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_CREATE1, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4471,7 +4471,7 @@ int handle_sys_enter_epoll_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    __s32 flags = (__s32)ctx->args[0];
+    __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
@@ -4487,7 +4487,7 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EPOLL_CREATE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_CREATE, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4553,7 +4553,7 @@ int handle_sys_exit_epoll_ctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EPOLL_CTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_CTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -4604,7 +4604,7 @@ int handle_sys_exit_epoll_wait(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EPOLL_WAIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_WAIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -4655,7 +4655,7 @@ int handle_sys_exit_epoll_pwait(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EPOLL_PWAIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_PWAIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -4706,7 +4706,7 @@ int handle_sys_exit_epoll_pwait2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EPOLL_PWAIT2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_PWAIT2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -4760,7 +4760,7 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FANOTIFY_INIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FANOTIFY_INIT, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4818,7 +4818,7 @@ int handle_sys_exit_fanotify_mark(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FANOTIFY_MARK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FANOTIFY_MARK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -4872,7 +4872,7 @@ int handle_sys_exit_inotify_init1(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_INOTIFY_INIT1, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_INOTIFY_INIT1, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4932,7 +4932,7 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_INOTIFY_INIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_INOTIFY_INIT, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -4989,7 +4989,7 @@ int handle_sys_exit_inotify_add_watch(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_INOTIFY_ADD_WATCH, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_INOTIFY_ADD_WATCH, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5040,7 +5040,7 @@ int handle_sys_exit_inotify_rm_watch(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_INOTIFY_RM_WATCH, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_INOTIFY_RM_WATCH, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5092,7 +5092,7 @@ int handle_sys_exit_file_getattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FILE_GETATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FILE_GETATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5144,7 +5144,7 @@ int handle_sys_exit_file_setattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FILE_SETATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FILE_SETATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5198,7 +5198,7 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FSOPEN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FSOPEN, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -5256,7 +5256,7 @@ int handle_sys_exit_fspick(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FSPICK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FSPICK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5307,7 +5307,7 @@ int handle_sys_exit_fsconfig(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FSCONFIG, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FSCONFIG, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5359,7 +5359,7 @@ int handle_sys_exit_statfs(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_STATFS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_STATFS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5410,7 +5410,7 @@ int handle_sys_exit_fstatfs(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FSTATFS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FSTATFS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5460,7 +5460,7 @@ int handle_sys_exit_ustat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_USTAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_USTAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5510,7 +5510,7 @@ int handle_sys_exit_getcwd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETCWD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETCWD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5562,7 +5562,7 @@ int handle_sys_exit_utimensat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UTIMENSAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UTIMENSAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5614,7 +5614,7 @@ int handle_sys_exit_futimesat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FUTIMESAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FUTIMESAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5666,7 +5666,7 @@ int handle_sys_exit_utimes(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UTIMES, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UTIMES, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5718,7 +5718,7 @@ int handle_sys_exit_utime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5768,7 +5768,7 @@ int handle_sys_exit_sync(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYNC, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYNC, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5819,7 +5819,7 @@ int handle_sys_exit_syncfs(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYNCFS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYNCFS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5870,7 +5870,7 @@ int handle_sys_exit_fsync(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FSYNC, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FSYNC, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5921,7 +5921,7 @@ int handle_sys_exit_fdatasync(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FDATASYNC, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FDATASYNC, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -5972,7 +5972,7 @@ int handle_sys_exit_sync_file_range(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYNC_FILE_RANGE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYNC_FILE_RANGE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6023,7 +6023,7 @@ int handle_sys_exit_vmsplice(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_VMSPLICE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_VMSPLICE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6073,7 +6073,7 @@ int handle_sys_exit_splice(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SPLICE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SPLICE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6123,7 +6123,7 @@ int handle_sys_exit_tee(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TEE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TEE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6175,7 +6175,7 @@ int handle_sys_exit_setxattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETXATTRAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETXATTRAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6227,7 +6227,7 @@ int handle_sys_exit_setxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6279,7 +6279,7 @@ int handle_sys_exit_lsetxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LSETXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LSETXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6330,7 +6330,7 @@ int handle_sys_exit_fsetxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FSETXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FSETXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6382,7 +6382,7 @@ int handle_sys_exit_getxattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETXATTRAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETXATTRAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6434,7 +6434,7 @@ int handle_sys_exit_getxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6486,7 +6486,7 @@ int handle_sys_exit_lgetxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LGETXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LGETXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6537,7 +6537,7 @@ int handle_sys_exit_fgetxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FGETXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FGETXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6589,7 +6589,7 @@ int handle_sys_exit_listxattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LISTXATTRAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LISTXATTRAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6641,7 +6641,7 @@ int handle_sys_exit_listxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LISTXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LISTXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6693,7 +6693,7 @@ int handle_sys_exit_llistxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LLISTXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LLISTXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6744,7 +6744,7 @@ int handle_sys_exit_flistxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FLISTXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FLISTXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6796,7 +6796,7 @@ int handle_sys_exit_removexattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_REMOVEXATTRAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_REMOVEXATTRAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6848,7 +6848,7 @@ int handle_sys_exit_removexattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_REMOVEXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_REMOVEXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6900,7 +6900,7 @@ int handle_sys_exit_lremovexattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LREMOVEXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LREMOVEXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -6951,7 +6951,7 @@ int handle_sys_exit_fremovexattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FREMOVEXATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FREMOVEXATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7003,7 +7003,7 @@ int handle_sys_exit_umount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UMOUNT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UMOUNT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7057,7 +7057,7 @@ int handle_sys_exit_open_tree(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_OPEN_TREE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN_TREE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7109,7 +7109,7 @@ int handle_sys_exit_mount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MOUNT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MOUNT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7163,7 +7163,7 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FSMOUNT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FSMOUNT, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -7222,7 +7222,7 @@ int handle_sys_exit_move_mount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MOVE_MOUNT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MOVE_MOUNT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7274,7 +7274,7 @@ int handle_sys_exit_pivot_root(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PIVOT_ROOT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PIVOT_ROOT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7326,7 +7326,7 @@ int handle_sys_exit_mount_setattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MOUNT_SETATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MOUNT_SETATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7380,7 +7380,7 @@ int handle_sys_exit_open_tree_attr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_OPEN_TREE_ATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN_TREE_ATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7430,7 +7430,7 @@ int handle_sys_exit_statmount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_STATMOUNT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_STATMOUNT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7480,7 +7480,7 @@ int handle_sys_exit_listmount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LISTMOUNT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LISTMOUNT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7530,7 +7530,7 @@ int handle_sys_exit_sysfs(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYSFS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYSFS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7581,7 +7581,7 @@ int handle_sys_exit_close_range(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLOSE_RANGE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOSE_RANGE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7633,7 +7633,7 @@ int handle_sys_exit_dup3(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_DUP3, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_DUP3, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7684,7 +7684,7 @@ int handle_sys_exit_dup2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_DUP2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_DUP2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7735,7 +7735,7 @@ int handle_sys_exit_dup(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_DUP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_DUP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7796,7 +7796,7 @@ int handle_sys_exit_select(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SELECT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SELECT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7857,7 +7857,7 @@ int handle_sys_exit_pselect6(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PSELECT6, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PSELECT6, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7913,7 +7913,7 @@ int handle_sys_exit_poll(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_POLL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_POLL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -7974,7 +7974,7 @@ int handle_sys_exit_ppoll(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PPOLL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PPOLL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8025,7 +8025,7 @@ int handle_sys_exit_getdents(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETDENTS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETDENTS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8076,7 +8076,7 @@ int handle_sys_exit_getdents64(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETDENTS64, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETDENTS64, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8127,7 +8127,7 @@ int handle_sys_exit_ioctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IOCTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IOCTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8180,7 +8180,7 @@ int handle_sys_exit_fcntl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FCNTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FCNTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8232,7 +8232,7 @@ int handle_sys_exit_mknodat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MKNODAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MKNODAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8284,7 +8284,7 @@ int handle_sys_exit_mknod(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MKNOD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MKNOD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8336,7 +8336,7 @@ int handle_sys_exit_mkdirat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MKDIRAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MKDIRAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8388,7 +8388,7 @@ int handle_sys_exit_mkdir(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MKDIR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MKDIR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8440,7 +8440,7 @@ int handle_sys_exit_rmdir(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RMDIR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RMDIR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8492,7 +8492,7 @@ int handle_sys_exit_unlinkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UNLINKAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UNLINKAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8544,7 +8544,7 @@ int handle_sys_exit_unlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UNLINK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UNLINK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8597,7 +8597,7 @@ int handle_sys_exit_symlinkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYMLINKAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYMLINKAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8650,7 +8650,7 @@ int handle_sys_exit_symlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYMLINK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYMLINK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8703,7 +8703,7 @@ int handle_sys_exit_linkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LINKAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LINKAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8756,7 +8756,7 @@ int handle_sys_exit_link(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LINK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LINK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8809,7 +8809,7 @@ int handle_sys_exit_renameat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RENAMEAT2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RENAMEAT2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8862,7 +8862,7 @@ int handle_sys_exit_renameat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RENAMEAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RENAMEAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8915,7 +8915,7 @@ int handle_sys_exit_rename(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RENAME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RENAME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -8973,7 +8973,7 @@ int handle_sys_exit_pipe2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PIPE2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PIPE2, ctx->ret))
         return 0;
 
     struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
@@ -9048,7 +9048,7 @@ int handle_sys_exit_pipe(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PIPE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PIPE, ctx->ret))
         return 0;
 
     struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
@@ -9120,7 +9120,7 @@ int handle_sys_exit_execve(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EXECVE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EXECVE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9175,7 +9175,7 @@ int handle_sys_exit_execveat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EXECVEAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EXECVEAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9227,7 +9227,7 @@ int handle_sys_exit_newstat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_NEWSTAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWSTAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9279,7 +9279,7 @@ int handle_sys_exit_newlstat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_NEWLSTAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWLSTAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9331,7 +9331,7 @@ int handle_sys_exit_newfstatat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_NEWFSTATAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWFSTATAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9382,7 +9382,7 @@ int handle_sys_exit_newfstat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_NEWFSTAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWFSTAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9434,7 +9434,7 @@ int handle_sys_exit_readlinkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_READLINKAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_READLINKAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9486,7 +9486,7 @@ int handle_sys_exit_readlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_READLINK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_READLINK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9538,7 +9538,7 @@ int handle_sys_exit_statx(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_STATX, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_STATX, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9589,7 +9589,7 @@ int handle_sys_exit_lseek(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LSEEK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LSEEK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9640,7 +9640,7 @@ int handle_sys_exit_read(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_READ, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9691,7 +9691,7 @@ int handle_sys_exit_write(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_WRITE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_WRITE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9742,7 +9742,7 @@ int handle_sys_exit_pread64(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PREAD64, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PREAD64, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9793,7 +9793,7 @@ int handle_sys_exit_pwrite64(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PWRITE64, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PWRITE64, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9844,7 +9844,7 @@ int handle_sys_exit_readv(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_READV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_READV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9895,7 +9895,7 @@ int handle_sys_exit_writev(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_WRITEV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_WRITEV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9946,7 +9946,7 @@ int handle_sys_exit_preadv(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PREADV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PREADV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -9997,7 +9997,7 @@ int handle_sys_exit_preadv2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PREADV2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PREADV2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10048,7 +10048,7 @@ int handle_sys_exit_pwritev(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PWRITEV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PWRITEV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10099,7 +10099,7 @@ int handle_sys_exit_pwritev2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PWRITEV2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PWRITEV2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10149,7 +10149,7 @@ int handle_sys_exit_sendfile64(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SENDFILE64, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SENDFILE64, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10200,7 +10200,7 @@ int handle_sys_exit_copy_file_range(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_COPY_FILE_RANGE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_COPY_FILE_RANGE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10252,7 +10252,7 @@ int handle_sys_exit_truncate(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TRUNCATE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TRUNCATE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10303,7 +10303,7 @@ int handle_sys_exit_ftruncate(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FTRUNCATE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FTRUNCATE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10354,7 +10354,7 @@ int handle_sys_exit_fallocate(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FALLOCATE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FALLOCATE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10406,7 +10406,7 @@ int handle_sys_exit_faccessat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FACCESSAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FACCESSAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10458,7 +10458,7 @@ int handle_sys_exit_faccessat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FACCESSAT2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FACCESSAT2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10510,7 +10510,7 @@ int handle_sys_exit_access(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ACCESS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ACCESS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10562,7 +10562,7 @@ int handle_sys_exit_chdir(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CHDIR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CHDIR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10613,7 +10613,7 @@ int handle_sys_exit_fchdir(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FCHDIR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHDIR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10665,7 +10665,7 @@ int handle_sys_exit_chroot(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CHROOT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CHROOT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10716,7 +10716,7 @@ int handle_sys_exit_fchmod(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FCHMOD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHMOD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10768,7 +10768,7 @@ int handle_sys_exit_fchmodat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FCHMODAT2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHMODAT2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10820,7 +10820,7 @@ int handle_sys_exit_fchmodat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FCHMODAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHMODAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10872,7 +10872,7 @@ int handle_sys_exit_chmod(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CHMOD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CHMOD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10924,7 +10924,7 @@ int handle_sys_exit_fchownat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FCHOWNAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHOWNAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -10976,7 +10976,7 @@ int handle_sys_exit_chown(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CHOWN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CHOWN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11028,7 +11028,7 @@ int handle_sys_exit_lchown(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LCHOWN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LCHOWN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11079,7 +11079,7 @@ int handle_sys_exit_fchown(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FCHOWN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHOWN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11133,7 +11133,7 @@ int handle_sys_exit_open(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_OPEN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11187,7 +11187,7 @@ int handle_sys_exit_openat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_OPENAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_OPENAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11241,7 +11241,7 @@ int handle_sys_exit_openat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_OPENAT2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_OPENAT2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11293,7 +11293,7 @@ int handle_sys_exit_creat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CREAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CREAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11344,7 +11344,7 @@ int handle_sys_exit_close(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLOSE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOSE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11394,7 +11394,7 @@ int handle_sys_exit_vhangup(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_VHANGUP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_VHANGUP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11448,7 +11448,7 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MEMFD_CREATE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MEMFD_CREATE, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -11508,7 +11508,7 @@ int handle_sys_exit_memfd_secret(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MEMFD_SECRET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MEMFD_SECRET, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -11564,7 +11564,7 @@ int handle_sys_exit_move_pages(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MOVE_PAGES, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MOVE_PAGES, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11614,7 +11614,7 @@ int handle_sys_exit_set_mempolicy_home_node(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SET_MEMPOLICY_HOME_NODE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SET_MEMPOLICY_HOME_NODE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11664,7 +11664,7 @@ int handle_sys_exit_mbind(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MBIND, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MBIND, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11714,7 +11714,7 @@ int handle_sys_exit_set_mempolicy(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SET_MEMPOLICY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SET_MEMPOLICY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11764,7 +11764,7 @@ int handle_sys_exit_migrate_pages(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MIGRATE_PAGES, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MIGRATE_PAGES, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11814,7 +11814,7 @@ int handle_sys_exit_get_mempolicy(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GET_MEMPOLICY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GET_MEMPOLICY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11866,7 +11866,7 @@ int handle_sys_exit_swapoff(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SWAPOFF, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SWAPOFF, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11918,7 +11918,7 @@ int handle_sys_exit_swapon(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SWAPON, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SWAPON, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -11972,7 +11972,7 @@ int handle_sys_exit_madvise(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MADVISE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MADVISE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12023,7 +12023,7 @@ int handle_sys_exit_process_madvise(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PROCESS_MADVISE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PROCESS_MADVISE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12077,7 +12077,7 @@ int handle_sys_exit_mseal(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MSEAL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MSEAL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12127,7 +12127,7 @@ int handle_sys_exit_process_vm_readv(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PROCESS_VM_READV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PROCESS_VM_READV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12177,7 +12177,7 @@ int handle_sys_exit_process_vm_writev(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PROCESS_VM_WRITEV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PROCESS_VM_WRITEV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12227,7 +12227,7 @@ int handle_sys_exit_msync(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MSYNC, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MSYNC, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12281,7 +12281,7 @@ int handle_sys_exit_mremap(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MREMAP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MREMAP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12335,7 +12335,7 @@ int handle_sys_exit_mprotect(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MPROTECT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MPROTECT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12389,7 +12389,7 @@ int handle_sys_exit_pkey_mprotect(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PKEY_MPROTECT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PKEY_MPROTECT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12439,7 +12439,7 @@ int handle_sys_exit_pkey_alloc(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PKEY_ALLOC, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PKEY_ALLOC, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12489,7 +12489,7 @@ int handle_sys_exit_pkey_free(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PKEY_FREE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PKEY_FREE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12543,7 +12543,7 @@ int handle_sys_exit_brk(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_BRK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_BRK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12597,7 +12597,7 @@ int handle_sys_exit_munmap(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MUNMAP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MUNMAP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12651,7 +12651,7 @@ int handle_sys_exit_remap_file_pages(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_REMAP_FILE_PAGES, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_REMAP_FILE_PAGES, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12705,7 +12705,7 @@ int handle_sys_exit_mlock(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MLOCK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MLOCK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12759,7 +12759,7 @@ int handle_sys_exit_mlock2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MLOCK2, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MLOCK2, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12813,7 +12813,7 @@ int handle_sys_exit_munlock(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MUNLOCK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MUNLOCK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12863,7 +12863,7 @@ int handle_sys_exit_mlockall(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MLOCKALL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MLOCKALL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12913,7 +12913,7 @@ int handle_sys_exit_munlockall(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MUNLOCKALL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MUNLOCKALL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -12967,7 +12967,7 @@ int handle_sys_exit_mincore(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MINCORE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MINCORE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13018,7 +13018,7 @@ int handle_sys_exit_readahead(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_READAHEAD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_READAHEAD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13069,7 +13069,7 @@ int handle_sys_exit_fadvise64(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FADVISE64, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FADVISE64, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13120,7 +13120,7 @@ int handle_sys_exit_process_mrelease(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PROCESS_MRELEASE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PROCESS_MRELEASE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13171,7 +13171,7 @@ int handle_sys_exit_cachestat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CACHESTAT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CACHESTAT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13221,7 +13221,7 @@ int handle_sys_exit_rseq(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RSEQ, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RSEQ, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13290,7 +13290,7 @@ int handle_sys_exit_perf_event_open(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PERF_EVENT_OPEN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PERF_EVENT_OPEN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13340,7 +13340,7 @@ int handle_sys_exit_bpf(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_BPF, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_BPF, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13390,7 +13390,7 @@ int handle_sys_exit_seccomp(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SECCOMP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SECCOMP, ctx->ret))
         return 0;
 
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
@@ -13439,7 +13439,7 @@ int handle_sys_exit_kexec_file_load(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_KEXEC_FILE_LOAD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_KEXEC_FILE_LOAD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13489,7 +13489,7 @@ int handle_sys_exit_kexec_load(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_KEXEC_LOAD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_KEXEC_LOAD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13541,7 +13541,7 @@ int handle_sys_exit_acct(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ACCT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ACCT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13591,7 +13591,7 @@ int handle_sys_exit_set_robust_list(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SET_ROBUST_LIST, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SET_ROBUST_LIST, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13641,7 +13641,7 @@ int handle_sys_exit_get_robust_list(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GET_ROBUST_LIST, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GET_ROBUST_LIST, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13691,7 +13691,7 @@ int handle_sys_exit_futex(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FUTEX, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FUTEX, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13741,7 +13741,7 @@ int handle_sys_exit_futex_waitv(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FUTEX_WAITV, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FUTEX_WAITV, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13791,7 +13791,7 @@ int handle_sys_exit_futex_wake(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FUTEX_WAKE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FUTEX_WAKE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13841,7 +13841,7 @@ int handle_sys_exit_futex_wait(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FUTEX_WAIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FUTEX_WAIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13891,7 +13891,7 @@ int handle_sys_exit_futex_requeue(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FUTEX_REQUEUE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FUTEX_REQUEUE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13941,7 +13941,7 @@ int handle_sys_exit_getitimer(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETITIMER, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETITIMER, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -13991,7 +13991,7 @@ int handle_sys_exit_alarm(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ALARM, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ALARM, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14041,7 +14041,7 @@ int handle_sys_exit_setitimer(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETITIMER, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETITIMER, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14091,7 +14091,7 @@ int handle_sys_exit_timer_create(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMER_CREATE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMER_CREATE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14141,7 +14141,7 @@ int handle_sys_exit_timer_gettime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMER_GETTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMER_GETTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14191,7 +14191,7 @@ int handle_sys_exit_timer_getoverrun(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMER_GETOVERRUN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMER_GETOVERRUN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14241,7 +14241,7 @@ int handle_sys_exit_timer_settime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMER_SETTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMER_SETTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14291,7 +14291,7 @@ int handle_sys_exit_timer_delete(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMER_DELETE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMER_DELETE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14341,7 +14341,7 @@ int handle_sys_exit_clock_settime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLOCK_SETTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_SETTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14391,7 +14391,7 @@ int handle_sys_exit_clock_gettime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLOCK_GETTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_GETTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14441,7 +14441,7 @@ int handle_sys_exit_clock_adjtime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLOCK_ADJTIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_ADJTIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14491,7 +14491,7 @@ int handle_sys_exit_clock_getres(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLOCK_GETRES, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_GETRES, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14551,7 +14551,7 @@ int handle_sys_exit_clock_nanosleep(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLOCK_NANOSLEEP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_NANOSLEEP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14611,7 +14611,7 @@ int handle_sys_exit_nanosleep(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_NANOSLEEP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_NANOSLEEP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14661,7 +14661,7 @@ int handle_sys_exit_time(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14711,7 +14711,7 @@ int handle_sys_exit_gettimeofday(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETTIMEOFDAY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETTIMEOFDAY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14761,7 +14761,7 @@ int handle_sys_exit_settimeofday(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETTIMEOFDAY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETTIMEOFDAY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14811,7 +14811,7 @@ int handle_sys_exit_adjtimex(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ADJTIMEX, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ADJTIMEX, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14864,7 +14864,7 @@ int handle_sys_exit_kcmp(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_KCMP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_KCMP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -14914,7 +14914,7 @@ int handle_sys_exit_delete_module(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_DELETE_MODULE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_DELETE_MODULE, ctx->ret))
         return 0;
 
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
@@ -14962,7 +14962,7 @@ int handle_sys_exit_init_module(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_INIT_MODULE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_INIT_MODULE, ctx->ret))
         return 0;
 
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
@@ -15011,7 +15011,7 @@ int handle_sys_exit_finit_module(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FINIT_MODULE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FINIT_MODULE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15061,7 +15061,7 @@ int handle_sys_exit_syslog(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYSLOG, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYSLOG, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15111,7 +15111,7 @@ int handle_sys_exit_membarrier(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MEMBARRIER, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MEMBARRIER, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15161,7 +15161,7 @@ int handle_sys_exit_sched_setscheduler(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_SETSCHEDULER, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_SETSCHEDULER, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15211,7 +15211,7 @@ int handle_sys_exit_sched_setparam(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_SETPARAM, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_SETPARAM, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15261,7 +15261,7 @@ int handle_sys_exit_sched_setattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_SETATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_SETATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15311,7 +15311,7 @@ int handle_sys_exit_sched_getscheduler(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_GETSCHEDULER, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_GETSCHEDULER, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15361,7 +15361,7 @@ int handle_sys_exit_sched_getparam(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_GETPARAM, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_GETPARAM, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15411,7 +15411,7 @@ int handle_sys_exit_sched_getattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_GETATTR, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_GETATTR, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15461,7 +15461,7 @@ int handle_sys_exit_sched_setaffinity(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_SETAFFINITY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_SETAFFINITY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15511,7 +15511,7 @@ int handle_sys_exit_sched_getaffinity(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_GETAFFINITY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_GETAFFINITY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15561,7 +15561,7 @@ int handle_sys_exit_sched_yield(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_YIELD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_YIELD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15611,7 +15611,7 @@ int handle_sys_exit_sched_get_priority_max(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_GET_PRIORITY_MAX, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_GET_PRIORITY_MAX, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15661,7 +15661,7 @@ int handle_sys_exit_sched_get_priority_min(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_GET_PRIORITY_MIN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_GET_PRIORITY_MIN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15711,7 +15711,7 @@ int handle_sys_exit_sched_rr_get_interval(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SCHED_RR_GET_INTERVAL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SCHED_RR_GET_INTERVAL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15761,7 +15761,7 @@ int handle_sys_exit_getgroups(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETGROUPS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETGROUPS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15811,7 +15811,7 @@ int handle_sys_exit_setgroups(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETGROUPS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETGROUPS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15861,7 +15861,7 @@ int handle_sys_exit_reboot(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_REBOOT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_REBOOT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15911,7 +15911,7 @@ int handle_sys_exit_listns(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_LISTNS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_LISTNS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -15962,7 +15962,7 @@ int handle_sys_exit_setns(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETNS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETNS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16000,7 +16000,7 @@ int handle_sys_enter_pidfd_open(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    __s32 flags = (__s32)ctx->args[0];
+    __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
@@ -16016,7 +16016,7 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PIDFD_OPEN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PIDFD_OPEN, ctx->ret))
         return 0;
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
@@ -16073,7 +16073,7 @@ int handle_sys_exit_pidfd_getfd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PIDFD_GETFD, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PIDFD_GETFD, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16123,7 +16123,7 @@ int handle_sys_exit_setpriority(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETPRIORITY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETPRIORITY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16173,7 +16173,7 @@ int handle_sys_exit_getpriority(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETPRIORITY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETPRIORITY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16223,7 +16223,7 @@ int handle_sys_exit_setregid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETREGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETREGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16273,7 +16273,7 @@ int handle_sys_exit_setgid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16323,7 +16323,7 @@ int handle_sys_exit_setreuid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETREUID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETREUID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16373,7 +16373,7 @@ int handle_sys_exit_setuid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETUID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETUID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16423,7 +16423,7 @@ int handle_sys_exit_setresuid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETRESUID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETRESUID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16473,7 +16473,7 @@ int handle_sys_exit_getresuid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETRESUID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETRESUID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16523,7 +16523,7 @@ int handle_sys_exit_setresgid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETRESGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETRESGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16573,7 +16573,7 @@ int handle_sys_exit_getresgid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETRESGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETRESGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16623,7 +16623,7 @@ int handle_sys_exit_setfsuid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETFSUID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETFSUID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16673,7 +16673,7 @@ int handle_sys_exit_setfsgid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETFSGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETFSGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16723,7 +16723,7 @@ int handle_sys_exit_getpid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETPID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETPID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16773,7 +16773,7 @@ int handle_sys_exit_gettid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETTID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETTID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16823,7 +16823,7 @@ int handle_sys_exit_getppid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETPPID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETPPID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16873,7 +16873,7 @@ int handle_sys_exit_getuid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETUID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETUID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16923,7 +16923,7 @@ int handle_sys_exit_geteuid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETEUID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETEUID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -16973,7 +16973,7 @@ int handle_sys_exit_getgid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17023,7 +17023,7 @@ int handle_sys_exit_getegid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETEGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETEGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17073,7 +17073,7 @@ int handle_sys_exit_times(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TIMES, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMES, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17123,7 +17123,7 @@ int handle_sys_exit_setpgid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETPGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETPGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17173,7 +17173,7 @@ int handle_sys_exit_getpgid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETPGID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETPGID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17223,7 +17223,7 @@ int handle_sys_exit_getpgrp(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETPGRP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETPGRP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17273,7 +17273,7 @@ int handle_sys_exit_getsid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETSID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETSID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17323,7 +17323,7 @@ int handle_sys_exit_setsid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETSID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETSID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17373,7 +17373,7 @@ int handle_sys_exit_newuname(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_NEWUNAME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWUNAME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17423,7 +17423,7 @@ int handle_sys_exit_sethostname(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETHOSTNAME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETHOSTNAME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17473,7 +17473,7 @@ int handle_sys_exit_setdomainname(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETDOMAINNAME, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETDOMAINNAME, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17523,7 +17523,7 @@ int handle_sys_exit_getrlimit(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETRLIMIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETRLIMIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17573,7 +17573,7 @@ int handle_sys_exit_prlimit64(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PRLIMIT64, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PRLIMIT64, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17623,7 +17623,7 @@ int handle_sys_exit_setrlimit(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SETRLIMIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SETRLIMIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17673,7 +17673,7 @@ int handle_sys_exit_getrusage(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETRUSAGE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETRUSAGE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17723,7 +17723,7 @@ int handle_sys_exit_umask(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UMASK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UMASK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17773,7 +17773,7 @@ int handle_sys_exit_prctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PRCTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PRCTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17823,7 +17823,7 @@ int handle_sys_exit_getcpu(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_GETCPU, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_GETCPU, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17873,7 +17873,7 @@ int handle_sys_exit_sysinfo(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SYSINFO, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SYSINFO, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17923,7 +17923,7 @@ int handle_sys_exit_restart_syscall(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RESTART_SYSCALL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RESTART_SYSCALL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -17973,7 +17973,7 @@ int handle_sys_exit_rt_sigprocmask(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_SIGPROCMASK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGPROCMASK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18023,7 +18023,7 @@ int handle_sys_exit_rt_sigpending(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_SIGPENDING, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGPENDING, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18073,7 +18073,7 @@ int handle_sys_exit_rt_sigtimedwait(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_SIGTIMEDWAIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGTIMEDWAIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18123,7 +18123,7 @@ int handle_sys_exit_kill(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_KILL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_KILL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18174,7 +18174,7 @@ int handle_sys_exit_pidfd_send_signal(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PIDFD_SEND_SIGNAL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PIDFD_SEND_SIGNAL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18224,7 +18224,7 @@ int handle_sys_exit_tgkill(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TGKILL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TGKILL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18274,7 +18274,7 @@ int handle_sys_exit_tkill(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_TKILL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_TKILL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18324,7 +18324,7 @@ int handle_sys_exit_rt_sigqueueinfo(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_SIGQUEUEINFO, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGQUEUEINFO, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18374,7 +18374,7 @@ int handle_sys_exit_rt_tgsigqueueinfo(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_TGSIGQUEUEINFO, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_TGSIGQUEUEINFO, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18424,7 +18424,7 @@ int handle_sys_exit_sigaltstack(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SIGALTSTACK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SIGALTSTACK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18474,7 +18474,7 @@ int handle_sys_exit_rt_sigaction(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_SIGACTION, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGACTION, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18524,7 +18524,7 @@ int handle_sys_exit_pause(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PAUSE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PAUSE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18574,7 +18574,7 @@ int handle_sys_exit_rt_sigsuspend(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_SIGSUSPEND, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGSUSPEND, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18627,7 +18627,7 @@ int handle_sys_exit_ptrace(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PTRACE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PTRACE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18677,7 +18677,7 @@ int handle_sys_exit_capget(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CAPGET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CAPGET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18727,7 +18727,7 @@ int handle_sys_exit_capset(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CAPSET, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CAPSET, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18777,7 +18777,7 @@ int handle_sys_exit_exit(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EXIT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EXIT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18827,7 +18827,7 @@ int handle_sys_exit_exit_group(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_EXIT_GROUP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_EXIT_GROUP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18877,7 +18877,7 @@ int handle_sys_exit_waitid(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_WAITID, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_WAITID, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18927,7 +18927,7 @@ int handle_sys_exit_wait4(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_WAIT4, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_WAIT4, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -18977,7 +18977,7 @@ int handle_sys_exit_personality(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_PERSONALITY, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_PERSONALITY, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19027,7 +19027,7 @@ int handle_sys_exit_set_tid_address(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_SET_TID_ADDRESS, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_SET_TID_ADDRESS, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19077,7 +19077,7 @@ int handle_sys_exit_fork(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_FORK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_FORK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19127,7 +19127,7 @@ int handle_sys_exit_vfork(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_VFORK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_VFORK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19177,7 +19177,7 @@ int handle_sys_exit_clone(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLONE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLONE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19227,7 +19227,7 @@ int handle_sys_exit_clone3(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_CLONE3, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLONE3, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19277,7 +19277,7 @@ int handle_sys_exit_unshare(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UNSHARE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UNSHARE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19331,7 +19331,7 @@ int handle_sys_exit_map_shadow_stack(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MAP_SHADOW_STACK, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MAP_SHADOW_STACK, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19381,7 +19381,7 @@ int handle_sys_exit_uretprobe(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_URETPROBE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_URETPROBE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19431,7 +19431,7 @@ int handle_sys_exit_uprobe(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_UPROBE, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_UPROBE, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19481,7 +19481,7 @@ int handle_sys_exit_arch_prctl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_ARCH_PRCTL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_ARCH_PRCTL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19532,7 +19532,7 @@ int handle_sys_exit_mmap(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MMAP, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MMAP, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19582,7 +19582,7 @@ int handle_sys_exit_modify_ldt(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_MODIFY_LDT, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_MODIFY_LDT, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19632,7 +19632,7 @@ int handle_sys_exit_ioperm(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IOPERM, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IOPERM, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19682,7 +19682,7 @@ int handle_sys_exit_iopl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_IOPL, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_IOPL, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
@@ -19732,7 +19732,7 @@ int handle_sys_exit_rt_sigreturn(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_exit(tid, SYS_EXIT_RT_SIGRETURN, ctx->ret))
+    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGRETURN, ctx->ret))
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);

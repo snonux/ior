@@ -1775,3 +1775,62 @@ format:
 	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
 	field:long ret;	offset:16;	size:8;	signed:1;
 `
+
+// epoll_create(int size) — single argument, no flags.
+const FormatEpollCreate = `name: sys_enter_epoll_create
+ID: 1451
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int size;	offset:16;	size:8;	signed:0;
+
+print fmt: "size: 0x%08lx", ((unsigned long)(REC->size))
+`
+
+const FormatExitEpollCreate = `name: sys_exit_epoll_create
+ID: 1450
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+// pidfd_open(pid_t pid, unsigned int flags) — flags at args[1], not args[0].
+const FormatPidfdOpen = `name: sys_enter_pidfd_open
+ID: 1461
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:pid_t pid;	offset:16;	size:8;	signed:0;
+	field:unsigned int flags;	offset:24;	size:8;	signed:0;
+
+print fmt: "pid: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->pid)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitPidfdOpen = `name: sys_exit_pidfd_open
+ID: 1460
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
