@@ -63,7 +63,7 @@ func NewLiveTrie(fields []string, countField string) *LiveTrie {
 }
 
 func (lt *LiveTrie) addLocked(frames []string, value uint64) {
-	insertTriePath(lt.root, frames, value)
+	insertTriePath(lt.root, frames, value, value)
 	if len(frames) > lt.maxDepth {
 		lt.maxDepth = len(frames)
 	}

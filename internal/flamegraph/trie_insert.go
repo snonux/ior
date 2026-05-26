@@ -1,7 +1,7 @@
 package flamegraph
 
-// insertTriePath follows or creates nodes for frames and adds value at the leaf.
-func insertTriePath(root *trieNode, frames []string, value uint64) {
+// insertTriePath follows or creates nodes for frames and adds values at the leaf.
+func insertTriePath(root *trieNode, frames []string, value, heightValue uint64) {
 	node := root
 	for _, frame := range frames {
 		if node.childMap == nil {
@@ -19,4 +19,5 @@ func insertTriePath(root *trieNode, frames []string, value uint64) {
 		node = child
 	}
 	node.value += value
+	node.heightValue += heightValue
 }
