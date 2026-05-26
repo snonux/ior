@@ -194,6 +194,7 @@ type Model struct {
 	fieldPresets [][]string
 	fieldIndex   int
 	countField   string
+	heightField  string
 
 	paused bool
 
@@ -244,13 +245,16 @@ func NewModel(liveTrie LiveTrieSource) Model {
 			{"tracepoint", "comm", "path"},
 			{"pid", "tracepoint", "path"},
 			{"comm", "path", "tracepoint"},
+			{"tracepoint", "comm", "pid"},
 		},
-		isDark:     true,
-		keys:       defaultFlameKeyMap(),
-		countField: "count",
+		isDark:      true,
+		keys:        defaultFlameKeyMap(),
+		countField:  "count",
+		heightField: "",
 	}
 	m.syncFieldPresetToTrie()
 	m.syncCountFieldToTrie()
+	m.syncHeightFieldToTrie()
 	return m
 }
 
@@ -357,6 +361,8 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg) bool {
 		m.cycleFieldOrder()
 	case isCycleMetricKey(msg):
 		m.toggleCountField()
+	case isToggleHeightKey(msg):
+		m.toggleHeightField()
 	case isHelpToggleKey(msg):
 		m.toggleHelp()
 	case isZoomInKey(msg, m.keys):
@@ -455,6 +461,7 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 		isResetBaselineKey(msg),
 		isCycleOrderKey(msg),
 		isCycleMetricKey(msg),
+		isToggleHeightKey(msg),
 		isHelpToggleKey(msg):
 		return true
 	case isZoomInKey(msg, m.keys),
@@ -551,6 +558,7 @@ func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.syncFieldPresetToTrie()
 	m.syncCountFieldToTrie()
+	m.syncHeightFieldToTrie()
 	m.lastVersion = 0
 	m.snapshot = nil
 	m.globalTotal = 0
@@ -591,6 +599,20 @@ func (m *Model) syncCountFieldToTrie() {
 		field = "count"
 	}
 	m.countField = field
+}
+
+func (m *Model) syncHeightFieldToTrie() {
+	if m.liveTrie == nil {
+		m.heightField = ""
+		return
+	}
+	field := strings.TrimSpace(m.liveTrie.HeightField())
+	switch field {
+	case "", "count", "bytes", "duration":
+		m.heightField = field
+	default:
+		m.heightField = ""
+	}
 }
 
 // RefreshFromLiveTrie loads a new snapshot synchronously and returns true when
@@ -921,6 +943,7 @@ func isCycleOrderKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "o" }
 func isCycleMetricKey(msg tea.KeyPressMsg) bool {
 	return keyString(msg) == "b"
 }
+func isToggleHeightKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "v" }
 func isHelpToggleKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "?" }
 
 func isZoomInKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
