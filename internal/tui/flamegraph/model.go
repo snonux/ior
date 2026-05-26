@@ -510,7 +510,7 @@ func (m Model) renderViewContent() string {
 		renderHeight = 3
 	}
 
-	content := RenderTerminalView(m.frames, m.width, renderHeight, m.selectedIdx, m.subtreeSet, m.matchIndices, m.filterVisible, m.globalTotal, m.countFieldLabel(), m.isDark, m.searchActive, m.searchQuery)
+	content := RenderTerminalView(m.frames, m.width, renderHeight, m.selectedIdx, m.subtreeSet, m.matchIndices, m.filterVisible, m.globalTotal, m.countFieldLabel(), strings.TrimSpace(m.heightField) != "", m.isDark, m.searchActive, m.searchQuery)
 	content = replaceHeaderLine(content, m.toolbarLine())
 	if m.searchActive {
 		content = replaceFooterLine(content, m.searchFooter())
