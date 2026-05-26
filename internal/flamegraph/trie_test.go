@@ -167,3 +167,59 @@ func TestInsertTriePathStoresValueAndHeightValueIndependently(t *testing.T) {
 		t.Fatalf("expected leaf heightValue=5, got %d", b.heightValue)
 	}
 }
+
+func TestTrieComputeTotalsPropagatesDualMetricsAcrossBranches(t *testing.T) {
+	tr := newTrie()
+	insertTriePath(tr.root, []string{"a", "x"}, 5, 100)
+	insertTriePath(tr.root, []string{"a", "y"}, 3, 40)
+	insertTriePath(tr.root, []string{"b", "z"}, 7, 1)
+	tr.computeTotals()
+
+	a := findChild(tr.root, "a")
+	if a == nil {
+		t.Fatal("expected node a")
+	}
+	b := findChild(tr.root, "b")
+	if b == nil {
+		t.Fatal("expected node b")
+	}
+	x := findChild(a, "x")
+	if x == nil {
+		t.Fatal("expected node x")
+	}
+	y := findChild(a, "y")
+	if y == nil {
+		t.Fatal("expected node y")
+	}
+
+	if got, want := x.total, uint64(5); got != want {
+		t.Fatalf("x total = %d, want %d", got, want)
+	}
+	if got, want := x.heightTotal, uint64(100); got != want {
+		t.Fatalf("x heightTotal = %d, want %d", got, want)
+	}
+	if got, want := y.total, uint64(3); got != want {
+		t.Fatalf("y total = %d, want %d", got, want)
+	}
+	if got, want := y.heightTotal, uint64(40); got != want {
+		t.Fatalf("y heightTotal = %d, want %d", got, want)
+	}
+	if got, want := a.total, uint64(8); got != want {
+		t.Fatalf("a total = %d, want %d", got, want)
+	}
+	if got, want := a.heightTotal, uint64(140); got != want {
+		t.Fatalf("a heightTotal = %d, want %d", got, want)
+	}
+	if got, want := b.total, uint64(7); got != want {
+		t.Fatalf("b total = %d, want %d", got, want)
+	}
+	if got, want := b.heightTotal, uint64(1); got != want {
+		t.Fatalf("b heightTotal = %d, want %d", got, want)
+	}
+	if got, want := tr.root.total, uint64(15); got != want {
+		t.Fatalf("root total = %d, want %d", got, want)
+	}
+	if got, want := tr.root.heightTotal, uint64(141); got != want {
+		t.Fatalf("root heightTotal = %d, want %d", got, want)
+	}
+}

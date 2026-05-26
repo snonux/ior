@@ -359,6 +359,27 @@ func TestLiveTrieSetHeightFieldRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestLiveTrieSetHeightFieldNoopKeepsBaseline(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "bytes")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
+	beforeVersion := lt.Version()
+
+	if err := lt.SetHeightField("bytes"); err != nil {
+		t.Fatalf("set height field noop: %v", err)
+	}
+	if got := lt.Version(); got != beforeVersion {
+		t.Fatalf("version changed on noop height field set: got %d want %d", got, beforeVersion)
+	}
+
+	snap := decodeLiveSnapshot(t, lt)
+	if got, want := snap.Total, uint64(1); got != want {
+		t.Fatalf("total after noop height switch = %d, want %d", got, want)
+	}
+	if got, want := snap.HeightTotal, uint64(64); got != want {
+		t.Fatalf("height total after noop height switch = %d, want %d", got, want)
+	}
+}
+
 func TestLiveTrieHeightFieldEmptyDisablesHeightTotals(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
@@ -369,6 +390,37 @@ func TestLiveTrieHeightFieldEmptyDisablesHeightTotals(t *testing.T) {
 	}
 	if got := snap.HeightTotal; got != 0 {
 		t.Fatalf("root height total = %d, want 0 when height metric disabled", got)
+	}
+}
+
+func TestLiveTrieSnapshotHeightTotalsAccumulateAcrossBranches(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count", "bytes")
+	lt.Ingest(newTestPair("svc", 101, 1001, "/tmp/a", 10, 1, 100))
+	lt.Ingest(newTestPair("svc", 102, 1002, "/tmp/b", 10, 1, 40))
+	lt.Ingest(newTestPair("db", 201, 1003, "/tmp/c", 10, 1, 10))
+
+	snap := decodeLiveSnapshot(t, lt)
+	if got, want := snap.Total, uint64(3); got != want {
+		t.Fatalf("root total = %d, want %d", got, want)
+	}
+	if got, want := snap.HeightTotal, uint64(150); got != want {
+		t.Fatalf("root height total = %d, want %d", got, want)
+	}
+
+	svc := findSnapshotPath(t, &snap, "svc")
+	if got, want := svc.Total, uint64(2); got != want {
+		t.Fatalf("svc total = %d, want %d", got, want)
+	}
+	if got, want := svc.HeightTotal, uint64(140); got != want {
+		t.Fatalf("svc height total = %d, want %d", got, want)
+	}
+
+	db := findSnapshotPath(t, &snap, "db")
+	if got, want := db.Total, uint64(1); got != want {
+		t.Fatalf("db total = %d, want %d", got, want)
+	}
+	if got, want := db.HeightTotal, uint64(10); got != want {
+		t.Fatalf("db height total = %d, want %d", got, want)
 	}
 }
 
