@@ -94,11 +94,15 @@ type Snapshotter interface {
 type Configurator interface {
 	// Fields returns the current ordered list of grouping fields (e.g. ["comm","path"]).
 	Fields() []string
+	// HeightField returns the active frame-height metric (e.g. "bytes", "duration").
+	HeightField() string
 	// CountField returns the active aggregation metric name (e.g. "count", "bytes").
 	CountField() string
 	// Reconfigure replaces the grouping fields and resets accumulated data so a
 	// new baseline begins with the new field order.
 	Reconfigure([]string) error
+	// SetHeightField changes the frame-height metric and starts a fresh baseline.
+	SetHeightField(string) error
 	// SetCountField changes the active aggregation metric and starts a fresh baseline.
 	SetCountField(string) error
 	// Reset clears all accumulated data so the next ingested event starts a new baseline.
