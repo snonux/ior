@@ -20,20 +20,22 @@ const (
 )
 
 type SnapshotNode struct {
-	Name     string          `json:"n"`
-	Value    uint64          `json:"v"`
-	Total    uint64          `json:"t"`
-	Children []*SnapshotNode `json:"c,omitempty"`
+	Name        string          `json:"n"`
+	Value       uint64          `json:"v"`
+	Total       uint64          `json:"t"`
+	HeightTotal uint64          `json:"ht,omitempty"`
+	Children    []*SnapshotNode `json:"c,omitempty"`
 }
 
 // LiveTrie is a thread-safe, append-only trie used for live flamegraph snapshots.
 type LiveTrie struct {
-	mu         sync.RWMutex
-	root       *trieNode
-	maxDepth   int
-	version    atomic.Uint64
-	fields     []string
-	countField string
+	mu          sync.RWMutex
+	root        *trieNode
+	maxDepth    int
+	version     atomic.Uint64
+	fields      []string
+	countField  string
+	heightField string
 
 	// Snapshot cache avoids recomputing JSON when version is unchanged.
 	cacheMu      sync.Mutex
@@ -48,22 +50,26 @@ type LiveTrie struct {
 	treeCache   *SnapshotNode
 }
 
-// NewLiveTrie constructs an empty live trie with the configured frame/count fields.
-func NewLiveTrie(fields []string, countField string) *LiveTrie {
+// NewLiveTrie constructs an empty live trie with the configured frame/count/height fields.
+func NewLiveTrie(fields []string, countField, heightField string) *LiveTrie {
 	if !isLiveTrieCountField(countField) {
 		countField = "count"
+	}
+	if heightField != "" && !isLiveTrieCountField(heightField) {
+		heightField = ""
 	}
 	return &LiveTrie{
 		root: &trieNode{
 			childMap: make(map[string]*trieNode),
 		},
-		fields:     slices.Clone(fields),
-		countField: countField,
+		fields:      slices.Clone(fields),
+		countField:  countField,
+		heightField: heightField,
 	}
 }
 
-func (lt *LiveTrie) addLocked(frames []string, value uint64) {
-	insertTriePath(lt.root, frames, value, value)
+func (lt *LiveTrie) addLocked(frames []string, value, heightValue uint64) {
+	insertTriePath(lt.root, frames, value, heightValue)
 	if len(frames) > lt.maxDepth {
 		lt.maxDepth = len(frames)
 	}
@@ -100,10 +106,17 @@ func (lt *LiveTrie) AddRecord(record IterRecord) {
 	if err != nil {
 		return
 	}
+	heightValue := uint64(0)
+	if lt.heightField != "" {
+		heightValue, err = record.Cnt.ValueByName(lt.heightField)
+		if err != nil {
+			return
+		}
+	}
 
 	lt.mu.Lock()
 	frames := lt.buildFrames(record)
-	lt.addLocked(frames, value)
+	lt.addLocked(frames, value, heightValue)
 	lt.version.Add(1)
 	lt.mu.Unlock()
 }
@@ -132,6 +145,14 @@ func (lt *LiveTrie) CountField() string {
 	return field
 }
 
+// HeightField returns the active metric used to aggregate node heights.
+func (lt *LiveTrie) HeightField() string {
+	lt.mu.RLock()
+	field := lt.heightField
+	lt.mu.RUnlock()
+	return field
+}
+
 // SetCountField changes the active aggregation metric and starts a new baseline.
 func (lt *LiveTrie) SetCountField(countField string) error {
 	field := strings.TrimSpace(countField)
@@ -145,6 +166,25 @@ func (lt *LiveTrie) SetCountField(countField string) error {
 		return nil
 	}
 	lt.countField = field
+	lt.resetLocked()
+	lt.mu.Unlock()
+	lt.invalidateCache()
+	return nil
+}
+
+// SetHeightField changes the active height metric and starts a new baseline.
+func (lt *LiveTrie) SetHeightField(heightField string) error {
+	field := strings.TrimSpace(heightField)
+	if field != "" && !isLiveTrieCountField(field) {
+		return fmt.Errorf("invalid height field %q", heightField)
+	}
+
+	lt.mu.Lock()
+	if lt.heightField == field {
+		lt.mu.Unlock()
+		return nil
+	}
+	lt.heightField = field
 	lt.resetLocked()
 	lt.mu.Unlock()
 	lt.invalidateCache()
@@ -303,18 +343,20 @@ func subtreeTotal(node *trieNode) uint64 {
 }
 
 func buildSnapshot(node *trieNode, depth int, minFraction float64, rootTotal uint64) *SnapshotNode {
-	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal, false)
+	snapshot, _, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal, false)
 	return snapshot
 }
 
 type childSnapshotState struct {
-	node     *trieNode
-	snapshot *SnapshotNode
-	total    uint64
+	node        *trieNode
+	snapshot    *SnapshotNode
+	total       uint64
+	heightTotal uint64
 }
 
-func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*SnapshotNode, uint64) {
+func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*SnapshotNode, uint64, uint64) {
 	total := node.value
+	heightTotal := node.heightValue
 	children := slices.Clone(node.children)
 	slices.SortFunc(children, func(a, b *trieNode) int {
 		return cmp.Compare(a.name, b.name)
@@ -322,17 +364,19 @@ func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, root
 
 	childStates := make([]childSnapshotState, 0, len(children))
 	for _, child := range children {
-		childSnapshot, childTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal, false)
+		childSnapshot, childTotal, childHeightTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal, false)
 		total += childTotal
+		heightTotal += childHeightTotal
 		childStates = append(childStates, childSnapshotState{
-			node:     child,
-			snapshot: childSnapshot,
-			total:    childTotal,
+			node:        child,
+			snapshot:    childSnapshot,
+			total:       childTotal,
+			heightTotal: childHeightTotal,
 		})
 	}
 
 	if !forceKeep && depth > 0 && rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction {
-		return nil, total
+		return nil, total, heightTotal
 	}
 	ensureFallbackVisibleChildren(childStates, depth, minFraction, rootTotal)
 
@@ -344,14 +388,15 @@ func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, root
 	}
 
 	snapshot := &SnapshotNode{
-		Name:  node.name,
-		Value: node.value,
-		Total: total,
+		Name:        node.name,
+		Value:       node.value,
+		Total:       total,
+		HeightTotal: heightTotal,
 	}
 	if len(childSnapshots) > 0 {
 		snapshot.Children = childSnapshots
 	}
-	return snapshot, total
+	return snapshot, total, heightTotal
 }
 
 func ensureFallbackVisibleChildren(children []childSnapshotState, depth int, minFraction float64, rootTotal uint64) {
@@ -389,7 +434,7 @@ func ensureFallbackVisibleChildren(children []childSnapshotState, depth int, min
 	}
 	for i := 0; i < limit; i++ {
 		idx := candidates[i]
-		forced, _ := buildSnapshotWithTotal(children[idx].node, depth+1, minFraction, rootTotal, true)
+		forced, _, _ := buildSnapshotWithTotal(children[idx].node, depth+1, minFraction, rootTotal, true)
 		children[idx].snapshot = forced
 	}
 }

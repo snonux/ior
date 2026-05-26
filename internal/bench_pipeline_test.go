@@ -200,7 +200,7 @@ func benchmarkPipelineTUIParquet(b *testing.B, mix benchutil.EventMix, events, n
 		engine := statsengine.NewEngine(statsengine.DefaultTopN)
 		streamBuf := streamrow.NewRingBuffer()
 		streamSeq := streamrow.NewSequencer(0)
-		liveTrie := flamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
+		liveTrie := flamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count", "count")
 
 		recorder := parquet.NewRecorder(parquet.RecorderConfig{})
 		path := filepath.Join(dir, fmt.Sprintf("tui-%d.parquet", i))

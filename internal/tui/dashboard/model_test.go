@@ -845,7 +845,7 @@ func TestStreamSpaceUnpauseSchedulesStreamTick(t *testing.T) {
 }
 
 func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	liveTrie.Reset()
 
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
@@ -863,7 +863,7 @@ func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
 }
 
 func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
@@ -880,7 +880,7 @@ func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
 }
 
 func TestFlameTickPausedFreezesAfterInitialSnapshot(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabFlame
@@ -905,7 +905,7 @@ func TestFlameTickPausedFreezesAfterInitialSnapshot(t *testing.T) {
 }
 
 func TestPausedFlameDashboardViewPreservesZoomedSelectedLine(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	coreflamegraph.SeedTestFlameData(liveTrie)
 
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
@@ -1352,7 +1352,7 @@ func TestRefreshKeyResetsBaselineWhenSourceSupportsReset(t *testing.T) {
 }
 
 func TestRefreshKeyResetsLiveTrieOutsideFlameTab(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabSyscalls

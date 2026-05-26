@@ -42,7 +42,7 @@ func TestSetViewportAndDarkMode(t *testing.T) {
 }
 
 func TestRefreshFromLiveTrieTracksVersionAndSnapshot(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	m := NewModel(trie)
 
 	if changed := m.RefreshFromLiveTrie(); !changed {
@@ -58,7 +58,7 @@ func TestRefreshFromLiveTrieTracksVersionAndSnapshot(t *testing.T) {
 }
 
 func TestRefreshFromLiveTrieAllowsInitialLoadWhilePaused(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	m := NewModel(trie)
 	m.paused = true
 
@@ -74,7 +74,7 @@ func TestRefreshFromLiveTrieAllowsInitialLoadWhilePaused(t *testing.T) {
 }
 
 func TestRefreshFromLiveTriePausedBlocksAfterNavigableSnapshot(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	m := NewModel(trie)
 	m.paused = true
 	m.snapshot = &snapshotNode{Name: "root", Total: 1}
@@ -94,7 +94,7 @@ func TestRefreshFromLiveTriePausedBlocksAfterNavigableSnapshot(t *testing.T) {
 }
 
 func TestRefreshFromLiveTriePausedBlocksAfterAnySnapshot(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	m := NewModel(trie)
 	m.paused = true
 	m.snapshot = &snapshotNode{Name: "root", Total: 1}
@@ -441,7 +441,7 @@ func TestMouseClickDirectDeepZoomUndoReturnsToRoot(t *testing.T) {
 }
 
 func TestStaticFixtureArrowTraversalVisitsAllFrames(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	coreflamegraph.SeedTestFlameData(trie)
 
 	m := NewModel(trie)
@@ -472,7 +472,7 @@ func TestStaticFixtureArrowTraversalVisitsAllFrames(t *testing.T) {
 }
 
 func TestLiveFixtureArrowTraversalWhileStreamingVisitsAllFrames(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	coreflamegraph.SeedTestLiveFlameData(trie, 0)
 
 	m := NewModel(trie)
@@ -531,7 +531,7 @@ func TestLiveFixtureArrowTraversalWhileStreamingVisitsAllFrames(t *testing.T) {
 }
 
 func TestSelectionRestoresByPathAcrossLiveRefresh(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	coreflamegraph.SeedTestLiveFlameData(trie, 0)
 
 	m := NewModel(trie)
@@ -832,7 +832,7 @@ func TestControlPauseToggle(t *testing.T) {
 }
 
 func TestControlResetBaseline(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	m := NewModel(liveTrie)
 	m.snapshot = &snapshotNode{Name: "root", Total: 10}
 	m.frames = []tuiFrame{{Name: "root", Path: "root"}}
@@ -953,7 +953,7 @@ func TestViewFilterSelectionStatusUsesFilteredTotalAndKeepsContextVisible(t *tes
 }
 
 func TestControlCycleFieldOrderReconfiguresLiveTrie(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	m := NewModel(liveTrie)
 	initial := append([]string(nil), m.fieldPresets[m.fieldIndex]...)
 	expectedNextIdx := (m.fieldIndex + 1) % len(m.fieldPresets)
@@ -972,7 +972,7 @@ func TestControlCycleFieldOrderReconfiguresLiveTrie(t *testing.T) {
 }
 
 func TestControlMetricToggleReconfiguresLiveTrieCountField(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	m := NewModel(liveTrie)
 
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'b'}[0], Text: "b"})
@@ -1004,7 +1004,7 @@ func TestControlMetricToggleReconfiguresLiveTrieCountField(t *testing.T) {
 }
 
 func TestNewModelAlignsPresetIndexToLiveTrieFields(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	m := NewModel(liveTrie)
 	if got, want := m.fieldPresets[m.fieldIndex], []string{"comm", "path", "tracepoint"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected model field preset to align with trie fields, got %v want %v", got, want)
@@ -1012,7 +1012,7 @@ func TestNewModelAlignsPresetIndexToLiveTrieFields(t *testing.T) {
 }
 
 func TestNewModelAlignsCountFieldToLiveTrie(t *testing.T) {
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "bytes")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "bytes", "bytes")
 	m := NewModel(liveTrie)
 	if got, want := m.countField, "bytes"; got != want {
 		t.Fatalf("expected model count field to align with trie field, got %q want %q", got, want)

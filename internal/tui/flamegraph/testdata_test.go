@@ -29,7 +29,7 @@ const (
 )
 
 func generateTestTrie(depth, breadthPerLevel int) *coreflamegraph.LiveTrie {
-	lt := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	comms := []string{"api", "db", "worker", "cache"}
 	traceIDs := []types.TraceId{
 		types.SYS_ENTER_READ,

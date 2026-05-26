@@ -31,7 +31,7 @@ func TestRefreshFromLiveTrieCmdNilWhenNoTrie(t *testing.T) {
 }
 
 func TestRefreshFromLiveTrieCmdProducesSnapshotReady(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 120
@@ -65,7 +65,7 @@ func TestRefreshFromLiveTrieCmdProducesSnapshotReady(t *testing.T) {
 }
 
 func TestRefreshFromLiveTrieCmdCoalescesInFlight(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 80
@@ -80,7 +80,7 @@ func TestRefreshFromLiveTrieCmdCoalescesInFlight(t *testing.T) {
 }
 
 func TestRefreshFromLiveTrieCmdSkippedWhileUserDrives(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 80
@@ -106,7 +106,7 @@ func TestRefreshFromLiveTrieCmdSkippedWhileUserDrives(t *testing.T) {
 }
 
 func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 120
@@ -144,7 +144,7 @@ func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
 }
 
 func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 120

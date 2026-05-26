@@ -495,7 +495,7 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 
 func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
 	runtime := newRuntimeBindings()
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	runtime.SetLiveTrie(trie)
 	if got := runtime.liveTrie(); got != trie {
 		t.Fatalf("expected live trie to be stored and returned")
@@ -684,7 +684,7 @@ func TestGlobalFilterApplyAdvancesRuntimeFilterEpochAndKeepsRecorder(t *testing.
 }
 
 func TestTracingStartedUsesCurrentViewportForFlameNavigationWithoutResize(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	coreflamegraph.SeedTestFlameData(trie)
 
 	m := NewModel(-1, func(context.Context) error { return nil })
@@ -727,7 +727,7 @@ func TestTracingStartedUsesCurrentViewportForFlameNavigationWithoutResize(t *tes
 }
 
 func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	coreflamegraph.SeedTestFlameData(trie)
 
 	m := NewModel(-1, func(context.Context) error { return nil })
@@ -1945,7 +1945,7 @@ func aggregateTestSnapshot(syscall, path, comm, latencyLabel, gapLabel string) *
 }
 
 func aggregateTestTrie(comm, path string) *coreflamegraph.LiveTrie {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count", "count")
 	trie.AddRecord(coreflamegraph.IterRecord{
 		Comm:    comm,
 		Path:    path,
