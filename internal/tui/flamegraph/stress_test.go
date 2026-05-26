@@ -26,7 +26,7 @@ func TestStressHighEventRate(t *testing.T) {
 	)
 	allowedBudget := frameBudget * time.Duration(stressBudgetMultiplier())
 
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	var ingestWG sync.WaitGroup
 
 	type renderMetrics struct {
@@ -149,7 +149,7 @@ func TestStressRapidResize(t *testing.T) {
 func TestStressZoomDuringRefresh(t *testing.T) {
 	t.Parallel()
 
-	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	ingestStressEvents(liveTrie, 200, 0)
 
 	model := NewModel(liveTrie)

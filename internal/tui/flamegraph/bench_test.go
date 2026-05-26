@@ -284,7 +284,7 @@ func BenchmarkLiveTrieIngestAndSnapshot(b *testing.B) {
 		b.Run(fmt.Sprintf("%d_events", count), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+				liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 				for eventIdx := 0; eventIdx < count; eventIdx++ {
 					traceID := types.SYS_ENTER_READ
 					if eventIdx%2 == 0 {

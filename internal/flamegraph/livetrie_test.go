@@ -17,7 +17,7 @@ import (
 )
 
 func TestLiveTrieIngestAndSnapshotRoundTrip(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 2, 3))
 
 	snap := decodeLiveSnapshot(t, lt)
@@ -34,7 +34,7 @@ func TestLiveTrieIngestAndSnapshotRoundTrip(t *testing.T) {
 }
 
 func TestLiveTrieIngestIsAdditive(t *testing.T) {
-	lt := NewLiveTrie([]string{"path"}, "bytes")
+	lt := NewLiveTrie([]string{"path"}, "bytes", "bytes")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 2, 10))
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 3, 4, 15))
 
@@ -49,7 +49,7 @@ func TestLiveTrieIngestIsAdditive(t *testing.T) {
 }
 
 func TestLiveTrieIngestCopiesBeforeRecycle(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "path"}, "count")
+	lt := NewLiveTrie([]string{"comm", "path"}, "count", "count")
 
 	pair := newTestPair("svc", 42, 1001, "/tmp/a", 1, 2, 3)
 	lt.Ingest(pair)
@@ -66,7 +66,7 @@ func TestLiveTrieIngestCopiesBeforeRecycle(t *testing.T) {
 }
 
 func TestLiveTrieCommTracepointPathAggregatesSameSyscallAcrossPaths(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count")
+	lt := NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count", "count")
 	lt.AddRecord(IterRecord{
 		Path:    "/srv/a",
 		TraceID: types.SYS_ENTER_READ,
@@ -99,7 +99,7 @@ func TestLiveTrieCommTracepointPathAggregatesSameSyscallAcrossPaths(t *testing.T
 }
 
 func TestLiveTrieVersionIncrementsPerIngest(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	if got := lt.Version(); got != 0 {
 		t.Fatalf("initial version = %d, want 0", got)
 	}
@@ -112,7 +112,7 @@ func TestLiveTrieVersionIncrementsPerIngest(t *testing.T) {
 }
 
 func TestLiveTrieAddRecordIncrementsVersion(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	lt.AddRecord(IterRecord{
 		Path:    "/tmp/demo/read",
 		TraceID: types.SYS_ENTER_READ,
@@ -132,7 +132,7 @@ func TestLiveTrieAddRecordIncrementsVersion(t *testing.T) {
 }
 
 func TestSeedTestFlameDataBuildsStaticFixture(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	SeedTestFlameData(lt)
 
 	if got := lt.Version(); got == 0 {
@@ -151,7 +151,7 @@ func TestSeedTestFlameDataBuildsStaticFixture(t *testing.T) {
 }
 
 func TestSeedTestLiveFlameDataVariesByTick(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 
 	SeedTestLiveFlameData(lt, 0)
 	snapTick0 := decodeLiveSnapshot(t, lt)
@@ -176,7 +176,7 @@ func TestSeedTestLiveFlameDataVariesByTick(t *testing.T) {
 }
 
 func TestLiveTrieResetClearsDataAndAdvancesVersion(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
 	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 1, 1, 1))
 
@@ -203,7 +203,7 @@ func TestLiveTrieResetClearsDataAndAdvancesVersion(t *testing.T) {
 }
 
 func TestLiveTrieReconfigureChangesOrderAndResets(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
 
 	if err := lt.Reconfigure([]string{"path", "comm"}); err != nil {
@@ -224,7 +224,7 @@ func TestLiveTrieReconfigureChangesOrderAndResets(t *testing.T) {
 }
 
 func TestLiveTrieReconfigureRejectsInvalidFields(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 
 	cases := [][]string{
 		nil,
@@ -241,7 +241,7 @@ func TestLiveTrieReconfigureRejectsInvalidFields(t *testing.T) {
 }
 
 func TestLiveTrieSetCountFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
 
 	initial := decodeLiveSnapshot(t, lt)
@@ -273,7 +273,7 @@ func TestLiveTrieSetCountFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
 }
 
 func TestLiveTrieSetCountFieldRejectsInvalidValue(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
 	beforeVersion := lt.Version()
 
@@ -288,8 +288,92 @@ func TestLiveTrieSetCountFieldRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestLiveTrieHeightFieldTracksIndependentMetric(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "bytes")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
+	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 10, 1, 128))
+
+	snap := decodeLiveSnapshot(t, lt)
+	if got, want := snap.Total, uint64(2); got != want {
+		t.Fatalf("root total = %d, want %d", got, want)
+	}
+	if got, want := snap.HeightTotal, uint64(192); got != want {
+		t.Fatalf("root height total = %d, want %d", got, want)
+	}
+	leaf := findSnapshotPath(t, &snap, "svc")
+	if got, want := leaf.Total, uint64(2); got != want {
+		t.Fatalf("leaf total = %d, want %d", got, want)
+	}
+	if got, want := leaf.HeightTotal, uint64(192); got != want {
+		t.Fatalf("leaf height total = %d, want %d", got, want)
+	}
+}
+
+func TestLiveTrieSetHeightFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
+
+	initial := decodeLiveSnapshot(t, lt)
+	if got, want := initial.HeightTotal, uint64(1); got != want {
+		t.Fatalf("initial height total = %d, want %d", got, want)
+	}
+
+	if err := lt.SetHeightField("bytes"); err != nil {
+		t.Fatalf("set height field: %v", err)
+	}
+	if got, want := lt.HeightField(), "bytes"; got != want {
+		t.Fatalf("height field = %q, want %q", got, want)
+	}
+
+	empty := decodeLiveSnapshot(t, lt)
+	if got := empty.Total; got != 0 {
+		t.Fatalf("expected reset baseline after height metric switch, total=%d", got)
+	}
+	if got := empty.HeightTotal; got != 0 {
+		t.Fatalf("expected reset baseline after height metric switch, height total=%d", got)
+	}
+
+	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 10, 1, 64))
+	next := decodeLiveSnapshot(t, lt)
+	if got, want := next.Total, uint64(1); got != want {
+		t.Fatalf("total after switch = %d, want %d", got, want)
+	}
+	if got, want := next.HeightTotal, uint64(64); got != want {
+		t.Fatalf("height total after switch = %d, want %d", got, want)
+	}
+}
+
+func TestLiveTrieSetHeightFieldRejectsInvalidValue(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
+	beforeVersion := lt.Version()
+
+	if err := lt.SetHeightField("bogus"); err == nil {
+		t.Fatalf("expected invalid height field error")
+	}
+	if got, want := lt.HeightField(), "count"; got != want {
+		t.Fatalf("height field changed unexpectedly: got %q want %q", got, want)
+	}
+	if got := lt.Version(); got != beforeVersion {
+		t.Fatalf("version changed on invalid height field: got %d want %d", got, beforeVersion)
+	}
+}
+
+func TestLiveTrieHeightFieldEmptyDisablesHeightTotals(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
+
+	snap := decodeLiveSnapshot(t, lt)
+	if got, want := snap.Total, uint64(1); got != want {
+		t.Fatalf("root total = %d, want %d", got, want)
+	}
+	if got := snap.HeightTotal; got != 0 {
+		t.Fatalf("root height total = %d, want 0 when height metric disabled", got)
+	}
+}
+
 func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
 
 	first, version1 := lt.SnapshotJSON()
@@ -304,7 +388,7 @@ func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
 }
 
 func TestLiveTrieSnapshotJSONPrunesTinyNodes(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	for i := 0; i < 2000; i++ {
 		lt.Ingest(newTestPair("big", 42, uint32(1000+i), "/tmp/a", 1, 1, 1))
 	}
@@ -320,7 +404,7 @@ func TestLiveTrieSnapshotJSONPrunesTinyNodes(t *testing.T) {
 }
 
 func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count")
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	const total = 6000
 	for i := 0; i < total; i++ {
 		comm := fmt.Sprintf("svc-%04d", i)
@@ -337,7 +421,7 @@ func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testin
 }
 
 func TestLiveTrieSnapshotJSONKeepsFallbackChildrenAtDepthOne(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count", "count")
 	const total = 6000
 	for i := 0; i < total; i++ {
 		pid := uint32(100000 + i)
@@ -355,7 +439,7 @@ func TestLiveTrieSnapshotJSONKeepsFallbackChildrenAtDepthOne(t *testing.T) {
 }
 
 func TestLiveTrieConcurrentIngestAndSnapshot(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm", "pid"}, "count")
+	lt := NewLiveTrie([]string{"comm", "pid"}, "count", "count")
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -396,7 +480,7 @@ func TestLiveTrieStressHighRateConcurrentSnapshot(t *testing.T) {
 		maxMemGrowth    = 512 << 20
 	)
 
-	lt := NewLiveTrie([]string{"path", "pid"}, "count")
+	lt := NewLiveTrie([]string{"path", "pid"}, "count", "count")
 	var startMem runtime.MemStats
 	runtime.ReadMemStats(&startMem)
 
