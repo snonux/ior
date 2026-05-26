@@ -227,6 +227,7 @@ type renderViewParams struct {
 	rowOffset     int
 	maxRow        int
 	barHeight     int
+	leafBarHeight int
 	availableRows int
 	visibleFrames int
 	truncated     bool
@@ -234,12 +235,17 @@ type renderViewParams struct {
 
 // computeRenderParams derives the row-layout parameters for a given frame set
 // and viewport height.
-func computeRenderParams(frames []tuiFrame, height int) renderViewParams {
+func computeRenderParams(frames []tuiFrame, height int, heightMetricActive bool) renderViewParams {
 	availableRows := height - 2 // toolbar + frame-status line
 	maxRow := maxFrameRowForSet(frames, nil)
 	totalDepthRows := maxRow + 1
 	barHeight := computeBarHeight(availableRows, totalDepthRows, maxBarVisualHeight)
+	leafBarHeight := barHeight
 	visibleDepthRows := availableRows / barHeight
+	if heightMetricActive {
+		barHeight = 1
+		visibleDepthRows = availableRows
+	}
 	if visibleDepthRows < 1 {
 		visibleDepthRows = 1
 	}
@@ -249,10 +255,18 @@ func computeRenderParams(frames []tuiFrame, height int) renderViewParams {
 		rowOffset = maxRow + 1 - visibleDepthRows
 		truncated = true
 	}
+	if heightMetricActive {
+		visibleNonLeafRows := max(0, maxRow-rowOffset)
+		leafBarHeight = availableRows - visibleNonLeafRows
+		if leafBarHeight < 1 {
+			leafBarHeight = 1
+		}
+	}
 	return renderViewParams{
 		rowOffset:     rowOffset,
 		maxRow:        maxRow,
 		barHeight:     barHeight,
+		leafBarHeight: leafBarHeight,
 		availableRows: availableRows,
 		visibleFrames: countVisibleFrames(frames, nil),
 		truncated:     truncated,
@@ -313,7 +327,7 @@ func buildNormalStatus(selected tuiFrame, metricLabel string, globalTotal uint64
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
 // The function is split into helpers (computeRenderParams, buildToolbar,
 // buildFilteredStatus, buildNormalStatus) to keep each piece under 50 lines.
-func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet, filterSet map[int]bool, globalTotal uint64, metricLabel string, isDark, searchActive bool, searchQuery string) string {
+func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet, filterSet map[int]bool, globalTotal uint64, metricLabel string, heightMetricActive, isDark, searchActive bool, searchQuery string) string {
 	if width < minFlameWidth {
 		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
@@ -342,7 +356,7 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 	if subtreeSet == nil {
 		subtreeSet = computeSubtreeSet(frames, selectedIdx)
 	}
-	params := computeRenderParams(frames, height)
+	params := computeRenderParams(frames, height, heightMetricActive)
 	toolbar := buildToolbar(frames, width, params)
 	var status string
 	if filterIsActive {
@@ -350,11 +364,11 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 	} else {
 		status = buildNormalStatus(selected, metricLabel, globalTotal)
 	}
-	return renderViewRows(toolbar, status, rowsForRender(frames, width, params.rowOffset, params.maxRow, params.barHeight, params.availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterIsActive), width)
+	return renderViewRows(toolbar, status, rowsForRender(frames, width, params.rowOffset, params.maxRow, params.barHeight, params.leafBarHeight, params.availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, heightMetricActive, isDark, searchActive, filterIsActive), width)
 }
 
-func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow, barHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
-	return buildRenderRows(frames, width, rowOffset, maxRow, barHeight, availableRows, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
+func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow, barHeight, leafBarHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, heightMetricActive, isDark, searchActive, filterActive bool) []string {
+	return buildRenderRows(frames, width, rowOffset, maxRow, barHeight, leafBarHeight, availableRows, selectedPath, subtreeSet, matchSet, selectedIdx, heightMetricActive, isDark, searchActive, filterActive)
 }
 
 func renderViewRows(toolbar, status string, rows []string, width int) string {
@@ -376,7 +390,7 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
-func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) []string {
+func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, leafBarHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, heightMetricActive, isDark, searchActive, filterActive bool) []string {
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
@@ -395,6 +409,14 @@ func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, ava
 		slices.SortFunc(framesAtRow, func(a, b indexedFrame) int {
 			return cmp.Compare(a.frame.Col, b.frame.Col)
 		})
+		if heightMetricActive && row == maxRow {
+			frameHeights := leafFrameHeights(framesAtRow, leafBarHeight)
+			for h := leafBarHeight - 1; h >= 0; h-- {
+				showLabels := h == 0
+				rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive, showLabels))
+			}
+			continue
+		}
 		for repeat := 0; repeat < barHeight; repeat++ {
 			showLabels := repeat == barHeight/2
 			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive, showLabels))
@@ -416,6 +438,40 @@ func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, ava
 		}
 	}
 	return rows
+}
+
+func leafFrameHeights(frames []indexedFrame, leafBarHeight int) map[int]int {
+	heights := make(map[int]int, len(frames))
+	if leafBarHeight < 1 {
+		leafBarHeight = 1
+	}
+	maxHeightTotal := uint64(0)
+	for _, item := range frames {
+		if item.frame.HeightTotal > maxHeightTotal {
+			maxHeightTotal = item.frame.HeightTotal
+		}
+	}
+	for _, item := range frames {
+		frameHeight := 1
+		if maxHeightTotal > 0 {
+			scaled := math.Round(float64(leafBarHeight) * (float64(item.frame.HeightTotal) / float64(maxHeightTotal)))
+			frameHeight = int(scaled)
+		}
+		frameHeight = max(1, frameHeight)
+		frameHeight = min(leafBarHeight, frameHeight)
+		heights[item.idx] = frameHeight
+	}
+	return heights
+}
+
+func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive, showLabels bool) string {
+	visible := make([]indexedFrame, 0, len(frames))
+	for _, item := range frames {
+		if frameHeights[item.idx] > band {
+			visible = append(visible, item)
+		}
+	}
+	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive, showLabels)
 }
 
 func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive, showLabels bool) string {
