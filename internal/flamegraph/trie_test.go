@@ -33,6 +33,10 @@ func TestTrieSingleStack(t *testing.T) {
 		t.Fatalf("expected total propagation to be 10, got root=%d a=%d b=%d c=%d",
 			tr.root.total, a.total, b.total, c.total)
 	}
+	if tr.root.heightTotal != 10 || a.heightTotal != 10 || b.heightTotal != 10 || c.heightTotal != 10 {
+		t.Fatalf("expected heightTotal propagation to be 10, got root=%d a=%d b=%d c=%d",
+			tr.root.heightTotal, a.heightTotal, b.heightTotal, c.heightTotal)
+	}
 }
 
 func TestTrieMultipleStacks(t *testing.T) {
@@ -68,8 +72,14 @@ func TestTrieOverlappingPaths(t *testing.T) {
 	if b.value != 8 {
 		t.Fatalf("expected merged leaf value=8, got %d", b.value)
 	}
+	if b.heightValue != 8 {
+		t.Fatalf("expected merged leaf heightValue=8, got %d", b.heightValue)
+	}
 	if tr.root.total != 8 {
 		t.Fatalf("expected root total=8, got %d", tr.root.total)
+	}
+	if tr.root.heightTotal != 8 {
+		t.Fatalf("expected root heightTotal=8, got %d", tr.root.heightTotal)
 	}
 }
 
@@ -79,6 +89,9 @@ func TestTrieEmpty(t *testing.T) {
 
 	if tr.root.total != 0 {
 		t.Fatalf("expected root.total=0, got %d", tr.root.total)
+	}
+	if tr.root.heightTotal != 0 {
+		t.Fatalf("expected root.heightTotal=0, got %d", tr.root.heightTotal)
 	}
 }
 
@@ -123,7 +136,34 @@ func TestTrieEmptyFramesAccumulateAtRoot(t *testing.T) {
 	if tr.root.value != 5 {
 		t.Fatalf("expected root.value=5, got %d", tr.root.value)
 	}
+	if tr.root.heightValue != 5 {
+		t.Fatalf("expected root.heightValue=5, got %d", tr.root.heightValue)
+	}
 	if tr.root.total != 5 {
 		t.Fatalf("expected root.total=5, got %d", tr.root.total)
+	}
+	if tr.root.heightTotal != 5 {
+		t.Fatalf("expected root.heightTotal=5, got %d", tr.root.heightTotal)
+	}
+}
+
+func TestInsertTriePathStoresValueAndHeightValueIndependently(t *testing.T) {
+	root := &trieNode{childMap: make(map[string]*trieNode)}
+	insertTriePath(root, []string{"a", "b"}, 7, 3)
+	insertTriePath(root, []string{"a", "b"}, 5, 2)
+
+	a := findChild(root, "a")
+	if a == nil {
+		t.Fatal("expected node a")
+	}
+	b := findChild(a, "b")
+	if b == nil {
+		t.Fatal("expected node b")
+	}
+	if b.value != 12 {
+		t.Fatalf("expected leaf value=12, got %d", b.value)
+	}
+	if b.heightValue != 5 {
+		t.Fatalf("expected leaf heightValue=5, got %d", b.heightValue)
 	}
 }
