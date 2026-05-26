@@ -24,6 +24,9 @@ func TestNewModelDefaults(t *testing.T) {
 	if got, want := m.fieldPresets[0], []string{"comm", "tracepoint", "path"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("default field preset[0] = %v, want %v", got, want)
 	}
+	if got, want := m.fieldPresets[5], []string{"tracepoint", "comm", "pid"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("default field preset[5] = %v, want %v", got, want)
+	}
 	if !m.isDark {
 		t.Fatalf("expected dark mode enabled by default")
 	}
@@ -1003,6 +1006,49 @@ func TestControlMetricToggleReconfiguresLiveTrieCountField(t *testing.T) {
 	}
 }
 
+func TestControlHeightToggleReconfiguresLiveTrieHeightField(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "")
+	m := NewModel(liveTrie)
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'v'}[0], Text: "v"})
+	if got, want := m.heightField, "duration"; got != want {
+		t.Fatalf("expected model height field %q, got %q", want, got)
+	}
+	if got, want := liveTrie.HeightField(), "duration"; got != want {
+		t.Fatalf("expected live trie height field %q, got %q", want, got)
+	}
+	if got, want := m.statusMessage, "Height: duration (new baseline)"; got != want {
+		t.Fatalf("expected height toggle status %q, got %q", want, got)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'v'}[0], Text: "v"})
+	if got, want := m.heightField, "bytes"; got != want {
+		t.Fatalf("expected model height field %q after second toggle, got %q", want, got)
+	}
+	if got, want := liveTrie.HeightField(), "bytes"; got != want {
+		t.Fatalf("expected live trie height field %q after second toggle, got %q", want, got)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'v'}[0], Text: "v"})
+	if got, want := m.heightField, "count"; got != want {
+		t.Fatalf("expected model height field %q after third toggle, got %q", want, got)
+	}
+	if got, want := liveTrie.HeightField(), "count"; got != want {
+		t.Fatalf("expected live trie height field %q after third toggle, got %q", want, got)
+	}
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'v'}[0], Text: "v"})
+	if got, want := m.heightField, ""; got != want {
+		t.Fatalf("expected model height field %q after fourth toggle, got %q", want, got)
+	}
+	if got, want := liveTrie.HeightField(), ""; got != want {
+		t.Fatalf("expected live trie height field %q after fourth toggle, got %q", want, got)
+	}
+	if got, want := m.statusMessage, "Height: off (new baseline)"; got != want {
+		t.Fatalf("expected height toggle off status %q, got %q", want, got)
+	}
+}
+
 func TestNewModelAlignsPresetIndexToLiveTrieFields(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	m := NewModel(liveTrie)
@@ -1016,6 +1062,14 @@ func TestNewModelAlignsCountFieldToLiveTrie(t *testing.T) {
 	m := NewModel(liveTrie)
 	if got, want := m.countField, "bytes"; got != want {
 		t.Fatalf("expected model count field to align with trie field, got %q want %q", got, want)
+	}
+}
+
+func TestNewModelAlignsHeightFieldToLiveTrie(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "bytes")
+	m := NewModel(liveTrie)
+	if got, want := m.heightField, "bytes"; got != want {
+		t.Fatalf("expected model height field to align with trie field, got %q want %q", got, want)
 	}
 }
 

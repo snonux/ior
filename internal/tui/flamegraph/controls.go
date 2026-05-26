@@ -80,6 +80,30 @@ func (m *Model) toggleCountField() {
 	m.statusMessage = "Metric: " + m.countFieldLabel() + " (new baseline)"
 }
 
+func (m *Model) toggleHeightField() {
+	// 4-way cycle: off → duration → bytes → count → off.
+	var next string
+	switch m.heightField {
+	case "":
+		next = "duration"
+	case "duration":
+		next = "bytes"
+	case "bytes":
+		next = "count"
+	default:
+		next = ""
+	}
+	if m.liveTrie != nil {
+		if err := m.liveTrie.SetHeightField(next); err != nil {
+			m.statusMessage = "Height toggle error: " + err.Error()
+			return
+		}
+	}
+	m.heightField = next
+	m.clearSnapshotState(false)
+	m.statusMessage = "Height: " + m.heightFieldLabel() + " (new baseline)"
+}
+
 func (m *Model) toggleHelp() {
 	m.showHelp = !m.showHelp
 }
@@ -92,8 +116,8 @@ func (m Model) toolbarLine() string {
 	order := m.currentFieldPresetLabel()
 	// Use a Builder to avoid repeated allocations for the optional suffix segments.
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause",
-		state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel()))
+	b.WriteString(fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | v:height(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause",
+		state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel(), m.heightFieldLabel()))
 	if m.searchQuery != "" {
 		b.WriteString(" | filter:")
 		b.WriteString(m.searchQuery)
@@ -118,7 +142,7 @@ func (m Model) helpOverlay() string {
 	if width <= 0 {
 		width = 80
 	}
-	help := "Flame help: j/k depth  h/l sibling  pgup top  pgdn root  enter/click zoom  click ancestor undo  u/backspace/esc undo  / search  n/N matches  space pause  r reset baseline  o order  b metric  ? help"
+	help := "Flame help: j/k depth  h/l sibling  pgup top  pgdn root  enter/click zoom  click ancestor undo  u/backspace/esc undo  / search  n/N matches  space pause  r reset baseline  o order  b metric  v height  ? help"
 	return common.HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 
@@ -131,8 +155,12 @@ func (m Model) selectionStatusLine() string {
 	if m.paused {
 		mode = "PAUSED"
 	}
+	heightLabel := ""
+	if m.heightField != "" {
+		heightLabel = " | height:" + m.heightFieldLabel()
+	}
 	if len(m.frames) == 0 {
-		line := fmt.Sprintf("[%s] sel:none | arrows/hjkl navigate | enter zoom | / filter", mode)
+		line := fmt.Sprintf("[%s] sel:none | arrows/hjkl navigate | enter zoom | / filter%s", mode, heightLabel)
 		return common.HelpBarStyle.Width(width).Render(padOrTrim(line, width))
 	}
 	selIdx := m.selectedIdx
@@ -156,8 +184,8 @@ func (m Model) selectionStatusLine() string {
 	}
 	// Use a Builder to avoid a separate allocation for the optional filter suffix.
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s",
-		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel))
+	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s%s",
+		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel, heightLabel))
 	if m.searchQuery != "" {
 		b.WriteString(" | filter:")
 		b.WriteString(m.searchQuery)
@@ -189,5 +217,20 @@ func (m Model) countFieldLabel() string {
 		return "duration"
 	default:
 		return m.countField
+	}
+}
+
+func (m Model) heightFieldLabel() string {
+	switch m.heightField {
+	case "":
+		return "off"
+	case "count":
+		return "count"
+	case "bytes":
+		return "bytes"
+	case "duration":
+		return "duration"
+	default:
+		return m.heightField
 	}
 }
