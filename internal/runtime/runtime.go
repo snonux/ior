@@ -78,10 +78,14 @@ type Configurator interface {
 	Fields() []string
 	// CountField returns the active aggregation metric name.
 	CountField() string
+	// HeightField returns the active frame-height metric (e.g. "bytes", "duration").
+	HeightField() string
 	// Reconfigure replaces the grouping fields and resets accumulated data.
 	Reconfigure([]string) error
 	// SetCountField changes the active aggregation metric and starts a fresh baseline.
 	SetCountField(string) error
+	// SetHeightField changes the frame-height metric and starts a fresh baseline.
+	SetHeightField(string) error
 	// Reset clears all accumulated data, starting a new baseline.
 	Reset()
 }
