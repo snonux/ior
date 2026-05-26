@@ -449,6 +449,80 @@ func TestRenderLeafRowBandFiltersFramesByBand(t *testing.T) {
 	}
 }
 
+func TestBuildRenderRowsHeightMetricUsesLeafBandsAndViewportRows(t *testing.T) {
+	frames := []tuiFrame{
+		{Name: "root", Row: 0, Col: 0, Width: 12, Path: "root", Fill: color.RGBA{R: 70, G: 70, B: 70, A: 255}},
+		{Name: "A", Row: 1, Col: 0, Width: 6, Path: "root" + pathSeparator + "A", HeightTotal: 100, Fill: color.RGBA{R: 150, G: 80, B: 80, A: 255}},
+		{Name: "B", Row: 1, Col: 6, Width: 6, Path: "root" + pathSeparator + "B", HeightTotal: 50, Fill: color.RGBA{R: 80, G: 120, B: 180, A: 255}},
+	}
+
+	rows := buildRenderRows(
+		frames,
+		12, // width
+		0,  // rowOffset
+		1,  // maxRow
+		1,  // barHeight
+		4,  // leafBarHeight
+		5,  // availableRows
+		"root",
+		map[int]bool{0: true, 1: true, 2: true},
+		nil,
+		0,
+		true,  // heightMetricActive
+		true,  // isDark
+		false, // searchActive
+		false, // filterActive
+	)
+
+	if got, want := len(rows), 5; got != want {
+		t.Fatalf("row count = %d, want %d", got, want)
+	}
+	// In height mode, the last leaf band (h=0) is where labels are drawn.
+	if got := rows[3]; !strings.Contains(got, "A") || !strings.Contains(got, "B") {
+		t.Fatalf("expected bottom leaf band to show both labels, got %q", got)
+	}
+	// Root row is rendered after all leaf bands.
+	if got := rows[4]; !strings.Contains(got, "root") {
+		t.Fatalf("expected final row to be root row, got %q", got)
+	}
+}
+
+func TestBuildTerminalLayoutHeightTotalUsesSnapshotAggregation(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 3,
+		Children: []*snapshotNode{
+			{
+				Name:        "A",
+				Total:       2,
+				HeightTotal: 90,
+			},
+			{
+				Name:  "B",
+				Total: 1,
+				Children: []*snapshotNode{
+					{Name: "B1", Total: 1, HeightTotal: 30},
+				},
+			},
+		},
+	}
+
+	frames := BuildTerminalLayout(snapshot, 80, 8)
+	root := mustFindFrame(t, frames, "root")
+	a := mustFindFrame(t, frames, "root"+pathSeparator+"A")
+	b := mustFindFrame(t, frames, "root"+pathSeparator+"B")
+
+	if got, want := root.HeightTotal, uint64(120); got != want {
+		t.Fatalf("root HeightTotal = %d, want %d", got, want)
+	}
+	if got, want := a.HeightTotal, uint64(90); got != want {
+		t.Fatalf("A HeightTotal = %d, want %d", got, want)
+	}
+	if got, want := b.HeightTotal, uint64(30); got != want {
+		t.Fatalf("B HeightTotal = %d, want %d", got, want)
+	}
+}
+
 func mustFindFrame(t *testing.T, frames []tuiFrame, path string) tuiFrame {
 	t.Helper()
 	for _, frame := range frames {
