@@ -82,7 +82,7 @@ func (fa *FrameAnimator) reset() {
 // frameIndexAt returns the index of the frame rendered at terminal coordinates
 // (x, y), or -1 if no frame occupies that cell. showHelp adds one extra line
 // to the UI chrome so the frame area row calculations account for it.
-func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp bool) int {
+func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp, heightMetricActive bool) int {
 	if len(frames) == 0 || width <= 0 || height <= 0 {
 		return -1
 	}
@@ -105,7 +105,7 @@ func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp bool) int
 	if y < 1 || y > availableRows {
 		return -1
 	}
-	targetRow := frameCoordToTargetRow(frames, y-1, availableRows)
+	targetRow := frameCoordToTargetRow(frames, y-1, availableRows, heightMetricActive)
 	if targetRow < 0 {
 		return -1
 	}
@@ -115,10 +115,15 @@ func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp bool) int
 // frameCoordToTargetRow converts a data-area row offset (0-based, after
 // stripping the toolbar row) into the logical frame row index. Returns -1 when
 // the coordinate falls in the top padding above the first visible row.
-func frameCoordToTargetRow(frames []tuiFrame, dataRow, availableRows int) int {
+func frameCoordToTargetRow(frames []tuiFrame, dataRow, availableRows int, heightMetricActive bool) int {
 	maxRow := maxFrameRowForSet(frames, nil)
 	barHeight := computeBarHeight(availableRows, maxRow+1, maxBarVisualHeight)
+	leafBarHeight := barHeight
 	visibleDepthRows := availableRows / barHeight
+	if heightMetricActive {
+		barHeight = 1
+		visibleDepthRows = availableRows
+	}
 	if visibleDepthRows < 1 {
 		visibleDepthRows = 1
 	}
@@ -126,7 +131,17 @@ func frameCoordToTargetRow(frames []tuiFrame, dataRow, availableRows int) int {
 	if maxRow+1 > visibleDepthRows {
 		rowOffset = maxRow + 1 - visibleDepthRows
 	}
+	if heightMetricActive {
+		visibleNonLeafRows := max(0, maxRow-rowOffset)
+		leafBarHeight = availableRows - visibleNonLeafRows
+		if leafBarHeight < 1 {
+			leafBarHeight = 1
+		}
+	}
 	renderedRows := (maxRow - rowOffset + 1) * barHeight
+	if heightMetricActive {
+		renderedRows = leafBarHeight + max(0, maxRow-rowOffset)*barHeight
+	}
 	padTop := 0
 	if renderedRows < availableRows {
 		padTop = availableRows - renderedRows
@@ -134,8 +149,18 @@ func frameCoordToTargetRow(frames []tuiFrame, dataRow, availableRows int) int {
 	if dataRow < padTop {
 		return -1
 	}
-	depthFromTop := (dataRow - padTop) / barHeight
-	return maxRow - depthFromTop
+	rowInRender := dataRow - padTop
+	for row := maxRow; row >= rowOffset; row-- {
+		rowHeight := barHeight
+		if heightMetricActive && row == maxRow {
+			rowHeight = leafBarHeight
+		}
+		if rowInRender < rowHeight {
+			return row
+		}
+		rowInRender -= rowHeight
+	}
+	return -1
 }
 
 // findFrameAtRow scans frames for the narrowest one that occupies logical row
