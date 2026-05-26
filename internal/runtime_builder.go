@@ -42,6 +42,6 @@ func (b RuntimeBuilder) Build() runtimeComponents {
 		engine:    statsengine.NewEngine(statsengine.DefaultTopN),
 		streamBuf: streamrow.NewRingBuffer(),
 		streamSeq: streamrow.NewSequencer(0),
-		liveTrie:  flamegraph.NewLiveTrie(b.cfg.CollapsedFields, b.cfg.CountField, b.cfg.CountField),
+		liveTrie:  flamegraph.NewLiveTrie(b.cfg.CollapsedFields, b.cfg.CountField, ""),
 	}
 }
