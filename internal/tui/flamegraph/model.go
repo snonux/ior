@@ -216,15 +216,16 @@ type Model struct {
 
 // tuiFrame stores one terminal flamegraph frame cell.
 type tuiFrame struct {
-	Name    string
-	Col     int
-	Row     int
-	Width   int
-	Total   uint64
-	Percent float64
-	Fill    color.Color
-	Depth   int
-	Path    string
+	Name        string
+	Col         int
+	Row         int
+	Width       int
+	Total       uint64
+	HeightTotal uint64
+	Percent     float64
+	Fill        color.Color
+	Depth       int
+	Path        string
 }
 
 // NewModel constructs a flamegraph tab model with default state.
@@ -944,7 +945,7 @@ func isCycleMetricKey(msg tea.KeyPressMsg) bool {
 	return keyString(msg) == "b"
 }
 func isToggleHeightKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "v" }
-func isHelpToggleKey(msg tea.KeyPressMsg) bool { return keyString(msg) == "?" }
+func isHelpToggleKey(msg tea.KeyPressMsg) bool   { return keyString(msg) == "?" }
 
 func isZoomInKey(msg tea.KeyPressMsg, keys flameKeyMap) bool {
 	return key.Matches(msg, keys.ZoomIn) || msg.Code == tea.KeyEnter || strings.EqualFold(keyString(msg), "enter")
@@ -1127,8 +1128,10 @@ func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string
 		path := strings.Join(parts[:depth+1], pathSeparator)
 		node := findNodeByPath(snapshot, path)
 		total := uint64(0)
+		heightTotal := uint64(0)
 		if node != nil {
 			total = snapshotTotal(node)
+			heightTotal = snapshotHeightTotal(node)
 		}
 		percent := 0.0
 		if rootTotal > 0 {
@@ -1136,15 +1139,16 @@ func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string
 		}
 		name := parts[depth]
 		out = append(out, tuiFrame{
-			Name:    name,
-			Col:     0,
-			Row:     depth,
-			Width:   width,
-			Total:   total,
-			Percent: percent,
-			Fill:    terminalFrameColor(name),
-			Depth:   depth,
-			Path:    path,
+			Name:        name,
+			Col:         0,
+			Row:         depth,
+			Width:       width,
+			Total:       total,
+			HeightTotal: heightTotal,
+			Percent:     percent,
+			Fill:        terminalFrameColor(name),
+			Depth:       depth,
+			Path:        path,
 		})
 	}
 	return out

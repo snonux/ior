@@ -54,15 +54,16 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 
 	name := frameName(node.Name, depth)
 	*out = append(*out, tuiFrame{
-		Name:    name,
-		Col:     col,
-		Row:     depth,
-		Width:   span,
-		Total:   total,
-		Percent: 100 * float64(total) / float64(rootTotal),
-		Fill:    terminalFrameColor(name),
-		Depth:   depth,
-		Path:    path,
+		Name:        name,
+		Col:         col,
+		Row:         depth,
+		Width:       span,
+		Total:       total,
+		HeightTotal: snapshotHeightTotal(node),
+		Percent:     100 * float64(total) / float64(rootTotal),
+		Fill:        terminalFrameColor(name),
+		Depth:       depth,
+		Path:        path,
 	})
 
 	if len(node.Children) == 0 {
@@ -154,6 +155,20 @@ func snapshotTotal(node *snapshotNode) uint64 {
 	}
 	if node.Total > total {
 		return node.Total
+	}
+	return total
+}
+
+func snapshotHeightTotal(node *snapshotNode) uint64 {
+	if node == nil {
+		return 0
+	}
+	total := uint64(0)
+	for _, child := range node.Children {
+		total += snapshotHeightTotal(child)
+	}
+	if node.HeightTotal > total {
+		return node.HeightTotal
 	}
 	return total
 }
