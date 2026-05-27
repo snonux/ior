@@ -102,19 +102,22 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 
 // AddRecord adds one already-decoded flamegraph record into the live trie.
 func (lt *LiveTrie) AddRecord(record IterRecord) {
+	lt.mu.Lock()
+
 	value, err := record.Cnt.ValueByName(lt.countField)
 	if err != nil {
+		lt.mu.Unlock()
 		return
 	}
 	heightValue := uint64(0)
 	if lt.heightField != "" {
 		heightValue, err = record.Cnt.ValueByName(lt.heightField)
 		if err != nil {
+			lt.mu.Unlock()
 			return
 		}
 	}
 
-	lt.mu.Lock()
 	frames := lt.buildFrames(record)
 	lt.addLocked(frames, value, heightValue)
 	lt.version.Add(1)
