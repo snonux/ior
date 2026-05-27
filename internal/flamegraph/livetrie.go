@@ -84,14 +84,18 @@ func (lt *LiveTrie) resetLocked() {
 }
 
 func (lt *LiveTrie) invalidateCache() {
-	lt.cacheMu.Lock()
-	lt.cacheVersion = 0
-	lt.cacheJSON = nil
-	lt.cacheMu.Unlock()
-	lt.treeCacheMu.Lock()
-	lt.treeVersion = 0
-	lt.treeCache = nil
-	lt.treeCacheMu.Unlock()
+	func() {
+		lt.cacheMu.Lock()
+		defer lt.cacheMu.Unlock()
+		lt.cacheVersion = 0
+		lt.cacheJSON = nil
+	}()
+	func() {
+		lt.treeCacheMu.Lock()
+		defer lt.treeCacheMu.Unlock()
+		lt.treeVersion = 0
+		lt.treeCache = nil
+	}()
 }
 
 // Ingest adds one event pair into the live trie.
@@ -102,10 +106,10 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 
 func (lt *LiveTrie) addRecordConfig() ([]string, string, string) {
 	lt.mu.RLock()
+	defer lt.mu.RUnlock()
 	fields := slices.Clone(lt.fields)
 	countField := lt.countField
 	heightField := lt.heightField
-	lt.mu.RUnlock()
 	return fields, countField, heightField
 }
 
@@ -128,47 +132,53 @@ func (lt *LiveTrie) AddRecord(record IterRecord) {
 
 		frames := buildFrames(record, fields)
 
-		lt.mu.Lock()
-		if countField != lt.countField || heightField != lt.heightField || !slices.Equal(fields, lt.fields) {
-			lt.mu.Unlock()
-			continue
+		committed := func() bool {
+			lt.mu.Lock()
+			defer lt.mu.Unlock()
+			if countField != lt.countField || heightField != lt.heightField || !slices.Equal(fields, lt.fields) {
+				return false
+			}
+			lt.addLocked(frames, value, heightValue)
+			lt.version.Add(1)
+			return true
+		}()
+		if committed {
+			return
 		}
-		lt.addLocked(frames, value, heightValue)
-		lt.version.Add(1)
-		lt.mu.Unlock()
-		return
 	}
 }
 
 // Reset clears the trie so live snapshots start from a new baseline.
 func (lt *LiveTrie) Reset() {
-	lt.mu.Lock()
-	lt.resetLocked()
-	lt.mu.Unlock()
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		lt.resetLocked()
+	}()
 	lt.invalidateCache()
 }
 
 // Fields returns the currently configured frame fields in stack order.
 func (lt *LiveTrie) Fields() []string {
 	lt.mu.RLock()
+	defer lt.mu.RUnlock()
 	out := slices.Clone(lt.fields)
-	lt.mu.RUnlock()
 	return out
 }
 
 // CountField returns the active metric used to aggregate node values.
 func (lt *LiveTrie) CountField() string {
 	lt.mu.RLock()
+	defer lt.mu.RUnlock()
 	field := lt.countField
-	lt.mu.RUnlock()
 	return field
 }
 
 // HeightField returns the active metric used to aggregate node heights.
 func (lt *LiveTrie) HeightField() string {
 	lt.mu.RLock()
+	defer lt.mu.RUnlock()
 	field := lt.heightField
-	lt.mu.RUnlock()
 	return field
 }
 
@@ -179,14 +189,20 @@ func (lt *LiveTrie) SetCountField(countField string) error {
 		return fmt.Errorf("invalid count field %q", countField)
 	}
 
-	lt.mu.Lock()
-	if lt.countField == field {
-		lt.mu.Unlock()
+	changed := false
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		if lt.countField == field {
+			return
+		}
+		lt.countField = field
+		lt.resetLocked()
+		changed = true
+	}()
+	if !changed {
 		return nil
 	}
-	lt.countField = field
-	lt.resetLocked()
-	lt.mu.Unlock()
 	lt.invalidateCache()
 	return nil
 }
@@ -198,14 +214,20 @@ func (lt *LiveTrie) SetHeightField(heightField string) error {
 		return fmt.Errorf("invalid height field %q", heightField)
 	}
 
-	lt.mu.Lock()
-	if lt.heightField == field {
-		lt.mu.Unlock()
+	changed := false
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		if lt.heightField == field {
+			return
+		}
+		lt.heightField = field
+		lt.resetLocked()
+		changed = true
+	}()
+	if !changed {
 		return nil
 	}
-	lt.heightField = field
-	lt.resetLocked()
-	lt.mu.Unlock()
 	lt.invalidateCache()
 	return nil
 }
@@ -217,10 +239,12 @@ func (lt *LiveTrie) Reconfigure(fields []string) error {
 		return err
 	}
 
-	lt.mu.Lock()
-	lt.fields = slices.Clone(normalized)
-	lt.resetLocked()
-	lt.mu.Unlock()
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		lt.fields = slices.Clone(normalized)
+		lt.resetLocked()
+	}()
 	lt.invalidateCache()
 	return nil
 }
@@ -235,13 +259,17 @@ func (lt *LiveTrie) Version() uint64 {
 // callers that want the typed form directly.
 func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 	version := lt.Version()
-	lt.cacheMu.Lock()
-	if lt.cacheVersion == version && lt.cacheJSON != nil {
-		cached := slices.Clone(lt.cacheJSON)
-		lt.cacheMu.Unlock()
+	cached, ok := func() ([]byte, bool) {
+		lt.cacheMu.Lock()
+		defer lt.cacheMu.Unlock()
+		if lt.cacheVersion == version && lt.cacheJSON != nil {
+			return slices.Clone(lt.cacheJSON), true
+		}
+		return nil, false
+	}()
+	if ok {
 		return cached, version
 	}
-	lt.cacheMu.Unlock()
 
 	snapshot, version := lt.SnapshotTree()
 	payload, err := json.Marshal(snapshot)
@@ -250,12 +278,12 @@ func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 	}
 
 	lt.cacheMu.Lock()
+	defer lt.cacheMu.Unlock()
 	// Only commit if no concurrent caller stored a newer version.
 	if version >= lt.cacheVersion {
 		lt.cacheVersion = version
 		lt.cacheJSON = slices.Clone(payload)
 	}
-	lt.cacheMu.Unlock()
 
 	return payload, version
 }
@@ -267,27 +295,33 @@ func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 // block the Bubble Tea update loop.
 func (lt *LiveTrie) SnapshotTree() (*SnapshotNode, uint64) {
 	version := lt.Version()
-	lt.treeCacheMu.Lock()
-	if lt.treeVersion == version && lt.treeCache != nil {
-		tree := lt.treeCache
-		lt.treeCacheMu.Unlock()
+	tree, ok := func() (*SnapshotNode, bool) {
+		lt.treeCacheMu.Lock()
+		defer lt.treeCacheMu.Unlock()
+		if lt.treeVersion == version && lt.treeCache != nil {
+			return lt.treeCache, true
+		}
+		return nil, false
+	}()
+	if ok {
 		return tree, version
 	}
-	lt.treeCacheMu.Unlock()
 
-	lt.mu.RLock()
-	version = lt.version.Load()
-	rootTotal := subtreeTotal(lt.root)
-	tree := buildSnapshot(lt.root, 0, liveTrieMinFraction, rootTotal)
-	lt.mu.RUnlock()
+	version, tree = func() (uint64, *SnapshotNode) {
+		lt.mu.RLock()
+		defer lt.mu.RUnlock()
+		currentVersion := lt.version.Load()
+		rootTotal := subtreeTotal(lt.root)
+		return currentVersion, buildSnapshot(lt.root, 0, liveTrieMinFraction, rootTotal)
+	}()
 
 	lt.treeCacheMu.Lock()
+	defer lt.treeCacheMu.Unlock()
 	// Only commit if no concurrent caller stored a newer version.
 	if version >= lt.treeVersion {
 		lt.treeVersion = version
 		lt.treeCache = tree
 	}
-	lt.treeCacheMu.Unlock()
 	return tree, version
 }
 
