@@ -221,6 +221,7 @@ func TestSyscallAggregateConsumerDrainEmitsDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third Drain error: %v", err)
 	}
+	// Unchanged cumulative extrema use delta bucket sentinels: min 0 means no new lower min, max 999 caps bucket 0.
 	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
 		TraceID:        types.TraceId(traceID),
 		Count:          1,
