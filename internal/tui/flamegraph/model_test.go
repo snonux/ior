@@ -355,6 +355,47 @@ func TestZoomLineageParentsAreNeverNarrowerThanChildren(t *testing.T) {
 	}
 }
 
+func TestApplyZoomLineagePreservesHeightTotals(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name: "root",
+		Children: []*snapshotNode{
+			{
+				Name: "A",
+				Children: []*snapshotNode{
+					{Name: "A1", Total: 7, HeightTotal: 70},
+					{Name: "A2", Total: 3, HeightTotal: 30},
+				},
+			},
+			{Name: "B", Total: 4, HeightTotal: 40},
+		},
+	}
+	zoomPath := "root" + pathSeparator + "A"
+	zoomRoot := findNodeByPath(snapshot, zoomPath)
+	if zoomRoot == nil {
+		t.Fatalf("expected zoom root for %q", zoomPath)
+	}
+	zoomFrames := buildTerminalLayoutWithPath(zoomRoot, 100, 20, zoomPath)
+	zoomRootFrame := mustFindFrame(t, zoomFrames, zoomPath)
+	if got, want := zoomRootFrame.HeightTotal, uint64(100); got != want {
+		t.Fatalf("zoom root HeightTotal = %d, want %d before lineage", got, want)
+	}
+
+	frames := applyZoomLineage(zoomFrames, snapshot, zoomPath, 100)
+	root := mustFindFrame(t, frames, "root")
+	zoom := mustFindFrame(t, frames, zoomPath)
+	leaf := mustFindFrame(t, frames, zoomPath+pathSeparator+"A1")
+
+	if got, want := root.HeightTotal, uint64(140); got != want {
+		t.Fatalf("lineage root HeightTotal = %d, want %d", got, want)
+	}
+	if got, want := zoom.HeightTotal, zoomRootFrame.HeightTotal; got != want {
+		t.Fatalf("lineage zoom HeightTotal = %d, want %d", got, want)
+	}
+	if got, want := leaf.HeightTotal, uint64(70); got != want {
+		t.Fatalf("descendant HeightTotal = %d, want %d", got, want)
+	}
+}
+
 func TestMouseClickOnLineageAncestorUndoesToThatZoomLevel(t *testing.T) {
 	m := newZoomModel()
 	m.selectedIdx = mustFrameIndex(t, m.frames, "root"+pathSeparator+"A")
