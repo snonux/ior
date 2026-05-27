@@ -39,13 +39,21 @@ func (m *Model) clearSnapshotState(clearSearch bool) {
 	m.globalTotal = 0
 	m.frames = nil
 	m.targetFrames = nil
-	m.matchIndices = make(map[int]bool)
-	m.filterVisible = make(map[int]bool)
-	m.subtreeSet = make(map[int]bool)
+	m.matchIndices = resetBoolSet(m.matchIndices)
+	m.filterVisible = resetBoolSet(m.filterVisible)
+	m.subtreeSet = resetBoolSet(m.subtreeSet)
 	m.hasNavigableSnapshot = false
 	if clearSearch {
 		m.searchQuery = ""
 	}
+}
+
+func resetBoolSet(values map[int]bool) map[int]bool {
+	if values == nil {
+		return make(map[int]bool)
+	}
+	clear(values)
+	return values
 }
 
 func (m *Model) resetBaseline() {
