@@ -1098,15 +1098,16 @@ func (m Model) rootSnapshotPath() string {
 	return m.ZoomNavigator.rootSnapshotPath(m.snapshot, m.frames)
 }
 
-// frameIndexAt delegates to the FrameAnimator package-level helper to convert
+// frameIndexAt delegates to the renderer package-level helper to convert
 // terminal coordinates (x, y) to a frame index, accounting for UI chrome.
 func (m Model) frameIndexAt(x, y int) int {
 	return frameIndexAt(m.frames, x, y, m.width, m.height, m.showHelp, strings.TrimSpace(m.heightField) != "")
 }
 
-// frameCoordToTargetRow delegates to the FrameAnimator package-level helper.
+// frameCoordToTargetRow delegates to the renderer package-level helper.
 func (m Model) frameCoordToTargetRow(dataRow, availableRows int) int {
-	return frameCoordToTargetRow(m.frames, dataRow, availableRows, strings.TrimSpace(m.heightField) != "")
+	params := computeRenderParamsForAvailableRows(m.frames, availableRows, strings.TrimSpace(m.heightField) != "")
+	return frameCoordToTargetRow(dataRow, params)
 }
 
 func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
