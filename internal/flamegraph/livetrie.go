@@ -234,8 +234,11 @@ func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 	}
 
 	lt.cacheMu.Lock()
-	lt.cacheVersion = version
-	lt.cacheJSON = slices.Clone(payload)
+	// Only commit if no concurrent caller stored a newer version.
+	if version >= lt.cacheVersion {
+		lt.cacheVersion = version
+		lt.cacheJSON = slices.Clone(payload)
+	}
 	lt.cacheMu.Unlock()
 
 	return payload, version
