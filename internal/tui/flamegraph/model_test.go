@@ -1079,6 +1079,40 @@ func TestControlHeightToggleReconfiguresLiveTrieHeightField(t *testing.T) {
 	}
 }
 
+func TestControlMetricToggleUnknownValueFallsBackToCount(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "")
+	m := NewModel(liveTrie)
+	m.countField = "unexpected"
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'b'}[0], Text: "b"})
+	if got, want := m.countField, "count"; got != want {
+		t.Fatalf("expected model count field fallback %q, got %q", want, got)
+	}
+	if got, want := liveTrie.CountField(), "count"; got != want {
+		t.Fatalf("expected live trie count field fallback %q, got %q", want, got)
+	}
+	if got, want := m.statusMessage, "Metric: events (new baseline)"; got != want {
+		t.Fatalf("expected metric fallback status %q, got %q", want, got)
+	}
+}
+
+func TestControlHeightToggleUnknownValueFallsBackToOff(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "")
+	m := NewModel(liveTrie)
+	m.heightField = "unexpected"
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'v'}[0], Text: "v"})
+	if got, want := m.heightField, ""; got != want {
+		t.Fatalf("expected model height field fallback %q, got %q", want, got)
+	}
+	if got, want := liveTrie.HeightField(), ""; got != want {
+		t.Fatalf("expected live trie height field fallback %q, got %q", want, got)
+	}
+	if got, want := m.statusMessage, "Height: off (new baseline)"; got != want {
+		t.Fatalf("expected height fallback status %q, got %q", want, got)
+	}
+}
+
 func TestNewModelAlignsPresetIndexToLiveTrieFields(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	m := NewModel(liveTrie)

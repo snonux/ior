@@ -199,26 +199,57 @@ func terminalFrameColor(name string) color.Color {
 	}
 }
 
+type semanticMatchKind int
+
+const (
+	semanticMatchContains semanticMatchKind = iota
+	semanticMatchPrefix
+)
+
+type semanticRule struct {
+	kind    semanticMatchKind
+	pattern string
+	color   color.RGBA
+}
+
+var semanticColorRules = []semanticRule{
+	{kind: semanticMatchContains, pattern: "read", color: color.RGBA{R: 78, G: 132, B: 201, A: 255}},
+	{kind: semanticMatchContains, pattern: "pread", color: color.RGBA{R: 78, G: 132, B: 201, A: 255}},
+	{kind: semanticMatchContains, pattern: "write", color: color.RGBA{R: 222, G: 122, B: 58, A: 255}},
+	{kind: semanticMatchContains, pattern: "pwrite", color: color.RGBA{R: 222, G: 122, B: 58, A: 255}},
+	{kind: semanticMatchContains, pattern: "open", color: color.RGBA{R: 196, G: 168, B: 72, A: 255}},
+	{kind: semanticMatchContains, pattern: "close", color: color.RGBA{R: 196, G: 168, B: 72, A: 255}},
+	{kind: semanticMatchContains, pattern: "stat", color: color.RGBA{R: 196, G: 168, B: 72, A: 255}},
+	{kind: semanticMatchContains, pattern: "rename", color: color.RGBA{R: 196, G: 168, B: 72, A: 255}},
+	{kind: semanticMatchContains, pattern: "link", color: color.RGBA{R: 196, G: 168, B: 72, A: 255}},
+	{kind: semanticMatchPrefix, pattern: "/", color: color.RGBA{R: 88, G: 156, B: 84, A: 255}},
+	{kind: semanticMatchContains, pattern: "path:", color: color.RGBA{R: 88, G: 156, B: 84, A: 255}},
+	{kind: semanticMatchContains, pattern: "/", color: color.RGBA{R: 88, G: 156, B: 84, A: 255}},
+	{kind: semanticMatchContains, pattern: "pid", color: color.RGBA{R: 67, G: 151, B: 149, A: 255}},
+	{kind: semanticMatchContains, pattern: "tid", color: color.RGBA{R: 67, G: 151, B: 149, A: 255}},
+	{kind: semanticMatchPrefix, pattern: "sys_", color: color.RGBA{R: 191, G: 99, B: 74, A: 255}},
+}
+
+func semanticRuleMatches(label string, rule semanticRule) bool {
+	switch rule.kind {
+	case semanticMatchPrefix:
+		return strings.HasPrefix(label, rule.pattern)
+	default:
+		return strings.Contains(label, rule.pattern)
+	}
+}
+
 func semanticFrameColor(name string) (color.Color, bool) {
 	label := strings.ToLower(strings.TrimSpace(name))
-	switch {
-	case label == "":
-		return nil, false
-	case strings.Contains(label, "read"), strings.Contains(label, "pread"):
-		return color.RGBA{R: 78, G: 132, B: 201, A: 255}, true // read I/O: blue
-	case strings.Contains(label, "write"), strings.Contains(label, "pwrite"):
-		return color.RGBA{R: 222, G: 122, B: 58, A: 255}, true // write I/O: orange
-	case strings.Contains(label, "open"), strings.Contains(label, "close"), strings.Contains(label, "stat"), strings.Contains(label, "rename"), strings.Contains(label, "link"):
-		return color.RGBA{R: 196, G: 168, B: 72, A: 255}, true // metadata I/O: amber
-	case strings.HasPrefix(label, "/"), strings.Contains(label, "path:"), strings.Contains(label, "/"):
-		return color.RGBA{R: 88, G: 156, B: 84, A: 255}, true // file paths: green
-	case strings.Contains(label, "pid"), strings.Contains(label, "tid"):
-		return color.RGBA{R: 67, G: 151, B: 149, A: 255}, true // process/thread dimensions: teal
-	case strings.HasPrefix(label, "sys_"):
-		return color.RGBA{R: 191, G: 99, B: 74, A: 255}, true // other syscall buckets: rust
-	default:
+	if label == "" {
 		return nil, false
 	}
+	for _, rule := range semanticColorRules {
+		if semanticRuleMatches(label, rule) {
+			return rule.color, true
+		}
+	}
+	return nil, false
 }
 
 // renderViewParams bundles the pre-computed layout parameters used by

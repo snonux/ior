@@ -9,6 +9,22 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+var countFieldCycle = []string{"count", "bytes", "duration"}
+
+var heightFieldCycle = []string{"", "duration", "bytes", "count"}
+
+func nextCycleValue(current string, cycle []string) string {
+	if len(cycle) == 0 {
+		return current
+	}
+	for idx := range cycle {
+		if cycle[idx] == current {
+			return cycle[(idx+1)%len(cycle)]
+		}
+	}
+	return cycle[0]
+}
+
 func (m *Model) togglePause() {
 	m.paused = !m.paused
 }
@@ -57,18 +73,10 @@ func (m *Model) cycleFieldOrder() {
 }
 
 func (m *Model) toggleCountField() {
-	// 3-way cycle: count → bytes → duration → count.
+	// 3-way cycle: count -> bytes -> duration -> count.
 	// durationToPrev (inter-syscall gap) is reachable via the CLI flag but
 	// kept out of the toolbar cycle for now.
-	var next string
-	switch m.countField {
-	case "count":
-		next = "bytes"
-	case "bytes":
-		next = "duration"
-	default:
-		next = "count"
-	}
+	next := nextCycleValue(m.countField, countFieldCycle)
 	if m.liveTrie != nil {
 		if err := m.liveTrie.SetCountField(next); err != nil {
 			m.statusMessage = "Metric toggle error: " + err.Error()
@@ -81,18 +89,8 @@ func (m *Model) toggleCountField() {
 }
 
 func (m *Model) toggleHeightField() {
-	// 4-way cycle: off → duration → bytes → count → off.
-	var next string
-	switch m.heightField {
-	case "":
-		next = "duration"
-	case "duration":
-		next = "bytes"
-	case "bytes":
-		next = "count"
-	default:
-		next = ""
-	}
+	// 4-way cycle: off -> duration -> bytes -> count -> off.
+	next := nextCycleValue(m.heightField, heightFieldCycle)
 	if m.liveTrie != nil {
 		if err := m.liveTrie.SetHeightField(next); err != nil {
 			m.statusMessage = "Height toggle error: " + err.Error()

@@ -151,6 +151,40 @@ func TestTerminalFrameColorSemanticPalette(t *testing.T) {
 	}
 }
 
+func TestSemanticFrameColorRuleTableAndOrdering(t *testing.T) {
+	tests := []struct {
+		name  string
+		label string
+		want  color.RGBA
+		ok    bool
+	}{
+		{name: "empty", label: "", ok: false},
+		{name: "read before path", label: "read/path", want: color.RGBA{R: 78, G: 132, B: 201, A: 255}, ok: true},
+		{name: "sys fallback rust", label: "sys_custom", want: color.RGBA{R: 191, G: 99, B: 74, A: 255}, ok: true},
+		{name: "path before pid", label: "pid/1234", want: color.RGBA{R: 88, G: 156, B: 84, A: 255}, ok: true},
+		{name: "unmatched", label: "dimension", ok: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := semanticFrameColor(tc.label)
+			if ok != tc.ok {
+				t.Fatalf("expected ok=%v for %q, got %v", tc.ok, tc.label, ok)
+			}
+			if !tc.ok {
+				return
+			}
+			gotRGBA, castOK := got.(color.RGBA)
+			if !castOK {
+				t.Fatalf("expected semantic color type color.RGBA, got %T", got)
+			}
+			if gotRGBA != tc.want {
+				t.Fatalf("unexpected semantic color for %q: got=%v want=%v", tc.label, gotRGBA, tc.want)
+			}
+		})
+	}
+}
+
 func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
 	out := RenderTerminalView(RenderContext{
 		Width:       50,
