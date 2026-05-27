@@ -152,7 +152,12 @@ func TestTerminalFrameColorSemanticPalette(t *testing.T) {
 }
 
 func TestRenderTerminalViewShowsNarrowMessage(t *testing.T) {
-	out := RenderTerminalView(nil, 50, 10, 0, nil, nil, nil, 0, "events", false, true, false, "")
+	out := RenderTerminalView(RenderContext{
+		Width:       50,
+		Height:      10,
+		MetricLabel: "events",
+		IsDark:      true,
+	})
 	if !strings.Contains(out, "terminal too narrow") {
 		t.Fatalf("expected narrow terminal warning, got %q", out)
 	}
@@ -177,7 +182,14 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 
-	out := RenderTerminalView(frames, 80, 6, 1, nil, nil, nil, 0, "events", false, true, false, "")
+	out := RenderTerminalView(RenderContext{
+		Frames:      frames,
+		Width:       80,
+		Height:      6,
+		SelectedIdx: 1,
+		MetricLabel: "events",
+		IsDark:      true,
+	})
 	if !strings.Contains(out, "Flame | view:root | frames:2") {
 		t.Fatalf("expected toolbar to include frame count, got %q", out)
 	}
@@ -196,7 +208,14 @@ func TestRenderTerminalViewFillsAvailableHeightForShallowTree(t *testing.T) {
 	}
 	frames := BuildTerminalLayout(snapshot, 100, 20)
 
-	out := RenderTerminalView(frames, 100, 20, 1, nil, nil, nil, 0, "events", false, true, false, "")
+	out := RenderTerminalView(RenderContext{
+		Frames:      frames,
+		Width:       100,
+		Height:      20,
+		SelectedIdx: 1,
+		MetricLabel: "events",
+		IsDark:      true,
+	})
 	lines := strings.Split(out, "\n")
 	if got, want := len(lines), 20; got != want {
 		t.Fatalf("expected render to fill viewport height (%d lines), got %d", want, got)
@@ -226,7 +245,6 @@ func TestSelectedFrameStyleDoesNotUnderline(t *testing.T) {
 		1,
 		true,
 		false,
-		false,
 	)
 	rendered := style.Render(" child ")
 	if strings.Contains(rendered, "\x1b[4m") || strings.Contains(rendered, "[4;") || strings.Contains(rendered, ";4m") {
@@ -245,7 +263,16 @@ func TestRenderTerminalViewShowsPersistentFilterContext(t *testing.T) {
 	frames := BuildTerminalLayout(snapshot, 80, 6)
 	matchSet := map[int]bool{1: true}
 
-	out := RenderTerminalView(frames, 140, 6, 1, nil, matchSet, nil, 0, "events", false, true, false, "child")
+	out := RenderTerminalView(RenderContext{
+		Frames:      frames,
+		Width:       140,
+		Height:      6,
+		SelectedIdx: 1,
+		MatchSet:    matchSet,
+		MetricLabel: "events",
+		IsDark:      true,
+		SearchQuery: "child",
+	})
 	if !strings.Contains(out, `Filter "child"`) {
 		t.Fatalf("expected filter context in status line, got %q", out)
 	}
@@ -279,7 +306,17 @@ func TestRenderTerminalViewFilterKeepsNonMatchingBranchesVisible(t *testing.T) {
 	}
 	matchSet := map[int]bool{needleIdx: true}
 
-	out := RenderTerminalView(frames, 180, 8, needleIdx, nil, matchSet, nil, 100, "bytes", false, true, false, "needle")
+	out := RenderTerminalView(RenderContext{
+		Frames:      frames,
+		Width:       180,
+		Height:      8,
+		SelectedIdx: needleIdx,
+		MatchSet:    matchSet,
+		GlobalTotal: 100,
+		MetricLabel: "bytes",
+		IsDark:      true,
+		SearchQuery: "needle",
+	})
 	if !strings.Contains(out, `Filter "needle": 60.0% bytes`) {
 		t.Fatalf("expected filter status to report 60.0%% bytes share, got %q", out)
 	}
@@ -368,7 +405,14 @@ func TestRenderTerminalViewShowsDeepLevelTruncationHint(t *testing.T) {
 		},
 	}
 	frames := BuildTerminalLayout(snapshot, 80, 10)
-	out := RenderTerminalView(frames, 80, 4, 0, nil, nil, nil, 0, "events", false, true, false, "")
+	out := RenderTerminalView(RenderContext{
+		Frames:      frames,
+		Width:       80,
+		Height:      4,
+		SelectedIdx: 0,
+		MetricLabel: "events",
+		IsDark:      true,
+	})
 	if !strings.Contains(out, "showing deepest levels") {
 		t.Fatalf("expected truncation hint in toolbar, got %q", out)
 	}
@@ -435,7 +479,7 @@ func TestRenderLeafRowBandFiltersFramesByBand(t *testing.T) {
 		1: 2,
 	}
 
-	topBand := renderLeafRowBand(frames, heights, 3, 10, "root"+pathSeparator+"A", nil, nil, 0, true, false, false, true)
+	topBand := renderLeafRowBand(frames, heights, 3, 10, "root"+pathSeparator+"A", nil, nil, 0, true, false, true)
 	if !strings.Contains(topBand, "A") {
 		t.Fatalf("expected top band to render taller frame A, got %q", topBand)
 	}
@@ -443,7 +487,7 @@ func TestRenderLeafRowBandFiltersFramesByBand(t *testing.T) {
 		t.Fatalf("expected top band to hide shorter frame B, got %q", topBand)
 	}
 
-	lowerBand := renderLeafRowBand(frames, heights, 1, 10, "root"+pathSeparator+"A", nil, nil, 0, true, false, false, true)
+	lowerBand := renderLeafRowBand(frames, heights, 1, 10, "root"+pathSeparator+"A", nil, nil, 0, true, false, true)
 	if !strings.Contains(lowerBand, "A") || !strings.Contains(lowerBand, "B") {
 		t.Fatalf("expected lower band to render both frames, got %q", lowerBand)
 	}
@@ -456,23 +500,22 @@ func TestBuildRenderRowsHeightMetricUsesLeafBandsAndViewportRows(t *testing.T) {
 		{Name: "B", Row: 1, Col: 6, Width: 6, Path: "root" + pathSeparator + "B", HeightTotal: 50, Fill: color.RGBA{R: 80, G: 120, B: 180, A: 255}},
 	}
 
-	rows := buildRenderRows(
-		frames,
-		12, // width
-		0,  // rowOffset
-		1,  // maxRow
-		1,  // barHeight
-		4,  // leafBarHeight
-		5,  // availableRows
-		"root",
-		map[int]bool{0: true, 1: true, 2: true},
-		nil,
-		0,
-		true,  // heightMetricActive
-		true,  // isDark
-		false, // searchActive
-		false, // filterActive
-	)
+	rows := buildRenderRows(renderRowsContext{
+		frames:             frames,
+		width:              12, // width
+		rowOffset:          0,  // rowOffset
+		maxRow:             1,  // maxRow
+		barHeight:          1,  // barHeight
+		leafBarHeight:      4,  // leafBarHeight
+		availableRows:      5,  // availableRows
+		selectedPath:       "root",
+		subtreeSet:         map[int]bool{0: true, 1: true, 2: true},
+		matchSet:           nil,
+		selectedIdx:        0,
+		heightMetricActive: true,  // heightMetricActive
+		isDark:             true,  // isDark
+		filterActive:       false, // filterActive
+	})
 
 	if got, want := len(rows), 5; got != want {
 		t.Fatalf("row count = %d, want %d", got, want)

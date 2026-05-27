@@ -233,6 +233,40 @@ type renderViewParams struct {
 	truncated     bool
 }
 
+// RenderContext bundles flamegraph render inputs to avoid long positional
+// parameter lists at call sites.
+type RenderContext struct {
+	Frames             []tuiFrame
+	Width              int
+	Height             int
+	SelectedIdx        int
+	SubtreeSet         map[int]bool
+	MatchSet           map[int]bool
+	FilterSet          map[int]bool
+	GlobalTotal        uint64
+	MetricLabel        string
+	HeightMetricActive bool
+	IsDark             bool
+	SearchQuery        string
+}
+
+type renderRowsContext struct {
+	frames             []tuiFrame
+	width              int
+	rowOffset          int
+	maxRow             int
+	barHeight          int
+	leafBarHeight      int
+	availableRows      int
+	selectedPath       string
+	subtreeSet         map[int]bool
+	matchSet           map[int]bool
+	selectedIdx        int
+	heightMetricActive bool
+	isDark             bool
+	filterActive       bool
+}
+
 // computeRenderParams derives the row-layout parameters for a given frame set
 // and viewport height.
 func computeRenderParams(frames []tuiFrame, height int, heightMetricActive bool) renderViewParams {
@@ -327,7 +361,20 @@ func buildNormalStatus(selected tuiFrame, metricLabel string, globalTotal uint64
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
 // The function is split into helpers (computeRenderParams, buildToolbar,
 // buildFilteredStatus, buildNormalStatus) to keep each piece under 50 lines.
-func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtreeSet, matchSet, filterSet map[int]bool, globalTotal uint64, metricLabel string, heightMetricActive, isDark, searchActive bool, searchQuery string) string {
+func RenderTerminalView(ctx RenderContext) string {
+	frames := ctx.Frames
+	width := ctx.Width
+	height := ctx.Height
+	selectedIdx := ctx.SelectedIdx
+	subtreeSet := ctx.SubtreeSet
+	matchSet := ctx.MatchSet
+	filterSet := ctx.FilterSet
+	globalTotal := ctx.GlobalTotal
+	metricLabel := ctx.MetricLabel
+	heightMetricActive := ctx.HeightMetricActive
+	isDark := ctx.IsDark
+	searchQuery := ctx.SearchQuery
+
 	if width < minFlameWidth {
 		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
@@ -364,11 +411,23 @@ func RenderTerminalView(frames []tuiFrame, width, height, selectedIdx int, subtr
 	} else {
 		status = buildNormalStatus(selected, metricLabel, globalTotal)
 	}
-	return renderViewRows(toolbar, status, rowsForRender(frames, width, params.rowOffset, params.maxRow, params.barHeight, params.leafBarHeight, params.availableRows, selected.Path, subtreeSet, matchSet, selectedIdx, heightMetricActive, isDark, searchActive, filterIsActive), width)
-}
-
-func rowsForRender(frames []tuiFrame, width, rowOffset, maxRow, barHeight, leafBarHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, heightMetricActive, isDark, searchActive, filterActive bool) []string {
-	return buildRenderRows(frames, width, rowOffset, maxRow, barHeight, leafBarHeight, availableRows, selectedPath, subtreeSet, matchSet, selectedIdx, heightMetricActive, isDark, searchActive, filterActive)
+	rows := buildRenderRows(renderRowsContext{
+		frames:             frames,
+		width:              width,
+		rowOffset:          params.rowOffset,
+		maxRow:             params.maxRow,
+		barHeight:          params.barHeight,
+		leafBarHeight:      params.leafBarHeight,
+		availableRows:      params.availableRows,
+		selectedPath:       selected.Path,
+		subtreeSet:         subtreeSet,
+		matchSet:           matchSet,
+		selectedIdx:        selectedIdx,
+		heightMetricActive: heightMetricActive,
+		isDark:             isDark,
+		filterActive:       filterIsActive,
+	})
+	return renderViewRows(toolbar, status, rows, width)
 }
 
 func renderViewRows(toolbar, status string, rows []string, width int) string {
@@ -390,7 +449,22 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
-func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, leafBarHeight, availableRows int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, heightMetricActive, isDark, searchActive, filterActive bool) []string {
+func buildRenderRows(ctx renderRowsContext) []string {
+	frames := ctx.frames
+	width := ctx.width
+	rowOffset := ctx.rowOffset
+	maxRow := ctx.maxRow
+	barHeight := ctx.barHeight
+	leafBarHeight := ctx.leafBarHeight
+	availableRows := ctx.availableRows
+	selectedPath := ctx.selectedPath
+	subtreeSet := ctx.subtreeSet
+	matchSet := ctx.matchSet
+	selectedIdx := ctx.selectedIdx
+	heightMetricActive := ctx.heightMetricActive
+	isDark := ctx.isDark
+	filterActive := ctx.filterActive
+
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
@@ -413,13 +487,13 @@ func buildRenderRows(frames []tuiFrame, width, rowOffset, maxRow, barHeight, lea
 			frameHeights := leafFrameHeights(framesAtRow, leafBarHeight)
 			for h := leafBarHeight - 1; h >= 0; h-- {
 				showLabels := h == 0
-				rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive, showLabels))
+				rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive, showLabels))
 			}
 			continue
 		}
 		for repeat := 0; repeat < barHeight; repeat++ {
 			showLabels := repeat == barHeight/2
-			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive, showLabels))
+			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive, showLabels))
 		}
 	}
 
@@ -464,17 +538,17 @@ func leafFrameHeights(frames []indexedFrame, leafBarHeight int) map[int]int {
 	return heights
 }
 
-func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive, showLabels bool) string {
+func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, filterActive, showLabels bool) string {
 	visible := make([]indexedFrame, 0, len(frames))
 	for _, item := range frames {
 		if frameHeights[item.idx] > band {
 			visible = append(visible, item)
 		}
 	}
-	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive, showLabels)
+	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive, showLabels)
 }
 
-func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive, showLabels bool) string {
+func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, filterActive, showLabels bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -503,7 +577,7 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 		if showLabels {
 			label = frameLabel(frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
 		}
-		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, searchActive, filterActive)
+		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive)
 		cell := style.Render(label)
 		b.WriteString(cell)
 		cursor = frame.Col + cellWidth
@@ -582,8 +656,7 @@ func computeFilterVisibleSetInto(frames []tuiFrame, matchSet, visible map[int]bo
 	return visible
 }
 
-func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, searchActive, filterActive bool) lipgloss.Style {
-	_ = searchActive
+func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, filterActive bool) lipgloss.Style {
 	base := lipgloss.NewStyle().
 		Foreground(common.ColorBackground).
 		Background(frame.Fill)
