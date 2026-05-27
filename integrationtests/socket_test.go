@@ -5,8 +5,13 @@ import (
 	"testing"
 )
 
+var socketTraceArgs = []string{
+	"-trace-syscalls",
+	"socket,socketpair,bind,listen,accept4,accept,connect,shutdown,getsockname,getpeername,setsockopt,getsockopt,close",
+}
+
 func TestSocketBasic(t *testing.T) {
-	result, _ := runScenarioResult(t, "socket-basic", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "socket-basic", []ExpectedEvent{
 		{
 			Tracepoint: "enter_socket",
 			MinCount:   1,
@@ -15,14 +20,14 @@ func TestSocketBasic(t *testing.T) {
 			Tracepoint: "enter_close",
 			MinCount:   1,
 		},
-	})
+	}, socketTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_socket", "socket:1:")
 	assertTracepointPathPrefix(t, result, "enter_close", "socket:1:")
 }
 
 func TestSocketpairBasic(t *testing.T) {
-	result, _ := runScenarioResult(t, "socketpair-basic", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "socketpair-basic", []ExpectedEvent{
 		{
 			Tracepoint: "enter_socketpair",
 			MinCount:   1,
@@ -31,7 +36,7 @@ func TestSocketpairBasic(t *testing.T) {
 			Tracepoint: "enter_close",
 			MinCount:   2,
 		},
-	})
+	}, socketTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_socketpair", "socket:1:")
 	if got := totalTracepointPathCount(result, "enter_close", "socket:1:"); got < 2 {
@@ -40,13 +45,13 @@ func TestSocketpairBasic(t *testing.T) {
 }
 
 func TestSocketAcceptLifecycle(t *testing.T) {
-	result, _ := runScenarioResult(t, "socket-accept-lifecycle", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "socket-accept-lifecycle", []ExpectedEvent{
 		{Tracepoint: "enter_bind", MinCount: 1},
 		{Tracepoint: "enter_connect", MinCount: 1},
 		{Tracepoint: "enter_listen", MinCount: 1},
 		{Tracepoint: "enter_accept4", MinCount: 1},
 		{Tracepoint: "enter_shutdown", MinCount: 1},
-	})
+	}, socketTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_bind", "socket:1:")
 	assertTracepointPathPrefix(t, result, "enter_connect", "socket:1:")
@@ -56,13 +61,13 @@ func TestSocketAcceptLifecycle(t *testing.T) {
 }
 
 func TestSocketAcceptLifecyclePlain(t *testing.T) {
-	result, _ := runScenarioResult(t, "socket-accept-lifecycle-plain", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "socket-accept-lifecycle-plain", []ExpectedEvent{
 		{Tracepoint: "enter_bind", MinCount: 1},
 		{Tracepoint: "enter_connect", MinCount: 1},
 		{Tracepoint: "enter_listen", MinCount: 1},
 		{Tracepoint: "enter_accept", MinCount: 1},
 		{Tracepoint: "enter_shutdown", MinCount: 1},
-	})
+	}, socketTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_bind", "socket:1:")
 	assertTracepointPathPrefix(t, result, "enter_connect", "socket:1:")
@@ -76,12 +81,12 @@ func TestSocketAcceptLifecyclePlain(t *testing.T) {
 }
 
 func TestSocketIntrospection(t *testing.T) {
-	result, _ := runScenarioResult(t, "socket-introspection", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "socket-introspection", []ExpectedEvent{
 		{Tracepoint: "enter_getsockname", MinCount: 1},
 		{Tracepoint: "enter_getpeername", MinCount: 1},
 		{Tracepoint: "enter_setsockopt", MinCount: 1},
 		{Tracepoint: "enter_getsockopt", MinCount: 1},
-	})
+	}, socketTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_getsockname", "socket:1:")
 	assertTracepointPathPrefix(t, result, "enter_getpeername", "socket:1:")

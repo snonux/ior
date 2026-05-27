@@ -9,19 +9,21 @@ const (
 	mmapMinAddressSpaceBytesTotal = mmapScenarioAddressSpaceBytes * 2
 )
 
+var mmapTraceArgs = []string{"-trace-syscalls", "openat,write,close,mmap,msync,mremap,munmap"}
+
 func TestMmapBasic(t *testing.T) {
-	runScenario(t, "mmap-basic", []ExpectedEvent{
+	runScenarioResultWithIorArgs(t, "mmap-basic", []ExpectedEvent{
 		{
 			PathContains: "mmapfile.txt",
 			Tracepoint:   "enter_mmap",
 			Comm:         "ioworkload",
 			MinCount:     1,
 		},
-	})
+	}, mmapTraceArgs)
 }
 
 func TestMmapMsyncSync(t *testing.T) {
-	runScenario(t, "mmap-msync-sync", []ExpectedEvent{
+	runScenarioResultWithIorArgs(t, "mmap-msync-sync", []ExpectedEvent{
 		{
 			PathContains: "msyncfile.txt",
 			Tracepoint:   "enter_mmap",
@@ -33,11 +35,11 @@ func TestMmapMsyncSync(t *testing.T) {
 			Comm:       "ioworkload",
 			MinCount:   1,
 		},
-	})
+	}, mmapTraceArgs)
 }
 
 func TestMmapMsyncInvalidFlags(t *testing.T) {
-	runScenario(t, "mmap-msync-invalid-flags", []ExpectedEvent{
+	runScenarioResultWithIorArgs(t, "mmap-msync-invalid-flags", []ExpectedEvent{
 		{
 			PathContains: "msyncinvalidfile.txt",
 			Tracepoint:   "enter_mmap",
@@ -49,11 +51,11 @@ func TestMmapMsyncInvalidFlags(t *testing.T) {
 			Comm:       "ioworkload",
 			MinCount:   1,
 		},
-	})
+	}, mmapTraceArgs)
 }
 
 func TestMmapMremapMunmap(t *testing.T) {
-	result, _ := runScenarioResult(t, "mmap-mremap-munmap", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "mmap-mremap-munmap", []ExpectedEvent{
 		{
 			Tracepoint: "enter_mremap",
 			Comm:       "ioworkload",
@@ -64,7 +66,7 @@ func TestMmapMremapMunmap(t *testing.T) {
 			Comm:       "ioworkload",
 			MinCount:   1,
 		},
-	})
+	}, mmapTraceArgs)
 
 	assertEventBytesEqual(t, result, ExpectedEvent{
 		Tracepoint: "enter_mremap",
@@ -79,7 +81,7 @@ func TestMmapMremapMunmap(t *testing.T) {
 func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
 	h := newTestHarness(t)
 	h.WorkloadEnv = []string{mmapWorkloadStartupEnv}
-	path, pid, err := h.RunParquet("mmap-mremap-munmap", mmapParquetDuration)
+	path, pid, err := h.RunParquetWithIorArgs("mmap-mremap-munmap", mmapParquetDuration, mmapTraceArgs)
 	if err != nil {
 		t.Fatalf("run mmap-mremap-munmap parquet scenario: %v", err)
 	}

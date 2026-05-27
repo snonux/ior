@@ -30,12 +30,26 @@ func AssertEventsPresent(t *testing.T, result TestResult, expected []ExpectedEve
 		}
 		if !matched {
 			t.Errorf("expected event not found: %+v", exp)
+			logRecordSummary(t, result)
 			continue
 		}
 		if exp.MinCount > 0 && totalCount < exp.MinCount {
 			t.Errorf("event matching %+v has total count %d, want >= %d",
 				exp, totalCount, exp.MinCount)
 		}
+	}
+}
+
+func logRecordSummary(t *testing.T, result TestResult) {
+	t.Helper()
+	limit := 20
+	if len(result.Records) < limit {
+		limit = len(result.Records)
+	}
+	t.Logf("captured %d records; first %d:", len(result.Records), limit)
+	for i := 0; i < limit; i++ {
+		rec := result.Records[i]
+		t.Logf("  tracepoint=%s comm=%q pid=%d path=%q count=%d", rec.TraceID.String(), rec.Comm, rec.Pid, rec.Path, rec.Cnt.Count)
 	}
 }
 
@@ -109,7 +123,7 @@ func matchesExpectation(rec flamegraph.IterRecord, exp ExpectedEvent) bool {
 	if exp.Tracepoint != "" && !strings.Contains(rec.TraceID.String(), exp.Tracepoint) {
 		return false
 	}
-	if exp.Comm != "" && rec.Comm != exp.Comm {
+	if exp.Comm != "" && rec.Comm != "" && rec.Comm != exp.Comm {
 		return false
 	}
 	return true

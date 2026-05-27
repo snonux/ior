@@ -7,11 +7,13 @@ import (
 
 const mqPayloadLen = uint64(14)
 
+var ipcDescriptorTraceArgs = []string{"-trace-syscalls", "pipe,pipe2,eventfd,eventfd2,close"}
+
 func TestPipeBasic(t *testing.T) {
-	result, _ := runScenarioResult(t, "pipe-basic", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "pipe-basic", []ExpectedEvent{
 		{Tracepoint: "enter_pipe", MinCount: 1},
 		{Tracepoint: "enter_close", MinCount: 2},
-	})
+	}, ipcDescriptorTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_pipe", "pipe:")
 	if got := totalTracepointPathCount(result, "enter_close", "pipe:"); got < 2 {
@@ -20,10 +22,10 @@ func TestPipeBasic(t *testing.T) {
 }
 
 func TestPipe2Basic(t *testing.T) {
-	result, _ := runScenarioResult(t, "pipe2-basic", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "pipe2-basic", []ExpectedEvent{
 		{Tracepoint: "enter_pipe2", MinCount: 1},
 		{Tracepoint: "enter_close", MinCount: 2},
-	})
+	}, ipcDescriptorTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_pipe2", "pipe:")
 	if got := totalTracepointPathCount(result, "enter_close", "pipe:"); got < 2 {
@@ -32,20 +34,20 @@ func TestPipe2Basic(t *testing.T) {
 }
 
 func TestEventfdBasic(t *testing.T) {
-	result, _ := runScenarioResult(t, "eventfd-basic", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "eventfd-basic", []ExpectedEvent{
 		{Tracepoint: "enter_eventfd", MinCount: 1},
 		{Tracepoint: "enter_close", MinCount: 1},
-	})
+	}, ipcDescriptorTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_eventfd", "eventfd:")
 	assertTracepointPathPrefix(t, result, "enter_close", "eventfd:")
 }
 
 func TestEventfd2Basic(t *testing.T) {
-	result, _ := runScenarioResult(t, "eventfd2-basic", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "eventfd2-basic", []ExpectedEvent{
 		{Tracepoint: "enter_eventfd2", MinCount: 1},
 		{Tracepoint: "enter_close", MinCount: 1},
-	})
+	}, ipcDescriptorTraceArgs)
 
 	assertTracepointPathPrefix(t, result, "enter_eventfd2", "eventfd:")
 	assertTracepointPathPrefix(t, result, "enter_close", "eventfd:")

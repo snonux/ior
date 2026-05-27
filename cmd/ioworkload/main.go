@@ -18,6 +18,8 @@ import (
 const (
 	defaultStartupDelay = 8 * time.Second
 	startupDelayEnv     = "IOR_WORKLOAD_STARTUP_DELAY_MS"
+	startupFileEnv      = "IOR_WORKLOAD_STARTUP_FILE"
+	startupFileTimeout  = 30 * time.Second
 )
 
 func main() {
@@ -44,11 +46,45 @@ func main() {
 	}
 
 	fmt.Println(os.Getpid())
-	time.Sleep(configuredStartupDelay())
+	if err := waitForStartup(); err != nil {
+		fmt.Fprintf(os.Stderr, "startup wait failed: %v\n", err)
+		os.Exit(1)
+	}
 
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "scenario %s failed: %v\n", *scenario, err)
 		os.Exit(1)
+	}
+}
+
+func waitForStartup() error {
+	path := os.Getenv(startupFileEnv)
+	if path == "" {
+		time.Sleep(configuredStartupDelay())
+		return nil
+	}
+	return waitForStartupFile(path)
+}
+
+func waitForStartupFile(path string) error {
+	deadline := time.NewTimer(startupFileTimeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			return fmt.Errorf("timeout waiting for %s", path)
+		}
 	}
 }
 

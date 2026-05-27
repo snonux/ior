@@ -10,10 +10,12 @@ const (
 	pollingWorkloadStartupEnv = "IOR_WORKLOAD_STARTUP_DELAY_MS=1000"
 )
 
+var pollingTraceArgs = []string{"-trace-syscalls", "epoll_ctl,epoll_wait,epoll_pwait,epoll_pwait2,poll,ppoll,select,pselect6"}
+
 func TestPollingEpollTracepoints(t *testing.T) {
 	h := newTestHarness(t)
 	h.WorkloadEnv = []string{pollingWorkloadStartupEnv}
-	result, pid, err := h.Run("polling-epoll", defaultDuration)
+	result, pid, err := h.RunWithIorArgs("polling-epoll", defaultDuration, pollingTraceArgs)
 	if err != nil {
 		t.Fatalf("run scenario polling-epoll: %v", err)
 	}
@@ -38,7 +40,7 @@ func TestPollingEpollTracepoints(t *testing.T) {
 func TestPollingEpollReadyCountInParquet(t *testing.T) {
 	h := newTestHarness(t)
 	h.WorkloadEnv = []string{pollingWorkloadStartupEnv}
-	path, pid, err := h.RunParquet("polling-epoll", pollingParquetDuration)
+	path, pid, err := h.RunParquetWithIorArgs("polling-epoll", pollingParquetDuration, pollingTraceArgs)
 	if err != nil {
 		t.Fatalf("run polling-epoll parquet scenario: %v", err)
 	}

@@ -98,8 +98,8 @@ func runKeySyscalls(nr securitySyscalls) {
 func runPtraceSyscall(nr securitySyscalls) {
 	_, _, _ = syscall.Syscall6(
 		nr.ptrace,
-		uintptr(syscall.PTRACE_TRACEME),
-		0,
+		uintptr(syscall.PTRACE_PEEKDATA),
+		^uintptr(0),
 		0,
 		0,
 		0,
