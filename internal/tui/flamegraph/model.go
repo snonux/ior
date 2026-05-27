@@ -36,6 +36,8 @@ type flameViewCacheKey struct {
 	searchQuery   string
 	statusMessage string
 	zoomPath      string
+	countField    string
+	heightField   string
 	searchActive  bool
 	showHelp      bool
 	paused        bool
@@ -559,6 +561,8 @@ func (m Model) currentViewCacheKey() flameViewCacheKey {
 		searchQuery:   m.searchQuery,
 		statusMessage: m.statusMessage,
 		zoomPath:      m.zoomPath,
+		countField:    m.countField,
+		heightField:   m.heightField,
 		searchActive:  m.searchActive,
 		showHelp:      m.showHelp,
 		paused:        m.paused,

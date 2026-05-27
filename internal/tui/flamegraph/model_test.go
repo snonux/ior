@@ -1103,6 +1103,42 @@ func TestNewModelAlignsHeightFieldToLiveTrie(t *testing.T) {
 	}
 }
 
+func TestCurrentViewCacheKeyChangesWhenCountFieldChanges(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 20
+	m.frames = []tuiFrame{{Name: "root", Path: "root"}}
+
+	before := m.currentViewCacheKey()
+	m.countField = "bytes"
+	after := m.currentViewCacheKey()
+
+	if before == after {
+		t.Fatalf("expected cache key to change when count field changes")
+	}
+	if got, want := after.countField, "bytes"; got != want {
+		t.Fatalf("expected cache key count field %q, got %q", want, got)
+	}
+}
+
+func TestCurrentViewCacheKeyChangesWhenHeightFieldChanges(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 20
+	m.frames = []tuiFrame{{Name: "root", Path: "root"}}
+
+	before := m.currentViewCacheKey()
+	m.heightField = "duration"
+	after := m.currentViewCacheKey()
+
+	if before == after {
+		t.Fatalf("expected cache key to change when height field changes")
+	}
+	if got, want := after.heightField, "duration"; got != want {
+		t.Fatalf("expected cache key height field %q, got %q", want, got)
+	}
+}
+
 func TestControlHelpToggle(t *testing.T) {
 	m := NewModel(nil)
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'?'}[0], Text: "?"})
