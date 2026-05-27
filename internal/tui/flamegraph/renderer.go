@@ -296,7 +296,6 @@ type renderRowsContext struct {
 	selectedIdx        int
 	heightMetricActive bool
 	isDark             bool
-	filterActive       bool
 }
 
 // computeRenderParams derives the row-layout parameters for a given frame set
@@ -549,7 +548,6 @@ func RenderTerminalView(ctx RenderContext) string {
 		selectedIdx:        selectedIdx,
 		heightMetricActive: heightMetricActive,
 		isDark:             isDark,
-		filterActive:       filterIsActive,
 	})
 	return renderViewRows(toolbar, status, rows, width)
 }
@@ -587,7 +585,6 @@ func buildRenderRows(ctx renderRowsContext) []string {
 	selectedIdx := ctx.selectedIdx
 	heightMetricActive := ctx.heightMetricActive
 	isDark := ctx.isDark
-	filterActive := ctx.filterActive
 
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
@@ -611,13 +608,13 @@ func buildRenderRows(ctx renderRowsContext) []string {
 			frameHeights := leafFrameHeights(framesAtRow, leafBarHeight)
 			for h := leafBarHeight - 1; h >= 0; h-- {
 				showLabels := h == 0
-				rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive, showLabels))
+				rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels))
 			}
 			continue
 		}
 		for repeat := 0; repeat < barHeight; repeat++ {
 			showLabels := repeat == barHeight/2
-			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive, showLabels))
+			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels))
 		}
 	}
 
@@ -662,17 +659,17 @@ func leafFrameHeights(frames []indexedFrame, leafBarHeight int) map[int]int {
 	return heights
 }
 
-func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, filterActive, showLabels bool) string {
+func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, showLabels bool) string {
 	visible := make([]indexedFrame, 0, len(frames))
 	for _, item := range frames {
 		if frameHeights[item.idx] > band {
 			visible = append(visible, item)
 		}
 	}
-	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive, showLabels)
+	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels)
 }
 
-func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, filterActive, showLabels bool) string {
+func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, showLabels bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -701,7 +698,7 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 		if showLabels {
 			label = frameLabel(frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
 		}
-		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, filterActive)
+		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark)
 		cell := style.Render(label)
 		b.WriteString(cell)
 		cursor = frame.Col + cellWidth
@@ -780,7 +777,7 @@ func computeFilterVisibleSetInto(frames []tuiFrame, matchSet, visible map[int]bo
 	return visible
 }
 
-func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, filterActive bool) lipgloss.Style {
+func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) lipgloss.Style {
 	base := lipgloss.NewStyle().
 		Foreground(common.ColorBackground).
 		Background(frame.Fill)
@@ -797,10 +794,6 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 	if isSelected {
 		selectedBg := lipgloss.Color("129")
 		selectedFg := lipgloss.Color("15")
-		if !isDark {
-			selectedBg = lipgloss.Color("129")
-			selectedFg = lipgloss.Color("15")
-		}
 		return base.Background(selectedBg).Foreground(selectedFg).Bold(true)
 	}
 
@@ -810,10 +803,6 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 			return style.Bold(true)
 		}
 		return style.Faint(true)
-	}
-
-	if filterActive {
-		return base.Background(common.ColorPanel).Foreground(common.ColorMuted).Faint(true)
 	}
 
 	if inSubtree {
@@ -877,10 +866,6 @@ func frameRelation(path, selectedPath string) relation {
 	return relationNone
 }
 
-func maxFrameRow(frames []tuiFrame) int {
-	return maxFrameRowForSet(frames, nil)
-}
-
 func maxFrameRowForSet(frames []tuiFrame, include map[int]bool) int {
 	maxRow := 0
 	for idx, frame := range frames {
@@ -922,11 +907,6 @@ func normalizeSelectedIndex(frames []tuiFrame, selectedIdx int, include map[int]
 		}
 	}
 	return 0
-}
-
-func filterSampleCoverage(frames []tuiFrame, matchSet map[int]bool, totalBase uint64) float64 {
-	coveredTotal, rootTotal := filterCoverageTotals(frames, matchSet, totalBase)
-	return percentOfTotal(coveredTotal, rootTotal)
 }
 
 func computeBarHeight(availableRows, depthRows, maxHeight int) int {
