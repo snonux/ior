@@ -10,9 +10,10 @@ func TestFrameCoordToTargetRowKeepsUniformBarMapping(t *testing.T) {
 		{Name: "leaf", Row: 3, Col: 0, Width: 20, Path: "root" + pathSeparator + "a" + pathSeparator + "b" + pathSeparator + "leaf"},
 	}
 	availableRows := 8
+	params := computeRenderParamsForAvailableRows(frames, availableRows, false)
 	want := []int{3, 3, 2, 2, 1, 1, 0, 0}
 	for dataRow, expected := range want {
-		if got := frameCoordToTargetRow(frames, dataRow, availableRows, false); got != expected {
+		if got := frameCoordToTargetRow(dataRow, params); got != expected {
 			t.Fatalf("dataRow=%d: got row=%d want=%d", dataRow, got, expected)
 		}
 	}
@@ -24,9 +25,10 @@ func TestFrameCoordToTargetRowHeightMetricMapsExpandedLeafBand(t *testing.T) {
 		{Name: "leaf", Row: 1, Col: 0, Width: 20, Path: "root" + pathSeparator + "leaf", HeightTotal: 100},
 	}
 	availableRows := 6
+	params := computeRenderParamsForAvailableRows(frames, availableRows, true)
 	want := []int{1, 1, 1, 1, 1, 0}
 	for dataRow, expected := range want {
-		if got := frameCoordToTargetRow(frames, dataRow, availableRows, true); got != expected {
+		if got := frameCoordToTargetRow(dataRow, params); got != expected {
 			t.Fatalf("dataRow=%d: got row=%d want=%d", dataRow, got, expected)
 		}
 	}

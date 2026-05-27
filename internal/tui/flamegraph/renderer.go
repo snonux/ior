@@ -231,6 +231,7 @@ type renderViewParams struct {
 	availableRows int
 	visibleFrames int
 	truncated     bool
+	heightMetric  bool
 }
 
 // RenderContext bundles flamegraph render inputs to avoid long positional
@@ -270,7 +271,15 @@ type renderRowsContext struct {
 // computeRenderParams derives the row-layout parameters for a given frame set
 // and viewport height.
 func computeRenderParams(frames []tuiFrame, height int, heightMetricActive bool) renderViewParams {
-	availableRows := height - 2 // toolbar + frame-status line
+	return computeRenderParamsForAvailableRows(frames, height-2, heightMetricActive)
+}
+
+// computeRenderParamsForAvailableRows derives row-layout parameters for a
+// frame set and pre-computed data-area row budget.
+func computeRenderParamsForAvailableRows(frames []tuiFrame, availableRows int, heightMetricActive bool) renderViewParams {
+	if availableRows < 1 {
+		availableRows = 1
+	}
 	maxRow := maxFrameRowForSet(frames, nil)
 	totalDepthRows := maxRow + 1
 	barHeight := computeBarHeight(availableRows, totalDepthRows, maxBarVisualHeight)
@@ -304,7 +313,91 @@ func computeRenderParams(frames []tuiFrame, height int, heightMetricActive bool)
 		availableRows: availableRows,
 		visibleFrames: countVisibleFrames(frames, nil),
 		truncated:     truncated,
+		heightMetric:  heightMetricActive,
 	}
+}
+
+// frameIndexAt returns the index of the frame rendered at terminal coordinates
+// (x, y), or -1 if no frame occupies that cell. showHelp adds one extra line
+// to the UI chrome so the frame area row calculations account for it.
+func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp, heightMetricActive bool) int {
+	if len(frames) == 0 || width <= 0 || height <= 0 {
+		return -1
+	}
+	if x < 0 || x >= width || y < 0 {
+		return -1
+	}
+	extraLines := 1 // selection status line
+	if showHelp {
+		extraLines++
+	}
+	renderHeight := height - extraLines
+	if renderHeight < 3 {
+		renderHeight = 3
+	}
+	params := computeRenderParamsForAvailableRows(frames, renderHeight-2, heightMetricActive)
+	if y < 1 || y > params.availableRows {
+		return -1
+	}
+	targetRow := frameCoordToTargetRow(y-1, params)
+	if targetRow < 0 {
+		return -1
+	}
+	return findFrameAtRow(frames, targetRow, x, width)
+}
+
+// frameCoordToTargetRow converts a data-area row offset (0-based, after
+// stripping the toolbar row) into the logical frame row index. Returns -1 when
+// the coordinate falls in the top padding above the first visible row.
+func frameCoordToTargetRow(dataRow int, params renderViewParams) int {
+	if params.visibleFrames == 0 || params.availableRows < 1 || dataRow < 0 || dataRow >= params.availableRows {
+		return -1
+	}
+	renderedRows := (params.maxRow - params.rowOffset + 1) * params.barHeight
+	if params.heightMetric {
+		renderedRows = params.leafBarHeight + max(0, params.maxRow-params.rowOffset)*params.barHeight
+	}
+	padTop := 0
+	if renderedRows < params.availableRows {
+		padTop = params.availableRows - renderedRows
+	}
+	if dataRow < padTop {
+		return -1
+	}
+	rowInRender := dataRow - padTop
+	for row := params.maxRow; row >= params.rowOffset; row-- {
+		rowHeight := params.barHeight
+		if params.heightMetric && row == params.maxRow {
+			rowHeight = params.leafBarHeight
+		}
+		if rowInRender < rowHeight {
+			return row
+		}
+		rowInRender -= rowHeight
+	}
+	return -1
+}
+
+// findFrameAtRow scans frames for the narrowest one that occupies logical row
+// targetRow and contains pixel column x within [0, width). Returning the
+// narrowest frame resolves overlap between wide parent and narrow child bars.
+func findFrameAtRow(frames []tuiFrame, targetRow, x, width int) int {
+	best := -1
+	bestWidth := int(^uint(0) >> 1)
+	for idx, frame := range frames {
+		if frame.Row != targetRow || frame.Col >= width {
+			continue
+		}
+		right := min(width, frame.Col+frame.Width)
+		if x < frame.Col || x >= right {
+			continue
+		}
+		if frame.Width < bestWidth {
+			best = idx
+			bestWidth = frame.Width
+		}
+	}
+	return best
 }
 
 // buildToolbar assembles the top-of-view toolbar string and pads/trims it to
