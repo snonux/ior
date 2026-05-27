@@ -234,3 +234,7 @@ func (m Model) heightFieldLabel() string {
 		return m.heightField
 	}
 }
+
+func (m Model) heightMetricActive() bool {
+	return strings.TrimSpace(m.heightField) != ""
+}
