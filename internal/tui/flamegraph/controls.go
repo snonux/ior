@@ -156,7 +156,7 @@ func (m Model) selectionStatusLine() string {
 		mode = "PAUSED"
 	}
 	heightLabel := ""
-	if m.heightField != "" {
+	if m.heightMetricActive() {
 		heightLabel = " | height:" + m.heightFieldLabel()
 	}
 	if len(m.frames) == 0 {
@@ -168,6 +168,16 @@ func (m Model) selectionStatusLine() string {
 		selIdx = 0
 	}
 	frame := m.frames[selIdx]
+	if m.heightMetricActive() {
+		maxHeightTotal := uint64(0)
+		for i := range m.frames {
+			if m.frames[i].HeightTotal > maxHeightTotal {
+				maxHeightTotal = m.frames[i].HeightTotal
+			}
+		}
+		heightShare := percentOfTotal(frame.HeightTotal, maxHeightTotal)
+		heightLabel = fmt.Sprintf(" | height(%s)=%d (%.1f%% of max)", m.heightFieldLabel(), frame.HeightTotal, heightShare)
+	}
 	systemShare := frame.Percent
 	if m.globalTotal > 0 {
 		systemShare = percentOfTotal(frame.Total, m.globalTotal)
