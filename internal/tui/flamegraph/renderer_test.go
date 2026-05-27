@@ -278,7 +278,6 @@ func TestSelectedFrameStyleDoesNotUnderline(t *testing.T) {
 		nil,
 		1,
 		true,
-		false,
 	)
 	rendered := style.Render(" child ")
 	if strings.Contains(rendered, "\x1b[4m") || strings.Contains(rendered, "[4;") || strings.Contains(rendered, ";4m") {
@@ -407,7 +406,8 @@ func TestFilterSampleCoverageAvoidsDoubleCountingNestedMatches(t *testing.T) {
 		1: true, // A
 		2: true, // A1 (nested under A)
 	}
-	if got := filterSampleCoverage(frames, matchSet, 100); got != 60 {
+	coveredTotal, rootTotal := filterCoverageTotals(frames, matchSet, 100)
+	if got := percentOfTotal(coveredTotal, rootTotal); got != 60 {
 		t.Fatalf("expected nested matches to count once at 60%%, got %.1f%%", got)
 	}
 }
@@ -513,7 +513,7 @@ func TestRenderLeafRowBandFiltersFramesByBand(t *testing.T) {
 		1: 2,
 	}
 
-	topBand := renderLeafRowBand(frames, heights, 3, 10, "root"+pathSeparator+"A", nil, nil, 0, true, false, true)
+	topBand := renderLeafRowBand(frames, heights, 3, 10, "root"+pathSeparator+"A", nil, nil, 0, true, true)
 	if !strings.Contains(topBand, "A") {
 		t.Fatalf("expected top band to render taller frame A, got %q", topBand)
 	}
@@ -521,7 +521,7 @@ func TestRenderLeafRowBandFiltersFramesByBand(t *testing.T) {
 		t.Fatalf("expected top band to hide shorter frame B, got %q", topBand)
 	}
 
-	lowerBand := renderLeafRowBand(frames, heights, 1, 10, "root"+pathSeparator+"A", nil, nil, 0, true, false, true)
+	lowerBand := renderLeafRowBand(frames, heights, 1, 10, "root"+pathSeparator+"A", nil, nil, 0, true, true)
 	if !strings.Contains(lowerBand, "A") || !strings.Contains(lowerBand, "B") {
 		t.Fatalf("expected lower band to render both frames, got %q", lowerBand)
 	}
@@ -548,7 +548,6 @@ func TestBuildRenderRowsHeightMetricUsesLeafBandsAndViewportRows(t *testing.T) {
 		selectedIdx:        0,
 		heightMetricActive: true,  // heightMetricActive
 		isDark:             true,  // isDark
-		filterActive:       false, // filterActive
 	})
 
 	if got, want := len(rows), 5; got != want {

@@ -798,12 +798,6 @@ func (m *Model) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestr
 	m.FrameAnimator.applyTargetFrames(targetFrames, ancestry, prevPath, animate, &m.SelectionManager, &m.SearchController, m.height)
 }
 
-// restoreSelectionByPath delegates to SelectionManager to restore the selection
-// after a frame layout swap.
-func (m *Model) restoreSelectionByPath(path string) {
-	m.SelectionManager.restoreByPath(m.frames, path)
-}
-
 func (m Model) frameIndexByPath(path string) int {
 	for idx, frame := range m.frames {
 		if frame.Path == path {
@@ -887,22 +881,6 @@ func (m Model) currentRootPath() string {
 	return m.ZoomNavigator.currentRootPath(m.frames)
 }
 
-// filterActive reports whether a search filter is applied.
-func (m Model) filterActive() bool {
-	return filterActive(m.searchQuery)
-}
-
-// navigableFrameSet returns the filter-visible set when a filter is active, else nil.
-func (m Model) navigableFrameSet() map[int]bool {
-	return navigableSet(m.searchQuery, m.filterVisible)
-}
-
-// framesAtDepth returns frame indices at the given depth filtered by the
-// current search.
-func (m Model) framesAtDepth(depth int) []int {
-	return framesAtDepthFiltered(m.frames, depth, m.navigableFrameSet())
-}
-
 // frameNavigable reports whether a frame can be selected under the current filter.
 func (m Model) frameNavigable(idx int) bool {
 	return frameNavigable(idx, m.frames, m.searchQuery, m.filterVisible)
@@ -928,27 +906,6 @@ func (m *Model) recordKeyDebug(msg tea.KeyPressMsg, handled, moved bool) {
 		sel = compactFramePath(m.frames[m.selectedIdx].Path)
 	}
 	m.lastKeyDebug = fmt.Sprintf("dbg frames=%d idx=%d key=%q code=%d handled=%t moved=%t sel=%s", len(m.frames), selIdx, keyID, msg.Code, handled, moved, sel)
-}
-
-// moveTraversal delegates depth-then-column traversal to SelectionManager.
-func (m *Model) moveTraversal(delta int) {
-	m.SelectionManager.moveTraversal(m.frames, delta, m.searchQuery, m.filterVisible)
-}
-
-// visibleTraversalOrder delegates to SelectionManager for the sorted traversal order.
-func (m Model) visibleTraversalOrder() []int {
-	return visibleTraversalOrder(m.frames, m.searchQuery, m.filterVisible)
-}
-
-// visibleRowOffset delegates row offset calculation to SelectionManager.
-func (m Model) visibleRowOffset() int {
-	return visibleRowOffset(m.frames, m.height, m.searchQuery, m.filterVisible)
-}
-
-// ensureSelectionVisible delegates to SelectionManager to adjust the selection
-// so it falls within the visible rendered rows.
-func (m *Model) ensureSelectionVisible() {
-	m.SelectionManager.ensureVisible(m.frames, m.height, m.searchQuery, m.filterVisible)
 }
 
 func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {

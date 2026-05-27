@@ -1278,7 +1278,7 @@ func TestRebuildKeepsSelectionOnVisibleRowsWhenTruncated(t *testing.T) {
 	if len(m.frames) == 0 {
 		t.Fatalf("expected rebuilt frames")
 	}
-	rowOffset := m.visibleRowOffset()
+	rowOffset := visibleRowOffset(m.frames, m.height, m.searchQuery, m.filterVisible)
 	if m.frames[m.selectedIdx].Row < rowOffset {
 		t.Fatalf("expected selected frame row %d to be visible (offset=%d)", m.frames[m.selectedIdx].Row, rowOffset)
 	}
