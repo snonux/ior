@@ -890,6 +890,36 @@ func TestViewSelectionStatusUsesBytesLabelInBytesMode(t *testing.T) {
 	}
 }
 
+func TestSelectionStatusLineIncludesSelectedHeightValueAndMaxShare(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 220
+	m.height = 20
+	m.heightField = "duration"
+	m.frames = []tuiFrame{
+		{Name: "root", Depth: 0, Col: 0, Row: 0, Width: 120, Total: 100, Percent: 100, Path: "root", HeightTotal: 200},
+		{Name: "child", Depth: 1, Col: 0, Row: 1, Width: 60, Total: 40, Percent: 40, Path: "root" + pathSeparator + "child", HeightTotal: 50},
+	}
+	m.selectedIdx = 1
+	m.globalTotal = 100
+
+	line := m.selectionStatusLine()
+	if !strings.Contains(line, "height(duration)=50 (25.0% of max)") {
+		t.Fatalf("expected selected height metric fragment, got %q", line)
+	}
+}
+
+func TestSelectionStatusLineUsesHeightLabelWithoutSelectedValueWhenNoSelection(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 220
+	m.height = 20
+	m.heightField = "duration"
+
+	line := m.selectionStatusLine()
+	if !strings.Contains(line, "height:duration") {
+		t.Fatalf("expected height field label without selected value when no frames, got %q", line)
+	}
+}
+
 func TestViewFitsViewportHeightAndKeepsSearchFooterVisible(t *testing.T) {
 	m := NewModel(nil)
 	m.width = 100
