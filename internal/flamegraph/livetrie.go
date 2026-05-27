@@ -100,28 +100,44 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	lt.AddRecord(record)
 }
 
+func (lt *LiveTrie) addRecordConfig() ([]string, string, string) {
+	lt.mu.RLock()
+	fields := slices.Clone(lt.fields)
+	countField := lt.countField
+	heightField := lt.heightField
+	lt.mu.RUnlock()
+	return fields, countField, heightField
+}
+
 // AddRecord adds one already-decoded flamegraph record into the live trie.
 func (lt *LiveTrie) AddRecord(record IterRecord) {
-	lt.mu.Lock()
+	for {
+		fields, countField, heightField := lt.addRecordConfig()
 
-	value, err := record.Cnt.ValueByName(lt.countField)
-	if err != nil {
+		value, err := record.Cnt.ValueByName(countField)
+		if err != nil {
+			return
+		}
+		heightValue := uint64(0)
+		if heightField != "" {
+			heightValue, err = record.Cnt.ValueByName(heightField)
+			if err != nil {
+				return
+			}
+		}
+
+		frames := buildFrames(record, fields)
+
+		lt.mu.Lock()
+		if countField != lt.countField || heightField != lt.heightField || !slices.Equal(fields, lt.fields) {
+			lt.mu.Unlock()
+			continue
+		}
+		lt.addLocked(frames, value, heightValue)
+		lt.version.Add(1)
 		lt.mu.Unlock()
 		return
 	}
-	heightValue := uint64(0)
-	if lt.heightField != "" {
-		heightValue, err = record.Cnt.ValueByName(lt.heightField)
-		if err != nil {
-			lt.mu.Unlock()
-			return
-		}
-	}
-
-	frames := lt.buildFrames(record)
-	lt.addLocked(frames, value, heightValue)
-	lt.version.Add(1)
-	lt.mu.Unlock()
 }
 
 // Reset clears the trie so live snapshots start from a new baseline.
@@ -292,9 +308,9 @@ func eventPairToRecord(ep *event.Pair) IterRecord {
 	}
 }
 
-func (lt *LiveTrie) buildFrames(record IterRecord) []string {
-	frames := make([]string, 0, len(lt.fields))
-	for _, fieldName := range lt.fields {
+func buildFrames(record IterRecord, fields []string) []string {
+	frames := make([]string, 0, len(fields))
+	for _, fieldName := range fields {
 		value, err := record.StringByName(fieldName)
 		if err != nil {
 			continue
