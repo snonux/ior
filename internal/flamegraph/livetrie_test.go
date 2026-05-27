@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -436,6 +437,33 @@ func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
 	}
 	if !bytes.Equal(first, second) {
 		t.Fatalf("snapshot bytes differ across cached call")
+	}
+}
+
+func TestLiveTrieSnapshotJSONSkipsStaleCacheWrite(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
+	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
+
+	_, version := lt.SnapshotJSON()
+	newerPayload := []byte(`{"n":"newer","v":7}`)
+
+	lt.cacheMu.Lock()
+	lt.cacheVersion = version + 1
+	lt.cacheJSON = slices.Clone(newerPayload)
+	lt.cacheMu.Unlock()
+
+	_, _ = lt.SnapshotJSON()
+
+	lt.cacheMu.Lock()
+	gotVersion := lt.cacheVersion
+	gotPayload := slices.Clone(lt.cacheJSON)
+	lt.cacheMu.Unlock()
+
+	if gotVersion != version+1 {
+		t.Fatalf("cache version overwritten by stale snapshot: got %d want %d", gotVersion, version+1)
+	}
+	if !bytes.Equal(gotPayload, newerPayload) {
+		t.Fatalf("cache payload overwritten by stale snapshot: got %q want %q", gotPayload, newerPayload)
 	}
 }
 
