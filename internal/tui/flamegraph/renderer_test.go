@@ -599,6 +599,12 @@ func TestBuildTerminalLayoutHeightTotalUsesSnapshotAggregation(t *testing.T) {
 	}
 }
 
+func TestSnapshotHeightTotalNilNodeReturnsZero(t *testing.T) {
+	if got, want := snapshotHeightTotal(nil), uint64(0); got != want {
+		t.Fatalf("snapshotHeightTotal(nil) = %d, want %d", got, want)
+	}
+}
+
 func mustFindFrame(t *testing.T, frames []tuiFrame, path string) tuiFrame {
 	t.Helper()
 	for _, frame := range frames {
