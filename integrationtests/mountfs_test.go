@@ -2,8 +2,13 @@ package integrationtests
 
 import "testing"
 
+var mountfsTraceArgs = []string{
+	"-trace-syscalls",
+	"mount,umount,move_mount,fsmount,pivot_root,quotactl,statmount,listmount,listns,swapon,swapoff",
+}
+
 func TestMountFsManagementSyscalls(t *testing.T) {
-	runScenario(t, "mountfs-management", []ExpectedEvent{
+	runScenarioResultWithIorArgs(t, "mountfs-management", []ExpectedEvent{
 		{Tracepoint: "enter_mount", MinCount: 1},
 		{Tracepoint: "enter_umount", MinCount: 1},
 		{Tracepoint: "enter_move_mount", MinCount: 1},
@@ -15,5 +20,5 @@ func TestMountFsManagementSyscalls(t *testing.T) {
 		{Tracepoint: "enter_listns", MinCount: 1},
 		{Tracepoint: "enter_swapon", MinCount: 1},
 		{Tracepoint: "enter_swapoff", MinCount: 1},
-	})
+	}, mountfsTraceArgs)
 }

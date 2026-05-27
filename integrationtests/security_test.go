@@ -5,14 +5,16 @@ import (
 	"testing"
 )
 
+var securityTraceArgs = []string{"-trace-syscalls", "keyctl,add_key,request_key,ptrace,perf_event_open,close"}
+
 func TestSecurityKeysPtracePerf(t *testing.T) {
-	result, _ := runScenarioResult(t, "security-keys-ptrace-perf", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "security-keys-ptrace-perf", []ExpectedEvent{
 		{Tracepoint: "enter_keyctl", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_add_key", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_request_key", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_ptrace", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_perf_event_open", Comm: "ioworkload", MinCount: 1},
-	})
+	}, securityTraceArgs)
 
 	// Key and ptrace operations are not fd/path based and should stay untracked.
 	assertTracepointPathPrefix(t, result, "enter_keyctl", "N:file")

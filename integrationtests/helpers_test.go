@@ -52,9 +52,14 @@ func runScenario(t *testing.T, scenario string, expected []ExpectedEvent) {
 
 func runScenarioResult(t *testing.T, scenario string, expected []ExpectedEvent) (TestResult, int) {
 	t.Helper()
+	return runScenarioResultWithIorArgs(t, scenario, expected, nil)
+}
+
+func runScenarioResultWithIorArgs(t *testing.T, scenario string, expected []ExpectedEvent, extraIorArgs []string) (TestResult, int) {
+	t.Helper()
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
-	result, pid, err := h.Run(scenario, defaultDuration)
+	result, pid, err := h.RunWithIorArgs(scenario, defaultDuration, extraIorArgs)
 	if err != nil {
 		t.Fatalf("run scenario %s: %v", scenario, err)
 	}

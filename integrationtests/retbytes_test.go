@@ -2,10 +2,12 @@ package integrationtests
 
 import "testing"
 
+var retbytesTraceArgs = []string{"-trace-syscalls", "sendto,recvfrom,sendmsg,recvmsg,sendmmsg,recvmmsg,sendfile64,splice,tee,process_vm_writev,process_vm_readv,socketpair,pipe2,openat,write,read,close,lseek,fcntl,unlinkat,mkdirat,getdents64"}
+
 func TestRetbytesPhaseA(t *testing.T) {
 	const payloadLen = uint64(18)
 
-	result, _ := runScenarioResult(t, "retbytes-phase-a", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "retbytes-phase-a", []ExpectedEvent{
 		{Tracepoint: "enter_sendto", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_recvfrom", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_sendmsg", Comm: "ioworkload", MinCount: 1},
@@ -17,7 +19,7 @@ func TestRetbytesPhaseA(t *testing.T) {
 		{Tracepoint: "enter_tee", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_process_vm_writev", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload", MinCount: 1},
-	})
+	}, retbytesTraceArgs)
 
 	for _, tracepoint := range []string{
 		"enter_sendto",

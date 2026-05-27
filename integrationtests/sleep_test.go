@@ -7,10 +7,12 @@ const (
 	sleepWorkloadStartupEnv = "IOR_WORKLOAD_STARTUP_DELAY_MS=1000"
 )
 
+var sleepTraceArgs = []string{"-trace-families", "Time"}
+
 func TestSleepTracepoints(t *testing.T) {
 	h := newTestHarness(t)
 	h.WorkloadEnv = []string{sleepWorkloadStartupEnv}
-	result, pid, err := h.Run("sleep-syscalls", defaultDuration)
+	result, pid, err := h.RunWithIorArgs("sleep-syscalls", defaultDuration, sleepTraceArgs)
 	if err != nil {
 		t.Fatalf("run scenario sleep-syscalls: %v", err)
 	}
@@ -26,7 +28,7 @@ func TestSleepTracepoints(t *testing.T) {
 func TestSleepRequestedTimespecInParquet(t *testing.T) {
 	h := newTestHarness(t)
 	h.WorkloadEnv = []string{sleepWorkloadStartupEnv}
-	path, pid, err := h.RunParquet("sleep-syscalls", sleepParquetDuration)
+	path, pid, err := h.RunParquetWithIorArgs("sleep-syscalls", sleepParquetDuration, sleepTraceArgs)
 	if err != nil {
 		t.Fatalf("run sleep-syscalls parquet scenario: %v", err)
 	}
@@ -64,4 +66,3 @@ func TestSleepRequestedTimespecInParquet(t *testing.T) {
 		t.Fatal("expected clock_nanosleep row with RequestedSleepNS=3000000")
 	}
 }
-

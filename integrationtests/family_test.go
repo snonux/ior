@@ -15,10 +15,12 @@ const (
 	familyWorkloadStartupEnv = "IOR_WORKLOAD_STARTUP_DELAY_MS=1000"
 )
 
+var familyMixedTraceArgs = []string{"-trace-syscalls", "openat,write,mmap,munmap,pipe2,socketpair,getpid,sched_yield,nanosleep"}
+
 func TestFamilyParquetRecordingAndAggregation(t *testing.T) {
 	h := newTestHarness(t)
 	h.WorkloadEnv = []string{familyWorkloadStartupEnv}
-	path, pid, err := h.RunParquet("family-mixed", familyParquetDuration)
+	path, pid, err := h.RunParquetWithIorArgs("family-mixed", familyParquetDuration, familyMixedTraceArgs)
 	if err != nil {
 		t.Fatalf("run family-mixed parquet scenario: %v", err)
 	}
@@ -54,7 +56,7 @@ func TestFamilyParquetRecordingAndAggregation(t *testing.T) {
 	}
 	for syscall := range expectedSyscallFamilies {
 		if !seenSyscalls[syscall] {
-			t.Fatalf("expected traced syscall %q in parquet rows", syscall)
+			t.Fatalf("expected traced syscall %q in parquet rows; saw syscalls: %+v", syscall, seenSyscalls)
 		}
 	}
 
