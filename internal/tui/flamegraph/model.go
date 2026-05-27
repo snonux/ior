@@ -520,7 +520,7 @@ func (m Model) renderViewContent() string {
 		FilterSet:          m.filterVisible,
 		GlobalTotal:        m.globalTotal,
 		MetricLabel:        m.countFieldLabel(),
-		HeightMetricActive: strings.TrimSpace(m.heightField) != "",
+		HeightMetricActive: m.heightMetricActive(),
 		IsDark:             m.isDark,
 		SearchQuery:        m.searchQuery,
 	})
@@ -1101,12 +1101,12 @@ func (m Model) rootSnapshotPath() string {
 // frameIndexAt delegates to the renderer package-level helper to convert
 // terminal coordinates (x, y) to a frame index, accounting for UI chrome.
 func (m Model) frameIndexAt(x, y int) int {
-	return frameIndexAt(m.frames, x, y, m.width, m.height, m.showHelp, strings.TrimSpace(m.heightField) != "")
+	return frameIndexAt(m.frames, x, y, m.width, m.height, m.showHelp, m.heightMetricActive())
 }
 
 // frameCoordToTargetRow delegates to the renderer package-level helper.
 func (m Model) frameCoordToTargetRow(dataRow, availableRows int) int {
-	params := computeRenderParamsForAvailableRows(m.frames, availableRows, strings.TrimSpace(m.heightField) != "")
+	params := computeRenderParamsForAvailableRows(m.frames, availableRows, m.heightMetricActive())
 	return frameCoordToTargetRow(dataRow, params)
 }
 
