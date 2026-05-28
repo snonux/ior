@@ -24,6 +24,23 @@ func TestCloseRange(t *testing.T) {
 	})
 }
 
+func TestCloseRangeBounded(t *testing.T) {
+	runScenario(t, "close-range-bounded", []ExpectedEvent{
+		{
+			PathContains: "closerangelow-",
+			Tracepoint:   "enter_close_range",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+		{
+			PathContains: "closerangehigh.txt",
+			Tracepoint:   "enter_write",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
 func TestCloseInvalidFd(t *testing.T) {
 	runScenario(t, "close-invalid-fd", []ExpectedEvent{
 		{

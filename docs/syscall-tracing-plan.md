@@ -61,7 +61,7 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 - eventfd: `epoll_create`, `epoll_create1`, `eventfd`, `eventfd2`, `fanotify_init`, `fsmount`, `fsopen`, `inotify_init`, `inotify_init1`, `landlock_create_ruleset`, `memfd_create`, `memfd_secret`, `signalfd`, `signalfd4`, `timerfd_create`, `userfaultfd`
 - exec: `execve`, `execveat`
 - fcntl: `fcntl`
-- fd: `bind`, `cachestat`, `close`, `close_range`, `connect`, `copy_file_range`, `dup`, `dup2`, `epoll_pwait`, `epoll_pwait2`, `epoll_wait`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_add_watch`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `ioctl`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mmap`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `sync_file_range`, `syncfs`, `vmsplice`, `write`, `writev`
+- fd: `bind`, `cachestat`, `close`, `connect`, `copy_file_range`, `dup`, `dup2`, `epoll_pwait`, `epoll_pwait2`, `epoll_wait`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_add_watch`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `ioctl`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mmap`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `sync_file_range`, `syncfs`, `vmsplice`, `write`, `writev`
 - futex: `futex`, `futex_requeue`, `futex_wait`, `futex_waitv`, `futex_wake`
 - keyctl: `add_key`, `keyctl`, `request_key`
 - mem: `brk`, `madvise`, `map_shadow_stack`, `mincore`, `mlock`, `mlock2`, `mprotect`, `mremap`, `mseal`, `munlock`, `munmap`, `pkey_mprotect`, `remap_file_pages`
@@ -86,7 +86,7 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 - sysv-id: `msgget`, `semget`, `shmget`
 - sysv-op: `msgctl`, `msgrcv`, `msgsnd`, `semctl`, `semop`, `semtimedop`, `shmat`, `shmctl`, `shmdt`
 - timer-obj: `timer_create`, `timer_delete`, `timer_getoverrun`, `timer_gettime`, `timer_settime`
-- two-fd: `kcmp`, `move_mount`
+- two-fd: `close_range`, `kcmp`, `move_mount`
 
 ## Bytes vs Non-Bytes Classification
 

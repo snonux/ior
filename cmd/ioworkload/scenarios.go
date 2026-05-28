@@ -43,6 +43,7 @@ var scenarios = map[string]func() error{
 	"family-mixed":                  familyMixed,
 	"close-basic":                   closeBasic,
 	"close-range":                   closeRange,
+	"close-range-bounded":           closeRangeBounded,
 	"close-invalid-fd":              closeInvalidFd,
 	"close-double-close":            closeDoubleClose,
 	"close-range-empty":             closeRangeEmpty,

@@ -58,11 +58,19 @@ func (t *fdTracker) delete(fd int32) {
 	delete(t.files, fd)
 }
 
-func (t *fdTracker) closeRangeFrom(first int32) {
+// closeRange removes all tracked fds in the inclusive range [first, last], as
+// closed by close_range(2). A negative last means "no upper bound": close_range's
+// last argument is an unsigned int, so the common close-everything form ~0U
+// arrives here as a negative __s32 and must close every tracked fd >= first.
+func (t *fdTracker) closeRange(first, last int32) {
 	for fd := range t.files {
-		if fd >= first {
-			delete(t.files, fd)
+		if fd < first {
+			continue
 		}
+		if last >= 0 && fd > last {
+			continue
+		}
+		delete(t.files, fd)
 	}
 }
 
@@ -113,16 +121,23 @@ func (t *fdTracker) deleteProcFdCache(fd int32, pid uint32) {
 	t.deleteCacheKey(procFdCacheKey(pid, fd))
 }
 
-func (t *fdTracker) deleteProcFdCacheFrom(first int32, pid uint32) {
+// deleteProcFdCacheRange drops cached procfs resolutions for pid's fds in the
+// inclusive range [first, last]. A negative last means "no upper bound" (see
+// closeRange for why close_range's last argument can arrive negative).
+func (t *fdTracker) deleteProcFdCacheRange(first, last int32, pid uint32) {
 	if t.procFdCache == nil {
 		return
 	}
 	for key := range t.procFdCache {
 		cachePid := uint32(key >> 32)
 		cacheFd := int32(uint32(key))
-		if cachePid == pid && cacheFd >= first {
-			t.deleteCacheKey(key)
+		if cachePid != pid || cacheFd < first {
+			continue
 		}
+		if last >= 0 && cacheFd > last {
+			continue
+		}
+		t.deleteCacheKey(key)
 	}
 }
 

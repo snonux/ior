@@ -118,8 +118,10 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 }
 
 // handleFdExit processes exit events for fd-based syscalls. It resolves the fd
-// to a file, applies close/close_range state transitions, filters the pair, and
-// handles dup/pidfd_getfd fd-transfer operations before finalising bytes.
+// to a file, applies the close state transition, filters the pair, and handles
+// dup/pidfd_getfd fd-transfer operations before finalising bytes. close_range is
+// not handled here: it carries (first, last, flags) and is routed through
+// handleTwoFdExit so the upper bound and flags are honoured.
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	ep.File = e.fdState().resolve(fd, fdEv.Pid)
@@ -134,21 +136,11 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	return true
 }
 
-// applyFdCloseState updates fd-tracking state for close and close_range syscalls.
+// applyFdCloseState updates fd-tracking state for the close syscall.
 func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 	if ep.Is(types.SYS_ENTER_CLOSE) {
 		e.fdState().delete(fd)
 		e.fdState().deleteProcFdCache(fd, pid)
-		return
-	}
-	if ep.Is(types.SYS_ENTER_CLOSE_RANGE) {
-		// close_range provides (first, last), but fd_event only carries the first
-		// argument, so we approximate by closing all tracked fds >= first.
-		retEv, ok := ep.ExitEv.(*types.RetEvent)
-		if ok && retEv.Ret == 0 {
-			e.fdState().closeRangeFrom(fd)
-			e.fdState().deleteProcFdCacheFrom(fd, pid)
-		}
 	}
 }
 
@@ -385,7 +377,31 @@ func (e *eventLoop) handlePollExit(ep *event.Pair, pollEv *types.PollEvent) bool
 
 func (e *eventLoop) handleTwoFdExit(ep *event.Pair, twoFdEv *types.TwoFdEvent) bool {
 	ep.File = e.fdState().resolve(twoFdEv.FdA, twoFdEv.Pid)
+	if ep.Is(types.SYS_ENTER_CLOSE_RANGE) {
+		e.applyCloseRangeState(ep, twoFdEv)
+	}
 	return e.finishPairForTid(ep, twoFdEv.GetTid())
+}
+
+// closeRangeCloexec mirrors CLOSE_RANGE_CLOEXEC from <linux/close_range.h>: when
+// set, close_range only marks the descriptors close-on-exec instead of closing
+// them, so the fds stay open and must remain tracked.
+const closeRangeCloexec = 1 << 2
+
+// applyCloseRangeState evicts the fds closed by a successful close_range. The
+// enter event carries (first, last, flags) in fd_a/fd_b/extra. fd_b is an __s32
+// view of the unsigned "last" argument, so a negative value (e.g. ~0U meaning
+// "close everything from first up") is treated as having no upper bound.
+func (e *eventLoop) applyCloseRangeState(ep *event.Pair, ev *types.TwoFdEvent) {
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok || retEv.Ret != 0 {
+		return
+	}
+	if ev.Extra&closeRangeCloexec != 0 {
+		return
+	}
+	e.fdState().closeRange(ev.FdA, ev.FdB)
+	e.fdState().deleteProcFdCacheRange(ev.FdA, ev.FdB, ev.Pid)
 }
 
 func (e *eventLoop) handleMemExit(ep *event.Pair, memEv *types.MemEvent) bool {

@@ -7549,7 +7549,7 @@ int handle_sys_exit_sysfs(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_close_range is a struct fd_event (kind=fd)
+/// sys_enter_close_range is a struct two_fd_event (kind=two-fd)
 SEC("tracepoint/syscalls/sys_enter_close_range")
 int handle_sys_enter_close_range(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -7559,16 +7559,18 @@ int handle_sys_enter_close_range(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_CLOSE_RANGE))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct two_fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct two_fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_TWO_FD_EVENT;
     ev->trace_id = SYS_ENTER_CLOSE_RANGE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd_a = (__s32)ctx->args[0];
+    ev->fd_b = (__s32)ctx->args[1];
+    ev->extra = (__u64)ctx->args[2];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

@@ -1401,6 +1401,7 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"mount", FormatMount, FormatExitMount, KindPathname},
 		{"umount", FormatUmount, FormatExitUmount, KindPathname},
 		{"move_mount", FormatMoveMount, FormatExitMoveMount, KindTwoFd},
+		{"close_range", syntheticEnter("close_range", 9322), syntheticExit("close_range", 9321), KindTwoFd},
 		{"kcmp", syntheticEnter("kcmp", 9324), syntheticExit("kcmp", 9323), KindTwoFd},
 		{"kexec_file_load", syntheticEnter("kexec_file_load", 9326), syntheticExit("kexec_file_load", 9325), KindFd},
 		{"membarrier", syntheticEnter("membarrier", 9328), syntheticExit("membarrier", 9327), KindNull},
