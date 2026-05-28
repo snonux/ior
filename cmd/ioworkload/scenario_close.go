@@ -64,6 +64,52 @@ func closeRange() error {
 	return nil
 }
 
+// closeRangeBounded opens a contiguous block of low fds plus one higher fd,
+// then closes only the low block via close_range(first, last, 0) where last is
+// strictly below the higher fd. It writes to the higher fd afterwards to prove
+// it stayed open. This exercises close_range's upper-bound handling end to end:
+// ior must keep the higher fd tracked rather than evicting everything >= first.
+func closeRangeBounded() error {
+	dir, cleanup, err := makeTempDir("close-range-bounded")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	var lowFds []int
+	for i := range 3 {
+		path := filepath.Join(dir, fmt.Sprintf("closerangelow-%d.txt", i))
+		fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+		if err != nil {
+			return fmt.Errorf("open low %d: %w", i, err)
+		}
+		lowFds = append(lowFds, fd)
+	}
+
+	highPath := filepath.Join(dir, "closerangehigh.txt")
+	highFd, err := syscall.Open(highPath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open high: %w", err)
+	}
+	defer syscall.Close(highFd)
+
+	if highFd <= lowFds[len(lowFds)-1] {
+		return fmt.Errorf("high fd %d not above low fds %v", highFd, lowFds)
+	}
+
+	first := uintptr(lowFds[0])
+	last := uintptr(lowFds[len(lowFds)-1])
+	if _, _, errno := syscall.Syscall(sysCloseRange, first, last, 0); errno != 0 {
+		return fmt.Errorf("close_range: %w", errno)
+	}
+
+	// highFd is above last, so it must still be open and usable.
+	if _, err := syscall.Write(highFd, []byte("still-open")); err != nil {
+		return fmt.Errorf("write high fd: %w", err)
+	}
+	return nil
+}
+
 // closeInvalidFd attempts to close a very high fd number that is not open.
 // The close fails with EBADF, but ior should capture the enter_close tracepoint
 // because arguments are read on syscall entry before the kernel returns an error.

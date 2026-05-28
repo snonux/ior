@@ -241,9 +241,14 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_epoll_ctl":    KindEpollCtl,
 
 	"sys_enter_move_mount": KindTwoFd,
-	"sys_enter_statmount":  KindNull,
-	"sys_enter_listmount":  KindNull,
-	"sys_enter_listns":     KindNull,
+	// close_range(first, last, flags) needs all three arguments, so it is a
+	// two_fd_event (fd_a=first, fd_b=last, extra=flags) rather than a single-fd
+	// fd_event. This lets the runtime honour the upper bound and the
+	// CLOSE_RANGE_CLOEXEC flag instead of closing every fd >= first.
+	"sys_enter_close_range": KindTwoFd,
+	"sys_enter_statmount":   KindNull,
+	"sys_enter_listmount":   KindNull,
+	"sys_enter_listns":      KindNull,
 
 	"sys_enter_poll":     KindPoll,
 	"sys_enter_ppoll":    KindPoll,

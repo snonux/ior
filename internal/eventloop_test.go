@@ -186,37 +186,112 @@ func TestHandleFdExitCloseClearsProcFdCache(t *testing.T) {
 	verifyProcFdNotCached(t, el, pid, fd)
 }
 
-func TestHandleFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
+func TestHandleTwoFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	pid := uint32(2002)
 
-	el.fdState().setProcFdCache(10, pid, file.NewFd(10, "keep", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(10, pid, file.NewFd(10, "keep-below", syscall.O_RDONLY))
 	el.fdState().setProcFdCache(20, pid, file.NewFd(20, "drop", syscall.O_RDONLY))
 	el.fdState().setProcFdCache(30, pid, file.NewFd(30, "drop", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(40, pid, file.NewFd(40, "keep-above", syscall.O_RDONLY))
 	el.fdState().setProcFdCache(20, pid+1, file.NewFd(20, "other-pid", syscall.O_RDONLY))
 
-	enter := &types.FdEvent{
-		TraceId: types.SYS_ENTER_CLOSE_RANGE,
-		Pid:     pid,
-		Tid:     pid,
-		Fd:      20,
+	// close_range(20, 30, 0): only the inclusive [20,30] window for pid is evicted.
+	enter := &types.TwoFdEvent{
+		EventType: types.ENTER_TWO_FD_EVENT,
+		TraceId:   types.SYS_ENTER_CLOSE_RANGE,
+		Pid:       pid,
+		Tid:       pid,
+		FdA:       20,
+		FdB:       30,
+		Extra:     0,
 	}
 	exit := &types.RetEvent{
-		TraceId: types.SYS_EXIT_CLOSE_RANGE,
-		Pid:     pid,
-		Tid:     pid,
-		Ret:     0,
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_CLOSE_RANGE,
+		Pid:       pid,
+		Tid:       pid,
+		Ret:       0,
 	}
 	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
 
-	if ok := el.handleFdExit(ep, enter); !ok {
-		t.Fatal("handleFdExit(close_range) returned false")
+	if ok := el.handleTwoFdExit(ep, enter); !ok {
+		t.Fatal("handleTwoFdExit(close_range) returned false")
 	}
 
 	verifyProcFdCached(t, el, pid, 10)
 	verifyProcFdNotCached(t, el, pid, 20)
 	verifyProcFdNotCached(t, el, pid, 30)
+	verifyProcFdCached(t, el, pid, 40)
 	verifyProcFdCached(t, el, pid+1, 20)
+}
+
+func TestHandleTwoFdExitCloseRangeCloexecKeepsFds(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(5, file.NewFd(5, "stays-open", syscall.O_RDONLY))
+	el.fdState().set(6, file.NewFd(6, "stays-open", syscall.O_RDONLY))
+
+	// close_range(5, 6, CLOSE_RANGE_CLOEXEC): the kernel only marks the fds
+	// close-on-exec, so they remain open and must stay tracked.
+	enter := &types.TwoFdEvent{
+		EventType: types.ENTER_TWO_FD_EVENT,
+		TraceId:   types.SYS_ENTER_CLOSE_RANGE,
+		Pid:       3003,
+		Tid:       3003,
+		FdA:       5,
+		FdB:       6,
+		Extra:     closeRangeCloexec,
+	}
+	exit := &types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_CLOSE_RANGE,
+		Pid:       3003,
+		Tid:       3003,
+		Ret:       0,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleTwoFdExit(ep, enter); !ok {
+		t.Fatal("handleTwoFdExit(close_range cloexec) returned false")
+	}
+
+	verifyFileDescriptor(t, el, 5, "stays-open")
+	verifyFileDescriptor(t, el, 6, "stays-open")
+}
+
+func TestHandleTwoFdExitCloseRangeUnboundedClosesAll(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(2, file.NewFd(2, "keep-below", syscall.O_RDONLY))
+	el.fdState().set(7, file.NewFd(7, "drop", syscall.O_RDONLY))
+	el.fdState().set(900, file.NewFd(900, "drop-high", syscall.O_RDONLY))
+
+	// close_range(3, ~0U, 0): the unsigned UINT_MAX upper bound arrives as a
+	// negative __s32, meaning "close everything from fd 3 up".
+	enter := &types.TwoFdEvent{
+		EventType: types.ENTER_TWO_FD_EVENT,
+		TraceId:   types.SYS_ENTER_CLOSE_RANGE,
+		Pid:       4004,
+		Tid:       4004,
+		FdA:       3,
+		FdB:       -1,
+		Extra:     0,
+	}
+	exit := &types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_CLOSE_RANGE,
+		Pid:       4004,
+		Tid:       4004,
+		Ret:       0,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleTwoFdExit(ep, enter); !ok {
+		t.Fatal("handleTwoFdExit(close_range unbounded) returned false")
+	}
+
+	verifyFileDescriptor(t, el, 2, "keep-below")
+	verifyFdNotTracked(t, el, 7)
+	verifyFdNotTracked(t, el, 900)
 }
 
 func TestFreezePairForEmissionCopiesFdFile(t *testing.T) {
@@ -423,6 +498,27 @@ func makeExitFdEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, trace
 	return ev, bytes
 }
 
+// makeEnterTwoFdEvent builds an enter two_fd_event and its wire bytes. For
+// close_range the three fields carry (first, last, flags).
+func makeEnterTwoFdEvent(t *testing.T, time uint64, pid, tid uint32, fdA, fdB int32, extra uint64, traceId types.TraceId) (types.TwoFdEvent, []byte) {
+	ev := types.TwoFdEvent{
+		EventType: types.ENTER_TWO_FD_EVENT,
+		TraceId:   traceId,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		FdA:       fdA,
+		FdB:       fdB,
+		Extra:     extra,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
 // Helper function to create exit RetEvent
 func makeExitRetEvent(t *testing.T, time uint64, pid, tid uint32, traceId types.TraceId, ret int64) (types.RetEvent, []byte) {
 	ev := types.RetEvent{
@@ -590,7 +686,8 @@ func makeCloseRangeEventTestData(t *testing.T) (td testData) {
 	openExitBytes3, _ = openExitEv3.Bytes()
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes3)
 
-	enterCloseRange, enterCloseRangeBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, defaultTid, fd2, types.SYS_ENTER_CLOSE_RANGE)
+	// close_range(fd2, fd3, 0): closes the inclusive window [fd2, fd3], leaving fd1 tracked.
+	enterCloseRange, enterCloseRangeBytes := makeEnterTwoFdEvent(t, defaulTime+600, defaultPid, defaultTid, fd2, fd3, 0, types.SYS_ENTER_CLOSE_RANGE)
 	td.rawTracepoints = append(td.rawTracepoints, enterCloseRangeBytes)
 
 	exitCloseRange, exitCloseRangeBytes := makeExitRetEvent(t, defaulTime+700, defaultPid, defaultTid, types.SYS_EXIT_CLOSE_RANGE, 0)
@@ -671,7 +768,8 @@ func makeCloseRangeFailureTestData(t *testing.T) (td testData) {
 	openExitBytes2, _ = openExitEv2.Bytes()
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes2)
 
-	enterCloseRange, enterCloseRangeBytes := makeEnterFdEvent(t, defaulTime+400, defaultPid, defaultTid, fd1, types.SYS_ENTER_CLOSE_RANGE)
+	// close_range(fd1, fd2, 0) that fails (ret=-1): no fds should be evicted.
+	enterCloseRange, enterCloseRangeBytes := makeEnterTwoFdEvent(t, defaulTime+400, defaultPid, defaultTid, fd1, fd2, 0, types.SYS_ENTER_CLOSE_RANGE)
 	td.rawTracepoints = append(td.rawTracepoints, enterCloseRangeBytes)
 
 	exitCloseRange, exitCloseRangeBytes := makeExitRetEvent(t, defaulTime+500, defaultPid, defaultTid, types.SYS_EXIT_CLOSE_RANGE, -1)

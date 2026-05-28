@@ -1135,7 +1135,7 @@ var syscallKinds = map[string]string{
 	"clone":                   "proc",
 	"clone3":                  "proc",
 	"close":                   "fd",
-	"close_range":             "fd",
+	"close_range":             "two-fd",
 	"connect":                 "fd",
 	"copy_file_range":         "fd",
 	"creat":                   "pathname",
