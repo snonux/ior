@@ -1540,6 +1540,12 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"request_key", syntheticEnter("request_key", 9304), syntheticExit("request_key", 9303), FamilySecurity},
 		{"ptrace", syntheticEnter("ptrace", 9306), syntheticExit("ptrace", 9305), FamilySecurity},
 		{"perf_event_open", syntheticEnter("perf_event_open", 9308), syntheticExit("perf_event_open", 9307), FamilySecurity},
+		// lsm_* are the Linux Security Module introspection syscalls (Linux
+		// 6.8+); they belong with their landlock_*/keyctl/*_key siblings in
+		// the Security family, not Misc.
+		{"lsm_list_modules", syntheticEnter("lsm_list_modules", 9412), syntheticExit("lsm_list_modules", 9411), FamilySecurity},
+		{"lsm_get_self_attr", syntheticEnter("lsm_get_self_attr", 9414), syntheticExit("lsm_get_self_attr", 9413), FamilySecurity},
+		{"lsm_set_self_attr", syntheticEnter("lsm_set_self_attr", 9416), syntheticExit("lsm_set_self_attr", 9415), FamilySecurity},
 		{"mount", FormatMount, FormatExitMount, FamilyFS},
 		{"umount", FormatUmount, FormatExitUmount, FamilyFS},
 		{"move_mount", FormatMoveMount, FormatExitMoveMount, FamilyFS},

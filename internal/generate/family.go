@@ -121,7 +121,13 @@ var syscallFamilies = map[string]SyscallFamily{
 	"kexec_file_load": FamilySecurity, "keyctl": FamilySecurity,
 	"landlock_add_rule": FamilySecurity, "landlock_create_ruleset": FamilySecurity,
 	"landlock_restrict_self": FamilySecurity, "lookup_dcookie": FamilySecurity,
-	"perf_event_open": FamilySecurity, "ptrace": FamilySecurity,
+	// lsm_* are the Linux Security Module (LSM) introspection syscalls
+	// (Linux 6.8+): list loaded LSMs and get/set per-task LSM attributes.
+	// They belong with the other security syscalls, alongside their
+	// landlock_* and *_key siblings.
+	"lsm_get_self_attr": FamilySecurity, "lsm_list_modules": FamilySecurity,
+	"lsm_set_self_attr": FamilySecurity,
+	"perf_event_open":   FamilySecurity, "ptrace": FamilySecurity,
 	"request_key": FamilySecurity, "seccomp": FamilySecurity,
 }
 
