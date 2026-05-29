@@ -707,6 +707,65 @@ func TestClassifyRequestKey(t *testing.T) {
 	}
 }
 
+// TestClassifyKeyctlAudit is a lock-in regression test for the keyctl(2)
+// audit. The key-management syscalls have these signatures:
+//
+//	long         keyctl(int op, unsigned long arg2, arg3, arg4, arg5)
+//	key_serial_t add_key(const char *type, const char *desc,
+//	                     const void *payload, size_t plen, key_serial_t keyring)
+//	key_serial_t request_key(const char *type, const char *desc,
+//	                     const char *callout_info, key_serial_t dest_keyring)
+//
+// keyctl's op selects a command and the remaining arguments are
+// operation-dependent unsigned longs — never an fd or a path. add_key and
+// request_key take string TYPE/DESCRIPTION arguments that are key metadata
+// (a key type name and a free-form description), NOT filesystem paths, so
+// they must not be classified as KindPathname/KindOpen. All three therefore
+// classify as KindKeyctl (operation + generic numeric args, captured via the
+// keyctl_event without any bpf_probe_read_user path/fd capture), live in the
+// FamilySecurity family alongside their *_key/landlock_*/lsm_*/seccomp
+// siblings, and return an operation-dependent value or -1 that is NOT a byte
+// transfer, so their exits stay UNCLASSIFIED.
+func TestClassifyKeyctlAudit(t *testing.T) {
+	for _, name := range []string{"keyctl", "add_key", "request_key"} {
+		// Family: Security on both enter and exit tracepoint names.
+		for _, prefix := range []string{"sys_enter_", "sys_exit_"} {
+			if fam := ClassifySyscallFamily(prefix + name); fam != FamilySecurity {
+				t.Errorf("%s%s: got family %s, want FamilySecurity", prefix, name, fam)
+			}
+		}
+
+		// Returns: UNCLASSIFIED (key serial / op-dependent value / -1, not
+		// a byte count), so the exit must NOT be tagged as a read/write/
+		// transfer byte transfer.
+		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
+			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want UNCLASSIFIED", name, got)
+		}
+	}
+
+	// Contrast: add_key/request_key take a const char * "type"/"description"
+	// first argument, but it is key metadata, not a path. Such a field name
+	// must NOT trip the generic pathname/open heuristics — the name-only table
+	// maps these syscalls to KindKeyctl before any field is inspected.
+	addKey := ClassifyFormat(&Format{
+		Name: "sys_enter_add_key",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "_type"},
+			{Type: "const char *", Name: "_description"},
+			{Type: "const void *", Name: "_payload"},
+			{Type: "size_t", Name: "plen"},
+			{Type: "key_serial_t", Name: "ringid"},
+		},
+	})
+	if addKey.Kind != KindKeyctl {
+		t.Errorf("add_key: got kind %d, want KindKeyctl (string args are key metadata, not paths)", addKey.Kind)
+	}
+	if addKey.PathnameField != "" {
+		t.Errorf("add_key: got PathnameField %q, want empty (no path capture)", addKey.PathnameField)
+	}
+}
+
 func TestClassifyPtrace(t *testing.T) {
 	r := ClassifyFormat(&Format{
 		Name: "sys_enter_ptrace",
