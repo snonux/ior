@@ -41,6 +41,17 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_ioperm", FamilyMisc},
 		{"sys_enter_iopl", FamilyMisc},
 		{"sys_enter_modify_ldt", FamilyMisc},
+		// rseq(2) registers/unregisters a per-thread restartable-sequences area
+		// (a userspace struct pointer, not an fd/path). It is not in the explicit
+		// family table and intentionally falls through to Misc, sharing the family
+		// with its closest per-thread sibling set_robust_list/get_robust_list
+		// (also Misc). set_tid_address is Process, but rseq is grouped with the
+		// robust-list pair rather than the tid-address syscall; keep this in sync
+		// with the Misc list in docs/syscall-tracing-plan.md.
+		{"sys_enter_rseq", FamilyMisc},
+		{"sys_exit_rseq", FamilyMisc},
+		{"sys_enter_set_robust_list", FamilyMisc},
+		{"sys_enter_get_robust_list", FamilyMisc},
 		{"sys_enter_unlisted_future_syscall", FamilyMisc},
 	}
 
