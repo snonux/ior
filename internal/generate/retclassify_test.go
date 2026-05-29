@@ -44,6 +44,9 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		"openat", "close", "rename", "unlink", "fcntl", "dup", "dup2", "dup3",
 		"mkdir", "rmdir", "chmod", "chown", "chdir", "stat", "lseek",
 		"truncate", "fallocate", "mmap", "fsync", "flock", "recvmmsg", "sendmmsg",
+		// gettimeofday(2) returns int 0/-1 (no byte count); its exit carries a
+		// plain ret_event and must stay UNCLASSIFIED, not a read/write transfer.
+		"gettimeofday",
 	}
 	for _, name := range unclassified {
 		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {

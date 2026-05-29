@@ -14,6 +14,11 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_execve", FamilyProcess},
 		{"sys_enter_rt_sigaction", FamilySignals},
 		{"sys_enter_clock_gettime", FamilyTime},
+		// gettimeofday(2) gets wall-clock time via a userspace timeval/timezone
+		// pointer; it is a time/clock syscall and shares FamilyTime with its
+		// sibling clock_gettime/settimeofday/time syscalls.
+		{"sys_enter_gettimeofday", FamilyTime},
+		{"sys_exit_gettimeofday", FamilyTime},
 		{"sys_enter_sched_yield", FamilySched},
 		{"sys_enter_openat", FamilyFS},
 		{"sys_enter_epoll_wait", FamilyPolling},
