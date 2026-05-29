@@ -370,6 +370,25 @@ format:
 print fmt: "pathname: 0x%08lx", ((unsigned long)(REC->pathname))
 `
 
+// FormatUtime mirrors the real sys_enter_utime tracepoint format: its first
+// argument "filename" is a genuine const char * filesystem path (args[0]),
+// so utime classifies as KindPathname with PathnameField "filename" — the
+// path is captured, just like its siblings utimensat/futimesat.
+const FormatUtime = `name: sys_enter_utime
+ID: 1035
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:char * filename;	offset:16;	size:8;	signed:0;
+	field:struct utimbuf * times;	offset:24;	size:8;	signed:0;
+
+print fmt: "filename: 0x%08lx, times: 0x%08lx", ((unsigned long)(REC->filename)), ((unsigned long)(REC->times))
+`
+
 const FormatDup3 = `name: sys_enter_dup3
 ID: 922
 format:

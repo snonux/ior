@@ -88,6 +88,21 @@ func TestClassifyPathnameUnlink(t *testing.T) {
 	}
 }
 
+// TestClassifyPathnameUtime locks in that utime's args[0] "filename" is
+// captured as a real path. utime(2) changes a file's access/modification
+// times; its filename argument is a genuine filesystem path (not a
+// domain/host name string), so it must classify as KindPathname with the
+// path wired to the "filename" field — matching siblings utimensat/futimesat.
+func TestClassifyPathnameUtime(t *testing.T) {
+	r := classifyFromData(t, FormatUtime)
+	if r.Kind != KindPathname {
+		t.Errorf("utime: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "filename" {
+		t.Errorf("utime: PathnameField = %q, want filename", r.PathnameField)
+	}
+}
+
 func TestClassifyNameRename(t *testing.T) {
 	r := classifyFromData(t, FormatRename)
 	if r.Kind != KindName {

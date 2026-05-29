@@ -179,6 +179,11 @@ var fsSyscalls = map[string]struct{}{
 	"statfs": {}, "statmount": {}, "swapoff": {}, "swapon": {}, "sync": {},
 	"sync_file_range": {}, "syncfs": {}, "symlink": {}, "symlinkat": {},
 	"truncate": {}, "umount": {}, "umount2": {}, "unlink": {}, "unlinkat": {},
+	// utime/utimes change a file's access and modification times by path
+	// (filename at args[0] is a real filesystem path, captured as
+	// KindPathname). They belong with their siblings utimensat/futimesat
+	// in the FS family rather than falling through to Misc.
+	"utime": {}, "utimes": {},
 	"utimensat": {}, "write": {}, "writev": {}, "pread64": {}, "preadv": {},
 	"preadv2": {}, "pwrite64": {}, "pwritev": {}, "pwritev2": {},
 }
