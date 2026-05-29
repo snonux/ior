@@ -149,6 +149,62 @@ func TestGenerateRtSigpendingHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateSigaltstackHandler locks in how sigaltstack(2) is generated. Per
+// the man page:
+//
+//	int sigaltstack(const stack_t *ss, stack_t *old_ss)
+//
+// It sets and/or gets the calling thread's alternate signal stack and returns 0
+// on success or -1 on error. Neither argument is an fd or a path: args[0] is a
+// userspace input pointer to a stack_t describing a new alternate stack and
+// args[1] is a userspace output pointer that receives the previously installed
+// stack. Both are signal-handling control structures, not I/O resources, so ior
+// classifies sigaltstack as KindNull in FamilySignals, alongside the rest of the
+// signal group (rt_sig*/kill/pause/tkill/tgkill). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0] or
+//     args[1] as an fd/path/addr — the stack_t pointers are not traced I/O.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateSigaltstackHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("sigaltstack")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_sigaltstack")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_sigaltstack")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SIGALTSTACK;")
+
+	// The KindNull enter handler must not wire the new-stack pointer (args[0]) or
+	// the old-stack output pointer (args[1]) as an fd/path/addr — neither is a
+	// traced I/O resource. Scope to the enter handler body (everything from the
+	// enter SEC up to the exit SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("sigaltstack: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("sigaltstack must be KindNull: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetSigaltstackUnclassified locks in that sigaltstack's return value
+// is UNCLASSIFIED. It returns 0 on success or -1 on error — a status code, not a
+// number of bytes transferred — so classifying it as READ/WRITE/TRANSFER would
+// wrongly count it as data movement.
+func TestClassifyRetSigaltstackUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_sigaltstack"); got != Unclassified {
+		t.Errorf("sigaltstack ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 // TestGenerateSysinfoHandler locks in how sysinfo(2) is generated. Per the man
 // page:
 //
