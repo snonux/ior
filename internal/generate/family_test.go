@@ -59,6 +59,19 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_gettimeofday", FamilyTime},
 		{"sys_enter_sched_yield", FamilySched},
 		{"sys_enter_openat", FamilyFS},
+		// access(2) checks the calling process's permissions for a file named by
+		// a real filesystem path (pathname at args[0]; no dirfd). Its siblings
+		// faccessat(2)/faccessat2(2) perform the same check relative to a dirfd
+		// (path at args[1]). All three are filesystem-metadata syscalls and must
+		// stay in FamilyFS together — assert the whole cluster so a stray
+		// reclassification of any one trips this test. Keep in sync with the FS
+		// list in docs/syscall-tracing-plan.md.
+		{"sys_enter_access", FamilyFS},
+		{"sys_exit_access", FamilyFS},
+		{"sys_enter_faccessat", FamilyFS},
+		{"sys_exit_faccessat", FamilyFS},
+		{"sys_enter_faccessat2", FamilyFS},
+		{"sys_exit_faccessat2", FamilyFS},
 		// utime(2)/utimes(2) change a file's access and modification times by
 		// path (filename at args[0] is a real filesystem path, captured as
 		// KindPathname). They are filesystem-metadata syscalls and share
