@@ -302,6 +302,42 @@ func TestGenerateMemHandlerMadvise(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateMemHandlerMincore locks in the BPF handler wiring for mincore(2):
+// int mincore(void addr[.length], size_t length, unsigned char *vec).
+// The queried address range is args[0]/args[1] (addr/length). args[2] is `vec`,
+// a *userspace output pointer* where the kernel writes one byte per page telling
+// whether that page is resident — it is NOT a flags value. mincore therefore has
+// neither a flags argument nor a second length, so both ev->flags and ev->length2
+// must stay zero. This guards against the historical mistake of blindly mapping
+// args[2] onto ev->flags (as flags-bearing siblings like madvise/mlock2/mseal do);
+// doing so here would surface a meaningless userspace pointer as a flags field.
+// mincore returns int 0 on success / -1 on error, captured generically via
+// ev->ret as UNCLASSIFIED like every other KindMem exit.
+func TestGenerateMemHandlerMincore(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mincore")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mincore")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = 0;")
+	// args[2] is the userspace `vec` output pointer, not flags. It must never be
+	// wired into ev->flags (nor ev->length2).
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[2];") {
+		t.Error("mincore handler must keep flags zero; args[2] is the vec output pointer, not a flags value")
+	}
+	if strings.Contains(output, "ev->length2 = (__u64)ctx->args") {
+		t.Error("mincore handler must keep length2 zero; it has no second length argument")
+	}
+	// The exit handler returns the int status generically (0 on success, -1 on
+	// error), not via a byte-count classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_mincore")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 func TestGenerateMemHandlerPkeyMprotect(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("pkey_mprotect")))
 
