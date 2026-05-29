@@ -60,6 +60,17 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		// ret_event and must stay UNCLASSIFIED, like its NUMA siblings
 		// set_mempolicy/mbind/migrate_pages/move_pages.
 		"set_mempolicy_home_node",
+		// migrate_pages(2) moves all pages of a process (selected by pid, NOT an
+		// fd) between NUMA node sets; on success it returns the number of pages
+		// that could NOT be moved (>=0, zero meaning all moved), or -1 on error.
+		// That count is a page tally, not a transferred byte count, so its exit
+		// must stay UNCLASSIFIED (plain ret_event), like its NUMA siblings
+		// set_mempolicy/mbind/set_mempolicy_home_node and move_pages.
+		"migrate_pages",
+		// move_pages(2) is the per-page NUMA sibling of migrate_pages(2); it also
+		// returns 0/-1 (with per-page status reported via a userspace array, not
+		// the return value), so its exit likewise stays UNCLASSIFIED.
+		"move_pages",
 		// setsid(2) returns the new session ID (a pid_t) on success, or
 		// (pid_t)-1 on error; that return is a session/process identifier, not a
 		// transferred byte count. Its exit must stay UNCLASSIFIED (plain
