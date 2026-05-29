@@ -1692,6 +1692,7 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"pread64", FormatPread64, FormatExitPread64, KindFd},
 		{"symlink", FormatSymlink, FormatExitSymlink, KindName},
 		{"mknod", FormatMknod, FormatExitMknod, KindPathname},
+		{"mknodat", FormatMknodat, FormatExitMknodat, KindPathname},
 		{"execve", FormatExecve, FormatExitExecve, KindExec},
 		{"execveat", FormatExecveat, FormatExitExecveat, KindExec},
 		{"accept", FormatAccept, FormatExitAccept, KindAccept},
@@ -1806,6 +1807,7 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		family SyscallFamily
 	}{
 		{"mknod", FormatMknod, FormatExitMknod, FamilyFS},
+		{"mknodat", FormatMknodat, FormatExitMknodat, FamilyFS},
 		{"execve", FormatExecve, FormatExitExecve, FamilyProcess},
 		{"execveat", FormatExecveat, FormatExitExecveat, FamilyProcess},
 		{"accept", FormatAccept, FormatExitAccept, FamilyNetwork},
