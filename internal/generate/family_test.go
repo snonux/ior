@@ -19,6 +19,20 @@ func TestClassifySyscallFamily(t *testing.T) {
 		// FamilyIPC (where the pidfd_* lifecycle syscalls live).
 		{"sys_enter_process_madvise", FamilyMemory},
 		{"sys_exit_process_madvise", FamilyMemory},
+		// set_mempolicy_home_node(2) (Linux 5.17+) sets the home NUMA node for a
+		// memory range (start,len,home_node,flags); it returns 0/-1 with no byte
+		// count, so it is KindNull and Unclassified. It is a NUMA memory-policy
+		// syscall and shares FamilyMemory with its siblings set_mempolicy(2),
+		// mbind(2), migrate_pages(2), and move_pages(2). NOTE: get_mempolicy(2) is
+		// the one NUMA sibling currently classified FamilySecurity instead of
+		// FamilyMemory — that inconsistency is tracked separately and is out of
+		// scope for this set_mempolicy_home_node assertion.
+		{"sys_enter_set_mempolicy_home_node", FamilyMemory},
+		{"sys_exit_set_mempolicy_home_node", FamilyMemory},
+		{"sys_enter_set_mempolicy", FamilyMemory},
+		{"sys_enter_mbind", FamilyMemory},
+		{"sys_enter_migrate_pages", FamilyMemory},
+		{"sys_enter_move_pages", FamilyMemory},
 		{"sys_enter_execve", FamilyProcess},
 		{"sys_enter_rt_sigaction", FamilySignals},
 		{"sys_enter_clock_gettime", FamilyTime},
