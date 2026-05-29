@@ -86,6 +86,18 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_fsync", FamilyFS},
 		{"sys_enter_fdatasync", FamilyFS},
 		{"sys_enter_sync_file_range", FamilyFS},
+		// fallocate(2) manipulates the allocated disk space (preallocate,
+		// punch-hole, collapse, zero, insert) for the file referred to by its
+		// args[0] fd; it is a per-file space-management syscall and shares
+		// FamilyFS with its fd-based siblings fadvise64(2) (access-pattern
+		// advice), ftruncate(2) (resize by fd), and sync_file_range(2) (flush a
+		// byte range). Assert the group so a stray reclassification of any one
+		// trips this test. Keep in sync with the FS list in
+		// docs/syscall-tracing-plan.md.
+		{"sys_enter_fallocate", FamilyFS},
+		{"sys_exit_fallocate", FamilyFS},
+		{"sys_enter_fadvise64", FamilyFS},
+		{"sys_enter_ftruncate", FamilyFS},
 		{"sys_enter_epoll_wait", FamilyPolling},
 		{"sys_enter_io_uring_enter", FamilyAIO},
 		{"sys_enter_bpf", FamilySecurity},
