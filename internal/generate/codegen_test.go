@@ -645,6 +645,20 @@ func TestGenerateMemHandlerMunlock(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateMemHandlerRemapFilePages locks in the BPF handler wiring for the
+// (deprecated) remap_file_pages(2):
+// int remap_file_pages(void *addr, size_t size, int prot, size_t pgoff, int flags).
+// The mapping address range is args[0]/args[1] (addr/length). Crucially, the
+// flags argument is at args[4], NOT args[2] — args[2] is `prot` (which the man
+// page requires to be 0 and which carries no useful information). The pgoff
+// argument (args[3]) is a file offset in pages and is parked in the generic
+// length2 slot. The historical hazard here is wiring flags from args[2] (prot)
+// the way flags-bearing siblings (madvise/mlock2/mseal/mprotect) legitimately
+// do — doing so would surface the always-zero prot value as flags and drop the
+// real MAP_NONBLOCK flag. remap_file_pages returns int 0 on success / -1 on
+// error, captured generically via ev->ret as UNCLASSIFIED like every other
+// KindMem exit (it is not a byte-count, so it is intentionally absent from
+// retClassifications).
 func TestGenerateMemHandlerRemapFilePages(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("remap_file_pages")))
 
@@ -653,8 +667,22 @@ func TestGenerateMemHandlerRemapFilePages(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
 	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
 	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	// pgoff (args[3]) is parked in the generic length2 slot.
 	requireContains(t, output, "ev->length2 = (__u64)ctx->args[3];")
+	// flags is at args[4]; prot (args[2]) must never be wired into ev->flags.
 	requireContains(t, output, "ev->flags = (__u64)ctx->args[4];")
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[2];") {
+		t.Error("remap_file_pages handler must read flags from args[4]; args[2] is prot (always 0), not a flags value")
+	}
+	// addr (args[0]) must never be reused as flags.
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[0];") {
+		t.Error("remap_file_pages handler must read flags from args[4]; args[0] is the addr, not a flags value")
+	}
+	// The exit handler returns the int status generically (0 on success, -1 on
+	// error), not via a byte-count classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_remap_file_pages")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
 func TestGenerateMemHandlerMprotect(t *testing.T) {
