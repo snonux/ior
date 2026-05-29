@@ -60,6 +60,16 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		// ret_event and must stay UNCLASSIFIED, like its NUMA siblings
 		// set_mempolicy/mbind/migrate_pages/move_pages.
 		"set_mempolicy_home_node",
+		// setsid(2) returns the new session ID (a pid_t) on success, or
+		// (pid_t)-1 on error; that return is a session/process identifier, not a
+		// transferred byte count. Its exit must stay UNCLASSIFIED (plain
+		// ret_event), exactly like its pid-returning siblings getsid/getpid/
+		// getppid (asserted below), so it is never mistaken for a read/write
+		// byte transfer.
+		"setsid",
+		"getsid",
+		"getpid",
+		"getppid",
 	}
 	for _, name := range unclassified {
 		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
