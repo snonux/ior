@@ -11,6 +11,14 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_accept", FamilyNetwork},
 		{"sys_enter_pipe2", FamilyIPC},
 		{"sys_enter_munmap", FamilyMemory},
+		// process_madvise(2) gives memory advice (MADV_COLD/PAGEOUT/...) about
+		// address ranges of another process selected by a pidfd. Although its
+		// first arg is a pidfd (KindFd) rather than an address, the operation is
+		// fundamentally a memory-advice call, so it shares FamilyMemory with its
+		// madvise(2)/process_mrelease(2)/process_vm_readv/writev(2) siblings — not
+		// FamilyIPC (where the pidfd_* lifecycle syscalls live).
+		{"sys_enter_process_madvise", FamilyMemory},
+		{"sys_exit_process_madvise", FamilyMemory},
 		{"sys_enter_execve", FamilyProcess},
 		{"sys_enter_rt_sigaction", FamilySignals},
 		{"sys_enter_clock_gettime", FamilyTime},

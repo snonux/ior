@@ -33,6 +33,20 @@ func TestGeneratePidfdGetfdHandlerUsesPidfdArgument(t *testing.T) {
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 }
 
+// TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd locks in the BPF
+// handler wiring for process_madvise(2):
+//
+//	ssize_t process_madvise(int pidfd, const struct iovec iovec[.n], size_t n,
+//	                        int advice, unsigned int flags).
+//
+// Unlike the sibling madvise(2) (KindMem, addr/length at args[0]/args[1]), the
+// first argument here is a pidfd — a PID *file descriptor* selecting the target
+// process (see pidfd_open(2)) — so process_madvise is classified KindFd and the
+// enter handler must capture ev->fd from args[0], NOT treat args[0] as an
+// address. process_madvise returns the number of bytes advised on success or -1
+// on error, but that count is advisory (no data is actually transferred), so the
+// exit handler reports the raw status as UNCLASSIFIED exactly like madvise(2) —
+// it must never be misclassified as a READ/WRITE/TRANSFER byte count.
 func TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("process_madvise")))
 
@@ -41,6 +55,29 @@ func TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_PROCESS_MADVISE;")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	// args[0] is a pidfd, never an address: the KindMem addr wiring must not leak
+	// into the process_madvise enter handler.
+	if strings.Contains(output, "ev->addr = (__u64)ctx->args[0];") &&
+		strings.Contains(output, `SEC("tracepoint/syscalls/sys_enter_process_madvise")`) &&
+		strings.Contains(output, "struct mem_event *ev") {
+		t.Error("process_madvise must be KindFd (fd=args[0]), not KindMem (addr=args[0])")
+	}
+	// The exit handler returns the advisory byte count generically as the raw
+	// status, classified UNCLASSIFIED — not as a transfer/byte-count.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_process_madvise")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetProcessMadviseUnclassified locks in that process_madvise's
+// return value is UNCLASSIFIED. The man page says it returns "the number of
+// bytes advised", but that is advisory accounting, not real I/O: no bytes move
+// between buffers. Classifying it as TRANSFER/READ/WRITE would double-count it as
+// data movement, so it must stay UNCLASSIFIED like madvise(2).
+func TestClassifyRetProcessMadviseUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_process_madvise"); got != Unclassified {
+		t.Errorf("process_madvise ret classification = %q, want %q", got, Unclassified)
+	}
 }
 
 func TestGenerateLandlockAddRuleHandlerUsesFirstArgumentAsFd(t *testing.T) {
