@@ -300,6 +300,23 @@ func TestClassifySocketFdSyscallsByName(t *testing.T) {
 	}
 }
 
+// TestClassifyExitGetpeername locks in that the getpeername exit tracepoint is
+// classified as KindRet. getpeername(2) returns int (0 on success, -1 on
+// error), so its exit format carries a single "ret" field and must map to a
+// plain ret_event, matching the generated sys_exit_getpeername handler.
+func TestClassifyExitGetpeername(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_getpeername",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Errorf("exit_getpeername: got kind %d, want KindRet", r.Kind)
+	}
+}
+
 func TestClassifySocket(t *testing.T) {
 	r := classifyFromData(t, FormatSocket)
 	if r.Kind != KindSocket {
