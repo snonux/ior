@@ -51,6 +51,11 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		// sequences area; it transfers no bytes, so its exit must stay
 		// UNCLASSIFIED (plain ret_event), like its KindNull siblings.
 		"rseq",
+		// set_mempolicy_home_node(2) sets the home NUMA node for a memory range
+		// and returns int 0/-1 (no byte count), so its exit carries a plain
+		// ret_event and must stay UNCLASSIFIED, like its NUMA siblings
+		// set_mempolicy/mbind/migrate_pages/move_pages.
+		"set_mempolicy_home_node",
 	}
 	for _, name := range unclassified {
 		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
