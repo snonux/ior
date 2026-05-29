@@ -454,6 +454,53 @@ func TestClassifyExitFallocateUnclassifiedRet(t *testing.T) {
 	}
 }
 
+// TestClassifySetuidNullEnter locks in that the setuid enter tracepoint is
+// classified as KindNull. setuid(2) is "int setuid(uid_t uid)" — its single
+// argument is a numeric user ID, NOT a file descriptor or a path. It must
+// therefore map to a null_event (no argument capture); misclassifying it as an
+// fd-bearing kind would be a real bug, since the uid is not an fd and capturing
+// it as one would attribute the credential change to a bogus file. The whole
+// credential-setting cluster (setuid/seteuid/setresuid/setreuid/setfsuid and
+// the gid analogues) shares this KindNull treatment with the getuid readers.
+func TestClassifySetuidNullEnter(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_setuid",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "uid"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("enter_setuid: got kind %d, want KindNull", r.Kind)
+	}
+	// The uid argument must never be captured as a file descriptor or path.
+	if r.PathnameField != "" {
+		t.Errorf("enter_setuid: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
+// TestClassifyExitSetuidUnclassifiedRet locks in that the setuid exit
+// tracepoint is classified as KindRet and Unclassified. setuid(2) returns int
+// (0 on success, -1 on error) — that return is a status code, NOT a
+// transferred byte count, so its exit format carries a single "ret" field and
+// must map to a plain ret_event (KindRet) whose ret_type stays UNCLASSIFIED.
+// Misclassifying it as a READ/WRITE/TRANSFER byte count would be a real bug.
+func TestClassifyExitSetuidUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_setuid",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_setuid: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_setuid"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_setuid) = %q, want UNCLASSIFIED", got)
+	}
+}
+
 // TestClassifyExitGetpeername locks in that the getpeername exit tracepoint is
 // classified as KindRet. getpeername(2) returns int (0 on success, -1 on
 // error), so its exit format carries a single "ret" field and must map to a
