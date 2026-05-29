@@ -1208,6 +1208,75 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+// FormatInitModule mirrors the real sys_enter_init_module tracepoint layout.
+// Its arguments are a userspace ELF image pointer (umod), the image length
+// (len), and a module-parameter string (uargs). uargs is a parameter string of
+// the form "name=value ..." — NOT a filesystem path — so init_module must
+// classify as KindModule (null_event) and capture neither an fd nor a path.
+const FormatInitModule = `name: sys_enter_init_module
+ID: 9370
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:void * umod;	offset:16;	size:8;	signed:0;
+	field:unsigned long len;	offset:24;	size:8;	signed:0;
+	field:const char * uargs;	offset:32;	size:8;	signed:0;
+
+print fmt: "umod: 0x%08lx, len: 0x%08lx, uargs: 0x%08lx", ((unsigned long)(REC->umod)), ((unsigned long)(REC->len)), ((unsigned long)(REC->uargs))
+`
+
+const FormatExitInitModule = `name: sys_exit_init_module
+ID: 9369
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+// FormatFinitModule mirrors the real sys_enter_finit_module tracepoint layout.
+// Unlike init_module, finit_module reads the module from a file descriptor
+// (fd at args[0]), so field-based classification must yield KindFd and capture
+// fd = args[0]. This is the load-bearing distinction from init_module.
+const FormatFinitModule = `name: sys_enter_finit_module
+ID: 9371
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int fd;	offset:16;	size:8;	signed:0;
+	field:const char * uargs;	offset:24;	size:8;	signed:0;
+	field:int flags;	offset:32;	size:8;	signed:0;
+
+print fmt: "fd: 0x%08lx, uargs: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->fd)), ((unsigned long)(REC->uargs)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitFinitModule = `name: sys_exit_finit_module
+ID: 9372
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatAccept = `name: sys_enter_accept
 ID: 1808
 format:
