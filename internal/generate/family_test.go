@@ -19,6 +19,16 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_epoll_wait", FamilyPolling},
 		{"sys_enter_io_uring_enter", FamilyAIO},
 		{"sys_enter_bpf", FamilySecurity},
+		// Futexes are shared-memory synchronization/IPC primitives ("fast
+		// user-space locking", futex(2)); the classic futex() and the Linux
+		// 6.7+ split syscalls all classify as IPC alongside the System V
+		// semaphores, not Misc.
+		{"sys_enter_futex", FamilyIPC},
+		{"sys_enter_futex_wait", FamilyIPC},
+		{"sys_enter_futex_wake", FamilyIPC},
+		{"sys_exit_futex_wake", FamilyIPC},
+		{"sys_enter_futex_requeue", FamilyIPC},
+		{"sys_enter_futex_waitv", FamilyIPC},
 		// x86 I/O-port / CPU-state syscalls are not in the explicit family
 		// table and intentionally fall through to Misc (ioperm/iopl/modify_ldt
 		// set port-access or LDT state, not file I/O). arch_prctl/personality

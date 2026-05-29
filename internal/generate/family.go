@@ -41,6 +41,16 @@ var syscallFamilies = map[string]SyscallFamily{
 	"shmctl": FamilyIPC, "shmdt": FamilyIPC, "shmget": FamilyIPC,
 	"signalfd": FamilyIPC, "signalfd4": FamilyIPC, "timerfd_create": FamilyIPC,
 	"timerfd_gettime": FamilyIPC, "timerfd_settime": FamilyIPC, "userfaultfd": FamilyIPC,
+	// Futexes ("fast user-space locking", futex(2)) are shared-memory
+	// synchronization/IPC primitives in the same vein as the System V
+	// semaphores (semop/semget) above; group them under IPC rather than
+	// letting them fall through to Misc. Covers the classic futex() plus the
+	// Linux 6.7+ split syscalls (futex_wait/futex_wake/futex_requeue) and
+	// futex_waitv. The futex word is a userspace pointer, so argument capture
+	// is handled by KindFutex (null_event); the family tag only affects
+	// per-family aggregation/reporting.
+	"futex": FamilyIPC, "futex_wait": FamilyIPC, "futex_wake": FamilyIPC,
+	"futex_requeue": FamilyIPC, "futex_waitv": FamilyIPC,
 
 	"brk": FamilyMemory, "madvise": FamilyMemory, "map_shadow_stack": FamilyMemory,
 	"mbind": FamilyMemory, "membarrier": FamilyMemory, "migrate_pages": FamilyMemory,
