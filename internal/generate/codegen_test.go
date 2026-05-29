@@ -125,6 +125,61 @@ func TestGenerateRtSigpendingHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateSysinfoHandler locks in how sysinfo(2) is generated. Per the man
+// page:
+//
+//	int sysinfo(struct sysinfo *info)
+//
+// It returns overall system statistics (memory/swap usage and load averages)
+// into the single userspace *info output buffer and returns 0 on success or -1
+// on error. The lone argument is NOT an fd or a path: it is a userspace output
+// pointer to a struct sysinfo (a statistics buffer, not an I/O resource). ior
+// therefore classifies sysinfo as KindNull in FamilyMisc, alongside its
+// system-introspection siblings newuname/sysfs/ustat. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     as an fd/path/addr — the info pointer is not a traced I/O resource.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateSysinfoHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("sysinfo")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_sysinfo")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_sysinfo")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SYSINFO;")
+
+	// The KindNull enter handler must not wire the info pointer (args[0]) as an
+	// fd/path/addr — it is not a traced I/O resource. Scope to the enter handler
+	// body (everything from the enter SEC up to the exit SEC) so we only check
+	// what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("sysinfo: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("sysinfo must be KindNull: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetSysinfoUnclassified locks in that sysinfo's return value is
+// UNCLASSIFIED. sysinfo(2) returns 0 on success or -1 on error — a status code,
+// not a number of bytes transferred — so classifying it as READ/WRITE/TRANSFER
+// would wrongly count it as data movement.
+func TestClassifyRetSysinfoUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_sysinfo"); got != Unclassified {
+		t.Errorf("sysinfo ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 // TestClassifyRetRtSigpendingUnclassified locks in that rt_sigpending's return
 // value is UNCLASSIFIED. It returns 0 on success or -1 on error — a status code,
 // not a number of bytes transferred — so classifying it as READ/WRITE/TRANSFER

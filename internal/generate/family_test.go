@@ -87,6 +87,21 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_rseq", FamilyMisc},
 		{"sys_enter_set_robust_list", FamilyMisc},
 		{"sys_enter_get_robust_list", FamilyMisc},
+		// sysinfo(2) returns overall system statistics (memory/swap usage and
+		// load averages) into a single userspace struct sysinfo *info pointer
+		// (an output buffer, not an fd/path). It is not in the explicit family
+		// table and intentionally falls through to Misc, sharing the family with
+		// its closest system-introspection siblings newuname/sysfs (also Misc).
+		// NOTE: other "system info" relatives are deliberately classified
+		// elsewhere — getrusage is Process, times/gettimeofday are Time — so
+		// sysinfo is grouped with the uname/sysfs cluster rather than any of
+		// those. ustat(2) is NOT a sibling here: it contains the "stat" name
+		// marker and is classified FamilyFS by isFSSyscall. Keep this in sync
+		// with the Misc list in docs/syscall-tracing-plan.md.
+		{"sys_enter_sysinfo", FamilyMisc},
+		{"sys_exit_sysinfo", FamilyMisc},
+		{"sys_enter_newuname", FamilyMisc},
+		{"sys_enter_sysfs", FamilyMisc},
 		// rt_sigpending(2) examines the set of signals pending for delivery
 		// (sigset_t *set, size_t sigsetsize). It is a signal-handling syscall and
 		// shares FamilySignals with the whole rt_sig* group as well as kill/pause/
