@@ -38,19 +38,20 @@ func TestEventloop(t *testing.T) {
 		"OpenEventTest3":       makeOpenEventTestData3(t),
 		"OpenEventFailureTest": makeOpenEventFailureTestData(t),
 		// FdEvent tests
-		"ReadEventTest":          makeReadEventTestData(t),
-		"WriteEventTest":         makeWriteEventTestData(t),
-		"CloseEventTest":         makeCloseEventTestData(t),
-		"CloseRangeEventTest":    makeCloseRangeEventTestData(t),
-		"CloseRangeFailureTest":  makeCloseRangeFailureTestData(t),
-		"FsyncEventTest":         makeFsyncEventTestData(t),
-		"SyncFileRangeEventTest": makeSyncFileRangeEventTestData(t),
-		"CopyFileRangeEventTest": makeCopyFileRangeEventTestData(t),
-		"PidfdGetfdEventTest":    makePidfdGetfdEventTestData(t),
-		"PidfdGetfdFailureTest":  makePidfdGetfdFailureTestData(t),
-		"MmapEventTest":          makeMmapEventTestData(t),
-		"MsyncEventTest":         makeMsyncEventTestData(t),
-		"FtruncateEventTest":     makeFtruncateEventTestData(t),
+		"ReadEventTest":            makeReadEventTestData(t),
+		"WriteEventTest":           makeWriteEventTestData(t),
+		"CloseEventTest":           makeCloseEventTestData(t),
+		"CloseRangeEventTest":      makeCloseRangeEventTestData(t),
+		"CloseRangeFailureTest":    makeCloseRangeFailureTestData(t),
+		"FsyncEventTest":           makeFsyncEventTestData(t),
+		"SyncFileRangeEventTest":   makeSyncFileRangeEventTestData(t),
+		"SyncFileRangeFailureTest": makeSyncFileRangeFailureTestData(t),
+		"CopyFileRangeEventTest":   makeCopyFileRangeEventTestData(t),
+		"PidfdGetfdEventTest":      makePidfdGetfdEventTestData(t),
+		"PidfdGetfdFailureTest":    makePidfdGetfdFailureTestData(t),
+		"MmapEventTest":            makeMmapEventTestData(t),
+		"MsyncEventTest":           makeMsyncEventTestData(t),
+		"FtruncateEventTest":       makeFtruncateEventTestData(t),
 		// PathEvent tests
 		"MkdirEventTest":  makeMkdirEventTestData(t),
 		"UnlinkEventTest": makeUnlinkEventTestData(t),
@@ -877,6 +878,56 @@ func makeSyncFileRangeEventTestData(t *testing.T) (td testData) {
 		}
 		if ep.File.Name() != filename {
 			t.Errorf("Expected sync_file_range file name '%s' but got '%s'", filename, ep.File.Name())
+		}
+	})
+
+	return td
+}
+
+// makeSyncFileRangeFailureTestData locks in the EBADF failure path of
+// sync_file_range(2): the enter fd_event must still pair with an exit
+// ret_event carrying the negative errno. ior classifies sync_file_range as a
+// plain fd_event (fd from args[0], no byte range / flags captured) with an
+// UNCLASSIFIED ret. When the fd was never observed via an open-family syscall,
+// the eventloop attaches a synthetic placeholder FdFile for the bogus fd
+// (unknown name, O_NONE flags) rather than dropping the file metadata, so the
+// failed call is still reported as a complete enter/exit pair.
+func makeSyncFileRangeFailureTestData(t *testing.T) (td testData) {
+	fd := int32(99999) // bogus fd, as in the sync-file-range-ebadf scenario
+
+	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_SYNC_FILE_RANGE)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	// EBADF is errno 9; the kernel reports it to the exit tracepoint as -9.
+	const ebadf = -9
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_SYNC_FILE_RANGE, ebadf)
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		// The exit ret_event must carry the negative EBADF errno unchanged.
+		retEv, ok := ep.ExitEv.(*types.RetEvent)
+		if !ok {
+			t.Fatalf("Expected exit *types.RetEvent for failed sync_file_range, got %T", ep.ExitEv)
+		}
+		if retEv.Ret != ebadf {
+			t.Errorf("Expected ret %d (EBADF) but got %d", ebadf, retEv.Ret)
+		}
+		// The bogus fd was never opened, so the eventloop synthesizes a
+		// placeholder FdFile carrying the same fd and O_NONE flags.
+		if ep.File == nil {
+			t.Fatalf("Expected synthetic file metadata for failed sync_file_range")
+		}
+		if ep.File.FD() != fd {
+			t.Errorf("Expected synthetic file fd %d but got %d", fd, ep.File.FD())
+		}
+		if flags := ep.File.Flags().String(); flags != "O_NONE" {
+			t.Errorf("Expected synthetic file flags 'O_NONE' but got '%s'", flags)
 		}
 	})
 
