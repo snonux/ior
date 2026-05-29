@@ -602,6 +602,49 @@ func TestGenerateMemHandlerMlock2(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
 }
 
+// TestGenerateMemHandlerMunlock locks in the BPF handler wiring for munlock(2):
+// int munlock(const void addr[.size], size_t size). munlock unlocks the page
+// range [addr, addr+size) so it may be paged out again — the converse of
+// mlock(2). The range is args[0]/args[1] (addr/length). Crucially munlock has
+// NO flags argument (unlike its sibling mlock2(2), which carries
+// MLOCK_ONFAULT at args[2]) and no second length region, so both ev->flags and
+// ev->length2 must stay zero. This guards against accidentally copying the
+// mlock2 wiring and surfacing a nonexistent args[2] as flags. munlock must not
+// be confused with munlockall(2), which takes no address range and is
+// classified KindNull. munlock returns int 0 on success / -1 on error,
+// captured generically via ev->ret as UNCLASSIFIED like every other KindMem
+// exit (it is not a byte-count, so it is intentionally absent from
+// retClassifications).
+func TestGenerateMemHandlerMunlock(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("munlock")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_munlock")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = 0;")
+	// munlock has no flags argument; args[2] must never be wired into ev->flags
+	// (that is the mlock2-only MLOCK_ONFAULT slot).
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[2];") {
+		t.Error("munlock handler must keep flags zero; munlock has no flags argument (that is mlock2's args[2])")
+	}
+	// munlock has no second length region.
+	if strings.Contains(output, "ev->length2 = (__u64)ctx->args") {
+		t.Error("munlock handler must keep length2 zero; it has no second length argument")
+	}
+	// addr (args[0]) must never be reused as flags.
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[0];") {
+		t.Error("munlock handler must keep flags zero; args[0] is the addr, not a flags value")
+	}
+	// The exit handler returns the int status generically (0 on success, -1 on
+	// error), not via a byte-count classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_munlock")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 func TestGenerateMemHandlerRemapFilePages(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("remap_file_pages")))
 
