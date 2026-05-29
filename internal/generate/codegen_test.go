@@ -149,6 +149,79 @@ func TestGenerateRtSigpendingHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateClone3Handler locks in how clone3(2) is generated. Per the man
+// page:
+//
+//	long clone3(struct clone_args *cl_args, size_t size)
+//
+// clone3 is the modern superset of clone/fork/vfork: it creates a new process
+// or thread. args[0] is a userspace pointer to a struct clone_args (a control
+// block, not an fd or filesystem path) and args[1] is its byte size. The return
+// value is a pid_t: the child's PID in the parent, 0 in the child, or -1 on
+// error — never a byte count. ior therefore classifies clone3 as KindProc in
+// FamilyProcess, identical to its siblings clone/fork/vfork. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     (the clone_args pointer) or args[1] (size) as an fd/path/addr — neither is
+//     a traced I/O resource.
+//   - The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED; it is not
+//     a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a misclassification to KindNull (which would still emit a
+// null_event but break sibling/dimension consistency) or to any fd/path kind
+// (which would wrongly treat the clone_args pointer as a resource).
+func TestGenerateClone3Handler(t *testing.T) {
+	// Classification consistency with the clone/fork/vfork siblings. clone3's
+	// real tracepoint args are (struct clone_args *, size_t); we feed a generic
+	// pointer arg here to prove the name-only table — not a field heuristic —
+	// pins all four siblings to KindProc.
+	for _, name := range []string{"sys_enter_clone3", "sys_enter_clone", "sys_enter_fork", "sys_enter_vfork"} {
+		r := ClassifyFormat(&Format{
+			Name: name,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "struct clone_args *", Name: "uargs"},
+				{Type: "unsigned long", Name: "size"},
+			},
+		})
+		if r.Kind != KindProc {
+			t.Errorf("%s kind = %v, want KindProc", name, r.Kind)
+		}
+	}
+	if got := ClassifySyscallFamily("sys_enter_clone3"); got != FamilyProcess {
+		t.Errorf("clone3 family = %q, want %q", got, FamilyProcess)
+	}
+	if got := ClassifyRet("sys_exit_clone3"); got != Unclassified {
+		t.Errorf("clone3 ret classification = %q, want %q (pid, not a byte count)", got, Unclassified)
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("clone3")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_clone3")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_clone3")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_CLONE3;")
+
+	// The KindProc enter handler must not wire args[0] (clone_args ptr) or
+	// args[1] (size) as an fd/path/addr — neither is a traced I/O resource.
+	// Scope to the enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("clone3: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("clone3 must be KindProc: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 // TestGenerateSigaltstackHandler locks in how sigaltstack(2) is generated. Per
 // the man page:
 //
