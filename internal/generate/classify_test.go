@@ -368,6 +368,61 @@ func TestClassifyExitSyncfs(t *testing.T) {
 	}
 }
 
+// TestClassifyFallocateEnterFd locks in that the fallocate enter tracepoint is
+// classified as KindFd with the fd captured at args[0].
+//
+//	int fallocate(int fd, int mode, off_t offset, off_t len)
+//
+// fallocate(2) manipulates the allocated disk space for the file referred to
+// by fd (args[0]); the remaining mode/offset/len args are NOT captured, exactly
+// like its fd-based siblings fadvise64(2)/ftruncate(2)/sync_file_range(2) which
+// also carry trailing offset/len/advice args but only record args[0]. The
+// leading "fd" external field must select KindFd so the generated
+// handle_sys_enter_fallocate emits ev->fd = ctx->args[0] into a fd_event.
+func TestClassifyFallocateEnterFd(t *testing.T) {
+	f := &Format{
+		Name: "sys_enter_fallocate",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "int", Name: "fd"},
+			{Type: "int", Name: "mode"},
+			{Type: "loff_t", Name: "offset"},
+			{Type: "loff_t", Name: "len"},
+		},
+	}
+	r := ClassifyFormat(f)
+	if r.Kind != KindFd {
+		t.Fatalf("enter_fallocate: got kind %d, want KindFd", r.Kind)
+	}
+	// fd is the first real argument (args[0]); FieldNumber skips __syscall_nr.
+	if got := f.FieldNumber("fd"); got != 0 {
+		t.Errorf("enter_fallocate: fd field number = %d, want 0 (args[0])", got)
+	}
+}
+
+// TestClassifyExitFallocateUnclassifiedRet locks in that the fallocate exit
+// tracepoint is classified as KindRet and Unclassified. fallocate(2) returns
+// int (0 on success, -1 on error) — that return is a status code, NOT a
+// transferred byte count, so its exit format carries a single "ret" field and
+// must map to a plain ret_event (KindRet) whose ret_type stays UNCLASSIFIED.
+// Misclassifying it as a READ/WRITE/TRANSFER byte count would be a real bug,
+// since fallocate allocates space but reports no transferred bytes.
+func TestClassifyExitFallocateUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_fallocate",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_fallocate: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_fallocate"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_fallocate) = %q, want UNCLASSIFIED", got)
+	}
+}
+
 // TestClassifyExitGetpeername locks in that the getpeername exit tracepoint is
 // classified as KindRet. getpeername(2) returns int (0 on success, -1 on
 // error), so its exit format carries a single "ret" field and must map to a
