@@ -711,6 +711,63 @@ func TestGenerateExitNoreturnHandlers(t *testing.T) {
 	}
 }
 
+// TestGenerateSchedGetPriorityMinHandler locks in how sched_get_priority_min
+// (and its identical sibling sched_get_priority_max) are generated. Per
+// sched_get_priority_min(2): `int sched_get_priority_min(int policy)` takes a
+// single `int policy` scheduling-policy enum (SCHED_FIFO, SCHED_RR, ...) and
+// returns the minimum static priority value for that policy on success, or -1
+// on error. The `policy` arg is neither an fd nor a path, so ior classifies the
+// syscall as KindNull in FamilySched (alongside every other sched_* syscall).
+// Therefore:
+//   - The enter handler emits a struct null_event and intentionally does NOT
+//     capture the int policy arg (it is not an I/O resource).
+//   - Unlike the noreturn exit() syscalls, this syscall DOES return, so the
+//     kernel sys_exit_sched_get_priority_min tracepoint fires and the generator
+//     emits a live exit handler that records the int return value (-1 or the
+//     priority) via the generic EXIT_RET_EVENT path.
+func TestGenerateSchedGetPriorityMinHandler(t *testing.T) {
+	for _, syscall := range []string{"sched_get_priority_min", "sched_get_priority_max"} {
+		t.Run(syscall, func(t *testing.T) {
+			formats := mustParseAll(t, syntheticPair(syscall))
+			if got := formats[0].Family; got != FamilySched {
+				t.Fatalf("%s family = %s, want %s", syscall, got, FamilySched)
+			}
+			if got := ClassifySyscallFamily("sys_enter_" + syscall); got != FamilySched {
+				t.Fatalf("ClassifySyscallFamily(%s) = %s, want %s", syscall, got, FamilySched)
+			}
+
+			output := GenerateTracepointsC(formats)
+			if strings.Contains(output, "Skipping") {
+				t.Fatalf("%s was skipped: %s", syscall, output)
+			}
+
+			enterSec := `SEC("tracepoint/syscalls/sys_enter_` + syscall + `")`
+			exitSec := `SEC("tracepoint/syscalls/sys_exit_` + syscall + `")`
+			requireContains(t, output, enterSec)
+			requireContains(t, output, "struct null_event *ev")
+			requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+			// Returning syscall: the exit handler must exist and emit the ret value.
+			requireContains(t, output, exitSec)
+			requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+
+			// The int policy arg is not an fd/path, so the enter handler must not
+			// capture any ctx->args[].
+			enterStart := strings.Index(output, enterSec)
+			if enterStart < 0 {
+				t.Fatalf("%s: enter handler not found", syscall)
+			}
+			enterEnd := strings.Index(output[enterStart+len(enterSec):], `SEC("tracepoint/`)
+			enterBody := output[enterStart:]
+			if enterEnd >= 0 {
+				enterBody = output[enterStart : enterStart+len(enterSec)+enterEnd]
+			}
+			if strings.Contains(enterBody, "ctx->args[") {
+				t.Errorf("%s: enter handler unexpectedly captures an arg; the int policy must be ignored", syscall)
+			}
+		})
+	}
+}
+
 func TestGenerateHandlersForEverySyscallFamily(t *testing.T) {
 	tests := []struct {
 		syscall string
