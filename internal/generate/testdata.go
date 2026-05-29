@@ -493,6 +493,24 @@ format:
 print fmt: "oldfd: 0x%08lx, newfd: 0x%08lx", ((unsigned long)(REC->oldfd)), ((unsigned long)(REC->newfd))
 `
 
+// FormatExitDup2 mirrors the kernel's sys_exit_dup2 tracepoint. Like dup/dup3,
+// dup2 returns the new descriptor (newfd) on success or -1 on error; that fd
+// number is reported as a plain ret_event (UNCLASSIFIED), never a byte-count
+// transfer.
+const FormatExitDup2 = `name: sys_exit_dup2
+ID: 919
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatFcntl = `name: sys_enter_fcntl
 ID: 898
 format:
