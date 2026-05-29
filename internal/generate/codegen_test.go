@@ -268,6 +268,40 @@ func TestGenerateMemHandlerMprotect(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
 }
 
+// TestGenerateMemHandlerMadvise locks in the BPF handler wiring for madvise(2):
+// int madvise(void addr[.size], size_t size, int advice).
+// The address range is args[0]/args[1] (addr/length) and the `advice` enum
+// (MADV_DONTNEED, MADV_WILLNEED, ...) is flags-like, so it maps to ev->flags at
+// args[2]. There is no second length, so length2 must stay zero. madvise returns
+// int 0 on success / -1 on error, captured generically via ev->ret as
+// UNCLASSIFIED like every other KindMem exit. This must NOT be confused with the
+// sibling process_madvise(2), whose first arg is a pidfd and is classified KindFd
+// (covered by TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd).
+func TestGenerateMemHandlerMadvise(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("madvise")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_madvise")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+	// The advice enum lives at args[2]; addr (args[0]) must never be reused as flags.
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[0];") {
+		t.Error("madvise handler must use args[2] (advice) as flags, not args[0] (addr)")
+	}
+	// madvise has no second length region (unlike mremap/pkey_mprotect).
+	if strings.Contains(output, "ev->length2 = (__u64)ctx->args") {
+		t.Error("madvise handler must keep length2 zero; it has no second length argument")
+	}
+	// The exit handler returns the int status generically, not via a byte-count
+	// classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_madvise")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 func TestGenerateMemHandlerPkeyMprotect(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("pkey_mprotect")))
 
