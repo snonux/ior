@@ -160,6 +160,22 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_rt_sigqueueinfo", FamilySignals},
 		{"sys_enter_rt_tgsigqueueinfo", FamilySignals},
 		{"sys_enter_sigaltstack", FamilySignals},
+		// ioprio_get/ioprio_set query/set the I/O scheduling class and priority of
+		// a process, process group, or user. They are the I/O-priority analogues of
+		// getpriority/setpriority (the CPU nice value) and share the identical
+		// which/who selector signature, so they classify as Process alongside them
+		// rather than falling through to Misc. Assert the ioprio pair together with
+		// their getpriority/setpriority siblings so a stray reclassification of any
+		// one of them trips this test. Note: the x86 I/O-port syscalls ioperm/iopl
+		// (asserted above as Misc) only share an "io" name prefix; they set
+		// port-access state, not process I/O priority, and stay in Misc. Keep in
+		// sync with the Process list in docs/syscall-tracing-plan.md.
+		{"sys_enter_ioprio_get", FamilyProcess},
+		{"sys_exit_ioprio_get", FamilyProcess},
+		{"sys_enter_ioprio_set", FamilyProcess},
+		{"sys_exit_ioprio_set", FamilyProcess},
+		{"sys_enter_getpriority", FamilyProcess},
+		{"sys_enter_setpriority", FamilyProcess},
 		{"sys_enter_unlisted_future_syscall", FamilyMisc},
 	}
 

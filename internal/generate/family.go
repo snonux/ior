@@ -72,6 +72,14 @@ var syscallFamilies = map[string]SyscallFamily{
 	"getppid": FamilyProcess, "getpriority": FamilyProcess, "getresgid": FamilyProcess,
 	"getresuid": FamilyProcess, "getrlimit": FamilyProcess, "getrusage": FamilyProcess,
 	"getsid": FamilyProcess, "gettid": FamilyProcess, "getuid": FamilyProcess,
+	// ioprio_get/ioprio_set query/set the I/O scheduling class and priority of a
+	// process, process group, or user (ioprio_set(which, who, ioprio)). They are
+	// the I/O-priority analogues of getpriority/setpriority (the CPU nice value
+	// for a process/group/user) and share the identical which/who selector
+	// signature, so they classify as Process alongside them rather than falling
+	// through to Misc. The who argument is a pid/pgid/uid (selected by which),
+	// never an fd or path, so argument capture is KindNull (null_event).
+	"ioprio_get": FamilyProcess, "ioprio_set": FamilyProcess,
 	"kcmp": FamilyProcess, "personality": FamilyProcess, "pivot_root": FamilyProcess,
 	"prctl": FamilyProcess, "prlimit64": FamilyProcess, "reboot": FamilyProcess,
 	"restart_syscall": FamilyProcess, "set_tid_address": FamilyProcess,

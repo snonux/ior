@@ -1259,6 +1259,58 @@ func TestClassifyE7NullNameOnlyKinds(t *testing.T) {
 	}
 }
 
+// TestClassifyIoprioNullKind locks in the argument-capture classification for
+// ioprio_set/ioprio_get using their real kernel tracepoint fields. Unlike the
+// name-only Misc/null syscalls above, ioprio_* are NOT in nameOnlyKindsTable:
+// they classify by field fallthrough. ioprio_set(which, who, ioprio) and
+// ioprio_get(which, who) carry only int-typed which/who/ioprio fields. None is
+// named "fd"/"pathname"/"path"/"filename", so ClassifyFormat must return
+// KindNone — in particular the "who" argument (a pid/pgid/uid selected by
+// "which", never an fd) must NOT be misclassified as KindFd, and nothing must be
+// captured as a path. classifyEnterForGeneration then promotes the field-bearing
+// enter format to KindNull (the null_event seen in generated_tracepoints.c).
+func TestClassifyIoprioNullKind(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields []Field
+	}{
+		{
+			name: "sys_enter_ioprio_set",
+			fields: []Field{
+				{Type: "int", Name: "__syscall_nr"},
+				{Type: "int", Name: "which"},
+				{Type: "int", Name: "who"},
+				{Type: "int", Name: "ioprio"},
+			},
+		},
+		{
+			name: "sys_enter_ioprio_get",
+			fields: []Field{
+				{Type: "int", Name: "__syscall_nr"},
+				{Type: "int", Name: "which"},
+				{Type: "int", Name: "who"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Format{Name: tc.name, ExternalFields: tc.fields}
+
+			// No field should match an fd/path/name pattern: raw classification
+			// is KindNone, proving "who" is not captured as an fd.
+			if r := ClassifyFormat(f); r.Kind != KindNone {
+				t.Fatalf("%s: ClassifyFormat kind = %d, want KindNone", tc.name, r.Kind)
+			}
+
+			// The generator promotes the field-bearing enter format to KindNull.
+			if r := classifyEnterForGeneration(f); r.Kind != KindNull {
+				t.Fatalf("%s: classifyEnterForGeneration kind = %d, want KindNull", tc.name, r.Kind)
+			}
+		})
+	}
+}
+
 func TestClassifyB7NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string
