@@ -1846,6 +1846,72 @@ func TestIsFdTypeNonMatch(t *testing.T) {
 	}
 }
 
+// TestClassifySchedGetattrPidNotFd is a lock-in regression test for the
+// sched_getattr audit. The syscall signature is:
+//
+//	int sched_getattr(pid_t pid, struct sched_attr *attr,
+//	                  unsigned int size, unsigned int flags)
+//
+// args[0] is a PID (a process/thread id), NOT a file descriptor, and attr is
+// a userspace output pointer. The expected classification is KindNull (no fd,
+// pathname, or other resource handle is extracted on enter) and family Sched.
+//
+// The critical invariant guarded here is that the pid argument must never be
+// misclassified as an fd. ClassifyFormat resolves sched_getattr via the
+// name-only table first, which short-circuits before any field heuristic;
+// this test pins that behavior even when the real kernel field layout (whose
+// first arg is named "pid", not "fd") is supplied.
+func TestClassifySchedGetattrPidNotFd(t *testing.T) {
+	// Field layout mirrors the actual kernel tracepoint format for
+	// sys_enter_sched_getattr: pid_t pid, struct sched_attr *uattr,
+	// unsigned int usize, unsigned int flags.
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_sched_getattr",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "pid_t", Name: "pid"},
+			{Type: "struct sched_attr *", Name: "uattr"},
+			{Type: "unsigned int", Name: "usize"},
+			{Type: "unsigned int", Name: "flags"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("sched_getattr: got kind %d, want KindNull (pid arg must not be treated as fd)", r.Kind)
+	}
+	if r.Kind == KindFd {
+		t.Fatalf("sched_getattr: pid arg misclassified as fd")
+	}
+
+	// Family must match the Sched siblings (sched_setattr, sched_getparam,
+	// sched_getscheduler, ...).
+	if fam := ClassifySyscallFamily("sys_enter_sched_getattr"); fam != FamilySched {
+		t.Fatalf("sched_getattr: got family %s, want FamilySched", fam)
+	}
+
+	// Sanity-check sibling consistency: the matching setter and the other
+	// getters share the same family and KindNull classification.
+	siblings := []string{
+		"sys_enter_sched_setattr",
+		"sys_enter_sched_getparam",
+		"sys_enter_sched_getscheduler",
+	}
+	for _, name := range siblings {
+		s := ClassifyFormat(&Format{
+			Name: name,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "long", Name: "arg0"},
+			},
+		})
+		if s.Kind != KindNull {
+			t.Errorf("%s: got kind %d, want KindNull", name, s.Kind)
+		}
+		if fam := ClassifySyscallFamily(name); fam != FamilySched {
+			t.Errorf("%s: got family %s, want FamilySched", name, fam)
+		}
+	}
+}
+
 func mustParseAll(t *testing.T, data string) []Format {
 	t.Helper()
 	formats, err := ParseFormats(strings.NewReader(data))
