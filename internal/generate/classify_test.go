@@ -1022,6 +1022,32 @@ func TestClassify67NameOnlyKinds(t *testing.T) {
 	}
 }
 
+// TestClassifyInitModuleVsFinitModule locks in the load-bearing distinction
+// between the two module-loading syscalls (man 2 init_module).
+//
+// init_module(void *module_image, unsigned long len, const char *param_values)
+// takes a userspace ELF image pointer and a module-PARAMETER string (not a
+// filesystem path), so it must classify as KindModule (null_event) and capture
+// neither an fd nor a path — param_values must NOT be mistaken for a path.
+//
+// finit_module(int fd, const char *param_values, int flags) reads the module
+// from a file descriptor, so it must classify as KindFd via field-based
+// matching on the leading "fd" field.
+func TestClassifyInitModuleVsFinitModule(t *testing.T) {
+	if r := classifyFromData(t, FormatInitModule); r.Kind != KindModule {
+		t.Errorf("init_module: got kind %d, want KindModule", r.Kind)
+	}
+	if r := classifyFromData(t, FormatFinitModule); r.Kind != KindFd {
+		t.Errorf("finit_module: got kind %d, want KindFd", r.Kind)
+	}
+
+	// param_values (uargs) is a parameter string, never a captured path: the
+	// init_module classification must not select KindPathname/KindName/KindOpen.
+	if r := classifyFromData(t, FormatInitModule); r.PathnameField != "" {
+		t.Errorf("init_module: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
 func TestClassify87NameOnlyKinds(t *testing.T) {
 	tests := []string{
 		"sys_enter_rt_sigaction",

@@ -24,6 +24,30 @@ func TestGenerateFdHandler(t *testing.T) {
 	requireContains(t, output, "#define SYS_ENTER_READ 844")
 }
 
+// TestGenerateModuleHandlers locks in the generated BPF C for the module-load
+// syscalls (man 2 init_module). init_module is a null_event: it must capture no
+// fd and no path/filename (its param_values arg is a parameter string, not a
+// path). finit_module is an fd_event capturing fd = args[0].
+func TestGenerateModuleHandlers(t *testing.T) {
+	initOut := generateFromPair(t, FormatInitModule, FormatExitInitModule)
+	requireContains(t, initOut, `SEC("tracepoint/syscalls/sys_enter_init_module")`)
+	requireContains(t, initOut, "struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);")
+	requireContains(t, initOut, "ev->event_type = ENTER_NULL_EVENT;")
+	// init_module must not capture an fd or any filename/path.
+	if strings.Contains(initOut, "ev->fd =") {
+		t.Error("init_module handler must not capture an fd")
+	}
+	if strings.Contains(initOut, "ev->filename") || strings.Contains(initOut, "bpf_probe_read_user_str") {
+		t.Error("init_module handler must not capture param_values as a path/filename")
+	}
+
+	finitOut := generateFromPair(t, FormatFinitModule, FormatExitFinitModule)
+	requireContains(t, finitOut, `SEC("tracepoint/syscalls/sys_enter_finit_module")`)
+	requireContains(t, finitOut, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, finitOut, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, finitOut, "ev->fd = (__s32)ctx->args[0];")
+}
+
 func TestGeneratePidfdGetfdHandlerUsesPidfdArgument(t *testing.T) {
 	output := generateFromPair(t, FormatPidfdGetfd, FormatExitPidfdGetfd)
 
