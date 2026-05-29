@@ -189,6 +189,35 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_ioprio_set", FamilyProcess},
 		{"sys_enter_getpriority", FamilyProcess},
 		{"sys_enter_setpriority", FamilyProcess},
+		// setuid(2) sets the process credential (effective, and possibly real and
+		// saved, user ID); it is a process/credential-management syscall and shares
+		// FamilyProcess with its credential-setting cluster — the uid setters
+		// setresuid/setreuid/setfsuid, the gid analogues
+		// setgid/setresgid/setregid/setfsgid/setgroups, and the matching credential
+		// readers getuid/geteuid/getgid/getegid/getresuid/getresgid/getgroups.
+		// Assert the cluster (enter and exit for setuid) so a stray
+		// reclassification of any one credential syscall trips this test. Note:
+		// seteuid/setegid have no dedicated kernel tracepoints (they are libc
+		// wrappers over setreuid/setresuid), so they never reach this classifier
+		// and are intentionally not asserted here. Keep in sync with the Process
+		// list in docs/syscall-tracing-plan.md.
+		{"sys_enter_setuid", FamilyProcess},
+		{"sys_exit_setuid", FamilyProcess},
+		{"sys_enter_setresuid", FamilyProcess},
+		{"sys_enter_setreuid", FamilyProcess},
+		{"sys_enter_setfsuid", FamilyProcess},
+		{"sys_enter_setgid", FamilyProcess},
+		{"sys_enter_setresgid", FamilyProcess},
+		{"sys_enter_setregid", FamilyProcess},
+		{"sys_enter_setfsgid", FamilyProcess},
+		{"sys_enter_setgroups", FamilyProcess},
+		{"sys_enter_getuid", FamilyProcess},
+		{"sys_enter_geteuid", FamilyProcess},
+		{"sys_enter_getgid", FamilyProcess},
+		{"sys_enter_getegid", FamilyProcess},
+		{"sys_enter_getresuid", FamilyProcess},
+		{"sys_enter_getresgid", FamilyProcess},
+		{"sys_enter_getgroups", FamilyProcess},
 		{"sys_enter_unlisted_future_syscall", FamilyMisc},
 	}
 
