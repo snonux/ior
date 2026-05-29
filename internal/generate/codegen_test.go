@@ -80,6 +80,61 @@ func TestClassifyRetProcessMadviseUnclassified(t *testing.T) {
 	}
 }
 
+// TestGenerateRtSigpendingHandler locks in how rt_sigpending(2) is generated.
+// Per the man page:
+//
+//	int rt_sigpending(sigset_t *set, size_t sigsetsize)
+//
+// It reports the set of signals pending for delivery into the userspace *set
+// buffer and returns 0 on success or -1 on error. Neither argument is an fd or
+// a path: args[0] is a userspace output pointer to a sigset_t (a signal mask,
+// not an I/O resource) and args[1] is the byte size of that set. ior therefore
+// classifies rt_sigpending as KindNull in FamilySignals, alongside the rest of
+// the rt_sig* group. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     as an fd/path/addr — the sigset pointer is not a traced I/O resource.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateRtSigpendingHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("rt_sigpending")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_rt_sigpending")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_rt_sigpending")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_RT_SIGPENDING;")
+
+	// The KindNull enter handler must not wire the sigset pointer (args[0]) or the
+	// sigsetsize (args[1]) as an fd/path/addr — they are not traced I/O resources.
+	// Scope to the enter handler body (everything from the enter SEC up to the
+	// exit SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("rt_sigpending: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("rt_sigpending must be KindNull: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetRtSigpendingUnclassified locks in that rt_sigpending's return
+// value is UNCLASSIFIED. It returns 0 on success or -1 on error — a status code,
+// not a number of bytes transferred — so classifying it as READ/WRITE/TRANSFER
+// would wrongly count it as data movement.
+func TestClassifyRetRtSigpendingUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_rt_sigpending"); got != Unclassified {
+		t.Errorf("rt_sigpending ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 func TestGenerateLandlockAddRuleHandlerUsesFirstArgumentAsFd(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("landlock_add_rule")))
 

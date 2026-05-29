@@ -74,6 +74,22 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_rseq", FamilyMisc},
 		{"sys_enter_set_robust_list", FamilyMisc},
 		{"sys_enter_get_robust_list", FamilyMisc},
+		// rt_sigpending(2) examines the set of signals pending for delivery
+		// (sigset_t *set, size_t sigsetsize). It is a signal-handling syscall and
+		// shares FamilySignals with the whole rt_sig* group as well as kill/pause/
+		// sigaltstack/tkill/tgkill. The entire group must stay consistent; assert
+		// every rt_sig* sibling alongside rt_sigpending so a stray reclassification
+		// of any one of them trips this test. Keep in sync with the Signals list in
+		// docs/syscall-tracing-plan.md.
+		{"sys_enter_rt_sigpending", FamilySignals},
+		{"sys_exit_rt_sigpending", FamilySignals},
+		{"sys_enter_rt_sigprocmask", FamilySignals},
+		{"sys_enter_rt_sigsuspend", FamilySignals},
+		{"sys_enter_rt_sigtimedwait", FamilySignals},
+		{"sys_enter_rt_sigreturn", FamilySignals},
+		{"sys_enter_rt_sigqueueinfo", FamilySignals},
+		{"sys_enter_rt_tgsigqueueinfo", FamilySignals},
+		{"sys_enter_sigaltstack", FamilySignals},
 		{"sys_enter_unlisted_future_syscall", FamilyMisc},
 	}
 
