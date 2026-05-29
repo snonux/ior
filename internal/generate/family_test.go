@@ -19,6 +19,13 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_epoll_wait", FamilyPolling},
 		{"sys_enter_io_uring_enter", FamilyAIO},
 		{"sys_enter_bpf", FamilySecurity},
+		// x86 I/O-port / CPU-state syscalls are not in the explicit family
+		// table and intentionally fall through to Misc (ioperm/iopl/modify_ldt
+		// set port-access or LDT state, not file I/O). arch_prctl/personality
+		// are deliberately classified as Process, so they are not listed here.
+		{"sys_enter_ioperm", FamilyMisc},
+		{"sys_enter_iopl", FamilyMisc},
+		{"sys_enter_modify_ldt", FamilyMisc},
 		{"sys_enter_unlisted_future_syscall", FamilyMisc},
 	}
 
