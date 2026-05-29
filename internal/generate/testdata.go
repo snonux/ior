@@ -1228,6 +1228,44 @@ format:
 print fmt: "filename: 0x%08lx, mode: 0x%08lx, dev: 0x%08lx", ((unsigned long)(REC->filename)), ((unsigned long)(REC->mode)), ((unsigned long)(REC->dev))
 `
 
+// FormatMknodat mirrors the real sys_enter_mknodat tracepoint format. Unlike
+// mknod(2), mknodat(2) takes a directory fd (dfd) as its first argument, which
+// pushes the filename (the real path) to args[1]. The classifier must capture
+// the path from args[1] here, not args[0] (which is the dirfd).
+const FormatMknodat = `name: sys_enter_mknodat
+ID: 896
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int dfd;	offset:16;	size:8;	signed:0;
+	field:const char * filename;	offset:24;	size:8;	signed:0;
+	field:umode_t mode;	offset:32;	size:8;	signed:0;
+	field:unsigned dev;	offset:40;	size:8;	signed:0;
+
+print fmt: "dfd: 0x%08lx, filename: 0x%08lx, mode: 0x%08lx, dev: 0x%08lx", ((unsigned long)(REC->dfd)), ((unsigned long)(REC->filename)), ((unsigned long)(REC->mode)), ((unsigned long)(REC->dev))
+`
+
+// FormatExitMknodat mirrors the real sys_exit_mknodat tracepoint format. Like
+// mknod, mknodat returns a plain int (0 on success, -1 on error) and is
+// therefore classified as a ret_event (UNCLASSIFIED return value).
+const FormatExitMknodat = `name: sys_exit_mknodat
+ID: 895
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatExitMknod = `name: sys_exit_mknod
 ID: 893
 format:

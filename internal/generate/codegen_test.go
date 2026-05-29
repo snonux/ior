@@ -631,6 +631,35 @@ func TestGenerateAccessFaccessatHandlers(t *testing.T) {
 	requireContains(t, faccessatOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
 }
 
+// TestGenerateMknodMknodatHandlers locks in the generated BPF C for mknod(2)
+// and its dirfd-relative sibling mknodat(2). Both create a filesystem node and
+// capture a real path into a path_event's pathname member, but from DIFFERENT
+// argument slots: mknod(2) has no dirfd so its path is at args[0], whereas
+// mknodat(2) takes dfd at args[0] and the path at args[1]. This guards against
+// a regression that would read the wrong arg (e.g. capturing mknodat's dirfd
+// as a path, or dropping mknod's path entirely). The exit side is a ret_event
+// (int 0/-1, UNCLASSIFIED) — verified via the shared ret_event handler shape.
+func TestGenerateMknodMknodatHandlers(t *testing.T) {
+	exitMknod := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_mknod", 1)
+	exitMknod = strings.Replace(exitMknod, "ID: 843", "ID: 893", 1)
+	mknodOut := generateFromPair(t, FormatMknod, exitMknod)
+	requireContains(t, mknodOut, `SEC("tracepoint/syscalls/sys_enter_mknod")`)
+	requireContains(t, mknodOut, "struct path_event *ev")
+	requireContains(t, mknodOut, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, mknodOut, "ev->trace_id = SYS_ENTER_MKNOD;")
+	// mknod(2): path (filename) is at args[0] — no dirfd precedes it.
+	requireContains(t, mknodOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+
+	exitMknodat := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_mknodat", 1)
+	exitMknodat = strings.Replace(exitMknodat, "ID: 843", "ID: 895", 1)
+	mknodatOut := generateFromPair(t, FormatMknodat, exitMknodat)
+	requireContains(t, mknodatOut, `SEC("tracepoint/syscalls/sys_enter_mknodat")`)
+	requireContains(t, mknodatOut, "struct path_event *ev")
+	requireContains(t, mknodatOut, "ev->trace_id = SYS_ENTER_MKNODAT;")
+	// mknodat(2): dfd is at args[0], so the path (filename) is at args[1].
+	requireContains(t, mknodatOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+}
+
 func TestGenerateFcntlHandler(t *testing.T) {
 	output := generateFromPair(t, FormatFcntl, FormatExitFcntl)
 
