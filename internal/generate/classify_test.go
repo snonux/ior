@@ -2075,6 +2075,104 @@ func TestClassifySendmsgWriteByteCount(t *testing.T) {
 	}
 }
 
+// TestClassifyPwritev2WriteByteCount locks in the classification of the
+// pwritev2(2) audit. The syscall signature is:
+//
+//	ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
+//	                 off_t offset, int flags)
+//
+// args[0] is the file descriptor written to (the real kernel tracepoint format
+// names the first field "fd"), iov/iovcnt describe the gather buffers, offset is
+// the file position, and flags is an int (RWF_*). On success pwritev2 returns
+// the NUMBER OF BYTES WRITTEN, so its exit must be WRITE_CLASSIFIED — those
+// bytes are counted as written, exactly like the pwritev/writev/write/pwrite64
+// siblings, and never as a read.
+//
+// The invariants pinned here:
+//   - enter classifies as KindFd off the first "fd" field (fd at args[0]),
+//   - family is FS (matches pwritev/writev/pwrite64/preadv2 file-IO siblings),
+//   - return classifies as WRITE_CLASSIFIED (bytes-written → written).
+//
+// Contrast case guards the easy off-by-one mistake: preadv2 is the read-side
+// sibling (READ_CLASSIFIED, never write). The whole p/readv/writev family is
+// asserted together so a stray reclassification of any sibling trips the test.
+func TestClassifyPwritev2WriteByteCount(t *testing.T) {
+	// Field layout mirrors the actual kernel tracepoint format for
+	// sys_enter_pwritev2: int fd, struct iovec *vec, unsigned long vlen,
+	// unsigned long pos_l, unsigned long pos_h, rwf_t flags.
+	pwritev2 := ClassifyFormat(&Format{
+		Name: "sys_enter_pwritev2",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "unsigned long", Name: "fd"},
+			{Type: "const struct iovec *", Name: "vec"},
+			{Type: "unsigned long", Name: "vlen"},
+			{Type: "unsigned long", Name: "pos_l"},
+			{Type: "unsigned long", Name: "pos_h"},
+			{Type: "rwf_t", Name: "flags"},
+		},
+	})
+	if pwritev2.Kind != KindFd {
+		t.Fatalf("pwritev2: got kind %d, want KindFd (fd at args[0])", pwritev2.Kind)
+	}
+
+	if fam := ClassifySyscallFamily("sys_enter_pwritev2"); fam != FamilyFS {
+		t.Fatalf("pwritev2: got family %s, want FamilyFS", fam)
+	}
+
+	// Return value is a byte count of data written → counted as written.
+	if got := ClassifyRet("sys_exit_pwritev2"); got != WriteClassified {
+		t.Fatalf("pwritev2: ClassifyRet = %q, want WRITE_CLASSIFIED (return is bytes written)", got)
+	}
+
+	// preadv2 is the read-side sibling; it must never be a write.
+	if got := ClassifyRet("sys_exit_preadv2"); got != ReadClassified {
+		t.Fatalf("preadv2: ClassifyRet = %q, want READ_CLASSIFIED", got)
+	}
+
+	// All write-side vectored/positional siblings count their byte-count return
+	// as written; assert the whole group so a stray reclassification trips here.
+	for _, name := range []string{
+		"sys_exit_pwritev",
+		"sys_exit_writev",
+		"sys_exit_write",
+		"sys_exit_pwrite64",
+	} {
+		if got := ClassifyRet(name); got != WriteClassified {
+			t.Errorf("%s: ClassifyRet = %q, want WRITE_CLASSIFIED", name, got)
+		}
+	}
+
+	// All read-side siblings stay READ_CLASSIFIED (off-by-one guard).
+	for _, name := range []string{
+		"sys_exit_preadv",
+		"sys_exit_readv",
+		"sys_exit_read",
+		"sys_exit_pread64",
+	} {
+		if got := ClassifyRet(name); got != ReadClassified {
+			t.Errorf("%s: ClassifyRet = %q, want READ_CLASSIFIED", name, got)
+		}
+	}
+
+	// The whole p/readv/writev family shares the FS family.
+	for _, name := range []string{
+		"sys_enter_pwritev",
+		"sys_enter_writev",
+		"sys_enter_write",
+		"sys_enter_pwrite64",
+		"sys_enter_preadv2",
+		"sys_enter_preadv",
+		"sys_enter_readv",
+		"sys_enter_read",
+		"sys_enter_pread64",
+	} {
+		if fam := ClassifySyscallFamily(name); fam != FamilyFS {
+			t.Errorf("%s: got family %s, want FamilyFS", name, fam)
+		}
+	}
+}
+
 func mustParseAll(t *testing.T, data string) []Format {
 	t.Helper()
 	formats, err := ParseFormats(strings.NewReader(data))
