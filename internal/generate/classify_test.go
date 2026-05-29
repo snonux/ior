@@ -1757,6 +1757,11 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 		{"listns", FormatListns, FormatExitListns, FamilyFS},
 		{"swapon", FormatSwapon, FormatExitSwapon, FamilyFS},
 		{"swapoff", FormatSwapoff, FormatExitSwapoff, FamilyFS},
+		// Bare sync() takes no args and returns void, but it DOES return (it is
+		// not noreturn like exit/exit_group), so it belongs in FamilyFS and must
+		// still emit a live exit handler. Its fd-taking siblings (syncfs/fsync/
+		// fdatasync/sync_file_range) are FamilyFS+KindFd and covered elsewhere.
+		{"sync", FormatSync, FormatExitSync, FamilyFS},
 		{"kill", FormatKill, FormatExitKill, FamilySignals},
 		{"exit_group", syntheticEnter("exit_group", 9316), syntheticExit("exit_group", 9315), FamilyProcess},
 	}
