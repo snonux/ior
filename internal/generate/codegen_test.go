@@ -588,6 +588,49 @@ func TestGenerateFallbackNullHandler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
 }
 
+// TestGenerateExitNoreturnHandlers locks in how the noreturn process-exit
+// syscalls are generated. Per exit(2)/exit_group(2): both take a single
+// `int status` argument and never return. ior classifies them as KindNull
+// (FamilyProcess), so:
+//   - The enter handler emits a struct null_event and intentionally does NOT
+//     capture the int status arg (it is not an I/O resource like an fd/path).
+//   - The kernel still exposes sys_exit_{exit,exit_group} tracepoints, so the
+//     generator emits matching EXIT_RET_EVENT handlers, but those handlers can
+//     never fire at runtime because the syscall does not return. This is
+//     harmless: the generator pairs by name, not by observed return events.
+func TestGenerateExitNoreturnHandlers(t *testing.T) {
+	for _, syscall := range []string{"exit", "exit_group"} {
+		t.Run(syscall, func(t *testing.T) {
+			output := GenerateTracepointsC(mustParseAll(t, syntheticPair(syscall)))
+
+			enterSec := `SEC("tracepoint/syscalls/sys_enter_` + syscall + `")`
+			exitSec := `SEC("tracepoint/syscalls/sys_exit_` + syscall + `")`
+			requireContains(t, output, enterSec)
+			requireContains(t, output, "struct null_event *ev")
+			requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+			// The noreturn exit handler is still emitted (kernel exposes the
+			// tracepoint) even though it never fires.
+			requireContains(t, output, exitSec)
+			requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+
+			// The int status arg must NOT be captured: a null_event has no
+			// arg fields, so no ctx->args[...] read should be generated for
+			// the enter handler.
+			enterStart := strings.Index(output, enterSec)
+			if enterStart < 0 {
+				t.Fatalf("%s: enter handler not found", syscall)
+			}
+			enterBody := output[enterStart:]
+			if exitStart := strings.Index(enterBody, exitSec); exitStart > 0 {
+				enterBody = enterBody[:exitStart]
+			}
+			if strings.Contains(enterBody, "ctx->args[") {
+				t.Errorf("%s: enter handler unexpectedly captures an arg; the int status must be ignored", syscall)
+			}
+		})
+	}
+}
+
 func TestGenerateHandlersForEverySyscallFamily(t *testing.T) {
 	tests := []struct {
 		syscall string
