@@ -280,6 +280,81 @@ func TestGenerateClone3Handler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateWait4Handler locks in how wait4(2) is generated. Per the man
+// page:
+//
+//	pid_t wait4(pid_t pid, int *wstatus, int options, struct rusage *rusage)
+//
+// wait4 waits for a child process to change state and optionally retrieves its
+// resource usage. NONE of the arguments is an fd or a filesystem path: args[0]
+// (pid) is a process/group selector — a pid, NOT a file descriptor, so it must
+// never be misclassified as one; args[1] (wstatus) is a userspace output pointer
+// for the wait status; args[2] (options) is an int flag set; and args[3]
+// (rusage) is a userspace output pointer to a struct rusage. The return value is
+// a pid_t: the pid of the child whose state changed, 0 (WNOHANG, none ready), or
+// -1 on error — never a byte count. ior therefore classifies wait4 as KindProc
+// in FamilyProcess, identical to its siblings waitid/clone/fork/vfork.
+// Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg
+//     as an fd/path/addr — neither the pid selector, the status/rusage pointers,
+//     nor the options flags are traced I/O resources.
+//   - The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED; it is not
+//     a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a misclassification to KindNull (which would still emit a
+// null_event but break sibling/dimension consistency) or to any fd kind (which
+// would wrongly treat the pid at args[0] as a file descriptor).
+func TestGenerateWait4Handler(t *testing.T) {
+	// Classification consistency with the waitid/clone/fork/vfork siblings. We
+	// feed a generic pointer arg so the name-only table — not a field heuristic —
+	// is what pins both wait* siblings to KindProc.
+	for _, name := range []string{"sys_enter_wait4", "sys_enter_waitid"} {
+		r := ClassifyFormat(&Format{
+			Name: name,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "pid_t", Name: "upid"},
+			},
+		})
+		if r.Kind != KindProc {
+			t.Errorf("%s kind = %v, want KindProc", name, r.Kind)
+		}
+	}
+	if got := ClassifySyscallFamily("sys_enter_wait4"); got != FamilyProcess {
+		t.Errorf("wait4 family = %q, want %q", got, FamilyProcess)
+	}
+	if got := ClassifyRet("sys_exit_wait4"); got != Unclassified {
+		t.Errorf("wait4 ret classification = %q, want %q (pid, not a byte count)", got, Unclassified)
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("wait4")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_wait4")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_wait4")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_WAIT4;")
+
+	// The KindProc enter handler must not wire any arg as an fd/path/addr — in
+	// particular the pid at args[0] must never be treated as an fd. Scope to the
+	// enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("wait4: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("wait4 must be KindProc: enter handler must not capture any arg (pid at args[0] is not an fd)")
+	}
+
+	// The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 // TestGenerateSigaltstackHandler locks in how sigaltstack(2) is generated. Per
 // the man page:
 //
