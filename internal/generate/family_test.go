@@ -56,6 +56,20 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_utimes", FamilyFS},
 		{"sys_enter_utimensat", FamilyFS},
 		{"sys_enter_futimesat", FamilyFS},
+		// The filesystem-sync family commits cached file data/metadata to disk
+		// and all classify as FamilyFS: sync(2) (no args, whole system),
+		// syncfs(2) (one fd, the filesystem containing that fd), and the
+		// per-file fsync(2)/fdatasync(2)/sync_file_range(2). syncfs and its
+		// siblings must stay together in FamilyFS — assert the whole group so a
+		// stray reclassification of any one trips this test. Keep in sync with
+		// the FS list in docs/syscall-tracing-plan.md.
+		{"sys_enter_sync", FamilyFS},
+		{"sys_exit_sync", FamilyFS},
+		{"sys_enter_syncfs", FamilyFS},
+		{"sys_exit_syncfs", FamilyFS},
+		{"sys_enter_fsync", FamilyFS},
+		{"sys_enter_fdatasync", FamilyFS},
+		{"sys_enter_sync_file_range", FamilyFS},
 		{"sys_enter_epoll_wait", FamilyPolling},
 		{"sys_enter_io_uring_enter", FamilyAIO},
 		{"sys_enter_bpf", FamilySecurity},
