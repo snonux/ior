@@ -624,6 +624,75 @@ func TestGenerateNullHandler(t *testing.T) {
 	}
 }
 
+// TestGenerateSyncHandler locks in how the bare sync(2) syscall is generated.
+// Per sync(2): `void sync(void)` — it flushes all filesystem buffers to disk,
+// takes NO arguments and returns NO value. This makes it distinct from its
+// filesystem-sync siblings, which all take a leading fd and return int:
+//   - int syncfs(int fd)
+//   - int fsync(int fd)
+//   - int fdatasync(int fd)
+//   - int sync_file_range(int fd, off64_t off, off64_t n, unsigned flags)
+//
+// Because sync has no arguments, ior classifies it as KindNull in FamilyFS, so:
+//   - The enter handler emits a struct null_event and, since there are no args
+//     at all, must NOT reference ctx->args[...] anywhere in its body.
+//   - Crucially, although sync returns void, the syscall still *completes* and
+//     the kernel sys_exit_sync tracepoint fires with a (meaningless) ret field.
+//     Unlike the noreturn exit(2)/exit_group(2) syscalls, sync DOES return, so
+//     the generator must emit a live exit handler — it must NOT be suppressed.
+//   - The void return is recorded generically via EXIT_RET_EVENT and classified
+//     UNCLASSIFIED: it is not a byte count and must never be tagged
+//     READ/WRITE/TRANSFER.
+func TestGenerateSyncHandler(t *testing.T) {
+	output := generateFromPair(t, FormatSync, FormatExitSync)
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_sync")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_sync")`
+
+	// Enter: null_event, no argument capture (sync takes no arguments).
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SYNC;")
+
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("sync: enter/exit handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("sync must be KindNull and takes no args: enter handler must not capture any arg")
+	}
+
+	// Exit: sync is void but DOES return, so unlike exit/exit_group the exit
+	// handler must be emitted and report the meaningless ret as UNCLASSIFIED.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetSyncUnclassified locks in that the bare sync(2) return value is
+// UNCLASSIFIED. sync returns void; the sys_exit_sync tracepoint still carries a
+// ret field, but it is meaningless and certainly not a byte count, so it must
+// stay UNCLASSIFIED — never READ/WRITE/TRANSFER.
+func TestClassifyRetSyncUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_sync"); got != Unclassified {
+		t.Errorf("sync ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
+// TestSyncIsNotNoreturn locks in that bare sync(2) is NOT treated as a noreturn
+// syscall: it is void but returns control to userspace, so its exit handler must
+// be generated (see TestGenerateSyncHandler). Only exit(2)/exit_group(2) are
+// noreturn. This guards against sync accidentally being added to the noreturn
+// suppression list, which would silently drop its exit events.
+func TestSyncIsNotNoreturn(t *testing.T) {
+	if isNoreturnSyscall("sync") {
+		t.Error("sync must not be noreturn: it is void but DOES return, so its exit handler must be emitted")
+	}
+}
+
 func TestGenerateIoUringEnterHandler(t *testing.T) {
 	output := generateFromPair(t, FormatIoUringEnter, FormatExitIoUringEnter)
 
