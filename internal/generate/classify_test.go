@@ -315,6 +315,59 @@ func TestClassifySocketFdSyscallsByName(t *testing.T) {
 	}
 }
 
+// TestClassifySyncFamilyFdSyscallsByName locks in that the filesystem-sync
+// family (fsync/fdatasync/syncfs/sync_file_range) is classified as KindFd on
+// enter. Each of these takes an open file descriptor as args[0]:
+//   - int fsync(int fd)
+//   - int fdatasync(int fd)
+//   - int syncfs(int fd)
+//   - int sync_file_range(int fd, off64_t offset, off64_t nbytes, unsigned flags)
+//
+// so their enter tracepoint carries a leading fd field and must capture
+// fd=args[0] into a fd_event (KindFd), matching the generated
+// handle_sys_enter_* handlers. (Plain sync() takes no args and is KindNull;
+// it is asserted separately in the classification table test.)
+func TestClassifySyncFamilyFdSyscallsByName(t *testing.T) {
+	tests := []string{
+		"fsync",
+		"fdatasync",
+		"syncfs",
+		"sync_file_range",
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := ClassifyFormat(&Format{
+				Name: "sys_enter_" + name,
+				ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "int", Name: "fd"},
+				},
+			})
+			if r.Kind != KindFd {
+				t.Errorf("%s: got kind %d, want KindFd", name, r.Kind)
+			}
+		})
+	}
+}
+
+// TestClassifyExitSyncfs locks in that the syncfs exit tracepoint is classified
+// as KindRet. syncfs(2) returns int (0 on success, -1 on error) and transfers
+// no bytes, so its exit format carries a single "ret" field and must map to a
+// plain ret_event (KindRet, Unclassified) — matching the generated
+// sys_exit_syncfs handler and its fsync/fdatasync siblings.
+func TestClassifyExitSyncfs(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_syncfs",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Errorf("exit_syncfs: got kind %d, want KindRet", r.Kind)
+	}
+}
+
 // TestClassifyExitGetpeername locks in that the getpeername exit tracepoint is
 // classified as KindRet. getpeername(2) returns int (0 on success, -1 on
 // error), so its exit format carries a single "ret" field and must map to a
