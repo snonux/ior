@@ -397,6 +397,24 @@ func TestGenerateEpollCreateHandlerUsesZeroFlags(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 }
 
+func TestGenerateEpollCreate1HandlerUsesArg0Flags(t *testing.T) {
+	output := generateFromPair(t, FormatEpollCreate1, FormatExitEpollCreate1)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_EPOLL_CREATE1;")
+	// epoll_create1(flags) carries its flags (e.g. EPOLL_CLOEXEC) in args[0];
+	// the generated enter handler must capture it rather than hardcoding 0.
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[0];")
+	if strings.Contains(output, "__s32 flags = 0;\n    bpf_map_update_elem") {
+		t.Error("epoll_create1 enter handler must read ctx->args[0] as flags, not 0")
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_epoll_create1\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
 func TestGeneratePidfdOpenHandlerUsesArg1Flags(t *testing.T) {
 	output := generateFromPair(t, FormatPidfdOpen, FormatExitPidfdOpen)
 

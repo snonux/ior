@@ -1805,6 +1805,35 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+// epoll_create1(int flags) — single argument carrying flags at args[0].
+const FormatEpollCreate1 = `name: sys_enter_epoll_create1
+ID: 1453
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int flags;	offset:16;	size:8;	signed:0;
+
+print fmt: "flags: 0x%08lx", ((unsigned long)(REC->flags))
+`
+
+const FormatExitEpollCreate1 = `name: sys_exit_epoll_create1
+ID: 1452
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 // pidfd_open(pid_t pid, unsigned int flags) — flags at args[1], not args[0].
 const FormatPidfdOpen = `name: sys_enter_pidfd_open
 ID: 1461
