@@ -1522,7 +1522,17 @@ func TestClassifySyscallPairEmitsAllFamilies(t *testing.T) {
 			if !strings.Contains(output, `SEC("tracepoint/syscalls/sys_enter_`+tt.name+`")`) {
 				t.Errorf("syscall %s missing enter handler", tt.name)
 			}
-			if !strings.Contains(output, `SEC("tracepoint/syscalls/sys_exit_`+tt.name+`")`) {
+			// Noreturn syscalls (exit, exit_group) are deliberately exempt from
+			// the exit-handler requirement: their sys_exit handler can never
+			// fire because the syscall never returns, so codegen suppresses it
+			// via isNoreturnSyscall (see TestGenerateExitNoreturnHandlers). For
+			// every other syscall the exit handler is still required.
+			hasExitHandler := strings.Contains(output, `SEC("tracepoint/syscalls/sys_exit_`+tt.name+`")`)
+			if isNoreturnSyscall(tt.name) {
+				if hasExitHandler {
+					t.Errorf("noreturn syscall %s must not emit an exit handler", tt.name)
+				}
+			} else if !hasExitHandler {
 				t.Errorf("syscall %s missing exit handler", tt.name)
 			}
 		})

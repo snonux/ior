@@ -125,7 +125,11 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 	if sc.Enter != nil {
 		result = append(result, GeneratedTracepoint{Format: sc.Enter, Classification: enterClass})
 	}
-	if sc.Exit != nil {
+	// Emit the exit handler only for syscalls that can actually return.
+	// Noreturn syscalls (exit, exit_group) never return to userspace, so their
+	// sys_exit tracepoint never fires; emitting a handler would be dead code in
+	// the generated BPF program. We still emit their enter handler above.
+	if sc.Exit != nil && !isNoreturnSyscall(sc.Name) {
 		result = append(result, GeneratedTracepoint{Format: sc.Exit, Classification: exitClass})
 	}
 	return result, ""
@@ -144,6 +148,21 @@ func classifyEnterForGeneration(f *Format) ClassificationResult {
 // needs updating when a new TracepointKind is added.
 func isEnterRejected(kind TracepointKind) bool {
 	return !lookupKind(kind).enterAccepted
+}
+
+// noreturnSyscalls lists syscalls that never return control to userspace.
+// Their sys_exit tracepoint can never fire, so the generator suppresses the
+// matching exit handler (see classifySyscall) to avoid dead code in the
+// generated BPF program.
+var noreturnSyscalls = map[string]bool{
+	"exit":       true,
+	"exit_group": true,
+}
+
+// isNoreturnSyscall reports whether the named syscall never returns and thus
+// must not have an exit handler emitted.
+func isNoreturnSyscall(name string) bool {
+	return noreturnSyscalls[name]
 }
 
 func syscallFormatNames(sc Syscall) []string {
