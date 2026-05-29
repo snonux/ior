@@ -34,6 +34,22 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_migrate_pages", FamilyMemory},
 		{"sys_enter_move_pages", FamilyMemory},
 		{"sys_enter_execve", FamilyProcess},
+		// setsid(2) creates a new session and returns the new session ID
+		// (a pid_t), or -1 on error; it takes no arguments. It is a
+		// process/session-management syscall and shares FamilyProcess with its
+		// session/process-group siblings getsid(2), setpgid(2), getpgid(2), and
+		// getpgrp(2), as well as the pid-returning getpid(2)/getppid(2). Assert
+		// the whole session/pgrp cluster so a stray reclassification of any one
+		// trips this test. Keep in sync with the Process list in
+		// docs/syscall-tracing-plan.md.
+		{"sys_enter_setsid", FamilyProcess},
+		{"sys_exit_setsid", FamilyProcess},
+		{"sys_enter_getsid", FamilyProcess},
+		{"sys_enter_setpgid", FamilyProcess},
+		{"sys_enter_getpgid", FamilyProcess},
+		{"sys_enter_getpgrp", FamilyProcess},
+		{"sys_enter_getpid", FamilyProcess},
+		{"sys_enter_getppid", FamilyProcess},
 		{"sys_enter_rt_sigaction", FamilySignals},
 		{"sys_enter_clock_gettime", FamilyTime},
 		// gettimeofday(2) gets wall-clock time via a userspace timeval/timezone
