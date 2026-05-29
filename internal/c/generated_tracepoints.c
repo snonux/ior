@@ -696,9 +696,7 @@
 #define SYS_ENTER_CAPSET 159
 #define SYS_EXIT_CAPSET 158
 #define SYS_ENTER_EXIT 150
-#define SYS_EXIT_EXIT 149
 #define SYS_ENTER_EXIT_GROUP 148
-#define SYS_EXIT_EXIT_GROUP 147
 #define SYS_ENTER_WAITID 146
 #define SYS_EXIT_WAITID 145
 #define SYS_ENTER_WAIT4 144
@@ -18772,32 +18770,6 @@ int handle_sys_enter_exit(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_exit is a struct ret_event (UNCLASSIFIED) (kind=ret)
-SEC("tracepoint/syscalls/sys_exit_exit")
-int handle_sys_exit_exit(struct syscall_trace_exit *ctx) {
-    __u32 pid, tid;
-    if (filter(&pid, &tid))
-        return 0;
-
-    if (!ior_on_syscall_exit(tid, SYS_ENTER_EXIT, ctx->ret))
-        return 0;
-
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
-    if (!ev)
-        return 0;
-
-    ev->event_type = EXIT_RET_EVENT;
-    ev->trace_id = SYS_EXIT_EXIT;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = bpf_ktime_get_boot_ns();
-    ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
-
-    bpf_ringbuf_submit(ev, 0);
-    return 0;
-}
-
 /// sys_enter_exit_group is a struct null_event (kind=null)
 SEC("tracepoint/syscalls/sys_enter_exit_group")
 int handle_sys_enter_exit_group(struct syscall_trace_enter *ctx) {
@@ -18817,32 +18789,6 @@ int handle_sys_enter_exit_group(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-
-    bpf_ringbuf_submit(ev, 0);
-    return 0;
-}
-
-/// sys_exit_exit_group is a struct ret_event (UNCLASSIFIED) (kind=ret)
-SEC("tracepoint/syscalls/sys_exit_exit_group")
-int handle_sys_exit_exit_group(struct syscall_trace_exit *ctx) {
-    __u32 pid, tid;
-    if (filter(&pid, &tid))
-        return 0;
-
-    if (!ior_on_syscall_exit(tid, SYS_ENTER_EXIT_GROUP, ctx->ret))
-        return 0;
-
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
-    if (!ev)
-        return 0;
-
-    ev->event_type = EXIT_RET_EVENT;
-    ev->trace_id = SYS_EXIT_EXIT_GROUP;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = bpf_ktime_get_boot_ns();
-    ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
