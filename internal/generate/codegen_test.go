@@ -280,6 +280,24 @@ func TestGenerateMemHandlerPkeyMprotect(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
 }
 
+// TestGenerateMemHandlerMapShadowStack locks in the BPF handler wiring for the
+// x86 CET map_shadow_stack syscall (Linux 6.6+):
+// void *map_shadow_stack(unsigned long addr, unsigned long size, unsigned int flags).
+// The hint addr and size are args[0]/args[1] and flags is args[2]; there is no
+// second length, so length2 must stay zero. The return is a mapped address (or
+// -errno), captured generically via ev->ret like every other KindMem exit.
+func TestGenerateMemHandlerMapShadowStack(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("map_shadow_stack")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_map_shadow_stack")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
 func TestGenerateMemHandlerBrk(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("brk")))
 
