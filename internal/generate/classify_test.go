@@ -103,6 +103,37 @@ func TestClassifyPathnameUtime(t *testing.T) {
 	}
 }
 
+// TestClassifyPathnameAccess locks in that access(2)'s args[0] argument
+// (kernel field "filename") is captured as a real filesystem path. access(2)
+// checks the calling process's permissions for a file by path; the path is at
+// args[0] (there is no dirfd), so it must classify as KindPathname with the
+// path wired to the "filename" field. If this regresses to a non-path kind,
+// access's pathname would silently stop being captured.
+func TestClassifyPathnameAccess(t *testing.T) {
+	r := classifyFromData(t, FormatAccess)
+	if r.Kind != KindPathname {
+		t.Errorf("access: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "filename" {
+		t.Errorf("access: PathnameField = %q, want filename", r.PathnameField)
+	}
+}
+
+// TestClassifyPathnameFaccessat locks in that faccessat(2) — access(2)'s
+// dirfd-relative sibling — also classifies as KindPathname with the path wired
+// to the "filename" field. The path is at args[1] (args[0] is the dirfd); the
+// argument-index difference from access(2) is verified separately in the
+// codegen tests (TestGenerateAccessFaccessatHandlers).
+func TestClassifyPathnameFaccessat(t *testing.T) {
+	r := classifyFromData(t, FormatFaccessat)
+	if r.Kind != KindPathname {
+		t.Errorf("faccessat: got kind %d, want KindPathname", r.Kind)
+	}
+	if r.PathnameField != "filename" {
+		t.Errorf("faccessat: PathnameField = %q, want filename", r.PathnameField)
+	}
+}
+
 func TestClassifyNameRename(t *testing.T) {
 	r := classifyFromData(t, FormatRename)
 	if r.Kind != KindName {

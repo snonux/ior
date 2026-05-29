@@ -389,6 +389,51 @@ format:
 print fmt: "filename: 0x%08lx, times: 0x%08lx", ((unsigned long)(REC->filename)), ((unsigned long)(REC->times))
 `
 
+// FormatAccess mirrors the real sys_enter_access tracepoint format. access(2)
+// checks the calling process's permissions for a file; its first argument
+// "filename" is a genuine const char * filesystem path at args[0] (there is no
+// dirfd), so access classifies as KindPathname with PathnameField "filename"
+// and the path is captured from args[0]. The trailing __data_loc field is the
+// kernel's own copy of the string and is ignored by the classifier.
+const FormatAccess = `name: sys_enter_access
+ID: 817
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * filename;	offset:16;	size:8;	signed:0;
+	field:int mode;	offset:24;	size:8;	signed:0;
+	field:__data_loc char[] __filename_val;	offset:32;	size:4;	signed:0;
+
+print fmt: "filename: 0x%08lx \"%s\", mode: 0x%08lx", ((unsigned long)(REC->filename)), __get_str(__filename_val), ((unsigned long)(REC->mode))
+`
+
+// FormatFaccessat mirrors the real sys_enter_faccessat tracepoint format.
+// faccessat(2) is access(2) relative to a directory file descriptor: its first
+// argument is "dfd" (the dirfd, args[0]) and the real path "filename" is at
+// args[1]. It must therefore classify as KindPathname with PathnameField
+// "filename" while capturing the path from args[1] (not args[0]) — the key
+// difference from access(2), whose path is at args[0].
+const FormatFaccessat = `name: sys_enter_faccessat
+ID: 821
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int dfd;	offset:16;	size:8;	signed:0;
+	field:const char * filename;	offset:24;	size:8;	signed:0;
+	field:int mode;	offset:32;	size:8;	signed:0;
+	field:__data_loc char[] __filename_val;	offset:40;	size:4;	signed:0;
+
+print fmt: "dfd: 0x%08lx, filename: 0x%08lx \"%s\", mode: 0x%08lx", ((unsigned long)(REC->dfd)), ((unsigned long)(REC->filename)), __get_str(__filename_val), ((unsigned long)(REC->mode))
+`
+
 const FormatDup3 = `name: sys_enter_dup3
 ID: 922
 format:

@@ -602,6 +602,35 @@ func TestGeneratePathnameHandler(t *testing.T) {
 	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
 }
 
+// TestGenerateAccessFaccessatHandlers locks in the generated BPF C for
+// access(2) and its dirfd-relative sibling faccessat(2). Both capture a real
+// path into a path_event's pathname member, but from DIFFERENT argument slots:
+// access(2) has no dirfd so its path is at args[0], whereas faccessat(2) takes
+// dfd at args[0] and the path at args[1]. This guards against a regression that
+// would read the wrong arg (e.g. capturing faccessat's dirfd as a path, or
+// dropping access's path entirely). The exit side is a ret_event (int 0/-1,
+// UNCLASSIFIED) — verified via the shared ret_event handler shape.
+func TestGenerateAccessFaccessatHandlers(t *testing.T) {
+	exitAccess := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_access", 1)
+	exitAccess = strings.Replace(exitAccess, "ID: 843", "ID: 816", 1)
+	accessOut := generateFromPair(t, FormatAccess, exitAccess)
+	requireContains(t, accessOut, `SEC("tracepoint/syscalls/sys_enter_access")`)
+	requireContains(t, accessOut, "struct path_event *ev")
+	requireContains(t, accessOut, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, accessOut, "ev->trace_id = SYS_ENTER_ACCESS;")
+	// access(2): path (filename) is at args[0] — no dirfd precedes it.
+	requireContains(t, accessOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+
+	exitFaccessat := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_faccessat", 1)
+	exitFaccessat = strings.Replace(exitFaccessat, "ID: 843", "ID: 820", 1)
+	faccessatOut := generateFromPair(t, FormatFaccessat, exitFaccessat)
+	requireContains(t, faccessatOut, `SEC("tracepoint/syscalls/sys_enter_faccessat")`)
+	requireContains(t, faccessatOut, "struct path_event *ev")
+	requireContains(t, faccessatOut, "ev->trace_id = SYS_ENTER_FACCESSAT;")
+	// faccessat(2): dfd is at args[0], so the path (filename) is at args[1].
+	requireContains(t, faccessatOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+}
+
 func TestGenerateFcntlHandler(t *testing.T) {
 	output := generateFromPair(t, FormatFcntl, FormatExitFcntl)
 
