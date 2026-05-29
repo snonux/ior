@@ -43,6 +43,19 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_gettimeofday", FamilyTime},
 		{"sys_enter_sched_yield", FamilySched},
 		{"sys_enter_openat", FamilyFS},
+		// utime(2)/utimes(2) change a file's access and modification times by
+		// path (filename at args[0] is a real filesystem path, captured as
+		// KindPathname). They are filesystem-metadata syscalls and share
+		// FamilyFS with their siblings utimensat(2) and futimesat(2); they must
+		// NOT fall through to Misc. Assert all four siblings so a stray
+		// reclassification of any one trips this test. Keep in sync with the FS
+		// list in docs/syscall-tracing-plan.md.
+		{"sys_enter_utime", FamilyFS},
+		{"sys_exit_utime", FamilyFS},
+		{"sys_enter_utimes", FamilyFS},
+		{"sys_exit_utimes", FamilyFS},
+		{"sys_enter_utimensat", FamilyFS},
+		{"sys_enter_futimesat", FamilyFS},
 		{"sys_enter_epoll_wait", FamilyPolling},
 		{"sys_enter_io_uring_enter", FamilyAIO},
 		{"sys_enter_bpf", FamilySecurity},
