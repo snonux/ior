@@ -1912,6 +1912,75 @@ func TestClassifySchedGetattrPidNotFd(t *testing.T) {
 	}
 }
 
+// TestClassifySendmsgWriteByteCount is a lock-in regression test for the
+// sendmsg(2) audit. The syscall signature is:
+//
+//	ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags)
+//
+// args[0] is a socket file descriptor (the real kernel tracepoint format names
+// the first field "fd"), msg is a userspace input pointer, and flags is an int.
+// On success sendmsg returns the NUMBER OF BYTES SENT, so its exit must be
+// WRITE_CLASSIFIED — those bytes are counted as written, exactly like the
+// send/sendto/write siblings, and never as a read.
+//
+// The invariants pinned here:
+//   - enter classifies as KindFd off the first "fd" field (sockfd is an fd),
+//   - family is Network (matches sendto/recvfrom/recvmsg/socket siblings),
+//   - return classifies as WRITE_CLASSIFIED (bytes-sent → written).
+//
+// Contrast cases guard against the two easy mistakes: recvmsg is the read-side
+// sibling (READ_CLASSIFIED, never write), and sendmmsg is the batch variant
+// whose per-message byte counts cannot be derived from its scalar return value,
+// so it is deliberately deferred to UNCLASSIFIED rather than WRITE_CLASSIFIED.
+func TestClassifySendmsgWriteByteCount(t *testing.T) {
+	// Field layout mirrors the actual kernel tracepoint format for
+	// sys_enter_sendmsg: int fd, struct user_msghdr *msg, unsigned int flags.
+	sendmsg := ClassifyFormat(&Format{
+		Name: "sys_enter_sendmsg",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "int", Name: "fd"},
+			{Type: "struct user_msghdr *", Name: "msg"},
+			{Type: "unsigned int", Name: "flags"},
+		},
+	})
+	if sendmsg.Kind != KindFd {
+		t.Fatalf("sendmsg: got kind %d, want KindFd (sockfd at args[0] is an fd)", sendmsg.Kind)
+	}
+
+	if fam := ClassifySyscallFamily("sys_enter_sendmsg"); fam != FamilyNetwork {
+		t.Fatalf("sendmsg: got family %s, want FamilyNetwork", fam)
+	}
+
+	// Return value is a byte count of data sent → counted as written.
+	if got := ClassifyRet("sys_exit_sendmsg"); got != WriteClassified {
+		t.Fatalf("sendmsg: ClassifyRet = %q, want WRITE_CLASSIFIED (return is bytes sent)", got)
+	}
+
+	// recvmsg is the read-side sibling; it must never be a write.
+	if got := ClassifyRet("sys_exit_recvmsg"); got != ReadClassified {
+		t.Fatalf("recvmsg: ClassifyRet = %q, want READ_CLASSIFIED", got)
+	}
+
+	// sendmmsg is the batch variant: its scalar return is a message count, not a
+	// byte count, so it defers byte classification (UNCLASSIFIED) rather than
+	// being mislabeled as a write.
+	if got := ClassifyRet("sys_exit_sendmmsg"); got != Unclassified {
+		t.Fatalf("sendmmsg: ClassifyRet = %q, want UNCLASSIFIED (batch return is not a byte count)", got)
+	}
+
+	// All three send/recv message siblings share the Network family.
+	for _, name := range []string{
+		"sys_enter_recvmsg",
+		"sys_enter_sendmmsg",
+		"sys_enter_sendto",
+	} {
+		if fam := ClassifySyscallFamily(name); fam != FamilyNetwork {
+			t.Errorf("%s: got family %s, want FamilyNetwork", name, fam)
+		}
+	}
+}
+
 func mustParseAll(t *testing.T, data string) []Format {
 	t.Helper()
 	formats, err := ParseFormats(strings.NewReader(data))
