@@ -149,6 +149,64 @@ func TestGenerateRtSigpendingHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateRtTgsigqueueinfoHandler locks in how rt_tgsigqueueinfo(2) is
+// generated. Per the man page:
+//
+//	int rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *info)
+//
+// It queues signal sig (plus the accompanying siginfo data) to the thread tid
+// within thread group tgid, and returns 0 on success or -1 on error. NONE of
+// the arguments is an fd or a filesystem path: args[0] (tgid) and args[1] (tid)
+// are process/thread IDs (pids, not fds — they must not be misclassified as
+// file descriptors), args[2] (sig) is a signal number, and args[3] (info) is a
+// userspace pointer to a siginfo_t control block, not a traced I/O resource.
+// ior therefore classifies rt_tgsigqueueinfo as KindNull in FamilySignals,
+// alongside its sibling rt_sigqueueinfo and the rest of the rt_sig* group.
+// Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg
+//     as an fd/path/addr — the pids and siginfo pointer are not traced I/O.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateRtTgsigqueueinfoHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("rt_tgsigqueueinfo")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_rt_tgsigqueueinfo")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_rt_tgsigqueueinfo")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_RT_TGSIGQUEUEINFO;")
+
+	// The KindNull enter handler must not wire tgid/tid (the pids, args[0]/args[1])
+	// or the siginfo pointer (args[3]) as an fd/path/addr — none are traced I/O
+	// resources, and the pids in particular must never be treated as fds. Scope to
+	// the enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("rt_tgsigqueueinfo: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("rt_tgsigqueueinfo must be KindNull: enter handler must not capture any arg (tgid/tid are pids, not fds)")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetRtTgsigqueueinfoUnclassified locks in that rt_tgsigqueueinfo's
+// return value is UNCLASSIFIED. The syscall returns an int status (0 on success,
+// -1 on error) — never a byte count — so it must never be tagged as a
+// READ/WRITE/TRANSFER transfer size.
+func TestClassifyRetRtTgsigqueueinfoUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_rt_tgsigqueueinfo"); got != Unclassified {
+		t.Errorf("rt_tgsigqueueinfo ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 // TestGenerateClone3Handler locks in how clone3(2) is generated. Per the man
 // page:
 //
