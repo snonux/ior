@@ -942,6 +942,35 @@ func TestGeneratePselect6HandlerCapturesTimeoutPointer(t *testing.T) {
 	requireContains(t, output, "ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
 }
 
+// TestGeneratePpollHandlerCapturesNfdsAndTimeoutPointer locks in the ppoll
+// argument layout. ppoll(struct pollfd *fds, nfds_t nfds,
+// const struct timespec *tmo_p, const sigset_t *sigmask): args[0] is a
+// userspace pointer to an ARRAY of pollfd structs (NOT a file descriptor),
+// nfds is args[1], and the timeout is a timespec pointer at args[2]. The
+// handler must therefore capture nfds from args[1] and the timeout from the
+// args[2] timespec, and must NEVER read args[0] as an fd (that would be a real
+// bug: args[0] is a pointer, so an fd capture would record a garbage fd).
+func TestGeneratePpollHandlerCapturesNfdsAndTimeoutPointer(t *testing.T) {
+	output := generateFromPair(t, FormatPpoll, FormatExitPpoll)
+
+	// Enter: poll_event with nfds from args[1] and timespec timeout from args[2].
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_PPOLL;")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[1];")
+	requireContains(t, output, "if (ctx->args[2] != 0) {")
+	requireContains(t, output, "ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+
+	// Negative: args[0] is a pollfd-array pointer and must never be captured
+	// as an fd, and the exit is an UNCLASSIFIED ret_event (ready count, not a
+	// byte transfer), so no bytes/fd fields are emitted.
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireNotContains(t, output, "ev->bytes")
+	// Exit: plain ret_event recording the ready-count (>=0) or -1.
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
 func TestGenerateSleepHandlerCapturesRequestedTimespec(t *testing.T) {
 	output := generateFromPair(t, FormatNanosleep, FormatExitNanosleep)
 
@@ -1421,5 +1450,15 @@ func requireContains(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
 		t.Errorf("output missing expected string: %q", needle)
+	}
+}
+
+// requireNotContains fails when haystack unexpectedly contains needle. Used for
+// negative assertions, e.g. that a pointer argument is not misclassified as an
+// fd capture.
+func requireNotContains(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if strings.Contains(haystack, needle) {
+		t.Errorf("output unexpectedly contains forbidden string: %q", needle)
 	}
 }
