@@ -2149,6 +2149,85 @@ func TestClassifySchedGetattrPidNotFd(t *testing.T) {
 	}
 }
 
+// TestClassifyGetRobustListPidNotFd is a lock-in regression test for the
+// get_robust_list(2) / set_robust_list(2) audit. The signatures are:
+//
+//	long get_robust_list(int pid, struct robust_list_head **head_ptr, size_t *len_ptr)
+//	long set_robust_list(struct robust_list_head *head, size_t len)
+//
+// get_robust_list's args[0] is a PID (a thread/process identifier), NOT a file
+// descriptor, and head_ptr/len_ptr are userspace output pointers; set_robust_list
+// takes a userspace head pointer and a length. Neither syscall touches an fd or a
+// filesystem path, so both enter as KindNull (plain null_event). On success both
+// return 0 (-1 on error) and transfer no byte count, so their exits stay
+// UNCLASSIFIED.
+//
+// Invariants pinned here:
+//   - enter classifies as KindNull (the pid arg must NOT be picked up as an fd),
+//   - family is Misc — grouped with the per-thread sibling rseq, not promoted to
+//     IPC like the futex_* shared-memory primitives (see family.go / family_test.go),
+//   - return classifies as UNCLASSIFIED (0/-1, no byte transfer).
+//
+// NOTE: get_robust_list/set_robust_list are robust-futex bookkeeping and could
+// arguably sit with futex_* under IPC; that grouping question is tracked as a
+// follow-up rather than changed here, since the syscalls register/query a
+// per-thread pointer (like rseq) rather than operating on shared memory.
+func TestClassifyGetRobustListPidNotFd(t *testing.T) {
+	// Field layout mirrors the actual kernel tracepoint format for
+	// sys_enter_get_robust_list: int pid, struct robust_list_head **head_ptr,
+	// size_t *len_ptr.
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_get_robust_list",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "int", Name: "pid"},
+			{Type: "struct robust_list_head **", Name: "head_ptr"},
+			{Type: "size_t *", Name: "len_ptr"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("get_robust_list: got kind %d, want KindNull (pid arg must not be treated as fd)", r.Kind)
+	}
+
+	// set_robust_list takes a userspace head pointer and a length, no fd/path.
+	s := ClassifyFormat(&Format{
+		Name: "sys_enter_set_robust_list",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "struct robust_list_head *", Name: "head"},
+			{Type: "size_t", Name: "len"},
+		},
+	})
+	if s.Kind != KindNull {
+		t.Fatalf("set_robust_list: got kind %d, want KindNull", s.Kind)
+	}
+
+	// Both syscalls are FamilyMisc, sharing the family with their per-thread
+	// sibling rseq (and NOT promoted to FamilyIPC like the futex_* primitives).
+	for _, name := range []string{
+		"sys_enter_get_robust_list",
+		"sys_enter_set_robust_list",
+		"sys_enter_rseq",
+	} {
+		if fam := ClassifySyscallFamily(name); fam != FamilyMisc {
+			t.Errorf("%s: got family %s, want FamilyMisc", name, fam)
+		}
+	}
+
+	// Contrast: the futex_* siblings ARE classified IPC, so the robust-list pair
+	// is deliberately NOT lumped in with them at the family level.
+	if fam := ClassifySyscallFamily("sys_enter_futex"); fam != FamilyIPC {
+		t.Errorf("futex: got family %s, want FamilyIPC (contrast case)", fam)
+	}
+
+	// Returns: both exits are UNCLASSIFIED (0/-1, no byte transfer).
+	for _, name := range []string{"get_robust_list", "set_robust_list"} {
+		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
+			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want UNCLASSIFIED", name, got)
+		}
+	}
+}
+
 // TestClassifyRecvmsgReadByteCount is a lock-in regression test for the
 // recvmsg(2) audit. The syscall signature is:
 //
