@@ -1200,6 +1200,52 @@ func TestClassifyAcctPathname(t *testing.T) {
 	}
 }
 
+// TestClassifySetdomainnameNotPath locks in the audit finding for the
+// setdomainname(2) syscall (`int setdomainname(const char *name, size_t len)`).
+// Its first arg is a `const char *name`, but that name is the NIS/YP domain
+// name string — NOT a filesystem path. The name-only table therefore pins it to
+// KindNull so the field-based path heuristic (which would otherwise treat a
+// `const char *name` arg as KindPathname) never fires. The sibling sethostname
+// must classify identically, and both must share a family, so the two stay
+// consistent.
+func TestClassifySetdomainnameNotPath(t *testing.T) {
+	// Realistic format including the const char *name arg that the path
+	// heuristic would latch onto if the name-only table did not win first.
+	setdomainname := ClassifyFormat(&Format{
+		Name: "sys_enter_setdomainname",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "name"},
+			{Type: "size_t", Name: "len"},
+		},
+	})
+	if setdomainname.Kind != KindNull {
+		t.Fatalf("setdomainname: got kind %d, want KindNull (domain name is not a path)", setdomainname.Kind)
+	}
+	if setdomainname.PathnameField != "" {
+		t.Fatalf("setdomainname: PathnameField=%q, want empty (must not be captured as a path)", setdomainname.PathnameField)
+	}
+
+	sethostname := ClassifyFormat(&Format{
+		Name: "sys_enter_sethostname",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "const char *", Name: "name"},
+			{Type: "size_t", Name: "len"},
+		},
+	})
+	if sethostname.Kind != setdomainname.Kind {
+		t.Fatalf("sethostname kind %d != setdomainname kind %d: siblings must agree", sethostname.Kind, setdomainname.Kind)
+	}
+
+	if got := ClassifySyscallFamily("sys_enter_setdomainname"); got != FamilyMisc {
+		t.Fatalf("setdomainname: family=%q, want %q", got, FamilyMisc)
+	}
+	if got, want := ClassifySyscallFamily("sys_enter_setdomainname"), ClassifySyscallFamily("sys_enter_sethostname"); got != want {
+		t.Fatalf("setdomainname family %q != sethostname family %q: siblings must agree", got, want)
+	}
+}
+
 func TestClassifyMount(t *testing.T) {
 	r := classifyFromData(t, FormatMount)
 	if r.Kind != KindPathname {
