@@ -1650,6 +1650,41 @@ func TestGeneratePipeHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 }
 
+// TestGeneratePipeHandlerExitReadsFdPair locks in the pipe-specific exit path:
+// args[0] is an OUTPUT pointer to int[2], not an fd. The two created fds are
+// only valid AFTER the syscall returns, so the exit handler must read them from
+// the stashed userspace buffer with bpf_probe_read_user, guarded by ret == 0
+// (a failed pipe(2) leaves the buffer untouched). This mirrors the socketpair
+// audit (task c00) pipe-like pattern.
+func TestGeneratePipeHandlerExitReadsFdPair(t *testing.T) {
+	output := generateFromPair(t, FormatPipe2, FormatExitPipe2)
+
+	// Exit reads the fd pair from the stashed output pointer only on success.
+	requireContains(t, output, "if (ctx->ret == 0 && pending->upipefd != 0) {")
+	requireContains(t, output, "int pipefd[2];")
+	requireContains(t, output, "bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd)")
+	requireContains(t, output, "fd0 = (__s32)pipefd[0];")
+	requireContains(t, output, "fd1 = (__s32)pipefd[1];")
+	requireContains(t, output, "bpf_map_delete_elem(&pipe_ctx_map, &tid);")
+	requireContains(t, output, "ev->fd0 = fd0;")
+	requireContains(t, output, "ev->fd1 = fd1;")
+}
+
+// TestGeneratePlainPipeHandlerZeroFlags locks in that the flag-less pipe(2)
+// variant hardcodes flags = 0 and never reads args[1] (which does not exist for
+// pipe; only pipe2 has a flags argument at args[1]).
+func TestGeneratePlainPipeHandlerZeroFlags(t *testing.T) {
+	output := generateFromPair(t, FormatPipe, FormatExitPipe)
+
+	requireContains(t, output, "struct pipe_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PIPE_EVENT;")
+	requireContains(t, output, "pending.upipefd = ctx->args[0];")
+	requireContains(t, output, "pending.flags = 0;")
+	requireNotContains(t, output, "pending.flags = (__s32)ctx->args[1];")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_pipe\")")
+	requireContains(t, output, "ev->event_type = EXIT_PIPE_EVENT;")
+}
+
 func TestGenerateEventfdHandler(t *testing.T) {
 	output := generateFromPair(t, FormatEventfd2, FormatExitEventfd2)
 

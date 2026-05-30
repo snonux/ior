@@ -890,6 +890,41 @@ func TestClassifyExitPipe2(t *testing.T) {
 	}
 }
 
+// TestClassifyPipeNotFd locks in that pipe(2) is NOT classified as KindFd.
+// pipe's args[0] is an OUTPUT pointer to int[2] (the two created fds are written
+// there by the kernel and are only valid AFTER the syscall returns), NOT an fd
+// argument. Capturing args[0] as an fd would attribute the pipe to a bogus
+// descriptor; pipe must use the pipe-specific KindPipe path that reads the fd
+// pair from the userspace buffer at exit. Same pitfall as socketpair (task c00).
+func TestClassifyPipeNotFd(t *testing.T) {
+	for _, name := range []string{"pipe", "pipe2"} {
+		r := classifyFromData(t, map[string]string{
+			"pipe":  FormatPipe,
+			"pipe2": FormatPipe2,
+		}[name])
+		if r.Kind == KindFd {
+			t.Fatalf("%s classified as KindFd: args[0] is an output ptr, not an fd", name)
+		}
+		if r.Kind != KindPipe {
+			t.Errorf("%s: got kind %d, want KindPipe", name, r.Kind)
+		}
+	}
+}
+
+// TestClassifyPipeUnclassifiedRet locks in that the pipe and pipe2 exit
+// tracepoints stay UNCLASSIFIED. pipe(2)/pipe2(2) return int (0 on success,
+// -1 on error) — a status code, NOT a transferred byte count. They must not be
+// in retClassifications and must never map to READ/WRITE/TRANSFER, which would
+// misreport phantom bytes. The created fds are surfaced via fd0/fd1 in the
+// pipe_event, not via the return value.
+func TestClassifyPipeUnclassifiedRet(t *testing.T) {
+	for _, name := range []string{"sys_exit_pipe", "sys_exit_pipe2"} {
+		if got := ClassifyRet(name); got != Unclassified {
+			t.Errorf("ClassifyRet(%s) = %q, want UNCLASSIFIED", name, got)
+		}
+	}
+}
+
 func TestClassifyEventfd(t *testing.T) {
 	r := classifyFromData(t, FormatEventfd)
 	if r.Kind != KindEventfd {
