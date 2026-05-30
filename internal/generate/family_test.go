@@ -20,6 +20,16 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_listen", FamilyNetwork},
 		{"sys_enter_getsockname", FamilyNetwork},
 		{"sys_enter_getpeername", FamilyNetwork},
+		// setsockopt(2)/getsockopt(2) set and read socket options on the socket
+		// referred to by sockfd (args[0], KindFd). They are socket-configuration
+		// syscalls and share FamilyNetwork with the bind/connect/getsockname/
+		// getpeername siblings above. Assert both enter and exit for the
+		// setsockopt pair so a stray reclassification of either direction trips
+		// this test; keep in sync with the Network list in
+		// docs/syscall-tracing-plan.md.
+		{"sys_enter_setsockopt", FamilyNetwork},
+		{"sys_exit_setsockopt", FamilyNetwork},
+		{"sys_enter_getsockopt", FamilyNetwork},
 		{"sys_enter_pipe2", FamilyIPC},
 		{"sys_enter_munmap", FamilyMemory},
 		// process_madvise(2) gives memory advice (MADV_COLD/PAGEOUT/...) about
