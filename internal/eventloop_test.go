@@ -53,11 +53,12 @@ func TestEventloop(t *testing.T) {
 		"MsyncEventTest":           makeMsyncEventTestData(t),
 		"FtruncateEventTest":       makeFtruncateEventTestData(t),
 		// PathEvent tests
-		"MkdirEventTest":  makeMkdirEventTestData(t),
-		"UnlinkEventTest": makeUnlinkEventTestData(t),
-		"CreatEventTest":  makeCreatEventTestData(t),
-		"StatEventTest":   makeStatEventTestData(t),
-		"AccessEventTest": makeAccessEventTestData(t),
+		"MkdirEventTest":       makeMkdirEventTestData(t),
+		"UnlinkEventTest":      makeUnlinkEventTestData(t),
+		"CreatEventTest":       makeCreatEventTestData(t),
+		"FailedCreatEventTest": makeFailedCreatEventTestData(t),
+		"StatEventTest":        makeStatEventTestData(t),
+		"AccessEventTest":      makeAccessEventTestData(t),
 		// NameEvent tests
 		"RenameEventTest":  makeRenameEventTestData(t),
 		"LinkEventTest":    makeLinkEventTestData(t),
@@ -1363,9 +1364,53 @@ func makeCreatEventTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
-		// For creat, we expect the file to be tracked with the returned fd
+		// creat(pathname, mode) == open(pathname, O_CREAT|O_WRONLY|O_TRUNC,
+		// mode): on success the returned fd must be registered in fdState and
+		// mapped to the path, exactly like open/openat. Lock in both the
+		// fd->path mapping and the synthesized open flags.
 		if ep.File == nil {
-			t.Errorf("Expected file to be set")
+			t.Fatalf("Expected file to be set for successful creat")
+		}
+		verifyFileDescriptor(t, el, 47, pathname)
+		fdFile, ok := el.fdState().files[47].(*file.FdFile)
+		if !ok {
+			t.Fatalf("Expected creat fd 47 to be an *file.FdFile")
+		}
+		wantFlags := file.Flags(syscall.O_CREAT | syscall.O_WRONLY | syscall.O_TRUNC)
+		if fdFile.Flags() != wantFlags {
+			t.Errorf("creat fd flags = %v, want %v", fdFile.Flags(), wantFlags)
+		}
+	})
+
+	return td
+}
+
+// makeFailedCreatEventTestData locks in that a failed creat (return -1) does
+// NOT register an fd but still keeps the pathname so error scenarios stay
+// observable — mirroring handleOpenExit's failed-open branch.
+func makeFailedCreatEventTestData(t *testing.T) (td testData) {
+	pathname := "/tmp/cannot-create.txt"
+	enterEv, enterEvBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_CREAT)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_CREAT, -1) // EACCES etc.
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		// No fd was returned, so nothing must be registered. -1 is not a valid
+		// fd key; assert the path-only file carries the name instead.
+		verifyFdNotTracked(t, el, -1)
+		if ep.File == nil {
+			t.Fatalf("Expected path file to be set for failed creat")
+		}
+		if ep.File.Name() != pathname {
+			t.Errorf("failed creat path = %q, want %q", ep.File.Name(), pathname)
 		}
 	})
 

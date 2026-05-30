@@ -105,10 +105,17 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 			return false
 		}
 		if fd := int32(retEvent.Ret); fd >= 0 {
+			// creat(pathname, mode) == open(pathname, O_CREAT|O_WRONLY|O_TRUNC,
+			// mode): on success it returns a new fd, so register the fd->path
+			// mapping just like handleOpenExit does for open/openat/openat2.
 			fdFile := file.NewFd(fd, types.StringValue(pathEv.Pathname[:]),
 				syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
 			e.fdState().set(fd, fdFile)
 			ep.File = fdFile
+		} else {
+			// Failed creat (-1): keep the path so error scenarios stay
+			// observable, mirroring handleOpenExit's failed-open branch.
+			ep.File = file.NewPathname(pathEv.Pathname[:])
 		}
 	} else {
 		ep.File = file.NewPathname(pathEv.Pathname[:])
