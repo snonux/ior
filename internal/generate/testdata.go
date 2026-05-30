@@ -2156,3 +2156,38 @@ format:
 
 print fmt: "0x%lx", REC->ret
 `
+
+// FormatBind / FormatExitBind mirror the real kernel tracepoint format for
+// bind(2): int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen).
+// The leading "fd" field (sockfd at args[0]) makes it a KindFd fd_event; the
+// addr pointer and addrlen must NOT be captured. On exit bind returns 0/-1,
+// which is UNCLASSIFIED (a plain ret_event, no read/write/transfer byte count).
+const FormatBind = `name: sys_enter_bind
+ID: 1843
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int fd;	offset:16;	size:8;	signed:0;
+	field:struct sockaddr * umyaddr;	offset:24;	size:8;	signed:0;
+	field:int addrlen;	offset:32;	size:8;	signed:0;
+
+print fmt: "fd: 0x%08lx, umyaddr: 0x%08lx, addrlen: 0x%08lx", ((unsigned long)(REC->fd)), ((unsigned long)(REC->umyaddr)), ((unsigned long)(REC->addrlen))
+`
+
+const FormatExitBind = `name: sys_exit_bind
+ID: 1842
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`

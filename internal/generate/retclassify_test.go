@@ -99,6 +99,16 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		// exit must stay UNCLASSIFIED (plain ret_event), exactly like its
 		// pid/tid-returning Process siblings setsid/getsid/getpid/getppid above.
 		"set_tid_address",
+		// bind(2) assigns an address to a socket and returns int 0 on success or
+		// -1 on error — a status code, NOT a transferred byte count. Its exit must
+		// stay UNCLASSIFIED (plain ret_event), exactly like its socket-setup
+		// siblings connect/listen/getsockname/getpeername (asserted alongside it),
+		// so it is never mistaken for a recvfrom/sendto-style byte transfer.
+		"bind",
+		"connect",
+		"listen",
+		"getsockname",
+		"getpeername",
 	}
 	for _, name := range unclassified {
 		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {

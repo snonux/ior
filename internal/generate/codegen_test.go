@@ -48,6 +48,42 @@ func TestGenerateModuleHandlers(t *testing.T) {
 	requireContains(t, finitOut, "ev->fd = (__s32)ctx->args[0];")
 }
 
+// TestGenerateBindHandler locks in the generated BPF C for bind(2):
+//
+//	int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+//
+// bind assigns an address to a socket and returns 0 on success or -1 on error.
+// Its sockfd is at args[0], so the enter handler is a KindFd fd_event capturing
+// ev->fd = args[0] — matching its socket siblings connect/listen/accept/
+// getsockname/getpeername. The addr pointer (args[1]) and addrlen (args[2]) must
+// NOT be captured: bind reads no path and copies no userspace buffer we track.
+// The exit handler is a plain ret_event marked UNCLASSIFIED (0/-1, no byte
+// count), so it must not carry a READ/WRITE/TRANSFER classification.
+func TestGenerateBindHandler(t *testing.T) {
+	output := generateFromPair(t, FormatBind, FormatExitBind)
+
+	// Enter: KindFd fd_event capturing the sockfd from args[0].
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_bind")`)
+	requireContains(t, output, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_BIND;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+
+	// Negative guards: the sockaddr pointer (args[1]) must never be read as a
+	// path/buffer, and addrlen (args[2]) must not be captured as another fd.
+	requireNotContains(t, output, "bpf_probe_read_user_str")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[2];")
+
+	// Exit: plain ret_event, UNCLASSIFIED (bind returns 0/-1, no byte count).
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_bind")`)
+	requireContains(t, output, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = WRITE_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = TRANSFER_CLASSIFIED;")
+}
+
 func TestGeneratePidfdGetfdHandlerUsesPidfdArgument(t *testing.T) {
 	output := generateFromPair(t, FormatPidfdGetfd, FormatExitPidfdGetfd)
 
