@@ -442,6 +442,88 @@ func TestClassifyRetMsgctlUnclassified(t *testing.T) {
 	}
 }
 
+// TestGenerateSemctlHandler locks in how semctl(2) is generated. Per the man
+// page:
+//
+//	int semctl(int semid, int semnum, int op, ...)
+//
+// semctl performs the control operation (op) on the System V semaphore set
+// identified by semid (or on the semnum-th semaphore of that set). CRITICAL:
+// semid (args[0]) is a System V IPC identifier returned by semget — it is NOT a
+// file descriptor. Capturing it as an fd would record a meaningless number in
+// the fd column and corrupt the fd-resource view. args[1] (semnum) is a
+// semaphore index, args[2] (op) is a command, and the optional fourth arg is a
+// union semun (an int val or a userspace pointer to a control block / value
+// array); none of these is a traced I/O resource. The return value is an int
+// status (0, or a non-negative value for the GETVAL/GETPID/GETNCNT/GETZCNT/
+// IPC_INFO/SEM_INFO/SEM_STAT info ops, and -1 on error) — never a byte count.
+// ior therefore classifies semctl as KindSysVOp in FamilyIPC, identical to its
+// SysV control-syscall siblings msgctl and shmctl (and the rest of the sysv-op
+// group). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg —
+//     in particular it must NOT wire args[0] (the semid IPC id) as an fd.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; it is not a
+//     byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a regression to KindFd (which would misrecord the SysV
+// IPC id as a file descriptor) and pins consistency with msgctl/shmctl. The
+// sibling TestGenerateMsgctlHandler checks the same invariants on msgctl's
+// generated output; this test exercises semctl's own generated handler body.
+func TestGenerateSemctlHandler(t *testing.T) {
+	// Classification consistency: semctl must resolve to KindSysVOp in FamilyIPC,
+	// matching its SysV control-syscall siblings msgctl/shmctl.
+	res, ok := classifyNameOnly("sys_enter_semctl")
+	if !ok || res.Kind != KindSysVOp {
+		t.Fatalf("semctl classified as kind=%v ok=%v, want KindSysVOp", res.Kind, ok)
+	}
+	if fam := ClassifySyscallFamily("sys_enter_semctl"); fam != FamilyIPC {
+		t.Errorf("semctl family = %q, want FamilyIPC", fam)
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("semctl")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_semctl")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_semctl")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SEMCTL;")
+
+	// The KindSysVOp enter handler must not wire any argument: args[0] (semid) is
+	// a SysV IPC id, NOT an fd; args[1] (semnum) is a semaphore index; args[2]
+	// (op) is a command; the optional union semun arg is an int/userspace
+	// pointer. Scope to the enter handler body (from the enter SEC up to the exit
+	// SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("semctl: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("semctl must be KindSysVOp: enter handler must not capture any arg (args[0] semid is a SysV IPC id, not an fd)")
+	}
+	// Belt-and-suspenders: the enter handler must never assign ev->fd, which would
+	// mean the SysV semid was captured as a file descriptor.
+	requireNotContains(t, enterBody, "ev->fd")
+
+	// The exit handler reports the raw int status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetSemctlUnclassified locks in that semctl's return value is
+// UNCLASSIFIED. semctl returns an int status (0, or a non-negative value for the
+// GETVAL/GETPID/GETNCNT/GETZCNT/IPC_INFO/SEM_INFO/SEM_STAT info ops, and -1 on
+// error) — never a byte count — so it must never be tagged as a
+// READ/WRITE/TRANSFER transfer size.
+func TestClassifyRetSemctlUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_semctl"); got != Unclassified {
+		t.Errorf("semctl ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 // TestGenerateClone3Handler locks in how clone3(2) is generated. Per the man
 // page:
 //
