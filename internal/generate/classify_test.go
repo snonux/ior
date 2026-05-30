@@ -963,6 +963,18 @@ func TestClassifyAddKey(t *testing.T) {
 	}
 }
 
+// TestClassifyRequestKey locks in the request_key(2) classification:
+//
+//	key_serial_t request_key(const char *type, const char *description,
+//	                         const char *callout_info, key_serial_t dest_keyring)
+//
+// type/description/callout_info are key metadata STRINGS (a key type name, a
+// free-form description and optional callout payload), NOT filesystem paths,
+// so the const char * args must not trip the pathname/open heuristics. The
+// name-only table maps request_key to KindKeyctl before any field is
+// inspected; the generated handler captures only the numeric dest_keyring
+// (args[3]) plus the option=-2 sentinel, and the exit returns a key serial /
+// -1 that is not a byte count (UNCLASSIFIED).
 func TestClassifyRequestKey(t *testing.T) {
 	r := ClassifyFormat(&Format{
 		Name: "sys_enter_request_key",
@@ -976,6 +988,21 @@ func TestClassifyRequestKey(t *testing.T) {
 	})
 	if r.Kind != KindKeyctl {
 		t.Errorf("request_key: got kind %d, want KindKeyctl", r.Kind)
+	}
+	// The const char * type/description/callout_info args are key metadata,
+	// not paths — no path capture must be emitted for them.
+	if r.PathnameField != "" {
+		t.Errorf("request_key: got PathnameField %q, want empty (string args are key metadata, not paths)", r.PathnameField)
+	}
+	// Family: Security, alongside add_key/keyctl/lsm_*/seccomp siblings.
+	for _, prefix := range []string{"sys_enter_", "sys_exit_"} {
+		if fam := ClassifySyscallFamily(prefix + "request_key"); fam != FamilySecurity {
+			t.Errorf("%srequest_key: got family %s, want FamilySecurity", prefix, fam)
+		}
+	}
+	// Return value is a key serial / -1, never a byte transfer.
+	if got := ClassifyRet("sys_exit_request_key"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_request_key) = %q, want UNCLASSIFIED", got)
 	}
 }
 
