@@ -743,6 +743,85 @@ func TestClassifyExitGetsockname(t *testing.T) {
 	}
 }
 
+// TestClassifySetsockoptEnterFd locks in that the setsockopt enter tracepoint is
+// classified as KindFd with the socket fd captured at args[0]. The signature is:
+//
+//	int setsockopt(int sockfd, int level, int optname,
+//	               const void *optval, socklen_t optlen)
+//
+// setsockopt(2) sets a socket option on the socket referred to by sockfd
+// (args[0]); the remaining level/optname/optval/optlen args are NOT captured.
+// optval is a userspace pointer (not a transferred byte buffer we account for),
+// so only the leading sockfd matters — exactly like its KindFd network siblings
+// bind/connect/getsockname/getpeername/getsockopt and the explicit name-only
+// mapping in classify.go. The classification is name-only, so this asserts the
+// kind holds even when the enter format carries the real "fd" field. Capturing
+// any later arg as the fd, or failing to capture args[0], would be a real bug.
+func TestClassifySetsockoptEnterFd(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_setsockopt",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "int", Name: "fd"},
+			{Type: "int", Name: "level"},
+			{Type: "int", Name: "optname"},
+			{Type: "char *", Name: "optval"},
+			{Type: "int", Name: "optlen"},
+		},
+	})
+	if r.Kind != KindFd {
+		t.Fatalf("enter_setsockopt: got kind %d, want KindFd", r.Kind)
+	}
+	// optval is a userspace pointer, never a pathname we record.
+	if r.PathnameField != "" {
+		t.Errorf("enter_setsockopt: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
+// TestClassifyExitSetsockoptUnclassifiedRet locks in that the setsockopt exit
+// tracepoint is classified as KindRet and Unclassified. setsockopt(2) returns
+// int (0 on success, -1 on error) — a status code, NOT a transferred byte count
+// — so its exit format carries a single "ret" field and must map to a plain
+// ret_event (KindRet) whose ret_type stays UNCLASSIFIED, matching the generated
+// sys_exit_setsockopt handler and its sibling getsockopt. Misclassifying it as a
+// READ/WRITE/TRANSFER byte count would be a real bug.
+func TestClassifyExitSetsockoptUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_setsockopt",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_setsockopt: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_setsockopt"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_setsockopt) = %q, want UNCLASSIFIED", got)
+	}
+}
+
+// TestClassifyExitGetsockoptUnclassifiedRet mirrors the setsockopt exit lock-in
+// for its read-side sibling getsockopt(2), which likewise returns int (0/-1) and
+// must map to a plain ret_event (KindRet, UNCLASSIFIED) — never a READ byte
+// count, even though it copies option data into a userspace buffer via a
+// userspace pointer rather than returning a transferred byte total.
+func TestClassifyExitGetsockoptUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_getsockopt",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_getsockopt: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_getsockopt"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_getsockopt) = %q, want UNCLASSIFIED", got)
+	}
+}
+
 func TestClassifySocket(t *testing.T) {
 	r := classifyFromData(t, FormatSocket)
 	if r.Kind != KindSocket {
