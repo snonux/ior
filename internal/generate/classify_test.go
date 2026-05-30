@@ -1342,6 +1342,21 @@ func TestClassifyInitModuleVsFinitModule(t *testing.T) {
 	if r := classifyFromData(t, FormatInitModule); r.PathnameField != "" {
 		t.Errorf("init_module: unexpected PathnameField %q, want empty", r.PathnameField)
 	}
+	if r := classifyFromData(t, FormatFinitModule); r.PathnameField != "" {
+		t.Errorf("finit_module: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+
+	// Both module-loading syscalls live in FamilySecurity (man 2 init_module:
+	// loading kernel code is a privileged, security-sensitive operation), and
+	// both return 0/-1 with no byte count, so their exits are UNCLASSIFIED.
+	for _, name := range []string{"init_module", "finit_module"} {
+		if fam := ClassifySyscallFamily("sys_enter_" + name); fam != FamilySecurity {
+			t.Errorf("%s: got family %s, want FamilySecurity", name, fam)
+		}
+		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
+			t.Errorf("ClassifyRet(sys_exit_%s) = %q, want UNCLASSIFIED", name, got)
+		}
+	}
 }
 
 func TestClassify87NameOnlyKinds(t *testing.T) {
