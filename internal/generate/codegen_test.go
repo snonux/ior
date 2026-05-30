@@ -1404,6 +1404,50 @@ func TestGenerateDup2Handler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateDupHandler locks in the generated BPF C for dup(2):
+//
+//	int dup(int oldfd)
+//
+// dup duplicates oldfd and returns the lowest-numbered unused descriptor on
+// success, or -1 on error. Its single argument is captured by the tracepoint as
+// the "fildes" field at args[0]. dup is classified KindFd (a plain fd_event),
+// so the enter handler must capture ev->fd from args[0] (oldfd/fildes) — the
+// SAME convention as dup2 (args[0]=oldfd) and dup3 (args[0]=oldfd). dup has no
+// newfd and no flags arguments, so the handler must emit a struct fd_event (not
+// a dup3_event) and must NOT wire any flags or read args[1]/args[2]. The exit
+// returns the new fd number as a plain ret_event (UNCLASSIFIED), exactly like
+// dup2/dup3/open — never a byte-count transfer. The eventloop registerDup path
+// registers the returned newfd onto the same underlying file with flags=0,
+// since plain dup always clears FD_CLOEXEC on the duplicate.
+func TestGenerateDupHandler(t *testing.T) {
+	output := generateFromPair(t, FormatDup, FormatExitDup)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_dup")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_DUP;")
+	// fd must come from oldfd/fildes (args[0]); dup has no other args.
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	if strings.Contains(output, "ev->fd = (__s32)ctx->args[1];") {
+		t.Error("dup must capture fd from args[0] (fildes/oldfd), not args[1]")
+	}
+	// dup is a plain fd_event: it must not be promoted to a dup3_event and must
+	// not capture any flags (dup has no flags arg and always clears FD_CLOEXEC).
+	if strings.Contains(output, "struct dup3_event *ev") &&
+		strings.Contains(output, `SEC("tracepoint/syscalls/sys_enter_dup")`) {
+		t.Error("dup must be KindFd (fd_event), not KindDup3 (dup3_event)")
+	}
+	if strings.Contains(output, "ev->flags") &&
+		strings.Contains(output, `int handle_sys_enter_dup`) {
+		t.Error("dup handler must not capture any flags (dup has no flags arg)")
+	}
+	// The exit handler returns the new fd number generically as the raw status,
+	// classified UNCLASSIFIED — not a read/write/transfer byte count.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_dup")`)
+	requireContains(t, output, "struct ret_event *ev")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 func TestGenerateOpenByHandleAtHandler(t *testing.T) {
 	output := generateFromPair(t, FormatOpenByHandleAt, FormatExitOpenByHandleAt)
 
