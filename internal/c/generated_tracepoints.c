@@ -732,7 +732,6 @@
 #define SYS_ENTER_IOPL 93
 #define SYS_EXIT_IOPL 92
 #define SYS_ENTER_RT_SIGRETURN 57
-#define SYS_EXIT_RT_SIGRETURN 56
 
 /// sys_enter_socket is a struct socket_event (kind=socket)
 SEC("tracepoint/syscalls/sys_enter_socket")
@@ -19659,7 +19658,7 @@ int handle_sys_enter_rt_sigreturn(struct syscall_trace_enter *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_RT_SIGRETURN))
+    if (!ior_on_noreturn_syscall_enter(SYS_ENTER_RT_SIGRETURN))
         return 0;
 
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
@@ -19671,32 +19670,6 @@ int handle_sys_enter_rt_sigreturn(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-
-    bpf_ringbuf_submit(ev, 0);
-    return 0;
-}
-
-/// sys_exit_rt_sigreturn is a struct ret_event (UNCLASSIFIED) (kind=ret)
-SEC("tracepoint/syscalls/sys_exit_rt_sigreturn")
-int handle_sys_exit_rt_sigreturn(struct syscall_trace_exit *ctx) {
-    __u32 pid, tid;
-    if (filter(&pid, &tid))
-        return 0;
-
-    if (!ior_on_syscall_exit(tid, SYS_ENTER_RT_SIGRETURN, ctx->ret))
-        return 0;
-
-    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
-    if (!ev)
-        return 0;
-
-    ev->event_type = EXIT_RET_EVENT;
-    ev->trace_id = SYS_EXIT_RT_SIGRETURN;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = bpf_ktime_get_boot_ns();
-    ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

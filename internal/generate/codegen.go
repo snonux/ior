@@ -126,9 +126,10 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 		result = append(result, GeneratedTracepoint{Format: sc.Enter, Classification: enterClass})
 	}
 	// Emit the exit handler only for syscalls that can actually return.
-	// Noreturn syscalls (exit, exit_group) never return to userspace, so their
-	// sys_exit tracepoint never fires; emitting a handler would be dead code in
-	// the generated BPF program. We still emit their enter handler above.
+	// Noreturn syscalls (exit, exit_group, rt_sigreturn) never return to the
+	// syscall site, so their sys_exit tracepoint never fires; emitting a handler
+	// would be dead code in the generated BPF program. We still emit their enter
+	// handler above.
 	if sc.Exit != nil && !isNoreturnSyscall(sc.Name) {
 		result = append(result, GeneratedTracepoint{Format: sc.Exit, Classification: exitClass})
 	}
@@ -150,13 +151,25 @@ func isEnterRejected(kind TracepointKind) bool {
 	return !lookupKind(kind).enterAccepted
 }
 
-// noreturnSyscalls lists syscalls that never return control to userspace.
+// noreturnSyscalls lists syscalls that never return to the syscall site.
 // Their sys_exit tracepoint can never fire, so the generator suppresses the
 // matching exit handler (see classifySyscall) to avoid dead code in the
-// generated BPF program.
+// generated BPF program, and the enter handler uses the noreturn enter hook
+// that skips the (otherwise un-reclaimable) syscall_enter_state_map write.
+//
+//   - exit / exit_group terminate the thread/process; control never returns.
+//   - rt_sigreturn restores the pre-signal execution context off the signal
+//     stack frame and resumes the interrupted instruction. It does NOT return
+//     to the instruction after the rt_sigreturn syscall, so the kernel never
+//     fires sys_exit_rt_sigreturn. Verified empirically against
+//     /sys/kernel/tracing: sys_enter_rt_sigreturn fires once per signal-handler
+//     return while sys_exit_rt_sigreturn never does. The man page (sigreturn(2))
+//     states plainly that "sigreturn() never returns". rt_sigreturn is emitted
+//     by the signal trampoline, not called directly by applications.
 var noreturnSyscalls = map[string]bool{
-	"exit":       true,
-	"exit_group": true,
+	"exit":         true,
+	"exit_group":   true,
+	"rt_sigreturn": true,
 }
 
 // isNoreturnSyscall reports whether the named syscall never returns and thus

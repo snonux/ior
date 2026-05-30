@@ -733,7 +733,6 @@ var List = []string{
 	"sys_enter_iopl",
 	"sys_exit_iopl",
 	"sys_enter_rt_sigreturn",
-	"sys_exit_rt_sigreturn",
 }
 
 var syscallFamilies = map[string]string{
