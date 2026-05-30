@@ -555,6 +555,54 @@ func TestClassifyExitSetpgidUnclassifiedRet(t *testing.T) {
 	}
 }
 
+// TestClassifyGetgidNullEnter locks in the getgid(2) enter classification using
+// the syscall's REAL tracepoint fields. getgid(2) is "gid_t getgid(void)" — it
+// takes NO arguments at all, so its enter format carries only the synthetic
+// __syscall_nr field and must classify as KindNull (null_event capturing
+// nothing). This matches the no-arg id-returning reader cluster
+// getuid/geteuid/getegid/getpid/getppid/gettid and the explicit name-only
+// mapping in classify.go. With no real argument fields there is nothing the fd
+// or path heuristics could latch onto, so PathnameField must stay empty.
+func TestClassifyGetgidNullEnter(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_getgid",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("enter_getgid: got kind %d, want KindNull", r.Kind)
+	}
+	// getgid has no arguments, so nothing must be captured as a path/fd.
+	if r.PathnameField != "" {
+		t.Errorf("enter_getgid: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
+// TestClassifyExitGetgidUnclassifiedRet locks in that the getgid exit
+// tracepoint is classified as KindRet and Unclassified. getgid(2) returns the
+// real group ID (gid_t) of the caller and ALWAYS succeeds — its return is a
+// numeric credential identifier, NOT a transferred byte count and never an
+// error status. Its exit format carries a single "ret" field and must map to a
+// plain ret_event (KindRet) whose ret_type stays UNCLASSIFIED. Misclassifying
+// the gid as a READ/WRITE/TRANSFER byte count would be a real bug. This matches
+// its no-arg reader siblings getuid/getpid (no byte semantics on their return).
+func TestClassifyExitGetgidUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_getgid",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_getgid: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_getgid"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_getgid) = %q, want UNCLASSIFIED", got)
+	}
+}
+
 // TestClassifyExitGetpeername locks in that the getpeername exit tracepoint is
 // classified as KindRet. getpeername(2) returns int (0 on success, -1 on
 // error), so its exit format carries a single "ret" field and must map to a
