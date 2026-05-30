@@ -84,6 +84,12 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		// byte transfer.
 		"setsid",
 		"getsid",
+		// setpgid(2) sets the process group ID of a process and returns int
+		// 0 on success or -1 on error — a status code, not a transferred byte
+		// count. Its exit must stay UNCLASSIFIED (plain ret_event), exactly
+		// like its session/process-group siblings setsid/getsid above and the
+		// pid-returning getpid/getppid below.
+		"setpgid",
 		"getpid",
 		"getppid",
 	}

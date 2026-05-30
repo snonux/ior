@@ -501,6 +501,60 @@ func TestClassifyExitSetuidUnclassifiedRet(t *testing.T) {
 	}
 }
 
+// TestClassifySetpgidNullEnter locks in the setpgid(2) enter classification
+// using the syscall's REAL tracepoint fields. setpgid(pid_t pid, pid_t pgid)
+// sets the process group ID of a process; both arguments are process/process-
+// group identifiers (the kernel tracepoint declares them as field type
+// "pid_t"), NOT file descriptors and NOT filesystem paths. The audit concern is
+// that args[0] ("pid") could be mistaken for an fd: it must not be. setpgid has
+// no fd or path argument, so its enter format must classify as KindNull
+// (null_event) — matching its session/process-group siblings setsid/getsid/
+// getpgid/getpgrp and the explicit name-only mapping in classify.go. Using the
+// real "pid"/"pgid" pid_t fields here (rather than a synthetic arg0) proves the
+// generic field heuristics never capture them: isFdType only matches int/
+// unsigned int/unsigned long (not "pid_t"), and the fd heuristic additionally
+// requires the field name be "fd", which neither "pid" nor "pgid" is.
+func TestClassifySetpgidNullEnter(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_setpgid",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "pid_t", Name: "pid"},
+			{Type: "pid_t", Name: "pgid"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("enter_setpgid: got kind %d, want KindNull", r.Kind)
+	}
+	// Neither pid argument must be captured as a file descriptor or path.
+	if r.PathnameField != "" {
+		t.Errorf("enter_setpgid: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
+// TestClassifyExitSetpgidUnclassifiedRet locks in that the setpgid exit
+// tracepoint is classified as KindRet and Unclassified. setpgid(2) returns int
+// (0 on success, -1 on error) — a status code, NOT a transferred byte count —
+// so its exit format carries a single "ret" field and must map to a plain
+// ret_event (KindRet) whose ret_type stays UNCLASSIFIED. This matches its
+// sibling setsid/getsid (asserted in retclassify_test.go); misclassifying it as
+// a READ/WRITE/TRANSFER byte count would be a real bug.
+func TestClassifyExitSetpgidUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_setpgid",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_setpgid: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_setpgid"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_setpgid) = %q, want UNCLASSIFIED", got)
+	}
+}
+
 // TestClassifyExitGetpeername locks in that the getpeername exit tracepoint is
 // classified as KindRet. getpeername(2) returns int (0 on success, -1 on
 // error), so its exit format carries a single "ret" field and must map to a
