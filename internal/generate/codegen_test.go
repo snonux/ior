@@ -365,6 +365,83 @@ func TestClassifyRetRtTgsigqueueinfoUnclassified(t *testing.T) {
 	}
 }
 
+// TestGenerateMsgctlHandler locks in how msgctl(2) is generated. Per the man
+// page:
+//
+//	int msgctl(int msqid, int op, struct msqid_ds *buf)
+//
+// msgctl performs a control operation (op) on the System V message queue
+// identified by msqid. CRITICAL: msqid (args[0]) is a System V IPC identifier
+// returned by msgget — it is NOT a file descriptor. Capturing it as an fd would
+// record a meaningless number in the fd column and corrupt the fd-resource view.
+// args[1] (op) is a command and args[2] (buf) is a userspace pointer to a
+// struct msqid_ds control block; neither is a traced I/O resource. The return
+// value is an int status (0, or a non-negative value for IPC_INFO/MSG_INFO/
+// MSG_STAT, and -1 on error) — never a byte count. ior therefore classifies
+// msgctl as KindSysVOp in FamilyIPC, identical to its SysV control-syscall
+// siblings semctl and shmctl (and the rest of the sysv-op group). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg —
+//     in particular it must NOT wire args[0] (the msqid IPC id) as an fd.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; it is not a
+//     byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a regression to KindFd (which would misrecord the SysV
+// IPC id as a file descriptor) and pins consistency with semctl/shmctl.
+func TestGenerateMsgctlHandler(t *testing.T) {
+	// Classification consistency: msgctl and its SysV control-syscall siblings
+	// semctl/shmctl must all resolve to KindSysVOp.
+	for _, sc := range []string{"msgctl", "semctl", "shmctl"} {
+		res, ok := classifyNameOnly("sys_enter_" + sc)
+		if !ok || res.Kind != KindSysVOp {
+			t.Fatalf("%s classified as kind=%v ok=%v, want KindSysVOp", sc, res.Kind, ok)
+		}
+		if fam := ClassifySyscallFamily("sys_enter_" + sc); fam != FamilyIPC {
+			t.Errorf("%s family = %q, want FamilyIPC", sc, fam)
+		}
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("msgctl")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_msgctl")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_msgctl")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MSGCTL;")
+
+	// The KindSysVOp enter handler must not wire any argument: args[0] (msqid) is
+	// a SysV IPC id, NOT an fd; args[1] (op) is a command; args[2] (buf) is a
+	// userspace control-block pointer. Scope to the enter handler body (from the
+	// enter SEC up to the exit SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("msgctl: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("msgctl must be KindSysVOp: enter handler must not capture any arg (args[0] msqid is a SysV IPC id, not an fd)")
+	}
+	// Belt-and-suspenders: the enter handler must never assign ev->fd, which would
+	// mean the SysV msqid was captured as a file descriptor.
+	requireNotContains(t, enterBody, "ev->fd")
+
+	// The exit handler reports the raw int status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetMsgctlUnclassified locks in that msgctl's return value is
+// UNCLASSIFIED. msgctl returns an int status (0, or a non-negative value for the
+// IPC_INFO/MSG_INFO/MSG_STAT info ops, and -1 on error) — never a byte count —
+// so it must never be tagged as a READ/WRITE/TRANSFER transfer size.
+func TestClassifyRetMsgctlUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_msgctl"); got != Unclassified {
+		t.Errorf("msgctl ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 // TestGenerateClone3Handler locks in how clone3(2) is generated. Per the man
 // page:
 //
