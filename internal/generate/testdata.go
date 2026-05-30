@@ -2296,3 +2296,55 @@ format:
 
 print fmt: "0x%lx", REC->ret
 `
+
+// FormatKexecFileLoad / FormatExitKexecFileLoad mirror the real kernel
+// tracepoint format for kexec_file_load(2):
+//
+//	long kexec_file_load(int kernel_fd, int initrd_fd,
+//	                     unsigned long cmdline_len, const char *cmdline,
+//	                     unsigned long flags)
+//
+// kexec_file_load loads a new kernel (and optional initrd) from open file
+// descriptors so it can later be booted by reboot(2); it returns 0 on success
+// or -1 on error. The leading "kernel_fd" field (args[0]) makes the enter a
+// KindFd fd_event capturing ev->fd = args[0] — the FieldNumber("fd") lookup
+// finds no field literally named "fd" here, so generateExtraFd falls back to
+// args[0], which IS kernel_fd. There are TWO fds (kernel_fd at args[0],
+// initrd_fd at args[1]); by the single-fd KindFd convention only the first
+// (kernel_fd) is captured. Critically, cmdline_ptr (args[3]) is a command-line
+// STRING for the new kernel, NOT a filesystem path, so it must NOT be read with
+// bpf_probe_read_user_str. On exit kexec_file_load returns 0/-1, which is
+// UNCLASSIFIED (a plain ret_event, no read/write/transfer byte count). Field
+// names/offsets are copied verbatim from
+// /sys/kernel/tracing/events/syscalls/sys_enter_kexec_file_load.
+const FormatKexecFileLoad = `name: sys_enter_kexec_file_load
+ID: 508
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int kernel_fd;	offset:16;	size:8;	signed:0;
+	field:int initrd_fd;	offset:24;	size:8;	signed:0;
+	field:unsigned long cmdline_len;	offset:32;	size:8;	signed:0;
+	field:const char * cmdline_ptr;	offset:40;	size:8;	signed:0;
+	field:unsigned long flags;	offset:48;	size:8;	signed:0;
+
+print fmt: "kernel_fd: 0x%08lx, initrd_fd: 0x%08lx, cmdline_len: 0x%08lx, cmdline_ptr: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->kernel_fd)), ((unsigned long)(REC->initrd_fd)), ((unsigned long)(REC->cmdline_len)), ((unsigned long)(REC->cmdline_ptr)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitKexecFileLoad = `name: sys_exit_kexec_file_load
+ID: 507
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
