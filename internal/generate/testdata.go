@@ -2052,3 +2052,70 @@ format:
 
 print fmt: "0x%lx", REC->ret
 `
+
+// FormatMkdirat is real sysfs data for mkdirat(2): the pathname argument sits
+// at args[1], AFTER the dirfd at args[0]. Captured from a Linux 7.0 kernel,
+// which also exposes the __data_loc __pathname_val trailing field. The
+// generator must read the path from args[1] (the dfd at args[0] is NOT a path).
+const FormatMkdirat = `name: sys_enter_mkdirat
+ID: 899
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int dfd;	offset:16;	size:8;	signed:0;
+	field:const char * pathname;	offset:24;	size:8;	signed:0;
+	field:umode_t mode;	offset:32;	size:8;	signed:0;
+	field:__data_loc char[] __pathname_val;	offset:40;	size:4;	signed:0;
+
+print fmt: "dfd: 0x%08lx, pathname: 0x%08lx, mode: 0x%08lx", ((unsigned long)(REC->dfd)), ((unsigned long)(REC->pathname)), ((unsigned long)(REC->mode))
+`
+
+const FormatExitMkdirat = `name: sys_exit_mkdirat
+ID: 898
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
+// FormatMkdir is the sibling mkdir(2): it has NO dirfd, so the pathname is the
+// first argument at args[0]. This is the key contrast with mkdirat above and
+// guards against accidentally sharing a single arg index between the two.
+const FormatMkdir = `name: sys_enter_mkdir
+ID: 901
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * pathname;	offset:16;	size:8;	signed:0;
+	field:umode_t mode;	offset:24;	size:8;	signed:0;
+
+print fmt: "pathname: 0x%08lx, mode: 0x%08lx", ((unsigned long)(REC->pathname)), ((unsigned long)(REC->mode))
+`
+
+const FormatExitMkdir = `name: sys_exit_mkdir
+ID: 900
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
