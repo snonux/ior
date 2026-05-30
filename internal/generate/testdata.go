@@ -2191,3 +2191,46 @@ format:
 
 print fmt: "0x%lx", REC->ret
 `
+
+// FormatGetsockname / FormatExitGetsockname mirror the real kernel tracepoint
+// format for getsockname(2):
+//
+//	int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen).
+//
+// getsockname returns the local address a socket is bound to. The leading "fd"
+// field (sockfd at args[0]) makes the enter a KindFd fd_event; both the addr
+// output pointer (usockaddr, args[1]) and the addrlen in/out pointer
+// (usockaddr_len, args[2]) are userspace pointers we do NOT capture — note that
+// unlike bind(2)'s by-value addrlen, getsockname's third arg is itself a
+// pointer. On exit getsockname returns 0/-1, which is UNCLASSIFIED (a plain
+// ret_event, no read/write/transfer byte count). Field names/offsets are copied
+// verbatim from /sys/kernel/tracing/events/syscalls/sys_enter_getsockname.
+const FormatGetsockname = `name: sys_enter_getsockname
+ID: 1833
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int fd;	offset:16;	size:8;	signed:0;
+	field:struct sockaddr * usockaddr;	offset:24;	size:8;	signed:0;
+	field:int * usockaddr_len;	offset:32;	size:8;	signed:0;
+
+print fmt: "fd: 0x%08lx, usockaddr: 0x%08lx, usockaddr_len: 0x%08lx", ((unsigned long)(REC->fd)), ((unsigned long)(REC->usockaddr)), ((unsigned long)(REC->usockaddr_len))
+`
+
+const FormatExitGetsockname = `name: sys_exit_getsockname
+ID: 1832
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
