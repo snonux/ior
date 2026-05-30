@@ -9,6 +9,17 @@ func TestClassifySyscallFamily(t *testing.T) {
 	}{
 		{"sys_enter_accept", FamilyNetwork},
 		{"sys_exit_accept", FamilyNetwork},
+		// bind(2) assigns an address to a socket; it is a socket-setup syscall and
+		// shares FamilyNetwork with its connect/listen/accept/getsockname/
+		// getpeername siblings. Assert both enter and exit (and the closest
+		// siblings) so a stray reclassification of any one trips this test. Keep in
+		// sync with the Network list in docs/syscall-tracing-plan.md.
+		{"sys_enter_bind", FamilyNetwork},
+		{"sys_exit_bind", FamilyNetwork},
+		{"sys_enter_connect", FamilyNetwork},
+		{"sys_enter_listen", FamilyNetwork},
+		{"sys_enter_getsockname", FamilyNetwork},
+		{"sys_enter_getpeername", FamilyNetwork},
 		{"sys_enter_pipe2", FamilyIPC},
 		{"sys_enter_munmap", FamilyMemory},
 		// process_madvise(2) gives memory advice (MADV_COLD/PAGEOUT/...) about
