@@ -1955,10 +1955,47 @@ func TestClassifySwapoff(t *testing.T) {
 	}
 }
 
+// TestClassifyKillExplicitNull locks in the kill(2) enter classification using
+// the syscall's REAL tracepoint fields. kill(pid_t pid, int sig) sends signal
+// sig to a process (or process group); both arguments are integers — a process/
+// process-group identifier and a signal number — NOT a file descriptor and NOT
+// a filesystem path. The audit concern is that args[0] ("pid") could be mistaken
+// for an fd: it must not be. kill has no fd or path argument, so its enter format
+// must classify as KindNull (null_event), matching its signal siblings tkill/
+// tgkill/rt_sigqueueinfo and the explicit name-only mapping in classify.go.
+// (Its pidfd-taking sibling pidfd_send_signal differs deliberately: args[0]
+// there is a real pidfd file descriptor, so that one is KindFd/FamilyIPC.)
 func TestClassifyKillExplicitNull(t *testing.T) {
 	r := classifyFromData(t, FormatKill)
 	if r.Kind != KindNull {
 		t.Errorf("kill: got kind %d, want KindNull", r.Kind)
+	}
+	// Neither the pid nor the sig argument must be captured as a path/fd.
+	if r.PathnameField != "" {
+		t.Errorf("kill: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
+// TestClassifyExitKillUnclassifiedRet locks in that the kill exit tracepoint is
+// classified as KindRet and Unclassified. kill(2) returns int (0 on success, -1
+// on error) — that return is a status code, NOT a transferred byte count — so
+// its exit format carries a single "ret" field and must map to a plain ret_event
+// (KindRet) whose ret_type stays UNCLASSIFIED. This matches its signal siblings
+// (tkill/tgkill/rt_sigqueueinfo); misclassifying it as a READ/WRITE/TRANSFER
+// byte count would be a real bug.
+func TestClassifyExitKillUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_kill",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_kill: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_kill"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_kill) = %q, want UNCLASSIFIED", got)
 	}
 }
 
