@@ -108,6 +108,99 @@ func TestHandleSocketpairExitTracksReturnedFdsFromExitEvent(t *testing.T) {
 	verifyFileDescriptor(t, el, 62, "socket:1:1:0")
 }
 
+// TestHandleSocketpairExitDoesNotTrackDomainAsFd is a regression lock-in for the
+// socketpair(2) audit (task c00). socketpair's first argument (args[0]) is the
+// address-family/domain constant (e.g. AF_UNIX, AF_INET6), NOT a file
+// descriptor: the two created fds are written by the kernel into the OUTPUT
+// array sv[2] (args[3]) and are only valid AFTER the call returns. KindSocketpair
+// captures sv0/sv1 from that output buffer at exit; it must never register the
+// domain integer as an fd. This test pins that invariant by using a Family value
+// (AF_INET6 == 10) that is numerically distinct from the returned fds and
+// asserting fd 10 is never tracked.
+func TestHandleSocketpairExitDoesNotTrackDomainAsFd(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+
+	const afInet6 = 10
+	enter := &types.SocketpairEvent{
+		EventType: types.ENTER_SOCKETPAIR_EVENT,
+		TraceId:   types.SYS_ENTER_SOCKETPAIR,
+		Time:      100,
+		Pid:       77,
+		Tid:       78,
+		Family:    afInet6,
+		Type:      1,
+		Protocol:  0,
+		Sv0:       -1,
+		Sv1:       -1,
+		Ret:       0,
+	}
+	exit := &types.SocketpairEvent{
+		EventType: types.EXIT_SOCKETPAIR_EVENT,
+		TraceId:   types.SYS_EXIT_SOCKETPAIR,
+		Time:      200,
+		Pid:       77,
+		Tid:       78,
+		Family:    afInet6,
+		Type:      1,
+		Protocol:  0,
+		Sv0:       3,
+		Sv1:       4,
+		Ret:       0,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleSocketpairExit(ep, enter); !ok {
+		t.Fatal("handleSocketpairExit returned false")
+	}
+	// Only the output fds sv[2] are tracked.
+	verifyFileDescriptor(t, el, 3, "socket:10:1:0")
+	verifyFileDescriptor(t, el, 4, "socket:10:1:0")
+	// The domain constant (AF_INET6 == 10) must NOT have been captured as an fd.
+	verifyFdNotTracked(t, el, afInet6)
+}
+
+// TestHandleSocketpairExitDropsFdsOnError pins that a failed socketpair(2)
+// (ret != 0) tracks no descriptors: the sv[2] output buffer is undefined on
+// error, so the BPF exit handler leaves sv0/sv1 at the -1 sentinel and the
+// userspace handler must not register anything.
+func TestHandleSocketpairExitDropsFdsOnError(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+
+	enter := &types.SocketpairEvent{
+		EventType: types.ENTER_SOCKETPAIR_EVENT,
+		TraceId:   types.SYS_ENTER_SOCKETPAIR,
+		Time:      100,
+		Pid:       77,
+		Tid:       78,
+		Family:    1,
+		Type:      1,
+		Protocol:  0,
+		Sv0:       -1,
+		Sv1:       -1,
+		Ret:       0,
+	}
+	exit := &types.SocketpairEvent{
+		EventType: types.EXIT_SOCKETPAIR_EVENT,
+		TraceId:   types.SYS_EXIT_SOCKETPAIR,
+		Time:      200,
+		Pid:       77,
+		Tid:       78,
+		Family:    1,
+		Type:      1,
+		Protocol:  0,
+		Sv0:       -1,
+		Sv1:       -1,
+		Ret:       -24, // -EMFILE
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleSocketpairExit(ep, enter); !ok {
+		t.Fatal("handleSocketpairExit returned false")
+	}
+	verifyFdNotTracked(t, el, 1)
+	verifyFdNotTracked(t, el, -1)
+}
+
 func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 
