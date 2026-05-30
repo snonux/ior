@@ -411,6 +411,83 @@ func TestClassifyRetSigaltstackUnclassified(t *testing.T) {
 	}
 }
 
+// TestGenerateTkillHandler locks in how tkill(2) is generated. Per the man page:
+//
+//	int tkill(pid_t tid, int sig)
+//
+// tkill sends signal sig to the thread whose thread id is tid; it is the
+// obsolete predecessor of tgkill(tgid, tid, sig) (the kernel recommends tgkill
+// because a bare tid can be recycled). It returns 0 on success or -1 on error.
+// Neither argument is an fd or a path: args[0] is a thread id (a signal target,
+// NOT a file descriptor) and args[1] is the signal number. tkill is not listed
+// in the name-only kind table; it carries fields named "pid"/"sig" that match no
+// fd/path/name pattern, so ClassifyFormat returns KindNone and the generation
+// fallback (classifyEnterForGeneration) promotes it to KindNull. This test guards
+// that path: tkill must emit a struct null_event and the args[0] tid must never be
+// captured as an fd. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg —
+//     in particular the tid must not be mistaken for an fd.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateTkillHandler(t *testing.T) {
+	// syntheticPair derives the fixture from FormatKill, whose fields
+	// (pid_t pid; int sig) match the real sys_enter_tkill tracepoint layout
+	// exactly, so this exercises tkill's true argument shape.
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("tkill")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_tkill")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_tkill")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_TKILL;")
+
+	// The KindNull enter handler must not wire the tid (args[0]) or sig (args[1])
+	// as an fd/path/addr — the tid is a signal target, not a traced I/O resource.
+	// Scope to the enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("tkill: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("tkill must be KindNull: enter handler must not capture any arg (tid is not an fd)")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyTkillFallsThroughToNull pins the classifier behaviour that makes
+// tkill safe: ClassifyFormat itself returns KindNone (no field matches an
+// fd/path/name pattern — crucially the pid_t tid field is NOT treated as an fd),
+// and only the generation-time fallback turns that into KindNull. If a future
+// change made the tid match the fd rule, this test would flip to KindFd and fail.
+func TestClassifyTkillFallsThroughToNull(t *testing.T) {
+	f := mustParseOne(t, strings.Replace(
+		strings.Replace(FormatKill, "sys_enter_kill", "sys_enter_tkill", 1),
+		"ID: 183", "ID: 177", 1))
+	if r := ClassifyFormat(&f); r.Kind != KindNone {
+		t.Errorf("tkill ClassifyFormat = %d, want KindNone (tid must not match the fd rule)", r.Kind)
+	}
+	if r := classifyEnterForGeneration(&f); r.Kind != KindNull {
+		t.Errorf("tkill classifyEnterForGeneration = %d, want KindNull", r.Kind)
+	}
+}
+
+// TestClassifyRetTkillUnclassified locks in that tkill's return value is
+// UNCLASSIFIED. It returns 0 on success or -1 on error — a status code, not a
+// number of bytes transferred — so classifying it as READ/WRITE/TRANSFER would
+// wrongly count it as data movement.
+func TestClassifyRetTkillUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_tkill"); got != Unclassified {
+		t.Errorf("tkill ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 // TestGenerateSysinfoHandler locks in how sysinfo(2) is generated. Per the man
 // page:
 //
