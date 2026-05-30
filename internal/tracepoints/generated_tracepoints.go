@@ -1388,7 +1388,7 @@ var syscallKinds = map[string]string{
 	"semget":                  "sysv-id",
 	"semop":                   "sysv-op",
 	"semtimedop":              "sysv-op",
-	"sendfile64":              "null",
+	"sendfile64":              "fd",
 	"sendmmsg":                "fd",
 	"sendmsg":                 "fd",
 	"sendto":                  "fd",

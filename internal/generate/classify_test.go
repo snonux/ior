@@ -985,6 +985,56 @@ func TestClassifyN7NameOnlyKinds(t *testing.T) {
 	}
 }
 
+// TestClassifySendfile64CapturesOutFd locks in the sendfile64 audit (task az):
+// sendfile64(out_fd, in_fd, offset, count) transfers bytes between two file
+// descriptors inside the kernel and returns the count written to out_fd. Its
+// real tracepoint fields carry no field literally named "fd", so without the
+// explicit nameOnlyKindsTable override it would fall through to KindNull and
+// capture no descriptor — inconsistent with its sibling copy_file_range (KindFd)
+// and the read/write/sendto/recvfrom families. This test pins that sendfile64 is
+// a KindFd event capturing out_fd (args[0], the write destination) and that the
+// generated C emits exactly that capture, never a null_event.
+func TestClassifySendfile64CapturesOutFd(t *testing.T) {
+	// Realistic enter layout from /sys/kernel/tracing for sys_enter_sendfile64.
+	enter := &Format{
+		Name: "sys_enter_sendfile64",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "int", Name: "out_fd"},
+			{Type: "int", Name: "in_fd"},
+			{Type: "off_t *", Name: "offset"},
+			{Type: "size_t", Name: "count"},
+		},
+	}
+	r := ClassifyFormat(enter)
+	if r.Kind != KindFd {
+		t.Fatalf("sendfile64: got kind %d, want KindFd (must not fall back to KindNull)", r.Kind)
+	}
+	// Negative guard: out_fd/in_fd must not be mistaken for a two-fd event; the
+	// audit deliberately keeps sendfile64 single-fd like copy_file_range.
+	if r.Kind == KindTwoFd || r.Kind == KindNull {
+		t.Fatalf("sendfile64: kind %d, want single-fd KindFd, not two-fd/null", r.Kind)
+	}
+
+	// Generated C must capture out_fd at args[0] (the byte-write destination) via
+	// a struct fd_event, never a struct null_event.
+	output := GenerateTracepointsC(phaseAFormats("sendfile64", 9500))
+	if !strings.Contains(output, "/// sys_enter_sendfile64 is a struct fd_event") {
+		t.Fatalf("sys_enter_sendfile64 should be a struct fd_event:\n%s", output)
+	}
+	if strings.Contains(output, "/// sys_enter_sendfile64 is a struct null_event") {
+		t.Fatalf("sys_enter_sendfile64 must not be a struct null_event:\n%s", output)
+	}
+	if !strings.Contains(output, "ev->fd = (__s32)ctx->args[0];") {
+		t.Fatalf("sys_enter_sendfile64 should capture out_fd from args[0]:\n%s", output)
+	}
+	// Return value stays TransferClassified: sendfile64 moves bytes between two
+	// fds, consistent with copy_file_range/splice/tee/vmsplice.
+	if c := ClassifyRet("sys_exit_sendfile64"); c != TransferClassified {
+		t.Fatalf("sendfile64 ret: got %v, want TransferClassified", c)
+	}
+}
+
 func TestClassifyG7NameOnlyKinds(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2000,7 +2050,7 @@ func TestClassifyPhaseAByteSyscallPairsAccepted(t *testing.T) {
 		{"recvmsg", "struct fd_event", "READ_CLASSIFIED"},
 		{"sendto", "struct fd_event", "WRITE_CLASSIFIED"},
 		{"sendmsg", "struct fd_event", "WRITE_CLASSIFIED"},
-		{"sendfile64", "struct null_event", "TRANSFER_CLASSIFIED"},
+		{"sendfile64", "struct fd_event", "TRANSFER_CLASSIFIED"},
 		{"splice", "struct null_event", "TRANSFER_CLASSIFIED"},
 		{"tee", "struct null_event", "TRANSFER_CLASSIFIED"},
 		{"process_vm_readv", "struct null_event", "READ_CLASSIFIED"},
