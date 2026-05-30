@@ -246,7 +246,18 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// fd_event. This lets the runtime honour the upper bound and the
 	// CLOSE_RANGE_CLOEXEC flag instead of closing every fd >= first.
 	"sys_enter_close_range": KindTwoFd,
-	"sys_enter_statmount":   KindNull,
+	// sendfile64(out_fd, in_fd, offset, count) transfers bytes between two file
+	// descriptors inside the kernel and returns the number of bytes written to
+	// out_fd (TransferClassified, see retClassifications). Its tracepoint fields
+	// (out_fd, in_fd, offset, count) carry no field literally named "fd", so
+	// without an explicit override it would fall through to KindNull and capture
+	// no descriptor at all — unlike its sibling copy_file_range, which is a
+	// KindFd event. Capture out_fd (args[0], the destination the bytes are
+	// written to) so sendfile64 attributes its transfer to a concrete fd, matching
+	// the single-fd KindFd convention used for copy_file_range and the
+	// read/write/sendto/recvfrom families.
+	"sys_enter_sendfile64": KindFd,
+	"sys_enter_statmount":  KindNull,
 	"sys_enter_listmount":   KindNull,
 	"sys_enter_listns":      KindNull,
 
