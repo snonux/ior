@@ -2053,6 +2053,43 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+// FormatSignalfd4 is real sysfs data for signalfd4(2) captured from a Linux 7.0
+// kernel. The raw syscall is signalfd4(int ufd, const sigset_t *mask, size_t
+// sizemask, int flags): ufd at args[0], user_mask at args[1], sizemask at
+// args[2], and crucially the flags (SFD_NONBLOCK/SFD_CLOEXEC) at args[3]. ior
+// classifies it as KindEventfd (an fd-creating IPC syscall), so the generator
+// must capture flags from args[3], never any earlier index.
+const FormatSignalfd4 = `name: sys_enter_signalfd4
+ID: 1087
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int ufd;	offset:16;	size:8;	signed:0;
+	field:sigset_t * user_mask;	offset:24;	size:8;	signed:0;
+	field:size_t sizemask;	offset:32;	size:8;	signed:0;
+	field:int flags;	offset:40;	size:8;	signed:0;
+
+print fmt: "ufd: 0x%08lx, user_mask: 0x%08lx, sizemask: 0x%08lx, flags: 0x%08lx", ((unsigned long)(REC->ufd)), ((unsigned long)(REC->user_mask)), ((unsigned long)(REC->sizemask)), ((unsigned long)(REC->flags))
+`
+
+const FormatExitSignalfd4 = `name: sys_exit_signalfd4
+ID: 1086
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 // FormatMkdirat is real sysfs data for mkdirat(2): the pathname argument sits
 // at args[1], AFTER the dirfd at args[0]. Captured from a Linux 7.0 kernel,
 // which also exposes the __data_loc __pathname_val trailing field. The
