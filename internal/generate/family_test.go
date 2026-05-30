@@ -197,6 +197,20 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_rt_sigqueueinfo", FamilySignals},
 		{"sys_enter_rt_tgsigqueueinfo", FamilySignals},
 		{"sys_enter_sigaltstack", FamilySignals},
+		// tkill(tid, sig) and its successor tgkill(tgid, tid, sig) deliver a signal
+		// to a specific thread; kill(pid, sig) signals a whole process. All three
+		// are signal-delivery syscalls and belong in FamilySignals with the rest of
+		// the group above. tkill is the obsolete predecessor of tgkill (man 2 tkill)
+		// and must not drift into FamilyProcess just because its first arg is a
+		// thread id — the tid is a signal target, not a process-control operand.
+		// Assert both enter and exit for tkill/tgkill/kill so a stray
+		// reclassification of any of them trips this test.
+		{"sys_enter_kill", FamilySignals},
+		{"sys_exit_kill", FamilySignals},
+		{"sys_enter_tkill", FamilySignals},
+		{"sys_exit_tkill", FamilySignals},
+		{"sys_enter_tgkill", FamilySignals},
+		{"sys_exit_tgkill", FamilySignals},
 		// ioprio_get/ioprio_set query/set the I/O scheduling class and priority of
 		// a process, process group, or user. They are the I/O-priority analogues of
 		// getpriority/setpriority (the CPU nice value) and share the identical
