@@ -2276,10 +2276,16 @@ func TestClassifySchedGetattrPidNotFd(t *testing.T) {
 //     IPC like the futex_* shared-memory primitives (see family.go / family_test.go),
 //   - return classifies as UNCLASSIFIED (0/-1, no byte transfer).
 //
-// NOTE: get_robust_list/set_robust_list are robust-futex bookkeeping and could
-// arguably sit with futex_* under IPC; that grouping question is tracked as a
-// follow-up rather than changed here, since the syscalls register/query a
-// per-thread pointer (like rseq) rather than operating on shared memory.
+// FAMILY DECISION (resolved): get_robust_list/set_robust_list stay FamilyMisc and
+// are NOT moved to FamilyIPC for "futex consistency". The boundary rule (spelled
+// out next to the futex block in family.go) is operation-vs-registration: a
+// syscall is IPC only if it PERFORMS the actual IPC/sync operation (futex
+// wait/wake/requeue, or an op on an IPC object). These two only register/query
+// the per-thread robust-futex list head pointer — per get_robust_list(2) the list
+// is "managed in user space: the kernel knows only about the location of the head"
+// — and never wait, wake, or touch the shared futex word. That is per-thread
+// bookkeeping, structurally identical to rseq, so they share rseq's Misc family.
+// The contrast assertion below (futex == IPC) pins both sides of the boundary.
 func TestClassifyGetRobustListPidNotFd(t *testing.T) {
 	// Field layout mirrors the actual kernel tracepoint format for
 	// sys_enter_get_robust_list: int pid, struct robust_list_head **head_ptr,
