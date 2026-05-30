@@ -729,6 +729,53 @@ func TestMkdiratFamilyAndKindMatchSiblings(t *testing.T) {
 	}
 }
 
+// TestGenerateRmdirHandlerCapturesPathFromArgs0 locks in that rmdir(2) is a
+// KindPathname event whose real filesystem path is read from args[0]. rmdir is
+// "int rmdir(const char *pathname)" with a single pathname argument (no dirfd),
+// so the path lives at args[0] — exactly like its single-pathname sibling
+// unlink(2) and unlike the dirfd-relative mkdirat/unlinkat which read args[1].
+// A regression that dropped rmdir's path capture (while unlink/mkdir keep theirs)
+// or read the wrong arg would surface here. The exit returns int 0/-1 (a status
+// code, not a byte count), so the exit handler must stay UNCLASSIFIED.
+func TestGenerateRmdirHandlerCapturesPathFromArgs0(t *testing.T) {
+	exitRmdir := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_rmdir", 1)
+	exitRmdir = strings.Replace(exitRmdir, "ID: 843", "ID: 881", 1)
+	output := generateFromPair(t, FormatRmdir, exitRmdir)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_rmdir")`)
+	requireContains(t, output, "struct path_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_RMDIR;")
+	requireContains(t, output, "__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	// Negative guard: rmdir has no dirfd, so the path must NOT be read from args[1].
+	requireNotContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	// Return value is a 0/-1 status code, not a byte count: UNCLASSIFIED.
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestRmdirFamilyAndKindMatchSiblings locks in that rmdir shares the same FS
+// family and KindPathname classification as its directory/link removal siblings
+// unlink/unlinkat/mkdir. A drift here (e.g. rmdir slipping into Misc, or losing
+// its pathname capture) would split related path-based syscalls across families
+// in the dashboard and drop rmdir's path from the trace.
+func TestRmdirFamilyAndKindMatchSiblings(t *testing.T) {
+	for _, syscall := range []string{"rmdir", "unlink", "unlinkat", "mkdir"} {
+		if got := ClassifySyscallFamily("sys_enter_" + syscall); got != FamilyFS {
+			t.Errorf("%s family = %q, want %q", syscall, got, FamilyFS)
+		}
+	}
+
+	rmdir := mustParseOne(t, FormatRmdir)
+	if r := ClassifyFormat(&rmdir); r.Kind != KindPathname || r.PathnameField != "pathname" {
+		t.Errorf("rmdir classified as kind=%d field=%q, want KindPathname/pathname", r.Kind, r.PathnameField)
+	}
+	// rmdir has no dirfd, so the pathname is the first real argument: args[0].
+	if n := rmdir.FieldNumber("pathname"); n != 0 {
+		t.Errorf("rmdir FieldNumber(pathname) = %d, want 0", n)
+	}
+}
+
 func TestGenerateExecHandler(t *testing.T) {
 	output := generateFromPair(t, FormatExecveat, FormatExitExecveat)
 
