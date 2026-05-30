@@ -2499,6 +2499,51 @@ func TestClassifyNameOnlyPrefixKinds(t *testing.T) {
 	}
 }
 
+// TestIoUringRegisterTablePrecedenceOverIoPrefix is an audit lock-in for
+// io_uring_register(2): int io_uring_register(unsigned int fd, unsigned int
+// opcode, void *arg, unsigned int nr_args). The io_uring fd lives at args[0],
+// so the syscall MUST classify as KindFd (a single-fd fd_event) rather than
+// falling through to the generic `sys_enter_io_` KindNull prefix rule shared
+// with io_setup/io_destroy/io_submit/io_getevents. classifyNameOnly consults
+// the exact nameOnlyKindsTable BEFORE the nameOnlyPrefixKinds list, so the
+// explicit KindFd entry wins. This test would fail if that entry were removed
+// (leaving the prefix rule to wrongly produce KindNull and drop the fd) or if
+// table-vs-prefix lookup order were reversed.
+func TestIoUringRegisterTablePrecedenceOverIoPrefix(t *testing.T) {
+	r, ok := classifyNameOnly("sys_enter_io_uring_register")
+	if !ok {
+		t.Fatal("classifyNameOnly(sys_enter_io_uring_register) did not match")
+	}
+	if r.Kind != KindFd {
+		t.Fatalf("io_uring_register kind = %d, want KindFd (fd at args[0]); the "+
+			"sys_enter_io_ KindNull prefix rule must not win", r.Kind)
+	}
+
+	// Sanity check the prefix rule itself still maps the io_* AIO siblings that
+	// have no fd argument to KindNull, so the precedence above is meaningful.
+	if pr, ok := classifyNameOnly("sys_enter_io_submit"); !ok || pr.Kind != KindNull {
+		t.Fatalf("sys_enter_io_submit kind = %d (ok=%v), want KindNull via prefix rule", pr.Kind, ok)
+	}
+}
+
+// TestIoUringRegisterReturnUnclassified locks in that io_uring_register's exit
+// is UNCLASSIFIED: on success it returns 0 or a small positive value (e.g. an
+// fd or count specific to the opcode), never a byte-transfer count, so it must
+// not appear in retClassifications as READ/WRITE/TRANSFER. Treating it as a
+// byte count would corrupt throughput accounting. Its io_uring siblings
+// (io_uring_setup/io_uring_enter) are likewise unclassified.
+func TestIoUringRegisterReturnUnclassified(t *testing.T) {
+	for _, name := range []string{
+		"sys_exit_io_uring_register",
+		"sys_exit_io_uring_enter",
+		"sys_exit_io_uring_setup",
+	} {
+		if got := ClassifyRet(name); got != Unclassified {
+			t.Errorf("ClassifyRet(%q) = %q, want %q", name, got, Unclassified)
+		}
+	}
+}
+
 func TestClassifyNameOnlyUnknown(t *testing.T) {
 	if r, ok := classifyNameOnly("sys_enter_not_real"); ok {
 		t.Fatalf("classifyNameOnly matched unknown syscall with kind %d", r.Kind)
