@@ -3150,6 +3150,96 @@ func TestClassifyPwritev2WriteByteCount(t *testing.T) {
 	}
 }
 
+// TestClassifyPwrite64WriteByteCount locks in the classification of the
+// pwrite64(2) audit. The syscall signature is:
+//
+//	ssize_t pwrite64(int fd, const void *buf, size_t count, off_t offset)
+//
+// args[0] is the file descriptor written to (the kernel tracepoint format names
+// the first field "fd"), buf/count describe the source buffer, and offset is the
+// absolute file position (pwrite64 does NOT advance the file offset). On success
+// pwrite64 returns the NUMBER OF BYTES WRITTEN, so its exit must be
+// WRITE_CLASSIFIED — those bytes are counted as written, exactly like the
+// write/pwrite/pwritev/pwritev2 siblings, and never as a read.
+//
+// The invariants pinned here:
+//   - enter classifies as KindFd off the first "fd" field (fd at args[0]),
+//   - family is FS (matches write/pread64/pwritev file-IO siblings),
+//   - return classifies as WRITE_CLASSIFIED (bytes-written → written).
+//
+// Contrast case guards the easy off-by-one mistake in the read/write tables:
+// pread64 is the read-side positional counterpart (READ_CLASSIFIED, never
+// write). Both directions are asserted together so a stray reclassification of
+// either side trips the test.
+func TestClassifyPwrite64WriteByteCount(t *testing.T) {
+	// Field layout mirrors the actual kernel tracepoint format for
+	// sys_enter_pwrite64: unsigned int fd, const char *buf, size_t count,
+	// loff_t pos.
+	pwrite64 := ClassifyFormat(&Format{
+		Name: "sys_enter_pwrite64",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "unsigned int", Name: "fd"},
+			{Type: "const char *", Name: "buf"},
+			{Type: "size_t", Name: "count"},
+			{Type: "loff_t", Name: "pos"},
+		},
+	})
+	if pwrite64.Kind != KindFd {
+		t.Fatalf("pwrite64: got kind %d, want KindFd (fd at args[0])", pwrite64.Kind)
+	}
+
+	if fam := ClassifySyscallFamily("sys_enter_pwrite64"); fam != FamilyFS {
+		t.Fatalf("pwrite64: got family %s, want FamilyFS", fam)
+	}
+
+	// Return value is a byte count of data written → counted as written.
+	if got := ClassifyRet("sys_exit_pwrite64"); got != WriteClassified {
+		t.Fatalf("pwrite64: ClassifyRet = %q, want WRITE_CLASSIFIED (return is bytes written)", got)
+	}
+
+	// pread64 is the read-side positional counterpart; it must never be a
+	// write (off-by-one guard in the read/write classification tables).
+	if got := ClassifyRet("sys_exit_pread64"); got != ReadClassified {
+		t.Fatalf("pread64: ClassifyRet = %q, want READ_CLASSIFIED", got)
+	}
+
+	// pwrite64 must not be misclassified as a transfer (sendfile/splice style)
+	// nor left unclassified — it is a plain write byte count.
+	if got := ClassifyRet("sys_exit_pwrite64"); got == TransferClassified || got == Unclassified {
+		t.Fatalf("pwrite64: ClassifyRet = %q, want WRITE_CLASSIFIED, not transfer/unclassified", got)
+	}
+
+	// All positional/plain write siblings count their byte-count return as
+	// written; assert the group so a stray reclassification trips here.
+	// (There is no separate sys_exit_pwrite tracepoint on Linux: the glibc
+	// pwrite() wrapper dispatches the pwrite64 syscall, so only pwrite64 has a
+	// tracepoint to classify.)
+	for _, name := range []string{
+		"sys_exit_pwrite64",
+		"sys_exit_pwritev",
+		"sys_exit_pwritev2",
+		"sys_exit_write",
+	} {
+		if got := ClassifyRet(name); got != WriteClassified {
+			t.Errorf("%s: ClassifyRet = %q, want WRITE_CLASSIFIED", name, got)
+		}
+	}
+
+	// The fd-bearing positional siblings all share KindFd at args[0] and the
+	// FS family; pin both enter sides so a kind/family drift trips here.
+	for _, name := range []string{
+		"sys_enter_pwrite64",
+		"sys_enter_pread64",
+		"sys_enter_write",
+		"sys_enter_read",
+	} {
+		if fam := ClassifySyscallFamily(name); fam != FamilyFS {
+			t.Errorf("%s: got family %s, want FamilyFS", name, fam)
+		}
+	}
+}
+
 func mustParseAll(t *testing.T, data string) []Format {
 	t.Helper()
 	formats, err := ParseFormats(strings.NewReader(data))
