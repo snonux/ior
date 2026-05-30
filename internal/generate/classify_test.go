@@ -1612,6 +1612,59 @@ func TestClassifyE7NullNameOnlyKinds(t *testing.T) {
 	}
 }
 
+// TestClassifyIoplNullEnter locks in the iopl(2) enter classification using the
+// syscall's REAL tracepoint field. iopl(int level) changes the x86 I/O privilege
+// level of the calling thread (the two least significant bits of level select
+// the IOPL, 0-3); level is a plain int status/selector, NOT a file descriptor and
+// NOT a filesystem path. iopl is in nameOnlyKindsTable, so its enter classifies
+// as KindNull by name before any field heuristic runs — but the audit concern is
+// that the single "level" int must never be captured as an fd or a path. Using
+// the real "int level" field here (rather than the synthetic arg0 used by
+// TestClassifyE7NullNameOnlyKinds) proves the heuristics would not capture it
+// even if the name-only mapping were removed: the fd heuristic requires the field
+// be named "fd" (which "level" is not), and no string-pointer path field exists.
+// Siblings ioperm/modify_ldt share this null_event shape (FamilyMisc, asserted in
+// family_test.go).
+func TestClassifyIoplNullEnter(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_iopl",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "int", Name: "level"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("enter_iopl: got kind %d, want KindNull", r.Kind)
+	}
+	// The "level" argument must not be captured as a file descriptor or path.
+	if r.PathnameField != "" {
+		t.Errorf("enter_iopl: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
+// TestClassifyExitIoplUnclassifiedRet locks in that the iopl exit tracepoint is
+// classified as KindRet and Unclassified. iopl(2) returns int (0 on success, -1
+// on error) — a status code, NOT a transferred byte count — so its exit format
+// carries a single "ret" field and must map to a plain ret_event (KindRet) whose
+// ret_type stays UNCLASSIFIED (matching the generated handle_sys_exit_iopl).
+// Misclassifying that status as a READ/WRITE/TRANSFER byte count would be a real
+// bug; it shares this shape with its siblings ioperm/modify_ldt.
+func TestClassifyExitIoplUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_iopl",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_iopl: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_iopl"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_iopl) = %q, want UNCLASSIFIED", got)
+	}
+}
+
 // TestClassifyIoprioNullKind locks in the argument-capture classification for
 // ioprio_set/ioprio_get using their real kernel tracepoint fields. Unlike the
 // name-only Misc/null syscalls above, ioprio_* are NOT in nameOnlyKindsTable:
