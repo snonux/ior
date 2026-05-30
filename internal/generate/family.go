@@ -52,7 +52,8 @@ var syscallFamilies = map[string]SyscallFamily{
 	"futex": FamilyIPC, "futex_wait": FamilyIPC, "futex_wake": FamilyIPC,
 	"futex_requeue": FamilyIPC, "futex_waitv": FamilyIPC,
 
-	"brk": FamilyMemory, "madvise": FamilyMemory, "map_shadow_stack": FamilyMemory,
+	"brk": FamilyMemory, "get_mempolicy": FamilyMemory, "madvise": FamilyMemory,
+	"map_shadow_stack": FamilyMemory,
 	"mbind": FamilyMemory, "membarrier": FamilyMemory, "migrate_pages": FamilyMemory,
 	"mincore": FamilyMemory, "mlock": FamilyMemory, "mlock2": FamilyMemory,
 	"mlockall": FamilyMemory, "mmap": FamilyMemory, "mmap2": FamilyMemory,
@@ -125,7 +126,7 @@ var syscallFamilies = map[string]SyscallFamily{
 
 	"add_key": FamilySecurity, "bpf": FamilySecurity, "capget": FamilySecurity,
 	"capset": FamilySecurity, "delete_module": FamilySecurity, "finit_module": FamilySecurity,
-	"get_mempolicy": FamilySecurity, "getrandom": FamilySecurity, "init_module": FamilySecurity,
+	"getrandom": FamilySecurity, "init_module": FamilySecurity,
 	"kexec_file_load": FamilySecurity, "keyctl": FamilySecurity,
 	"landlock_add_rule": FamilySecurity, "landlock_create_ruleset": FamilySecurity,
 	"landlock_restrict_self": FamilySecurity, "lookup_dcookie": FamilySecurity,

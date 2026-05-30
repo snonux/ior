@@ -819,7 +819,7 @@ var syscallFamilies = map[string]string{
 	"futex_waitv":             "IPC",
 	"futex_wake":              "IPC",
 	"futimesat":               "FS",
-	"get_mempolicy":           "Security",
+	"get_mempolicy":           "Memory",
 	"get_robust_list":         "Misc",
 	"getcpu":                  "Misc",
 	"getcwd":                  "FS",
