@@ -23,13 +23,19 @@ func TestClassifySyscallFamily(t *testing.T) {
 		// memory range (start,len,home_node,flags); it returns 0/-1 with no byte
 		// count, so it is KindNull and Unclassified. It is a NUMA memory-policy
 		// syscall and shares FamilyMemory with its siblings set_mempolicy(2),
-		// mbind(2), migrate_pages(2), and move_pages(2). NOTE: get_mempolicy(2) is
-		// the one NUMA sibling currently classified FamilySecurity instead of
-		// FamilyMemory — that inconsistency is tracked separately and is out of
-		// scope for this set_mempolicy_home_node assertion.
+		// get_mempolicy(2), mbind(2), migrate_pages(2), and move_pages(2). Pin the
+		// whole NUMA memory-policy cluster (enter+exit) so a stray reclassification
+		// of any one syscall trips this test. In particular get_mempolicy(2)
+		// retrieves the NUMA policy of a thread/address (not a security operation)
+		// and was previously misclassified FamilySecurity; assert it here so the
+		// group stays consistent. Keep in sync with the Memory list in
+		// docs/syscall-tracing-plan.md.
 		{"sys_enter_set_mempolicy_home_node", FamilyMemory},
 		{"sys_exit_set_mempolicy_home_node", FamilyMemory},
 		{"sys_enter_set_mempolicy", FamilyMemory},
+		{"sys_exit_set_mempolicy", FamilyMemory},
+		{"sys_enter_get_mempolicy", FamilyMemory},
+		{"sys_exit_get_mempolicy", FamilyMemory},
 		{"sys_enter_mbind", FamilyMemory},
 		{"sys_enter_migrate_pages", FamilyMemory},
 		{"sys_enter_move_pages", FamilyMemory},
