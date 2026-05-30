@@ -184,7 +184,12 @@ var syscallFamilies = map[string]SyscallFamily{
 	"add_key": FamilySecurity, "bpf": FamilySecurity, "capget": FamilySecurity,
 	"capset": FamilySecurity, "delete_module": FamilySecurity, "finit_module": FamilySecurity,
 	"getrandom": FamilySecurity, "init_module": FamilySecurity,
-	"kexec_file_load": FamilySecurity, "keyctl": FamilySecurity,
+	// kexec_load and kexec_file_load are documented together on the same man
+	// page (kexec_load(2)): both load a new kernel for later execution by
+	// reboot(2). They belong in the same family even though kexec_load takes
+	// raw user pointers (KindNull) while kexec_file_load takes fds (KindFd).
+	"kexec_file_load": FamilySecurity, "kexec_load": FamilySecurity,
+	"keyctl": FamilySecurity,
 	"landlock_add_rule": FamilySecurity, "landlock_create_ruleset": FamilySecurity,
 	"landlock_restrict_self": FamilySecurity, "lookup_dcookie": FamilySecurity,
 	// lsm_* are the Linux Security Module (LSM) introspection syscalls

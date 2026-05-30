@@ -147,6 +147,13 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_epoll_wait", FamilyPolling},
 		{"sys_enter_io_uring_enter", FamilyAIO},
 		{"sys_enter_bpf", FamilySecurity},
+		// kexec_load and kexec_file_load are siblings on the kexec_load(2) man
+		// page (both load a new kernel for later execution by reboot(2)) and
+		// must share the Security family even though kexec_load takes raw user
+		// pointers (KindNull) and kexec_file_load takes fds (KindFd).
+		{"sys_enter_kexec_load", FamilySecurity},
+		{"sys_enter_kexec_file_load", FamilySecurity},
+		{"sys_exit_kexec_load", FamilySecurity},
 		// Futexes are shared-memory synchronization/IPC primitives ("fast
 		// user-space locking", futex(2)); the classic futex() and the Linux
 		// 6.7+ split syscalls all classify as IPC alongside the System V
