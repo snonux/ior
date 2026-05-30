@@ -1,6 +1,7 @@
 package integrationtests
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,9 +11,30 @@ import (
 // workloadTempDirPrefix is the prefix used by ioworkload's makeTempDir.
 const workloadTempDirPrefix = "ioworkload-"
 
-// listWorkloadTempDirs returns the set of ioworkload-* directories in the
-// system temp directory.
-func listWorkloadTempDirs(t *testing.T) map[string]struct{} {
+// uniqueLeakPrefix returns a temp-dir prefix that is unique to this single test
+// invocation. It embeds the running PID and the per-test name so that the
+// before/after leak-detection diff only ever observes directories created BY
+// THIS test, never the ioworkload-<scenario>-* directories that real scenario
+// workloads legitimately create in the shared system temp root while they run.
+//
+// Scoping detection (and the subsequent cleanup RemoveAll) to this unique
+// prefix is what makes the leak-detection tests order- and concurrency-safe:
+// the previous implementation scanned os.TempDir() for ANY "ioworkload-"
+// directory, so when other (parallel) scenario tests had in-flight temp dirs,
+// this test both falsely attributed them as leaks and deleted them out from
+// under the still-running tests.
+func uniqueLeakPrefix(t *testing.T) string {
+	t.Helper()
+	// Replace path separators so the prefix is a valid single dir-name
+	// component (subtests embed "/" in t.Name()).
+	safeName := strings.ReplaceAll(t.Name(), "/", "_")
+	return fmt.Sprintf("%sleak-%d-%s-", workloadTempDirPrefix, os.Getpid(), safeName)
+}
+
+// listWorkloadTempDirsWithPrefix returns the set of directories in the system
+// temp directory whose name starts with prefix. Restricting to a caller-chosen
+// prefix keeps detection scoped to a single test's own directories.
+func listWorkloadTempDirsWithPrefix(t *testing.T, prefix string) map[string]struct{} {
 	t.Helper()
 	tmpDir := os.TempDir()
 	entries, err := os.ReadDir(tmpDir)
@@ -22,31 +44,25 @@ func listWorkloadTempDirs(t *testing.T) map[string]struct{} {
 
 	dirs := make(map[string]struct{})
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), workloadTempDirPrefix) {
+		if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
 			dirs[filepath.Join(tmpDir, e.Name())] = struct{}{}
 		}
 	}
 	return dirs
 }
 
-// assertNoNewWorkloadTempDirs fails if any new ioworkload temp dirs appeared
-// since the snapshot was taken. It also cleans up any leaked dirs to prevent
-// cascading failures in subsequent tests.
-func assertNoNewWorkloadTempDirs(t *testing.T, before map[string]struct{}) {
+// newLeakedDirs returns the directories matching prefix that appeared in the
+// system temp root since the before snapshot was taken.
+func newLeakedDirs(t *testing.T, prefix string, before map[string]struct{}) []string {
 	t.Helper()
-	after := listWorkloadTempDirs(t)
+	after := listWorkloadTempDirsWithPrefix(t, prefix)
 	var leaked []string
 	for dir := range after {
 		if _, existed := before[dir]; !existed {
 			leaked = append(leaked, dir)
 		}
 	}
-	if len(leaked) > 0 {
-		t.Errorf("leaked ioworkload temp dirs: %v", leaked)
-		for _, dir := range leaked {
-			os.RemoveAll(dir)
-		}
-	}
+	return leaked
 }
 
 func TestCleanupOutputDirContainsOnlyExpectedFiles(t *testing.T) {
@@ -88,37 +104,40 @@ func TestCleanupOutputDirContainsOnlyExpectedFiles(t *testing.T) {
 }
 
 func TestCleanupDetectsLeakedWorkloadTempDir(t *testing.T) {
-	before := listWorkloadTempDirs(t)
+	// Use a prefix unique to this test so the diff cannot observe directories
+	// created by any concurrently running scenario test.
+	prefix := uniqueLeakPrefix(t)
+	before := listWorkloadTempDirsWithPrefix(t, prefix)
 
 	// Create a temp dir that looks like a leaked ioworkload dir.
-	leaked, err := os.MkdirTemp("", workloadTempDirPrefix+"leak-test-")
+	leaked, err := os.MkdirTemp("", prefix)
 	if err != nil {
 		t.Fatalf("create leaked dir: %v", err)
 	}
 	defer os.RemoveAll(leaked)
 
-	after := listWorkloadTempDirs(t)
-	var found bool
-	for dir := range after {
-		if _, existed := before[dir]; !existed {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if len(newLeakedDirs(t, prefix, before)) == 0 {
 		t.Error("leak detection failed: new ioworkload temp dir was not detected")
 	}
 }
 
 func TestCleanupLeakedWorkloadTempDirCaughtByAssertion(t *testing.T) {
-	before := listWorkloadTempDirs(t)
+	// The intentionally leaked dir is created under a prefix unique to this
+	// test (PID + test name). Both the snapshot scan and the cleanup below are
+	// scoped to that prefix, so this test can never observe — let alone delete
+	// — temp dirs belonging to other scenario tests. The template is created in
+	// os.TempDir() (the same root listWorkloadTempDirsWithPrefix scans) rather
+	// than a hard-coded /tmp, so detection works regardless of $TMPDIR.
+	prefix := uniqueLeakPrefix(t)
+	before := listWorkloadTempDirsWithPrefix(t, prefix)
 	tmpDir := t.TempDir()
 	outputDir := t.TempDir()
 
 	// Fake workload that creates a temp dir but does NOT clean it up.
 	// This simulates a killed workload whose defer cleanup() never ran.
+	leakTemplate := filepath.Join(os.TempDir(), prefix+"XXXXXX")
 	workloadBin := writeScript(t, tmpDir, "workload",
-		`echo $$; mktemp -d /tmp/ioworkload-leaked-test-XXXXXX >/dev/null`)
+		fmt.Sprintf("echo $$; mktemp -d %q >/dev/null", leakTemplate))
 	iorBin := writeScript(t, tmpDir, "ior", `exit 0`)
 
 	h := TestHarness{
@@ -130,18 +149,12 @@ func TestCleanupLeakedWorkloadTempDirCaughtByAssertion(t *testing.T) {
 
 	h.Run("test", 5) //nolint:errcheck
 
-	// Verify that a leaked dir IS detected.
-	after := listWorkloadTempDirs(t)
-	var leaked []string
-	for dir := range after {
-		if _, existed := before[dir]; !existed {
-			leaked = append(leaked, dir)
-		}
-	}
+	// Verify that the leaked dir IS detected.
+	leaked := newLeakedDirs(t, prefix, before)
 	if len(leaked) == 0 {
 		t.Error("expected to detect leaked ioworkload temp dir, found none")
 	}
-	// Clean up the intentionally leaked dir.
+	// Clean up the intentionally leaked dir(s) — all share this test's prefix.
 	for _, dir := range leaked {
 		os.RemoveAll(dir)
 	}
