@@ -594,6 +594,66 @@ func TestGenerateMqOpenHandler(t *testing.T) {
 	requireContains(t, output, "ev->flags = ctx->args[1];")
 }
 
+// TestGenerateMkdiratHandlerCapturesPathFromArgs1 locks in that mkdirat(2) is a
+// KindPathname event whose path is read from args[1]. mkdirat(dirfd, pathname,
+// mode) places the dirfd at args[0] and the real filesystem path at args[1];
+// reading args[0] would capture the dir fd (often AT_FDCWD) instead of the path.
+// The arg index is data-driven from the kernel format (FieldNumber of the
+// "pathname" field), so this guards against a regression in that derivation.
+func TestGenerateMkdiratHandlerCapturesPathFromArgs1(t *testing.T) {
+	output := generateFromPair(t, FormatMkdirat, FormatExitMkdirat)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mkdirat")`)
+	requireContains(t, output, "struct path_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MKDIRAT;")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	// Negative guard: the path must NOT be read from args[0] (the dirfd).
+	requireNotContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	// Return value is a 0/-1 status code, not a byte count: UNCLASSIFIED.
+	requireContains(t, output, "ev->trace_id = SYS_EXIT_MKDIRAT;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateMkdirHandlerCapturesPathFromArgs0 locks in that the sibling
+// mkdir(2) — which has no dirfd — reads its pathname from args[0]. Contrasting
+// it with mkdirat above ensures the two never collapse onto a shared arg index.
+func TestGenerateMkdirHandlerCapturesPathFromArgs0(t *testing.T) {
+	output := generateFromPair(t, FormatMkdir, FormatExitMkdir)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mkdir")`)
+	requireContains(t, output, "struct path_event *ev")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MKDIR;")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireContains(t, output, "ev->trace_id = SYS_EXIT_MKDIR;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestMkdiratFamilyAndKindMatchSiblings locks in that mkdirat and its siblings
+// mkdir/mknodat share the same FS family and pathname kind classification. A
+// drift here (e.g. mkdirat slipping into Misc) would split related directory/
+// node-creation syscalls across families in the dashboard.
+func TestMkdiratFamilyAndKindMatchSiblings(t *testing.T) {
+	for _, syscall := range []string{"mkdirat", "mkdir", "mknodat"} {
+		if got := ClassifySyscallFamily("sys_enter_" + syscall); got != FamilyFS {
+			t.Errorf("%s family = %q, want %q", syscall, got, FamilyFS)
+		}
+	}
+
+	mkdirat := mustParseOne(t, FormatMkdirat)
+	if r := ClassifyFormat(&mkdirat); r.Kind != KindPathname || r.PathnameField != "pathname" {
+		t.Errorf("mkdirat classified as kind=%d field=%q, want KindPathname/pathname", r.Kind, r.PathnameField)
+	}
+	if n := mkdirat.FieldNumber("pathname"); n != 1 {
+		t.Errorf("mkdirat FieldNumber(pathname) = %d, want 1", n)
+	}
+
+	mkdir := mustParseOne(t, FormatMkdir)
+	if n := mkdir.FieldNumber("pathname"); n != 0 {
+		t.Errorf("mkdir FieldNumber(pathname) = %d, want 0", n)
+	}
+}
+
 func TestGenerateExecHandler(t *testing.T) {
 	output := generateFromPair(t, FormatExecveat, FormatExitExecveat)
 
