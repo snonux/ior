@@ -36,10 +36,11 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 	// between kernel-assigned enter/exit IDs.
 	enterName := enterConstForHandler(f.Name, isEnter)
 
-	// Noreturn syscalls (exit, exit_group) get a special enter hook that skips
-	// the syscall_enter_state_map write. Their exit handler is suppressed (see
-	// codegen.go), so nothing would ever clear a recorded enter-state entry;
-	// recording it would only leak stale per-tid entries in the bounded map.
+	// Noreturn syscalls (exit, exit_group, rt_sigreturn) get a special enter
+	// hook that skips the syscall_enter_state_map write. Their exit handler is
+	// suppressed (see codegen.go), so nothing would ever clear a recorded
+	// enter-state entry; recording it would only leak stale per-tid entries in
+	// the bounded map.
 	noreturn := isEnter && isNoreturnSyscall(syscallName(f.Name))
 
 	return renderHandler(f.Name, ctxStruct, eventStruct, comment, eventTypeConst, extra, isEnter, noreturn, enterName)

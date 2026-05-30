@@ -79,9 +79,11 @@ static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id)
 }
 
 // ior_on_noreturn_syscall_enter is the enter hook for noreturn syscalls
-// (exit, exit_group). Unlike ior_on_syscall_enter it deliberately does NOT
-// write a per-tid entry into syscall_enter_state_map. A noreturn syscall never
-// returns to userspace, so its sys_exit tracepoint never fires and the matching
+// (exit, exit_group, rt_sigreturn). Unlike ior_on_syscall_enter it deliberately
+// does NOT write a per-tid entry into syscall_enter_state_map. A noreturn
+// syscall never returns to the syscall site (exit/exit_group terminate;
+// rt_sigreturn restores the pre-signal context), so its sys_exit tracepoint
+// never fires and the matching
 // exit handler is suppressed by the generator (see internal/generate/codegen.go
 // isNoreturnSyscall). With no exit handler, nothing would ever look up or
 // bpf_map_delete_elem that enter-state entry, so recording it would only leave

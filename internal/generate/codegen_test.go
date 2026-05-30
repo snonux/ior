@@ -1161,12 +1161,44 @@ func TestClassifyRetSyncUnclassified(t *testing.T) {
 
 // TestSyncIsNotNoreturn locks in that bare sync(2) is NOT treated as a noreturn
 // syscall: it is void but returns control to userspace, so its exit handler must
-// be generated (see TestGenerateSyncHandler). Only exit(2)/exit_group(2) are
-// noreturn. This guards against sync accidentally being added to the noreturn
-// suppression list, which would silently drop its exit events.
+// be generated (see TestGenerateSyncHandler). Only exit(2)/exit_group(2)/
+// rt_sigreturn(2) are noreturn. This guards against sync accidentally being added
+// to the noreturn suppression list, which would silently drop its exit events.
 func TestSyncIsNotNoreturn(t *testing.T) {
 	if isNoreturnSyscall("sync") {
 		t.Error("sync must not be noreturn: it is void but DOES return, so its exit handler must be emitted")
+	}
+}
+
+// TestRtSigreturnIsNoreturn locks in that rt_sigreturn(2) is treated as a
+// noreturn syscall. rt_sigreturn restores the pre-signal execution context off
+// the signal-stack frame and resumes the interrupted instruction; it does NOT
+// return to the instruction after the syscall, so the kernel never fires
+// sys_exit_rt_sigreturn (verified empirically against /sys/kernel/tracing:
+// sys_enter_rt_sigreturn fires once per signal-handler return, sys_exit never
+// does). man sigreturn(2): "sigreturn() never returns". Suppressing the dead
+// exit handler also stops the bounded syscall_enter_state_map from leaking a
+// per-tid entry on every signal-handler return.
+func TestRtSigreturnIsNoreturn(t *testing.T) {
+	if !isNoreturnSyscall("rt_sigreturn") {
+		t.Error("rt_sigreturn must be noreturn: it never returns to the syscall site, so sys_exit_rt_sigreturn never fires and its exit handler must be suppressed")
+	}
+}
+
+// TestRtSigSiblingsAreNotNoreturn is the contrast to TestRtSigreturnIsNoreturn:
+// every OTHER rt_sig* syscall returns normally to its caller, so it must NOT be
+// in the noreturn set or its exit events (and durations) would be silently
+// dropped. Only rt_sigreturn is the kernel/libc signal-trampoline return path.
+func TestRtSigSiblingsAreNotNoreturn(t *testing.T) {
+	siblings := []string{
+		"rt_sigaction", "rt_sigprocmask", "rt_sigpending",
+		"rt_sigsuspend", "rt_sigtimedwait", "rt_sigqueueinfo",
+		"rt_tgsigqueueinfo",
+	}
+	for _, s := range siblings {
+		if isNoreturnSyscall(s) {
+			t.Errorf("%s must not be noreturn: it returns normally, so its exit handler must be emitted", s)
+		}
 	}
 }
 
@@ -2059,17 +2091,22 @@ func TestGenerateFallbackNullHandler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
 }
 
-// TestGenerateExitNoreturnHandlers locks in how the noreturn process-exit
-// syscalls are generated. Per exit(2)/exit_group(2): both take a single
-// `int status` argument and never return. ior classifies them as KindNull
-// (FamilyProcess), so:
+// TestGenerateExitNoreturnHandlers locks in how the noreturn syscalls are
+// generated. exit(2)/exit_group(2) take a single `int status` argument and
+// never return (they terminate the thread/process). rt_sigreturn(2) takes no
+// meaningful arguments and never returns to the syscall site: it restores the
+// pre-signal execution context off the signal-stack frame and resumes the
+// interrupted instruction (man sigreturn(2): "sigreturn() never returns";
+// verified empirically against /sys/kernel/tracing where sys_enter_rt_sigreturn
+// fires once per signal-handler return while sys_exit_rt_sigreturn never does).
+// All three are KindNull, so:
 //   - The enter handler emits a struct null_event and intentionally does NOT
-//     capture the int status arg (it is not an I/O resource like an fd/path).
-//   - The kernel still exposes sys_exit_{exit,exit_group} tracepoints, but
-//     those handlers can never fire at runtime because the syscall does not
-//     return. The generator suppresses the dead exit handlers.
+//     capture any arg (status/whatever is not an I/O resource like an fd/path).
+//   - The kernel still exposes the sys_exit_<name> tracepoints, but those
+//     handlers can never fire at runtime because the syscall does not return.
+//     The generator suppresses the dead exit handlers.
 func TestGenerateExitNoreturnHandlers(t *testing.T) {
-	for _, syscall := range []string{"exit", "exit_group"} {
+	for _, syscall := range []string{"exit", "exit_group", "rt_sigreturn"} {
 		t.Run(syscall, func(t *testing.T) {
 			output := GenerateTracepointsC(mustParseAll(t, syntheticPair(syscall)))
 
