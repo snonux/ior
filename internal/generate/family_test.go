@@ -152,6 +152,16 @@ func TestClassifySyscallFamily(t *testing.T) {
 		// (also Misc). set_tid_address is Process, but rseq is grouped with the
 		// robust-list pair rather than the tid-address syscall; keep this in sync
 		// with the Misc list in docs/syscall-tracing-plan.md.
+		//
+		// Boundary rule (see family.go futex block): a syscall is IPC only if it
+		// PERFORMS the actual IPC/sync operation (futex wait/wake/requeue, or an
+		// op on an IPC object). set_robust_list/get_robust_list merely register or
+		// query the per-thread robust-futex list head pointer — "managed in user
+		// space: the kernel knows only about the location of the head"
+		// (get_robust_list(2)) — and never wait/wake or touch the shared futex
+		// word. That is registration/bookkeeping, exactly like rseq, so they stay
+		// Misc and are NOT promoted to IPC alongside futex_* (asserted as IPC just
+		// above). The split axis is operation-vs-registration, not name similarity.
 		{"sys_enter_rseq", FamilyMisc},
 		{"sys_exit_rseq", FamilyMisc},
 		{"sys_enter_set_robust_list", FamilyMisc},

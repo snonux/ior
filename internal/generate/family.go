@@ -49,6 +49,24 @@ var syscallFamilies = map[string]SyscallFamily{
 	// futex_waitv. The futex word is a userspace pointer, so argument capture
 	// is handled by KindFutex (null_event); the family tag only affects
 	// per-family aggregation/reporting.
+	//
+	// Boundary rule for the futex/IPC vs Misc split (keep consistent): a
+	// syscall is IPC only if it PERFORMS the actual IPC/synchronization
+	// operation — wait/wake/requeue on the futex word, or an operation on an
+	// IPC object (semaphore, message queue, shared-memory segment, pipe, etc.).
+	// By contrast, per-thread registration/bookkeeping that merely hands the
+	// kernel a pointer it consults LATER (at thread exit) is NOT IPC and stays
+	// in Misc. get_robust_list/set_robust_list fall in the latter camp: per
+	// get_robust_list(2), the robust futex list is "managed in user space: the
+	// kernel knows only about the location of the head of the list." They
+	// register/query that per-thread head pointer; they never wait, wake, or
+	// touch the shared futex word themselves. That makes them structurally
+	// identical to rseq (per-thread restartable-sequences area registration),
+	// so both deliberately fall through to FamilyMisc (they are absent from this
+	// explicit table by design — see ClassifySyscallFamily's default and the
+	// rseq/robust_list assertions in family_test.go / classify_test.go). Do not
+	// promote them to IPC for "futex consistency": the consistent axis is
+	// operation-vs-registration, not name similarity.
 	"futex": FamilyIPC, "futex_wait": FamilyIPC, "futex_wake": FamilyIPC,
 	"futex_requeue": FamilyIPC, "futex_waitv": FamilyIPC,
 
