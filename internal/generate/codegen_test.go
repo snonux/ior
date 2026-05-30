@@ -1992,6 +1992,16 @@ func TestGeneratePerfEventOpenHandler(t *testing.T) {
 	requireContains(t, output, "ev->target_pid = (__s32)ctx->args[1];")
 	requireContains(t, output, "ev->group_fd = (__s32)ctx->args[3];")
 	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+
+	// Audit lock-in (perf_event_open(2)): args[0] is a
+	// `struct perf_event_attr *` userspace pointer, NOT an fd, and args[1]
+	// is a pid (not an fd). The handler must read args[0] only via
+	// bpf_probe_read_user (the attr struct) and never capture args[0] or
+	// args[1] as an fd. Only group_fd at args[3] is a genuine fd.
+	requireContains(t, output, "bpf_probe_read_user(&attr, sizeof(attr), (void *)ctx->args[0])")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "ev->group_fd = (__s32)ctx->args[0];")
 }
 
 func TestGenerateNameToHandleAtHandler(t *testing.T) {
