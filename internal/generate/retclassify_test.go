@@ -51,6 +51,11 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		// gettimeofday(2) returns int 0/-1 (no byte count); its exit carries a
 		// plain ret_event and must stay UNCLASSIFIED, not a read/write transfer.
 		"gettimeofday",
+		// times(2) returns a clock_t tick count (clock ticks since an arbitrary
+		// point in the past), or (clock_t)-1 on error. That is a tick count, NOT
+		// a transferred byte count, so its exit must stay UNCLASSIFIED (plain
+		// ret_event), like its time sibling gettimeofday.
+		"times",
 		// rseq(2) returns int 0/-1 on (un)registration of the restartable-
 		// sequences area; it transfers no bytes, so its exit must stay
 		// UNCLASSIFIED (plain ret_event), like its KindNull siblings.

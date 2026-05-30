@@ -57,6 +57,14 @@ func TestClassifySyscallFamily(t *testing.T) {
 		// sibling clock_gettime/settimeofday/time syscalls.
 		{"sys_enter_gettimeofday", FamilyTime},
 		{"sys_exit_gettimeofday", FamilyTime},
+		// times(2) stores the calling process's CPU times (struct tms *buf) and
+		// returns a clock_t tick count. It is a time/clock syscall and shares
+		// FamilyTime with gettimeofday/clock_gettime — NOT FamilyProcess (where
+		// getrusage lives). Assert both enter and exit so a stray reclassification
+		// trips this test. Keep in sync with the Time list in
+		// docs/syscall-tracing-plan.md.
+		{"sys_enter_times", FamilyTime},
+		{"sys_exit_times", FamilyTime},
 		{"sys_enter_sched_yield", FamilySched},
 		{"sys_enter_openat", FamilyFS},
 		// access(2) checks the calling process's permissions for a file named by
