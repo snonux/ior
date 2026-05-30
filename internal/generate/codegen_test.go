@@ -1394,6 +1394,41 @@ func TestGeneratePselect6HandlerCapturesTimeoutPointer(t *testing.T) {
 	requireContains(t, output, "ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
 }
 
+// TestGenerateSelectHandlerCapturesNfdsAndTimevalTimeout locks in the select
+// argument layout. select(int nfds, fd_set *readfds, fd_set *writefds,
+// fd_set *exceptfds, struct timeval *timeout): args[0] is nfds — the highest
+// fd number plus one, i.e. a COUNT, NOT a file descriptor — and args[1..3] are
+// userspace fd_set bitmask pointers (also NOT single fds). The timeout is a
+// timeval pointer at args[4]. The handler must therefore capture nfds from
+// args[0] and the timeout from the args[4] timeval (sec*1e9 + usec*1e3), and
+// must NEVER read any argument as an fd: capturing args[0] as an fd would
+// record a garbage fd (it is a count), and capturing the bitmask pointers
+// would record garbage pointers. The exit is an UNCLASSIFIED ret_event because
+// the return value is a ready-fd count (>=0) or -1, never a byte transfer.
+func TestGenerateSelectHandlerCapturesNfdsAndTimevalTimeout(t *testing.T) {
+	output := generateFromPair(t, FormatSelect, FormatExitSelect)
+
+	// Enter: poll_event with nfds from args[0] and timeval timeout from args[4].
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SELECT;")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[0];")
+	requireContains(t, output, "if (ctx->args[4] != 0) {")
+	requireContains(t, output, "ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;")
+
+	// Negative: nfds is a count and the fd_set args are bitmask pointers, so no
+	// argument may ever be captured as an fd, and the exit carries no bytes/fd
+	// fields (the ready count is not a byte transfer).
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "ev->bytes")
+
+	// Exit: plain ret_event recording the ready-count (>=0) or -1, UNCLASSIFIED.
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 // TestGeneratePpollHandlerCapturesNfdsAndTimeoutPointer locks in the ppoll
 // argument layout. ppoll(struct pollfd *fds, nfds_t nfds,
 // const struct timespec *tmo_p, const sigset_t *sigmask): args[0] is a
