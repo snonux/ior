@@ -66,6 +66,7 @@ func TestEventloop(t *testing.T) {
 		// NullEvent tests
 		"SyncEventTest":            makeSyncEventTestData(t),
 		"GetcwdEventTest":          makeGetcwdEventTestData(t),
+		"GetcwdFailureEventTest":   makeGetcwdFailureEventTestData(t),
 		"IoUringSetupEventTest":    makeIoUringSetupEventTestData(t),
 		"IoUringSetupFailureTest":  makeIoUringSetupFailureTestData(t),
 		"IoUringEnterEventTest":    makeIoUringEnterEventTestData(t),
@@ -1589,11 +1590,41 @@ func makeGetcwdEventTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
+		// getcwd args[0] (buf) is an OUTPUT buffer that is only valid at exit,
+		// so the path is never read at enter. Instead it is resolved at exit
+		// from /proc/<tid>/cwd, which must equal the process cwd here.
 		if ep.File == nil {
 			t.Fatalf("Expected getcwd to attach a pathname")
 		}
 		if got := ep.File.Name(); got != cwd {
 			t.Errorf("Expected cwd '%v' but got '%v'", cwd, got)
+		}
+	})
+
+	return td
+}
+
+// makeGetcwdFailureEventTestData locks in that a failed getcwd (negative
+// errno return) does NOT resolve or attach a cwd path. The exit handler only
+// reads /proc/<tid>/cwd when ret > 0 (success returns the path length); on
+// error there is nothing to attach.
+func makeGetcwdFailureEventTestData(t *testing.T) (td testData) {
+	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_GETCWD)
+	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+
+	// ERANGE: buffer too small. Raw syscall reports it as a negative errno.
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_GETCWD, -int64(syscall.ERANGE))
+	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, _ *eventLoop, ep *event.Pair) {
+		if !enterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", enterEv, ep.EnterEv)
+		}
+		if !exitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
+		}
+		if ep.File != nil {
+			t.Errorf("Expected no cwd attached on getcwd failure, got '%v'", ep.File.Name())
 		}
 	})
 

@@ -214,10 +214,37 @@ func TestClassifyNullSyslog(t *testing.T) {
 	}
 }
 
+// TestClassifyNullGetcwd pins getcwd as KindNull at enter.
+//
+// getcwd's args[0] is `char *buf`, an OUTPUT buffer: the kernel writes the
+// absolute cwd path into it and the contents only become valid AFTER the
+// syscall returns (sys_exit). Reading buf at enter would capture an empty or
+// garbage string, so getcwd must NOT be classified as a path-input syscall.
+// KindNull is the correct enter kind; the cwd is resolved at exit from
+// /proc/<tid>/cwd (see eventLoop.handleNullExit). This test locks that in:
+//   - the enter kind is KindNull (not KindPathname/KindName), and
+//   - no pathname field is captured from the buffer at enter.
 func TestClassifyNullGetcwd(t *testing.T) {
 	r := classifyFromData(t, FormatGetcwd)
 	if r.Kind != KindNull {
 		t.Errorf("getcwd: got kind %d, want KindNull", r.Kind)
+	}
+	if r.Kind == KindPathname || r.Kind == KindName {
+		t.Errorf("getcwd: enter must not capture output buf as a path, got kind %d", r.Kind)
+	}
+	if r.PathnameField != "" {
+		t.Errorf("getcwd: no enter-time pathname field expected, got %q", r.PathnameField)
+	}
+}
+
+// TestClassifyByFieldGetcwdBufNotPath is a defense-in-depth lock-in: even if
+// the name-only KindNull override for getcwd were removed, the generic
+// field-based classifier must not treat `char *buf` as a pathname. Only the
+// field names pathname/path/filename/newname are path-like; "buf" is not, so
+// classifyByField must report no match for getcwd's output buffer.
+func TestClassifyByFieldGetcwdBufNotPath(t *testing.T) {
+	if r, ok := classifyByField("char *", "buf"); ok {
+		t.Errorf("getcwd buf: char *buf must not classify as a field kind, got %d", r.Kind)
 	}
 }
 
