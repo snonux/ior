@@ -870,7 +870,7 @@ var syscallFamilies = map[string]string{
 	"ioprio_set":              "Process",
 	"kcmp":                    "Process",
 	"kexec_file_load":         "Security",
-	"kexec_load":              "Misc",
+	"kexec_load":              "Security",
 	"keyctl":                  "Security",
 	"kill":                    "Signals",
 	"landlock_add_rule":       "Security",

@@ -109,6 +109,14 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		"listen",
 		"getsockname",
 		"getpeername",
+		// kexec_load(2) loads a new kernel for later execution by reboot(2) and
+		// returns long 0 on success or -1 on error — a status code, NOT a
+		// transferred byte count. Its exit must stay UNCLASSIFIED (plain
+		// ret_event), exactly like its sibling kexec_file_load and the
+		// system/admin syscall reboot below.
+		"kexec_load",
+		"kexec_file_load",
+		"reboot",
 	}
 	for _, name := range unclassified {
 		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
