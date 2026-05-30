@@ -92,6 +92,13 @@ func TestClassifyRetUnclassified(t *testing.T) {
 		"setpgid",
 		"getpid",
 		"getppid",
+		// set_tid_address(2) sets the calling thread's clear_child_tid pointer
+		// and ALWAYS returns the caller's thread ID — it never fails and never
+		// returns -1 (set_tid_address(2): "always succeeds"). That return is a
+		// thread identifier (a pid_t/tid), NOT a transferred byte count, so its
+		// exit must stay UNCLASSIFIED (plain ret_event), exactly like its
+		// pid/tid-returning Process siblings setsid/getsid/getpid/getppid above.
+		"set_tid_address",
 	}
 	for _, name := range unclassified {
 		if got := ClassifyRet("sys_exit_" + name); got != Unclassified {
