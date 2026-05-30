@@ -411,6 +411,27 @@ format:
 print fmt: "pathname: 0x%08lx", ((unsigned long)(REC->pathname))
 `
 
+// FormatRmdir mirrors the real sys_enter_rmdir tracepoint format. rmdir(2) is
+// "int rmdir(const char *pathname)": it deletes an empty directory and takes a
+// single argument, a genuine const char * filesystem path at args[0]. It is the
+// directory-removal sibling of unlink(2) (same single-pathname shape) and the
+// inverse of mkdir(2), so it classifies as KindPathname with PathnameField
+// "pathname" and the path is captured from args[0]. Its exit returns int 0/-1
+// (no byte count), so the exit stays UNCLASSIFIED.
+const FormatRmdir = `name: sys_enter_rmdir
+ID: 882
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:const char * pathname;	offset:16;	size:8;	signed:0;
+
+print fmt: "pathname: 0x%08lx", ((unsigned long)(REC->pathname))
+`
+
 // FormatUtime mirrors the real sys_enter_utime tracepoint format: its first
 // argument "filename" is a genuine const char * filesystem path (args[0]),
 // so utime classifies as KindPathname with PathnameField "filename" — the
