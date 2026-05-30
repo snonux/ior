@@ -42,6 +42,47 @@ func TestHandlePipeExitTracksReturnedFds(t *testing.T) {
 	verifyFileDescriptor(t, el, 53, "pipe:524288:52:53")
 }
 
+// TestHandlePipeExitFailureTracksNoFds locks in the pipe(2) failure path:
+// when the syscall returns -1 the kernel writes nothing into the output buffer,
+// so the BPF exit handler leaves fd0/fd1 at -1 and the runtime must not register
+// any descriptor. Tracking a bogus fd here would attribute later reads/writes to
+// a pipe that was never created.
+func TestHandlePipeExitFailureTracksNoFds(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+
+	enter := &types.PipeEvent{
+		EventType: types.ENTER_PIPE_EVENT,
+		TraceId:   types.SYS_ENTER_PIPE,
+		Time:      100,
+		Pid:       72,
+		Tid:       73,
+		Flags:     0,
+		Fd0:       -1,
+		Fd1:       -1,
+		Ret:       0,
+	}
+	exit := &types.PipeEvent{
+		EventType: types.EXIT_PIPE_EVENT,
+		TraceId:   types.SYS_EXIT_PIPE,
+		Time:      200,
+		Pid:       72,
+		Tid:       73,
+		Flags:     0,
+		Fd0:       -1,
+		Fd1:       -1,
+		Ret:       -1,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handlePipeExit(ep, enter); !ok {
+		t.Fatal("handlePipeExit returned false")
+	}
+	verifyFdNotTracked(t, el, -1)
+	if ep.File != nil {
+		t.Errorf("expected no file attached to failed pipe pair, got %q", ep.File.Name())
+	}
+}
+
 func TestHandleEventfdExitTracksReturnedFd(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 
