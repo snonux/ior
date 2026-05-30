@@ -38,8 +38,14 @@ func TestSleepRequestedTimespecInParquet(t *testing.T) {
 		t.Fatalf("expected parquet rows for workload PID %d", pid)
 	}
 
+	// The workload issues, per loop iteration: a relative nanosleep (2ms), a
+	// relative clock_nanosleep (3ms), and an ABSOLUTE clock_nanosleep
+	// (TIMER_ABSTIME) whose request is an absolute CLOCK_MONOTONIC timestamp.
+	// The absolute one must be reported as the -1 sentinel, never as a bogus
+	// multi-decade "sleep duration" (task a20).
 	var sawNanosleep bool
-	var sawClockNanosleep bool
+	var sawClockNanosleepRel bool
+	var sawClockNanosleepAbs bool
 	for _, row := range rows {
 		switch row.Syscall {
 		case "nanosleep":
@@ -50,8 +56,18 @@ func TestSleepRequestedTimespecInParquet(t *testing.T) {
 				t.Fatalf("nanosleep bytes = %d, want 0", row.Bytes)
 			}
 		case "clock_nanosleep":
-			if row.RequestedSleepNS == 3_000_000 {
-				sawClockNanosleep = true
+			switch row.RequestedSleepNS {
+			case 3_000_000:
+				sawClockNanosleepRel = true
+			case -1:
+				// Absolute (TIMER_ABSTIME) sleep: sentinel, not a duration.
+				sawClockNanosleepAbs = true
+			default:
+				// Any large positive value here means the absolute wakeup
+				// timestamp leaked through as a duration — the bug in a20.
+				if row.RequestedSleepNS > 1_000_000_000 {
+					t.Fatalf("clock_nanosleep RequestedSleepNS = %d looks like an absolute timestamp; TIMER_ABSTIME must record -1", row.RequestedSleepNS)
+				}
 			}
 			if row.Bytes != 0 {
 				t.Fatalf("clock_nanosleep bytes = %d, want 0", row.Bytes)
@@ -62,7 +78,10 @@ func TestSleepRequestedTimespecInParquet(t *testing.T) {
 	if !sawNanosleep {
 		t.Fatal("expected nanosleep row with RequestedSleepNS=2000000")
 	}
-	if !sawClockNanosleep {
-		t.Fatal("expected clock_nanosleep row with RequestedSleepNS=3000000")
+	if !sawClockNanosleepRel {
+		t.Fatal("expected relative clock_nanosleep row with RequestedSleepNS=3000000")
+	}
+	if !sawClockNanosleepAbs {
+		t.Fatal("expected absolute (TIMER_ABSTIME) clock_nanosleep row with RequestedSleepNS=-1")
 	}
 }

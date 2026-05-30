@@ -494,23 +494,68 @@ func memExpr(expr string) string {
 	return expr
 }
 
-// sleepTimespecPtr maps sleep-family syscall names to the C expression pointing
-// at the user-space timespec struct. Syscalls not listed default to "0" (no
-// pointer), which makes the generated code skip the probe_read_user call.
-// To add a new sleep-like syscall, register its timespec pointer expression here.
-var sleepTimespecPtr = map[string]string{
-	"sys_enter_nanosleep":       "ctx->args[0]",
-	"sys_enter_clock_nanosleep": "ctx->args[2]",
+// sleepSpec describes how a sleep-family syscall exposes its requested sleep
+// duration.
+//
+//   - ptr      is the C expression pointing at the user-space timespec struct.
+//   - flagsArg is the C expression for the flags argument that may carry
+//     TIMER_ABSTIME; it is empty for syscalls whose request is always relative.
+type sleepSpec struct {
+	ptr      string
+	flagsArg string
 }
 
+// sleepTimespecPtr maps sleep-family syscall names to their timespec pointer and
+// (where applicable) flags-argument expressions. Syscalls not listed default to
+// ptr "0" (no pointer), which makes the generated code skip the probe_read_user
+// call. To add a new sleep-like syscall, register it here.
+//
+// nanosleep(const struct timespec *req, struct timespec *rem) is ALWAYS a
+// relative sleep, so it has no flagsArg. clock_nanosleep(clockid_t clockid,
+// int flags, const struct timespec *request, struct timespec *remain) takes a
+// flags argument: when flags & TIMER_ABSTIME is set, *request is an ABSOLUTE
+// wakeup time against clockid, not a relative duration — see generateExtraSleep.
+var sleepTimespecPtr = map[string]sleepSpec{
+	"sys_enter_nanosleep":       {ptr: "ctx->args[0]"},
+	"sys_enter_clock_nanosleep": {ptr: "ctx->args[2]", flagsArg: "ctx->args[1]"},
+}
+
+// timerAbstimeFlag is the Linux TIMER_ABSTIME flag value (uapi/linux/time.h).
+// When set in clock_nanosleep's flags argument, the request timespec is an
+// absolute wakeup time rather than a relative duration.
+const timerAbstimeFlag = "1 /* TIMER_ABSTIME */"
+
 // generateExtraSleep emits the requested_ns capture body for sleep-family
-// syscalls. The timespec pointer expression comes from sleepTimespecPtr.
+// syscalls. The timespec pointer (and optional flags) expression come from
+// sleepTimespecPtr.
+//
+// requested_ns defaults to the -1 sentinel (the same value used for a
+// null/unreadable timespec pointer). For relative sleeps we overwrite it with
+// tv_sec*1e9 + tv_nsec. For an absolute sleep (clock_nanosleep with
+// TIMER_ABSTIME set) the request timespec is an absolute clock value, NOT a
+// duration; computing tv_sec*1e9 + tv_nsec there would export a bogus
+// multi-decade "sleep duration". Deriving the true relative duration would
+// require reading the current time of the (variable) clockid in BPF, which is
+// racy and clock-dependent. Instead we leave the -1 sentinel so downstream
+// consumers (CSV/parquet/stream) report "unknown" rather than a misleading
+// value.
 func generateExtraSleep(name string) string {
-	ptrExpr := sleepTimespecPtr[name] // empty string if not found
+	spec := sleepTimespecPtr[name] // zero value (ptr "") if not found
+	ptrExpr := spec.ptr
 	if ptrExpr == "" {
 		ptrExpr = "0"
 	}
-	return "    ev->requested_ns = -1;\n    if (" + ptrExpr + " != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)" + ptrExpr + ") == 0) {\n            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n"
+
+	compute := "            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"
+	if spec.flagsArg != "" {
+		// Absolute sleeps keep the -1 sentinel; only relative sleeps get a
+		// computed duration.
+		compute = "            if ((" + spec.flagsArg + " & " + timerAbstimeFlag + ") == 0) {\n" +
+			"                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n" +
+			"            }\n"
+	}
+
+	return "    ev->requested_ns = -1;\n    if (" + ptrExpr + " != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)" + ptrExpr + ") == 0) {\n" + compute + "        }\n    }\n"
 }
 
 // keyctlFieldSpec describes the three fields captured for keyctl-family syscalls.

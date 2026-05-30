@@ -1371,6 +1371,10 @@ func TestGenerateSleepHandlerCapturesRequestedTimespec(t *testing.T) {
 	requireContains(t, output, "ev->requested_ns = -1;")
 	requireContains(t, output, "if (ctx->args[0] != 0) {")
 	requireContains(t, output, "ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+	// nanosleep is ALWAYS a relative sleep (no flags argument), so its handler
+	// must compute the duration unconditionally — no TIMER_ABSTIME flags check.
+	requireNotContains(t, output, "TIMER_ABSTIME")
+	requireNotContains(t, output, "& 1 /* TIMER_ABSTIME */")
 }
 
 func TestGenerateClockNanosleepHandlerCapturesRequestedTimespec(t *testing.T) {
@@ -1384,6 +1388,27 @@ func TestGenerateClockNanosleepHandlerCapturesRequestedTimespec(t *testing.T) {
 	requireContains(t, output, "ev->requested_ns = -1;")
 	requireContains(t, output, "if (ctx->args[2] != 0) {")
 	requireContains(t, output, "ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+}
+
+// TestGenerateClockNanosleepHandlerSkipsAbsoluteSleeps locks in the
+// TIMER_ABSTIME fix: when flags (args[1]) has TIMER_ABSTIME set, the request
+// timespec is an ABSOLUTE wakeup time, not a relative duration, so the handler
+// must keep the -1 sentinel instead of exporting a bogus multi-decade
+// "sleep duration". The relative-duration computation is therefore guarded by a
+// flags check, and only runs when the flag is clear.
+func TestGenerateClockNanosleepHandlerSkipsAbsoluteSleeps(t *testing.T) {
+	output := generateFromPair(t, FormatClockNanosleep, FormatExitClockNanosleep)
+
+	// The flags check on args[1] against TIMER_ABSTIME (value 1) must be present,
+	// guarding the relative-duration assignment.
+	requireContains(t, output, "if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {")
+	// The duration is computed inside the guard (relative branch only); the abs
+	// branch leaves the -1 sentinel set above.
+	requireContains(t, output,
+		"        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {\n"+
+			"            if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {\n"+
+			"                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"            }\n        }")
 }
 
 // TestClockNanosleepExitHandlerIsUnclassifiedRet locks in that the exit side of
