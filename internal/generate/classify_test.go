@@ -1864,6 +1864,66 @@ func TestClassifyExitIoplUnclassifiedRet(t *testing.T) {
 	}
 }
 
+// TestClassifyArchPrctlNullEnter locks in the arch_prctl(2) enter classification
+// using the syscall's REAL kernel tracepoint fields. arch_prctl(int op, unsigned
+// long addr) sets/gets x86-64-specific thread state (ARCH_SET_FS, ARCH_GET_FS,
+// ARCH_SET_GS, ARCH_GET_GS, ARCH_SET_CPUID, ARCH_GET_CPUID). The kernel exposes
+// these args as "option" (an int operation code) and "arg2" (an unsigned long
+// that is either a value for the SET ops or a userspace pointer for the GET ops).
+// Neither is a file descriptor and neither is a filesystem path. arch_prctl is in
+// nameOnlyKindsTable, so its enter classifies as KindNull by name before any field
+// heuristic runs — but the audit concern is that "option"/"arg2" must never be
+// captured as an fd or a path. Using the real fields here (rather than the
+// synthetic arg0 used by TestClassifyE7NullNameOnlyKinds) proves the heuristics
+// would not capture them even if the name-only mapping were removed: the fd
+// heuristic requires a field named "fd" (neither "option" nor "arg2" qualifies),
+// and no C-string-pointer path field exists. arch_prctl is deliberately
+// FamilyProcess (asserted in family_test.go), not Misc, unlike its x86 siblings
+// ioperm/iopl/modify_ldt.
+func TestClassifyArchPrctlNullEnter(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_arch_prctl",
+		ExternalFields: []Field{
+			{Type: "int", Name: "__syscall_nr"},
+			{Type: "int", Name: "option"},
+			{Type: "unsigned long", Name: "arg2"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("enter_arch_prctl: got kind %d, want KindNull", r.Kind)
+	}
+	// Neither the "option" code nor the "arg2" value/pointer must be captured as a
+	// file descriptor or a path.
+	if r.PathnameField != "" {
+		t.Errorf("enter_arch_prctl: unexpected PathnameField %q, want empty", r.PathnameField)
+	}
+}
+
+// TestClassifyExitArchPrctlUnclassifiedRet locks in that the arch_prctl exit
+// tracepoint is classified as KindRet and Unclassified. arch_prctl(2) returns int
+// (0 on success, -1 on error) — a status code, NOT a transferred byte count — so
+// its exit format carries a single "ret" field and must map to a plain ret_event
+// (KindRet) whose ret_type stays UNCLASSIFIED (matching the generated
+// handle_sys_exit_arch_prctl). Misclassifying that status as a READ/WRITE/TRANSFER
+// byte count would be a real bug. (The ARCH_GET_CPUID op returns the flag setting
+// in the return value, but it is still a small status code, not an I/O byte
+// count.)
+func TestClassifyExitArchPrctlUnclassifiedRet(t *testing.T) {
+	r := ClassifyFormat(&Format{
+		Name: "sys_exit_arch_prctl",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if r.Kind != KindRet {
+		t.Fatalf("exit_arch_prctl: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_arch_prctl"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_arch_prctl) = %q, want UNCLASSIFIED", got)
+	}
+}
+
 // TestClassifyIoprioNullKind locks in the argument-capture classification for
 // ioprio_set/ioprio_get using their real kernel tracepoint fields. Unlike the
 // name-only Misc/null syscalls above, ioprio_* are NOT in nameOnlyKindsTable:
