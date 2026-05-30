@@ -2297,6 +2297,49 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+// FormatListen / FormatExitListen mirror the real kernel tracepoint format for
+// listen(2):
+//
+//	int listen(int sockfd, int backlog).
+//
+// listen marks the socket referred to by sockfd as a passive socket that will
+// accept incoming connection requests via accept(2). The leading "fd" field
+// (sockfd at args[0]) makes the enter a KindFd fd_event capturing
+// ev->fd = args[0] — matching its socket siblings bind/connect/accept/
+// getsockname/getpeername. The backlog argument (args[1]) is a plain int queue
+// length, NOT a second fd, and must NOT be captured. On exit listen returns
+// 0/-1, which is UNCLASSIFIED (a plain ret_event, no read/write/transfer byte
+// count). Field names/offsets are copied verbatim from
+// /sys/kernel/tracing/events/syscalls/sys_enter_listen.
+const FormatListen = `name: sys_enter_listen
+ID: 1841
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:int fd;	offset:16;	size:8;	signed:0;
+	field:int backlog;	offset:24;	size:8;	signed:0;
+
+print fmt: "fd: 0x%08lx, backlog: 0x%08lx", ((unsigned long)(REC->fd)), ((unsigned long)(REC->backlog))
+`
+
+const FormatExitListen = `name: sys_exit_listen
+ID: 1840
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 // FormatKexecFileLoad / FormatExitKexecFileLoad mirror the real kernel
 // tracepoint format for kexec_file_load(2):
 //
