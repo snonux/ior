@@ -2378,6 +2378,73 @@ func TestClassifySchedGetparamPidNotFd(t *testing.T) {
 	}
 }
 
+// TestClassifySchedSetparamPidNotFd is a lock-in regression test for the
+// sched_setparam(2) audit. The syscall signature is:
+//
+//	int sched_setparam(pid_t pid, const struct sched_param *param)
+//
+// args[0] is a PID (the thread/process whose scheduling parameters are set; 0
+// means the calling thread), NOT a file descriptor, and param is a userspace
+// input pointer to a struct sched_param. No fd or filesystem path is involved,
+// so the enter tracepoint must classify as KindNull (plain null_event; the pid
+// must never be picked up as an fd). On success sched_setparam returns 0 (-1 on
+// error) and transfers no byte count, so its exit stays KindRet / UNCLASSIFIED
+// — exactly like its getter sibling sched_getparam and sched_setscheduler.
+func TestClassifySchedSetparamPidNotFd(t *testing.T) {
+	// Field layout mirrors the actual kernel tracepoint format for
+	// sys_enter_sched_setparam: pid_t pid, const struct sched_param *param.
+	r := ClassifyFormat(&Format{
+		Name: "sys_enter_sched_setparam",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "pid_t", Name: "pid"},
+			{Type: "const struct sched_param *", Name: "param"},
+		},
+	})
+	if r.Kind != KindNull {
+		t.Fatalf("sched_setparam: got kind %d, want KindNull (pid arg must not be treated as fd)", r.Kind)
+	}
+	if r.Kind == KindFd {
+		t.Fatalf("sched_setparam: pid arg misclassified as fd")
+	}
+
+	// Family must match the Sched siblings (sched_getparam, sched_setscheduler, ...).
+	if fam := ClassifySyscallFamily("sys_enter_sched_setparam"); fam != FamilySched {
+		t.Fatalf("sched_setparam: got family %s, want FamilySched", fam)
+	}
+
+	// Exit returns int 0/-1 (a status code, not a transferred byte count), so
+	// the return must classify as KindRet / UNCLASSIFIED.
+	exit := ClassifyFormat(&Format{
+		Name: "sys_exit_sched_setparam",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "long", Name: "ret"},
+		},
+	})
+	if exit.Kind != KindRet {
+		t.Fatalf("exit_sched_setparam: got kind %d, want KindRet", exit.Kind)
+	}
+	if got := ClassifyRet("sys_exit_sched_setparam"); got != Unclassified {
+		t.Errorf("ClassifyRet(sys_exit_sched_setparam) = %q, want UNCLASSIFIED", got)
+	}
+
+	// Sibling consistency: the matching getter shares family Sched and KindNull.
+	if g := ClassifyFormat(&Format{
+		Name: "sys_enter_sched_getparam",
+		ExternalFields: []Field{
+			{Type: "long", Name: "__syscall_nr"},
+			{Type: "pid_t", Name: "pid"},
+			{Type: "struct sched_param *", Name: "param"},
+		},
+	}); g.Kind != KindNull {
+		t.Errorf("sched_getparam: got kind %d, want KindNull", g.Kind)
+	}
+	if fam := ClassifySyscallFamily("sys_enter_sched_getparam"); fam != FamilySched {
+		t.Errorf("sched_getparam: got family %s, want FamilySched", fam)
+	}
+}
+
 // TestClassifyGetRobustListPidNotFd is a lock-in regression test for the
 // get_robust_list(2) / set_robust_list(2) audit. The signatures are:
 //
