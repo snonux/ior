@@ -36,7 +36,13 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 	// between kernel-assigned enter/exit IDs.
 	enterName := enterConstForHandler(f.Name, isEnter)
 
-	return renderHandler(f.Name, ctxStruct, eventStruct, comment, eventTypeConst, extra, isEnter, enterName)
+	// Noreturn syscalls (exit, exit_group) get a special enter hook that skips
+	// the syscall_enter_state_map write. Their exit handler is suppressed (see
+	// codegen.go), so nothing would ever clear a recorded enter-state entry;
+	// recording it would only leak stale per-tid entries in the bounded map.
+	noreturn := isEnter && isNoreturnSyscall(syscallName(f.Name))
+
+	return renderHandler(f.Name, ctxStruct, eventStruct, comment, eventTypeConst, extra, isEnter, noreturn, enterName)
 }
 
 // enterConstForHandler returns the C #define constant name for the
@@ -51,7 +57,7 @@ func enterConstForHandler(name string, isEnter bool) string {
 	return strings.Replace(upper, "SYS_EXIT_", "SYS_ENTER_", 1)
 }
 
-func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra string, isEnter bool, enterName string) string {
+func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra string, isEnter, noreturn bool, enterName string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "/// %s is a struct %s\n", name, comment)
 	fmt.Fprintf(&b, "SEC(\"tracepoint/syscalls/%s\")\n", name)
@@ -60,7 +66,15 @@ func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra 
 	b.WriteString("    if (filter(&pid, &tid))\n")
 	b.WriteString("        return 0;\n")
 	b.WriteString("\n")
-	if isEnter {
+	if isEnter && noreturn {
+		// Noreturn enter: only the sampling decision, no enter-state write. The
+		// syscall never returns, so its exit handler is suppressed and nothing
+		// would ever look up or delete a recorded enter-state entry. Skipping
+		// the write avoids leaking stale per-tid entries in the bounded
+		// syscall_enter_state_map; the enter null_event is still emitted below.
+		fmt.Fprintf(&b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(name))
+		b.WriteString("        return 0;\n")
+	} else if isEnter {
 		fmt.Fprintf(&b, "    if (!ior_on_syscall_enter(tid, %s))\n", strings.ToUpper(name))
 		b.WriteString("        return 0;\n")
 	} else {

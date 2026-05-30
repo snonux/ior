@@ -1409,7 +1409,48 @@ func TestGenerateExitNoreturnHandlers(t *testing.T) {
 			if strings.Contains(enterBody, "ctx->args[") {
 				t.Errorf("%s: enter handler unexpectedly captures an arg; the int status must be ignored", syscall)
 			}
+
+			// Regression guard (task z10): the noreturn enter handler must emit
+			// the enter null_event WITHOUT recording enter-state. Because the
+			// exit handler is suppressed, nothing would ever look up or delete a
+			// syscall_enter_state_map entry, so recording one would leak a stale
+			// per-tid entry in the bounded map. The handler must therefore call
+			// the dedicated ior_on_noreturn_syscall_enter hook (which only makes
+			// the sampling decision) and must NOT call the state-recording
+			// ior_on_syscall_enter that normal returning syscalls use.
+			requireContains(t, output, "ior_on_noreturn_syscall_enter("+strings.ToUpper("sys_enter_"+syscall)+")")
+			if strings.Contains(enterBody, "ior_on_syscall_enter(") {
+				t.Errorf("%s: noreturn enter handler must not record enter-state "+
+					"(found ior_on_syscall_enter, which writes syscall_enter_state_map)", syscall)
+			}
 		})
+	}
+}
+
+// TestGenerateReturningSyscallEnterRecordsState is the positive contrast to
+// TestGenerateExitNoreturnHandlers: a normal returning syscall's enter handler
+// DOES record enter-state via ior_on_syscall_enter (so its later exit handler
+// can pair durations and delete the entry), and must NOT use the noreturn hook.
+func TestGenerateReturningSyscallEnterRecordsState(t *testing.T) {
+	syscall := "sched_get_priority_min" // a returning KindNull syscall
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair(syscall)))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_` + syscall + `")`
+	enterStart := strings.Index(output, enterSec)
+	if enterStart < 0 {
+		t.Fatalf("%s: enter handler not found", syscall)
+	}
+	enterEnd := strings.Index(output[enterStart+len(enterSec):], `SEC("tracepoint/`)
+	enterBody := output[enterStart:]
+	if enterEnd >= 0 {
+		enterBody = output[enterStart : enterStart+len(enterSec)+enterEnd]
+	}
+
+	if !strings.Contains(enterBody, "ior_on_syscall_enter(tid, "+strings.ToUpper("sys_enter_"+syscall)+")") {
+		t.Errorf("%s: returning syscall enter handler must record enter-state via ior_on_syscall_enter", syscall)
+	}
+	if strings.Contains(enterBody, "ior_on_noreturn_syscall_enter(") {
+		t.Errorf("%s: returning syscall enter handler must not use the noreturn hook", syscall)
 	}
 }
 
