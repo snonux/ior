@@ -88,6 +88,14 @@ var syscallFamilies = map[string]SyscallFamily{
 	"setgroups": FamilyProcess, "setns": FamilyProcess, "setpgid": FamilyProcess,
 	"setpriority": FamilyProcess, "setregid": FamilyProcess, "setresgid": FamilyProcess,
 	"setresuid": FamilyProcess, "setreuid": FamilyProcess, "setrlimit": FamilyProcess,
+	// seteuid/setegid set the effective user/group ID (seteuid(2)) and belong
+	// with the rest of the credential-setting cluster (setuid/setgid/setresuid/
+	// setreuid/setfsuid) under Process. They are latent here: current kernels
+	// expose no dedicated seteuid/setegid tracepoints (glibc implements them as
+	// wrappers over setreuid/setresuid), so they never reach the generated
+	// tracepoint map or docs. Classified for consistency so that if such
+	// tracepoints ever appear they land in Process rather than falling to Misc.
+	"seteuid": FamilyProcess, "setegid": FamilyProcess,
 	"setsid": FamilyProcess, "setuid": FamilyProcess, "umask": FamilyProcess,
 	"unshare": FamilyProcess, "vfork": FamilyProcess, "vhangup": FamilyProcess,
 	"wait4": FamilyProcess, "waitid": FamilyProcess,

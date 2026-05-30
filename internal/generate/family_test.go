@@ -210,13 +210,19 @@ func TestClassifySyscallFamily(t *testing.T) {
 		// setgid/setresgid/setregid/setfsgid/setgroups, and the matching credential
 		// readers getuid/geteuid/getgid/getegid/getresuid/getresgid/getgroups.
 		// Assert the cluster (enter and exit for setuid) so a stray
-		// reclassification of any one credential syscall trips this test. Note:
-		// seteuid/setegid have no dedicated kernel tracepoints (they are libc
-		// wrappers over setreuid/setresuid), so they never reach this classifier
-		// and are intentionally not asserted here. Keep in sync with the Process
-		// list in docs/syscall-tracing-plan.md.
+		// reclassification of any one credential syscall trips this test.
+		// seteuid/setegid (set effective uid/gid) belong with the cluster too,
+		// but have no dedicated kernel tracepoints (they are libc wrappers over
+		// setreuid/setresuid), so they never reach the generated tracepoint map
+		// or docs/syscall-tracing-plan.md. They are still classified as Process
+		// in family.go for consistency, so assert them here by name directly
+		// (no tracepoint required) to lock in that latent classification.
 		{"sys_enter_setuid", FamilyProcess},
 		{"sys_exit_setuid", FamilyProcess},
+		{"sys_enter_seteuid", FamilyProcess},
+		{"sys_exit_seteuid", FamilyProcess},
+		{"sys_enter_setegid", FamilyProcess},
+		{"sys_exit_setegid", FamilyProcess},
 		{"sys_enter_setresuid", FamilyProcess},
 		{"sys_enter_setreuid", FamilyProcess},
 		{"sys_enter_setfsuid", FamilyProcess},
