@@ -92,6 +92,13 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_times", FamilyTime},
 		{"sys_enter_sched_yield", FamilySched},
 		{"sys_enter_openat", FamilyFS},
+		// lseek(2) repositions the file offset of an open fd; it is a per-file
+		// positioning syscall and shares FamilyFS with its fd-based I/O siblings
+		// read/write/fsync (also FamilyFS). Assert both enter and exit so a stray
+		// reclassification trips this test. Keep in sync with the FS list in
+		// docs/syscall-tracing-plan.md.
+		{"sys_enter_lseek", FamilyFS},
+		{"sys_exit_lseek", FamilyFS},
 		// access(2) checks the calling process's permissions for a file named by
 		// a real filesystem path (pathname at args[0]; no dirfd). Its siblings
 		// faccessat(2)/faccessat2(2) perform the same check relative to a dirfd

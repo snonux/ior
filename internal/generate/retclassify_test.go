@@ -42,8 +42,18 @@ func TestClassifyRetTransfer(t *testing.T) {
 func TestClassifyRetUnclassified(t *testing.T) {
 	unclassified := []string{
 		"openat", "close", "rename", "unlink", "fcntl", "dup", "dup2", "dup3",
-		"mkdir", "rmdir", "chmod", "chown", "chdir", "stat", "lseek",
+		"mkdir", "rmdir", "chmod", "chown", "chdir", "stat",
 		"truncate", "fallocate", "mmap", "fsync", "flock", "recvmmsg", "sendmmsg",
+		// lseek(2) repositions the file offset of args[0]'s fd and returns the
+		// RESULTING file OFFSET (off_t, bytes from the start of the file) on
+		// success, or -1 on error. That return is a file POSITION, NOT a count of
+		// bytes transferred — so its exit must stay UNCLASSIFIED (plain
+		// ret_event). Classifying it as READ/WRITE/TRANSFER would wrongly add the
+		// absolute file position into I/O byte totals and grossly inflate them
+		// (e.g. an lseek to offset 1 GiB would look like a 1 GiB transfer). lseek
+		// is a KindFd FamilyFS syscall like its read/write/fsync siblings; only
+		// read/write actually move bytes and carry a byte-count return.
+		"lseek",
 		// syncfs(2) returns int 0/-1 (no byte count); it commits the filesystem
 		// containing args[0]'s fd and transfers no bytes, so its exit must stay
 		// UNCLASSIFIED (plain ret_event), like its fsync/fdatasync siblings.
