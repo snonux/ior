@@ -540,6 +540,24 @@ format:
 print fmt: "fildes: 0x%08lx", ((unsigned long)(REC->fildes))
 `
 
+// FormatExitDup mirrors the kernel's sys_exit_dup tracepoint. dup() returns the
+// new (lowest-numbered unused) descriptor on success or -1 on error; that fd
+// number is reported as a plain ret_event (UNCLASSIFIED), never a byte-count
+// transfer, exactly like dup2/dup3.
+const FormatExitDup = `name: sys_exit_dup
+ID: 924
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatDup2 = `name: sys_enter_dup2
 ID: 920
 format:
