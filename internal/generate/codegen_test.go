@@ -1378,8 +1378,28 @@ func TestGenerateClockNanosleepHandlerCapturesRequestedTimespec(t *testing.T) {
 
 	requireContains(t, output, "struct sleep_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_SLEEP_EVENT;")
+	// clock_nanosleep(clockid_t, int flags, const struct timespec *request,
+	// struct timespec *remain): the request pointer is args[2], not args[0]
+	// (which is the clockid). The sentinel -1 marks a missing/unreadable ptr.
+	requireContains(t, output, "ev->requested_ns = -1;")
 	requireContains(t, output, "if (ctx->args[2] != 0) {")
 	requireContains(t, output, "ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+}
+
+// TestClockNanosleepExitHandlerIsUnclassifiedRet locks in that the exit side of
+// clock_nanosleep records a plain ret_event with ret_type UNCLASSIFIED. The
+// syscall returns 0 on success or a positive errno (and -1 only when invoked
+// via the libc wrapper on error), never an fd or byte count, so UNCLASSIFIED is
+// the correct return classification — same as its nanosleep sibling.
+func TestClockNanosleepExitHandlerIsUnclassifiedRet(t *testing.T) {
+	output := generateFromPair(t, FormatClockNanosleep, FormatExitClockNanosleep)
+
+	requireContains(t, output, "handle_sys_exit_clock_nanosleep")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	// The exit handler must not try to read a timespec or treat ret as an fd.
+	requireNotContains(t, output, "handle_sys_exit_clock_nanosleep(struct syscall_trace_exit *ctx) {\n    __u32 pid, tid;\n    if (filter(&pid, &tid))\n        return 0;\n\n    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_NANOSLEEP, ctx->ret))\n        return 0;\n\n    struct sleep_event")
 }
 
 func TestGenerateKeyctlHandler(t *testing.T) {
