@@ -1189,6 +1189,66 @@ func TestGenerateMemHandlerMunlock(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
+// TestGenerateNullHandlerMlockall locks in the BPF handler wiring for mlockall(2):
+//
+//	int mlockall(int flags)
+//
+// mlockall locks ALL of the calling process's memory (code/data/stack/shared
+// libraries/mmaps) into RAM. Unlike its KindMem siblings mlock(2)/mlock2(2)/
+// munlock(2) — which take an (addr, len) address range — mlockall has NO address
+// range at all: its single argument is a flags bitmask (MCL_CURRENT/MCL_FUTURE/
+// MCL_ONFAULT), an int, not an addr/fd/path. There is therefore no I/O resource
+// to capture, so ior classifies mlockall as KindNull in FamilyMemory (matching
+// its sibling munlockall(2), which takes no argument). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     (the flags int) as an fd/path/addr — nor wire it into a mem_event addr/
+//     length/flags the way KindMem mlock/mlock2 do. Capturing it would falsely
+//     present mlockall as a ranged memory-lock with a bogus address.
+//   - The exit handler reports the raw int status (0 success / -1 error) as
+//     UNCLASSIFIED; it is not a byte count, so it must never be tagged
+//     READ/WRITE/TRANSFER.
+func TestGenerateNullHandlerMlockall(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mlockall")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_mlockall")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_mlockall")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MLOCKALL;")
+
+	// Scope the negative assertions to the enter handler body (from the enter SEC
+	// up to the exit SEC) so we only inspect what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("mlockall: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	// KindNull: the flags int (args[0]) must not be captured as any resource, and
+	// no mem_event addr/length/flags wiring must leak in from the KindMem siblings.
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("mlockall must be KindNull: enter handler must not capture any arg (args[0] is a flags int, not an addr/fd/path)")
+	}
+	requireNotContains(t, enterBody, "struct mem_event")
+	requireNotContains(t, enterBody, "ev->addr")
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestClassifyRetMlockallUnclassified locks in that mlockall's return value is
+// UNCLASSIFIED. mlockall(2) returns 0 on success or -1 on error — a status code,
+// not a number of bytes transferred — so classifying it as READ/WRITE/TRANSFER
+// would wrongly count it as data movement.
+func TestClassifyRetMlockallUnclassified(t *testing.T) {
+	if got := ClassifyRet("sys_exit_mlockall"); got != Unclassified {
+		t.Errorf("mlockall ret classification = %q, want %q", got, Unclassified)
+	}
+}
+
 // TestGenerateMemHandlerRemapFilePages locks in the BPF handler wiring for the
 // (deprecated) remap_file_pages(2):
 // int remap_file_pages(void *addr, size_t size, int prot, size_t pgoff, int flags).
