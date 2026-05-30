@@ -40,6 +40,35 @@ func TestClassifyFdWrite(t *testing.T) {
 	}
 }
 
+// TestClassifyFdLseek pins lseek(2) as a single-fd KindFd event. lseek's
+// tracepoint exposes a generic "fd" field of an fd-like type at args[0], so it
+// classifies via classifyByField exactly like read/write — the fd is captured
+// from args[0], while the off_t offset and whence args are ignored. The return
+// value (resulting file offset) is asserted UNCLASSIFIED separately in
+// retclassify_test.go (TestClassifyRetUnclassified) and end-to-end in
+// TestClassifyRetExitLseek below.
+func TestClassifyFdLseek(t *testing.T) {
+	r := classifyFromData(t, FormatLseek)
+	if r.Kind != KindFd {
+		t.Errorf("lseek: got kind %d, want KindFd", r.Kind)
+	}
+}
+
+// TestClassifyRetExitLseek locks in that sys_exit_lseek is a plain ret_event
+// (KindRet) and that ClassifyRet keeps it UNCLASSIFIED. lseek returns the new
+// file OFFSET (bytes-from-start), not a transferred byte count, so it must
+// never be classified as READ/WRITE/TRANSFER — doing so would inflate I/O byte
+// accounting.
+func TestClassifyRetExitLseek(t *testing.T) {
+	r := classifyFromData(t, FormatExitLseek)
+	if r.Kind != KindRet {
+		t.Errorf("lseek exit: got kind %d, want KindRet", r.Kind)
+	}
+	if got := ClassifyRet("sys_exit_lseek"); got != Unclassified {
+		t.Errorf("lseek exit: ClassifyRet = %q, want UNCLASSIFIED", got)
+	}
+}
+
 func TestClassifyFdPidfdGetfd(t *testing.T) {
 	r := classifyFromData(t, FormatPidfdGetfd)
 	if r.Kind != KindFd {
@@ -2072,6 +2101,7 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		enterKind TracepointKind
 	}{
 		{"read", FormatRead, FormatExitRead, KindFd},
+		{"lseek", FormatLseek, FormatExitLseek, KindFd},
 		{"openat", FormatOpenat, FormatExitOpenat, KindOpen},
 		{"rename", FormatRename, FormatExitRename, KindName},
 		{"close", FormatClose, FormatExitClose, KindFd},

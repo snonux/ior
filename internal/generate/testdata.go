@@ -124,6 +124,47 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+// FormatLseek mirrors the real sys_enter_lseek tracepoint
+// (lseek(unsigned int fd, off_t offset, unsigned int whence)). The first
+// field is a generic "fd" of an fd-like type, so ClassifyFormat resolves it
+// to KindFd via classifyByField (fd at args[0]) — exactly like read/write.
+// The off_t offset and whence args are not captured by an fd_event.
+const FormatLseek = `name: sys_enter_lseek
+ID: 853
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:unsigned int fd;	offset:16;	size:8;	signed:0;
+	field:off_t offset;	offset:24;	size:8;	signed:0;
+	field:unsigned int whence;	offset:32;	size:8;	signed:0;
+
+print fmt: "fd: 0x%08lx, offset: 0x%08lx, whence: 0x%08lx", ((unsigned long)(REC->fd)), ((unsigned long)(REC->offset)), ((unsigned long)(REC->whence))
+`
+
+// FormatExitLseek mirrors sys_exit_lseek. lseek returns the RESULTING FILE
+// OFFSET (bytes from the start of the file), or -1 on error — a file
+// position, NOT a count of bytes transferred. So its exit is a plain
+// ret_event and stays UNCLASSIFIED; it must never be ReadClassified /
+// WriteClassified / TransferClassified, which would wrongly inflate I/O byte
+// totals.
+const FormatExitLseek = `name: sys_exit_lseek
+ID: 852
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatClose = `name: sys_enter_close
 ID: 778
 format:
