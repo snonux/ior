@@ -101,7 +101,38 @@ var syscallFamilies = map[string]SyscallFamily{
 	"ioprio_get": FamilyProcess, "ioprio_set": FamilyProcess,
 	"kcmp": FamilyProcess, "personality": FamilyProcess, "pivot_root": FamilyProcess,
 	"prctl": FamilyProcess, "prlimit64": FamilyProcess, "reboot": FamilyProcess,
-	"restart_syscall": FamilyProcess, "set_tid_address": FamilyProcess,
+	"restart_syscall": FamilyProcess,
+	// Boundary rule for the Process vs Misc split of PER-THREAD POINTER
+	// REGISTRATION syscalls (keep consistent — distinct from the futex IPC-vs-
+	// Misc rule documented in the futex block above):
+	//
+	//   - set_tid_address(2) stays Process. Although it "merely" hands the
+	//     kernel a tidptr it consults later, that pointer is the kernel's
+	//     primary THREAD-EXIT notification mechanism: it sets clear_child_tid,
+	//     which the kernel zeroes and FUTEX_WAKEs at thread teardown. The C
+	//     runtime sets it (via clone(2) CLONE_CHILD_CLEARTID, or this syscall)
+	//     for essentially every thread, the call returns the caller's thread ID
+	//     (a pid_t, like gettid/getpid), and it is mandatory thread-lifecycle
+	//     plumbing. It therefore belongs with the core process/thread lifecycle
+	//     cluster — clone/clone3/fork/vfork/exit/exit_group/wait4/waitid/gettid
+	//     — not with optional opt-in features.
+	//
+	//   - rseq(2) and set_robust_list/get_robust_list(2) stay Misc (absent from
+	//     this table by design; see ClassifySyscallFamily's default and the
+	//     assertions in family_test.go). They register OPTIONAL, opt-in
+	//     per-thread feature areas: rseq a restartable-sequences scheduling
+	//     optimization, robust_list a futex-cleanup list a program only uses if
+	//     it opts into robust mutexes. They are not part of the mandatory
+	//     thread-lifecycle path and a thread runs fine without ever calling
+	//     them.
+	//
+	// The split axis here is mandatory-thread-lifecycle vs optional-opt-in-
+	// feature, NOT pointer-registration-vs-operation (which would lump all
+	// three into Misc). Do not move set_tid_address to Misc for "registration
+	// consistency" with rseq/robust_list: registration is the surface form, but
+	// set_tid_address is core thread lifecycle while the others are optional
+	// features.
+	"set_tid_address": FamilyProcess,
 	"setfsuid": FamilyProcess, "setfsgid": FamilyProcess, "setgid": FamilyProcess,
 	"setgroups": FamilyProcess, "setns": FamilyProcess, "setpgid": FamilyProcess,
 	"setpriority": FamilyProcess, "setregid": FamilyProcess, "setresgid": FamilyProcess,

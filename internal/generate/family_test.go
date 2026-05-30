@@ -166,6 +166,24 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_exit_rseq", FamilyMisc},
 		{"sys_enter_set_robust_list", FamilyMisc},
 		{"sys_enter_get_robust_list", FamilyMisc},
+		// set_tid_address(2) is the deliberate counterpoint to the
+		// rseq/robust_list cluster above: it shares the surface form
+		// ("per-thread registration of a pointer the kernel consults later")
+		// but stays Process, NOT Misc. WHY: the tidptr it registers is
+		// clear_child_tid — the kernel's primary thread-EXIT notification
+		// mechanism (zeroed + FUTEX_WAKEd at thread teardown), set by the C
+		// runtime for essentially every thread (clone(2) CLONE_CHILD_CLEARTID),
+		// and the call returns the caller's thread ID like gettid/getpid. It is
+		// mandatory thread-lifecycle plumbing and belongs with
+		// clone/fork/exit/gettid, whereas rseq (scheduling optimization) and
+		// robust_list (opt-in futex cleanup) are OPTIONAL per-thread features a
+		// thread runs fine without. The Process-vs-Misc axis here is
+		// mandatory-lifecycle vs optional-opt-in-feature, not registration-vs-
+		// operation. Assert enter+exit so a stray move to Misc trips this test.
+		// See the Process-vs-Misc boundary block in family.go and keep in sync
+		// with the Process list in docs/syscall-tracing-plan.md.
+		{"sys_enter_set_tid_address", FamilyProcess},
+		{"sys_exit_set_tid_address", FamilyProcess},
 		// sysinfo(2) returns overall system statistics (memory/swap usage and
 		// load averages) into a single userspace struct sysinfo *info pointer
 		// (an output buffer, not an fd/path). It is not in the explicit family
