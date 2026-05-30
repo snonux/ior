@@ -14536,7 +14536,9 @@ int handle_sys_enter_clock_nanosleep(struct syscall_trace_enter *ctx) {
             __s64 tv_nsec;
         } ts = {};
         if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {
-            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {
+                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            }
         }
     }
 
