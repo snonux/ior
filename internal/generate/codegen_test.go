@@ -132,6 +132,52 @@ func TestGeneratePidfdGetfdHandlerUsesPidfdArgument(t *testing.T) {
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 }
 
+// TestGenerateKexecFileLoadHandler locks in the generated BPF C for
+// kexec_file_load(2):
+//
+//	long kexec_file_load(int kernel_fd, int initrd_fd,
+//	                     unsigned long cmdline_len, const char *cmdline,
+//	                     unsigned long flags)
+//
+// kexec_file_load loads a new kernel (and optional initrd) from open file
+// descriptors so it can later be booted by reboot(2); it returns 0 on success
+// or -1 on error. The leading kernel_fd (args[0]) makes the enter a KindFd
+// fd_event capturing ev->fd = args[0]. There are TWO fds (kernel_fd at args[0],
+// initrd_fd at args[1]); by the single-fd KindFd convention only the first
+// (kernel_fd) is captured, so the handler must NOT wire args[1]. Critically,
+// cmdline_ptr (args[3]) is a command-line STRING for the new kernel, NOT a
+// filesystem path, so it must NOT be read with bpf_probe_read_user_str. On exit
+// kexec_file_load returns 0/-1 — UNCLASSIFIED (a plain ret_event, no
+// read/write/transfer byte count). It shares FamilySecurity with its sibling
+// kexec_load(2) (asserted in family_test.go).
+func TestGenerateKexecFileLoadHandler(t *testing.T) {
+	output := generateFromPair(t, FormatKexecFileLoad, FormatExitKexecFileLoad)
+
+	// Enter: KindFd fd_event capturing kernel_fd from args[0].
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_kexec_file_load")`)
+	requireContains(t, output, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_KEXEC_FILE_LOAD;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+
+	// Negative guards: only kernel_fd (args[0]) is captured — initrd_fd (args[1])
+	// must not be wired as a second fd, and cmdline_ptr (args[3]) is a kernel
+	// command-line string, never a filesystem path, so it must not be slurped via
+	// bpf_probe_read_user_str.
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "bpf_probe_read_user_str")
+
+	// Exit: plain ret_event, UNCLASSIFIED (kexec_file_load returns 0/-1, no byte
+	// count).
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_kexec_file_load")`)
+	requireContains(t, output, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = WRITE_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = TRANSFER_CLASSIFIED;")
+}
+
 // TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd locks in the BPF
 // handler wiring for process_madvise(2):
 //
