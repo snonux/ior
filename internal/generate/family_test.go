@@ -184,10 +184,20 @@ func TestClassifySyscallFamily(t *testing.T) {
 		// x86 I/O-port / CPU-state syscalls are not in the explicit family
 		// table and intentionally fall through to Misc (ioperm/iopl/modify_ldt
 		// set port-access or LDT state, not file I/O). arch_prctl/personality
-		// are deliberately classified as Process, so they are not listed here.
+		// are deliberately classified as Process (they are in the explicit family
+		// table) — locked in below to guard against drift toward Misc with their
+		// x86 siblings.
 		{"sys_enter_ioperm", FamilyMisc},
 		{"sys_enter_iopl", FamilyMisc},
 		{"sys_enter_modify_ldt", FamilyMisc},
+		// arch_prctl(2) sets/gets x86-64 thread state (FS/GS base, CPUID faulting).
+		// It is per-thread process/architecture state, grouped with the rest of the
+		// process-state cluster, NOT with the port-access/LDT siblings above.
+		{"sys_enter_arch_prctl", FamilyProcess},
+		{"sys_exit_arch_prctl", FamilyProcess},
+		// personality(2) sets the process execution domain — also Process, never Misc.
+		{"sys_enter_personality", FamilyProcess},
+		{"sys_exit_personality", FamilyProcess},
 		// rseq(2) registers/unregisters a per-thread restartable-sequences area
 		// (a userspace struct pointer, not an fd/path). It is not in the explicit
 		// family table and intentionally falls through to Misc, sharing the family
