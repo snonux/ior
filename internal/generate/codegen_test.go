@@ -1330,6 +1330,39 @@ func TestGeneratePidfdOpenHandlerUsesArg1Flags(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 }
 
+// TestGenerateSignalfd4HandlerUsesArg3Flags locks in that signalfd4(2) is
+// emitted as a KindEventfd handler whose flags are read from args[3]. The raw
+// syscall is signalfd4(int ufd, const sigset_t *mask, size_t sizemask, int
+// flags): args[0] (ufd) is an existing signalfd or -1, args[1]/args[2] are the
+// mask pointer and its size — none of those are the flags. A wrong index would
+// silently report bogus SFD_NONBLOCK/SFD_CLOEXEC bits, so guard args[3]
+// explicitly. The exit returns the new (or modified) fd, captured as a plain
+// ret with no read/write byte classification.
+func TestGenerateSignalfd4HandlerUsesArg3Flags(t *testing.T) {
+	output := generateFromPair(t, FormatSignalfd4, FormatExitSignalfd4)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SIGNALFD4;")
+	// signalfd4(ufd, mask, sizemask, flags): flags is at args[3].
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[3];")
+	// Must not mistake ufd (args[0]), the mask pointer (args[1]) or sizemask
+	// (args[2]) for the flags argument.
+	for _, wrong := range []string{
+		"flags = (__s32)ctx->args[0]",
+		"flags = (__s32)ctx->args[1]",
+		"flags = (__s32)ctx->args[2]",
+	} {
+		if strings.Contains(output, wrong) {
+			t.Errorf("signalfd4 handler must read flags from args[3], not via %q", wrong)
+		}
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_signalfd4\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
 func TestGenerateEpollCtlHandler(t *testing.T) {
 	output := generateFromPair(t, FormatEpollCtl, FormatExitEpollCtl)
 
