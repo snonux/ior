@@ -843,6 +843,25 @@ func TestClassifyExitSocketpair(t *testing.T) {
 	}
 }
 
+// TestClassifySocketpairNotFd is a regression lock-in for the socketpair(2)
+// audit (task c00). socketpair(int domain, int type, int protocol, int sv[2])
+// takes the address-family/domain constant as args[0] (named "family" in the
+// tracepoint format), NOT a file descriptor. The created fds are written into
+// the OUTPUT array sv[2] (args[3]) and are only valid after the call returns.
+// socketpair must therefore be KindSocketpair (read sv[2] at exit), never
+// KindFd, which would record the domain integer as a bogus fd. Pin that the
+// name-based override wins so a future field-shape change cannot make it fall
+// through to the generic KindFd path.
+func TestClassifySocketpairNotFd(t *testing.T) {
+	r := classifyFromData(t, FormatSocketpair)
+	if r.Kind == KindFd {
+		t.Fatal("socketpair classified as KindFd: args[0] is the domain constant, not an fd")
+	}
+	if r.Kind != KindSocketpair {
+		t.Errorf("socketpair: got kind %d, want KindSocketpair", r.Kind)
+	}
+}
+
 func TestClassifyPipe(t *testing.T) {
 	r := classifyFromData(t, FormatPipe)
 	if r.Kind != KindPipe {
