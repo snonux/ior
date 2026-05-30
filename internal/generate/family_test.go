@@ -67,6 +67,14 @@ func TestClassifySyscallFamily(t *testing.T) {
 		{"sys_enter_getpgrp", FamilyProcess},
 		{"sys_enter_getpid", FamilyProcess},
 		{"sys_enter_getppid", FamilyProcess},
+		// gettid(2) ("pid_t gettid(void)") returns the caller's thread ID and
+		// belongs with the no-arg id-returning reader cluster
+		// getpid/getppid/getuid/getgid under FamilyProcess (it is a per-thread
+		// identity query, not Time/Sched/Misc). Assert enter+exit so a stray
+		// reclassification trips this test. Keep in sync with the Process list in
+		// docs/syscall-tracing-plan.md.
+		{"sys_enter_gettid", FamilyProcess},
+		{"sys_exit_gettid", FamilyProcess},
 		{"sys_enter_rt_sigaction", FamilySignals},
 		{"sys_enter_clock_gettime", FamilyTime},
 		// gettimeofday(2) gets wall-clock time via a userspace timeval/timezone
