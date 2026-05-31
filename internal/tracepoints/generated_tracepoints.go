@@ -741,7 +741,7 @@ var syscallFamilies = map[string]string{
 	"access":                  "FS",
 	"acct":                    "Misc",
 	"add_key":                 "Security",
-	"adjtimex":                "Misc",
+	"adjtimex":                "Time",
 	"alarm":                   "Misc",
 	"arch_prctl":              "Process",
 	"bind":                    "Network",
