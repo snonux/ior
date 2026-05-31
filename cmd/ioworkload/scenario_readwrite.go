@@ -251,6 +251,51 @@ func readwriteWritev() error {
 	return nil
 }
 
+// readwriteReadahead opens a file, writes data, then calls readahead(2) on it.
+// readahead(fd, offset, count) initiates non-blocking readahead so subsequent
+// reads are served from the page cache. Despite its ssize_t prototype it returns
+// 0 on success / -1 on error (it does NOT return a byte count and transfers no
+// bytes to userspace), so ior classifies it KindFd / UNCLASSIFIED. The scenario
+// exercises the enter fd_event (fd at args[0]) and the exit ret_event end-to-end.
+func readwriteReadahead() error {
+	dir, cleanup, err := makeTempDir("readwrite-readahead")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "readaheadfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("readahead test data")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	// readahead(fd, offset=0, count=4096): prime the page cache for the file.
+	_, _, errno := syscall.Syscall(syscall.SYS_READAHEAD, uintptr(fd), 0, 4096)
+	if errno != 0 {
+		return fmt.Errorf("readahead: %w", errno)
+	}
+	return nil
+}
+
+// readwriteReadaheadEbadf calls readahead(2) on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_readahead tracepoint
+// because arguments are read on syscall entry before the kernel returns an error.
+func readwriteReadaheadEbadf() error {
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_READAHEAD, 99999, 0, 4096)
+		if errno == 0 {
+			return fmt.Errorf("expected EBADF, but readahead succeeded")
+		}
+	}
+	return nil
+}
+
 // readwriteWronlyRead opens a file O_WRONLY, then attempts to read from it.
 // The read fails with EBADF, but ior should capture the enter_read tracepoint
 // because arguments are read on syscall entry before the kernel returns an error.
