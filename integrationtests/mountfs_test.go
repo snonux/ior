@@ -4,7 +4,7 @@ import "testing"
 
 var mountfsTraceArgs = []string{
 	"-trace-syscalls",
-	"mount,umount,move_mount,fsmount,pivot_root,quotactl,statmount,listmount,listns,swapon,swapoff",
+	"mount,umount,move_mount,fsopen,fsmount,pivot_root,quotactl,statmount,listmount,listns,swapon,swapoff",
 }
 
 func TestMountFsManagementSyscalls(t *testing.T) {
@@ -12,6 +12,7 @@ func TestMountFsManagementSyscalls(t *testing.T) {
 		{Tracepoint: "enter_mount", MinCount: 1},
 		{Tracepoint: "enter_umount", MinCount: 1},
 		{Tracepoint: "enter_move_mount", MinCount: 1},
+		{Tracepoint: "enter_fsopen", MinCount: 1},
 		{Tracepoint: "enter_fsmount", MinCount: 1},
 		{Tracepoint: "enter_pivot_root", MinCount: 1},
 		{Tracepoint: "enter_quotactl", MinCount: 1},
