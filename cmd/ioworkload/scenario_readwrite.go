@@ -65,6 +65,103 @@ func readwritePread() error {
 	return nil
 }
 
+// readwritePreadv opens a file, writes data, then reads it back via preadv
+// (positional vectored read). preadv returns the number of bytes read and is
+// READ_CLASSIFIED, so the scenario reads a known payload to validate
+// end-to-end byte attribution for the positional vectored read variant.
+func readwritePreadv() error {
+	dir, cleanup, err := makeTempDir("readwrite-preadv")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "preadvfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	data := []byte("preadv test data")
+	if _, err := syscall.Write(fd, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	buf1 := make([]byte, 6)
+	buf2 := make([]byte, 10)
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	// preadv(fd, iov, iovcnt, offset) reads at the given offset (0) without
+	// changing the file position.
+	_, _, errno := syscall.Syscall6(syscall.SYS_PREADV, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("preadv: %w", errno)
+	}
+	return nil
+}
+
+// readwritePreadv2 opens a file, writes data, then reads it back via preadv2
+// (positional vectored read with flags). Like preadv it returns the bytes read
+// and is READ_CLASSIFIED; the scenario reads a known payload to validate
+// end-to-end byte attribution.
+func readwritePreadv2() error {
+	dir, cleanup, err := makeTempDir("readwrite-preadv2")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "preadv2file.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	data := []byte("preadv2 test data")
+	if _, err := syscall.Write(fd, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	buf1 := make([]byte, 7)
+	buf2 := make([]byte, 10)
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	nr, err := preadv2SyscallNr(runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	// preadv2(fd, iov, iovcnt, pos_l, pos_h, flags): offset 0, no flags.
+	_, _, errno := syscall.Syscall6(nr, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("preadv2: %w", errno)
+	}
+	return nil
+}
+
+// preadv2SyscallNr returns the preadv2(2) syscall number for the given GOARCH.
+// Go's syscall package lacks a SYS_PREADV2 constant, so the architecture
+// numbers are provided explicitly (matching securitySyscallNumbers' pattern).
+func preadv2SyscallNr(arch string) (uintptr, error) {
+	switch arch {
+	case "amd64":
+		return 327, nil
+	case "arm64":
+		return 286, nil
+	default:
+		return 0, fmt.Errorf("preadv2 syscall number not defined for GOARCH=%s", arch)
+	}
+}
+
 // readwritePwrite opens a file and writes data via pwrite64.
 func readwritePwrite() error {
 	dir, cleanup, err := makeTempDir("readwrite-pwrite")

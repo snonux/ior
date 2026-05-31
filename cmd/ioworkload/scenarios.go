@@ -18,6 +18,8 @@ var scenarios = map[string]func() error{
 	"open-pid-filter":               openPidFilter,
 	"readwrite-basic":               readwriteBasic,
 	"readwrite-pread":               readwritePread,
+	"readwrite-preadv":              readwritePreadv,
+	"readwrite-preadv2":             readwritePreadv2,
 	"readwrite-pwrite":              readwritePwrite,
 	"readwrite-readv":               readwriteReadv,
 	"readwrite-writev":              readwriteWritev,
