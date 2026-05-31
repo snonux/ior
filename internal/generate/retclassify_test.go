@@ -8,7 +8,11 @@ func TestClassifyRetRead(t *testing.T) {
 		// getxattrat (Linux 6.13+) returns the xattr value size in bytes, the
 		// same read byte-count as getxattr/lgetxattr/fgetxattr.
 		"getxattrat",
-		"lgetxattr", "listxattr", "llistxattr", "pread64", "preadv",
+		"lgetxattr", "listxattr",
+		// listxattrat (Linux 6.13+) returns the size in bytes of the xattr
+		// name list, the same read byte-count as listxattr/llistxattr/flistxattr.
+		"listxattrat",
+		"llistxattr", "pread64", "preadv",
 		"preadv2", "process_vm_readv", "read", "readlink", "readlinkat",
 		"readv", "recvmsg", "recvfrom", "syslog", "mq_timedreceive", "getrandom", "msgrcv",
 	}
