@@ -125,6 +125,7 @@ var scenarios = map[string]func() error{
 	"iouring-register-ebadf":        iouringRegisterEbadf,
 	"aio-setup":                     aioSetup,
 	"aio-setup-einval":              aioSetupEinval,
+	"aio-submit":                    aioSubmit,
 }
 
 func makeTempDir(prefix string) (string, func(), error) {
