@@ -31,7 +31,11 @@ func TestReadwriteBasic(t *testing.T) {
 }
 
 func TestReadwritePread(t *testing.T) {
-	runScenario(t, "readwrite-pread", []ExpectedEvent{
+	// pread64 returns the number of bytes read (READ_CLASSIFIED), so a
+	// successful positional read must attribute the payload byte count
+	// end-to-end, mirroring the pwrite64 byte-count assertion below.
+	const payloadLen = uint64(len("pread test data"))
+	result, _ := runScenarioResult(t, "readwrite-pread", []ExpectedEvent{
 		{
 			PathContains: "preadfile.txt",
 			Tracepoint:   "enter_pread64",
@@ -39,6 +43,11 @@ func TestReadwritePread(t *testing.T) {
 			MinCount:     1,
 		},
 	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "preadfile.txt",
+		Tracepoint:   "enter_pread64",
+		Comm:         "ioworkload",
+	}, payloadLen)
 }
 
 func TestReadwritePwrite(t *testing.T) {
@@ -55,6 +64,45 @@ func TestReadwritePwrite(t *testing.T) {
 		Tracepoint:   "enter_pwrite64",
 		Comm:         "ioworkload",
 	}, 1)
+}
+
+func TestReadwritePreadv(t *testing.T) {
+	// preadv is the positional vectored read sibling of pread64/readv and is
+	// READ_CLASSIFIED, so a successful read must attribute the payload bytes
+	// end-to-end.
+	const payloadLen = uint64(len("preadv test data"))
+	result, _ := runScenarioResult(t, "readwrite-preadv", []ExpectedEvent{
+		{
+			PathContains: "preadvfile.txt",
+			Tracepoint:   "enter_preadv",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "preadvfile.txt",
+		Tracepoint:   "enter_preadv",
+		Comm:         "ioworkload",
+	}, payloadLen)
+}
+
+func TestReadwritePreadv2(t *testing.T) {
+	// preadv2 is the positional vectored read variant with flags; like preadv
+	// it is READ_CLASSIFIED and must attribute the payload bytes end-to-end.
+	const payloadLen = uint64(len("preadv2 test data"))
+	result, _ := runScenarioResult(t, "readwrite-preadv2", []ExpectedEvent{
+		{
+			PathContains: "preadv2file.txt",
+			Tracepoint:   "enter_preadv2",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "preadv2file.txt",
+		Tracepoint:   "enter_preadv2",
+		Comm:         "ioworkload",
+	}, payloadLen)
 }
 
 func TestReadwriteReadv(t *testing.T) {
