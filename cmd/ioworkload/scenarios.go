@@ -9,6 +9,7 @@ import (
 var scenarios = map[string]func() error{
 	"crash":                         crash,
 	"open-basic":                    openBasic,
+	"open-openat2":                  openOpenat2,
 	"open-creat":                    openCreat,
 	"open-by-handle-at":             openByHandleAt,
 	"open-duration-gap":             openDurationGap,
