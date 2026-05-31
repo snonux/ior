@@ -221,6 +221,48 @@ func TestReadwritePwriteInvalid(t *testing.T) {
 	})
 }
 
+func TestReadwriteReadahead(t *testing.T) {
+	// readahead(2) is KindFd / UNCLASSIFIED: despite its ssize_t prototype it
+	// returns 0/-1 and transfers no bytes to userspace, so the tracer must
+	// attribute zero bytes (not misread the 0/-1 return as a byte count) while
+	// still capturing the fd (args[0]) on enter and timing the syscall.
+	result, _ := runScenarioResult(t, "readwrite-readahead", []ExpectedEvent{
+		{
+			PathContains: "readaheadfile.txt",
+			Tracepoint:   "enter_readahead",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	exp := ExpectedEvent{
+		PathContains: "readaheadfile.txt",
+		Tracepoint:   "enter_readahead",
+		Comm:         "ioworkload",
+	}
+	// UNCLASSIFIED: no byte count is attributed for a successful readahead.
+	assertEventBytesEqual(t, result, exp, 0)
+	// Timing is captured end-to-end (enter/exit paired into a duration).
+	assertEventDurationPositive(t, result, exp)
+}
+
+func TestReadwriteReadaheadEbadf(t *testing.T) {
+	// readahead on an invalid fd fails with EBADF, but ior still captures the
+	// enter_readahead tracepoint because arguments are read on syscall entry
+	// before the kernel returns the error. The UNCLASSIFIED -1 return must not
+	// be attributed as bytes.
+	result, _ := runScenarioResult(t, "readwrite-readahead-ebadf", []ExpectedEvent{
+		{
+			Tracepoint: "enter_readahead",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+	assertEventBytesEqual(t, result, ExpectedEvent{
+		Tracepoint: "enter_readahead",
+		Comm:       "ioworkload",
+	}, 0)
+}
+
 func assertEventBytesAtLeast(t *testing.T, result TestResult, exp ExpectedEvent, minBytes uint64) {
 	t.Helper()
 	var matched bool
