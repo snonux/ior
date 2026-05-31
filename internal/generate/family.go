@@ -156,6 +156,14 @@ var syscallFamilies = map[string]SyscallFamily{
 	"rt_tgsigqueueinfo": FamilySignals, "sigaltstack": FamilySignals,
 	"tgkill": FamilySignals, "tkill": FamilySignals,
 
+	// adjtimex(2) and clock_adjtime(2) share one man page: both tune or query
+	// the kernel clock (clock_adjtime is adjtimex with an explicit clockid) and
+	// return a clock-state code (TIME_OK/TIME_INS/...) or -1. adjtimex therefore
+	// belongs in FamilyTime alongside clock_adjtime and the rest of the
+	// gettimeofday/settimeofday/clock_* cluster, not in Misc. The single argument
+	// is a userspace struct timex *, so argument capture is KindNull (null_event)
+	// and the return is UNCLASSIFIED (a state code, not a byte count).
+	"adjtimex":      FamilyTime,
 	"clock_adjtime": FamilyTime, "clock_getres": FamilyTime, "clock_gettime": FamilyTime,
 	"clock_nanosleep": FamilyTime, "clock_settime": FamilyTime, "getitimer": FamilyTime,
 	"gettimeofday": FamilyTime, "nanosleep": FamilyTime, "setitimer": FamilyTime,
