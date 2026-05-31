@@ -99,6 +99,7 @@ var scenarios = map[string]func() error{
 	"stat-access-enoent":            statAccessEnoent,
 	"stat-fstat-ebadf":              statFstatEbadf,
 	"xattr-getxattrat":              xattrGetxattrat,
+	"xattr-listxattrat":             xattrListxattrat,
 	"utime-basic":                   utimeBasic,
 	"utime-utimes":                  utimeUtimes,
 	"utime-enoent":                  utimeEnoent,

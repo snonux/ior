@@ -593,6 +593,10 @@ var retClassifications = map[string]RetClassification{
 	"getxattrat":       ReadClassified,
 	"lgetxattr":        ReadClassified,
 	"listxattr":        ReadClassified,
+	// listxattrat (Linux 6.13+) returns the size in bytes of the list of
+	// extended attribute names, exactly like listxattr/llistxattr/flistxattr,
+	// so it is a read byte-count.
+	"listxattrat":      ReadClassified,
 	"llistxattr":       ReadClassified,
 	"pread64":          ReadClassified,
 	"preadv":           ReadClassified,
