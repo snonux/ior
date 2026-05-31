@@ -92,7 +92,7 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 
 Payload bytes classified by return value:
 
-- ReadClassified: `fgetxattr`, `flistxattr`, `getdents`, `getdents64`, `getrandom`, `getxattr`, `lgetxattr`, `listxattr`, `llistxattr`, `mq_timedreceive`, `msgrcv`, `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`, `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `syslog`
+- ReadClassified: `fgetxattr`, `flistxattr`, `getdents`, `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`, `listxattr`, `llistxattr`, `mq_timedreceive`, `msgrcv`, `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`, `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `syslog`
 - TransferClassified: `copy_file_range`, `sendfile64`, `splice`, `tee`, `vmsplice`
 - WriteClassified: `mq_timedsend`, `msgsnd`, `process_vm_writev`, `pwrite64`, `pwritev`, `pwritev2`, `sendmsg`, `sendto`, `write`, `writev`
 

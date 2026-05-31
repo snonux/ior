@@ -588,6 +588,9 @@ var retClassifications = map[string]RetClassification{
 	"getdents":         ReadClassified,
 	"getdents64":       ReadClassified,
 	"getxattr":         ReadClassified,
+	// getxattrat (Linux 6.13+) returns the size in bytes of the xattr value,
+	// exactly like getxattr/lgetxattr/fgetxattr, so it is a read byte-count.
+	"getxattrat":       ReadClassified,
 	"lgetxattr":        ReadClassified,
 	"listxattr":        ReadClassified,
 	"llistxattr":       ReadClassified,
