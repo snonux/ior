@@ -46,6 +46,13 @@ func mountfsManagement() error {
 
 	// Best-effort coverage: these calls are expected to fail on most hosts
 	// without CAP_SYS_ADMIN, but still exercise syscall tracing paths.
+	// fsopen(fsname, flags) is the entry point of the new mount API: it takes a
+	// filesystem TYPE name (e.g. "tmpfs"), NOT a path, in args[0] and the
+	// FSOPEN_CLOEXEC flag in args[1], returning a new filesystem-context fd. We
+	// close the returned fd when the call succeeds so we do not leak it.
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSOPEN, uintptr(unsafe.Pointer(tmpfs)), uintptr(unix.FSOPEN_CLOEXEC), 0); errno == 0 {
+		_ = syscall.Close(int(fd))
+	}
 	_, _, _ = syscall.RawSyscall6(unix.SYS_MOUNT, uintptr(unsafe.Pointer(none)), uintptr(unsafe.Pointer(mountPath)), uintptr(unsafe.Pointer(tmpfs)), 0, 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), uintptr(unix.MNT_DETACH), 0)
