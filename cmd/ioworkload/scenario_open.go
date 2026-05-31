@@ -127,6 +127,65 @@ func openPidFilter() error {
 	return nil
 }
 
+// openHow mirrors the kernel's struct open_how (uapi/linux/openat2.h):
+// the resolve-time configuration that openat2(2) takes by pointer instead of
+// a plain flags int. flags carries the O_* open flags, mode the creation mode
+// (only meaningful with O_CREAT/O_TMPFILE), and resolve the RESOLVE_* bits.
+type openHow struct {
+	Flags   uint64
+	Mode    uint64
+	Resolve uint64
+}
+
+// sysOpenat2 is the openat2(2) syscall number on amd64.
+const sysOpenat2 = 437
+
+// openOpenat2 opens a file via the raw openat2(2) syscall. Go's syscall package
+// has no openat2 wrapper and routes Open/Openat through openat, so we must issue
+// the raw syscall to actually exercise the openat2 tracepoint. The path lives at
+// args[1] (after dirfd at args[0]); the open flags/mode live INSIDE the open_how
+// struct pointed to by args[2], not as a plain int argument — ior reads the path
+// from args[1] and intentionally does not decode flags out of the struct.
+func openOpenat2() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	dir, cleanup, err := makeTempDir("open-openat2")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "openat2file.txt")
+	pathBytes, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+
+	how := openHow{Flags: uint64(syscall.O_RDWR | syscall.O_CREAT), Mode: 0o644}
+	// Use a runtime int variable so the negative AT_FDCWD survives the uintptr
+	// conversion: converting the negative constant directly overflows uintptr.
+	dirfd := _AT_FDCWD
+	fd, _, errno := syscall.Syscall6(
+		sysOpenat2,
+		uintptr(dirfd),
+		uintptr(unsafe.Pointer(pathBytes)),
+		uintptr(unsafe.Pointer(&how)),
+		unsafe.Sizeof(how),
+		0, 0,
+	)
+	runtime.KeepAlive(pathBytes)
+	runtime.KeepAlive(&how)
+	if errno != 0 {
+		return fmt.Errorf("openat2: %w", errno)
+	}
+	return syscall.Close(int(fd))
+}
+
+// _AT_FDCWD is the special dirfd value meaning "relative to the current working
+// directory"; openat2 with an absolute path ignores it but still requires it.
+const _AT_FDCWD int = -100
+
 // openByHandleAt creates a file, resolves its handle via name_to_handle_at,
 // then opens it via open_by_handle_at. Requires root (CAP_DAC_READ_SEARCH).
 // LockOSThread prevents goroutine migration between the two syscalls so that

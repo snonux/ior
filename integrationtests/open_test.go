@@ -16,6 +16,22 @@ func TestOpenBasic(t *testing.T) {
 	})
 }
 
+// TestOpenOpenat2 exercises the raw openat2(2) syscall. openat2 differs from
+// open/openat in that its flags/mode live inside an open_how struct (args[2]),
+// not a plain int; the path is still at args[1]. This test verifies ior reads
+// the path from args[1] (not the dirfd at args[0] nor the struct ptr at args[2])
+// and that the enter_openat2 tracepoint is captured end-to-end.
+func TestOpenOpenat2(t *testing.T) {
+	runScenario(t, "open-openat2", []ExpectedEvent{
+		{
+			PathContains: "openat2file.txt",
+			Tracepoint:   "enter_openat2",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
 func TestOpenCreat(t *testing.T) {
 	runScenario(t, "open-creat", []ExpectedEvent{
 		{
