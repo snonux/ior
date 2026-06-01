@@ -36,3 +36,68 @@ func TestSysVShmBasic(t *testing.T) {
 		assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: tp, Comm: "ioworkload"})
 	}
 }
+
+// sysvMsgTraceArgs restricts tracing to the SysV message-queue family so the
+// captured output is dominated by the lifecycle calls the workload issues.
+var sysvMsgTraceArgs = []string{
+	"-trace-syscalls",
+	"msgget,msgsnd,msgrcv,msgctl",
+}
+
+// TestSysVMsgBasic verifies the SysV message-queue family is traced end-to-end.
+// The workload runs msgget(IPC_PRIVATE) -> msgsnd -> msgrcv -> msgctl(IPC_RMID);
+// each call must appear as an enter event with a positive duration (proving the
+// enter/exit pair was correlated). The workload always issues IPC_RMID, so no
+// kernel message queue leaks.
+func TestSysVMsgBasic(t *testing.T) {
+	h := newTestHarness(t)
+	result, pid, err := h.RunWithIorArgs("sysv-msg-basic", defaultDuration, sysvMsgTraceArgs)
+	if err != nil {
+		t.Fatalf("run scenario sysv-msg-basic: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_msgget", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_msgsnd", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_msgrcv", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_msgctl", Comm: "ioworkload", MinCount: 1},
+	})
+
+	for _, tp := range []string{"enter_msgget", "enter_msgsnd", "enter_msgrcv", "enter_msgctl"} {
+		assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: tp, Comm: "ioworkload"})
+	}
+}
+
+// sysvSemTraceArgs restricts tracing to the SysV semaphore family so the
+// captured output is dominated by the lifecycle calls the workload issues.
+var sysvSemTraceArgs = []string{
+	"-trace-syscalls",
+	"semget,semop,semctl",
+}
+
+// TestSysVSemBasic verifies the SysV semaphore family is traced end-to-end. The
+// workload runs semget(IPC_PRIVATE) -> semop(+1) -> semop(-1) ->
+// semctl(IPC_RMID); each distinct syscall must appear as an enter event with a
+// positive duration (proving the enter/exit pair was correlated). The workload
+// always issues IPC_RMID, so no kernel semaphore set leaks.
+func TestSysVSemBasic(t *testing.T) {
+	h := newTestHarness(t)
+	result, pid, err := h.RunWithIorArgs("sysv-sem-basic", defaultDuration, sysvSemTraceArgs)
+	if err != nil {
+		t.Fatalf("run scenario sysv-sem-basic: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_semget", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_semop", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_semctl", Comm: "ioworkload", MinCount: 1},
+	})
+
+	for _, tp := range []string{"enter_semget", "enter_semop", "enter_semctl"} {
+		assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: tp, Comm: "ioworkload"})
+	}
+}
