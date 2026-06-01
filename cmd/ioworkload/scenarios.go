@@ -44,6 +44,8 @@ var scenarios = map[string]func() error{
 	"fd-from-air-eventfd-users":     fdFromAirEventfdUsers,
 	"mq-posix-basic":                mqPosixBasic,
 	"sysv-shm-basic":                sysvShmBasic,
+	"sysv-msg-basic":                sysvMsgBasic,
+	"sysv-sem-basic":                sysvSemBasic,
 	"mountfs-management":            mountfsManagement,
 	"polling-epoll":                 pollingEpoll,
 	"sleep-syscalls":                sleepSyscalls,
