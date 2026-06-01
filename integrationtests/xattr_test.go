@@ -40,6 +40,44 @@ func TestXattrGetxattrat(t *testing.T) {
 	assertEventDurationPositive(t, result, exp)
 }
 
+// TestXattrSetxattr verifies ior traces the PATH-based setxattr(2) end-to-end.
+// setxattr(const char *path, const char *name, const void *value, size_t size,
+// int flags) takes a real filesystem PATH at args[0] (kind=pathname) and the
+// xattr NAME at args[1]; only the path must be captured on entry, so
+// enter_setxattr must carry the file path "xattrfile.txt" and never the xattr
+// name "user.ior". Crucially, setxattr returns 0 on success / -1 on error — its
+// `size` argument is the INPUT value length, NOT a byte count returned by the
+// call. The exit is therefore UNCLASSIFIED (contrast getxattr/listxattr, which
+// DO return byte counts and are READ-classified), so the recorded byte total
+// must be exactly zero. This reuses the xattr-getxattrat scenario, whose
+// workload performs syscall.Setxattr(path, "user.ior", ...) and is traced via
+// xattrTraceArgs ("getxattrat,setxattr,openat").
+func TestXattrSetxattr(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "xattr-getxattrat", []ExpectedEvent{
+		{
+			PathContains: "xattrfile.txt",
+			Tracepoint:   "enter_setxattr",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	}, xattrTraceArgs)
+
+	// The captured path must be the filesystem path, never the xattr name.
+	for _, rec := range result.Records {
+		if rec.TraceID.String() == "enter_setxattr" && rec.Path == "user.ior" {
+			t.Errorf("setxattr captured xattr name %q as path instead of file path", rec.Path)
+		}
+	}
+
+	// setxattr is UNCLASSIFIED: its return is a 0/-1 status, never a byte count
+	// (the `size` arg is the input value length). The accounted bytes for the
+	// setxattr events must therefore be exactly zero — guarding against the
+	// msgsnd-style bug of treating a status return as bytes written.
+	exp := ExpectedEvent{Tracepoint: "enter_setxattr", Comm: "ioworkload"}
+	assertEventBytesEqual(t, result, exp, 0)
+	assertEventDurationPositive(t, result, exp)
+}
+
 // TestXattrListxattrat verifies ior traces listxattrat(2) (Linux 6.13+)
 // end-to-end. listxattrat takes a dirfd plus a real filesystem path at args[1]
 // (NOT args[0]=dfd); only the path must be captured. The path is read on
