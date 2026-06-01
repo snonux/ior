@@ -113,7 +113,10 @@ func TestPosixMqBasic(t *testing.T) {
 
 	sendExp := ExpectedEvent{Tracepoint: "enter_mq_timedsend", Comm: "ioworkload", PathContains: "/ior-mq-"}
 	recvExp := ExpectedEvent{Tracepoint: "enter_mq_timedreceive", Comm: "ioworkload", PathContains: "/ior-mq-"}
-	assertEventBytesAtLeast(t, result, sendExp, mqPayloadLen)
+	// mq_timedsend returns 0 on success (a status, not a byte count), so it is
+	// UNCLASSIFIED and must NOT be attributed any write bytes. Only
+	// mq_timedreceive returns a real received byte count (ReadClassified).
+	assertEventBytesEqual(t, result, sendExp, 0)
 	assertEventBytesAtLeast(t, result, recvExp, mqPayloadLen)
 	assertEventDurationPositive(t, result, sendExp)
 	assertEventDurationPositive(t, result, recvExp)

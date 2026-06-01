@@ -632,5 +632,11 @@ var retClassifications = map[string]RetClassification{
 	// UNCLASSIFIED so the stats engine never treats the return as bytes written.
 	"write":             WriteClassified,
 	"writev":            WriteClassified,
-	"mq_timedsend":      WriteClassified,
+	// mq_timedsend is deliberately NOT listed here: mq_timedsend(2)/mq_send(3)
+	// return 0 on success or -1 on error — NOT a byte count (msg_len is an
+	// INPUT arg, never the return). Listing it as WriteClassified made
+	// bytesFromRet attribute its 0 return as "bytes written". Like its POSIX mq
+	// sibling mq_timedreceive (which genuinely returns the received byte count
+	// and stays ReadClassified), mq_timedsend's int status must stay
+	// UNCLASSIFIED. This mirrors the SysV IPC msgsnd vs msgrcv asymmetry.
 }

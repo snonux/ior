@@ -350,7 +350,9 @@ func TestClassifyMqSyscallPairsAcceptedAndClassified(t *testing.T) {
 	}{
 		{"mq_open", "struct open_event", "UNCLASSIFIED"},
 		{"mq_unlink", "struct path_event", "UNCLASSIFIED"},
-		{"mq_timedsend", "struct fd_event", "WRITE_CLASSIFIED"},
+		// mq_timedsend returns 0/-1 (a status), not a byte count, so its ret is
+		// UNCLASSIFIED. Only mq_timedreceive returns a real received byte count.
+		{"mq_timedsend", "struct fd_event", "UNCLASSIFIED"},
 		{"mq_timedreceive", "struct fd_event", "READ_CLASSIFIED"},
 		{"mq_notify", "struct fd_event", "UNCLASSIFIED"},
 		{"mq_getsetattr", "struct fd_event", "UNCLASSIFIED"},
