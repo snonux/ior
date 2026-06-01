@@ -164,6 +164,17 @@ var syscallFamilies = map[string]SyscallFamily{
 	// is a userspace struct timex *, so argument capture is KindNull (null_event)
 	// and the return is UNCLASSIFIED (a state code, not a byte count).
 	"adjtimex":      FamilyTime,
+	// alarm(2) arranges for a SIGALRM after a given number of seconds; it is a
+	// simplified setitimer(ITIMER_REAL) and, per alarm(2) NOTES, "alarm() and
+	// setitimer(2) share the same timer; calls to one will interfere with use of
+	// the other." It therefore belongs in FamilyTime alongside setitimer/
+	// getitimer/timer_create, not in Misc (where it previously fell through by
+	// omission, an adjtimex-style misclassification). The single argument is an
+	// unsigned int seconds (no fd/path), so argument capture is KindNull
+	// (null_event); the return is the seconds remaining on any previously set
+	// alarm (or 0) and alarm never fails, so the return is UNCLASSIFIED — not a
+	// byte count.
+	"alarm":         FamilyTime,
 	"clock_adjtime": FamilyTime, "clock_getres": FamilyTime, "clock_gettime": FamilyTime,
 	"clock_nanosleep": FamilyTime, "clock_settime": FamilyTime, "getitimer": FamilyTime,
 	"gettimeofday": FamilyTime, "nanosleep": FamilyTime, "setitimer": FamilyTime,
