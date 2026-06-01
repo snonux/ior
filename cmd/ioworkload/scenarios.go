@@ -21,6 +21,8 @@ var scenarios = map[string]func() error{
 	"readwrite-preadv":              readwritePreadv,
 	"readwrite-preadv2":             readwritePreadv2,
 	"readwrite-pwrite":              readwritePwrite,
+	"readwrite-pwritev":             readwritePwritev,
+	"readwrite-pwritev2":            readwritePwritev2,
 	"readwrite-readv":               readwriteReadv,
 	"readwrite-writev":              readwriteWritev,
 	"readwrite-wronly-read":         readwriteWronlyRead,

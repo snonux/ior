@@ -183,6 +183,93 @@ func readwritePwrite() error {
 	return nil
 }
 
+// readwritePwritev opens a file and writes data via pwritev (positional
+// vectored write). pwritev returns the number of bytes written and is
+// WRITE_CLASSIFIED, so the scenario writes a known iovec total to validate
+// end-to-end byte attribution for the positional vectored write variant.
+func readwritePwritev() error {
+	dir, cleanup, err := makeTempDir("readwrite-pwritev")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "pwritevfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	buf1 := []byte("pwritev ")
+	buf2 := []byte("test data")
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	// pwritev(fd, iov, iovcnt, offset) writes at the given offset (0) without
+	// changing the file position.
+	_, _, errno := syscall.Syscall6(syscall.SYS_PWRITEV, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("pwritev: %w", errno)
+	}
+	return nil
+}
+
+// readwritePwritev2 opens a file and writes data via pwritev2 (positional
+// vectored write with flags). Like pwritev it returns the bytes written and is
+// WRITE_CLASSIFIED; the scenario writes a known iovec total to validate
+// end-to-end byte attribution.
+func readwritePwritev2() error {
+	dir, cleanup, err := makeTempDir("readwrite-pwritev2")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "pwritev2file.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	buf1 := []byte("pwritev2 ")
+	buf2 := []byte("test data")
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	nr, err := pwritev2SyscallNr(runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	// pwritev2(fd, iov, iovcnt, pos_l, pos_h, flags): offset 0, no flags.
+	_, _, errno := syscall.Syscall6(nr, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("pwritev2: %w", errno)
+	}
+	return nil
+}
+
+// pwritev2SyscallNr returns the pwritev2(2) syscall number for the given GOARCH.
+// Go's syscall package lacks a SYS_PWRITEV2 constant, so the architecture
+// numbers are provided explicitly (mirroring preadv2SyscallNr).
+func pwritev2SyscallNr(arch string) (uintptr, error) {
+	switch arch {
+	case "amd64":
+		return 328, nil
+	case "arm64":
+		return 287, nil
+	default:
+		return 0, fmt.Errorf("pwritev2 syscall number not defined for GOARCH=%s", arch)
+	}
+}
+
 // readwriteReadv opens a file, writes data, then reads it back via readv.
 func readwriteReadv() error {
 	dir, cleanup, err := makeTempDir("readwrite-readv")
