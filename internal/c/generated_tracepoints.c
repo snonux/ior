@@ -3296,7 +3296,7 @@ int handle_sys_enter_msgsnd(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_msgsnd is a struct ret_event (WRITE_CLASSIFIED) (kind=ret)
+/// sys_exit_msgsnd is a struct ret_event (UNCLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_msgsnd")
 int handle_sys_exit_msgsnd(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -3316,7 +3316,7 @@ int handle_sys_exit_msgsnd(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = WRITE_CLASSIFIED;
+    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

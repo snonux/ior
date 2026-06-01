@@ -625,7 +625,11 @@ var retClassifications = map[string]RetClassification{
 	"pwritev2":          WriteClassified,
 	"sendmsg":           WriteClassified,
 	"sendto":            WriteClassified,
-	"msgsnd":            WriteClassified,
+	// msgsnd is deliberately NOT listed here: msgsnd(2) returns 0 on success or
+	// -1 on error — it is NOT a byte count (the payload size msgsz is an INPUT
+	// arg, never the return). Like its SysV IPC siblings (msgrcv excepted, which
+	// genuinely returns a received byte count), msgsnd's int status must stay
+	// UNCLASSIFIED so the stats engine never treats the return as bytes written.
 	"write":             WriteClassified,
 	"writev":            WriteClassified,
 	"mq_timedsend":      WriteClassified,
