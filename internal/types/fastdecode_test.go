@@ -544,6 +544,109 @@ func TestNewSleepEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+// fillCommonHeader writes the shared 24-byte event prefix
+// (event_type, trace_id, time, pid, tid) into raw.
+func fillCommonHeader(raw []byte, et EventType, tid TraceId) {
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(et))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(tid))
+	binary.LittleEndian.PutUint64(raw[8:16], 111)
+	binary.LittleEndian.PutUint32(raw[16:20], 22)
+	binary.LittleEndian.PutUint32(raw[20:24], 33)
+}
+
+// The five tests below feed the *padded* kernel payload (sizeof(struct ...)
+// reserved by bpf_ringbuf_reserve, which Go's binary.Write does NOT emit) and
+// assert the fast path decodes it correctly. They guard against the regression
+// where the fast-size gate used the field-sum size and silently dropped to the
+// slow binary.Read path on the hottest events (open/read/write/ret).
+
+func TestNewOpenEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, openEventSize) // 304: sizeof(struct open_event)
+	fillCommonHeader(raw, ENTER_OPEN_EVENT, SYS_ENTER_OPENAT)
+	flags := int32(-7)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(flags))
+	copy(raw[28:284], "hi")
+	copy(raw[284:300], "bash")
+
+	fast := NewOpenEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded open event for padded kernel payload")
+	}
+	defer fast.Recycle()
+	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Flags != -7 ||
+		string(fast.Comm[:4]) != "bash" {
+		t.Fatalf("unexpected open decode: %#v", fast)
+	}
+}
+
+func TestNewFdEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, fdEventSize) // 32: sizeof(struct fd_event)
+	fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(9)))
+
+	fast := NewFdEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded fd event for padded kernel payload")
+	}
+	defer fast.Recycle()
+	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 {
+		t.Fatalf("unexpected fd decode: %#v", fast)
+	}
+}
+
+func TestNewRetEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, retEventSize) // 40: sizeof(struct ret_event)
+	fillCommonHeader(raw, EXIT_RET_EVENT, SYS_EXIT_READ)
+	// ret_event has Ret before Pid/Tid; rewrite pid/tid at their real offsets.
+	ret := int64(-5)
+	binary.LittleEndian.PutUint64(raw[16:24], uint64(ret))
+	binary.LittleEndian.PutUint32(raw[24:28], 22)
+	binary.LittleEndian.PutUint32(raw[28:32], 33)
+	binary.LittleEndian.PutUint32(raw[32:36], READ_CLASSIFIED)
+
+	fast := NewRetEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded ret event for padded kernel payload")
+	}
+	defer fast.Recycle()
+	if fast.Time != 111 || fast.Ret != -5 || fast.Pid != 22 || fast.Tid != 33 ||
+		fast.RetType != READ_CLASSIFIED {
+		t.Fatalf("unexpected ret decode: %#v", fast)
+	}
+}
+
+func TestNewSocketEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, socketEventSize) // 40: sizeof(struct socket_event)
+	fillCommonHeader(raw, ENTER_SOCKET_EVENT, SYS_ENTER_SOCKET)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(2)))
+	binary.LittleEndian.PutUint32(raw[28:32], uint32(int32(1)))
+	binary.LittleEndian.PutUint32(raw[32:36], uint32(int32(6)))
+
+	fast := NewSocketEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded socket event for padded kernel payload")
+	}
+	defer fast.Recycle()
+	if fast.Time != 111 || fast.Family != 2 || fast.Type != 1 || fast.Protocol != 6 {
+		t.Fatalf("unexpected socket decode: %#v", fast)
+	}
+}
+
+func TestNewOpenByHandleAtEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, openByHandleAtEventSize) // 32: sizeof(struct open_by_handle_at_event)
+	fillCommonHeader(raw, ENTER_OPEN_BY_HANDLE_AT_EVENT, SYS_ENTER_OPEN_BY_HANDLE_AT)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(3)))
+
+	fast := NewOpenByHandleAtEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded open_by_handle_at event for padded kernel payload")
+	}
+	defer fast.Recycle()
+	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Flags != 3 {
+		t.Fatalf("unexpected open_by_handle_at decode: %#v", fast)
+	}
+}
+
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 	cases := []struct {
 		name   string

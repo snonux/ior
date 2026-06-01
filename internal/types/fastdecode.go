@@ -3,41 +3,58 @@ package types
 import "encoding/binary"
 
 const (
-	openEventSize           = 300
-	execEventSize           = 304
-	nullEventSize           = 24
-	fdEventSize             = 28
-	retEventSize            = 36
-	nameEventSize           = 536
-	pathEventSize           = 280
-	fcntlEventSize          = 40
-	dup3EventSize           = 32
-	openByHandleAtEventSize = 28
-	socketEventSize         = 36
-	socketpairEventSize     = 56
-	socketpairEventSizeV1   = 52
-	acceptEventSize         = 40
-	acceptEventSizeV1       = 36
-	pipeEventSize           = 48
-	pipeEventSizeV1         = 44
-	eventfdEventSize        = 40
-	eventfdEventSizeV1      = 36
-	epollCtlEventSize       = 40
-	twoFdEventSize          = 40
-	pollEventSize           = 40
-	pollEventSizeV1         = 36
-	memEventSize            = 56
-	sleepEventSize          = 32
-	keyctlEventSize         = 40
-	ptraceEventSize         = 48
-	perfOpenEventSize       = 56
+	// Sizes below are the kernel ringbuf payload sizes, i.e. sizeof(struct ...)
+	// from internal/c/types.h compiled for the BPF/LP64 target. The kernel
+	// reserves sizeof(struct) via bpf_ringbuf_reserve, which for structs whose
+	// last field is 32-bit but that also contain a __u64 includes trailing
+	// padding to the struct's 8-byte alignment. The fast path must therefore
+	// gate on sizeof, not on the sum of field widths, or it silently falls back
+	// to the slow binary.Read path on the hot events (open/read/write/ret/...).
+	//
+	// The *V1 constants are the historical, unpadded field-sum sizes still
+	// produced by Go's binary.Write (used by tests and by Bytes()); the fast
+	// decoders accept both so test payloads and kernel payloads both hit the
+	// fast path. The trailing pad bytes carry no data and are ignored.
+	openEventSize             = 304
+	openEventSizeV1           = 300
+	execEventSize             = 304
+	nullEventSize             = 24
+	fdEventSize               = 32
+	fdEventSizeV1             = 28
+	retEventSize              = 40
+	retEventSizeV1            = 36
+	nameEventSize             = 536
+	pathEventSize             = 280
+	fcntlEventSize            = 40
+	dup3EventSize             = 32
+	openByHandleAtEventSize   = 32
+	openByHandleAtEventSizeV1 = 28
+	socketEventSize           = 40
+	socketEventSizeV1         = 36
+	socketpairEventSize       = 56
+	socketpairEventSizeV1     = 52
+	acceptEventSize           = 40
+	acceptEventSizeV1         = 36
+	pipeEventSize             = 48
+	pipeEventSizeV1           = 44
+	eventfdEventSize          = 40
+	eventfdEventSizeV1        = 36
+	epollCtlEventSize         = 40
+	twoFdEventSize            = 40
+	pollEventSize             = 40
+	pollEventSizeV1           = 36
+	memEventSize              = 56
+	sleepEventSize            = 32
+	keyctlEventSize           = 40
+	ptraceEventSize           = 48
+	perfOpenEventSize         = 56
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
-	if len(raw) < openEventSize {
+	if len(raw) < openEventSizeV1 {
 		return nil
 	}
-	if len(raw) != openEventSize {
+	if len(raw) != openEventSize && len(raw) != openEventSizeV1 {
 		return NewOpenEvent(raw)
 	}
 	o := poolOfOpenEvents.Get().(*OpenEvent)
@@ -89,10 +106,10 @@ func NewNullEventFast(raw []byte) *NullEvent {
 }
 
 func NewFdEventFast(raw []byte) *FdEvent {
-	if len(raw) < fdEventSize {
+	if len(raw) < fdEventSizeV1 {
 		return nil
 	}
-	if len(raw) != fdEventSize {
+	if len(raw) != fdEventSize && len(raw) != fdEventSizeV1 {
 		return NewFdEvent(raw)
 	}
 	f := poolOfFdEvents.Get().(*FdEvent)
@@ -106,10 +123,10 @@ func NewFdEventFast(raw []byte) *FdEvent {
 }
 
 func NewRetEventFast(raw []byte) *RetEvent {
-	if len(raw) < retEventSize {
+	if len(raw) < retEventSizeV1 {
 		return nil
 	}
-	if len(raw) != retEventSize {
+	if len(raw) != retEventSize && len(raw) != retEventSizeV1 {
 		return NewRetEvent(raw)
 	}
 	r := poolOfRetEvents.Get().(*RetEvent)
@@ -196,10 +213,10 @@ func NewDup3EventFast(raw []byte) *Dup3Event {
 }
 
 func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
-	if len(raw) < openByHandleAtEventSize {
+	if len(raw) < openByHandleAtEventSizeV1 {
 		return nil
 	}
-	if len(raw) != openByHandleAtEventSize {
+	if len(raw) != openByHandleAtEventSize && len(raw) != openByHandleAtEventSizeV1 {
 		return NewOpenByHandleAtEvent(raw)
 	}
 	o := poolOfOpenByHandleAtEvents.Get().(*OpenByHandleAtEvent)
@@ -213,10 +230,10 @@ func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
 }
 
 func NewSocketEventFast(raw []byte) *SocketEvent {
-	if len(raw) < socketEventSize {
+	if len(raw) < socketEventSizeV1 {
 		return nil
 	}
-	if len(raw) != socketEventSize {
+	if len(raw) != socketEventSize && len(raw) != socketEventSizeV1 {
 		return NewSocketEvent(raw)
 	}
 	s := poolOfSocketEvents.Get().(*SocketEvent)
