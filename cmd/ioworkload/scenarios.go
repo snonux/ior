@@ -139,6 +139,7 @@ var scenarios = map[string]func() error{
 	"aio-submit":                    aioSubmit,
 	"signals-basic":                 signalsBasic,
 	"misc-basic":                    miscBasic,
+	"sched-basic":                   schedBasic,
 }
 
 func makeTempDir(prefix string) (string, func(), error) {
