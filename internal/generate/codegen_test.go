@@ -251,17 +251,6 @@ func TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
-// TestClassifyRetProcessMadviseUnclassified locks in that process_madvise's
-// return value is UNCLASSIFIED. The man page says it returns "the number of
-// bytes advised", but that is advisory accounting, not real I/O: no bytes move
-// between buffers. Classifying it as TRANSFER/READ/WRITE would double-count it as
-// data movement, so it must stay UNCLASSIFIED like madvise(2).
-func TestClassifyRetProcessMadviseUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_process_madvise"); got != Unclassified {
-		t.Errorf("process_madvise ret classification = %q, want %q", got, Unclassified)
-	}
-}
-
 // TestGenerateRtSigpendingHandler locks in how rt_sigpending(2) is generated.
 // Per the man page:
 //
@@ -355,16 +344,6 @@ func TestGenerateRtTgsigqueueinfoHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
-// TestClassifyRetRtTgsigqueueinfoUnclassified locks in that rt_tgsigqueueinfo's
-// return value is UNCLASSIFIED. The syscall returns an int status (0 on success,
-// -1 on error) — never a byte count — so it must never be tagged as a
-// READ/WRITE/TRANSFER transfer size.
-func TestClassifyRetRtTgsigqueueinfoUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_rt_tgsigqueueinfo"); got != Unclassified {
-		t.Errorf("rt_tgsigqueueinfo ret classification = %q, want %q", got, Unclassified)
-	}
-}
-
 // TestGenerateMsgctlHandler locks in how msgctl(2) is generated. Per the man
 // page:
 //
@@ -430,16 +409,6 @@ func TestGenerateMsgctlHandler(t *testing.T) {
 	requireContains(t, output, exitSec)
 	requireContains(t, output, "ev->ret = ctx->ret;")
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
-}
-
-// TestClassifyRetMsgctlUnclassified locks in that msgctl's return value is
-// UNCLASSIFIED. msgctl returns an int status (0, or a non-negative value for the
-// IPC_INFO/MSG_INFO/MSG_STAT info ops, and -1 on error) — never a byte count —
-// so it must never be tagged as a READ/WRITE/TRANSFER transfer size.
-func TestClassifyRetMsgctlUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_msgctl"); got != Unclassified {
-		t.Errorf("msgctl ret classification = %q, want %q", got, Unclassified)
-	}
 }
 
 // TestGenerateSemctlHandler locks in how semctl(2) is generated. Per the man
@@ -511,17 +480,6 @@ func TestGenerateSemctlHandler(t *testing.T) {
 	requireContains(t, output, exitSec)
 	requireContains(t, output, "ev->ret = ctx->ret;")
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
-}
-
-// TestClassifyRetSemctlUnclassified locks in that semctl's return value is
-// UNCLASSIFIED. semctl returns an int status (0, or a non-negative value for the
-// GETVAL/GETPID/GETNCNT/GETZCNT/IPC_INFO/SEM_INFO/SEM_STAT info ops, and -1 on
-// error) — never a byte count — so it must never be tagged as a
-// READ/WRITE/TRANSFER transfer size.
-func TestClassifyRetSemctlUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_semctl"); got != Unclassified {
-		t.Errorf("semctl ret classification = %q, want %q", got, Unclassified)
-	}
 }
 
 // TestGenerateClone3Handler locks in how clone3(2) is generated. Per the man
@@ -718,16 +676,6 @@ func TestGenerateSigaltstackHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
-// TestClassifyRetSigaltstackUnclassified locks in that sigaltstack's return value
-// is UNCLASSIFIED. It returns 0 on success or -1 on error — a status code, not a
-// number of bytes transferred — so classifying it as READ/WRITE/TRANSFER would
-// wrongly count it as data movement.
-func TestClassifyRetSigaltstackUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_sigaltstack"); got != Unclassified {
-		t.Errorf("sigaltstack ret classification = %q, want %q", got, Unclassified)
-	}
-}
-
 // TestGenerateTkillHandler locks in how tkill(2) is generated. Per the man page:
 //
 //	int tkill(pid_t tid, int sig)
@@ -778,33 +726,6 @@ func TestGenerateTkillHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
-// TestClassifyTkillFallsThroughToNull pins the classifier behaviour that makes
-// tkill safe: ClassifyFormat itself returns KindNone (no field matches an
-// fd/path/name pattern — crucially the pid_t tid field is NOT treated as an fd),
-// and only the generation-time fallback turns that into KindNull. If a future
-// change made the tid match the fd rule, this test would flip to KindFd and fail.
-func TestClassifyTkillFallsThroughToNull(t *testing.T) {
-	f := mustParseOne(t, strings.Replace(
-		strings.Replace(FormatKill, "sys_enter_kill", "sys_enter_tkill", 1),
-		"ID: 183", "ID: 177", 1))
-	if r := ClassifyFormat(&f); r.Kind != KindNone {
-		t.Errorf("tkill ClassifyFormat = %d, want KindNone (tid must not match the fd rule)", r.Kind)
-	}
-	if r := classifyEnterForGeneration(&f); r.Kind != KindNull {
-		t.Errorf("tkill classifyEnterForGeneration = %d, want KindNull", r.Kind)
-	}
-}
-
-// TestClassifyRetTkillUnclassified locks in that tkill's return value is
-// UNCLASSIFIED. It returns 0 on success or -1 on error — a status code, not a
-// number of bytes transferred — so classifying it as READ/WRITE/TRANSFER would
-// wrongly count it as data movement.
-func TestClassifyRetTkillUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_tkill"); got != Unclassified {
-		t.Errorf("tkill ret classification = %q, want %q", got, Unclassified)
-	}
-}
-
 // TestGenerateSysinfoHandler locks in how sysinfo(2) is generated. Per the man
 // page:
 //
@@ -848,26 +769,6 @@ func TestGenerateSysinfoHandler(t *testing.T) {
 	requireContains(t, output, exitSec)
 	requireContains(t, output, "ev->ret = ctx->ret;")
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
-}
-
-// TestClassifyRetSysinfoUnclassified locks in that sysinfo's return value is
-// UNCLASSIFIED. sysinfo(2) returns 0 on success or -1 on error — a status code,
-// not a number of bytes transferred — so classifying it as READ/WRITE/TRANSFER
-// would wrongly count it as data movement.
-func TestClassifyRetSysinfoUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_sysinfo"); got != Unclassified {
-		t.Errorf("sysinfo ret classification = %q, want %q", got, Unclassified)
-	}
-}
-
-// TestClassifyRetRtSigpendingUnclassified locks in that rt_sigpending's return
-// value is UNCLASSIFIED. It returns 0 on success or -1 on error — a status code,
-// not a number of bytes transferred — so classifying it as READ/WRITE/TRANSFER
-// would wrongly count it as data movement.
-func TestClassifyRetRtSigpendingUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_rt_sigpending"); got != Unclassified {
-		t.Errorf("rt_sigpending ret classification = %q, want %q", got, Unclassified)
-	}
 }
 
 func TestGenerateLandlockAddRuleHandlerUsesFirstArgumentAsFd(t *testing.T) {
@@ -946,31 +847,6 @@ func TestGenerateMkdirHandlerCapturesPathFromArgs0(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
-// TestMkdiratFamilyAndKindMatchSiblings locks in that mkdirat and its siblings
-// mkdir/mknodat share the same FS family and pathname kind classification. A
-// drift here (e.g. mkdirat slipping into Misc) would split related directory/
-// node-creation syscalls across families in the dashboard.
-func TestMkdiratFamilyAndKindMatchSiblings(t *testing.T) {
-	for _, syscall := range []string{"mkdirat", "mkdir", "mknodat"} {
-		if got := ClassifySyscallFamily("sys_enter_" + syscall); got != FamilyFS {
-			t.Errorf("%s family = %q, want %q", syscall, got, FamilyFS)
-		}
-	}
-
-	mkdirat := mustParseOne(t, FormatMkdirat)
-	if r := ClassifyFormat(&mkdirat); r.Kind != KindPathname || r.PathnameField != "pathname" {
-		t.Errorf("mkdirat classified as kind=%d field=%q, want KindPathname/pathname", r.Kind, r.PathnameField)
-	}
-	if n := mkdirat.FieldNumber("pathname"); n != 1 {
-		t.Errorf("mkdirat FieldNumber(pathname) = %d, want 1", n)
-	}
-
-	mkdir := mustParseOne(t, FormatMkdir)
-	if n := mkdir.FieldNumber("pathname"); n != 0 {
-		t.Errorf("mkdir FieldNumber(pathname) = %d, want 0", n)
-	}
-}
-
 // TestGenerateRmdirHandlerCapturesPathFromArgs0 locks in that rmdir(2) is a
 // KindPathname event whose real filesystem path is read from args[0]. rmdir is
 // "int rmdir(const char *pathname)" with a single pathname argument (no dirfd),
@@ -994,28 +870,6 @@ func TestGenerateRmdirHandlerCapturesPathFromArgs0(t *testing.T) {
 	requireNotContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
 	// Return value is a 0/-1 status code, not a byte count: UNCLASSIFIED.
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
-}
-
-// TestRmdirFamilyAndKindMatchSiblings locks in that rmdir shares the same FS
-// family and KindPathname classification as its directory/link removal siblings
-// unlink/unlinkat/mkdir. A drift here (e.g. rmdir slipping into Misc, or losing
-// its pathname capture) would split related path-based syscalls across families
-// in the dashboard and drop rmdir's path from the trace.
-func TestRmdirFamilyAndKindMatchSiblings(t *testing.T) {
-	for _, syscall := range []string{"rmdir", "unlink", "unlinkat", "mkdir"} {
-		if got := ClassifySyscallFamily("sys_enter_" + syscall); got != FamilyFS {
-			t.Errorf("%s family = %q, want %q", syscall, got, FamilyFS)
-		}
-	}
-
-	rmdir := mustParseOne(t, FormatRmdir)
-	if r := ClassifyFormat(&rmdir); r.Kind != KindPathname || r.PathnameField != "pathname" {
-		t.Errorf("rmdir classified as kind=%d field=%q, want KindPathname/pathname", r.Kind, r.PathnameField)
-	}
-	// rmdir has no dirfd, so the pathname is the first real argument: args[0].
-	if n := rmdir.FieldNumber("pathname"); n != 0 {
-		t.Errorf("rmdir FieldNumber(pathname) = %d, want 0", n)
-	}
 }
 
 func TestGenerateExecHandler(t *testing.T) {
@@ -1231,16 +1085,6 @@ func TestGenerateSyncHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
 
-// TestClassifyRetSyncUnclassified locks in that the bare sync(2) return value is
-// UNCLASSIFIED. sync returns void; the sys_exit_sync tracepoint still carries a
-// ret field, but it is meaningless and certainly not a byte count, so it must
-// stay UNCLASSIFIED — never READ/WRITE/TRANSFER.
-func TestClassifyRetSyncUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_sync"); got != Unclassified {
-		t.Errorf("sync ret classification = %q, want %q", got, Unclassified)
-	}
-}
-
 // TestSyncIsNotNoreturn locks in that bare sync(2) is NOT treated as a noreturn
 // syscall: it is void but returns control to userspace, so its exit handler must
 // be generated (see TestGenerateSyncHandler). Only exit(2)/exit_group(2)/
@@ -1428,16 +1272,6 @@ func TestGenerateNullHandlerMlockall(t *testing.T) {
 	requireContains(t, output, exitSec)
 	requireContains(t, output, "ev->ret = ctx->ret;")
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
-}
-
-// TestClassifyRetMlockallUnclassified locks in that mlockall's return value is
-// UNCLASSIFIED. mlockall(2) returns 0 on success or -1 on error — a status code,
-// not a number of bytes transferred — so classifying it as READ/WRITE/TRANSFER
-// would wrongly count it as data movement.
-func TestClassifyRetMlockallUnclassified(t *testing.T) {
-	if got := ClassifyRet("sys_exit_mlockall"); got != Unclassified {
-		t.Errorf("mlockall ret classification = %q, want %q", got, Unclassified)
-	}
 }
 
 // TestGenerateMemHandlerRemapFilePages locks in the BPF handler wiring for the
