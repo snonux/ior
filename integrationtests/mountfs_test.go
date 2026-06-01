@@ -4,7 +4,7 @@ import "testing"
 
 var mountfsTraceArgs = []string{
 	"-trace-syscalls",
-	"mount,umount,move_mount,fsopen,fsmount,pivot_root,quotactl,statmount,listmount,listns,swapon,swapoff",
+	"mount,umount,move_mount,fsopen,fsconfig,fspick,open_tree,fsmount,pivot_root,quotactl,statmount,listmount,listns,swapon,swapoff",
 }
 
 func TestMountFsManagementSyscalls(t *testing.T) {
@@ -13,6 +13,13 @@ func TestMountFsManagementSyscalls(t *testing.T) {
 		{Tracepoint: "enter_umount", MinCount: 1},
 		{Tracepoint: "enter_move_mount", MinCount: 1},
 		{Tracepoint: "enter_fsopen", MinCount: 1},
+		// fsconfig (KindFd), fspick (KindPathname), and open_tree (KindOpen) are
+		// best-effort new-mount-API calls in the scenario. Their sys_enter_
+		// tracepoints fire on kernel entry regardless of permission/validity, so
+		// MinCount>=1 holds even when the syscalls themselves return an error.
+		{Tracepoint: "enter_fsconfig", MinCount: 1},
+		{Tracepoint: "enter_fspick", MinCount: 1},
+		{Tracepoint: "enter_open_tree", MinCount: 1},
 		{Tracepoint: "enter_fsmount", MinCount: 1},
 		{Tracepoint: "enter_pivot_root", MinCount: 1},
 		{Tracepoint: "enter_quotactl", MinCount: 1},
