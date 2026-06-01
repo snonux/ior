@@ -12,6 +12,25 @@ import (
 	"ior/internal/types"
 )
 
+// newHermeticCommResolver builds a commResolver whose lookup path never touches
+// the host's /proc tree. Comm names in these tests are established exclusively
+// from the synthetic OpenEvent.Comm bytes (cached via setCachedComm); any cache
+// miss for a synthetic pid/tid must deterministically resolve to "no comm".
+//
+// Without this seam the default resolver reads /proc/<tid>/comm for the small,
+// fixed test pids/tids (e.g. defaultTid+100 == 111, defaultPid+1 == 11). Those
+// numbers collide with real, transient kernel/host threads (e.g. a live
+// "kworker/0:1-events"), so the resolved comm depended on what happened to be
+// running on the host at that instant — making the assertions flaky under full
+// `mage test` runs. Returning ("", nil) makes the lookup hermetic.
+func newHermeticCommResolver() *commResolver {
+	r := newCommResolver(make(map[uint32]string))
+	r.resolveFn = func(_ context.Context, _ uint32) (string, error) {
+		return "", nil
+	}
+	return r
+}
+
 // Test that comm names are properly propagated across syscalls
 func TestCommPropagation(t *testing.T) {
 	td := makeCommPropagationTestData(t)
@@ -22,7 +41,9 @@ func TestCommPropagation(t *testing.T) {
 	inCh := make(chan []byte)
 	outCh := make(chan synchronizedPair)
 
-	el := mustNewEventLoop(t, eventLoopConfig{})
+	// Inject a hermetic comm resolver so cache-miss lookups for the synthetic
+	// pids/tids never read /proc on the host (see newHermeticCommResolver).
+	el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
 	el.printCb = func(ev *event.Pair) {
 		next := synchronizedPair{pair: ev, ack: make(chan struct{})}
 		outCh <- next
@@ -116,8 +137,9 @@ func makeCommPropagationTestData(t *testing.T) (td testData) {
 		}
 	})
 
-	// Step 4: Different thread without open should not have comm name.
-	// Use a very large TID to avoid collisions with real /proc entries on CI/hosts.
+	// Step 4: Different thread without open should not have comm name. The
+	// hermetic comm resolver (injected above) returns no comm for this tid, so
+	// it stays empty deterministically regardless of what runs on the host.
 	differentTid := uint32(4000000000)
 	_, diffReadEnterBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, differentTid, fd, types.SYS_ENTER_READ)
 	td.rawTracepoints = append(td.rawTracepoints, diffReadEnterBytes)
@@ -531,9 +553,12 @@ func TestCommFilterToggle(t *testing.T) {
 
 func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 	el := &eventLoop{
-		pairs:        newPairTracker(),
-		fdTracker:    newFDTracker(make(map[int32]file.File)),
-		commResolver: newCommResolver(make(map[uint32]string)),
+		pairs:     newPairTracker(),
+		fdTracker: newFDTracker(make(map[int32]file.File)),
+		// Hermetic resolver: cache-miss tids resolve to "no comm" instead of
+		// reading /proc on the host, so filter assertions cannot pick up a real
+		// process comm for a synthetic tid (see newHermeticCommResolver).
+		commResolver: newHermeticCommResolver(),
 		cfg:          eventLoopConfig{synchronousRawProcessing: true},
 		outputFormatter: outputFormatter{
 			printCb: func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
