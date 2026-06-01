@@ -66,6 +66,45 @@ func TestReadwritePwrite(t *testing.T) {
 	}, 1)
 }
 
+func TestReadwritePwritev(t *testing.T) {
+	// pwritev is the positional vectored write sibling of pwrite64/writev and is
+	// WRITE_CLASSIFIED, so a successful write must attribute the iovec total
+	// (sum of both buffers) end-to-end.
+	const payloadLen = uint64(len("pwritev ") + len("test data"))
+	result, _ := runScenarioResult(t, "readwrite-pwritev", []ExpectedEvent{
+		{
+			PathContains: "pwritevfile.txt",
+			Tracepoint:   "enter_pwritev",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "pwritevfile.txt",
+		Tracepoint:   "enter_pwritev",
+		Comm:         "ioworkload",
+	}, payloadLen)
+}
+
+func TestReadwritePwritev2(t *testing.T) {
+	// pwritev2 is the positional vectored write variant with flags; like pwritev
+	// it is WRITE_CLASSIFIED and must attribute the iovec total end-to-end.
+	const payloadLen = uint64(len("pwritev2 ") + len("test data"))
+	result, _ := runScenarioResult(t, "readwrite-pwritev2", []ExpectedEvent{
+		{
+			PathContains: "pwritev2file.txt",
+			Tracepoint:   "enter_pwritev2",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "pwritev2file.txt",
+		Tracepoint:   "enter_pwritev2",
+		Comm:         "ioworkload",
+	}, payloadLen)
+}
+
 func TestReadwritePreadv(t *testing.T) {
 	// preadv is the positional vectored read sibling of pread64/readv and is
 	// READ_CLASSIFIED, so a successful read must attribute the payload bytes
