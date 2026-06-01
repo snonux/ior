@@ -35,5 +35,6 @@ func TestSchedBasic(t *testing.T) {
 		{Tracepoint: "enter_sched_getaffinity", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_sched_getscheduler", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_sched_getparam", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_sched_rr_get_interval", Comm: "ioworkload", MinCount: 1},
 	})
 }
