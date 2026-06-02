@@ -787,7 +787,7 @@ var syscallFamilies = map[string]string{
 	"fadvise64":               "FS",
 	"fallocate":               "FS",
 	"fanotify_init":           "IPC",
-	"fanotify_mark":           "Misc",
+	"fanotify_mark":           "IPC",
 	"fchdir":                  "FS",
 	"fchmod":                  "FS",
 	"fchmodat":                "FS",
