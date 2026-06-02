@@ -40,8 +40,21 @@ var syscallFamilies = map[string]SyscallFamily{
 	// alarm/adjtimex-style misclassification). The flags argument is at args[0]
 	// (KindEventfd / eventfd flags capture) and the returned fd is captured via
 	// the fd mechanism, so the return is UNCLASSIFIED (not a byte count).
-	// fanotify_mark stays out of this table (path-marking, not fd creation).
+	//
+	// fanotify_mark(2) adds/removes/modifies a mark on an fanotify group and is
+	// the operation counterpart of fanotify_init — the direct analog of
+	// inotify_add_watch (both register a watch/mark on a filesystem object,
+	// taking the notification-group fd as arg0). inotify_add_watch is FamilyIPC,
+	// so for sibling consistency fanotify_mark belongs in IPC too rather than
+	// falling through to Misc by omission (the same alarm/adjtimex-style
+	// misclassification just fixed for fanotify_init). Its KIND stays KindPathname
+	// capturing the (optional) pathname at args[4]: this matches the *at() cohort
+	// convention — fchmodat, fchownat, unlinkat, mkdirat, newfstatat, utimensat,
+	// name_to_handle_at all carry a dirfd at arg0 yet capture the pathname — since
+	// fanotify_mark has a dirfd@arg3 + pathname@arg4 pair. fanotify_mark returns
+	// 0/-1, so the return is UNCLASSIFIED (not a byte count).
 	"fanotify_init": FamilyIPC,
+	"fanotify_mark": FamilyIPC,
 	"inotify_add_watch": FamilyIPC,
 	"inotify_init": FamilyIPC, "inotify_init1": FamilyIPC, "inotify_rm_watch": FamilyIPC,
 	"memfd_create": FamilyIPC, "memfd_secret": FamilyIPC, "mq_getsetattr": FamilyIPC,
