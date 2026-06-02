@@ -12,6 +12,8 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/magefile/mage v1.15.0
 	github.com/parquet-go/parquet-go v0.29.0
+	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.41.0
 )
 
 require (
@@ -35,7 +37,5 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )

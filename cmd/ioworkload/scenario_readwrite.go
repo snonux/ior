@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // readwriteBasic opens a file, writes data, seeks to start, reads it back.
@@ -379,6 +381,76 @@ func readwriteReadaheadEbadf() error {
 		if errno == 0 {
 			return fmt.Errorf("expected EBADF, but readahead succeeded")
 		}
+	}
+	return nil
+}
+
+// cachestatRange mirrors the kernel's struct cachestat_range, the second
+// cachestat(2) argument: { __u64 off; __u64 len; }. off=0/len=0 means "the
+// whole file".
+type cachestatRange struct {
+	off uint64
+	len uint64
+}
+
+// cachestatResult mirrors the kernel's struct cachestat output, the third
+// cachestat(2) argument. The kernel fills it in; the scenario only needs to
+// hand the kernel a correctly-sized buffer, so the fields are not inspected.
+type cachestatResult struct {
+	nrCache           uint64
+	nrDirty           uint64
+	nrWriteback       uint64
+	nrEvicted         uint64
+	nrRecentlyEvicted uint64
+}
+
+// readwriteCachestat opens a file, writes data (so the file has pages in the
+// page cache), then queries the cache residency of the whole file via
+// cachestat(2). cachestat has no glibc/unix wrapper, so it is issued as a raw
+// syscall: cachestat(fd, &cachestat_range{0,0}, &cachestat, flags=0). It returns
+// 0 on success / -1 on error and transfers no I/O bytes to userspace, so ior
+// classifies it KindFd / UNCLASSIFIED. The scenario exercises the enter fd_event
+// (fd at args[0]) and the exit ret_event end-to-end. cachestat is Linux 6.5+;
+// ENOSYS on older kernels is tolerated so the workload stays portable.
+func readwriteCachestat() error {
+	dir, cleanup, err := makeTempDir("readwrite-cachestat")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "cachestatfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("cachestat test data")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	// cachestat(fd, &range{off:0,len:0}=whole file, &cstat output, flags=0).
+	cr := cachestatRange{off: 0, len: 0}
+	var cs cachestatResult
+	_, _, errno := syscall.Syscall6(
+		unix.SYS_CACHESTAT,
+		uintptr(fd),
+		uintptr(unsafe.Pointer(&cr)),
+		uintptr(unsafe.Pointer(&cs)),
+		0, // flags must be 0
+		0,
+		0,
+	)
+	runtime.KeepAlive(cr)
+	runtime.KeepAlive(cs)
+	if errno == syscall.ENOSYS {
+		// Kernel < 6.5: cachestat is unavailable. Tolerate gracefully so the
+		// scenario does not fail on older portable targets.
+		return nil
+	}
+	if errno != 0 {
+		return fmt.Errorf("cachestat: %w", errno)
 	}
 	return nil
 }

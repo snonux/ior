@@ -302,6 +302,32 @@ func TestReadwriteReadaheadEbadf(t *testing.T) {
 	}, 0)
 }
 
+func TestReadwriteCachestat(t *testing.T) {
+	// cachestat(2) is KindFd / UNCLASSIFIED: it queries page-cache residency for
+	// a file and returns 0/-1 (no byte count, no I/O bytes to userspace), so the
+	// tracer must attribute zero bytes while still capturing the fd (args[0]) on
+	// enter and timing the syscall. cachestat is Linux 6.5+; the enter tracepoint
+	// fires before the kernel checks availability, so even an ENOSYS kernel would
+	// still record enter_cachestat, but this dev kernel (7.0.9) supports it fully.
+	result, _ := runScenarioResult(t, "readwrite-cachestat", []ExpectedEvent{
+		{
+			PathContains: "cachestatfile.txt",
+			Tracepoint:   "enter_cachestat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	exp := ExpectedEvent{
+		PathContains: "cachestatfile.txt",
+		Tracepoint:   "enter_cachestat",
+		Comm:         "ioworkload",
+	}
+	// UNCLASSIFIED: no byte count is attributed for a successful cachestat.
+	assertEventBytesEqual(t, result, exp, 0)
+	// Timing is captured end-to-end (enter/exit paired into a duration).
+	assertEventDurationPositive(t, result, exp)
+}
+
 func assertEventBytesAtLeast(t *testing.T, result TestResult, exp ExpectedEvent, minBytes uint64) {
 	t.Helper()
 	var matched bool
