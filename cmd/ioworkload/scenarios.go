@@ -107,6 +107,7 @@ var scenarios = map[string]func() error{
 	"stat-fstat-ebadf":              statFstatEbadf,
 	"xattr-getxattrat":              xattrGetxattrat,
 	"xattr-listxattrat":             xattrListxattrat,
+	"xattr-removexattrat":           xattrRemovexattrat,
 	"utime-basic":                   utimeBasic,
 	"utime-utimes":                  utimeUtimes,
 	"utime-enoent":                  utimeEnoent,
