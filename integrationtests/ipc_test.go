@@ -9,6 +9,8 @@ const mqPayloadLen = uint64(14)
 
 var ipcDescriptorTraceArgs = []string{"-trace-syscalls", "pipe,pipe2,eventfd,eventfd2,close"}
 
+var inotifyTraceArgs = []string{"-trace-syscalls", "inotify_init1,inotify_add_watch,inotify_rm_watch,close"}
+
 func TestPipeBasic(t *testing.T) {
 	result, _ := runScenarioResultWithIorArgs(t, "pipe-basic", []ExpectedEvent{
 		{Tracepoint: "enter_pipe", MinCount: 1},
@@ -75,6 +77,37 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 
 	assertTracepointPathPrefix(t, result, "enter_memfd_create", "memfd:")
 	assertTracepointPathPrefix(t, result, "enter_timerfd_create", "timerfd:")
+}
+
+// TestInotifyBasic asserts end-to-end tracing of the inotify IPC family.
+// The inotify-basic scenario issues inotify_init1(IN_CLOEXEC) ->
+// inotify_add_watch(fd, file, IN_CREATE|IN_DELETE|IN_MODIFY) ->
+// inotify_rm_watch(fd, wd) -> close(fd). We assert all three inotify enter
+// tracepoints fire at least once, with positive durations and the hermetic
+// PID/comm guards already applied by runScenarioResultWithIorArgs. The
+// inotify_init1 instance fd resolves to the "inotifyfd:" path label, and the
+// close on that same fd carries the same label.
+func TestInotifyBasic(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "inotify-basic", []ExpectedEvent{
+		{Tracepoint: "enter_inotify_init1", MinCount: 1},
+		{Tracepoint: "enter_inotify_add_watch", MinCount: 1},
+		{Tracepoint: "enter_inotify_rm_watch", MinCount: 1},
+		{Tracepoint: "enter_close", MinCount: 1},
+	}, inotifyTraceArgs)
+
+	// inotify_init1 returns a registered fd labelled inotifyfd:, and the
+	// subsequent close of that fd resolves to the same tracked label.
+	assertTracepointPathPrefix(t, result, "enter_inotify_init1", "inotifyfd:")
+	assertTracepointPathPrefix(t, result, "enter_close", "inotifyfd:")
+
+	// inotify_add_watch / inotify_rm_watch capture the inotify instance fd
+	// (kind=fd@arg0), so they too resolve to the tracked inotifyfd: label.
+	assertTracepointPathPrefix(t, result, "enter_inotify_add_watch", "inotifyfd:")
+	assertTracepointPathPrefix(t, result, "enter_inotify_rm_watch", "inotifyfd:")
+
+	assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: "enter_inotify_init1", Comm: "ioworkload"})
+	assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: "enter_inotify_add_watch", Comm: "ioworkload"})
+	assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: "enter_inotify_rm_watch", Comm: "ioworkload"})
 }
 
 func TestPosixMqBasic(t *testing.T) {

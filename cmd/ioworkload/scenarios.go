@@ -42,6 +42,7 @@ var scenarios = map[string]func() error{
 	"eventfd-basic":                 eventfdBasic,
 	"eventfd2-basic":                eventfd2Basic,
 	"fd-from-air-eventfd-users":     fdFromAirEventfdUsers,
+	"inotify-basic":                 inotifyBasic,
 	"mq-posix-basic":                mqPosixBasic,
 	"sysv-shm-basic":                sysvShmBasic,
 	"sysv-msg-basic":                sysvMsgBasic,
