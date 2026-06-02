@@ -143,12 +143,23 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	return true
 }
 
-// applyFdCloseState updates fd-tracking state for the close syscall.
+// applyFdCloseState updates fd-tracking state for the close syscall. The fd is
+// deregistered only on a SUCCESSFUL close (ret == 0): per close(2), a failed
+// close — most importantly EBADF, "fd isn't a valid open file descriptor" —
+// did not release any descriptor we are tracking, so evicting the mapping there
+// would drop a still-valid fd->path entry and let a later genuine close (or a
+// reuse of the number) resolve against a stale/empty state. This mirrors the
+// ret == 0 gate already applied by applyCloseRangeState for close_range.
 func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
-	if ep.Is(types.SYS_ENTER_CLOSE) {
-		e.fdState().delete(fd)
-		e.fdState().deleteProcFdCache(fd, pid)
+	if !ep.Is(types.SYS_ENTER_CLOSE) {
+		return
 	}
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok || retEv.Ret != 0 {
+		return
+	}
+	e.fdState().delete(fd)
+	e.fdState().deleteProcFdCache(fd, pid)
 }
 
 // applyFdTransferOp handles dup/dup2 and pidfd_getfd fd-transfer operations.
