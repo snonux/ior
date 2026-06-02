@@ -10,6 +10,10 @@ var xattrTraceArgs = []string{"-trace-syscalls", "getxattrat,setxattr,openat"}
 // test is not perturbed by unrelated xattr/open traffic.
 var xattrListTraceArgs = []string{"-trace-syscalls", "listxattrat,setxattr,openat"}
 
+// xattrRemoveTraceArgs restricts tracing to the removexattrat tracepoints so
+// the test is not perturbed by unrelated xattr/open traffic.
+var xattrRemoveTraceArgs = []string{"-trace-syscalls", "removexattrat,setxattr,openat"}
+
 // TestXattrGetxattrat verifies ior traces getxattrat(2) (Linux 6.13+)
 // end-to-end. getxattrat takes a dirfd plus a real filesystem path at args[1]
 // (NOT args[0]=dfd) and an xattr NAME at args[3]; only the path must be
@@ -98,5 +102,38 @@ func TestXattrListxattrat(t *testing.T) {
 	// listxattr/llistxattr/flistxattr).
 	exp := ExpectedEvent{Tracepoint: "enter_listxattrat", Comm: "ioworkload"}
 	assertEventBytesAtLeast(t, result, exp, uint64(len("user.ior")+1))
+	assertEventDurationPositive(t, result, exp)
+}
+
+// TestXattrRemovexattrat verifies ior traces removexattrat(2) (Linux 6.13+)
+// end-to-end. removexattrat takes a dirfd plus a real filesystem path at
+// args[1] (NOT args[0]=dfd); the xattr name is at args[3] and must NOT be
+// captured. The path is read on syscall entry, so enter_removexattrat must
+// carry the file path "xattrfile.txt", never the name "user.ior".
+func TestXattrRemovexattrat(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "xattr-removexattrat", []ExpectedEvent{
+		{
+			PathContains: "xattrfile.txt",
+			Tracepoint:   "enter_removexattrat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	}, xattrRemoveTraceArgs)
+
+	// The captured path must be the filesystem path, never the xattr name.
+	for _, rec := range result.Records {
+		if rec.TraceID.String() == "enter_removexattrat" && rec.Path == "user.ior" {
+			t.Errorf("removexattrat captured xattr name %q as path instead of file path", rec.Path)
+		}
+	}
+
+	// removexattrat is UNCLASSIFIED: it REMOVES an attribute and returns a 0/-1
+	// status, never a byte count (contrast getxattrat/listxattrat, which return
+	// value/name-list sizes). The accounted bytes must therefore be exactly
+	// zero — matching removexattr/lremovexattr/fremovexattr, and guarding
+	// against wrongly READ-classifying it like its getxattrat/listxattrat
+	// siblings.
+	exp := ExpectedEvent{Tracepoint: "enter_removexattrat", Comm: "ioworkload"}
+	assertEventBytesEqual(t, result, exp, 0)
 	assertEventDurationPositive(t, result, exp)
 }

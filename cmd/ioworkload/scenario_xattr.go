@@ -34,6 +34,20 @@ const sysGetxattrat = 464
 // error — exactly like listxattr/llistxattr/flistxattr.
 const sysListxattrat = 465
 
+// removexattrat is syscall number 466 on amd64 (added in Linux 6.13, right
+// after listxattrat). Go's syscall package does not export SYS_REMOVEXATTRAT,
+// so we invoke it by its raw number. Its signature is:
+//
+//	removexattrat(int dfd, const char *pathname, unsigned int at_flags,
+//	              const char *name)
+//
+// The filesystem PATH is at args[1] (after the dirfd); args[3] is the xattr
+// NAME (e.g. "user.ior") and must NOT be captured as a path. Unlike
+// getxattrat/listxattrat, removexattrat REMOVES an attribute and returns 0 on
+// success / -1 on error (a status, NOT a read byte-count) — so its exit is
+// UNCLASSIFIED, exactly like removexattr/lremovexattr/fremovexattr.
+const sysRemovexattrat = 466
+
 // xattrArgs mirrors struct xattr_args from <linux/xattr.h> (Linux 6.13+):
 // a userspace value buffer pointer plus its size and flags.
 type xattrArgs struct {
@@ -178,6 +192,72 @@ func callListxattrat(path string, wantMinSize int) error {
 	}
 	if int(ret) < wantMinSize {
 		return fmt.Errorf("listxattrat returned %d, want at least %d", int(ret), wantMinSize)
+	}
+	return nil
+}
+
+// xattrRemovexattrat creates a file on tmpfs (/tmp), sets a user xattr on it,
+// then removes that xattr via the raw removexattrat(2) syscall with AT_FDCWD.
+// This exercises ior's removexattrat tracing end-to-end and confirms:
+//   - the real filesystem path (args[1]) is captured, NOT the dirfd or the
+//     xattr name string at args[3];
+//   - the syscall exit is UNCLASSIFIED — removexattrat returns a 0/-1 status,
+//     never a byte count, so no read bytes are attributed (contrast
+//     getxattrat/listxattrat). This matches removexattr/lremovexattr/
+//     fremovexattr.
+func xattrRemovexattrat() error {
+	dir, cleanup, err := makeTempDir("xattr-removexattrat")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "xattrfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	syscall.Close(fd)
+
+	const xattrName = "user.ior"
+	if err := syscall.Setxattr(path, xattrName, []byte("removexattrat-value"), 0); err != nil {
+		return fmt.Errorf("setxattr: %w", err)
+	}
+
+	return callRemovexattrat(path, xattrName)
+}
+
+// callRemovexattrat performs the raw removexattrat(AT_FDCWD, path, 0, name)
+// call and verifies it succeeds (returns 0).
+func callRemovexattrat(path, name string) error {
+	pathBytes, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+	nameBytes, err := syscall.BytePtrFromString(name)
+	if err != nil {
+		return fmt.Errorf("name bytes: %w", err)
+	}
+
+	// Use a runtime int variable so the negative AT_FDCWD survives the uintptr
+	// conversion: converting the negative constant directly overflows uintptr.
+	dirfd := _AT_FDCWD
+	ret, _, errno := syscall.Syscall6(
+		sysRemovexattrat,
+		uintptr(dirfd),
+		uintptr(unsafe.Pointer(pathBytes)),
+		0, // at_flags
+		uintptr(unsafe.Pointer(nameBytes)),
+		0,
+		0,
+	)
+	runtime.KeepAlive(pathBytes)
+	runtime.KeepAlive(nameBytes)
+	if errno != 0 {
+		return fmt.Errorf("removexattrat: %w", errno)
+	}
+	if int(ret) != 0 {
+		return fmt.Errorf("removexattrat returned %d, want 0", int(ret))
 	}
 	return nil
 }
