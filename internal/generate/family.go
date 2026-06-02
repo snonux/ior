@@ -29,7 +29,20 @@ var syscallFamilies = map[string]SyscallFamily{
 	"setsockopt": FamilyNetwork, "shutdown": FamilyNetwork, "socket": FamilyNetwork,
 	"socketpair": FamilyNetwork, "splice": FamilyNetwork, "tee": FamilyNetwork,
 
-	"eventfd": FamilyIPC, "eventfd2": FamilyIPC, "inotify_add_watch": FamilyIPC,
+	"eventfd": FamilyIPC, "eventfd2": FamilyIPC,
+	// fanotify_init(2) creates and initializes an fanotify notification group and
+	// returns an event-queue file descriptor — it is the direct analog of
+	// inotify_init1 (both are filesystem-event notification facilities whose
+	// group-creating syscall is a flags-taking fd-creator). inotify_init/
+	// inotify_init1 are FamilyIPC alongside the other fd-based event-notification
+	// primitives (eventfd, signalfd, timerfd, userfaultfd), so fanotify_init
+	// belongs in IPC too rather than falling through to Misc by omission (an
+	// alarm/adjtimex-style misclassification). The flags argument is at args[0]
+	// (KindEventfd / eventfd flags capture) and the returned fd is captured via
+	// the fd mechanism, so the return is UNCLASSIFIED (not a byte count).
+	// fanotify_mark stays out of this table (path-marking, not fd creation).
+	"fanotify_init": FamilyIPC,
+	"inotify_add_watch": FamilyIPC,
 	"inotify_init": FamilyIPC, "inotify_init1": FamilyIPC, "inotify_rm_watch": FamilyIPC,
 	"memfd_create": FamilyIPC, "memfd_secret": FamilyIPC, "mq_getsetattr": FamilyIPC,
 	"mq_notify": FamilyIPC, "mq_open": FamilyIPC, "mq_timedreceive": FamilyIPC,
