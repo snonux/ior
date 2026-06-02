@@ -43,6 +43,7 @@ func TestEventloop(t *testing.T) {
 		"CloseEventTest":           makeCloseEventTestData(t),
 		"CloseRangeEventTest":      makeCloseRangeEventTestData(t),
 		"CloseRangeFailureTest":    makeCloseRangeFailureTestData(t),
+		"CloseFailureTest":         makeCloseFailureTestData(t),
 		"FsyncEventTest":           makeFsyncEventTestData(t),
 		"SyncFileRangeEventTest":   makeSyncFileRangeEventTestData(t),
 		"SyncFileRangeFailureTest": makeSyncFileRangeFailureTestData(t),
@@ -175,11 +176,14 @@ func TestHandleFdExitCloseClearsProcFdCache(t *testing.T) {
 		Tid:     pid,
 		Fd:      fd,
 	}
-	exit := &types.FdEvent{
-		TraceId: types.SYS_EXIT_CLOSE,
-		Pid:     pid,
-		Tid:     pid,
-		Fd:      fd,
+	// close's exit tracepoint is a ret_event (UNCLASSIFIED); a successful
+	// close returns 0, which is what triggers proc-fd-cache eviction.
+	exit := &types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_CLOSE,
+		Pid:       pid,
+		Tid:       pid,
+		Ret:       0,
 	}
 	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
 
@@ -540,6 +544,17 @@ func makeExitRetEvent(t *testing.T, time uint64, pid, tid uint32, traceId types.
 	return ev, bytes
 }
 
+// makeExitCloseEvent builds the exit event for a close syscall. close's exit
+// tracepoint is generated as a ret_event (UNCLASSIFIED) — see
+// handle_sys_exit_close in generated_tracepoints.c — so the wire bytes carry an
+// EXIT_RET_EVENT whose Ret is the close return value (0 on success, -errno on
+// failure), NOT an fd_event. Tests must feed this so the userspace exit handler
+// sees the same event type it gets at runtime; in particular applyFdCloseState
+// only deregisters the fd when Ret == 0.
+func makeExitCloseEvent(t *testing.T, time uint64, pid, tid uint32, ret int64) (types.RetEvent, []byte) {
+	return makeExitRetEvent(t, time, pid, tid, types.SYS_EXIT_CLOSE, ret)
+}
+
 // Test data functions for FdEvent syscalls
 func makeReadEventTestData(t *testing.T) (td testData) {
 	fd := int32(42) // Assume file descriptor 42
@@ -636,7 +651,7 @@ func makeCloseEventTestData(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
-	exitEv, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_CLOSE)
+	exitEv, exitEvBytes := makeExitCloseEvent(t, defaulTime+100, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -806,6 +821,49 @@ func makeCloseRangeFailureTestData(t *testing.T) (td testData) {
 
 		verifyFileDescriptor(t, el, fd1, filename1)
 		verifyFileDescriptor(t, el, fd2, filename2)
+	})
+
+	return td
+}
+
+// makeCloseFailureTestData opens a file, then issues a close that FAILS
+// (ret=-1, e.g. EBADF/EINTR). applyFdCloseState only deregisters on ret==0, so
+// the fd->path mapping must survive a failed close — otherwise a later genuine
+// close or a reuse of the fd number would resolve against stale/empty state.
+func makeCloseFailureTestData(t *testing.T) (td testData) {
+	fd := int32(48)
+	filename := "close_fail.txt"
+
+	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	copy(openEnterEv.Filename[:], filename)
+	openEnterBytes, _ = openEnterEv.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
+
+	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv.Ret = int64(fd)
+	openExitBytes, _ = openExitEv.Bytes()
+	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		verifyFileDescriptor(t, el, fd, filename)
+	})
+
+	// close(fd) that fails with ret=-1: the fd must remain tracked.
+	closeEnterEv, closeEnterBytes := makeEnterFdEvent(t, defaulTime+200, defaultPid, defaultTid, fd, types.SYS_ENTER_CLOSE)
+	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes)
+
+	closeExitEv, closeExitBytes := makeExitCloseEvent(t, defaulTime+300, defaultPid, defaultTid, -1)
+	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
+
+	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
+		if !closeEnterEv.Equals(ep.EnterEv) {
+			t.Errorf("Expected '%v' but got '%v'", closeEnterEv, ep.EnterEv)
+		}
+		if !closeExitEv.Equals(ep.ExitEv) {
+			t.Errorf("Expected '%v' but got '%v'", closeExitEv, ep.ExitEv)
+		}
+		// Failed close leaves the mapping intact.
+		verifyFileDescriptor(t, el, fd, filename)
 	})
 
 	return td
@@ -1820,7 +1878,7 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 	_, closeOrigEnterBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, defaultTid, origFd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigEnterBytes)
 
-	_, closeOrigExitBytes := makeExitFdEvent(t, defaulTime+700, defaultPid, defaultTid, origFd, types.SYS_EXIT_CLOSE)
+	_, closeOrigExitBytes := makeExitCloseEvent(t, defaulTime+700, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -1831,7 +1889,7 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 	_, closeNewEnterBytes := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, newFd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeNewEnterBytes)
 
-	_, closeNewExitBytes := makeExitFdEvent(t, defaulTime+900, defaultPid, defaultTid, newFd, types.SYS_EXIT_CLOSE)
+	_, closeNewExitBytes := makeExitCloseEvent(t, defaulTime+900, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeNewExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -1905,7 +1963,7 @@ func makeDup2TestData(t *testing.T) (td testData) {
 	_, closeOrigEnterBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, defaultTid, origFd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigEnterBytes)
 
-	_, closeOrigExitBytes := makeExitFdEvent(t, defaulTime+700, defaultPid, defaultTid, origFd, types.SYS_EXIT_CLOSE)
+	_, closeOrigExitBytes := makeExitCloseEvent(t, defaulTime+700, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -1916,7 +1974,7 @@ func makeDup2TestData(t *testing.T) (td testData) {
 	_, closeTargetEnterBytes := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, targetFd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeTargetEnterBytes)
 
-	_, closeTargetExitBytes := makeExitFdEvent(t, defaulTime+900, defaultPid, defaultTid, targetFd, types.SYS_EXIT_CLOSE)
+	_, closeTargetExitBytes := makeExitCloseEvent(t, defaulTime+900, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeTargetExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2084,7 +2142,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 	_, closeEnterBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, defaultTid, int32(fd), types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes)
 
-	_, closeExitBytes := makeExitFdEvent(t, defaulTime+700, defaultPid, defaultTid, int32(fd), types.SYS_EXIT_CLOSE)
+	_, closeExitBytes := makeExitCloseEvent(t, defaulTime+700, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2164,7 +2222,7 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 	_, closeOrigEnterBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, defaultTid, int32(origFd), types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigEnterBytes)
 
-	_, closeOrigExitBytes := makeExitFdEvent(t, defaulTime+700, defaultPid, defaultTid, int32(origFd), types.SYS_EXIT_CLOSE)
+	_, closeOrigExitBytes := makeExitCloseEvent(t, defaulTime+700, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2189,7 +2247,7 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 	_, closeNewEnterBytes := makeEnterFdEvent(t, defaulTime+1000, defaultPid, defaultTid, int32(newFd), types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeNewEnterBytes)
 
-	_, closeNewExitBytes := makeExitFdEvent(t, defaulTime+1100, defaultPid, defaultTid, int32(newFd), types.SYS_EXIT_CLOSE)
+	_, closeNewExitBytes := makeExitCloseEvent(t, defaulTime+1100, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeNewExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2301,7 +2359,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 	_, closeOrigEnterBytes := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, int32(origFd), types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigEnterBytes)
 
-	_, closeOrigExitBytes := makeExitFdEvent(t, defaulTime+900, defaultPid, defaultTid, int32(origFd), types.SYS_EXIT_CLOSE)
+	_, closeOrigExitBytes := makeExitCloseEvent(t, defaulTime+900, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2312,7 +2370,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 	_, closeNewEnterBytes := makeEnterFdEvent(t, defaulTime+1000, defaultPid, defaultTid, int32(newFd), types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeNewEnterBytes)
 
-	_, closeNewExitBytes := makeExitFdEvent(t, defaulTime+1100, defaultPid, defaultTid, int32(newFd), types.SYS_EXIT_CLOSE)
+	_, closeNewExitBytes := makeExitCloseEvent(t, defaulTime+1100, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeNewExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2418,7 +2476,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 	_, closeEnterBytes := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, int32(fd), types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes)
 
-	_, closeExitBytes := makeExitFdEvent(t, defaulTime+900, defaultPid, defaultTid, int32(fd), types.SYS_EXIT_CLOSE)
+	_, closeExitBytes := makeExitCloseEvent(t, defaulTime+900, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2482,7 +2540,7 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 	_, closeEnterBytes := makeEnterFdEvent(t, defaulTime+400, defaultPid, defaultTid, int32(realFd), types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes)
 
-	_, closeExitBytes := makeExitFdEvent(t, defaulTime+500, defaultPid, defaultTid, int32(realFd), types.SYS_EXIT_CLOSE)
+	_, closeExitBytes := makeExitCloseEvent(t, defaulTime+500, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2677,7 +2735,7 @@ func makeFdLifecycleTestData(t *testing.T) (td testData) {
 	_, closeEnterBytes := makeEnterFdEvent(t, defaulTime+600, defaultPid, defaultTid, fd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes)
 
-	_, closeExitBytes := makeExitFdEvent(t, defaulTime+700, defaultPid, defaultTid, fd, types.SYS_EXIT_CLOSE)
+	_, closeExitBytes := makeExitCloseEvent(t, defaulTime+700, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	// Validate close removed the fd
@@ -2766,7 +2824,7 @@ func makeFdDupTestData(t *testing.T) (td testData) {
 	_, closeOrigEnterBytes := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, origFd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigEnterBytes)
 
-	_, closeOrigExitBytes := makeExitFdEvent(t, defaulTime+900, defaultPid, defaultTid, origFd, types.SYS_EXIT_CLOSE)
+	_, closeOrigExitBytes := makeExitCloseEvent(t, defaulTime+900, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	// Validate original fd is closed but dup'd fd still works
@@ -2797,7 +2855,7 @@ func makeFdDupTestData(t *testing.T) (td testData) {
 	_, closeDupEnterBytes := makeEnterFdEvent(t, defaulTime+1200, defaultPid, defaultTid, dupFd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeDupEnterBytes)
 
-	_, closeDupExitBytes := makeExitFdEvent(t, defaulTime+1300, defaultPid, defaultTid, dupFd, types.SYS_EXIT_CLOSE)
+	_, closeDupExitBytes := makeExitCloseEvent(t, defaulTime+1300, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeDupExitBytes)
 
 	// Validate both fds are now untracked
@@ -2889,7 +2947,7 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 	_, closeEnterBytes2 := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, fd2, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes2)
 
-	_, closeExitBytes2 := makeExitFdEvent(t, defaulTime+900, defaultPid, defaultTid, fd2, types.SYS_EXIT_CLOSE)
+	_, closeExitBytes2 := makeExitCloseEvent(t, defaulTime+900, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes2)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2903,7 +2961,7 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 	_, closeEnterBytes1 := makeEnterFdEvent(t, defaulTime+1000, defaultPid, defaultTid, fd1, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes1)
 
-	_, closeExitBytes1 := makeExitFdEvent(t, defaulTime+1100, defaultPid, defaultTid, fd1, types.SYS_EXIT_CLOSE)
+	_, closeExitBytes1 := makeExitCloseEvent(t, defaulTime+1100, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes1)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2932,7 +2990,7 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 	_, closeEnterBytes3 := makeEnterFdEvent(t, defaulTime+1400, defaultPid, defaultTid, fd3, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes3)
 
-	_, closeExitBytes3 := makeExitFdEvent(t, defaulTime+1500, defaultPid, defaultTid, fd3, types.SYS_EXIT_CLOSE)
+	_, closeExitBytes3 := makeExitCloseEvent(t, defaulTime+1500, defaultPid, defaultTid, 0)
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes3)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
