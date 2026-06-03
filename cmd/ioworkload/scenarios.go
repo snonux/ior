@@ -134,6 +134,7 @@ var scenarios = map[string]func() error{
 	"pidfd-getfd-success":           pidfdGetfdSuccess,
 	"pidfd-getfd-failure":           pidfdGetfdFailure,
 	"security-keys-ptrace-perf":     securityKeysPtracePerf,
+	"security-landlock":             securityLandlockCreateRuleset,
 	"iouring-setup":                 iouringSetup,
 	"iouring-enter":                 iouringEnter,
 	"iouring-register":              iouringRegister,

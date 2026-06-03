@@ -62,6 +62,60 @@ func TestSecurityKeysPtracePerf(t *testing.T) {
 	}
 }
 
+var landlockTraceArgs = []string{"-trace-syscalls", "landlock_create_ruleset,close"}
+
+// TestSecurityLandlockCreateRuleset asserts end-to-end tracing of the
+// Security-family landlock_create_ruleset syscall. The security-landlock
+// scenario calls landlock_create_ruleset(&attr, sizeof(attr), 0) and closes
+// the returned ruleset fd (it deliberately never calls landlock_restrict_self,
+// which would irreversibly sandbox the shared test runner).
+//
+// The sys_enter tracepoint fires before any ENOSYS/EOPNOTSUPP error, so the
+// enter event is observed regardless of whether Landlock is enabled on the
+// running kernel; we therefore assert the enter MinCount unconditionally.
+// landlock_create_ruleset is KindEventfd (it captures flags at args[2]); when
+// the ruleset fd is successfully created and registered, it resolves to the
+// "landlockfd:" path label, which is also seen on the matching close.
+func TestSecurityLandlockCreateRuleset(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "security-landlock", []ExpectedEvent{
+		{Tracepoint: "enter_landlock_create_ruleset", Comm: "ioworkload", MinCount: 1},
+	}, landlockTraceArgs)
+
+	assertEventDurationPositive(t, result, ExpectedEvent{
+		Tracepoint: "enter_landlock_create_ruleset",
+		Comm:       "ioworkload",
+	})
+
+	// landlock_create_ruleset may fail (ENOSYS on kernels < 5.13, or
+	// EOPNOTSUPP when the Landlock LSM is disabled). If a tracked ruleset fd
+	// appears, it must carry the "landlockfd:" label and be closed under the
+	// same label; otherwise we must observe no tracked landlock close events.
+	landlockOpenTracked := totalTracepointPathCount(result, "enter_landlock_create_ruleset", "landlockfd:")
+	landlockCloseTracked := totalTracepointPathCount(result, "enter_close", "landlockfd:")
+	if landlockOpenTracked == 0 {
+		if landlockCloseTracked != 0 {
+			t.Fatalf("unexpected tracked landlock close events without tracked ruleset open: close=%d", landlockCloseTracked)
+		}
+		return
+	}
+
+	assertTracepointPathPrefix(t, result, "enter_landlock_create_ruleset", "landlockfd:")
+	assertTracepointPathPrefix(t, result, "enter_close", "landlockfd:")
+	if landlockCloseTracked < landlockOpenTracked {
+		t.Fatalf("tracked landlock close count too small: close=%d open=%d", landlockCloseTracked, landlockOpenTracked)
+	}
+
+	// The tracked ruleset descriptor path should be stable between the
+	// create_ruleset record and its matching close record.
+	openPaths := uniqueTracepointPathsWithPrefix(result, "enter_landlock_create_ruleset", "landlockfd:")
+	closePaths := uniqueTracepointPathsWithPrefix(result, "enter_close", "landlockfd:")
+	for path := range openPaths {
+		if _, ok := closePaths[path]; !ok {
+			t.Fatalf("tracked landlock descriptor %q seen on create but not close", path)
+		}
+	}
+}
+
 func uniqueTracepointPathsWithPrefix(result TestResult, tracepoint, wantPrefix string) map[string]struct{} {
 	paths := make(map[string]struct{})
 	for _, rec := range result.Records {

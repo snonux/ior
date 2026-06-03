@@ -132,3 +132,61 @@ func runPerfEventOpenSyscall(nr securitySyscalls) {
 		_ = syscall.Close(int(fd))
 	}
 }
+
+// landlockSyscallNumber is the landlock_create_ruleset syscall number.
+// It is 444 on both amd64 and arm64 (and most modern arches).
+func landlockSyscallNumber(arch string) (uintptr, error) {
+	switch arch {
+	case "amd64", "arm64":
+		return 444, nil
+	default:
+		return 0, fmt.Errorf("landlock_create_ruleset syscall number not defined for GOARCH=%s", arch)
+	}
+}
+
+// landlockRulesetAttr mirrors struct landlock_ruleset_attr (uapi/linux/landlock.h).
+// handled_access_fs is the set of filesystem access rights the ruleset will
+// govern; handled_access_net (added in Landlock ABI v4) governs TCP access.
+// We declare both fields so unsafe.Sizeof yields the current kernel struct size.
+type landlockRulesetAttr struct {
+	handledAccessFs  uint64
+	handledAccessNet uint64
+}
+
+// LANDLOCK_ACCESS_FS_READ_FILE (uapi/linux/landlock.h) — a benign, always-valid
+// filesystem access right used to populate a minimal, valid ruleset attribute.
+const landlockAccessFsReadFile = 0x4
+
+// securityLandlockCreateRuleset exercises the landlock_create_ruleset syscall
+// end-to-end. It builds a minimal valid struct landlock_ruleset_attr (handling
+// only LANDLOCK_ACCESS_FS_READ_FILE), calls landlock_create_ruleset(&attr,
+// sizeof(attr), 0) to obtain a fresh ruleset fd, and closes it.
+//
+// SAFETY: this scenario deliberately does NOT call landlock_restrict_self.
+// landlock_restrict_self irreversibly sandboxes the calling process for its
+// entire lifetime, which would break the shared integration-test runner.
+// Creating and closing a ruleset fd has no process-wide side effects.
+//
+// The call is tolerated to fail with ENOSYS/EOPNOTSUPP (kernel < 5.13 or
+// Landlock LSM disabled): the sys_enter_landlock_create_ruleset tracepoint
+// fires before any such error, so the tracer still observes the enter event.
+func securityLandlockCreateRuleset() error {
+	nr, err := landlockSyscallNumber(runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+
+	attr := landlockRulesetAttr{
+		handledAccessFs: landlockAccessFsReadFile,
+	}
+	fd, _, _ := syscall.Syscall(
+		nr,
+		uintptr(unsafe.Pointer(&attr)),
+		unsafe.Sizeof(attr),
+		0, // flags = 0: create a real ruleset (not the ABI-version query)
+	)
+	if int64(fd) >= 0 {
+		_ = syscall.Close(int(fd))
+	}
+	return nil
+}
