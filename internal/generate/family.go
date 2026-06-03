@@ -245,6 +245,20 @@ var syscallFamilies = map[string]SyscallFamily{
 	"lsm_set_self_attr": FamilySecurity,
 	"perf_event_open":   FamilySecurity, "ptrace": FamilySecurity,
 	"request_key": FamilySecurity, "seccomp": FamilySecurity,
+
+	// file_getattr(2) (Linux 6.13+) is the path-based counterpart of statx
+	// and the FS_IOC_FSGETXATTR ioctl: it retrieves a file's extended
+	// attributes (struct file_attr) given dirfd@args[0] + pathname@args[1]
+	// + attr-buffer + size + at_flags. It is squarely a filesystem
+	// operation and belongs in FamilyFS alongside its statx/getxattr
+	// siblings. It must be listed explicitly because the fsNameMarkers list
+	// keys on "stat"/"xattr"/"chmod"/"chown" substrings — "getattr" matches
+	// none of them — and it is absent from the fsSyscalls set, so without
+	// this entry it would fall through to FamilyMisc (the same
+	// alarm/fanotify-style misclassification). KIND is data-driven from the
+	// live tracepoint (pathname@args[1] -> KindPathname) and the return is
+	// 0/-1, hence UNCLASSIFIED (not a byte count).
+	"file_getattr": FamilyFS,
 }
 
 // ClassifySyscallFamily returns the high-level syscall family for a tracepoint.
