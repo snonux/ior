@@ -797,7 +797,7 @@ var syscallFamilies = map[string]string{
 	"fcntl":                   "FS",
 	"fdatasync":               "FS",
 	"fgetxattr":               "FS",
-	"file_getattr":            "Misc",
+	"file_getattr":            "FS",
 	"file_setattr":            "Misc",
 	"finit_module":            "Security",
 	"flistxattr":              "FS",
