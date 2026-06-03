@@ -259,6 +259,17 @@ var syscallFamilies = map[string]SyscallFamily{
 	// live tracepoint (pathname@args[1] -> KindPathname) and the return is
 	// 0/-1, hence UNCLASSIFIED (not a byte count).
 	"file_getattr": FamilyFS,
+
+	// file_setattr(2) (Linux 6.13+) is the write counterpart of file_getattr:
+	// it sets a file's extended attributes (struct file_attr) given
+	// dirfd@args[0] + pathname@args[1] + attr-buffer + size + at_flags. Like
+	// file_getattr it is a filesystem operation, its name ("setattr") matches
+	// none of the fsNameMarkers substrings ("stat"/"xattr"/"chmod"/"chown"),
+	// and it is absent from the fsSyscalls set, so without this explicit entry
+	// it falls through to FamilyMisc (the same alarm/fanotify-style
+	// misclassification). KIND is data-driven (pathname@args[1] -> KindPathname)
+	// and the return is 0/-1, hence UNCLASSIFIED.
+	"file_setattr": FamilyFS,
 }
 
 // ClassifySyscallFamily returns the high-level syscall family for a tracepoint.
