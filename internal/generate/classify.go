@@ -202,6 +202,16 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_exit_signalfd4":       KindEventfd,
 	"sys_enter_timerfd_create": KindEventfd,
 	"sys_exit_timerfd_create":  KindEventfd,
+	// timerfd_settime/timerfd_gettime operate on an EXISTING timerfd whose
+	// tracepoint arg0 is named "ufd" (int), not literally "fd". The generic
+	// field matcher (classifyByField) only maps fieldName=="fd" -> KindFd, so
+	// without these overrides they fall through to KindNull and capture NO
+	// descriptor — dropping the timerfd they act on. Classify them KindFd so
+	// the enter handler captures the timerfd at args[0], mirroring the
+	// epoll_wait(epfd) and mq_*(mqdes) precedent. timerfd_create above is the
+	// fd CREATOR (KindEventfd) and is intentionally left unchanged.
+	"sys_enter_timerfd_settime": KindFd,
+	"sys_enter_timerfd_gettime": KindFd,
 
 	"sys_enter_epoll_create":  KindEventfd,
 	"sys_exit_epoll_create":   KindEventfd,
@@ -257,6 +267,17 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// the single-fd KindFd convention used for copy_file_range and the
 	// read/write/sendto/recvfrom families.
 	"sys_enter_sendfile64": KindFd,
+	// splice(fd_in, off_in, fd_out, off_out, len, flags) and
+	// tee(fdin, fdout, len, flags) are in-kernel transfers between two
+	// EXISTING file descriptors (TransferClassified, see retClassifications),
+	// exactly like copy_file_range/sendfile64. Their arg0 is the source fd
+	// named "fd_in"/"fdin" — not literally "fd" — so the generic field matcher
+	// (classifyByField) leaves them at KindNull, capturing NO descriptor and
+	// dropping the fds they operate on. Classify them KindFd to capture the
+	// source fd at args[0], matching the single-fd KindFd convention already
+	// used for copy_file_range and sendfile64.
+	"sys_enter_splice":     KindFd,
+	"sys_enter_tee":        KindFd,
 	"sys_enter_statmount":  KindNull,
 	"sys_enter_listmount":   KindNull,
 	"sys_enter_listns":      KindNull,

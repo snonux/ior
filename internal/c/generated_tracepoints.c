@@ -4169,7 +4169,7 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_timerfd_settime is a struct null_event (kind=null)
+/// sys_enter_timerfd_settime is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_timerfd_settime")
 int handle_sys_enter_timerfd_settime(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -4179,15 +4179,16 @@ int handle_sys_enter_timerfd_settime(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_TIMERFD_SETTIME))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_TIMERFD_SETTIME;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4219,7 +4220,7 @@ int handle_sys_exit_timerfd_settime(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_timerfd_gettime is a struct null_event (kind=null)
+/// sys_enter_timerfd_gettime is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_timerfd_gettime")
 int handle_sys_enter_timerfd_gettime(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -4229,15 +4230,16 @@ int handle_sys_enter_timerfd_gettime(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_TIMERFD_GETTIME))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_TIMERFD_GETTIME;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6039,7 +6041,7 @@ int handle_sys_exit_vmsplice(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_splice is a struct null_event (kind=null)
+/// sys_enter_splice is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_splice")
 int handle_sys_enter_splice(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -6049,15 +6051,16 @@ int handle_sys_enter_splice(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_SPLICE))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_SPLICE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6089,7 +6092,7 @@ int handle_sys_exit_splice(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_tee is a struct null_event (kind=null)
+/// sys_enter_tee is a struct fd_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_tee")
 int handle_sys_enter_tee(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -6099,15 +6102,16 @@ int handle_sys_enter_tee(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_TEE))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FD_EVENT;
     ev->trace_id = SYS_ENTER_TEE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
