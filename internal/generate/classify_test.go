@@ -304,8 +304,8 @@ func TestClassifyPhaseAByteSyscallPairsAccepted(t *testing.T) {
 		{"sendto", "struct fd_event", "WRITE_CLASSIFIED"},
 		{"sendmsg", "struct fd_event", "WRITE_CLASSIFIED"},
 		{"sendfile64", "struct fd_event", "TRANSFER_CLASSIFIED"},
-		{"splice", "struct null_event", "TRANSFER_CLASSIFIED"},
-		{"tee", "struct null_event", "TRANSFER_CLASSIFIED"},
+		{"splice", "struct fd_event", "TRANSFER_CLASSIFIED"},
+		{"tee", "struct fd_event", "TRANSFER_CLASSIFIED"},
 		{"process_vm_readv", "struct null_event", "READ_CLASSIFIED"},
 		{"process_vm_writev", "struct null_event", "WRITE_CLASSIFIED"},
 	}
