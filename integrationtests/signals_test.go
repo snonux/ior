@@ -32,6 +32,8 @@ func TestSignalsBasic(t *testing.T) {
 		{Tracepoint: "enter_sigaltstack", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_kill", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_tgkill", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_tkill", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_rt_sigqueueinfo", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_rt_sigtimedwait", Comm: "ioworkload", MinCount: 1},
 	})
 

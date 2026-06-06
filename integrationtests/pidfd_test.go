@@ -4,6 +4,18 @@ import "testing"
 
 var pidfdTraceArgs = []string{"-trace-syscalls", "pidfd_open,pidfd_getfd,openat,write,close"}
 
+// TestPidfdGetfdSuccess asserts the resolved path of the pidfd_getfd event is
+// the duplicated source file, NOT the pidfd's anon_inode.
+//
+// The BPF enter handler captures args[0] = the pidfd (correct: the pidfd is the
+// operand being acted on). One might therefore expect the resolved path to be
+// the self-pidfd's "anon_inode:[pidfd]". It is not, and the PathContains below
+// is deterministic and meaningful for a concrete reason: pidfd_getfd is an
+// fd-transfer op. At exit, applyFdTransferOp (internal/eventloop_exit.go) drops
+// the pidfd and re-points the event's file to the RETURNED fd (the duplicate of
+// the source fd). For a self-pidfd that returned fd lives in this same process
+// and refers to the very same open file, so /proc/<pid>/fd/<newfd> readlinks to
+// "pidfd-getfd-source.txt". Verified deterministic across repeated runs.
 func TestPidfdGetfdSuccess(t *testing.T) {
 	runScenarioResultWithIorArgs(t, "pidfd-getfd-success", []ExpectedEvent{
 		{
