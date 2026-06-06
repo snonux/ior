@@ -2,7 +2,7 @@ package integrationtests
 
 import "testing"
 
-var retbytesTraceArgs = []string{"-trace-syscalls", "sendto,recvfrom,sendmsg,recvmsg,sendmmsg,recvmmsg,sendfile64,splice,tee,process_vm_writev,process_vm_readv,socketpair,pipe2,openat,write,read,close,lseek,fcntl,unlinkat,mkdirat,getdents64"}
+var retbytesTraceArgs = []string{"-trace-syscalls", "sendto,recvfrom,sendmsg,recvmsg,sendmmsg,recvmmsg,sendfile64,splice,tee,process_vm_writev,process_vm_readv,socketpair,pipe2,openat,write,read,close,lseek,fcntl,unlinkat,mkdirat,getdents64,readlinkat,symlink"}
 
 func TestRetbytesPhaseA(t *testing.T) {
 	const payloadLen = uint64(18)
@@ -20,6 +20,7 @@ func TestRetbytesPhaseA(t *testing.T) {
 		{Tracepoint: "enter_process_vm_writev", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_getdents64", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_readlinkat", Comm: "ioworkload", MinCount: 1},
 	}, retbytesTraceArgs)
 
 	for _, tracepoint := range []string{
@@ -51,4 +52,14 @@ func TestRetbytesPhaseA(t *testing.T) {
 	getdentsExp := ExpectedEvent{Tracepoint: "enter_getdents64", Comm: "ioworkload"}
 	assertEventBytesAtLeast(t, result, getdentsExp, 1)
 	assertEventDurationPositive(t, result, getdentsExp)
+
+	// readlinkat is READ_CLASSIFIED: a successful call reports ctx->ret > 0,
+	// the byte length of the resolved link target written into the caller's
+	// buffer. The retbytes driver points the symlink at a known non-empty
+	// target, so the exit byte count is strictly positive. Assert a
+	// conservative bytes>=1 minimum (the exact target length is deterministic
+	// but path-dependent across temp dirs, so >=1 is the safest invariant).
+	readlinkatExp := ExpectedEvent{Tracepoint: "enter_readlinkat", Comm: "ioworkload"}
+	assertEventBytesAtLeast(t, result, readlinkatExp, 1)
+	assertEventDurationPositive(t, result, readlinkatExp)
 }
