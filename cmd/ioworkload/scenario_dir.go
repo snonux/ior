@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // dirBasic creates a directory via raw SYS_MKDIR, checks access, then removes it
@@ -59,6 +61,32 @@ func dirMkdirat() error {
 	subDir := filepath.Join(dir, "mkdirat-subdir")
 	if err := syscall.Mkdir(subDir, 0o755); err != nil {
 		return fmt.Errorf("mkdirat: %w", err)
+	}
+	return nil
+}
+
+// dirMknodatFifo creates a FIFO (named pipe) via mknodat(2) using
+// unix.Mknodat with AT_FDCWD. A FIFO node (S_IFIFO) is unprivileged to
+// create: unlike character/block device nodes it needs no CAP_MKNOD, so the
+// scenario runs as an ordinary user. mknodat captures pathname@args[1] (after
+// dirfd@args[0]); a PathContains match on the distinct fifo name proves the
+// args[1] capture fired. The FIFO is removed afterward.
+func dirMknodatFifo() error {
+	dir, cleanup, err := makeTempDir("dir-mknodat")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	fifoPath := filepath.Join(dir, "mknodat-fifo")
+	// S_IFIFO | 0o600: a FIFO node, owner read/write. dev is ignored for FIFOs.
+	if err := unix.Mknodat(unix.AT_FDCWD, fifoPath, syscall.S_IFIFO|0o600, 0); err != nil {
+		return fmt.Errorf("mknodat fifo: %w", err)
+	}
+	// RemoveAll on the temp dir (via cleanup) also removes the FIFO, but unlink
+	// it explicitly so the node lifetime matches the scenario's intent.
+	if err := syscall.Unlink(fifoPath); err != nil {
+		return fmt.Errorf("unlink fifo: %w", err)
 	}
 	return nil
 }

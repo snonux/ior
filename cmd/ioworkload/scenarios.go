@@ -92,6 +92,7 @@ var scenarios = map[string]func() error{
 	"unlink-unlinkat-enoent":        unlinkUnlinkatEnoent,
 	"dir-basic":                     dirBasic,
 	"dir-mkdirat":                   dirMkdirat,
+	"dir-mknodat-fifo":              dirMknodatFifo,
 	"dir-chdir":                     dirChdir,
 	"dir-getcwd":                    dirGetcwd,
 	"dir-getdents":                  dirGetdents,
@@ -166,6 +167,7 @@ var scenarios = map[string]func() error{
 	"misc-basic":                    miscBasic,
 	"sched-basic":                   schedBasic,
 	"priority-basic":                priorityBasic,
+	"ioprio-basic":                  ioprioBasic,
 }
 
 func makeTempDir(prefix string) (string, func(), error) {
