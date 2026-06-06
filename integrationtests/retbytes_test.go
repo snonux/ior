@@ -19,6 +19,7 @@ func TestRetbytesPhaseA(t *testing.T) {
 		{Tracepoint: "enter_tee", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_process_vm_writev", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_getdents64", Comm: "ioworkload", MinCount: 1},
 	}, retbytesTraceArgs)
 
 	for _, tracepoint := range []string{
@@ -42,4 +43,12 @@ func TestRetbytesPhaseA(t *testing.T) {
 		assertEventBytesEqual(t, result, exp, 0)
 		assertEventDurationPositive(t, result, exp)
 	}
+
+	// getdents64 is READ_CLASSIFIED: a successful call on a non-empty directory
+	// fills the dirent buffer and reports ctx->ret > 0. Dirent size varies with
+	// filename length and alignment, so assert a conservative bytes>=1 minimum
+	// rather than an exact payload length.
+	getdentsExp := ExpectedEvent{Tracepoint: "enter_getdents64", Comm: "ioworkload"}
+	assertEventBytesAtLeast(t, result, getdentsExp, 1)
+	assertEventDurationPositive(t, result, getdentsExp)
 }
