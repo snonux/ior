@@ -62,6 +62,29 @@ func TestSecurityKeysPtracePerf(t *testing.T) {
 	}
 }
 
+var getrandomTraceArgs = []string{"-trace-syscalls", "getrandom"}
+
+// TestSecurityGetrandom asserts end-to-end tracing of the getrandom syscall
+// (Security family, READ_CLASSIFIED). The security-getrandom scenario fills a
+// 32-byte buffer via unix.Getrandom, looping until the full buffer is filled.
+//
+// getrandom reports the number of random bytes written into buf as its return
+// value, which ior records as the exit byte count. The scenario loops past any
+// signal-interrupted short reads, so the cumulative byte count is strictly
+// positive; we assert bytes>=1 (the per-call count can be split across reads,
+// so a conservative >=1 minimum is the safe invariant) plus a positive
+// duration. The enter tracepoint is null-kind (no fd/path dimension), so only
+// the READ byte-count classification is locked in here.
+func TestSecurityGetrandom(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "security-getrandom", []ExpectedEvent{
+		{Tracepoint: "enter_getrandom", Comm: "ioworkload", MinCount: 1},
+	}, getrandomTraceArgs)
+
+	exp := ExpectedEvent{Tracepoint: "enter_getrandom", Comm: "ioworkload"}
+	assertEventBytesAtLeast(t, result, exp, 1)
+	assertEventDurationPositive(t, result, exp)
+}
+
 var landlockTraceArgs = []string{"-trace-syscalls", "landlock_create_ruleset,landlock_add_rule,close"}
 
 // TestSecurityLandlockCreateRuleset asserts end-to-end tracing of the
