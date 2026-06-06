@@ -62,29 +62,39 @@ func TestSecurityKeysPtracePerf(t *testing.T) {
 	}
 }
 
-var landlockTraceArgs = []string{"-trace-syscalls", "landlock_create_ruleset,close"}
+var landlockTraceArgs = []string{"-trace-syscalls", "landlock_create_ruleset,landlock_add_rule,close"}
 
 // TestSecurityLandlockCreateRuleset asserts end-to-end tracing of the
-// Security-family landlock_create_ruleset syscall. The security-landlock
-// scenario calls landlock_create_ruleset(&attr, sizeof(attr), 0) and closes
-// the returned ruleset fd (it deliberately never calls landlock_restrict_self,
-// which would irreversibly sandbox the shared test runner).
+// Security-family landlock_create_ruleset and landlock_add_rule syscalls. The
+// security-landlock scenario calls landlock_create_ruleset(&attr, sizeof(attr),
+// 0), adds a PATH_BENEATH rule via landlock_add_rule(ruleset_fd, rule_type,
+// &attr, 0), and closes the returned ruleset fd (it deliberately never calls
+// landlock_restrict_self, which would irreversibly sandbox the shared test
+// runner).
 //
-// The sys_enter tracepoint fires before any ENOSYS/EOPNOTSUPP error, so the
-// enter event is observed regardless of whether Landlock is enabled on the
-// running kernel; we therefore assert the enter MinCount unconditionally.
+// The sys_enter tracepoints fire before any ENOSYS/EOPNOTSUPP error, so both
+// enter events are observed regardless of whether Landlock is enabled on the
+// running kernel; we therefore assert the enter MinCounts unconditionally.
 // landlock_create_ruleset is KindEventfd (it captures flags at args[2]); when
 // the ruleset fd is successfully created and registered, it resolves to the
 // "landlockfd:" path label, which is also seen on the matching close.
+// landlock_add_rule captures ruleset_fd (KindFd) at args[0]; its return value
+// (0 or -1) is UNCLASSIFIED, not a byte count.
 func TestSecurityLandlockCreateRuleset(t *testing.T) {
 	result, _ := runScenarioResultWithIorArgs(t, "security-landlock", []ExpectedEvent{
 		{Tracepoint: "enter_landlock_create_ruleset", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_landlock_add_rule", Comm: "ioworkload", MinCount: 1},
 	}, landlockTraceArgs)
 
-	assertEventDurationPositive(t, result, ExpectedEvent{
-		Tracepoint: "enter_landlock_create_ruleset",
-		Comm:       "ioworkload",
-	})
+	for _, tracepoint := range []string{
+		"enter_landlock_create_ruleset",
+		"enter_landlock_add_rule",
+	} {
+		assertEventDurationPositive(t, result, ExpectedEvent{
+			Tracepoint: tracepoint,
+			Comm:       "ioworkload",
+		})
+	}
 
 	// landlock_create_ruleset may fail (ENOSYS on kernels < 5.13, or
 	// EOPNOTSUPP when the Landlock LSM is disabled). If a tracked ruleset fd
