@@ -11,6 +11,40 @@ import (
 
 var keySpecProcessKeyringArg = ^uintptr(1)
 
+// getrandomBufLen is the requested length of the getrandom buffer. getrandom
+// reports the number of random bytes written into buf as its return value,
+// which ior READ-classifies as a byte count.
+const getrandomBufLen = 32
+
+// securityGetrandom exercises the getrandom syscall end-to-end. getrandom
+// (FamilyTime/Security, READ_CLASSIFIED) fills buf with random bytes and
+// returns the count placed there, so ior records that count as the exit byte
+// total.
+//
+// getrandom may return fewer bytes than requested only when interrupted by a
+// signal; to keep the byte count deterministic we loop until the full buffer
+// is filled, accumulating any short reads. The enter tracepoint is null-kind
+// (no fd/path), so this scenario only locks in the READ byte-count classifi-
+// cation, not a path/fd dimension.
+func securityGetrandom() error {
+	buf := make([]byte, getrandomBufLen)
+	for off := 0; off < len(buf); {
+		// Use unix.Getrandom so the exact sys_enter_getrandom tracepoint fires.
+		n, err := unix.Getrandom(buf[off:], 0)
+		if err != nil {
+			if err == unix.EINTR {
+				continue
+			}
+			return fmt.Errorf("getrandom: %w", err)
+		}
+		if n <= 0 {
+			return fmt.Errorf("getrandom returned non-positive count %d", n)
+		}
+		off += n
+	}
+	return nil
+}
+
 func securityKeysPtracePerf() error {
 	nr, err := securitySyscallNumbers(runtime.GOARCH)
 	if err != nil {

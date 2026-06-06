@@ -148,6 +148,8 @@ var scenarios = map[string]func() error{
 	"pidfd-getfd-failure":           pidfdGetfdFailure,
 	"security-keys-ptrace-perf":     securityKeysPtracePerf,
 	"security-landlock":             securityLandlockCreateRuleset,
+	"security-getrandom":            securityGetrandom,
+	"flock-basic":                   flockBasic,
 	"iouring-setup":                 iouringSetup,
 	"iouring-enter":                 iouringEnter,
 	"iouring-register":              iouringRegister,
