@@ -15,6 +15,59 @@ type itimerspec struct {
 	Value    unix.Timespec
 }
 
+// itimerval mirrors struct itimerval from <sys/time.h> (it_interval, it_value),
+// each a struct timeval. It is the argument to setitimer/getitimer (the classic
+// interval timers, distinct from the POSIX per-process timer_* family above).
+type itimerval struct {
+	Interval unix.Timeval
+	Value    unix.Timeval
+}
+
+// itimerReal is ITIMER_REAL (=0): a real-time interval timer that, when armed,
+// delivers SIGALRM on expiry.
+const itimerReal = 0
+
+// intervalTimerNoop exercises the classic interval-timer syscalls setitimer(2)
+// and getitimer(2) without ever arming anything, so the enter_setitimer /
+// enter_getitimer tracepoints fire end-to-end while remaining fully SIGNAL-SAFE.
+//
+// SAFETY: setitimer is called with an ALL-ZERO struct itimerval. A zero it_value
+// disarms the timer and arms nothing new, so NO SIGALRM is ever scheduled or
+// delivered — this mirrors the alarm(0) pattern in miscAlarmCancel and the
+// far-future / never-firing approach in posixTimerLifecycle. getitimer is a pure
+// read of the (now disarmed) timer's state.
+//
+// Both setitimer and getitimer are KindNull (null_event) on enter and return an
+// UNCLASSIFIED ret_event on exit: neither takes a pathname nor an fd, and the
+// return value is not a descriptor. We therefore only assert enter-presence.
+func intervalTimerNoop() error {
+	// All-zero itimerval: it_interval = it_value = {0,0}. This disarms
+	// ITIMER_REAL and arms nothing, so no SIGALRM can fire.
+	var zero itimerval
+	if _, _, errno := syscall.RawSyscall(
+		unix.SYS_SETITIMER,
+		itimerReal,
+		uintptr(unsafe.Pointer(&zero)),
+		0, // old_value == NULL (we don't care about the previous setting)
+	); errno != 0 {
+		return fmt.Errorf("setitimer: %w", errno)
+	}
+
+	// getitimer reads the current (disarmed) ITIMER_REAL state into out; a safe,
+	// side-effect-free read included for symmetry with setitimer.
+	var out itimerval
+	if _, _, errno := syscall.RawSyscall(
+		unix.SYS_GETITIMER,
+		itimerReal,
+		uintptr(unsafe.Pointer(&out)),
+		0,
+	); errno != 0 {
+		return fmt.Errorf("getitimer: %w", errno)
+	}
+
+	return nil
+}
+
 // posixTimerLifecycle exercises the full POSIX per-process timer family so the
 // tracer's null_event handling is covered end-to-end:
 //
