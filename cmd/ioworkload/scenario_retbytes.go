@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -39,7 +40,59 @@ func retbytesPhaseA() error {
 	if err := retbytesTee(); err != nil {
 		return err
 	}
+	if err := retbytesGetdents(); err != nil {
+		return err
+	}
 	return retbytesProcessVM()
+}
+
+// retbytesGetdents opens a non-empty directory and reads its entries via
+// getdents64(2). getdents/getdents64 are READ_CLASSIFIED, so a successful call
+// on a populated directory returns ctx->ret > 0 (bytes filled into the dirent
+// buffer). This drives the exit byte-count assertion in TestRetbytesPhaseA.
+func retbytesGetdents() error {
+	dir, cleanup, err := makeTempDir("retbytes-getdents")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// Create several files so getdents64 has substantial dirent data to return,
+	// guaranteeing a strictly positive byte count.
+	for i := 0; i < 4; i++ {
+		filePath := filepath.Join(dir, fmt.Sprintf("getdents-file-%d.txt", i))
+		fd, openErr := syscall.Open(filePath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+		if openErr != nil {
+			return fmt.Errorf("open file: %w", openErr)
+		}
+		syscall.Close(fd)
+	}
+
+	dirFD, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open dir: %w", err)
+	}
+	defer syscall.Close(dirFD)
+
+	// Re-issue getdents64 in a short window so ior has enough time to attach and
+	// capture an enter/exit pair under high parallel integration load. Each call
+	// rewinds via lseek so the directory keeps returning entries.
+	buf := make([]byte, 4096)
+	for i := 0; i < 40; i++ {
+		if _, err := syscall.Seek(dirFD, 0, 0); err != nil {
+			return fmt.Errorf("seek dir: %w", err)
+		}
+		n, _, errno := syscall.Syscall(syscall.SYS_GETDENTS64, uintptr(dirFD), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		runtime.KeepAlive(buf)
+		if errno != 0 {
+			return fmt.Errorf("getdents64: %w", errno)
+		}
+		if n == 0 {
+			return fmt.Errorf("getdents64 returned 0 bytes on a non-empty directory")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return nil
 }
 
 func retbytesSocketIO() error {
