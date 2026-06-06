@@ -77,9 +77,36 @@ func fdFromAirEventfdUsers() error {
 	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD4, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), uintptr(unsafe.Sizeof(mask)))
 	closeIfValid(int(fd))
 
+	// Create a timerfd and, while it is still open, arm it with
+	// timerfd_settime and read it back with timerfd_gettime. Both of those
+	// syscalls take the timerfd as arg0 (kind=fd@arg0), so tracing them
+	// exercises the fd_event capture path fixed in commit 6ac9fa4: the enter
+	// handlers must resolve arg0 to the registered "timerfd:" descriptor
+	// rather than emitting a null event. We close the fd only after both
+	// operations so the descriptor stays registered for the duration.
 	fd, _, _ = syscall.RawSyscall(unix.SYS_TIMERFD_CREATE, uintptr(unix.CLOCK_MONOTONIC), uintptr(unix.TFD_CLOEXEC), 0)
-	closeIfValid(int(fd))
+	if int(fd) >= 0 {
+		armAndReadTimerfd(int(fd))
+		closeIfValid(int(fd))
+	}
 	return nil
+}
+
+// armAndReadTimerfd arms the given timerfd via timerfd_settime and reads its
+// current setting back via timerfd_gettime. The timer is set to a one-second
+// relative expiration: far enough in the future that it never actually fires
+// during the scenario, so its only observable effect is that the two syscalls
+// are issued against an already-open timerfd descriptor.
+func armAndReadTimerfd(fd int) {
+	newValue := unix.ItimerSpec{
+		Value: unix.Timespec{Sec: 1, Nsec: 0},
+	}
+	syscall.RawSyscall6(unix.SYS_TIMERFD_SETTIME, uintptr(fd), 0,
+		uintptr(unsafe.Pointer(&newValue)), 0, 0, 0)
+
+	var curValue unix.ItimerSpec
+	syscall.RawSyscall(unix.SYS_TIMERFD_GETTIME, uintptr(fd),
+		uintptr(unsafe.Pointer(&curValue)), 0)
 }
 
 func closeIfValid(fd int) {

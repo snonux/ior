@@ -73,10 +73,20 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 		{Tracepoint: "enter_signalfd", MinCount: 1},
 		{Tracepoint: "enter_signalfd4", MinCount: 1},
 		{Tracepoint: "enter_timerfd_create", MinCount: 1},
+		// The timerfd is armed and read back while still open, so
+		// timerfd_settime/gettime fire against the existing descriptor.
+		{Tracepoint: "enter_timerfd_settime", MinCount: 1},
+		{Tracepoint: "enter_timerfd_gettime", MinCount: 1},
 	})
 
 	assertTracepointPathPrefix(t, result, "enter_memfd_create", "memfd:")
 	assertTracepointPathPrefix(t, result, "enter_timerfd_create", "timerfd:")
+
+	// timerfd_settime/gettime take the timerfd as arg0 (kind=fd@arg0). The
+	// "timerfd:" path prefix proves the enter handlers captured that fd via
+	// fd_event rather than emitting a null event, locking in the 6ac9fa4 fix.
+	assertTracepointPathPrefix(t, result, "enter_timerfd_settime", "timerfd:")
+	assertTracepointPathPrefix(t, result, "enter_timerfd_gettime", "timerfd:")
 }
 
 // TestInotifyBasic asserts end-to-end tracing of the inotify IPC family.
