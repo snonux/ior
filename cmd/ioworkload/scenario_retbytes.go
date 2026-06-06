@@ -43,6 +43,9 @@ func retbytesPhaseA() error {
 	if err := retbytesGetdents(); err != nil {
 		return err
 	}
+	if err := retbytesReadlinkat(); err != nil {
+		return err
+	}
 	return retbytesProcessVM()
 }
 
@@ -89,6 +92,64 @@ func retbytesGetdents() error {
 		}
 		if n == 0 {
 			return fmt.Errorf("getdents64 returned 0 bytes on a non-empty directory")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return nil
+}
+
+// retbytesReadlinkat creates a symlink with a known non-empty target and reads
+// it back via readlinkat(2). readlinkat is READ_CLASSIFIED, so a successful
+// call returns ctx->ret > 0: the byte length of the target string copied into
+// the caller's buffer. This drives the exit byte-count assertion in
+// TestRetbytesPhaseA.
+func retbytesReadlinkat() error {
+	dir, cleanup, err := makeTempDir("retbytes-readlinkat")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// Point the symlink at an absolute path inside the temp dir. The target is
+	// deliberately non-empty so readlinkat reports a strictly positive byte
+	// count (the length of this target string).
+	target := filepath.Join(dir, "retbytes-readlinkat-target.txt")
+	linkPath := filepath.Join(dir, "retbytes-readlinkat-link.txt")
+	if err := syscall.Symlink(target, linkPath); err != nil {
+		return fmt.Errorf("symlink: %w", err)
+	}
+
+	dirFD, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open dir: %w", err)
+	}
+	defer syscall.Close(dirFD)
+
+	linkName, err := syscall.BytePtrFromString("retbytes-readlinkat-link.txt")
+	if err != nil {
+		return fmt.Errorf("link name bytes: %w", err)
+	}
+
+	// Re-issue readlinkat in a short window so ior has enough time to attach and
+	// capture an enter/exit pair under high parallel integration load. Each call
+	// re-resolves the same symlink, so ctx->ret stays equal to the target length.
+	buf := make([]byte, 256)
+	for i := 0; i < 40; i++ {
+		n, _, errno := syscall.Syscall6(
+			syscall.SYS_READLINKAT,
+			uintptr(dirFD),
+			uintptr(unsafe.Pointer(linkName)),
+			uintptr(unsafe.Pointer(&buf[0])),
+			uintptr(len(buf)),
+			0, 0,
+		)
+		runtime.KeepAlive(linkName)
+		runtime.KeepAlive(buf)
+		if errno != 0 {
+			return fmt.Errorf("readlinkat: %w", errno)
+		}
+		if n == 0 {
+			return fmt.Errorf("readlinkat returned 0 bytes for a non-empty link target")
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
