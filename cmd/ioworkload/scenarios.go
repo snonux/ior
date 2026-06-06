@@ -110,6 +110,7 @@ var scenarios = map[string]func() error{
 	"xattr-getxattrat":              xattrGetxattrat,
 	"xattr-listxattrat":             xattrListxattrat,
 	"xattr-removexattrat":           xattrRemovexattrat,
+	"chmod-basic":                   chmodBasic,
 	"utime-basic":                   utimeBasic,
 	"utime-utimes":                  utimeUtimes,
 	"utime-enoent":                  utimeEnoent,
