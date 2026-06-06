@@ -1098,7 +1098,7 @@ var syscallFamilies = map[string]string{
 	"utimes":                  "FS",
 	"vfork":                   "Process",
 	"vhangup":                 "Process",
-	"vmsplice":                "Misc",
+	"vmsplice":                "Network",
 	"wait4":                   "Process",
 	"waitid":                  "Process",
 	"write":                   "FS",
