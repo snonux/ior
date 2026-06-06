@@ -30,6 +30,36 @@ func TestUtimeUtimes(t *testing.T) {
 	})
 }
 
+// TestUtimeFutimesat verifies the dirfd-relative sibling futimesat(2) is
+// path-classified and its filename captured from args[1] (after the dirfd at
+// args[0]). The scenario passes AT_FDCWD as the dirfd, so a hit on the file
+// name proves ior reads the path from the second arg, not the first.
+func TestUtimeFutimesat(t *testing.T) {
+	runScenario(t, "utime-futimesat", []ExpectedEvent{
+		{
+			PathContains: "futimesatfile.txt",
+			Tracepoint:   "enter_futimesat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
+// TestUtimeUtimensat verifies the nanosecond-resolution sibling utimensat(2) is
+// path-classified and its filename captured from args[1] (after the dirfd at
+// args[0]). As with futimesat, AT_FDCWD is passed as the dirfd, so matching the
+// file name confirms the path is read from the second arg.
+func TestUtimeUtimensat(t *testing.T) {
+	runScenario(t, "utime-utimensat", []ExpectedEvent{
+		{
+			PathContains: "utimensatfile.txt",
+			Tracepoint:   "enter_utimensat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
 // TestUtimeEnoent verifies the path is still captured on the error path:
 // utime(2) on a missing file fails with ENOENT, but ior records enter_utime
 // because the filename is read on syscall entry.
