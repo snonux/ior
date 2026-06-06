@@ -123,6 +123,8 @@ var scenarios = map[string]func() error{
 	"chown-basic":                   chownBasic,
 	"utime-basic":                   utimeBasic,
 	"utime-utimes":                  utimeUtimes,
+	"utime-futimesat":               utimeFutimesat,
+	"utime-utimensat":               utimeUtimensat,
 	"utime-enoent":                  utimeEnoent,
 	"sync-basic":                    syncBasic,
 	"sync-fdatasync":                syncFdatasync,
