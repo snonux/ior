@@ -267,6 +267,43 @@ func statAccessEnoent() error {
 	return nil
 }
 
+// statStatfs creates a file and queries its filesystem via statfs(2) (path
+// input) and fstatfs(2) (fd input) using Go's syscall wrappers, which map
+// directly to SYS_STATFS / SYS_FSTATFS.
+//
+//   - enter_statfs is a path_event: it captures the pathname at arg0, so the
+//     trace records carry the file's path.
+//   - enter_fstatfs is an fd_event: it captures the fd at arg0; ior resolves the
+//     path through its fd lookup table. Its exit is an UNCLASSIFIED ret_event.
+func statStatfs() error {
+	dir, cleanup, err := makeTempDir("stat-statfs")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "statfsfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	// statfs(path, &buf): the pathname is read on entry (enter_statfs).
+	var sbuf syscall.Statfs_t
+	if err := syscall.Statfs(path, &sbuf); err != nil {
+		return fmt.Errorf("statfs: %w", err)
+	}
+
+	// fstatfs(fd, &buf): the fd is read on entry (enter_fstatfs).
+	var fbuf syscall.Statfs_t
+	if err := syscall.Fstatfs(fd, &fbuf); err != nil {
+		return fmt.Errorf("fstatfs: %w", err)
+	}
+
+	return nil
+}
+
 // statFstatEbadf calls raw SYS_FSTAT on an invalid fd (99999).
 // The syscall fails with EBADF, but ior captures the enter_newfstat
 // tracepoint because it is recorded on syscall entry.

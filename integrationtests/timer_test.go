@@ -12,6 +12,15 @@ var posixTimerTraceArgs = []string{
 	"timer_create,timer_settime,timer_gettime,timer_getoverrun,timer_delete,timerfd_create",
 }
 
+// intervalTimerTraceArgs restricts tracing to the classic interval-timer
+// syscalls setitimer/getitimer, which the interval-timer-noop workload issues.
+// Both are KindNull (null_event) on enter with an UNCLASSIFIED ret on exit, so
+// the test asserts only enter-presence (no path/fd/return to inspect).
+var intervalTimerTraceArgs = []string{
+	"-trace-syscalls",
+	"setitimer,getitimer",
+}
+
 // TestPosixTimerLifecycle verifies the POSIX per-process timer family is traced
 // end-to-end. The workload runs timer_create -> timer_settime -> timer_gettime
 // -> timer_getoverrun -> timer_delete; each must appear as an enter event.
@@ -40,4 +49,24 @@ func TestPosixTimerLifecycle(t *testing.T) {
 		t.Fatalf("enter_timer_create records with a timerfd: descriptor path = %d, want 0; "+
 			"timer_create returns a timer_t, not an fd, and must not be classified like timerfd_create", got)
 	}
+}
+
+// TestIntervalTimerNoop verifies the classic interval-timer family (setitimer /
+// getitimer) is traced end-to-end. The interval-timer-noop workload issues a
+// setitimer(ITIMER_REAL, &{0,0,0,0}, NULL) — an all-zero itimerval that arms
+// nothing, so NO SIGALRM is ever scheduled — followed by a getitimer read.
+// Both are KindNull on enter, so we assert enter-presence for each.
+func TestIntervalTimerNoop(t *testing.T) {
+	h := newTestHarness(t)
+	result, pid, err := h.RunWithIorArgs("interval-timer-noop", defaultDuration, intervalTimerTraceArgs)
+	if err != nil {
+		t.Fatalf("run scenario interval-timer-noop: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_setitimer", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_getitimer", Comm: "ioworkload", MinCount: 1},
+	})
 }

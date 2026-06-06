@@ -101,6 +101,25 @@ func TestStatAccessEnoent(t *testing.T) {
 	})
 }
 
+// TestStatStatfs verifies the statfs family (statfs/fstatfs) is traced
+// end-to-end. enter_statfs is a path_event, so its record must contain the
+// file's path; enter_fstatfs is an fd_event, asserted via enter-presence.
+func TestStatStatfs(t *testing.T) {
+	runScenario(t, "stat-statfs", []ExpectedEvent{
+		{
+			PathContains: "statfsfile.txt",
+			Tracepoint:   "enter_statfs",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+		{
+			Tracepoint: "enter_fstatfs",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	})
+}
+
 func TestStatFstatEbadf(t *testing.T) {
 	runScenario(t, "stat-fstat-ebadf", []ExpectedEvent{
 		{
