@@ -68,6 +68,15 @@ func TestSysVMsgBasic(t *testing.T) {
 	for _, tp := range []string{"enter_msgget", "enter_msgsnd", "enter_msgrcv", "enter_msgctl"} {
 		assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: tp, Comm: "ioworkload"})
 	}
+
+	// msgrcv is READ_CLASSIFIED: its exit handler reports ctx->ret, the number
+	// of bytes copied into the caller's buffer. The workload sends the literal
+	// "ior-sysv-msg" (12 bytes, scenario_sysv.go sysvMsgText) and reads it back,
+	// so the captured byte count must be at least the payload length. (msgsnd is
+	// UNCLASSIFIED, so only msgrcv carries a meaningful READ byte count.)
+	assertEventBytesAtLeast(t, result,
+		ExpectedEvent{Tracepoint: "enter_msgrcv", Comm: "ioworkload"},
+		uint64(len("ior-sysv-msg")))
 }
 
 // sysvSemTraceArgs restricts tracing to the SysV semaphore family so the
