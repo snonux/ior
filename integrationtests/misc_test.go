@@ -7,20 +7,24 @@ import "testing"
 // Note: the tracer names the uname tracepoint after the underlying kernel
 // syscall sys_newuname, i.e. "newuname" (not "uname"). vmsplice and alarm are
 // issued too, but the must-haves below are the three pure-read calls whose
-// tracepoints are guaranteed to fire deterministically. (alarm is classified
-// FamilyTime, not Misc — it shares setitimer's ITIMER_REAL timer — but the
-// misc-basic scenario still issues alarm(0) as a harmless cancel, and the
-// -trace-syscalls filter is by syscall name, so it is captured regardless.)
+// tracepoints are guaranteed to fire deterministically. Neither vmsplice nor
+// alarm is a Misc-family syscall: vmsplice is FamilyNetwork — the iovec<->pipe
+// variant of splice(2), sibling to splice/tee whose transfer coverage lives in
+// retbytes_test.go — and alarm is FamilyTime (it shares setitimer's ITIMER_REAL
+// timer). The misc-basic scenario still issues both as harmless side-effect-free
+// calls, and the -trace-syscalls filter is by syscall name, so they are captured
+// regardless of family.
 var miscTraceArgs = []string{
 	"-trace-syscalls",
 	"getcpu,newuname,sysinfo,vmsplice,alarm",
 }
 
 // TestMiscBasic verifies the Misc syscall family is traced end-to-end. The
-// misc-basic workload issues getcpu, uname (sys_newuname), sysinfo, vmsplice
-// (into a self-drained pipe), and alarm(0) — all unprivileged, non-blocking,
-// and free of global side effects. Each required syscall must appear as an
-// enter event attributed to the ioworkload process.
+// misc-basic workload issues getcpu, uname (sys_newuname), and sysinfo (the
+// three Misc-family must-haves asserted below), plus vmsplice (FamilyNetwork,
+// into a self-drained pipe) and alarm(0) (FamilyTime) — all unprivileged,
+// non-blocking, and free of global side effects. Each required syscall must
+// appear as an enter event attributed to the ioworkload process.
 func TestMiscBasic(t *testing.T) {
 	h := newTestHarness(t)
 	result, pid, err := h.RunWithIorArgs("misc-basic", defaultDuration, miscTraceArgs)

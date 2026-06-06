@@ -27,7 +27,18 @@ var syscallFamilies = map[string]SyscallFamily{
 	"recvmmsg": FamilyNetwork, "recvmsg": FamilyNetwork, "sendfile64": FamilyNetwork,
 	"sendmmsg": FamilyNetwork, "sendmsg": FamilyNetwork, "sendto": FamilyNetwork,
 	"setsockopt": FamilyNetwork, "shutdown": FamilyNetwork, "socket": FamilyNetwork,
-	"socketpair": FamilyNetwork, "splice": FamilyNetwork, "tee": FamilyNetwork,
+	"socketpair": FamilyNetwork,
+	// splice/tee/vmsplice are the fd byte-mover cohort. splice moves data between
+	// two fds (one a pipe); tee duplicates pipe contents between pipe fds.
+	// vmsplice(int fd, const struct iovec*, unsigned long nr_segs, unsigned int
+	// flags) is the iovec<->pipe variant of splice(2) and is documented/grouped
+	// with splice/tee/sendfile64/copy_file_range as an fd byte-mover. Its KIND
+	// (KindFd@arg0) and RET (TransferClassified, byte count) already match
+	// splice/tee — only the family was wrong: vmsplice was absent from this map
+	// and fell through to FamilyMisc (the same alarm/adjtimex-style misclassi-
+	// fication fixed for fanotify_*/file_*attr). The established mj0 decision put
+	// splice/tee in Network, so for sibling consistency vmsplice belongs here too.
+	"splice": FamilyNetwork, "tee": FamilyNetwork, "vmsplice": FamilyNetwork,
 
 	"eventfd": FamilyIPC, "eventfd2": FamilyIPC,
 	// fanotify_init(2) creates and initializes an fanotify notification group and
