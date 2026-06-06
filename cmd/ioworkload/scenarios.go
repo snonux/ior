@@ -156,6 +156,8 @@ var scenarios = map[string]func() error{
 	"aio-setup":                     aioSetup,
 	"aio-setup-einval":              aioSetupEinval,
 	"aio-submit":                    aioSubmit,
+	"aio-getevents":                 aioGetevents,
+	"aio-cancel":                    aioCancel,
 	"signals-basic":                 signalsBasic,
 	"misc-basic":                    miscBasic,
 	"sched-basic":                   schedBasic,
