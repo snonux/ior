@@ -46,7 +46,79 @@ func retbytesPhaseA() error {
 	if err := retbytesReadlinkat(); err != nil {
 		return err
 	}
+	if err := retbytesVmsplice(); err != nil {
+		return err
+	}
 	return retbytesProcessVM()
+}
+
+// retbytesVmspliceLen is the exact number of bytes vmsplice gathers from the
+// user iovec into the pipe on every iteration. It is far below the default
+// pipe capacity (64 KiB) so vmsplice never blocks, and it is the value the
+// TRANSFER_CLASSIFIED exit byte-count assertion in TestRetbytesPhaseA pins.
+const retbytesVmspliceLen = 18
+
+// retbytesVmsplice gathers a fixed-size user buffer into a pipe via vmsplice(2)
+// and drains the pipe each iteration. vmsplice is TRANSFER_CLASSIFIED, so a
+// successful gather into the pipe returns ctx->ret = bytes moved (here exactly
+// retbytesVmspliceLen). This drives the exit byte-count assertion in
+// TestRetbytesPhaseA, locking in the byte attribution like its splice/tee
+// siblings. The buffer is far smaller than the pipe capacity, so vmsplice
+// cannot block; draining the read end leaves no data behind.
+func retbytesVmsplice() error {
+	buf := []byte("phase-a-vmsplice!!") // retbytesVmspliceLen bytes
+	if len(buf) != retbytesVmspliceLen {
+		return fmt.Errorf("vmsplice payload is %d bytes, want %d", len(buf), retbytesVmspliceLen)
+	}
+
+	// Re-issue vmsplice in a short window so ior has enough time to attach and
+	// capture an enter/exit pair under high parallel integration load. Each
+	// iteration creates a fresh pipe, gathers the same buffer, drains it, and
+	// closes both ends so descriptors and data never accumulate.
+	for i := 0; i < 40; i++ {
+		if err := retbytesVmspliceOnce(buf); err != nil {
+			return err
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return nil
+}
+
+// retbytesVmspliceOnce performs a single vmsplice of buf into a fresh pipe and
+// drains it. It returns an error if vmsplice fails or moves the wrong number of
+// bytes, so the workload fails loudly rather than silently skewing the assert.
+func retbytesVmspliceOnce(buf []byte) error {
+	pipe := make([]int, 2)
+	if err := syscall.Pipe2(pipe, syscall.O_CLOEXEC); err != nil {
+		return fmt.Errorf("pipe2 for vmsplice: %w", err)
+	}
+	defer syscall.Close(pipe[0])
+	defer syscall.Close(pipe[1])
+
+	iov := syscall.Iovec{Base: &buf[0], Len: uint64(len(buf))}
+	n, _, errno := syscall.Syscall6(
+		syscall.SYS_VMSPLICE,
+		uintptr(pipe[1]),
+		uintptr(unsafe.Pointer(&iov)),
+		1, // one iovec segment
+		0, // no SPLICE_F_* flags needed for this tiny, non-blocking gather
+		0, 0,
+	)
+	runtime.KeepAlive(buf)
+	if errno != 0 {
+		return fmt.Errorf("vmsplice: %w", errno)
+	}
+	if int(n) != len(buf) {
+		return fmt.Errorf("vmsplice moved %d bytes, want %d", n, len(buf))
+	}
+
+	// Drain whatever vmsplice placed into the pipe so it never approaches its
+	// capacity across iterations.
+	drain := make([]byte, int(n))
+	if _, err := syscall.Read(pipe[0], drain); err != nil {
+		return fmt.Errorf("drain vmsplice pipe: %w", err)
+	}
+	return nil
 }
 
 // retbytesGetdents opens a non-empty directory and reads its entries via

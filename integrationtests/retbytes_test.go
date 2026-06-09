@@ -2,7 +2,7 @@ package integrationtests
 
 import "testing"
 
-var retbytesTraceArgs = []string{"-trace-syscalls", "sendto,recvfrom,sendmsg,recvmsg,sendmmsg,recvmmsg,sendfile64,splice,tee,process_vm_writev,process_vm_readv,socketpair,pipe2,openat,write,read,close,lseek,fcntl,unlinkat,mkdirat,getdents64,readlinkat,symlink"}
+var retbytesTraceArgs = []string{"-trace-syscalls", "sendto,recvfrom,sendmsg,recvmsg,sendmmsg,recvmmsg,sendfile64,splice,tee,vmsplice,process_vm_writev,process_vm_readv,socketpair,pipe2,openat,write,read,close,lseek,fcntl,unlinkat,mkdirat,getdents64,readlinkat,symlink"}
 
 func TestRetbytesPhaseA(t *testing.T) {
 	const payloadLen = uint64(18)
@@ -21,6 +21,7 @@ func TestRetbytesPhaseA(t *testing.T) {
 		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_getdents64", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_readlinkat", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_vmsplice", Comm: "ioworkload", MinCount: 1},
 	}, retbytesTraceArgs)
 
 	for _, tracepoint := range []string{
@@ -62,4 +63,12 @@ func TestRetbytesPhaseA(t *testing.T) {
 	readlinkatExp := ExpectedEvent{Tracepoint: "enter_readlinkat", Comm: "ioworkload"}
 	assertEventBytesAtLeast(t, result, readlinkatExp, 1)
 	assertEventDurationPositive(t, result, readlinkatExp)
+
+	// vmsplice is TRANSFER_CLASSIFIED: a successful gather of the user iovec
+	// into the pipe reports ctx->ret = bytes moved. The retbytes driver gathers
+	// exactly payloadLen (18) bytes each iteration, so the exit byte count is at
+	// least that. This locks in the TRANSFER byte attribution like splice/tee.
+	vmspliceExp := ExpectedEvent{Tracepoint: "enter_vmsplice", Comm: "ioworkload"}
+	assertEventBytesAtLeast(t, result, vmspliceExp, payloadLen)
+	assertEventDurationPositive(t, result, vmspliceExp)
 }
