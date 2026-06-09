@@ -93,6 +93,20 @@ func mountfsManagement() error {
 	if fd, _, errno := syscall.RawSyscall(unix.SYS_OPEN_TREE, atFDCWD, uintptr(unsafe.Pointer(mountPath)), uintptr(unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC)); errno == 0 {
 		_ = syscall.Close(int(fd))
 	}
+
+	// mount_setattr(dirfd, path, flags, attr, size) changes the per-mount
+	// attributes of an existing mount. It is a KindPathname syscall: args[1] is
+	// the path. We aim it at the scenario mount point with AT_FDCWD, requesting
+	// MOUNT_ATTR_RDONLY, but it requires CAP_SYS_ADMIN (Linux 5.12+) and the
+	// path is not even a mount here, so it returns EPERM/EINVAL unprivileged.
+	// That is fine: like its mount-API siblings above, the sys_enter_
+	// mount_setattr tracepoint fires on kernel entry before any permission or
+	// validity check, so MinCount>=1 holds regardless of errno. attr/size carry
+	// the MountAttr struct and its size so the kernel parses the call before
+	// failing; the call mutates no real mount.
+	attr := unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}
+	_, _, _ = syscall.RawSyscall6(unix.SYS_MOUNT_SETATTR, atFDCWD, uintptr(unsafe.Pointer(mountPath)), 0, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
+
 	_, _, _ = syscall.RawSyscall6(unix.SYS_MOUNT, uintptr(unsafe.Pointer(none)), uintptr(unsafe.Pointer(mountPath)), uintptr(unsafe.Pointer(tmpfs)), 0, 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), uintptr(unix.MNT_DETACH), 0)

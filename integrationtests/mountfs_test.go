@@ -4,7 +4,7 @@ import "testing"
 
 var mountfsTraceArgs = []string{
 	"-trace-syscalls",
-	"mount,umount,move_mount,fsopen,fsconfig,fspick,open_tree,fsmount,pivot_root,quotactl,quotactl_fd,statmount,listmount,listns,swapon,swapoff",
+	"mount,umount,move_mount,fsopen,fsconfig,fspick,open_tree,mount_setattr,fsmount,pivot_root,quotactl,quotactl_fd,statmount,listmount,listns,swapon,swapoff",
 }
 
 func TestMountFsManagementSyscalls(t *testing.T) {
@@ -20,6 +20,12 @@ func TestMountFsManagementSyscalls(t *testing.T) {
 		{Tracepoint: "enter_fsconfig", MinCount: 1},
 		{Tracepoint: "enter_fspick", MinCount: 1},
 		{Tracepoint: "enter_open_tree", MinCount: 1},
+		// mount_setattr (KindPathname, path@arg1) changes per-mount attributes
+		// of an existing mount and needs CAP_SYS_ADMIN (Linux 5.12+), so it
+		// returns EPERM/EINVAL in the scenario. Its sys_enter_ tracepoint fires
+		// on kernel entry regardless of permission/validity, so MinCount>=1
+		// holds even though the call itself fails.
+		{Tracepoint: "enter_mount_setattr", MinCount: 1},
 		{Tracepoint: "enter_fsmount", MinCount: 1},
 		{Tracepoint: "enter_pivot_root", MinCount: 1},
 		{Tracepoint: "enter_quotactl", MinCount: 1},
