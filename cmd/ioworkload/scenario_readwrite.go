@@ -385,6 +385,50 @@ func readwriteReadaheadEbadf() error {
 	return nil
 }
 
+// readwriteFadvise64 opens a file, writes data, then calls fadvise64(2) on it.
+// fadvise64(fd, offset, len, advice) declares an access-pattern hint for the
+// file's page cache; offset=0/len=0 means "the whole file". It returns 0 on
+// success / -1 on error and transfers NO bytes to userspace, so ior classifies
+// it KindFd / UNCLASSIFIED (offset/len are hint parameters, not bytes moved).
+// The scenario exercises the enter fd_event (fd at args[0]) and the exit
+// ret_event end-to-end. unix.Fadvise wraps the per-arch fadvise64 syscall.
+func readwriteFadvise64() error {
+	dir, cleanup, err := makeTempDir("readwrite-fadvise64")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "fadvise64file.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("fadvise64 test data")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	// fadvise64(fd, offset=0, len=0, FADV_NORMAL): hint over the whole file.
+	if err := unix.Fadvise(fd, 0, 0, unix.FADV_NORMAL); err != nil {
+		return fmt.Errorf("fadvise64: %w", err)
+	}
+	return nil
+}
+
+// readwriteFadvise64Ebadf calls fadvise64(2) on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_fadvise64 tracepoint
+// because arguments are read on syscall entry before the kernel returns an error.
+func readwriteFadvise64Ebadf() error {
+	for i := 0; i < 5; i++ {
+		if err := unix.Fadvise(99999, 0, 0, unix.FADV_NORMAL); err == nil {
+			return fmt.Errorf("expected EBADF, but fadvise64 succeeded")
+		}
+	}
+	return nil
+}
+
 // cachestatRange mirrors the kernel's struct cachestat_range, the second
 // cachestat(2) argument: { __u64 off; __u64 len; }. off=0/len=0 means "the
 // whole file".

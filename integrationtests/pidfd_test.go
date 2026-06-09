@@ -2,7 +2,7 @@ package integrationtests
 
 import "testing"
 
-var pidfdTraceArgs = []string{"-trace-syscalls", "pidfd_open,pidfd_getfd,openat,write,close"}
+var pidfdTraceArgs = []string{"-trace-syscalls", "pidfd_open,pidfd_getfd,pidfd_send_signal,openat,write,close"}
 
 // TestPidfdGetfdSuccess asserts the resolved path of the pidfd_getfd event is
 // the duplicated source file, NOT the pidfd's anon_inode.
@@ -31,6 +31,21 @@ func TestPidfdGetfdFailure(t *testing.T) {
 	runScenarioResultWithIorArgs(t, "pidfd-getfd-failure", []ExpectedEvent{
 		{
 			Tracepoint: "enter_pidfd_getfd",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	}, pidfdTraceArgs)
+}
+
+// TestPidfdSendSignal asserts ior captures the enter_pidfd_send_signal
+// tracepoint when ioworkload issues a pidfd_send_signal liveness probe (sig 0)
+// against its own pidfd. The BPF enter handler captures args[0] = the pidfd
+// (FamilyIPC, KindFd); the exit is UNCLASSIFIED. Signal 0 delivers nothing, so
+// the probe is safe to target self.
+func TestPidfdSendSignal(t *testing.T) {
+	runScenarioResultWithIorArgs(t, "pidfd-send-signal", []ExpectedEvent{
+		{
+			Tracepoint: "enter_pidfd_send_signal",
 			Comm:       "ioworkload",
 			MinCount:   1,
 		},
