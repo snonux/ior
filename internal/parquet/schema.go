@@ -30,6 +30,13 @@ type Record struct {
 	File              string `parquet:"file"`
 	IsError           bool   `parquet:"is_error"`
 	FilterEpoch       uint64 `parquet:"filter_epoch"`
+	// EpollOp/EpollTargetFD/EpollEvents surface epoll_ctl control metadata: the
+	// operation (ADD/MOD/DEL), the target descriptor registered (args[2]), and
+	// the requested event mask (args[3]->events). EpollOp is empty and the
+	// numeric fields are zero for all non-epoll_ctl rows.
+	EpollOp       string `parquet:"epoll_op"`
+	EpollTargetFD int32  `parquet:"epoll_target_fd"`
+	EpollEvents   uint32 `parquet:"epoll_events"`
 }
 
 // FileMetadata captures constant metadata written once into the parquet file.
@@ -74,6 +81,9 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		File:              row.FileName,
 		IsError:           row.IsError,
 		FilterEpoch:       filterEpoch,
+		EpollOp:           row.EpollOp,
+		EpollTargetFD:     row.EpollTargetFD,
+		EpollEvents:       row.EpollEvents,
 	}
 }
 

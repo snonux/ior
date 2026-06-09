@@ -60,8 +60,19 @@ func TestPollingEpollReadyCountInParquet(t *testing.T) {
 	}
 	var sawPwait2 bool
 	var sawPwait2ReadyCount bool
+	var sawEpollCtlOp bool
 	for _, row := range rows {
 		switch row.Syscall {
+		case "epoll_ctl":
+			// The workload registers descriptors via epoll_ctl; at least one
+			// successful row must surface a decoded op and a non-negative target
+			// fd distinct from the resolved epfd column.
+			if row.EpollOp != "" && row.Ret == 0 {
+				sawEpollCtlOp = true
+				if row.EpollTargetFD < 0 {
+					t.Fatalf("epoll_ctl row has op %q but target fd %d < 0", row.EpollOp, row.EpollTargetFD)
+				}
+			}
 		case "epoll_wait", "epoll_pwait", "poll", "ppoll", "select", "pselect6":
 			if row.Ret > 0 {
 				wantReadyCount[row.Syscall] = true
@@ -77,7 +88,15 @@ func TestPollingEpollReadyCountInParquet(t *testing.T) {
 			if row.Bytes != 0 {
 				t.Fatalf("%s bytes = %d, want 0 for ready-count events", row.Syscall, row.Bytes)
 			}
+			// epoll_ctl metadata must stay empty for non-epoll_ctl syscalls.
+			if row.EpollOp != "" {
+				t.Fatalf("%s row has unexpected epoll_op %q", row.Syscall, row.EpollOp)
+			}
 		}
+	}
+
+	if !sawEpollCtlOp {
+		t.Fatalf("expected at least one successful epoll_ctl row with decoded op/target-fd in parquet output")
 	}
 
 	for syscall, ok := range wantReadyCount {

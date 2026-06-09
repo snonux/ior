@@ -31,6 +31,44 @@ type Pair struct {
 	AddressSpaceBytes uint64
 	// RequestedSleepNs tracks requested sleep duration for nanosleep-style syscalls.
 	RequestedSleepNs int64
+	// Epoll carries epoll_ctl control metadata (op, target fd, requested event
+	// mask). It is only populated for epoll_ctl pairs; HasEpoll reports whether
+	// it is set. The Pair-level File still resolves to the epoll instance (epfd);
+	// Epoll.TargetFD is the descriptor being registered/modified/removed.
+	Epoll    EpollCtl
+	HasEpoll bool
+}
+
+// EpollCtl holds the decoded epoll_ctl arguments surfaced from the BPF
+// EpollCtlEvent: the operation (EPOLL_CTL_ADD/MOD/DEL), the target fd
+// (args[2]), and the requested epoll event mask (args[3]->events).
+type EpollCtl struct {
+	Op       int32
+	TargetFD int32
+	Events   uint32
+}
+
+// Linux epoll_ctl op values from <sys/epoll.h>.
+const (
+	epollCtlAdd = 1
+	epollCtlDel = 2
+	epollCtlMod = 3
+)
+
+// OpName renders the epoll_ctl operation as a human-readable token
+// (ADD/DEL/MOD). Unknown values fall back to their decimal form so the
+// raw op is never lost.
+func (c EpollCtl) OpName() string {
+	switch c.Op {
+	case epollCtlAdd:
+		return "ADD"
+	case epollCtlDel:
+		return "DEL"
+	case epollCtlMod:
+		return "MOD"
+	default:
+		return strconv.FormatInt(int64(c.Op), 10)
+	}
 }
 
 func NewPair(enterEv Event) *Pair {
