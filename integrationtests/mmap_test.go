@@ -11,6 +11,11 @@ const (
 
 var mmapTraceArgs = []string{"-trace-syscalls", "openat,write,close,mmap,msync,mremap,munmap"}
 
+// mmapMemoryLockTraceArgs traces the memory-locking cluster. mlock/mlock2/
+// munlock are KindMem and mlockall/munlockall are KindNull; in all cases only
+// the sys_enter_ tracepoint presence is asserted (return is UNCLASSIFIED).
+var mmapMemoryLockTraceArgs = []string{"-trace-syscalls", "mlock,mlock2,munlock,mlockall,munlockall"}
+
 func TestMmapBasic(t *testing.T) {
 	runScenarioResultWithIorArgs(t, "mmap-basic", []ExpectedEvent{
 		{
@@ -76,6 +81,41 @@ func TestMmapMremapMunmap(t *testing.T) {
 		Tracepoint: "enter_munmap",
 		Comm:       "ioworkload",
 	}, 0)
+}
+
+// TestMmapMemoryLock asserts the memory-locking cluster fires its enter
+// tracepoints end-to-end. mlock/mlock2/munlock (KindMem) and mlockall/
+// munlockall (KindNull) all return UNCLASSIFIED, so enter-presence is the
+// correct check. mlock/mlock2/mlockall may hit EPERM/ENOMEM under a low
+// RLIMIT_MEMLOCK, but the sys_enter_ tracepoint fires regardless.
+func TestMmapMemoryLock(t *testing.T) {
+	runScenarioResultWithIorArgs(t, "mmap-memory-lock", []ExpectedEvent{
+		{
+			Tracepoint: "enter_mlock",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+		{
+			Tracepoint: "enter_munlock",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+		{
+			Tracepoint: "enter_mlock2",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+		{
+			Tracepoint: "enter_mlockall",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+		{
+			Tracepoint: "enter_munlockall",
+			Comm:       "ioworkload",
+			MinCount:   1,
+		},
+	}, mmapMemoryLockTraceArgs)
 }
 
 func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
