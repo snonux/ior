@@ -144,6 +144,7 @@ var scenarios = map[string]func() error{
 	"mmap-msync-sync":               mmapMsyncSync,
 	"mmap-msync-invalid-flags":      mmapMsyncInvalidFlags,
 	"mmap-mremap-munmap":            mmapMremapMunmap,
+	"mmap-memory-lock":              mmapMemoryLock,
 	"copy-file-range-basic":         copyFileRangeBasic,
 	"copy-file-range-bad-dst-fd":    copyFileRangeBadDstFd,
 	"truncate-basic":                truncateBasic,
