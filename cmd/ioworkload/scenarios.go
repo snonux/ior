@@ -74,6 +74,7 @@ var scenarios = map[string]func() error{
 	"fcntl-dupfd-cloexec":           fcntlDupfdCloexec,
 	"fcntl-invalid-fd":              fcntlInvalidFd,
 	"fcntl-dupfd-max":               fcntlDupfdMax,
+	"ioctl-basic":                   ioctlBasic,
 	"rename-basic":                  renameBasic,
 	"rename-renameat":               renameRenameat,
 	"rename-renameat2":              renameRenameat2,

@@ -4,7 +4,7 @@ import "testing"
 
 var mountfsTraceArgs = []string{
 	"-trace-syscalls",
-	"mount,umount,move_mount,fsopen,fsconfig,fspick,open_tree,fsmount,pivot_root,quotactl,statmount,listmount,listns,swapon,swapoff",
+	"mount,umount,move_mount,fsopen,fsconfig,fspick,open_tree,fsmount,pivot_root,quotactl,quotactl_fd,statmount,listmount,listns,swapon,swapoff",
 }
 
 func TestMountFsManagementSyscalls(t *testing.T) {
@@ -23,6 +23,10 @@ func TestMountFsManagementSyscalls(t *testing.T) {
 		{Tracepoint: "enter_fsmount", MinCount: 1},
 		{Tracepoint: "enter_pivot_root", MinCount: 1},
 		{Tracepoint: "enter_quotactl", MinCount: 1},
+		// quotactl_fd (KindFd, fd@arg0) is the fd-based sibling of quotactl,
+		// issued best-effort on an fd opened on the mount point. Its sys_enter_
+		// tracepoint fires on kernel entry regardless of privilege/quota support.
+		{Tracepoint: "enter_quotactl_fd", MinCount: 1},
 		{Tracepoint: "enter_statmount", MinCount: 1},
 		{Tracepoint: "enter_listmount", MinCount: 1},
 		{Tracepoint: "enter_listns", MinCount: 1},
