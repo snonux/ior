@@ -100,6 +100,18 @@ func mountfsManagement() error {
 	_, _, _ = syscall.RawSyscall(unix.SYS_FSMOUNT, ^uintptr(0), 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_PIVOT_ROOT, uintptr(unsafe.Pointer(newRoot)), uintptr(unsafe.Pointer(putOld)), 0)
 	_, _, _ = syscall.RawSyscall6(unix.SYS_QUOTACTL, 0, uintptr(unsafe.Pointer(mountPath)), 0, 0, 0, 0)
+
+	// quotactl_fd(fd, cmd, id, addr) is the fd-based variant of quotactl: it is
+	// a KindFd syscall capturing fd@arg0. We point it at an fd opened on the
+	// mount point directory with best-effort args (Q_GETQUOTA-style cmd, id 0,
+	// nil addr). Quota support / privilege is irrelevant: the sys_enter_
+	// quotactl_fd tracepoint fires on kernel entry before any check, exactly
+	// like the quotactl call above, so MinCount>=1 holds regardless of errno.
+	if quotaFd, err := syscall.Open(mountPoint, syscall.O_RDONLY, 0); err == nil {
+		_, _, _ = syscall.RawSyscall6(unix.SYS_QUOTACTL_FD, uintptr(quotaFd), 0, 0, 0, 0, 0)
+		_ = syscall.Close(quotaFd)
+	}
+
 	_, _, _ = syscall.RawSyscall(unix.SYS_SWAPON, uintptr(unsafe.Pointer(swapPath)), 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_SWAPOFF, uintptr(unsafe.Pointer(swapPath)), 0, 0)
 
