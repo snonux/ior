@@ -30,6 +30,12 @@ type Record struct {
 	File              string `parquet:"file"`
 	IsError           bool   `parquet:"is_error"`
 	FilterEpoch       uint64 `parquet:"filter_epoch"`
+	// OldFile is the source/old path for rename-family (rename/renameat/
+	// renameat2) and link-family (link/linkat/symlink/symlinkat) syscalls; the
+	// `file` column carries the "new" path. This is the only place the captured
+	// oldname (BPF name_event.oldname, at args[1] for the AT-variants) is
+	// persisted. Empty for every other syscall.
+	OldFile string `parquet:"old_file"`
 	// EpollOp/EpollTargetFD/EpollEvents surface epoll_ctl control metadata: the
 	// operation (ADD/MOD/DEL), the target descriptor registered (args[2]), and
 	// the requested event mask (args[3]->events). EpollOp is empty and the
@@ -81,6 +87,7 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		File:              row.FileName,
 		IsError:           row.IsError,
 		FilterEpoch:       filterEpoch,
+		OldFile:           row.OldName,
 		EpollOp:           row.EpollOp,
 		EpollTargetFD:     row.EpollTargetFD,
 		EpollEvents:       row.EpollEvents,
