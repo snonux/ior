@@ -30,6 +30,13 @@ type Row struct {
 	RetVal           int64
 	IsError          bool
 	FD               int32
+	// EpollOp is the epoll_ctl operation as a readable token (ADD/MOD/DEL),
+	// empty for non-epoll_ctl rows. EpollTargetFD and EpollEvents hold the
+	// registered descriptor (args[2]) and requested event mask (args[3]->events)
+	// for epoll_ctl rows; both are zero when EpollOp is empty.
+	EpollOp       string
+	EpollTargetFD int32
+	EpollEvents   uint32
 }
 
 func (r Row) SyscallValue() string {
@@ -120,6 +127,15 @@ func New(seq uint64, pair *event.Pair) Row {
 	}
 	if fd, ok := pair.FileDescriptor(); ok {
 		row.FD = fd
+	}
+
+	// Surface epoll_ctl control metadata when present. The Pair's FD/File still
+	// reflect the epoll instance (epfd); these fields expose the target fd and
+	// operation so consumers can see which descriptor was registered.
+	if pair.HasEpoll {
+		row.EpollOp = pair.Epoll.OpName()
+		row.EpollTargetFD = pair.Epoll.TargetFD
+		row.EpollEvents = pair.Epoll.Events
 	}
 
 	if retEv, ok := pair.ExitEv.(*types.RetEvent); ok {

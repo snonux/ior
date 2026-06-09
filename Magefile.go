@@ -1164,11 +1164,14 @@ func runClickHouseQuery(dir, file, sql string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// expectedParquetColumns lists the 15 column names that the parquet schema must contain.
+// expectedParquetColumns lists the column names that the parquet schema must
+// contain. Keep in lockstep with parquet.Record (internal/parquet/schema.go).
 var expectedParquetColumns = []string{
 	"seq", "time_ns", "gap_ns", "latency_ns", "comm",
 	"pid", "tid", "syscall", "family", "fd", "ret",
-	"bytes", "file", "is_error", "filter_epoch",
+	"bytes", "address_space_bytes", "requested_sleep_ns",
+	"file", "is_error", "filter_epoch",
+	"epoll_op", "epoll_target_fd", "epoll_events",
 }
 
 // parquetSchemaCheck verifies that all expectedParquetColumns appear in the

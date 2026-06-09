@@ -30,9 +30,14 @@ state, no installation needed beyond Docker.
 | `fd` | Int32 | File descriptor |
 | `ret` | Int64 | Return value (negative = errno) |
 | `bytes` | UInt64 | Bytes transferred (0 if not applicable) |
+| `address_space_bytes` | UInt64 | Memory-region extent for memory syscalls (e.g. `munmap`/`mremap`); 0 otherwise |
+| `requested_sleep_ns` | Int64 | Requested sleep duration for nanosleep-style syscalls; 0 otherwise |
 | `file` | String | File path (empty if not resolved) |
 | `is_error` | Bool | True when `ret` is a negative errno |
 | `filter_epoch` | UInt64 | Filter generation at capture time |
+| `epoll_op` | String | `epoll_ctl` operation (`ADD`/`MOD`/`DEL`); empty for other syscalls |
+| `epoll_target_fd` | Int32 | `epoll_ctl` target descriptor being registered (args[2]); 0 for other syscalls |
+| `epoll_events` | UInt32 | `epoll_ctl` requested event mask (args[3]->events); 0 for other syscalls |
 
 ---
 
@@ -78,12 +83,17 @@ pid           UInt32
 tid           UInt32
 syscall       String
 family        String
-fd            Int32
-ret           Int64
-bytes         UInt64
-file          String
-is_error      Bool
-filter_epoch  UInt64
+fd                  Int32
+ret                 Int64
+bytes               UInt64
+address_space_bytes UInt64
+requested_sleep_ns  Int64
+file                String
+is_error            Bool
+filter_epoch        UInt64
+epoll_op            String
+epoll_target_fd     Int32
+epoll_events        UInt32
 ```
 
 ### Row count
@@ -220,6 +230,6 @@ PARQUET_FILE=ior-recording-20260313-170234.parquet env GOTOOLCHAIN=auto mage par
 ```
 
 It checks:
-1. All 14 expected columns are present
+1. All 20 expected columns are present
 2. Row count > 0
 3. `seq` is monotonically ordered and `time_ns` is non-zero

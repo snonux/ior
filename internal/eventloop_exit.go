@@ -385,7 +385,16 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 }
 
 func (e *eventLoop) handleEpollCtlExit(ep *event.Pair, epollCtlEv *types.EpollCtlEvent) bool {
+	// File resolves to the epoll instance (epfd); the decoded op/target-fd/events
+	// are surfaced separately via ep.Epoll so consumers can see which descriptor
+	// was registered and the operation performed.
 	ep.File = e.fdState().resolve(epollCtlEv.Epfd, epollCtlEv.Pid)
+	ep.Epoll = event.EpollCtl{
+		Op:       epollCtlEv.Op,
+		TargetFD: epollCtlEv.Fd,
+		Events:   epollCtlEv.Events,
+	}
+	ep.HasEpoll = true
 	return e.finishPairForTid(ep, epollCtlEv.GetTid())
 }
 
