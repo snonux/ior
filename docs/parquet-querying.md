@@ -32,7 +32,8 @@ state, no installation needed beyond Docker.
 | `bytes` | UInt64 | Bytes transferred (0 if not applicable) |
 | `address_space_bytes` | UInt64 | Memory-region extent for memory syscalls (e.g. `munmap`/`mremap`); 0 otherwise |
 | `requested_sleep_ns` | Int64 | Requested sleep duration for nanosleep-style syscalls; 0 otherwise |
-| `file` | String | File path (empty if not resolved) |
+| `file` | String | File path (empty if not resolved); for rename/link syscalls this is the "new" path |
+| `old_file` | String | Source/old path for rename-family (`rename`/`renameat`/`renameat2`) and link-family (`link`/`linkat`/`symlink`/`symlinkat`) syscalls; empty for other syscalls |
 | `is_error` | Bool | True when `ret` is a negative errno |
 | `filter_epoch` | UInt64 | Filter generation at capture time |
 | `epoll_op` | String | `epoll_ctl` operation (`ADD`/`MOD`/`DEL`); empty for other syscalls |
@@ -89,6 +90,7 @@ bytes               UInt64
 address_space_bytes UInt64
 requested_sleep_ns  Int64
 file                String
+old_file            String
 is_error            Bool
 filter_epoch        UInt64
 epoll_op            String
@@ -230,6 +232,6 @@ PARQUET_FILE=ior-recording-20260313-170234.parquet env GOTOOLCHAIN=auto mage par
 ```
 
 It checks:
-1. All 20 expected columns are present
+1. All 21 expected columns are present
 2. Row count > 0
 3. `seq` is monotonically ordered and `time_ns` is non-zero

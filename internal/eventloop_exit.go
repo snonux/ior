@@ -81,7 +81,12 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 }
 
 func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool {
+	// File.Name() resolves to the "new" path (newname); surface the captured
+	// source path (oldname, at args[1] for the AT-variants) separately on the
+	// Pair so it reaches the output schema rather than living only in the
+	// TUI String() repr ("old:... ->new:...").
 	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
+	ep.Oldname = types.StringValue(nameEv.Oldname[:])
 	ep.Comm = e.comm(nameEv.GetTid())
 	return true
 }

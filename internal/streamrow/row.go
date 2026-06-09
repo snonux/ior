@@ -37,6 +37,10 @@ type Row struct {
 	EpollOp       string
 	EpollTargetFD int32
 	EpollEvents   uint32
+	// OldName is the source/old path for rename-family (rename/renameat/
+	// renameat2) and link-family (link/linkat/symlink/symlinkat) syscalls;
+	// FileName carries the "new" path. Empty for every other syscall.
+	OldName string
 }
 
 func (r Row) SyscallValue() string {
@@ -124,6 +128,9 @@ func New(seq uint64, pair *event.Pair) Row {
 		AddressSpaceBytes: pair.AddressSpaceBytes,
 		RequestedSleepNs:  pair.RequestedSleepNs,
 		FD:                UnknownFD,
+		// OldName carries the rename/link source path; FileName is the new path.
+		// Empty for non-rename/link syscalls (pair.Oldname is zero there).
+		OldName: pair.Oldname,
 	}
 	if fd, ok := pair.FileDescriptor(); ok {
 		row.FD = fd

@@ -37,6 +37,13 @@ type Pair struct {
 	// Epoll.TargetFD is the descriptor being registered/modified/removed.
 	Epoll    EpollCtl
 	HasEpoll bool
+	// Oldname holds the source/old path for rename-family (rename/renameat/
+	// renameat2) and link-family (link/linkat/symlink/symlinkat) syscalls. The
+	// Pair-level File resolves to the "new" path (File.Name() == newname), so
+	// Oldname is the only place the captured source path (BPF name_event.oldname,
+	// at args[1] for the AT-variants after a dirfd) reaches the output schema.
+	// Empty for every other syscall.
+	Oldname string
 }
 
 // EpollCtl holds the decoded epoll_ctl arguments surfaced from the BPF
