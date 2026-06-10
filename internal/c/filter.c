@@ -120,6 +120,14 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
     return emit_event != 0;
 }
 
+// filter() decides whether the current task's syscall is in scope. Today this is
+// a single-TGID gate (PID_FILTER, with -1 meaning trace-all) plus an optional
+// TID_FILTER. ior does NOT follow forks: a traced process's children run under a
+// different TGID and are excluded here, which also means their syscalls miss the
+// aggregate-count path downstream. A planned opt-in process-tree-following mode
+// would extend this gate to also accept descendant TGIDs from a BPF-maintained
+// set seeded with the root PID and updated via sched_process_fork/exit — see
+// docs/follow-forks-plan.md for the full design.
 static __always_inline int filter(__u32 *pid, __u32 *tid) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     *pid = pid_tgid >> 32;
