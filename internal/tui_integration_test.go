@@ -28,6 +28,7 @@ package internal
 // visible once that filter is cleared.
 
 import (
+	"context"
 	"io"
 	"regexp"
 	"strings"
@@ -39,6 +40,8 @@ import (
 	"github.com/charmbracelet/x/vt"
 
 	"ior/internal/flags"
+	"ior/internal/probemanager"
+	"ior/internal/runtime"
 	"ior/internal/tui"
 )
 
@@ -81,6 +84,86 @@ func tuiTestConfig() flags.Config {
 	cfg := flags.NewFlags()
 	cfg.TUIExportEnable = true
 	return cfg
+}
+
+// tuiNewPickerModel starts a session whose model begins on the PID picker
+// screen. Passing initialPID=-1 to tui.NewModel selects the picker instead of
+// the dashboard, so picker tests can assert the picker chrome and then select a
+// PID to land on the populated dashboard seeded by tuiTestFlamesStarter.
+func tuiNewPickerModel(t *testing.T) *tuiSession {
+	t.Helper()
+	cfg := tuiTestConfig()
+	return tuiNewSession(t, tui.NewModel(-1, tuiTestFlamesStarter(cfg)))
+}
+
+// tuiFakeProbeManager is a deterministic in-test runtime.ProbeManager that
+// renders a small, stable set of rows in the probes modal without any BPF.
+// The real interface (internal/runtime/runtime.go) is:
+//
+//	States() []probemanager.ProbeState
+//	Toggle(syscall string) error
+//	ActiveCount() (int, int)
+type tuiFakeProbeManager struct {
+	states []probemanager.ProbeState
+}
+
+// tuiNewFakeProbeManager returns a fake probe manager with a couple of active
+// probes so the probes modal renders non-empty rows and a "(N/N active)" title.
+func tuiNewFakeProbeManager() tuiFakeProbeManager {
+	return tuiFakeProbeManager{states: []probemanager.ProbeState{
+		{Syscall: "read", Active: true},
+		{Syscall: "write", Active: true},
+		{Syscall: "openat", Active: false},
+	}}
+}
+
+func (f tuiFakeProbeManager) States() []probemanager.ProbeState { return f.states }
+func (f tuiFakeProbeManager) Toggle(string) error               { return nil }
+
+// ActiveCount reports the number of active probes and the total.
+func (f tuiFakeProbeManager) ActiveCount() (int, int) {
+	active := 0
+	for _, s := range f.states {
+		if s.Active {
+			active++
+		}
+	}
+	return active, len(f.states)
+}
+
+// tuiTestFlamesStarterWithProbes behaves like tuiTestFlamesStarter (seeding the
+// static flame/stats/stream sources) and additionally wires a deterministic
+// fake probe manager via the runtime publisher's SetProbeManager, so pressing
+// "o" opens a non-empty probes modal.
+func tuiTestFlamesStarterWithProbes(cfg flags.Config) runtime.TraceStarter {
+	base := tuiTestFlamesStarter(cfg)
+	return func(ctx context.Context) error {
+		if err := base(ctx); err != nil {
+			return err
+		}
+		if bindings, ok := runtime.RuntimePublisherFromContext(ctx); ok {
+			bindings.SetProbeManager(tuiNewFakeProbeManager())
+		}
+		return nil
+	}
+}
+
+// tuiNewProbesModel starts a static test-flames session whose runtime also has
+// a fake probe manager wired in, so the probes modal ("o") renders rows.
+func tuiNewProbesModel(t *testing.T) *tuiSession {
+	t.Helper()
+	cfg := tuiTestConfig()
+	return tuiNewSession(t, tui.NewTestFlamesModel(cfg, tuiTestFlamesStarterWithProbes(cfg)))
+}
+
+// tuiChdirTemp switches the test's working directory to a fresh temp dir (Go
+// 1.24+ t.Chdir, auto-restored on cleanup) and returns it, isolating files
+// written by recording/export submit tests. It returns the new directory.
+func tuiChdirTemp(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Chdir(dir)
+	return dir
 }
 
 func tuiNewSession(t *testing.T, m tui.Model) *tuiSession {
@@ -362,6 +445,27 @@ func TestTUIIntegration_Recording_ModalOpenClose(t *testing.T) {
 	s.waitFor("Start Parquet Recording", "Filename:")
 	s.press(tea.KeyEsc)
 	s.waitFor("view:root") // back to dashboard, no recording started
+}
+
+// --- Probes modal -----------------------------------------------------------
+
+// TestTUIIntegration_ProbesModal_Smoke validates the tuiNewProbesModel helper +
+// fake ProbeManager end-to-end: it opens the dashboard, presses "o", and
+// asserts the probes modal renders the seeded title and a probe row.
+func TestTUIIntegration_ProbesModal_Smoke(t *testing.T) {
+	s := tuiNewProbesModel(t)
+	s.waitFor("view:root")
+
+	// Leave the flame tab first: on the flame tab "o" is bound to the frame
+	// ordering toggle, so the probes shortcut only reaches the dashboard from a
+	// non-flame tab (here Overview).
+	s.typeStr("2")
+	s.waitFor("Trends:")
+
+	s.typeStr("o")
+	// Title is "Probes (2/3 active)" given the fake's two active probes, and the
+	// "read" row is one of the seeded rows.
+	s.waitFor("Probes (2/3 active)", "read")
 }
 
 // --- Live mode (--testliveflames) -------------------------------------------
