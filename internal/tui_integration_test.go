@@ -1226,6 +1226,41 @@ func TestTUIIntegration_NonIO_ShowsFamilyRows(t *testing.T) {
 	s.waitFor("Family", "Polling")
 }
 
+// TestTUIIntegration_NonIO_ScrollAndColumnNav drives the Non-IO tab's
+// selectable-table handlers. The Non-IO tab (number key "8") renders the same
+// compact selectable table as the Syscalls/Files/Processes tabs, with a
+// "[Row r/N Col c/N]" hint line over the seeded families (Polling, Process); at
+// the test width the body is the 6-column compact layout, so column 0 is the
+// "Family" name column and the selectable-column index runs 1..6. With only two
+// seeded families row scrolling clamps quickly, so the assertions track coherent
+// index movement (and PgDown/PgUp clamping to the last/first row) rather than a
+// specific large count, while confirming the "Family" header stays rendered.
+// Non-IO is table-only — there are no bubbles/treemap viz modes.
+func TestTUIIntegration_NonIO_ScrollAndColumnNav(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("8")
+	s.waitFor("Family", "Polling", "[Row 1/2 Col 1/6]")
+
+	s.press('l') // move selection one column to the right
+	s.waitFor("[Row 1/2 Col 2/6]")
+	s.press('h') // move back to the first column
+	s.waitFor("[Row 1/2 Col 1/6]")
+
+	s.press('j') // move selection down one row
+	s.waitFor("[Row 2/2 Col 1/6]")
+	s.press('k') // back up to the top row
+	s.waitFor("[Row 1/2 Col 1/6]")
+
+	// Paging keys clamp within the 2 seeded rows: PgDown lands on the last row,
+	// PgUp returns to the first. The table header stays rendered throughout.
+	s.press(tea.KeyPgDown)
+	s.waitFor("Family", "[Row 2/2 Col 1/6]")
+	s.press(tea.KeyPgUp)
+	s.waitFor("Family", "[Row 1/2 Col 1/6]")
+}
+
 // --- Syscalls tab interactions (seeded table in --testflames) ---------------
 //
 // The Syscalls tab (number key "3") renders a selectable table of seeded
