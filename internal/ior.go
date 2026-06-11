@@ -114,6 +114,8 @@ func tuiTestLiveFlamesStarter(cfg flags.Config) runtime.TraceStarter {
 func buildTestFlamesRuntime(cfg flags.Config) (*statsengine.Engine, *streamrow.RingBuffer, *flamegraph.LiveTrie) {
 	components := newRuntimeBuilder(cfg).Build()
 	flamegraph.SeedTestFlameData(components.liveTrie)
+	statsengine.SeedTestStatsData(components.engine)
+	streamrow.SeedTestStreamData(components.streamBuf)
 	return components.engine, components.streamBuf, components.liveTrie
 }
 
@@ -124,6 +126,8 @@ func buildTestFlamesRuntime(cfg flags.Config) (*statsengine.Engine, *streamrow.R
 func buildTestLiveFlamesRuntime(ctx context.Context, cfg flags.Config) (*statsengine.Engine, *streamrow.RingBuffer, *flamegraph.LiveTrie) {
 	components := newRuntimeBuilder(cfg).Build()
 	flamegraph.SeedTestLiveFlameData(components.liveTrie, 0)
+	statsengine.SeedTestStatsData(components.engine)
+	streamrow.SeedTestStreamData(components.streamBuf)
 
 	interval := cfg.LiveInterval
 	if interval <= 0 {
