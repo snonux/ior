@@ -225,6 +225,27 @@ func (s *tuiSession) waitFor(wants ...string) {
 	}
 }
 
+// waitForAbsent polls the reconstructed screen until the first substring is
+// gone while the remaining "present" substrings are all still rendered, failing
+// with the last screen on timeout. It is the negative counterpart of waitFor,
+// used to assert a toggled-off overlay has disappeared without racing the frame
+// that still shows it.
+func (s *tuiSession) waitForAbsent(absent string, present ...string) {
+	s.t.Helper()
+	deadline := time.Now().Add(tuiWaitFor)
+	for {
+		scr := s.screen()
+		if !strings.Contains(scr, absent) && tuiContainsAll(scr, present...) {
+			return
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("waitForAbsent %q (with %q present) not met within %s.\n--- screen ---\n%s",
+				absent, present, tuiWaitFor, scr)
+		}
+		time.Sleep(tuiWaitTick)
+	}
+}
+
 func (s *tuiSession) typeStr(str string) { s.tm.Type(str) }
 func (s *tuiSession) press(code rune)    { s.tm.Send(tea.KeyPressMsg{Code: code}) }
 func (s *tuiSession) shiftTab()          { s.tm.Send(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}) }
@@ -389,6 +410,135 @@ func TestTUIIntegration_Flame_PauseResume(t *testing.T) {
 	s.waitFor("[PAUSED]")
 	s.press(tea.KeySpace)
 	s.waitFor("[LIVE]")
+}
+
+// --- Flamegraph extra controls ----------------------------------------------
+//
+// These cover the remaining flame-tab controls (internal/tui/flamegraph
+// model.go handleModeKey + controls.go): "o" cycles the field-order preset, "v"
+// toggles the frame-height metric, "/"+n/N step the search match cursor, "r"
+// resets the baseline, left/right + pgup/pgdn move the selection, and "?"
+// toggles the in-tab flame help overlay.
+//
+// Observability notes for the 160-col VT harness (confirmed by dumping
+// s.screen()): the toolbar header line is middle-trimmed at the terminal width,
+// so only the leading "o:order(<preset>)" segment survives — the trailing
+// "b:metric(...)" and "v:height(...)" toolbar segments are clipped off-screen.
+// The field-order preset is therefore asserted on the visible "o:order(...)"
+// token, and the height metric on the selection status line's "height:<label>"
+// suffix (selectionStatusLine appends " | height:duration" when the height
+// metric is active). The count-metric toggle ("b") has no surviving on-screen
+// token in this mode (its toolbar label is clipped, and switching the static
+// test-flames trie's count field to bytes/duration clears the snapshot to zero
+// visible frames, so no "total(bytes)" status ever renders), so it is skipped
+// with that reason rather than asserted brittlely.
+
+// TestTUIIntegration_Flame_OrderCycle presses "o" and asserts the toolbar's
+// field-order preset advances from the default "comm/tracepoint/path" to the
+// next preset "path/tracepoint/comm" (the visible o:order(...) token).
+func TestTUIIntegration_Flame_OrderCycle(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root", "o:order(comm/tracepoint/path)")
+
+	s.press('o') // cycle to the next field-order preset
+	s.waitFor("o:order(path/tracepoint/comm)")
+}
+
+// TestTUIIntegration_Flame_MetricToggle is skipped: the count-metric label lives
+// in the toolbar segment that the 160-col VT harness trims off-screen, and
+// switching the static test-flames trie's count field to bytes/duration clears
+// the snapshot to zero visible frames, so no "total(<metric>)" status line ever
+// renders. The control has no deterministic on-screen token to assert.
+func TestTUIIntegration_Flame_MetricToggle(t *testing.T) {
+	t.Skip("flame count-metric toggle (b) has no observable token in test-flames " +
+		"mode: its toolbar label is trimmed at the 160-col width, and the bytes/" +
+		"duration count field yields zero visible frames on the static trie, so " +
+		"no total(<metric>) status line renders")
+}
+
+// TestTUIIntegration_Flame_HeightToggle presses "v" and asserts the height
+// metric activates: the selection status line gains a "height:duration" suffix
+// (off -> duration is the first step of the height cycle).
+func TestTUIIntegration_Flame_HeightToggle(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root", "Selected: root")
+
+	s.press('v') // toggle frame-height metric off -> duration
+	s.waitFor("view:root", "height:duration")
+}
+
+// TestTUIIntegration_Flame_MatchNextPrev opens flame search, applies the seeded
+// token "read" (8 matches across the trie), then steps the match cursor forward
+// with "n" and back with "N", asserting the "(<pos>/8 matches)" counter advances
+// from 1/8 to 2/8 and returns to 1/8.
+func TestTUIIntegration_Flame_MatchNextPrev(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("Selected: root")
+
+	s.typeStr("/") // open flame search
+	s.waitFor("matches")
+	s.typeStr("read")
+	s.press(tea.KeyEnter) // apply; selection jumps to the first match
+	s.waitFor(`Filter "read"`, "1/8 matches")
+
+	s.press('n') // advance the match cursor
+	s.waitFor("2/8 matches")
+	s.press('N') // step the match cursor back
+	s.waitFor("1/8 matches")
+}
+
+// TestTUIIntegration_Flame_ResetBaseline presses "r" to reset the baseline. The
+// reset clears the trie, which then reseeds from the static test-flames fixture,
+// so rather than asserting an exact pre/post total this asserts the stable
+// invariant that the flame view stays coherent and reseeds back to the root
+// frame (view:root + Selected: root + the seeded total render again).
+func TestTUIIntegration_Flame_ResetBaseline(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root", "Selected: root", "total(events):")
+
+	s.press('r') // reset baseline; trie clears then reseeds from the fixture
+	s.waitFor("view:root", "Selected: root", "total(events):")
+}
+
+// TestTUIIntegration_Flame_SiblingAndPaging descends into the first child
+// ("api"), moves to a sibling with Right (-> "batch") and back with Left, then
+// exercises the paging keys (PgDown jumps to the root-level extent, PgUp back).
+// Sibling destinations are asserted by name; paging destinations are
+// data-dependent, so those steps assert coherence (still on a seeded depth-1
+// comm under view:root).
+func TestTUIIntegration_Flame_SiblingAndPaging(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root", "Selected: root")
+
+	s.press(tea.KeyDown) // descend root -> api
+	s.waitFor("Selected: api")
+	s.press(tea.KeyRight) // sibling api -> batch
+	s.waitFor("Selected: batch")
+	s.press(tea.KeyLeft) // sibling batch -> api
+	s.waitFor("Selected: api")
+
+	// Paging keys move the selection within the frame layout; the exact landing
+	// frame is data-dependent, so assert the view stays coherent (still under
+	// view:root with a selection rendered).
+	s.press(tea.KeyPgDown)
+	s.waitFor("view:root", "Selected:")
+	s.press(tea.KeyPgUp)
+	s.waitFor("view:root", "Selected:")
+}
+
+// TestTUIIntegration_Flame_HelpOverlay presses "?" to open the in-tab flame help
+// (distinct from the global "H" overlay, which shows "Dashboard Tabs"); the
+// flame help renders its "Flame help:" cheat-sheet footer. Pressing "?" again
+// toggles it off, returning to the plain flame view.
+func TestTUIIntegration_Flame_HelpOverlay(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root", "Selected: root")
+
+	s.press('?') // open the flame in-tab help overlay
+	s.waitFor("view:root", "Flame help:")
+
+	s.press('?') // toggle the flame help back off
+	s.waitForAbsent("Flame help:", "view:root")
 }
 
 // --- Stream (seeded ring buffer in test-flames mode) ------------------------
