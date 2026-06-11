@@ -435,6 +435,179 @@ func TestTUIIntegration_Stream_ExportModal_OpenCancel(t *testing.T) {
 	s.waitFor("buffer:")
 }
 
+// --- Stream tab row interactions (seeded ring buffer in --testflames) --------
+//
+// The Stream tab (number key "7") renders the seeded 40-row ring buffer
+// (comms api/worker/ingest/batch, pids 2001-2004, paths under /srv, syscalls
+// read/write/close/openat/fsync with a few error rows). The model starts with
+// a pid=1 filter that hides every seeded row, so each test first clears that
+// filter via the dashboard filter modal (f -> c clears all fields -> Esc
+// applies), after which the stream's own "Filter: all" line shows and the
+// seeded rows render. These tests drive the stream's pause/select, table
+// navigation, push-filter, undo, and search handlers and assert on stable
+// rendered tokens from internal/tui/eventstream/render.go: the status line's
+// "PAUSED" marker, the "Filter:" summary line, and the search modal prompt
+// ("Regex Search" / "Pattern:").
+//
+// The stream's paused footer (the "Sel s/N Col c/10 | Enter push-filter" line)
+// and the search/status messages are only rendered when the dashboard help bar
+// is visible (eventstream.Model.SetFooterVisible is driven by dashboard
+// showHelp), and that toggle is shadowed by the tui-level "H" help overlay, so
+// the footer never renders in the running TUI. The selected-row/column
+// highlight is style-only (no glyph marker), which the VT emulator strips.
+// Navigation is therefore asserted through its *observable* effect: g/G recenter
+// the viewport. The File column is middle-truncated ("/srv....yaml"), so the
+// stable non-truncated discriminators are the per-row Latency values: row 0
+// (api openat) is "18.4us" and a tail-region row (api read socket) is
+// "198.3us", both unique across the 40 seeded rows. selectedCol still advances
+// deterministically under the hood, so Enter-to-push-filter remains assertable
+// via the resulting "Filter:" summary even though the column index itself is
+// not on screen.
+
+// tuiStreamClearFilter switches to the Stream tab (key 7) and clears the
+// model's startup pid=1 filter via the dashboard filter modal so the seeded
+// rows become visible. On return the stream renders "Filter: all" plus seeded
+// chrome. Every Stream row-interaction test starts from this state.
+func tuiStreamClearFilter(s *tuiSession) {
+	s.t.Helper()
+	s.typeStr("7")
+	s.waitFor("buffer:", "Comm", "Syscall")
+	s.typeStr("f")
+	s.waitFor("j/k move") // filter modal help line
+	s.typeStr("c")        // clear all fields
+	s.press(tea.KeyEsc)   // apply the now-empty filter
+	s.waitFor("buffer:", "Filter: all")
+}
+
+// TestTUIIntegration_Stream_RowsRender asserts that clearing the pid=1 filter
+// reveals the seeded rows: the "Filter: all" summary plus a seeded comm and a
+// seeded /srv path render alongside the live "buffer:" chrome.
+func TestTUIIntegration_Stream_RowsRender(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	tuiStreamClearFilter(s)
+	s.waitFor("buffer:", "Filter: all", "api", "/srv")
+}
+
+// TestTUIIntegration_Stream_PauseSelectsAndNavigates pauses the live stream
+// (asserting the "PAUSED" status marker), then drives g/G navigation and
+// asserts the viewport recenters: "g" brings the seeded row-0 latency
+// ("18.4us") to the top, "G" reveals a tail-region latency ("198.3us") that is
+// absent near row 0. Down/up and h/l are exercised to prove they are consumed
+// without breaking the table (PAUSED + a seeded row stay rendered); their footer
+// counters are not on screen in the running TUI.
+func TestTUIIntegration_Stream_PauseSelectsAndNavigates(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	tuiStreamClearFilter(s)
+
+	// Space pauses; the status line's live "LIVE" marker flips to "PAUSED".
+	s.press(tea.KeySpace)
+	s.waitFor("PAUSED")
+
+	// g anchors on row 0 and recenters, bringing the first seeded row's latency
+	// (18.4us, api openat) to the top of the viewport.
+	s.press('g')
+	s.waitFor("PAUSED", "18.4us")
+
+	// G jumps to the last row and recenters, revealing a tail-region latency
+	// (198.3us, api read socket near the end) that is not present near row 0.
+	s.press('G')
+	s.waitFor("PAUSED", "198.3us")
+
+	// Directional keys are consumed by the paused table navigator; assert the
+	// table stays coherent (still paused, still rendering seeded rows) after
+	// exercising down/up and the column-nav keys h/l.
+	s.press('g')
+	s.waitFor("PAUSED", "18.4us")
+	s.press(tea.KeyDown)
+	s.press(tea.KeyUp)
+	s.press('l')
+	s.press('h')
+	s.waitFor("PAUSED", "buffer:", "api")
+}
+
+// TestTUIIntegration_Stream_EnterPushFilterThenUndo pauses, anchors the
+// selection on row 0 (comm "api"), advances two columns to the Comm column,
+// and presses Enter to push a "comm~api" filter. The selected column index is
+// not rendered, but it advances deterministically under the hood, so the push
+// targets Comm; the resulting predicate is observable on the stream's "Filter:"
+// summary line. F then pops the filter stack, reverting to "Filter: all".
+func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	tuiStreamClearFilter(s)
+
+	s.press(tea.KeySpace)
+	s.waitFor("PAUSED")
+	s.press('g')                  // anchor selection on row 0 (comm "api"); selectedCol stays 0
+	s.waitFor("PAUSED", "18.4us") // row 0 (api openat) at the top of the viewport
+
+	// Two "l" presses move the selected column from Gap (0) to Comm (index 2).
+	s.press('l')
+	s.press('l')
+
+	// Enter clones the stream filter and adds the selected cell's predicate; the
+	// Comm cell of row 0 is "api", so the filter becomes "comm~api" (synced into
+	// the stream's own Filter line via the dashboard global filter).
+	s.press(tea.KeyEnter)
+	s.waitFor("Filter:", "comm~api")
+
+	// F pops the filter stack, reverting to the cleared "all" filter.
+	s.press('F')
+	s.waitFor("Filter: all")
+}
+
+// TestTUIIntegration_Stream_Search opens the forward search modal ("/"),
+// asserting its prompt chrome, searches for the seeded syscall "read" (which
+// pauses the stream and jumps to a match), exercises n/N match navigation, and
+// smoke-opens the reverse search modal ("?"). The match-indicator status line
+// is only rendered with the help footer (absent in the running TUI), so the
+// observable assertions are the modal chrome, the paused state, and a visible
+// "read" row.
+func TestTUIIntegration_Stream_Search(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	tuiStreamClearFilter(s)
+
+	// "/" opens the forward search modal (Regex Search / Pattern: prompt).
+	s.press('/')
+	s.waitFor("Regex Search", "Pattern:", "Enter search")
+	s.typeStr("read")
+	s.press(tea.KeyEnter)
+	// Submitting pauses the stream and jumps the selection to a "read" match.
+	s.waitFor("PAUSED", "buffer:", "read")
+
+	// n/N step forward/back through matches; they are consumed and the table
+	// stays coherent (a "read" row remains visible).
+	s.press('n')
+	s.waitFor("PAUSED", "read")
+	s.press('N')
+	s.waitFor("PAUSED", "read")
+
+	// "?" smoke-opens the reverse search modal (same prompt chrome).
+	s.press('?')
+	s.waitFor("Regex Search", "Pattern:")
+	s.press(tea.KeyEsc)
+	s.waitFor("buffer:") // modal closed, stream visible again
+}
+
+// TestTUIIntegration_Stream_FDTraceView documents that the FD-trace overlay is
+// not reachable through the TUI: eventstream.Model.openFDTraceView has no key
+// binding (no handler in handleStreamKey, and the dashboard's tabScrollStream
+// never invokes it), so the overlay and its "FD Trace" token cannot be driven
+// from key presses. The test is skipped with that reason rather than asserting
+// a path that does not exist.
+func TestTUIIntegration_Stream_FDTraceView(t *testing.T) {
+	t.Skip("FD-trace overlay (eventstream.openFDTraceView) has no key binding " +
+		"in handleStreamKey or dashboard.tabScrollStream, so it is unreachable " +
+		"from the TUI and cannot be driven deterministically by a key press")
+}
+
 // --- Recording modal --------------------------------------------------------
 
 func TestTUIIntegration_Recording_ModalOpenClose(t *testing.T) {
