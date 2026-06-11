@@ -30,6 +30,8 @@ package internal
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -653,6 +655,60 @@ func TestTUIIntegration_Stream_ExportModal_OpenCancel(t *testing.T) {
 	s.waitFor("buffer:")
 }
 
+// TestTUIIntegration_Export_SubmitWritesCSV drives the export modal to a real
+// SUBMIT and asserts the CSV file is written with seeded rows. It chdirs into an
+// isolated temp dir (the export writer's exportDir defaults to "." -> cwd, and
+// the default ior-stream-<ts>.csv filename is filename-only), switches to the
+// stream tab, and clears the model's startup pid=1 filter so the seeded rows
+// (which all carry pids 2001-2004) are present in the snapshot the exporter
+// captures. It then opens the export modal with "e", leaves the default
+// selection on "CSV stream rows", and presses Enter: the modal emits a
+// RequestMsg, the program runs dashboard.ExportStreamCSV() (writing the filtered
+// snapshot via exportRowsToCSV), and the resulting CompletedMsg sets the modal's
+// "Exported: <path>" status. The test asserts that status, then polls the temp
+// dir for the ior-stream-*.csv and asserts it contains the CSV header plus a
+// seeded data row (a "batch" comm on a "/srv" path), proving the seeded rows were
+// exported.
+func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
+	dir := tuiChdirTemp(t)
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// Clearing the startup pid=1 filter makes the seeded rows visible (and thus
+	// part of the exported snapshot, which the exporter filters with the same
+	// global filter).
+	tuiStreamClearFilter(s)
+	s.waitFor("buffer:", "Filter: all", "batch", "/srv")
+
+	// Open the export modal; the default selection is "CSV stream rows".
+	s.typeStr("e")
+	s.waitFor("Export Stream CSV", "CSV stream rows", "Enter confirm")
+
+	// Enter submits OptionCSV; the export runs and the modal reports success with
+	// the written path.
+	s.press(tea.KeyEnter)
+	s.waitFor("Exported: ", "ior-stream-")
+
+	path := tuiWaitForFile(t, dir, "ior-stream-*.csv")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read csv %q: %v", path, err)
+	}
+	csv := string(data)
+	// The header row is written unconditionally; the seeded "batch" comm on a
+	// "/srv" path proves at least one filtered data row was exported.
+	for _, want := range []string{"seq,time_ns", "comm", "batch", "/srv"} {
+		if !strings.Contains(csv, want) {
+			t.Fatalf("exported csv %q missing %q.\n--- csv ---\n%s", path, want, csv)
+		}
+	}
+	// Beyond the header, at least one data line must be present.
+	if lines := strings.Count(strings.TrimRight(csv, "\n"), "\n"); lines < 1 {
+		t.Fatalf("exported csv %q has no data rows beyond the header:\n%s", path, csv)
+	}
+}
+
 // --- Stream tab row interactions (seeded ring buffer in --testflames) --------
 //
 // The Stream tab (number key "7") renders the seeded 40-row ring buffer
@@ -836,6 +892,115 @@ func TestTUIIntegration_Recording_ModalOpenClose(t *testing.T) {
 	s.waitFor("Start Parquet Recording", "Filename:")
 	s.press(tea.KeyEsc)
 	s.waitFor("view:root") // back to dashboard, no recording started
+}
+
+// tuiGlobErr lists files in dir matching the glob pattern, failing the test on a
+// malformed pattern. It is the polling primitive for the file-writing submit
+// tests below.
+func tuiGlobMatches(t *testing.T, dir, pattern string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, pattern))
+	if err != nil {
+		t.Fatalf("glob %q in %q: %v", pattern, dir, err)
+	}
+	return matches
+}
+
+// tuiWaitForFile polls dir for a single file matching pattern, returning its
+// path once it appears (and there is exactly one match). It fails the test on
+// timeout or on an unexpected number of matches, so submit tests can assert the
+// written artifact deterministically without racing the asynchronous flush.
+func tuiWaitForFile(t *testing.T, dir, pattern string) string {
+	t.Helper()
+	deadline := time.Now().Add(tuiWaitFor)
+	for {
+		matches := tuiGlobMatches(t, dir, pattern)
+		if len(matches) == 1 {
+			return matches[0]
+		}
+		if len(matches) > 1 {
+			t.Fatalf("expected one %q file in %q, found %d: %v", pattern, dir, len(matches), matches)
+		}
+		if time.Now().After(deadline) {
+			entries, _ := os.ReadDir(dir)
+			t.Fatalf("no %q file written to %q within %s; dir contents: %v",
+				pattern, dir, tuiWaitFor, tuiDirNames(entries))
+		}
+		time.Sleep(tuiWaitTick)
+	}
+}
+
+func tuiDirNames(entries []os.DirEntry) []string {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// TestTUIIntegration_Recording_SubmitWritesParquet drives the recording modal to
+// a real SUBMIT and asserts the parquet file is written. It chdirs into an
+// isolated temp dir (the recorder writes the modal's filename-only path into the
+// cwd), opens the modal with "R", accepts the default ior-recording-<ts>.parquet
+// filename with Enter to start the recorder, and asserts the dashboard chrome
+// shows the live "rec:" status with that filename. It then presses "R" again to
+// stop the recorder — recorderStop() calls Recorder.Stop(), which drains the
+// queue, flushes the final batch, and closes the parquet writer (footer + atomic
+// rename of the .tmp file to the final path), so the .parquet is only complete
+// after this step. The test polls the temp dir for the finalized *.parquet and
+// asserts it carries the parquet magic ("PAR1") at both ends, proving a valid
+// footer was written.
+//
+// In --testflames mode no real event loop feeds rows into the recorder (the row
+// sink in internal/ior.go fires only from the live event-loop callback), so the
+// file is a valid but row-empty parquet: row-count > 0 is covered by the parquet
+// unit tests / `mage parquetValidate`, while this integration test asserts the
+// reachable end-to-end behavior (modal submit -> recorder start -> "rec:" status
+// -> stop/flush -> valid parquet on disk).
+func TestTUIIntegration_Recording_SubmitWritesParquet(t *testing.T) {
+	dir := tuiChdirTemp(t)
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// Open the recording modal; it pre-fills the default ior-recording-<ts>.parquet
+	// filename. Enter submits, starting the recorder against that cwd-relative path.
+	s.typeStr("R")
+	s.waitFor("Start Parquet Recording", "Filename:", "ior-recording-")
+	s.press(tea.KeyEnter)
+
+	// The Syscalls tab is short enough to keep the "rec:" status (rendered on the
+	// same chrome line as "filter:") on screen; the active recording shows the
+	// filename suffix.
+	// recorderStatus shortens long paths to a 36-char "...<suffix>" form, so the
+	// default ior-recording-<ts>.parquet renders as "rec: ...recording-<ts>.parquet".
+	s.typeStr("3")
+	s.waitFor("Syscall", "rec: ", "recording-", ".parquet")
+
+	// Press "R" again to stop the recorder. recorderStop -> Recorder.Stop() flushes
+	// and closes the writer, finalizing the .parquet; the chrome flips to "rec: off".
+	s.press('R')
+	s.waitFor("rec: off")
+
+	// The finalized parquet is now on disk in the isolated cwd.
+	path := tuiWaitForFile(t, dir, "ior-recording-*.parquet")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read parquet %q: %v", path, err)
+	}
+	// A valid parquet file is framed by the 4-byte "PAR1" magic at both ends, so
+	// this asserts a complete footer was written even though the test-flames
+	// recorder captured zero rows.
+	const magic = "PAR1"
+	if len(data) < 2*len(magic) {
+		t.Fatalf("parquet %q too small (%d bytes) to be a valid file", path, len(data))
+	}
+	if got := string(data[:len(magic)]); got != magic {
+		t.Fatalf("parquet %q missing leading magic: got %q", path, got)
+	}
+	if got := string(data[len(data)-len(magic):]); got != magic {
+		t.Fatalf("parquet %q missing trailing magic (incomplete footer): got %q", path, got)
+	}
 }
 
 // --- Filter modal -----------------------------------------------------------
