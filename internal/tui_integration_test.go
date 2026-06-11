@@ -468,6 +468,74 @@ func TestTUIIntegration_ProbesModal_Smoke(t *testing.T) {
 	s.waitFor("Probes (2/3 active)", "read")
 }
 
+// --- Populated dashboard tabs (seeded in --testflames) ----------------------
+
+// tuiChrome is a stable token from the persistent dashboard tab bar, which is
+// rendered on every tab regardless of body height (unlike the "press H for
+// help" footer hint, which tall tabs such as Overview push off-screen). The
+// flame tab label is never the active selection while cycling tabs 2..8, so it
+// is always present as plain "1:Flm", proving the chrome survives tab switches.
+const tuiChrome = "1:Flm"
+
+// TestTUIIntegration_AllTabs_RenderPopulatedAndKeepChrome cycles through every
+// non-flame dashboard tab (2..8), asserting each renders its seeded body tokens
+// while the persistent chrome line stays put, then returns to the flame tab.
+func TestTUIIntegration_AllTabs_RenderPopulatedAndKeepChrome(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	tabs := []struct {
+		key   string
+		wants []string
+	}{
+		{"2", []string{"Trends:", "Top processes:", "worker/2002"}}, // Overview
+		{"3", []string{"Syscall", "epoll_wait"}},                    // Syscalls
+		{"4", []string{"Accesses", "Max Latency"}},                  // Files
+		{"5", []string{"Comm", "worker", "ingest"}},                 // Processes
+		{"6", []string{"Latency Histogram", "Gap Histogram"}},       // Latency+Gaps
+		{"7", []string{"buffer:"}},                                  // Stream chrome (rows filtered by pid=1)
+		{"8", []string{"Family", "Polling"}},                        // Non-IO
+	}
+	for _, tab := range tabs {
+		s.typeStr(tab.key)
+		// Each tab must render its seeded data AND keep the dashboard chrome.
+		s.waitFor(append(tab.wants, tuiChrome)...)
+	}
+
+	s.typeStr("1")
+	s.waitFor("view:root")
+}
+
+// TestTUIIntegration_Overview_ShowsPopulatedStats asserts the Overview tab
+// renders its trends header and a seeded top-processes value.
+func TestTUIIntegration_Overview_ShowsPopulatedStats(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("2")
+	s.waitFor("Trends:", "Top processes:", "worker/2002")
+}
+
+// TestTUIIntegration_Latency_ShowsHistogramTotals asserts the Latency+Gaps tab
+// renders both seeded histograms.
+func TestTUIIntegration_Latency_ShowsHistogramTotals(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("6")
+	s.waitFor("Latency Histogram", "Gap Histogram")
+}
+
+// TestTUIIntegration_NonIO_ShowsFamilyRows asserts the Non-IO tab renders its
+// family header and the seeded Polling family row.
+func TestTUIIntegration_NonIO_ShowsFamilyRows(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("8")
+	s.waitFor("Family", "Polling")
+}
+
 // --- Live mode (--testliveflames) -------------------------------------------
 
 func TestTUIIntegration_Live_FlamegraphUpdatesOverTime(t *testing.T) {
