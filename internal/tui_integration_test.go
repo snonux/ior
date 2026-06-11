@@ -1539,6 +1539,140 @@ func TestTUIIntegration_Processes_ReanchorsSelectionAfterRefresh(t *testing.T) {
 	s.waitFor("Comm", "worker", "ingest", "[Row 2/4 Col 1/6]")
 }
 
+// --- PID picker (tui.NewModel(-1) starts on the picker) ----------------------
+//
+// Passing initialPID=-1 to tui.NewModel selects the PID picker screen instead
+// of the dashboard (tuiNewPickerModel). The picker (internal/tui/pidpicker/
+// model.go) reads the host's real /proc, so its process rows are
+// non-deterministic; these tests assert only the deterministic chrome: the
+// "Select PID" header, the "Filter: " input prompt, and the synthetic "All
+// PIDs" row that always occupies index 0 (selected on entry as "> All PIDs").
+// Selecting that row emits PidSelectedMsg{Pid:0}, which the tui model handles
+// by attaching and transitioning to the populated dashboard (asserted via the
+// flame tab's "view:root" token).
+
+// TestTUIIntegration_PidPicker_FilterSelectAllToDashboard starts on the PID
+// picker, asserts its chrome and the selected "All PIDs" row, types a filter
+// string (echoed in the "Filter: " input), then presses Enter on the still-
+// selected "All PIDs" row (index 0). The resulting PidSelectedMsg{Pid:0}
+// transitions to the dashboard, asserted via the seeded flame view.
+func TestTUIIntegration_PidPicker_FilterSelectAllToDashboard(t *testing.T) {
+	s := tuiNewPickerModel(t)
+	// Picker chrome: the header, the filter input prompt, and the synthetic
+	// "All PIDs" row, which starts selected ("> ").
+	s.waitFor("Select PID", "Filter: ", "> All PIDs")
+
+	// Typing focuses the input and echoes into the "Filter: " prompt; "zzz" is an
+	// unlikely comm/pid substring, so the real process rows narrow away while the
+	// always-present "All PIDs" row stays at index 0.
+	s.typeStr("zzz")
+	s.waitFor("Filter: zzz", "All PIDs")
+
+	// Enter on the selected index-0 row emits PidSelectedMsg{Pid:0}; the model
+	// attaches and lands on the populated dashboard (seeded flame view).
+	s.press(tea.KeyEnter)
+	s.waitFor("view:root")
+}
+
+// TestTUIIntegration_PidPicker_ReselectEscReturns starts on the dashboard,
+// presses "p" to reselect a PID (which bookmarks the dashboard and switches to
+// the picker), then Esc to cancel. Because the picker was entered with a
+// pending return bookmark, Esc cancels back to the original dashboard without
+// restarting the trace (shouldCancelPickerToDashboard in tui.go), asserted via
+// the still-seeded flame view.
+func TestTUIIntegration_PidPicker_ReselectEscReturns(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// "p" reselects the PID: the dashboard is bookmarked and the picker opens.
+	s.press('p')
+	s.waitFor("Select PID", "Filter: ", "All PIDs")
+
+	// Esc cancels the picker; the pending bookmark routes back to the dashboard
+	// without re-attaching, so the seeded flame view returns intact.
+	s.press(tea.KeyEsc)
+	s.waitFor("view:root")
+}
+
+// --- Global keys (reset baseline "r", cycle auto-reset "I") -------------------
+//
+// These dashboard-level shortcuts are routed by handleDashboardShortcutKeys in
+// tui.go regardless of the active tab. "r" resets the stats/flame baseline; "I"
+// advances the auto-reset cadence through autoResetCycle (off, 10s, 30s, 1m,
+// 2m, 5m). The auto-reset cadence is rendered in the dashboard chrome's status
+// line ("auto-reset: <remaining>/<total>") via filterSummary, which — like the
+// "filter:" summary — only stays on screen on a short tab (the tall Overview
+// pushes it off the 48-row grid), so these tests assert it from the Syscalls
+// tab (key 3). The test-flames config seeds the default 30s reset timer, so the
+// baseline status is "auto-reset: .../30s".
+
+// TestTUIIntegration_Global_ResetClearsCounts presses "r" to reset the
+// baseline. The reset clears the stats/flame aggregates, which then reseed from
+// the static test-flames fixture, so rather than asserting zeroed counts this
+// asserts the stable invariant that the dashboard stays coherent: the Syscalls
+// table still renders its seeded rows and the chrome (the persistent tab bar)
+// survives the reset.
+func TestTUIIntegration_Global_ResetClearsCounts(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// The Syscalls tab keeps the status line on screen and renders a seeded table.
+	s.typeStr("3")
+	s.waitFor("Syscall", "epoll_wait", tuiChrome)
+
+	// "r" resets the baseline; the aggregates clear then reseed from the fixture,
+	// so the seeded table and the persistent chrome remain rendered.
+	s.press('r')
+	s.waitFor("Syscall", "epoll_wait", tuiChrome)
+}
+
+// TestTUIIntegration_Global_AutoResetCycleShowsInterval presses "I" once and
+// asserts the auto-reset cadence advances in the dashboard status line. The
+// seeded default is 30s, so the baseline status shows "auto-reset: .../30s";
+// one "I" press advances 30s -> 1m0s, so the total flips to "/1m0s".
+func TestTUIIntegration_Global_AutoResetCycleShowsInterval(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// The Syscalls tab keeps the auto-reset status line on screen.
+	s.typeStr("3")
+	s.waitFor("Syscall", "auto-reset: ", "/30s")
+
+	// "I" advances the cadence from the seeded 30s to the next preset (1m0s); the
+	// status line's total segment flips accordingly.
+	s.press('I')
+	s.waitFor("auto-reset: ", "/1m0s")
+}
+
+// --- Terminal resize (tea.WindowSizeMsg) ------------------------------------
+//
+// The model forwards tea.WindowSizeMsg to the dashboard, which re-renders its
+// tab bar at the new width (renderTabBar in dashboard/tabs.go). The VT emulator
+// is fixed at 160x48, so a narrow WindowSizeMsg makes the dashboard render a
+// narrow tab bar within the 160-col grid: below width 90 it falls back to the
+// plain renderer with abbreviated labels ("1:Flm 2:Ovr ...", active bracketed),
+// while at full width it renders the full labels ("1:Flame", "2:Overview").
+
+// TestTUIIntegration_Resize_NarrowThenWide drives a narrow then wide resize and
+// asserts the tab bar degrades to short labels and then restores. A narrow
+// WindowSizeMsg{80x24} forces the plain narrow tab bar (short labels, active
+// bracketed as "[1:Flm]"); a wide WindowSizeMsg{160x48} restores the full
+// labels ("1:Flame"/"2:Overview") while the seeded flame view stays coherent.
+func TestTUIIntegration_Resize_NarrowThenWide(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// A narrow size (<90 cols) degrades the tab bar to the plain narrow renderer:
+	// abbreviated labels with the active tab bracketed.
+	s.tm.Send(tea.WindowSizeMsg{Width: 80, Height: 24})
+	s.waitFor("[1:Flm]", "2:Ovr")
+
+	// Restoring a wide size brings back the full tab labels; the flame view stays
+	// coherent (still on view:root).
+	s.tm.Send(tea.WindowSizeMsg{Width: tuiTermWidth, Height: tuiTermHeight})
+	s.waitFor("1:Flame", "2:Overview", "view:root")
+}
+
 // --- Live mode (--testliveflames) -------------------------------------------
 
 func TestTUIIntegration_Live_FlamegraphUpdatesOverTime(t *testing.T) {
