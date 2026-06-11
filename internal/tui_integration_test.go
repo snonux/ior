@@ -1629,6 +1629,62 @@ func TestTUIIntegration_PidPicker_ReselectEscReturns(t *testing.T) {
 	s.waitFor("view:root")
 }
 
+// --- TID picker ("t" reselect on the dashboard) -----------------------------
+//
+// The "t" key on the dashboard triggers reselectTID() (tui.go), which bookmarks
+// the dashboard and opens the pidpicker model in TID mode
+// (pidpicker.NewTIDWithKeys, PickerModeTID). In TID mode the picker reads the
+// current PID's real /proc threads, so its thread rows are non-deterministic;
+// these tests assert only the deterministic chrome: the "Select TID for PID N"
+// header and the synthetic "All TIDs" row that always occupies index 0
+// (selected on entry as "> All TIDs"). tuiNewFlamesModel starts with pid=1, so
+// the header reads "Select TID for PID 1". Selecting "All TIDs" emits
+// TidSelectedMsg{Tid:0}; handleTidSelected clears the TID filter (tid<=0 -> -1)
+// and returns to the dashboard, asserted via the flame tab's "view:root" token
+// and the "filter: pid=1" status line (no tid component, since it was cleared).
+
+// TestTUIIntegration_TidPicker_ReselectFromDashboard starts on the dashboard,
+// presses "t" to open the TID picker, asserts its chrome and the selected
+// "All TIDs" row, then presses Enter on that still-selected index-0 row. The
+// resulting TidSelectedMsg{Tid:0} clears the tid filter and re-attaches the
+// dashboard, asserted via the seeded flame view and the "filter: pid=1" status
+// line.
+func TestTUIIntegration_TidPicker_ReselectFromDashboard(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// "t" reselects the TID: the dashboard is bookmarked and the TID picker opens
+	// scoped to the current pid (1). The synthetic "All TIDs" row starts selected.
+	s.press('t')
+	s.waitFor("Select TID for PID 1", "Filter: ", "> All TIDs")
+
+	// Enter on the selected index-0 row emits TidSelectedMsg{Tid:0}; the model
+	// clears the tid filter and re-attaches, landing on the seeded flame view with
+	// the pid-only filter status line.
+	s.press(tea.KeyEnter)
+	s.waitFor("view:root", "filter: pid=1")
+}
+
+// TestTUIIntegration_TidPicker_EscReturnsToDashboard starts on the dashboard,
+// presses "t" to open the TID picker, asserts its chrome, then Esc to cancel.
+// Because the picker was entered with a pending return bookmark, Esc cancels
+// back to the original dashboard without restarting the trace
+// (shouldCancelPickerToDashboard in tui.go), asserted via the still-seeded
+// flame view.
+func TestTUIIntegration_TidPicker_EscReturnsToDashboard(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// "t" reselects the TID: the dashboard is bookmarked and the TID picker opens.
+	s.press('t')
+	s.waitFor("Select TID for PID 1", "Filter: ", "All TIDs")
+
+	// Esc cancels the picker; the pending bookmark routes back to the dashboard
+	// without re-attaching, so the seeded flame view returns intact.
+	s.press(tea.KeyEsc)
+	s.waitFor("view:root")
+}
+
 // --- Global keys (reset baseline "r", cycle auto-reset "I") -------------------
 //
 // These dashboard-level shortcuts are routed by handleDashboardShortcutKeys in
