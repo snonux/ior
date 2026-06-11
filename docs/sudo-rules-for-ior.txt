@@ -1,0 +1,88 @@
+# =============================================================================
+# Sudoers rules for I/O Riot NG (ior) build/test hardening
+# =============================================================================
+# Purpose:
+#   Allow unprivileged users to run ONLY the specific commands that require
+#   root/CAP_BPF, while keeping Mage (the build tool) itself unprivileged.
+#
+# Installation (as root):
+#   1. Replace "%developers" below with the actual Unix group or username.
+#   2. Copy this file to /etc/sudoers.d/ior
+#   3. chmod 440 /etc/sudoers.d/ior
+#   4. visudo -c -f /etc/sudoers.d/ior
+#
+# Rules are ordered from most specific to least specific.
+# Use "!env_reset" or pass env vars explicitly via sudo's env_keep if needed.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. Read-only kernel BTF dump (used by mage generate / mage world)
+# -----------------------------------------------------------------------------
+# The exact invocation in Magefile.go is:
+#   sudo -n bpftool btf dump file /sys/kernel/btf/vmlinux format c
+%developers ALL=(root) NOPASSWD: /usr/sbin/bpftool btf dump file /sys/kernel/btf/vmlinux format c
+
+# -----------------------------------------------------------------------------
+# 2. Read tracepoint format files (used by mage generate / mage world)
+# -----------------------------------------------------------------------------
+# The exact invocation in Magefile.go is:
+#   sudo -n sh -c 'LC_ALL=C find /sys/kernel/tracing/events/syscalls \
+#       -maxdepth 2 -mindepth 2 -name format | sort | xargs cat'
+# Because the shell expands the command, we whitelist /bin/sh with the exact
+# argument string.  Adjust the path to /bin/sh or /usr/bin/sh as appropriate.
+%developers ALL=(root) NOPASSWD: /bin/sh -c LC_ALL\=C find /sys/kernel/tracing/events/syscalls -maxdepth 2 -mindepth 2 -name format | sort | xargs cat
+
+# -----------------------------------------------------------------------------
+# 3. Run the compiled integration test binary (used by mage integrationTest,
+#    mage integrationTestSerial, mage testWithName for integration targets)
+# -----------------------------------------------------------------------------
+# The binary is produced by "go test -c ./integrationtests" and lands in the
+# repository root as "integrationtests.test".  Because Go produces a static
+# binary at a predictable name, we lock the rule to that path.
+#
+# If your repo is checked out in a non-standard location, you may need a
+# symlink or wrapper script at a fixed path (e.g. /usr/local/bin/ior-test-runner)
+# and update Magefile.go accordingly.
+#
+# IMPORTANT: we must preserve the environment (CGO_CFLAGS, CGO_LDFLAGS, LIBBPFGO,
+# HOME, PATH, etc.) that mage sets before invoking sudo.  Sudoers does not allow
+# arbitrary env preservation by default, but "SETENV" on the Cmnd_Spec enables
+# the caller to preserve the environment via "sudo -n -E ./binary".
+#
+# Alternatively, add the needed env vars to env_keep in your main sudoers file
+# and omit SETENV here.  The minimal set is: CGO_CFLAGS, CGO_LDFLAGS, GOARCH,
+# GOOS, LIBBPFGO, HOME, GOPATH, GOMODCACHE, PATH, GOTOOLCHAIN.
+%developers ALL=(root) NOPASSWD:SETENV: /home/*/*/ior/integrationtests.test
+
+# If you prefer a tighter path, uncomment and adjust the line below instead:
+# %developers ALL=(root) NOPASSWD:SETENV: /home/paul/git/ior/integrationtests.test
+
+# -----------------------------------------------------------------------------
+# 4. Run the ior binary itself (optional — only if you want to run ior via sudo
+#    from scripts outside of mage)
+# -----------------------------------------------------------------------------
+%developers ALL=(root) NOPASSWD:SETENV: /home/*/*/ior/ior
+
+# -----------------------------------------------------------------------------
+# 5. Demo tooling (OUT OF SCOPE for granular rules)
+# -----------------------------------------------------------------------------
+# The demo pipeline (mage demo / mage demoOne) spawns a shell script that calls
+# sudo multiple times for pkill, ttyd, and launching ior.  This is inherently
+# broader and should be handled separately—either by running the demo as root,
+# or by creating a dedicated demo-user with a broader but still locked-down
+# sudoers snippet.
+#
+# Example BROADER rule (use with caution):
+# %developers ALL=(root) NOPASSWD: /bin/bash /home/*/*/ior/docs/tutorial/scripts/run-tape.sh *
+# %developers ALL=(root) NOPASSWD: /usr/bin/pkill -TERM -f /ior$
+# %developers ALL=(root) NOPASSWD: /usr/bin/ttyd *
+
+# -----------------------------------------------------------------------------
+# 6. Package installation (OUT OF SCOPE — admin task only)
+# -----------------------------------------------------------------------------
+# mage installDemoTools runs "sudo dnf install -y ttyd".  This is a one-time
+# admin operation and should NOT be included in automated CI/test sudoers.
+
+# =============================================================================
+# END OF FILE
+# =============================================================================

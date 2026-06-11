@@ -5,7 +5,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"go/format"
@@ -203,13 +202,15 @@ func TestWithName() error {
 		fmt.Println("Running integration test", testName, "(requires root)...")
 		env := goEnv()
 		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH", "GOTOOLCHAIN")
-		return runGoTestWithProgress(env,
-			"./integrationtests/...",
-			"-run", "^"+testName+"$",
-			"-failfast",
-			"-timeout=30m",
-			"-count=1",
-			"-json",
+		if err := compileIntegrationTestBinary(env); err != nil {
+			return err
+		}
+		return runIntegrationTestBinary(env,
+			"-test.run", "^"+testName+"$",
+			"-test.failfast",
+			"-test.timeout=30m",
+			"-test.count=1",
+			"-test.v",
 		)
 	}
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-run", "^"+testName+"$", "-v", "-failfast")
@@ -519,6 +520,29 @@ func IntegrationTestSerial() error {
 	return runIntegrationTests(false)
 }
 
+func compileIntegrationTestBinary(env map[string]string) error {
+	return sh.RunWithV(env, "go", "test", "-c", "./integrationtests/...", "-o", "integrationtests.test")
+}
+
+func runIntegrationTestBinary(env map[string]string, args ...string) error {
+	envList := make([]string, 0, len(env))
+	for k, v := range env {
+		envList = append(envList, k+"="+v)
+	}
+	slices.Sort(envList)
+
+	cmd := exec.Command("./integrationtests.test", args...)
+	cmd.Dir = "integrationtests"
+	cmd.Env = append(os.Environ(), envList...)
+	if os.Geteuid() == 0 {
+		return cmd.Run()
+	}
+	sudoCmd := exec.Command("sudo", append([]string{"-n", "-E", "./integrationtests.test"}, args...)...)
+	sudoCmd.Dir = "integrationtests"
+	sudoCmd.Env = cmd.Env
+	return sudoCmd.Run()
+}
+
 func runIntegrationTests(parallel bool) error {
 	mg.SerialDeps(All)
 	if err := buildWorkloadBinary(); err != nil {
@@ -528,16 +552,19 @@ func runIntegrationTests(parallel bool) error {
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN")
 
+	if err := compileIntegrationTestBinary(env); err != nil {
+		return err
+	}
+
 	timeout := "30m"
 	if !parallel {
 		timeout = "90m"
 	}
 
 	args := []string{
-		"./integrationtests/...",
-		"-failfast",
-		"-timeout=" + timeout,
-		"-count=1",
+		"-test.failfast",
+		"-test.timeout=" + timeout,
+		"-test.count=1",
 	}
 
 	if parallel {
@@ -547,13 +574,12 @@ func runIntegrationTests(parallel bool) error {
 		}
 		env[integrationParallelE] = "1"
 		fmt.Printf("Running integration tests in parallel (requires root, parallel=%d)...\n", parallelism)
-		args = append(args, "-parallel", strconv.Itoa(parallelism))
+		args = append(args, "-test.parallel", strconv.Itoa(parallelism))
 	} else {
 		fmt.Println("Running integration tests serially (requires root)...")
 	}
 
-	args = append(args, "-json")
-	return runGoTestWithProgress(env, args...)
+	return runIntegrationTestBinary(env, args...)
 }
 
 func resolveIntegrationParallelism() (int, error) {
@@ -810,7 +836,7 @@ func sudoOutput(cmd string, args ...string) (string, error) {
 	if os.Geteuid() == 0 {
 		return sh.Output(cmd, args...)
 	}
-	return sh.Output("sudo", append([]string{cmd}, args...)...)
+	return sh.Output("sudo", append([]string{"-n", cmd}, args...)...)
 }
 
 func sudoRunWithEnv(env map[string]string, cmd string, args ...string) error {
@@ -822,8 +848,8 @@ func sudoRunWithEnv(env map[string]string, cmd string, args ...string) error {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	sudoArgs := make([]string, 0, 1+len(keys)+1+len(args))
-	sudoArgs = append(sudoArgs, "env")
+	sudoArgs := make([]string, 0, 2+len(keys)+1+len(args))
+	sudoArgs = append(sudoArgs, "-n", "env")
 	for _, k := range keys {
 		sudoArgs = append(sudoArgs, k+"="+env[k])
 	}
@@ -895,193 +921,6 @@ func sortLinesWithLocale(lines []string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
-}
-
-type goTestEvent struct {
-	Action  string `json:"Action"`
-	Package string `json:"Package"`
-	Test    string `json:"Test"`
-	Output  string `json:"Output"`
-}
-
-// buildGoTestCmd constructs the exec.Cmd for running `go test -json` with the
-// given env vars. When not root it wraps the command with `sudo env KEY=VAL …`
-// so elevated integration tests inherit the correct CGO/LIBBPFGO environment.
-func buildGoTestCmd(env map[string]string, cmdArgs []string) *exec.Cmd {
-	if os.Geteuid() == 0 {
-		cmd := exec.Command("go", cmdArgs...)
-		cmd.Env = append(os.Environ(), envToList(env)...)
-		return cmd
-	}
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	sudoArgs := make([]string, 0, 1+len(keys)+1+len(cmdArgs))
-	sudoArgs = append(sudoArgs, "env")
-	for _, k := range keys {
-		sudoArgs = append(sudoArgs, k+"="+env[k])
-	}
-	sudoArgs = append(sudoArgs, "go")
-	sudoArgs = append(sudoArgs, cmdArgs...)
-	return exec.Command("sudo", sudoArgs...)
-}
-
-// startProgressTicker prints the set of currently-running tests every 15 s.
-// Call close(done) to stop the ticker goroutine.
-func startProgressTicker(running map[string]time.Time, done <-chan struct{}) {
-	ticker := time.NewTicker(15 * time.Second)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				if len(running) == 0 {
-					fmt.Println("Integration tests still running... waiting for next test event")
-					continue
-				}
-				names := make([]string, 0, len(running))
-				for k := range running {
-					names = append(names, k)
-				}
-				slices.Sort(names)
-				fmt.Println("Integration tests running:", strings.Join(names, ", "))
-			}
-		}
-	}()
-}
-
-// drainTestEvents reads JSON test events from scanner, updates the running map,
-// and prints human-readable RUN/PASS/FAIL/SKIP/LOG lines.
-func drainTestEvents(scanner *bufio.Scanner, running map[string]time.Time) {
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var ev goTestEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			fmt.Println(string(line))
-			continue
-		}
-		if ev.Test == "" {
-			continue
-		}
-		key := ev.Package + "/" + ev.Test
-		switch ev.Action {
-		case "run":
-			running[key] = time.Now()
-			fmt.Println("RUN ", key)
-		case "pass":
-			delete(running, key)
-			fmt.Println("PASS", key)
-		case "fail":
-			delete(running, key)
-			fmt.Println("FAIL", key)
-		case "skip":
-			delete(running, key)
-			fmt.Println("SKIP", key)
-		case "output":
-			msg := strings.TrimSpace(ev.Output)
-			if msg != "" && shouldPrintTestLog(msg) {
-				fmt.Println("LOG ", key, "-", msg)
-			}
-		}
-	}
-}
-
-// runGoTestWithProgress runs `go test -json` (via sudo when not root), streams
-// progress to stdout every 15 s, and returns a non-nil error on test failure.
-func runGoTestWithProgress(env map[string]string, args ...string) error {
-	cmd := buildGoTestCmd(env, append([]string{"test"}, args...))
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	// Forward stderr from the test binary so build errors are always visible.
-	go func() { _, _ = io.Copy(os.Stderr, stderr) }()
-
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	running := map[string]time.Time{}
-	done := make(chan struct{})
-	startProgressTicker(running, done)
-
-	drainTestEvents(scanner, running)
-	close(done)
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return cmd.Wait()
-}
-
-func envToList(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(env))
-	for k, v := range env {
-		out = append(out, k+"="+v)
-	}
-	slices.Sort(out)
-	return out
-}
-
-func shouldPrintTestLog(msg string) bool {
-	// Always keep error/failure lines.
-	if strings.Contains(msg, "--- FAIL:") ||
-		strings.Contains(msg, " FAIL ") ||
-		strings.Contains(msg, "panic:") ||
-		strings.Contains(strings.ToLower(msg), "error") ||
-		strings.Contains(strings.ToLower(msg), "expected event not found") {
-		return true
-	}
-
-	// Drop high-volume attach/debug noise from ior startup in integration tests.
-	noisePrefixes := []string{
-		"=== RUN",
-		"___",
-		"|_ _|",
-		"| |",
-		"|___",
-		"v0.0.0",
-		"libbpf:",
-		"Attaching tracepoint ",
-		"Attached prog handle_ ",
-		"Attached tracepoint",
-		"Attaching sys_",
-		"Not attaching sys_",
-		"Collecting flame graph stats",
-		"Starting flamegraph worker",
-		"Waiting for stats to be ready",
-		"Stopping event loop",
-		"Waiting for flamegraph",
-		"Worker ",
-		"Writing ",
-		"Good bye...",
-		"Statistics:",
-		"duration:",
-		"tracepoints:",
-		"syscalls:",
-		"syscalls after filter:",
-	}
-	for _, p := range noisePrefixes {
-		if strings.HasPrefix(msg, p) {
-			return false
-		}
-	}
-	return true
 }
 
 func isIntegrationTest(testName string) (bool, error) {
