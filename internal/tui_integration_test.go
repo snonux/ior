@@ -665,6 +665,190 @@ func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 	s.waitFor("syscall~write")
 }
 
+// --- Files tab interactions (seeded table in --testflames) ------------------
+//
+// The Files tab (number key "4") renders a six-column selectable table
+// (Accesses/Read/Write/Avg Latency/Max Latency/Path) over the seeded file
+// snapshots. Pressing "d" toggles directory grouping, which swaps in the
+// dir-aggregated table (adds a "Files" count column and a "Directory" path
+// column) and unlocks the bubbles/treemap/icicle visualisations — the flat
+// (ungrouped) view is table-only. As with the Syscalls tests these assertions
+// target stable rendered tokens (the table hint line, the "[sort: ...]" label,
+// and the viz headers) rather than data-dependent row ordering. The selected
+// column starts at 0 (Accesses), whose default direction is descending, so the
+// first "s" press yields "Accesses desc" and "S" reverses to "Accesses asc".
+
+// TestTUIIntegration_Files_TableRenders asserts the Files tab renders its flat
+// table headers and the selectable-table hint line.
+func TestTUIIntegration_Files_TableRenders(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("4")
+	s.waitFor("Accesses", "Max Latency", "[sort: default]")
+}
+
+// TestTUIIntegration_Files_DirGroupToggle presses "d" to switch to the
+// directory-grouped view (distinct "Directory" header + "Files" count column,
+// and the "[d:files]" hint that toggles back), then "d" again to return to the
+// flat per-file table.
+func TestTUIIntegration_Files_DirGroupToggle(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("4")
+	s.waitFor("Accesses", "Max Latency") // flat view
+
+	s.press('d') // flat -> directory-grouped
+	// The dir-grouped header carries the distinct "Directory" column title and a
+	// "Files" per-directory count column; the toggle hint flips to "d:files".
+	s.waitFor("Directory", "Files", "[d:files]")
+
+	s.press('d') // directory-grouped -> flat (per-file headers return)
+	s.waitFor("Accesses", "Max Latency", "[d:dirs]")
+}
+
+// TestTUIIntegration_Files_SortAndViz sorts the flat table (asserting the
+// "[sort: ...]" label flips direction), then enters dir-grouped mode and cycles
+// the visualization with "v" through bubbles -> treemap -> icicle, asserting
+// each mode-specific header. The icicle mode is only reachable in dir-grouped
+// mode, which is the Files tab's distinguishing viz.
+func TestTUIIntegration_Files_SortAndViz(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("4")
+	s.waitFor("Accesses", "[sort: default]")
+
+	// Column 0 (Accesses) defaults to descending, so "s" sorts descending and
+	// "S" reverses to ascending.
+	s.press('s')
+	s.waitFor("[sort: Accesses desc]")
+	s.press('S')
+	s.waitFor("[sort: Accesses asc]")
+
+	// Non-table visualisations require dir-grouped mode.
+	s.press('d')
+	s.waitFor("Directory")
+
+	// Cycle: table -> bubbles -> treemap -> icicle. The bubble chart is labelled
+	// "Files/Dirs" while the treemap/icicle headers use "Files".
+	s.press('v')
+	s.waitFor("Files/Dirs bubbles", "metric:events")
+	s.press('v')
+	s.waitFor("Files treemap")
+	s.press('v')
+	s.waitFor("Files icicle")
+}
+
+// TestTUIIntegration_Files_MetricToggle switches into the dir-grouped bubble
+// chart and presses "b" to cycle the chart metric from the default "events" to
+// "bytes". The Files tab only accepts metric changes in dir-grouped mode.
+func TestTUIIntegration_Files_MetricToggle(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("4")
+	s.waitFor("Accesses")
+
+	s.press('d') // enable dir-grouped mode (required for bubble metrics)
+	s.waitFor("Directory")
+	s.press('v') // table -> bubbles (default metric: events)
+	s.waitFor("Files/Dirs bubbles", "metric:events")
+	s.press('b') // toggle metric events -> bytes
+	s.waitFor("Files/Dirs bubbles", "metric:bytes")
+}
+
+// --- Processes tab interactions (seeded table in --testflames) --------------
+//
+// The Processes tab (number key "5") renders a six-column selectable table
+// (PID/Comm/Syscalls/Rate/s/Total Bytes/Avg Latency) over the four seeded
+// processes (api/worker/ingest/batch, pids 2001-2004). The default order is
+// Syscalls-descending, so "worker" (6 syscalls) and "ingest" (5) lead. The
+// selected column starts at 0 (PID), whose default direction is ascending.
+// These tests drive the sort, column-nav, visualization-cycle, and
+// refresh-reanchor handlers and assert on stable rendered tokens (the table
+// hint line, the "[sort: ...]" label, and the bubbles/treemap headers).
+
+// TestTUIIntegration_Processes_TableRenders asserts the Processes tab renders
+// its table header, two seeded comms, and the selectable-table hint line.
+func TestTUIIntegration_Processes_TableRenders(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("5")
+	s.waitFor("Comm", "worker", "ingest", "[Row 1/4 Col 1/6]", "[sort: default]")
+}
+
+// TestTUIIntegration_Processes_SortColumns sorts on the PID column (default
+// ascending) with "s"/"S", then moves one column right to Comm and sorts again,
+// asserting the "[sort: <Col> asc|desc]" label tracks each column.
+func TestTUIIntegration_Processes_SortColumns(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("5")
+	s.waitFor("Comm", "[sort: default]")
+
+	// Column 0 (PID) defaults to ascending.
+	s.press('s')
+	s.waitFor("[sort: PID asc]")
+	s.press('S')
+	s.waitFor("[sort: PID desc]")
+
+	// Move to column 1 (Comm, default ascending) and sort it. The earlier PID
+	// sort reanchored the selected row, so assert only the column index moved
+	// (the row index is data-dependent after the reanchor).
+	s.press('l')
+	s.waitFor("Col 2/6")
+	s.press('s')
+	s.waitFor("[sort: Comm asc]")
+}
+
+// TestTUIIntegration_Processes_VizCycle presses "v" to cycle the visualization
+// mode table -> bubbles -> treemap -> table, asserting a mode-specific header on
+// each step and the table header returning at the end.
+func TestTUIIntegration_Processes_VizCycle(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("5")
+	s.waitFor("Comm", "worker") // table mode
+
+	s.press('v') // table -> bubbles
+	s.waitFor("Processes bubbles", "metric:events")
+	s.press('v') // bubbles -> treemap
+	s.waitFor("Processes treemap")
+	s.press('v') // treemap -> table (header returns)
+	s.waitFor("Comm", "[Row 1/4 Col 1/6]")
+}
+
+// TestTUIIntegration_Processes_ReanchorsSelectionAfterRefresh selects a non-top
+// row, then waits through at least one dashboard refresh tick (the snapshot
+// refreshes ~1s) and asserts the selection still anchors the same row. Because
+// the test-flames snapshot is static, the stable-key reanchoring keeps the
+// selection pinned to the same process across the refresh: the "[Row 2/4]" hint
+// and the seeded comms remain rendered. This asserts the weaker but
+// deterministic invariant (the table stays coherent and the selection index is
+// preserved) rather than attempting to observe a row identity swap, which the
+// static seed cannot produce.
+func TestTUIIntegration_Processes_ReanchorsSelectionAfterRefresh(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("5")
+	s.waitFor("Comm", "[Row 1/4 Col 1/6]")
+
+	s.press('j') // move selection to row 2
+	s.waitFor("[Row 2/4 Col 1/6]")
+
+	// Wait through more than one refresh tick (cadence is ~1s) so a snapshot
+	// refresh has certainly fired, then confirm the selection survived it: the
+	// row hint is unchanged and the seeded comms still render.
+	time.Sleep(1200 * time.Millisecond)
+	s.waitFor("Comm", "worker", "ingest", "[Row 2/4 Col 1/6]")
+}
+
 // --- Live mode (--testliveflames) -------------------------------------------
 
 func TestTUIIntegration_Live_FlamegraphUpdatesOverTime(t *testing.T) {
