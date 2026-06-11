@@ -290,13 +290,21 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	return err
 }
 
-// RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
-func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
+// NewTestFlamesModel builds the test-flames dashboard model without running the
+// Bubble Tea program. It shares construction with
+// RunTestFlamesWithTraceStarterConfig so in-process tests (teatest) exercise the
+// exact same model wiring that `--testflames`/`--testliveflames` use.
+func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) Model {
 	model := newModelWithRuntimeConfig(1, filterFromConfig(cfg), 1, -1, cfg.TUIExportEnable, starter)
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	// Apply the configurable fast-refresh cadence from the CLI flag.
 	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
-	program := tea.NewProgram(model)
+	return model
+}
+
+// RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
+func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
+	program := tea.NewProgram(NewTestFlamesModel(cfg, starter))
 	_, err := program.Run()
 	return err
 }
@@ -366,6 +374,13 @@ type Model struct {
 type pickerReturnState struct {
 	pidFilter int
 	tidFilter int
+}
+
+// Quitting reports whether the model has begun shutting down (the user pressed
+// the quit key). Exposed for in-process tests that assert terminal state via
+// teatest's FinalModel.
+func (m Model) Quitting() bool {
+	return m.quitting
 }
 
 // NewModel creates the top-level TUI model with default runtime flags.

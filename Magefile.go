@@ -123,6 +123,19 @@ func TestRace() error {
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-race", "-failfast", "-timeout=90m")
 }
 
+// TestTUI runs the in-process TUI integration suite (teatest, no root needed).
+// These tests drive the whole Bubble Tea program via synthetic key presses and
+// assert on rendered frames. They are also covered by `mage test`; this target
+// is a focused convenience runner.
+func TestTUI() error {
+	mg.Deps(BpfBuild)
+	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
+		return err
+	}
+	return sh.RunWithV(goEnv(), "go", "test", "./internal/",
+		"-run", "TestTUIIntegration", "-count=1", "-v")
+}
+
 // Fmt runs gofmt -w on all Go source files to enforce canonical formatting.
 func Fmt() error {
 	return fmtGoFiles(false)
