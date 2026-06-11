@@ -536,6 +536,135 @@ func TestTUIIntegration_NonIO_ShowsFamilyRows(t *testing.T) {
 	s.waitFor("Family", "Polling")
 }
 
+// --- Syscalls tab interactions (seeded table in --testflames) ---------------
+//
+// The Syscalls tab (number key "3") renders a selectable table of seeded
+// syscalls (write/read/close/fsync/openat/epoll_wait/getpid/poll). At the
+// 160-col test width the dashboard body falls into the 8-column "compact"
+// layout, so the selectable-column index runs 1..8 and column 0 is the
+// "Syscall" name column. These tests drive the table's sort, column-nav,
+// scroll, visualization-cycle, metric-toggle, and enter-to-filter handlers and
+// assert on stable rendered tokens (the table hint line "[Row r/8 Col c/8]",
+// the sort label "[sort: ...]", the bubbles/treemap headers, and the
+// "filter:" status line) rather than data-dependent row ordering.
+
+// TestTUIIntegration_Syscalls_TableRenders asserts the Syscalls tab renders its
+// table header, a seeded row, and the selectable-table hint line.
+func TestTUIIntegration_Syscalls_TableRenders(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("Syscall", "epoll_wait", "[Row 1/8 Col 1/8]", "[sort: default]")
+}
+
+// TestTUIIntegration_Syscalls_SortToggles presses "s" then "S" on the selected
+// (name) column and asserts the sort label reflects the ascending then
+// descending direction. The selected column starts at 0 (Syscall), so the
+// label is the stable observable; exact row order is data-dependent.
+func TestTUIIntegration_Syscalls_SortToggles(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("Syscall", "[sort: default]")
+
+	s.press('s') // sort ascending on the name column
+	s.waitFor("[sort: Syscall asc]")
+	s.press('S') // reverse to descending
+	s.waitFor("[sort: Syscall desc]")
+}
+
+// TestTUIIntegration_Syscalls_ColumnNav presses "l" (right) then "h" (left) and
+// asserts the selected-column index in the table hint line moves and returns.
+func TestTUIIntegration_Syscalls_ColumnNav(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("[Row 1/8 Col 1/8]")
+
+	s.press('l') // move selection one column to the right
+	s.waitFor("[Row 1/8 Col 2/8]")
+	s.press('h') // move back to the first column
+	s.waitFor("[Row 1/8 Col 1/8]")
+}
+
+// TestTUIIntegration_Syscalls_Scroll presses "j"/"k" and PgDown/PgUp and asserts
+// the selected row in the table hint line tracks the navigation, returning to
+// the top row, with the table staying coherent throughout.
+func TestTUIIntegration_Syscalls_Scroll(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("Syscall", "[Row 1/8 Col 1/8]")
+
+	s.press('j') // move selection down one row
+	s.waitFor("[Row 2/8 Col 1/8]")
+	s.press('k') // back up to the top row
+	s.waitFor("[Row 1/8 Col 1/8]")
+
+	// Paging keys clamp within the 8 seeded rows: PgDown lands on the last row,
+	// PgUp returns to the first. The table header stays rendered throughout.
+	s.press(tea.KeyPgDown)
+	s.waitFor("Syscall", "[Row 8/8 Col 1/8]")
+	s.press(tea.KeyPgUp)
+	s.waitFor("Syscall", "[Row 1/8 Col 1/8]")
+}
+
+// TestTUIIntegration_Syscalls_VizCycle presses "v" to cycle the visualization
+// mode table -> bubbles -> treemap -> table, asserting a mode-specific header on
+// each step and the table header returning at the end.
+func TestTUIIntegration_Syscalls_VizCycle(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("Syscall", "epoll_wait") // table mode
+
+	s.press('v') // table -> bubbles
+	s.waitFor("Syscalls bubbles", "metric:events")
+	s.press('v') // bubbles -> treemap
+	s.waitFor("Syscalls treemap")
+	s.press('v') // treemap -> table (header returns)
+	s.waitFor("Syscall", "[Row 1/8 Col 1/8]")
+}
+
+// TestTUIIntegration_Syscalls_MetricToggle switches to bubbles mode and presses
+// "b" to toggle the chart metric, asserting the metric label changes from the
+// default "events" to "bytes".
+func TestTUIIntegration_Syscalls_MetricToggle(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("Syscall")
+
+	s.press('v') // enter bubbles mode (default metric: events)
+	s.waitFor("Syscalls bubbles", "metric:events")
+	s.press('b') // toggle metric events -> bytes
+	s.waitFor("Syscalls bubbles", "metric:bytes")
+}
+
+// TestTUIIntegration_Syscalls_EnterPushesFilter presses Enter on the selected
+// table row and asserts the resulting global filter (shown in the dashboard
+// status line) gains a "syscall~<name>" predicate for the seeded top row.
+func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	// The model starts with a pid=1 filter; the status line shows it verbatim.
+	s.waitFor("Syscall", "filter: pid=1")
+
+	// Enter on the table's selected (top) row clones the active filter and adds a
+	// syscall predicate for that row's name; "write" is the seeded top row by the
+	// default count-descending order.
+	s.press(tea.KeyEnter)
+	s.waitFor("syscall~write")
+}
+
 // --- Live mode (--testliveflames) -------------------------------------------
 
 func TestTUIIntegration_Live_FlamegraphUpdatesOverTime(t *testing.T) {
