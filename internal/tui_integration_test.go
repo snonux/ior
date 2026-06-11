@@ -156,6 +156,74 @@ func tuiNewProbesModel(t *testing.T) *tuiSession {
 	return tuiNewSession(t, tui.NewTestFlamesModel(cfg, tuiTestFlamesStarterWithProbes(cfg)))
 }
 
+// tuiStatefulProbeManager is a pointer-based runtime.ProbeManager whose Toggle
+// actually flips the stored Active flag (unlike tuiFakeProbeManager, whose
+// value-receiver Toggle is a no-op). It backs the toggle assertion in
+// TestTUIIntegration_ProbesModal_NavSearchToggleClose: the modal calls Toggle
+// then re-reads States(), so a real flip is observable as both the row's
+// checkbox marker and the "(N/M active)" title changing.
+type tuiStatefulProbeManager struct {
+	states []probemanager.ProbeState
+}
+
+// tuiNewStatefulProbeManager returns a stateful probe manager seeded like
+// tuiNewFakeProbeManager (read+write active, openat inactive) so the modal
+// renders the same "(2/3 active)" title and rows, but toggling mutates state.
+func tuiNewStatefulProbeManager() *tuiStatefulProbeManager {
+	return &tuiStatefulProbeManager{states: []probemanager.ProbeState{
+		{Syscall: "read", Active: true},
+		{Syscall: "write", Active: true},
+		{Syscall: "openat", Active: false},
+	}}
+}
+
+func (f *tuiStatefulProbeManager) States() []probemanager.ProbeState {
+	out := make([]probemanager.ProbeState, len(f.states))
+	copy(out, f.states)
+	return out
+}
+
+// Toggle flips the Active flag of the named probe, so a subsequent States()
+// read reflects the change in the modal.
+func (f *tuiStatefulProbeManager) Toggle(syscall string) error {
+	for i := range f.states {
+		if f.states[i].Syscall == syscall {
+			f.states[i].Active = !f.states[i].Active
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *tuiStatefulProbeManager) ActiveCount() (int, int) {
+	active := 0
+	for _, s := range f.states {
+		if s.Active {
+			active++
+		}
+	}
+	return active, len(f.states)
+}
+
+// tuiNewStatefulProbesModel starts a static test-flames session whose runtime
+// has a stateful (toggle-mutating) probe manager wired in, so toggling a probe
+// in the modal is observable in the rendered checkbox and active count.
+func tuiNewStatefulProbesModel(t *testing.T) *tuiSession {
+	t.Helper()
+	cfg := tuiTestConfig()
+	starter := tuiTestFlamesStarter(cfg)
+	wrapped := func(ctx context.Context) error {
+		if err := starter(ctx); err != nil {
+			return err
+		}
+		if bindings, ok := runtime.RuntimePublisherFromContext(ctx); ok {
+			bindings.SetProbeManager(tuiNewStatefulProbeManager())
+		}
+		return nil
+	}
+	return tuiNewSession(t, tui.NewTestFlamesModel(cfg, wrapped))
+}
+
 // tuiChdirTemp switches the test's working directory to a fresh temp dir (Go
 // 1.24+ t.Chdir, auto-restored on cleanup) and returns it, isolating files
 // written by recording/export submit tests. It returns the new directory.
@@ -770,6 +838,90 @@ func TestTUIIntegration_Recording_ModalOpenClose(t *testing.T) {
 	s.waitFor("view:root") // back to dashboard, no recording started
 }
 
+// --- Filter modal -----------------------------------------------------------
+//
+// The dashboard filter modal (internal/tui/tracefilter/model.go) opens with "f"
+// and edits the global trace filter. Its fields are Syscall/Comm/File/PID/TID/
+// FD/Latency/Gap/Bytes/Return/Errors; j/k move the "> " field cursor, Enter on a
+// text field starts an inline edit (type + Enter commits), "c" clears every
+// field, and Esc commits the edited fields and applies the filter. The applied
+// filter is observable on the dashboard's status line ("filter: <summary>"),
+// which is rendered on the shorter Syscalls tab (the tall Overview tab pushes it
+// off the 48-row screen). The model starts with a pid=1 filter, so the modal
+// opens with "PID: [ =] 1" pre-filled and the baseline status is "filter: pid=1".
+//
+// Tokens confirmed by dumping s.screen(): the modal header "Filter", the active
+// field marker "> Syscall:", the help line "j/k move", and the status-line
+// summary "filter: syscall~read pid=1 | stack: syscall~read" after applying.
+
+// TestTUIIntegration_FilterModal_EditApplyClear opens the filter modal from the
+// Syscalls tab, edits the Syscall field to "read", applies it (Esc), and asserts
+// the dashboard status line gains the "syscall~read" predicate alongside the
+// startup pid=1. It then reopens the modal, clears all fields ("c"), applies, and
+// asserts the filter falls back to "filter: all" (clear empties every field,
+// including the startup PID).
+func TestTUIIntegration_FilterModal_EditApplyClear(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	// The Syscalls tab is short enough to keep the "filter:" status line on screen.
+	s.typeStr("3")
+	s.waitFor("Syscall", "filter: pid=1")
+
+	// Open the filter modal; it pre-fills the active PID and starts on Syscall.
+	s.typeStr("f")
+	s.waitFor("Filter", "> Syscall:", "j/k move")
+
+	// Exercise j/k navigation (Syscall -> Comm -> Syscall), then edit Syscall.
+	s.press('j')
+	s.waitFor("> Comm:")
+	s.press('k')
+	s.waitFor("> Syscall:")
+
+	s.press(tea.KeyEnter) // start editing the Syscall field
+	s.typeStr("read")
+	s.press(tea.KeyEnter) // commit the field value
+	s.press(tea.KeyEsc)   // apply + close
+
+	// The applied filter combines the typed syscall predicate with the startup
+	// pid=1; the dashboard status line and the undo stack both show it.
+	s.waitFor("filter: syscall~read pid=1", "stack: syscall~read")
+
+	// Reopen the modal and clear every field, then apply: the filter collapses to
+	// "all" (clear empties the PID field too).
+	s.typeStr("f")
+	s.waitFor("Filter", "j/k move")
+	s.press('c')        // clear all fields
+	s.press(tea.KeyEsc) // apply the now-empty filter
+	s.waitFor("filter: all")
+}
+
+// TestTUIIntegration_FilterModal_UndoFilter applies a syscall filter, then
+// presses "F" (undo) on the dashboard and asserts the previous filter is popped
+// off the stack: the status line reverts from "syscall~read pid=1" back to the
+// baseline "pid=1", with the undo stack emptied (no "stack:" segment remains).
+func TestTUIIntegration_FilterModal_UndoFilter(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("Syscall", "filter: pid=1")
+
+	// Apply a syscall~read filter via the modal.
+	s.typeStr("f")
+	s.waitFor("Filter", "> Syscall:")
+	s.press(tea.KeyEnter) // edit Syscall (already the active field)
+	s.typeStr("read")
+	s.press(tea.KeyEnter) // commit
+	s.press(tea.KeyEsc)   // apply + close
+	s.waitFor("filter: syscall~read pid=1", "stack: syscall~read")
+
+	// "F" pops the filter stack, restoring the baseline pid=1 filter and emptying
+	// the undo stack.
+	s.press('F')
+	s.waitForAbsent("syscall~read", "filter: pid=1")
+}
+
 // --- Probes modal -----------------------------------------------------------
 
 // TestTUIIntegration_ProbesModal_Smoke validates the tuiNewProbesModel helper +
@@ -789,6 +941,56 @@ func TestTUIIntegration_ProbesModal_Smoke(t *testing.T) {
 	// Title is "Probes (2/3 active)" given the fake's two active probes, and the
 	// "read" row is one of the seeded rows.
 	s.waitFor("Probes (2/3 active)", "read")
+}
+
+// TestTUIIntegration_ProbesModal_NavSearchToggleClose extends the smoke test
+// with the modal's interactive surface (internal/tui/probes/model.go): j/k move
+// the "> " selection cursor, space toggles the selected probe (via a stateful
+// fake whose Toggle flips Active, so the checkbox + "(N/M active)" title change),
+// "/" opens the search bar that narrows the list to matching syscalls, and Esc
+// closes the modal back to the dashboard.
+//
+// Observable tokens confirmed by dumping s.screen(): the selection cursor is a
+// literal "> " prefix on the active row ("> [x] read"); the checkbox is "[x]"
+// active / "[ ]" inactive; the title is "Probes (N/M active)"; search renders a
+// "Filter: <needle>" line and drops non-matching rows.
+func TestTUIIntegration_ProbesModal_NavSearchToggleClose(t *testing.T) {
+	s := tuiNewStatefulProbesModel(t)
+	s.waitFor("view:root")
+
+	// Leave the flame tab first: there "o" is the frame-ordering toggle, so the
+	// probes shortcut only reaches the dashboard from a non-flame tab (Overview).
+	s.typeStr("2")
+	s.waitFor("Trends:")
+
+	s.typeStr("o")
+	// Seeded title (read+write active, openat inactive) and the selected top row.
+	s.waitFor("Probes (2/3 active)", "> [x] read")
+
+	// j/k move the selection cursor down to "write" and back up to "read".
+	s.press('j')
+	s.waitFor("> [x] write")
+	s.press('k')
+	s.waitFor("> [x] read")
+
+	// Space toggles the selected probe ("read"): the stateful fake flips its
+	// Active flag, the modal re-reads States(), and both the checkbox and the
+	// active-count title update (read active -> inactive => 1/3 active).
+	s.press(' ')
+	s.waitFor("Probes (1/3 active)", "> [ ] read")
+
+	// "/" opens the search bar; typing "open" + Enter narrows the list to the
+	// single matching "openat" row, dropping the read/write rows. The committed
+	// search renders a "Filter: open" line.
+	s.press('/')
+	s.typeStr("open")
+	s.press(tea.KeyEnter)
+	s.waitFor("Filter: open", "openat")
+	s.waitForAbsent("write", "openat")
+
+	// Esc closes the modal; the dashboard (Overview) returns.
+	s.press(tea.KeyEsc)
+	s.waitForAbsent("Probes (", "Trends:")
 }
 
 // --- Populated dashboard tabs (seeded in --testflames) ----------------------
