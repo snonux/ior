@@ -870,16 +870,34 @@ func TestTUIIntegration_Stream_Search(t *testing.T) {
 	s.waitFor("buffer:") // modal closed, stream visible again
 }
 
-// TestTUIIntegration_Stream_FDTraceView documents that the FD-trace overlay is
-// not reachable through the TUI: eventstream.Model.openFDTraceView has no key
-// binding (no handler in handleStreamKey, and the dashboard's tabScrollStream
-// never invokes it), so the overlay and its "FD Trace" token cannot be driven
-// from key presses. The test is skipped with that reason rather than asserting
-// a path that does not exist.
+// TestTUIIntegration_Stream_FDTraceView drives the FD-trace overlay end-to-end:
+// it clears the startup pid=1 filter, pauses, anchors the selection on row 0
+// (api openat, PID 2001 / FD 7), and presses "T" to open the FD-trace overlay.
+// All seeded "api" FS rows share PID 2001 / FD 7, so the overlay's distinct
+// "FD Trace (ring snapshot)" header plus the "PID:2001 FD:7 matched:" summary
+// render. Esc closes the overlay and returns to the live "buffer:" stream chrome.
 func TestTUIIntegration_Stream_FDTraceView(t *testing.T) {
-	t.Skip("FD-trace overlay (eventstream.openFDTraceView) has no key binding " +
-		"in handleStreamKey or dashboard.tabScrollStream, so it is unreachable " +
-		"from the TUI and cannot be driven deterministically by a key press")
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	tuiStreamClearFilter(s)
+
+	// Pause so row selection is active, then anchor the selection on row 0
+	// (api openat) with g.
+	s.press(tea.KeySpace)
+	s.waitFor("PAUSED")
+	s.press('g')
+	s.waitFor("PAUSED", "18.4us") // row 0 (api openat) at the top
+
+	// T opens the FD-trace overlay for the selected row's PID+FD. The overlay
+	// renders its own header and a "PID:2001 FD:7 matched:N" summary; both
+	// "FD Trace" and "matched:" are distinct tokens absent from the stream table.
+	s.typeStr("T")
+	s.waitFor("FD Trace", "PID:2001 FD:7", "matched:")
+
+	// Esc closes the overlay and returns to the stream view (live "buffer:" chrome).
+	s.press(tea.KeyEsc)
+	s.waitForAbsent("FD Trace", "buffer:")
 }
 
 // --- Recording modal --------------------------------------------------------
