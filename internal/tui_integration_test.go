@@ -514,16 +514,20 @@ func TestTUIIntegration_Flame_OrderCycle(t *testing.T) {
 	s.waitFor("o:order(path/tracepoint/comm)")
 }
 
-// TestTUIIntegration_Flame_MetricToggle is skipped: the count-metric label lives
-// in the toolbar segment that the 160-col VT harness trims off-screen, and
-// switching the static test-flames trie's count field to bytes/duration clears
-// the snapshot to zero visible frames, so no "total(<metric>)" status line ever
-// renders. The control has no deterministic on-screen token to assert.
+// TestTUIIntegration_Flame_MetricToggle presses "b" to cycle the count metric
+// (events -> bytes -> duration), asserting the selection status line's
+// "total(<metric>)" token tracks each step. This must run in LIVE mode: pressing
+// "b" resets the flamegraph baseline, so on the static --testflames trie the
+// view goes blank (no fresh data to re-fill the delta) and nothing renders. With
+// --testliveflames the synthetic workload keeps flowing, so each press
+// re-renders frames under the new metric.
 func TestTUIIntegration_Flame_MetricToggle(t *testing.T) {
-	t.Skip("flame count-metric toggle (b) has no observable token in test-flames " +
-		"mode: its toolbar label is trimmed at the 160-col width, and the bytes/" +
-		"duration count field yields zero visible frames on the static trie, so " +
-		"no total(<metric>) status line renders")
+	s := tuiNewLiveModel(t)
+	s.waitFor("total(events)") // default count metric
+	s.press('b')
+	s.waitFor("total(bytes)") // bytes metric
+	s.press('b')
+	s.waitFor("total(duration)") // duration metric
 }
 
 // TestTUIIntegration_Flame_HeightToggle presses "v" and asserts the height
