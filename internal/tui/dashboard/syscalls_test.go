@@ -20,7 +20,7 @@ func TestRenderSyscallsIncludesHeaders(t *testing.T) {
 	)
 
 	out := renderSyscalls(&snap, 120, 30)
-	for _, token := range []string{"Syscall", "Count", "Rate/s", "p95", "p99", "Bytes", "Errors"} {
+	for _, token := range []string{"Syscall", "Family", "Count", "Rate/s", "p95", "p99", "Bytes", "Errors"} {
 		if !strings.Contains(out, token) {
 			t.Fatalf("expected token %q in syscall table view", token)
 		}
@@ -80,13 +80,23 @@ func TestSortedSyscallSnapshotsUsesSelectedSortKey(t *testing.T) {
 }
 
 func TestSyscallSortKeyForColumnKeepsLogicalMeaningAcrossWidths(t *testing.T) {
-	key, ok := syscallSortKeyForColumn(120, 4)
+	key, ok := syscallSortKeyForColumn(120, 5)
 	if !ok || key != syscallSortKeyP95 {
-		t.Fatalf("expected compact column 4 to map to p95, got %v ok=%v", key, ok)
+		t.Fatalf("expected compact column 5 to map to p95, got %v ok=%v", key, ok)
 	}
 
-	key, ok = syscallSortKeyForColumn(160, 7)
+	key, ok = syscallSortKeyForColumn(160, 8)
 	if !ok || key != syscallSortKeyP95 {
-		t.Fatalf("expected full column 7 to map to p95, got %v ok=%v", key, ok)
+		t.Fatalf("expected full column 8 to map to p95, got %v ok=%v", key, ok)
+	}
+
+	key, ok = syscallSortKeyForColumn(120, 1)
+	if !ok || key != syscallSortKeyFamily {
+		t.Fatalf("expected compact column 1 to map to Family, got %v ok=%v", key, ok)
+	}
+
+	key, ok = syscallSortKeyForColumn(160, 1)
+	if !ok || key != syscallSortKeyFamily {
+		t.Fatalf("expected full column 1 to map to Family, got %v ok=%v", key, ok)
 	}
 }

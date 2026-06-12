@@ -19,7 +19,6 @@ type KeyMap struct {
 	Five        key.Binding
 	Six         key.Binding
 	Seven       key.Binding
-	Eight       key.Binding
 	Visualize   key.Binding
 	Metric      key.Binding
 	Sort        key.Binding
@@ -63,7 +62,6 @@ func DefaultKeyMap() KeyMap {
 		Five:        keyBinding("processes", "5"),
 		Six:         keyBinding("lat+gaps", "6"),
 		Seven:       keyBinding("stream", "7"),
-		Eight:       keyBinding("non-io", "8"),
 		Visualize:   keyBinding("viz", "v"),
 		Metric:      keyBinding("metric", "b"),
 		Sort:        keyBinding("sort table", "s"),
@@ -112,7 +110,7 @@ func (k KeyMap) globalStatusBindings() []key.Binding {
 	bindings := []key.Binding{
 		helpTextBinding("H", "toggle help"),
 		k.Tab, k.ShiftTab,
-		k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven, k.Eight,
+		k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven,
 		k.Visualize, k.Metric, k.Sort, k.ReverseSort,
 		k.Filter, k.FilterUndo,
 		k.SelectPID, k.SelectTID,
@@ -157,7 +155,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	controls = append(controls, k.Visualize, k.Metric, k.Sort, k.ReverseSort, k.Filter, k.FilterUndo)
 
 	return [][]key.Binding{
-		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven, k.Eight},
+		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},
 		controls,
 		{
 			helpTextBinding("space", "stream pause"),

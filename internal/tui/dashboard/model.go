@@ -103,8 +103,6 @@ type Model struct {
 	syscallsCol              int
 	syscallsSort             tableSortState[syscallSortKey]
 	syscallsTreemapSelection int
-	nonIOOffset              int
-	nonIOCol                 int
 	filesOffset              int
 	filesCol                 int
 	filesSort                tableSortState[fileSortKey]
@@ -306,7 +304,6 @@ func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	m.reanchorFilesDirOffset(selectedDir)
 	m.reanchorProcessesOffset(selectedProcess)
 	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
-	m.nonIOOffset = clampOffset(m.nonIOOffset, m.maxNonIORows())
 	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
@@ -874,7 +871,6 @@ func scrollOffset(keyStr string, offset *int, maxRows int) bool {
 
 func (m *Model) clampTableColumns() {
 	m.syscallsCol = common.ClampTableCol(m.syscallsCol, len(syscallColumns(m.width)))
-	m.nonIOCol = common.ClampTableCol(m.nonIOCol, len(nonIOColumns(m.width)))
 	m.filesCol = common.ClampTableCol(m.filesCol, len(fileColumns(m.width)))
 	m.filesDirCol = common.ClampTableCol(m.filesDirCol, len(fileDirColumns(m.width)))
 	m.processesCol = common.ClampTableCol(m.processesCol, len(processColumns()))
@@ -882,10 +878,6 @@ func (m *Model) clampTableColumns() {
 
 func (m Model) maxSyscallsRows() int {
 	return m.snapshotOrZero().SyscallsCount()
-}
-
-func (m Model) maxNonIORows() int {
-	return nonIOFamiliesCount(m.snapshotOrZero().Families())
 }
 
 func (m Model) maxFilesRows() int {
@@ -1278,8 +1270,6 @@ func (m Model) renderActiveContentTable(width, activeHeight int) (string, bool) 
 	switch {
 	case m.activeTab == TabSyscalls && m.latest != nil:
 		return renderSyscallsWithSort(m.latest, width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort), true
-	case m.activeTab == TabNonIO && m.latest != nil:
-		return renderNonIOWithOffset(m.latest, width, activeHeight, m.nonIOOffset, m.nonIOCol), true
 	case m.activeTab == TabFiles && m.latest != nil && m.filesVizMode == tabVizModeTable:
 		if m.filesDirGrouped {
 			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirOffset, m.filesDirCol, m.filesDirSort), true
