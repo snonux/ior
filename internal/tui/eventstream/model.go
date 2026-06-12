@@ -318,6 +318,11 @@ func (m *Model) handleStreamKey(keyStr string) bool {
 		}
 		m.pendingUndo = true
 		return true
+	case "T":
+		if !m.paused {
+			return false
+		}
+		return m.openFDTraceView()
 	case "esc":
 		if m.paused && len(m.filterStack) > 0 {
 			m.pendingUndo = true
@@ -544,7 +549,7 @@ func (m *Model) renderStreamBase(width int) (string, int) {
 func (m *Model) appendStreamFooter(base string, start int) string {
 	status := fmt.Sprintf("Row %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | Esc/F undo",
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | T fd-trace | Esc/F undo",
 			rowNumber(start, len(m.filtered)), len(m.filtered),
 			rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered),
 			m.selectedCol+1, streamColumnCount)
