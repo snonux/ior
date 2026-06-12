@@ -53,6 +53,7 @@ type StringFilter struct {
 
 type Candidate interface {
 	SyscallValue() string
+	FamilyValue() string
 	CommValue() string
 	FileValue() string
 	PIDValue() uint32
@@ -68,6 +69,10 @@ type Candidate interface {
 type Filter struct {
 	// Syscall filters events by syscall/tracepoint name substring.
 	Syscall *StringFilter
+	// Family filters events by high-level syscall family (FS/Network/...)
+	// substring. Family is derived from the syscall classification at
+	// pair/row construction, so it is matched user-side only.
+	Family *StringFilter
 	// Comm filters events by process command name substring.
 	Comm *StringFilter
 	// File filters events by the file path involved in the syscall.
@@ -93,6 +98,7 @@ type Filter struct {
 func (f Filter) Clone() Filter {
 	out := f
 	out.Syscall = cloneFilter(f.Syscall)
+	out.Family = cloneFilter(f.Family)
 	out.Comm = cloneFilter(f.Comm)
 	out.File = cloneFilter(f.File)
 	out.PID = cloneFilter(f.PID)
@@ -107,6 +113,7 @@ func (f Filter) Clone() Filter {
 
 func (f Filter) Equal(other Filter) bool {
 	return sameFilter(f.Syscall, other.Syscall) &&
+		sameFilter(f.Family, other.Family) &&
 		sameFilter(f.Comm, other.Comm) &&
 		sameFilter(f.File, other.File) &&
 		sameFilter(f.PID, other.PID) &&
@@ -127,6 +134,9 @@ func (f Filter) Matches(candidate Candidate) bool {
 		return false
 	}
 	if !matchString(f.Syscall, candidate.SyscallValue()) {
+		return false
+	}
+	if !matchString(f.Family, candidate.FamilyValue()) {
 		return false
 	}
 	if !matchString(f.Comm, candidate.CommValue()) {
@@ -163,7 +173,7 @@ func (f Filter) IsActive() bool {
 	if f.ErrorsOnly {
 		return true
 	}
-	for _, sf := range []*StringFilter{f.Syscall, f.Comm, f.File} {
+	for _, sf := range []*StringFilter{f.Syscall, f.Family, f.Comm, f.File} {
 		if sf != nil && strings.TrimSpace(sf.Pattern) != "" {
 			return true
 		}

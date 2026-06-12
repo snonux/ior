@@ -69,6 +69,7 @@ func FilterSummary(f globalfilter.Filter) string {
 		parts = append(parts, "errors")
 	}
 	parts = AppendStringSummary(parts, "syscall", f.Syscall)
+	parts = AppendStringSummary(parts, "family", f.Family)
 	parts = AppendStringSummary(parts, "comm", f.Comm)
 	parts = AppendStringSummary(parts, "file", f.File)
 	parts = AppendNumericSummary(parts, "pid", f.PID, false)

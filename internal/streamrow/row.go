@@ -47,6 +47,10 @@ func (r Row) SyscallValue() string {
 	return r.Syscall
 }
 
+func (r Row) FamilyValue() string {
+	return r.Family
+}
+
 func (r Row) CommValue() string {
 	return r.Comm
 }
