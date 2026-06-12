@@ -90,15 +90,6 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		HandleScroll:    tabScrollSyscalls,
 		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Three },
 	},
-	TabNonIO: {
-		Name:            "Non-IO",
-		ShortName:       "NIO",
-		Position:        75,
-		AllowedVizModes: []tabVizMode{tabVizModeTable},
-		Render:          tabRenderNonIO,
-		HandleScroll:    tabScrollNonIO,
-		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Eight },
-	},
 	TabFiles: {
 		Name:            "Files",
 		ShortName:       "Fil",
@@ -211,12 +202,6 @@ func tabRenderSyscalls(_ *Model, snap *statsengine.Snapshot, _ *eventstream.Mode
 	return renderSyscalls(snap, width, height)
 }
 
-// tabRenderNonIO adapts renderNonIO to the tabRenderFn signature.
-// Offset rendering is handled by renderActiveContentTable before this path.
-func tabRenderNonIO(_ *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
-	return renderNonIO(snap, width, height)
-}
-
 // tabRenderFiles adapts renderFiles to the tabRenderFn signature, choosing
 // between the dir-grouped and plain view based on model state.
 // Sort-state rendering is handled by renderActiveContentTable before this path.
@@ -254,13 +239,6 @@ func tabScrollSyscalls(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	return common.HandleTableNavigationKey(keyStr, &m.syscallsOffset, &m.syscallsCol,
 		m.maxSyscallsRows(), len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
-}
-
-// tabScrollNonIO handles navigation keys for the non-IO family table.
-func tabScrollNonIO(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	keyStr := msg.String()
-	return common.HandleTableNavigationKey(keyStr, &m.nonIOOffset, &m.nonIOCol,
-		m.maxNonIORows(), len(nonIOColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 }
 
 // tabScrollFiles handles navigation keys for the files tab, selecting between

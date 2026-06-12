@@ -53,7 +53,7 @@ func testStatsPairs() []*event.Pair {
 		{types.SYS_ENTER_WRITE, types.WRITE_CLASSIFIED, -28, "worker", 2002, "/srv/worker/queue/push/write", 0, 210000, 35000},
 		{types.SYS_ENTER_READ, types.READ_CLASSIFIED, 95, "worker", 2002, "/srv/worker/cache/redis/get/read", 97280, 95000, 20000},
 		{types.SYS_ENTER_WRITE, types.WRITE_CLASSIFIED, 90, "worker", 2002, "/srv/worker/cache/redis/set/write", 92160, 90000, 18000},
-		// Non-FS so the Non-IO tab has rows.
+		// Non-FS so non-IO syscall families (e.g. Polling) appear in the Syscalls tab.
 		{types.SYS_ENTER_EPOLL_WAIT, types.UNCLASSIFIED, 2, "worker", 2002, "", 0, 320000, 15000},
 
 		// ingest: parsing and upload I/O.

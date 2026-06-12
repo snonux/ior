@@ -388,7 +388,6 @@ func TestTUIIntegration_TabNav_NumberKeys(t *testing.T) {
 		{"5", []string{"Comm", "worker", "ingest"}},           // Processes: header + seeded comms
 		{"6", []string{"Latency Histogram", "Gap Histogram"}}, // Latency+Gaps
 		{"7", []string{"buffer:"}},                            // Stream chrome (rows filtered by pid=1)
-		{"8", []string{"Family", "Polling"}},                  // Non-IO: header + seeded family
 		{"1", []string{"view:root"}},                          // back to Flame
 	}
 	for _, step := range steps {
@@ -1253,7 +1252,6 @@ func TestTUIIntegration_AllTabs_RenderPopulatedAndKeepChrome(t *testing.T) {
 		{"5", []string{"Comm", "worker", "ingest"}},                 // Processes
 		{"6", []string{"Latency Histogram", "Gap Histogram"}},       // Latency+Gaps
 		{"7", []string{"buffer:"}},                                  // Stream chrome (rows filtered by pid=1)
-		{"8", []string{"Family", "Polling"}},                        // Non-IO
 	}
 	for _, tab := range tabs {
 		s.typeStr(tab.key)
@@ -1285,71 +1283,29 @@ func TestTUIIntegration_Latency_ShowsHistogramTotals(t *testing.T) {
 	s.waitFor("Latency Histogram", "Gap Histogram")
 }
 
-// TestTUIIntegration_NonIO_ShowsFamilyRows asserts the Non-IO tab renders its
-// family header and the seeded Polling family row.
-func TestTUIIntegration_NonIO_ShowsFamilyRows(t *testing.T) {
-	s := tuiNewFlamesModel(t)
-	s.waitFor("view:root")
-
-	s.typeStr("8")
-	s.waitFor("Family", "Polling")
-}
-
-// TestTUIIntegration_NonIO_ScrollAndColumnNav drives the Non-IO tab's
-// selectable-table handlers. The Non-IO tab (number key "8") renders the same
-// compact selectable table as the Syscalls/Files/Processes tabs, with a
-// "[Row r/N Col c/N]" hint line over the seeded families (Polling, Process); at
-// the test width the body is the 6-column compact layout, so column 0 is the
-// "Family" name column and the selectable-column index runs 1..6. With only two
-// seeded families row scrolling clamps quickly, so the assertions track coherent
-// index movement (and PgDown/PgUp clamping to the last/first row) rather than a
-// specific large count, while confirming the "Family" header stays rendered.
-// Non-IO is table-only — there are no bubbles/treemap viz modes.
-func TestTUIIntegration_NonIO_ScrollAndColumnNav(t *testing.T) {
-	s := tuiNewFlamesModel(t)
-	s.waitFor("view:root")
-
-	s.typeStr("8")
-	s.waitFor("Family", "Polling", "[Row 1/2 Col 1/6]")
-
-	s.press('l') // move selection one column to the right
-	s.waitFor("[Row 1/2 Col 2/6]")
-	s.press('h') // move back to the first column
-	s.waitFor("[Row 1/2 Col 1/6]")
-
-	s.press('j') // move selection down one row
-	s.waitFor("[Row 2/2 Col 1/6]")
-	s.press('k') // back up to the top row
-	s.waitFor("[Row 1/2 Col 1/6]")
-
-	// Paging keys clamp within the 2 seeded rows: PgDown lands on the last row,
-	// PgUp returns to the first. The table header stays rendered throughout.
-	s.press(tea.KeyPgDown)
-	s.waitFor("Family", "[Row 2/2 Col 1/6]")
-	s.press(tea.KeyPgUp)
-	s.waitFor("Family", "[Row 1/2 Col 1/6]")
-}
-
 // --- Syscalls tab interactions (seeded table in --testflames) ---------------
 //
 // The Syscalls tab (number key "3") renders a selectable table of seeded
 // syscalls (write/read/close/fsync/openat/epoll_wait/getpid/poll). At the
-// 160-col test width the dashboard body falls into the 8-column "compact"
-// layout, so the selectable-column index runs 1..8 and column 0 is the
-// "Syscall" name column. These tests drive the table's sort, column-nav,
-// scroll, visualization-cycle, metric-toggle, and enter-to-filter handlers and
-// assert on stable rendered tokens (the table hint line "[Row r/8 Col c/8]",
-// the sort label "[sort: ...]", the bubbles/treemap headers, and the
-// "filter:" status line) rather than data-dependent row ordering.
+// 160-col test width the dashboard body falls into the 9-column "compact"
+// layout (Syscall, Family, Count, Rate/s, Avg, p95, p99, Bytes, Errors), so the
+// selectable-column index runs 1..9 and column 0 is the "Syscall" name column,
+// with the "Family" column at index 1. These tests drive the table's sort,
+// column-nav, scroll, visualization-cycle, metric-toggle, and enter-to-filter
+// handlers and assert on stable rendered tokens (the table hint line
+// "[Row r/8 Col c/9]", the sort label "[sort: ...]", the bubbles/treemap
+// headers, and the "filter:" status line) rather than data-dependent row
+// ordering.
 
 // TestTUIIntegration_Syscalls_TableRenders asserts the Syscalls tab renders its
-// table header, a seeded row, and the selectable-table hint line.
+// table header (including the Family column), a seeded non-FS family value, and
+// the selectable-table hint line.
 func TestTUIIntegration_Syscalls_TableRenders(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	s.waitFor("Syscall", "epoll_wait", "[Row 1/8 Col 1/8]", "[sort: default]")
+	s.waitFor("Syscall", "Family", "Polling", "epoll_wait", "[Row 1/8 Col 1/9]", "[sort: default]")
 }
 
 // TestTUIIntegration_Syscalls_SortToggles presses "s" then "S" on the selected
@@ -1367,6 +1323,15 @@ func TestTUIIntegration_Syscalls_SortToggles(t *testing.T) {
 	s.waitFor("[sort: Syscall asc]")
 	s.press('S') // reverse to descending
 	s.waitFor("[sort: Syscall desc]")
+
+	// Move selection to the Family column (index 1) and sort by it, grouping
+	// families together.
+	s.press('l')
+	s.waitFor("[Row 1/8 Col 2/9]")
+	s.press('s') // sort ascending by Family
+	s.waitFor("[sort: Family asc]")
+	s.press('S') // reverse to descending
+	s.waitFor("[sort: Family desc]")
 }
 
 // TestTUIIntegration_Syscalls_ColumnNav presses "l" (right) then "h" (left) and
@@ -1376,12 +1341,12 @@ func TestTUIIntegration_Syscalls_ColumnNav(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	s.waitFor("[Row 1/8 Col 1/8]")
+	s.waitFor("[Row 1/8 Col 1/9]")
 
 	s.press('l') // move selection one column to the right
-	s.waitFor("[Row 1/8 Col 2/8]")
+	s.waitFor("[Row 1/8 Col 2/9]")
 	s.press('h') // move back to the first column
-	s.waitFor("[Row 1/8 Col 1/8]")
+	s.waitFor("[Row 1/8 Col 1/9]")
 }
 
 // TestTUIIntegration_Syscalls_Scroll presses "j"/"k" and PgDown/PgUp and asserts
@@ -1392,19 +1357,19 @@ func TestTUIIntegration_Syscalls_Scroll(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	s.waitFor("Syscall", "[Row 1/8 Col 1/8]")
+	s.waitFor("Syscall", "[Row 1/8 Col 1/9]")
 
 	s.press('j') // move selection down one row
-	s.waitFor("[Row 2/8 Col 1/8]")
+	s.waitFor("[Row 2/8 Col 1/9]")
 	s.press('k') // back up to the top row
-	s.waitFor("[Row 1/8 Col 1/8]")
+	s.waitFor("[Row 1/8 Col 1/9]")
 
 	// Paging keys clamp within the 8 seeded rows: PgDown lands on the last row,
 	// PgUp returns to the first. The table header stays rendered throughout.
 	s.press(tea.KeyPgDown)
-	s.waitFor("Syscall", "[Row 8/8 Col 1/8]")
+	s.waitFor("Syscall", "[Row 8/8 Col 1/9]")
 	s.press(tea.KeyPgUp)
-	s.waitFor("Syscall", "[Row 1/8 Col 1/8]")
+	s.waitFor("Syscall", "[Row 1/8 Col 1/9]")
 }
 
 // TestTUIIntegration_Syscalls_VizCycle presses "v" to cycle the visualization
@@ -1422,7 +1387,7 @@ func TestTUIIntegration_Syscalls_VizCycle(t *testing.T) {
 	s.press('v') // bubbles -> treemap
 	s.waitFor("Syscalls treemap")
 	s.press('v') // treemap -> table (header returns)
-	s.waitFor("Syscall", "[Row 1/8 Col 1/8]")
+	s.waitFor("Syscall", "[Row 1/8 Col 1/9]")
 }
 
 // TestTUIIntegration_Syscalls_MetricToggle switches to bubbles mode and presses

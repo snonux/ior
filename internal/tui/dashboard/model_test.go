@@ -581,7 +581,7 @@ func TestSyscallsP95SortSurvivesWidthExpansion(t *testing.T) {
 		{Name: "read", Count: 3, LatencyMinNs: 1, LatencyP95Ns: 50},
 	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	m.latest = &snap
-	m.syscallsCol = 4
+	m.syscallsCol = 5
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
 	model := next.(Model)
