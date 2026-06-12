@@ -611,7 +611,8 @@ func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cm
 	m.showHelp = !m.showHelp
 	// Keep sub-model state in sync so View() stays a pure render pass.
 	// The flamegraph viewport shrinks/grows when the help bar expands/collapses;
-	// the stream footer row is only shown when the full help bar is visible.
+	// the live stream footer row follows the help bar, while the paused
+	// selection/column/search footer always renders (see eventstream.Model.View).
 	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
 	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 	m.streamModel.SetFooterVisible(m.showHelp)

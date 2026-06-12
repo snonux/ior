@@ -511,7 +511,11 @@ func (m *Model) View(width, height int) string {
 	if m.searchModal.Visible() {
 		return m.searchModal.View(width, height)
 	}
-	if !m.showFooter {
+	// The paused selection/column/search footer is essential interaction
+	// feedback while the user navigates rows and columns, so render it whenever
+	// the stream is paused, independent of the dashboard help-bar toggle
+	// (m.showFooter). The live Row x/N footer remains tied to the help bar.
+	if !m.showFooter && !m.paused {
 		return base
 	}
 	return m.appendStreamFooter(base, start)

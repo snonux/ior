@@ -26,6 +26,38 @@ func pushEvents(rb *RingBuffer, count int) {
 	}
 }
 
+// TestPausedFooterRendersIndependentOfFooterVisible verifies the footer
+// gating: the paused selection/column footer renders whenever the stream is
+// paused, even with SetFooterVisible(false) (the dashboard help-bar state),
+// while the live footer stays hidden until the help bar enables it.
+func TestPausedFooterRendersIndependentOfFooterVisible(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	pushEvents(rb, 10)
+	m.Refresh()
+
+	// Footer hidden (help bar off) and live: no Row/Sel footer line.
+	m.SetFooterVisible(false)
+	if got := m.View(120, 24); strings.Contains(got, "Row ") {
+		t.Fatalf("live + footer-hidden should not render the Row footer:\n%s", got)
+	}
+
+	// Pause and anchor a selection; the footer must render despite footer-hidden.
+	if !m.HandleKey("space") {
+		t.Fatalf("space should pause")
+	}
+	if !m.paused {
+		t.Fatalf("expected paused state")
+	}
+	got := m.View(120, 24)
+	if !strings.Contains(got, "Sel ") || !strings.Contains(got, "Col ") {
+		t.Fatalf("paused stream must render Sel/Col footer regardless of SetFooterVisible(false):\n%s", got)
+	}
+	if !strings.Contains(got, "Enter push-filter") {
+		t.Fatalf("paused footer should include the push-filter hint:\n%s", got)
+	}
+}
+
 func TestModelPauseFreezesDisplay(t *testing.T) {
 	rb := NewRingBuffer()
 	m := NewModel(rb)

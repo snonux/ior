@@ -744,6 +744,10 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 // chrome. Every Stream row-interaction test starts from this state.
 func tuiStreamClearFilter(s *tuiSession) {
 	s.t.Helper()
+	// Give the dashboard a realistic full-size terminal so the stream's wide
+	// event rows are not soft-wrapped and the paused selection/column/search
+	// footer (the last rendered line) is not clipped by the height budget.
+	s.tm.Send(tea.WindowSizeMsg{Width: tuiTermWidth, Height: tuiTermHeight})
 	s.typeStr("7")
 	s.waitFor("buffer:", "Comm", "Syscall")
 	s.typeStr("f")
@@ -769,8 +773,9 @@ func TestTUIIntegration_Stream_RowsRender(t *testing.T) {
 // asserts the viewport recenters: "g" brings the seeded row-0 latency
 // ("18.4us") to the top, "G" reveals a tail-region latency ("198.3us") that is
 // absent near row 0. Down/up and h/l are exercised to prove they are consumed
-// without breaking the table (PAUSED + a seeded row stay rendered); their footer
-// counters are not on screen in the running TUI.
+// without breaking the table (PAUSED + a seeded row stay rendered). The paused
+// selection/column footer ("Sel"/"Col" counters) renders independent of the
+// dashboard help bar, so its tokens are asserted directly.
 func TestTUIIntegration_Stream_PauseSelectsAndNavigates(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
@@ -782,9 +787,10 @@ func TestTUIIntegration_Stream_PauseSelectsAndNavigates(t *testing.T) {
 	s.waitFor("PAUSED")
 
 	// g anchors on row 0 and recenters, bringing the first seeded row's latency
-	// (18.4us, api openat) to the top of the viewport.
+	// (18.4us, api openat) to the top of the viewport. With a row selected the
+	// paused footer renders the "Sel"/"Col" counters and the push-filter hint.
 	s.press('g')
-	s.waitFor("PAUSED", "18.4us")
+	s.waitFor("PAUSED", "18.4us", "Sel 1/", "Col 1/10", "Enter push-filter")
 
 	// G jumps to the last row and recenters, revealing a tail-region latency
 	// (198.3us, api read socket near the end) that is not present near row 0.
@@ -805,10 +811,11 @@ func TestTUIIntegration_Stream_PauseSelectsAndNavigates(t *testing.T) {
 
 // TestTUIIntegration_Stream_EnterPushFilterThenUndo pauses, anchors the
 // selection on row 0 (comm "api"), advances two columns to the Comm column,
-// and presses Enter to push a "comm~api" filter. The selected column index is
-// not rendered, but it advances deterministically under the hood, so the push
-// targets Comm; the resulting predicate is observable on the stream's "Filter:"
-// summary line. F then pops the filter stack, reverting to "Filter: all".
+// and presses Enter to push a "comm~api" filter. The paused footer's "Col"
+// counter makes the column advance observable (Col 1/10 -> Col 3/10), so the
+// push targets Comm; the resulting predicate is observable on the stream's
+// "Filter:" summary line. F then pops the filter stack, reverting to
+// "Filter: all".
 func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
@@ -817,12 +824,14 @@ func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
 
 	s.press(tea.KeySpace)
 	s.waitFor("PAUSED")
-	s.press('g')                  // anchor selection on row 0 (comm "api"); selectedCol stays 0
-	s.waitFor("PAUSED", "18.4us") // row 0 (api openat) at the top of the viewport
+	s.press('g')                              // anchor selection on row 0 (comm "api"); selectedCol stays 0
+	s.waitFor("PAUSED", "18.4us", "Col 1/10") // row 0 (api openat) at the top; column anchored at 1/10
 
-	// Two "l" presses move the selected column from Gap (0) to Comm (index 2).
+	// Two "l" presses move the selected column from Gap (0) to Comm (index 2);
+	// the paused footer's Col counter advances from 1/10 to 3/10.
 	s.press('l')
 	s.press('l')
+	s.waitFor("Col 3/10")
 
 	// Enter clones the stream filter and adds the selected cell's predicate; the
 	// Comm cell of row 0 is "api", so the filter becomes "comm~api" (synced into
@@ -838,10 +847,10 @@ func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
 // TestTUIIntegration_Stream_Search opens the forward search modal ("/"),
 // asserting its prompt chrome, searches for the seeded syscall "read" (which
 // pauses the stream and jumps to a match), exercises n/N match navigation, and
-// smoke-opens the reverse search modal ("?"). The match-indicator status line
-// is only rendered with the help footer (absent in the running TUI), so the
-// observable assertions are the modal chrome, the paused state, and a visible
-// "read" row.
+// smoke-opens the reverse search modal ("?"). Submitting a search pauses the
+// stream, so the paused footer renders the search-status line ("/read @ row
+// r/N"); the observable assertions are the modal chrome, the paused state, a
+// visible "read" row, and that search-status token.
 func TestTUIIntegration_Stream_Search(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
@@ -853,8 +862,9 @@ func TestTUIIntegration_Stream_Search(t *testing.T) {
 	s.waitFor("Regex Search", "Pattern:", "Enter search")
 	s.typeStr("read")
 	s.press(tea.KeyEnter)
-	// Submitting pauses the stream and jumps the selection to a "read" match.
-	s.waitFor("PAUSED", "buffer:", "read")
+	// Submitting pauses the stream and jumps the selection to a "read" match; the
+	// paused footer's search-status line shows "/read @ row r/N".
+	s.waitFor("PAUSED", "buffer:", "read", "/read @ row")
 
 	// n/N step forward/back through matches; they are consumed and the table
 	// stays coherent (a "read" row remains visible).
@@ -868,6 +878,43 @@ func TestTUIIntegration_Stream_Search(t *testing.T) {
 	s.waitFor("Regex Search", "Pattern:")
 	s.press(tea.KeyEsc)
 	s.waitFor("buffer:") // modal closed, stream visible again
+}
+
+// TestTUIIntegration_Stream_PausedFooterShowsSelection focuses on the paused
+// selection/column/search footer, which renders whenever the stream is paused
+// independent of the dashboard help-bar toggle (the global "H" overlay shadows
+// the dashboard "H" so the help bar is never enabled). It asserts:
+//   - while LIVE, the paused footer tokens are absent;
+//   - after Space+g (pause + anchor row 0), the "Sel"/"Col" counters and the
+//     "Enter push-filter" hint render;
+//   - moving the selected column with "l" advances the "Col" counter;
+//   - a "/" search submits the "/read @ row r/N" search-status line.
+func TestTUIIntegration_Stream_PausedFooterShowsSelection(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	tuiStreamClearFilter(s)
+
+	// While live the footer's selection tokens are not rendered.
+	s.waitForAbsent("Enter push-filter", "buffer:", "Filter: all")
+
+	// Pause and anchor the selection on row 0; the paused footer appears with the
+	// Sel/Col counters and the push-filter hint, all without toggling the help bar.
+	s.press(tea.KeySpace)
+	s.waitFor("PAUSED")
+	s.press('g')
+	s.waitFor("Sel 1/40", "Col 1/10", "Enter push-filter", "T fd-trace")
+
+	// Advancing the selected column updates the Col counter.
+	s.press('l')
+	s.waitFor("Col 2/10")
+
+	// A submitted search renders the search-status line in the paused footer.
+	s.press('/')
+	s.waitFor("Regex Search", "Pattern:")
+	s.typeStr("read")
+	s.press(tea.KeyEnter)
+	s.waitFor("PAUSED", "/read @ row")
 }
 
 // TestTUIIntegration_Stream_FDTraceView drives the FD-trace overlay end-to-end:
