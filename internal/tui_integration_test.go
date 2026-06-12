@@ -1424,6 +1424,36 @@ func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 	s.waitFor("syscall~write")
 }
 
+// TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter moves the column
+// selection to the Family column (index 1) and presses Enter, asserting the
+// status line gains a "family~<X>" predicate (scoping by the selected row's
+// syscall family rather than its name). Pressing "F" undoes the filter, which
+// reverts the status line to the model's initial "pid=1" filter. The seeded
+// top row ("write") classifies as the FS family, so the predicate is
+// "family~FS".
+func TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("3")
+	s.waitFor("Syscall", "filter: pid=1", "[Row 1/8 Col 1/9]")
+
+	// Move the column selection from Syscall (0) to Family (1).
+	s.press('l')
+	s.waitFor("[Row 1/8 Col 2/9]")
+
+	// Enter on the Family column scopes the dashboard to the top row's family.
+	s.press(tea.KeyEnter)
+	s.waitFor("family~FS")
+
+	// F undoes the just-pushed filter, reverting to the initial pid=1 filter.
+	s.press('F')
+	s.waitFor("filter: pid=1")
+	if strings.Contains(s.screen(), "family~FS") {
+		t.Fatalf("expected family~FS filter to be undone, screen still shows it:\n%s", s.screen())
+	}
+}
+
 // --- Files tab interactions (seeded table in --testflames) ------------------
 //
 // The Files tab (number key "4") renders a six-column selectable table

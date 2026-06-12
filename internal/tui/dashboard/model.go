@@ -400,10 +400,25 @@ func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 }
 
+// syscallFamilyColumn is the index of the Family column in the Syscalls table
+// (right after the Syscall name column, in both the compact and full layouts).
+// Enter on this column scopes the dashboard to the selected row's family rather
+// than its syscall name.
+const syscallFamilyColumn = 1
+
 func (m Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 	selected, ok := m.selectedSyscallSnapshot()
 	if !ok {
 		return globalfilter.Filter{}, "", false
+	}
+	if m.syscallsCol == syscallFamilyColumn {
+		family := string(selected.TraceID.Family())
+		if strings.TrimSpace(family) == "" {
+			return globalfilter.Filter{}, "", false
+		}
+		filter := m.globalFilter.Clone()
+		filter.Family = &globalfilter.StringFilter{Pattern: family}
+		return filter, "family~" + family, true
 	}
 	if strings.TrimSpace(selected.Name) == "" {
 		return globalfilter.Filter{}, "", false

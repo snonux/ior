@@ -130,6 +130,7 @@ func globalFilterActionLabel(prev, next globalfilter.Filter, action string) stri
 		}
 	}
 	parts = appendStringFilterChange(parts, "syscall", prev.Syscall, next.Syscall)
+	parts = appendStringFilterChange(parts, "family", prev.Family, next.Family)
 	parts = appendStringFilterChange(parts, "comm", prev.Comm, next.Comm)
 	parts = appendStringFilterChange(parts, "file", prev.File, next.File)
 	parts = appendNumericFilterChange(parts, "pid", prev.PID, next.PID, false)

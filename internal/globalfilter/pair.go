@@ -20,6 +20,13 @@ func (p pairCandidate) SyscallValue() string {
 	return p.pair.EnterEv.GetTraceId().Name()
 }
 
+func (p pairCandidate) FamilyValue() string {
+	if p.pair == nil || p.pair.EnterEv == nil {
+		return ""
+	}
+	return string(p.pair.EnterEv.GetTraceId().Family())
+}
+
 func (p pairCandidate) CommValue() string {
 	if p.pair == nil {
 		return ""

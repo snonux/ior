@@ -7,6 +7,7 @@ import (
 
 type sampleCandidate struct {
 	syscall string
+	family  string
 	comm    string
 	file    string
 	pid     uint32
@@ -20,6 +21,7 @@ type sampleCandidate struct {
 }
 
 func (s sampleCandidate) SyscallValue() string { return s.syscall }
+func (s sampleCandidate) FamilyValue() string  { return s.family }
 func (s sampleCandidate) CommValue() string    { return s.comm }
 func (s sampleCandidate) FileValue() string    { return s.file }
 func (s sampleCandidate) PIDValue() uint32     { return s.pid }
@@ -34,6 +36,7 @@ func (s sampleCandidate) ErrorValue() bool     { return s.isError }
 func testCandidate() sampleCandidate {
 	return sampleCandidate{
 		syscall: "read",
+		family:  "FS",
 		comm:    "nginx",
 		file:    "/var/log/access.log",
 		pid:     1234,
@@ -74,6 +77,34 @@ func TestFilterStringAndNumericMatching(t *testing.T) {
 	}
 	if !filter.Matches(candidate) {
 		t.Fatalf("combined filter should match candidate")
+	}
+}
+
+func TestFilterFamilyMatchesAndExcludes(t *testing.T) {
+	candidate := testCandidate()
+	candidate.family = "Polling"
+
+	if !(Filter{Family: &StringFilter{Pattern: "Polling"}}).Matches(candidate) {
+		t.Fatalf("family filter Polling should match Polling candidate")
+	}
+	if !(Filter{Family: &StringFilter{Pattern: "poll"}}).Matches(candidate) {
+		t.Fatalf("family filter should match case-insensitive substring")
+	}
+	if (Filter{Family: &StringFilter{Pattern: "Network"}}).Matches(candidate) {
+		t.Fatalf("family filter Network should exclude Polling candidate")
+	}
+	if !(Filter{Family: &StringFilter{Pattern: "Polling"}}).IsActive() {
+		t.Fatalf("non-empty family filter should be active")
+	}
+
+	base := Filter{Family: &StringFilter{Pattern: "Polling"}}
+	cloned := base.Clone()
+	cloned.Family.Pattern = "Process"
+	if base.Family.Pattern != "Polling" {
+		t.Fatalf("Clone() should deep-copy the Family filter")
+	}
+	if base.Equal(cloned) {
+		t.Fatalf("filters with different Family patterns should not be Equal")
 	}
 }
 
