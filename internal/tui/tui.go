@@ -764,6 +764,14 @@ func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.
 		next, cmd := m.undoGlobalFilter()
 		return next, cmd, true
 	}
+	if key.Matches(msg, m.keys.NextFamily) {
+		next, cmd := m.cycleFamilyScope(+1)
+		return next, cmd, true
+	}
+	if key.Matches(msg, m.keys.PrevFamily) {
+		next, cmd := m.cycleFamilyScope(-1)
+		return next, cmd, true
+	}
 	if key.Matches(msg, m.keys.SelectPID) {
 		next, cmd := m.reselectPID()
 		return next, cmd, true
@@ -1052,6 +1060,24 @@ func (m *Model) syncDashboardFilterState() {
 func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
 	changed := m.filters.push(filter, action)
 	m.setGlobalFilter(m.filters.current())
+	return m.reapplyActiveFilter(changed)
+}
+
+// replaceGlobalFilter swaps the active global filter for a re-scope (e.g. the
+// [/] family cycle) WITHOUT pushing onto the undo stack, then re-applies it to
+// the running pipeline using the same live-swap/restart path as
+// applyGlobalFilter. The stack label stays the same length across calls.
+func (m Model) replaceGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
+	changed := !m.filters.current().Equal(filter)
+	m.setGlobalFilter(filter)
+	return m.reapplyActiveFilter(changed)
+}
+
+// reapplyActiveFilter pushes the current filter into the running pipeline,
+// preferring an in-place live swap and falling back to a trace restart. It is
+// the shared tail of applyGlobalFilter (push) and replaceGlobalFilter
+// (setGlobal) so both routes drive the pipeline identically (DRY).
+func (m Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 	if !changed || m.screen != ScreenDashboard {
 		return m, nil
 	}
