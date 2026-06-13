@@ -29,6 +29,8 @@ type KeyMap struct {
 	Probes      key.Binding
 	Filter      key.Binding
 	FilterUndo  key.Binding
+	PrevFamily  key.Binding
+	NextFamily  key.Binding
 	Export      key.Binding
 	Record      key.Binding
 	Quit        key.Binding
@@ -72,6 +74,8 @@ func DefaultKeyMap() KeyMap {
 		Probes:      keyBinding("probes", "o"),
 		Filter:      keyBinding("filter", "f"),
 		FilterUndo:  keyBinding("undo filter", "F"),
+		PrevFamily:  keyBinding("prev family", "["),
+		NextFamily:  keyBinding("next family", "]"),
 		Export:      keyBinding("stream export", "e"),
 		Record:      keyBinding("parquet rec", "R"),
 		Quit:        keyBinding("quit", "q", "ctrl+c"),
@@ -113,6 +117,7 @@ func (k KeyMap) globalStatusBindings() []key.Binding {
 		k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven,
 		k.Visualize, k.Metric, k.Sort, k.ReverseSort,
 		k.Filter, k.FilterUndo,
+		k.PrevFamily, k.NextFamily,
 		k.SelectPID, k.SelectTID,
 		k.Probes, k.Record, k.Refresh, k.AutoReset, k.Quit,
 	}
@@ -152,7 +157,7 @@ func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 		controls = append(controls, k.Export)
 	}
 	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Record, k.Refresh, k.AutoReset, k.Quit)
-	controls = append(controls, k.Visualize, k.Metric, k.Sort, k.ReverseSort, k.Filter, k.FilterUndo)
+	controls = append(controls, k.Visualize, k.Metric, k.Sort, k.ReverseSort, k.Filter, k.FilterUndo, k.PrevFamily, k.NextFamily)
 
 	return [][]key.Binding{
 		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},

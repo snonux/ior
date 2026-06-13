@@ -1454,6 +1454,45 @@ func TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter(t *testing.T) {
 	}
 }
 
+// TestTUIIntegration_FamilyCycleHotkeys cycles the dashboard's syscall-family
+// scope with the global "]" (next) and "[" (prev) hotkeys. Each press re-scopes
+// the whole dashboard by REPLACING the active filter's Family component (the
+// pid=1 base filter is preserved), so the cycle walks
+// all -> Network -> Memory -> ... and wraps. Because the re-scope is a
+// replacement (setGlobal) and not a stack push, the "stack:" label must NOT
+// grow as the user cycles.
+func TestTUIIntegration_FamilyCycleHotkeys(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root", "filter: pid=1")
+
+	stackBefore := strings.Count(s.screen(), "stack:")
+
+	// "]" advances from the "all" state to the first family (Network). The
+	// base pid=1 filter is preserved alongside the new family predicate.
+	s.press(']')
+	s.waitFor("family~Network", "pid=1")
+
+	// "]" again advances to the next family (Memory).
+	s.press(']')
+	s.waitFor("family~Memory")
+
+	// "[" reverses back to the previous family (Network).
+	s.press('[')
+	s.waitFor("family~Network")
+
+	// "[" again steps off the first family back to the "all" state: the
+	// family predicate disappears while the base pid=1 filter remains.
+	s.press('[')
+	s.waitForAbsent("family~", "filter: pid=1")
+
+	// The replacement path must never push onto the undo stack, so the
+	// "stack:" label count is unchanged across the whole cycle.
+	if got := strings.Count(s.screen(), "stack:"); got != stackBefore {
+		t.Fatalf("family cycle grew the filter stack: stack-label count %d -> %d\n%s",
+			stackBefore, got, s.screen())
+	}
+}
+
 // --- Files tab interactions (seeded table in --testflames) ------------------
 //
 // The Files tab (number key "4") renders a six-column selectable table
