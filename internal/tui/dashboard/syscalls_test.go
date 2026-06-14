@@ -19,7 +19,7 @@ func TestRenderSyscallsIncludesHeaders(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 
-	out := renderSyscalls(&snap, 120, 30)
+	out := renderSyscalls(&snap, snap.Syscalls(), 120, 30)
 	for _, token := range []string{"Syscall", "Family", "Count", "Rate/s", "p95", "p99", "Bytes", "Errors"} {
 		if !strings.Contains(out, token) {
 			t.Fatalf("expected token %q in syscall table view", token)

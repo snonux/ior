@@ -36,7 +36,7 @@ func TestTreemapRootPathTextDirectoryOnly(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 
-	sysItems := buildSyscallTreemapItems(&snap, bubbleMetricCount)
+	sysItems := buildSyscallTreemapItems(snap.Syscalls(), bubbleMetricCount)
 	if len(sysItems) == 0 || sysItems[0].Name != "read" {
 		t.Fatalf("expected syscall treemap label to stay native, got %#v", sysItems)
 	}
@@ -64,7 +64,7 @@ func TestBubbleRootPathTextDirectoryOnly(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 
-	sys := syscallBubbleData(&snap)
+	sys := syscallBubbleData(snap.Syscalls())
 	if len(sys) == 0 || sys[0].Label != "write" {
 		t.Fatalf("expected syscall bubble label to stay native, got %#v", sys)
 	}

@@ -26,20 +26,20 @@ const (
 	syscallSortKeyErrors
 )
 
-func renderSyscalls(snap *statsengine.Snapshot, width, height int) string {
-	return renderSyscallsWithSort(snap, width, height, 0, 0, tableSortState[syscallSortKey]{})
+func renderSyscalls(snap *statsengine.Snapshot, rows []statsengine.SyscallSnapshot, width, height int) string {
+	return renderSyscallsWithSort(snap, rows, width, height, 0, 0, tableSortState[syscallSortKey]{})
 }
 
-func renderSyscallsWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
-	return renderSyscallsWithSort(snap, width, height, offset, selectedCol, tableSortState[syscallSortKey]{})
-}
-
-func renderSyscallsWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[syscallSortKey]) string {
+// renderSyscallsWithSort renders the Syscalls table from the already
+// filter-scoped row set rowsData (see Model.visibleSyscallRows). snap is passed
+// only to distinguish the "waiting for stats" state (nil snapshot) from the
+// "no data" state (non-nil snapshot but empty rows after filtering).
+func renderSyscallsWithSort(snap *statsengine.Snapshot, rowsData []statsengine.SyscallSnapshot, width, height, offset, selectedCol int, sortState tableSortState[syscallSortKey]) string {
 	if snap == nil {
 		return "Syscalls: waiting for stats..."
 	}
 
-	rowsData := sortedSyscallSnapshots(snap.Syscalls(), sortState)
+	rowsData = sortedSyscallSnapshots(rowsData, sortState)
 	columns, rows := syscallTableData(rowsData, width)
 	if len(rows) == 0 {
 		return "Syscalls: no data"

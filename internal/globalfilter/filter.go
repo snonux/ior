@@ -169,6 +169,16 @@ func (f Filter) Matches(candidate Candidate) bool {
 	return true
 }
 
+// MatchesSyscallRow reports whether a syscall-table row with the given syscall
+// name and family satisfies ONLY the row-level string dimensions of the filter
+// (Syscall and Family). Trace-scope dimensions (pid/tid/fd/numeric/comm/file)
+// are intentionally ignored: in --testflames the synthetic processes are seeded
+// unfiltered, so applying those here would hide rows that should stay visible.
+// A nil/empty Syscall or Family filter matches everything for that dimension.
+func (f Filter) MatchesSyscallRow(name, family string) bool {
+	return matchString(f.Syscall, name) && matchString(f.Family, family)
+}
+
 func (f Filter) IsActive() bool {
 	if f.ErrorsOnly {
 		return true

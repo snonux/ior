@@ -196,10 +196,11 @@ func tabRenderOverview(_ *Model, snap *statsengine.Snapshot, _ *eventstream.Mode
 	return renderOverview(snap, width, height)
 }
 
-// tabRenderSyscalls adapts renderSyscalls to the tabRenderFn signature.
+// tabRenderSyscalls adapts renderSyscalls to the tabRenderFn signature, scoping
+// the rows to the active global filter via the shared visibleSyscallRows helper.
 // Sort-state rendering is handled by renderActiveContentTable before this path.
-func tabRenderSyscalls(_ *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
-	return renderSyscalls(snap, width, height)
+func tabRenderSyscalls(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
+	return renderSyscalls(snap, m.visibleSyscallRows(snap), width, height)
 }
 
 // tabRenderFiles adapts renderFiles to the tabRenderFn signature, choosing

@@ -108,6 +108,80 @@ func TestFilterFamilyMatchesAndExcludes(t *testing.T) {
 	}
 }
 
+func TestMatchesSyscallRow(t *testing.T) {
+	cases := []struct {
+		name    string
+		filter  Filter
+		syscall string
+		family  string
+		want    bool
+	}{
+		{
+			name:    "empty filter matches everything",
+			filter:  Filter{},
+			syscall: "epoll_wait",
+			family:  "Polling",
+			want:    true,
+		},
+		{
+			name:    "matches on family",
+			filter:  Filter{Family: &StringFilter{Pattern: "Polling"}},
+			syscall: "epoll_wait",
+			family:  "Polling",
+			want:    true,
+		},
+		{
+			name:    "excludes on non-matching family",
+			filter:  Filter{Family: &StringFilter{Pattern: "FS"}},
+			syscall: "epoll_wait",
+			family:  "Polling",
+			want:    false,
+		},
+		{
+			name:    "matches on syscall name",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}},
+			syscall: "write",
+			family:  "FS",
+			want:    true,
+		},
+		{
+			name:    "excludes on non-matching syscall name",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}},
+			syscall: "read",
+			family:  "FS",
+			want:    false,
+		},
+		{
+			name:    "both dimensions must match",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}, Family: &StringFilter{Pattern: "FS"}},
+			syscall: "write",
+			family:  "FS",
+			want:    true,
+		},
+		{
+			name:    "one dimension mismatch fails the AND",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}, Family: &StringFilter{Pattern: "Polling"}},
+			syscall: "write",
+			family:  "FS",
+			want:    false,
+		},
+		{
+			name:    "trace-scope dimensions are ignored",
+			filter:  Filter{PID: NewEqFilter(999), Comm: &StringFilter{Pattern: "nope"}},
+			syscall: "write",
+			family:  "FS",
+			want:    true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.filter.MatchesSyscallRow(tc.syscall, tc.family); got != tc.want {
+				t.Fatalf("MatchesSyscallRow(%q, %q) = %v, want %v", tc.syscall, tc.family, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFilterStringAnchorsSupportExactPrefixAndSuffix(t *testing.T) {
 	candidate := testCandidate()
 
