@@ -438,7 +438,34 @@ func (m Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
 }
 
 func (m Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
-	return sortedSyscallSnapshots(m.snapshotOrZero().Syscalls(), m.syscallsSort)
+	snap := m.snapshotOrZero()
+	return sortedSyscallSnapshots(m.visibleSyscallRows(&snap), m.syscallsSort)
+}
+
+// visibleSyscallRows returns the syscall rows of snap scoped to the active
+// global filter's row-level dimensions (Family and Syscall name). It is the
+// single source of truth shared by the Syscalls tab renderer, the
+// selection/sort/scroll paths, and the row-count/clamp logic, so that what is
+// displayed always matches what Enter/sort/scroll operate on. Only the Syscall
+// and Family string dimensions are applied (see Filter.MatchesSyscallRow);
+// trace-scope dimensions are deliberately left out so synthetic processes stay
+// visible in --testflames. When no Syscall/Family filter is active every row
+// passes through unchanged.
+func (m Model) visibleSyscallRows(snap *statsengine.Snapshot) []statsengine.SyscallSnapshot {
+	if snap == nil {
+		return nil
+	}
+	rows := snap.Syscalls()
+	if m.globalFilter.Syscall == nil && m.globalFilter.Family == nil {
+		return rows
+	}
+	filtered := make([]statsengine.SyscallSnapshot, 0, len(rows))
+	for _, row := range rows {
+		if m.globalFilter.MatchesSyscallRow(row.Name, string(row.TraceID.Family())) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
 }
 
 func (m Model) selectedSyscallName() string {
@@ -892,7 +919,8 @@ func (m *Model) clampTableColumns() {
 }
 
 func (m Model) maxSyscallsRows() int {
-	return m.snapshotOrZero().SyscallsCount()
+	snap := m.snapshotOrZero()
+	return len(m.visibleSyscallRows(&snap))
 }
 
 func (m Model) maxFilesRows() int {
@@ -1257,7 +1285,7 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 func (m Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
 	switch {
 	case m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap:
-		return renderSyscallsTreemap(m.latest, width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark), true
+		return renderSyscallsTreemap(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark), true
 	case m.activeTab == TabFiles && m.filesVizMode == tabVizModeTreemap && m.filesDirGrouped:
 		return renderFilesTreemap(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark), true
 	case m.activeTab == TabFiles && m.filesVizMode == tabVizModeIcicle && m.filesDirGrouped:
@@ -1284,7 +1312,7 @@ func (m Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
 func (m Model) renderActiveContentTable(width, activeHeight int) (string, bool) {
 	switch {
 	case m.activeTab == TabSyscalls && m.latest != nil:
-		return renderSyscallsWithSort(m.latest, width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort), true
+		return renderSyscallsWithSort(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort), true
 	case m.activeTab == TabFiles && m.latest != nil && m.filesVizMode == tabVizModeTable:
 		if m.filesDirGrouped {
 			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirOffset, m.filesDirCol, m.filesDirSort), true
@@ -1314,7 +1342,7 @@ func (m *Model) refreshBubbleData() bool {
 	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
 	m.setBubbleViewports(flameWidth, flameHeight)
 
-	syscallsAnimating := m.syscallsChart.SetData(syscallBubbleData(m.latest))
+	syscallsAnimating := m.syscallsChart.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest)))
 	filesAnimating := m.refreshFilesBubbleData()
 	processesAnimating := m.processesChart.SetData(processBubbleData(m.latest))
 

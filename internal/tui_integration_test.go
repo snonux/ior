@@ -1422,6 +1422,11 @@ func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 	// default count-descending order.
 	s.press(tea.KeyEnter)
 	s.waitFor("syscall~write")
+
+	// The Syscalls tab now render-scopes by the active syscall predicate: only
+	// the "write" row survives; the distinctive seeded "epoll_wait" row (which is
+	// present in the unfiltered table) is gone.
+	s.waitForAbsent("epoll_wait", "syscall~write", "write")
 }
 
 // TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter moves the column
@@ -1446,12 +1451,19 @@ func TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter(t *testing.T) {
 	s.press(tea.KeyEnter)
 	s.waitFor("family~FS")
 
+	// The Syscalls tab now render-scopes to the FS family: the FS "write" row
+	// stays while the Polling-family "epoll_wait" row drops out of the table.
+	s.waitForAbsent("epoll_wait", "family~FS", "write")
+
 	// F undoes the just-pushed filter, reverting to the initial pid=1 filter.
 	s.press('F')
 	s.waitFor("filter: pid=1")
 	if strings.Contains(s.screen(), "family~FS") {
 		t.Fatalf("expected family~FS filter to be undone, screen still shows it:\n%s", s.screen())
 	}
+	// With the family scope undone the full table returns, including the
+	// previously-hidden Polling row.
+	s.waitFor("epoll_wait")
 }
 
 // TestTUIIntegration_FamilyCycleHotkeys cycles the dashboard's syscall-family
@@ -1491,6 +1503,54 @@ func TestTUIIntegration_FamilyCycleHotkeys(t *testing.T) {
 		t.Fatalf("family cycle grew the filter stack: stack-label count %d -> %d\n%s",
 			stackBefore, got, s.screen())
 	}
+}
+
+// TestTUIIntegration_FamilyCycleScopesSyscallsTab verifies that the global
+// family cycle ([ / ]) actually render-scopes the Syscalls tab rows (not just
+// the status label). In --testflames the engine is seeded unfiltered, so this
+// exercises the user-side render scoping added on the Syscalls path.
+//
+// The dashboard family order is
+// Network, Memory, Signals, Sched, IPC, Time, Process, Security, FS, Polling,
+// AIO, Misc; "[" steps backward from the "all" state, so the first three "["
+// presses land on Misc, then AIO, then Polling. Of those only Polling has
+// seeded data (epoll_wait); Misc and AIO have none, so they scope to
+// "Syscalls: no data".
+func TestTUIIntegration_FamilyCycleScopesSyscallsTab(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root", "filter: pid=1")
+
+	// Go to the Syscalls tab; the unfiltered table shows both FS (write) and
+	// Polling (epoll_wait) rows.
+	s.typeStr("3")
+	s.waitFor("Syscall", "write", "epoll_wait")
+
+	// "[" backward from "all": Misc (no seeded data) -> "Syscalls: no data".
+	s.press('[')
+	s.waitFor("family~Misc", "Syscalls: no data")
+
+	// "[" again: AIO (no seeded data) -> still "Syscalls: no data".
+	s.press('[')
+	s.waitFor("family~AIO", "Syscalls: no data")
+
+	// "[" again: Polling -> only the epoll_wait row; the FS "write" row is gone.
+	s.press('[')
+	s.waitFor("family~Polling", "epoll_wait")
+	s.waitForAbsent("write", "family~Polling", "epoll_wait")
+
+	// "]" forward back to AIO (no data) -> "Syscalls: no data".
+	s.press(']')
+	s.waitFor("family~AIO", "Syscalls: no data")
+
+	// "]" to Misc (the last family, still no data).
+	s.press(']')
+	s.waitFor("family~Misc", "Syscalls: no data")
+
+	// "]" wraps off the last family back to the "all" state: the family
+	// predicate disappears and the full unfiltered table returns (both the FS
+	// "write" row and the Polling "epoll_wait" row).
+	s.press(']')
+	s.waitForAbsent("family~", "write", "epoll_wait")
 }
 
 // --- Files tab interactions (seeded table in --testflames) ------------------

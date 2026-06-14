@@ -42,11 +42,14 @@ type treemapCell struct {
 	bold      bool
 }
 
-func renderSyscallsTreemap(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
+// renderSyscallsTreemap renders the Syscalls treemap from the already
+// filter-scoped syscall rows (see Model.visibleSyscallRows). snap is passed only
+// to distinguish the "waiting for stats" (nil) state from the "no data" state.
+func renderSyscallsTreemap(snap *statsengine.Snapshot, rows []statsengine.SyscallSnapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
 		return "Syscalls treemap: waiting for stats..."
 	}
-	items := buildSyscallTreemapItems(snap, metric)
+	items := buildSyscallTreemapItems(rows, metric)
 	return renderTreemapPanel("Syscalls treemap", "Syscalls treemap: no data", items, width, height, metric, selected, isDark)
 }
 
@@ -104,11 +107,7 @@ func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, wid
 	return strings.Join(lines, "\n")
 }
 
-func buildSyscallTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
-	if snap == nil {
-		return nil
-	}
-	syscalls := snap.Syscalls()
+func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bubbleMetric) []syscallTreemapItem {
 	items := make([]syscallTreemapItem, 0, len(syscalls))
 	for _, syscall := range syscalls {
 		item := syscallTreemapItem{

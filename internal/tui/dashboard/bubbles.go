@@ -832,11 +832,10 @@ func bubbleValue(d bubbleDatum, metric bubbleMetric) uint64 {
 	}
 }
 
-func syscallBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
-	if snap == nil {
-		return nil
-	}
-	rows := snap.Syscalls()
+// syscallBubbleData builds bubble-chart data from the already filter-scoped
+// syscall rows (see Model.visibleSyscallRows) so the bubble view matches the
+// table view under an active family/syscall filter.
+func syscallBubbleData(rows []statsengine.SyscallSnapshot) []bubbleDatum {
 	data := make([]bubbleDatum, 0, len(rows))
 	for _, syscall := range rows {
 		detail := fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, formatDurationUintNs(syscall.LatencyP95Ns))
