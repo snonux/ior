@@ -12,9 +12,11 @@ import (
 
 // main is the entry point for the application. It checks if the OS is Linux,
 // parses command-line flags, and runs the internal logic of the application.
+// All error output goes to stderr so redirected stdout stays machine-readable
+// (e.g. -plain writes its CSV rows to stdout).
 func main() {
 	if runtime.GOOS != "linux" {
-		fmt.Println("Unsupported OS")
+		fmt.Fprintln(os.Stderr, "Unsupported OS")
 		os.Exit(2)
 	}
 
@@ -22,7 +24,7 @@ func main() {
 	// global singleton to read from after this point.
 	cfg, err := flags.Parse()
 	if err != nil {
-		fmt.Printf("Failed to parse flags: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to parse flags: %v\n", err)
 		os.Exit(2)
 	}
 
@@ -43,7 +45,7 @@ func main() {
 
 	// Run the internal logic of the application.
 	if err := internal.Run(cfg); err != nil {
-		fmt.Printf("Failed to run: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to run: %v\n", err)
 		os.Exit(2)
 	}
 }

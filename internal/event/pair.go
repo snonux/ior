@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"ior/internal/file"
 	"ior/internal/types"
@@ -116,25 +118,83 @@ func (e *Pair) Is(id types.TraceId) bool {
 	return e.EnterEv.GetTraceId() == id
 }
 
-const EventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,notice,file"
+// EventStreamHeader is the CSV header line printed once by -plain mode.
+// Each row rendered by Pair.String() carries exactly these columns, in this
+// order. This is the reduced plain-mode schema; the full per-event schema
+// (timestamp, bytes, requested_sleep_ns, ...) is available via the TUI stream
+// CSV export and the headless Parquet output.
+const EventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,file"
 
+// quoteCSVField quotes field for RFC 4180 CSV output, byte-identical to
+// encoding/csv.Writer for the default comma: quotes fields containing a comma,
+// double quote, carriage return, or line feed, fields whose first rune is a
+// Unicode space, and the literal `\.`; embedded double quotes are doubled.
+// Bytes are copied verbatim (not runes) so non-UTF-8 filenames round-trip
+// unchanged. Fields that need no quoting are returned unchanged so the hot
+// plain-mode path stays allocation-free for the common case.
+func quoteCSVField(field string) string {
+	if !csvFieldNeedsQuotes(field) {
+		return field
+	}
+	var sb strings.Builder
+	// Worst case doubles every byte plus two delimiters; Grow is a hint.
+	sb.Grow(2*len(field) + 2)
+	sb.WriteByte('"')
+	for i := 0; i < len(field); i++ {
+		if field[i] == '"' {
+			sb.WriteString(`""`)
+			continue
+		}
+		sb.WriteByte(field[i])
+	}
+	sb.WriteByte('"')
+	return sb.String()
+}
+
+// csvFieldNeedsQuotes mirrors encoding/csv.Writer.fieldNeedsQuotes for the
+// default comma so quoteCSVField stays byte-identical to the stdlib writer:
+// empty fields are never quoted, the Postgres `\.` terminator always is, and
+// fields containing the comma/quote/CR/LF bytes or starting with a Unicode
+// space must be quoted.
+func csvFieldNeedsQuotes(field string) bool {
+	if field == "" {
+		return false
+	}
+	if field == `\.` {
+		return true
+	}
+	for i := 0; i < len(field); i++ {
+		switch field[i] {
+		case '\n', '\r', '"', ',':
+			return true
+		}
+	}
+	r1, _ := utf8.DecodeRuneInString(field)
+	return unicode.IsSpace(r1)
+}
+
+// String renders the Pair as one CSV row matching EventStreamHeader: seven
+// columns (durationToPrevNs,durationNs,comm,pid.tid,name,ret,file). Free-text
+// columns (comm, name, file) are quoted per RFC 4180 so embedded commas —
+// e.g. the fd/flags decoration inside the file column — stay inside their
+// field and the row stays machine-parseable with any CSV reader. The ret
+// column is empty when no return value was captured.
 func (e *Pair) String() string {
 	var sb strings.Builder
 
-	_, _ = fmt.Fprintf(&sb, "%08d,%08d", e.DurationToPrev, e.Duration)
+	_, _ = fmt.Fprintf(&sb, "%08d,%08d,", e.DurationToPrev, e.Duration)
+
+	sb.WriteString(quoteCSVField(e.Comm))
 
 	sb.WriteString(",")
-	sb.WriteString(e.Comm)
-
-	sb.WriteString("@")
 	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetPid()), 10))
 	sb.WriteString(".")
 	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetTid()), 10))
 
 	sb.WriteString(",")
-	sb.WriteString(e.EnterEv.GetTraceId().Name())
+	sb.WriteString(quoteCSVField(e.EnterEv.GetTraceId().Name()))
 
-	sb.WriteString("=>")
+	sb.WriteString(",")
 	if retEv, ok := e.ExitEv.(*types.RetEvent); ok {
 		sb.WriteString(strconv.FormatInt(int64(retEv.Ret), 10))
 	}
@@ -143,7 +203,7 @@ func (e *Pair) String() string {
 	if e.File == nil {
 		sb.WriteString("N:file")
 	} else {
-		sb.WriteString(e.File.String())
+		sb.WriteString(quoteCSVField(e.File.String()))
 	}
 
 	return sb.String()

@@ -169,7 +169,7 @@ ior has three persistence flows; each solves a different problem.
 | TUI Parquet recording  | `R` from the dashboard                       | streaming Parquet of every row that passes your filter  |
 | Headless `.ior.zst`    | `sudo ./ior -flamegraph -name <name>`        | one aggregated native trace artifact (bandwidth-cheap)  |
 | Headless Parquet       | `sudo ./ior -parquet trace.parquet`          | streaming Parquet, full firehose, no TUI                |
-| Plain CSV              | `sudo ./ior -plain`                          | one CSV row per event on stdout                         |
+| Plain CSV              | `sudo ./ior -plain`                          | one CSV row per event on stdout (status lines on stderr) |
 
 ### TUI Parquet recording
 
@@ -185,7 +185,11 @@ For unattended captures or scripting, skip the TUI entirely. The demo runs all t
 
 ![Three headless flows in one tape](./assets/14-headless-modes.gif)
 
-`-flamegraph` writes one aggregated `.ior.zst` artifact at shutdown, ideal for `ior`'s native flamegraph and integration workflows. `-parquet` streams every row, so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe into anything.
+`-flamegraph` writes one aggregated `.ior.zst` artifact at shutdown, ideal for `ior`'s native flamegraph and integration workflows. `-parquet` streams every row, so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe into anything (human-facing status lines go to stderr, so the pipe stays clean).
+
+#### Plain CSV schema
+
+`-plain` prints the header `durationToPrevNs,durationNs,comm,pid.tid,name,ret,file` once, then one RFC 4180 CSV row per event. It is a reduced schema: there is no timestamp, byte count, or `requested_sleep_ns` column, and pid/tid share one dot-separated column. Fields that may contain commas (process names, file paths) are CSV-quoted, so parse the rows with any CSV reader rather than a naive comma split. For the full per-event schema (with `seq`, `time_ns`, `bytes`, `error`, `family`, `requested_sleep_ns`, ...) use the TUI stream CSV export (`e` in the dashboard, writes `ior-stream-<timestamp>.csv`) or headless Parquet instead.
 
 ## Regenerating the demo
 

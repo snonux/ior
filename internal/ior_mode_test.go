@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -39,6 +40,74 @@ func stubDeps() runnerDeps {
 		runTUI:               func(flags.Config, runtime.TraceStarter) error { return nil },
 		runTUITestFlames:     func(flags.Config, runtime.TraceStarter) error { return nil },
 		runTUITestLiveFlames: func(flags.Config, runtime.TraceStarter) error { return nil },
+	}
+}
+
+// captureStdoutStderr redirects the process-wide os.Stdout/os.Stderr into
+// pipes and returns the read ends. The returned restore func puts the real
+// streams back and closes the pipe write ends; it is idempotent and also
+// registered via t.Cleanup as a panic safety net, so callers may simply defer
+// it before draining the pipes.
+func captureStdoutStderr(t *testing.T) (stdout, stderr io.Reader, restore func()) {
+	t.Helper()
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = wOut, wErr
+	var once sync.Once
+	restore = func() {
+		once.Do(func() {
+			os.Stdout, os.Stderr = oldOut, oldErr
+			_ = wOut.Close()
+			_ = wErr.Close()
+		})
+	}
+	t.Cleanup(restore)
+	return rOut, rErr, restore
+}
+
+// TestPrintStartupBannerPlainModeRoutesBannerToStderr is the stdout-purity
+// guard for -plain mode: the ASCII banner is human-facing status output, so it
+// must never mix with the CSV rows on stdout.
+func TestPrintStartupBannerPlainModeRoutesBannerToStderr(t *testing.T) {
+	stdout, stderr, restore := captureStdoutStderr(t)
+	printStartupBanner(flags.Config{PlainMode: true})
+	restore()
+
+	var outBuf, errBuf bytes.Buffer
+	_, _ = io.Copy(&outBuf, stdout)
+	_, _ = io.Copy(&errBuf, stderr)
+
+	if outBuf.Len() != 0 {
+		t.Fatalf("plain mode wrote %d bytes to stdout, want 0: %q", outBuf.Len(), outBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "Next-Generation BPF I/O Syscall Tracer") {
+		t.Fatalf("banner not found on stderr, got %q", errBuf.String())
+	}
+}
+
+// TestPrintStartupBannerDefaultModeKeepsStdout verifies that modes with a TUI
+// (or file-based output) keep printing the banner to stdout as before.
+func TestPrintStartupBannerDefaultModeKeepsStdout(t *testing.T) {
+	stdout, stderr, restore := captureStdoutStderr(t)
+	printStartupBanner(flags.Config{})
+	restore()
+
+	var outBuf, errBuf bytes.Buffer
+	_, _ = io.Copy(&outBuf, stdout)
+	_, _ = io.Copy(&errBuf, stderr)
+
+	if errBuf.Len() != 0 {
+		t.Fatalf("default mode wrote %d bytes to stderr, want 0: %q", errBuf.Len(), errBuf.String())
+	}
+	if !strings.Contains(outBuf.String(), "Next-Generation BPF I/O Syscall Tracer") {
+		t.Fatalf("banner not found on stdout, got %q", outBuf.String())
 	}
 }
 

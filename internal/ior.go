@@ -53,8 +53,19 @@ type streamEventSink = runtime.EventSink
 // Run is the main entry point for the ior binary.
 // cfg must be provided by the caller; it should not be fetched from the global singleton here.
 func Run(cfg flags.Config) error {
-	flags.PrintVersion()
+	printStartupBanner(cfg)
 	return dispatchRun(cfg)
+}
+
+// printStartupBanner prints the ASCII startup banner. In -plain mode stdout
+// carries only CSV rows, so the banner (and all other human-facing output)
+// goes to stderr instead.
+func printStartupBanner(cfg flags.Config) {
+	if cfg.PlainMode {
+		flags.PrintVersionTo(os.Stderr)
+		return
+	}
+	flags.PrintVersion()
 }
 
 // dispatchRun delegates to the defaultRegistry, which validates all
@@ -399,11 +410,16 @@ func traceFilterFromConfig(cfg flags.Config) globalfilter.Filter {
 	return flags.BuildTraceFilter(cfg)
 }
 
+// newLogger returns the human-facing status logger used by headless trace
+// modes. verbose is true for every non-TUI mode (plain CSV, flamegraph,
+// headless Parquet); messages go to stderr so stdout stays reserved for
+// machine-readable output (CSV rows, or nothing for file-based modes). In TUI
+// mode the logger is silent.
 func newLogger(verbose bool) func(...any) {
 	if !verbose {
 		return func(...any) {}
 	}
-	return func(args ...any) { _, _ = fmt.Println(args...) }
+	return func(args ...any) { _, _ = fmt.Fprintln(os.Stderr, args...) }
 }
 
 func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(...any)) (context.Context, context.CancelFunc, func()) {
@@ -461,7 +477,9 @@ func startTraceShutdownWatcher(ctx context.Context, verbose bool, el *eventLoop,
 		defer close(done)
 		<-ctx.Done()
 		if verbose {
-			fmt.Println(el.stats())
+			// el.stats() already ends with a newline; write to stderr so the
+			// summary never mixes with machine-readable stdout data.
+			_, _ = fmt.Fprint(os.Stderr, el.stats())
 		}
 		profiling.stop(logln)
 	}()
