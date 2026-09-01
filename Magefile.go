@@ -25,27 +25,28 @@ import (
 )
 
 const (
-	clickhouseImage      = "clickhouse/clickhouse-server:latest"
-	binaryName           = "ior"
-	workloadBinaryName   = "ioworkload"
-	defaultLibbpfgoPath  = "../libbpfgo"
-	libbpfgoRequiredTag  = "v0.9.2-libbpf-1.5.1"
-	bpfSourcePath        = "internal/c/ior.bpf.c"
-	bpfObjectPath        = "internal/c/ior.bpf.o"
-	bpfOutputPath        = "ior.bpf.o"
-	workloadSourcePath   = "./cmd/ioworkload"
-	tracepointsCPath     = "internal/c/generated_tracepoints.c"
-	tracepointsResult    = "internal/c/generated_tracepoints_result.txt"
-	tracepointsResultNew = "internal/c/generated_tracepoints_result.txt.new"
-	tracepointsGoPath    = "internal/tracepoints/generated_tracepoints.go"
-	typesGoPath          = "internal/types/generated_types.go"
-	dockerBuildScript    = "scripts/build-with-docker.sh"
-	dockerBuildScriptEl8 = "scripts/build-with-docker-el8.sh"
-	typesHeaderPath      = "internal/c/types.h"
-	VMLINUXPath          = "internal/c/vmlinux.h"
-	benchProfilesDir     = "bench-profiles"
-	integrationParallel  = "INTEGRATION_PARALLEL"
-	integrationParallelE = "IOR_INTEGRATION_PARALLEL"
+	clickhouseImage           = "clickhouse/clickhouse-server:latest"
+	binaryName                = "ior"
+	workloadBinaryName        = "ioworkload"
+	integrationTestBinaryName = "integrationtests.test"
+	defaultLibbpfgoPath       = "../libbpfgo"
+	libbpfgoRequiredTag       = "v0.9.2-libbpf-1.5.1"
+	bpfSourcePath             = "internal/c/ior.bpf.c"
+	bpfObjectPath             = "internal/c/ior.bpf.o"
+	bpfOutputPath             = "ior.bpf.o"
+	workloadSourcePath        = "./cmd/ioworkload"
+	tracepointsCPath          = "internal/c/generated_tracepoints.c"
+	tracepointsResult         = "internal/c/generated_tracepoints_result.txt"
+	tracepointsResultNew      = "internal/c/generated_tracepoints_result.txt.new"
+	tracepointsGoPath         = "internal/tracepoints/generated_tracepoints.go"
+	typesGoPath               = "internal/types/generated_types.go"
+	dockerBuildScript         = "scripts/build-with-docker.sh"
+	dockerBuildScriptEl8      = "scripts/build-with-docker-el8.sh"
+	typesHeaderPath           = "internal/c/types.h"
+	VMLINUXPath               = "internal/c/vmlinux.h"
+	benchProfilesDir          = "bench-profiles"
+	integrationParallel       = "INTEGRATION_PARALLEL"
+	integrationParallelE      = "IOR_INTEGRATION_PARALLEL"
 )
 
 // Default builds the project.
@@ -363,12 +364,13 @@ func BenchCompare() error {
 }
 
 // Generate regenerates all generated files.
-// If the environment variable IOR_FORCE_GENERATE=1 is set,
+// If the environment variable IOR_FORCE_GENERATE is set to 1/yes/true,
 // the C tracepoint generation will be forced even when it would cause a diff.
+// Explicit falsey values (0/no/false) keep the diff-gated default; unknown
+// values are ignored with a warning.
 func Generate() error {
 	fmt.Println("Generating tracepoint and type artifacts...")
-	forceEnv := os.Getenv("IOR_FORCE_GENERATE")
-	force := strings.EqualFold(forceEnv, "1") || strings.EqualFold(forceEnv, "yes") || forceEnv != ""
+	force := forceGenerateFromEnv()
 	if force {
 		fmt.Println("Force generation enabled – ignoring diff checks.")
 		mg.SerialDeps(GenerateTracepointsCForce, GenerateTracepointsGo, GenerateTypesGo)
@@ -377,6 +379,24 @@ func Generate() error {
 	}
 	fmt.Println("Generation complete.")
 	return nil
+}
+
+// forceGenerateFromEnv parses IOR_FORCE_GENERATE strictly: only 1/yes/true
+// (case-insensitive) enable forcing. Any other value — including 0/no/false —
+// keeps the default diff-gated behavior, and unknown non-empty values print a
+// warning instead of silently forcing.
+func forceGenerateFromEnv() bool {
+	switch value := strings.ToLower(strings.TrimSpace(os.Getenv("IOR_FORCE_GENERATE"))); value {
+	case "":
+		return false
+	case "1", "yes", "true":
+		return true
+	case "0", "no", "false":
+		return false
+	default:
+		fmt.Printf("Warning: ignoring unknown IOR_FORCE_GENERATE value %q (use 1/yes/true to force).\n", value)
+		return false
+	}
 }
 
 // GenerateTracepointsC regenerates the tracepoint handlers in C.
@@ -471,6 +491,7 @@ func Install() error {
 }
 
 // Clean removes build artifacts.
+// internal/c/vmlinux.h is deliberately preserved (see cleanBPFArtifacts).
 func Clean() error {
 	if err := removeFilesByName(binaryName); err != nil {
 		return err
@@ -479,6 +500,9 @@ func Clean() error {
 		return err
 	}
 	if err := removeFilesByPath(bpfOutputPath); err != nil {
+		return err
+	}
+	if err := removeFilesByPath(integrationTestBinaryName); err != nil {
 		return err
 	}
 	if err := cleanBPFArtifacts(); err != nil {
@@ -534,25 +558,39 @@ func IntegrationTestSerial() error {
 }
 
 func compileIntegrationTestBinary(env map[string]string) error {
-	return sh.RunWithV(env, "go", "test", "-c", "./integrationtests/...", "-o", "integrationtests.test")
+	return sh.RunWithV(env, "go", "test", "-c", "./integrationtests/...", "-o", integrationTestBinaryName)
 }
 
+// runIntegrationTestBinary execs the compiled integration test binary. The
+// binary is compiled to the repo root so its absolute path matches the scoped
+// sudoers rule (/home/paul/git/ior/integrationtests.test), while the child
+// process runs with Dir=integrationtests as before. Output is wired through
+// to mage so failures are visible instead of an opaque exit status
+// (audit M12).
 func runIntegrationTestBinary(env map[string]string, args ...string) error {
+	binaryPath, err := filepath.Abs(integrationTestBinaryName)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", integrationTestBinaryName, err)
+	}
 	envList := make([]string, 0, len(env))
 	for k, v := range env {
 		envList = append(envList, k+"="+v)
 	}
 	slices.Sort(envList)
 
-	cmd := exec.Command("./integrationtests.test", args...)
+	cmd := exec.Command(binaryPath, args...)
 	cmd.Dir = "integrationtests"
 	cmd.Env = append(os.Environ(), envList...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if os.Geteuid() == 0 {
 		return cmd.Run()
 	}
-	sudoCmd := exec.Command("sudo", append([]string{"-n", "-E", "./integrationtests.test"}, args...)...)
+	sudoCmd := exec.Command("sudo", append([]string{"-n", "-E", binaryPath}, args...)...)
 	sudoCmd.Dir = "integrationtests"
 	sudoCmd.Env = cmd.Env
+	sudoCmd.Stdout = os.Stdout
+	sudoCmd.Stderr = os.Stderr
 	return sudoCmd.Run()
 }
 
@@ -699,7 +737,13 @@ func runFlameBenchToFile(outputFile string) error {
 }
 
 func cleanBPFArtifacts() error {
-	for _, pattern := range []string{"internal/c/*.o", VMLINUXPath} {
+	// internal/c/vmlinux.h is deliberately preserved: it is a gitignored build
+	// input recoverable only with root (ensureVMLINUX regenerates it via
+	// sudo bpftool). Deleting it in Clean/Mrproper would leave the tree
+	// unbuildable on hosts without the scoped sudoers rule (audit F6).
+	// The *.tmp-* glob also sweeps generate temp renders orphaned by a signal
+	// interrupt between render and the atomic rename.
+	for _, pattern := range []string{"internal/c/*.o", "internal/c/generated_tracepoints.c.tmp-*"} {
 		if err := removeFilesByGlob(pattern); err != nil {
 			return err
 		}
@@ -744,10 +788,78 @@ func generateTracepointsC(strict bool, toStdout bool) error {
 		return nil
 	}
 
-	if err := os.WriteFile(tracepointsCPath, []byte(output), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tracepointsCPath, err)
+	// Render to a temp file first and run the strict result gate BEFORE
+	// replacing the committed C file, so a failing generate (e.g. on a host
+	// whose kernel lacks newer tracepoints than the committed artifacts)
+	// leaves the working tree untouched (audit M11).
+	tmpCPath, err := writeTempRender(filepath.Dir(tracepointsCPath), filepath.Base(tracepointsCPath), output)
+	if err != nil {
+		return err
 	}
-	return writeTracepointsResult(output, strict)
+	defer func() {
+		_ = os.Remove(tmpCPath)
+		_ = os.Remove(tracepointsResultNew)
+	}()
+
+	if err := stageTracepointsResultGate(output, strict); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpCPath, tracepointsCPath); err != nil {
+		return fmt.Errorf("replace %s: %w", tracepointsCPath, err)
+	}
+	return adoptTracepointsResult()
+}
+
+// writeTempRender writes content to a 0644 temp file in dir whose name starts
+// with base, so the later rename lands atomically in the target directory.
+func writeTempRender(dir, base, content string) (string, error) {
+	tmp, err := os.CreateTemp(dir, base+".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp render: %w", err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("write temp render: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("close temp render: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("chmod temp render: %w", err)
+	}
+	return tmp.Name(), nil
+}
+
+// stageTracepointsResultGate renders the .new result transient and, in strict
+// mode, fails when it would change the committed result file. The caller's
+// cleanup removes the transients; nothing else is written.
+func stageTracepointsResultGate(output string, strict bool) error {
+	result := extractTracepointReasons(output)
+	if err := os.WriteFile(tracepointsResultNew, []byte(result), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tracepointsResultNew, err)
+	}
+	if _, err := os.Stat(tracepointsResult); errors.Is(err, os.ErrNotExist) {
+		return nil // bootstrap: no committed result to gate against yet
+	} else if err != nil {
+		return fmt.Errorf("stat %s: %w", tracepointsResult, err)
+	}
+	err := sh.RunV("diff", "-u", tracepointsResult, tracepointsResultNew)
+	if err == nil || !strict {
+		return nil
+	}
+	return err
+}
+
+// adoptTracepointsResult copies the staged .new result onto the committed
+// result file and removes the transient.
+func adoptTracepointsResult() error {
+	if err := sh.RunV("cp", tracepointsResultNew, tracepointsResult); err != nil {
+		return err
+	}
+	return os.Remove(tracepointsResultNew)
 }
 
 func goEnv() map[string]string {
@@ -877,24 +989,6 @@ func forwardEnv(env map[string]string, keys ...string) {
 			env[k] = v
 		}
 	}
-}
-
-func writeTracepointsResult(output string, strict bool) error {
-	result := extractTracepointReasons(output)
-	if err := os.WriteFile(tracepointsResultNew, []byte(result), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tracepointsResultNew, err)
-	}
-	if _, err := os.Stat(tracepointsResult); errors.Is(err, os.ErrNotExist) {
-		return sh.RunV("cp", tracepointsResultNew, tracepointsResult)
-	} else if err != nil {
-		return fmt.Errorf("stat %s: %w", tracepointsResult, err)
-	}
-	if err := sh.RunV("diff", "-u", tracepointsResult, tracepointsResultNew); err != nil {
-		if strict {
-			return err
-		}
-	}
-	return sh.RunV("cp", tracepointsResultNew, tracepointsResult)
 }
 
 func extractTracepointReasons(output string) string {
