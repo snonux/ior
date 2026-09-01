@@ -195,7 +195,21 @@ type tuiRuntime struct {
 	streamSeq   *streamrow.Sequencer
 	liveTrie    *flamegraph.LiveTrie
 	recorder    *parquet.Recorder
-	filterEpoch uint64
+	// filterEpochFn reads the live filter epoch from the TUI-owned runtime
+	// bindings at row-stamp time, so in-place filter swaps advance the epoch
+	// recorded in parquet rows without a trace restart. Nil (headless modes
+	// without TUI bindings) stamps epoch 0.
+	filterEpochFn func() uint64
+}
+
+// currentFilterEpoch returns the live filter epoch for parquet row stamping.
+// A nil provider (headless modes without TUI bindings, or wiring that never
+// captured one) reports epoch 0, matching the pre-provider behavior.
+func (rt *tuiRuntime) currentFilterEpoch() uint64 {
+	if rt.filterEpochFn == nil {
+		return 0
+	}
+	return rt.filterEpochFn()
 }
 
 // buildTUIRuntime constructs fresh trace-session components via RuntimeBuilder
@@ -242,7 +256,10 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 		rt.streamSeq = persistentSeq
 	}
 	rt.recorder = bindings.Recorder()
-	rt.filterEpoch = bindings.FilterEpoch()
+	// Capture the epoch provider, not the value: the TUI advances the epoch on
+	// every filter change (including in-place swaps that never re-wire the
+	// runtime), and recorded rows must stamp the epoch current at record time.
+	rt.filterEpochFn = bindings.FilterEpoch
 	// Expose the snapshot-read side to the dashboard; the accumulator (write
 	// side) is used only by the event-loop callback below.
 	bindings.SetDashboardSnapshotSource(rt.snapSource)
@@ -273,7 +290,7 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 			rt.accumulator.Ingest(ep)
 			rt.streamBuf.Push(row)
 			if rt.recorder != nil {
-				if err := rt.recorder.Record(row, rt.filterEpoch); err != nil {
+				if err := rt.recorder.Record(row, rt.currentFilterEpoch()); err != nil {
 					recorderWarningOnce.Do(func() {
 						if el.warningCb != nil {
 							el.warningCb(fmt.Sprintf("Parquet recorder failed: %v", err))
