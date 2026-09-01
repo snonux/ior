@@ -221,6 +221,9 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 			e.pairs.set(enterEv)
 		} else {
 			e.notifyWarning(fmt.Sprintf("No comm name for %v process probably already vanished?", enterEv))
+			// The event is dropped (no cached comm to match a comm filter
+			// against): return it to its pool per the EventLifecycle contract.
+			enterEv.Recycle()
 		}
 	}
 }
