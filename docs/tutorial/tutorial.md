@@ -58,7 +58,7 @@ The same picker can be re-opened later from the dashboard with `p`.
 
 ## Touring the dashboard tabs
 
-The dashboard has eight tabs, addressable by number key. The default landing tab is **Flamegraph**. `tab` / `shift+tab` step forward / back.
+The dashboard has seven tabs, addressable by number key. The default landing tab is **Flamegraph**. `tab` / `shift+tab` step forward / back.
 
 | Key | Tab               | What it shows                                                            |
 |-----|-------------------|--------------------------------------------------------------------------|
@@ -69,7 +69,6 @@ The dashboard has eight tabs, addressable by number key. The default landing tab
 | `5` | Processes (`Pro`) | Per-process / per-comm counters                                          |
 | `6` | Latency (`Lat`)   | Latency + inter-syscall gap histograms                                   |
 | `7` | Stream (`Str`)    | Live tail of individual traced events                                    |
-| `8` | Non-IO (`NIO`)    | Broad non-file syscall family counters                                   |
 
 ### 1 · Flamegraph (default landing tab)
 
@@ -85,7 +84,7 @@ Press `2`. The Overview tab is the at-a-glance view: a sparkline of recent event
 
 ### 3 · Syscalls
 
-Press `3`. A sortable table of every traced syscall (count, average latency, total bytes). `j` / `k` (or arrow keys) scroll the rows; `←` / `→` move the selected column; `s` sorts by the selected column using its default direction; `S` reverses.
+Press `3`. A sortable table of every traced syscall (family, count, average latency, total bytes). Each row carries a **Family** column that groups the syscall into a broad class (FS, Network, Memory, Polling, …). `j` / `k` (or arrow keys) scroll the rows; `←` / `→` move the selected column; `s` sorts by the selected column using its default direction; `S` reverses.
 
 ![Syscalls table with sort + reverse-sort](./assets/03-syscalls-tab.gif)
 
@@ -112,10 +111,6 @@ Press `6`. Two histograms: syscall **latency** (how long the syscall ran) and th
 Press `7`. A live tail of every traced event row: comm, PID, TID, syscall, file, FD, return value, bytes, latency, gap. This is the workhorse view; the next section explores it in depth.
 
 ![Stream tab live-tailing rows](./assets/07-stream-live.gif)
-
-### 8 · Non-IO
-
-Press `8`. This groups traced non-file syscall activity by broad family: network, memory, signals, scheduler, IPC, time, process, security, polling, AIO, and miscellaneous.
 
 ## Mastering the Stream tab
 
@@ -216,7 +211,7 @@ Tapes live in [`tapes/`](./tapes), the background workload that drives them is [
 | Key | Action |
 |-----|--------|
 | `tab` / `shift+tab` | next / previous tab |
-| `1`–`8` | jump to tab by number (1=Flame, 2=Overview, 3=Syscalls, 4=Files, 5=Processes, 6=Latency, 7=Stream, 8=Non-IO) |
+| `1`–`7` | jump to tab by number (1=Flame, 2=Overview, 3=Syscalls, 4=Files, 5=Processes, 6=Latency+Gaps, 7=Stream) |
 | `H` | toggle bottom help panel |
 | `e` | export filtered stream snapshot to CSV |
 | `R` | start / stop Parquet recording |

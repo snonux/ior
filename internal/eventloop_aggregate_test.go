@@ -428,9 +428,10 @@ func TestAggregateEndToEndFilterGateBlocksIngestion(t *testing.T) {
 	}
 }
 
-// TestAggregateEndToEndFamilyRowPopulated verifies that aggregate-only
-// ingestion also populates the per-family snapshot rows, not just per-syscall.
-func TestAggregateEndToEndFamilyRowPopulated(t *testing.T) {
+// TestAggregateEndToEndSyscallRowPopulated verifies that aggregate-only
+// ingestion via the drain loop populates the per-syscall snapshot rows for
+// the designated trace IDs.
+func TestAggregateEndToEndSyscallRowPopulated(t *testing.T) {
 	engine := statsengine.NewEngine(statsengine.DefaultTopN)
 	src := &aggregateSourceStub{
 		rows: [][]statsengine.SyscallAggregate{{
@@ -466,23 +467,14 @@ func TestAggregateEndToEndFamilyRowPopulated(t *testing.T) {
 		t.Fatalf("snapshot error: %v", err)
 	}
 
-	// Futex belongs to a syscall family; verify the family row is populated.
-	futexFamily := types.SYS_ENTER_FUTEX.Family()
-	var found bool
-	for _, fam := range snap.Families() {
-		if fam.Family == futexFamily {
-			found = true
-			if fam.Count != 6 {
-				t.Fatalf("family %s Count = %d, want 6", futexFamily, fam.Count)
-			}
-			if fam.TotalLatencyNs != 600 {
-				t.Fatalf("family %s TotalLatencyNs = %d, want 600", futexFamily, fam.TotalLatencyNs)
-			}
-			break
-		}
+	// Futex was drained as an aggregate; verify its per-syscall row is
+	// populated with the drained counts and latency totals.
+	futexRow := findSyscallSnapshot(t, snap.Syscalls(), types.SYS_ENTER_FUTEX)
+	if futexRow.Count != 6 {
+		t.Fatalf("futex Count = %d, want 6", futexRow.Count)
 	}
-	if !found {
-		t.Fatalf("expected family row for %s, got families: %+v", futexFamily, snap.Families())
+	if futexRow.TotalLatencyNs != 600 {
+		t.Fatalf("futex TotalLatencyNs = %d, want 600", futexRow.TotalLatencyNs)
 	}
 }
 
