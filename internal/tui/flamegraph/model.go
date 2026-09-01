@@ -531,7 +531,7 @@ func (m Model) renderViewContent() string {
 		content = replaceFooterLine(content, m.searchFooter())
 	}
 	if m.snapshot != nil && len(m.frames) == 0 {
-		content = common.PanelStyle.Render(fmt.Sprintf("Flame: snapshot v%d has no visible frames", m.lastVersion))
+		content = common.Current().PanelStyle.Render(fmt.Sprintf("Flame: snapshot v%d has no visible frames", m.lastVersion))
 	}
 	// Assemble the final output using a Builder to avoid repeated string copies
 	// for the optional help-overlay suffix.

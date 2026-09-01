@@ -19,11 +19,12 @@ func RenderTableHeader(columns []TableColumn) string {
 	for _, col := range columns {
 		cells = append(cells, renderTableCell(col.Title, col.Width))
 	}
-	return TableHeaderStyle.Render(strings.Join(cells, " "))
+	return Current().TableHeaderStyle.Render(strings.Join(cells, " "))
 }
 
 // RenderTableRow renders one shared TUI table row.
 func RenderTableRow(columns []TableColumn, cells []string, selected bool, selectedCol int, baseStyle lipgloss.Style) string {
+	theme := Current()
 	rendered := make([]string, 0, len(columns))
 	for idx, col := range columns {
 		value := ""
@@ -33,9 +34,9 @@ func RenderTableRow(columns []TableColumn, cells []string, selected bool, select
 		cell := renderTableCell(value, col.Width)
 		switch {
 		case selected && idx == selectedCol:
-			cell = TableSelectedCellStyle.Render(cell)
+			cell = theme.TableSelectedCellStyle.Render(cell)
 		case selected:
-			cell = TableSelectedRowStyle.Render(cell)
+			cell = theme.TableSelectedRowStyle.Render(cell)
 		}
 		rendered = append(rendered, cell)
 	}

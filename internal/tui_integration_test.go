@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,7 +165,12 @@ func tuiNewProbesModel(t *testing.T) *tuiSession {
 // TestTUIIntegration_ProbesModal_NavSearchToggleClose: the modal calls Toggle
 // then re-reads States(), so a real flip is observable as both the row's
 // checkbox marker and the "(N/M active)" title changing.
+//
+// Bubble Tea invokes Toggle from a command goroutine while the renderer reads
+// States/ActiveCount from the event-loop goroutine, so all access to states is
+// guarded by mu to keep the test double race-detector clean.
 type tuiStatefulProbeManager struct {
+	mu     sync.Mutex
 	states []probemanager.ProbeState
 }
 
@@ -180,6 +186,8 @@ func tuiNewStatefulProbeManager() *tuiStatefulProbeManager {
 }
 
 func (f *tuiStatefulProbeManager) States() []probemanager.ProbeState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]probemanager.ProbeState, len(f.states))
 	copy(out, f.states)
 	return out
@@ -188,6 +196,8 @@ func (f *tuiStatefulProbeManager) States() []probemanager.ProbeState {
 // Toggle flips the Active flag of the named probe, so a subsequent States()
 // read reflects the change in the modal.
 func (f *tuiStatefulProbeManager) Toggle(syscall string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i := range f.states {
 		if f.states[i].Syscall == syscall {
 			f.states[i].Active = !f.states[i].Active
@@ -198,6 +208,8 @@ func (f *tuiStatefulProbeManager) Toggle(syscall string) error {
 }
 
 func (f *tuiStatefulProbeManager) ActiveCount() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	active := 0
 	for _, s := range f.states {
 		if s.Active {
