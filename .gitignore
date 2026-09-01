@@ -20,3 +20,6 @@ perltidy.ERR
 /.cursor/
 REVIEW-COMMENTS.md
 /.serena/
+
+# mage generate temp renders (internal/c/, removed by defer; swept by clean)
+internal/c/generated_tracepoints.c.tmp-*

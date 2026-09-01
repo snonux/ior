@@ -60,7 +60,7 @@ Current behavior: when `os.Geteuid() != 0`, the function manufactures a `sudo en
 Two new helpers are introduced:
 
 - `compileIntegrationTestBinary(env)` – runs `go test -c ./integrationtests/...` with the required `CGO_*` environment.
-- `runIntegrationTestBinary(env, args…)` – elevates **only** the compiled binary via `sudo -n -E ./integrationtests.test …`, running it from the `integrationtests/` directory so that relative path resolution (`../ior`, `../ioworkload`) matches `go test` behaviour.
+- `runIntegrationTestBinary(env, args…)` – elevates **only** the compiled binary via `sudo -n -E /absolute/path/to/integrationtests.test …`, resolving the binary's absolute repo-root path so it matches the scoped sudoers rule, while running it from the `integrationtests/` directory so that relative path resolution (`../ior`, `../ioworkload`) matches `go test` behaviour.
 
 `IntegrationTest`, `IntegrationTestSerial`, and `testWithName` (when the target is an integration test) are updated to:
 
@@ -82,7 +82,7 @@ Two new helpers are introduced:
 
 | Before | After |
 |---|---|
-| `mage integrationTest` as non-root → auto `sudo env … go test …` | `mage integrationTest` as non-root → compiles as user, then `sudo -n -E ./integrationtests.test …` |
+| `mage integrationTest` as non-root → auto `sudo env … go test …` | `mage integrationTest` as non-root → compiles as user, then `sudo -n -E /abs/path/integrationtests.test …` |
 | Password prompt may appear mid-build | `sudo -n` fails fast if rule missing; no surprise prompts |
 | JSON progress ticker from `go test -json` | Dropped for integration-test path; plain `-test.v` style output is printed directly.  (The compiled test binary does not support the `go test` JSON protocol.) |
 | `mage testWithName TEST_NAME=TestAioSetup` | Same compiled-binary dance when target is an integration test |
@@ -105,4 +105,4 @@ Two new helpers are introduced:
 
 - **`mage demo`** is **not covered** by the granular rules.  The demo tapes run a helper script (`run-tape.sh`) that performs multiple privileged actions (`pkill`, launching `./ior`).  Running the demo still requires a broad `NOPASSWD` rule for that script, or running `mage demo` as root.
 - **`mage installDemoTools`** requires `dnf` access and remains outside the scope of automated test rules.
-- The compiled integration-test binary is invoked from the **repository root**.  Sudoers rules using a wildcard path (`…/ior/integrationtests.test`) assume the repository is checked out somewhere predictable (e.g., `/home/<user>/git/ior/`).  If the checkout lives in arbitrary locations, use a wrapper script at a fixed path.
+- The compiled integration-test binary is invoked by **absolute path** (resolved from the repository root), matching the scoped sudoers rule (`…/ior/integrationtests.test`).  Sudoers rules using an absolute path assume the repository is checked out somewhere predictable (e.g., `/home/<user>/git/ior/`).  If the checkout lives in arbitrary locations, use a wrapper script at a fixed path.
