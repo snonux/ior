@@ -485,6 +485,7 @@ func buildNormalStatus(selected tuiFrame, metricLabel string, globalTotal uint64
 // The function is split into helpers (computeRenderParams, buildToolbar,
 // buildFilteredStatus, buildNormalStatus) to keep each piece under 50 lines.
 func RenderTerminalView(ctx RenderContext) string {
+	theme := common.Current()
 	frames := ctx.Frames
 	width := ctx.Width
 	height := ctx.Height
@@ -499,13 +500,13 @@ func RenderTerminalView(ctx RenderContext) string {
 	searchQuery := ctx.SearchQuery
 
 	if width < minFlameWidth {
-		return common.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
+		return theme.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
 	}
 	if height < 3 {
-		return common.PanelStyle.Render("Flame: viewport too short")
+		return theme.PanelStyle.Render("Flame: viewport too short")
 	}
 	if len(frames) == 0 {
-		return common.PanelStyle.Render("Flame: waiting for data...")
+		return theme.PanelStyle.Render("Flame: waiting for data...")
 	}
 	if strings.TrimSpace(metricLabel) == "" {
 		metricLabel = "events"
@@ -516,7 +517,7 @@ func RenderTerminalView(ctx RenderContext) string {
 			filterSet = computeFilterVisibleSetInto(frames, matchSet, nil)
 		}
 		if len(filterSet) == 0 {
-			return common.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", searchQuery))
+			return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", searchQuery))
 		}
 	} else {
 		filterSet = nil
@@ -778,8 +779,9 @@ func computeFilterVisibleSetInto(frames []tuiFrame, matchSet, visible map[int]bo
 }
 
 func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) lipgloss.Style {
+	theme := common.Current()
 	base := lipgloss.NewStyle().
-		Foreground(common.ColorBackground).
+		Foreground(theme.Background).
 		Background(frame.Fill)
 
 	isSelected := idx == selectedIdx
@@ -807,12 +809,12 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 
 	if inSubtree {
 		if frameRelation(frame.Path, selectedPath) == relationAncestor {
-			return base.BorderLeft(true).BorderForeground(common.ColorAccent)
+			return base.BorderLeft(true).BorderForeground(theme.Accent)
 		}
 		return base
 	}
 
-	return base.Background(common.ColorPanel).Foreground(common.ColorMuted).Faint(true)
+	return base.Background(theme.Panel).Foreground(theme.Muted).Faint(true)
 }
 
 func frameLabel(name string, width int, isSelected, isMatch bool) string {

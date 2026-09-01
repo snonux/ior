@@ -115,9 +115,10 @@ func (m *Model) toggleHelp() {
 }
 
 func (m Model) toolbarLine() string {
-	state := lipgloss.NewStyle().Foreground(common.ColorPrimary).Render("[LIVE]")
+	theme := common.Current()
+	state := lipgloss.NewStyle().Foreground(theme.Primary).Render("[LIVE]")
 	if m.paused {
-		state = lipgloss.NewStyle().Foreground(common.ColorDanger).Bold(true).Render("[PAUSED]")
+		state = lipgloss.NewStyle().Foreground(theme.Danger).Bold(true).Render("[PAUSED]")
 	}
 	order := m.currentFieldPresetLabel()
 	// Use a Builder to avoid repeated allocations for the optional suffix segments.
@@ -149,7 +150,7 @@ func (m Model) helpOverlay() string {
 		width = 80
 	}
 	help := "Flame help: j/k depth  h/l sibling  pgup top  pgdn root  enter/click zoom  click ancestor undo  u/backspace/esc undo  / search  n/N matches  space pause  r reset baseline  o order  b metric  v height  ? help"
-	return common.HelpBarStyle.Width(width).Render(padOrTrim(help, width))
+	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 
 func (m Model) selectionStatusLine() string {
@@ -167,7 +168,7 @@ func (m Model) selectionStatusLine() string {
 	}
 	if len(m.frames) == 0 {
 		line := fmt.Sprintf("[%s] sel:none | arrows/hjkl navigate | enter zoom | / filter%s", mode, heightLabel)
-		return common.HelpBarStyle.Width(width).Render(padOrTrim(line, width))
+		return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(line, width))
 	}
 	selIdx := m.selectedIdx
 	if selIdx < 0 || selIdx >= len(m.frames) {
@@ -206,7 +207,7 @@ func (m Model) selectionStatusLine() string {
 		b.WriteString(" | filter:")
 		b.WriteString(m.searchQuery)
 	}
-	return common.HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
+	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
 }
 
 func (m Model) currentFieldPresetLabel() string {

@@ -64,6 +64,7 @@ func tabIndex(tab Tab, tabs []Tab) int {
 // plain renderer when the terminal is narrow, and further degrades to showing
 // only the active tab label when even the abbreviated labels do not fit.
 func renderTabBar(active Tab, width int) string {
+	theme := common.Current()
 	if width > 0 && width < 90 {
 		return renderTabBarPlain(active, width)
 	}
@@ -73,9 +74,9 @@ func renderTabBar(active Tab, width int) string {
 		for i, tab := range tabs {
 			label := fmt.Sprintf("%d:%s", i+1, tabLabel(tab, short))
 			if tab == active {
-				parts = append(parts, common.TabActiveStyle.Render(label))
+				parts = append(parts, theme.TabActiveStyle.Render(label))
 			} else {
-				parts = append(parts, common.TabInactiveStyle.Render(label))
+				parts = append(parts, theme.TabInactiveStyle.Render(label))
 			}
 		}
 		return lipgloss.JoinHorizontal(lipgloss.Left, parts...)
@@ -87,7 +88,7 @@ func renderTabBar(active Tab, width int) string {
 	}
 	if width > 0 && lipgloss.Width(bar) > width {
 		label := fmt.Sprintf("%d:%s", tabIndex(active, tabs)+1, tabLabel(active, false))
-		bar = common.TabActiveStyle.Render(label)
+		bar = theme.TabActiveStyle.Render(label)
 	}
 	if width <= 0 {
 		return bar
@@ -125,7 +126,7 @@ func renderHelpBarWithStatus(keys common.KeyMap, width int, status string) strin
 	if width > 0 && width < 90 {
 		return text
 	}
-	return common.HelpBarStyle.Width(width).Render(text)
+	return common.Current().HelpBarStyle.Width(width).Render(text)
 }
 
 func renderHelpHint(width int) string {
@@ -140,7 +141,7 @@ func renderHelpHintWithStatus(width int, status string) string {
 	if width > 0 && width < 90 {
 		return hint
 	}
-	return common.HelpBarStyle.Width(width).Render(hint)
+	return common.Current().HelpBarStyle.Width(width).Render(hint)
 }
 
 func appendStatusText(base, status string, width int) string {

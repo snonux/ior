@@ -1193,7 +1193,7 @@ func (m Model) View() tea.View {
 	} else {
 		b.WriteString(renderHelpHintWithStatus(width, m.filterSummary()))
 	}
-	return tea.NewView(common.ScreenStyle.Render(b.String()))
+	return tea.NewView(common.Current().ScreenStyle.Render(b.String()))
 }
 
 func (m Model) filterSummary() string {
@@ -1545,11 +1545,11 @@ func tickCmd(d time.Duration) tea.Cmd {
 func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height int) string {
 	d := lookupTab(tab)
 	if d.Render == nil {
-		return common.PanelStyle.Render("Unknown tab")
+		return common.Current().PanelStyle.Render("Unknown tab")
 	}
 	// Stream and flame manage their own "waiting" state; all others need a snapshot.
 	if tab != TabStream && tab != TabFlame && snap == nil {
-		return common.PanelStyle.Render(tab.String() + ": waiting for stats...")
+		return common.Current().PanelStyle.Render(tab.String() + ": waiting for stats...")
 	}
 	return d.Render(m, snap, streamModel, flameModel, width, height)
 }

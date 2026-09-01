@@ -401,7 +401,6 @@ func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarte
 
 func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
 	common.ApplyPalette(true)
-	syncStylesFromCommon()
 
 	keys := Keys
 	if !exportEnabled {
@@ -1156,7 +1155,6 @@ func (m *Model) applyTheme(isDark bool) {
 	}
 	m.isDark = isDark
 	common.ApplyPalette(isDark)
-	syncStylesFromCommon()
 	m.dashboard.SetDarkMode(isDark)
 	m.pidPicker = m.pidPicker.SetDarkMode(isDark)
 	m.probeModal = m.probeModal.SetDarkMode(isDark)
@@ -1187,11 +1185,13 @@ func (m Model) View() tea.View {
 
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(common.PanelStyle.Render(line))), title)
+		theme := common.Current()
+		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(theme.PanelStyle.Render(line))), title)
 	}
 
 	if m.lastErr != nil {
-		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))), title)
+		theme := common.Current()
+		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(theme.ErrorStyle.Render(m.lastErr.Error()))), title)
 	}
 	if m.helpOverlayVisible {
 		helpView := renderGlobalHelpOverlay(width, height, m.helpSections())

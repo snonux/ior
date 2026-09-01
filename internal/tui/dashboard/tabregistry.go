@@ -186,7 +186,7 @@ func tabAllowedVizModes(tab Tab, filesDirGrouped bool) []tabVizMode {
 // tabRenderFlame adapts the flame model's View to the tabRenderFn signature.
 func tabRenderFlame(_ *Model, _ *statsengine.Snapshot, _ *eventstream.Model, flame *flamegraphtui.Model, _, _ int) string {
 	if flame == nil {
-		return common.PanelStyle.Render("Flame: waiting for model...")
+		return common.Current().PanelStyle.Render("Flame: waiting for model...")
 	}
 	return flame.View().Content
 }
@@ -226,7 +226,7 @@ func tabRenderLatency(_ *Model, snap *statsengine.Snapshot, _ *eventstream.Model
 // tabRenderStream adapts the stream model's View to the tabRenderFn signature.
 func tabRenderStream(_ *Model, _ *statsengine.Snapshot, stream *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
 	if stream == nil {
-		return common.PanelStyle.Render("Stream: waiting for source...")
+		return common.Current().PanelStyle.Render("Stream: waiting for source...")
 	}
 	return stream.View(width, height)
 }
