@@ -19,9 +19,12 @@ const resolveCommTimeout = time.Second
 type commResolver struct {
 	comms map[uint32]string
 
-	mu      sync.RWMutex
-	pending map[uint32]struct{}
-	closed  bool
+	mu       sync.RWMutex
+	pending  map[uint32]struct{}
+	closed   bool
+	commAges map[uint32]uint64 // insertion/access order per TID, for comms LRU eviction
+	commAge  uint64            // monotonic counter for comms LRU ordering
+	maxComms int               // max cached comms before pruning; 0 = default
 
 	lookupQueue      chan uint32
 	lookupWorkers    int
@@ -40,8 +43,26 @@ func newCommResolver(comms map[uint32]string) *commResolver {
 		comms:   comms,
 		pending: make(map[uint32]struct{}),
 	}
+	r.ensureCommsAllocated()
 	r.ensureLookupConfig()
 	return r
+}
+
+// ensureCommsAllocated initializes the comms cache and its LRU age metadata
+// when absent. Safe both in constructors/lazy-init paths (before concurrent
+// use) and under r.mu from the mutation helpers. When age metadata is created
+// fresh for an injected pre-populated comms map, its entries are aged
+// oldest-first (0) so they evict before freshly touched entries.
+func (r *commResolver) ensureCommsAllocated() {
+	if r.comms == nil {
+		r.comms = make(map[uint32]string)
+	}
+	if r.commAges == nil {
+		r.commAges = make(map[uint32]uint64, len(r.comms))
+		for tid := range r.comms {
+			r.commAges[tid] = 0
+		}
+	}
 }
 
 func (r *commResolver) ensureLookupConfig() {
@@ -93,7 +114,7 @@ func (r *commResolver) lookupWorker() {
 		r.mu.Lock()
 		delete(r.pending, tid)
 		if comm != "" {
-			r.comms[tid] = comm
+			r.setCommLocked(tid, comm)
 		}
 		r.mu.Unlock()
 		r.notifyResolveFailure(tid, err)
@@ -138,9 +159,13 @@ func (r *commResolver) comm(tid uint32) string {
 }
 
 func (r *commResolver) cached(tid uint32) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	comm, ok := r.comms[tid]
+	if ok {
+		// Refresh the LRU age on use so active TIDs stay cached.
+		r.touchCommLocked(tid)
+	}
 	return comm, ok
 }
 
@@ -149,8 +174,47 @@ func (r *commResolver) setCached(tid uint32, comm string) {
 		return
 	}
 	r.mu.Lock()
-	r.comms[tid] = comm
+	r.setCommLocked(tid, comm)
 	r.mu.Unlock()
+}
+
+// setCommLocked stores comm for tid, refreshes its LRU age, and prunes the
+// cache when over the limit. Callers must hold r.mu.
+func (r *commResolver) setCommLocked(tid uint32, comm string) {
+	r.ensureCommsAllocated()
+	r.commAge++
+	r.comms[tid] = comm
+	r.commAges[tid] = r.commAge
+	r.pruneCommsLocked()
+}
+
+// touchCommLocked refreshes the LRU age of an existing comms entry. Callers
+// must hold r.mu and the entry must exist.
+func (r *commResolver) touchCommLocked(tid uint32) {
+	if r.commAges == nil {
+		r.commAges = make(map[uint32]uint64)
+	}
+	r.commAge++
+	r.commAges[tid] = r.commAge
+}
+
+// pruneCommsLocked evicts the oldest comms entries when over the limit, so
+// the per-TID comm cache stays bounded on thread-churning traces. Callers
+// must hold r.mu.
+func (r *commResolver) pruneCommsLocked() {
+	limit := r.commsLimit()
+	if len(r.comms) <= limit {
+		return
+	}
+	trimLRU(r.comms, r.commAges, trimTarget(limit), nil)
+}
+
+// commsLimit reports the maximum number of cached comms before pruning.
+func (r *commResolver) commsLimit() int {
+	if r.maxComms > 0 {
+		return r.maxComms
+	}
+	return defaultMaxPendingHandleEntries
 }
 
 func (r *commResolver) queueLookup(tid uint32) {
@@ -165,6 +229,8 @@ func (r *commResolver) queueLookup(tid uint32) {
 		return
 	}
 	if _, ok := r.comms[tid]; ok {
+		// Already resolved; refresh the LRU age so the active TID stays cached.
+		r.touchCommLocked(tid)
 		return
 	}
 	if r.pending == nil {

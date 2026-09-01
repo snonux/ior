@@ -142,9 +142,7 @@ func configuredCommResolver(injected *commResolver) *commResolver {
 	if injected == nil {
 		return newCommResolver(nil)
 	}
-	if injected.comms == nil {
-		injected.comms = make(map[uint32]string)
-	}
+	injected.ensureCommsAllocated()
 	if injected.pending == nil {
 		injected.pending = make(map[uint32]struct{})
 	}
@@ -183,9 +181,7 @@ func (e *eventLoop) commState() *commResolver {
 	if e.commResolver == nil {
 		e.commResolver = newCommResolver(nil)
 	}
-	if e.commResolver.comms == nil {
-		e.commResolver.comms = make(map[uint32]string)
-	}
+	e.commResolver.ensureCommsAllocated()
 	if e.commResolver.pending == nil {
 		e.commResolver.pending = make(map[uint32]struct{})
 	}

@@ -213,18 +213,20 @@ func (t *pendingHandleTracker) limit() int {
 // pairTracker holds the state for matching sys_enter events to their sys_exit
 // counterparts and computing inter-syscall durations per TID.
 type pairTracker struct {
-	enters    map[uint32]*event.Pair // pending enter events, keyed by TID
-	enterAges map[uint32]uint64      // insertion order per TID, for LRU eviction
-	prevTimes map[uint32]uint64      // previous pair's exit time per TID, for DurationToPrev
-	maxSize   int                    // max pending enter events before pruning; 0 = default
-	age       uint64                 // monotonic counter for LRU ordering
+	enters       map[uint32]*event.Pair // pending enter events, keyed by TID
+	enterAges    map[uint32]uint64      // insertion order per TID, for LRU eviction
+	prevTimes    map[uint32]uint64      // previous pair's exit time per TID, for DurationToPrev
+	prevTimeAges map[uint32]uint64      // insertion order per TID, for prevTimes LRU eviction
+	maxSize      int                    // max pending enter events before pruning; 0 = default
+	age          uint64                 // monotonic counter for LRU ordering
 }
 
 func newPairTracker() pairTracker {
 	return pairTracker{
-		enters:    make(map[uint32]*event.Pair),
-		enterAges: make(map[uint32]uint64),
-		prevTimes: make(map[uint32]uint64),
+		enters:       make(map[uint32]*event.Pair),
+		enterAges:    make(map[uint32]uint64),
+		prevTimes:    make(map[uint32]uint64),
+		prevTimeAges: make(map[uint32]uint64),
 	}
 }
 
@@ -237,6 +239,7 @@ func (p *pairTracker) set(enterEv event.Event) {
 		p.enters = make(map[uint32]*event.Pair)
 		p.enterAges = make(map[uint32]uint64)
 		p.prevTimes = make(map[uint32]uint64)
+		p.prevTimeAges = make(map[uint32]uint64)
 	}
 	tid := enterEv.GetTid()
 	pair := event.NewPair(enterEv)
@@ -266,12 +269,28 @@ func (p *pairTracker) prevTime(tid uint32) uint64 {
 	return p.prevTimes[tid]
 }
 
-// setPrevTime records the exit time of the most recent completed pair for tid.
+// setPrevTime records the exit time of the most recent completed pair for tid
+// and ages the entry for LRU eviction, so the map stays bounded on
+// thread-churning traces where TIDs are never reused.
 func (p *pairTracker) setPrevTime(tid uint32, t uint64) {
 	if p.prevTimes == nil {
 		p.prevTimes = make(map[uint32]uint64)
+		p.prevTimeAges = make(map[uint32]uint64)
 	}
+	p.age++
 	p.prevTimes[tid] = t
+	p.prevTimeAges[tid] = p.age
+	p.prunePrevTimes()
+}
+
+// prunePrevTimes evicts the oldest prevTimes entries when over the limit,
+// keeping the per-TID duration metadata bounded like the pending enters.
+func (p *pairTracker) prunePrevTimes() {
+	limit := p.limit()
+	if len(p.prevTimes) <= limit {
+		return
+	}
+	trimLRU(p.prevTimes, p.prevTimeAges, trimTarget(limit), nil)
 }
 
 func (p *pairTracker) prune() {
