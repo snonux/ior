@@ -73,10 +73,10 @@ Generator source code:
 - **Default mode** is TUI (`-plain` disables TUI and prints CSV rows to stdout).
 - **TUI trace flow** ingests events into the in-memory stats engine; it does **not** continuously write trace rows to disk.
 - **File output in TUI** is explicit export only (`e`), writing `ior-stream-<timestamp>.csv` in the current directory from the current filtered stream snapshot.
-- **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime.
+- **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime, including the Stream tab's x/X/E shortcuts and their hints.
 - **Tab navigation** supports `tab/shift+tab`, numeric keys `1..7`, and directional keys `left/right` and `h/l`.
 - **Family visibility**: the Syscalls tab shows a per-syscall Family column classified via `TraceId.Family()`; there is no dedicated Non-IO tab.
-- **When export is disabled**, export key hints are hidden from dashboard help and `e` does not open export modal.
+- **When export is disabled**, export key hints are hidden from dashboard help and `e` and the Stream tab's x/X/E shortcuts do not open the export modal or write CSV files.
 - **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to disable high-frequency refresh and fall back to the standard dashboard cadence.
 - **Sampling / aggregate-only mode**:
   - `-syscall-sampling-families` and `-syscall-sampling-syscalls` control per-family/per-syscall sampling (`0` = aggregate-only, `1` = all events, `N` = 1-in-N).

@@ -214,7 +214,7 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
 	fs.DurationVar(&cfg.TUIFastRefreshInterval, "tui-fast-refresh", cfg.TUIFastRefreshInterval,
 		"High-frequency refresh interval for TUI flamegraph and stream tabs (0 = disable high-frequency refresh)")
-	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI CSV snapshot export files (separate from Parquet recording)")
+	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI stream CSV export (e and stream-tab x/X/E shortcuts plus their hints; separate from Parquet recording)")
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
 	familySampling = fs.String("syscall-sampling-families", "",

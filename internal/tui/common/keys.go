@@ -104,8 +104,17 @@ func (k KeyMap) DashboardStatusHelp() []key.Binding {
 func (k KeyMap) DashboardStatusHelpSections() []HelpSection {
 	return []HelpSection{
 		{Title: "Global", Bindings: k.globalStatusBindings()},
-		{Title: "Dashboard", Bindings: dashboardStatusBindings(k)},
+		{Title: "Dashboard", Bindings: k.dashboardStatusBindings()},
 	}
+}
+
+// ExportEnabled reports whether the stream-export shortcuts (e/x/X/E) are
+// active. The top-level model blanks the Export binding when -tuiExport is
+// false, which both hides the binding and gates the stream export shortcuts
+// and their hints.
+func (k KeyMap) ExportEnabled() bool {
+	help := k.Export.Help()
+	return help.Key != "" || help.Desc != ""
 }
 
 // globalStatusBindings returns the global key bindings shown in the status bar,
@@ -121,7 +130,7 @@ func (k KeyMap) globalStatusBindings() []key.Binding {
 		k.SelectPID, k.SelectTID,
 		k.Probes, k.Record, k.Refresh, k.AutoReset, k.Quit,
 	}
-	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
+	if k.ExportEnabled() {
 		bindings = append(bindings, k.Export)
 	}
 	return bindings
@@ -129,8 +138,10 @@ func (k KeyMap) globalStatusBindings() []key.Binding {
 
 // dashboardStatusBindings returns the dashboard-specific bindings shown in
 // the status bar (table navigation, stream controls, and export shortcuts).
-func dashboardStatusBindings(k KeyMap) []key.Binding {
-	return []key.Binding{
+// The stream export shortcuts (x/X/E) are appended only when export is
+// enabled, so -tuiExport=false hides both the shortcuts and their behavior.
+func (k KeyMap) dashboardStatusBindings() []key.Binding {
+	bindings := []key.Binding{
 		k.DirGroup, k.Visualize, k.Metric, k.Sort, k.ReverseSort,
 		helpTextBinding("space", "stream pause"),
 		helpTextBinding("enter", "selected filter"),
@@ -144,41 +155,54 @@ func dashboardStatusBindings(k KeyMap) []key.Binding {
 		helpTextBinding("pgup/down", "table page"),
 		helpTextBinding("/,?", "stream regex search"),
 		helpTextBinding("n/N", "stream search next/prev"),
-		helpTextBinding("x", "stream export"),
-		helpTextBinding("X", "stream export as"),
-		helpTextBinding("E", "stream open last"),
 	}
+	if k.ExportEnabled() {
+		bindings = append(bindings,
+			helpTextBinding("x", "stream export"),
+			helpTextBinding("X", "stream export as"),
+			helpTextBinding("E", "stream open last"),
+		)
+	}
+	return bindings
 }
 
 // DashboardFullHelp returns grouped bindings for dashboard overlays.
 func (k KeyMap) DashboardFullHelp() [][]key.Binding {
 	controls := []key.Binding{k.Tab, k.ShiftTab}
-	if help := k.Export.Help(); help.Key != "" || help.Desc != "" {
+	if k.ExportEnabled() {
 		controls = append(controls, k.Export)
 	}
 	controls = append(controls, k.DirGroup, k.SelectPID, k.SelectTID, k.Probes, k.Record, k.Refresh, k.AutoReset, k.Quit)
 	controls = append(controls, k.Visualize, k.Metric, k.Sort, k.ReverseSort, k.Filter, k.FilterUndo, k.PrevFamily, k.NextFamily)
 
-	return [][]key.Binding{
-		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},
-		controls,
-		{
-			helpTextBinding("space", "stream pause"),
-			helpTextBinding("enter", "selected filter"),
-			helpTextBinding("esc", "stream undo filter"),
-			helpTextBinding("T", "stream fd-trace"),
-			helpTextBinding("g/G", "table top/bottom"),
-			helpTextBinding("left/right", "table col"),
-			helpTextBinding("h/l", "table col"),
-			helpTextBinding("j/k", "table row"),
-			helpTextBinding("up/down", "table row"),
-			helpTextBinding("pgup/down", "table page"),
+	streamGroup := []key.Binding{
+		helpTextBinding("space", "stream pause"),
+		helpTextBinding("enter", "selected filter"),
+		helpTextBinding("esc", "stream undo filter"),
+		helpTextBinding("T", "stream fd-trace"),
+		helpTextBinding("g/G", "table top/bottom"),
+		helpTextBinding("left/right", "table col"),
+		helpTextBinding("h/l", "table col"),
+		helpTextBinding("j/k", "table row"),
+		helpTextBinding("up/down", "table row"),
+		helpTextBinding("pgup/down", "table page"),
+	}
+	if k.ExportEnabled() {
+		streamGroup = append(streamGroup,
 			helpTextBinding("x", "stream export"),
 			helpTextBinding("X", "stream export as"),
 			helpTextBinding("E", "stream open last"),
-			helpTextBinding("/,?", "stream regex search"),
-			helpTextBinding("n/N", "stream search next/prev"),
-		},
+		)
+	}
+	streamGroup = append(streamGroup,
+		helpTextBinding("/,?", "stream regex search"),
+		helpTextBinding("n/N", "stream search next/prev"),
+	)
+
+	return [][]key.Binding{
+		{k.One, k.Two, k.Three, k.Four, k.Five, k.Six, k.Seven},
+		controls,
+		streamGroup,
 	}
 }
 
