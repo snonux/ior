@@ -539,6 +539,57 @@ func TestPausedQuickExportWritesFilteredRows(t *testing.T) {
 	}
 }
 
+// TestPausedQuickExportDisabledByExportFlag regresses audit finding M10: with
+// -tuiExport=false the paused-stream x shortcut must not write an export CSV,
+// must not open the export modal, and must fall through as unhandled.
+func TestPausedQuickExportDisabledByExportFlag(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "firefox", PID: 10, TID: 100, Syscall: "read", FileName: "/a"})
+
+	exportDir := t.TempDir()
+	m := NewModel(rb)
+	m.height = 20
+	m.SetExportEnabled(false)
+	m.setExportDirForTest(exportDir)
+	m.Refresh()
+	if !m.HandleKey("space") {
+		t.Fatalf("space should pause")
+	}
+
+	if m.HandleKey("x") {
+		t.Fatalf("x must fall through as unhandled when export is disabled")
+	}
+	if m.lastExportPath != "" {
+		t.Fatalf("expected no export path when export is disabled, got %q", m.lastExportPath)
+	}
+	if strings.Contains(m.statusMessage, "Export") {
+		t.Fatalf("expected no export status when export is disabled, got %q", m.statusMessage)
+	}
+	if m.exportModal.Visible() {
+		t.Fatalf("x must not open the export modal when export is disabled")
+	}
+	if m.HandleKey("X") {
+		t.Fatalf("X must fall through as unhandled when export is disabled")
+	}
+	if m.exportModal.Visible() {
+		t.Fatalf("X must not open the export modal when export is disabled")
+	}
+	if m.HandleKey("E") {
+		t.Fatalf("E must fall through as unhandled when export is disabled")
+	}
+	if strings.Contains(m.statusMessage, "editor") || strings.Contains(m.statusMessage, "No stream export") {
+		t.Fatalf("E must not set an open-in-editor status when export is disabled, got %q", m.statusMessage)
+	}
+
+	entries, err := os.ReadDir(exportDir)
+	if err != nil {
+		t.Fatalf("read export dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no exported files in export dir, got %d entries", len(entries))
+	}
+}
+
 func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})

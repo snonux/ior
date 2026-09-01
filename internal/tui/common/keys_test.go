@@ -1,6 +1,10 @@
 package common
 
-import "testing"
+import (
+	"testing"
+
+	"charm.land/bubbles/v2/key"
+)
 
 func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 	keys := DefaultKeyMap()
@@ -230,4 +234,69 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	if !foundReverseSort {
 		t.Fatalf("expected reverse sort binding in dashboard short help")
 	}
+}
+
+// TestExportDisabledHidesStreamExportHints regresses the -tuiExport=false
+// hint gating: with the Export binding blanked (what the top-level model does
+// when the flag is false), neither the dashboard status bar nor the dashboard
+// full help may advertise the stream export shortcuts (x/X/E).
+func TestExportDisabledHidesStreamExportHints(t *testing.T) {
+	blanked := DefaultKeyMap()
+	blanked.Export = key.NewBinding()
+	for _, tc := range []struct {
+		name  string
+		binds []key.Binding
+	}{
+		{"status help", blanked.DashboardStatusHelp()},
+		{"full help", flattenedHelpGroups(blanked.DashboardFullHelp())},
+	} {
+		for _, binding := range tc.binds {
+			help := binding.Help()
+			if help.Key == "e" && help.Desc == "stream export" {
+				t.Fatalf("%s: did not expect the e export binding when export is disabled", tc.name)
+			}
+			if desc := exportHintDescriptions[help.Desc]; desc {
+				t.Fatalf("%s: did not expect export hint %q when export is disabled", tc.name, help.Desc)
+			}
+		}
+	}
+
+	enabled := DefaultKeyMap()
+	for _, tc := range []struct {
+		name  string
+		binds []key.Binding
+	}{
+		{"status help", enabled.DashboardStatusHelp()},
+		{"full help", flattenedHelpGroups(enabled.DashboardFullHelp())},
+	} {
+		found := map[string]bool{}
+		for _, binding := range tc.binds {
+			help := binding.Help()
+			if exportHintDescriptions[help.Desc] {
+				found[help.Desc] = true
+			}
+		}
+		for desc := range exportHintDescriptions {
+			if !found[desc] {
+				t.Fatalf("%s: expected export hint %q when export is enabled", tc.name, desc)
+			}
+		}
+	}
+}
+
+// flattenedHelpGroups flattens grouped help bindings into one slice.
+func flattenedHelpGroups(groups [][]key.Binding) []key.Binding {
+	var out []key.Binding
+	for _, group := range groups {
+		out = append(out, group...)
+	}
+	return out
+}
+
+// exportHintDescriptions lists the stream export hint descriptions gated by
+// the -tuiExport flag (all must appear when export is enabled).
+var exportHintDescriptions = map[string]bool{
+	"stream export":    true,
+	"stream export as": true,
+	"stream open last": true,
 }

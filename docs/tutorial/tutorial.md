@@ -141,7 +141,7 @@ Four keys, four flavours:
 
 ![Press 'e', then ls the resulting CSV](./assets/10-stream-csv-export.gif)
 
-If you don't want CSV export at all, start ior with `-tuiExport=false`; the help footer hides the export keys and `e` becomes a no-op.
+If you don't want CSV export at all, start ior with `-tuiExport=false`; the help footer hides the export keys and `e` and the Stream tab's x/X/E shortcuts become no-ops.
 
 ## Choosing what to trace
 

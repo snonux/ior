@@ -161,6 +161,9 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 	// showHelp starts false; align the stream footer visibility so it matches
 	// from the first render without relying on View() to fix up the mismatch.
 	m.streamModel.SetFooterVisible(false)
+	// Gate the stream tab's x/X/E export shortcuts and hints from the shared
+	// key map: the top-level model blanks keys.Export when -tuiExport=false.
+	m.streamModel.SetExportEnabled(keys.ExportEnabled())
 	m.SetDarkMode(true)
 	return m
 }

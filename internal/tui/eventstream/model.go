@@ -43,6 +43,11 @@ type Model struct {
 
 	paused bool
 
+	// exportEnabled gates the x/X/E stream export shortcuts and their hints.
+	// It is wired from the shared key map's Export binding, which the top-level
+	// model blanks when -tuiExport=false.
+	exportEnabled bool
+
 	scrollOffset        int
 	autoScroll          bool
 	selectedIdx         int
@@ -80,19 +85,27 @@ type fdTraceViewState struct {
 
 func NewModel(source Source) Model {
 	m := Model{
-		source:      source,
-		exportModal: NewExportModal(),
-		searchModal: NewSearchModal(),
-		autoScroll:  true,
-		selectedIdx: -1,
-		selectedCol: 0,
-		exportDir:   ".",
-		showFooter:  true,
-		isDark:      true,
-		viewport:    newStreamViewport(),
+		source:        source,
+		exportModal:   NewExportModal(),
+		searchModal:   NewSearchModal(),
+		autoScroll:    true,
+		selectedIdx:   -1,
+		selectedCol:   0,
+		exportDir:     ".",
+		showFooter:    true,
+		isDark:        true,
+		viewport:      newStreamViewport(),
+		exportEnabled: true,
 	}
 	m.SetDarkMode(true)
 	return m
+}
+
+// SetExportEnabled gates the x/X/E stream export shortcuts and their hints.
+// It is wired from the shared key map's Export binding, which the top-level
+// model blanks when -tuiExport=false.
+func (m *Model) SetExportEnabled(enabled bool) {
+	m.exportEnabled = enabled
 }
 
 func newStreamViewport() viewport.Model {
@@ -262,7 +275,12 @@ func (m *Model) handleFDTraceKey(keyStr string) bool {
 }
 
 // handleStreamExportKey handles x/X/E export shortcuts while the stream is paused.
+// The shortcuts are inactive when export is disabled (-tuiExport=false): the
+// keys fall through so no export file is written and no modal opens.
 func (m *Model) handleStreamExportKey(keyStr string) (bool, bool) {
+	if !m.exportEnabled {
+		return false, false
+	}
 	switch keyStr {
 	case "x":
 		if !m.paused {

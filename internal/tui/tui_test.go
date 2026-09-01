@@ -2010,7 +2010,12 @@ func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
 	}
 }
 
-func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
+// TestExportDisabledHidesHintsAndShortcuts is the real gating test for
+// -tuiExport=false: the global help overlay and the dashboard status help
+// must not advertise any export shortcut, and the stream export modal must
+// stay closed (the vacuous predecessor asserted a hint-mode view that never
+// shows the binding in either configuration).
+func TestExportDisabledHidesHintsAndShortcuts(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.TUIExportEnable = false
 	m := NewModelWithConfig(cfg, -1, func(context.Context) error { return nil })
@@ -2018,9 +2023,30 @@ func TestStatusBarHidesExportBindingWhenExportDisabled(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	out := m.View().Content
-	if strings.Contains(out, "e stream export") {
-		t.Fatalf("did not expect export shortcut in status bar when export is disabled")
+	disabledOut := m.View().Content
+	if strings.Contains(disabledOut, "Exported:") {
+		t.Fatalf("did not expect export status when export is disabled")
+	}
+
+	// The enabled configuration must still advertise the shortcuts in the
+	// same surfaces, so the hiding is attributable to the flag.
+	enabled := NewModelWithConfig(flags.NewFlags(), -1, func(context.Context) error { return nil })
+	enabled.screen = ScreenDashboard
+	enabled.width = 100
+	enabled.height = 30
+	enabled.helpOverlayVisible = true
+	enabledOut := enabled.View().Content
+	if !strings.Contains(enabledOut, "stream: x/X export  E open") {
+		t.Fatalf("expected stream export hint in the help overlay when export is enabled")
+	}
+	if !strings.Contains(enabledOut, "e stream export") {
+		t.Fatalf("expected e stream export hint in the help overlay when export is enabled")
+	}
+	disabledOverlay := m
+	disabledOverlay.helpOverlayVisible = true
+	disabledOut = disabledOverlay.View().Content
+	if strings.Contains(disabledOut, "stream: x/X export") || strings.Contains(disabledOut, "e stream export") {
+		t.Fatalf("did not expect export hints in the help overlay when export is disabled")
 	}
 }
 
