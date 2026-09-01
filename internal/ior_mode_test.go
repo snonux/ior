@@ -956,6 +956,96 @@ func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 	}
 }
 
+// TestTuiTraceStarterInPlaceFilterSwapAdvancesRecordedEpoch regresses audit
+// finding M9: rows recorded after an in-place filter swap must carry the
+// bindings' live filter epoch, not the value frozen at trace wiring time.
+func TestTuiTraceStarterInPlaceFilterSwapAdvancesRecordedEpoch(t *testing.T) {
+	recorder := parquet.NewRecorder(parquet.RecorderConfig{
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+	})
+	if err := recorder.Start(filepath.Join(t.TempDir(), "trace"), parquet.StartOptions{
+		Metadata: parquet.FileMetadata{Mode: "tui"},
+	}); err != nil {
+		t.Fatalf("recorder.Start() error = %v", err)
+	}
+
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
+		recorder:     recorder,
+	}
+	base := flags.NewFlags()
+	base.GlobalFilter = globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "keep"}}
+
+	// release keeps the starter alive so the live filter setter stays
+	// registered while the test drives pairs through the print callback.
+	// Returning immediately would race against the trace starter's deferred
+	// SetLiveFilterSetter(nil) cleanup (see
+	// TestTuiTraceStarterAppliesLiveFilterSwapInPlace).
+	release := make(chan struct{})
+	captured := make(chan *eventLoop, 1)
+	starter := tuiTraceStarterFromRunTrace(
+		base,
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+			el := &eventLoop{}
+			configure(el)
+			captured <- el
+			close(started)
+			<-release
+			return nil
+		},
+	)
+
+	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
+	starterErr := make(chan error, 1)
+	go func() { starterErr <- starter(ctx) }()
+
+	el := <-captured
+
+	// Row while the initial filter (epoch 0) is active.
+	el.printCb(testTracePair(1, "keep"))
+	waitForStreamRows(t, bindings.streamBuffer, 1)
+
+	// In-place filter swap: the TUI advances the epoch and pushes the new
+	// filter into the running pipeline via the registered setter, without a
+	// trace restart or runtime re-wiring.
+	bindings.filterEpoch = 1
+	setter := bindings.currentLiveFilterSetter()
+	if setter == nil {
+		t.Fatalf("expected live filter setter to be registered")
+	}
+	setter(globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "keep2"}})
+
+	// Row recorded after the swap must carry the advanced epoch.
+	el.printCb(testTracePair(2, "keep2"))
+	waitForStreamRows(t, bindings.streamBuffer, 2)
+
+	close(release)
+	if err := <-starterErr; err != nil {
+		t.Fatalf("starter() error = %v", err)
+	}
+
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("recorder.Stop() error = %v", err)
+	}
+	status := recorder.Status()
+	if status.LastError != nil {
+		t.Fatalf("recorder status error = %v, want nil", status.LastError)
+	}
+
+	got := readRecordedParquet(t, status.Path)
+	if len(got) != 2 {
+		t.Fatalf("recorded rows = %d, want 2", len(got))
+	}
+	if got[0].Seq != 1 || got[1].Seq != 2 {
+		t.Fatalf("recorded seq = %d,%d, want 1,2", got[0].Seq, got[1].Seq)
+	}
+	if got[0].FilterEpoch != 0 || got[1].FilterEpoch != 1 {
+		t.Fatalf("recorded filter epochs = %d,%d, want 0,1 (in-place swap must advance the recorded epoch)", got[0].FilterEpoch, got[1].FilterEpoch)
+	}
+}
+
 func TestTuiTraceStarterSurfacesAggregateOnlySyscallInSnapshot(t *testing.T) {
 	bindings := &traceRuntimeBindingsStub{
 		streamBuffer: streamrow.NewRingBuffer(),
