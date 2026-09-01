@@ -38,18 +38,6 @@ func TestSeedTestStatsDataPopulatesSnapshot(t *testing.T) {
 	if got := len(snap.Processes()); got < 4 {
 		t.Fatalf("expected at least 4 process rows (one per comm), got %d", got)
 	}
-
-	// Non-FS syscalls should produce at least one non-FS family row.
-	var nonFS bool
-	for _, fam := range snap.Families() {
-		if fam.Name != "FS" {
-			nonFS = true
-			break
-		}
-	}
-	if !nonFS {
-		t.Fatalf("expected at least one non-FS family row for the Non-IO tab")
-	}
 }
 
 func TestSeedTestStatsDataNilEngineNoPanic(t *testing.T) {

@@ -53,7 +53,6 @@ type Snapshot struct {
 	throughputSeriesB []float64
 
 	syscalls  []SyscallSnapshot
-	families  []FamilySnapshot
 	files     []FileSnapshot
 	processes []ProcessSnapshot
 
@@ -78,22 +77,6 @@ type SyscallSnapshot struct {
 	LatencyP50Ns   uint64
 	LatencyP95Ns   uint64
 	LatencyP99Ns   uint64
-}
-
-// FamilySnapshot is an aggregated syscall-family row.
-type FamilySnapshot struct {
-	Family types.SyscallFamily
-	Name   string
-
-	Count      uint64
-	RatePerSec float64
-	Errors     uint64
-	Bytes      uint64
-
-	LatencyMinNs   uint64
-	LatencyMaxNs   uint64
-	LatencyMeanNs  float64
-	TotalLatencyNs uint64
 }
 
 // FileSnapshot is an aggregated per-file ranking entry.
@@ -148,31 +131,11 @@ func NewSnapshot(
 	latencyHistogram HistogramSnapshot,
 	gapHistogram HistogramSnapshot,
 ) Snapshot {
-	return NewSnapshotWithFamilies(
-		latencySeriesNs, gapSeriesNs, throughputSeriesB,
-		syscalls, nil, files, processes,
-		latencyHistogram, gapHistogram,
-	)
-}
-
-// NewSnapshotWithFamilies creates a snapshot including family aggregate rows.
-func NewSnapshotWithFamilies(
-	latencySeriesNs []float64,
-	gapSeriesNs []float64,
-	throughputSeriesB []float64,
-	syscalls []SyscallSnapshot,
-	families []FamilySnapshot,
-	files []FileSnapshot,
-	processes []ProcessSnapshot,
-	latencyHistogram HistogramSnapshot,
-	gapHistogram HistogramSnapshot,
-) Snapshot {
 	return Snapshot{
 		latencySeriesNs:   slices.Clone(latencySeriesNs),
 		gapSeriesNs:       slices.Clone(gapSeriesNs),
 		throughputSeriesB: slices.Clone(throughputSeriesB),
 		syscalls:          slices.Clone(syscalls),
-		families:          slices.Clone(families),
 		files:             slices.Clone(files),
 		processes:         slices.Clone(processes),
 		LatencyHistogram:  latencyHistogram.Clone(),
@@ -224,17 +187,6 @@ func (s Snapshot) Syscalls() []SyscallSnapshot {
 // SyscallsCount returns number of syscall rows without cloning backing slices.
 func (s Snapshot) SyscallsCount() int {
 	return len(s.syscalls)
-}
-
-// Families returns per-syscall-family snapshot rows.
-// Callers must treat returned data as read-only.
-func (s Snapshot) Families() []FamilySnapshot {
-	return s.families
-}
-
-// FamiliesCount returns number of syscall-family rows without cloning backing slices.
-func (s Snapshot) FamiliesCount() int {
-	return len(s.families)
 }
 
 // TopNSyscalls returns at most n per-syscall rows in ranking order.

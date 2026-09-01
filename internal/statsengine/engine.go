@@ -57,7 +57,6 @@ type Engine struct {
 	totalGap               uint64
 
 	syscalls         *syscallAccumulator
-	families         *familyAccumulator
 	files            *fileRanker
 	processes        *processAccumulator
 	latencyHist      *histogram
@@ -85,7 +84,6 @@ type snapshotInputs struct {
 	throughputSeries []float64
 
 	syscalls  []syscallSnapshotInput
-	families  []familySnapshotInput
 	files     []fileSnapshotInput
 	processes []processSnapshotInput
 
@@ -108,7 +106,6 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 		startedAt:        now(),
 		topN:             topN,
 		syscalls:         newSyscallAccumulator(),
-		families:         newFamilyAccumulator(),
 		files:            newFileRankerWithConfig(topN),
 		processes:        newProcessAccumulatorWithConfig(topN),
 		latencyHist:      newHistogram(),
@@ -138,7 +135,6 @@ func (e *Engine) Reset() {
 	e.totalLatency = 0
 	e.totalGap = 0
 	e.syscalls = newSyscallAccumulator()
-	e.families = newFamilyAccumulator()
 	e.files = newFileRankerWithConfig(e.topN)
 	e.processes = newProcessAccumulatorWithConfig(e.topN)
 	e.latencyHist = newHistogram()
@@ -166,7 +162,6 @@ func (e *Engine) Ingest(pair *event.Pair) {
 
 	e.updateErrorAndByteClasses(pair)
 	e.syscalls.Add(pair)
-	e.families.Add(pair)
 	e.files.Add(pair)
 	e.processes.Add(pair)
 	e.latencyHist.Increment(pair.Duration)
@@ -199,7 +194,6 @@ func (e *Engine) updateErrorAndByteClasses(pair *event.Pair) {
 // subSnapshots holds the concurrently built per-category snapshot slices.
 type subSnapshots struct {
 	syscalls    []SyscallSnapshot
-	families    []FamilySnapshot
 	files       []FileSnapshot
 	processes   []ProcessSnapshot
 	latencyHist HistogramSnapshot
@@ -227,7 +221,6 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		gapSeries:              e.gapSeries.Values(),
 		throughputSeries:       e.throughputSeries.Values(),
 		syscalls:               e.syscalls.snapshotInputs(),
-		families:               e.families.snapshotInputs(),
 		files:                  e.files.snapshotInputs(),
 		processes:              e.processes.snapshotInputs(),
 		latencyHist:            e.latencyHist.snapshotInputs(),
@@ -247,11 +240,6 @@ func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) (subSnapshots, 
 	eg.Go(func() error {
 		var err error
 		ss.syscalls, err = buildSyscallSnapshots(in.syscalls, elapsed)
-		return err
-	})
-	eg.Go(func() error {
-		var err error
-		ss.families, err = buildFamilySnapshots(in.families, elapsed)
 		return err
 	})
 	eg.Go(func() error {
@@ -322,9 +310,9 @@ func (e *Engine) Snapshot() (*Snapshot, error) {
 		return nil, err
 	}
 
-	snap := NewSnapshotWithFamilies(
+	snap := NewSnapshot(
 		in.latencySeries, in.gapSeries, in.throughputSeries,
-		ss.syscalls, ss.families, ss.files, ss.processes,
+		ss.syscalls, ss.files, ss.processes,
 		ss.latencyHist, ss.gapHist,
 	)
 	populateSnapshotFields(&snap, in, elapsed)

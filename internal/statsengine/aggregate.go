@@ -34,7 +34,6 @@ func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 		e.totalErrors += row.Errors
 		e.totalLatency += row.TotalLatencyNs
 		e.syscalls.AddAggregate(row)
-		e.families.AddAggregate(row)
 		e.latencyHist.AddBucketCounts(row.LatencyHistogramNs)
 
 		batchLatency += row.TotalLatencyNs

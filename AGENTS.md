@@ -65,7 +65,7 @@ Generator source code:
 - **Core packages**: `/internal/event/` (BPF event handling), `/internal/flamegraph/` (FlameGraph generation), `/internal/c/` (BPF programs)  
 - **Output**: TUI dashboard and TUI flamegraphs (no embedded web flamegraph server mode)
 - **TUI package**: `/internal/tui/` contains top-level Bubble Tea orchestration (`tui.go`), shared key map (`keys.go`), and styles (`styles.go`).
-- **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream/non-io) and tab framework model.
+- **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
 
 ## TUI Behavior
@@ -74,8 +74,8 @@ Generator source code:
 - **TUI trace flow** ingests events into the in-memory stats engine; it does **not** continuously write trace rows to disk.
 - **File output in TUI** is explicit export only (`e`), writing `ior-stream-<timestamp>.csv` in the current directory from the current filtered stream snapshot.
 - **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime.
-- **Tab navigation** supports `tab/shift+tab`, numeric keys `1..8`, and directional keys `left/right` and `h/l`.
-- **Non-IO visibility**: dashboard includes a dedicated `Non-IO` tab backed by per-family aggregate rows (`Snapshot.Families`); Non-IO filtering is applied in `internal/tui/dashboard`.
+- **Tab navigation** supports `tab/shift+tab`, numeric keys `1..7`, and directional keys `left/right` and `h/l`.
+- **Family visibility**: the Syscalls tab shows a per-syscall Family column classified via `TraceId.Family()`; there is no dedicated Non-IO tab.
 - **When export is disabled**, export key hints are hidden from dashboard help and `e` does not open export modal.
 - **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to disable high-frequency refresh and fall back to the standard dashboard cadence.
 - **Sampling / aggregate-only mode**:
