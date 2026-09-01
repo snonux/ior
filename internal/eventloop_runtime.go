@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"time"
 
@@ -11,6 +12,13 @@ import (
 	"ior/internal/types"
 )
 
+// logStatus prints a human-facing status line to stderr. All event-loop
+// lifecycle messages live on stderr so stdout carries only machine-readable
+// output (the CSV header and rows in -plain mode).
+func logStatus(args ...any) {
+	_, _ = fmt.Fprintln(os.Stderr, args...)
+}
+
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 	defer e.shutdownCommResolver()
@@ -18,7 +26,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer stopAggregateLoop()
 
 	if e.cfg.pprofEnable {
-		fmt.Println("Profiling, press Ctrl+C to stop")
+		logStatus("Profiling, press Ctrl+C to stop")
 	}
 	if e.cfg.plainMode && !e.cfg.pprofEnable {
 		fmt.Println(event.EventStreamHeader)
@@ -76,7 +84,7 @@ func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
 			e.processRawEvent(raw, pairs)
 			e.drainPairs(pairs)
 		case <-ctx.Done():
-			fmt.Println("Stopping event loop")
+			logStatus("Stopping event loop")
 			return
 		}
 	}
@@ -115,7 +123,7 @@ func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *eve
 				// bad event cannot crash the entire process.
 				e.processRawEventSafe(raw, ch)
 			case <-ctx.Done():
-				fmt.Println("Stopping event loop")
+				logStatus("Stopping event loop")
 				return
 			}
 		}

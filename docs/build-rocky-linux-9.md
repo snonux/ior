@@ -89,8 +89,8 @@ mage all
 sudo ./ior -plain -duration 5
 ```
 
-If `./ior -plain -duration 5` prints `Probing for 5s` and a stream of CSV rows,
-the install is good.
+If `sudo ./ior -plain -duration 5` writes status lines such as `Probing for 5s`
+to stderr and a stream of CSV rows to stdout, the install is good.
 
 ## libbpfgo toolchain
 

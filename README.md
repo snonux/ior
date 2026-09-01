@@ -111,6 +111,22 @@ Discover valid values with:
 ./ior --help
 ```
 
+## Plain CSV Output
+
+`-plain` skips the TUI and writes one CSV row per event to stdout (status
+messages go to stderr), so the output can be piped straight into other tools:
+
+```shell
+sudo ./ior -plain -duration 5 > events.csv
+```
+
+The schema is intentionally reduced — a header of
+`durationToPrevNs,durationNs,comm,pid.tid,name,ret,file` followed by RFC 4180
+rows (fields that may contain commas, such as file paths, are CSV-quoted). It
+carries no timestamp, byte count, or sleep duration. For the full per-event
+schema use the TUI stream CSV export (press `e` in the dashboard) or headless
+Parquet (`-parquet`).
+
 ## Bytes Classification
 
 Bytes accounting is syscall-specific:
