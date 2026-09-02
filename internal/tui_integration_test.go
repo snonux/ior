@@ -1892,6 +1892,39 @@ func TestTUIIntegration_Global_ResetClearsCounts(t *testing.T) {
 	s.waitFor("Syscall", "epoll_wait", tuiChrome)
 }
 
+// TestTUIIntegration_Global_ResetKeepsStreamRows locks the documented stream
+// retention decision (audit domain-03 F3, recorded on resetBaselineCmd): the
+// stream ring buffer is a chronological event log, not an aggregate, so its
+// rows survive baseline resets and are only cleared when a new PID/TID
+// selection starts a fresh trace. Pressing "r" on the Stream tab must reset
+// the stats/flame baseline while leaving the rendered stream rows intact.
+func TestTUIIntegration_Global_ResetKeepsStreamRows(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.typeStr("7")
+	s.waitFor("buffer:")
+	// Clear the model's pid=1 startup filter so the seeded rows render
+	// (all seeded rows carry pids 2001-2004).
+	s.typeStr("f")
+	s.waitFor("j/k move")
+	s.typeStr("c")
+	s.press(tea.KeyEsc)
+	s.waitFor("buffer:", "Filter: all", "batch", "/srv")
+
+	// "r" fires the global baseline reset while the stream tab is visible.
+	// The seeded stream rows must survive it. To make sure the assertion
+	// observes a genuinely post-reset frame (and not a stale pre-reset
+	// render still buffered by the cursed renderer), round-trip through
+	// another tab first: any frame shown for the later "7" keypress is
+	// provably after "r" was processed, because the message queue is FIFO.
+	s.press('r')
+	s.typeStr("3")
+	s.waitFor("Syscall")
+	s.typeStr("7")
+	s.waitFor("buffer:", "Filter: all", "batch", "/srv")
+}
+
 // TestTUIIntegration_Global_AutoResetCycleShowsInterval presses "I" once and
 // asserts the auto-reset cadence advances in the dashboard status line. The
 // seeded default is 30s, so the baseline status shows "auto-reset: .../30s";
