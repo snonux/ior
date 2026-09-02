@@ -110,8 +110,8 @@ func NewFlags() Config {
 		LiveInterval:               200 * time.Millisecond,
 		TUIFastRefreshInterval:     250 * time.Millisecond,
 		TUIExportEnable:            true,
-		CollapsedFields:            []string{"comm", "tracepoint", "path"},
-		CountField:                 "count",
+		CollapsedFields:            collapse.DefaultFields(),
+		CountField:                 collapse.DefaultCountField(),
 		ResetTimer:                 DefaultResetTimer,
 		SyscallFamilySamplingRates: make(map[types.SyscallFamily]uint32),
 		SyscallSamplingRates:       make(map[string]uint32),
@@ -248,7 +248,7 @@ func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string, 
 	// re-evaluated on newer kernels and do not require CO-RE-based exclusions.
 	// If future kernels regress, add targeted exclusions here.
 	if *fields == "" {
-		cfg.CollapsedFields = []string{"comm", "tracepoint", "path"}
+		cfg.CollapsedFields = collapse.DefaultFields()
 	} else {
 		cfg.CollapsedFields = strings.Split(*fields, ",")
 	}

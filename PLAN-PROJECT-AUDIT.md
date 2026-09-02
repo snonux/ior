@@ -29,12 +29,12 @@ At its core, `ior` attaches eBPF tracepoint probes to the kernel's syscall entry
 - Support an **export modal** (`e` key) to write the current stream snapshot to a CSV file.
 
 ### 3. Generate Offline FlameGraphs
-- Aggregate traced events into collapsed stack formats and write compressed `.ior.zst` files for offline FlameGraph generation.
+- Aggregate traced events into a compressed gob record map (`.ior.zst`, one zstd frame wrapping a gob-encoded record map) and derive flamegraph.pl-ready collapsed stacks from recordings via `ior collapsed <file>.ior.zst`.
 - Maintain a **live trie** data structure that continuously accumulates stack samples for real-time flamegraph rendering.
 
 ### 4. Support Headless / Automated Modes
 - **`-plain`** — disables the TUI and emits raw CSV rows to `stdout`.
-- **`-flamegraph`** — writes aggregated `.ior.zst` output directly, suitable for later `flamegraph.pl` rendering.
+- **`-flamegraph`** — writes an aggregated `.ior.zst` recording (gob record map in a zstd frame); `ior collapsed <file>.ior.zst` derives flamegraph.pl-ready collapsed stacks from it.
 - **`-parquet <path>`** — writes every traced syscall row to an Apache Parquet file for downstream analytics.
 - All headless modes can be constrained by duration (`-duration`) and filters.
 
@@ -185,9 +185,9 @@ This section defines a structured audit plan an independent auditor should execu
 - [ ] Run `mage test` and confirm all `livetrie_test.go` assertions pass.
 
 ### 4.2 Offline Recorder (.ior.zst)
-- [ ] Review `internal/flamegraph/recorder.go` to confirm that `AddPair()` and `Write()` produce valid collapsed-stack lines.
-- [ ] Trace a known workload (e.g., `docs/tutorial/scripts/workload.sh`), write `.ior.zst`, and decompress with `zstdcat`.
-- [ ] Feed the decompressed output into `flamegraph.pl` and confirm it renders a valid SVG with recognizable stack frames.
+- [ ] Review `internal/flamegraph/recorder.go` to confirm that `AddPair()` aggregates event pairs into the record map and `Write()` serializes it as a gob-in-zstd `.ior.zst` recording (not collapsed-stack text).
+- [ ] Trace a known workload (e.g., `docs/tutorial/scripts/workload.sh`), write `.ior.zst`, and read it back with `flamegraph.LoadFromFile` (or the `ior collapsed` subcommand).
+- [ ] Run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg` and confirm it renders a valid SVG with recognizable stack frames.
 - [ ] Verify that counts and weights in the `.ior.zst` file match the total event count observed in the TUI for the same trace duration.
 
 ### 4.3 Parquet Output
@@ -321,7 +321,7 @@ This section defines a structured audit plan an independent auditor should execu
 ### 8.2 Headless Flamegraph Journey
 1. `sudo ./ior -flamegraph -duration 10 -name mytrace`
 2. Confirm `<hostname>-mytrace-<YYYY-MM-DD_HH:MM:SS>.ior.zst` is created in the current directory (filename pattern is `<hostname>-<flamegraphName>-<timestamp>.ior.zst`; see `internal/flamegraph/iordata.go`).
-3. Decompress with `zstdcat` and feed into `flamegraph.pl`; confirm it renders a valid SVG with recognizable stack frames.
+3. Run `ior collapsed <hostname>-mytrace-<...>.ior.zst | flamegraph.pl > flame.svg` and confirm it renders a valid SVG with recognizable stack frames (the `.ior.zst` payload itself is a gob record map, not collapsed text).
 4. Confirm total event count in the file matches TUI count for the same workload.
 
 ### 8.3 Parquet Journey

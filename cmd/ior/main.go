@@ -20,6 +20,17 @@ func main() {
 		os.Exit(2)
 	}
 
+	// `ior collapsed <file.ior.zst>` derives flamegraph.pl-ready collapsed
+	// stacks from a recording. It is dispatched before global flag parsing so
+	// the main flag surface stays untouched.
+	if len(os.Args) > 1 && os.Args[1] == "collapsed" {
+		if err := internal.RunCollapsedConverter(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "collapsed: %v\n", err)
+			os.Exit(2)
+		}
+		return
+	}
+
 	// Parse command-line flags; Parse returns the Config directly so there is no
 	// global singleton to read from after this point.
 	cfg, err := flags.Parse()

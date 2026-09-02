@@ -180,7 +180,7 @@ For unattended captures or scripting, skip the TUI entirely. The demo runs all t
 
 ![Three headless flows in one tape](./assets/14-headless-modes.gif)
 
-`-flamegraph` writes one aggregated `.ior.zst` artifact at shutdown, ideal for `ior`'s native flamegraph and integration workflows. `-parquet` streams every row, so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe into anything (human-facing status lines go to stderr, so the pipe stays clean).
+`-flamegraph` writes one aggregated `.ior.zst` artifact at shutdown, ideal for `ior`'s native flamegraph and integration workflows. To render a recording with external FlameGraph tooling, derive collapsed stacks from it: `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`. `-parquet` streams every row, so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe into anything (human-facing status lines go to stderr, so the pipe stays clean).
 
 #### Plain CSV schema
 
