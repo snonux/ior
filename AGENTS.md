@@ -59,6 +59,33 @@ Generated files (do not edit manually):
 Generator source code:
 - `internal/generate/` - Parser, classifier, and code generation logic
 
+### Generation host / kernel
+
+The generator reads the *running* kernel's `/sys/kernel/tracing` tracepoint
+tree, so the committed artifacts are pinned to the kernel they were generated
+on. That kernel is substantially newer than RHEL/Rocky 9's `5.14` — the
+committed set contains syscalls that only exist on recent mainline kernels
+(`mseal`, `statmount`/`listmount`, `getxattrat`/`setxattrat`/`listxattrat`/
+`removexattrat`, `lsm_get_self_attr`/`lsm_list_modules`, `open_tree_attr`,
+`file_getattr`, …). Consequences:
+
+- Regeneration is byte-deterministic **for a fixed kernel** (ordering is forced
+  by `LC_ALL=C find | sort`), but running `mage generate` on an older kernel
+  produces a large *deletion* diff, not a reproducibility bug. Do not commit
+  such a diff: regenerate on a host at least as new as the generation kernel.
+- `mage generate` is diff-gated for exactly this reason: it renders to a temp
+  file, diffs the derived `internal/c/generated_tracepoints_result.txt` against
+  the committed one, and aborts on *any* difference without touching the
+  working tree (`GenerateTracepointsCForce` bypasses the gate).
+- `buildDocker`/`buildDockerEl8` run `IOR_FORCE_GENERATE=1 mage generate` **by
+  design**: the container regenerates against its own build kernel, and the
+  resulting artifacts are throwaway build inputs, never committed back.
+- `IOR_FORCE_GENERATE` is parsed strictly: only `1`/`yes`/`true` force;
+  `0`/`no`/`false` keep the diff gate; unknown values warn and do not force.
+- Attaching degrades gracefully at runtime: tracepoints missing on the running
+  kernel are skipped with a warning instead of failing the run, which is why a
+  binary generated on a newer kernel still works on `5.14`.
+
 ## Architecture
 
 - **Entry point**: `cmd/ior/main.go` - Linux-only BPF-based I/O syscall tracer
@@ -72,12 +99,13 @@ Generator source code:
 
 - **Default mode** is TUI (`-plain` disables TUI and prints CSV rows to stdout).
 - **TUI trace flow** ingests events into the in-memory stats engine; it does **not** continuously write trace rows to disk.
-- **File output in TUI** is explicit export only (`e`), writing `ior-stream-<timestamp>.csv` in the current directory from the current filtered stream snapshot.
+- **File output in TUI** is explicit export only (`e`), writing `ior-stream-<timestamp>.csv` in the current directory from the current filtered stream snapshot. The `e` modal is an options picker (no filename shown); the default filename is generated at submit time (the stream tab's `X` "export as" modal is the one that pre-fills a name).
 - **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime, including the Stream tab's x/X/E shortcuts and their hints.
-- **Tab navigation** supports `tab/shift+tab`, numeric keys `1..7`, and directional keys `left/right` and `h/l`.
+- **Tab navigation** supports `tab/shift+tab` and numeric keys `1..7` only. `left/right` and `h/l` navigate table columns (and the flame graph); they do not switch tabs.
 - **Family visibility**: the Syscalls tab shows a per-syscall Family column classified via `TraceId.Family()`; there is no dedicated Non-IO tab.
 - **When export is disabled**, export key hints are hidden from dashboard help and `e` and the Stream tab's x/X/E shortcuts do not open the export modal or write CSV files.
-- **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to disable high-frequency refresh and fall back to the standard dashboard cadence.
+- **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to fall back to the built-in 200ms flame/stream tick constants (high-frequency refresh never fully stops — it does not fall back to the slower standard dashboard cadence).
+- **Attach-time tracepoint selection**: with no `-trace-*`/`-no-trace-*` flags the default allowlist is the **FS family only** — the other 11 families (`Network`, `Memory`, `Signals`, `Sched`, `IPC`, `Time`, `Process`, `Security`, `Polling`, `AIO`, `Misc`) are opt-in via `-trace-families`/`-trace-kinds`/`-trace-syscalls`. Only the full opt-in set reaches the ~300+ syscalls the generator classifies; the default attaches a subset of them.
 - **Sampling / aggregate-only mode**:
   - `-syscall-sampling-families` and `-syscall-sampling-syscalls` control per-family/per-syscall sampling (`0` = aggregate-only, `1` = all events, `N` = 1-in-N).
   - Current defaults include aggregate-only (`0`) for `futex`, `futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`, and `clock_gettime`.

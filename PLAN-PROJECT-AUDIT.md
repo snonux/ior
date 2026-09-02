@@ -9,7 +9,7 @@ At its core, `ior` attaches eBPF tracepoint probes to the kernel's syscall entry
 ## What It Is Supposed To Do
 
 ### 1. Trace Synchronous I/O Syscalls
-- Attach BPF probes to ~300+ Linux syscall tracepoints across families such as **FS**, **Network**, **Memory**, **IPC**, **Process**, **Signals**, **Time**, **Polling**, **Security**, **AIO**, **Sched**, and **Misc**.
+- Classify ~300+ Linux syscalls into the families **FS**, **Network**, **Memory**, **IPC**, **Process**, **Signals**, **Time**, **Polling**, **Security**, **AIO**, **Sched**, and **Misc**, and attach BPF probes to the selected subset. **Default attach set: the FS family only** — every other family is opt-in via `-trace-families` / `-trace-kinds` / `-trace-syscalls` (`internal/tracepoints/dimension_selector.go`).
 - Capture enter/exit event pairs to compute per-syscall latency.
 - Classify syscalls by payload direction: **Read**, **Write**, **Transfer**, or **Non-bytes**.
 - Track additional dimensions such as file path, process name (`comm`), PID, TID, and address-space extent.
@@ -203,7 +203,7 @@ This section defines a structured audit plan an independent auditor should execu
 - [ ] Run `sudo ./ior -plain -duration 5 > /tmp/out.csv`.
 - [ ] Verify that the CSV header and row format match the documentation.
 - [ ] Check that `-plain` promotes default aggregate-only sampling rates to `1` (all events) because there is no TUI aggregate sink.
-- [ ] Confirm that CSV rows contain all documented fields (timestamp, pid, tid, comm, syscall, path, latency_ns, bytes, requested_sleep_ns, etc.).
+- [ ] Confirm that rows carry the seven `-plain` columns `durationToPrevNs,durationNs,comm,pid.tid,name,ret,file` (`event.EventStreamHeader`). The richer schema (`seq,time_ns,gap_ns,latency_ns,comm,pid,tid,syscall,fd,ret,bytes,file,error,family,requested_sleep_ns`) belongs to the **TUI stream CSV export**, not to `-plain`.
 
 ---
 
@@ -220,7 +220,7 @@ This section defines a structured audit plan an independent auditor should execu
 ### 5.2 Tab Navigation & Rendering
 - [ ] For each tab (1–7), verify:
   - correct shortcut key activates it,
-  - `tab`/`shift+tab` and `h`/`l` / `left`/`right` arrows cycle tabs,
+  - `tab`/`shift+tab` cycle tabs (`h`/`l` and `left`/`right` are **table-column** navigation, not tab switching),
   - tab content refreshes without crashing,
   - numeric keys (`1`–`7`) jump directly.
 - [ ] Test that `H` toggles the help panel and that help text reflects the current mode (e.g., export disabled when `-tuiExport=false`).
@@ -229,11 +229,11 @@ This section defines a structured audit plan an independent auditor should execu
 ### 5.3 Flamegraph Tab
 - [ ] Start a trace and switch to tab `1`; confirm the flamegraph renders bars with recognizable labels.
 - [ ] Run a continuously varying workload and confirm bars grow/shift in real time (not just static once).
-- [ ] Test with `-tui-fast-refresh=0` and confirm the flamegraph still updates at the standard tick rate.
+- [ ] Test with `-tui-fast-refresh=0` and confirm the flamegraph still updates: `0` clears the override and the flame/stream tabs fall back to their built-in 200ms tick constants (high-frequency refresh is never fully disabled).
 
 ### 5.4 Stream Tab & Export
 - [ ] Switch to the Stream tab and confirm live rows appear with correct fields.
-- [ ] Press `e` to open the export modal; confirm it proposes a filename `ior-stream-<timestamp>.csv`.
+- [ ] Press `e` to open the export modal; it is an **options** picker (no filename shown). Confirm that submitting it writes `ior-stream-<timestamp>.csv` — the name is generated at submit time. The filename-proposing modal is the Stream tab's `X` ("export as") modal.
 - [ ] Complete the export and verify the written file contains the same rows visible in the stream snapshot (respecting any active filters).
 - [ ] Verify that when `-tuiExport=false`, the `e` key hint is hidden and the export modal does not open.
 
@@ -268,11 +268,11 @@ This section defines a structured audit plan an independent auditor should execu
 
 ### 6.3 Sampling Rates
 - [ ] Review `internal/flags/sampling.go` and `internal/ior_bpfsetup.go`.
-- [ ] Run with `-syscall-sampling-syscalls futex:0,read:1,write:5`.
+- [ ] Run with `-syscall-sampling-syscalls futex=0,read=1,write=5` (the syntax is `name=rate`; colons are rejected).
 - [ ] Verify that `futex` appears only in aggregate totals (no stream rows / no Parquet rows).
 - [ ] Verify that `read` emits every event.
 - [ ] Verify that `write` emits roughly 1 in 5 events (statistically over a large sample).
-- [ ] Confirm that in `-plain` or `-flamegraph` or `-parquet` mode, default aggregate-only rates (e.g., `futex:0`) are **promoted to `1`** because there is no TUI aggregate sink.
+- [ ] Confirm that in `-plain` or `-flamegraph` or `-parquet` mode, default aggregate-only rates (e.g., `futex=0`) are **promoted to `1`** because there is no TUI aggregate sink.
 
 ### 6.4 Global Filter (Runtime)
 - [ ] Review `internal/globalfilter/` (especially `filter.go` and `pair.go`) and `internal/tui/filterstack.go`.
@@ -362,7 +362,7 @@ This section defines a structured audit plan an independent auditor should execu
 
 ### 10.1 Root Privilege Gate
 - [ ] Run `./ior` (without `sudo`) and confirm it exits with a clear error message (`tracing requires root privileges (run with sudo)`).
-- [ ] Review `internal/ior_mode_registry.go` to confirm the EUID check (`deps.getEUID() != 0`) happens in the `validate()` method of trace-requiring mode handlers (`plainTraceModeHandler`, `tuiModeHandler`, `headlessParquetModeHandler`) **before** any BPF module is loaded. Note: some modes (like `testFlamesModeHandler`) skip the root check intentionally because they don't need BPF. The root check is not in `internal/ior.go` — it is in the mode registry.
+- [ ] Review `internal/ior_mode_registry.go` to confirm the EUID check (`deps.getEUID() != 0`) is the **first statement of the `run()` method** of every trace-requiring mode handler (`plainTraceModeHandler`, `tuiModeHandler`, `headlessParquetModeHandler`), so it fires **before** any BPF module is loaded. It is not in `validate()`. Note: some modes (like `testFlamesModeHandler`) skip the root check intentionally because they don't need BPF. The root check is not in `internal/ior.go` — it is in the mode registry.
 - [ ] Verify that the error constant is `errRootPrivilegesRequired` defined in `internal/ior.go`.
 
 ### 10.2 BPF Resource Cleanup

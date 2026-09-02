@@ -58,8 +58,10 @@ type modeHandler interface {
 	// match returns true when this handler should own the run.
 	match(cfg flags.Config) bool
 	// validate returns an error if the config is invalid for this mode.
-	// It is called only after the root-privilege check has been skipped
-	// (pre-root modes are checked first and return early before requiring root).
+	// It runs before any root-privilege gate: the gate is the first
+	// statement of each trace-requiring handler's run(), not part of
+	// validate(). Pre-root modes never reach the gate because their
+	// handlers match and run without loading BPF.
 	validate(cfg flags.Config) error
 	// run executes the mode using the supplied config.
 	run(cfg flags.Config, deps runnerDeps) error
