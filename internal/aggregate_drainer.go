@@ -49,33 +49,14 @@ func (d *aggregateDrainer) Tick() aggregateDrainResult {
 	return aggregateDrainResult{rows: rows}
 }
 
+// Start polls the aggregate map every `every` until ctx is cancelled or the
+// returned stop function runs; stop performs a final drain so the last partial
+// interval is still ingested (see startPollLoop).
 func (d *aggregateDrainer) Start(ctx context.Context, every time.Duration, handle func(aggregateDrainResult)) func() {
 	if d == nil || d.source == nil {
 		return func() {}
 	}
-
-	done := make(chan struct{})
-	stop := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(every)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-stop:
-				return
-			case <-ticker.C:
-				handle(d.Tick())
-			}
-		}
-	}()
-	return func() {
-		close(stop)
-		<-done
-		handle(d.Tick())
-	}
+	return startPollLoop(ctx, every, func() { handle(d.Tick()) })
 }
 
 func (d *aggregateDrainer) filterRowsForIngest(rows []statsengine.SyscallAggregate) []statsengine.SyscallAggregate {

@@ -113,6 +113,14 @@ committed set contains syscalls that only exist on recent mainline kernels
 - **Additional metric dimensions**:
   - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints).
+- **Drop observability**: every generated handler counts a kernel-side event loss
+  (`bpf_ringbuf_reserve` returning NULL, i.e. `event_map` full under userspace
+  backpressure) in the per-CPU BPF map `ringbuf_drop_map` via
+  `ior_count_ringbuf_drop()` (`internal/c/filter.c`). Userspace polls that map
+  once per second (`ringbufDropMonitor`): a growing count raises a live warning
+  (a TUI stream warning row, stderr in `-plain`/headless modes) and the run
+  total is always printed in the end-of-run `Statistics:` block as
+  `ring buffer drops: N (N/s, N% of events)`.
 
 ## Code Style
 

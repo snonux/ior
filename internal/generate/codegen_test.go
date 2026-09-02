@@ -2620,3 +2620,104 @@ func handlerBody(t *testing.T, generated, name string) string {
 	t.Fatalf("handler %s has no closing brace", name)
 	return ""
 }
+
+// ringbufDropCountCall is the shared BPF helper every generated handler must
+// call when bpf_ringbuf_reserve() returns NULL. Kernel-side drops were
+// previously silent (audit findings D2 F1 / D9 Y2): the event just vanished,
+// with no counter in BPF, stats() or the TUI.
+const ringbufDropCountCall = "ior_count_ringbuf_drop();"
+
+// reserveNullBranch is the exact emitted NULL-reserve branch, counting the
+// drop before bailing out.
+const reserveNullBranch = "    if (!ev) {\n" +
+	"        " + ringbufDropCountCall + "\n" +
+	"        return 0;\n" +
+	"    }\n"
+
+// countRingbufReserves returns how many bpf_ringbuf_reserve call sites the
+// given generated C contains.
+func countRingbufReserves(generated string) int {
+	return strings.Count(generated, "bpf_ringbuf_reserve(&event_map,")
+}
+
+// TestGenerateEveryHandlerCountsRingbufDrops asserts the invariant on freshly
+// generated output: every reserve site is followed by the drop-counting NULL
+// branch, so no emit site can lose an event silently.
+func TestGenerateEveryHandlerCountsRingbufDrops(t *testing.T) {
+	pairs := []struct{ enter, exit string }{
+		{FormatRead, FormatExitRead},
+		{FormatOpenat, FormatExitOpenat},
+		{FormatAccept, FormatExitAccept},
+		{FormatPipe2, FormatExitPipe2},
+		{FormatSocketpair, FormatExitSocketpair},
+		{FormatEventfd2, FormatExitEventfd2},
+		{FormatMmap, FormatExitMmap},
+		{FormatExecve, FormatExitExecve},
+		{syntheticEnter("ptrace", 163), syntheticExit("ptrace", 162)},
+		{syntheticEnter("exit_group", 60), syntheticExit("exit_group", 59)},
+	}
+	var input strings.Builder
+	for _, p := range pairs {
+		input.WriteString(p.enter + "\n" + p.exit + "\n")
+	}
+	out := GenerateTracepointsC(mustParseAll(t, input.String()))
+
+	reserves := countRingbufReserves(out)
+	if reserves == 0 {
+		t.Fatal("no bpf_ringbuf_reserve sites generated")
+	}
+	if got := strings.Count(out, reserveNullBranch); got != reserves {
+		t.Errorf("%d of %d reserve sites count the drop, want all of them", got, reserves)
+	}
+	if strings.Contains(out, "    if (!ev)\n        return 0;") {
+		t.Error("a reserve site still drops events without counting them")
+	}
+}
+
+// TestGeneratedArtifactCountsRingbufDrops applies the same invariant to the
+// committed internal/c/generated_tracepoints.c, so a stale or hand-edited
+// artifact cannot reintroduce silent drops.
+func TestGeneratedArtifactCountsRingbufDrops(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	reserves := countRingbufReserves(artifact)
+	if reserves == 0 {
+		t.Fatal("no bpf_ringbuf_reserve sites in the generated artifact")
+	}
+	if got := strings.Count(artifact, reserveNullBranch); got != reserves {
+		t.Errorf("%d of %d reserve sites in generated_tracepoints.c count the drop, want all", got, reserves)
+	}
+	if got := strings.Count(artifact, ringbufDropCountCall); got != reserves {
+		t.Errorf("%d drop-count calls for %d reserve sites in generated_tracepoints.c", got, reserves)
+	}
+}
+
+// TestRingbufDropHelperIsDefinedInBPFSource pins the other half of the
+// contract: the helper the generated handlers call, and the map it updates,
+// must exist in the hand-written BPF sources included ahead of the generated
+// file (internal/c/ior.bpf.c includes filter.c before generated_tracepoints.c).
+func TestRingbufDropHelperIsDefinedInBPFSource(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+	if !strings.Contains(filterC, "static __always_inline void ior_count_ringbuf_drop(void)") {
+		t.Error("filter.c must define ior_count_ringbuf_drop")
+	}
+	if !strings.Contains(filterC, "bpf_map_lookup_elem(&ringbuf_drop_map,") {
+		t.Error("ior_count_ringbuf_drop must update ringbuf_drop_map")
+	}
+
+	mapsH, err := readCSource("maps.h")
+	if err != nil {
+		t.Fatalf("read maps.h: %v", err)
+	}
+	if !strings.Contains(mapsH, "} ringbuf_drop_map SEC(\".maps\");") {
+		t.Error("maps.h must declare ringbuf_drop_map")
+	}
+	if !strings.Contains(mapsH, "BPF_MAP_TYPE_PERCPU_ARRAY") {
+		t.Error("ringbuf_drop_map must be a per-CPU array so the hot-path increment needs no atomics")
+	}
+}

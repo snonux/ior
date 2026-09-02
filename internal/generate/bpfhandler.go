@@ -84,8 +84,14 @@ func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra 
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "    struct %s *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct %s), 0);\n", eventStruct, eventStruct)
-	b.WriteString("    if (!ev)\n")
+	// A NULL reserve means event_map is full: the event is lost right here.
+	// Count it (ior_count_ringbuf_drop, internal/c/filter.c) so kernel-side
+	// loss under backpressure is reported instead of vanishing silently
+	// (audit findings D2 F1 / D9 Y2).
+	b.WriteString("    if (!ev) {\n")
+	b.WriteString("        ior_count_ringbuf_drop();\n")
 	b.WriteString("        return 0;\n")
+	b.WriteString("    }\n")
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "    ev->event_type = %s;\n", eventTypeConst)
 	fmt.Fprintf(&b, "    ev->trace_id = %s;\n", strings.ToUpper(name))

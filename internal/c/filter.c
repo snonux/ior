@@ -4,6 +4,24 @@
 #define FILTER 1
 #define IOR_HISTOGRAM_BUCKETS 8
 
+// ior_count_ringbuf_drop records one event lost to a full event_map ring
+// buffer. Every generated tracepoint handler calls it on the
+// bpf_ringbuf_reserve() NULL path, which is the only place ior loses events
+// kernel-side; userspace reports the summed value in the run statistics and
+// as a live TUI warning, so backpressure is no longer invisible.
+//
+// ringbuf_drop_map is a single-slot PERCPU_ARRAY, so the lookup yields this
+// CPU's private counter and the increment needs no atomic. The map is
+// pre-allocated by the kernel: the lookup can only fail if the map is missing,
+// in which case dropping the count is the correct, verifier-safe fallback.
+static __always_inline void ior_count_ringbuf_drop(void) {
+    __u32 key = 0;
+    __u64 *drops = bpf_map_lookup_elem(&ringbuf_drop_map, &key);
+
+    if (drops)
+        *drops += 1;
+}
+
 static __always_inline __u32 ior_histogram_bucket_index(__u64 duration_ns) {
     if (duration_ns < 1000)
         return 0;
