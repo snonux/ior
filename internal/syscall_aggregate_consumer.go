@@ -289,6 +289,20 @@ func buildSyscallSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 			rates[enterID] = rate
 		}
 	}
+	// Raw output modes (-plain, -flamegraph, headless -parquet) have no
+	// aggregate sink, so an explicit family rate of 0 (aggregate-only)
+	// would suppress every ring-buffer event for that family and silently
+	// erase it from the output. Promote those family-derived zeros to 1;
+	// the per-syscall entries below still override, so an explicit
+	// -syscall-sampling-syscalls X=0 keeps its zero. This mirrors the
+	// default-syscall promotion in flags.promoteAggregateOnlyForRawOutput.
+	if cfg.IsRawOutputMode() {
+		for enterID, rate := range rates {
+			if rate == 0 {
+				rates[enterID] = 1
+			}
+		}
+	}
 	for syscallName, rate := range cfg.SyscallSamplingRates {
 		enterID, ok := types.EnterTraceIDByName(syscallName)
 		if !ok {

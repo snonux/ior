@@ -407,6 +407,12 @@ func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filt
 	if cfg == nil {
 		return
 	}
+	// These values bypass flags.validateConfig because they do not come
+	// from CLI input: EqValue only returns positive IDs and the PID/TID
+	// picker sources them from a live /proc scan, so the trusted-source
+	// invariant of validateProcessID (in [1, pid_max]) holds by
+	// construction. If a future GlobalFilter ever carries user-typed
+	// IDs, re-validate here.
 	cfg.PidFilter = -1
 	cfg.TidFilter = -1
 	if pid, ok := filter.PID.EqValue(); ok {

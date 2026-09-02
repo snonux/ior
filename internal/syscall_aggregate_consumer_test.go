@@ -26,6 +26,59 @@ func TestBuildSyscallSamplingRatesFamilyAndSyscallOverride(t *testing.T) {
 	}
 }
 
+// TestBuildSyscallSamplingRatesPromotesFamilyZerosInRawModes locks audit
+// domain-06 F2: raw output modes have no aggregate sink, so an explicit
+// family rate of 0 (aggregate-only) must be promoted to 1 instead of
+// silently erasing the family's events from the output.
+func TestBuildSyscallSamplingRatesPromotesFamilyZerosInRawModes(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.PlainMode = true
+	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 0
+
+	rates := buildSyscallSamplingRates(cfg)
+	if got := rates[types.SYS_ENTER_NANOSLEEP]; got != 1 {
+		t.Fatalf("nanosleep rate = %d, want 1 (family zero promoted in raw mode)", got)
+	}
+	if got := rates[types.SYS_ENTER_CLOCK_GETTIME]; got != 1 {
+		t.Fatalf("clock_gettime rate = %d, want 1 (family zero promoted in raw mode)", got)
+	}
+}
+
+// TestBuildSyscallSamplingRatesPreservesExplicitSyscallZerosInRawModes
+// locks the precedence: the family promotion must never override an explicit
+// -syscall-sampling-syscalls rate.
+func TestBuildSyscallSamplingRatesPreservesExplicitSyscallZerosInRawModes(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.PlainMode = true
+	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 0
+	cfg.SyscallSamplingRates["nanosleep"] = 0
+	cfg.SyscallSamplingRates["clock_gettime"] = 2
+
+	rates := buildSyscallSamplingRates(cfg)
+	if got := rates[types.SYS_ENTER_NANOSLEEP]; got != 0 {
+		t.Fatalf("nanosleep rate = %d, want 0 (explicit per-syscall override)", got)
+	}
+	if got := rates[types.SYS_ENTER_CLOCK_GETTIME]; got != 2 {
+		t.Fatalf("clock_gettime rate = %d, want 2 (explicit per-syscall override)", got)
+	}
+}
+
+// TestBuildSyscallSamplingRatesKeepsFamilyZerosInTUIMode locks the TUI side of
+// the same contract: with an aggregate sink available, an explicit family rate
+// of 0 stays 0 (aggregate-only) exactly as the user asked.
+func TestBuildSyscallSamplingRatesKeepsFamilyZerosInTUIMode(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 0
+
+	rates := buildSyscallSamplingRates(cfg)
+	if got := rates[types.SYS_ENTER_NANOSLEEP]; got != 0 {
+		t.Fatalf("nanosleep rate = %d, want 0 (aggregate-only in TUI mode)", got)
+	}
+	if got := rates[types.SYS_ENTER_CLOCK_GETTIME]; got != 0 {
+		t.Fatalf("clock_gettime rate = %d, want 0 (aggregate-only in TUI mode)", got)
+	}
+}
+
 func TestBuildAggregateOnlyTraceIDs(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 10
