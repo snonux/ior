@@ -572,17 +572,41 @@ func TestTUIIntegration_Flame_MatchNextPrev(t *testing.T) {
 	s.waitFor("1/8 matches")
 }
 
-// TestTUIIntegration_Flame_ResetBaseline presses "r" to reset the baseline. The
-// reset clears the trie, which then reseeds from the static test-flames fixture,
-// so rather than asserting an exact pre/post total this asserts the stable
-// invariant that the flame view stays coherent and reseeds back to the root
-// frame (view:root + Selected: root + the seeded total render again).
+// TestTUIIntegration_Flame_ResetBaseline presses "r" on the flame tab and
+// asserts the baseline reset actually took effect. While TabFlame is active the
+// key is consumed by the flamegraph model itself (ConsumesKey ->
+// flamegraph.Model.resetBaseline), so this covers the flame-local reset: the
+// live trie is cleared and the cached snapshot state is dropped.
+//
+// The static test-flames fixture is seeded exactly once, at starter time
+// (tuiTestFlamesStarter -> buildTestFlamesRuntime); nothing refills the trie
+// afterwards. So a working reset empties it for good and the tab falls back to
+// its empty state ("... has no visible frames" + "sel:none"), while the seeded
+// breadcrumb ("view:root") disappears.
+//
+// Observing that state has to be forced: teatest's screen() replays only the
+// bytes produced so far and the cursed renderer flushes asynchronously, so a
+// stale pre-reset frame can otherwise satisfy the match (which is what made the
+// previous version of this test pass even with the reset broken). Following the
+// pattern of TestTUIIntegration_Global_ResetKeepsStreamRows (commit 1d95fd4),
+// round-trip through another tab after pressing "r": any frame rendered for the
+// later keypresses is provably after "r" was handled, because the message queue
+// is FIFO.
 func TestTUIIntegration_Flame_ResetBaseline(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root", "Selected: root", "total(events):")
 
-	s.press('r') // reset baseline; trie clears then reseeds from the fixture
-	s.waitFor("view:root", "Selected: root", "total(events):")
+	// "r" clears the live trie; the one-shot fixture is never re-seeded.
+	s.press('r')
+	// Hop to the Syscalls tab and back. Its seeded table (unaffected by the
+	// flame-local reset) proves the "3" keypress - queued after "r" - has been
+	// processed and has repainted the screen over the old flame frame.
+	s.typeStr("3")
+	s.waitFor("Syscall", "epoll_wait")
+	// Back on the flame tab, the repaint is provably post-reset: the flame must
+	// now be empty.
+	s.typeStr("1")
+	s.waitForAbsent("view:root", "has no visible frames", "sel:none")
 }
 
 // TestTUIIntegration_Flame_SiblingAndPaging descends into the first child
@@ -1871,12 +1895,21 @@ func TestTUIIntegration_TidPicker_EscReturnsToDashboard(t *testing.T) {
 // tab (key 3). The test-flames config seeds the default 30s reset timer, so the
 // baseline status is "auto-reset: .../30s".
 
-// TestTUIIntegration_Global_ResetClearsCounts presses "r" to reset the
-// baseline. The reset clears the stats/flame aggregates, which then reseed from
-// the static test-flames fixture, so rather than asserting zeroed counts this
-// asserts the stable invariant that the dashboard stays coherent: the Syscalls
-// table still renders its seeded rows and the chrome (the persistent tab bar)
-// survives the reset.
+// TestTUIIntegration_Global_ResetClearsCounts presses "r" and asserts the stats
+// baseline is really cleared. The static test-flames fixture is seeded exactly
+// once, at starter time (tuiTestFlamesStarter -> buildTestFlamesRuntime), so the
+// aggregates never come back: after the reset the Syscalls tab must lose its
+// seeded rows and render the "Syscalls: no data" placeholder, while the
+// persistent chrome (the tab bar) survives.
+//
+// The assertion has to be forced onto a post-reset frame: teatest's screen()
+// replays only the bytes produced so far and the cursed renderer flushes
+// asynchronously, so a stale pre-reset frame can otherwise satisfy the match
+// (which is what made the previous version of this test pass even with the reset
+// broken). Following the pattern of TestTUIIntegration_Global_ResetKeepsStreamRows
+// (commit 1d95fd4), round-trip through another tab after pressing "r": any frame
+// rendered for the later keypresses is provably after "r" was handled, because
+// the message queue is FIFO.
 func TestTUIIntegration_Global_ResetClearsCounts(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
@@ -1885,10 +1918,13 @@ func TestTUIIntegration_Global_ResetClearsCounts(t *testing.T) {
 	s.typeStr("3")
 	s.waitFor("Syscall", "epoll_wait", tuiChrome)
 
-	// "r" resets the baseline; the aggregates clear then reseed from the fixture,
-	// so the seeded table and the persistent chrome remain rendered.
+	// "r" resets the baseline, then hop to the Stream tab and back so the final
+	// assertion observes a genuinely post-reset render.
 	s.press('r')
-	s.waitFor("Syscall", "epoll_wait", tuiChrome)
+	s.typeStr("7")
+	s.waitFor("buffer:")
+	s.typeStr("3")
+	s.waitForAbsent("epoll_wait", "Syscalls: no data", tuiChrome)
 }
 
 // TestTUIIntegration_Global_ResetKeepsStreamRows locks the documented stream
