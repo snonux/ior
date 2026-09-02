@@ -3,6 +3,7 @@ package parquet
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ior/internal/streamrow"
@@ -19,7 +20,10 @@ var (
 	ErrRecorderActive = errors.New("parquet recorder is already active")
 	// ErrRecorderNotActive indicates that rows cannot be accepted because no session is active.
 	ErrRecorderNotActive = errors.New("parquet recorder is not active")
-	// ErrRecorderQueueFull indicates bounded queue overflow. This is treated as a recording failure.
+	// ErrRecorderQueueFull indicates the row was shed because the bounded
+	// recorder queue was full. The recording session stays active and keeps
+	// accepting rows as capacity frees up; the caller should surface
+	// Status().RowsDropped instead of treating this as a failure.
 	ErrRecorderQueueFull = errors.New("parquet recorder queue is full")
 )
 
@@ -54,6 +58,8 @@ type Status struct {
 	Path        string
 	TempPath    string
 	RowsWritten uint64
+	// RowsDropped counts rows shed because the bounded queue was full.
+	RowsDropped uint64
 	LastError   error
 }
 
@@ -75,6 +81,10 @@ type recordingSession struct {
 	stopCause error
 	doneErr   error
 	stopOnce  sync.Once
+
+	// dropped counts rows shed on queue overflow; atomic so Status can
+	// read the live count without contending the session mutex.
+	dropped atomic.Uint64
 }
 
 type recordRequest struct {
@@ -126,7 +136,10 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 	return nil
 }
 
-// Record queues one shared stream row for persistence.
+// Record queues one shared stream row for persistence. When the bounded
+// queue is full the row is shed (counted in Status().RowsDropped) and
+// ErrRecorderQueueFull is returned; the session stays active so later rows
+// are recorded as capacity frees up.
 func (r *Recorder) Record(row streamrow.Row, filterEpoch uint64) error {
 	if r == nil {
 		return ErrRecorderNotActive
@@ -175,8 +188,14 @@ func (r *Recorder) Status() Status {
 	}
 
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.status
+	status := r.status
+	session := r.active
+	r.mu.RUnlock()
+
+	if session != nil {
+		status.RowsDropped = session.dropped.Load()
+	}
+	return status
 }
 
 func (r *Recorder) runSession(session *recordingSession, writer rowWriter, cfg RecorderConfig) {
@@ -294,6 +313,7 @@ func (r *Recorder) finishSession(session *recordingSession, err error) {
 	}
 	r.status.Active = false
 	r.status.LastError = err
+	r.status.RowsDropped = session.dropped.Load()
 	if err == nil {
 		r.status.TempPath = ""
 	}
@@ -338,11 +358,10 @@ func (s *recordingSession) enqueue(req recordRequest) error {
 	case s.queue <- req:
 		return nil
 	default:
-		s.accepting = false
-		if s.stopCause == nil {
-			s.stopCause = ErrRecorderQueueFull
-		}
-		s.stopOnce.Do(func() { close(s.stopC) })
+		// Shed the row instead of failing the session: aborting here would
+		// discard every already-captured event. The drop is counted so
+		// callers can surface it while the recording continues.
+		s.dropped.Add(1)
 		return ErrRecorderQueueFull
 	}
 }

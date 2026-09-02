@@ -812,6 +812,52 @@ func TestHeadlessParquetSinkRecordsRows(t *testing.T) {
 	}
 }
 
+func TestHeadlessParquetSinkQueueOverflowIsNotFatal(t *testing.T) {
+	// Queue overflow sheds the single row and keeps the session alive, so it
+	// must not cancel the headless trace run; real recorder errors must.
+	if isFatalRecorderError(nil) {
+		t.Fatalf("isFatalRecorderError(nil) = true, want false")
+	}
+	if isFatalRecorderError(parquet.ErrRecorderQueueFull) {
+		t.Fatalf("isFatalRecorderError(ErrRecorderQueueFull) = true, want false")
+	}
+	joined := errors.Join(parquet.ErrRecorderQueueFull, errors.New("overflow detail"))
+	if isFatalRecorderError(joined) {
+		t.Fatalf("isFatalRecorderError(joined queue-full) = true, want false")
+	}
+	if !isFatalRecorderError(parquet.ErrRecorderNotActive) {
+		t.Fatalf("isFatalRecorderError(ErrRecorderNotActive) = false, want true")
+	}
+	if !isFatalRecorderError(errors.New("writer boom")) {
+		t.Fatalf("isFatalRecorderError(plain error) = false, want true")
+	}
+}
+
+func TestHeadlessParquetSinkFailsRunOnRecorderError(t *testing.T) {
+	// A recorder that never started rejects rows with ErrRecorderNotActive;
+	// the sink must treat that as fatal: cancel the context and record the
+	// error for the run result.
+	recorder := parquet.NewRecorder(parquet.RecorderConfig{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sink := newHeadlessParquetSink(recorder, cancel)
+	el := &eventLoop{}
+	sink.configure(el)
+
+	el.printCb(testTracePair(1, "keep"))
+
+	if !errors.Is(sink.err(), parquet.ErrRecorderNotActive) {
+		t.Fatalf("sink.err() = %v, want %v", sink.err(), parquet.ErrRecorderNotActive)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatalf("expected the trace context to be cancelled after a fatal recorder error")
+	}
+}
+
 func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T) {
 	recorder := parquet.NewRecorder(parquet.RecorderConfig{
 		BatchSize:     1,

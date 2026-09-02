@@ -273,7 +273,11 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 // the print callback that fans out to engine/stream/trie, and registers the
 // live-filter setter so the TUI can swap filters without restarting BPF probes.
 func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRuntime) func(*eventLoop) {
-	var recorderWarningOnce sync.Once
+	// Overflow and genuine failures are warned about independently: a shed
+	// storm must not consume the once-guard that would later surface a
+	// real recorder error in the stream.
+	var recorderOverflowWarningOnce sync.Once
+	var recorderFailureWarningOnce sync.Once
 	type aggregateSink interface {
 		IngestSyscallAggregates([]statsengine.SyscallAggregate)
 	}
@@ -281,6 +285,24 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 		// Seed the event loop's filter from config so subsequent reads via
 		// el.Filter() see the same filter the trace was started with.
 		el.SetFilter(cfg.GlobalFilter)
+		warnRecorderIssue := func(err error) {
+			if err == nil {
+				return
+			}
+			if errors.Is(err, parquet.ErrRecorderQueueFull) {
+				recorderOverflowWarningOnce.Do(func() {
+					if el.warningCb != nil {
+						el.warningCb("Parquet recorder queue full: rows are being dropped")
+					}
+				})
+				return
+			}
+			recorderFailureWarningOnce.Do(func() {
+				if el.warningCb != nil {
+					el.warningCb(fmt.Sprintf("Parquet recorder failed: %v", err))
+				}
+			})
+		}
 		el.printCb = func(ep *event.Pair) {
 			if !shouldIngestTracePair(el.Filter(), ep) {
 				ep.Recycle()
@@ -290,13 +312,7 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 			rt.accumulator.Ingest(ep)
 			rt.streamBuf.Push(row)
 			if rt.recorder != nil {
-				if err := rt.recorder.Record(row, rt.currentFilterEpoch()); err != nil {
-					recorderWarningOnce.Do(func() {
-						if el.warningCb != nil {
-							el.warningCb(fmt.Sprintf("Parquet recorder failed: %v", err))
-						}
-					})
-				}
+				warnRecorderIssue(rt.recorder.Record(row, rt.currentFilterEpoch()))
 			}
 			rt.liveTrie.Ingest(ep)
 			// Both downstream consumers snapshot the pair synchronously, so

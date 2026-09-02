@@ -48,6 +48,9 @@ func TestRecorderRoundTrip(t *testing.T) {
 	if status.RowsWritten != 3 {
 		t.Fatalf("Status().RowsWritten = %d, want 3", status.RowsWritten)
 	}
+	if status.RowsDropped != 0 {
+		t.Fatalf("Status().RowsDropped = %d, want 0", status.RowsDropped)
+	}
 	if status.LastError != nil {
 		t.Fatalf("Status().LastError = %v, want nil", status.LastError)
 	}
@@ -66,7 +69,7 @@ func TestRecorderRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRecorderFailsOnQueueOverflow(t *testing.T) {
+func TestRecorderShedsRowsOnQueueOverflowInsteadOfAborting(t *testing.T) {
 	writer := newBlockingWriter()
 	recorder := NewRecorder(RecorderConfig{
 		QueueCapacity: 1,
@@ -80,54 +83,169 @@ func TestRecorderFailsOnQueueOverflow(t *testing.T) {
 	if err := recorder.Start("ignored", StartOptions{}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	// The first row fills the queue and is picked up by the session
+	// goroutine, which blocks inside WriteRows (batch size 1).
 	if err := recorder.Record(testStreamRow(1, "read", false), 0); err != nil {
 		t.Fatalf("first Record() error = %v", err)
 	}
-
 	<-writer.started
 
+	// The session goroutine is blocked in WriteRows, so the second row keeps
+	// the single queue slot occupied and further rows must be shed, not
+	// fatal: the session stays active and drops are counted.
 	if err := recorder.Record(testStreamRow(2, "write", false), 0); err != nil {
 		t.Fatalf("second Record() error = %v", err)
 	}
-	if err := recorder.Record(testStreamRow(3, "openat", false), 0); !errors.Is(err, ErrRecorderQueueFull) {
-		t.Fatalf("third Record() error = %v, want %v", err, ErrRecorderQueueFull)
+	for i := 3; i <= 4; i++ {
+		err := recorder.Record(testStreamRow(uint64(i), "openat", false), 0)
+		if !errors.Is(err, ErrRecorderQueueFull) {
+			t.Fatalf("Record(%d) error = %v, want %v", i, err, ErrRecorderQueueFull)
+		}
 	}
 
-	writer.releaseWrites()
+	live := recorder.Status()
+	if !live.Active {
+		t.Fatalf("Status().Active = false, want session to survive queue overflow")
+	}
+	if live.RowsDropped != 2 {
+		t.Fatalf("Status().RowsDropped = %d, want 2 while session is active", live.RowsDropped)
+	}
 
-	if err := recorder.Stop(); !errors.Is(err, ErrRecorderQueueFull) {
-		t.Fatalf("Stop() error = %v, want %v", err, ErrRecorderQueueFull)
+	// Releasing the writer lets the session drain; Stop must gracefully
+	// flush the surviving rows and finalize the recording, not abort it.
+	writer.releaseWrites()
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v, want nil", err)
 	}
 
 	status := recorder.Status()
 	if status.Active {
 		t.Fatalf("Status().Active = true, want false")
 	}
-	if !errors.Is(status.LastError, ErrRecorderQueueFull) {
-		t.Fatalf("Status().LastError = %v, want %v", status.LastError, ErrRecorderQueueFull)
+	if status.LastError != nil {
+		t.Fatalf("Status().LastError = %v, want nil", status.LastError)
 	}
-	if !writer.aborted.Load() {
-		t.Fatalf("expected recorder failure path to abort the backing writer")
+	if status.RowsDropped != 2 {
+		t.Fatalf("Status().RowsDropped = %d, want 2 after stop", status.RowsDropped)
+	}
+	if status.RowsWritten != 2 {
+		t.Fatalf("Status().RowsWritten = %d, want 2", status.RowsWritten)
+	}
+	if writer.aborted.Load() {
+		t.Fatalf("queue overflow must not abort the backing writer")
+	}
+	if got := writer.written.Load(); got != 2 {
+		t.Fatalf("writer rows = %d, want 2", got)
+	}
+}
+
+// TestRecorderStressQueueSaturation reproduces the audit's total-abort
+// scenario (queue saturation under sustained load, AUDIT-REPORT.md M14 /
+// domain-09 Y1) with concurrent producers hammering a blocked writer. It
+// asserts the shed-mode invariants: every attempted row is either written
+// or counted as dropped, accounting is exact, and the session finalizes
+// the partial recording instead of aborting it.
+func TestRecorderStressQueueSaturation(t *testing.T) {
+	writer := newBlockingWriter()
+	recorder := NewRecorder(RecorderConfig{
+		QueueCapacity: 16,
+		BatchSize:     16,
+		FlushInterval: time.Hour,
+		newWriter: func(string, WriterConfig, FileMetadata) (rowWriter, error) {
+			return writer, nil
+		},
+	})
+
+	if err := recorder.Start("ignored", StartOptions{}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	const producers = 8
+	const rowsPerProducer = 250
+	const attempted = producers * rowsPerProducer
+
+	var accepted, shed atomic.Uint64
+	var wg sync.WaitGroup
+	for p := 0; p < producers; p++ {
+		wg.Add(1)
+		go func(p int) {
+			defer wg.Done()
+			for i := 0; i < rowsPerProducer; i++ {
+				err := recorder.Record(testStreamRow(uint64(p*rowsPerProducer+i+1), "read", false), 0)
+				switch {
+				case err == nil:
+					accepted.Add(1)
+				case errors.Is(err, ErrRecorderQueueFull):
+					shed.Add(1)
+				default:
+					t.Errorf("Record() error = %v, want nil or %v", err, ErrRecorderQueueFull)
+				}
+			}
+		}(p)
+	}
+	wg.Wait()
+
+	// The writer is still blocked, so at most one batch plus one queue
+	// worth of rows can be in flight; the saturation sheds must have been
+	// observed and counted.
+	writer.releaseWrites()
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v, want nil", err)
+	}
+
+	status := recorder.Status()
+	if status.Active {
+		t.Fatalf("Status().Active = true, want false")
+	}
+	if status.LastError != nil {
+		t.Fatalf("Status().LastError = %v, want nil", status.LastError)
+	}
+	if writer.aborted.Load() {
+		t.Fatalf("queue saturation must not abort the backing writer")
+	}
+
+	acceptedCount := accepted.Load()
+	shedCount := shed.Load()
+	if shedCount == 0 {
+		t.Fatalf("stress run observed no overflow sheds; test no longer reproduces queue saturation")
+	}
+	if acceptedCount+shedCount != attempted {
+		t.Fatalf("accepted(%d)+shed(%d) = %d, want %d", acceptedCount, shedCount, acceptedCount+shedCount, attempted)
+	}
+	if status.RowsDropped != shedCount {
+		t.Fatalf("Status().RowsDropped = %d, want %d", status.RowsDropped, shedCount)
+	}
+	if status.RowsWritten != acceptedCount {
+		t.Fatalf("Status().RowsWritten = %d, want %d (every accepted row must be persisted)", status.RowsWritten, acceptedCount)
+	}
+	if status.RowsWritten != writer.written.Load() {
+		t.Fatalf("Status().RowsWritten = %d, want writer rows %d", status.RowsWritten, writer.written.Load())
+	}
+	if status.RowsWritten+status.RowsDropped != attempted {
+		t.Fatalf("RowsWritten(%d)+RowsDropped(%d) = %d, want %d", status.RowsWritten, status.RowsDropped, status.RowsWritten+status.RowsDropped, attempted)
 	}
 }
 
 func TestRecorderStopReturnsTerminalErrorOnRepeatedCalls(t *testing.T) {
+	// Queue overflow no longer aborts a session, so a writer failure stands
+	// in for the terminal error a finished session may carry.
+	terminalErr := errors.New("parquet writer failed")
 	recorder := NewRecorder(RecorderConfig{})
 	session := newRecordingSession(1)
-	session.doneErr = ErrRecorderQueueFull
+	session.doneErr = terminalErr
 	close(session.doneC)
 
 	recorder.mu.Lock()
 	recorder.active = session
 	recorder.status = Status{
 		Active:    true,
-		LastError: ErrRecorderQueueFull,
+		LastError: terminalErr,
 	}
 	recorder.mu.Unlock()
 
 	for i := 0; i < 2; i++ {
-		if err := recorder.Stop(); !errors.Is(err, ErrRecorderQueueFull) {
-			t.Fatalf("Stop() call %d error = %v, want %v", i+1, err, ErrRecorderQueueFull)
+		if err := recorder.Stop(); !errors.Is(err, terminalErr) {
+			t.Fatalf("Stop() call %d error = %v, want %v", i+1, err, terminalErr)
 		}
 	}
 }
@@ -159,6 +277,7 @@ type blockingWriter struct {
 	startOnce   sync.Once
 	releaseOnce sync.Once
 
+	written atomic.Uint64
 	aborted atomic.Bool
 }
 
@@ -169,7 +288,8 @@ func newBlockingWriter() *blockingWriter {
 	}
 }
 
-func (w *blockingWriter) WriteRows([]Record) error {
+func (w *blockingWriter) WriteRows(rows []Record) error {
+	w.written.Add(uint64(len(rows)))
 	w.startOnce.Do(func() { close(w.started) })
 	<-w.release
 	return nil

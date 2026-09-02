@@ -38,11 +38,19 @@ func newHeadlessParquetSink(recorder *parquet.Recorder, cancel context.CancelFun
 func (s *headlessParquetSink) configure(el *eventLoop) {
 	el.printCb = func(ep *event.Pair) {
 		row := streamrow.New(s.seq.Next(), ep)
-		if err := s.recorder.Record(row, 0); err != nil {
+		if err := s.recorder.Record(row, 0); isFatalRecorderError(err) {
 			s.fail(err)
 		}
 		ep.Recycle()
 	}
+}
+
+// isFatalRecorderError reports whether a recorder error must abort the
+// headless run. Queue overflow sheds the single row while the session stays
+// active, so it is surfaced via Status().RowsDropped after the run instead
+// of cancelling the trace and losing every already-captured event.
+func isFatalRecorderError(err error) bool {
+	return err != nil && !errors.Is(err, parquet.ErrRecorderQueueFull)
 }
 
 func (s *headlessParquetSink) fail(err error) {
@@ -133,6 +141,9 @@ func runHeadlessParquet(cfg flags.Config) error {
 	}
 	if stopErr != nil {
 		return stopErr
+	}
+	if dropped := recorder.Status().RowsDropped; dropped > 0 {
+		logln("Warning:", dropped, "events were dropped (parquet recorder queue overflow) - the recording is partial")
 	}
 	logln("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
 	return nil
