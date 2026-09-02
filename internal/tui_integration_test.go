@@ -741,8 +741,7 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 // The stream's paused footer (the "Sel s/N Col c/10 | Enter push-filter" line)
 // and the search/status messages are only rendered when the dashboard help bar
 // is visible (eventstream.Model.SetFooterVisible is driven by dashboard
-// showHelp), and that toggle is shadowed by the tui-level "H" help overlay, so
-// the footer never renders in the running TUI. The selected-row/column
+// showHelp, toggled by F1). The selected-row/column
 // highlight is style-only (no glyph marker), which the VT emulator strips.
 // Navigation is therefore asserted through its *observable* effect: g/G recenter
 // the viewport. The File column is middle-truncated ("/srv....yaml"), so the
@@ -897,8 +896,8 @@ func TestTUIIntegration_Stream_Search(t *testing.T) {
 
 // TestTUIIntegration_Stream_PausedFooterShowsSelection focuses on the paused
 // selection/column/search footer, which renders whenever the stream is paused
-// independent of the dashboard help-bar toggle (the global "H" overlay shadows
-// the dashboard "H" so the help bar is never enabled). It asserts:
+// independent of the dashboard help-bar toggle (F1 toggles the bar; H belongs
+// to the global overlay). It asserts:
 //   - while LIVE, the paused footer tokens are absent;
 //   - after Space+g (pause + anchor row 0), the "Sel"/"Col" counters and the
 //     "Enter push-filter" hint render;

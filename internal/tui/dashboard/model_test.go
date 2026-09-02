@@ -1558,25 +1558,39 @@ func TestStreamTabViewKeepsTabAndHelpChromeVisible(t *testing.T) {
 	}
 }
 
-func TestHelpToggleWithH(t *testing.T) {
+func TestHelpToggleWithF1(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
 	out := m.View().Content
 	if !strings.Contains(out, "press H for help") {
 		t.Fatalf("expected default help hint")
 	}
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
 	m = next.(Model)
 	out = m.View().Content
 	if !strings.Contains(out, "tab next tab") {
-		t.Fatalf("expected expanded help after pressing h")
+		t.Fatalf("expected expanded help after pressing F1")
 	}
 
-	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
 	m = next.(Model)
 	out = m.View().Content
 	if !strings.Contains(out, "press H for help") {
-		t.Fatalf("expected help hint after pressing h again")
+		t.Fatalf("expected help hint after pressing F1 again")
+	}
+}
+
+// TestHelpToggleIgnoresH locks the rewiring (audit domain-05 F4): H belongs
+// to the global help overlay handled above the dashboard model, so pressing
+// it here must not expand the dashboard help bar.
+func TestHelpToggleIgnoresH(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	m = next.(Model)
+	out := m.View().Content
+	if !strings.Contains(out, "press H for help") {
+		t.Fatalf("H must not toggle the dashboard help bar; expected the collapsed hint to remain")
 	}
 }
 

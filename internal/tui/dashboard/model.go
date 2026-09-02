@@ -647,7 +647,11 @@ func (m Model) selectedDirPath() string {
 }
 
 func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
-	if msg.String() != "H" {
+	// The expanded dashboard help bar is bound to F1 because H is
+	// intercepted at the top level (tui.handleGlobalKeyPress) to open the
+	// global help overlay, leaving the bar with no reachable key when it
+	// was bound to H (audit domain-05 F4).
+	if msg.Code != tea.KeyF1 {
 		return false, m, nil
 	}
 	m.showHelp = !m.showHelp
