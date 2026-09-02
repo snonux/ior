@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -218,7 +219,7 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
 	familySampling = fs.String("syscall-sampling-families", "",
-		"Per-family sampling rates, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N)")
+		"Per-family sampling rates, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N; family rate 0 is promoted to 1 in raw output modes -plain/-flamegraph/-parquet which have no aggregate sink)")
 	syscallSampling = fs.String("syscall-sampling-syscalls", "",
 		"Per-syscall sampling rates, for example \"futex=0,clock_gettime=200\" (overrides family rates)")
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
@@ -303,6 +304,44 @@ func validateConfig(cfg Config) error {
 	// error. Reject it here with a clear diagnostic instead.
 	if cfg.EventMapSize <= 0 {
 		return fmt.Errorf("invalid mapSize: %d (must be > 0)", cfg.EventMapSize)
+	}
+	// A -pid/-tid of 0 matches only the idle task, and any negative value
+	// other than the -1 "no filter" sentinel wraps to a huge uint32 BPF
+	// global that no real TGID/TID can ever equal — both produce a silently
+	// empty trace, so reject them with a clear startup error.
+	if err := validateProcessID("pid", cfg.PidFilter); err != nil {
+		return err
+	}
+	return validateProcessID("tid", cfg.TidFilter)
+}
+
+// fallbackPidMax is used when /proc/sys/kernel/pid_max cannot be read (for
+// example in a container without /proc mounted); 4194304 is the maximum
+// pid_max on 64-bit Linux.
+const fallbackPidMax = 4194304
+
+// pidMaxFn is swapped in tests to pin the validation bound deterministically.
+var pidMaxFn = defaultPidMax
+
+func defaultPidMax() int {
+	data, err := os.ReadFile("/proc/sys/kernel/pid_max")
+	if err != nil {
+		return fallbackPidMax
+	}
+	if max, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && max > 0 {
+		return max
+	}
+	return fallbackPidMax
+}
+
+// validateProcessID rejects -pid/-tid values outside {-1} ∪ [1, pid_max]:
+// -1 means "no filter", and any other value must be a real process/thread ID.
+func validateProcessID(name string, value int) error {
+	if value == -1 {
+		return nil
+	}
+	if max := pidMaxFn(); value < 1 || value > max {
+		return fmt.Errorf("invalid %s: %d (must be -1 for no filter or an ID in [1, %d])", name, value, max)
 	}
 	return nil
 }
