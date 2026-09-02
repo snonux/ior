@@ -967,6 +967,13 @@ func (m Model) snapshotOrZero() statsengine.Snapshot {
 	return *m.latest
 }
 
+// resetBaselineCmd restarts the stats/flame baseline: the live trie and the
+// stats engine are cleared so aggregates rebuild from zero. The stream ring
+// buffer is intentionally NOT cleared here: the stream is a chronological
+// event log rather than an aggregate, so its rows survive baseline resets
+// (both the `r` key and auto-reset ticks) and are only cleared when a new
+// PID/TID selection starts a fresh trace (runtime.resetStreamBuffer).
+// This retention is locked by TestTUIIntegration_Global_ResetKeepsStreamRows.
 func (m *Model) resetBaselineCmd() tea.Cmd {
 	if m.liveTrie != nil {
 		m.liveTrie.Reset()
