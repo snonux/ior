@@ -53,3 +53,53 @@ func TestMatchPairRejectsMismatchesAndMissingFD(t *testing.T) {
 		t.Fatalf("expected missing fd to reject pair")
 	}
 }
+
+// TestMatchPairSeesRetOnKindSpecificExits guards the ret-carrier fix at the
+// filter layer: accept/pipe/socketpair/eventfd exits decode into their own
+// event structs rather than *types.RetEvent, so `ret`/errors-only filters used
+// to see ret=0 and silently drop every failing call of those syscalls.
+func TestMatchPairSeesRetOnKindSpecificExits(t *testing.T) {
+	tests := []struct {
+		name  string
+		enter event.Event
+		exit  event.Event
+		ret   int64
+	}{
+		{
+			name:  "accept",
+			enter: &types.AcceptEvent{TraceId: types.SYS_ENTER_ACCEPT, Pid: 1234, Tid: 1235},
+			exit:  &types.AcceptEvent{TraceId: types.SYS_EXIT_ACCEPT, Pid: 1234, Tid: 1235, Ret: -11},
+			ret:   -11,
+		},
+		{
+			name:  "pipe",
+			enter: &types.PipeEvent{TraceId: types.SYS_ENTER_PIPE, Pid: 1234, Tid: 1235},
+			exit:  &types.PipeEvent{TraceId: types.SYS_EXIT_PIPE, Pid: 1234, Tid: 1235, Ret: -24},
+			ret:   -24,
+		},
+		{
+			name:  "socketpair",
+			enter: &types.SocketpairEvent{TraceId: types.SYS_ENTER_SOCKETPAIR, Pid: 1234, Tid: 1235},
+			exit:  &types.SocketpairEvent{TraceId: types.SYS_EXIT_SOCKETPAIR, Pid: 1234, Tid: 1235, Ret: -93},
+			ret:   -93,
+		},
+		{
+			name:  "eventfd2",
+			enter: &types.EventfdEvent{TraceId: types.SYS_ENTER_EVENTFD2, Pid: 1234, Tid: 1235},
+			exit:  &types.EventfdEvent{TraceId: types.SYS_EXIT_EVENTFD2, Pid: 1234, Tid: 1235, Ret: -24},
+			ret:   -24,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pair := &event.Pair{EnterEv: tt.enter, ExitEv: tt.exit, Comm: "srv"}
+			if !MatchPair(Filter{ErrorsOnly: true}, pair) {
+				t.Fatalf("errors-only filter did not match failing %s pair", tt.name)
+			}
+			if !MatchPair(Filter{RetVal: &NumericFilter{Op: OpEq, Value: tt.ret}}, pair) {
+				t.Fatalf("ret == %d filter did not match %s pair", tt.ret, tt.name)
+			}
+		})
+	}
+}

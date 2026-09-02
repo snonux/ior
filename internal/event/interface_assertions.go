@@ -77,3 +77,29 @@ var (
 	// *types.TwoFdEvent carries operations that include two fd inputs.
 	_ Event = (*types.TwoFdEvent)(nil)
 )
+
+// --- ret-carrying event assertions ---
+//
+// Every event type whose kernel struct has a `ret` field must satisfy
+// RetCarrier, because streamrow.New reads RetVal/IsError through that
+// interface. The GetRet accessor is emitted by the types generator, so a newly
+// generated ret-carrying struct is covered automatically; these assertions
+// pin the current set, and TestGeneratedRetCarriersExposeGetRet in
+// internal/types guards the generator-level invariant.
+
+var (
+	// *types.RetEvent is the generic syscall exit payload.
+	_ RetCarrier = (*types.RetEvent)(nil)
+
+	// *types.SocketpairEvent is the socketpair exit payload (sv0/sv1 + ret).
+	_ RetCarrier = (*types.SocketpairEvent)(nil)
+
+	// *types.AcceptEvent is the accept/accept4 exit payload (accepted fd in ret).
+	_ RetCarrier = (*types.AcceptEvent)(nil)
+
+	// *types.PipeEvent is the pipe/pipe2 exit payload (fd0/fd1 + ret).
+	_ RetCarrier = (*types.PipeEvent)(nil)
+
+	// *types.EventfdEvent is the eventfd/pidfd-family exit payload (flags + ret).
+	_ RetCarrier = (*types.EventfdEvent)(nil)
+)

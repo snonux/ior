@@ -262,3 +262,50 @@ func TestQuoteCSVFieldMatchesEncodingCSV(t *testing.T) {
 		}
 	}
 }
+
+// TestPairStringCarriesRetForKindSpecificExits guards the plain-mode CSV ret
+// column: accept/pipe/socketpair/eventfd exits decode into their own event
+// structs, not *types.RetEvent, so the column used to be rendered empty even
+// though the kernel-side struct carries the return value.
+func TestPairStringCarriesRetForKindSpecificExits(t *testing.T) {
+	tests := []struct {
+		name  string
+		enter Event
+		exit  Event
+		want  string
+	}{
+		{
+			name:  "accept",
+			enter: &types.AcceptEvent{TraceId: types.SYS_ENTER_ACCEPT, Pid: 7, Tid: 8},
+			exit:  &types.AcceptEvent{TraceId: types.SYS_EXIT_ACCEPT, Pid: 7, Tid: 8, Ret: -11},
+			want:  "00000000,00000000,srv,7.8,accept,-11,N:file",
+		},
+		{
+			name:  "pipe2",
+			enter: &types.PipeEvent{TraceId: types.SYS_ENTER_PIPE2, Pid: 7, Tid: 8},
+			exit:  &types.PipeEvent{TraceId: types.SYS_EXIT_PIPE2, Pid: 7, Tid: 8, Ret: -24},
+			want:  "00000000,00000000,srv,7.8,pipe2,-24,N:file",
+		},
+		{
+			name:  "socketpair",
+			enter: &types.SocketpairEvent{TraceId: types.SYS_ENTER_SOCKETPAIR, Pid: 7, Tid: 8},
+			exit:  &types.SocketpairEvent{TraceId: types.SYS_EXIT_SOCKETPAIR, Pid: 7, Tid: 8, Ret: -93},
+			want:  "00000000,00000000,srv,7.8,socketpair,-93,N:file",
+		},
+		{
+			name:  "eventfd2",
+			enter: &types.EventfdEvent{TraceId: types.SYS_ENTER_EVENTFD2, Pid: 7, Tid: 8},
+			exit:  &types.EventfdEvent{TraceId: types.SYS_EXIT_EVENTFD2, Pid: 7, Tid: 8, Ret: -24},
+			want:  "00000000,00000000,srv,7.8,eventfd2,-24,N:file",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pair := &Pair{EnterEv: tt.enter, ExitEv: tt.exit, Comm: "srv"}
+			if got := pair.String(); got != tt.want {
+				t.Fatalf("Pair.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

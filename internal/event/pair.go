@@ -195,8 +195,11 @@ func (e *Pair) String() string {
 	sb.WriteString(quoteCSVField(e.EnterEv.GetTraceId().Name()))
 
 	sb.WriteString(",")
-	if retEv, ok := e.ExitEv.(*types.RetEvent); ok {
-		sb.WriteString(strconv.FormatInt(int64(retEv.Ret), 10))
+	// Every exit event carrying a ret field feeds this column, not just the
+	// generic *types.RetEvent: the kind-specific exits (accept/accept4,
+	// pipe/pipe2, socketpair, eventfd/pidfd) carry one too.
+	if retEv, ok := e.ExitEv.(RetCarrier); ok {
+		sb.WriteString(strconv.FormatInt(retEv.GetRet(), 10))
 	}
 
 	sb.WriteString(",")

@@ -172,12 +172,16 @@ func (e *Engine) Ingest(pair *event.Pair) {
 }
 
 func (e *Engine) updateErrorAndByteClasses(pair *event.Pair) {
+	// Error counting keys off any ret-carrying exit event so failing
+	// accept/pipe/socketpair/eventfd calls are counted too; the read/write byte
+	// classification is a *types.RetEvent-only field (RetType).
+	if retCarrier, ok := pair.ExitEv.(event.RetCarrier); ok && retCarrier.GetRet() < 0 {
+		e.totalErrors++
+	}
+
 	retEv, ok := pair.ExitEv.(*types.RetEvent)
 	if !ok {
 		return
-	}
-	if retEv.Ret < 0 {
-		e.totalErrors++
 	}
 
 	switch retEv.RetType {

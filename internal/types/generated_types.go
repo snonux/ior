@@ -1168,6 +1168,11 @@ func (r *RetEvent) GetTime() uint64 {
 	return r.Time
 }
 
+// GetRet returns the syscall return value carried by this event.
+func (r *RetEvent) GetRet() int64 {
+	return r.Ret
+}
+
 var poolOfRetEvents = sync.Pool{
 	New: func() any { return &RetEvent{} },
 }
@@ -1655,6 +1660,11 @@ func (s *SocketpairEvent) GetTime() uint64 {
 	return s.Time
 }
 
+// GetRet returns the syscall return value carried by this event.
+func (s *SocketpairEvent) GetRet() int64 {
+	return s.Ret
+}
+
 var poolOfSocketpairEvents = sync.Pool{
 	New: func() any { return &SocketpairEvent{} },
 }
@@ -1722,6 +1732,11 @@ func (a *AcceptEvent) GetTid() uint32 {
 
 func (a *AcceptEvent) GetTime() uint64 {
 	return a.Time
+}
+
+// GetRet returns the syscall return value carried by this event.
+func (a *AcceptEvent) GetRet() int64 {
+	return a.Ret
 }
 
 var poolOfAcceptEvents = sync.Pool{
@@ -1795,6 +1810,11 @@ func (p *PipeEvent) GetTime() uint64 {
 	return p.Time
 }
 
+// GetRet returns the syscall return value carried by this event.
+func (p *PipeEvent) GetRet() int64 {
+	return p.Ret
+}
+
 var poolOfPipeEvents = sync.Pool{
 	New: func() any { return &PipeEvent{} },
 }
@@ -1862,6 +1882,11 @@ func (e *EventfdEvent) GetTid() uint32 {
 
 func (e *EventfdEvent) GetTime() uint64 {
 	return e.Time
+}
+
+// GetRet returns the syscall return value carried by this event.
+func (e *EventfdEvent) GetRet() int64 {
+	return e.Ret
 }
 
 var poolOfEventfdEvents = sync.Pool{

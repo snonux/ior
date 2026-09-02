@@ -397,9 +397,9 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// KindSeccomp/KindModule map to null_event, which has no ret field, so
 	// pinning the exit side too made these three exits emit a payload-less
 	// null_event: ior_on_syscall_exit() still fed ctx->ret to the kernel-side
-	// aggregate map, but the ring-buffer record carried no return value and
-	// streamrow.New (which fills RetVal/IsError only for *types.RetEvent) had
-	// to report ret=0/is_error=false even for failed calls. Leaving the exits
+	// aggregate map, but the ring-buffer record carried no return value, so
+	// consumers reading it (streamrow.New and friends, via event.RetCarrier)
+	// had to report ret=0/is_error=false even for failed calls. Leaving the exits
 	// unpinned lets field-based classification see "long ret" and pick KindRet
 	// (ret_event), like every other generic syscall exit.
 	"sys_enter_seccomp":       KindSeccomp,
