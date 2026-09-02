@@ -180,6 +180,13 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields, familySampling, syscallSampling *string, dims *tracepoints.DimensionSelectorConfig) {
 	validFields := collapse.ValidFields()
 	validCounts := collapse.ValidCountFields()
+	// Families and kinds enumerate their full valid sets in the help text
+	// (audit domain-06 D2); syscall names are too numerous to list.
+	validFamilies := make([]string, 0, 12)
+	for _, family := range types.AllSyscallFamilies() {
+		validFamilies = append(validFamilies, string(family))
+	}
+	validKinds := tracepoints.KnownKinds()
 	dimensionCfg := &tracepoints.DimensionSelectorConfig{}
 
 	fs.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
@@ -194,15 +201,15 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	tpsAttach = fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
 	tpsExclude = fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
 	fs.StringVar(&dimensionCfg.TraceFamilies, "trace-families", "",
-		"Comma separated syscall families to attach (for example FS,Time,Network)")
+		"Comma separated syscall families to attach; default attaches the FS family only (valid: "+strings.Join(validFamilies, ",")+")")
 	fs.StringVar(&dimensionCfg.TraceKinds, "trace-kinds", "",
-		"Comma separated tracepoint kinds to attach (for example fd,open,sleep,epoll-ctl)")
+		"Comma separated tracepoint kinds to attach (valid: "+strings.Join(validKinds, ",")+")")
 	fs.StringVar(&dimensionCfg.TraceSyscalls, "trace-syscalls", "",
 		"Comma separated syscall names to attach (for example openat,read,nanosleep)")
 	fs.StringVar(&dimensionCfg.NoTraceFamilies, "no-trace-families", "",
-		"Comma separated syscall families to exclude from attachment")
+		"Comma separated syscall families to exclude from attachment (valid: "+strings.Join(validFamilies, ",")+")")
 	fs.StringVar(&dimensionCfg.NoTraceKinds, "no-trace-kinds", "",
-		"Comma separated tracepoint kinds to exclude from attachment")
+		"Comma separated tracepoint kinds to exclude from attachment (valid: "+strings.Join(validKinds, ",")+")")
 	fs.StringVar(&dimensionCfg.NoTraceSyscalls, "no-trace-syscalls", "",
 		"Comma separated syscall names to exclude from attachment")
 
@@ -214,14 +221,14 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	fs.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
 	fs.DurationVar(&cfg.TUIFastRefreshInterval, "tui-fast-refresh", cfg.TUIFastRefreshInterval,
-		"High-frequency refresh interval for TUI flamegraph and stream tabs (0 = disable high-frequency refresh)")
+		"High-frequency refresh interval for TUI flamegraph and stream tabs (0 = fall back to the built-in 200ms flame/stream tick, not to the slower dashboard cadence)")
 	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI stream CSV export (e and stream-tab x/X/E shortcuts plus their hints; separate from Parquet recording)")
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
 	familySampling = fs.String("syscall-sampling-families", "",
-		"Per-family sampling rates, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N; family rate 0 is promoted to 1 in raw output modes -plain/-flamegraph/-parquet which have no aggregate sink)")
+		"Per-family sampling rates as name=rate, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N; family rate 0 is promoted to 1 in raw output modes -plain/-flamegraph/-parquet which have no aggregate sink; valid families: "+strings.Join(validFamilies, ",")+")")
 	syscallSampling = fs.String("syscall-sampling-syscalls", "",
-		"Per-syscall sampling rates, for example \"futex=0,clock_gettime=200\" (overrides family rates)")
+		"Per-syscall sampling rates as name=rate, for example \"futex=0,clock_gettime=200\" (overrides family rates)")
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
 	fields = fs.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))

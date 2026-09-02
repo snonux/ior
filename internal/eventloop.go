@@ -34,12 +34,10 @@ type syscallAggregateSink interface {
 }
 
 type eventLoopConfig struct {
-	pidFilter       int
-	filter          globalfilter.Filter
-	collapsedFields []string
-	countField      string
-	pprofEnable     bool
-	plainMode       bool
+	pidFilter   int
+	filter      globalfilter.Filter
+	pprofEnable bool
+	plainMode   bool
 	// synchronousRawProcessing keeps raw decode and callback emission in a
 	// single goroutine for deterministic test execution.
 	synchronousRawProcessing bool

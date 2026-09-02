@@ -378,14 +378,15 @@ func TestParseTUIFastRefreshOverride(t *testing.T) {
 	}
 }
 
-func TestParseTUIFastRefreshZeroDisables(t *testing.T) {
-	// A zero value is valid and means "disable high-frequency refresh",
-	// falling back to the default Bubble Tea tick rate.
+func TestParseTUIFastRefreshZeroFallsBackToBuiltinTick(t *testing.T) {
+	// A zero value is valid: it clears the configured override so the
+	// dashboard falls back to its built-in 200ms flame/stream tick
+	// constants. High-frequency refresh is never fully disabled.
 	cfg, err := parseForTest(t, "-tui-fast-refresh", "0")
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
 	if cfg.TUIFastRefreshInterval != 0 {
-		t.Fatalf("TUIFastRefreshInterval = %v, want 0 (disabled)", cfg.TUIFastRefreshInterval)
+		t.Fatalf("TUIFastRefreshInterval = %v, want 0 (built-in tick fallback)", cfg.TUIFastRefreshInterval)
 	}
 }
