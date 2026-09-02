@@ -147,14 +147,24 @@ func recorderStatus(recorder *parquet.Recorder) string {
 	if recorder == nil {
 		return "rec: unavailable"
 	}
-	status := recorder.Status()
+	return formatRecorderStatus(recorder.Status())
+}
+
+// formatRecorderStatus renders a recorder status snapshot for the status
+// bar, surfacing queue-overflow drops next to the recording state so partial
+// recordings are visible without opening the file.
+func formatRecorderStatus(status parquet.Status) string {
+	dropped := ""
+	if status.RowsDropped > 0 {
+		dropped = fmt.Sprintf(" (dropped %d)", status.RowsDropped)
+	}
 	if status.Active {
-		return "rec: " + shortenRecordingPath(status.Path)
+		return "rec: " + shortenRecordingPath(status.Path) + dropped
 	}
 	if status.LastError != nil {
 		return "rec err: " + status.LastError.Error()
 	}
-	return "rec: off"
+	return "rec: off" + dropped
 }
 
 func defaultParquetRecordingFilename() string {
