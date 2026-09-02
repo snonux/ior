@@ -99,6 +99,15 @@ Payload bytes classified by return value:
 All other traced syscalls are treated as non-bytes for throughput accounting.
 Memory extent is tracked separately via address-space metrics.
 
+## Known Argument-Capture Gaps
+
+- `openat2` does not report `flags`. Unlike every other `open`-family syscall,
+  openat2's flags are not a tracepoint argument: they live inside the
+  `struct open_how` the caller passes by pointer (`args[2]`), so reading them
+  would require a guarded `bpf_probe_read_user` of user memory. Until that is
+  implemented and verifier-tested, the enter handler emits the `-1` sentinel
+  and `flags` must be read as "not captured" for openat2 (not as "0 flags").
+
 ## Runtime Notes
 
 - Dashboard ships with a dedicated `Non-IO` tab (shortcut `8`) backed by

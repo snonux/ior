@@ -71,6 +71,22 @@ func readSyscallTracingPlan() (string, error) {
 	return string(content), nil
 }
 
+// readGeneratedTracepointsC returns the committed BPF C artifact so tests can
+// assert invariants over the generated handlers, not just over freshly
+// generated output.
+func readGeneratedTracepointsC() (string, error) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("runtime.Caller failed")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
+	content, err := os.ReadFile(filepath.Join(repoRoot, "internal", "c", "generated_tracepoints.c"))
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
 func parseDocListSection(doc, heading string) (map[string][]string, error) {
 	lines := strings.Split(doc, "\n")
 	start := -1

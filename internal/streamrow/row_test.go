@@ -223,3 +223,44 @@ func TestSequencerNilSafeNext(t *testing.T) {
 		t.Fatalf("nil Sequencer.Next() = %d, want 0", got)
 	}
 }
+
+// TestNewCarriesRetForSeccompAndModuleExits locks in audit finding M1/F2 at the
+// row level. seccomp/init_module/delete_module used to emit a payload-less
+// null_event on the exit side, so New() found no *types.RetEvent and every row
+// reported ret=0, is_error=false even for a failing call. The generator now
+// classifies those exits as KindRet (ret_event), so a negative return has to
+// surface here as RetVal < 0 and IsError.
+func TestNewCarriesRetForSeccompAndModuleExits(t *testing.T) {
+	tests := []struct {
+		name        string
+		enterID     types.TraceId
+		exitID      types.TraceId
+		wantSyscall string
+		ret         int64
+		wantIsError bool
+	}{
+		{"seccomp", types.SYS_ENTER_SECCOMP, types.SYS_EXIT_SECCOMP, "seccomp", -1, true},
+		{"init_module", types.SYS_ENTER_INIT_MODULE, types.SYS_EXIT_INIT_MODULE, "init_module", -13, true},
+		{"delete_module", types.SYS_ENTER_DELETE_MODULE, types.SYS_EXIT_DELETE_MODULE, "delete_module", 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			enter := &types.NullEvent{TraceId: tt.enterID, Time: 10, Pid: 5, Tid: 6}
+			pair := event.NewPair(enter)
+			pair.ExitEv = &types.RetEvent{TraceId: tt.exitID, Time: 20, Ret: tt.ret, Pid: 5, Tid: 6}
+
+			got := New(1, pair)
+			if got.Syscall != tt.wantSyscall {
+				t.Fatalf("Syscall = %q, want %q", got.Syscall, tt.wantSyscall)
+			}
+			if got.RetVal != tt.ret || got.IsError != tt.wantIsError {
+				t.Fatalf("RetVal/IsError = %d/%v, want %d/%v", got.RetVal, got.IsError, tt.ret, tt.wantIsError)
+			}
+			if got.ReturnValue() != tt.ret || got.ErrorValue() != tt.wantIsError {
+				t.Fatalf("ReturnValue/ErrorValue = %d/%v, want %d/%v",
+					got.ReturnValue(), got.ErrorValue(), tt.ret, tt.wantIsError)
+			}
+		})
+	}
+}

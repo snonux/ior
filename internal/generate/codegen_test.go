@@ -2452,3 +2452,171 @@ func requireNotContains(t *testing.T, haystack, needle string) {
 		t.Errorf("output unexpectedly contains forbidden string: %q", needle)
 	}
 }
+
+// TestGenerateSeccompModuleExitsCarryRet locks in audit finding M1/F2: the
+// enter side of seccomp(2)/init_module(2)/delete_module(2) is deliberately a
+// payload-less null_event (KindSeccomp/KindModule), but their *exit* side must
+// never be. null_event has no ret field, so pinning the exit formats to the
+// same kinds made these three handlers submit a ring-buffer record without the
+// syscall return value: streamrow.New fills RetVal/IsError only for
+// *types.RetEvent, so stream/CSV/Parquet rows reported ret=0, is_error=false
+// even for failed calls (the kernel-side aggregate map was unaffected because
+// ior_on_syscall_exit still receives ctx->ret). The exits are now unpinned and
+// fall through to field-based classification, which sees "long ret" and picks
+// KindRet -> ret_event, like every other generic syscall exit.
+func TestGenerateSeccompModuleExitsCarryRet(t *testing.T) {
+	tests := []struct {
+		name        string
+		enter, exit string
+		enterStruct string
+		enterKind   TracepointKind
+	}{
+		{"seccomp", syntheticEnter("seccomp", 526), syntheticExit("seccomp", 525), "null_event", KindSeccomp},
+		{"init_module", FormatInitModule, FormatExitInitModule, "null_event", KindModule},
+		{"delete_module", syntheticEnter("delete_module", 410), syntheticExit("delete_module", 409), "null_event", KindModule},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exitFormat := mustParseAll(t, tt.exit)[0]
+			if got := ClassifyFormat(&exitFormat).Kind; got != KindRet {
+				t.Fatalf("sys_exit_%s classified as %v, want KindRet", tt.name, got)
+			}
+
+			out := generateFromPair(t, tt.enter, tt.exit)
+
+			// Enter side is unchanged: still the payload-less null_event.
+			requireContains(t, out, "/// sys_enter_"+tt.name+" is a struct "+tt.enterStruct+" (kind="+tt.enterKind.MetadataName()+")")
+
+			// Exit side must be a ret_event that records the return value.
+			requireContains(t, out, "/// sys_exit_"+tt.name+" is a struct ret_event (UNCLASSIFIED) (kind=ret)")
+			requireContains(t, out, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+			requireContains(t, out, "ev->event_type = EXIT_RET_EVENT;")
+			requireContains(t, out, "ev->trace_id = SYS_EXIT_"+strings.ToUpper(tt.name)+";")
+			requireContains(t, out, "ev->ret = ctx->ret;")
+			if strings.Contains(out, "ev->event_type = EXIT_NULL_EVENT;") {
+				t.Errorf("sys_exit_%s must not emit a payload-less null_event:\n%s", tt.name, out)
+			}
+		})
+	}
+}
+
+// TestGenerateEveryExitHandlerCapturesRet is the generic guard behind
+// TestGenerateSeccompModuleExitsCarryRet: whatever struct an exit handler
+// picks, it must record the kernel return value. All five exit-side structs
+// (ret_event, accept_event, pipe_event, socketpair_event, eventfd_event) have
+// a ret field, so there is no legitimate exception.
+func TestGenerateEveryExitHandlerCapturesRet(t *testing.T) {
+	pairs := []struct{ enter, exit string }{
+		{FormatRead, FormatExitRead},
+		{FormatOpenat, FormatExitOpenat},
+		{FormatAccept, FormatExitAccept},
+		{FormatPipe2, FormatExitPipe2},
+		{FormatSocketpair, FormatExitSocketpair},
+		{FormatEventfd2, FormatExitEventfd2},
+		{FormatInitModule, FormatExitInitModule},
+		{syntheticEnter("seccomp", 526), syntheticExit("seccomp", 525)},
+		{syntheticEnter("delete_module", 410), syntheticExit("delete_module", 409)},
+		{syntheticEnter("ptrace", 163), syntheticExit("ptrace", 162)},
+	}
+	var input strings.Builder
+	for _, p := range pairs {
+		input.WriteString(p.enter + "\n" + p.exit + "\n")
+	}
+	out := GenerateTracepointsC(mustParseAll(t, input.String()))
+
+	for _, name := range exitHandlerNames(out) {
+		body := handlerBody(t, out, name)
+		if !strings.Contains(body, "ev->ret = ctx->ret;") {
+			t.Errorf("%s does not capture the syscall return value:\n%s", name, body)
+		}
+	}
+}
+
+// TestGeneratedArtifactExitHandlersCaptureRet applies the same invariant to the
+// committed internal/c/generated_tracepoints.c so a stale artifact cannot
+// silently reintroduce a ret-less exit handler.
+func TestGeneratedArtifactExitHandlersCaptureRet(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	names := exitHandlerNames(artifact)
+	if len(names) == 0 {
+		t.Fatal("no sys_exit_* handlers found in the generated artifact")
+	}
+	for _, name := range names {
+		if !strings.Contains(handlerBody(t, artifact, name), "ev->ret = ctx->ret;") {
+			t.Errorf("%s in generated_tracepoints.c does not capture ctx->ret", name)
+		}
+	}
+}
+
+// TestGeneratePtraceZeroesPad locks in audit finding F3: struct ptrace_event
+// has an explicit __s32 _pad filler between target_pid and data. bpf_ringbuf_
+// reserve hands back uninitialized memory, so a handler that never writes _pad
+// submits 4 bytes left over from a previously submitted record, which the Go
+// decoder then surfaces as PtraceEvent.Pad.
+func TestGeneratePtraceZeroesPad(t *testing.T) {
+	out := generateFromPair(t, syntheticEnter("ptrace", 163), syntheticExit("ptrace", 162))
+	requireContains(t, out, "struct ptrace_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ptrace_event), 0);")
+	requireContains(t, out, "ev->target_pid = (__s32)ctx->args[1];\n    ev->_pad = 0;\n    ev->data = (__u64)ctx->args[3];")
+}
+
+// TestGenerateOpenat2FlagsGapIsDocumented pins the deliberate openat2 gap
+// (audit finding F4): openat2's flags are not a tracepoint argument — they sit
+// behind the struct open_how pointer at args[2] — so the handler emits the -1
+// sentinel. The sentinel must stay self-explaining in the generated C, and the
+// gap is written up in docs/syscall-tracing-plan.md.
+func TestGenerateOpenat2FlagsGapIsDocumented(t *testing.T) {
+	out := generateFromPair(t, FormatOpenat2, syntheticExit("openat2", 781))
+	requireContains(t, out, "ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)")
+
+	doc, err := readSyscallTracingPlan()
+	if err != nil {
+		t.Fatalf("read syscall tracing plan: %v", err)
+	}
+	if !strings.Contains(doc, "## Known Argument-Capture Gaps") || !strings.Contains(doc, "struct open_how") {
+		t.Error("docs/syscall-tracing-plan.md must document the openat2 flags gap")
+	}
+}
+
+// exitHandlerNames returns every sys_exit_* handler name emitted in generated C.
+func exitHandlerNames(generated string) []string {
+	var names []string
+	for _, line := range strings.Split(generated, "\n") {
+		const prefix = "/// sys_exit_"
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "/// ")
+		if idx := strings.Index(rest, " is a struct "); idx > 0 {
+			names = append(names, rest[:idx])
+		}
+	}
+	return names
+}
+
+// handlerBody returns the generated C body of the named handler, from its ///
+// doc comment through the closing brace.
+func handlerBody(t *testing.T, generated, name string) string {
+	t.Helper()
+	lines := strings.Split(generated, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "/// "+name+" is a struct ") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("handler %s not found in generated output", name)
+	}
+	for i := start; i < len(lines); i++ {
+		if lines[i] == "}" {
+			return strings.Join(lines[start:i+1], "\n")
+		}
+	}
+	t.Fatalf("handler %s has no closing brace", name)
+	return ""
+}

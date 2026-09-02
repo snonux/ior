@@ -276,11 +276,11 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// dropping the fds they operate on. Classify them KindFd to capture the
 	// source fd at args[0], matching the single-fd KindFd convention already
 	// used for copy_file_range and sendfile64.
-	"sys_enter_splice":     KindFd,
-	"sys_enter_tee":        KindFd,
-	"sys_enter_statmount":  KindNull,
-	"sys_enter_listmount":   KindNull,
-	"sys_enter_listns":      KindNull,
+	"sys_enter_splice":    KindFd,
+	"sys_enter_tee":       KindFd,
+	"sys_enter_statmount": KindNull,
+	"sys_enter_listmount": KindNull,
+	"sys_enter_listns":    KindNull,
 
 	"sys_enter_poll":     KindPoll,
 	"sys_enter_ppoll":    KindPoll,
@@ -393,12 +393,18 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_request_key":      KindKeyctl,
 	"sys_enter_ptrace":           KindPtrace,
 	"sys_enter_perf_event_open":  KindPerfOpen,
-	"sys_enter_seccomp":          KindSeccomp,
-	"sys_exit_seccomp":           KindSeccomp,
-	"sys_enter_init_module":      KindModule,
-	"sys_exit_init_module":       KindModule,
-	"sys_enter_delete_module":    KindModule,
-	"sys_exit_delete_module":     KindModule,
+	// seccomp/init_module/delete_module are pinned on the ENTER side only.
+	// KindSeccomp/KindModule map to null_event, which has no ret field, so
+	// pinning the exit side too made these three exits emit a payload-less
+	// null_event: ior_on_syscall_exit() still fed ctx->ret to the kernel-side
+	// aggregate map, but the ring-buffer record carried no return value and
+	// streamrow.New (which fills RetVal/IsError only for *types.RetEvent) had
+	// to report ret=0/is_error=false even for failed calls. Leaving the exits
+	// unpinned lets field-based classification see "long ret" and pick KindRet
+	// (ret_event), like every other generic syscall exit.
+	"sys_enter_seccomp":       KindSeccomp,
+	"sys_enter_init_module":   KindModule,
+	"sys_enter_delete_module": KindModule,
 
 	"sys_enter_getpid":          KindNull,
 	"sys_enter_gettid":          KindNull,
@@ -604,16 +610,16 @@ func ClassifyRet(name string) RetClassification {
 }
 
 var retClassifications = map[string]RetClassification{
-	"fgetxattr":        ReadClassified,
-	"flistxattr":       ReadClassified,
-	"getdents":         ReadClassified,
-	"getdents64":       ReadClassified,
-	"getxattr":         ReadClassified,
+	"fgetxattr":  ReadClassified,
+	"flistxattr": ReadClassified,
+	"getdents":   ReadClassified,
+	"getdents64": ReadClassified,
+	"getxattr":   ReadClassified,
 	// getxattrat (Linux 6.13+) returns the size in bytes of the xattr value,
 	// exactly like getxattr/lgetxattr/fgetxattr, so it is a read byte-count.
-	"getxattrat":       ReadClassified,
-	"lgetxattr":        ReadClassified,
-	"listxattr":        ReadClassified,
+	"getxattrat": ReadClassified,
+	"lgetxattr":  ReadClassified,
+	"listxattr":  ReadClassified,
 	// listxattrat (Linux 6.13+) returns the size in bytes of the list of
 	// extended attribute names, exactly like listxattr/llistxattr/flistxattr,
 	// so it is a read byte-count.
@@ -651,8 +657,8 @@ var retClassifications = map[string]RetClassification{
 	// arg, never the return). Like its SysV IPC siblings (msgrcv excepted, which
 	// genuinely returns a received byte count), msgsnd's int status must stay
 	// UNCLASSIFIED so the stats engine never treats the return as bytes written.
-	"write":             WriteClassified,
-	"writev":            WriteClassified,
+	"write":  WriteClassified,
+	"writev": WriteClassified,
 	// mq_timedsend is deliberately NOT listed here: mq_timedsend(2)/mq_send(3)
 	// return 0 on success or -1 on error — NOT a byte count (msg_len is an
 	// INPUT arg, never the return). Listing it as WriteClassified made
