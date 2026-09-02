@@ -83,8 +83,9 @@ explanation.
 
 ## TUI
 
-Press **H** inside the dashboard to toggle the built-in help panel. Tabs are
-reachable with **tab/shift+tab** or number keys **1–7**. For the full hotkey
+Press **H** inside the dashboard to toggle the built-in help overlay, or
+**F1** to toggle the compact bottom help bar. Tabs are reachable with
+**tab/shift+tab** or number keys **1–7**. For the full hotkey
 reference, recording modes, and the `.ior.zst` vs Parquet trade-off see the
 [tutorial](./docs/tutorial/tutorial.md).
 

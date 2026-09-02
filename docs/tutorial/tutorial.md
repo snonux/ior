@@ -212,7 +212,8 @@ Tapes live in [`tapes/`](./tapes), the background workload that drives them is [
 |-----|--------|
 | `tab` / `shift+tab` | next / previous tab |
 | `1`–`7` | jump to tab by number (1=Flame, 2=Overview, 3=Syscalls, 4=Files, 5=Processes, 6=Latency+Gaps, 7=Stream) |
-| `H` | toggle bottom help panel |
+| `H` | toggle global help overlay |
+| `F1` | toggle bottom dashboard help bar |
 | `e` | export filtered stream snapshot to CSV |
 | `R` | start / stop Parquet recording |
 | `p` | re-open PID picker |
