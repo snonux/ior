@@ -643,11 +643,28 @@ func setupTraceInfra(
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 	el.aggregateSrc = aggregateConsumer
+	attachRingbufDropCounter(el, bpfModule, logTeardown)
 
 	teardown = func() {
 		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 	}
 	return eventCh, ctx, cancel, profiling, el, mgr, teardown, nil
+}
+
+// attachRingbufDropCounter wires the kernel-side ring-buffer drop counter into
+// the event loop so lost events are reported instead of vanishing silently
+// (audit findings D2 F1 / D9 Y2). A missing map is deliberately non-fatal: it
+// only means this binary was linked against an older BPF object, and losing
+// the drop telemetry must not abort an otherwise healthy trace. logErr always
+// writes to stderr, so the degraded observability stays visible in TUI mode
+// too.
+func attachRingbufDropCounter(el *eventLoop, bpfModule *bpf.Module, logErr func(...any)) {
+	dropCounter, err := newRingbufDropCounter(bpfModule)
+	if err != nil {
+		logErr("Ring-buffer drop counter unavailable (kernel-side drops will not be reported):", err)
+		return
+	}
+	el.dropSrc = dropCounter
 }
 
 // ringBufferStopper abstracts the ring-buffer polling control for teardown.

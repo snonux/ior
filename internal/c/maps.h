@@ -73,3 +73,18 @@ struct {
     __type(key, __u32);
     __type(value, __u32);
 } syscall_sampling_rate_map SEC(".maps");
+
+// ringbuf_drop_map counts events lost because bpf_ringbuf_reserve() found
+// event_map full. A full ring buffer is the kernel-side symptom of userspace
+// backpressure (the libbpfgo ring-buffer callback blocks on a full Go channel),
+// and without this counter those losses are completely silent.
+//
+// PERCPU_ARRAY with a single slot: the increment sits on the hot drop path, so
+// each CPU bumps its own private u64 without atomics or contention; userspace
+// sums the per-CPU values when reporting.
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} ringbuf_drop_map SEC(".maps");

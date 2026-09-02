@@ -202,6 +202,8 @@ func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
+	attachRingbufDropCounter(el, bpfModule, logTeardown)
+
 	cleanup = func() {
 		// Teardown order: stop the ring-buffer polling goroutine before the
 		// module is closed, detach probes (failures always logged to stderr —

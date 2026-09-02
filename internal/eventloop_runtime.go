@@ -24,6 +24,8 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer e.shutdownCommResolver()
 	stopAggregateLoop := e.startAggregateDrainLoop(ctx)
 	defer stopAggregateLoop()
+	stopDropMonitor := e.startRingbufDropMonitor(ctx)
+	defer stopDropMonitor()
 
 	if e.cfg.pprofEnable {
 		logStatus("Profiling, press Ctrl+C to stop")
@@ -56,6 +58,43 @@ func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
 
 	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateOnlyTraceIDs, e.Filter)
 	return drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
+}
+
+// startRingbufDropMonitor polls the kernel-side ring-buffer drop counter for
+// the lifetime of the run. Both stop paths (ctx cancellation and the deferred
+// stop) take a final reading before stats() is unblocked by close(e.done), so
+// the reported total covers the whole run.
+func (e *eventLoop) startRingbufDropMonitor(ctx context.Context) func() {
+	if e.dropSrc == nil {
+		return func() {}
+	}
+	monitor := newRingbufDropMonitor(e.dropSrc)
+	return monitor.Start(ctx, e.cfg.aggregateDrainEvery, e.handleRingbufDropResult)
+}
+
+// handleRingbufDropResult records the running drop total and raises a warning
+// for every interval that lost events, so backpressure shows up live in the
+// TUI stream (and in -plain runs via the end-of-run statistics).
+func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
+	if result.warning != "" {
+		e.notifyWarning(result.warning)
+		return
+	}
+	e.numRingbufDrops.Store(result.total)
+	if result.delta == 0 {
+		return
+	}
+	message := formatRingbufDropWarning(result)
+	if e.warningCb != nil {
+		e.notifyWarning(message)
+		return
+	}
+	// Modes without a warning sink (-plain, -flamegraph, headless -parquet)
+	// would otherwise only learn about the loss from the end-of-run
+	// statistics, which can be hours away. Losing events silently is exactly
+	// the finding this counter closes, so fall back to stderr - stdout stays
+	// machine-readable.
+	logStatus("Warning:", message)
 }
 
 func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {

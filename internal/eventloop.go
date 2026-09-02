@@ -33,6 +33,13 @@ type syscallAggregateSink interface {
 	IngestSyscallAggregates([]statsengine.SyscallAggregate)
 }
 
+// ringbufDropSource reports the cumulative number of events the kernel dropped
+// because the event ring buffer was full. Implemented by ringbufDropCounter
+// over the BPF ringbuf_drop_map; stubbed in tests.
+type ringbufDropSource interface {
+	Total() (uint64, error)
+}
+
 type eventLoopConfig struct {
 	pidFilter   int
 	filter      globalfilter.Filter
@@ -65,14 +72,20 @@ type eventLoop struct {
 	cfg             eventLoopConfig
 	aggregateSink   syscallAggregateSink
 	aggregateSrc    syscallAggregateSource
+	// dropSrc reads the kernel-side ring-buffer drop counter. nil disables
+	// drop monitoring (tests and any path without a BPF module).
+	dropSrc ringbufDropSource
 
 	// Statistics
 	numTracepoints          uint
 	numTracepointMismatches uint
 	numSyscalls             uint
 	numSyscallsAfterFilter  uint
-	startTime               time.Time
-	done                    chan struct{}
+	// numRingbufDrops is the cumulative kernel-side ring-buffer drop count.
+	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
+	numRingbufDrops atomic.Uint64
+	startTime       time.Time
+	done            chan struct{}
 }
 
 // Filter returns a snapshot of the currently active global filter. Each call
@@ -219,16 +232,28 @@ func (e *eventLoop) stats() string {
 		mismatchPct = (float64(e.numTracepointMismatches) / float64(e.numTracepoints)) * 100
 	}
 
+	// Kernel-side ring-buffer drops used to be invisible (audit findings
+	// D2 F1 / D9 Y2): a full event_map makes bpf_ringbuf_reserve() return
+	// NULL and the generated handlers skip the event. The counter is always
+	// reported, so a zero line is an explicit "no loss" statement.
+	drops := e.numRingbufDrops.Load()
+	dropPct := 0.0
+	if total := uint64(e.numTracepoints) + drops; total > 0 {
+		dropPct = (float64(drops) / float64(total)) * 100
+	}
+
 	stats := fmt.Sprintf(
 		"Statistics:\n"+
 			"\tduration: %v\n"+
 			"\ttracepoints: %v (%.2f/s) with %d mismatches (%.2f%%)\n"+
 			"\tsyscalls: %d (%.2f/s)\n"+
-			"\tsyscalls after filter: %d (%.2f/s)\n",
+			"\tsyscalls after filter: %d (%.2f/s)\n"+
+			"\tring buffer drops: %d (%.2f/s, %.2f%% of events)\n",
 		duration,
 		e.numTracepoints, rate(uint64(e.numTracepoints)), e.numTracepointMismatches, mismatchPct,
 		e.numSyscalls, rate(uint64(e.numSyscalls)),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
+		drops, rate(drops), dropPct,
 	)
 
 	return stats
