@@ -607,9 +607,19 @@ func setupTraceInfra(
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
+	// Teardown errors must stay visible in every mode: the mode-dependent
+	// logln is a no-op in TUI mode, which previously silently discarded
+	// probe-detach failures (audit domain-10 F2).
+	logTeardown := newLogger(true)
+
 	eventCh, rb, err := setupEventChannel(bpfModule)
 	if err != nil {
-		bpfModule.Close()
+		// Probes are already attached (setupBPFModule succeeded), so detach
+		// them too on this early-abort path (audit domain-10 F3). The ring
+		// buffer does not exist yet and no context was created, hence the
+		// explicit nils for rb and stopSignals; the bindings are released
+		// because setupBPFModule already wired them.
+		closeTraceInfra(logTeardown, nil, mgr, releaseBindings, bpfModule, nil)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
@@ -618,9 +628,7 @@ func setupTraceInfra(
 	profiling, err = setupProfiling(ctx, cfg, started)
 	if err != nil {
 		cancel()
-		stopSignals()
-		rb.Stop()
-		bpfModule.Close()
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
@@ -629,35 +637,75 @@ func setupTraceInfra(
 	el, err = newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
 		cancel()
-		stopSignals()
-		rb.Stop()
-		bpfModule.Close()
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 	aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
 	if err != nil {
 		cancel()
-		stopSignals()
-		rb.Stop()
-		bpfModule.Close()
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 	el.aggregateSrc = aggregateConsumer
 
 	teardown = func() {
-		// Stop the ring-buffer polling goroutine before the module is closed.
-		// rb.Stop() is idempotent; bpfModule.Close() calls rb.Close() for the C struct.
-		rb.Stop()
-		// mgr.Close() detaches BPF probes and releases kernel resources; log any
-		// error so that probe-detach failures are not silently discarded.
-		if err := mgr.Close(); err != nil {
-			logln("BPF probe manager close error:", err)
-		}
-		releaseBindings()
-		bpfModule.Close()
-		stopSignals()
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 	}
 	return eventCh, ctx, cancel, profiling, el, mgr, teardown, nil
+}
+
+// ringBufferStopper abstracts the ring-buffer polling control for teardown.
+type ringBufferStopper interface {
+	Stop()
+}
+
+// probeCloser abstracts the probe manager, whose Close reports detach
+// failures.
+type probeCloser interface {
+	Close() error
+}
+
+// moduleCloser abstracts the BPF module, whose libbpfgo Close releases the
+// module without reporting an error.
+type moduleCloser interface {
+	Close()
+}
+
+// closeTraceInfra tears down trace infrastructure in the canonical order:
+// stop ring-buffer polling first (it is idempotent; the module Close also
+// releases the underlying C ring buffer), detach probes, release bindings,
+// close the module, then stop signal handling. Collaborators that a failed
+// setup step has not created yet must be passed as explicit nil (a typed nil
+// pointer would defeat the nil checks). Probe-detach failures are routed to
+// logErr instead of being propagated, so an in-flight setup error stays the
+// visible failure. In production logErr always writes to stderr: the
+// mode-dependent logger is a no-op in TUI mode, which previously silently
+// discarded teardown errors (audit domain-10 F2).
+func closeTraceInfra(
+	logErr func(...any),
+	rb ringBufferStopper,
+	mgr probeCloser,
+	releaseBindings func(),
+	bpfModule moduleCloser,
+	stopSignals func(),
+) {
+	if rb != nil {
+		rb.Stop()
+	}
+	if mgr != nil {
+		if err := mgr.Close(); err != nil {
+			logErr("BPF probe manager close error:", err)
+		}
+	}
+	if releaseBindings != nil {
+		releaseBindings()
+	}
+	if bpfModule != nil {
+		bpfModule.Close()
+	}
+	if stopSignals != nil {
+		stopSignals()
+	}
 }
 
 func chainEventLoopConfigure(fns ...func(*eventLoop)) func(*eventLoop) {

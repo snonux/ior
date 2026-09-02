@@ -170,9 +170,19 @@ func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
+	// Teardown errors must stay visible in every mode: the mode-dependent
+	// logln is a no-op in TUI mode, which previously silently discarded
+	// probe-detach failures (audit domain-10 F2).
+	logTeardown := newLogger(true)
+
 	eventCh, rb, err := setupEventChannel(bpfModule)
 	if err != nil {
-		bpfModule.Close()
+		// Probes are already attached (setupBPFModule succeeded), so detach
+		// them too on this early-abort path (audit domain-10 F3). The ring
+		// buffer does not exist yet and no context was created, hence the
+		// explicit nils for rb and stopSignals; the bindings are released
+		// because setupBPFModule already wired them.
+		closeTraceInfra(logTeardown, nil, mgr, releaseBindings, bpfModule, nil)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
@@ -181,31 +191,23 @@ func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (
 	profiling, err = setupProfiling(ctx, cfg, nil)
 	if err != nil {
 		cancel()
-		stopSignals()
-		rb.Stop()
-		bpfModule.Close()
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
 	el, err = newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
 		cancel()
-		stopSignals()
-		rb.Stop()
-		bpfModule.Close()
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
 	cleanup = func() {
-		// Stop the ring-buffer polling goroutine before the module is closed.
-		// rb.Stop() is idempotent; bpfModule.Close() calls rb.Close() for the C struct.
-		rb.Stop()
-		if err := mgr.Close(); err != nil {
-			logln("BPF probe manager close error:", err)
-		}
-		releaseBindings()
-		bpfModule.Close()
-		stopSignals()
+		// Teardown order: stop the ring-buffer polling goroutine before the
+		// module is closed, detach probes (failures always logged to stderr —
+		// the mode-dependent logln is a no-op in TUI mode; audit domain-10
+		// F2), release bindings, close the module, then stop signal handling.
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 	}
 	return eventCh, ctx, cancel, profiling, el, mgr, cleanup, nil
 }
