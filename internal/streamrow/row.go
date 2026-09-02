@@ -149,9 +149,15 @@ func New(seq uint64, pair *event.Pair) Row {
 		row.EpollEvents = pair.Epoll.Events
 	}
 
-	if retEv, ok := pair.ExitEv.(*types.RetEvent); ok {
-		row.RetVal = retEv.Ret
-		row.IsError = retEv.Ret < 0
+	// Any exit event carrying a `ret` field surfaces the return value, not just
+	// the generic *types.RetEvent: the kind-specific exits (accept/accept4,
+	// pipe/pipe2, socketpair, eventfd/pidfd) carry one too. Matching on the
+	// event.RetCarrier interface instead of concrete types means a newly
+	// generated ret-carrying kind is covered without touching this function.
+	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok {
+		ret := retEv.GetRet()
+		row.RetVal = ret
+		row.IsError = ret < 0
 	}
 
 	return row

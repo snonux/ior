@@ -162,3 +162,50 @@ func newEnginePair(traceID types.TraceId, ret int64, retType uint32, comm string
 		File:              file.NewFd(3, path, -1),
 	}
 }
+
+// TestEngineCountsErrorsForKindSpecificExits guards the ret-carrier fix at the
+// aggregation layer: accept/pipe/socketpair/eventfd exits decode into their own
+// event structs, not *types.RetEvent, so a failing call used to be invisible to
+// both the global error total and the per-syscall Errors column.
+func TestEngineCountsErrorsForKindSpecificExits(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	engine := newEngineWithClock(4, clock.Now)
+
+	exits := []struct {
+		traceID types.TraceId
+		exit    event.Event
+	}{
+		{types.SYS_ENTER_ACCEPT, &types.AcceptEvent{TraceId: types.SYS_EXIT_ACCEPT, Ret: -11}},
+		{types.SYS_ENTER_PIPE, &types.PipeEvent{TraceId: types.SYS_EXIT_PIPE, Ret: -24}},
+		{types.SYS_ENTER_SOCKETPAIR, &types.SocketpairEvent{TraceId: types.SYS_EXIT_SOCKETPAIR, Ret: -93}},
+		{types.SYS_ENTER_EVENTFD2, &types.EventfdEvent{TraceId: types.SYS_EXIT_EVENTFD2, Ret: -24}},
+	}
+	for _, tc := range exits {
+		engine.Ingest(&event.Pair{
+			EnterEv:  &types.NullEvent{TraceId: tc.traceID, Pid: 4242},
+			ExitEv:   tc.exit,
+			Comm:     "srv",
+			Duration: 1000,
+			File:     file.NewFd(3, "socket:accepted", -1),
+		})
+		clock.Advance(100 * time.Millisecond)
+	}
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+	if snap.TotalErrors != uint64(len(exits)) {
+		t.Fatalf("TotalErrors = %d, want %d", snap.TotalErrors, len(exits))
+	}
+
+	seen := make(map[types.TraceId]uint64, len(exits))
+	for _, row := range snap.Syscalls() {
+		seen[row.TraceID] = row.Errors
+	}
+	for _, tc := range exits {
+		if got := seen[tc.traceID]; got != 1 {
+			t.Errorf("syscall %s Errors = %d, want 1", tc.traceID.Name(), got)
+		}
+	}
+}

@@ -2,7 +2,6 @@ package globalfilter
 
 import (
 	"ior/internal/event"
-	"ior/internal/types"
 )
 
 func MatchPair(filter Filter, pair *event.Pair) bool {
@@ -91,11 +90,14 @@ func (p pairCandidate) ReturnValue() int64 {
 	if p.pair == nil {
 		return 0
 	}
-	retEvent, ok := p.pair.ExitEv.(*types.RetEvent)
+	// Match on the ret-carrying interface so filters on ret/error also see the
+	// kind-specific exits (accept/accept4, pipe/pipe2, socketpair,
+	// eventfd/pidfd), not just the generic *types.RetEvent.
+	retEvent, ok := p.pair.ExitEv.(event.RetCarrier)
 	if !ok {
 		return 0
 	}
-	return retEvent.Ret
+	return retEvent.GetRet()
 }
 
 func (p pairCandidate) ErrorValue() bool {

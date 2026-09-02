@@ -94,7 +94,9 @@ func (a *syscallAccumulator) Add(pair *event.Pair) {
 	stats.updateMinMax(pair.Duration)
 	stats.addSample(pair.Duration, a.sampleCap, a.rng)
 
-	if retEv, ok := pair.ExitEv.(*types.RetEvent); ok && retEv.Ret < 0 {
+	// Any ret-carrying exit event counts here, including the kind-specific
+	// exits (accept/accept4, pipe/pipe2, socketpair, eventfd/pidfd).
+	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok && retEv.GetRet() < 0 {
 		stats.errorCount++
 	}
 }

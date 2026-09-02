@@ -334,3 +334,91 @@ func TestParseCTypesInputEmpty(t *testing.T) {
 		t.Errorf("expected 0 constants, got %d", len(constants))
 	}
 }
+
+// retTypesH exercises the ret-accessor emission: ret_event and accept_event
+// carry a scalar `ret`, null_event does not, and pipe_event's `ret` is a
+// narrower type that has to be widened to int64.
+const retTypesH = `struct null_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+};
+
+struct ret_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __s64 ret;
+    __u32 pid;
+    __u32 tid;
+};
+
+struct accept_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd;
+    __s64 ret;
+};
+
+struct pipe_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 ret;
+};
+`
+
+// TestGenerateTypesGoEmitsRetGetter locks in the accessor that lets
+// streamrow.New read a return value through event.RetCarrier instead of a
+// hand-maintained type switch: every struct with a `ret` member — not just
+// ret_event — must get GetRet, so a newly generated kind-specific exit struct
+// is covered automatically and cannot silently report ret=0.
+func TestGenerateTypesGoEmitsRetGetter(t *testing.T) {
+	structs, constants, err := ParseCTypesInput(strings.NewReader(retTypesH + testDefines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+
+	requireContains(t, output, "func (r *RetEvent) GetRet() int64 {\n\treturn r.Ret\n}")
+	requireContains(t, output, "func (a *AcceptEvent) GetRet() int64 {\n\treturn a.Ret\n}")
+
+	// A narrower ret type is widened rather than emitted as a type error.
+	requireContains(t, output, "func (p *PipeEvent) GetRet() int64 {\n\treturn int64(p.Ret)\n}")
+
+	if strings.Contains(output, "func (n *NullEvent) GetRet()") {
+		t.Fatalf("null_event has no ret member but got a GetRet accessor")
+	}
+}
+
+// TestGenerateTypesGoRetGetterCoversEveryRetStruct is the generator-side
+// invariant: whatever set of structs the C header defines, the number of
+// emitted GetRet accessors must equal the number of structs carrying a ret
+// member. This is what keeps the fix from rotting as new kinds are added.
+func TestGenerateTypesGoRetGetterCoversEveryRetStruct(t *testing.T) {
+	structs, constants, err := ParseCTypesInput(strings.NewReader(retTypesH + testDefines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+
+	want := 0
+	for _, s := range structs {
+		if _, ok := findRetMember(s.Members); ok {
+			want++
+		}
+	}
+	if want == 0 {
+		t.Fatal("test input defines no ret-carrying struct")
+	}
+	if got := strings.Count(output, ") GetRet() int64 {"); got != want {
+		t.Fatalf("emitted %d GetRet accessors for %d ret-carrying structs", got, want)
+	}
+}

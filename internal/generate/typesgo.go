@@ -302,6 +302,7 @@ func writeGoStruct(b *strings.Builder, s CStruct) {
 	writeStringMethod(b, goName, selfRef, s.Members)
 	writeEqualsMethod(b, goName, selfRef, s.Members)
 	writeGetterMethods(b, goName, selfRef)
+	writeRetGetterMethod(b, goName, selfRef, s.Members)
 
 	if strings.HasSuffix(goName, "Event") {
 		b.WriteString("\n")
@@ -372,6 +373,40 @@ func writeGetterMethods(b *strings.Builder, goName, selfRef string) {
 		fmt.Fprintf(b, "func (%s *%s) %s() %s {\n\treturn %s.%s\n}\n\n",
 			selfRef, goName, g.method, g.returnType, selfRef, g.field)
 	}
+}
+
+// retMemberName is the C field name that carries a syscall return value.
+// Every event struct that has it is a "ret carrier" and gets a GetRet
+// accessor so consumers (e.g. streamrow.New) can read the return value
+// without knowing the concrete type. Keeping this in the generator means a
+// newly added kind-specific exit struct is covered automatically instead of
+// silently reporting ret=0.
+const retMemberName = "ret"
+
+// findRetMember returns the scalar `ret` member of a struct, if any.
+func findRetMember(members []CMember) (CMember, bool) {
+	for _, m := range members {
+		if m.FieldName == retMemberName && m.ArraySize == "" {
+			return m, true
+		}
+	}
+	return CMember{}, false
+}
+
+// writeRetGetterMethod emits GetRet for structs carrying a ret field. The
+// accessor normalises to int64 so all ret carriers share one interface
+// (event.RetCarrier).
+func writeRetGetterMethod(b *strings.Builder, goName, selfRef string, members []CMember) {
+	m, ok := findRetMember(members)
+	if !ok {
+		return
+	}
+	expr := selfRef + ".Ret"
+	if cTypeToGoType(m.TypeName) != "int64" {
+		expr = "int64(" + expr + ")"
+	}
+	b.WriteString("// GetRet returns the syscall return value carried by this event.\n")
+	fmt.Fprintf(b, "func (%s *%s) GetRet() int64 {\n\treturn %s\n}\n\n", selfRef, goName, expr)
 }
 
 func writeSyncPool(b *strings.Builder, goName, selfRef string) {
