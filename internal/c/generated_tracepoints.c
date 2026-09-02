@@ -11232,7 +11232,7 @@ int handle_sys_enter_openat2(struct syscall_trace_enter *ctx) {
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
-    ev->flags = -1; // Probably OK
+    ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13387,7 +13387,7 @@ int handle_sys_enter_seccomp(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_seccomp is a struct null_event (kind=seccomp)
+/// sys_exit_seccomp is a struct ret_event (UNCLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_seccomp")
 int handle_sys_exit_seccomp(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -13397,15 +13397,17 @@ int handle_sys_exit_seccomp(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SECCOMP, ctx->ret))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_NULL_EVENT;
+    ev->event_type = EXIT_RET_EVENT;
     ev->trace_id = SYS_EXIT_SECCOMP;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14913,7 +14915,7 @@ int handle_sys_enter_delete_module(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_delete_module is a struct null_event (kind=module)
+/// sys_exit_delete_module is a struct ret_event (UNCLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_delete_module")
 int handle_sys_exit_delete_module(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -14923,15 +14925,17 @@ int handle_sys_exit_delete_module(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_DELETE_MODULE, ctx->ret))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_NULL_EVENT;
+    ev->event_type = EXIT_RET_EVENT;
     ev->trace_id = SYS_EXIT_DELETE_MODULE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14961,7 +14965,7 @@ int handle_sys_enter_init_module(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_init_module is a struct null_event (kind=module)
+/// sys_exit_init_module is a struct ret_event (UNCLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_init_module")
 int handle_sys_exit_init_module(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -14971,15 +14975,17 @@ int handle_sys_exit_init_module(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_INIT_MODULE, ctx->ret))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev)
         return 0;
 
-    ev->event_type = EXIT_NULL_EVENT;
+    ev->event_type = EXIT_RET_EVENT;
     ev->trace_id = SYS_EXIT_INIT_MODULE;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->ret = ctx->ret;
+    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18620,6 +18626,7 @@ int handle_sys_enter_ptrace(struct syscall_trace_enter *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     ev->request = (__s64)ctx->args[0];
     ev->target_pid = (__s32)ctx->args[1];
+    ev->_pad = 0;
     ev->data = (__u64)ctx->args[3];
 
     bpf_ringbuf_submit(ev, 0);

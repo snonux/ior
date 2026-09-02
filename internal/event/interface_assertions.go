@@ -22,8 +22,13 @@ var (
 	// *types.FdEvent carries a single file-descriptor field (close, dup, etc.).
 	_ Event = (*types.FdEvent)(nil)
 
-	// *types.RetEvent is the exit-side event for all syscalls; it carries the
-	// kernel return value.
+	// *types.RetEvent is the default exit-side event: every syscall exit that
+	// is not pinned to a kind-specific struct decodes as a RetEvent carrying
+	// the kernel return value. The exceptions are the exits that need extra
+	// payload alongside the return value — accept/accept4 (AcceptEvent),
+	// pipe/pipe2 (PipeEvent), socketpair (SocketpairEvent) and the
+	// eventfd/pidfd family (EventfdEvent) — and those carry ret too, so every
+	// generated exit handler records the return value.
 	_ Event = (*types.RetEvent)(nil)
 
 	// *types.NameEvent carries a single filename field (unlink, mkdir, etc.).

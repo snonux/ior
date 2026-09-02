@@ -226,7 +226,12 @@ func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) st
 	if flagsIdx > -1 {
 		fmt.Fprintf(&b, "    ev->flags = ctx->args[%d];\n", flagsIdx)
 	} else {
-		b.WriteString("    ev->flags = -1; // Probably OK\n")
+		// Known gap: openat2(2) is the only open-family syscall whose flags are
+		// not a tracepoint argument — they live inside the struct open_how the
+		// caller passes by pointer (args[2]), so they would need a guarded
+		// bpf_probe_read_user of user memory. Until that is implemented and
+		// verifier-tested, emit the -1 sentinel and say why.
+		b.WriteString("    ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)\n")
 	}
 	return b.String()
 }
@@ -296,20 +301,20 @@ func generateExtraPipe(f *Format, isEnter bool) string {
 // that captures the flags argument. Syscalls not listed here default to "0".
 // To add a new eventfd-like syscall, register its flags expression below.
 var eventfdFlagsExpr = map[string]string{
-	"sys_enter_epoll_create":          "0", // epoll_create(size) has no flags argument
-	"sys_enter_epoll_create1":         "(__s32)ctx->args[0]",
-	"sys_enter_inotify_init1":         "(__s32)ctx->args[0]",
-	"sys_enter_fanotify_init":         "(__s32)ctx->args[0]",
+	"sys_enter_epoll_create":            "0", // epoll_create(size) has no flags argument
+	"sys_enter_epoll_create1":           "(__s32)ctx->args[0]",
+	"sys_enter_inotify_init1":           "(__s32)ctx->args[0]",
+	"sys_enter_fanotify_init":           "(__s32)ctx->args[0]",
 	"sys_enter_landlock_create_ruleset": "(__s32)ctx->args[2]",
-	"sys_enter_eventfd2":              "(__s32)ctx->args[1]",
-	"sys_enter_memfd_create":          "(__s32)ctx->args[1]",
-	"sys_enter_memfd_secret":          "(__s32)ctx->args[0]",
-	"sys_enter_userfaultfd":           "(__s32)ctx->args[0]",
-	"sys_enter_signalfd4":             "(__s32)ctx->args[3]",
-	"sys_enter_timerfd_create":        "(__s32)ctx->args[1]",
-	"sys_enter_pidfd_open":            "(__s32)ctx->args[1]", // pidfd_open(pid, flags): flags at args[1]
-	"sys_enter_fsmount":               "(__s32)ctx->args[1]",
-	"sys_enter_fsopen":                "(__s32)ctx->args[1]",
+	"sys_enter_eventfd2":                "(__s32)ctx->args[1]",
+	"sys_enter_memfd_create":            "(__s32)ctx->args[1]",
+	"sys_enter_memfd_secret":            "(__s32)ctx->args[0]",
+	"sys_enter_userfaultfd":             "(__s32)ctx->args[0]",
+	"sys_enter_signalfd4":               "(__s32)ctx->args[3]",
+	"sys_enter_timerfd_create":          "(__s32)ctx->args[1]",
+	"sys_enter_pidfd_open":              "(__s32)ctx->args[1]", // pidfd_open(pid, flags): flags at args[1]
+	"sys_enter_fsmount":                 "(__s32)ctx->args[1]",
+	"sys_enter_fsopen":                  "(__s32)ctx->args[1]",
 }
 
 // generateExtraEventfd emits the enter/exit body for eventfd-family syscalls.
@@ -583,8 +588,12 @@ func generateExtraKeyctl(name string) string {
 		memExpr(spec.option), memExpr(spec.keySerial), memExpr(spec.value))
 }
 
+// generateExtraPtrace emits the ptrace_event body. _pad is an explicit
+// alignment filler between target_pid and data; it must be written, otherwise
+// the reserved ring-buffer record keeps whatever 4 bytes the previous record
+// left there and the Go decoder surfaces that stale data as PtraceEvent.Pad.
 func generateExtraPtrace() string {
-	return "    ev->request = (__s64)ctx->args[0];\n    ev->target_pid = (__s32)ctx->args[1];\n    ev->data = (__u64)ctx->args[3];\n"
+	return "    ev->request = (__s64)ctx->args[0];\n    ev->target_pid = (__s32)ctx->args[1];\n    ev->_pad = 0;\n    ev->data = (__u64)ctx->args[3];\n"
 }
 
 func generateExtraPerfOpen() string {
