@@ -546,8 +546,8 @@ func TestBuildRenderRowsHeightMetricUsesLeafBandsAndViewportRows(t *testing.T) {
 		subtreeSet:         map[int]bool{0: true, 1: true, 2: true},
 		matchSet:           nil,
 		selectedIdx:        0,
-		heightMetricActive: true,  // heightMetricActive
-		isDark:             true,  // isDark
+		heightMetricActive: true, // heightMetricActive
+		isDark:             true, // isDark
 	})
 
 	if got, want := len(rows), 5; got != want {
