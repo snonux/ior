@@ -73,4 +73,3 @@ func TestInitRawHandlersRegistersSleepEvents(t *testing.T) {
 		t.Fatal("ENTER_SLEEP_EVENT handler is not registered")
 	}
 }
-

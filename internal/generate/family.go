@@ -64,10 +64,10 @@ var syscallFamilies = map[string]SyscallFamily{
 	// name_to_handle_at all carry a dirfd at arg0 yet capture the pathname — since
 	// fanotify_mark has a dirfd@arg3 + pathname@arg4 pair. fanotify_mark returns
 	// 0/-1, so the return is UNCLASSIFIED (not a byte count).
-	"fanotify_init": FamilyIPC,
-	"fanotify_mark": FamilyIPC,
+	"fanotify_init":     FamilyIPC,
+	"fanotify_mark":     FamilyIPC,
 	"inotify_add_watch": FamilyIPC,
-	"inotify_init": FamilyIPC, "inotify_init1": FamilyIPC, "inotify_rm_watch": FamilyIPC,
+	"inotify_init":      FamilyIPC, "inotify_init1": FamilyIPC, "inotify_rm_watch": FamilyIPC,
 	"memfd_create": FamilyIPC, "memfd_secret": FamilyIPC, "mq_getsetattr": FamilyIPC,
 	"mq_notify": FamilyIPC, "mq_open": FamilyIPC, "mq_timedreceive": FamilyIPC,
 	"mq_timedsend": FamilyIPC, "mq_unlink": FamilyIPC, "msgctl": FamilyIPC,
@@ -109,7 +109,7 @@ var syscallFamilies = map[string]SyscallFamily{
 
 	"brk": FamilyMemory, "get_mempolicy": FamilyMemory, "madvise": FamilyMemory,
 	"map_shadow_stack": FamilyMemory,
-	"mbind": FamilyMemory, "membarrier": FamilyMemory, "migrate_pages": FamilyMemory,
+	"mbind":            FamilyMemory, "membarrier": FamilyMemory, "migrate_pages": FamilyMemory,
 	"mincore": FamilyMemory, "mlock": FamilyMemory, "mlock2": FamilyMemory,
 	"mlockall": FamilyMemory, "mmap": FamilyMemory, "mmap2": FamilyMemory,
 	"mprotect": FamilyMemory, "mremap": FamilyMemory, "mseal": FamilyMemory,
@@ -170,7 +170,7 @@ var syscallFamilies = map[string]SyscallFamily{
 	// set_tid_address is core thread lifecycle while the others are optional
 	// features.
 	"set_tid_address": FamilyProcess,
-	"setfsuid": FamilyProcess, "setfsgid": FamilyProcess, "setgid": FamilyProcess,
+	"setfsuid":        FamilyProcess, "setfsgid": FamilyProcess, "setgid": FamilyProcess,
 	"setgroups": FamilyProcess, "setns": FamilyProcess, "setpgid": FamilyProcess,
 	"setpriority": FamilyProcess, "setregid": FamilyProcess, "setresgid": FamilyProcess,
 	"setresuid": FamilyProcess, "setreuid": FamilyProcess, "setrlimit": FamilyProcess,
@@ -200,7 +200,7 @@ var syscallFamilies = map[string]SyscallFamily{
 	// gettimeofday/settimeofday/clock_* cluster, not in Misc. The single argument
 	// is a userspace struct timex *, so argument capture is KindNull (null_event)
 	// and the return is UNCLASSIFIED (a state code, not a byte count).
-	"adjtimex":      FamilyTime,
+	"adjtimex": FamilyTime,
 	// alarm(2) arranges for a SIGALRM after a given number of seconds; it is a
 	// simplified setitimer(ITIMER_REAL) and, per alarm(2) NOTES, "alarm() and
 	// setitimer(2) share the same timer; calls to one will interfere with use of
@@ -245,7 +245,7 @@ var syscallFamilies = map[string]SyscallFamily{
 	// reboot(2). They belong in the same family even though kexec_load takes
 	// raw user pointers (KindNull) while kexec_file_load takes fds (KindFd).
 	"kexec_file_load": FamilySecurity, "kexec_load": FamilySecurity,
-	"keyctl": FamilySecurity,
+	"keyctl":            FamilySecurity,
 	"landlock_add_rule": FamilySecurity, "landlock_create_ruleset": FamilySecurity,
 	"landlock_restrict_self": FamilySecurity, "lookup_dcookie": FamilySecurity,
 	// lsm_* are the Linux Security Module (LSM) introspection syscalls

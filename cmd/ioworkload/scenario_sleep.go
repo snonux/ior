@@ -72,4 +72,3 @@ func invokeClockNanosleep(flags uintptr, req *unix.Timespec) error {
 	}
 	return nil
 }
-

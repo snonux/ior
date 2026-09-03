@@ -110,8 +110,11 @@ Memory extent is tracked separately via address-space metrics.
 
 ## Runtime Notes
 
-- Dashboard ships with a dedicated `Non-IO` tab (shortcut `8`) backed by
-  per-family aggregates (`Snapshot.Families`); Non-IO filtering is applied in `internal/tui/dashboard`.
+- The dashboard has seven tabs (`1`..`7`: Flame, Overview, Syscalls, Files,
+  Processes, Latency+Gaps, Stream). The former dedicated `Non-IO` tab and its
+  `Snapshot.Families` aggregate backing were both removed; per-family
+  visibility now comes from the Syscalls tab's Family column, classified via
+  `TraceId.Family()`.
 - Aggregate-only sampling mode is implemented (`rate=0`) via:
   - `-syscall-sampling-families`
   - `-syscall-sampling-syscalls`
