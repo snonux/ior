@@ -75,13 +75,32 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 	}
 	// execEv is the sys_enter_execve payload, so its comm is the name of the
 	// program that *called* execve - correct for this row, wrong for the tid
-	// from here on. Deliberately not written into the comm cache: the
-	// authoritative post-exec name arrives as a PROCESS_EXEC_EVENT control
-	// record (handleProcessExecEvent), and seeding the pre-exec name here would
-	// re-introduce exactly the stale label that record exists to prevent.
+	// from here on. On a SUCCESSFUL execve it is deliberately not written into
+	// the comm cache: the authoritative post-exec name arrives as a
+	// PROCESS_EXEC_EVENT control record (handleProcessExecEvent), and seeding
+	// the pre-exec name here would re-introduce exactly the stale label that
+	// record exists to prevent.
 	ep.Comm = types.StringValue(execEv.Comm[:])
 	ep.File = file.NewPathname(execEv.Filename[:])
+	e.cacheCommOfFailedExec(ep, execEv)
 	return e.finishPair(ep)
+}
+
+// cacheCommOfFailedExec warms the comm cache from a *failed* execve.
+//
+// sched_process_exec only fires once the kernel has committed to the new
+// program, so a failing execve (ENOENT, EACCES, ELOOP, ...) produces no control
+// record at all. The task keeps running under its old name, which is precisely
+// the name the sys_enter_execve payload carries, so caching it here is both
+// correct and useful: for a tid whose lookup has not landed yet this is a free,
+// exact label. A successful execve must never take this path, which is why the
+// syscall's return value gates it.
+func (e *eventLoop) cacheCommOfFailedExec(ep *event.Pair, execEv *types.ExecEvent) {
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok || retEv.Ret >= 0 {
+		return
+	}
+	e.setCachedComm(execEv.GetTid(), types.StringValue(execEv.Comm[:]))
 }
 
 func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool {
@@ -128,7 +147,11 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 	} else {
 		ep.File = file.NewPathname(pathEv.Pathname[:])
 	}
-	return e.finishCommForTid(ep, pathEv.GetTid())
+	// ep.File carries the very pathname matchRawPathEvent already matched, so
+	// the full pair filter is safe here: unlike the rename kinds it cannot
+	// disagree with the raw match. See finishCommForTid for why the name kinds
+	// need the narrower comm-only checkpoint instead.
+	return e.finishPairForTid(ep, pathEv.GetTid())
 }
 
 // handleFdExit processes exit events for fd-based syscalls. It resolves the fd
@@ -605,14 +628,25 @@ func (e *eventLoop) finishPairForTid(ep *event.Pair, tid uint32) bool {
 // finishCommForTid attaches the resolved comm for tid and drops the pair when
 // that comm contradicts the active comm filter.
 //
-// It exists for the path- and name-carrying kinds, whose kernel payload has no
-// comm field: their raw enter filter can only check the path, and the enter-side
-// comm gate in tracepointEntered only requires that *some* comm is known for the
-// tid, not that it matches. Without this checkpoint those rows were emitted
-// unconditionally, so a run filtered by -comm could show rows carrying a
-// different comm. Only the comm dimension is applied here - path was already
-// matched on the raw event, and the remaining dimensions keep their existing
-// application points, so filtering semantics for everything else are unchanged.
+// It exists for the rename-like (name-carrying) kinds, whose kernel payload has
+// no comm field: their raw enter filter can only check the paths, and the
+// enter-side comm gate in tracepointEntered only requires that *some* comm is
+// known for the tid, not that it matches. Without this checkpoint those rows
+// were emitted unconditionally, so a run filtered by -comm could show rows
+// carrying a different comm.
+//
+// Why only the comm dimension, rather than the full MatchPair: for these kinds
+// the raw filter matches oldname OR newname (Filter.MatchNameEvent), while
+// oldnameNewnameFile.Name() reports only the newname, so MatchPair would drop
+// every row a -path <oldname> filter legitimately selected. The path-carrying
+// kinds have no such asymmetry and do run the full pair filter
+// (handlePathExit -> finishPairForTid).
+//
+// Consequence, stated plainly: for the rename kinds the remaining filter
+// dimensions (-latency/-bytes/-ret/-fd/-family and non-equality -pid/-tid) are
+// not applied at all - not here and not anywhere else on their path. That is a
+// pre-existing gap shared with the other raw-filtered kinds and is tracked
+// separately as task o1; it is not introduced or widened here.
 func (e *eventLoop) finishCommForTid(ep *event.Pair, tid uint32) bool {
 	ep.Comm = e.comm(tid)
 	if e.Filter().MatchComm(ep.Comm) {

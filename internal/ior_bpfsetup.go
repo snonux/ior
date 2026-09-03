@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	appconfig "ior/internal/config"
 	"ior/internal/flags"
@@ -69,15 +70,16 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 		return nil, nil, releaseBindings, setupBPFModuleError("configure sampling rates", err)
 	}
 
+	attacher := libbpfTracepointModule{module: bpfModule}
 	// Attach the exec probe before the syscall tracepoints. AttachAll walks
 	// hundreds of tracepoints and takes a noticeable amount of time, during
 	// which syscall records already flow from the ones attached first. Any task
 	// that execs in that window would otherwise produce syscall rows with no
 	// preceding comm record, which is exactly the stale/empty label this probe
 	// exists to prevent.
-	releaseExecProbe := attachProcessExecProbe(bpfModule)
+	releaseExecProbe := attachProcessExecProbe(attacher)
 
-	mgr := probemanager.NewManager(libbpfTracepointModule{module: bpfModule})
+	mgr := probemanager.NewManager(attacher)
 	// Per-syscall attach failures are non-fatal: on older kernels the
 	// tracepoint may be absent (e.g. binary built against a newer kernel).
 	// We log and skip; the affected probe stays in the manager with its
@@ -117,9 +119,18 @@ const processExecProgName = "handle_sched_process_exec"
 // Failure is deliberately non-fatal and mirrors the per-syscall attach policy:
 // without this probe comms fall back to the asynchronous procfs resolver, which
 // is exactly the pre-fix behaviour - degraded labelling, not a broken trace.
-func attachProcessExecProbe(bpfModule *bpf.Module) func() {
+//
+// It takes the same probemanager.Attacher seam the syscall probes use rather
+// than a *bpf.Module, so both non-fatal failure paths and the detach path are
+// reachable from tests without a live BPF module. The returned release closure
+// is idempotent: setupBPFModule hands it out both directly and wrapped inside
+// releaseBindings, and a double Destroy on a libbpf link is not safe.
+func attachProcessExecProbe(attacher probemanager.Attacher) func() {
 	noop := func() {}
-	prog, err := bpfModule.GetProgram(processExecProgName)
+	if attacher == nil {
+		return noop
+	}
+	prog, err := attacher.GetProgram(processExecProgName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ior: skipping sched_process_exec probe: get program %s: %v\n", processExecProgName, err)
 		return noop
@@ -129,10 +140,13 @@ func attachProcessExecProbe(bpfModule *bpf.Module) func() {
 		fmt.Fprintf(os.Stderr, "ior: skipping sched_process_exec probe: %v\n", err)
 		return noop
 	}
+	var once sync.Once
 	return func() {
-		if err := link.Destroy(); err != nil {
-			fmt.Fprintf(os.Stderr, "ior: sched_process_exec probe detach error: %v\n", err)
-		}
+		once.Do(func() {
+			if err := link.Destroy(); err != nil {
+				fmt.Fprintf(os.Stderr, "ior: sched_process_exec probe detach error: %v\n", err)
+			}
+		})
 	}
 }
 

@@ -84,8 +84,13 @@ type eventLoop struct {
 	// numRingbufDrops is the cumulative kernel-side ring-buffer drop count.
 	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
 	numRingbufDrops atomic.Uint64
-	startTime       time.Time
-	done            chan struct{}
+	// commRefreshPending is raised by the drop-monitor goroutine when the
+	// kernel lost events (one of which may have been a sched_process_exec
+	// control record) and consumed by the event-loop goroutine in
+	// applyPendingCommRefresh, which owns the comm cache's lazy init.
+	commRefreshPending atomic.Bool
+	startTime          time.Time
+	done               chan struct{}
 }
 
 // Filter returns a snapshot of the currently active global filter. Each call
@@ -227,6 +232,16 @@ func (e *eventLoop) stats() string {
 		}
 		return float64(n) / secs
 	}
+	// numTracepoints counts every ring-buffer record the loop decoded, which
+	// since the sched_process_exec probe includes control records (one per
+	// successful execve) alongside the syscall enter/exit records. Both
+	// denominators below are deliberately left on that total: the kernel-side
+	// drop counter also counts control records it failed to reserve
+	// (internal/c/exec.c), so "drops as a share of events" only stays
+	// arithmetically honest if the events side counts them too. The mismatch
+	// share is diluted by the same records, which is acceptable - execve is
+	// rare next to syscall traffic, and both figures describe the ring-buffer
+	// stream as a whole rather than the syscall pairs alone.
 	mismatchPct := 0.0
 	if e.numTracepoints > 0 {
 		mismatchPct = (float64(e.numTracepointMismatches) / float64(e.numTracepoints)) * 100

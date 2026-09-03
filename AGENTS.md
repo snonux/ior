@@ -162,12 +162,44 @@ committed set contains syscalls that only exist on recent mainline kernels
   of `-trace-*` selection. Control records never become rows; they only refresh
   the cache (`handleProcessExecEvent`), and because the ring buffer preserves
   reservation order and the event loop has a single consumer goroutine, the
-  refresh always lands before the new program's first syscall pair. A failed
-  attach is non-fatal and simply degrades to the old procfs-only labelling.
-  Correspondingly, `handleExecExit` deliberately does **not** cache the
-  `sys_enter_execve` comm (that is the *calling* program's name), and the
-  path/name kinds apply `Filter.MatchComm` in `finishCommForTid` so a row's
-  reported comm can never contradict an active `-comm` filter.
+  refresh lands before the new program's first syscall pair — **for every record
+  that is actually delivered**. Two residual paths are handled explicitly:
+  - *Lost record.* Under backpressure `bpf_ringbuf_reserve()` fails and the
+    control record is never emitted (counted in `ringbuf_drop_map`). With
+    `-comm X` active the usual self-healing path is closed too, because
+    `matchRawOpenEvent` drops non-matching opens at enter so `handleOpenExit`
+    never refreshes the cache from the kernel comm. A non-zero drop delta
+    therefore flags the whole comm cache stale (`markAllStale`, requested by the
+    drop monitor goroutine and applied by the event-loop goroutine in
+    `applyPendingCommRefresh`). A stale entry keeps serving its current value
+    and triggers one asynchronous procfs re-read on next use — that read happens
+    after the exec, so it heals the label. Evicting instead would blank the comm
+    column and, under `-comm`, drop the tid's events at the enter-side gate.
+  - *Late lookup worker.* A resolver worker that read `/proc/<tid>/comm` before
+    the exec could otherwise overwrite the authoritative post-exec name. Each
+    cache entry carries an exec epoch, bumped by `handleProcessExecEvent`; a
+    worker samples it before its procfs read and its result is discarded when
+    the epoch moved on. Both writes are mutex-protected, so this is a logical
+    race the race detector cannot see.
+
+  A failed attach is non-fatal and simply degrades to the old procfs-only
+  labelling. Correspondingly, `handleExecExit` deliberately does **not** cache
+  the `sys_enter_execve` comm of a *successful* execve (that is the *calling*
+  program's name); it does cache it for a **failed** one, where no
+  `sched_process_exec` fires and the task keeps running under exactly that name.
+  The name kinds apply `Filter.MatchComm` in `finishCommForTid` — only the comm
+  dimension, because their raw filter matches oldname-or-newname while
+  `oldnameNewnameFile.Name()` reports only the newname, so a full `MatchPair`
+  would drop legitimate `-path <oldname>` matches — and the path kinds run the
+  full `finishPairForTid`. Either way a row's reported comm can never contradict
+  an active `-comm` filter.
+- **Control records in the statistics**: `numTracepoints` counts every
+  ring-buffer record the event loop decoded, control records included, so both
+  the mismatch percentage and the `ring buffer drops: … % of events` denominator
+  cover the whole ring-buffer stream rather than syscall pairs alone. That is
+  deliberate: `internal/c/exec.c` also counts a control record it fails to
+  reserve in `ringbuf_drop_map`, so the drop share only stays arithmetically
+  honest if the events side counts them too.
 
 ## Code Style
 
