@@ -14,6 +14,14 @@ make -C ../libbpfgo libbpfgo-static
 
 If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), rerun the commands above and then run `mage world`. Prefer Mage targets over raw `go test` for packages that import `libbpfgo`; Mage wires the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
 
+**Vetting**: use `mage vet`, not bare `go vet ./...`. Besides wiring the cgo
+environment, it scopes a single analyzer exemption: `cmd/ioworkload` is vetted
+with `-unsafeptr=false` because `shmWrite` converts the mapping address
+returned by `shmat` into a `[]byte`, which vet cannot distinguish from a raw
+integer. Every other package — and every other analyzer in `cmd/ioworkload` —
+is vetted normally, so bare `go vet ./...` reports that one known finding and
+exits non-zero by design.
+
 ```bash
 mage build                             # Build BPF object + Go binary (all is an alias)
 mage buildDocker                       # Build ior inside a Rocky Linux 9 container (writes binary to repo root)
@@ -23,6 +31,7 @@ mage testRace                          # Run all tests with the race detector en
 TEST_NAME=TestEventloop mage testWithName  # Run specific test
 mage integrationTest                   # Build + run integration tests in parallel (parallelism capped to NumCPU)
 mage integrationTestSerial             # Build + run integration tests one at a time
+mage vet                               # go vet with the libbpfgo cgo env (use instead of bare `go vet ./...`)
 mage generate     # Generate code (required after modifying tracepoint definitions)
 mage bench        # Run benchmarks
 mage prReview     # Run PR review baseline: world + benchProf
