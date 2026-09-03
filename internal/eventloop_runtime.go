@@ -56,7 +56,7 @@ func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
 		return func() {}
 	}
 
-	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateOnlyTraceIDs, e.Filter)
+	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateIngestTraceIDs, e.Filter)
 	return drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
 }
 

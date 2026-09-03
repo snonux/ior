@@ -431,11 +431,11 @@ func runTrace(cfg flags.Config) error {
 
 func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	return eventLoopConfig{
-		pidFilter:             cfg.PidFilter,
-		filter:                traceFilterFromConfig(cfg),
-		pprofEnable:           cfg.PprofEnable,
-		plainMode:             cfg.PlainMode,
-		aggregateOnlyTraceIDs: buildAggregateOnlyTraceIDs(cfg),
+		pidFilter:               cfg.PidFilter,
+		filter:                  traceFilterFromConfig(cfg),
+		pprofEnable:             cfg.PprofEnable,
+		plainMode:               cfg.PlainMode,
+		aggregateIngestTraceIDs: buildAggregateIngestTraceIDs(cfg),
 	}
 }
 

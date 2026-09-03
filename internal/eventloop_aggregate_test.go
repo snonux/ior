@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"ior/internal/event"
+	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
 	"ior/internal/types"
@@ -43,7 +45,7 @@ func (s *aggregateSinkStub) IngestSyscallAggregates(rows []statsengine.SyscallAg
 	s.rows = append(s.rows, rows...)
 }
 
-func TestAggregateDrainerTickFiltersAggregateOnlyTraceIDs(t *testing.T) {
+func TestAggregateDrainerTickFiltersAggregateIngestTraceIDs(t *testing.T) {
 	drainer := newAggregateDrainer(
 		&aggregateSourceStub{
 			rows: [][]statsengine.SyscallAggregate{{
@@ -95,7 +97,7 @@ func TestAggregateDrainerTickGatesWhenUnsupportedFilterActive(t *testing.T) {
 	}
 }
 
-func TestAggregateDrainerTickRejectsRowsWithoutAggregateOnlyTraceIDs(t *testing.T) {
+func TestAggregateDrainerTickRejectsRowsWithoutAggregateIngestTraceIDs(t *testing.T) {
 	drainer := newAggregateDrainer(
 		&aggregateSourceStub{
 			rows: [][]statsengine.SyscallAggregate{{
@@ -111,7 +113,7 @@ func TestAggregateDrainerTickRejectsRowsWithoutAggregateOnlyTraceIDs(t *testing.
 		t.Fatalf("warning = %q, want empty", got.warning)
 	}
 	if len(got.rows) != 0 {
-		t.Fatalf("expected no rows without aggregate-only trace IDs, got %+v", got.rows)
+		t.Fatalf("expected no rows without aggregate ingest trace IDs, got %+v", got.rows)
 	}
 }
 
@@ -177,7 +179,7 @@ func TestStartAggregateDrainLoopFinalFlushesOnStop(t *testing.T) {
 	el := &eventLoop{
 		cfg: eventLoopConfig{
 			aggregateDrainEvery: 5 * time.Second,
-			aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
+			aggregateIngestTraceIDs: map[types.TraceId]struct{}{
 				types.SYS_ENTER_FUTEX: {},
 			},
 		},
@@ -228,7 +230,7 @@ func TestAggregateEndToEndDrainIntoStatsEngine(t *testing.T) {
 	el := &eventLoop{
 		cfg: eventLoopConfig{
 			aggregateDrainEvery: 5 * time.Second,
-			aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
+			aggregateIngestTraceIDs: map[types.TraceId]struct{}{
 				types.SYS_ENTER_FUTEX: {},
 			},
 		},
@@ -294,7 +296,7 @@ func TestAggregateEndToEndMultipleDrainTicksAccumulate(t *testing.T) {
 	el := &eventLoop{
 		cfg: eventLoopConfig{
 			aggregateDrainEvery: time.Millisecond,
-			aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
+			aggregateIngestTraceIDs: map[types.TraceId]struct{}{
 				types.SYS_ENTER_FUTEX: {},
 			},
 		},
@@ -349,7 +351,7 @@ func TestAggregateEndToEndNonDesignatedSyscallsFiltered(t *testing.T) {
 		cfg: eventLoopConfig{
 			aggregateDrainEvery: 5 * time.Second,
 			// Only futex is aggregate-only; clock_gettime should be dropped.
-			aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
+			aggregateIngestTraceIDs: map[types.TraceId]struct{}{
 				types.SYS_ENTER_FUTEX: {},
 			},
 		},
@@ -399,7 +401,7 @@ func TestAggregateEndToEndFilterGateBlocksIngestion(t *testing.T) {
 	el := &eventLoop{
 		cfg: eventLoopConfig{
 			aggregateDrainEvery: 5 * time.Second,
-			aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
+			aggregateIngestTraceIDs: map[types.TraceId]struct{}{
 				types.SYS_ENTER_FUTEX: {},
 			},
 		},
@@ -448,7 +450,7 @@ func TestAggregateEndToEndSyscallRowPopulated(t *testing.T) {
 	el := &eventLoop{
 		cfg: eventLoopConfig{
 			aggregateDrainEvery: 5 * time.Second,
-			aggregateOnlyTraceIDs: map[types.TraceId]struct{}{
+			aggregateIngestTraceIDs: map[types.TraceId]struct{}{
 				types.SYS_ENTER_FUTEX: {},
 			},
 		},
@@ -489,4 +491,113 @@ func findSyscallSnapshot(t *testing.T, rows []statsengine.SyscallSnapshot, id ty
 	}
 	t.Fatalf("no syscall snapshot row for trace ID %v", id)
 	return statsengine.SyscallSnapshot{}
+}
+
+// TestSampledSyscallTotalsMatchTrueInvocationCount is the regression test for
+// the sampled 1-in-N under-report: a syscall traced at rate N used to be
+// counted only through its emitted 1/N pairs because the drainer discarded
+// every aggregate row that was not aggregate-only, so its totals were roughly
+// N times too small.
+//
+// The kernel now aggregates exactly the events it does not emit
+// (ior_on_syscall_exit, internal/c/filter.c), so the two paths partition the
+// invocations. This test replays that partition for 12 nanosleep calls at
+// rate 4: 3 emitted pairs go through per-event ingestion and the remaining 9
+// arrive as a kernel aggregate row. The reported count must be the true 12 —
+// not 3 (the old under-report) and not 21 (double counting).
+//
+// A fully traced (rate 1) syscall is asserted unchanged in the same run: read
+// is counted only through its 8 emitted pairs, and a stray read aggregate row
+// (as a version-skewed BPF object could produce) must be dropped by the
+// ingest gate rather than doubling the count.
+func TestSampledSyscallTotalsMatchTrueInvocationCount(t *testing.T) {
+	const (
+		nanosleepTotal    = 12
+		nanosleepRate     = 4
+		nanosleepEmitted  = nanosleepTotal / nanosleepRate
+		nanosleepDropped  = nanosleepTotal - nanosleepEmitted
+		perEventLatencyNs = 100
+		readTotal         = 8
+	)
+
+	cfg := flags.NewFlags()
+	cfg.SyscallSamplingRates["nanosleep"] = nanosleepRate
+	cfg.SyscallSamplingRates["read"] = 1
+
+	engine := statsengine.NewEngine(statsengine.DefaultTopN)
+
+	// Per-event path: only the emitted pairs reach userspace.
+	for i := 0; i < nanosleepEmitted; i++ {
+		engine.Ingest(newAggregateTestPair(types.SYS_ENTER_NANOSLEEP, perEventLatencyNs))
+	}
+	for i := 0; i < readTotal; i++ {
+		engine.Ingest(newAggregateTestPair(types.SYS_ENTER_READ, perEventLatencyNs))
+	}
+
+	// Kernel path: the non-emitted nanosleep calls, plus a read row that must
+	// not be ingested.
+	src := &aggregateSourceStub{
+		rows: [][]statsengine.SyscallAggregate{{
+			{
+				TraceID:        types.SYS_ENTER_NANOSLEEP,
+				Count:          nanosleepDropped,
+				TotalLatencyNs: nanosleepDropped * perEventLatencyNs,
+				MinLatencyNs:   perEventLatencyNs,
+				MaxLatencyNs:   perEventLatencyNs,
+			},
+			{
+				TraceID:        types.SYS_ENTER_READ,
+				Count:          readTotal,
+				TotalLatencyNs: readTotal * perEventLatencyNs,
+			},
+		}},
+	}
+
+	el := &eventLoop{
+		cfg: eventLoopConfig{
+			aggregateDrainEvery:     5 * time.Second,
+			aggregateIngestTraceIDs: buildAggregateIngestTraceIDs(cfg),
+		},
+		aggregateSrc:  src,
+		aggregateSink: engine,
+	}
+	el.SetFilter(globalfilter.Filter{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := el.startAggregateDrainLoop(ctx)
+	cancel()
+	stop()
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+
+	nanosleepRow := findSyscallSnapshot(t, snap.Syscalls(), types.SYS_ENTER_NANOSLEEP)
+	if nanosleepRow.Count != nanosleepTotal {
+		t.Fatalf("nanosleep Count = %d, want %d (sampled 1-in-%d must report the true count)",
+			nanosleepRow.Count, nanosleepTotal, nanosleepRate)
+	}
+	if want := uint64(nanosleepTotal * perEventLatencyNs); nanosleepRow.TotalLatencyNs != want {
+		t.Fatalf("nanosleep TotalLatencyNs = %d, want %d", nanosleepRow.TotalLatencyNs, want)
+	}
+
+	readRow := findSyscallSnapshot(t, snap.Syscalls(), types.SYS_ENTER_READ)
+	if readRow.Count != readTotal {
+		t.Fatalf("read Count = %d, want %d (rate 1 syscalls are counted per event only)", readRow.Count, readTotal)
+	}
+
+	if want := uint64(nanosleepTotal + readTotal); snap.TotalSyscalls != want {
+		t.Fatalf("TotalSyscalls = %d, want %d", snap.TotalSyscalls, want)
+	}
+}
+
+// newAggregateTestPair builds a minimal enter/exit pair for stats-engine
+// ingestion: trace ID and duration are all the count/latency assertions need.
+func newAggregateTestPair(traceID types.TraceId, durationNs uint64) *event.Pair {
+	return &event.Pair{
+		EnterEv:  &types.RetEvent{TraceId: traceID, Pid: 1},
+		ExitEv:   &types.RetEvent{TraceId: traceID, Pid: 1},
+		Duration: durationNs,
+	}
 }

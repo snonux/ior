@@ -79,21 +79,33 @@ func TestBuildSyscallSamplingRatesKeepsFamilyZerosInTUIMode(t *testing.T) {
 	}
 }
 
-func TestBuildAggregateOnlyTraceIDs(t *testing.T) {
+// TestBuildAggregateIngestTraceIDsCoversAggregateOnlyAndSampled locks the fix
+// for the sampled-count under-report: the ingest set must contain every
+// syscall whose sampling rate is not 1 — aggregate-only (0) and sampled
+// 1-in-N (N>1) alike — because the kernel aggregates exactly the events it
+// does not emit. Fully traced (rate 1) syscalls must stay out of the set.
+func TestBuildAggregateIngestTraceIDsCoversAggregateOnlyAndSampled(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 10
 	cfg.SyscallSamplingRates["futex"] = 0
 	cfg.SyscallSamplingRates["clock_gettime"] = 0
+	cfg.SyscallSamplingRates["read"] = 1
 
-	ids := buildAggregateOnlyTraceIDs(cfg)
+	ids := buildAggregateIngestTraceIDs(cfg)
 	if _, ok := ids[types.SYS_ENTER_FUTEX]; !ok {
-		t.Fatal("expected futex in aggregate-only set")
+		t.Fatal("expected futex (rate 0) in aggregate ingest set")
 	}
 	if _, ok := ids[types.SYS_ENTER_CLOCK_GETTIME]; !ok {
-		t.Fatal("expected clock_gettime in aggregate-only set")
+		t.Fatal("expected clock_gettime (rate 0) in aggregate ingest set")
 	}
-	if _, ok := ids[types.SYS_ENTER_NANOSLEEP]; ok {
-		t.Fatal("did not expect nanosleep in aggregate-only set")
+	if _, ok := ids[types.SYS_ENTER_NANOSLEEP]; !ok {
+		t.Fatal("expected nanosleep (rate 10) in aggregate ingest set: sampled syscalls need their kernel counts merged")
+	}
+	if _, ok := ids[types.SYS_ENTER_READ]; ok {
+		t.Fatal("did not expect read (rate 1) in aggregate ingest set: fully traced syscalls are counted per event")
+	}
+	if _, ok := ids[types.SYS_ENTER_WRITE]; ok {
+		t.Fatal("did not expect write (unconfigured, kernel default rate 1) in aggregate ingest set")
 	}
 }
 

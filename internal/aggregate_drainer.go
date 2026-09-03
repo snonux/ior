@@ -17,20 +17,20 @@ type aggregateDrainResult struct {
 }
 
 type aggregateDrainer struct {
-	source                syscallAggregateSource
-	filter                func() globalfilter.Filter
-	aggregateOnlyTraceIDs map[types.TraceId]struct{}
+	source                  syscallAggregateSource
+	filter                  func() globalfilter.Filter
+	aggregateIngestTraceIDs map[types.TraceId]struct{}
 }
 
 func newAggregateDrainer(
 	source syscallAggregateSource,
-	aggregateOnlyTraceIDs map[types.TraceId]struct{},
+	aggregateIngestTraceIDs map[types.TraceId]struct{},
 	filter func() globalfilter.Filter,
 ) *aggregateDrainer {
 	return &aggregateDrainer{
-		source:                source,
-		filter:                filter,
-		aggregateOnlyTraceIDs: aggregateOnlyTraceIDs,
+		source:                  source,
+		filter:                  filter,
+		aggregateIngestTraceIDs: aggregateIngestTraceIDs,
 	}
 }
 
@@ -59,6 +59,14 @@ func (d *aggregateDrainer) Start(ctx context.Context, every time.Duration, handl
 	return startPollLoop(ctx, every, func() { handle(d.Tick()) })
 }
 
+// filterRowsForIngest keeps only the aggregate rows the stats engine may
+// merge. The kernel aggregates exactly the events it does not emit (see
+// ior_on_syscall_exit in internal/c/filter.c), so ingesting rows for both
+// aggregate-only (rate 0) and sampled (rate N>1) syscalls yields their true
+// invocation counts with no double counting against the per-event path. Rows
+// for fully traced (rate 1) syscalls are dropped: the kernel writes none, and
+// dropping any that appear keeps a version-skewed BPF object under-reporting
+// rather than double-counting.
 func (d *aggregateDrainer) filterRowsForIngest(rows []statsengine.SyscallAggregate) []statsengine.SyscallAggregate {
 	if len(rows) == 0 {
 		return nil
@@ -66,13 +74,13 @@ func (d *aggregateDrainer) filterRowsForIngest(rows []statsengine.SyscallAggrega
 	if !aggregateIngestAllowedForFilter(d.currentFilter()) {
 		return nil
 	}
-	if len(d.aggregateOnlyTraceIDs) == 0 {
+	if len(d.aggregateIngestTraceIDs) == 0 {
 		return nil
 	}
 
 	filtered := make([]statsengine.SyscallAggregate, 0, len(rows))
 	for _, row := range rows {
-		if _, ok := d.aggregateOnlyTraceIDs[row.TraceID]; ok {
+		if _, ok := d.aggregateIngestTraceIDs[row.TraceID]; ok {
 			filtered = append(filtered, row)
 		}
 	}

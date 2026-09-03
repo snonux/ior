@@ -2721,3 +2721,31 @@ func TestRingbufDropHelperIsDefinedInBPFSource(t *testing.T) {
 		t.Error("ringbuf_drop_map must be a per-CPU array so the hot-path increment needs no atomics")
 	}
 }
+
+// TestSyscallAggregateCountsOnlyNonEmittedEvents pins the kernel half of the
+// sampled-count fix. ior_on_syscall_exit must update syscall_aggregate_map
+// only for syscalls whose events are NOT emitted to the ring buffer, so the
+// kernel aggregate and the per-event stream partition the invocations:
+// userspace can then merge aggregate rows for sampled (rate N>1) syscalls to
+// recover their true counts without double counting the ~1/N emitted pairs.
+// Dropping the emit guard would silently double-count every traced syscall,
+// and BPF behaviour cannot be exercised from a unit test, so the contract is
+// asserted over the source.
+func TestSyscallAggregateCountsOnlyNonEmittedEvents(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+
+	const guardedUpdate = "if (!emit_event && state->enter_trace_id == enter_trace_id)\n" +
+		"        ior_update_syscall_aggregate(state->enter_trace_id, duration, ret);"
+	if !strings.Contains(filterC, guardedUpdate) {
+		t.Error("ior_on_syscall_exit must call ior_update_syscall_aggregate only when the event is not emitted")
+	}
+	if got := strings.Count(filterC, "ior_update_syscall_aggregate(state->enter_trace_id"); got != 1 {
+		t.Errorf("%d aggregate update call sites in ior_on_syscall_exit, want exactly 1 (the emit-guarded one)", got)
+	}
+	if !strings.Contains(filterC, "emit_event = state->emit_event;") {
+		t.Error("ior_on_syscall_exit must read state->emit_event before the aggregate guard")
+	}
+}
