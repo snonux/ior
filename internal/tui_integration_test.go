@@ -1265,10 +1265,34 @@ func TestTUIIntegration_ProbesModal_NavSearchToggleClose(t *testing.T) {
 
 // tuiChrome is a stable token from the persistent dashboard tab bar, which is
 // rendered on every tab regardless of body height (unlike the "press H for
-// help" footer hint, which tall tabs such as Overview push off-screen). The
-// flame tab label is never the active selection while cycling tabs 2..8, so it
-// is always present as plain "1:Flm", proving the chrome survives tab switches.
-const tuiChrome = "1:Flm"
+// help" footer hint, which tall tabs such as Overview push off-screen). It is
+// the first tab-bar entry (the flame tab), which is never the active selection
+// while cycling tabs 2..8, so its presence proves the chrome survives tab
+// switches.
+//
+// The token is deliberately the "1:Fl" prefix rather than a whole label,
+// because the label the dashboard renders depends on the terminal width and
+// that width is not deterministic in this harness. Two window sizes race at
+// startup, both delivered asynchronously (bubbletea runs "go p.checkResize()"
+// in tea.go, which sends a WindowSizeMsg from tty.go), and whichever lands
+// last wins for the rest of the run:
+//
+//   - teatest's WithInitialTermSize -> tea.WithWindowSize -> tuiTermWidth x
+//     tuiTermHeight (160x48), where renderTabBar draws full labels: "1:Flame".
+//   - the program's own initialWindowSizeCmd (internal/tui/tui.go), which falls
+//     back to common.EffectiveViewport's 80x24 default because the test binary's
+//     stdout is not a TTY. Below 90 columns renderTabBar degrades to the plain
+//     abbreviated bar (internal/tui/dashboard/tabs.go): "1:Flm".
+//
+// Asserting either whole label therefore depends on an ordering nothing
+// guarantees: it only looks stable because one ordering dominates in practice.
+// This test was seen to fail once under full-suite race load with the settled
+// 160-col bar on screen while the assertion waited for the 80-col form; that
+// exact failure has not been reproduced on demand since, but the ordering it
+// depends on is unspecified either way. "1:Fl" is the prefix both renderers
+// emit, so the assertion holds for whichever size wins without weakening what
+// it proves: the tab bar is there.
+const tuiChrome = "1:Fl"
 
 // TestTUIIntegration_AllTabs_RenderPopulatedAndKeepChrome cycles through every
 // non-flame dashboard tab (2..8), asserting each renders its seeded body tokens
