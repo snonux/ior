@@ -137,6 +137,58 @@ func TestTUI() error {
 		"-run", "TestTUIIntegration", "-count=1", "-v")
 }
 
+// vetUnsafeptrExempt is the one package where the unsafeptr analyzer is
+// disabled. cmd/ioworkload/scenario_sysv.go converts the address returned by
+// SYS_SHMAT into a []byte so the workload can fault the shared page in, and
+// vet cannot tell a kernel-supplied mapping address from a raw integer.
+//
+// The exemption is deliberate and could not be avoided by restructuring: the
+// uintptr -> unsafe.Pointer conversion is reported wherever it appears (behind
+// a helper, inline with the syscall, or held as an unsafe.Pointer), and
+// golang.org/x/sys/unix uses the identical idiom in mremap.go. The conversion
+// is safe because the segment is kernel-owned rather than Go-heap memory, so
+// it is never relocated by the GC, and it stays mapped until shmdt.
+//
+// Every other package is vetted with the full analyzer set, including
+// unsafeptr, so a new misuse elsewhere still fails this gate.
+const vetUnsafeptrExempt = "ior/cmd/ioworkload"
+
+// Vet runs go vet over the module with the libbpfgo cgo environment.
+//
+// It is split into two passes so the single unsafeptr exemption stays scoped
+// to one package instead of disabling the analyzer module-wide; see
+// vetUnsafeptrExempt for why that package needs it.
+func Vet() error {
+	mg.Deps(BpfBuild)
+	packages, err := vetPackagesExcept(vetUnsafeptrExempt)
+	if err != nil {
+		return err
+	}
+	args := append([]string{"vet"}, packages...)
+	if err := sh.RunWithV(goEnv(), "go", args...); err != nil {
+		return err
+	}
+	return sh.RunWithV(goEnv(), "go", "vet", "-unsafeptr=false", vetUnsafeptrExempt)
+}
+
+// vetPackagesExcept lists the module's packages minus the excluded one.
+func vetPackagesExcept(excluded string) ([]string, error) {
+	out, err := sh.OutputWith(goEnv(), "go", "list", "./...")
+	if err != nil {
+		return nil, fmt.Errorf("go list: %w", err)
+	}
+	var packages []string
+	for _, pkg := range strings.Fields(out) {
+		if pkg != excluded {
+			packages = append(packages, pkg)
+		}
+	}
+	if len(packages) == 0 {
+		return nil, fmt.Errorf("go list returned no packages besides %s", excluded)
+	}
+	return packages, nil
+}
+
 // Fmt runs gofmt -w on all Go source files to enforce canonical formatting.
 func Fmt() error {
 	return fmtGoFiles(false)

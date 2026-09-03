@@ -69,6 +69,14 @@ func shmAttach(shmid uintptr) (uintptr, error) {
 
 // shmWrite copies the payload into the mapped segment, faulting the page in so
 // the workload genuinely uses the shared memory.
+//
+// The unsafe.Pointer conversion below is why this package is exempted from
+// vet's unsafeptr analyzer (see vetUnsafeptrExempt in Magefile.go). addr is a
+// mapping address returned by shmat, not a Go pointer: the segment is owned by
+// the kernel, so the GC neither scans nor relocates it, and it stays mapped
+// until shmDetach. vet cannot distinguish that from a raw integer, and the
+// report cannot be avoided by restructuring - golang.org/x/sys/unix uses the
+// same idiom in mremap.go.
 func shmWrite(addr, size uintptr) error {
 	if uintptr(len(sysvShmPayload)) > size {
 		return fmt.Errorf("shm payload (%d) exceeds segment size (%d)", len(sysvShmPayload), size)
