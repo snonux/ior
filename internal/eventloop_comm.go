@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"ior/internal/types"
 )
 
 // resolveCommTimeout caps each procfs read so a frozen cgroup cannot stall
@@ -299,6 +301,28 @@ func (e *eventLoop) setCachedComm(tid uint32, comm string) {
 
 func (e *eventLoop) queueCommLookup(tid uint32) {
 	e.commState().queueLookup(tid)
+}
+
+// handleProcessExecEvent applies the exact post-exec comm reported by the
+// kernel's sched:sched_process_exec tracepoint.
+//
+// This is the authoritative source for a task's name after an execve, and the
+// only one that is race-free. The procfs resolver below runs asynchronously on
+// worker goroutines, so a lookup scheduled for a tid that has just forked can
+// complete before that tid execs and cache the pre-exec program name; nothing
+// then invalidated it, and the first syscalls of the new program (typically the
+// dynamic loader's access("/etc/ld.so.preload")) were labelled with the old
+// name. Because the kernel already installed the new name in task->comm before
+// this tracepoint fires, and the ring buffer delivers this record before any
+// syscall record of the new program, overwriting the cache here makes the label
+// correct from the very first post-exec event.
+func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent) {
+	defer ev.Recycle()
+	comm := types.StringValue(ev.Comm[:])
+	if comm == "" {
+		return
+	}
+	e.setCachedComm(ev.Tid, comm)
 }
 
 func procTidPathPrefix(tid uint32) string {

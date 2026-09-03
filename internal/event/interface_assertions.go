@@ -76,6 +76,11 @@ var (
 
 	// *types.TwoFdEvent carries operations that include two fd inputs.
 	_ Event = (*types.TwoFdEvent)(nil)
+
+	// *types.ProcessExecEvent is the sched:sched_process_exec control record.
+	// It never becomes a Pair, but it flows through the same raw-event decode
+	// table as the syscall events, so it must satisfy Event too.
+	_ Event = (*types.ProcessExecEvent)(nil)
 )
 
 // --- ret-carrying event assertions ---

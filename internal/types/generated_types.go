@@ -114,6 +114,7 @@ const ENTER_PERF_OPEN_EVENT = 43
 const EXIT_PERF_OPEN_EVENT = 44
 const ENTER_EXEC_EVENT = 45
 const EXIT_EXEC_EVENT = 46
+const PROCESS_EXEC_EVENT = 47
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -2478,4 +2479,72 @@ func (p *PerfOpenEvent) Bytes() ([]byte, error) {
 
 func (p *PerfOpenEvent) Recycle() {
 	poolOfPerfOpenEvents.Put(p)
+}
+
+type ProcessExecEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Comm      [MAX_PROGNAME_LENGTH]byte
+}
+
+func (p ProcessExecEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, string(p.Comm[:]))
+}
+
+func (p ProcessExecEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*ProcessExecEvent)
+	if !ok {
+		return false
+	}
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Comm == otherConcrete.Comm
+}
+
+func (p *ProcessExecEvent) GetEventType() EventType {
+	return p.EventType
+}
+
+func (p *ProcessExecEvent) GetTraceId() TraceId {
+	return p.TraceId
+}
+
+func (p *ProcessExecEvent) GetPid() uint32 {
+	return p.Pid
+}
+
+func (p *ProcessExecEvent) GetTid() uint32 {
+	return p.Tid
+}
+
+func (p *ProcessExecEvent) GetTime() uint64 {
+	return p.Time
+}
+
+var poolOfProcessExecEvents = sync.Pool{
+	New: func() any { return &ProcessExecEvent{} },
+}
+
+func NewProcessExecEvent(raw []byte) *ProcessExecEvent {
+	p := poolOfProcessExecEvents.Get().(*ProcessExecEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, p); err != nil {
+		*p = ProcessExecEvent{}
+		poolOfProcessExecEvents.Put(p)
+		return nil
+	}
+	return p
+}
+
+func (p *ProcessExecEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, p)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (p *ProcessExecEvent) Recycle() {
+	poolOfProcessExecEvents.Put(p)
 }

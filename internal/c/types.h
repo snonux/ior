@@ -49,6 +49,7 @@
 #define EXIT_PERF_OPEN_EVENT 44
 #define ENTER_EXEC_EVENT 45
 #define EXIT_EXEC_EVENT 46
+#define PROCESS_EXEC_EVENT 47
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -302,4 +303,20 @@ struct perf_open_event {
     __s32 cpu;
     __s32 group_fd;
     __u32 flags;
+};
+
+// process_exec_event is not a syscall tracepoint event: it is emitted by the
+// hand-written sched:sched_process_exec handler in exec.c, which fires after
+// the kernel has already installed the new program's name in task->comm but
+// before the new program executes its first syscall. Userspace consumes it as
+// a control event (no enter/exit pair, never rendered as a row) that refreshes
+// the pid->comm cache, so the first post-exec syscalls are labelled with the
+// post-exec comm instead of the pre-exec one.
+struct process_exec_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    char comm[MAX_PROGNAME_LENGTH];
 };

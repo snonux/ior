@@ -14,6 +14,9 @@
  */
 #include "filter.c"
 
+// Hand-written non-syscall tracepoints (sched:sched_process_exec).
+#include "exec.c"
+
 // Auto-generated tracepoints.
 #include "generated_tracepoints.c"
 
