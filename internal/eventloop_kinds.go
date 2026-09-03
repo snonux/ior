@@ -10,6 +10,11 @@ type runtimeEventDecoder func(raw []byte) event.Event
 type runtimeExitHandler func(e *eventLoop, ep *event.Pair) bool
 type runtimeEnterFilter func(filter globalfilter.Filter, ev event.Event) bool
 
+// runtimeControlHandler consumes a control event: a ring-buffer record that
+// carries state for the event loop instead of a syscall to report. The handler
+// owns the event and must recycle it.
+type runtimeControlHandler func(e *eventLoop, ev event.Event)
+
 type runtimeEventKind struct {
 	enterEventType types.EventType
 	exit           runtimeExitHandler
@@ -20,6 +25,10 @@ type rawEventDirection uint8
 const (
 	rawEnterEvent rawEventDirection = iota
 	rawExitEvent
+	// rawControlEvent is neither side of a syscall pair. It updates event-loop
+	// state (currently: the post-exec comm of a tid) and is never emitted as a
+	// row.
+	rawControlEvent
 )
 
 type rawRuntimeEvent struct {
@@ -27,6 +36,7 @@ type rawRuntimeEvent struct {
 	direction rawEventDirection
 	decode    runtimeEventDecoder
 	filter    runtimeEnterFilter
+	control   runtimeControlHandler
 }
 
 type eventPtr[T any] interface {
@@ -41,6 +51,18 @@ func rawDecoder[T any, P eventPtr[T]](decode func([]byte) P) runtimeEventDecoder
 			return nil
 		}
 		return ev
+	}
+}
+
+func typedRuntimeControl[T any, P eventPtr[T]](handle func(*eventLoop, P)) runtimeControlHandler {
+	return func(e *eventLoop, ev event.Event) {
+		typed, ok := ev.(P)
+		if !ok {
+			e.notifyWarning("Dropped malformed control event")
+			ev.Recycle()
+			return
+		}
+		handle(e, typed)
 	}
 }
 
@@ -114,6 +136,8 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_KEYCTL_EVENT, rawDecoder[types.KeyctlEvent](types.NewKeyctlEventFast), nil),
 		enterRaw(types.ENTER_PTRACE_EVENT, rawDecoder[types.PtraceEvent](types.NewPtraceEventFast), nil),
 		enterRaw(types.ENTER_PERF_OPEN_EVENT, rawDecoder[types.PerfOpenEvent](types.NewPerfOpenEventFast), nil),
+		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
+			typedRuntimeControl((*eventLoop).handleProcessExecEvent)),
 	}
 }
 
@@ -123,6 +147,10 @@ func enterRaw(eventType types.EventType, decode runtimeEventDecoder, filter runt
 
 func exitRaw(eventType types.EventType, decode runtimeEventDecoder) rawRuntimeEvent {
 	return rawRuntimeEvent{eventType: eventType, direction: rawExitEvent, decode: decode}
+}
+
+func controlRaw(eventType types.EventType, decode runtimeEventDecoder, control runtimeControlHandler) rawRuntimeEvent {
+	return rawRuntimeEvent{eventType: eventType, direction: rawControlEvent, decode: decode, control: control}
 }
 
 func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {

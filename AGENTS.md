@@ -149,6 +149,25 @@ committed set contains syscalls that only exist on recent mainline kernels
   (a TUI stream warning row, stderr in `-plain`/headless modes) and the run
   total is always printed in the end-of-run `Statistics:` block as
   `ring buffer drops: N (N/s, N% of events)`.
+- **Comm resolution across `execve`**: most event payloads carry no command
+  name, so it comes from `commResolver` (`internal/eventloop_comm.go`), an
+  asynchronous `/proc/<tid>/comm` cache. A tid survives `execve`, so a lookup
+  that lands in the post-fork/pre-exec window would cache the *pre-exec* name
+  and label the new program's first syscalls with it. The hand-written
+  `sched:sched_process_exec` handler in `internal/c/exec.c` closes that race: it
+  emits a `PROCESS_EXEC_EVENT` control record carrying `bpf_get_current_comm()`
+  taken after the kernel installed the new name. It is not a syscall
+  tracepoint, so it lives outside `probemanager` and is attached directly by
+  `attachProcessExecProbe` — **before** the syscall tracepoints, and regardless
+  of `-trace-*` selection. Control records never become rows; they only refresh
+  the cache (`handleProcessExecEvent`), and because the ring buffer preserves
+  reservation order and the event loop has a single consumer goroutine, the
+  refresh always lands before the new program's first syscall pair. A failed
+  attach is non-fatal and simply degrades to the old procfs-only labelling.
+  Correspondingly, `handleExecExit` deliberately does **not** cache the
+  `sys_enter_execve` comm (that is the *calling* program's name), and the
+  path/name kinds apply `Filter.MatchComm` in `finishCommForTid` so a row's
+  reported comm can never contradict an active `-comm` filter.
 
 ## Code Style
 

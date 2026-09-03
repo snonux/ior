@@ -48,6 +48,10 @@ const (
 	keyctlEventSize           = 40
 	ptraceEventSize           = 48
 	perfOpenEventSize         = 56
+	// process_exec_event is not a syscall event; it is the control record
+	// emitted by sched:sched_process_exec. 4+4+8+4+4+16 = 40 bytes with no
+	// trailing padding, so kernel and binary.Write payloads share one size.
+	processExecEventSize = 40
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -499,5 +503,24 @@ func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
 	p.Cpu = int32(binary.LittleEndian.Uint32(raw[44:48]))
 	p.GroupFd = int32(binary.LittleEndian.Uint32(raw[48:52]))
 	p.Flags = binary.LittleEndian.Uint32(raw[52:56])
+	return p
+}
+
+// NewProcessExecEventFast decodes the sched:sched_process_exec control record
+// carrying the post-exec task comm.
+func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
+	if len(raw) < processExecEventSize {
+		return nil
+	}
+	if len(raw) != processExecEventSize {
+		return NewProcessExecEvent(raw)
+	}
+	p := poolOfProcessExecEvents.Get().(*ProcessExecEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	copy(p.Comm[:], raw[24:40])
 	return p
 }

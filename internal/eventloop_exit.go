@@ -73,10 +73,14 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 		e.recyclePair(ep, "Dropped malformed exec exit event")
 		return false
 	}
-	comm := types.StringValue(execEv.Comm[:])
-	ep.Comm = comm
+	// execEv is the sys_enter_execve payload, so its comm is the name of the
+	// program that *called* execve - correct for this row, wrong for the tid
+	// from here on. Deliberately not written into the comm cache: the
+	// authoritative post-exec name arrives as a PROCESS_EXEC_EVENT control
+	// record (handleProcessExecEvent), and seeding the pre-exec name here would
+	// re-introduce exactly the stale label that record exists to prevent.
+	ep.Comm = types.StringValue(execEv.Comm[:])
 	ep.File = file.NewPathname(execEv.Filename[:])
-	e.setCachedComm(execEv.Tid, comm)
 	return e.finishPair(ep)
 }
 
@@ -87,8 +91,7 @@ func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool
 	// TUI String() repr ("old:... ->new:...").
 	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
 	ep.Oldname = types.StringValue(nameEv.Oldname[:])
-	ep.Comm = e.comm(nameEv.GetTid())
-	return true
+	return e.finishCommForTid(ep, nameEv.GetTid())
 }
 
 func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
@@ -125,8 +128,7 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 	} else {
 		ep.File = file.NewPathname(pathEv.Pathname[:])
 	}
-	ep.Comm = e.comm(pathEv.GetTid())
-	return true
+	return e.finishCommForTid(ep, pathEv.GetTid())
 }
 
 // handleFdExit processes exit events for fd-based syscalls. It resolves the fd
@@ -598,6 +600,26 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int
 func (e *eventLoop) finishPairForTid(ep *event.Pair, tid uint32) bool {
 	ep.Comm = e.comm(tid)
 	return e.finishPair(ep)
+}
+
+// finishCommForTid attaches the resolved comm for tid and drops the pair when
+// that comm contradicts the active comm filter.
+//
+// It exists for the path- and name-carrying kinds, whose kernel payload has no
+// comm field: their raw enter filter can only check the path, and the enter-side
+// comm gate in tracepointEntered only requires that *some* comm is known for the
+// tid, not that it matches. Without this checkpoint those rows were emitted
+// unconditionally, so a run filtered by -comm could show rows carrying a
+// different comm. Only the comm dimension is applied here - path was already
+// matched on the raw event, and the remaining dimensions keep their existing
+// application points, so filtering semantics for everything else are unchanged.
+func (e *eventLoop) finishCommForTid(ep *event.Pair, tid uint32) bool {
+	ep.Comm = e.comm(tid)
+	if e.Filter().MatchComm(ep.Comm) {
+		return true
+	}
+	ep.Recycle()
+	return false
 }
 
 func (e *eventLoop) finishPair(ep *event.Pair) bool {

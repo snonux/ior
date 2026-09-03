@@ -148,6 +148,14 @@ func TestRuntimeEventKindRegistriesHaveUniqueCoverage(t *testing.T) {
 				t.Fatalf("enter raw event %v has no runtime exit handler", rawEvent.eventType)
 			}
 		}
+		if rawEvent.direction == rawControlEvent {
+			if rawEvent.control == nil {
+				t.Fatalf("control raw event %v has no control handler", rawEvent.eventType)
+			}
+			if _, exists := exitHandlers[rawEvent.eventType]; exists {
+				t.Fatalf("control raw event %v must not be paired with an exit handler", rawEvent.eventType)
+			}
+		}
 	}
 
 	for enterEventType := range exitHandlers {

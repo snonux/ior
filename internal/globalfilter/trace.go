@@ -33,6 +33,17 @@ func (f Filter) MatchPair(pair *event.Pair) bool {
 	return f.Matches(pairCandidate{pair: pair})
 }
 
+// MatchComm applies only the comm dimension of the filter.
+//
+// Most event payloads carry no comm, so for those kinds the command name is
+// attached by userspace after the raw enter-side filtering stage. MatchComm is
+// the checkpoint for exactly that late-resolved value: without it a row can be
+// emitted whose reported comm contradicts the active comm filter, which is the
+// contradiction the pid->comm cache used to produce across execve.
+func (f Filter) MatchComm(comm string) bool {
+	return matchString(f.Comm, comm)
+}
+
 // MatchOpenEvent applies the subset of the filter that can be evaluated on raw
 // open events before exit pairing.
 func (f Filter) MatchOpenEvent(ev *types.OpenEvent) bool {
