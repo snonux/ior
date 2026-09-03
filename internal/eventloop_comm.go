@@ -18,8 +18,33 @@ import (
 // a lookup worker indefinitely and block clean shutdown.
 const resolveCommTimeout = time.Second
 
+// commEntry is one cached command name plus the bookkeeping that keeps it
+// honest across execve.
+//
+// epoch counts the execve renamings userspace has observed for the tid. A
+// lookup worker samples it *before* reading /proc and discards its result when
+// the epoch moved on in the meantime: without that guard a worker descheduled
+// between the procfs read and the cache write can overwrite the authoritative
+// post-exec name installed by handleProcessExecEvent with the pre-exec name it
+// is still holding. That is a purely logical race (both writes are correctly
+// mutex-protected), so the race detector cannot see it.
+//
+// stale marks an entry whose value may predate an exec record the kernel never
+// managed to emit, because bpf_ringbuf_reserve() failed under backpressure
+// (internal/c/exec.c counts that in ringbuf_drop_map). Such an entry keeps
+// serving its current value - dropping it outright would blank the comm column
+// and, with an active -comm filter, discard the tid's events at the enter-side
+// comm gate - but it triggers one asynchronous procfs re-read on next use.
+// That read happens after the exec, so it returns the new name and heals the
+// label.
+type commEntry struct {
+	comm  string
+	epoch uint64
+	stale bool
+}
+
 type commResolver struct {
-	comms map[uint32]string
+	comms map[uint32]commEntry
 
 	mu       sync.RWMutex
 	pending  map[uint32]struct{}
@@ -42,8 +67,11 @@ func newCommResolver(comms map[uint32]string) *commResolver {
 		comms = make(map[uint32]string)
 	}
 	r := &commResolver{
-		comms:   comms,
+		comms:   make(map[uint32]commEntry, len(comms)),
 		pending: make(map[uint32]struct{}),
+	}
+	for tid, comm := range comms {
+		r.comms[tid] = commEntry{comm: comm}
 	}
 	r.ensureCommsAllocated()
 	r.ensureLookupConfig()
@@ -57,7 +85,7 @@ func newCommResolver(comms map[uint32]string) *commResolver {
 // oldest-first (0) so they evict before freshly touched entries.
 func (r *commResolver) ensureCommsAllocated() {
 	if r.comms == nil {
-		r.comms = make(map[uint32]string)
+		r.comms = make(map[uint32]commEntry)
 	}
 	if r.commAges == nil {
 		r.commAges = make(map[uint32]uint64, len(r.comms))
@@ -107,20 +135,44 @@ func (r *commResolver) startLookupWorkers() {
 func (r *commResolver) lookupWorker() {
 	defer r.workersWG.Done()
 	for tid := range r.lookupQueue {
+		// Sample the exec generation before the read: everything this worker
+		// observes in /proc from here on may already be one execve out of
+		// date, and storeLookupResult uses the sample to detect exactly that.
+		epoch := r.execEpoch(tid)
 		// Each procfs read gets an independent timeout so that a frozen cgroup
 		// or a slow /proc entry cannot block a worker goroutine indefinitely
 		// and stall shutdown (which waits on workersWG).
 		ctx, cancel := context.WithTimeout(context.Background(), resolveCommTimeout)
 		comm, err := r.resolveFn(ctx, tid)
 		cancel()
-		r.mu.Lock()
-		delete(r.pending, tid)
-		if comm != "" {
-			r.setCommLocked(tid, comm)
-		}
-		r.mu.Unlock()
+		r.storeLookupResult(tid, comm, epoch)
 		r.notifyResolveFailure(tid, err)
 	}
+}
+
+// execEpoch reports how many execve renamings have been applied to tid.
+func (r *commResolver) execEpoch(tid uint32) uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.comms[tid].epoch
+}
+
+// storeLookupResult clears the pending flag for tid and caches comm, unless an
+// execve renamed the task while the lookup was in flight. In that case
+// handleProcessExecEvent has already installed the exact kernel-reported
+// post-exec name and this result - read before the rename, or concurrently
+// with it - would put the pre-exec name back.
+func (r *commResolver) storeLookupResult(tid uint32, comm string, epoch uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.pending, tid)
+	if comm == "" {
+		return
+	}
+	if r.comms[tid].epoch != epoch {
+		return
+	}
+	r.setCommLocked(tid, comm)
 }
 
 func (r *commResolver) seedTrackedPidComm(pidFilter int) {
@@ -161,14 +213,76 @@ func (r *commResolver) comm(tid uint32) string {
 }
 
 func (r *commResolver) cached(tid uint32) (string, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	comm, ok := r.comms[tid]
-	if ok {
-		// Refresh the LRU age on use so active TIDs stay cached.
-		r.touchCommLocked(tid)
+	comm, ok, stale := r.lookupCached(tid)
+	if stale {
+		// Serve the value we have and heal it in the background.
+		r.refreshStaleComm(tid)
 	}
 	return comm, ok
+}
+
+// lookupCached reads the cache entry for tid, refreshing its LRU age, and
+// additionally reports whether the entry was flagged for re-resolution.
+func (r *commResolver) lookupCached(tid uint32) (comm string, ok, stale bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.comms[tid]
+	if !ok {
+		return "", false, false
+	}
+	// Refresh the LRU age on use so active TIDs stay cached.
+	r.touchCommLocked(tid)
+	return entry.comm, true, entry.stale
+}
+
+// markAllStale flags every cached comm for one asynchronous re-read and
+// reports how many entries it newly flagged.
+//
+// Called after the ring-buffer drop counter grew: a dropped record may have
+// been a sched_process_exec control record, and that is the one loss the event
+// stream cannot repair by itself. With an active -comm filter the usual
+// self-healing path is closed too, because matchRawOpenEvent drops
+// non-matching opens at enter, so handleOpenExit never gets to refresh the
+// cache from the kernel comm. Without this sweep a tid stale-cached as the
+// forking shell would keep that label - and keep contradicting the filter -
+// for the rest of its life.
+func (r *commResolver) markAllStale() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	marked := 0
+	for tid, entry := range r.comms {
+		if entry.stale {
+			continue
+		}
+		entry.stale = true
+		r.comms[tid] = entry
+		marked++
+	}
+	return marked
+}
+
+// refreshStaleComm queues one procfs re-read for a stale entry. The cached
+// value stays in place until the read lands, so rows keep their (possibly
+// outdated) label instead of losing it. The stale flag is cleared only once
+// the lookup is actually queued, so a saturated queue means "retry on next
+// use" rather than "give up".
+func (r *commResolver) refreshStaleComm(tid uint32) {
+	if tid == 0 {
+		return
+	}
+	r.startLookupWorkers()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.comms[tid]
+	if !ok || !entry.stale {
+		return
+	}
+	if !r.enqueueLookupLocked(tid) {
+		return
+	}
+	entry.stale = false
+	r.comms[tid] = entry
 }
 
 func (r *commResolver) setCached(tid uint32, comm string) {
@@ -185,9 +299,27 @@ func (r *commResolver) setCached(tid uint32, comm string) {
 func (r *commResolver) setCommLocked(tid uint32, comm string) {
 	r.ensureCommsAllocated()
 	r.commAge++
-	r.comms[tid] = comm
+	entry := r.comms[tid]
+	entry.comm = comm
+	entry.stale = false
+	r.comms[tid] = entry
 	r.commAges[tid] = r.commAge
 	r.pruneCommsLocked()
+}
+
+// setCachedAfterExec stores the kernel-reported post-exec name for tid and
+// bumps its exec generation, which invalidates every procfs lookup that was
+// already in flight for that tid (see storeLookupResult).
+func (r *commResolver) setCachedAfterExec(tid uint32, comm string) {
+	if comm == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.comms[tid]
+	entry.epoch++
+	r.comms[tid] = entry
+	r.setCommLocked(tid, comm)
 }
 
 // touchCommLocked refreshes the LRU age of an existing comms entry. Callers
@@ -235,19 +367,32 @@ func (r *commResolver) queueLookup(tid uint32) {
 		r.touchCommLocked(tid)
 		return
 	}
+	r.enqueueLookupLocked(tid)
+}
+
+// enqueueLookupLocked marks tid pending and hands it to a lookup worker,
+// reporting whether it was actually queued. It refuses after shutdown and when
+// a lookup for tid is already in flight, and stays non-blocking so event
+// processing never stalls on saturated resolver workers. Callers must hold
+// r.mu.
+func (r *commResolver) enqueueLookupLocked(tid uint32) bool {
+	if r.closed {
+		return false
+	}
 	if r.pending == nil {
 		r.pending = make(map[uint32]struct{})
 	}
 	if _, ok := r.pending[tid]; ok {
-		return
+		return false
 	}
 	r.pending[tid] = struct{}{}
 
-	// Keep event processing non-blocking if resolver workers are saturated.
 	select {
 	case r.lookupQueue <- tid:
+		return true
 	default:
 		delete(r.pending, tid)
+		return false
 	}
 }
 
@@ -299,6 +444,30 @@ func (e *eventLoop) setCachedComm(tid uint32, comm string) {
 	e.commState().setCached(tid, comm)
 }
 
+// setCachedCommAfterExec applies a kernel-reported post-exec name (see
+// commResolver.setCachedAfterExec).
+func (e *eventLoop) setCachedCommAfterExec(tid uint32, comm string) {
+	e.commState().setCachedAfterExec(tid, comm)
+}
+
+// applyPendingCommRefresh consumes a refresh request raised by the ring-buffer
+// drop monitor and flags the whole comm cache for re-resolution.
+//
+// It runs on the event-loop goroutine, not on the monitor's: commState() lazily
+// initialises the resolver and its callbacks without holding a lock, so calling
+// it from the monitor goroutine would be a data race. The monitor therefore
+// only sets an atomic flag and this hot-path check (one relaxed load per raw
+// event) picks it up.
+func (e *eventLoop) applyPendingCommRefresh() {
+	if !e.commRefreshPending.Load() {
+		return
+	}
+	if !e.commRefreshPending.CompareAndSwap(true, false) {
+		return
+	}
+	e.commState().markAllStale()
+}
+
 func (e *eventLoop) queueCommLookup(tid uint32) {
 	e.commState().queueLookup(tid)
 }
@@ -315,14 +484,21 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 // name. Because the kernel already installed the new name in task->comm before
 // this tracepoint fires, and the ring buffer delivers this record before any
 // syscall record of the new program, overwriting the cache here makes the label
-// correct from the very first post-exec event.
+// correct from the very first post-exec event. The write also bumps the tid's
+// exec generation, which retires any procfs lookup still in flight for it -
+// otherwise a worker holding the pre-exec name could land afterwards and undo
+// this correction. The one case this cannot cover is the record never being
+// emitted at all (ring-buffer backpressure); markAllStale is the recovery path
+// for that.
 func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent) {
 	defer ev.Recycle()
 	comm := types.StringValue(ev.Comm[:])
 	if comm == "" {
+		// A control record with an empty comm carries no information; keeping
+		// whatever is cached beats replacing a good label with nothing.
 		return
 	}
-	e.setCachedComm(ev.Tid, comm)
+	e.setCachedCommAfterExec(ev.Tid, comm)
 }
 
 func procTidPathPrefix(tid uint32) string {

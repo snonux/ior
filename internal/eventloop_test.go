@@ -2043,10 +2043,10 @@ func verifyMismatchCount(t *testing.T, el *eventLoop, expectedCount uint) {
 }
 
 func verifyCommName(t *testing.T, el *eventLoop, tid uint32, expectedComm string) {
-	if comm, ok := el.commState().comms[tid]; !ok {
+	if entry, ok := el.commState().comms[tid]; !ok {
 		t.Errorf("Expected comm name for tid %d but it wasn't found", tid)
-	} else if comm != expectedComm {
-		t.Errorf("Expected comm name '%s' for tid %d but got '%s'", expectedComm, tid, comm)
+	} else if entry.comm != expectedComm {
+		t.Errorf("Expected comm name '%s' for tid %d but got '%s'", expectedComm, tid, entry.comm)
 	}
 }
 

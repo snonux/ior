@@ -84,6 +84,14 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	if result.delta == 0 {
 		return
 	}
+	// Some of those lost records may have been sched_process_exec control
+	// records, and that is the one loss the stream cannot repair on its own:
+	// with an active -comm filter the open-side cache refresh never runs for a
+	// non-matching program, so a tid stale-cached under its pre-exec name would
+	// keep that name forever. Ask the event-loop goroutine to re-resolve the
+	// comm cache; the flag is consumed in applyPendingCommRefresh because this
+	// callback runs on the monitor goroutine.
+	e.commRefreshPending.Store(true)
 	message := formatRingbufDropWarning(result)
 	if e.warningCb != nil {
 		e.notifyWarning(message)
@@ -188,6 +196,7 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	if len(raw) == 0 {
 		return
 	}
+	e.applyPendingCommRefresh()
 	e.numTracepoints++
 	evType := types.EventType(raw[0])
 	handler, ok := e.rawHandlers[evType]
@@ -222,9 +231,12 @@ func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHan
 		if rawEvent.direction == rawControlEvent {
 			// Control records never become rows; they only update event-loop
 			// state. Because the BPF ring buffer preserves reservation order
-			// and this goroutine is the single consumer, a control record is
-			// applied before any later event of the same task is turned into
-			// a pair.
+			// and this goroutine is the single consumer, a control record that
+			// reaches userspace is applied before any later event of the same
+			// task is turned into a pair. The caveat is backpressure: a record
+			// the kernel could not reserve never arrives at all, so the
+			// ordering guarantee holds for delivered records only and the drop
+			// counter drives the recovery path (applyPendingCommRefresh).
 			if rawEvent.control == nil {
 				ev.Recycle()
 				return

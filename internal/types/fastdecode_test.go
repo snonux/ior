@@ -341,6 +341,25 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("perf_open decode mismatch")
 		}
 	})
+
+	// ProcessExecEvent is not a syscall event: it is the sched_process_exec
+	// control record that keeps the pid->comm cache correct across execve. It
+	// belongs in this table for the same reason as the others - its fast path
+	// only triggers on the exact kernel payload size, so a struct-layout drift
+	// must show up as a decode mismatch here.
+	t.Run("ProcessExecEvent", func(t *testing.T) {
+		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 3}
+		copy(ev.Comm[:], "cat")
+		raw, _ := ev.Bytes()
+
+		slow := NewProcessExecEvent(raw)
+		fast := NewProcessExecEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("process_exec decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -674,6 +693,8 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "KeyctlEvent", decode: func(raw []byte) bool { return NewKeyctlEventFast(raw) == nil }},
 		{name: "PtraceEvent", decode: func(raw []byte) bool { return NewPtraceEventFast(raw) == nil }},
 		{name: "PerfOpenEvent", decode: func(raw []byte) bool { return NewPerfOpenEventFast(raw) == nil }},
+		{name: "MemEvent", decode: func(raw []byte) bool { return NewMemEventFast(raw) == nil }},
+		{name: "ProcessExecEvent", decode: func(raw []byte) bool { return NewProcessExecEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {
