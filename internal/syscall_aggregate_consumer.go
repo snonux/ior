@@ -313,10 +313,24 @@ func buildSyscallSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 	return rates
 }
 
-func buildAggregateOnlyTraceIDs(cfg flags.Config) map[types.TraceId]struct{} {
+// buildAggregateIngestTraceIDs returns the trace IDs whose kernel aggregate
+// rows must be merged into the stats engine: every syscall whose sampling rate
+// is not 1, i.e. aggregate-only (rate 0) and sampled 1-in-N (rate N>1).
+//
+// The kernel only aggregates syscalls it does NOT emit as ring-buffer events
+// (ior_on_syscall_exit in internal/c/filter.c), so the two paths are disjoint:
+//   - rate 0: no events at all, the aggregate carries the whole count.
+//   - rate N: the ~1/N emitted pairs are counted by per-event ingestion, the
+//     remaining (N-1)/N by the aggregate — summing to the true count instead
+//     of under-reporting by roughly a factor of N.
+//   - rate 1: everything is emitted and the kernel writes no aggregate row at
+//     all; excluding those trace IDs here keeps the gate fail-safe (a stale
+//     BPF object loaded via IOR_BPF_OBJECT would under-report rather than
+//     double-count).
+func buildAggregateIngestTraceIDs(cfg flags.Config) map[types.TraceId]struct{} {
 	ids := make(map[types.TraceId]struct{})
 	for traceID, rate := range buildSyscallSamplingRates(cfg) {
-		if rate == 0 {
+		if rate != 1 {
 			ids[traceID] = struct{}{}
 		}
 	}

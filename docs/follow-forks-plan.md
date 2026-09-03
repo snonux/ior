@@ -32,12 +32,14 @@ tree, while leaving the default single-PID behavior unchanged.
    per-syscall aggregate counts/durations/histograms in `syscall_aggregate_map`
    (maintained by `ior_update_syscall_aggregate` in `filter.c`) must roll up
    syscalls issued by descendants, not just the root. Note the existing
-   invariant to preserve: aggregate counting is independent of per-event
-   sampling — `ior_on_syscall_exit` calls `ior_update_syscall_aggregate`
-   regardless of the sampling/`emit_event` decision, so even syscalls in
-   aggregate-only (sampling-rate 0) mode still count. Following forks must not
-   regress this: a descendant whose individual events are sampled down must
-   still contribute to the counts.
+   invariant to preserve: aggregate counting and per-event emission *partition*
+   the invocations — `ior_on_syscall_exit` calls
+   `ior_update_syscall_aggregate` exactly when the sampling decision says the
+   event is not emitted (`emit_event == 0`), and userspace merges the aggregate
+   rows for every syscall whose rate is not 1, so aggregate + emitted = the
+   true count. Following forks must not regress this: a descendant whose
+   individual events are sampled down must still contribute to the counts
+   through both halves of that partition.
 4. Bounded resource use: descendant set lives in a fixed-size BPF map, reclaimed
    on process exit; pathological fork storms degrade gracefully (best-effort),
    they do not crash the tracer.

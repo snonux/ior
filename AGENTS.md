@@ -110,6 +110,25 @@ committed set contains syscalls that only exist on recent mainline kernels
   - `-syscall-sampling-families` and `-syscall-sampling-syscalls` control per-family/per-syscall sampling (`0` = aggregate-only, `1` = all events, `N` = 1-in-N).
   - Current defaults include aggregate-only (`0`) for `futex`, `futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`, and `clock_gettime`.
   - In raw output modes (`-plain`, `-flamegraph`, headless `-parquet`) the default aggregate-only rates are automatically promoted to `1` because these modes lack a TUI aggregate sink. Explicit per-family rate `0` is also promoted to `1` in raw modes (a family zero would otherwise erase the whole family from output with no aggregate to preserve it); user-explicit `-syscall-sampling-syscalls` overrides are still preserved.
+  - **Sampled counts are exact, not scaled.** The kernel aggregates exactly the
+    events it does *not* emit (`ior_on_syscall_exit` in `internal/c/filter.c`
+    updates `syscall_aggregate_map` only when `emit_event == 0`), so the
+    aggregate map and the ring-buffer stream partition the invocations: rate
+    `0` contributes everything through the aggregate, rate `N` contributes
+    ~1/N through per-event ingestion and the remaining (N-1)/N through the
+    aggregate, and rate `1` writes no aggregate row at all. The drainer
+    ingests rows for every trace ID whose rate is not `1`
+    (`buildAggregateIngestTraceIDs`), so TUI/stats counts, error counts,
+    latency totals and the latency histogram for sampled syscalls are the true
+    full-population values with no double counting and no scaling estimate.
+  - What stays sampled for rate `N` syscalls: per-event detail only — stream
+    rows, file/process attribution, byte totals, gaps, and latency percentiles
+    come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,
+    gaps, files or processes). Counts/errors/latency-sums/histograms are full.
+  - While a runtime filter with an unsupported dimension is active, aggregate
+    ingestion is gated off entirely (`aggregateIngestAllowedForFilter`), so
+    aggregate-only syscalls disappear and sampled syscalls fall back to their
+    1-in-N counts until the filter is cleared.
 - **Additional metric dimensions**:
   - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints).

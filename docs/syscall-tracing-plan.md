@@ -118,6 +118,12 @@ Memory extent is tracked separately via address-space metrics.
 - Aggregate-only sampling mode is implemented (`rate=0`) via:
   - `-syscall-sampling-families`
   - `-syscall-sampling-syscalls`
+- The kernel aggregate map counts exactly the events that are *not* emitted to
+  the ring buffer, so aggregate rows and per-event rows partition the
+  invocations. Userspace merges aggregate rows for every syscall whose rate is
+  not `1`, making counts/errors/latency totals exact for sampled (`rate=N`)
+  syscalls too; only per-event detail (bytes, files, processes, gaps,
+  percentiles, stream rows) remains 1-in-N.
 - Current defaults include aggregate-only mode for:
   - `futex`, `futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`
   - `clock_gettime`

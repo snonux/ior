@@ -127,13 +127,29 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
     if (now >= state->start_ns)
         duration = now - state->start_ns;
 
-    // Pair aggregate stats using the explicit enter_trace_id passed by the
-    // generated exit handler, avoiding any numeric adjacency assumption
-    // between kernel-assigned enter and exit tracepoint IDs.
-    if (state->enter_trace_id == enter_trace_id)
+    emit_event = state->emit_event;
+
+    // Aggregate-vs-emit partitioning: this map counts exactly the syscalls
+    // that userspace will NOT see as ring-buffer events, so the kernel
+    // aggregate and the per-event stream are disjoint and their sum is the
+    // true invocation count:
+    //   rate 0 (aggregate-only): nothing is emitted, everything lands here.
+    //   rate 1 (trace all):      everything is emitted, nothing lands here
+    //                            (the aggregate map stays empty for it).
+    //   rate N (1-in-N):         the ~1/N emitted pairs are counted user-side
+    //                            by the stats engine, the other (N-1)/N land
+    //                            here and are merged in by the aggregate
+    //                            drainer — no double counting, no scaling
+    //                            estimate.
+    // Counting emitted events here as well would double-count every traced
+    // syscall once the drainer ingests rows for sampled trace IDs.
+    //
+    // Pairing uses the explicit enter_trace_id passed by the generated exit
+    // handler, avoiding any numeric adjacency assumption between
+    // kernel-assigned enter and exit tracepoint IDs.
+    if (!emit_event && state->enter_trace_id == enter_trace_id)
         ior_update_syscall_aggregate(state->enter_trace_id, duration, ret);
 
-    emit_event = state->emit_event;
     bpf_map_delete_elem(&syscall_enter_state_map, &tid);
     return emit_event != 0;
 }
