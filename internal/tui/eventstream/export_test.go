@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -272,5 +273,46 @@ func TestShellSplitVariousCases(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("shellSplit(%q): got %#v, want %#v", tc.input, got, tc.want)
 		}
+	}
+}
+
+// TestExportSnapshotMatchesRenameOnEitherName guards the export half of the
+// either-name contract. Model.ExportSnapshotToCSV (the `E` path) filters the
+// source snapshot itself rather than reusing m.filtered, so it needs its own
+// regression test: without one, reverting it to plain Matches leaves the whole
+// package green while the exported CSV silently loses rename rows that the
+// Stream tab is showing.
+func TestExportSnapshotMatchesRenameOnEitherName(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{
+		Seq:      1,
+		Syscall:  "renameat2",
+		Comm:     "mv",
+		FileName: "/tmp/new.txt",
+		OldName:  "/tmp/old.txt",
+	})
+	rb.Push(StreamEvent{
+		Seq:      2,
+		Syscall:  "openat",
+		Comm:     "cat",
+		FileName: "/tmp/unrelated.txt",
+	})
+
+	dir := t.TempDir()
+	path, err := exportSnapshotToCSV(rb, Filter{File: &StringFilter{Pattern: "old.txt"}}, dir, "either-name.csv")
+	if err != nil {
+		t.Fatalf("exportSnapshotToCSV: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read exported csv: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "renameat2") {
+		t.Fatalf("a rename matched on its oldname must be exported, got:\n%s", got)
+	}
+	if strings.Contains(got, "openat") {
+		t.Fatalf("the export must not include rows the filter rejects, got:\n%s", got)
 	}
 }

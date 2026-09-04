@@ -166,3 +166,65 @@ func TestMatchPairEitherNameWidensOnlyTheFileDimension(t *testing.T) {
 		t.Fatalf("expected a nil pair to be rejected")
 	}
 }
+
+// stubCandidate is a minimal Candidate for exercising MatchesEitherName
+// directly, without depending on any concrete row type.
+type stubCandidate struct {
+	syscall string
+	file    string
+	latency uint64
+}
+
+func (c stubCandidate) SyscallValue() string { return c.syscall }
+func (c stubCandidate) FamilyValue() string  { return "FS" }
+func (c stubCandidate) CommValue() string    { return "mv" }
+func (c stubCandidate) FileValue() string    { return c.file }
+func (c stubCandidate) PIDValue() uint32     { return 1 }
+func (c stubCandidate) TIDValue() uint32     { return 1 }
+func (c stubCandidate) FDValue() int32       { return -1 }
+func (c stubCandidate) LatencyValue() uint64 { return c.latency }
+func (c stubCandidate) GapValue() uint64     { return 0 }
+func (c stubCandidate) BytesValue() uint64   { return 0 }
+func (c stubCandidate) ReturnValue() int64   { return 0 }
+func (c stubCandidate) ErrorValue() bool     { return false }
+
+// TestMatchesEitherNameWidensOnlyTheFileDimension is the Candidate-level
+// counterpart of TestMatchPairEitherNameWidensOnlyTheFileDimension. The Stream
+// tab and its CSV export filter rows rather than pairs, so this path needs its
+// own guard: it is the one shared by both of those call sites.
+func TestMatchesEitherNameWidensOnlyTheFileDimension(t *testing.T) {
+	row := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", latency: 1_000_000}
+	const oldName = "/tmp/old.txt"
+
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).MatchesEitherName(row, oldName) {
+		t.Fatal("expected a newname match to be accepted")
+	}
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).MatchesEitherName(row, oldName) {
+		t.Fatal("expected an oldname match to be accepted")
+	}
+	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).MatchesEitherName(row, oldName) {
+		t.Fatal("expected a pattern matching neither name to be rejected")
+	}
+
+	// An empty oldName must not widen anything: a row with no rename source
+	// behaves exactly like plain Matches.
+	if (Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).MatchesEitherName(row, "") {
+		t.Fatal("an absent oldname must not satisfy the file dimension")
+	}
+
+	// The widening must not become a bypass for any other dimension.
+	strict := Filter{
+		File:    &StringFilter{Pattern: "/tmp/old.txt"},
+		Syscall: &StringFilter{Pattern: "openat"},
+	}
+	if strict.MatchesEitherName(row, oldName) {
+		t.Fatal("expected an oldname match to still be subject to -syscall")
+	}
+	slow := Filter{
+		File:      &StringFilter{Pattern: "/tmp/old.txt"},
+		LatencyNs: &NumericFilter{Op: OpGt, Value: 2_000_000},
+	}
+	if slow.MatchesEitherName(row, oldName) {
+		t.Fatal("expected an oldname match to still be subject to -latency")
+	}
+}
