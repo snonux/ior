@@ -170,22 +170,30 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 }
 
 // handleFdExit processes exit events for fd-based syscalls. It resolves the fd
-// to a file, applies the close state transition, filters the pair, and handles
-// dup/pidfd_getfd fd-transfer operations before finalising bytes. close_range is
-// not handled here: it carries (first, last, flags) and is routed through
+// to a file, applies the close state transition, applies the dup/pidfd_getfd
+// fd-transfer operation and only then filters the pair. close_range is not
+// handled here: it carries (first, last, flags) and is routed through
 // handleTwoFdExit so the upper bound and flags are honoured.
+//
+// The state work runs BEFORE the filter for the same reason it does in
+// handleOpenExit: the fd table is global, so a row this run does not want must
+// still leave it correct for the rows it does want. With the transfer applied
+// after the checkpoint, a dup/dup2 row dropped by -path or -comm left the
+// duplicated descriptor unregistered and every later read/write/close on it
+// resolved to no path (or, when the target fd number was already tracked, to
+// the *previous* file). For pidfd_getfd the ordering was also a filter-input
+// bug: ep.File was re-pointed at the transferred file after the filter had
+// already judged the pair on the source pidfd, so the value filtered on and the
+// value printed genuinely differed.
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	ep.File = e.fdState().resolve(fd, fdEv.Pid)
 	e.applyFdCloseState(ep, fd, fdEv.Pid)
 	ep.Comm = e.comm(fdEv.GetTid())
-	if !e.finishPair(ep) {
-		return false
-	}
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
 		return false
 	}
-	return true
+	return e.finishPair(ep)
 }
 
 // applyFdCloseState updates fd-tracking state for the close syscall. The fd is
@@ -209,6 +217,10 @@ func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 
 // applyFdTransferOp handles dup/dup2 and pidfd_getfd fd-transfer operations.
 // Returns false if the pair should be dropped due to a malformed event.
+//
+// It runs before the pair filter (see handleFdExit): the fd registration is
+// global state, and for pidfd_getfd the ep.File it assigns is the file the row
+// reports, so it has to be in place before the filter reads it.
 func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool {
 	if ep.Is(types.SYS_ENTER_DUP) || ep.Is(types.SYS_ENTER_DUP2) {
 		fdFile, ok := ep.File.(*file.FdFile)
@@ -238,13 +250,13 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 	return true
 }
 
+// handleDup3Exit registers the duplicated descriptor before filtering the pair,
+// for the reason spelled out on handleFdExit: the fd table must stay correct
+// for the rows the run does want even when this row is dropped.
 func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool {
 	fd := int32(dup3Ev.Fd)
 	ep.File = e.fdState().resolve(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
-	if !e.finishPair(ep) {
-		return false
-	}
 
 	fdFile, ok := ep.File.(*file.FdFile)
 	if !ok {
@@ -257,7 +269,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 		return false
 	}
 	e.registerDup(fdFile, int32(retEvent.Ret), dup3Ev.Flags&syscall.O_CLOEXEC)
-	return true
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *types.OpenByHandleAtEvent) bool {
@@ -595,14 +607,27 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 	return e.finishPair(ep)
 }
 
+// handleFcntlExit applies the fd-state effect of the command (F_SETFL flag
+// update, F_DUPFD/F_DUPFD_CLOEXEC descriptor registration) before filtering the
+// pair - see handleFdExit for why the ordering matters. F_SETFL belongs to the
+// same class even though no filter dimension reads flags: for a descriptor
+// known only to the procfs cache it is the call that promotes the entry into
+// the fd table, so behind the checkpoint a dropped row left that promotion, and
+// the new flags with it, unrecorded.
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.fdState().resolve(fd, fcntlEv.Pid)
-	if !e.finishPair(ep) {
+	if !e.applyFcntlFdState(ep, fcntlEv, fd) {
 		return false
 	}
+	return e.finishPair(ep)
+}
 
+// applyFcntlFdState performs the fd-table side effects of one fcntl command.
+// It reports whether ep is still alive; a false return means the pair was
+// malformed and has already been recycled.
+func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent, fd int32) bool {
 	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
 		e.recyclePair(ep, "Dropped malformed fcntl exit event")
