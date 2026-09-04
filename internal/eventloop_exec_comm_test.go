@@ -3,7 +3,9 @@ package internal
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -658,6 +660,41 @@ func TestPathKindsApplyTheFullPairFilter(t *testing.T) {
 		}
 	})
 
+	t.Run("path row matching the path filter survives", func(t *testing.T) {
+		// The risk direction of routing handlePathExit through the full pair
+		// filter: a row the -path filter legitimately selects must still be
+		// emitted, and must still carry its file and comm.
+		el := mustNewEventLoop(t, eventLoopConfig{
+			filter: globalfilter.Filter{
+				File: &globalfilter.StringFilter{Pattern: "/etc/ld.so.preload"},
+			},
+			commResolver: newHermeticCommResolver(),
+		})
+		t.Cleanup(el.commResolver.shutdown)
+		el.setCachedComm(execCommTid, "cat")
+
+		out := make(chan *event.Pair, 1)
+		_, enterRaw := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
+			"/etc/ld.so.preload", types.SYS_ENTER_ACCESS)
+		_, exitRaw := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
+			types.SYS_EXIT_ACCESS, -2)
+		el.processRawEvent(enterRaw, out)
+		el.processRawEvent(exitRaw, out)
+
+		select {
+		case ep := <-out:
+			if ep.File == nil || ep.File.Name() != "/etc/ld.so.preload" {
+				t.Fatalf("unexpected file on the path row: %v", ep.File)
+			}
+			if ep.Comm != "cat" {
+				t.Fatalf("path row comm = %q, want \"cat\"", ep.Comm)
+			}
+			ep.Recycle()
+		default:
+			t.Fatal("a path row matching the -path filter must still be emitted")
+		}
+	})
+
 	t.Run("rename row matched on oldname survives", func(t *testing.T) {
 		el := mustNewEventLoop(t, eventLoopConfig{
 			filter: globalfilter.Filter{
@@ -685,4 +722,255 @@ func TestPathKindsApplyTheFullPairFilter(t *testing.T) {
 			t.Fatal("a rename matched on its oldname must still be emitted")
 		}
 	})
+}
+
+// feedOpenByHandleAtPair drives a full name_to_handle_at + open_by_handle_at
+// sequence through the raw event path and returns the emitted open_by_handle_at
+// pair, or nil when it was filtered. name_to_handle_at itself never produces a
+// row: handlePathExit only parks its pathname for the correlation.
+func feedOpenByHandleAtPair(t *testing.T, el *eventLoop, pathname string, fd int32) *event.Pair {
+	t.Helper()
+	out := make(chan *event.Pair, 2)
+
+	_, enterNameRaw := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
+		pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
+	_, exitNameRaw := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
+		types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
+	el.processRawEvent(enterNameRaw, out)
+	el.processRawEvent(exitNameRaw, out)
+
+	_, enterOpenRaw := makeEnterOpenByHandleAtEvent(t, defaulTime+200, execCommPid, execCommTid,
+		syscall.O_RDONLY)
+	_, exitOpenRaw := makeExitRetEvent(t, defaulTime+300, execCommPid, execCommTid,
+		types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
+	el.processRawEvent(enterOpenRaw, out)
+	el.processRawEvent(exitOpenRaw, out)
+
+	select {
+	case ep := <-out:
+		return ep
+	default:
+		return nil
+	}
+}
+
+// TestOpenByHandleAtRowsCannotContradictTheCommFilter closes the last kind that
+// escaped every filter dimension. open_by_handle_at has no raw enter filter at
+// all (rawRuntimeEvents registers it with a nil filter) and its exit handler
+// used to attach the resolved comm and return true, so under `-comm cat` a row
+// labelled "bash" was emitted - the exact contradiction this whole fix exists
+// to remove. The enter-side gate in tracepointEntered does not help: it only
+// requires that *some* comm is cached for the tid, not that it matches.
+func TestOpenByHandleAtRowsCannotContradictTheCommFilter(t *testing.T) {
+	const pathname = "/tmp/handle.txt"
+
+	t.Run("row whose comm contradicts the filter is dropped", func(t *testing.T) {
+		el := newEventLoopWithStaleComm(t, eventLoopConfig{
+			filter: globalfilter.Filter{
+				Comm: &globalfilter.StringFilter{Pattern: "cat"},
+			},
+		}, "bash")
+
+		if ep := feedOpenByHandleAtPair(t, el, pathname, 70); ep != nil {
+			defer ep.Recycle()
+			t.Fatalf("open_by_handle_at row survived -comm cat with comm=%q file=%v", ep.Comm, ep.File)
+		}
+	})
+
+	t.Run("row whose comm matches the filter survives", func(t *testing.T) {
+		el := newEventLoopWithStaleComm(t, eventLoopConfig{
+			filter: globalfilter.Filter{
+				Comm: &globalfilter.StringFilter{Pattern: "cat"},
+			},
+		}, "cat")
+
+		ep := feedOpenByHandleAtPair(t, el, pathname, 71)
+		if ep == nil {
+			t.Fatal("open_by_handle_at row matching -comm cat must still be emitted")
+		}
+		defer ep.Recycle()
+		if ep.Comm != "cat" {
+			t.Fatalf("row comm = %q, want \"cat\"", ep.Comm)
+		}
+		if ep.File == nil || ep.File.Name() != pathname {
+			t.Fatalf("row file = %v, want %q", ep.File, pathname)
+		}
+	})
+
+	t.Run("row is filtered on the pathname it reports", func(t *testing.T) {
+		// The full pair filter is deliberate here, not just the comm
+		// dimension: ep.File is in both branches exactly the name the row
+		// displays, so -path can never select a row that then shows a
+		// different file.
+		el := newEventLoopWithStaleComm(t, eventLoopConfig{
+			filter: globalfilter.Filter{
+				File: &globalfilter.StringFilter{Pattern: "/tmp/other.txt"},
+			},
+		}, "cat")
+
+		if ep := feedOpenByHandleAtPair(t, el, pathname, 72); ep != nil {
+			defer ep.Recycle()
+			t.Fatalf("open_by_handle_at row survived a non-matching -path filter: file=%v", ep.File)
+		}
+	})
+}
+
+// TestKernelCommWinsOverAnInFlightProcfsLookup is the non-exec half of the
+// epoch guard. handleOpenExit caches the open event's payload comm, which BPF
+// read from task->comm at event time; a resolver worker descheduled with an
+// older name must not land on top of it. Before every kernel-sourced write
+// bumped the rename generation this was reachable without any execve at all -
+// prctl(PR_SET_NAME) is enough - and after a dropped exec record too.
+func TestKernelCommWinsOverAnInFlightProcfsLookup(t *testing.T) {
+	readStarted := make(chan struct{})
+	release := make(chan struct{})
+	resolver := newCommResolver(nil)
+	resolver.lookupWorkers = 1
+	resolver.resolveFn = func(_ context.Context, tid uint32) (string, error) {
+		if tid != execCommTid {
+			return "", nil
+		}
+		// The worker read the old name and is now descheduled.
+		close(readStarted)
+		<-release
+		return "bash", nil
+	}
+	el := mustNewEventLoop(t, eventLoopConfig{commResolver: resolver})
+	t.Cleanup(resolver.shutdown)
+	// Registered after the shutdown cleanup so it runs before it (LIFO): an
+	// early t.Fatal must not leave the worker parked, or shutdown deadlocks on
+	// workersWG instead of reporting the failure.
+	unpark := unparkOnce(release)
+	t.Cleanup(unpark)
+
+	el.queueCommLookup(execCommTid)
+	select {
+	case <-readStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the procfs lookup to start")
+	}
+
+	// An open event carrying the current kernel name arrives while that worker
+	// is parked.
+	out := make(chan *event.Pair, 1)
+	openEv, _ := makeEnterOpenEvent(t, defaulTime, execCommPid, execCommTid)
+	// Overwrite, do not overlay: makeEnterOpenEvent seeds "testcomm", and a
+	// plain copy would leave a "cattcomm" tail behind.
+	openEv.Comm = [types.MAX_PROGNAME_LENGTH]byte{}
+	copy(openEv.Comm[:], "cat")
+	enterRaw, err := openEv.Bytes()
+	if err != nil {
+		t.Fatalf("OpenEvent.Bytes() error = %v", err)
+	}
+	_, exitRaw := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
+		types.SYS_EXIT_OPENAT, 5)
+	el.processRawEvent(enterRaw, out)
+	el.processRawEvent(exitRaw, out)
+	select {
+	case ep := <-out:
+		ep.Recycle()
+	default:
+		t.Fatal("expected the open pair to be emitted")
+	}
+	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+		t.Fatalf("cached comm right after the open event = %q (present=%v), want \"cat\"", got, ok)
+	}
+
+	unpark()
+	waitForCondition(t, 2*time.Second, "timed out waiting for the stale lookup to complete",
+		func() bool { return pendingCount(resolver) == 0 })
+
+	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+		t.Fatalf("cached comm after the stale lookup landed = %q (present=%v), want \"cat\"", got, ok)
+	}
+}
+
+// unparkOnce returns an idempotent closer for the channel a parked resolver
+// worker is blocked on. Registering it with t.Cleanup keeps a t.Fatal before
+// the unpark from leaving that worker parked forever, which would deadlock
+// commResolver.shutdown on workersWG and hide the real failure behind a test
+// timeout. It closes over the channel value rather than the variable, so the
+// worker's receive never races the test goroutine.
+func unparkOnce(ch chan struct{}) func() {
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
+}
+
+// commEntryStale reports the stale flag of a cache entry under the resolver's
+// own mutex, so tests can observe it without racing the lookup workers.
+func commEntryStale(r *commResolver, tid uint32) (stale, present bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.comms[tid]
+	return entry.stale, ok
+}
+
+// TestLookupInFlightAcrossAStalenessSweepLandsStale closes the hole markAllStale
+// alone leaves open. The sweep can only flag entries that exist when it runs; a
+// lookup already in flight creates its entry afterwards, with a value read
+// before the exec record the drop lost, and setCommLocked clears the stale flag
+// on the way in. Without the sweep-generation check that tid would keep a
+// pre-exec label forever whenever the drop burst was a one-off.
+func TestLookupInFlightAcrossAStalenessSweepLandsStale(t *testing.T) {
+	readStarted := make(chan struct{})
+	release := make(chan struct{})
+	var reads atomic.Int32
+
+	resolver := newCommResolver(nil)
+	resolver.lookupWorkers = 1
+	resolver.resolveFn = func(_ context.Context, tid uint32) (string, error) {
+		if tid != execCommTid {
+			return "", nil
+		}
+		if reads.Add(1) == 1 {
+			// Read before the exec, and parked until the sweep has run.
+			close(readStarted)
+			<-release
+			return "bash", nil
+		}
+		return "cat", nil
+	}
+	t.Cleanup(resolver.shutdown)
+	unpark := unparkOnce(release)
+	t.Cleanup(unpark)
+
+	resolver.queueLookup(execCommTid)
+	select {
+	case <-readStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the procfs lookup to start")
+	}
+
+	// The drop monitor sweeps while the lookup is in flight. There is nothing
+	// cached for this tid yet, so the sweep itself cannot reach it.
+	if marked := resolver.markAllStale(); marked != 0 {
+		t.Fatalf("markAllStale marked %d entries, want 0 (the cache is still empty)", marked)
+	}
+
+	unpark()
+	waitForCondition(t, 2*time.Second, "timed out waiting for the lookup to land",
+		func() bool { return pendingCount(resolver) == 0 })
+
+	stale, present := commEntryStale(resolver, execCommTid)
+	if !present {
+		t.Fatal("the late lookup did not create a cache entry")
+	}
+	if !stale {
+		t.Fatal("a lookup that predates the staleness sweep must land stale")
+	}
+
+	// The retained value is still served, and the flag drives one re-read that
+	// heals the label.
+	if got, ok := resolver.cached(execCommTid); !ok || got != "bash" {
+		t.Fatalf("stale entry served %q (present=%v), want the retained \"bash\"", got, ok)
+	}
+	waitForCondition(t, 2*time.Second, "timed out waiting for the comm cache to heal", func() bool {
+		got, ok := resolver.cached(execCommTid)
+		return ok && got == "cat"
+	})
+	// The healed value must not be flagged again: the sweep generation it was
+	// read under is the current one.
+	if stale, _ := commEntryStale(resolver, execCommTid); stale {
+		t.Fatal("the healing re-read must land clean, otherwise re-resolution never terminates")
+	}
 }

@@ -64,7 +64,10 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 		// Keep path information for failed opens so error scenarios remain observable.
 		ep.File = file.NewPathname(openEv.Filename[:])
 	}
-	e.setCachedComm(openEv.Tid, comm)
+	// The payload comm is read by BPF from task->comm at event time, so it is
+	// authoritative: it retires any procfs lookup still in flight for this tid
+	// (setCachedFromKernel bumps the rename generation).
+	e.setCachedCommFromKernel(openEv.Tid, comm)
 	return true
 }
 
@@ -95,12 +98,15 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 // correct and useful: for a tid whose lookup has not landed yet this is a free,
 // exact label. A successful execve must never take this path, which is why the
 // syscall's return value gates it.
+//
+// Like handleOpenExit this is a kernel-sourced name and goes in as such, so a
+// resolver worker descheduled with an older name cannot land on top of it.
 func (e *eventLoop) cacheCommOfFailedExec(ep *event.Pair, execEv *types.ExecEvent) {
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok || retEv.Ret >= 0 {
 		return
 	}
-	e.setCachedComm(execEv.GetTid(), types.StringValue(execEv.Comm[:]))
+	e.setCachedCommFromKernel(execEv.GetTid(), types.StringValue(execEv.Comm[:]))
 }
 
 func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool {
@@ -273,8 +279,18 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 		e.fdState().set(fd, fdFile)
 		ep.File = fdFile
 	}
-	ep.Comm = e.comm(tid)
-	return true
+	// This kind has no raw enter filter at all (see rawRuntimeEvents), so
+	// without a checkpoint here NO filter dimension - comm included - was ever
+	// applied to an open_by_handle_at row, and a run filtered by -comm could
+	// emit rows carrying a different comm. The full pair filter is the right
+	// checkpoint: ep.File is in both branches exactly the name the row reports
+	// (the cached name_to_handle_at pathname, or the /proc/<pid>/fd readlink),
+	// so filter and displayed value can never disagree, and unlike the rename
+	// kinds there is no raw match to contradict. Applying -path to a
+	// procfs-resolved name is also not new: every fd-based kind already does
+	// that (handleFdExit -> fdTracker.resolve -> file.NewFdWithPid, then
+	// finishPair).
+	return e.finishPairForTid(ep, tid)
 }
 
 func (e *eventLoop) handleSocketExit(ep *event.Pair, socketEv *types.SocketEvent) bool {
@@ -638,9 +654,10 @@ func (e *eventLoop) finishPairForTid(ep *event.Pair, tid uint32) bool {
 // Why only the comm dimension, rather than the full MatchPair: for these kinds
 // the raw filter matches oldname OR newname (Filter.MatchNameEvent), while
 // oldnameNewnameFile.Name() reports only the newname, so MatchPair would drop
-// every row a -path <oldname> filter legitimately selected. The path-carrying
-// kinds have no such asymmetry and do run the full pair filter
-// (handlePathExit -> finishPairForTid).
+// every row a -path <oldname> filter legitimately selected. No other kind has
+// that asymmetry: the path-carrying kinds run the full pair filter
+// (handlePathExit -> finishPairForTid) and so does open_by_handle_at, whose raw
+// enter filter is nil so nothing had matched its rows beforehand at all.
 //
 // Consequence, stated plainly: for the rename kinds the remaining filter
 // dimensions (-latency/-bytes/-ret/-fd/-family and non-equality -pid/-tid) are
