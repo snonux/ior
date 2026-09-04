@@ -720,3 +720,49 @@ func readCSVRecords(t *testing.T, path string) [][]string {
 	}
 	return records
 }
+
+// TestModelFilterMatchesRenameOnEitherName pins that the Stream tab applies the
+// same either-name file semantics as the event loop and the dashboard ingest
+// stage. A rename row's FileValue is its newname, so filtering it with plain
+// Matches would hide a row the aggregates on every other tab already counted —
+// and would drop it from the CSV export too.
+func TestModelFilterMatchesRenameOnEitherName(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{
+		Seq:      1,
+		Syscall:  "renameat2",
+		Comm:     "mv",
+		FileName: "/tmp/new.txt",
+		OldName:  "/tmp/old.txt",
+	})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+
+	m.setFilterForTest(Filter{File: &StringFilter{Pattern: "old.txt"}})
+	m.applyFilter()
+	if len(m.filtered) != 1 {
+		t.Fatalf("a rename matched on its oldname must stay visible in the Stream tab, got %d rows", len(m.filtered))
+	}
+
+	m.setFilterForTest(Filter{File: &StringFilter{Pattern: "new.txt"}})
+	m.applyFilter()
+	if len(m.filtered) != 1 {
+		t.Fatalf("a rename matched on its newname must stay visible, got %d rows", len(m.filtered))
+	}
+
+	// Widening the file dimension must not become a bypass.
+	m.setFilterForTest(Filter{File: &StringFilter{Pattern: "unrelated.txt"}})
+	m.applyFilter()
+	if len(m.filtered) != 0 {
+		t.Fatalf("a pattern matching neither name must hide the row, got %d rows", len(m.filtered))
+	}
+	m.setFilterForTest(Filter{
+		File:    &StringFilter{Pattern: "old.txt"},
+		Syscall: &StringFilter{Pattern: "openat"},
+	})
+	m.applyFilter()
+	if len(m.filtered) != 0 {
+		t.Fatalf("an oldname match must not bypass the other dimensions, got %d rows", len(m.filtered))
+	}
+}

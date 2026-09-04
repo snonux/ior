@@ -109,3 +109,34 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 	}
 	return nil
 }
+
+// eitherNameCandidate reports oldName as the file dimension of an arbitrary
+// candidate, leaving every other dimension to the wrapped value.
+type eitherNameCandidate struct {
+	Candidate
+	oldName string
+}
+
+func (c eitherNameCandidate) FileValue() string {
+	return c.oldName
+}
+
+// MatchesEitherName is Matches with the same file-dimension widening that
+// MatchPairEitherName applies to a Pair, for candidates that carry a rename
+// source path of their own (streamrow.Row, whose FileValue is the newname).
+//
+// The Stream tab and its CSV export filter rows rather than pairs, so without
+// this they would re-narrow the either-name contract that the event loop and
+// the dashboard ingest stage already honour: a `-path <oldname>` filter would
+// count a rename row in the aggregates while hiding it from the row list it is
+// supposed to correspond to. oldName is empty for every non-rename row, in
+// which case this is exactly Matches.
+func (f Filter) MatchesEitherName(candidate Candidate, oldName string) bool {
+	if f.Matches(candidate) {
+		return true
+	}
+	if !hasStringPattern(f.File) || oldName == "" {
+		return false
+	}
+	return f.Matches(eitherNameCandidate{Candidate: candidate, oldName: oldName})
+}
