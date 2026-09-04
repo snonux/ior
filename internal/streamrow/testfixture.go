@@ -17,6 +17,15 @@ func SeedTestStreamData(buf *RingBuffer) {
 // assigned monotonically so insertion order, gaps, and latencies stay stable
 // across runs. Several rows carry IsError with a negative RetVal so error
 // filtering and search have matches.
+// TestStreamRowCount is the number of rows SeedTestStreamData pushes. Tests in
+// other packages (the teatest suite asserts "total:40", "filtered:40", "Sel
+// 1/40" and an exported CSV row count) cannot reach the unexported fixture, so
+// without this they hardcode the number and adding one spec breaks them with
+// nothing pointing at the cause.
+func TestStreamRowCount() int {
+	return len(testStreamSpecs())
+}
+
 func testStreamRows() []Row {
 	specs := testStreamSpecs()
 	rows := make([]Row, 0, len(specs))
