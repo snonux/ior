@@ -310,6 +310,14 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep.Recycle()
 		return
 	}
+	// The derived values must be on the Pair *before* the exit handlers run,
+	// because that is where the pair filter is applied: MatchPair reads
+	// Bytes/Duration/DurationToPrev, and evaluating them while they are still
+	// zero silently turns `-latency`/`-gap`/`-bytes` into "compare against 0"
+	// for every kind (a `-latency >= 50` filter dropped a row whose real
+	// latency was 100ns). Only the emission-side freeze has to wait for the
+	// handler, since that is what assigns ep.File.
+	e.applyDerivedPairValues(ep)
 	if !e.handleTracepointExit(ep) {
 		return
 	}
@@ -317,13 +325,21 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	ch <- ep
 }
 
-func (e *eventLoop) finalizeTracepointPair(ep *event.Pair) {
+// applyDerivedPairValues computes every filterable value the Pair does not
+// carry straight from its two events: transferred bytes, address-space extent,
+// requested sleep, syscall latency and the inter-syscall gap. It reads the
+// per-tid previous-exit timestamp but deliberately does not advance it - that
+// happens in finalizeTracepointPair, so the gap keeps being measured from the
+// previously *emitted* pair rather than from a filtered-out one.
+func (e *eventLoop) applyDerivedPairValues(ep *event.Pair) {
 	applyRetBytes(ep)
 	applyAddressSpaceBytes(ep)
 	applyRequestedSleepNs(ep)
-	tid := ep.EnterEv.GetTid()
-	ep.CalculateDurations(e.pairs.prevTime(tid))
-	e.pairs.setPrevTime(tid, ep.ExitEv.GetTime())
+	ep.CalculateDurations(e.pairs.prevTime(ep.EnterEv.GetTid()))
+}
+
+func (e *eventLoop) finalizeTracepointPair(ep *event.Pair) {
+	e.pairs.setPrevTime(ep.EnterEv.GetTid(), ep.ExitEv.GetTime())
 	e.freezePairForEmission(ep)
 }
 

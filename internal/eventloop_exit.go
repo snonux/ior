@@ -66,9 +66,18 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	}
 	// The payload comm is read by BPF from task->comm at event time, so it is
 	// authoritative: it retires any procfs lookup still in flight for this tid
-	// (setCachedFromKernel bumps the rename generation).
+	// (setCachedFromKernel bumps the rename generation). Like the fd
+	// registration above this is global state, so it is updated before the
+	// filter: a row this run does not want must still leave the fd table and
+	// the comm cache correct for the rows it does want.
 	e.setCachedCommFromKernel(openEv.Tid, comm)
-	return true
+	// The raw enter filter (MatchOpenEvent) only covers the comm and path
+	// dimensions, so without this checkpoint -syscall/-family/-fd/-ret/
+	// -latency/-bytes and non-equality -pid/-tid reached open rows nowhere.
+	// The full pair filter is safe: ep.Comm and ep.File.Name() are the very
+	// payload bytes MatchOpenEvent already matched, so the two can never
+	// disagree, and there is no oldname/newname asymmetry to preserve.
+	return e.finishPair(ep)
 }
 
 func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool {
@@ -116,7 +125,7 @@ func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool
 	// TUI String() repr ("old:... ->new:...").
 	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
 	ep.Oldname = types.StringValue(nameEv.Oldname[:])
-	return e.finishCommForTid(ep, nameEv.GetTid())
+	return e.finishPairEitherName(ep, nameEv.GetTid())
 }
 
 func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
@@ -155,8 +164,8 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 	}
 	// ep.File carries the very pathname matchRawPathEvent already matched, so
 	// the full pair filter is safe here: unlike the rename kinds it cannot
-	// disagree with the raw match. See finishCommForTid for why the name kinds
-	// need the narrower comm-only checkpoint instead.
+	// disagree with the raw match. See finishPairEitherName for why the name
+	// kinds need their file dimension widened instead.
 	return e.finishPairForTid(ep, pathEv.GetTid())
 }
 
@@ -641,32 +650,24 @@ func (e *eventLoop) finishPairForTid(ep *event.Pair, tid uint32) bool {
 	return e.finishPair(ep)
 }
 
-// finishCommForTid attaches the resolved comm for tid and drops the pair when
-// that comm contradicts the active comm filter.
+// finishPairEitherName is finishPairForTid for the rename-like (name-carrying)
+// kinds. It attaches the resolved comm for tid and applies every filter
+// dimension, but treats the file dimension as satisfied when either the newname
+// (ep.File.Name()) or the captured oldname (ep.Oldname) matches - exactly the
+// oldname-OR-newname semantics of the raw enter filter these pairs already
+// passed (Filter.MatchNameEvent).
 //
-// It exists for the rename-like (name-carrying) kinds, whose kernel payload has
-// no comm field: their raw enter filter can only check the paths, and the
-// enter-side comm gate in tracepointEntered only requires that *some* comm is
-// known for the tid, not that it matches. Without this checkpoint those rows
-// were emitted unconditionally, so a run filtered by -comm could show rows
-// carrying a different comm.
-//
-// Why only the comm dimension, rather than the full MatchPair: for these kinds
-// the raw filter matches oldname OR newname (Filter.MatchNameEvent), while
-// oldnameNewnameFile.Name() reports only the newname, so MatchPair would drop
-// every row a -path <oldname> filter legitimately selected. No other kind has
-// that asymmetry: the path-carrying kinds run the full pair filter
-// (handlePathExit -> finishPairForTid) and so does open_by_handle_at, whose raw
-// enter filter is nil so nothing had matched its rows beforehand at all.
-//
-// Consequence, stated plainly: for the rename kinds the remaining filter
-// dimensions (-latency/-bytes/-ret/-fd/-family and non-equality -pid/-tid) are
-// not applied at all - not here and not anywhere else on their path. That is a
-// pre-existing gap shared with the other raw-filtered kinds and is tracked
-// separately as task o1; it is not introduced or widened here.
-func (e *eventLoop) finishCommForTid(ep *event.Pair, tid uint32) bool {
+// These kinds carry no comm in their kernel payload, so their raw filter can
+// only check paths, and the enter-side comm gate in tracepointEntered only
+// requires that *some* comm is known for the tid, not that it matches. Until
+// e1 that left the rows unfiltered entirely; e1 added a comm-only checkpoint
+// because a plain MatchPair would have dropped every row a -path <oldname>
+// filter legitimately selected, which left -latency/-bytes/-ret/-fd/-family and
+// non-equality -pid/-tid applied nowhere on this path. Matching on either name
+// closes that gap instead of trading one wrong answer for another.
+func (e *eventLoop) finishPairEitherName(ep *event.Pair, tid uint32) bool {
 	ep.Comm = e.comm(tid)
-	if e.Filter().MatchComm(ep.Comm) {
+	if e.Filter().MatchPairEitherName(ep) {
 		return true
 	}
 	ep.Recycle()

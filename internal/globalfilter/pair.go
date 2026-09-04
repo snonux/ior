@@ -12,6 +12,20 @@ type pairCandidate struct {
 	pair *event.Pair
 }
 
+// oldnameCandidate is a pairCandidate that reports the rename-like pair's
+// *source* path as the file dimension. Every other dimension is inherited
+// unchanged from the embedded candidate.
+type oldnameCandidate struct {
+	pairCandidate
+}
+
+func (p oldnameCandidate) FileValue() string {
+	if p.pair == nil {
+		return ""
+	}
+	return p.pair.Oldname
+}
+
 func (p pairCandidate) SyscallValue() string {
 	if p.pair == nil || p.pair.EnterEv == nil {
 		return ""
