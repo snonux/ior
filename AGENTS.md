@@ -195,12 +195,34 @@ committed set contains syscalls that only exist on recent mainline kernels
   already in flight when the sweep ran lands *stale* rather than silently
   clearing the flag it never received.
 - **Where the pair filter is enforced per kind**: *every* exit handler now ends
-  in a full-strength checkpoint, so no kind escapes any filter dimension.
-  Caveat: this is about the *checkpoint*. Three handlers still mutate global fd
-  state after their filter (`handleFdExit`/`handleDup3Exit`/`handleFcntlExit`
-  for the dup family) and `pidfd_getfd` assigns `ep.File` after being filtered
-  on the source fd's file, so a dropped row can still cost a later row its
-  filename. Tracked separately as task `s1`.
+  in a full-strength checkpoint, so no kind escapes any filter dimension, and
+  every handler performs its global-state mutations **before** that checkpoint.
+  Those are two separate rules and both are load-bearing:
+  - *State before the filter.* The fd table (`fdTracker`) and the comm cache are
+    global, so a row this run does not want must still leave them correct for
+    the rows it does want. `handleOpenExit` is the reference (registration plus
+    `setCachedCommFromKernel` before `finishPair`, pinned by
+    `TestDroppedOpenStillRegistersTheFd`), and the dup family now follows it:
+    `handleFdExit` calls `applyFdTransferOp` (dup/dup2 `registerDup`,
+    `pidfd_getfd`), `handleDup3Exit` calls `registerDup`, and `handleFcntlExit`
+    calls `applyFcntlFdState` (F_SETFL, F_DUPFD, F_DUPFD_CLOEXEC) — all ahead of
+    `finishPair`. Until then a `-path`/`-comm` run that dropped a dup row left
+    the duplicated descriptor unregistered, so every later read/write/close on
+    it lost its filename, or — when the target fd number was already tracked
+    (`dup2(old, new)`) — kept reporting the file `new` used to point at, which
+    is a *wrong* row rather than a missing one. Unlike the numeric dimensions
+    this was CLI-reachable. Pinned by
+    `TestDroppedDupStillRegistersTheDuplicatedFd` and
+    `TestDroppedFcntlSetflStillUpdatesTheFdTable`
+    (`internal/eventloop_dupfilter_test.go`).
+  - *Filter input must be the reported value.* `pidfd_getfd` re-points `ep.File`
+    at the transferred descriptor; while that happened after the checkpoint the
+    pair was judged on the **source pidfd**, so `-path <transferred file>`
+    dropped the very row that prints it and `-path pidfd` kept a row that
+    printed something else. The assignment now precedes the filter
+    (`TestPidfdGetfdIsFilteredOnTheFileItReports`). This is the hazard the
+    `handleOpenExit` comment argues against, and the same reason
+    `applyDerivedPairValues` runs before the handlers (below).
   - The name (rename-like) kinds use `finishPairEitherName`
     (`Filter.MatchPairEitherName`): every dimension exactly as `MatchPair`
     applies it, except that the file dimension is satisfied by *either*
