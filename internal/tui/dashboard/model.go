@@ -1064,6 +1064,13 @@ func (m Model) AutoResetInterval() time.Duration {
 // package-level constants (streamRefreshMs / flameRefreshMs). Callers such as
 // RunWithTraceStarterConfig use this to wire in cfg.TUIFastRefreshInterval
 // after construction without changing the NewModelWithConfig call chain.
+// FastRefreshInterval reports the high-frequency tick cadence for the stream
+// and flame tabs (0 when the built-in default applies). It exists so the
+// parent package can assert its startup wiring without running the program.
+func (m Model) FastRefreshInterval() time.Duration {
+	return m.fastRefreshEvery
+}
+
 func (m *Model) SetFastRefreshInterval(d time.Duration) {
 	if d < 0 {
 		d = 0

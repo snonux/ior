@@ -23,7 +23,8 @@ package internal
 // "Latency Histogram"). In --testflames mode the flamegraph trie, the stats
 // engine, and the stream ring buffer are all seeded with the same synthetic
 // workload (comms api/worker/ingest/batch), so every dashboard tab renders
-// populated rows and the stream carries 40 buffered events. Test-flames mode
+// populated rows and the stream carries the whole seeded fixture
+// (streamrow.TestStreamRowCount() events). Test-flames mode
 // starts UNFILTERED ("Filter: all"), so the seeded stream rows render as soon
 // as the Stream tab is selected; tests that need a pid-scoped baseline build a
 // session with tuiNewFlamesModelWithPidFilter instead.
@@ -695,15 +696,17 @@ func TestTUIIntegration_Stream_SeededRowsVisibleUnfiltered(t *testing.T) {
 
 	s.tm.Send(tea.WindowSizeMsg{Width: tuiTermWidth, Height: tuiTermHeight})
 	s.typeStr("7")
-	// "filtered:40" (not "filtered:0") plus a seeded comm, pid and path prove
-	// the rows survive the startup filter and are actually rendered.
+	// A filtered count equal to the total (not "filtered:0"), plus a seeded
+	// comm, pid and path, proves the rows survive the startup filter and are
+	// actually rendered.
 	seeded := streamrow.TestStreamRowCount()
 	s.waitFor(fmt.Sprintf("total:%d", seeded), fmt.Sprintf("filtered:%d", seeded),
 		"Filter: all", "worker", "2002", "/srv")
-	// No waitForAbsent("filtered:0") here: "filtered:0" cannot be a substring
-	// of a screen already asserted to contain "filtered:40", so such a check
-	// would pass on its first poll no matter what. The real guard is
-	// "filtered:40" plus the seeded comm/pid/path tokens above.
+	// No waitForAbsent("filtered:0") here: with a non-zero fixture, "filtered:0"
+	// cannot be a substring of a screen already asserted to carry the full
+	// filtered count, so such a check would pass on its first poll no matter
+	// what. The real guard is that count plus the seeded comm/pid/path tokens
+	// above.
 }
 
 func TestTUIIntegration_Stream_FilterModal_OpenCancel(t *testing.T) {
