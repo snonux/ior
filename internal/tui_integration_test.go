@@ -23,9 +23,10 @@ package internal
 // "Latency Histogram"). In --testflames mode the flamegraph trie, the stats
 // engine, and the stream ring buffer are all seeded with the same synthetic
 // workload (comms api/worker/ingest/batch), so every dashboard tab renders
-// populated rows and the stream carries 40 buffered events. The stream view
-// inherits the model's startup pid=1 filter, so its seeded rows only become
-// visible once that filter is cleared.
+// populated rows and the stream carries 40 buffered events. Test-flames mode
+// starts UNFILTERED ("Filter: all"), so the seeded stream rows render as soon
+// as the Stream tab is selected; tests that need a pid-scoped baseline build a
+// session with tuiNewFlamesModelWithPidFilter instead.
 
 import (
 	"context"
@@ -70,6 +71,19 @@ type tuiSession struct {
 func tuiNewFlamesModel(t *testing.T) *tuiSession {
 	t.Helper()
 	cfg := tuiTestConfig()
+	return tuiNewSession(t, tui.NewTestFlamesModel(cfg, tuiTestFlamesStarter(cfg)))
+}
+
+// tuiNewFlamesModelWithPidFilter starts a static test-flames session with an
+// explicit -pid filter, mirroring `ior --testflames -pid <n>`. Test-flames mode
+// itself contributes no pid filter (its seeded rows carry synthetic pids
+// 2001-2004), so this is the only way to get a pid-scoped baseline — used by the
+// filter-modal/family-cycle/TID-picker tests, which assert how a base pid
+// predicate combines with, and survives, other filter operations.
+func tuiNewFlamesModelWithPidFilter(t *testing.T, pid int) *tuiSession {
+	t.Helper()
+	cfg := tuiTestConfig()
+	cfg.PidFilter = pid
 	return tuiNewSession(t, tui.NewTestFlamesModel(cfg, tuiTestFlamesStarter(cfg)))
 }
 
@@ -399,7 +413,7 @@ func TestTUIIntegration_TabNav_NumberKeys(t *testing.T) {
 		{"4", []string{"Accesses", "Max Latency"}},            // Files: table headers
 		{"5", []string{"Comm", "worker", "ingest"}},           // Processes: header + seeded comms
 		{"6", []string{"Latency Histogram", "Gap Histogram"}}, // Latency+Gaps
-		{"7", []string{"buffer:"}},                            // Stream chrome (rows filtered by pid=1)
+		{"7", []string{"buffer:", "batch"}},                   // Stream chrome + a seeded row
 		{"1", []string{"view:root"}},                          // back to Flame
 	}
 	for _, step := range steps {
@@ -657,17 +671,32 @@ func TestTUIIntegration_Stream_RendersLiveChrome(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("7")
-	s.waitFor("buffer:", "Comm", "Syscall")
-	// The model starts with a pid=1 filter, which hides every seeded row
-	// (all carry pids 2001-2004). Clear it via the stream filter modal
-	// (f -> c clears all fields -> Esc applies) so the seeded rows render.
-	s.typeStr("f")
-	s.waitFor("j/k move")
-	s.typeStr("c")
-	s.press(tea.KeyEsc)
-	// With the filter cleared, a seeded row (comm + syscall + path) is shown
-	// alongside the unchanged "buffer:" chrome.
-	s.waitFor("buffer:", "Filter: all", "batch", "/srv")
+	// Test-flames mode applies no pid filter, so a seeded row (comm + path)
+	// renders next to the live "buffer:" chrome with no filter edits at all.
+	s.waitFor("buffer:", "Comm", "Syscall", "Filter: all", "batch", "/srv")
+}
+
+// TestTUIIntegration_Stream_SeededRowsVisibleUnfiltered is the regression guard
+// for the picker-skip sentinel leaking into the pid filter: --testflames used to
+// build its model with pidFilter=1 purely to skip the PID picker, and since every
+// seeded row carries a synthetic pid (2001-2004) the Stream tab rendered its
+// header and counters but ZERO data rows ("filtered:0", "Filter: pid=1").
+//
+// Counter-only assertions ("buffer:", "total:40") could not see that, because
+// "total" counts the ring buffer, not the visible rows. This test therefore
+// asserts the visible-row side explicitly: the filtered counter equals the
+// buffered total, the filter summary is "all", and a seeded comm/pid/path
+// actually appears on screen — all WITHOUT touching the filter modal.
+func TestTUIIntegration_Stream_SeededRowsVisibleUnfiltered(t *testing.T) {
+	s := tuiNewFlamesModel(t)
+	s.waitFor("view:root")
+
+	s.tm.Send(tea.WindowSizeMsg{Width: tuiTermWidth, Height: tuiTermHeight})
+	s.typeStr("7")
+	// "filtered:40" (not "filtered:0") plus a seeded comm, pid and path prove
+	// the rows survive the startup filter and are actually rendered.
+	s.waitFor("total:40", "filtered:40", "Filter: all", "worker", "2002", "/srv")
+	s.waitForAbsent("filtered:0", "total:40")
 }
 
 func TestTUIIntegration_Stream_FilterModal_OpenCancel(t *testing.T) {
@@ -698,9 +727,9 @@ func TestTUIIntegration_Stream_ExportModal_OpenCancel(t *testing.T) {
 // SUBMIT and asserts the CSV file is written with seeded rows. It chdirs into an
 // isolated temp dir (the export writer's exportDir defaults to "." -> cwd, and
 // the default ior-stream-<ts>.csv filename is filename-only), switches to the
-// stream tab, and clears the model's startup pid=1 filter so the seeded rows
-// (which all carry pids 2001-2004) are present in the snapshot the exporter
-// captures. It then opens the export modal with "e", leaves the default
+// stream tab (test-flames applies no pid filter, so all 40 seeded rows are
+// already in the snapshot the exporter captures). It then opens the export modal
+// with "e", leaves the default
 // selection on "CSV stream rows", and presses Enter: the modal emits a
 // RequestMsg, the program runs dashboard.ExportStreamCSV() (writing the filtered
 // snapshot via exportRowsToCSV), and the resulting CompletedMsg sets the modal's
@@ -713,10 +742,9 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
-	// Clearing the startup pid=1 filter makes the seeded rows visible (and thus
-	// part of the exported snapshot, which the exporter filters with the same
-	// global filter).
-	tuiStreamClearFilter(s)
+	// The exporter writes the same filtered snapshot the stream renders, so the
+	// unfiltered seeded rows must be on screen first.
+	tuiStreamOpen(s)
 	s.waitFor("buffer:", "Filter: all", "batch", "/srv")
 
 	// Open the export modal; the default selection is "CSV stream rows".
@@ -742,21 +770,31 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 			t.Fatalf("exported csv %q missing %q.\n--- csv ---\n%s", path, want, csv)
 		}
 	}
-	// Beyond the header, at least one data line must be present.
-	if lines := strings.Count(strings.TrimRight(csv, "\n"), "\n"); lines < 1 {
-		t.Fatalf("exported csv %q has no data rows beyond the header:\n%s", path, csv)
+	// Beyond the header, every one of the 40 seeded rows must be present. The
+	// exact count matters: the picker-skip sentinel used to leak into the pid
+	// filter, and the resulting export was a lone header line with 0 data rows.
+	if got := tuiCSVDataRows(csv); got != 40 {
+		t.Fatalf("exported csv %q has %d data rows, want 40:\n%s", path, got, csv)
 	}
+}
+
+// tuiCSVDataRows counts the non-empty lines of a CSV beyond its header row.
+func tuiCSVDataRows(csv string) int {
+	lines := strings.Split(strings.TrimRight(csv, "\n"), "\n")
+	if len(lines) <= 1 {
+		return 0
+	}
+	return len(lines) - 1
 }
 
 // --- Stream tab row interactions (seeded ring buffer in --testflames) --------
 //
 // The Stream tab (number key "7") renders the seeded 40-row ring buffer
 // (comms api/worker/ingest/batch, pids 2001-2004, paths under /srv, syscalls
-// read/write/close/openat/fsync with a few error rows). The model starts with
-// a pid=1 filter that hides every seeded row, so each test first clears that
-// filter via the dashboard filter modal (f -> c clears all fields -> Esc
-// applies), after which the stream's own "Filter: all" line shows and the
-// seeded rows render. These tests drive the stream's pause/select, table
+// read/write/close/openat/fsync with a few error rows). Test-flames mode starts
+// unfiltered, so each test only switches to the tab (tuiStreamOpen), after which
+// the stream's own "Filter: all" line shows and the seeded rows render. These
+// tests drive the stream's pause/select, table
 // navigation, push-filter, undo, and search handlers and assert on stable
 // rendered tokens from internal/tui/eventstream/render.go: the status line's
 // "PAUSED" marker, the "Filter:" summary line, and the search modal prompt
@@ -776,33 +814,28 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 // via the resulting "Filter:" summary even though the column index itself is
 // not on screen.
 
-// tuiStreamClearFilter switches to the Stream tab (key 7) and clears the
-// model's startup pid=1 filter via the dashboard filter modal so the seeded
-// rows become visible. On return the stream renders "Filter: all" plus seeded
-// chrome. Every Stream row-interaction test starts from this state.
-func tuiStreamClearFilter(s *tuiSession) {
+// tuiStreamOpen switches to the Stream tab (key 7) and waits for the seeded
+// rows to render. Test-flames mode starts unfiltered, so nothing has to be
+// cleared first: the stream shows "Filter: all" and the seeded rows straight
+// away. Every Stream row-interaction test starts from this state.
+func tuiStreamOpen(s *tuiSession) {
 	s.t.Helper()
 	// Give the dashboard a realistic full-size terminal so the stream's wide
 	// event rows are not soft-wrapped and the paused selection/column/search
 	// footer (the last rendered line) is not clipped by the height budget.
 	s.tm.Send(tea.WindowSizeMsg{Width: tuiTermWidth, Height: tuiTermHeight})
 	s.typeStr("7")
-	s.waitFor("buffer:", "Comm", "Syscall")
-	s.typeStr("f")
-	s.waitFor("j/k move") // filter modal help line
-	s.typeStr("c")        // clear all fields
-	s.press(tea.KeyEsc)   // apply the now-empty filter
-	s.waitFor("buffer:", "Filter: all")
+	s.waitFor("buffer:", "Comm", "Syscall", "Filter: all")
 }
 
-// TestTUIIntegration_Stream_RowsRender asserts that clearing the pid=1 filter
-// reveals the seeded rows: the "Filter: all" summary plus a seeded comm and a
-// seeded /srv path render alongside the live "buffer:" chrome.
+// TestTUIIntegration_Stream_RowsRender asserts the seeded rows render on the
+// Stream tab: the "Filter: all" summary plus a seeded comm and a seeded /srv
+// path alongside the live "buffer:" chrome.
 func TestTUIIntegration_Stream_RowsRender(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
-	tuiStreamClearFilter(s)
+	tuiStreamOpen(s)
 	s.waitFor("buffer:", "Filter: all", "api", "/srv")
 }
 
@@ -818,7 +851,7 @@ func TestTUIIntegration_Stream_PauseSelectsAndNavigates(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
-	tuiStreamClearFilter(s)
+	tuiStreamOpen(s)
 
 	// Space pauses; the status line's live "LIVE" marker flips to "PAUSED".
 	s.press(tea.KeySpace)
@@ -858,7 +891,7 @@ func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
-	tuiStreamClearFilter(s)
+	tuiStreamOpen(s)
 
 	s.press(tea.KeySpace)
 	s.waitFor("PAUSED")
@@ -893,7 +926,7 @@ func TestTUIIntegration_Stream_Search(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
-	tuiStreamClearFilter(s)
+	tuiStreamOpen(s)
 
 	// "/" opens the forward search modal (Regex Search / Pattern: prompt).
 	s.press('/')
@@ -931,7 +964,7 @@ func TestTUIIntegration_Stream_PausedFooterShowsSelection(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
-	tuiStreamClearFilter(s)
+	tuiStreamOpen(s)
 
 	// While live the footer's selection tokens are not rendered.
 	s.waitForAbsent("Enter push-filter", "buffer:", "Filter: all")
@@ -956,7 +989,7 @@ func TestTUIIntegration_Stream_PausedFooterShowsSelection(t *testing.T) {
 }
 
 // TestTUIIntegration_Stream_FDTraceView drives the FD-trace overlay end-to-end:
-// it clears the startup pid=1 filter, pauses, anchors the selection on row 0
+// it opens the Stream tab, pauses, anchors the selection on row 0
 // (api openat, PID 2001 / FD 7), and presses "T" to open the FD-trace overlay.
 // All seeded "api" FS rows share PID 2001 / FD 7, so the overlay's distinct
 // "FD Trace (ring snapshot)" header plus the "PID:2001 FD:7 matched:" summary
@@ -965,7 +998,7 @@ func TestTUIIntegration_Stream_FDTraceView(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 
-	tuiStreamClearFilter(s)
+	tuiStreamOpen(s)
 
 	// Pause so row selection is active, then anchor the selection on row 0
 	// (api openat) with g.
@@ -1115,8 +1148,9 @@ func TestTUIIntegration_Recording_SubmitWritesParquet(t *testing.T) {
 // field, and Esc commits the edited fields and applies the filter. The applied
 // filter is observable on the dashboard's status line ("filter: <summary>"),
 // which is rendered on the shorter Syscalls tab (the tall Overview tab pushes it
-// off the 48-row screen). The model starts with a pid=1 filter, so the modal
-// opens with "PID: [ =] 1" pre-filled and the baseline status is "filter: pid=1".
+// off the 48-row screen). These tests build the session with -pid 1
+// (tuiNewFlamesModelWithPidFilter), so the modal opens with "PID: [ =] 1"
+// pre-filled and the baseline status is "filter: pid=1".
 //
 // Tokens confirmed by dumping s.screen(): the modal header "Filter", the active
 // field marker "> Syscall:", the help line "j/k move", and the status-line
@@ -1125,11 +1159,11 @@ func TestTUIIntegration_Recording_SubmitWritesParquet(t *testing.T) {
 // TestTUIIntegration_FilterModal_EditApplyClear opens the filter modal from the
 // Syscalls tab, edits the Syscall field to "read", applies it (Esc), and asserts
 // the dashboard status line gains the "syscall~read" predicate alongside the
-// startup pid=1. It then reopens the modal, clears all fields ("c"), applies, and
-// asserts the filter falls back to "filter: all" (clear empties every field,
-// including the startup PID).
+// -pid 1 baseline. It then reopens the modal, clears all fields ("c"), applies,
+// and asserts the filter falls back to "filter: all" (clear empties every field,
+// including the PID).
 func TestTUIIntegration_FilterModal_EditApplyClear(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
 
 	// The Syscalls tab is short enough to keep the "filter:" status line on screen.
@@ -1151,8 +1185,8 @@ func TestTUIIntegration_FilterModal_EditApplyClear(t *testing.T) {
 	s.press(tea.KeyEnter) // commit the field value
 	s.press(tea.KeyEsc)   // apply + close
 
-	// The applied filter combines the typed syscall predicate with the startup
-	// pid=1; the dashboard status line and the undo stack both show it.
+	// The applied filter combines the typed syscall predicate with the -pid 1
+	// baseline; the dashboard status line and the undo stack both show it.
 	s.waitFor("filter: syscall~read pid=1", "stack: syscall~read")
 
 	// Reopen the modal and clear every field, then apply: the filter collapses to
@@ -1169,7 +1203,7 @@ func TestTUIIntegration_FilterModal_EditApplyClear(t *testing.T) {
 // off the stack: the status line reverts from "syscall~read pid=1" back to the
 // baseline "pid=1", with the undo stack emptied (no "stack:" segment remains).
 func TestTUIIntegration_FilterModal_UndoFilter(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
 
 	s.typeStr("3")
@@ -1310,7 +1344,7 @@ func TestTUIIntegration_AllTabs_RenderPopulatedAndKeepChrome(t *testing.T) {
 		{"4", []string{"Accesses", "Max Latency"}},                  // Files
 		{"5", []string{"Comm", "worker", "ingest"}},                 // Processes
 		{"6", []string{"Latency Histogram", "Gap Histogram"}},       // Latency+Gaps
-		{"7", []string{"buffer:"}},                                  // Stream chrome (rows filtered by pid=1)
+		{"7", []string{"buffer:", "batch"}},                         // Stream chrome + a seeded row
 	}
 	for _, tab := range tabs {
 		s.typeStr(tab.key)
@@ -1469,11 +1503,11 @@ func TestTUIIntegration_Syscalls_MetricToggle(t *testing.T) {
 // table row and asserts the resulting global filter (shown in the dashboard
 // status line) gains a "syscall~<name>" predicate for the seeded top row.
 func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	// The model starts with a pid=1 filter; the status line shows it verbatim.
+	// The session was built with -pid 1; the status line shows it verbatim.
 	s.waitFor("Syscall", "filter: pid=1")
 
 	// Enter on the table's selected (top) row clones the active filter and adds a
@@ -1492,11 +1526,11 @@ func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 // selection to the Family column (index 1) and presses Enter, asserting the
 // status line gains a "family~<X>" predicate (scoping by the selected row's
 // syscall family rather than its name). Pressing "F" undoes the filter, which
-// reverts the status line to the model's initial "pid=1" filter. The seeded
+// reverts the status line to the session's baseline "pid=1" filter. The seeded
 // top row ("write") classifies as the FS family, so the predicate is
 // "family~FS".
 func TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
 
 	s.typeStr("3")
@@ -1514,7 +1548,7 @@ func TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter(t *testing.T) {
 	// stays while the Polling-family "epoll_wait" row drops out of the table.
 	s.waitForAbsent("epoll_wait", "family~FS", "write")
 
-	// F undoes the just-pushed filter, reverting to the initial pid=1 filter.
+	// F undoes the just-pushed filter, reverting to the baseline pid=1 filter.
 	s.press('F')
 	s.waitFor("filter: pid=1")
 	if strings.Contains(s.screen(), "family~FS") {
@@ -1533,7 +1567,7 @@ func TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter(t *testing.T) {
 // replacement (setGlobal) and not a stack push, the "stack:" label must NOT
 // grow as the user cycles.
 func TestTUIIntegration_FamilyCycleHotkeys(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root", "filter: pid=1")
 
 	stackBefore := strings.Count(s.screen(), "stack:")
@@ -1576,7 +1610,7 @@ func TestTUIIntegration_FamilyCycleHotkeys(t *testing.T) {
 // seeded data (epoll_wait); Misc and AIO have none, so they scope to
 // "Syscalls: no data".
 func TestTUIIntegration_FamilyCycleScopesSyscallsTab(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root", "filter: pid=1")
 
 	// Go to the Syscalls tab; the unfiltered table shows both FS (write) and
@@ -1859,7 +1893,7 @@ func TestTUIIntegration_PidPicker_ReselectEscReturns(t *testing.T) {
 // current PID's real /proc threads, so its thread rows are non-deterministic;
 // these tests assert only the deterministic chrome: the "Select TID for PID N"
 // header and the synthetic "All TIDs" row that always occupies index 0
-// (selected on entry as "> All TIDs"). tuiNewFlamesModel starts with pid=1, so
+// (selected on entry as "> All TIDs"). These sessions are built with -pid 1, so
 // the header reads "Select TID for PID 1". Selecting "All TIDs" emits
 // TidSelectedMsg{Tid:0}; handleTidSelected clears the TID filter (tid<=0 -> -1)
 // and returns to the dashboard, asserted via the flame tab's "view:root" token
@@ -1872,7 +1906,7 @@ func TestTUIIntegration_PidPicker_ReselectEscReturns(t *testing.T) {
 // dashboard, asserted via the seeded flame view and the "filter: pid=1" status
 // line.
 func TestTUIIntegration_TidPicker_ReselectFromDashboard(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
 
 	// "t" reselects the TID: the dashboard is bookmarked and the TID picker opens
@@ -1894,7 +1928,7 @@ func TestTUIIntegration_TidPicker_ReselectFromDashboard(t *testing.T) {
 // (shouldCancelPickerToDashboard in tui.go), asserted via the still-seeded
 // flame view.
 func TestTUIIntegration_TidPicker_EscReturnsToDashboard(t *testing.T) {
-	s := tuiNewFlamesModel(t)
+	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
 
 	// "t" reselects the TID: the dashboard is bookmarked and the TID picker opens.
@@ -1962,13 +1996,7 @@ func TestTUIIntegration_Global_ResetKeepsStreamRows(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("7")
-	s.waitFor("buffer:")
-	// Clear the model's pid=1 startup filter so the seeded rows render
-	// (all seeded rows carry pids 2001-2004).
-	s.typeStr("f")
-	s.waitFor("j/k move")
-	s.typeStr("c")
-	s.press(tea.KeyEsc)
+	// Test-flames mode is unfiltered, so the seeded rows render immediately.
 	s.waitFor("buffer:", "Filter: all", "batch", "/srv")
 
 	// "r" fires the global baseline reset while the stream tab is visible.

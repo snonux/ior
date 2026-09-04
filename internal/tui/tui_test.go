@@ -2286,3 +2286,69 @@ func TestNextAutoResetIntervalAdvancesCustomValueToNextPreset(t *testing.T) {
 		t.Fatalf("nextAutoResetInterval(10m) = %s, want 0 (off)", got)
 	}
 }
+
+// TestNewTestFlamesModelSkipsPickerWithoutPidFilter guards the decoupling of
+// the picker-skip decision from the pid filter. --testflames/--testliveflames
+// used to pass initialPID=1 AND pidFilter=1 (the same "1" doing both jobs), so
+// the model that only wanted to skip the PID picker also filtered every view to
+// pid=1 — and the seeded fixtures carry synthetic pids 2001-2004, so the Stream
+// tab rendered no rows at all and its CSV export was a header with no data.
+func TestNewTestFlamesModelSkipsPickerWithoutPidFilter(t *testing.T) {
+	m := NewTestFlamesModel(flags.NewFlags(), func(context.Context) error { return nil })
+
+	if m.screen != ScreenDashboard {
+		t.Fatalf("expected dashboard screen (picker skipped), got %v", m.screen)
+	}
+	if !m.attaching {
+		t.Fatalf("expected attaching state so Init() starts the seeded trace")
+	}
+	if m.proc.pid != -1 {
+		t.Fatalf("expected no pid filter, got %d", m.proc.pid)
+	}
+	if m.proc.tid != -1 {
+		t.Fatalf("expected no tid filter, got %d", m.proc.tid)
+	}
+	if f := m.filters.current(); f.PID != nil || f.TID != nil {
+		t.Fatalf("expected no PID/TID predicate on the startup filter, got %+v", f)
+	}
+}
+
+// TestNewTestFlamesModelHonoursConfigPidFilter asserts the opposite direction:
+// a genuine -pid/-tid passed alongside --testflames must still reach the model.
+func TestNewTestFlamesModelHonoursConfigPidFilter(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.PidFilter = 2002
+	cfg.TidFilter = 2202
+
+	m := NewTestFlamesModel(cfg, func(context.Context) error { return nil })
+
+	if m.screen != ScreenDashboard {
+		t.Fatalf("expected dashboard screen (picker skipped), got %v", m.screen)
+	}
+	if m.proc.pid != 2002 {
+		t.Fatalf("expected pid filter 2002, got %d", m.proc.pid)
+	}
+	if m.proc.tid != 2202 {
+		t.Fatalf("expected tid filter 2202, got %d", m.proc.tid)
+	}
+}
+
+// TestNewModelWithConfigInitialPIDStillFilters pins the real (attach) startup
+// path: an initialPID is a genuine attach target, so it must keep both skipping
+// the picker and filtering by that pid.
+func TestNewModelWithConfigInitialPIDStillFilters(t *testing.T) {
+	m := NewModelWithConfig(flags.NewFlags(), 7, func(context.Context) error { return nil })
+
+	if m.screen != ScreenDashboard {
+		t.Fatalf("expected dashboard screen for an initial pid, got %v", m.screen)
+	}
+	if !m.attaching {
+		t.Fatalf("expected attaching state for an initial pid")
+	}
+	if m.proc.pid != 7 {
+		t.Fatalf("expected pid filter 7, got %d", m.proc.pid)
+	}
+	if f := m.filters.current(); f.PID == nil {
+		t.Fatalf("expected a PID predicate on the startup filter, got %+v", f)
+	}
+}

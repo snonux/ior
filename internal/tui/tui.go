@@ -280,7 +280,14 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 
 // RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
 func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
-	model := newModelWithRuntimeConfig(cfg.PidFilter, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
+	model := newModelWithRuntimeConfig(modelStartup{
+		initialPID:    cfg.PidFilter,
+		filter:        filterFromConfig(cfg),
+		pidFilter:     cfg.PidFilter,
+		tidFilter:     cfg.TidFilter,
+		exportEnabled: cfg.TUIExportEnable,
+		startTrace:    starter,
+	})
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	// Apply the configurable fast-refresh cadence from the CLI flag so the
 	// stream and flame tabs honour the -tui-fast-refresh value.
@@ -294,8 +301,22 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // Bubble Tea program. It shares construction with
 // RunTestFlamesWithTraceStarterConfig so in-process tests (teatest) exercise the
 // exact same model wiring that `--testflames`/`--testliveflames` use.
+//
+// There is no attach target here: the data is seeded synthetically, so the
+// model only needs to skip the PID picker. It must NOT inherit a pid filter
+// from that decision — the seeded rows carry synthetic pids (2001-2004), so a
+// filter of pid=1 would hide every stream row and export nothing but a CSV
+// header. Any real -pid/-tid the user passed is still honoured.
 func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) Model {
-	model := newModelWithRuntimeConfig(1, filterFromConfig(cfg), 1, -1, cfg.TUIExportEnable, starter)
+	model := newModelWithRuntimeConfig(modelStartup{
+		initialPID:    -1,
+		skipPicker:    true,
+		filter:        filterFromConfig(cfg),
+		pidFilter:     cfg.PidFilter,
+		tidFilter:     cfg.TidFilter,
+		exportEnabled: cfg.TUIExportEnable,
+		startTrace:    starter,
+	})
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	// Apply the configurable fast-refresh cadence from the CLI flag.
 	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
@@ -391,7 +412,14 @@ func NewModel(initialPID int, startTrace TraceStarter) Model {
 
 // NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
 func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) Model {
-	model := newModelWithRuntimeConfig(initialPID, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
+	model := newModelWithRuntimeConfig(modelStartup{
+		initialPID:    initialPID,
+		filter:        filterFromConfig(cfg),
+		pidFilter:     cfg.PidFilter,
+		tidFilter:     cfg.TidFilter,
+		exportEnabled: cfg.TUIExportEnable,
+		startTrace:    startTrace,
+	})
 	// Seed the dashboard's auto-reset cadence from the parsed CLI flag
 	// (default DefaultResetTimer; 0 disables). Init() will arm the
 	// underlying tea.Tick when the dashboard becomes active.
@@ -399,16 +427,40 @@ func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarte
 	return model
 }
 
-func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
+// modelStartup carries the startup wiring for newModelWithRuntimeConfig.
+// It exists to keep the "skip the PID picker" decision separate from the
+// pid filter: both used to be derived from a single initialPID argument, so
+// modes that only wanted to skip the picker (test-flames) silently pinned the
+// stream to pid=1 as well.
+type modelStartup struct {
+	// initialPID is a genuine attach target. When > 0 it both seeds the
+	// pid filter (overriding pidFilter/tidFilter) and skips the picker.
+	// Use -1 for "no attach target".
+	initialPID int
+	// skipPicker starts on the dashboard and begins tracing immediately
+	// without an attach target, for modes whose data is seeded rather than
+	// attached. It has no effect on the filters.
+	skipPicker bool
+	// filter is the startup global filter (built from the CLI config).
+	filter globalfilter.Filter
+	// pidFilter/tidFilter are the CLI -pid/-tid values (-1 = no filter).
+	pidFilter int
+	tidFilter int
+	// exportEnabled mirrors -tuiExport.
+	exportEnabled bool
+	startTrace    TraceStarter
+}
+
+func newModelWithRuntimeConfig(startup modelStartup) Model {
 	common.ApplyPalette(true)
 
 	keys := Keys
-	if !exportEnabled {
+	if !startup.exportEnabled {
 		keys.Export = key.NewBinding()
 	}
 
 	rt := newRuntimeBindings()
-	pidFilter, tidFilter := resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter)
+	pidFilter, tidFilter := resolveStartupPIDFilters(startup.initialPID, startup.pidFilter, startup.tidFilter)
 	// Pass 0 for fastRefreshMs so the dashboard uses the package-level default
 	// (200 ms). Callers that hold a flags.Config can override this via
 	// SetFastRefreshInterval after construction.
@@ -428,16 +480,16 @@ func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter
 		runtime:       rt,
 		keys:          keys,
 		spin:          spin,
-		tracer:        newTraceLifecycle(startTrace),
-		filters:       newFilterStack(startupFilter),
+		tracer:        newTraceLifecycle(startup.startTrace),
+		filters:       newFilterStack(startup.filter),
 		router:        newScreenRouter(),
-		exportEnabled: exportEnabled,
+		exportEnabled: startup.exportEnabled,
 		isDark:        true,
 		focused:       true,
 	}
 	model.setProcessFilters(pidFilter, tidFilter)
 
-	if initialPID > 0 {
+	if startup.initialPID > 0 || startup.skipPicker {
 		model.screen = ScreenDashboard
 		model.attaching = true
 	}
