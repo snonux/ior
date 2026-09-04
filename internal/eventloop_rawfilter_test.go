@@ -11,13 +11,14 @@ import (
 
 // The raw output modes (-plain, -flamegraph, headless -parquet) have no second
 // filtering stage: whatever an exit handler returns true for is printed. The
-// TUI does re-apply MatchPair in shouldIngestTracePair, which is why the gaps
-// closed here were never visible on the dashboard.
+// TUI has two further stages - shouldIngestTracePair on ingest and the Stream
+// tab's own applyFilter - and both now use the either-name form
+// (MatchPairEitherName / MatchesEitherName) so all three agree.
 //
 // Two kinds used to escape the pair filter entirely. handleOpenExit returned
 // true unconditionally, relying on the raw enter filter MatchOpenEvent - but
 // that only covers the comm and path dimensions. handleNameExit applied only
-// MatchComm, because its raw enter filter matches oldname-OR-newname while
+// the comm dimension, because its raw enter filter matches oldname-OR-newname while
 // oldnameNewnameFile.Name() reports only the newname, so a plain MatchPair
 // would have dropped every row a -path <oldname> filter legitimately selected.
 // Either way -latency/-bytes/-ret/-fd/-family/-syscall and non-equality
@@ -459,6 +460,93 @@ func TestFilteredPairDoesNotAdvanceTheGapBaseline(t *testing.T) {
 	}
 }
 
+// TestGapIsMeasuredFromTheLastEmittedPair is the stronger form of
+// TestFilteredPairDoesNotAdvanceTheGapBaseline: emit A, drop B, emit C, and
+// require C's gap to be measured from A's exit.
+//
+// The zero-gap assertion above is satisfied by any implementation that leaves
+// no baseline at all — including a wrong one that CLEARS prevTime when a pair
+// is dropped. Only a three-pair sequence distinguishes "measured from the last
+// emitted pair" from "zero for some other reason".
+func TestGapIsMeasuredFromTheLastEmittedPair(t *testing.T) {
+	const droppedFd = 7
+	const keptFd = 42
+
+	el := newFilteredEventLoop(t, globalfilter.Filter{
+		FD: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: keptFd},
+	})
+
+	feedOpenAt := func(t *testing.T, enterTime uint64, fd int64) *event.Pair {
+		t.Helper()
+		enterEv := types.OpenEvent{
+			EventType: types.ENTER_OPEN_EVENT,
+			TraceId:   types.SYS_ENTER_OPENAT,
+			Time:      enterTime,
+			Pid:       execCommPid,
+			Tid:       execCommTid,
+			Flags:     syscall.O_RDONLY,
+		}
+		copy(enterEv.Filename[:], "/tmp/gap.txt")
+		copy(enterEv.Comm[:], "ioworkload")
+		enterRaw, err := enterEv.Bytes()
+		if err != nil {
+			t.Fatalf("encode open enter event: %v", err)
+		}
+		exitEv := types.RetEvent{
+			EventType: types.EXIT_OPEN_EVENT,
+			TraceId:   types.SYS_EXIT_OPENAT,
+			Time:      enterTime + openPairLatency,
+			Ret:       fd,
+			Pid:       execCommPid,
+			Tid:       execCommTid,
+		}
+		exitRaw, err := exitEv.Bytes()
+		if err != nil {
+			t.Fatalf("encode open exit event: %v", err)
+		}
+		out := make(chan *event.Pair, 1)
+		el.processRawEvent(enterRaw, out)
+		el.processRawEvent(exitRaw, out)
+		select {
+		case ep := <-out:
+			return ep
+		default:
+			return nil
+		}
+	}
+
+	// A: emitted, exits at defaulTime+openPairLatency.
+	epA := feedOpenAt(t, defaulTime, keptFd)
+	if epA == nil {
+		t.Fatal("pair A must be emitted")
+	}
+	epA.Recycle()
+
+	// B: dropped by -fd, exits at defaulTime+3*openPairLatency.
+	if ep := feedOpenAt(t, defaulTime+2*openPairLatency, droppedFd); ep != nil {
+		defer ep.Recycle()
+		t.Fatal("pair B must be dropped by the fd filter")
+	}
+
+	// C: emitted, enters at defaulTime+4*openPairLatency. Its gap must be
+	// measured from A's exit, not from B's.
+	epC := feedOpenAt(t, defaulTime+4*openPairLatency, keptFd)
+	if epC == nil {
+		t.Fatal("pair C must be emitted")
+	}
+	defer epC.Recycle()
+
+	const wantFromA = 3 * openPairLatency // C.enter - A.exit
+	const wrongFromB = openPairLatency    // C.enter - B.exit
+	if epC.DurationToPrev == wrongFromB {
+		t.Fatalf("gap = %d: measured from the DROPPED pair B, want %d (from the last emitted pair A)",
+			epC.DurationToPrev, wantFromA)
+	}
+	if epC.DurationToPrev != wantFromA {
+		t.Fatalf("gap = %d, want %d (C.enter - A.exit)", epC.DurationToPrev, wantFromA)
+	}
+}
+
 // TestDroppedOpenStillRegistersTheFd pins that handleOpenExit updates the
 // global fd table and the comm cache BEFORE applying the filter. That
 // ordering only became load-bearing when handleOpenExit started dropping rows;
@@ -467,6 +555,7 @@ func TestFilteredPairDoesNotAdvanceTheGapBaseline(t *testing.T) {
 func TestDroppedOpenStillRegistersTheFd(t *testing.T) {
 	const filename = "/tmp/registered.txt"
 	const openedFd = 42
+	const payloadComm = "renamed-proc"
 
 	// A latency filter no open pair can satisfy: the row is dropped, but the
 	// descriptor it opened must still be resolvable afterwards.
@@ -474,7 +563,7 @@ func TestDroppedOpenStillRegistersTheFd(t *testing.T) {
 		LatencyNs: &globalfilter.NumericFilter{Op: globalfilter.OpGte, Value: openPairLatency + 1},
 	})
 
-	if ep := feedOpenPair(t, el, filename, "ioworkload", openedFd); ep != nil {
+	if ep := feedOpenPair(t, el, filename, payloadComm, openedFd); ep != nil {
 		defer ep.Recycle()
 		t.Fatalf("open row survived a -latency filter it cannot satisfy: %v", ep)
 	}
@@ -485,5 +574,14 @@ func TestDroppedOpenStillRegistersTheFd(t *testing.T) {
 	}
 	if resolved.Name() != filename {
 		t.Fatalf("fd %d resolved to %q, want %q", openedFd, resolved.Name(), filename)
+	}
+
+	// The comm cache is the other half of the same invariant: the payload comm
+	// is authoritative and must retire the seeded value even when the row it
+	// arrived on is dropped. newFilteredEventLoop seeds "ioworkload", so a
+	// different payload comm proves the refresh happened before the filter.
+	if got := el.comm(execCommTid); got != payloadComm {
+		t.Fatalf("comm cache = %q, want %q: the payload comm must be applied before the filter",
+			got, payloadComm)
 	}
 }

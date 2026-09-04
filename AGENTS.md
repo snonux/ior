@@ -230,9 +230,15 @@ committed set contains syscalls that only exist on recent mainline kernels
   `-pid`/`-tid` (pushed kernel-side via `PID_FILTER`/`TID_FILTER` in
   `internal/c/filter.c`). The value is that a future raw-mode filter source
   cannot silently reintroduce the gap. The TUI reaches every dimension through
-  its filter modal and re-applies the filter in `shouldIngestTracePair`
-  (`internal/ior.go`), which uses `MatchPairEitherName` so that stage agrees
-  with the checkpoint above rather than narrowing it back.
+  its filter modal and filters in two further stages, both of which use the
+  either-name form so they agree with the checkpoint above instead of
+  narrowing it back: `shouldIngestTracePair` (`internal/ior.go`, feeding the
+  stats engine, flamegraph and parquet recorder) uses `MatchPairEitherName`,
+  and the Stream tab's `applyFilter` plus its CSV export
+  (`internal/tui/eventstream/`) use `Filter.MatchesEitherName`. All three
+  stages must move together: when only some of them widen, a `-path <oldname>`
+  rename row is counted in the aggregates but missing from the row list that
+  is supposed to correspond to them.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
