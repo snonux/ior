@@ -196,6 +196,11 @@ committed set contains syscalls that only exist on recent mainline kernels
   clearing the flag it never received.
 - **Where the pair filter is enforced per kind**: *every* exit handler now ends
   in a full-strength checkpoint, so no kind escapes any filter dimension.
+  Caveat: this is about the *checkpoint*. Three handlers still mutate global fd
+  state after their filter (`handleFdExit`/`handleDup3Exit`/`handleFcntlExit`
+  for the dup family) and `pidfd_getfd` assigns `ep.File` after being filtered
+  on the source fd's file, so a dropped row can still cost a later row its
+  filename. Tracked separately as task `s1`.
   - The name (rename-like) kinds use `finishPairEitherName`
     (`Filter.MatchPairEitherName`): every dimension exactly as `MatchPair`
     applies it, except that the file dimension is satisfied by *either*
@@ -216,11 +221,18 @@ committed set contains syscalls that only exist on recent mainline kernels
     correct for the rows it does want.
   - Every remaining kind ends in `finishPair`/`finishPairForTid`.
 
-  This only ever mattered for `-plain`/`-flamegraph`/headless `-parquet`, which
-  have no second filtering stage; the TUI re-applies `MatchPair` in
-  `shouldIngestTracePair` (`internal/ior.go`). Equality `-pid`/`-tid` are pushed
-  kernel-side (`PID_FILTER`/`TID_FILTER` in `internal/c/filter.c`) and are
-  therefore already enforced before any of this.
+  Stated honestly, closing the open/name gap is **hardening, not an
+  observable bug fix**: the dimensions it newly enforces are not reachable
+  from the CLI at all. `flags.BuildTraceFilter` sets only comm/path/pid/tid,
+  and the raw modes have no other filter source, so in `-plain`/`-flamegraph`/
+  headless `-parquet` the only live dimensions are comm and path (already
+  enforced at enter by `MatchOpenEvent`/`MatchNameEvent`) plus equality
+  `-pid`/`-tid` (pushed kernel-side via `PID_FILTER`/`TID_FILTER` in
+  `internal/c/filter.c`). The value is that a future raw-mode filter source
+  cannot silently reintroduce the gap. The TUI reaches every dimension through
+  its filter modal and re-applies the filter in `shouldIngestTracePair`
+  (`internal/ior.go`), which uses `MatchPairEitherName` so that stage agrees
+  with the checkpoint above rather than narrowing it back.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
@@ -228,9 +240,13 @@ committed set contains syscalls that only exist on recent mainline kernels
   `-latency`/`-gap`/`-bytes` into "compare against 0" for **every** kind — a
   `-latency >= 50` filter dropped a row whose real latency was 100ns. Only the
   emission-side work stays after the handler (`finalizeTracepointPair`:
-  advancing the per-tid previous-exit timestamp and `freezePairForEmission`),
-  because that is what needs `ep.File`. The gap is therefore still measured from
-  the previously *emitted* pair, not from a filtered-out one.
+  advancing the per-tid previous-exit timestamp and `freezePairForEmission`).
+  `freezePairForEmission` stays because it needs `ep.File`, which the handler
+  assigns; advancing the timestamp stays for a different reason — so the gap
+  keeps being measured from the previously *emitted* pair rather than from one
+  the filter dropped. This ordering predates the per-kind checkpoints above and
+  was wrong for every kind that already ran `MatchPair`, not just the ones
+  added here.
 - **Control records in the statistics**: `numTracepoints` counts every non-empty
   ring-buffer record the event loop pulled off the ring. It is incremented
   before dispatch, so it counts records *seen*: undecodable records

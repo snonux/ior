@@ -705,6 +705,40 @@ func TestShouldIngestTracePairAppliesFullGlobalFilter(t *testing.T) {
 	}
 }
 
+// TestShouldIngestTracePairMatchesOnEitherRenameName pins that the TUI's
+// second filtering stage uses the same either-name file semantics as the
+// event-loop checkpoint (Filter.MatchPairEitherName). Using plain MatchPair
+// here silently narrowed the contract, so a `-path <oldname>` filter kept a
+// rename row in -plain output but dropped it on the dashboard.
+func TestShouldIngestTracePairMatchesOnEitherRenameName(t *testing.T) {
+	pair := &event.Pair{
+		File:    file.NewOldnameNewname([]byte("/tmp/old.txt"), []byte("/tmp/new.txt")),
+		Oldname: "/tmp/old.txt",
+	}
+
+	oldnameFilter := globalfilter.Filter{File: &globalfilter.StringFilter{Pattern: "old.txt"}}
+	if !shouldIngestTracePair(oldnameFilter, pair) {
+		t.Fatal("a rename matched on its oldname must reach the dashboard, as it does in -plain output")
+	}
+
+	newnameFilter := globalfilter.Filter{File: &globalfilter.StringFilter{Pattern: "new.txt"}}
+	if !shouldIngestTracePair(newnameFilter, pair) {
+		t.Fatal("a rename matched on its newname must reach the dashboard")
+	}
+
+	// Widening the file dimension must not turn into a bypass: a pattern
+	// matching neither name still rejects, and so does a mismatch on any
+	// other dimension.
+	otherFilter := globalfilter.Filter{File: &globalfilter.StringFilter{Pattern: "unrelated.txt"}}
+	if shouldIngestTracePair(otherFilter, pair) {
+		t.Fatal("a pattern matching neither name must still reject the pair")
+	}
+	fdFilter := globalfilter.Filter{FD: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 99}}
+	if shouldIngestTracePair(fdFilter, pair) {
+		t.Fatal("an oldname match must not bypass the other filter dimensions")
+	}
+}
+
 func TestProfilingFilesForMode(t *testing.T) {
 	cpu, mem, execTrace, duration := profilingFilesForMode(false)
 	if cpu != "ior.cpuprofile" || mem != "ior.memprofile" {
