@@ -187,19 +187,35 @@ committed set contains syscalls that only exist on recent mainline kernels
   the `sys_enter_execve` comm of a *successful* execve (that is the *calling*
   program's name); it does cache it for a **failed** one, where no
   `sched_process_exec` fires and the task keeps running under exactly that name.
-  The name kinds apply `Filter.MatchComm` in `finishCommForTid` — only the comm
-  dimension, because their raw filter matches oldname-or-newname while
+  Kernel-sourced names — the control record, an open event's payload comm, a
+  failed execve's payload comm — all go in through
+  `commResolver.setCachedFromKernel`, which bumps the tid's rename generation
+  and so retires any procfs lookup still in flight for it. A `markAllStale`
+  sweep likewise bumps a resolver-wide sweep generation, so a lookup that was
+  already in flight when the sweep ran lands *stale* rather than silently
+  clearing the flag it never received.
+- **Where the comm filter is enforced per kind**: the name (rename-like) kinds
+  apply `Filter.MatchComm` in `finishCommForTid` — only the comm dimension,
+  because their raw filter matches oldname-or-newname while
   `oldnameNewnameFile.Name()` reports only the newname, so a full `MatchPair`
-  would drop legitimate `-path <oldname>` matches — and the path kinds run the
-  full `finishPairForTid`. Either way a row's reported comm can never contradict
+  would drop legitimate `-path <oldname>` matches. The path kinds and
+  `open_by_handle_at` run the full `finishPairForTid`; for `open_by_handle_at`
+  that is the *only* filtering it gets, because its raw enter filter is `nil`
+  (see `rawRuntimeEvents`) — before that checkpoint existed, no filter dimension
+  at all reached its rows and a `-comm`-filtered run could emit one carrying a
+  different comm. `handleOpenExit` needs no checkpoint: its raw filter matched
+  the very payload comm the row then reports. Every remaining kind ends in
+  `finishPair`/`finishPairForTid`. So a row's reported comm can never contradict
   an active `-comm` filter.
-- **Control records in the statistics**: `numTracepoints` counts every
-  ring-buffer record the event loop decoded, control records included, so both
-  the mismatch percentage and the `ring buffer drops: … % of events` denominator
-  cover the whole ring-buffer stream rather than syscall pairs alone. That is
-  deliberate: `internal/c/exec.c` also counts a control record it fails to
-  reserve in `ringbuf_drop_map`, so the drop share only stays arithmetically
-  honest if the events side counts them too.
+- **Control records in the statistics**: `numTracepoints` counts every non-empty
+  ring-buffer record the event loop pulled off the ring. It is incremented
+  before dispatch, so it counts records *seen*: undecodable records
+  (`dropMalformedRawEvent`) and unhandled event types are included, and so are
+  control records. Both the mismatch percentage and the `ring buffer drops: … %
+  of events` denominator therefore cover the whole ring-buffer stream rather
+  than syscall pairs alone. That is deliberate: `internal/c/exec.c` also counts
+  a control record it fails to reserve in `ringbuf_drop_map`, so the drop share
+  only stays arithmetically honest if the events side counts them too.
 
 ## Code Style
 

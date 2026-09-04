@@ -232,11 +232,14 @@ func (e *eventLoop) stats() string {
 		}
 		return float64(n) / secs
 	}
-	// numTracepoints counts every ring-buffer record the loop decoded, which
-	// since the sched_process_exec probe includes control records (one per
-	// successful execve) alongside the syscall enter/exit records. Both
-	// denominators below are deliberately left on that total: the kernel-side
-	// drop counter also counts control records it failed to reserve
+	// numTracepoints counts every non-empty ring-buffer record the loop pulled
+	// off the ring. It is incremented before dispatch, so it counts records
+	// *seen*, not records successfully turned into something: records that fail
+	// to decode (dropMalformedRawEvent) and records of an unhandled event type
+	// are included, and so are - since the sched_process_exec probe - control
+	// records (one per successful execve) alongside the syscall enter/exit
+	// records. Both denominators below are deliberately left on that total: the
+	// kernel-side drop counter also counts control records it failed to reserve
 	// (internal/c/exec.c), so "drops as a share of events" only stays
 	// arithmetically honest if the events side counts them too. The mismatch
 	// share is diluted by the same records, which is acceptable - execve is

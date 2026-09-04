@@ -54,6 +54,33 @@ func TestOpenByHandleAt(t *testing.T) {
 	})
 }
 
+// TestOpenByHandleAtCommFilterKeepsMatchingRows and
+// TestOpenByHandleAtCommFilterDropsNonMatchingRows are the end-to-end guard for
+// task e1: open_by_handle_at has no raw enter filter, so until
+// handleOpenByHandleAtExit routed the pair through the full pair filter, NO
+// filter dimension reached its rows and a -comm-filtered run emitted rows
+// carrying a different comm. Both directions matter - the drop direction is the
+// bug, the keep direction is the risk the fix carries.
+func TestOpenByHandleAtCommFilterKeepsMatchingRows(t *testing.T) {
+	runScenarioResultWithIorArgs(t, "open-by-handle-at", []ExpectedEvent{
+		{
+			PathContains: "handlefile.txt",
+			Tracepoint:   "enter_open_by_handle_at",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	}, []string{"-comm", "ioworkload"})
+}
+
+func TestOpenByHandleAtCommFilterDropsNonMatchingRows(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "open-by-handle-at", nil,
+		[]string{"-comm", "zzznotarealcomm"})
+	for _, rec := range result.Records {
+		t.Errorf("row survived -comm zzznotarealcomm: comm=%q tracepoint=%s path=%q",
+			rec.Comm, rec.TraceID.String(), rec.Path)
+	}
+}
+
 func TestOpenEnoent(t *testing.T) {
 	runScenario(t, "open-enoent", []ExpectedEvent{
 		{
