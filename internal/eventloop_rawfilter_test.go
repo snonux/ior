@@ -386,3 +386,104 @@ func TestDerivedPairValuesAreVisibleToTheFilter(t *testing.T) {
 			openPairLatency, openPairLatency)
 	}
 }
+
+// TestFilteredPairDoesNotAdvanceTheGapBaseline pins the deliberate split
+// between applyDerivedPairValues (before the exit handlers, so the filter sees
+// real durations) and finalizeTracepointPair (after, so only an EMITTED pair
+// advances the per-tid previous-exit timestamp).
+//
+// Without that split a row dropped by the filter would still move the
+// baseline, and every later durationToPrevNs would be measured from a pair the
+// user never saw. Moving setPrevTime into applyDerivedPairValues makes this
+// test fail while the rest of the suite stays green.
+func TestFilteredPairDoesNotAdvanceTheGapBaseline(t *testing.T) {
+	const droppedFd = 7
+	const keptFd = 42
+
+	// -fd 42 drops the first open (fd 7) and keeps the second (fd 42).
+	el := newFilteredEventLoop(t, globalfilter.Filter{
+		FD: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: keptFd},
+	})
+
+	if ep := feedOpenPair(t, el, "/tmp/dropped.txt", "ioworkload", droppedFd); ep != nil {
+		defer ep.Recycle()
+		t.Fatalf("open row with fd %d survived -fd == %d", droppedFd, keptFd)
+	}
+
+	// The second pair starts one full openPairLatency after the first one's
+	// exit, so if the dropped pair had advanced the baseline the gap would be
+	// measured from it instead of from the last emitted exit.
+	enterEv := types.OpenEvent{
+		EventType: types.ENTER_OPEN_EVENT,
+		TraceId:   types.SYS_ENTER_OPENAT,
+		Time:      defaulTime + 2*openPairLatency,
+		Pid:       execCommPid,
+		Tid:       execCommTid,
+		Flags:     syscall.O_RDONLY,
+	}
+	copy(enterEv.Filename[:], "/tmp/kept.txt")
+	copy(enterEv.Comm[:], "ioworkload")
+	enterRaw, err := enterEv.Bytes()
+	if err != nil {
+		t.Fatalf("encode open enter event: %v", err)
+	}
+	exitEv := types.RetEvent{
+		EventType: types.EXIT_OPEN_EVENT,
+		TraceId:   types.SYS_EXIT_OPENAT,
+		Time:      defaulTime + 3*openPairLatency,
+		Ret:       keptFd,
+		Pid:       execCommPid,
+		Tid:       execCommTid,
+	}
+	exitRaw, err := exitEv.Bytes()
+	if err != nil {
+		t.Fatalf("encode open exit event: %v", err)
+	}
+
+	out := make(chan *event.Pair, 1)
+	el.processRawEvent(enterRaw, out)
+	el.processRawEvent(exitRaw, out)
+
+	select {
+	case ep := <-out:
+		defer ep.Recycle()
+		// prevTime was never set (the only prior pair was filtered out), so
+		// CalculateDurations reports a zero gap rather than one measured from
+		// the dropped pair's exit at defaulTime+openPairLatency.
+		if ep.DurationToPrev != 0 {
+			t.Fatalf("gap = %d, want 0: a filtered-out pair must not advance the gap baseline",
+				ep.DurationToPrev)
+		}
+	default:
+		t.Fatalf("open row with fd %d must survive -fd == %d", keptFd, keptFd)
+	}
+}
+
+// TestDroppedOpenStillRegistersTheFd pins that handleOpenExit updates the
+// global fd table and the comm cache BEFORE applying the filter. That
+// ordering only became load-bearing when handleOpenExit started dropping rows;
+// if it regressed, every later read/write/close on a descriptor whose open was
+// filtered away would lose its filename.
+func TestDroppedOpenStillRegistersTheFd(t *testing.T) {
+	const filename = "/tmp/registered.txt"
+	const openedFd = 42
+
+	// A latency filter no open pair can satisfy: the row is dropped, but the
+	// descriptor it opened must still be resolvable afterwards.
+	el := newFilteredEventLoop(t, globalfilter.Filter{
+		LatencyNs: &globalfilter.NumericFilter{Op: globalfilter.OpGte, Value: openPairLatency + 1},
+	})
+
+	if ep := feedOpenPair(t, el, filename, "ioworkload", openedFd); ep != nil {
+		defer ep.Recycle()
+		t.Fatalf("open row survived a -latency filter it cannot satisfy: %v", ep)
+	}
+
+	resolved, ok := el.fdState().get(openedFd)
+	if !ok || resolved == nil {
+		t.Fatalf("fd %d was not registered because its open row was filtered out", openedFd)
+	}
+	if resolved.Name() != filename {
+		t.Fatalf("fd %d resolved to %q, want %q", openedFd, resolved.Name(), filename)
+	}
+}
