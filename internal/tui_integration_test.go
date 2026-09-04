@@ -30,6 +30,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -696,7 +697,9 @@ func TestTUIIntegration_Stream_SeededRowsVisibleUnfiltered(t *testing.T) {
 	s.typeStr("7")
 	// "filtered:40" (not "filtered:0") plus a seeded comm, pid and path prove
 	// the rows survive the startup filter and are actually rendered.
-	s.waitFor("total:40", "filtered:40", "Filter: all", "worker", "2002", "/srv")
+	seeded := streamrow.TestStreamRowCount()
+	s.waitFor(fmt.Sprintf("total:%d", seeded), fmt.Sprintf("filtered:%d", seeded),
+		"Filter: all", "worker", "2002", "/srv")
 	// No waitForAbsent("filtered:0") here: "filtered:0" cannot be a substring
 	// of a screen already asserted to contain "filtered:40", so such a check
 	// would pass on its first poll no matter what. The real guard is
@@ -774,7 +777,7 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 			t.Fatalf("exported csv %q missing %q.\n--- csv ---\n%s", path, want, csv)
 		}
 	}
-	// Beyond the header, every one of the 40 seeded rows must be present. The
+	// Beyond the header, every seeded row must be present. The
 	// exact count matters: the picker-skip sentinel used to leak into the pid
 	// filter, and the resulting export was a lone header line with 0 data rows.
 	if got := tuiCSVDataRows(csv); got != streamrow.TestStreamRowCount() {
@@ -978,7 +981,8 @@ func TestTUIIntegration_Stream_PausedFooterShowsSelection(t *testing.T) {
 	s.press(tea.KeySpace)
 	s.waitFor("PAUSED")
 	s.press('g')
-	s.waitFor("Sel 1/40", "Col 1/10", "Enter push-filter", "T fd-trace")
+	s.waitFor(fmt.Sprintf("Sel 1/%d", streamrow.TestStreamRowCount()),
+		"Col 1/10", "Enter push-filter", "T fd-trace")
 
 	// Advancing the selected column updates the Col counter.
 	s.press('l')

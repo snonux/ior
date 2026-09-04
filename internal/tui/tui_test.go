@@ -2351,13 +2351,20 @@ func TestNewTestFlamesModelHonoursConfigTidFilterAlone(t *testing.T) {
 }
 
 // TestNewRunModelWiresTheProductionStartup guards the struct literal on the one
-// path real users take. Dropping initialPID there leaves every other test in
-// the repo green while `ior -pid <n>` would open the PID picker instead of the
-// dashboard and never fire beginTraceCmd().
+// path real users take. Every field is asserted, not just the one that was
+// once dropped: a modelStartup field is silently optional where a positional
+// argument would not compile, so an omission anywhere in this literal is valid
+// Go that no other test in the repo would notice. Dropping initialPID made
+// `ior -pid <n>` open the PID picker instead of the dashboard; dropping
+// `filter` would strip -comm/-path from the trace filter just as quietly.
 func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.PidFilter = 1234
+	cfg.TidFilter = -1
+	cfg.CommFilter = "ioworkload"
+	cfg.PathFilter = "/srv/data"
 	cfg.TUIExportEnable = false
+	cfg.ResetTimer = 90 * time.Second
 
 	m := newRunModel(cfg, func(context.Context) error { return nil })
 
@@ -2372,6 +2379,18 @@ func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 	}
 	if m.exportEnabled {
 		t.Fatal("expected -tuiExport=false to reach the model")
+	}
+	// The startup filter carries -comm/-path into the global trace filter for
+	// every real run; dropping it used to leave the whole suite green.
+	startupFilter := m.filters.current()
+	if startupFilter.Comm == nil || startupFilter.Comm.Pattern != "ioworkload" {
+		t.Fatalf("expected -comm to reach the startup filter, got %+v", startupFilter.Comm)
+	}
+	if startupFilter.File == nil || startupFilter.File.Pattern != "/srv/data" {
+		t.Fatalf("expected -path to reach the startup filter, got %+v", startupFilter.File)
+	}
+	if got := m.dashboard.AutoResetInterval(); got != 90*time.Second {
+		t.Fatalf("expected -resetTimer to reach the dashboard, got %v", got)
 	}
 }
 
