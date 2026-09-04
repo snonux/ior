@@ -103,3 +103,66 @@ func TestMatchPairSeesRetOnKindSpecificExits(t *testing.T) {
 		})
 	}
 }
+
+// renamePair models what handleNameExit builds: File.Name() is the newname and
+// the source path only reaches the filter through Pair.Oldname.
+func renamePair() *event.Pair {
+	return &event.Pair{
+		EnterEv:  &types.RetEvent{TraceId: types.SYS_ENTER_RENAME, Pid: 1234, Tid: 1235},
+		ExitEv:   &types.RetEvent{TraceId: types.SYS_EXIT_RENAME, Pid: 1234, Tid: 1235, Ret: 0},
+		Comm:     "mv",
+		File:     file.NewOldnameNewname([]byte("/tmp/old.txt"), []byte("/tmp/new.txt")),
+		Oldname:  "/tmp/old.txt",
+		Duration: 1_500_000,
+	}
+}
+
+// TestMatchPairEitherNameWidensOnlyTheFileDimension pins the rename-kind
+// filter contract: the file dimension follows MatchNameEvent and matches
+// oldname OR newname, while every other dimension stays exactly as strict as
+// MatchPair. Before this existed the name kinds skipped the pair filter
+// entirely, so none of the numeric dimensions reached their rows at all.
+func TestMatchPairEitherNameWidensOnlyTheFileDimension(t *testing.T) {
+	pair := renamePair()
+
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).MatchPairEitherName(pair) {
+		t.Fatalf("expected a newname match to be accepted")
+	}
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).MatchPairEitherName(pair) {
+		t.Fatalf("expected an oldname match to be accepted")
+	}
+	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).MatchPairEitherName(pair) {
+		t.Fatalf("expected a path matching neither name to be rejected")
+	}
+	// MatchPair alone is the false negative this method exists to avoid.
+	if MatchPair(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}, pair) {
+		t.Fatalf("sanity: plain MatchPair is not supposed to see the oldname")
+	}
+
+	// Every other dimension keeps MatchPair's strictness, including when the
+	// file dimension was satisfied by the oldname.
+	strict := Filter{
+		File:      &StringFilter{Pattern: "/tmp/old.txt"},
+		LatencyNs: &NumericFilter{Op: OpGt, Value: 2_000_000},
+	}
+	if strict.MatchPairEitherName(pair) {
+		t.Fatalf("expected an oldname match to still be subject to -latency")
+	}
+	for name, filter := range map[string]Filter{
+		"syscall":     {Syscall: &StringFilter{Pattern: "unlink"}},
+		"comm":        {Comm: &StringFilter{Pattern: "cat"}},
+		"pid":         {PID: &NumericFilter{Op: OpGt, Value: 99999}},
+		"tid":         {TID: &NumericFilter{Op: OpNeq, Value: 1235}},
+		"bytes":       {Bytes: &NumericFilter{Op: OpGte, Value: 1}},
+		"ret":         {RetVal: &NumericFilter{Op: OpEq, Value: -1}},
+		"errors-only": {ErrorsOnly: true},
+	} {
+		if filter.MatchPairEitherName(pair) {
+			t.Fatalf("expected the %s dimension to reject the rename pair", name)
+		}
+	}
+
+	if (Filter{}).MatchPairEitherName(nil) {
+		t.Fatalf("expected a nil pair to be rejected")
+	}
+}

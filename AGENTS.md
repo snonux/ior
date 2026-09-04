@@ -194,19 +194,43 @@ committed set contains syscalls that only exist on recent mainline kernels
   sweep likewise bumps a resolver-wide sweep generation, so a lookup that was
   already in flight when the sweep ran lands *stale* rather than silently
   clearing the flag it never received.
-- **Where the comm filter is enforced per kind**: the name (rename-like) kinds
-  apply `Filter.MatchComm` in `finishCommForTid` — only the comm dimension,
-  because their raw filter matches oldname-or-newname while
-  `oldnameNewnameFile.Name()` reports only the newname, so a full `MatchPair`
-  would drop legitimate `-path <oldname>` matches. The path kinds and
-  `open_by_handle_at` run the full `finishPairForTid`; for `open_by_handle_at`
-  that is the *only* filtering it gets, because its raw enter filter is `nil`
-  (see `rawRuntimeEvents`) — before that checkpoint existed, no filter dimension
-  at all reached its rows and a `-comm`-filtered run could emit one carrying a
-  different comm. `handleOpenExit` needs no checkpoint: its raw filter matched
-  the very payload comm the row then reports. Every remaining kind ends in
-  `finishPair`/`finishPairForTid`. So a row's reported comm can never contradict
-  an active `-comm` filter.
+- **Where the pair filter is enforced per kind**: *every* exit handler now ends
+  in a full-strength checkpoint, so no kind escapes any filter dimension.
+  - The name (rename-like) kinds use `finishPairEitherName`
+    (`Filter.MatchPairEitherName`): every dimension exactly as `MatchPair`
+    applies it, except that the file dimension is satisfied by *either*
+    `Pair.File.Name()` (the newname) or `Pair.Oldname`. That mirrors the raw
+    enter filter `MatchNameEvent`, which matches oldname-or-newname, while
+    `oldnameNewnameFile.Name()` reports only the newname — a plain `MatchPair`
+    would drop legitimate `-path <oldname>` matches. Widening *only* the file
+    dimension is what let these kinds stop skipping the pair filter altogether.
+  - The path kinds and `open_by_handle_at` run the full `finishPairForTid`; for
+    `open_by_handle_at` that is the *only* filtering it gets, because its raw
+    enter filter is `nil` (see `rawRuntimeEvents`).
+  - `handleOpenExit` runs the full `finishPair`. Its raw enter filter
+    (`MatchOpenEvent`) covers the comm and path dimensions only, so before this
+    checkpoint existed `-syscall`/`-family`/`-fd`/`-ret`/`-latency`/`-bytes` and
+    non-equality `-pid`/`-tid` reached open rows nowhere at all. Its fd
+    registration and `setCachedCommFromKernel` stay *before* the filter: a row
+    this run does not want must still leave the fd table and the comm cache
+    correct for the rows it does want.
+  - Every remaining kind ends in `finishPair`/`finishPairForTid`.
+
+  This only ever mattered for `-plain`/`-flamegraph`/headless `-parquet`, which
+  have no second filtering stage; the TUI re-applies `MatchPair` in
+  `shouldIngestTracePair` (`internal/ior.go`). Equality `-pid`/`-tid` are pushed
+  kernel-side (`PID_FILTER`/`TID_FILTER` in `internal/c/filter.c`) and are
+  therefore already enforced before any of this.
+- **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
+  `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
+  latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
+  before the checkpoint above. Computing them afterwards silently turned
+  `-latency`/`-gap`/`-bytes` into "compare against 0" for **every** kind — a
+  `-latency >= 50` filter dropped a row whose real latency was 100ns. Only the
+  emission-side work stays after the handler (`finalizeTracepointPair`:
+  advancing the per-tid previous-exit timestamp and `freezePairForEmission`),
+  because that is what needs `ep.File`. The gap is therefore still measured from
+  the previously *emitted* pair, not from a filtered-out one.
 - **Control records in the statistics**: `numTracepoints` counts every non-empty
   ring-buffer record the event loop pulled off the ring. It is incremented
   before dispatch, so it counts records *seen*: undecodable records

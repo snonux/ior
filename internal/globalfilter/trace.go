@@ -33,15 +33,34 @@ func (f Filter) MatchPair(pair *event.Pair) bool {
 	return f.Matches(pairCandidate{pair: pair})
 }
 
-// MatchComm applies only the comm dimension of the filter.
+// MatchPairEitherName is MatchPair for the rename-like (name-carrying) kinds:
+// every dimension is applied exactly as MatchPair applies it, except that the
+// file dimension is satisfied when *either* the new path (Pair.File.Name()) or
+// the captured source path (Pair.Oldname) matches.
 //
-// Most event payloads carry no comm, so for those kinds the command name is
-// attached by userspace after the raw enter-side filtering stage. MatchComm is
-// the checkpoint for exactly that late-resolved value: without it a row can be
-// emitted whose reported comm contradicts the active comm filter, which is the
-// contradiction the pid->comm cache used to produce across execve.
-func (f Filter) MatchComm(comm string) bool {
-	return matchString(f.Comm, comm)
+// That asymmetry is not a licence to be lax, it is what makes the pair filter
+// agree with the raw enter filter these kinds are already subjected to:
+// MatchNameEvent matches oldname OR newname, while oldnameNewnameFile.Name()
+// reports only the newname. A plain MatchPair here would therefore drop every
+// row a `-path <oldname>` filter legitimately selected — the reason the name
+// kinds used to skip the pair filter altogether and, with it, every numeric and
+// metadata dimension. Widening only the file dimension closes that gap without
+// re-introducing the false negatives.
+//
+// The second evaluation is reached only when the first one failed and a file
+// pattern is actually set, so the common paths cost the same as MatchPair.
+func (f Filter) MatchPairEitherName(pair *event.Pair) bool {
+	if pair == nil {
+		return false
+	}
+	candidate := pairCandidate{pair: pair}
+	if f.Matches(candidate) {
+		return true
+	}
+	if !hasStringPattern(f.File) || pair.Oldname == "" {
+		return false
+	}
+	return f.Matches(oldnameCandidate{pairCandidate: candidate})
 }
 
 // MatchOpenEvent applies the subset of the filter that can be evaluated on raw
