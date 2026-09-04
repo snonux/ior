@@ -278,8 +278,13 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 	return runtime.TraceFiltersFromContext(ctx)
 }
 
-// RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
-func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
+// newRunModel builds the model RunWithTraceStarterConfig runs. It is split out
+// so the production startup wiring is unit-testable: the struct literal below
+// is the one path real users take, and a dropped or misnamed field there is
+// silently valid Go. Without this seam, removing initialPID left the whole
+// suite green while `ior -pid <n>` would open the PID picker instead of the
+// dashboard and never call beginTraceCmd().
+func newRunModel(cfg flags.Config, starter TraceStarter) Model {
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    cfg.PidFilter,
 		filter:        filterFromConfig(cfg),
@@ -292,7 +297,12 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	// Apply the configurable fast-refresh cadence from the CLI flag so the
 	// stream and flame tabs honour the -tui-fast-refresh value.
 	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
-	program := tea.NewProgram(model)
+	return model
+}
+
+// RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
+func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
+	program := tea.NewProgram(newRunModel(cfg, starter))
 	_, err := program.Run()
 	return err
 }
@@ -307,13 +317,20 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // from that decision — the seeded rows carry synthetic pids (2001-2004), so a
 // filter of pid=1 would hide every stream row and export nothing but a CSV
 // header. Any real -pid/-tid the user passed is still honoured.
+//
+// The pid/tid pair goes through resolveStartupPIDFilters, the same helper the
+// production path uses, so that "the exact same model wiring" above is true of
+// the filters too: an explicit -pid clears -tid here exactly as it does for a
+// real attach, rather than test-flames quietly honouring a combination the
+// real TUI drops.
 func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) Model {
+	pidFilter, tidFilter := resolveStartupPIDFilters(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter)
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    -1,
 		skipPicker:    true,
 		filter:        filterFromConfig(cfg),
-		pidFilter:     cfg.PidFilter,
-		tidFilter:     cfg.TidFilter,
+		pidFilter:     pidFilter,
+		tidFilter:     tidFilter,
 		exportEnabled: cfg.TUIExportEnable,
 		startTrace:    starter,
 	})

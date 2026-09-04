@@ -2328,8 +2328,50 @@ func TestNewTestFlamesModelHonoursConfigPidFilter(t *testing.T) {
 	if m.proc.pid != 2002 {
 		t.Fatalf("expected pid filter 2002, got %d", m.proc.pid)
 	}
+	// -pid clears -tid, exactly as the production path does via
+	// resolveStartupPIDFilters. Test-flames must not honour a pid+tid
+	// combination the real TUI drops, or it stops being a faithful harness.
+	if m.proc.tid != -1 {
+		t.Fatalf("expected -pid to clear the tid filter as production does, got %d", m.proc.tid)
+	}
+}
+
+// TestNewTestFlamesModelHonoursConfigTidFilterAlone pins the other half of that
+// rule: with no -pid, a -tid passed alongside --testflames still reaches the
+// model, matching production.
+func TestNewTestFlamesModelHonoursConfigTidFilterAlone(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.TidFilter = 2202
+
+	m := NewTestFlamesModel(cfg, func(context.Context) error { return nil })
+
 	if m.proc.tid != 2202 {
 		t.Fatalf("expected tid filter 2202, got %d", m.proc.tid)
+	}
+}
+
+// TestNewRunModelWiresTheProductionStartup guards the struct literal on the one
+// path real users take. Dropping initialPID there leaves every other test in
+// the repo green while `ior -pid <n>` would open the PID picker instead of the
+// dashboard and never fire beginTraceCmd().
+func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.PidFilter = 1234
+	cfg.TUIExportEnable = false
+
+	m := newRunModel(cfg, func(context.Context) error { return nil })
+
+	if m.screen != ScreenDashboard {
+		t.Fatalf("a -pid attach target must start on the dashboard, got %v", m.screen)
+	}
+	if !m.attaching {
+		t.Fatal("a -pid attach target must start attaching, or Init() never calls beginTraceCmd()")
+	}
+	if m.proc.pid != 1234 {
+		t.Fatalf("expected pid filter 1234, got %d", m.proc.pid)
+	}
+	if m.exportEnabled {
+		t.Fatal("expected -tuiExport=false to reach the model")
 	}
 }
 

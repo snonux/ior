@@ -46,6 +46,7 @@ import (
 	"ior/internal/flags"
 	"ior/internal/probemanager"
 	"ior/internal/runtime"
+	"ior/internal/streamrow"
 	"ior/internal/tui"
 )
 
@@ -696,7 +697,10 @@ func TestTUIIntegration_Stream_SeededRowsVisibleUnfiltered(t *testing.T) {
 	// "filtered:40" (not "filtered:0") plus a seeded comm, pid and path prove
 	// the rows survive the startup filter and are actually rendered.
 	s.waitFor("total:40", "filtered:40", "Filter: all", "worker", "2002", "/srv")
-	s.waitForAbsent("filtered:0", "total:40")
+	// No waitForAbsent("filtered:0") here: "filtered:0" cannot be a substring
+	// of a screen already asserted to contain "filtered:40", so such a check
+	// would pass on its first poll no matter what. The real guard is
+	// "filtered:40" plus the seeded comm/pid/path tokens above.
 }
 
 func TestTUIIntegration_Stream_FilterModal_OpenCancel(t *testing.T) {
@@ -773,8 +777,8 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 	// Beyond the header, every one of the 40 seeded rows must be present. The
 	// exact count matters: the picker-skip sentinel used to leak into the pid
 	// filter, and the resulting export was a lone header line with 0 data rows.
-	if got := tuiCSVDataRows(csv); got != 40 {
-		t.Fatalf("exported csv %q has %d data rows, want 40:\n%s", path, got, csv)
+	if got := tuiCSVDataRows(csv); got != streamrow.TestStreamRowCount() {
+		t.Fatalf("exported csv %q has %d data rows, want %d:\n%s", path, got, streamrow.TestStreamRowCount(), csv)
 	}
 }
 
