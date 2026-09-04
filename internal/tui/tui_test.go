@@ -2351,8 +2351,9 @@ func TestNewTestFlamesModelHonoursConfigTidFilterAlone(t *testing.T) {
 }
 
 // TestNewRunModelWiresTheProductionStartup guards the struct literal on the one
-// path real users take. Every field is asserted, not just the one that was
-// once dropped: a modelStartup field is silently optional where a positional
+// path real users take. Every field is asserted across its two subtests
+// (tidFilter is only reachable when no -pid is given, because an attach pid
+// clears it): a modelStartup field is silently optional where a positional
 // argument would not compile, so an omission anywhere in this literal is valid
 // Go that no other test in the repo would notice. Dropping initialPID made
 // `ior -pid <n>` open the PID picker instead of the dashboard; dropping
@@ -2365,6 +2366,7 @@ func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 	cfg.PathFilter = "/srv/data"
 	cfg.TUIExportEnable = false
 	cfg.ResetTimer = 90 * time.Second
+	cfg.TUIFastRefreshInterval = 300 * time.Millisecond
 
 	m := newRunModel(cfg, func(context.Context) error { return nil })
 
@@ -2391,6 +2393,27 @@ func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 	}
 	if got := m.dashboard.AutoResetInterval(); got != 90*time.Second {
 		t.Fatalf("expected -resetTimer to reach the dashboard, got %v", got)
+	}
+	if got := m.dashboard.FastRefreshInterval(); got != 300*time.Millisecond {
+		t.Fatalf("expected -tui-fast-refresh to reach the dashboard, got %v", got)
+	}
+}
+
+// TestNewRunModelWiresTidFilterWithoutPid covers the one modelStartup field the
+// case above cannot reach: with an attach pid, resolveStartupPIDFilters forces
+// tid to -1, so only `ior -tid T` with no -pid exercises tidFilter. Dropping it
+// silently degrades to -1, losing the model-side tid filter and the
+// "Filter: tid=..." status display (kernel-side filtering still applies, so
+// rows stay correct - it is a display/filter-stack loss, not data loss).
+func TestNewRunModelWiresTidFilterWithoutPid(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.PidFilter = -1
+	cfg.TidFilter = 5678
+
+	m := newRunModel(cfg, func(context.Context) error { return nil })
+
+	if m.proc.tid != 5678 {
+		t.Fatalf("expected tid filter 5678 to reach the model, got %d", m.proc.tid)
 	}
 }
 
