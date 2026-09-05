@@ -214,7 +214,23 @@ committed set contains syscalls that only exist on recent mainline kernels
     this was CLI-reachable. Pinned by
     `TestDroppedDupStillRegistersTheDuplicatedFd` and
     `TestDroppedFcntlSetflStillUpdatesTheFdTable`
-    (`internal/eventloop_dupfilter_test.go`).
+    (`internal/eventloop_dupfilter_test.go`). Eviction is the same rule from the
+    other side — `applyFdCloseState`/`applyCloseRangeState` also run ahead of the
+    checkpoint, because a *stale* entry mislabels the next syscall that reuses
+    the descriptor number (`TestDroppedCloseStillEvictsTheFd`). Because these
+    mutations now run on every pair rather than only surviving ones, the failure
+    guards matter too: `registerDup` ignores a negative return
+    (`TestFailedDupDoesNotRegisterAnFd`).
+
+    Scope caveat: this rule is about the *pair-filter checkpoint*. Two earlier
+    gates still drop events before any exit handler runs, so it does not make
+    the fd table unconditionally correct under a filter. `matchRawOpenEvent`
+    drops non-matching opens at enter, so under `-path X` an open of a different
+    file never registers its fd at all; and with `-comm` active
+    `tracepointEntered` recycles a non-open/exec enter event for a tid whose
+    comm is not cached yet — and comm resolution is asynchronous, so a brand-new
+    tid's first syscall is exactly the exposed one. The `NewFdWithPid` procfs
+    fallback covers both while the descriptor is still open.
   - *Filter input must be the reported value.* `pidfd_getfd` re-points `ep.File`
     at the transferred descriptor; while that happened after the checkpoint the
     pair was judged on the **source pidfd**, so `-path <transferred file>`
