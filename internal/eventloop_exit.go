@@ -647,8 +647,13 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 	// See fcntl(2) for implementation details
 	switch fcntlEv.Cmd {
 	case syscall.F_SETFL:
+		// F_SETFL changes the settable status flags only; the access mode and
+		// the creation flags stay exactly as open(2) set them. Merge, do not
+		// replace: callers do F_GETFL then OR, so arg carries the access mode
+		// too, and masking it out of the stored word made an O_RDWR descriptor
+		// report O_RDONLY on the fcntl row and on every later row for that fd.
 		const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-		fdFile.SetFlags(int32(fcntlEv.Arg) & int32(canChange))
+		fdFile.MergeFlags(int32(canChange), int32(fcntlEv.Arg))
 		ep.File = fdFile
 		e.fdState().set(fd, fdFile)
 	case syscall.F_DUPFD:

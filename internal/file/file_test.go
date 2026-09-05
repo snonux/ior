@@ -95,6 +95,84 @@ func TestFdFileAddFlags(t *testing.T) {
 	}
 }
 
+// settableStatusFlags is the F_SETFL mask applyFcntlFdState passes.
+const settableStatusFlags = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT |
+	syscall.O_NOATIME | syscall.O_NONBLOCK
+
+// TestFdFileMergeFlags pins the fcntl(2) F_SETFL update shape: only the bits
+// selected by the mask move, everything else in the flag word survives.
+func TestFdFileMergeFlags(t *testing.T) {
+	tests := []struct {
+		name  string
+		start int32
+		arg   int32
+		want  Flags
+	}{
+		{
+			// The real caller's shape: F_GETFL, OR in a bit, F_SETFL. The
+			// access mode and the creation flags must come through untouched;
+			// replacing the word instead of merging it left O_NONBLOCK alone
+			// and reported the descriptor as O_RDONLY from here on.
+			name:  "settable bit added, access mode and creation flags kept",
+			start: syscall.O_RDWR | syscall.O_CREAT,
+			arg:   syscall.O_RDWR | syscall.O_NONBLOCK,
+			want:  Flags(syscall.O_RDWR | syscall.O_CREAT | syscall.O_NONBLOCK),
+		},
+		{
+			// A merge is not an OR: a settable bit missing from arg must be
+			// turned off, which is how F_SETFL clears O_NONBLOCK.
+			name:  "settable bit absent from arg is cleared",
+			start: syscall.O_RDWR | syscall.O_APPEND | syscall.O_NONBLOCK,
+			arg:   syscall.O_RDWR | syscall.O_APPEND,
+			want:  Flags(syscall.O_RDWR | syscall.O_APPEND),
+		},
+		{
+			// Bits outside the mask are ignored in arg as well: F_SETFL cannot
+			// turn a descriptor into an O_CREAT|O_TRUNC one.
+			name:  "non-settable bits in arg are ignored",
+			start: syscall.O_WRONLY,
+			arg:   syscall.O_CREAT | syscall.O_TRUNC | syscall.O_NONBLOCK,
+			want:  Flags(syscall.O_WRONLY | syscall.O_NONBLOCK),
+		},
+		{
+			name:  "access mode is never taken from arg",
+			start: syscall.O_RDWR,
+			arg:   syscall.O_RDONLY | syscall.O_NONBLOCK,
+			want:  Flags(syscall.O_RDWR | syscall.O_NONBLOCK),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fdFile := NewFd(1, "test.txt", tc.start)
+			fdFile.MergeFlags(settableStatusFlags, tc.arg)
+			if fdFile.Flags() != tc.want {
+				t.Errorf("MergeFlags(%v, %v) on %v = %v, want %v",
+					Flags(settableStatusFlags), Flags(tc.arg), Flags(tc.start),
+					fdFile.Flags(), tc.want)
+			}
+		})
+	}
+}
+
+// TestFdFileMergeFlagsKeepsUnknownUnknown pins that a descriptor whose flag
+// word was never observed stays unknown: there is no base word to merge into,
+// and synthesising one from the masked bits alone would claim an access mode
+// (O_RDONLY, the zero value) that nothing ever reported.
+func TestFdFileMergeFlagsKeepsUnknownUnknown(t *testing.T) {
+	fdFile := NewFd(1, "test.txt", -1)
+	if fdFile.Flags() != unknownFlag {
+		t.Fatalf("expected unknown flags to start with, got %v", fdFile.Flags())
+	}
+	// The arg carries none of the masked bits, so a merge without the guard
+	// would clear them out of the all-ones unknown word and turn O_NONE into a
+	// concrete-looking flag list.
+	fdFile.MergeFlags(settableStatusFlags, syscall.O_RDWR)
+	if fdFile.Flags() != unknownFlag {
+		t.Errorf("expected flags to stay unknown, got %v", fdFile.Flags())
+	}
+}
+
 func TestFdFileDup(t *testing.T) {
 	fdFile := NewFd(1, "original.txt", syscall.O_RDONLY)
 	duped := fdFile.Dup(42)

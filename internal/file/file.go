@@ -150,6 +150,27 @@ func (f *FdFile) AddFlags(flags int32) {
 	f.flags = Flags(int32(f.flags) | flags)
 }
 
+// MergeFlags replaces only the bits selected by mask with the corresponding
+// bits of flags and leaves every other bit of the current flag word intact.
+//
+// This is the update shape fcntl(2) F_SETFL has: it changes the settable
+// status flags only, while the access mode (O_RDONLY/O_WRONLY/O_RDWR) and the
+// creation flags of the descriptor keep the values open(2) gave them. Callers
+// typically pass the full word they got from F_GETFL, so a plain SetFlags of
+// arg&mask would mask the access mode away and make a read-write descriptor
+// report as read-only for the rest of its life.
+//
+// Flags that are not known at all are left unknown: with no base word there is
+// nothing to merge into, and materialising one from the masked bits alone
+// would assert an access mode (O_RDONLY is the zero value) that was never
+// observed.
+func (f *FdFile) MergeFlags(mask, flags int32) {
+	if f.flags == unknownFlag {
+		return
+	}
+	f.flags = Flags((int32(f.flags) &^ mask) | (flags & mask))
+}
+
 type oldnameNewnameFile struct {
 	Oldname, Newname string
 }

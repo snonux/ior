@@ -195,11 +195,8 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	const cachedName = "/tmp/setfl.txt"
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
 	// Seed O_RDWR, not O_RDONLY(=0), so the fixture carries an access mode at
-	// all: with a zero seed there is nothing for a correct merge to preserve,
-	// and the "settable bit was applied" assertion below could not even fail
-	// legibly. The access mode itself is still deliberately not asserted (see
-	// the note further down) — this seed is what makes strengthening the
-	// assertion possible once v1 lands.
+	// all: with a zero seed a lossy flag replace and a correct F_SETFL merge
+	// are indistinguishable, and the assertion below could not fail legibly.
 	el.fdState().setProcFdCache(dupSourceFd, execCommPid,
 		file.NewFd(dupSourceFd, cachedName, syscall.O_RDWR))
 	if _, ok := el.fdState().get(dupSourceFd); ok {
@@ -222,15 +219,18 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	if !ok {
 		t.Fatalf("fd %d resolved to %T, want *file.FdFile", dupSourceFd, resolved)
 	}
-	// The settable bit must have been applied — that is what this test pins.
-	if fdFile.Flags()&file.Flags(syscall.O_NONBLOCK) == 0 {
-		t.Fatalf("fd %d flags = %v, want O_NONBLOCK set", dupSourceFd, fdFile.Flags())
+	// Both halves matter, and the access mode is the sharper one: F_SETFL
+	// changes the settable status flags only (fcntl(2)), so the O_RDWR the
+	// descriptor was opened with has to survive the call. Replacing the flag
+	// word with arg&settable instead of merging into it dropped the access
+	// mode, and because the fd table entry is what every later read/write/close
+	// on this descriptor resolves through, the whole rest of its life reported
+	// O_RDONLY. The fcntl arg here deliberately carries only O_NONBLOCK, so a
+	// replace shows up as exactly that missing O_RDWR.
+	want := file.Flags(syscall.O_RDWR | syscall.O_NONBLOCK)
+	if fdFile.Flags() != want {
+		t.Fatalf("fd %d flags = %v, want %v", dupSourceFd, fdFile.Flags(), want)
 	}
-	// The access mode is NOT asserted here on purpose: F_SETFL currently
-	// replaces the whole flag word instead of merging, so O_RDWR is discarded
-	// and every later row on this fd reports O_RDONLY. That is a pre-existing
-	// defect tracked as task v1, not something this checkpoint ordering
-	// introduced; when v1 lands, assert O_RDWR|O_NONBLOCK here.
 }
 
 // TestPidfdGetfdIsFilteredOnTheFileItReports pins that the pair filter judges a
