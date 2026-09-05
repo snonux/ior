@@ -194,16 +194,23 @@ func feedFcntlPair(t *testing.T, el *eventLoop, cmd uint32, arg uint64, ret int6
 func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	const cachedName = "/tmp/setfl.txt"
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
-	// Seed O_RDWR, not O_RDONLY(=0), so the fixture carries an access mode at
+	// Seed O_RDWR|O_APPEND and pass arg = O_RDWR|O_NONBLOCK, which is the shape
+	// a real caller produces (F_GETFL then OR). This is deliberately
+	// order-sensitive: with MergeFlags' two int32 arguments swapped the result
+	// would be O_APPEND|O_NONBLOCK, so the assertion below pins the call site's
+	// argument order as well as the merge itself. It also exercises the clear
+	// half — O_APPEND was set and arg omits it, so it must go.
+	//
+	// Seeding an access mode at
 	// all: with a zero seed a lossy flag replace and a correct F_SETFL merge
 	// are indistinguishable, and the assertion below could not fail legibly.
 	el.fdState().setProcFdCache(dupSourceFd, execCommPid,
-		file.NewFd(dupSourceFd, cachedName, syscall.O_RDWR))
+		file.NewFd(dupSourceFd, cachedName, syscall.O_RDWR|syscall.O_APPEND))
 	if _, ok := el.fdState().get(dupSourceFd); ok {
 		t.Fatalf("fd %d must start out known only to the procfs cache", dupSourceFd)
 	}
 
-	if ep := feedFcntlPair(t, el, syscall.F_SETFL, syscall.O_NONBLOCK, 0); ep != nil {
+	if ep := feedFcntlPair(t, el, syscall.F_SETFL, syscall.O_RDWR|syscall.O_NONBLOCK, 0); ep != nil {
 		defer ep.Recycle()
 		t.Fatalf("fcntl row survived a -latency filter it cannot satisfy: %v", ep)
 	}
