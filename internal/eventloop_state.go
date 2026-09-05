@@ -264,6 +264,19 @@ func (p *pairTracker) consume(tid uint32) (*event.Pair, bool) {
 	return pair, true
 }
 
+// pending returns the still-unmatched enter pair for tid without consuming it,
+// so a control record can amend the enter event in place before its exit
+// arrives (handleOpenNameFixupEvent). It deliberately does not touch the LRU
+// age: peeking is not use, and letting a fixup refresh the entry would let a
+// stream of them keep genuinely stale enters alive.
+func (p *pairTracker) pending(tid uint32) (*event.Pair, bool) {
+	pair, ok := p.enters[tid]
+	if !ok || pair == nil {
+		return nil, false
+	}
+	return pair, true
+}
+
 // prevTime returns the exit time of the previous pair for tid, used to compute DurationToPrev.
 func (p *pairTracker) prevTime(tid uint32) uint64 {
 	return p.prevTimes[tid]

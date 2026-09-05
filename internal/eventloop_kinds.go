@@ -138,6 +138,13 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_PERF_OPEN_EVENT, rawDecoder[types.PerfOpenEvent](types.NewPerfOpenEventFast), nil),
 		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExecEvent)),
+		// The open-name fixup reuses struct open_event because that is exactly
+		// what it carries: the enter payload's filename, read a second time at
+		// sys_exit once the kernel had faulted the page in. It needs no decoder
+		// or Go type of its own, only its own event type so the dispatch table
+		// routes it to the control path instead of building a pair from it.
+		controlRaw(types.OPEN_NAME_FIXUP_EVENT, rawDecoder[types.OpenEvent](types.NewOpenEventFast),
+			typedRuntimeControl((*eventLoop).handleOpenNameFixupEvent)),
 	}
 }
 
@@ -153,9 +160,37 @@ func controlRaw(eventType types.EventType, decode runtimeEventDecoder, control r
 	return rawRuntimeEvent{eventType: eventType, direction: rawControlEvent, decode: decode, control: control}
 }
 
+// matchRawOpenEvent is the enter-side gate for the open kinds. It normally
+// applies the two dimensions an open payload can answer on its own, comm and
+// path.
+//
+// The exception is an open whose payload filename is empty, i.e. one whose
+// sys_enter bpf_probe_read_user_str faulted (see handleOpenNameFixupEvent). Its
+// real path is not knowable *here* - it arrives a moment later as a fixup
+// control record - so judging the path dimension now would answer it with "no
+// name, no match" and drop the event before the recovery could ever be applied.
+// That is precisely the failure this whole mechanism exists to remove: under
+// `-path X` those opens were silently missing, and with them the fd-table entry
+// that gives every later read/write/close on the descriptor its filename.
+//
+// So the path dimension alone is *deferred*, not waived. The comm dimension is
+// still applied here, because the payload comm is always present. The deferred
+// event is filtered at the exit checkpoint instead - handleOpenExit ends in the
+// full finishPair, which applies every dimension including the file one, and by
+// then the fixup has landed. Nothing can leak past filtering: if the name is
+// never recovered (a still-failing read, or a fixup lost to ring-buffer
+// backpressure) the pair reaches finishPair with an empty file name, which no
+// non-empty -path pattern matches, so the row is dropped there exactly as it
+// used to be dropped here.
 func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {
 	openEv, ok := ev.(*types.OpenEvent)
-	return ok && filter.MatchOpenEvent(openEv)
+	if !ok {
+		return false
+	}
+	if openEv.Filename[0] == 0 {
+		return filter.MatchOpenEventComm(openEv)
+	}
+	return filter.MatchOpenEvent(openEv)
 }
 
 func matchRawNameEvent(filter globalfilter.Filter, ev event.Event) bool {

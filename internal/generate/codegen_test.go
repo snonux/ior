@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -789,7 +790,8 @@ func TestGenerateOpenHandler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_OPENAT;")
 	requireContains(t, output, "__builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)")
+	requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[1]);")
 	requireContains(t, output, "bpf_get_current_comm(&ev->comm, sizeof(ev->comm));")
 	requireContains(t, output, "ev->flags = ctx->args[2];")
 }
@@ -797,7 +799,8 @@ func TestGenerateOpenHandler(t *testing.T) {
 func TestGenerateOpenHandlerDirect(t *testing.T) {
 	output := generateFromPair(t, FormatOpen, FormatExitOpen)
 
-	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)")
+	requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
 	requireContains(t, output, "ev->flags = ctx->args[1];")
 }
 
@@ -808,7 +811,8 @@ func TestGenerateMqOpenHandler(t *testing.T) {
 	requireContains(t, output, "struct open_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_MQ_OPEN;")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)")
+	requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
 	requireContains(t, output, "ev->flags = ctx->args[1];")
 }
 
@@ -2747,5 +2751,197 @@ func TestSyscallAggregateCountsOnlyNonEmittedEvents(t *testing.T) {
 	}
 	if !strings.Contains(filterC, "emit_event = state->emit_event;") {
 		t.Error("ior_on_syscall_exit must read state->emit_event before the aggregate guard")
+	}
+}
+
+// --- open filename recovery (task w1) ---
+//
+// bpf_probe_read_user_str() at sys_enter is a nofault read, so it returns
+// -EFAULT and leaves the buffer untouched whenever the path string's page is
+// not resident - routinely the first open a program makes through a freshly
+// mmap'ed library. Measured on this tree, ~15% of the openats of a fork/exec
+// workload lost their filename that way: the row printed "E:name", the
+// descriptor was registered under the empty string, and -path could not match
+// a name that was never captured. The generator now emits, for the open kinds
+// only, a stash at enter and a re-read at exit (where the kernel's own
+// getname() has already faulted the page in).
+
+// openNameStashLine is the enter-side emission: the nofault read is now tested
+// and its user pointer stashed for the exit handler when it fails.
+func openNameStashLine(argIdx string) string {
+	return "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[" + argIdx + "]) < 0)\n" +
+		"        ior_stash_pending_filename(tid, ctx->args[" + argIdx + "]);\n"
+}
+
+// openNameTakeLine must precede ior_on_syscall_exit, which deletes the per-tid
+// enter-state entry the pointer is stashed in.
+func openNameTakeLine(enterConst string) string {
+	return "    __u64 pending_filename = ior_take_pending_filename(tid, " + enterConst + ");\n"
+}
+
+// openNameEmitLine must precede this handler's own ring-buffer reserve, so the
+// fixup record reaches userspace while the enter event is still pending.
+func openNameEmitLine(enterConst string) string {
+	return "    ior_emit_open_name_fixup(pid, tid, " + enterConst + ", pending_filename);\n"
+}
+
+// TestGenerateOpenHandlersRecoverAFaultedFilename pins the generator emission
+// for both recovering kinds, and pins that no other kind pays for it.
+func TestGenerateOpenHandlersRecoverAFaultedFilename(t *testing.T) {
+	input := FormatOpenat + "\n" + FormatExitOpenat + "\n" +
+		FormatOpen + "\n" + FormatExitOpen + "\n" +
+		FormatRead + "\n" + FormatExitRead + "\n" +
+		FormatExecve + "\n" + FormatExitExecve + "\n"
+	// mq_open is the only KindMqOpen syscall; it names its fields u_name/oflag
+	// rather than filename/flags, so it is the second recovering kind and comes
+	// from the shared synthetic mq format builder.
+	out := GenerateTracepointsC(mustParseAll(t, input)) + GenerateTracepointsC(mqFormats("mq_open", 9300))
+
+	cases := []struct {
+		enter, exit, enterConst, argIdx string
+	}{
+		{"sys_enter_openat", "sys_exit_openat", "SYS_ENTER_OPENAT", "1"},
+		{"sys_enter_open", "sys_exit_open", "SYS_ENTER_OPEN", "0"},
+		{"sys_enter_mq_open", "sys_exit_mq_open", "SYS_ENTER_MQ_OPEN", "0"},
+	}
+	for _, tc := range cases {
+		enterBody := handlerBody(t, out, tc.enter)
+		if !strings.Contains(enterBody, openNameStashLine(tc.argIdx)) {
+			t.Errorf("%s does not stash the user pointer when the nofault read fails:\n%s", tc.enter, enterBody)
+		}
+		exitBody := handlerBody(t, out, tc.exit)
+		take := openNameTakeLine(tc.enterConst)
+		emit := openNameEmitLine(tc.enterConst)
+		if !strings.Contains(exitBody, take) {
+			t.Errorf("%s does not take the stashed pointer:\n%s", tc.exit, exitBody)
+		}
+		if !strings.Contains(exitBody, emit) {
+			t.Errorf("%s does not emit the fixup record:\n%s", tc.exit, exitBody)
+		}
+		// Ordering is load-bearing in both directions: the take must happen
+		// before ior_on_syscall_exit deletes the enter state, and the fixup
+		// must be reserved before this handler's own exit record so the ring
+		// buffer hands userspace the name while the enter event is still
+		// pending.
+		takeAt := strings.Index(exitBody, take)
+		exitHookAt := strings.Index(exitBody, "ior_on_syscall_exit(")
+		emitAt := strings.Index(exitBody, emit)
+		reserveAt := strings.Index(exitBody, "bpf_ringbuf_reserve(&event_map,")
+		if takeAt < 0 || exitHookAt < 0 || takeAt > exitHookAt {
+			t.Errorf("%s takes the stashed pointer after ior_on_syscall_exit deleted the enter state:\n%s", tc.exit, exitBody)
+		}
+		if emitAt < 0 || reserveAt < 0 || emitAt > reserveAt {
+			t.Errorf("%s emits the fixup after its own exit record:\n%s", tc.exit, exitBody)
+		}
+		if exitHookAt > emitAt {
+			t.Errorf("%s emits the fixup for an event ior_on_syscall_exit suppressed:\n%s", tc.exit, exitBody)
+		}
+	}
+
+	// Only the open kinds recover. read's exit is the generic ret handler and
+	// execve's enter reads a user string into a different struct, so neither
+	// may grow the recovery.
+	for _, name := range []string{"sys_exit_read", "sys_exit_execve", "sys_enter_read", "sys_enter_execve"} {
+		body := handlerBody(t, out, name)
+		if strings.Contains(body, "pending_filename") || strings.Contains(body, "ior_stash_pending_filename") {
+			t.Errorf("%s must not participate in the open filename recovery:\n%s", name, body)
+		}
+	}
+}
+
+// TestGeneratedArtifactRecoversFaultedOpenFilenames applies the same invariant
+// to the committed internal/c/generated_tracepoints.c. `mage generate` needs
+// root and a newer kernel than this host, so the artifact is spliced by hand;
+// this test is what keeps the splice honest and complete across all six
+// open-family syscalls.
+func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+
+	openEnters := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct open_event \(kind=(?:open|mq-open)\)$`).
+		FindAllStringSubmatch(artifact, -1)
+	if len(openEnters) == 0 {
+		t.Fatal("no open-kind enter handlers in the generated artifact")
+	}
+	for _, m := range openEnters {
+		enter := m[1]
+		syscallName := strings.TrimPrefix(enter, "sys_enter_")
+		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+		enterBody := handlerBody(t, artifact, enter)
+		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[") {
+			t.Errorf("%s does not stash the user pointer when the nofault read fails", enter)
+		}
+		if strings.Contains(enterBody, "    bpf_probe_read_user_str(ev->filename") {
+			t.Errorf("%s still reads the filename without testing the return value", enter)
+		}
+		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) {
+			t.Errorf("sys_exit_%s does not take the stashed pointer", syscallName)
+		}
+		if !strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+			t.Errorf("sys_exit_%s does not emit the fixup record", syscallName)
+		}
+	}
+
+	// Exactly the open-kind pairs, nothing else: an over-broad splice would
+	// make every exit handler pay two extra map operations.
+	if got := strings.Count(artifact, "ior_take_pending_filename("); got != len(openEnters) {
+		t.Errorf("%d ior_take_pending_filename call sites, want %d (one per open-kind exit)", got, len(openEnters))
+	}
+	if got := strings.Count(artifact, "ior_emit_open_name_fixup("); got != len(openEnters) {
+		t.Errorf("%d ior_emit_open_name_fixup call sites, want %d (one per open-kind exit)", got, len(openEnters))
+	}
+	if got := strings.Count(artifact, "ior_stash_pending_filename("); got != len(openEnters) {
+		t.Errorf("%d ior_stash_pending_filename call sites, want %d (one per open-kind enter)", got, len(openEnters))
+	}
+}
+
+// TestOpenNameFixupHelpersAreDefinedInBPFSource pins the hand-written kernel
+// side the generated handlers call. None of it can be exercised from a unit
+// test, so the contract is asserted over the source.
+func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+	for _, helper := range []string{
+		"static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr)",
+		"static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id)",
+		"static __always_inline void ior_emit_open_name_fixup(",
+	} {
+		if !strings.Contains(filterC, helper) {
+			t.Errorf("filter.c must define %q", helper)
+		}
+	}
+	// A stale enter-state entry belonging to a different syscall must not be
+	// allowed to graft a foreign path onto this pair.
+	if !strings.Contains(filterC, "if (!state || state->enter_trace_id != enter_trace_id)") {
+		t.Error("ior_take_pending_filename must reject an enter state from a different syscall")
+	}
+	// A still-failing re-read carries no information; submitting it would only
+	// cost a ring-buffer record.
+	if !strings.Contains(filterC, "bpf_ringbuf_discard(ev, 0);") {
+		t.Error("ior_emit_open_name_fixup must discard a fixup whose re-read failed")
+	}
+	if !strings.Contains(filterC, "ev->event_type = OPEN_NAME_FIXUP_EVENT;") {
+		t.Error("the fixup record must carry OPEN_NAME_FIXUP_EVENT")
+	}
+
+	mapsH, err := readCSource("maps.h")
+	if err != nil {
+		t.Fatalf("read maps.h: %v", err)
+	}
+	if !strings.Contains(mapsH, "__u64 pending_filename;") {
+		t.Error("struct syscall_enter_state must carry the stashed filename pointer")
+	}
+
+	typesH, err := readCSource("types.h")
+	if err != nil {
+		t.Fatalf("read types.h: %v", err)
+	}
+	if !strings.Contains(typesH, "#define OPEN_NAME_FIXUP_EVENT 48") {
+		t.Error("types.h must define OPEN_NAME_FIXUP_EVENT (the Go constant is generated from it)")
 	}
 }

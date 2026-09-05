@@ -154,6 +154,96 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
     return emit_event != 0;
 }
 
+// Recovering an open filename whose sys_enter read faulted.
+//
+// bpf_probe_read_user_str() is a *nofault* read: it runs with page faults
+// disabled, so it cannot bring in a user page that is not resident and returns
+// -EFAULT instead, leaving the destination buffer untouched. For open-family
+// syscalls that is not a rare corner case. The path string usually lives in
+// freshly mapped, never-touched memory - the classic case is the very first
+// openat a program makes through a library it has only just mmap'ed, where the
+// string sits in the library's .rodata and nothing has faulted that page in
+// yet. Measured on this tree, ~2% of system-wide openat events and ~15% of the
+// openats of short-lived fork/exec workloads lost their filename that way. The
+// row then printed "E:name", the descriptor was registered under the empty
+// string so every later read/write/close on it lost its path too, and -path
+// could not match a name that was never captured.
+//
+// Retrying at sys_enter cannot help (the page is still not resident and the
+// read still cannot fault), but by sys_exit the kernel itself has copied the
+// path in through getname(), so the page is resident and the identical read
+// succeeds. The three helpers below implement exactly that: the enter handler
+// stashes the user pointer on failure, the exit handler takes it back and
+// re-reads the string into a control record that userspace splices into the
+// still-pending enter event before the pair is completed.
+//
+// Only the open kinds do this. They are the ones that were measurably losing
+// names, and the only ones whose loss propagates past the row itself into the
+// fd table. The mechanism is not open-specific though: any enter handler that
+// reads a user string could stash its pointer the same way.
+
+// ior_stash_pending_filename records filename_ptr on this tid's in-flight
+// syscall state so the matching exit handler can retry the read. Called only
+// on the read-failure path, so the extra map lookup stays off the hot path.
+static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr) {
+    struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
+
+    if (state)
+        state->pending_filename = filename_ptr;
+}
+
+// ior_take_pending_filename returns the pointer stashed by the matching enter
+// handler, or 0 when there is nothing to recover. It must be called BEFORE
+// ior_on_syscall_exit, which deletes the per-tid entry. The enter_trace_id
+// check makes a stale entry from a different syscall unusable rather than
+// letting it graft a foreign path onto this pair.
+static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id) {
+    struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
+
+    if (!state || state->enter_trace_id != enter_trace_id)
+        return 0;
+    return state->pending_filename;
+}
+
+// ior_emit_open_name_fixup re-reads the filename at sys_exit and publishes it
+// as an OPEN_NAME_FIXUP_EVENT control record. The record reuses struct
+// open_event because that is precisely what it carries: the enter payload's
+// filename, read a second time. It is reserved and submitted before the exit
+// event of the same syscall, and the ring buffer preserves that order, so the
+// single userspace consumer always applies the fix while the enter event is
+// still pending and unpaired.
+//
+// A still-failing read is discarded rather than submitted: an empty fixup
+// carries no information and would only cost a ring-buffer record.
+static __always_inline void ior_emit_open_name_fixup(__u32 pid, __u32 tid, __u32 enter_trace_id,
+                                                     __u64 filename_ptr) {
+    struct open_event *ev;
+
+    if (!filename_ptr)
+        return;
+
+    ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
+    if (!ev) {
+        ior_count_ringbuf_drop();
+        return;
+    }
+
+    ev->event_type = OPEN_NAME_FIXUP_EVENT;
+    ev->trace_id = enter_trace_id;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    ev->flags = -1;
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)filename_ptr) < 0) {
+        bpf_ringbuf_discard(ev, 0);
+        return;
+    }
+    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+
+    bpf_ringbuf_submit(ev, 0);
+}
+
 // filter() decides whether the current task's syscall is in scope. Today this is
 // a single-TGID gate (PID_FILTER, with -1 meaning trace-all) plus an optional
 // TID_FILTER. ior does NOT follow forks: a traced process's children run under a

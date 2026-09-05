@@ -108,6 +108,19 @@ Memory extent is tracked separately via address-space metrics.
   implemented and verifier-tested, the enter handler emits the `-1` sentinel
   and `flags` must be read as "not captured" for openat2 (not as "0 flags").
 
+- The open-family filename is captured at `sys_enter` with
+  `bpf_probe_read_user_str`, which is a *nofault* read and therefore fails
+  whenever the path string's page is not resident yet. That was a ~15% loss on
+  fork/exec workloads, not a corner case, so it is no longer a gap: the enter
+  handler stashes the user pointer on failure and the exit handler re-reads it
+  once the kernel's own `getname()` has faulted the page in, publishing an
+  `OPEN_NAME_FIXUP_EVENT` control record that userspace splices into the
+  pending enter event. See AGENTS.md, "Recovering a faulted open filename".
+  The same loss still applies to the other kinds that read a user string
+  (`KindPathname`, `KindName`, `KindExec`); the mechanism is not open-specific
+  and could be extended to them, but only the open kinds were measurably
+  affected *and* propagated their loss into the fd table.
+
 ## Runtime Notes
 
 - The dashboard has seven tabs (`1`..`7`: Flame, Overview, Syscalls, Files,

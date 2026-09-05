@@ -45,3 +45,35 @@ func TestTracepointHelpersMatchRawEvents(t *testing.T) {
 		t.Fatalf("expected rename event to match file filter via newname")
 	}
 }
+
+// TestMatchOpenEventCommDropsOnlyTheFileDimension pins the split MatchOpenEvent
+// was refactored into. matchRawOpenEvent (internal/eventloop_kinds.go) uses the
+// comm-only form for an open whose sys_enter filename read faulted: its real
+// path arrives a moment later as a fixup control record, so judging the file
+// dimension on the empty payload name would answer it with "no name, no match"
+// and drop the event before the recovery could be applied. The comm dimension
+// must keep biting, and this must be the *only* difference from MatchOpenEvent.
+func TestMatchOpenEventCommDropsOnlyTheFileDimension(t *testing.T) {
+	filter := Filter{
+		Comm: &StringFilter{Pattern: "ioworkload"},
+		File: &StringFilter{Pattern: "locale-archive"},
+	}
+	emptyName := &types.OpenEvent{}
+	copy(emptyName.Comm[:], "ioworkload")
+	if filter.MatchOpenEvent(emptyName) {
+		t.Error("MatchOpenEvent must not match an empty filename against a -path pattern")
+	}
+	if !filter.MatchOpenEventComm(emptyName) {
+		t.Error("MatchOpenEventComm must accept a matching comm regardless of the filename")
+	}
+
+	wrongComm := &types.OpenEvent{}
+	copy(wrongComm.Comm[:], "someoneelse")
+	if filter.MatchOpenEventComm(wrongComm) {
+		t.Error("MatchOpenEventComm must still apply the comm dimension")
+	}
+
+	if filter.MatchOpenEventComm(nil) {
+		t.Error("MatchOpenEventComm(nil) must not match")
+	}
+}

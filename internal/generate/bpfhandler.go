@@ -23,27 +23,54 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 	}
 
 	eventStruct := eventStructName(tp.Classification.Kind)
-	comment := fmt.Sprintf("%s (kind=%s)", eventStruct, tp.Classification.Kind.MetadataName())
+
+	return renderHandler(handlerSpec{
+		name:           f.Name,
+		ctxStruct:      ctxStruct,
+		eventStruct:    eventStruct,
+		comment:        handlerComment(tp, eventStruct),
+		eventTypeConst: eventTypeConstant(tp.Classification.Kind, isEnter),
+		extra:          generateExtra(tp, isEnter),
+		isEnter:        isEnter,
+		// Noreturn syscalls (exit, exit_group, rt_sigreturn) get a special
+		// enter hook that skips the syscall_enter_state_map write. Their exit
+		// handler is suppressed (see codegen.go), so nothing would ever clear a
+		// recorded enter-state entry; recording it would only leak stale
+		// per-tid entries in the bounded map.
+		noreturn: isEnter && isNoreturnSyscall(syscallName(f.Name)),
+		// The explicit enter trace ID constant, so an exit handler does not
+		// rely on numeric adjacency between kernel-assigned enter/exit IDs.
+		enterName: enterConstForHandler(f.Name, isEnter),
+		// Only an exit handler recovers a filename, and only for a syscall
+		// whose enter side captured one. A sys_exit_* format is always just
+		// "long ret", so the exit's own classification cannot tell us that -
+		// EnterKind carries it across (see codegen.go).
+		recoverFilename: !isEnter && kindRecoversFilename(tp.EnterKind),
+	})
+}
+
+// handlerComment renders the /// reason line of a handler. It is also the line
+// internal/c/generated_tracepoints_result.txt is derived from, so its shape is
+// part of the committed artifact contract.
+func handlerComment(tp GeneratedTracepoint, eventStruct string) string {
 	if tp.Classification.Kind == KindRet {
-		comment = fmt.Sprintf("%s (%s) (kind=%s)", eventStruct, ClassifyRet(f.Name), tp.Classification.Kind.MetadataName())
+		return fmt.Sprintf("%s (%s) (kind=%s)", eventStruct, ClassifyRet(tp.Format.Name), tp.Classification.Kind.MetadataName())
 	}
+	return fmt.Sprintf("%s (kind=%s)", eventStruct, tp.Classification.Kind.MetadataName())
+}
 
-	eventTypeConst := eventTypeConstant(tp.Classification.Kind, isEnter)
-	extra := generateExtra(tp, isEnter)
-
-	// Derive the explicit enter trace ID constant for exit handlers so the
-	// generated ior_on_syscall_exit call does not rely on numeric adjacency
-	// between kernel-assigned enter/exit IDs.
-	enterName := enterConstForHandler(f.Name, isEnter)
-
-	// Noreturn syscalls (exit, exit_group, rt_sigreturn) get a special enter
-	// hook that skips the syscall_enter_state_map write. Their exit handler is
-	// suppressed (see codegen.go), so nothing would ever clear a recorded
-	// enter-state entry; recording it would only leak stale per-tid entries in
-	// the bounded map.
-	noreturn := isEnter && isNoreturnSyscall(syscallName(f.Name))
-
-	return renderHandler(f.Name, ctxStruct, eventStruct, comment, eventTypeConst, extra, isEnter, noreturn, enterName)
+// handlerSpec carries everything renderHandler needs for one tracepoint.
+type handlerSpec struct {
+	name            string
+	ctxStruct       string
+	eventStruct     string
+	comment         string
+	eventTypeConst  string
+	extra           string
+	isEnter         bool
+	noreturn        bool
+	enterName       string
+	recoverFilename bool
 }
 
 // enterConstForHandler returns the C #define constant name for the
@@ -58,32 +85,52 @@ func enterConstForHandler(name string, isEnter bool) string {
 	return strings.Replace(upper, "SYS_EXIT_", "SYS_ENTER_", 1)
 }
 
-func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra string, isEnter, noreturn bool, enterName string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "/// %s is a struct %s\n", name, comment)
-	fmt.Fprintf(&b, "SEC(\"tracepoint/syscalls/%s\")\n", name)
-	fmt.Fprintf(&b, "int handle_%s(struct %s *ctx) {\n", strings.ToLower(name), ctxStruct)
+// renderHandlerPrologue writes everything ahead of the ring-buffer reserve: the
+// scope gate, the per-tid enter/exit hook, and - for the open kinds only - the
+// two halves of the faulted-filename recovery. Both recovery lines are
+// position-critical, which is why they live here rather than in the kind
+// emitters: the take must precede ior_on_syscall_exit (which deletes this tid's
+// enter-state entry) and the fixup must precede this handler's own reserve, so
+// the ring buffer hands userspace the recovered name while the enter event of
+// the same syscall is still pending and unpaired.
+func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
+	name, isEnter := h.name, h.isEnter
+	fmt.Fprintf(b, "/// %s is a struct %s\n", name, h.comment)
+	fmt.Fprintf(b, "SEC(\"tracepoint/syscalls/%s\")\n", name)
+	fmt.Fprintf(b, "int handle_%s(struct %s *ctx) {\n", strings.ToLower(name), h.ctxStruct)
 	b.WriteString("    __u32 pid, tid;\n")
 	b.WriteString("    if (filter(&pid, &tid))\n")
 	b.WriteString("        return 0;\n")
 	b.WriteString("\n")
-	if isEnter && noreturn {
+	if h.recoverFilename {
+		fmt.Fprintf(b, "    __u64 pending_filename = ior_take_pending_filename(tid, %s);\n", h.enterName)
+		b.WriteString("\n")
+	}
+	switch {
+	case isEnter && h.noreturn:
 		// Noreturn enter: only the sampling decision, no enter-state write. The
 		// syscall never returns, so its exit handler is suppressed and nothing
 		// would ever look up or delete a recorded enter-state entry. Skipping
 		// the write avoids leaking stale per-tid entries in the bounded
 		// syscall_enter_state_map; the enter null_event is still emitted below.
-		fmt.Fprintf(&b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(name))
-		b.WriteString("        return 0;\n")
-	} else if isEnter {
-		fmt.Fprintf(&b, "    if (!ior_on_syscall_enter(tid, %s))\n", strings.ToUpper(name))
-		b.WriteString("        return 0;\n")
-	} else {
-		fmt.Fprintf(&b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret))\n", enterName)
-		b.WriteString("        return 0;\n")
+		fmt.Fprintf(b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(name))
+	case isEnter:
+		fmt.Fprintf(b, "    if (!ior_on_syscall_enter(tid, %s))\n", strings.ToUpper(name))
+	default:
+		fmt.Fprintf(b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret))\n", h.enterName)
 	}
+	b.WriteString("        return 0;\n")
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "    struct %s *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct %s), 0);\n", eventStruct, eventStruct)
+	if h.recoverFilename {
+		fmt.Fprintf(b, "    ior_emit_open_name_fixup(pid, tid, %s, pending_filename);\n", h.enterName)
+		b.WriteString("\n")
+	}
+}
+
+func renderHandler(h handlerSpec) string {
+	var b strings.Builder
+	renderHandlerPrologue(&b, h)
+	fmt.Fprintf(&b, "    struct %s *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct %s), 0);\n", h.eventStruct, h.eventStruct)
 	// A NULL reserve means event_map is full: the event is lost right here.
 	// Count it (ior_count_ringbuf_drop, internal/c/filter.c) so kernel-side
 	// loss under backpressure is reported instead of vanishing silently
@@ -93,13 +140,13 @@ func renderHandler(name, ctxStruct, eventStruct, comment, eventTypeConst, extra 
 	b.WriteString("        return 0;\n")
 	b.WriteString("    }\n")
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "    ev->event_type = %s;\n", eventTypeConst)
-	fmt.Fprintf(&b, "    ev->trace_id = %s;\n", strings.ToUpper(name))
+	fmt.Fprintf(&b, "    ev->event_type = %s;\n", h.eventTypeConst)
+	fmt.Fprintf(&b, "    ev->trace_id = %s;\n", strings.ToUpper(h.name))
 	b.WriteString("    ev->pid = pid;\n")
 	b.WriteString("    ev->tid = tid;\n")
 	b.WriteString("    ev->time = bpf_ktime_get_boot_ns();\n")
-	if extra != "" {
-		b.WriteString(extra)
+	if h.extra != "" {
+		b.WriteString(h.extra)
 	}
 	b.WriteString("\n")
 	b.WriteString("    bpf_ringbuf_submit(ev, 0);\n")
@@ -227,7 +274,16 @@ func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) st
 	flagsIdx := f.FieldNumber(flagsField)
 	var b strings.Builder
 	b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
-	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]);\n", filenameIdx)
+	// bpf_probe_read_user_str cannot fault, so it returns -EFAULT whenever the
+	// path string's page is not resident yet - routinely the case for the first
+	// open a program makes through a freshly mmap'ed library. Stash the pointer
+	// on failure; the exit handler re-reads it once the kernel has faulted the
+	// page in (ior_take_pending_filename / ior_emit_open_name_fixup in
+	// internal/c/filter.c). Without this the row printed "E:name", the
+	// descriptor was registered under the empty string, and -path could not
+	// match a name that was never captured.
+	fmt.Fprintf(&b, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0)\n", filenameIdx)
+	fmt.Fprintf(&b, "        ior_stash_pending_filename(tid, ctx->args[%d]);\n", filenameIdx)
 	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
 	if flagsIdx > -1 {
 		fmt.Fprintf(&b, "    ev->flags = ctx->args[%d];\n", flagsIdx)
