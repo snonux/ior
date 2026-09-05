@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -193,8 +194,11 @@ func feedFcntlPair(t *testing.T, el *eventLoop, cmd uint32, arg uint64, ret int6
 func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	const cachedName = "/tmp/setfl.txt"
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
+	// Seed O_RDWR, not O_RDONLY(=0): with a zero seed a correct flag merge and
+	// the lossy full replace in applyFcntlFdState are indistinguishable, so the
+	// assertions below would be blind to which one is running.
 	el.fdState().setProcFdCache(dupSourceFd, execCommPid,
-		file.NewFd(dupSourceFd, cachedName, syscall.O_RDONLY))
+		file.NewFd(dupSourceFd, cachedName, syscall.O_RDWR))
 	if _, ok := el.fdState().get(dupSourceFd); ok {
 		t.Fatalf("fd %d must start out known only to the procfs cache", dupSourceFd)
 	}
@@ -215,10 +219,15 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	if !ok {
 		t.Fatalf("fd %d resolved to %T, want *file.FdFile", dupSourceFd, resolved)
 	}
-	if fdFile.Flags() != file.Flags(syscall.O_NONBLOCK) {
-		t.Fatalf("fd %d flags = %v, want %v", dupSourceFd, fdFile.Flags(),
-			file.Flags(syscall.O_NONBLOCK))
+	// The settable bit must have been applied — that is what this test pins.
+	if fdFile.Flags()&file.Flags(syscall.O_NONBLOCK) == 0 {
+		t.Fatalf("fd %d flags = %v, want O_NONBLOCK set", dupSourceFd, fdFile.Flags())
 	}
+	// The access mode is NOT asserted here on purpose: F_SETFL currently
+	// replaces the whole flag word instead of merging, so O_RDWR is discarded
+	// and every later row on this fd reports O_RDONLY. That is a pre-existing
+	// defect tracked as task v1, not something this checkpoint ordering
+	// introduced; when v1 lands, assert O_RDWR|O_NONBLOCK here.
 }
 
 // TestPidfdGetfdIsFilteredOnTheFileItReports pins that the pair filter judges a
@@ -242,6 +251,15 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 	}
 	defer f.Close()
 	transferredFd := int32(f.Fd())
+	// The runtime resolves the descriptor by readlinking /proc/self/fd, which
+	// returns the fully resolved path. Compare against that, not against the
+	// TempDir path: on a host whose TMPDIR traverses a symlink (a common
+	// container layout) the two differ and every exact-match assertion below
+	// would fail for reasons that have nothing to do with the filter.
+	path, err = os.Readlink(fmt.Sprintf("/proc/self/fd/%d", transferredFd))
+	if err != nil {
+		t.Fatalf("readlink transferred fd: %v", err)
+	}
 	selfPid := uint32(os.Getpid())
 
 	feedPidfdGetfd := func(t *testing.T, el *eventLoop) *event.Pair {
@@ -290,4 +308,67 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 			t.Fatalf("transferred fd %d was not registered as %q", transferredFd, path)
 		}
 	})
+}
+
+// TestDroppedCloseStillEvictsTheFd is the eviction half of the rule the dup
+// tests pin from the registration side. applyFdCloseState runs before the
+// checkpoint, so a close row dropped by a filter must still remove the entry.
+//
+// Regressing this is worse than the dup bug it accompanies: a stale entry
+// mislabels the NEXT syscall that reuses the descriptor number with the old
+// file — a wrong row rather than a missing filename.
+func TestDroppedCloseStillEvictsTheFd(t *testing.T) {
+	const cachedName = "/tmp/closed.txt"
+
+	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
+	el.fdState().set(dupSourceFd, file.NewFd(dupSourceFd, cachedName, syscall.O_RDONLY))
+
+	_, enterRaw := makeEnterFdEvent(t, defaulTime, execCommPid, execCommTid, dupSourceFd,
+		types.SYS_ENTER_CLOSE)
+	_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, execCommPid, execCommTid,
+		types.SYS_EXIT_CLOSE, 0)
+	if ep := feedRawPair(t, el, enterRaw, exitRaw); ep != nil {
+		defer ep.Recycle()
+		t.Fatalf("close row survived a -latency filter it cannot satisfy: %v", ep)
+	}
+
+	if resolved, ok := el.fdState().get(dupSourceFd); ok {
+		t.Fatalf("fd %d still resolves to %v after a dropped close: a later syscall "+
+			"reusing that descriptor number would be labelled with the stale file",
+			dupSourceFd, resolved)
+	}
+}
+
+// TestFailedDupDoesNotRegisterAnFd pins the other direction of moving the
+// mutations ahead of the filter: they now run on EVERY pair, not just surviving
+// ones, so a failure return must not write to the fd table at all. Without the
+// guard a failed dup would register fd -1 (or whatever the error code is) and
+// point it at the source file.
+func TestFailedDupDoesNotRegisterAnFd(t *testing.T) {
+	const cachedName = "/tmp/dupsrc.txt"
+	const dupFailureRet = int64(-24) // -EMFILE
+
+	// No filter at all: this is about the failure guard, not the checkpoint.
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	el.fdState().set(dupSourceFd, file.NewFd(dupSourceFd, cachedName, syscall.O_RDONLY))
+
+	_, enterRaw := makeEnterFdEvent(t, defaulTime, execCommPid, execCommTid, dupSourceFd,
+		types.SYS_ENTER_DUP)
+	_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, execCommPid, execCommTid,
+		types.SYS_EXIT_DUP, dupFailureRet)
+	ep := feedRawPair(t, el, enterRaw, exitRaw)
+	if ep == nil {
+		t.Fatal("an unfiltered failed dup row must still be emitted")
+	}
+	defer ep.Recycle()
+
+	if resolved, ok := el.fdState().get(int32(dupFailureRet)); ok {
+		t.Fatalf("a failed dup registered fd %d as %v; failure returns must not "+
+			"mutate the fd table", dupFailureRet, resolved)
+	}
+	// The source descriptor must be untouched.
+	resolved, ok := el.fdState().get(dupSourceFd)
+	if !ok || resolved == nil || resolved.Name() != cachedName {
+		t.Fatalf("a failed dup disturbed the source fd %d: %v", dupSourceFd, resolved)
+	}
 }
