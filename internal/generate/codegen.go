@@ -18,6 +18,13 @@ type Syscall struct {
 type GeneratedTracepoint struct {
 	Format         *Format
 	Classification ClassificationResult
+	// EnterKind is the classification of the *enter* side of the same syscall.
+	// It is only meaningful on an exit tracepoint, where the handler otherwise
+	// has no idea what the enter side captured: a sys_exit_* format is always
+	// just "long ret", so every exit classifies as KindRet. The filename
+	// recovery in renderHandler needs exactly that missing context - it must
+	// run on the exit of an open, not on the exit of a read.
+	EnterKind TracepointKind
 }
 
 // GenerateTracepointsC produces the full generated_tracepoints.c content from
@@ -131,7 +138,11 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 	// would be dead code in the generated BPF program. We still emit their enter
 	// handler above.
 	if sc.Exit != nil && !isNoreturnSyscall(sc.Name) {
-		result = append(result, GeneratedTracepoint{Format: sc.Exit, Classification: exitClass})
+		result = append(result, GeneratedTracepoint{
+			Format:         sc.Exit,
+			Classification: exitClass,
+			EnterKind:      enterClass.Kind,
+		})
 	}
 	return result, ""
 }

@@ -228,7 +228,10 @@ committed set contains syscalls that only exist on recent mainline kernels
     gates still drop events before any exit handler runs, so it does not make
     the fd table unconditionally correct under a filter. `matchRawOpenEvent`
     drops non-matching opens at enter, so under `-path X` an open of a different
-    file never registers its fd at all; and with `-comm` active
+    file never registers its fd at all (the one exception is an open whose
+    payload filename is *empty* — see "Recovering a faulted open filename"
+    below, where the path dimension is deferred to the exit checkpoint); and
+    with `-comm` active
     `tracepointEntered` recycles a non-open/exec enter event for a tid whose
     comm is not cached yet — and comm resolution is asynchronous, so a brand-new
     tid's first syscall is exactly the exposed one. The `NewFdWithPid` procfs
@@ -293,6 +296,61 @@ committed set contains syscalls that only exist on recent mainline kernels
   the filter dropped. This ordering predates the per-kind checkpoints above and
   was wrong for every kind that already ran `MatchPair`, not just the ones
   added here.
+- **Recovering a faulted open filename**: `bpf_probe_read_user_str()` is a
+  *nofault* read — it runs with page faults disabled, so it returns `-EFAULT`
+  and leaves the destination untouched when the user page is not resident. For
+  the open family that is not a corner case: the path string usually lives in
+  freshly mapped, never-touched memory (the classic case is the first `openat`
+  a program makes through a library it has only just `mmap`'ed, the string
+  sitting in that library's `.rodata`). Measured on this tree at 64dcac1,
+  6153/41063 (14.98%) of the `openat` rows of a fork/exec workload and
+  2107/10553 (19.97%) of a system-wide idle capture arrived with an empty
+  filename. Such a row printed `E:name`, registered its descriptor under the
+  empty string so every later read/write/close on it lost its path too, and
+  could never match a `-path` pattern.
+
+  Retrying at `sys_enter` cannot help (still nofault, still not resident), but
+  by `sys_exit` the kernel's own `getname()` has faulted the page in, so the
+  identical read succeeds. The generator therefore emits, **for the open kinds
+  only** (`KindOpen`/`KindMqOpen`, flagged by `recoversFilename` in
+  `internal/generate/kindregistry.go`; an exit handler learns what its enter
+  captured through `GeneratedTracepoint.EnterKind`, since every `sys_exit_*`
+  format is just `long ret` and so classifies as `KindRet`):
+  - enter: `ior_stash_pending_filename(tid, ptr)` when the read fails, parking
+    the user pointer in `syscall_enter_state.pending_filename`;
+  - exit: `ior_take_pending_filename(tid, SYS_ENTER_X)` **before**
+    `ior_on_syscall_exit`, which deletes the per-tid entry — guarded on
+    `enter_trace_id` so a stale entry cannot graft a foreign path — then
+    `ior_emit_open_name_fixup(...)`, which re-reads the string and publishes it
+    as an `OPEN_NAME_FIXUP_EVENT` (48) control record **before** reserving the
+    handler's own exit record. All three helpers live in `internal/c/filter.c`.
+
+  The record reuses `struct open_event` (it carries exactly one thing: the enter
+  payload's filename, read a second time), so it needs no Go type and no
+  `fastdecode` entry of its own — only the generated constant and a
+  `controlRaw` row in `rawRuntimeEvents`. `handleOpenNameFixupEvent`
+  (`internal/eventloop_openfixup.go`) splices it into the still-pending enter
+  event: the ring buffer preserves reservation order and the event loop has a
+  single consumer goroutine, so the fixup always lands while the enter event is
+  unpaired. It never overwrites a name the enter side captured itself, and it
+  re-checks the enter trace ID so an `openat` fixup cannot be grafted onto a
+  pending `open`. A still-failing re-read is discarded kernel-side rather than
+  submitted; a fixup lost to backpressure simply never arrives and the row keeps
+  its empty name, exactly as before.
+
+  **The enter gate defers, it does not waive.** `matchRawOpenEvent` used to
+  judge the path dimension on the payload filename, so an empty-name open was
+  dropped before its fixup could arrive — which is why `-path` silently missed
+  exactly these events. For an empty payload name the *file* dimension alone is
+  now deferred (`Filter.MatchOpenEventComm`); the comm dimension still applies
+  at enter, and the full pair filter applies at the exit checkpoint, where
+  `handleOpenExit` ends in `finishPair` (see above). Nothing leaks: an
+  unrecovered name reaches `finishPair` empty, and no non-empty `-path` pattern
+  matches the empty string, so the row is dropped there instead of here.
+  Evidence, identical 4s fork/exec workload: `E:name` rows 6153/41063 (14.98%)
+  → 0/39617 (0.00%), and `-path locale-archive` — the path those opens were
+  actually taking — went from 0 matched rows to 6211.
+
 - **Control records in the statistics**: `numTracepoints` counts every non-empty
   ring-buffer record the event loop pulled off the ring. It is incremented
   before dispatch, so it counts records *seen*: undecodable records

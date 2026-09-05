@@ -2616,7 +2616,8 @@ int handle_sys_enter_mq_open(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)
+        ior_stash_pending_filename(tid, ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->flags = ctx->args[1];
 
@@ -2631,8 +2632,12 @@ int handle_sys_exit_mq_open(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MQ_OPEN);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_OPEN, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_MQ_OPEN, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7525,7 +7530,8 @@ int handle_sys_enter_open_tree(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)
+        ior_stash_pending_filename(tid, ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->flags = ctx->args[2];
 
@@ -7540,8 +7546,12 @@ int handle_sys_exit_open_tree(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_OPEN_TREE);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN_TREE, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPEN_TREE, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7872,7 +7882,8 @@ int handle_sys_enter_open_tree_attr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)
+        ior_stash_pending_filename(tid, ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->flags = ctx->args[2];
 
@@ -7887,8 +7898,12 @@ int handle_sys_exit_open_tree_attr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_OPEN_TREE_ATTR);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN_TREE_ATTR, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPEN_TREE_ATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11912,7 +11927,8 @@ int handle_sys_enter_open(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)
+        ior_stash_pending_filename(tid, ctx->args[0]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->flags = ctx->args[1];
 
@@ -11927,8 +11943,12 @@ int handle_sys_exit_open(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_OPEN);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPEN, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11970,7 +11990,8 @@ int handle_sys_enter_openat(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)
+        ior_stash_pending_filename(tid, ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->flags = ctx->args[2];
 
@@ -11985,8 +12006,12 @@ int handle_sys_exit_openat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_OPENAT);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPENAT, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPENAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12028,7 +12053,8 @@ int handle_sys_enter_openat2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)
+        ior_stash_pending_filename(tid, ctx->args[1]);
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)
 
@@ -12043,8 +12069,12 @@ int handle_sys_exit_openat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_OPENAT2);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPENAT2, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPENAT2, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {

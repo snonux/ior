@@ -66,13 +66,22 @@ func (f Filter) MatchPairEitherName(pair *event.Pair) bool {
 // MatchOpenEvent applies the subset of the filter that can be evaluated on raw
 // open events before exit pairing.
 func (f Filter) MatchOpenEvent(ev *types.OpenEvent) bool {
-	if ev == nil {
-		return false
-	}
-	if !matchString(f.Comm, types.StringValue(ev.Comm[:])) {
+	if !f.MatchOpenEventComm(ev) {
 		return false
 	}
 	return matchString(f.File, types.StringValue(ev.Filename[:]))
+}
+
+// MatchOpenEventComm is MatchOpenEvent without the file dimension, for the one
+// case where the file dimension cannot yet be answered: an open whose sys_enter
+// filename read faulted arrives with an empty payload name and only recovers it
+// at sys_exit. See matchRawOpenEvent (internal/eventloop_kinds.go) - the file
+// dimension is deferred to the exit checkpoint there, never dropped.
+func (f Filter) MatchOpenEventComm(ev *types.OpenEvent) bool {
+	if ev == nil {
+		return false
+	}
+	return matchString(f.Comm, types.StringValue(ev.Comm[:]))
 }
 
 // MatchPathEvent applies the path-related subset of the filter to raw path events.

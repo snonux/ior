@@ -9,6 +9,13 @@ type kindMeta struct {
 	// enterAccepted reports whether this kind is valid for a syscall-enter tracepoint.
 	// Kinds that are exit-only (e.g. KindRet) must not appear on enter.
 	enterAccepted bool
+	// recoversFilename reports whether this enter kind stashes its user-space
+	// filename pointer when bpf_probe_read_user_str faults, so that the matching
+	// exit handler re-reads the string once the kernel has faulted the page in
+	// (see internal/c/filter.c). Only the open kinds do: they are the ones
+	// measurably losing names, and the only ones whose loss also poisons the fd
+	// table for every later read/write/close on the descriptor.
+	recoversFilename bool
 }
 
 // kindRegistry maps every known TracepointKind to its static metadata.
@@ -17,8 +24,8 @@ type kindMeta struct {
 // automatically via lookupKind.
 var kindRegistry = map[TracepointKind]kindMeta{
 	KindFd:             {structName: "fd_event", enterAccepted: true},
-	KindOpen:           {structName: "open_event", enterAccepted: true},
-	KindMqOpen:         {structName: "open_event", enterAccepted: true},
+	KindOpen:           {structName: "open_event", enterAccepted: true, recoversFilename: true},
+	KindMqOpen:         {structName: "open_event", enterAccepted: true, recoversFilename: true},
 	KindExec:           {structName: "exec_event", enterAccepted: true},
 	KindPathname:       {structName: "path_event", enterAccepted: true},
 	KindName:           {structName: "name_event", enterAccepted: true},
@@ -58,6 +65,12 @@ var kindRegistry = map[TracepointKind]kindMeta{
 // lookupKind returns the metadata for kind. If kind is not registered (e.g.
 // KindNone or an unknown value), it returns a zero kindMeta whose structName
 // is "unknown_event" and enterAccepted is false.
+// kindRecoversFilename reports whether kind participates in the sys_exit
+// filename recovery described in internal/c/filter.c.
+func kindRecoversFilename(kind TracepointKind) bool {
+	return lookupKind(kind).recoversFilename
+}
+
 func lookupKind(kind TracepointKind) kindMeta {
 	if m, ok := kindRegistry[kind]; ok {
 		return m
