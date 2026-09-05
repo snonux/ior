@@ -194,9 +194,12 @@ func feedFcntlPair(t *testing.T, el *eventLoop, cmd uint32, arg uint64, ret int6
 func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	const cachedName = "/tmp/setfl.txt"
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
-	// Seed O_RDWR, not O_RDONLY(=0): with a zero seed a correct flag merge and
-	// the lossy full replace in applyFcntlFdState are indistinguishable, so the
-	// assertions below would be blind to which one is running.
+	// Seed O_RDWR, not O_RDONLY(=0), so the fixture carries an access mode at
+	// all: with a zero seed there is nothing for a correct merge to preserve,
+	// and the "settable bit was applied" assertion below could not even fail
+	// legibly. The access mode itself is still deliberately not asserted (see
+	// the note further down) — this seed is what makes strengthening the
+	// assertion possible once v1 lands.
 	el.fdState().setProcFdCache(dupSourceFd, execCommPid,
 		file.NewFd(dupSourceFd, cachedName, syscall.O_RDWR))
 	if _, ok := el.fdState().get(dupSourceFd); ok {
@@ -370,5 +373,67 @@ func TestFailedDupDoesNotRegisterAnFd(t *testing.T) {
 	resolved, ok := el.fdState().get(dupSourceFd)
 	if !ok || resolved == nil || resolved.Name() != cachedName {
 		t.Fatalf("a failed dup disturbed the source fd %d: %v", dupSourceFd, resolved)
+	}
+}
+
+// TestDroppedCloseRangeStillEvictsTheFds is the close_range half of the
+// eviction rule. It was previously unpinned: moving applyCloseRangeState behind
+// the checkpoint left the whole suite green, even though a stale entry after a
+// dropped close_range mislabels every later reuse of those descriptor numbers.
+func TestDroppedCloseRangeStillEvictsTheFds(t *testing.T) {
+	const lowFd = int32(21)
+	const highFd = int32(23)
+
+	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
+	for fd := lowFd; fd <= highFd; fd++ {
+		el.fdState().set(fd, file.NewFd(fd, "/tmp/ranged.txt", syscall.O_RDONLY))
+	}
+
+	_, enterRaw := makeEnterTwoFdEvent(t, defaulTime, execCommPid, execCommTid,
+		lowFd, highFd, 0, types.SYS_ENTER_CLOSE_RANGE)
+	_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, execCommPid, execCommTid,
+		types.SYS_EXIT_CLOSE_RANGE, 0)
+	if ep := feedRawPair(t, el, enterRaw, exitRaw); ep != nil {
+		defer ep.Recycle()
+		t.Fatalf("close_range row survived a -latency filter it cannot satisfy: %v", ep)
+	}
+
+	for fd := lowFd; fd <= highFd; fd++ {
+		if resolved, ok := el.fdState().get(fd); ok {
+			t.Fatalf("fd %d still resolves to %v after a dropped close_range", fd, resolved)
+		}
+	}
+}
+
+// TestFailedPidfdGetfdDoesNotRegisterAnFd covers the one failure guard in this
+// class that had no test: replacing pidfd_getfd's `newFd >= 0` condition with
+// `true` left the entire suite green. Because the mutation now runs on every
+// pair rather than only surviving ones, an unguarded failure would register the
+// negative errno as a descriptor and re-point the row's File at it.
+func TestFailedPidfdGetfdDoesNotRegisterAnFd(t *testing.T) {
+	const pidfd = int32(19)
+	const pidfdName = "pidfd:0"
+	const failureRet = int64(-9) // -EBADF
+
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	el.fdState().set(pidfd, file.NewFd(pidfd, pidfdName, -1))
+
+	_, enterRaw := makeEnterFdEvent(t, defaulTime, execCommPid, execCommTid, pidfd,
+		types.SYS_ENTER_PIDFD_GETFD)
+	_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, execCommPid, execCommTid,
+		types.SYS_EXIT_PIDFD_GETFD, failureRet)
+	ep := feedRawPair(t, el, enterRaw, exitRaw)
+	if ep == nil {
+		t.Fatal("an unfiltered failed pidfd_getfd row must still be emitted")
+	}
+	defer ep.Recycle()
+
+	if resolved, ok := el.fdState().get(int32(failureRet)); ok {
+		t.Fatalf("a failed pidfd_getfd registered fd %d as %v", failureRet, resolved)
+	}
+	// A failed transfer keeps reporting the source pidfd, which is what the
+	// filter must judge it on.
+	if ep.File == nil || ep.File.Name() != pidfdName {
+		t.Fatalf("failed pidfd_getfd reported file %v, want the source %q", ep.File, pidfdName)
 	}
 }
