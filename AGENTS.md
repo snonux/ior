@@ -215,12 +215,14 @@ committed set contains syscalls that only exist on recent mainline kernels
     `TestDroppedDupStillRegistersTheDuplicatedFd` and
     `TestDroppedFcntlSetflStillUpdatesTheFdTable`
     (`internal/eventloop_dupfilter_test.go`). Eviction is the same rule from the
-    other side — `applyFdCloseState`/`applyCloseRangeState` also run ahead of the
-    checkpoint, because a *stale* entry mislabels the next syscall that reuses
-    the descriptor number (`TestDroppedCloseStillEvictsTheFd`). Because these
+    other side — `applyFdCloseState` and `applyCloseRangeState` also run ahead of
+    the checkpoint, because a *stale* entry mislabels the next syscall that
+    reuses the descriptor number (`TestDroppedCloseStillEvictsTheFd` and
+    `TestDroppedCloseRangeStillEvictsTheFds` respectively). Because these
     mutations now run on every pair rather than only surviving ones, the failure
     guards matter too: `registerDup` ignores a negative return
-    (`TestFailedDupDoesNotRegisterAnFd`).
+    (`TestFailedDupDoesNotRegisterAnFd`) and so does the `pidfd_getfd` branch
+    (`TestFailedPidfdGetfdDoesNotRegisterAnFd`).
 
     Scope caveat: this rule is about the *pair-filter checkpoint*. Two earlier
     gates still drop events before any exit handler runs, so it does not make
