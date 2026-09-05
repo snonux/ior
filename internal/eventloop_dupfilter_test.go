@@ -201,9 +201,9 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	// argument order as well as the merge itself. It also exercises the clear
 	// half — O_APPEND was set and arg omits it, so it must go.
 	//
-	// Seeding an access mode at
-	// all: with a zero seed a lossy flag replace and a correct F_SETFL merge
-	// are indistinguishable, and the assertion below could not fail legibly.
+	// The access mode in the seed is what makes the assertion sharp at all:
+	// with a zero seed a lossy flag replace and a correct F_SETFL merge are
+	// indistinguishable, so the check below could not fail legibly.
 	el.fdState().setProcFdCache(dupSourceFd, execCommPid,
 		file.NewFd(dupSourceFd, cachedName, syscall.O_RDWR|syscall.O_APPEND))
 	if _, ok := el.fdState().get(dupSourceFd); ok {
@@ -232,8 +232,9 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	// word with arg&settable instead of merging into it dropped the access
 	// mode, and because the fd table entry is what every later read/write/close
 	// on this descriptor resolves through, the whole rest of its life reported
-	// O_RDONLY. The fcntl arg here deliberately carries only O_NONBLOCK, so a
-	// replace shows up as exactly that missing O_RDWR.
+	// O_RDONLY. Under a replace the arg's own O_RDWR is masked away with
+	// everything else outside the settable set, so the defect shows up here as
+	// exactly that missing O_RDWR.
 	want := file.Flags(syscall.O_RDWR | syscall.O_NONBLOCK)
 	if fdFile.Flags() != want {
 		t.Fatalf("fd %d flags = %v, want %v", dupSourceFd, fdFile.Flags(), want)
