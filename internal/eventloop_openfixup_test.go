@@ -279,3 +279,27 @@ func TestEmptyNameOpenDefersOnlyThePathGateAtEnter(t *testing.T) {
 		}
 	})
 }
+
+// TestMatchRawOpenEventHandlesTypedNil pins that the open gate survives a
+// typed-nil *types.OpenEvent. The type assertion succeeds for one of those, so
+// the gate must nil-check before reading Filename[0] to decide which dimension
+// set applies — the sibling gates get this for free by delegating straight to
+// a Match* helper that opens with its own nil check.
+//
+// Not reachable through the live decoder today, but this gate runs on every
+// open event and the enter-side deferral made it dereference where it used to
+// delegate. It also keeps MatchOpenEventComm's own nil contract exercisable
+// from its only production caller.
+func TestMatchRawOpenEventHandlesTypedNil(t *testing.T) {
+	var nilEvent *types.OpenEvent
+	filter := globalfilter.Filter{File: &globalfilter.StringFilter{Pattern: "anything"}}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("matchRawOpenEvent panicked on a typed-nil event: %v", r)
+		}
+	}()
+	if matchRawOpenEvent(filter, nilEvent) {
+		t.Fatal("a typed-nil open event must not match a -path filter")
+	}
+}

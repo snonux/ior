@@ -62,15 +62,15 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	// for any unregistered kind, so KindNone is implicitly rejected.
 }
 
-// lookupKind returns the metadata for kind. If kind is not registered (e.g.
-// KindNone or an unknown value), it returns a zero kindMeta whose structName
-// is "unknown_event" and enterAccepted is false.
 // kindRecoversFilename reports whether kind participates in the sys_exit
 // filename recovery described in internal/c/filter.c.
 func kindRecoversFilename(kind TracepointKind) bool {
 	return lookupKind(kind).recoversFilename
 }
 
+// lookupKind returns the metadata for kind. If kind is not registered (e.g.
+// KindNone or an unknown value), it returns a zero kindMeta whose structName
+// is "unknown_event" and enterAccepted is false.
 func lookupKind(kind TracepointKind) kindMeta {
 	if m, ok := kindRegistry[kind]; ok {
 		return m
