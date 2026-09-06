@@ -187,7 +187,16 @@ func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {
 	if !ok {
 		return false
 	}
-	if openEv.Filename[0] == 0 {
+	// A typed-nil *OpenEvent satisfies the assertion above, so the nil check
+	// has to happen here rather than being left to the Match* helpers: reading
+	// Filename[0] off it would panic. The sibling gates get this for free by
+	// delegating straight to a helper that opens with a nil check; this one
+	// dereferences first to decide which dimension set applies, so it has to
+	// do the check itself.
+	if openEv == nil || openEv.Filename[0] == 0 {
+		// An empty payload filename means the sys_enter read faulted. Defer
+		// only the path dimension to the exit checkpoint, where the recovered
+		// name has landed; comm is always present and still applies here.
 		return filter.MatchOpenEventComm(openEv)
 	}
 	return filter.MatchOpenEvent(openEv)
