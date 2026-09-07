@@ -14,8 +14,14 @@ import (
 	"ior/internal/types"
 )
 
-// resolveCommTimeout caps each procfs read so a frozen cgroup cannot stall
-// a lookup worker indefinitely and block clean shutdown.
+// resolveCommTimeout bounds how long each procfs lookup may make its caller
+// wait. A /proc/<tid>/comm read of a task stuck in D state (or a frozen
+// cgroup) blocks inside the kernel arbitrarily long and cannot be
+// interrupted, so the default resolver runs the blocking read in a helper
+// goroutine and abandons it on expiry (resolveCommWithinCtx). That is what
+// keeps the lookup workers moving and shutdown bounded: both the worker
+// loop's next queue item and shutdown()'s workersWG.Wait() depend on a read
+// not sticking.
 const resolveCommTimeout = time.Second
 
 // commEntry is one cached command name plus the bookkeeping that keeps it
@@ -120,16 +126,11 @@ func (r *commResolver) ensureLookupConfig() {
 		r.lookupQueue = make(chan uint32, defaultCommLookupQueueSize)
 	}
 	if r.resolveFn == nil {
-		// Default resolver wraps resolveCommFromProcWithError, which does not
-		// accept a context itself, so we honour cancellation by returning early
-		// when the context deadline is already exceeded before the call returns.
-		r.resolveFn = func(ctx context.Context, tid uint32) (string, error) {
-			comm, err := resolveCommFromProcWithError(tid)
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			return comm, err
-		}
+		// The default resolver honours ctx for real: the blocking procfs read
+		// runs in a helper goroutine that is abandoned when ctx expires
+		// (resolveCommWithinCtx), because os.ReadFile/Readlink cannot be
+		// interrupted once inside the kernel.
+		r.resolveFn = resolveCommWithinCtx
 	}
 }
 
@@ -152,6 +153,15 @@ func (r *commResolver) startLookupWorkers() {
 func (r *commResolver) lookupWorker() {
 	defer r.workersWG.Done()
 	for tid := range r.lookupQueue {
+		// Shutdown drains the queue without paying for procfs reads: the
+		// results would land in a cache the event loop no longer reads, and
+		// every skipped read saves up to resolveCommTimeout off the
+		// workersWG.Wait() that shutdown() is blocked on. storeLookupResult
+		// with an empty comm just clears the pending flag.
+		if r.isClosed() {
+			r.storeLookupResult(tid, "", lookupState{})
+			continue
+		}
 		// Sample the generation counters before the read: everything this
 		// worker observes in /proc from here on may already be one execve, or
 		// one drop-triggered staleness sweep, out of date. storeLookupResult
@@ -166,6 +176,14 @@ func (r *commResolver) lookupWorker() {
 		r.storeLookupResult(tid, comm, state)
 		r.notifyResolveFailure(tid, err)
 	}
+}
+
+// isClosed reports whether shutdown has begun, so the worker loop can drain
+// the remaining queue items without paying for their procfs reads.
+func (r *commResolver) isClosed() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.closed
 }
 
 // sampleLookupState snapshots the generation counters that decide whether a
@@ -227,8 +245,11 @@ func (r *commResolver) seedTrackedPidComm(pidFilter int) {
 			continue
 		}
 		seen[tid] = struct{}{}
-		// Use a short timeout here too; seeding happens at startup and a stall
-		// would delay the entire event loop initialisation.
+		// Bounded by resolveCommTimeout: seeding runs synchronously on the
+		// event-loop goroutine at startup, and a /proc read stuck in the
+		// kernel (D-state task, frozen cgroup) would otherwise delay the
+		// entire initialisation - the default resolver abandons the read
+		// when the deadline hits (resolveCommWithinCtx).
 		ctx, cancel := context.WithTimeout(context.Background(), resolveCommTimeout)
 		comm, err := r.resolveFn(ctx, tid)
 		cancel()
@@ -562,6 +583,51 @@ func procTidPathPrefix(tid uint32) string {
 func resolveCommFromProc(tid uint32) string {
 	comm, _ := resolveCommFromProcWithError(tid)
 	return comm
+}
+
+// resolveCommWithinCtx reads tid's comm from procfs with a real bound on how
+// long the caller can be made to wait. os.ReadFile/Readlink cannot be
+// interrupted once inside the kernel - a /proc/<tid>/comm read of a task in
+// D state, or of a process under a frozen cgroup, blocks arbitrarily long -
+// so the blocking read runs in a helper goroutine and this function returns
+// as soon as ctx is done, abandoning the helper.
+//
+// The abandoned goroutine is not a leak in the usual sense: its channel is
+// buffered, so it always completes its send and exits once the stuck read
+// eventually returns (or lingers with the process if it never does - the one
+// price of abandoning a syscall Go cannot cancel). It writes nothing to the
+// comm cache; the timeout result is stored as an empty comm, which
+// storeLookupResult drops, so a value that arrives late cannot land anywhere.
+// Test-resolvable resolveFns bypass this wrapper entirely by injecting their
+// own.
+func resolveCommWithinCtx(ctx context.Context, tid uint32) (string, error) {
+	return readWithDeadline(ctx, func() (string, error) {
+		return resolveCommFromProcWithError(tid)
+	})
+}
+
+// readWithDeadline runs one blocking read in a helper goroutine and returns
+// its result, or ctx.Err() as soon as ctx expires - whichever comes first.
+// Split out of resolveCommWithinCtx so the abandonment itself is testable
+// without needing a genuinely hung /proc entry.
+func readWithDeadline(ctx context.Context, read func() (string, error)) (string, error) {
+	type procResult struct {
+		comm string
+		err  error
+	}
+	// Buffered so the abandoned helper can always complete its send and exit,
+	// instead of blocking on a caller that has moved on.
+	done := make(chan procResult, 1)
+	go func() {
+		comm, err := read()
+		done <- procResult{comm: comm, err: err}
+	}()
+	select {
+	case res := <-done:
+		return res.comm, res.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 func resolveCommFromProcWithError(tid uint32) (string, error) {

@@ -162,7 +162,14 @@ committed set contains syscalls that only exist on recent mainline kernels
   `ring buffer drops: N (N/s, N% of events)`.
 - **Comm resolution across `execve`**: most event payloads carry no command
   name, so it comes from `commResolver` (`internal/eventloop_comm.go`), an
-  asynchronous `/proc/<tid>/comm` cache. A tid survives `execve`, so a lookup
+  asynchronous `/proc/<tid>/comm` cache. Every lookup is bounded by
+  `resolveCommTimeout` for real: `os.ReadFile` cannot be interrupted once
+  inside the kernel, so the default resolver runs the blocking read in a
+  helper goroutine and abandons it on expiry (`resolveCommWithinCtx`) - a
+  `/proc` read stuck in the kernel (D-state task, frozen cgroup) can neither
+  stall a worker nor hang the `workersWG.Wait()` that shutdown blocks on,
+  and once shutdown begins the workers drain the queue without paying for
+  the remaining reads. A tid survives `execve`, so a lookup
   that lands in the post-fork/pre-exec window would cache the *pre-exec* name
   and label the new program's first syscalls with it. The hand-written
   `sched:sched_process_exec` handler in `internal/c/exec.c` closes that race: it

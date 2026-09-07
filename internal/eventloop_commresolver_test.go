@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -339,5 +340,148 @@ func waitForCondition(t *testing.T, timeout time.Duration, message string, fn fu
 			t.Fatal(message)
 		case <-ticker.C:
 		}
+	}
+}
+
+// TestReadWithDeadlineAbandonsHungRead pins the property the default
+// resolver's timeout used to promise but not have: a procfs read stuck inside
+// the kernel (D-state task, frozen cgroup - a read os.ReadFile cannot be
+// interrupted out of) must not make the caller wait past the context deadline.
+// readWithDeadline runs the read in a helper goroutine and abandons it, so the
+// caller returns when ctx expires even though the read never will.
+func TestReadWithDeadlineAbandonsHungRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	started := make(chan struct{})
+	start := time.Now()
+	comm, err := readWithDeadline(ctx, func() (string, error) {
+		close(started)
+		// A read that never returns: models the uninterruptible kernel read.
+		select {}
+	})
+	elapsed := time.Since(start)
+
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected the context deadline error, got comm=%q err=%v", comm, err)
+	}
+	if comm != "" {
+		t.Fatalf("expected an empty comm on timeout, got %q", comm)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("the abandoned read made the caller wait %v, far past its deadline", elapsed)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("expected the helper goroutine to have started the read")
+	}
+}
+
+// TestReadWithDeadlineReturnsFastResult pins the other half: a read that
+// finishes before the deadline is returned as-is, with no error.
+func TestReadWithDeadlineReturnsFastResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	comm, err := readWithDeadline(ctx, func() (string, error) {
+		return "bash", nil
+	})
+	if err != nil || comm != "bash" {
+		t.Fatalf("expected the fast read's result, got comm=%q err=%v", comm, err)
+	}
+}
+
+// TestResolveCommWithinCtxBoundedByContext exercises the real default
+// resolver with an already-expired context: it must return promptly instead of
+// waiting for the underlying /proc read, which is exactly the guarantee the
+// lookup workers and seedTrackedPidComm rely on to stay bounded.
+func TestResolveCommWithinCtxBoundedByContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done() // make the deadline certain before entering
+
+	start := time.Now()
+	comm, err := resolveCommWithinCtx(ctx, uint32(os.Getpid()))
+	if time.Since(start) > time.Second {
+		t.Fatalf("cancelled-context resolve took %v, want a prompt return", time.Since(start))
+	}
+	// Either branch is fine: the read of our own /proc entry is
+	// near-instant and may complete before the scheduler runs the select.
+	// What must never happen is a long wait.
+	if err == nil && comm == "" {
+		t.Fatal("a completed read of a live tid must yield a non-empty comm")
+	}
+}
+
+// TestCommResolverShutdownDropsQueuedLookups pins the prompt-teardown half of
+// the fix: shutdown() is blocked on workersWG.Wait(), and the worker loop
+// drains the remaining queue items without paying their procfs reads once the
+// resolver is closed. Before the closed-check, a queue of N lookups on a
+// system with hanging /proc entries cost up to N*resolveCommTimeout of
+// teardown; without the abandonment fix a single stuck read hung teardown
+// forever.
+func TestCommResolverShutdownDropsQueuedLookups(t *testing.T) {
+	const queued = 50
+
+	var calls atomic.Int64
+	inFlight := make(chan struct{})
+	releaseAll := make(chan struct{})
+	t.Cleanup(func() { close(releaseAll) })
+
+	resolver := newCommResolver(nil)
+	resolver.lookupWorkers = 1
+	resolver.lookupQueue = make(chan uint32, queued)
+	resolver.resolveFn = func(ctx context.Context, _ uint32) (string, error) {
+		calls.Add(1)
+		// Signal that the worker is inside a resolve, so the test can start
+		// the shutdown while one read is in flight and pin exactly that branch.
+		select {
+		case inFlight <- struct{}{}:
+		default:
+		}
+		// Honour the worker's timeout, but pay it in full: every processed
+		// item costs resolveCommTimeout, so resolving the whole queue would
+		// take queued*resolveCommTimeout.
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-releaseAll:
+			return "", nil
+		}
+	}
+
+	resolver.startLookupWorkers()
+	for i := 0; i < queued; i++ {
+		resolver.queueLookup(uint32(1000 + i))
+	}
+
+	// Wait until the worker is genuinely inside the first resolve, so the
+	// shutdown below exercises the in-flight branch: one resolve completes
+	// (its context timeout), everything queued behind it is drained by the
+	// closed-skip.
+	select {
+	case <-inFlight:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the worker to enter its first resolve")
+	}
+
+	start := time.Now()
+	resolver.shutdown()
+	elapsed := time.Since(start)
+
+	// The worker is inside one resolve when shutdown lands (waited for
+	// above): it pays that one resolveCommTimeout, then everything queued
+	// behind it must be drained without further reads. Five timeouts of
+	// headroom allows for scheduling noise while still failing the
+	// queued*1s worst case (~50s) decisively.
+	if elapsed > 5*resolveCommTimeout {
+		t.Fatalf("shutdown took %v for a queue of %d lookups, want a prompt drain", elapsed, queued)
+	}
+	if got := calls.Load(); got > 2 {
+		t.Fatalf("resolved %d lookups during shutdown, want at most the in-flight one", got)
+	}
+	if got := pendingCount(resolver); got != 0 {
+		t.Fatalf("pending map still holds %d entries after shutdown", got)
 	}
 }
