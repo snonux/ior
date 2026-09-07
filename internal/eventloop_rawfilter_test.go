@@ -12,8 +12,9 @@ import (
 // The raw output modes (-plain, -flamegraph, headless -parquet) have no second
 // filtering stage: whatever an exit handler returns true for is printed. The
 // TUI has two further stages - shouldIngestTracePair on ingest and the Stream
-// tab's own applyFilter - and both now use the either-name form
-// (MatchPairEitherName / MatchesEitherName) so all three agree.
+// tab's own applyFilter - and all three now call the same predicate
+// (MatchPair / Matches), whose file dimension is either-name-aware for the
+// rename kinds (Candidate.OldFileValue), so all three agree by construction.
 //
 // Two kinds used to escape the pair filter entirely. handleOpenExit returned
 // true unconditionally, relying on the raw enter filter MatchOpenEvent - but
@@ -310,9 +311,9 @@ func TestNameKindsApplyEveryFilterDimension(t *testing.T) {
 		}
 	})
 
-	// The three cases below are the reason the name kinds get
-	// MatchPairEitherName rather than a plain MatchPair: the file dimension
-	// has to keep matching oldname-OR-newname, and only the file dimension.
+	// The three cases below are the reason the file dimension of MatchPair is
+	// either-name-aware for the rename kinds (Candidate.OldFileValue): it has
+	// to keep matching oldname-OR-newname, and only that dimension widens.
 	t.Run("row matched on its OLD name survives the full pair filter", func(t *testing.T) {
 		el := newFilteredEventLoop(t, globalfilter.Filter{
 			File:      &globalfilter.StringFilter{Pattern: oldname},

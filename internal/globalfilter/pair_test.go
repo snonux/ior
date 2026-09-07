@@ -117,35 +117,33 @@ func renamePair() *event.Pair {
 	}
 }
 
-// TestMatchPairEitherNameWidensOnlyTheFileDimension pins the rename-kind
-// filter contract: the file dimension follows MatchNameEvent and matches
-// oldname OR newname, while every other dimension stays exactly as strict as
-// MatchPair. Before this existed the name kinds skipped the pair filter
-// entirely, so none of the numeric dimensions reached their rows at all.
-func TestMatchPairEitherNameWidensOnlyTheFileDimension(t *testing.T) {
+// TestMatchPairSeesTheRenameOldname pins the rename-kind filter contract:
+// the file dimension of plain MatchPair matches oldname OR newname - the same
+// rule the raw enter filter MatchNameEvent applies - while every other
+// dimension stays exactly as strict as before. There is no separate
+// either-name variant of MatchPair any more: the widening lives inside
+// Matches (Candidate.OldFileValue), and the per-stage variants were how one
+// stage silently disagreed with another.
+func TestMatchPairSeesTheRenameOldname(t *testing.T) {
 	pair := renamePair()
 
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).MatchPairEitherName(pair) {
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).MatchPair(pair) {
 		t.Fatalf("expected a newname match to be accepted")
 	}
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).MatchPairEitherName(pair) {
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).MatchPair(pair) {
 		t.Fatalf("expected an oldname match to be accepted")
 	}
-	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).MatchPairEitherName(pair) {
+	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).MatchPair(pair) {
 		t.Fatalf("expected a path matching neither name to be rejected")
 	}
-	// MatchPair alone is the false negative this method exists to avoid.
-	if MatchPair(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}, pair) {
-		t.Fatalf("sanity: plain MatchPair is not supposed to see the oldname")
-	}
 
-	// Every other dimension keeps MatchPair's strictness, including when the
-	// file dimension was satisfied by the oldname.
+	// Every other dimension keeps its strictness, including when the file
+	// dimension was satisfied by the oldname.
 	strict := Filter{
 		File:      &StringFilter{Pattern: "/tmp/old.txt"},
 		LatencyNs: &NumericFilter{Op: OpGt, Value: 2_000_000},
 	}
-	if strict.MatchPairEitherName(pair) {
+	if strict.MatchPair(pair) {
 		t.Fatalf("expected an oldname match to still be subject to -latency")
 	}
 	for name, filter := range map[string]Filter{
@@ -157,21 +155,24 @@ func TestMatchPairEitherNameWidensOnlyTheFileDimension(t *testing.T) {
 		"ret":         {RetVal: &NumericFilter{Op: OpEq, Value: -1}},
 		"errors-only": {ErrorsOnly: true},
 	} {
-		if filter.MatchPairEitherName(pair) {
+		if filter.MatchPair(pair) {
 			t.Fatalf("expected the %s dimension to reject the rename pair", name)
 		}
 	}
 
-	if (Filter{}).MatchPairEitherName(nil) {
+	if (Filter{}).MatchPair(nil) {
 		t.Fatalf("expected a nil pair to be rejected")
 	}
 }
 
-// stubCandidate is a minimal Candidate for exercising MatchesEitherName
-// directly, without depending on any concrete row type.
+// stubCandidate is a minimal Candidate for exercising Matches directly,
+// without depending on any concrete row type. oldFile models the rename
+// source path a real candidate reports through OldFileValue; it is empty for
+// every single-name candidate.
 type stubCandidate struct {
 	syscall string
 	file    string
+	oldFile string
 	latency uint64
 }
 
@@ -179,6 +180,7 @@ func (c stubCandidate) SyscallValue() string { return c.syscall }
 func (c stubCandidate) FamilyValue() string  { return "FS" }
 func (c stubCandidate) CommValue() string    { return "mv" }
 func (c stubCandidate) FileValue() string    { return c.file }
+func (c stubCandidate) OldFileValue() string { return c.oldFile }
 func (c stubCandidate) PIDValue() uint32     { return 1 }
 func (c stubCandidate) TIDValue() uint32     { return 1 }
 func (c stubCandidate) FDValue() int32       { return -1 }
@@ -188,28 +190,40 @@ func (c stubCandidate) BytesValue() uint64   { return 0 }
 func (c stubCandidate) ReturnValue() int64   { return 0 }
 func (c stubCandidate) ErrorValue() bool     { return false }
 
-// TestMatchesEitherNameWidensOnlyTheFileDimension is the Candidate-level
-// counterpart of TestMatchPairEitherNameWidensOnlyTheFileDimension. The Stream
-// tab and its CSV export filter rows rather than pairs, so this path needs its
-// own guard: it is the one shared by both of those call sites.
-func TestMatchesEitherNameWidensOnlyTheFileDimension(t *testing.T) {
-	row := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", latency: 1_000_000}
-	const oldName = "/tmp/old.txt"
+// TestMatchesSeesTheCandidateOldName is the Candidate-level counterpart of
+// TestMatchPairSeesTheRenameOldname. The Stream tab and its CSV export filter
+// rows rather than pairs, and they call plain Matches - so the widening has to
+// come from the candidate itself (OldFileValue), not from a call-site variant.
+func TestMatchesSeesTheCandidateOldName(t *testing.T) {
+	row := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", oldFile: "/tmp/old.txt", latency: 1_000_000}
+	singleName := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", latency: 1_000_000}
 
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).MatchesEitherName(row, oldName) {
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).Matches(row) {
 		t.Fatal("expected a newname match to be accepted")
 	}
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).MatchesEitherName(row, oldName) {
+	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(row) {
 		t.Fatal("expected an oldname match to be accepted")
 	}
-	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).MatchesEitherName(row, oldName) {
+	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).Matches(row) {
 		t.Fatal("expected a pattern matching neither name to be rejected")
 	}
 
-	// An empty oldName must not widen anything: a row with no rename source
-	// behaves exactly like plain Matches.
-	if (Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).MatchesEitherName(row, "") {
+	// An empty OldFileValue must not widen anything: a row with no rename
+	// source behaves exactly like a single-name candidate. The degenerate
+	// anchored pattern "^$" is the sharp case - it matches the empty string,
+	// so an absent oldname satisfying it would let `-path '^$'` keep every
+	// single-name row instead of only the genuinely empty-path ones.
+	if (Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(singleName) {
 		t.Fatal("an absent oldname must not satisfy the file dimension")
+	}
+	if !(Filter{File: &StringFilter{Pattern: "^$"}}).Matches(stubCandidate{syscall: "read", file: ""}) {
+		t.Fatal("an empty-path row must satisfy -path '^$'")
+	}
+	if (Filter{File: &StringFilter{Pattern: "^$"}}).Matches(singleName) {
+		t.Fatal("an absent oldname must not satisfy -path '^$'")
+	}
+	if (Filter{File: &StringFilter{Pattern: "^$"}}).Matches(row) {
+		t.Fatal("a non-empty oldname must not satisfy -path '^$'")
 	}
 
 	// The widening must not become a bypass for any other dimension.
@@ -217,14 +231,14 @@ func TestMatchesEitherNameWidensOnlyTheFileDimension(t *testing.T) {
 		File:    &StringFilter{Pattern: "/tmp/old.txt"},
 		Syscall: &StringFilter{Pattern: "openat"},
 	}
-	if strict.MatchesEitherName(row, oldName) {
+	if strict.Matches(row) {
 		t.Fatal("expected an oldname match to still be subject to -syscall")
 	}
 	slow := Filter{
 		File:      &StringFilter{Pattern: "/tmp/old.txt"},
 		LatencyNs: &NumericFilter{Op: OpGt, Value: 2_000_000},
 	}
-	if slow.MatchesEitherName(row, oldName) {
+	if slow.Matches(row) {
 		t.Fatal("expected an oldname match to still be subject to -latency")
 	}
 }
