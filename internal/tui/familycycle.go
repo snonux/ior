@@ -49,7 +49,7 @@ func familyForRank(rank int) string {
 // clones it so every other filter component is preserved, sets or clears the
 // Family component, and applies the result as a REPLACEMENT (no undo-stack
 // push) so the stack label does not grow as the user cycles.
-func (m Model) cycleFamilyScope(delta int) (tea.Model, tea.Cmd) {
+func (m *Model) cycleFamilyScope(delta int) (tea.Model, tea.Cmd) {
 	scoped := m.filters.current().Clone()
 	nextRank := stepFamilyRank(currentFamilyRank(scoped), delta)
 	if family := familyForRank(nextRank); family != "" {

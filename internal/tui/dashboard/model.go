@@ -65,7 +65,15 @@ const (
 	tabVizModeIcicle
 )
 
-// Model is the dashboard tab framework model.
+// Model is the dashboard root: the tab framework plus the per-tab view state.
+// Receiver policy: every method takes *Model,
+// so *Model (not Model) is the Bubble Tea model that Init/Update/View
+// implement - the same policy the stream tab's model follows
+// (internal/tui/eventstream). The mixed value/pointer receivers this type
+// used to have worked only while every value happened to be addressable:
+// the value-receiver Update called pointer-receiver mutators on its local
+// copy, so any non-addressable or later-copied Model silently lost those
+// mutations.
 type Model struct {
 	activeTab Tab
 
@@ -117,7 +125,7 @@ type Model struct {
 	filesVizMode             tabVizMode
 	processesVizMode         tabVizMode
 	streamModel              eventstream.Model
-	flamegraphModel          flamegraphtui.Model
+	flamegraphModel          *flamegraphtui.Model
 	syscallsChart            bubbleChart
 	filesChart               bubbleChart
 	processesChart           bubbleChart
@@ -127,7 +135,10 @@ type Model struct {
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
-func NewModel(engine SnapshotSource, streamSource eventstream.Source) Model {
+// Like every method on Model the constructors return the pointer form:
+// *Model is the Bubble Tea model (all-pointer receiver policy, same as the
+// stream tab's model - see the receiver note on Model above).
+func NewModel(engine SnapshotSource, streamSource eventstream.Source) *Model {
 	return NewModelWithConfig(engine, streamSource, defaultRefreshMs, 0, common.Keys)
 }
 
@@ -136,11 +147,11 @@ func NewModel(engine SnapshotSource, streamSource eventstream.Source) Model {
 // flame tabs (e.g. 200 ms). A value of 0 uses the package-level constants
 // streamRefreshMs / flameRefreshMs (200 ms) so existing call sites are
 // backwards-compatible.
-func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, refreshMs int, fastRefreshMs int, keys common.KeyMap) Model {
+func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, refreshMs int, fastRefreshMs int, keys common.KeyMap) *Model {
 	if refreshMs <= 0 {
 		refreshMs = defaultRefreshMs
 	}
-	m := Model{
+	m := &Model{
 		activeTab:        TabFlame,
 		engine:           engine,
 		refreshEvery:     time.Duration(refreshMs) * time.Millisecond,
@@ -172,13 +183,13 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 // consulted to start any additional high-frequency tick the active tab needs
 // (e.g. stream and flame use a fast cadence controlled by fastRefreshEvery,
 // defaulting to streamRefreshMs / flameRefreshMs when not explicitly set).
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
 	d := lookupTab(m.activeTab)
 	if d.InitCmd != nil {
 		// Pass the model so the closure can read fastRefreshEvery and use
 		// the configured cadence rather than falling back to a constant.
-		cmds = append(cmds, d.InitCmd(&m))
+		cmds = append(cmds, d.InitCmd(m))
 	} else if m.bubbleEnabledForTab(m.activeTab) {
 		cmds = append(cmds, bubbleTickCmdFn())
 	}
@@ -192,7 +203,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 // Update handles ticks, snapshots, tab changes, and resize events.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
@@ -216,7 +227,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.handleActiveTabMsg(msg)
 }
 
-func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.width = msg.Width
 	m.height = msg.Height
 	m.clampTableColumns()
@@ -234,7 +245,7 @@ func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleRefreshTick() (tea.Model, tea.Cmd) {
+func (m *Model) handleRefreshTick() (tea.Model, tea.Cmd) {
 	if !m.focused {
 		return m, nil
 	}
@@ -245,7 +256,7 @@ func (m Model) handleRefreshTick() (tea.Model, tea.Cmd) {
 	)
 }
 
-func (m Model) handleStreamTick() (tea.Model, tea.Cmd) {
+func (m *Model) handleStreamTick() (tea.Model, tea.Cmd) {
 	if !m.focused || m.activeTab != TabStream {
 		return m, nil
 	}
@@ -254,7 +265,7 @@ func (m Model) handleStreamTick() (tea.Model, tea.Cmd) {
 	return m, m.streamTickCmd()
 }
 
-func (m Model) handleFlameTick() (tea.Model, tea.Cmd) {
+func (m *Model) handleFlameTick() (tea.Model, tea.Cmd) {
 	if !m.focused || m.activeTab != TabFlame {
 		return m, nil
 	}
@@ -271,7 +282,7 @@ func (m Model) handleFlameTick() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) handleBubbleTick() (tea.Model, tea.Cmd) {
+func (m *Model) handleBubbleTick() (tea.Model, tea.Cmd) {
 	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) {
 		return m, nil
 	}
@@ -282,7 +293,7 @@ func (m Model) handleBubbleTick() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	selectedSyscall := ""
 	selectedFile := ""
 	selectedDir := ""
@@ -315,23 +326,23 @@ func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleStreamEditorDone(msg streamEditorDoneMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleStreamEditorDone(msg streamEditorDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.streamModel.SetStatusMessage("Open failed: " + msg.err.Error())
 	}
 	return m, nil
 }
 
-func (m Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame {
 		return m, nil
 	}
 	next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
-	m.flamegraphModel = next.(flamegraphtui.Model)
+	m.flamegraphModel = next.(*flamegraphtui.Model)
 	return m, cmd
 }
 
-func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if handled, next, cmd := m.handleHelpToggleKey(msg); handled {
 		return next, cmd
 	}
@@ -369,7 +380,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
 }
 
-func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+func (m *Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !key.Matches(msg, m.keys.Enter) {
 		return false, nil
 	}
@@ -409,7 +420,7 @@ func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // than its syscall name.
 const syscallFamilyColumn = 1
 
-func (m Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
+func (m *Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 	selected, ok := m.selectedSyscallSnapshot()
 	if !ok {
 		return globalfilter.Filter{}, "", false
@@ -431,7 +442,7 @@ func (m Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 	return filter, "syscall~" + selected.Name, true
 }
 
-func (m Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
+func (m *Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
 	rows := m.sortedSyscallRows()
 	if len(rows) == 0 {
 		return statsengine.SyscallSnapshot{}, false
@@ -440,7 +451,7 @@ func (m Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
 	return rows[index], true
 }
 
-func (m Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
+func (m *Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
 	snap := m.snapshotOrZero()
 	return sortedSyscallSnapshots(m.visibleSyscallRows(&snap), m.syscallsSort)
 }
@@ -454,7 +465,7 @@ func (m Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
 // trace-scope dimensions are deliberately left out so synthetic processes stay
 // visible in --testflames. When no Syscall/Family filter is active every row
 // passes through unchanged.
-func (m Model) visibleSyscallRows(snap *statsengine.Snapshot) []statsengine.SyscallSnapshot {
+func (m *Model) visibleSyscallRows(snap *statsengine.Snapshot) []statsengine.SyscallSnapshot {
 	if snap == nil {
 		return nil
 	}
@@ -471,7 +482,7 @@ func (m Model) visibleSyscallRows(snap *statsengine.Snapshot) []statsengine.Sysc
 	return filtered
 }
 
-func (m Model) selectedSyscallName() string {
+func (m *Model) selectedSyscallName() string {
 	selected, ok := m.selectedSyscallSnapshot()
 	if !ok {
 		return ""
@@ -577,7 +588,7 @@ func reanchorOffset[T any, K comparable](current int, rows []T, selected K, find
 	return clampOffset(current, len(rows))
 }
 
-func (m Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
+func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 	if m.latest == nil {
 		return globalfilter.Filter{}, "", false
 	}
@@ -604,7 +615,7 @@ func (m Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 	return filter, "file~" + selected.Path, true
 }
 
-func (m Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
+func (m *Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
 	rows := m.sortedFileRows()
 	if len(rows) == 0 {
 		return statsengine.FileSnapshot{}, false
@@ -613,11 +624,11 @@ func (m Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
 	return rows[index], true
 }
 
-func (m Model) sortedFileRows() []statsengine.FileSnapshot {
+func (m *Model) sortedFileRows() []statsengine.FileSnapshot {
 	return sortedFileSnapshots(m.snapshotOrZero().Files(), m.filesSort)
 }
 
-func (m Model) selectedFilePath() string {
+func (m *Model) selectedFilePath() string {
 	selected, ok := m.selectedFileSnapshot()
 	if !ok {
 		return ""
@@ -625,7 +636,7 @@ func (m Model) selectedFilePath() string {
 	return selected.Path
 }
 
-func (m Model) selectedDirSnapshot() (DirSnapshot, bool) {
+func (m *Model) selectedDirSnapshot() (DirSnapshot, bool) {
 	rows := m.sortedDirRows()
 	if len(rows) == 0 {
 		return DirSnapshot{}, false
@@ -634,11 +645,11 @@ func (m Model) selectedDirSnapshot() (DirSnapshot, bool) {
 	return rows[index], true
 }
 
-func (m Model) sortedDirRows() []DirSnapshot {
+func (m *Model) sortedDirRows() []DirSnapshot {
 	return sortedDirSnapshots(aggregateFilesByDir(m.snapshotOrZero().Files()), m.filesDirSort)
 }
 
-func (m Model) selectedDirPath() string {
+func (m *Model) selectedDirPath() string {
 	selected, ok := m.selectedDirSnapshot()
 	if !ok {
 		return ""
@@ -646,7 +657,7 @@ func (m Model) selectedDirPath() string {
 	return selected.Dir
 }
 
-func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
+func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	// The expanded dashboard help bar is bound to F1 because H is
 	// intercepted at the top level (tui.handleGlobalKeyPress) to open the
 	// global help overlay, leaving the bar with no reachable key when it
@@ -665,12 +676,12 @@ func (m Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cm
 	return true, m, nil
 }
 
-func (m Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
+func (m *Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame || !m.flamegraphModel.ConsumesKey(msg) {
 		return false, m, nil
 	}
 	next, cmd := m.flamegraphModel.Update(msg)
-	m.flamegraphModel = next.(flamegraphtui.Model)
+	m.flamegraphModel = next.(*flamegraphtui.Model)
 	return true, m, cmd
 }
 
@@ -719,16 +730,16 @@ func (m *Model) toggleFilesDirGrouping() tea.Cmd {
 	return nil
 }
 
-func (m Model) handleUnhandledKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleUnhandledKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame {
 		return m, nil
 	}
 	next, flameCmd := m.flamegraphModel.Update(msg)
-	m.flamegraphModel = next.(flamegraphtui.Model)
+	m.flamegraphModel = next.(*flamegraphtui.Model)
 	return m, flameCmd
 }
 
-func (m Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
+func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 	proc, ok := m.selectedProcessSnapshot()
 	if !ok || proc.PID == 0 {
 		return globalfilter.Filter{}, "", false
@@ -745,7 +756,7 @@ func (m Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 	return filter, fmt.Sprintf("pid=%d", proc.PID), true
 }
 
-func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
+func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 	rows := m.snapshotOrZero().Processes()
 	if len(rows) == 0 {
 		return statsengine.ProcessSnapshot{}, false
@@ -761,11 +772,11 @@ func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 	}
 }
 
-func (m Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
+func (m *Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
 	return sortedProcessTableRows(m.snapshotOrZero().Processes(), m.processesSort)
 }
 
-func (m Model) selectedProcessPID() uint32 {
+func (m *Model) selectedProcessPID() uint32 {
 	selected, ok := m.selectedProcessSnapshot()
 	if !ok {
 		return 0
@@ -837,7 +848,7 @@ func processSelectionLabel(proc statsengine.ProcessSnapshot) string {
 // postKeyTransitionCmd assembles the commands needed when the active tab
 // changes after a key press. Each tab's InitCmd is started when we first
 // enter that tab so high-frequency ticks (stream, flame) resume correctly.
-func (m Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
+func (m *Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 4)
 	cmds = append(cmds, cmd)
 	if prevActiveTab != m.activeTab {
@@ -845,7 +856,7 @@ func (m Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
 		if d.InitCmd != nil {
 			// Pass the model so the closure reads fastRefreshEvery and honours
 			// the configured cadence from the first tick after a tab switch.
-			cmds = append(cmds, d.InitCmd(&m))
+			cmds = append(cmds, d.InitCmd(m))
 		} else if m.bubbleEnabledForTab(m.activeTab) {
 			cmds = append(cmds, bubbleTickCmdFn())
 		}
@@ -925,20 +936,20 @@ func (m *Model) clampTableColumns() {
 	m.processesCol = common.ClampTableCol(m.processesCol, len(processColumns()))
 }
 
-func (m Model) maxSyscallsRows() int {
+func (m *Model) maxSyscallsRows() int {
 	snap := m.snapshotOrZero()
 	return len(m.visibleSyscallRows(&snap))
 }
 
-func (m Model) maxFilesRows() int {
+func (m *Model) maxFilesRows() int {
 	return m.snapshotOrZero().FilesCount()
 }
 
-func (m Model) maxFilesDirRows() int {
+func (m *Model) maxFilesDirRows() int {
 	return len(aggregateFilesByDir(m.snapshotOrZero().Files()))
 }
 
-func (m Model) maxFilesDirRowsForMode() int {
+func (m *Model) maxFilesDirRowsForMode() int {
 	if m.filesVizMode != tabVizModeIcicle {
 		return m.maxFilesDirRows()
 	}
@@ -946,14 +957,14 @@ func (m Model) maxFilesDirRowsForMode() int {
 	return filesIcicleTileCount(m.latest, width, height, m.filesChart.Metric())
 }
 
-func (m Model) maxProcessesRows() int {
+func (m *Model) maxProcessesRows() int {
 	return m.snapshotOrZero().ProcessesCount()
 }
 
 // snapshot returns the latest engine snapshot, or nil if the engine is nil or
 // returns an error. Errors are silently dropped here because the dashboard
 // renders the last successful snapshot on transient failures.
-func (m Model) snapshot() *statsengine.Snapshot {
+func (m *Model) snapshot() *statsengine.Snapshot {
 	if m.engine == nil {
 		return nil
 	}
@@ -964,7 +975,7 @@ func (m Model) snapshot() *statsengine.Snapshot {
 	return snap
 }
 
-func (m Model) snapshotOrZero() statsengine.Snapshot {
+func (m *Model) snapshotOrZero() statsengine.Snapshot {
 	if m.latest == nil {
 		return statsengine.Snapshot{}
 	}
@@ -1000,7 +1011,7 @@ func (m *Model) resetBaselineCmd() tea.Cmd {
 // (interval <= 0) or while the dashboard is blurred, so callers can
 // compose it without extra branching. SetFocused re-arms the tick when
 // focus returns.
-func (m Model) autoResetTickCmd() tea.Cmd {
+func (m *Model) autoResetTickCmd() tea.Cmd {
 	if m.autoResetEvery <= 0 || !m.focused {
 		return nil
 	}
@@ -1016,7 +1027,7 @@ func (m Model) autoResetTickCmd() tea.Cmd {
 // changing the interval does not double-fire. While the dashboard is
 // blurred the tick is also dropped without re-arming; SetFocused will
 // arm a fresh tick on focus regain.
-func (m Model) handleAutoResetTick(msg autoResetTickMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleAutoResetTick(msg autoResetTickMsg) (tea.Model, tea.Cmd) {
 	if msg.generation != m.autoResetGen || m.autoResetEvery <= 0 || !m.focused {
 		return m, nil
 	}
@@ -1055,7 +1066,7 @@ func (m *Model) SetAutoResetInterval(d time.Duration) tea.Cmd {
 
 // AutoResetInterval reports the current auto-reset cadence. Zero means
 // the timer is disabled.
-func (m Model) AutoResetInterval() time.Duration {
+func (m *Model) AutoResetInterval() time.Duration {
 	return m.autoResetEvery
 }
 
@@ -1067,7 +1078,7 @@ func (m Model) AutoResetInterval() time.Duration {
 // FastRefreshInterval reports the high-frequency tick cadence for the stream
 // and flame tabs (0 when the built-in default applies). It exists so the
 // parent package can assert its startup wiring without running the program.
-func (m Model) FastRefreshInterval() time.Duration {
+func (m *Model) FastRefreshInterval() time.Duration {
 	return m.fastRefreshEvery
 }
 
@@ -1079,23 +1090,29 @@ func (m *Model) SetFastRefreshInterval(d time.Duration) {
 }
 
 // LatestSnapshot returns the most recently received snapshot.
-func (m Model) LatestSnapshot() *statsengine.Snapshot {
+func (m *Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
 }
 
 // ActiveTab returns the currently selected dashboard tab.
-func (m Model) ActiveTab() Tab {
+func (m *Model) ActiveTab() Tab {
 	return m.activeTab
 }
 
-// ExportStreamCSV exports a fresh filtered snapshot of the stream ringbuffer.
-func (m Model) ExportStreamCSV() (string, error) {
-	return m.streamModel.ExportSnapshotToCSV("")
+// ExportStreamCSVInputs captures the concrete inputs the stream CSV export
+// needs, on the caller's goroutine. The export command (tui.runExportCmd)
+// runs on a Bubble Tea command goroutine, and handing it the live Model
+// pointer would race with Update/View mutating the model's plain fields -
+// the pre-pointer-receiver value copy used to provide that isolation by
+// accident. The Source the captured values carry is safe to read from any
+// goroutine (Snapshot is RWMutex-guarded).
+func (m *Model) ExportStreamCSVInputs() (eventstream.Source, eventstream.Filter, string) {
+	return m.streamModel.ExportInputs()
 }
 
 // BlocksGlobalShortcuts reports whether the active tab should suppress a
 // top-level shortcut for the given key press.
-func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
+func (m *Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
 	if m.activeTab == TabStream {
 		return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
 	}
@@ -1182,7 +1199,7 @@ func (m *Model) SetFocused(focused bool) tea.Cmd {
 }
 
 // SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
-func (m Model) SnapshotCmd() tea.Cmd {
+func (m *Model) SnapshotCmd() tea.Cmd {
 	snap := m.snapshot()
 	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 }
@@ -1197,7 +1214,7 @@ func (m *Model) SetPidFilter(pid int) {
 // Sub-model state (stream footer visibility, flamegraph viewport dimensions)
 // is kept in sync by the Update() handlers that trigger each state change,
 // so no fixup is needed here.
-func (m Model) View() tea.View {
+func (m *Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
 	_, activeHeight := flameViewport(width, height, m.showHelp)
 	if m.activeTab == TabStream {
@@ -1207,7 +1224,7 @@ func (m Model) View() tea.View {
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, width))
 	b.WriteString("\n")
-	b.WriteString(m.renderActiveContent(width, activeHeight, &m.streamModel, &m.flamegraphModel))
+	b.WriteString(m.renderActiveContent(width, activeHeight, &m.streamModel, m.flamegraphModel))
 	b.WriteString("\n")
 	if m.showHelp {
 		b.WriteString(renderHelpBarWithStatus(m.keys, width, m.filterSummary()))
@@ -1217,7 +1234,7 @@ func (m Model) View() tea.View {
 	return tea.NewView(common.Current().ScreenStyle.Render(b.String()))
 }
 
-func (m Model) filterSummary() string {
+func (m *Model) filterSummary() string {
 	// Use a Builder to avoid repeated string copies for the optional suffix segments
 	// (filter stack, recording status, auto-reset label) on every render tick.
 	var b strings.Builder
@@ -1246,7 +1263,7 @@ func (m Model) filterSummary() string {
 //     the user knows the timer will not fire until focus returns.
 //
 // Disabled timers stay "off" regardless of focus.
-func (m Model) autoResetStatus() string {
+func (m *Model) autoResetStatus() string {
 	if m.autoResetEvery <= 0 {
 		return "auto-reset: off"
 	}
@@ -1286,7 +1303,7 @@ func formatAutoResetRemaining(armedAt time.Time, every time.Duration) string {
 // specialized viz modes (treemap/icicle/bubble) first, then the plain table
 // renderers with sort state, and finally falls back to the generic tab renderer
 // for tabs that have no mode-specific override (overview, latency, stream, flame).
-func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
+func (m *Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
 	if s, ok := m.renderActiveContentViz(width, activeHeight); ok {
 		return s
 	}
@@ -1294,7 +1311,7 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 		return s
 	}
 	return renderActiveTabContent(
-		&m, m.activeTab, m.latest, streamModel, flameModel,
+		m, m.activeTab, m.latest, streamModel, flameModel,
 		width, activeHeight,
 	)
 }
@@ -1303,7 +1320,7 @@ func (m Model) renderActiveContent(width, activeHeight int, streamModel *eventst
 // for the tabs that support alternative visualization modes. Returns the
 // rendered content and true when a viz-mode override applies; otherwise
 // returns "", false so the caller can fall through to the next renderer.
-func (m Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
+func (m *Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
 	switch {
 	case m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap:
 		return renderSyscallsTreemap(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark), true
@@ -1330,7 +1347,7 @@ func (m Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
 // renderActiveContentTable handles table rendering with live sort state for
 // the syscalls, files, and processes tabs. Returns the rendered content and
 // true when a table override applies; otherwise returns "", false.
-func (m Model) renderActiveContentTable(width, activeHeight int) (string, bool) {
+func (m *Model) renderActiveContentTable(width, activeHeight int) (string, bool) {
 	switch {
 	case m.activeTab == TabSyscalls && m.latest != nil:
 		return renderSyscallsWithSort(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort), true
@@ -1345,7 +1362,7 @@ func (m Model) renderActiveContentTable(width, activeHeight int) (string, bool) 
 	return "", false
 }
 
-func (m Model) activeTableHeight() int {
+func (m *Model) activeTableHeight() int {
 	_, activeHeight := flameViewport(m.width, m.height, m.showHelp)
 	return activeHeight
 }
@@ -1415,7 +1432,7 @@ func (m *Model) bubbleChartFor(tab Tab) *bubbleChart {
 // tabVizModeFor returns the current visualization mode for tab. Only the three
 // bubble-capable tabs (syscalls, files, processes) carry per-tab mode state;
 // all other tabs implicitly use tabVizModeTable.
-func (m Model) tabVizModeFor(tab Tab) tabVizMode {
+func (m *Model) tabVizModeFor(tab Tab) tabVizMode {
 	switch tab {
 	case TabSyscalls:
 		return m.syscallsVizMode
@@ -1442,7 +1459,7 @@ func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
 
 // bubbleEnabledForTab reports whether the bubble chart is the active view for
 // tab. The Files tab additionally requires dir-grouped mode to be on.
-func (m Model) bubbleEnabledForTab(tab Tab) bool {
+func (m *Model) bubbleEnabledForTab(tab Tab) bool {
 	switch tab {
 	case TabSyscalls:
 		return m.syscallsVizMode == tabVizModeBubbles
@@ -1479,9 +1496,8 @@ func (m *Model) moveBubbleSelection(delta int) bool {
 
 // activeBubbleChartHasNodes reports whether the active tab's bubble chart
 // has any nodes to display.
-func (m Model) activeBubbleChartHasNodes() bool {
-	mutable := m
-	ch := mutable.bubbleChartFor(m.activeTab)
+func (m *Model) activeBubbleChartHasNodes() bool {
+	ch := m.bubbleChartFor(m.activeTab)
 	if ch == nil {
 		return false
 	}
@@ -1527,7 +1543,7 @@ func (m *Model) toggleBubbleMetric() tea.Cmd {
 // allowedVizModes returns the visualization modes available for tab. It
 // delegates to the tab registry so that new tabs need no changes here;
 // only the Files tab has a runtime condition (requires dir-grouped mode).
-func (m Model) allowedVizModes(tab Tab) []tabVizMode {
+func (m *Model) allowedVizModes(tab Tab) []tabVizMode {
 	return tabAllowedVizModes(tab, m.filesDirGrouped)
 }
 
@@ -1579,7 +1595,7 @@ func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, strea
 // It uses m.fastRefreshEvery when set; otherwise it falls back to the
 // streamRefreshMs constant so the behaviour is unchanged for callers that
 // did not supply a fast-refresh interval.
-func (m Model) streamTickCmd() tea.Cmd {
+func (m *Model) streamTickCmd() tea.Cmd {
 	d := m.fastRefreshEvery
 	if d <= 0 {
 		d = streamRefreshMs * time.Millisecond
@@ -1591,7 +1607,7 @@ func (m Model) streamTickCmd() tea.Cmd {
 // It uses m.fastRefreshEvery when set; otherwise it falls back to the
 // flameRefreshMs constant so the behaviour is unchanged for callers that
 // did not supply a fast-refresh interval.
-func (m Model) flameTickCmd() tea.Cmd {
+func (m *Model) flameTickCmd() tea.Cmd {
 	d := m.fastRefreshEvery
 	if d <= 0 {
 		d = flameRefreshMs * time.Millisecond

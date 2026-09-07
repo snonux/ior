@@ -46,7 +46,7 @@ type helpSection struct {
 	lines []string
 }
 
-func (m Model) helpSections() []helpSection {
+func (m *Model) helpSections() []helpSection {
 	line1 := "f filter  p pid picker  t tid picker  o probes  R parquet rec"
 	if m.keys.ExportEnabled() {
 		line1 += "  e stream export"

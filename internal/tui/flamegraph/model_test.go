@@ -253,7 +253,7 @@ func TestMouseClickSelectsFrameAndZooms(t *testing.T) {
 	}
 
 	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	m = next.(Model)
+	m = next.(*Model)
 
 	if got := m.zoomPath; got != targetPath {
 		t.Fatalf("expected mouse click to zoom into %q, got %q", targetPath, got)
@@ -269,7 +269,7 @@ func TestMouseClickOutsideBarsDoesNotChangeSelectionOrZoom(t *testing.T) {
 	beforeZoom := m.zoomPath
 
 	next, _ := m.Update(tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft}) // toolbar row
-	m = next.(Model)
+	m = next.(*Model)
 
 	if m.selectedIdx != beforeSelection {
 		t.Fatalf("expected toolbar click to preserve selection, got idx %d want %d", m.selectedIdx, beforeSelection)
@@ -416,7 +416,7 @@ func TestMouseClickOnLineageAncestorUndoesToThatZoomLevel(t *testing.T) {
 	}
 
 	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	m = next.(Model)
+	m = next.(*Model)
 	if got := m.zoomPath; got != ancestorPath {
 		t.Fatalf("expected click on lineage ancestor to undo zoom to %q, got %q", ancestorPath, got)
 	}
@@ -432,7 +432,7 @@ func TestMouseClickDirectDeepZoomThenAncestorClickReRootsToAncestor(t *testing.T
 	}
 
 	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	m = next.(Model)
+	m = next.(*Model)
 	if got := m.zoomPath; got != deepPath {
 		t.Fatalf("expected direct deep click to zoom into %q, got %q", deepPath, got)
 	}
@@ -445,7 +445,7 @@ func TestMouseClickDirectDeepZoomThenAncestorClickReRootsToAncestor(t *testing.T
 	}
 
 	next, _ = m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	m = next.(Model)
+	m = next.(*Model)
 	if got := m.zoomPath; got != ancestorPath {
 		t.Fatalf("expected ancestor click to re-root to %q, got %q", ancestorPath, got)
 	}
@@ -467,7 +467,7 @@ func TestMouseClickDirectDeepZoomUndoReturnsToRoot(t *testing.T) {
 	}
 
 	next, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	m = next.(Model)
+	m = next.(*Model)
 	if got, want := m.zoomPath, deepPath; got != want {
 		t.Fatalf("expected direct deep click to zoom into %q, got %q", want, got)
 	}
@@ -528,7 +528,7 @@ func TestLiveFixtureArrowTraversalWhileStreamingVisitsAllFrames(t *testing.T) {
 		t.Fatalf("expected seeded fixture to contain navigable frames, got %d", len(m.frames))
 	}
 
-	selectedPath := func(model Model) string {
+	selectedPath := func(model *Model) string {
 		if len(model.frames) == 0 || model.selectedIdx < 0 || model.selectedIdx >= len(model.frames) {
 			return ""
 		}
@@ -1255,14 +1255,14 @@ func TestDataRefreshAnimationConvergesOverTicks(t *testing.T) {
 	}
 
 	next, _ := m.Update(animTickMsg{})
-	m = next.(Model)
+	m = next.(*Model)
 	if len(m.frames) != len(initial) {
 		t.Fatalf("expected frame count to remain stable during animation")
 	}
 
 	for i := 0; i < 180 && m.animating; i++ {
 		next, _ = m.Update(animTickMsg{})
-		m = next.(Model)
+		m = next.(*Model)
 	}
 	if m.animating {
 		t.Fatalf("expected animation to settle within 180 ticks")
@@ -1347,10 +1347,10 @@ func TestResizeRecalculatesLayoutAndCullsNarrowFrames(t *testing.T) {
 	_ = mustFrameIndex(t, m.frames, "root"+pathSeparator+"tiny")
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = next.(Model)
+	m = next.(*Model)
 	for i := 0; i < 180 && m.animating; i++ {
 		next, _ = m.Update(animTickMsg{})
-		m = next.(Model)
+		m = next.(*Model)
 	}
 
 	for _, frame := range m.frames {
@@ -1398,7 +1398,7 @@ func TestSetViewportSameSizeKeepsPausedZoomLayoutStable(t *testing.T) {
 	}
 }
 
-func newZoomModel() Model {
+func newZoomModel() *Model {
 	m := NewModel(nil)
 	m.width = 120
 	m.height = 30
@@ -1440,13 +1440,13 @@ func parentFramePath(path string) string {
 	return path[:lastSep]
 }
 
-func pressFlameKey(t *testing.T, m Model, keyMsg tea.KeyPressMsg) Model {
+func pressFlameKey(t *testing.T, m *Model, keyMsg tea.KeyPressMsg) *Model {
 	t.Helper()
 	next, _ := m.Update(keyMsg)
-	return next.(Model)
+	return next.(*Model)
 }
 
-func firstClickablePointForFrame(m Model, frameIdx int) (x, y int, ok bool) {
+func firstClickablePointForFrame(m *Model, frameIdx int) (x, y int, ok bool) {
 	if frameIdx < 0 || frameIdx >= len(m.frames) {
 		return 0, 0, false
 	}
@@ -1469,11 +1469,11 @@ func firstClickablePointForFrame(m Model, frameIdx int) (x, y int, ok bool) {
 	return 0, 0, false
 }
 
-func settleFlameAnimation(t *testing.T, m Model) Model {
+func settleFlameAnimation(t *testing.T, m *Model) *Model {
 	t.Helper()
 	for i := 0; i < 240 && m.animating; i++ {
 		next, _ := m.Update(animTickMsg{})
-		m = next.(Model)
+		m = next.(*Model)
 	}
 	if m.animating {
 		t.Fatalf("expected flame animation to settle within 240 ticks")

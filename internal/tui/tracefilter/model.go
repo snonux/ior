@@ -36,6 +36,15 @@ type filterField struct {
 	opIndex  int
 }
 
+// Model is the filter modal. Every method takes a value receiver and every
+// mutator returns the updated Model, exactly like the Open/Close/Update flow
+// the modal is driven through (and like the sibling modals in tui/probes and
+// tui/export): the receiver-style rule is what keeps a mutation from being
+// silently lost when a caller holds the modal by value. The only methods
+// that write into m.fields elements without returning are the plain
+// setStringField/setNumericField/applyFilterToFields helpers, which take the
+// fields slice explicitly so the shared-backing-array write is visible
+// instead of implied by an addressable receiver.
 type Model struct {
 	visible     bool
 	fields      []filterField
@@ -87,7 +96,7 @@ func (m Model) Open(initial globalfilter.Filter) Model {
 	m.editing = false
 	m.textInput.Blur()
 	m.fields = defaultFilterFields()
-	m.applyFilterToFields(initial)
+	applyFilterToFields(m.fields, initial)
 	m.filter = initial.Clone()
 	return m
 }
@@ -120,16 +129,14 @@ func (m Model) Update(msg tea.Msg) Model {
 func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
 	switch keyMsg.String() {
 	case "esc":
-		m.commitEdit()
+		m = m.commitEdit()
 		m.filter = m.buildFilterFromFields()
 		return m.Close()
 	case "enter":
 		if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
-			m.toggleBoolField(m.activeField)
-			return m
+			return m.toggleBoolField(m.activeField)
 		}
-		m.commitEdit()
-		return m
+		return m.commitEdit()
 	}
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(keyMsg)
@@ -145,8 +152,7 @@ func (m Model) updateNavigating(keyMsg tea.KeyPressMsg) Model {
 		m.filter = m.buildFilterFromFields()
 		return m.Close()
 	case "c":
-		m.clearAll()
-		return m
+		return m.clearAll()
 	case "j", "down":
 		if m.activeField < len(m.fields)-1 {
 			m.activeField++
@@ -164,27 +170,27 @@ func (m Model) updateNavigating(keyMsg tea.KeyPressMsg) Model {
 		return m
 	case " ", "space":
 		if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
-			m.toggleBoolField(m.activeField)
+			return m.toggleBoolField(m.activeField)
 		}
 		return m
 	case "enter":
 		if m.fields[m.activeField].fieldKey == fieldErrorsOnly {
-			m.toggleBoolField(m.activeField)
-			return m
+			return m.toggleBoolField(m.activeField)
 		}
-		m.startEdit()
-		return m
+		return m.startEdit()
 	}
 	return m
 }
 
 // toggleBoolField flips the string "true"/"false" value for a boolean field.
-func (m *Model) toggleBoolField(index int) {
+// Value receiver returning Model, like every mutator on this type.
+func (m Model) toggleBoolField(index int) Model {
 	if strings.TrimSpace(m.fields[index].value) == "true" {
 		m.fields[index].value = "false"
 	} else {
 		m.fields[index].value = "true"
 	}
+	return m
 }
 
 func (m Model) View(width, height int) string {
@@ -226,7 +232,7 @@ func (m Model) View(width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
-func (m *Model) clearAll() {
+func (m Model) clearAll() Model {
 	for i := range m.fields {
 		m.fields[i].value = ""
 		if m.isNumericField(i) {
@@ -236,19 +242,22 @@ func (m *Model) clearAll() {
 	m.fields[len(m.fields)-1].value = "false"
 	m.editing = false
 	m.textInput.Blur()
+	return m
 }
 
-func (m *Model) startEdit() {
+func (m Model) startEdit() Model {
 	m.editing = true
 	m.textInput.SetValue(m.fields[m.activeField].value)
 	m.textInput.CursorEnd()
 	m.textInput.Focus()
+	return m
 }
 
-func (m *Model) commitEdit() {
+func (m Model) commitEdit() Model {
 	m.fields[m.activeField].value = strings.TrimSpace(m.textInput.Value())
 	m.editing = false
 	m.textInput.Blur()
+	return m
 }
 
 func (m Model) renderField(field filterField, active bool) string {
@@ -353,44 +362,49 @@ func parseNumericFilter(value string, opIndex int, duration bool) (*globalfilter
 	return &globalfilter.NumericFilter{Op: compareOps[opIndex], Value: number}, true
 }
 
-func (m *Model) applyFilterToFields(filter globalfilter.Filter) {
-	m.setStringField(fieldSyscall, filter.Syscall)
-	m.setStringField(fieldComm, filter.Comm)
-	m.setStringField(fieldFile, filter.File)
-	m.setNumericField(fieldPID, filter.PID, false)
-	m.setNumericField(fieldTID, filter.TID, false)
-	m.setNumericField(fieldFD, filter.FD, false)
-	m.setNumericField(fieldLatency, filter.LatencyNs, true)
-	m.setNumericField(fieldGap, filter.GapNs, true)
-	m.setNumericField(fieldBytes, filter.Bytes, false)
-	m.setNumericField(fieldReturn, filter.RetVal, false)
+// applyFilterToFields overwrites the field values in fields from filter.
+// It takes the slice explicitly instead of a Model receiver so the
+// element writes are visible slice semantics, not a pointer-receiver side
+// effect. fields[i].fieldKey == i for every i (see defaultFilterFields), so
+// indexing by fieldKey is indexing by position.
+func applyFilterToFields(fields []filterField, filter globalfilter.Filter) {
+	setStringField(fields, fieldSyscall, filter.Syscall)
+	setStringField(fields, fieldComm, filter.Comm)
+	setStringField(fields, fieldFile, filter.File)
+	setNumericField(fields, fieldPID, filter.PID, false)
+	setNumericField(fields, fieldTID, filter.TID, false)
+	setNumericField(fields, fieldFD, filter.FD, false)
+	setNumericField(fields, fieldLatency, filter.LatencyNs, true)
+	setNumericField(fields, fieldGap, filter.GapNs, true)
+	setNumericField(fields, fieldBytes, filter.Bytes, false)
+	setNumericField(fields, fieldReturn, filter.RetVal, false)
 	if filter.ErrorsOnly {
-		m.fields[fieldErrorsOnly].value = "true"
+		fields[fieldErrorsOnly].value = "true"
 	} else {
-		m.fields[fieldErrorsOnly].value = "false"
+		fields[fieldErrorsOnly].value = "false"
 	}
 }
 
-func (m *Model) setStringField(key fieldKey, filter *globalfilter.StringFilter) {
+func setStringField(fields []filterField, key fieldKey, filter *globalfilter.StringFilter) {
 	if filter == nil {
-		m.fields[key].value = ""
+		fields[key].value = ""
 		return
 	}
-	m.fields[key].value = filter.Pattern
+	fields[key].value = filter.Pattern
 }
 
-func (m *Model) setNumericField(key fieldKey, filter *globalfilter.NumericFilter, duration bool) {
+func setNumericField(fields []filterField, key fieldKey, filter *globalfilter.NumericFilter, duration bool) {
 	if filter == nil {
-		m.fields[key].value = ""
-		m.fields[key].opIndex = 2
+		fields[key].value = ""
+		fields[key].opIndex = 2
 		return
 	}
-	m.fields[key].opIndex = opToIndex(filter.Op)
+	fields[key].opIndex = opToIndex(filter.Op)
 	if duration {
-		m.fields[key].value = formatDurationField(filter.Value)
+		fields[key].value = formatDurationField(filter.Value)
 		return
 	}
-	m.fields[key].value = strconv.FormatInt(filter.Value, 10)
+	fields[key].value = strconv.FormatInt(filter.Value, 10)
 }
 
 func formatDurationField(value int64) string {

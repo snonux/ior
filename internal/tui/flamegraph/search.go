@@ -50,7 +50,7 @@ func (m *Model) recomputeFilterState() {
 
 // searchFooter renders the search bar with match position info. Delegates to
 // SearchController.footerLine.
-func (m Model) searchFooter() string {
+func (m *Model) searchFooter() string {
 	return m.SearchController.footerLine(m.frames, m.selectedIdx)
 }
 

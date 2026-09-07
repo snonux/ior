@@ -277,7 +277,8 @@ func TestShellSplitVariousCases(t *testing.T) {
 }
 
 // TestExportSnapshotMatchesRenameOnEitherName guards the export half of the
-// either-name contract. Model.ExportSnapshotToCSV (the `E` path) filters the
+// either-name contract. The export command path (ExportSourceSnapshotToCSV,
+// the `E` path) filters the
 // source snapshot itself rather than reusing m.filtered, so it needs its own
 // regression test: without one, reverting it to plain Matches leaves the whole
 // package green while the exported CSV silently loses rename rows that the
