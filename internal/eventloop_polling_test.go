@@ -11,7 +11,7 @@ import (
 
 func TestHandleEpollCtlExitUsesEpollInstanceFd(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.fdState().set(41, file.NewFd(41, "anon_inode:[eventpoll]", -1))
+	el.fdState().set(41, 90, file.NewFd(41, "anon_inode:[eventpoll]", -1))
 
 	enter := &types.EpollCtlEvent{
 		EventType: types.ENTER_EPOLL_CTL_EVENT,

@@ -51,6 +51,7 @@
 #define EXIT_EXEC_EVENT 46
 #define PROCESS_EXEC_EVENT 47
 #define OPEN_NAME_FIXUP_EVENT 48
+#define PROCESS_EXIT_EVENT 49
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -320,4 +321,19 @@ struct process_exec_event {
     __u32 pid;
     __u32 tid;
     char comm[MAX_PROGNAME_LENGTH];
+};
+
+// process_exit_event is not a syscall tracepoint event: it is emitted by the
+// hand-written sched:sched_process_exit handler in exec.c, which fires when a
+// task exits. Userspace consumes it as a control event (no enter/exit pair,
+// never rendered as a row) that evicts the exited task's process (tgid) from
+// the fdTracker's per-(pid, fd) maps, so descriptors of processes that are
+// gone do not linger until LRU eviction. Like process_exec_event it carries no
+// comm: the only payload userspace needs is the identity of the process.
+struct process_exit_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
 };

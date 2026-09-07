@@ -360,6 +360,22 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("process_exec decode mismatch")
 		}
 	})
+
+	// ProcessExitEvent is the sibling control record (sched_process_exit)
+	// that evicts a dead process's fdTracker entries. Same table membership
+	// rationale as ProcessExecEvent above.
+	t.Run("ProcessExitEvent", func(t *testing.T) {
+		ev := &ProcessExitEvent{EventType: PROCESS_EXIT_EVENT, Time: 1, Pid: 2, Tid: 3}
+		raw, _ := ev.Bytes()
+
+		slow := NewProcessExitEvent(raw)
+		fast := NewProcessExitEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("process_exit decode mismatch")
+		}
+	})
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -695,6 +711,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "PerfOpenEvent", decode: func(raw []byte) bool { return NewPerfOpenEventFast(raw) == nil }},
 		{name: "MemEvent", decode: func(raw []byte) bool { return NewMemEventFast(raw) == nil }},
 		{name: "ProcessExecEvent", decode: func(raw []byte) bool { return NewProcessExecEventFast(raw) == nil }},
+		{name: "ProcessExitEvent", decode: func(raw []byte) bool { return NewProcessExitEventFast(raw) == nil }},
 	}
 
 	for _, tc := range cases {

@@ -11,7 +11,7 @@ import (
 
 func TestHandleTwoFdExitUsesFirstDescriptor(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.fdState().set(81, file.NewFd(81, "/proc/self/fd/81", -1))
+	el.fdState().set(81, 70, file.NewFd(81, "/proc/self/fd/81", -1))
 
 	enter := &types.TwoFdEvent{
 		EventType: types.ENTER_TWO_FD_EVENT,

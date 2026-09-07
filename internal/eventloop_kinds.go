@@ -138,6 +138,11 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_PERF_OPEN_EVENT, rawDecoder[types.PerfOpenEvent](types.NewPerfOpenEventFast), nil),
 		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExecEvent)),
+		// sched:sched_process_exit reports the tgid of an exiting task so the
+		// fdTracker can evict that process's (pid, fd) entries instead of
+		// holding them until LRU eviction (internal/eventloop_processexit.go).
+		controlRaw(types.PROCESS_EXIT_EVENT, rawDecoder[types.ProcessExitEvent](types.NewProcessExitEventFast),
+			typedRuntimeControl((*eventLoop).handleProcessExitEvent)),
 		// The open-name fixup reuses struct open_event because that is exactly
 		// what it carries: the enter payload's filename, read a second time at
 		// sys_exit once the kernel had faulted the page in. It needs no decoder

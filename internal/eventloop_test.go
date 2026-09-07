@@ -235,8 +235,8 @@ func TestHandleTwoFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
 
 func TestHandleTwoFdExitCloseRangeCloexecKeepsFds(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.fdState().set(5, file.NewFd(5, "stays-open", syscall.O_RDONLY))
-	el.fdState().set(6, file.NewFd(6, "stays-open", syscall.O_RDONLY))
+	el.fdState().set(5, 3003, file.NewFd(5, "stays-open", syscall.O_RDONLY))
+	el.fdState().set(6, 3003, file.NewFd(6, "stays-open", syscall.O_RDONLY))
 
 	// close_range(5, 6, CLOSE_RANGE_CLOEXEC): the kernel only marks the fds
 	// close-on-exec, so they remain open and must stay tracked.
@@ -262,15 +262,15 @@ func TestHandleTwoFdExitCloseRangeCloexecKeepsFds(t *testing.T) {
 		t.Fatal("handleTwoFdExit(close_range cloexec) returned false")
 	}
 
-	verifyFileDescriptor(t, el, 5, "stays-open")
-	verifyFileDescriptor(t, el, 6, "stays-open")
+	verifyFileDescriptor(t, el, 3003, 5, "stays-open")
+	verifyFileDescriptor(t, el, 3003, 6, "stays-open")
 }
 
 func TestHandleTwoFdExitCloseRangeUnboundedClosesAll(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.fdState().set(2, file.NewFd(2, "keep-below", syscall.O_RDONLY))
-	el.fdState().set(7, file.NewFd(7, "drop", syscall.O_RDONLY))
-	el.fdState().set(900, file.NewFd(900, "drop-high", syscall.O_RDONLY))
+	el.fdState().set(2, 4004, file.NewFd(2, "keep-below", syscall.O_RDONLY))
+	el.fdState().set(7, 4004, file.NewFd(7, "drop", syscall.O_RDONLY))
+	el.fdState().set(900, 4004, file.NewFd(900, "drop-high", syscall.O_RDONLY))
 
 	// close_range(3, ~0U, 0): the unsigned UINT_MAX upper bound arrives as a
 	// negative __s32, meaning "close everything from fd 3 up".
@@ -296,9 +296,9 @@ func TestHandleTwoFdExitCloseRangeUnboundedClosesAll(t *testing.T) {
 		t.Fatal("handleTwoFdExit(close_range unbounded) returned false")
 	}
 
-	verifyFileDescriptor(t, el, 2, "keep-below")
-	verifyFdNotTracked(t, el, 7)
-	verifyFdNotTracked(t, el, 900)
+	verifyFileDescriptor(t, el, 4004, 2, "keep-below")
+	verifyFdNotTracked(t, el, 4004, 7)
+	verifyFdNotTracked(t, el, 4004, 900)
 }
 
 func TestFreezePairForEmissionCopiesFdFile(t *testing.T) {
@@ -752,9 +752,9 @@ func makeCloseRangeEventTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected file name '%v' but got '%v'", filename2, ep.File.Name())
 		}
 
-		verifyFileDescriptor(t, el, fd1, filename1)
-		verifyFdNotTracked(t, el, fd2)
-		verifyFdNotTracked(t, el, fd3)
+		verifyFileDescriptor(t, el, defaultPid, fd1, filename1)
+		verifyFdNotTracked(t, el, defaultPid, fd2)
+		verifyFdNotTracked(t, el, defaultPid, fd3)
 	})
 
 	return td
@@ -819,8 +819,8 @@ func makeCloseRangeFailureTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected '%v' but got '%v'", exitCloseRange, ep.ExitEv)
 		}
 
-		verifyFileDescriptor(t, el, fd1, filename1)
-		verifyFileDescriptor(t, el, fd2, filename2)
+		verifyFileDescriptor(t, el, defaultPid, fd1, filename1)
+		verifyFileDescriptor(t, el, defaultPid, fd2, filename2)
 	})
 
 	return td
@@ -845,7 +845,7 @@ func makeCloseFailureTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
 	// close(fd) that fails with ret=-1: the fd must remain tracked.
@@ -863,7 +863,7 @@ func makeCloseFailureTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected '%v' but got '%v'", closeExitEv, ep.ExitEv)
 		}
 		// Failed close leaves the mapping intact.
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
 	return td
@@ -922,7 +922,7 @@ func makeSyncFileRangeEventTestData(t *testing.T) (td testData) {
 		if !openExitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", openExitEv, ep.ExitEv)
 		}
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -932,7 +932,7 @@ func makeSyncFileRangeEventTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 		if ep.File == nil {
 			t.Fatalf("Expected file metadata for sync_file_range event")
 		}
@@ -1025,7 +1025,7 @@ func makePidfdGetfdEventTestData(t *testing.T) (td testData) {
 		if got, want := ep.File.Name(), path; got != want {
 			t.Errorf("Expected transferred file '%v' but got '%v'", want, got)
 		}
-		if _, ok := el.fdState().files[int32(fd)]; !ok {
+		if _, ok := el.fdState().files[fdKey(pid, int32(fd))]; !ok {
 			t.Errorf("Expected transferred fd %d to be tracked", fd)
 		}
 	})
@@ -1047,7 +1047,7 @@ func makePidfdGetfdFailureTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
-		if _, ok := el.fdState().files[9999]; ok {
+		if _, ok := el.fdState().files[fdKey(defaultPid, 9999)]; ok {
 			t.Errorf("Expected no tracked fd for failed pidfd_getfd")
 		}
 	})
@@ -1116,14 +1116,14 @@ func makeCopyFileRangeEventTestData(t *testing.T) (td testData) {
 		if !srcOpenEnter.Equals(ep.EnterEv) || !srcOpenExit.Equals(ep.ExitEv) {
 			t.Errorf("unexpected src open event pair: %v", ep)
 		}
-		verifyFileDescriptor(t, el, srcFd, srcName)
+		verifyFileDescriptor(t, el, defaultPid, srcFd, srcName)
 	})
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		if !dstOpenEnter.Equals(ep.EnterEv) || !dstOpenExit.Equals(ep.ExitEv) {
 			t.Errorf("unexpected dst open event pair: %v", ep)
 		}
-		verifyFileDescriptor(t, el, dstFd, dstName)
+		verifyFileDescriptor(t, el, defaultPid, dstFd, dstName)
 	})
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -1181,7 +1181,7 @@ func makeMmapEventTestData(t *testing.T) (td testData) {
 		if !openExitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", openExitEv, ep.ExitEv)
 		}
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -1430,8 +1430,8 @@ func makeCreatEventTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Fatalf("Expected file to be set for successful creat")
 		}
-		verifyFileDescriptor(t, el, 47, pathname)
-		fdFile, ok := el.fdState().files[47].(*file.FdFile)
+		verifyFileDescriptor(t, el, defaultPid, 47, pathname)
+		fdFile, ok := el.fdState().files[fdKey(defaultPid, 47)].(*file.FdFile)
 		if !ok {
 			t.Fatalf("Expected creat fd 47 to be an *file.FdFile")
 		}
@@ -1464,7 +1464,7 @@ func makeFailedCreatEventTestData(t *testing.T) (td testData) {
 		}
 		// No fd was returned, so nothing must be registered. -1 is not a valid
 		// fd key; assert the path-only file carries the name instead.
-		verifyFdNotTracked(t, el, -1)
+		verifyFdNotTracked(t, el, defaultPid, -1)
 		if ep.File == nil {
 			t.Fatalf("Expected path file to be set for failed creat")
 		}
@@ -1707,7 +1707,7 @@ func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Errorf("Expected io_uring fd to be tracked")
 		}
-		if _, ok := el.fdState().files[48]; !ok {
+		if _, ok := el.fdState().files[fdKey(defaultPid, 48)]; !ok {
 			t.Errorf("Expected io_uring fd 48 to be tracked")
 		}
 	})
@@ -1759,7 +1759,7 @@ func makeIoUringEnterEventTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Errorf("Expected io_uring_enter to have a file")
 		}
-		if _, ok := el.fdState().files[fd]; ok {
+		if _, ok := el.fdState().files[fdKey(defaultPid, fd)]; ok {
 			t.Errorf("Expected io_uring_enter to not track fd %d", fd)
 		}
 	})
@@ -1785,7 +1785,7 @@ func makeIoUringRegisterEventTestData(t *testing.T) (td testData) {
 		if ep.File == nil {
 			t.Errorf("Expected io_uring_register to have a file")
 		}
-		if _, ok := el.fdState().files[fd]; ok {
+		if _, ok := el.fdState().files[fdKey(defaultPid, fd)]; ok {
 			t.Errorf("Expected io_uring_register to not track fd %d", fd)
 		}
 	})
@@ -1834,7 +1834,7 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 
 	// Validate open created the fd
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, origFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, origFd, filename)
 	})
 
 	// Step 2: Dup3 with O_CLOEXEC flag
@@ -1847,11 +1847,11 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 	// Validate dup3 created new fd with same file and O_CLOEXEC flag
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// Both fds should be tracked
-		verifyFileDescriptor(t, el, origFd, filename)
-		verifyFileDescriptor(t, el, newFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, origFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, newFd, filename)
 
 		// Verify the new fd has O_CLOEXEC flag
-		if newFile, ok := el.fdState().files[newFd]; ok {
+		if newFile, ok := el.fdState().files[fdKey(defaultPid, newFd)]; ok {
 			fdFile, ok := newFile.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1882,8 +1882,8 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, origFd)
-		verifyFileDescriptor(t, el, newFd, filename) // newFd should still be tracked
+		verifyFdNotTracked(t, el, defaultPid, origFd)
+		verifyFileDescriptor(t, el, defaultPid, newFd, filename) // newFd should still be tracked
 	})
 
 	_, closeNewEnterBytes := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, newFd, types.SYS_ENTER_CLOSE)
@@ -1893,8 +1893,8 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeNewExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, origFd)
-		verifyFdNotTracked(t, el, newFd)
+		verifyFdNotTracked(t, el, defaultPid, origFd)
+		verifyFdNotTracked(t, el, defaultPid, newFd)
 	})
 
 	return td
@@ -1919,7 +1919,7 @@ func makeDup2TestData(t *testing.T) (td testData) {
 
 	// Validate open created the fd
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, origFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, origFd, filename)
 	})
 
 	// Step 2: Dup2 (uses FdEvent, not Dup3Event)
@@ -1932,11 +1932,11 @@ func makeDup2TestData(t *testing.T) (td testData) {
 	// Validate dup2 created new fd without O_CLOEXEC
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// Both fds should be tracked
-		verifyFileDescriptor(t, el, origFd, filename)
-		verifyFileDescriptor(t, el, targetFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, origFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, targetFd, filename)
 
 		// Verify the new fd does NOT have O_CLOEXEC flag (unlike dup3)
-		if newFile, ok := el.fdState().files[targetFd]; ok {
+		if newFile, ok := el.fdState().files[fdKey(defaultPid, targetFd)]; ok {
 			fdFile, ok := newFile.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -1967,8 +1967,8 @@ func makeDup2TestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, origFd)
-		verifyFileDescriptor(t, el, targetFd, filename) // targetFd should still be tracked
+		verifyFdNotTracked(t, el, defaultPid, origFd)
+		verifyFileDescriptor(t, el, defaultPid, targetFd, filename) // targetFd should still be tracked
 	})
 
 	_, closeTargetEnterBytes := makeEnterFdEvent(t, defaulTime+800, defaultPid, defaultTid, targetFd, types.SYS_ENTER_CLOSE)
@@ -1978,27 +1978,29 @@ func makeDup2TestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeTargetExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, origFd)
-		verifyFdNotTracked(t, el, targetFd)
+		verifyFdNotTracked(t, el, defaultPid, origFd)
+		verifyFdNotTracked(t, el, defaultPid, targetFd)
 	})
 
 	return td
 }
 
-// Helper functions for FD lifecycle tests
-func verifyFileDescriptor(t *testing.T, el *eventLoop, fd int32, expectedFileName string) {
-	if file, ok := el.fdState().files[fd]; ok {
+// Helper functions for FD lifecycle tests. Both take the pid the descriptor
+// belongs to: the fd table is keyed by (pid, fd), so an assertion that ignores
+// the pid would pass even when the entry landed under the wrong process.
+func verifyFileDescriptor(t *testing.T, el *eventLoop, pid uint32, fd int32, expectedFileName string) {
+	if file, ok := el.fdState().files[fdKey(pid, fd)]; ok {
 		if file.Name() != expectedFileName {
-			t.Errorf("Expected fd %d to map to file '%s' but got '%s'", fd, expectedFileName, file.Name())
+			t.Errorf("Expected pid %d fd %d to map to file '%s' but got '%s'", pid, fd, expectedFileName, file.Name())
 		}
 	} else {
-		t.Errorf("Expected fd %d to be tracked but it wasn't found", fd)
+		t.Errorf("Expected pid %d fd %d to be tracked but it wasn't found", pid, fd)
 	}
 }
 
-func verifyFdNotTracked(t *testing.T, el *eventLoop, fd int32) {
-	if _, ok := el.fdState().files[fd]; ok {
-		t.Errorf("Expected fd %d to not be tracked but it was found", fd)
+func verifyFdNotTracked(t *testing.T, el *eventLoop, pid uint32, fd int32) {
+	if _, ok := el.fdState().files[fdKey(pid, fd)]; ok {
+		t.Errorf("Expected pid %d fd %d to not be tracked but it was found", pid, fd)
 	}
 }
 
@@ -2068,7 +2070,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 
 	// Validate open created the fd
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, int32(fd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(fd), filename)
 	})
 
 	// // Step 2: Call fcntl F_SETFL to add O_NONBLOCK and O_APPEND flags
@@ -2146,7 +2148,7 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, int32(fd))
+		verifyFdNotTracked(t, el, defaultPid, int32(fd))
 	})
 
 	return td
@@ -2171,7 +2173,7 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 
 	// Validate open created the fd
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, int32(origFd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(origFd), filename)
 	})
 
 	// Step 2: Call fcntl F_DUPFD to duplicate the file descriptor
@@ -2191,11 +2193,11 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 		}
 
 		// Both fds should be tracked and point to the same file
-		verifyFileDescriptor(t, el, int32(origFd), filename)
-		verifyFileDescriptor(t, el, int32(newFd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(origFd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(newFd), filename)
 
 		// Verify the new fd does NOT have O_CLOEXEC flag (F_DUPFD doesn't set it)
-		if f, ok := el.fdState().files[int32(newFd)]; ok {
+		if f, ok := el.fdState().files[fdKey(defaultPid, int32(newFd))]; ok {
 			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2226,8 +2228,8 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, int32(origFd))
-		verifyFileDescriptor(t, el, int32(newFd), filename) // newFd should still be tracked
+		verifyFdNotTracked(t, el, defaultPid, int32(origFd))
+		verifyFileDescriptor(t, el, defaultPid, int32(newFd), filename) // newFd should still be tracked
 	})
 
 	// Step 5: Write to new fd to verify it still works after original was closed
@@ -2251,8 +2253,8 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeNewExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, int32(origFd))
-		verifyFdNotTracked(t, el, int32(newFd))
+		verifyFdNotTracked(t, el, defaultPid, int32(origFd))
+		verifyFdNotTracked(t, el, defaultPid, int32(newFd))
 	})
 
 	return td
@@ -2277,9 +2279,9 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 
 	// Validate open created the fd
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, int32(origFd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(origFd), filename)
 		// Verify original fd doesn't have O_CLOEXEC
-		if f, ok := el.fdState().files[int32(origFd)]; ok {
+		if f, ok := el.fdState().files[fdKey(defaultPid, int32(origFd))]; ok {
 			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2306,11 +2308,11 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 		}
 
 		// Both fds should be tracked and point to the same file
-		verifyFileDescriptor(t, el, int32(origFd), filename)
-		verifyFileDescriptor(t, el, int32(newFd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(origFd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(newFd), filename)
 
 		// Verify the new fd has O_CLOEXEC flag
-		if f, ok := el.fdState().files[int32(newFd)]; ok {
+		if f, ok := el.fdState().files[fdKey(defaultPid, int32(newFd))]; ok {
 			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2320,7 +2322,7 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 		}
 
 		// Verify original fd still doesn't have O_CLOEXEC
-		if f, ok := el.fdState().files[int32(origFd)]; ok {
+		if f, ok := el.fdState().files[fdKey(defaultPid, int32(origFd))]; ok {
 			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2363,8 +2365,8 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeOrigExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, int32(origFd))
-		verifyFileDescriptor(t, el, int32(newFd), filename) // newFd should still be tracked
+		verifyFdNotTracked(t, el, defaultPid, int32(origFd))
+		verifyFileDescriptor(t, el, defaultPid, int32(newFd), filename) // newFd should still be tracked
 	})
 
 	_, closeNewEnterBytes := makeEnterFdEvent(t, defaulTime+1000, defaultPid, defaultTid, int32(newFd), types.SYS_ENTER_CLOSE)
@@ -2374,8 +2376,8 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeNewExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, int32(origFd))
-		verifyFdNotTracked(t, el, int32(newFd))
+		verifyFdNotTracked(t, el, defaultPid, int32(origFd))
+		verifyFdNotTracked(t, el, defaultPid, int32(newFd))
 	})
 
 	return td
@@ -2399,7 +2401,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 
 	// Validate open created the fd
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, int32(fd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(fd), filename)
 	})
 
 	// Step 2: Call fcntl with invalid command that will fail
@@ -2419,7 +2421,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 		}
 
 		// File descriptor should still be tracked unchanged
-		verifyFileDescriptor(t, el, int32(fd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(fd), filename)
 	})
 
 	// Step 3: Call fcntl F_SETFL with error
@@ -2439,7 +2441,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 		}
 
 		// Verify flags were NOT updated due to error
-		if f, ok := el.fdState().files[int32(fd)]; ok {
+		if f, ok := el.fdState().files[fdKey(defaultPid, int32(fd))]; ok {
 			fdFile, ok := f.(*file.FdFile)
 			if !ok {
 				t.Errorf("Expected file to be FdFile type")
@@ -2469,7 +2471,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 		if len(el.fdState().files) != 1 {
 			t.Errorf("Expected only 1 fd to be tracked, got %d", len(el.fdState().files))
 		}
-		verifyFileDescriptor(t, el, int32(fd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(fd), filename)
 	})
 
 	// Step 5: Close the fd
@@ -2480,7 +2482,7 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, int32(fd))
+		verifyFdNotTracked(t, el, defaultPid, int32(fd))
 	})
 
 	return td
@@ -2533,7 +2535,7 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, int32(realFd), filename)
+		verifyFileDescriptor(t, el, defaultPid, int32(realFd), filename)
 	})
 
 	// Step 3: Close the real fd
@@ -2544,7 +2546,7 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, int32(realFd))
+		verifyFdNotTracked(t, el, defaultPid, int32(realFd))
 	})
 
 	// Step 4: Call fcntl on the closed fd (should fail)
@@ -2563,7 +2565,7 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 		}
 
 		// The closed fd should not be tracked and no new fd should be created
-		verifyFdNotTracked(t, el, int32(realFd))
+		verifyFdNotTracked(t, el, defaultPid, int32(realFd))
 	})
 
 	return td
@@ -2619,7 +2621,7 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 		}
 
 		// Verify that the fd is now tracked
-		verifyFileDescriptor(t, el, fd, pathname)
+		verifyFileDescriptor(t, el, defaultPid, fd, pathname)
 
 		// Verify that the pending handle has been consumed
 		if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
@@ -2692,7 +2694,7 @@ func makeFdLifecycleTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected '%v' but got '%v'", openExitEv, ep.ExitEv)
 		}
 		// Verify fd is now tracked
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
 	// Step 2: Read from fd
@@ -2710,7 +2712,7 @@ func makeFdLifecycleTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected file name '%s' but got '%s'", filename, ep.File.Name())
 		}
 		// Verify fd is still tracked
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
 	// Step 3: Write to fd
@@ -2728,7 +2730,7 @@ func makeFdLifecycleTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected file name '%s' but got '%s'", filename, ep.File.Name())
 		}
 		// Verify fd is still tracked
-		verifyFileDescriptor(t, el, fd, filename)
+		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
 	// Step 4: Close fd
@@ -2746,7 +2748,7 @@ func makeFdLifecycleTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected file name '%s' but got '%s'", filename, ep.File.Name())
 		}
 		// Verify fd is no longer tracked after close
-		verifyFdNotTracked(t, el, fd)
+		verifyFdNotTracked(t, el, defaultPid, fd)
 	})
 
 	return td
@@ -2771,7 +2773,7 @@ func makeFdDupTestData(t *testing.T) (td testData) {
 
 	// Validate open created the fd
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, origFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, origFd, filename)
 	})
 
 	// Step 2: Dup the fd
@@ -2784,8 +2786,8 @@ func makeFdDupTestData(t *testing.T) (td testData) {
 	// Validate dup created new fd pointing to same file
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// Both fds should be tracked
-		verifyFileDescriptor(t, el, origFd, filename)
-		verifyFileDescriptor(t, el, dupFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, origFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, dupFd, filename)
 	})
 
 	// Step 3: Read from original fd
@@ -2830,9 +2832,9 @@ func makeFdDupTestData(t *testing.T) (td testData) {
 	// Validate original fd is closed but dup'd fd still works
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// Original fd should be untracked
-		verifyFdNotTracked(t, el, origFd)
+		verifyFdNotTracked(t, el, defaultPid, origFd)
 		// Dup'd fd should still be tracked
-		verifyFileDescriptor(t, el, dupFd, filename)
+		verifyFileDescriptor(t, el, defaultPid, dupFd, filename)
 	})
 
 	// Step 6: Read from dup'd fd after original is closed
@@ -2860,8 +2862,8 @@ func makeFdDupTestData(t *testing.T) (td testData) {
 
 	// Validate both fds are now untracked
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFdNotTracked(t, el, origFd)
-		verifyFdNotTracked(t, el, dupFd)
+		verifyFdNotTracked(t, el, defaultPid, origFd)
+		verifyFdNotTracked(t, el, defaultPid, dupFd)
 	})
 
 	return td
@@ -2889,7 +2891,7 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes1)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
-		verifyFileDescriptor(t, el, fd1, filename1)
+		verifyFileDescriptor(t, el, defaultPid, fd1, filename1)
 	})
 
 	// File 2
@@ -2905,8 +2907,8 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// Verify both fd1 and fd2 are tracked
-		verifyFileDescriptor(t, el, fd1, filename1)
-		verifyFileDescriptor(t, el, fd2, filename2)
+		verifyFileDescriptor(t, el, defaultPid, fd1, filename1)
+		verifyFileDescriptor(t, el, defaultPid, fd2, filename2)
 	})
 
 	// File 3
@@ -2922,9 +2924,9 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// Verify all 3 fds are tracked
-		verifyFileDescriptor(t, el, fd1, filename1)
-		verifyFileDescriptor(t, el, fd2, filename2)
-		verifyFileDescriptor(t, el, fd3, filename3)
+		verifyFileDescriptor(t, el, defaultPid, fd1, filename1)
+		verifyFileDescriptor(t, el, defaultPid, fd2, filename2)
+		verifyFileDescriptor(t, el, defaultPid, fd3, filename3)
 	})
 
 	// Read from fd2
@@ -2952,9 +2954,9 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// fd2 should be untracked, fd1 and fd3 still tracked
-		verifyFileDescriptor(t, el, fd1, filename1)
-		verifyFdNotTracked(t, el, fd2)
-		verifyFileDescriptor(t, el, fd3, filename3)
+		verifyFileDescriptor(t, el, defaultPid, fd1, filename1)
+		verifyFdNotTracked(t, el, defaultPid, fd2)
+		verifyFileDescriptor(t, el, defaultPid, fd3, filename3)
 	})
 
 	// Close fd1
@@ -2966,9 +2968,9 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// fd1 and fd2 should be untracked, fd3 still tracked
-		verifyFdNotTracked(t, el, fd1)
-		verifyFdNotTracked(t, el, fd2)
-		verifyFileDescriptor(t, el, fd3, filename3)
+		verifyFdNotTracked(t, el, defaultPid, fd1)
+		verifyFdNotTracked(t, el, defaultPid, fd2)
+		verifyFileDescriptor(t, el, defaultPid, fd3, filename3)
 	})
 
 	// Write to fd3 (verify it still works)
@@ -2995,9 +2997,9 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		// All fds should be untracked
-		verifyFdNotTracked(t, el, fd1)
-		verifyFdNotTracked(t, el, fd2)
-		verifyFdNotTracked(t, el, fd3)
+		verifyFdNotTracked(t, el, defaultPid, fd1)
+		verifyFdNotTracked(t, el, defaultPid, fd2)
+		verifyFdNotTracked(t, el, defaultPid, fd3)
 	})
 
 	return td

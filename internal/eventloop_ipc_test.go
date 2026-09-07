@@ -38,8 +38,8 @@ func TestHandlePipeExitTracksReturnedFds(t *testing.T) {
 	if ok := el.handlePipeExit(ep, enter); !ok {
 		t.Fatal("handlePipeExit returned false")
 	}
-	verifyFileDescriptor(t, el, 52, "pipe:524288:52:53")
-	verifyFileDescriptor(t, el, 53, "pipe:524288:52:53")
+	verifyFileDescriptor(t, el, 70, 52, "pipe:524288:52:53")
+	verifyFileDescriptor(t, el, 70, 53, "pipe:524288:52:53")
 }
 
 // TestHandlePipeExitFailureTracksNoFds locks in the pipe(2) failure path:
@@ -77,7 +77,7 @@ func TestHandlePipeExitFailureTracksNoFds(t *testing.T) {
 	if ok := el.handlePipeExit(ep, enter); !ok {
 		t.Fatal("handlePipeExit returned false")
 	}
-	verifyFdNotTracked(t, el, -1)
+	verifyFdNotTracked(t, el, 72, -1)
 	if ep.File != nil {
 		t.Errorf("expected no file attached to failed pipe pair, got %q", ep.File.Name())
 	}
@@ -109,7 +109,7 @@ func TestHandleEventfdExitTracksReturnedFd(t *testing.T) {
 	if ok := el.handleEventfdExit(ep, enter); !ok {
 		t.Fatal("handleEventfdExit returned false")
 	}
-	verifyFileDescriptor(t, el, 61, "eventfd:2048")
+	verifyFileDescriptor(t, el, 80, 61, "eventfd:2048")
 }
 
 func TestHandleEventfdExitAppliesPairFilter(t *testing.T) {

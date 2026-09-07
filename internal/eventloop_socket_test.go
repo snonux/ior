@@ -35,7 +35,7 @@ func TestHandleSocketExitTracksReturnedFd(t *testing.T) {
 	if ok := el.handleSocketExit(ep, enter); !ok {
 		t.Fatal("handleSocketExit returned false")
 	}
-	verifyFileDescriptor(t, el, 55, "socket:1:2:0")
+	verifyFileDescriptor(t, el, 42, 55, "socket:1:2:0")
 }
 
 func TestHandleSocketExitAppliesPairFilter(t *testing.T) {
@@ -104,8 +104,8 @@ func TestHandleSocketpairExitTracksReturnedFdsFromExitEvent(t *testing.T) {
 	if ok := el.handleSocketpairExit(ep, enter); !ok {
 		t.Fatal("handleSocketpairExit returned false")
 	}
-	verifyFileDescriptor(t, el, 61, "socket:1:1:0")
-	verifyFileDescriptor(t, el, 62, "socket:1:1:0")
+	verifyFileDescriptor(t, el, 77, 61, "socket:1:1:0")
+	verifyFileDescriptor(t, el, 77, 62, "socket:1:1:0")
 }
 
 // TestHandleSocketpairExitDoesNotTrackDomainAsFd is a regression lock-in for the
@@ -153,10 +153,10 @@ func TestHandleSocketpairExitDoesNotTrackDomainAsFd(t *testing.T) {
 		t.Fatal("handleSocketpairExit returned false")
 	}
 	// Only the output fds sv[2] are tracked.
-	verifyFileDescriptor(t, el, 3, "socket:10:1:0")
-	verifyFileDescriptor(t, el, 4, "socket:10:1:0")
+	verifyFileDescriptor(t, el, 77, 3, "socket:10:1:0")
+	verifyFileDescriptor(t, el, 77, 4, "socket:10:1:0")
 	// The domain constant (AF_INET6 == 10) must NOT have been captured as an fd.
-	verifyFdNotTracked(t, el, afInet6)
+	verifyFdNotTracked(t, el, 77, afInet6)
 }
 
 // TestHandleSocketpairExitDropsFdsOnError pins that a failed socketpair(2)
@@ -197,14 +197,14 @@ func TestHandleSocketpairExitDropsFdsOnError(t *testing.T) {
 	if ok := el.handleSocketpairExit(ep, enter); !ok {
 		t.Fatal("handleSocketpairExit returned false")
 	}
-	verifyFdNotTracked(t, el, 1)
-	verifyFdNotTracked(t, el, -1)
+	verifyFdNotTracked(t, el, 77, 1)
+	verifyFdNotTracked(t, el, 77, -1)
 }
 
 func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 
-	el.fdState().set(11, file.NewFd(11, "socket:1:1:0", -1))
+	el.fdState().set(11, 91, file.NewFd(11, "socket:1:1:0", -1))
 
 	enter := &types.AcceptEvent{
 		EventType: types.ENTER_ACCEPT_EVENT,
@@ -229,7 +229,7 @@ func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 	if ok := el.handleAcceptExit(ep, enter); !ok {
 		t.Fatal("handleAcceptExit returned false")
 	}
-	verifyFileDescriptor(t, el, 77, "socket:1:1:0")
+	verifyFileDescriptor(t, el, 91, 77, "socket:1:1:0")
 }
 
 func TestHandleAcceptExitAppliesPairFilter(t *testing.T) {
@@ -239,7 +239,7 @@ func TestHandleAcceptExitAppliesPairFilter(t *testing.T) {
 		},
 	})
 
-	el.fdState().set(11, file.NewFd(11, "socket:1:1:0", -1))
+	el.fdState().set(11, 91, file.NewFd(11, "socket:1:1:0", -1))
 
 	enter := &types.AcceptEvent{
 		EventType: types.ENTER_ACCEPT_EVENT,

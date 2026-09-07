@@ -116,6 +116,7 @@ const ENTER_EXEC_EVENT = 45
 const EXIT_EXEC_EVENT = 46
 const PROCESS_EXEC_EVENT = 47
 const OPEN_NAME_FIXUP_EVENT = 48
+const PROCESS_EXIT_EVENT = 49
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -2548,4 +2549,71 @@ func (p *ProcessExecEvent) Bytes() ([]byte, error) {
 
 func (p *ProcessExecEvent) Recycle() {
 	poolOfProcessExecEvents.Put(p)
+}
+
+type ProcessExitEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+}
+
+func (p ProcessExitEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid)
+}
+
+func (p ProcessExitEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*ProcessExitEvent)
+	if !ok {
+		return false
+	}
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid
+}
+
+func (p *ProcessExitEvent) GetEventType() EventType {
+	return p.EventType
+}
+
+func (p *ProcessExitEvent) GetTraceId() TraceId {
+	return p.TraceId
+}
+
+func (p *ProcessExitEvent) GetPid() uint32 {
+	return p.Pid
+}
+
+func (p *ProcessExitEvent) GetTid() uint32 {
+	return p.Tid
+}
+
+func (p *ProcessExitEvent) GetTime() uint64 {
+	return p.Time
+}
+
+var poolOfProcessExitEvents = sync.Pool{
+	New: func() any { return &ProcessExitEvent{} },
+}
+
+func NewProcessExitEvent(raw []byte) *ProcessExitEvent {
+	p := poolOfProcessExitEvents.Get().(*ProcessExitEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, p); err != nil {
+		*p = ProcessExitEvent{}
+		poolOfProcessExitEvents.Put(p)
+		return nil
+	}
+	return p
+}
+
+func (p *ProcessExitEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, p)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (p *ProcessExitEvent) Recycle() {
+	poolOfProcessExitEvents.Put(p)
 }
