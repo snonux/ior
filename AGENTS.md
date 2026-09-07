@@ -101,6 +101,17 @@ committed set contains syscalls that only exist on recent mainline kernels
 - **Core packages**: `/internal/event/` (BPF event handling), `/internal/flamegraph/` (FlameGraph generation), `/internal/c/` (BPF programs)  
 - **Output**: TUI dashboard and TUI flamegraphs (no embedded web flamegraph server mode)
 - **TUI package**: `/internal/tui/` contains top-level Bubble Tea orchestration (`tui.go`), shared key map (`keys.go`), and styles (`styles.go`).
+- **TUI Model receiver policy**: the three Bubble Tea models (`tui.Model`, `dashboard.Model`,
+  `flamegraph.Model`) and the stream tab's model use **all-pointer methods** — `*Model`
+  implements `tea.Model`, constructors return `*Model`, and every mutator takes
+  `*Model` (the `eventstream` template). The filter modal
+  (`tracefilter.Model`, like the sibling modals in `tui/probes` and `tui/export`)
+  is **all-value-flow** instead: value receivers and every mutator returns the
+  updated `Model`, matching its `Open`/`Close`/`Update` API. Do not mix
+  receivers within a Model type: a value-receiver `Update` calling a
+  pointer-receiver mutator only works while the value happens to be
+  addressable, and a non-addressable or later-copied Model silently loses
+  those mutations (task b2).
 - **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
 

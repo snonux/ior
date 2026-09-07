@@ -284,7 +284,7 @@ func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
 // silently valid Go. Without this seam, removing initialPID left the whole
 // suite green while `ior -pid <n>` would open the PID picker instead of the
 // dashboard and never call beginTraceCmd().
-func newRunModel(cfg flags.Config, starter TraceStarter) Model {
+func newRunModel(cfg flags.Config, starter TraceStarter) *Model {
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    cfg.PidFilter,
 		filter:        filterFromConfig(cfg),
@@ -323,7 +323,7 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // the filters too: an explicit -pid clears -tid here exactly as it does for a
 // real attach, rather than test-flames quietly honouring a combination the
 // real TUI drops.
-func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) Model {
+func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) *Model {
 	pidFilter, tidFilter := resolveStartupPIDFilters(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter)
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    -1,
@@ -372,10 +372,19 @@ type processState struct {
 // Model is the top-level Bubble Tea model that routes between PID picker and
 // dashboard. It delegates filter management to filterStack, trace lifecycle
 // to traceLifecycle, and screen transitions to screenRouter.
+//
+// Receiver policy: every method takes *Model, so *Model (not Model) is the
+// Bubble Tea model handed to tea.NewProgram - the same policy the stream
+// tab's model already follows (internal/tui/eventstream). The mixed
+// value/pointer receivers this type used to have worked only while every
+// value happened to be addressable: the value-receiver Update called
+// pointer-receiver mutators (tracer, filter stack, dashboard sub-model) on
+// its local copy, so any non-addressable or later-copied Model silently
+// lost those mutations.
 type Model struct {
 	screen      Screen
 	pidPicker   pidpicker.Model
-	dashboard   dashboardui.Model
+	dashboard   *dashboardui.Model
 	exporter    tuiexport.Model
 	probeModal  probes.Model
 	filterModal tracefilterui.Model
@@ -417,18 +426,18 @@ type pickerReturnState struct {
 // Quitting reports whether the model has begun shutting down (the user pressed
 // the quit key). Exposed for in-process tests that assert terminal state via
 // teatest's FinalModel.
-func (m Model) Quitting() bool {
+func (m *Model) Quitting() bool {
 	return m.quitting
 }
 
 // NewModel creates the top-level TUI model with default runtime flags.
 // Prefer NewModelWithConfig to pass parsed CLI config explicitly.
-func NewModel(initialPID int, startTrace TraceStarter) Model {
+func NewModel(initialPID int, startTrace TraceStarter) *Model {
 	return NewModelWithConfig(flags.NewFlags(), initialPID, startTrace)
 }
 
 // NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
-func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) Model {
+func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) *Model {
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    initialPID,
 		filter:        filterFromConfig(cfg),
@@ -468,7 +477,7 @@ type modelStartup struct {
 	startTrace    TraceStarter
 }
 
-func newModelWithRuntimeConfig(startup modelStartup) Model {
+func newModelWithRuntimeConfig(startup modelStartup) *Model {
 	common.ApplyPalette(true)
 
 	keys := Keys
@@ -486,7 +495,7 @@ func newModelWithRuntimeConfig(startup modelStartup) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.MiniDot
 
-	model := Model{
+	model := &Model{
 		screen:        ScreenPIDPicker,
 		pidPicker:     pidpicker.New().SetDarkMode(true),
 		dashboard:     dashboard,
@@ -531,7 +540,7 @@ func resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter int
 // runtime and pre-configured with the initial PID filter. fastRefreshMs
 // controls the high-frequency tick cadence for stream and flame tabs; pass 0
 // to use the package-level default (200 ms).
-func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fastRefreshMs int) dashboardui.Model {
+func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fastRefreshMs int) *dashboardui.Model {
 	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{runtime: rt}, rt.eventStreamSource(), 1000, fastRefreshMs, keys)
 	dashboard.SetDarkMode(true)
 	dashboard.SetPidFilter(pidFilter)
@@ -539,7 +548,7 @@ func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fa
 }
 
 // Init initializes the active child model and optional tracing startup command.
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
 	if m.screen == ScreenDashboard && m.attaching {
 		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, m.beginTraceCmd())
@@ -555,7 +564,7 @@ func initialWindowSizeCmd() tea.Cmd {
 }
 
 // Update routes messages, transitions screens, and manages tracing startup state.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	normalizedMsg, ok := m.keyNormalizer(msg)
 	if !ok {
 		return m, nil
@@ -579,7 +588,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // dispatchTypedMsg handles all typed message cases that require no modal check.
 // Returns (model, cmd, true) when the message was consumed, or (_, _, false)
 // to fall through to modal dispatch and then active-model routing.
-func (m Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -617,10 +626,14 @@ func (m Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 // dispatchAppMsg handles application-level message types (export, probe, trace,
 // filter) that are not tea framework messages.
 // It is called after dispatchTypedMsg returns unhandled for non-framework types.
-func (m Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tuiexport.RequestMsg:
-		return m, runExportCmd(m.exportEnabled, msg.Option, m.dashboard), true
+		// Capture the export inputs HERE, on the Update goroutine: the command
+		// closure below runs on its own goroutine, and reading the live model
+		// from it would race with Update/View mutations.
+		source, filter, exportDir := m.dashboard.ExportStreamCSVInputs()
+		return m, runExportCmd(m.exportEnabled, msg.Option, source, filter, exportDir), true
 	case tuiexport.CompletedMsg:
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
@@ -656,7 +669,7 @@ func (m Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 }
 
 // handleFocusMsg restores focus and re-arms the dashboard's auto-reset tick.
-func (m Model) handleFocusMsg() (tea.Model, tea.Cmd) {
+func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 	m.focused = true
 	// SetFocused returns a tea.Cmd that arms a fresh auto-reset tick
 	// when focus returns (or nil if the timer is disabled). It also
@@ -674,12 +687,12 @@ func (m Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 
 // handleProbeToggledMsg resets the dashboard aggregates after a probe toggle
 // so the new probe set is reflected immediately.
-func (m Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
 	if snap := m.runtime.resetDashboardSnapshotSource(); snap != nil {
 		next, dashboardCmd := m.dashboard.Update(messages.StatsTickMsg{Snap: snap})
-		m.dashboard = next.(dashboardui.Model)
+		m.dashboard = next.(*dashboardui.Model)
 		return m, tea.Batch(dashboardCmd, cmd)
 	}
 	return m, cmd
@@ -687,7 +700,7 @@ func (m Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea
 
 // handleTracingStarted wires live sources into the dashboard once the trace
 // starter confirms the trace is running.
-func (m Model) handleTracingStarted() (tea.Model, tea.Cmd) {
+func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 	m.dashboard.SetLiveTrie(m.runtime.liveTrie())
@@ -695,7 +708,7 @@ func (m Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	m.syncDashboardFilterState()
 	width, height := common.EffectiveViewport(m.width, m.height)
 	next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
-	m.dashboard = next.(dashboardui.Model)
+	m.dashboard = next.(*dashboardui.Model)
 	return m, tea.Batch(sizeCmd, m.dashboard.Init(), m.dashboard.SnapshotCmd())
 }
 
@@ -703,7 +716,7 @@ func (m *Model) keyNormalizer(msg tea.Msg) (tea.Msg, bool) {
 	return m.normalizeKeyEvent(msg)
 }
 
-func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
+func (m *Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 	return m.screen == ScreenDashboard &&
 		!m.attaching &&
 		m.lastErr == nil &&
@@ -714,13 +727,13 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 		!m.dashboard.BlocksGlobalShortcuts(msg)
 }
 
-func (m Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
+func (m *Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
 	return m.screen == ScreenPIDPicker &&
 		m.router.hasPendingReturn() &&
 		(isEscKey(msg) || key.Matches(msg, m.keys.Quit))
 }
 
-func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
+func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 	if m.helpOverlayVisible {
 		return false
 	}
@@ -732,7 +745,7 @@ func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 // screen: help overlay toggle, quit, and dashboard-level shortcuts. Returns
 // (model, cmd, handled); when handled is false the caller falls through to
 // screen-specific routing.
-func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.helpOverlayVisible {
 		return m.handleHelpOverlayKeyPress(msg)
 	}
@@ -757,7 +770,7 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 
 // handleHelpOverlayKeyPress closes the help overlay on any quit/close/open
 // key and consumes the event so it does not reach the underlying screen.
-func (m Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if isHelpOverlayQuitKey(msg) || isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
 		m.helpOverlayVisible = false
 	}
@@ -767,7 +780,7 @@ func (m Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 // handleQuitKeyPress handles the quit key. On the dashboard it stops the
 // trace and quits; when a modal is active the quit key is re-routed as Esc
 // so modals close before the user needs to press q again.
-func (m Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.canHandleDashboardShortcut(msg) {
 		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
 			m.lastErr = err
@@ -786,7 +799,7 @@ func (m Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool
 // routeQuitAsEsc synthesises an Esc key press and forwards it to whichever
 // modal is currently visible, allowing quit to act as an intuitive close
 // shortcut while a modal or sub-view is in focus.
-func (m Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
+func (m *Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
 	esc := tea.KeyPressMsg{Code: tea.KeyEsc}
 	if m.probeModal.Visible() {
 		next, cmd := m.updateProbeModal(esc)
@@ -805,14 +818,14 @@ func (m Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 	}
 	next, cmd := m.dashboard.Update(esc)
-	m.dashboard = next.(dashboardui.Model)
+	m.dashboard = next.(*dashboardui.Model)
 	return m, cmd, true
 }
 
 // handleDashboardShortcutKeys handles all dashboard-level hotkeys (export,
 // record, probes, filter, undo, PID/TID reselect, auto-reset). The caller
 // must verify canHandleDashboardShortcut before calling this method.
-func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.exportEnabled && key.Matches(msg, m.keys.Export) {
 		m.exporter = m.exporter.Open()
 		return m, nil, true
@@ -857,7 +870,7 @@ func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.
 
 // handleRecordKey either stops an active recording or opens the record modal
 // to start a new one.
-func (m Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 	if recorderActive(m.runtime.Recorder()) {
 		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
 			m.lastErr = err
@@ -872,29 +885,29 @@ func (m Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 // the next preset and re-arms the timer. The new cadence takes effect
 // on the next tick; any in-flight tick from the previous cadence is
 // dropped via the dashboard model's generation counter.
-func (m Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
+func (m *Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
 	next := nextAutoResetInterval(m.dashboard.AutoResetInterval())
 	cmd := m.dashboard.SetAutoResetInterval(next)
 	return m, cmd
 }
 
-func (m Model) updateDashboardForModal(msg tea.Msg) (Model, tea.Cmd) {
+func (m *Model) updateDashboardForModal(msg tea.Msg) (*Model, tea.Cmd) {
 	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.screen != ScreenDashboard {
 		return m, nil
 	}
 	next, cmd := m.dashboard.Update(msg)
-	m.dashboard = next.(dashboardui.Model)
+	m.dashboard = next.(*dashboardui.Model)
 	return m, cmd
 }
 
-func (m Model) updateProbeModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateProbeModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
 	return m, tea.Batch(dashboardCmd, cmd)
 }
 
-func (m Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	wasVisible := m.filterModal.Visible()
 	m.filterModal = m.filterModal.Update(msg)
@@ -905,14 +918,14 @@ func (m Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, dashboardCmd
 }
 
-func (m Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	var cmd tea.Cmd
 	m.exporter, cmd = m.exporter.Update(msg)
 	return m, tea.Batch(dashboardCmd, cmd)
 }
 
-func (m Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	var (
 		path   string
@@ -930,7 +943,7 @@ func (m Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, dashboardCmd
 }
 
-func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	if m.attaching {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
@@ -955,7 +968,7 @@ func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case ScreenPIDPicker:
 		next, cmd := m.pidPicker.Update(msg)
@@ -963,7 +976,7 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case ScreenDashboard:
 		next, cmd := m.dashboard.Update(msg)
-		m.dashboard = next.(dashboardui.Model)
+		m.dashboard = next.(*dashboardui.Model)
 		return m, cmd
 	default:
 		return m, nil
@@ -972,7 +985,7 @@ func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handlePidSelected stops any running trace, resets buffers, and starts a new
 // trace for the newly selected PID.
-func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
 		m.lastErr = err
@@ -990,7 +1003,7 @@ func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 
 // handleTidSelected stops any running trace, resets buffers, and starts a new
 // trace filtered to the selected TID within the current (or provided) PID.
-func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	tid := selectedPIDFilter(msg.Tid)
 	pid := m.proc.pid
 	if msg.Pid > 0 {
@@ -1012,7 +1025,7 @@ func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 
 // reselectPID saves a return bookmark and switches to the PID picker so the
 // user can choose a different process without losing dashboard state.
-func (m Model) reselectPID() (tea.Model, tea.Cmd) {
+func (m *Model) reselectPID() (tea.Model, tea.Cmd) {
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
 		m.lastErr = err
 		return m, nil
@@ -1034,7 +1047,7 @@ func (m Model) reselectPID() (tea.Model, tea.Cmd) {
 
 // reselectTID saves a return bookmark and switches to the TID picker within
 // the current PID so the user can narrow tracing to a specific thread.
-func (m Model) reselectTID() (tea.Model, tea.Cmd) {
+func (m *Model) reselectTID() (tea.Model, tea.Cmd) {
 	pid := m.proc.pid
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
 		m.lastErr = err
@@ -1064,7 +1077,7 @@ func selectedPIDFilter(pid int) int {
 
 // cancelPickerToDashboard restores the dashboard when the user presses Esc
 // while in the picker after a reselectPID/reselectTID navigation.
-func (m Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
+func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 	returnState, ok := m.router.takePendingReturn()
 	if !ok {
 		return m, nil
@@ -1125,7 +1138,7 @@ func (m *Model) syncDashboardFilterState() {
 
 // applyGlobalFilter pushes a new filter onto the filter stack, applies it
 // in-place when possible, or falls back to a full trace restart.
-func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
+func (m *Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
 	changed := m.filters.push(filter, action)
 	m.setGlobalFilter(m.filters.current())
 	return m.reapplyActiveFilter(changed)
@@ -1135,7 +1148,7 @@ func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea
 // [/] family cycle) WITHOUT pushing onto the undo stack, then re-applies it to
 // the running pipeline using the same live-swap/restart path as
 // applyGlobalFilter. The stack label stays the same length across calls.
-func (m Model) replaceGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
+func (m *Model) replaceGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
 	changed := !m.filters.current().Equal(filter)
 	m.setGlobalFilter(filter)
 	return m.reapplyActiveFilter(changed)
@@ -1145,7 +1158,7 @@ func (m Model) replaceGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.C
 // preferring an in-place live swap and falling back to a trace restart. It is
 // the shared tail of applyGlobalFilter (push) and replaceGlobalFilter
 // (setGlobal) so both routes drive the pipeline identically (DRY).
-func (m Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
+func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 	if !changed || m.screen != ScreenDashboard {
 		return m, nil
 	}
@@ -1180,7 +1193,7 @@ func (m Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 
 // undoGlobalFilter pops the filter stack and re-applies the previous filter,
 // using the same in-place swap or restart logic as applyGlobalFilter.
-func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
+func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	prev, ok := m.filters.pop()
 	if !ok {
 		return m, nil
@@ -1231,7 +1244,7 @@ func (m *Model) applyTheme(isDark bool) {
 	m.recordModal = m.recordModal.SetDarkMode(isDark)
 }
 
-func (m Model) windowTitle() string {
+func (m *Model) windowTitle() string {
 	switch m.screen {
 	case ScreenPIDPicker:
 		return "ior - select process"
@@ -1244,7 +1257,7 @@ func (m Model) windowTitle() string {
 }
 
 // View renders the currently active screen and startup overlay state.
-func (m Model) View() tea.View {
+func (m *Model) View() tea.View {
 	title := m.windowTitle()
 	if m.quitting {
 		return altScreenView("", title)
@@ -1278,7 +1291,7 @@ func (m Model) View() tea.View {
 }
 
 // viewPickerScreen renders the PID picker screen with optional export overlay.
-func (m Model) viewPickerScreen(width, height int, title string) tea.View {
+func (m *Model) viewPickerScreen(width, height int, title string) tea.View {
 	base := m.pidPicker.View().Content
 	if m.exporter.Visible() {
 		return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
@@ -1288,7 +1301,7 @@ func (m Model) viewPickerScreen(width, height int, title string) tea.View {
 
 // viewDashboardScreen renders the dashboard screen with the appropriate modal
 // overlay (filter, record, probes, export) if one is active.
-func (m Model) viewDashboardScreen(width, height int, title string) tea.View {
+func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 	base := m.dashboard.View().Content
 	if m.filterModal.Visible() {
 		return altScreenView(placeToViewport(width, height, m.filterModal.View(width, height)), title)
@@ -1321,14 +1334,21 @@ func isHelpOverlayQuitKey(msg tea.KeyPressMsg) bool {
 	return msg.String() == "q"
 }
 
-func runExportCmd(exportEnabled bool, option tuiexport.Option, dashboard dashboardui.Model) tea.Cmd {
+// runExportCmd builds the export command for the chosen option. It takes the
+// concrete export inputs (source, filter, directory) captured on the Update
+// goroutine rather than a *dashboardui.Model: the closure runs on a Bubble
+// Tea command goroutine, and the model's plain fields are mutated by
+// Update/View with no lock. The Source itself is safe to read from any
+// goroutine (Snapshot is RWMutex-guarded), so the captured inputs are the
+// correct cross-goroutine boundary.
+func runExportCmd(exportEnabled bool, option tuiexport.Option, source eventstream.Source, filter eventstream.Filter, exportDir string) tea.Cmd {
 	return func() tea.Msg {
 		if !exportEnabled {
 			return tuiexport.FailedMsg{Err: fmt.Errorf("tui export is disabled by -tuiExport=false")}
 		}
 		switch option {
 		case tuiexport.OptionCSV:
-			path, err := dashboard.ExportStreamCSV()
+			path, err := eventstream.ExportSourceSnapshotToCSV(source, filter, exportDir, "")
 			if err != nil {
 				return tuiexport.FailedMsg{Err: err}
 			}

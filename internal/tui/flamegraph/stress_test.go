@@ -131,7 +131,7 @@ func TestStressRapidResize(t *testing.T) {
 		lastWidth = 60 + rng.Intn(241) // [60, 300]
 		lastHeight = 20 + rng.Intn(61) // [20, 80]
 		next, _ := model.Update(tea.WindowSizeMsg{Width: lastWidth, Height: lastHeight})
-		model = next.(Model)
+		model = next.(*Model)
 		model = settleStressAnimation(model, 180)
 
 		assertFramesWithinBounds(t, model.frames, lastWidth, lastHeight)
@@ -191,10 +191,10 @@ func TestStressZoomDuringRefresh(t *testing.T) {
 	}
 }
 
-func settleStressAnimation(model Model, maxTicks int) Model {
+func settleStressAnimation(model *Model, maxTicks int) *Model {
 	for i := 0; i < maxTicks && model.animating; i++ {
 		next, _ := model.Update(animTickMsg{})
-		model = next.(Model)
+		model = next.(*Model)
 	}
 	return model
 }

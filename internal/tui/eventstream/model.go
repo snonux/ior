@@ -168,22 +168,22 @@ func (m *Model) SetDarkMode(isDark bool) {
 }
 
 // FilterModalVisible reports whether the filter modal is currently open.
-func (m Model) FilterModalVisible() bool {
+func (m *Model) FilterModalVisible() bool {
 	return false
 }
 
 // ExportModalVisible reports whether the stream export modal is currently open.
-func (m Model) ExportModalVisible() bool {
+func (m *Model) ExportModalVisible() bool {
 	return m.exportModal.Visible()
 }
 
 // SearchModalVisible reports whether the stream search modal is currently open.
-func (m Model) SearchModalVisible() bool {
+func (m *Model) SearchModalVisible() bool {
 	return m.searchModal.Visible()
 }
 
 // Paused reports whether stream refresh is currently paused.
-func (m Model) Paused() bool {
+func (m *Model) Paused() bool {
 	return m.paused
 }
 

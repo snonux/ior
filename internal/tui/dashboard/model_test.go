@@ -89,31 +89,31 @@ func TestKeySwitchingChangesActiveTab(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.activeTab != TabOverview {
 		t.Fatalf("expected overview tab on key 2, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabSyscalls {
 		t.Fatalf("expected next tab to be syscalls, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabOverview {
 		t.Fatalf("expected previous tab to be overview, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: string([]rune{'7'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabStream {
 		t.Fatalf("expected stream tab on key 7, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'1'}[0], Text: string([]rune{'1'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabFlame {
 		t.Fatalf("expected flame tab on key 1, got %v", model.activeTab)
 	}
@@ -124,25 +124,25 @@ func TestArrowAndViKeysDoNotCycleTabs(t *testing.T) {
 	m.activeTab = TabOverview
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.activeTab != TabOverview {
 		t.Fatalf("expected right arrow not to change tabs, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'l'}[0], Text: string([]rune{'l'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabOverview {
 		t.Fatalf("expected l not to change tabs, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabOverview {
 		t.Fatalf("expected left arrow not to change tabs, got %v", model.activeTab)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'h'}[0], Text: string([]rune{'h'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabOverview {
 		t.Fatalf("expected h not to change tabs, got %v", model.activeTab)
 	}
@@ -155,13 +155,13 @@ func TestSyscallsTabScrollsWithJK(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.syscallsOffset != 1 {
 		t.Fatalf("expected offset 1 after j, got %d", model.syscallsOffset)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'k'}[0], Text: string([]rune{'k'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.syscallsOffset != 0 {
 		t.Fatalf("expected offset 0 after k, got %d", model.syscallsOffset)
 	}
@@ -174,13 +174,13 @@ func TestProcessesTabScrollsWithJK(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.processesOffset != 1 {
 		t.Fatalf("expected processes offset 1 after j, got %d", model.processesOffset)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'k'}[0], Text: string([]rune{'k'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.processesOffset != 0 {
 		t.Fatalf("expected processes offset 0 after k, got %d", model.processesOffset)
 	}
@@ -193,13 +193,13 @@ func TestSyscallsTabSupportsHorizontalColumnNavigation(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.syscallsCol != 1 {
 		t.Fatalf("expected syscalls selected column 1 after right, got %d", model.syscallsCol)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.syscallsCol != 0 {
 		t.Fatalf("expected syscalls selected column 0 after left, got %d", model.syscallsCol)
 	}
@@ -212,13 +212,13 @@ func TestFilesTabSupportsHorizontalColumnNavigation(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.filesCol != 1 {
 		t.Fatalf("expected files selected column 1 after right, got %d", model.filesCol)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.filesCol != 0 {
 		t.Fatalf("expected files selected column 0 after left, got %d", model.filesCol)
 	}
@@ -231,13 +231,13 @@ func TestProcessesTabSupportsHorizontalColumnNavigation(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.processesCol != 1 {
 		t.Fatalf("expected processes selected column 1 after right, got %d", model.processesCol)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.processesCol != 0 {
 		t.Fatalf("expected processes selected column 0 after left, got %d", model.processesCol)
 	}
@@ -254,7 +254,7 @@ func TestProcessesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	m.processesOffset = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on processes tab to emit a filter request")
 	}
@@ -283,7 +283,7 @@ func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
 	m.processesCol = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on processes comm column to emit a filter request")
 	}
@@ -311,13 +311,13 @@ func TestProcessesSortKeyTogglesOnSelectedColumn(t *testing.T) {
 	m.processesCol = 1
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.processesSort.active || model.processesSort.key != processSortKeyComm {
 		t.Fatalf("expected process comm sort enabled, got %+v", model.processesSort)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.processesSort.active {
 		t.Fatalf("expected second s press to restore default process ordering")
 	}
@@ -334,13 +334,13 @@ func TestProcessesReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
 	m.processesCol = 1
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.processesSort.active || model.processesSort.key != processSortKeyComm || !model.processesSort.reverse {
 		t.Fatalf("expected reverse process comm sort enabled, got %+v", model.processesSort)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.processesSort.active {
 		t.Fatalf("expected second S press to restore default process ordering")
 	}
@@ -358,9 +358,9 @@ func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	m.processesCol = 1
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	m = next.(Model)
+	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted processes tab to emit a filter request")
 	}
@@ -384,7 +384,7 @@ func TestProcessesSortIgnoredOutsideTableMode(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.processesSort.active {
 		t.Fatalf("expected sort key ignored outside processes table mode")
 	}
@@ -409,7 +409,7 @@ func TestStatsTickReanchorsSortedProcessSelectionByPID(t *testing.T) {
 	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 
 	next, _ := m.Update(messages.StatsTickMsg{Snap: &newSnap})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.processesOffset != 2 {
 		t.Fatalf("expected selected worker row reanchored to offset 2, got %d", model.processesOffset)
 	}
@@ -425,13 +425,13 @@ func TestFilesTabScrollsWithJK(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.filesOffset != 1 {
 		t.Fatalf("expected files offset 1 after j, got %d", model.filesOffset)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'k'}[0], Text: string([]rune{'k'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.filesOffset != 0 {
 		t.Fatalf("expected files offset 0 after k, got %d", model.filesOffset)
 	}
@@ -448,7 +448,7 @@ func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	m.syscallsOffset = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on syscalls tab to emit a filter request")
 	}
@@ -475,13 +475,13 @@ func TestSyscallsSortKeyTogglesOnSelectedColumn(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.syscallsSort.active || model.syscallsSort.key != syscallSortKeyName {
 		t.Fatalf("expected syscall name sort enabled, got %+v", model.syscallsSort)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.syscallsSort.active {
 		t.Fatalf("expected second s press to restore default ordering")
 	}
@@ -497,13 +497,13 @@ func TestSyscallsReverseSortKeyTogglesOnSelectedColumn(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.syscallsSort.active || model.syscallsSort.key != syscallSortKeyName || !model.syscallsSort.reverse {
 		t.Fatalf("expected reverse syscall name sort enabled, got %+v", model.syscallsSort)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.syscallsSort.active {
 		t.Fatalf("expected second S press to restore default ordering")
 	}
@@ -520,7 +520,7 @@ func TestSyscallsSortReanchorsSelectedSyscall(t *testing.T) {
 	m.syscallsOffset = 1
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.syscallsOffset != 0 {
 		t.Fatalf("expected selected read row reanchored to offset 0, got %d", model.syscallsOffset)
 	}
@@ -540,9 +540,9 @@ func TestSyscallsSortEnterUsesSortedVisibleRow(t *testing.T) {
 	m.syscallsOffset = 1
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	m = next.(Model)
+	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted syscalls tab to emit a filter request")
 	}
@@ -566,7 +566,7 @@ func TestSyscallsSortIgnoredOutsideTableMode(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.syscallsSort.active {
 		t.Fatalf("expected sort key ignored outside syscall table mode")
 	}
@@ -584,13 +584,13 @@ func TestSyscallsP95SortSurvivesWidthExpansion(t *testing.T) {
 	m.syscallsCol = 5
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if first := model.sortedSyscallRows()[0].Name; first != "read" {
 		t.Fatalf("expected compact p95 sort to put read first, got %q", first)
 	}
 
 	next, _ = model.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
-	model = next.(Model)
+	model = next.(*Model)
 	if first := model.sortedSyscallRows()[0].Name; first != "read" {
 		t.Fatalf("expected p95 sort to survive width expansion, got %q", first)
 	}
@@ -614,7 +614,7 @@ func TestStatsTickReanchorsSortedSyscallSelectionByName(t *testing.T) {
 	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 
 	next, _ := m.Update(messages.StatsTickMsg{Snap: &newSnap})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.syscallsOffset != 2 {
 		t.Fatalf("expected selected write row reanchored to offset 2, got %d", model.syscallsOffset)
 	}
@@ -635,7 +635,7 @@ func TestFilesTabGroupedScrollUsesDirectoryOffset(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.filesDirOffset != 1 {
 		t.Fatalf("expected grouped dir offset 1 after j, got %d", model.filesDirOffset)
 	}
@@ -655,7 +655,7 @@ func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	m.filesOffset = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on files tab to emit a filter request")
 	}
@@ -683,13 +683,13 @@ func TestFilesSortKeyTogglesFlatMode(t *testing.T) {
 	m.filesCol = 5
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.filesSort.active || model.filesSort.key != fileSortKeyPath {
 		t.Fatalf("expected flat file path sort enabled, got %+v", model.filesSort)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.filesSort.active {
 		t.Fatalf("expected second s press to restore default file ordering")
 	}
@@ -706,13 +706,13 @@ func TestFilesReverseSortKeyTogglesFlatMode(t *testing.T) {
 	m.filesCol = 5
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.filesSort.active || model.filesSort.key != fileSortKeyPath || !model.filesSort.reverse {
 		t.Fatalf("expected reverse flat file path sort enabled, got %+v", model.filesSort)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.filesSort.active {
 		t.Fatalf("expected second S press to restore default file ordering")
 	}
@@ -730,13 +730,13 @@ func TestFilesDirReverseSortKeyTogglesGroupedMode(t *testing.T) {
 	m.filesDirCol = 6
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.filesDirSort.active || model.filesDirSort.key != fileDirSortKeyDir || !model.filesDirSort.reverse {
 		t.Fatalf("expected reverse grouped file dir sort enabled, got %+v", model.filesDirSort)
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'S'}[0], Text: "S"})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.filesDirSort.active {
 		t.Fatalf("expected second S press to restore default grouped file ordering")
 	}
@@ -754,9 +754,9 @@ func TestFilesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	m.filesCol = 5
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	m = next.(Model)
+	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted files tab to emit a filter request")
 	}
@@ -783,9 +783,9 @@ func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
 	m.filesDirCol = 6
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	m = next.(Model)
+	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted grouped files tab to emit a filter request")
 	}
@@ -810,12 +810,12 @@ func TestFilesSortStatesPersistAcrossDirToggle(t *testing.T) {
 	m.filesCol = 5
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	m = next.(Model)
+	m = next.(*Model)
 	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
-	m = next.(Model)
+	m = next.(*Model)
 	m.filesDirCol = 6
 	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
-	m = next.(Model)
+	m = next.(*Model)
 
 	if !m.filesSort.active || m.filesSort.key != fileSortKeyPath {
 		t.Fatalf("expected flat file sort state preserved, got %+v", m.filesSort)
@@ -825,7 +825,7 @@ func TestFilesSortStatesPersistAcrossDirToggle(t *testing.T) {
 	}
 
 	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
-	m = next.(Model)
+	m = next.(*Model)
 	if !m.filesSort.active || m.filesSort.key != fileSortKeyPath {
 		t.Fatalf("expected flat file sort state after returning from dir mode, got %+v", m.filesSort)
 	}
@@ -853,7 +853,7 @@ func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
 	m.activeTab = TabFlame
 
 	next, cmd := m.Update(flameTickMsg{})
-	model := next.(Model)
+	model := next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected flame tick to schedule next tick command")
 	}
@@ -873,7 +873,7 @@ func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
 	}
 
 	next, _ := m.Update(flameTickMsg{})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.flamegraphModel.HasSnapshot() {
 		t.Fatalf("expected flame tick to retain initial snapshot even when trie version is unchanged")
 	}
@@ -886,10 +886,10 @@ func TestFlameTickPausedFreezesAfterInitialSnapshot(t *testing.T) {
 	m.activeTab = TabFlame
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
-	model := next.(Model)
+	model := next.(*Model)
 
 	next, _ = model.Update(flameTickMsg{})
-	model = next.(Model)
+	model = next.(*Model)
 	initialVersion := model.flamegraphModel.LastVersion()
 
 	liveTrie.Reset()
@@ -898,7 +898,7 @@ func TestFlameTickPausedFreezesAfterInitialSnapshot(t *testing.T) {
 	}
 
 	next, _ = model.Update(flameTickMsg{})
-	model = next.(Model)
+	model = next.(*Model)
 	if got, want := model.flamegraphModel.LastVersion(), initialVersion; got != want {
 		t.Fatalf("expected paused flame tick to freeze version at %d, got %d", want, got)
 	}
@@ -912,15 +912,15 @@ func TestPausedFlameDashboardViewPreservesZoomedSelectedLine(t *testing.T) {
 	m.activeTab = TabFlame
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = next.(Model)
+	m = next.(*Model)
 	m.SetLiveTrie(liveTrie)
 
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	m = next.(Model)
+	m = next.(*Model)
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(Model)
+	m = next.(*Model)
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
-	m = next.(Model)
+	m = next.(*Model)
 
 	if !m.flamegraphModel.Paused() {
 		t.Fatalf("expected flamegraph model to be paused")
@@ -948,7 +948,7 @@ func TestPausedFlameDashboardViewPreservesZoomedSelectedLine(t *testing.T) {
 
 // newPausedStreamModel creates a stream tab model with 300 events, sized at
 // 120x30, and already paused — ready for scroll key assertions.
-func newPausedStreamModel(t *testing.T) Model {
+func newPausedStreamModel(t *testing.T) *Model {
 	t.Helper()
 	rb := eventstream.NewRingBuffer()
 	for i := 0; i < 300; i++ {
@@ -965,11 +965,11 @@ func newPausedStreamModel(t *testing.T) Model {
 	m.activeTab = TabStream
 	m.showHelp = true
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = next.(Model)
+	m = next.(*Model)
 	m.streamModel.Refresh()
 	_ = m.View()
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace}) // pause
-	return next.(Model)
+	return next.(*Model)
 }
 
 func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
@@ -977,28 +977,28 @@ func TestStreamPausedSupportsJKArrowsAndPageKeys(t *testing.T) {
 	before := rowFromStreamView(t, m.View().Content)
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'k'}[0], Text: string([]rune{'k'})})
-	m = next.(Model)
+	m = next.(*Model)
 	afterK := rowFromStreamView(t, m.View().Content)
 	if afterK >= before {
 		t.Fatalf("expected k to scroll up while paused: before=%d afterK=%d", before, afterK)
 	}
 
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m = next.(Model)
+	m = next.(*Model)
 	afterDown := rowFromStreamView(t, m.View().Content)
 	if afterDown <= afterK {
 		t.Fatalf("expected down arrow to scroll down while paused: afterK=%d afterDown=%d", afterK, afterDown)
 	}
 
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
-	m = next.(Model)
+	m = next.(*Model)
 	afterPgUp := rowFromStreamView(t, m.View().Content)
 	if afterPgUp >= afterDown {
 		t.Fatalf("expected pgup to scroll up while paused: afterDown=%d afterPgUp=%d", afterDown, afterPgUp)
 	}
 
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
-	m = next.(Model)
+	m = next.(*Model)
 	afterPgDown := rowFromStreamView(t, m.View().Content)
 	if afterPgDown <= afterPgUp {
 		t.Fatalf("expected pgdown to scroll down while paused: afterPgUp=%d afterPgDown=%d", afterPgUp, afterPgDown)
@@ -1024,14 +1024,14 @@ func TestDirGroupKeyTogglesOnlyOnFilesTab(t *testing.T) {
 	m.activeTab = TabFiles
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if !model.filesDirGrouped {
 		t.Fatalf("expected filesDirGrouped to toggle on files tab")
 	}
 
 	model.activeTab = TabOverview
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'d'}[0], Text: string([]rune{'d'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if !model.filesDirGrouped {
 		t.Fatalf("expected filesDirGrouped unchanged outside files tab")
 	}
@@ -1047,19 +1047,19 @@ func TestVisualizationCycleForSyscallsTab(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if got := model.syscallsVizMode; got != tabVizModeBubbles {
 		t.Fatalf("expected syscalls bubbles mode enabled")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if got := model.syscallsVizMode; got != tabVizModeTreemap {
 		t.Fatalf("expected syscalls treemap mode enabled")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'v'}[0], Text: string([]rune{'v'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if got := model.syscallsVizMode; got != tabVizModeTable {
 		t.Fatalf("expected syscalls mode cycled back to table")
 	}
@@ -1074,7 +1074,7 @@ func TestBubbleMetricToggleForSyscallsTab(t *testing.T) {
 	m.latest = &snap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'b'}[0], Text: string([]rune{'b'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if got := model.syscallsChart.Metric(); got != bubbleMetricBytes {
 		t.Fatalf("expected syscalls bubble metric bytes, got %q", got)
 	}
@@ -1091,16 +1091,16 @@ func TestMetricToggleAppliesInFilesTreemapMode(t *testing.T) {
 	m.filesVizMode = tabVizModeTreemap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'b'}[0], Text: string([]rune{'b'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if got := model.filesChart.Metric(); got != bubbleMetricBytes {
 		t.Fatalf("expected files metric toggle to bytes in treemap mode, got %q", got)
 	}
 }
 
 // pressKey sends a single rune key to model and returns the updated model.
-func pressKey(m Model, r rune) Model {
+func pressKey(m *Model, r rune) *Model {
 	next, _ := m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-	return next.(Model)
+	return next.(*Model)
 }
 
 func TestFilesVisualizationRequiresDirectoryMode(t *testing.T) {
@@ -1129,7 +1129,7 @@ func TestFilesVisualizationRequiresDirectoryMode(t *testing.T) {
 
 // assertFilesVizCycle verifies the full table→bubbles→treemap→icicle→table
 // cycle when directory mode is on, and that leaving dir mode resets to table.
-func assertFilesVizCycle(t *testing.T, m Model) {
+func assertFilesVizCycle(t *testing.T, m *Model) {
 	t.Helper()
 	m = pressKey(m, 'v')
 	if got := m.filesVizMode; got != tabVizModeBubbles {
@@ -1168,7 +1168,7 @@ func TestBubbleModeUsesJKForSelection(t *testing.T) {
 	}
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.syscallsChart.selected != 1 {
 		t.Fatalf("expected bubble selection to move to index 1, got %d", model.syscallsChart.selected)
 	}
@@ -1185,7 +1185,7 @@ func TestTreemapModeUsesJKForSelection(t *testing.T) {
 	m.syscallsVizMode = tabVizModeTreemap
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.syscallsTreemapSelection != 1 {
 		t.Fatalf("expected treemap selection to move to index 1, got %d", model.syscallsTreemapSelection)
 	}
@@ -1211,7 +1211,7 @@ func TestFilesIcicleModeSelectionUsesIcicleTileCount(t *testing.T) {
 
 	for i := 0; i < expectedMax+4; i++ {
 		next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-		m = next.(Model)
+		m = next.(*Model)
 	}
 	if m.filesDirOffset != expectedMax-1 {
 		t.Fatalf("expected icicle selection clamped by tile count to %d, got %d", expectedMax-1, m.filesDirOffset)
@@ -1300,7 +1300,7 @@ func TestScrollOffsetDoesNotGrowUnbounded(t *testing.T) {
 
 	for i := 0; i < 50; i++ {
 		next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
-		m = next.(Model)
+		m = next.(*Model)
 	}
 	if m.syscallsOffset != 1 {
 		t.Fatalf("expected bounded offset 1, got %d", m.syscallsOffset)
@@ -1375,7 +1375,7 @@ func TestFlameTabReceivesSlashKey(t *testing.T) {
 	m.height = 30
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'/'}[0], Text: string([]rune{'/'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if cmd != nil {
 		t.Fatalf("did not expect global command for flame search key")
 	}
@@ -1391,13 +1391,13 @@ func TestFlameTabReceivesResetAndPauseKeys(t *testing.T) {
 	m.height = 30
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
-	model := next.(Model)
+	model := next.(*Model)
 	if !strings.Contains(model.View().Content, "[PAUSED]") {
 		t.Fatalf("expected flame space key to toggle paused state")
 	}
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if cmd != nil {
 		t.Fatalf("expected flame reset key to be handled by flame tab without global refresh command")
 	}
@@ -1413,13 +1413,13 @@ func TestFlameSearchConsumesNumericTabKeys(t *testing.T) {
 	m.height = 30
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'/'}[0], Text: string([]rune{'/'})})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.activeTab != TabFlame {
 		t.Fatalf("expected flame tab to stay active after opening search")
 	}
 
 	next, _ = model.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
-	model = next.(Model)
+	model = next.(*Model)
 	if model.activeTab != TabFlame {
 		t.Fatalf("expected numeric key while searching to stay in flame tab")
 	}
@@ -1463,7 +1463,7 @@ func TestStatsTickMsgUpdatesLatestSnapshot(t *testing.T) {
 	m := NewModel(nil, nil)
 
 	next, _ := m.Update(messages.StatsTickMsg{Snap: snap})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.latest != snap {
 		t.Fatalf("expected latest snapshot to be updated")
 	}
@@ -1484,7 +1484,7 @@ func TestStatsTickClampsGroupedFilesOffset(t *testing.T) {
 	m.filesDirOffset = 10
 
 	next, _ := m.Update(messages.StatsTickMsg{Snap: &snap})
-	model := next.(Model)
+	model := next.(*Model)
 	if model.filesDirOffset != 0 {
 		t.Fatalf("expected grouped files offset clamped to 0, got %d", model.filesDirOffset)
 	}
@@ -1511,7 +1511,7 @@ func TestFlameTabRendersWaitingForDataPlaceholder(t *testing.T) {
 	// kept in sync. Direct field assignment bypasses the sync logic in
 	// handleWindowSize, so use a WindowSizeMsg instead.
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = next.(Model)
+	m = next.(*Model)
 
 	out := m.View().Content
 	if !strings.Contains(out, "Flame: waiting for data...") {
@@ -1566,14 +1566,14 @@ func TestHelpToggleWithF1(t *testing.T) {
 	}
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
-	m = next.(Model)
+	m = next.(*Model)
 	out = m.View().Content
 	if !strings.Contains(out, "tab next tab") {
 		t.Fatalf("expected expanded help after pressing F1")
 	}
 
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
-	m = next.(Model)
+	m = next.(*Model)
 	out = m.View().Content
 	if !strings.Contains(out, "press H for help") {
 		t.Fatalf("expected help hint after pressing F1 again")
@@ -1587,7 +1587,7 @@ func TestHelpToggleIgnoresH(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
-	m = next.(Model)
+	m = next.(*Model)
 	out := m.View().Content
 	if !strings.Contains(out, "press H for help") {
 		t.Fatalf("H must not toggle the dashboard help bar; expected the collapsed hint to remain")
@@ -1642,7 +1642,7 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 	// carries the pre-blur generation, so it must be silently dropped.
 	staleTick := autoResetTickMsg{generation: gen}
 	next, cmd := m.Update(staleTick)
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd != nil {
 		t.Fatalf("blurred dashboard should not re-arm the timer on a stale tick, got %v", cmd)
 	}
@@ -1654,7 +1654,7 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 	// while blurred — handleAutoResetTick gates on m.focused.
 	currentTick := autoResetTickMsg{generation: m.autoResetGen}
 	next, cmd = m.Update(currentTick)
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd != nil {
 		t.Fatalf("blurred dashboard must not re-arm even on a current-gen tick, got %v", cmd)
 	}
@@ -1688,7 +1688,7 @@ func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
 	// and a fresh tick must be re-armed for the next interval.
 	tick := autoResetTickMsg{generation: m.autoResetGen}
 	next, cmd := m.Update(tick)
-	m = next.(Model)
+	m = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("focused dashboard should re-arm timer and emit reset cmd, got nil")
 	}

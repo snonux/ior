@@ -248,10 +248,27 @@ func ensureCSVFilename(name string) (string, error) {
 	return base + ".csv", nil
 }
 
-// ExportSnapshotToCSV exports a fresh filtered snapshot from the current source
-// without mutating the model's paused/live view state.
-func (m Model) ExportSnapshotToCSV(filename string) (string, error) {
-	return exportSnapshotToCSV(m.source, m.filter, m.exportDir, filename)
+// ExportSourceSnapshotToCSV is the export path for callers that must not
+// touch a live Model: Bubble Tea runs command closures on their own goroutine,
+// and the Model's plain fields (width, height, paused, ...) are mutated by
+// Update/View with no lock, so a command goroutine reading them races. This
+// function takes the concrete inputs instead — capture them on the Update
+// goroutine before returning the command (see Model.ExportInputs and
+// tui.runExportCmd). Source.Snapshot itself is RWMutex-guarded
+// (streamrow.RingBuffer) and safe to call from any goroutine; the Filter is a
+// plain value whose pointed-to sub-filters are replaced wholesale, never
+// mutated in place.
+func ExportSourceSnapshotToCSV(source Source, filter Filter, exportDir, filename string) (string, error) {
+	return exportSnapshotToCSV(source, filter, exportDir, filename)
+}
+
+// ExportInputs captures the concrete CSV-export inputs (source, active
+// filter, target directory) on the caller's goroutine. Return these from the
+// Update path and hand them to the command closure instead of a Model
+// pointer: command closures run on their own goroutine while Update/View
+// keep mutating this Model (see ExportSourceSnapshotToCSV).
+func (m *Model) ExportInputs() (Source, Filter, string) {
+	return m.source, m.filter, m.exportDir
 }
 
 func (m *Model) exportFilteredToCSV(filename string) (string, error) {

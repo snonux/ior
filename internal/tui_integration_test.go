@@ -265,7 +265,7 @@ func tuiChdirTemp(t *testing.T) string {
 	return dir
 }
 
-func tuiNewSession(t *testing.T, m tui.Model) *tuiSession {
+func tuiNewSession(t *testing.T, m *tui.Model) *tuiSession {
 	t.Helper()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(tuiTermWidth, tuiTermHeight))
 	t.Cleanup(func() { _ = tm.Quit() })
@@ -456,7 +456,7 @@ func TestTUIIntegration_Quit_QExitsCleanly(t *testing.T) {
 	s.typeStr("q")
 	s.tm.WaitFinished(t, teatest.WithFinalTimeout(tuiFinalWait))
 
-	final, ok := s.tm.FinalModel(t, teatest.WithFinalTimeout(tuiFinalWait)).(tui.Model)
+	final, ok := s.tm.FinalModel(t, teatest.WithFinalTimeout(tuiFinalWait)).(*tui.Model)
 	if !ok {
 		t.Fatalf("final model has unexpected type %T", s.tm.FinalModel(t))
 	}
@@ -741,7 +741,9 @@ func TestTUIIntegration_Stream_ExportModal_OpenCancel(t *testing.T) {
 // already in the snapshot the exporter captures). It then opens the export modal
 // with "e", leaves the default
 // selection on "CSV stream rows", and presses Enter: the modal emits a
-// RequestMsg, the program runs dashboard.ExportStreamCSV() (writing the filtered
+// RequestMsg, the program captures the export inputs on the Update goroutine
+// and runs them in the export command
+// (eventstream.ExportSourceSnapshotToCSV, writing the filtered
 // snapshot via exportRowsToCSV), and the resulting CompletedMsg sets the modal's
 // "Exported: <path>" status. The test asserts that status, then polls the temp
 // dir for the ior-stream-*.csv and asserts it contains the CSV header plus a

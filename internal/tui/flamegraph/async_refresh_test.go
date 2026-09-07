@@ -134,7 +134,7 @@ func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
 
 	m.lastKeyAt = time.Now()
 	next, _ := m.handleSnapshotReady(msg)
-	post := next.(Model)
+	post := next.(*Model)
 	if post.animating {
 		t.Fatalf("expected snapshot ready to skip animation while user is driving")
 	}
@@ -156,7 +156,7 @@ func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
 	// Drain any pending animation so the cache path is exercised.
 	for m.animating {
 		nextModel, _ := m.Update(animTickMsg{})
-		m = nextModel.(Model)
+		m = nextModel.(*Model)
 	}
 
 	first := m.View().Content

@@ -114,7 +114,7 @@ func (m *Model) toggleHelp() {
 	m.showHelp = !m.showHelp
 }
 
-func (m Model) toolbarLine() string {
+func (m *Model) toolbarLine() string {
 	theme := common.Current()
 	state := lipgloss.NewStyle().Foreground(theme.Primary).Render("[LIVE]")
 	if m.paused {
@@ -144,7 +144,7 @@ func (m Model) toolbarLine() string {
 	return padOrTrim(b.String(), width)
 }
 
-func (m Model) helpOverlay() string {
+func (m *Model) helpOverlay() string {
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -153,7 +153,7 @@ func (m Model) helpOverlay() string {
 	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 
-func (m Model) selectionStatusLine() string {
+func (m *Model) selectionStatusLine() string {
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -210,7 +210,7 @@ func (m Model) selectionStatusLine() string {
 	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
 }
 
-func (m Model) currentFieldPresetLabel() string {
+func (m *Model) currentFieldPresetLabel() string {
 	if len(m.fieldPresets) == 0 {
 		return "n/a"
 	}
@@ -224,7 +224,7 @@ func (m Model) currentFieldPresetLabel() string {
 	return strings.Join(m.fieldPresets[idx], "/")
 }
 
-func (m Model) countFieldLabel() string {
+func (m *Model) countFieldLabel() string {
 	switch m.countField {
 	case "count":
 		return "events"
@@ -237,7 +237,7 @@ func (m Model) countFieldLabel() string {
 	}
 }
 
-func (m Model) heightFieldLabel() string {
+func (m *Model) heightFieldLabel() string {
 	switch m.heightField {
 	case "":
 		return "off"
@@ -252,6 +252,6 @@ func (m Model) heightFieldLabel() string {
 	}
 }
 
-func (m Model) heightMetricActive() bool {
+func (m *Model) heightMetricActive() bool {
 	return strings.TrimSpace(m.heightField) != ""
 }

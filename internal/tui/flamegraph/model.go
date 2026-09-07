@@ -169,6 +169,14 @@ func defaultFlameKeyMap() flameKeyMap {
 // sub-controllers: ZoomNavigator, SelectionManager, FrameAnimator, and
 // SearchController. The sub-controllers are embedded so existing field names
 // (e.g. m.selectedIdx, m.zoomPath) remain accessible directly.
+//
+// Receiver policy: every method on Model takes *Model, so *Model (not Model)
+// is the Bubble Tea model that Init/Update/View implement - the same policy
+// the stream tab's model already follows (internal/tui/eventstream). The
+// mixed value/pointer receivers this type used to have worked only while
+// every value happened to be addressable: a value-receiver Update calling a
+// pointer-receiver mutator mutates a copy, so any non-addressable or
+// later-copied Model silently lost those mutations.
 type Model struct {
 	// Sub-controllers — each owns a single concern.
 	ZoomNavigator    // zoom path, stack, and root node management
@@ -234,8 +242,14 @@ type tuiFrame struct {
 // The four embedded sub-controllers (ZoomNavigator, SelectionManager,
 // FrameAnimator, SearchController) are initialised here; the Model delegates
 // their respective concerns to them.
-func NewModel(liveTrie LiveTrieSource) Model {
-	m := Model{
+//
+// Like every method on Model, the constructor returns the pointer form: the
+// receiver policy for this type is all-pointer so *Model is the Bubble Tea
+// model (see the receiver note on the Model struct above), and a value return
+// would hand back a copy whose mutations could silently detach from the model
+// the program keeps.
+func NewModel(liveTrie LiveTrieSource) *Model {
+	m := &Model{
 		ZoomNavigator:    ZoomNavigator{},
 		SelectionManager: newSelectionManager(),
 		FrameAnimator:    newFrameAnimator(),
@@ -262,14 +276,14 @@ func NewModel(liveTrie LiveTrieSource) Model {
 }
 
 // Init starts the flamegraph model.
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	return nil
 }
 
 // Update handles incoming messages. Delegates animation ticks to FrameAnimator,
 // snapshot arrivals to handleSnapshotReady, and key/mouse events to the
 // appropriate handler.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case animTickMsg:
 		if !m.animating {
@@ -305,7 +319,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleSearchInput processes key events while search mode is active.
 // Delegates key dispatch (esc/enter/text) to SearchController, then updates
 // match state and status message on the Model.
-func (m Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	_, committed, query, cancelled := m.SearchController.handleInput(msg)
 	switch {
 	case cancelled:
@@ -332,7 +346,7 @@ func (m Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // handleKeyNavigation processes navigation key events when search is not active.
 // Delegates mode-toggle and zoom actions to handleModeKey, movement actions to
 // handleMovementKey, then updates the subtree highlight when selection changes.
-func (m Model) handleKeyNavigation(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKeyNavigation(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	prev := m.selectedIdx
 	handled := m.handleModeKey(msg)
 	if !handled {
@@ -411,7 +425,7 @@ func (m *Model) handleMovementKey(msg tea.KeyPressMsg) bool {
 // (the next tick will dispatch a fresh refresh), or if the user paused after a
 // snapshot already exists. Always clears refreshInFlight so subsequent ticks
 // can dispatch the next refresh.
-func (m Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cmd) {
 	m.refreshInFlight = false
 	if msg.snapshot == nil {
 		return m, nil
@@ -446,13 +460,13 @@ func (m Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cm
 
 // userDriving delegates to the FrameAnimator helper that checks whether the user
 // pressed a key within the drive window.
-func (m Model) userDriving() bool {
+func (m *Model) userDriving() bool {
 	return driveWindowActive(m.lastKeyAt)
 }
 
 // ConsumesKey reports whether the flamegraph should handle a key press before
 // dashboard- or app-level shortcuts.
-func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
+func (m *Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 	if m.searchActive {
 		return true
 	}
@@ -485,7 +499,7 @@ func (m Model) ConsumesKey(msg tea.KeyPressMsg) bool {
 // View renders the flamegraph viewport. Caches the rendered string keyed on
 // the inputs that affect output; skips the cache while animating (frames
 // change every 33 ms anyway, so cache hits are impossible).
-func (m Model) View() tea.View {
+func (m *Model) View() tea.View {
 	if !m.animating && m.viewCache != nil {
 		key := m.currentViewCacheKey()
 		if m.viewCache.valid && m.viewCache.key == key {
@@ -502,7 +516,7 @@ func (m Model) View() tea.View {
 
 // renderViewContent assembles the flamegraph string. Pure function over Model
 // state — pulled out so View() can decide whether to memoize the result.
-func (m Model) renderViewContent() string {
+func (m *Model) renderViewContent() string {
 	extraLines := 1 // selection status line
 	if m.showHelp {
 		extraLines++
@@ -549,7 +563,7 @@ func (m Model) renderViewContent() string {
 // currentViewCacheKey snapshots every Model field that influences View()
 // output. If any of these differ between successive View() invocations, the
 // cache misses and the content is rebuilt.
-func (m Model) currentViewCacheKey() flameViewCacheKey {
+func (m *Model) currentViewCacheKey() flameViewCacheKey {
 	return flameViewCacheKey{
 		version:       m.lastVersion,
 		selectedIdx:   m.selectedIdx,
@@ -732,22 +746,22 @@ func (m *Model) RefreshFromLiveTrieCmd() tea.Cmd {
 }
 
 // LastVersion returns the latest snapshot version loaded into the model.
-func (m Model) LastVersion() uint64 {
+func (m *Model) LastVersion() uint64 {
 	return m.lastVersion
 }
 
 // HasSnapshot reports whether the flamegraph model has loaded at least one snapshot.
-func (m Model) HasSnapshot() bool {
+func (m *Model) HasSnapshot() bool {
 	return m.snapshot != nil
 }
 
 // AnimationCmd returns a frame animation tick command when animation is active.
-func (m Model) AnimationCmd() tea.Cmd {
+func (m *Model) AnimationCmd() tea.Cmd {
 	return m.animationTickCmd()
 }
 
 // Paused reports whether live refresh is paused.
-func (m Model) Paused() bool {
+func (m *Model) Paused() bool {
 	return m.paused
 }
 
@@ -798,7 +812,7 @@ func (m *Model) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestr
 	m.FrameAnimator.applyTargetFrames(targetFrames, ancestry, prevPath, animate, &m.SelectionManager, &m.SearchController, m.height)
 }
 
-func (m Model) frameIndexByPath(path string) int {
+func (m *Model) frameIndexByPath(path string) int {
 	for idx, frame := range m.frames {
 		if frame.Path == path {
 			return idx
@@ -869,7 +883,7 @@ func abs(v int) int {
 	return v
 }
 
-func (m Model) animationTickCmd() tea.Cmd {
+func (m *Model) animationTickCmd() tea.Cmd {
 	if !m.animating {
 		return nil
 	}
@@ -877,12 +891,12 @@ func (m Model) animationTickCmd() tea.Cmd {
 }
 
 // currentRootPath delegates to ZoomNavigator to return the current view root path.
-func (m Model) currentRootPath() string {
+func (m *Model) currentRootPath() string {
 	return m.ZoomNavigator.currentRootPath(m.frames)
 }
 
 // frameNavigable reports whether a frame can be selected under the current filter.
-func (m Model) frameNavigable(idx int) bool {
+func (m *Model) frameNavigable(idx int) bool {
 	return frameNavigable(idx, m.frames, m.searchQuery, m.filterVisible)
 }
 
@@ -967,23 +981,23 @@ func (m *Model) setZoomPath(path string) bool {
 }
 
 // rootSnapshotPath delegates to ZoomNavigator to derive the canonical root path.
-func (m Model) rootSnapshotPath() string {
+func (m *Model) rootSnapshotPath() string {
 	return m.ZoomNavigator.rootSnapshotPath(m.snapshot, m.frames)
 }
 
 // frameIndexAt delegates to the renderer package-level helper to convert
 // terminal coordinates (x, y) to a frame index, accounting for UI chrome.
-func (m Model) frameIndexAt(x, y int) int {
+func (m *Model) frameIndexAt(x, y int) int {
 	return frameIndexAt(m.frames, x, y, m.width, m.height, m.showHelp, m.heightMetricActive())
 }
 
 // frameCoordToTargetRow delegates to the renderer package-level helper.
-func (m Model) frameCoordToTargetRow(dataRow, availableRows int) int {
+func (m *Model) frameCoordToTargetRow(dataRow, availableRows int) int {
 	params := computeRenderParamsForAvailableRows(m.frames, availableRows, m.heightMetricActive())
 	return frameCoordToTargetRow(dataRow, params)
 }
 
-func (m Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
+func (m *Model) withZoomLineage(frames []tuiFrame) []tuiFrame {
 	return applyZoomLineage(frames, m.snapshot, m.zoomPath, m.width)
 }
 
