@@ -568,7 +568,7 @@ func TestDroppedOpenStillRegistersTheFd(t *testing.T) {
 		t.Fatalf("open row survived a -latency filter it cannot satisfy: %v", ep)
 	}
 
-	resolved, ok := el.fdState().get(openedFd)
+	resolved, ok := el.fdState().get(openedFd, execCommPid)
 	if !ok || resolved == nil {
 		t.Fatalf("fd %d was not registered because its open row was filtered out", openedFd)
 	}

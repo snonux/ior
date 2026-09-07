@@ -94,7 +94,7 @@ func registerDupSourceViaDroppedOpen(t *testing.T, el *eventLoop) {
 		defer ep.Recycle()
 		t.Fatalf("open row survived a -latency filter it cannot satisfy: %v", ep)
 	}
-	if _, ok := el.fdState().get(dupSourceFd); !ok {
+	if _, ok := el.fdState().get(dupSourceFd, execCommPid); !ok {
 		t.Fatalf("fd %d was not registered by the dropped open row", dupSourceFd)
 	}
 }
@@ -152,7 +152,7 @@ func TestDroppedDupStillRegistersTheDuplicatedFd(t *testing.T) {
 				t.Fatalf("%s row survived a -latency filter it cannot satisfy: %v", tc.name, ep)
 			}
 
-			resolved, ok := el.fdState().get(dupTargetFd)
+			resolved, ok := el.fdState().get(dupTargetFd, execCommPid)
 			if !ok || resolved == nil {
 				t.Fatalf("fd %d was not registered because the %s row was filtered out",
 					dupTargetFd, tc.name)
@@ -206,7 +206,7 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 	// indistinguishable, so the check below could not fail legibly.
 	el.fdState().setProcFdCache(dupSourceFd, execCommPid,
 		file.NewFd(dupSourceFd, cachedName, syscall.O_RDWR|syscall.O_APPEND))
-	if _, ok := el.fdState().get(dupSourceFd); ok {
+	if _, ok := el.fdState().get(dupSourceFd, execCommPid); ok {
 		t.Fatalf("fd %d must start out known only to the procfs cache", dupSourceFd)
 	}
 
@@ -215,7 +215,7 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 		t.Fatalf("fcntl row survived a -latency filter it cannot satisfy: %v", ep)
 	}
 
-	resolved, ok := el.fdState().get(dupSourceFd)
+	resolved, ok := el.fdState().get(dupSourceFd, execCommPid)
 	if !ok || resolved == nil {
 		t.Fatalf("fd %d was not registered because the F_SETFL row was filtered out", dupSourceFd)
 	}
@@ -275,7 +275,7 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 
 	feedPidfdGetfd := func(t *testing.T, el *eventLoop) *event.Pair {
 		t.Helper()
-		el.fdState().set(pidfd, file.NewFd(pidfd, pidfdName, -1))
+		el.fdState().set(pidfd, selfPid, file.NewFd(pidfd, pidfdName, -1))
 		_, enterRaw := makeEnterFdEvent(t, defaulTime, selfPid, selfPid, pidfd,
 			types.SYS_ENTER_PIDFD_GETFD)
 		_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, selfPid, selfPid,
@@ -296,7 +296,7 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 		if ep.File == nil || ep.File.Name() != path {
 			t.Fatalf("pidfd_getfd row reported file %v, want %q", ep.File, path)
 		}
-		resolved, ok := el.fdState().get(transferredFd)
+		resolved, ok := el.fdState().get(transferredFd, selfPid)
 		if !ok || resolved == nil || resolved.Name() != path {
 			t.Fatalf("transferred fd %d was not registered as %q", transferredFd, path)
 		}
@@ -314,7 +314,7 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 		}
 		// Dropped or not, the transferred descriptor is global state and must
 		// still be registered for the rows the run does want.
-		resolved, ok := el.fdState().get(transferredFd)
+		resolved, ok := el.fdState().get(transferredFd, selfPid)
 		if !ok || resolved == nil || resolved.Name() != path {
 			t.Fatalf("transferred fd %d was not registered as %q", transferredFd, path)
 		}
@@ -332,7 +332,7 @@ func TestDroppedCloseStillEvictsTheFd(t *testing.T) {
 	const cachedName = "/tmp/closed.txt"
 
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
-	el.fdState().set(dupSourceFd, file.NewFd(dupSourceFd, cachedName, syscall.O_RDONLY))
+	el.fdState().set(dupSourceFd, execCommPid, file.NewFd(dupSourceFd, cachedName, syscall.O_RDONLY))
 
 	_, enterRaw := makeEnterFdEvent(t, defaulTime, execCommPid, execCommTid, dupSourceFd,
 		types.SYS_ENTER_CLOSE)
@@ -343,7 +343,7 @@ func TestDroppedCloseStillEvictsTheFd(t *testing.T) {
 		t.Fatalf("close row survived a -latency filter it cannot satisfy: %v", ep)
 	}
 
-	if resolved, ok := el.fdState().get(dupSourceFd); ok {
+	if resolved, ok := el.fdState().get(dupSourceFd, execCommPid); ok {
 		t.Fatalf("fd %d still resolves to %v after a dropped close: a later syscall "+
 			"reusing that descriptor number would be labelled with the stale file",
 			dupSourceFd, resolved)
@@ -361,7 +361,7 @@ func TestFailedDupDoesNotRegisterAnFd(t *testing.T) {
 
 	// No filter at all: this is about the failure guard, not the checkpoint.
 	el := newFilteredEventLoop(t, globalfilter.Filter{})
-	el.fdState().set(dupSourceFd, file.NewFd(dupSourceFd, cachedName, syscall.O_RDONLY))
+	el.fdState().set(dupSourceFd, execCommPid, file.NewFd(dupSourceFd, cachedName, syscall.O_RDONLY))
 
 	_, enterRaw := makeEnterFdEvent(t, defaulTime, execCommPid, execCommTid, dupSourceFd,
 		types.SYS_ENTER_DUP)
@@ -373,12 +373,12 @@ func TestFailedDupDoesNotRegisterAnFd(t *testing.T) {
 	}
 	defer ep.Recycle()
 
-	if resolved, ok := el.fdState().get(int32(dupFailureRet)); ok {
+	if resolved, ok := el.fdState().get(int32(dupFailureRet), execCommPid); ok {
 		t.Fatalf("a failed dup registered fd %d as %v; failure returns must not "+
 			"mutate the fd table", dupFailureRet, resolved)
 	}
 	// The source descriptor must be untouched.
-	resolved, ok := el.fdState().get(dupSourceFd)
+	resolved, ok := el.fdState().get(dupSourceFd, execCommPid)
 	if !ok || resolved == nil || resolved.Name() != cachedName {
 		t.Fatalf("a failed dup disturbed the source fd %d: %v", dupSourceFd, resolved)
 	}
@@ -394,7 +394,7 @@ func TestDroppedCloseRangeStillEvictsTheFds(t *testing.T) {
 
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
 	for fd := lowFd; fd <= highFd; fd++ {
-		el.fdState().set(fd, file.NewFd(fd, "/tmp/ranged.txt", syscall.O_RDONLY))
+		el.fdState().set(fd, execCommPid, file.NewFd(fd, "/tmp/ranged.txt", syscall.O_RDONLY))
 	}
 
 	_, enterRaw := makeEnterTwoFdEvent(t, defaulTime, execCommPid, execCommTid,
@@ -407,7 +407,7 @@ func TestDroppedCloseRangeStillEvictsTheFds(t *testing.T) {
 	}
 
 	for fd := lowFd; fd <= highFd; fd++ {
-		if resolved, ok := el.fdState().get(fd); ok {
+		if resolved, ok := el.fdState().get(fd, execCommPid); ok {
 			t.Fatalf("fd %d still resolves to %v after a dropped close_range", fd, resolved)
 		}
 	}
@@ -424,7 +424,7 @@ func TestFailedPidfdGetfdDoesNotRegisterAnFd(t *testing.T) {
 	const failureRet = int64(-9) // -EBADF
 
 	el := newFilteredEventLoop(t, globalfilter.Filter{})
-	el.fdState().set(pidfd, file.NewFd(pidfd, pidfdName, -1))
+	el.fdState().set(pidfd, execCommPid, file.NewFd(pidfd, pidfdName, -1))
 
 	_, enterRaw := makeEnterFdEvent(t, defaulTime, execCommPid, execCommTid, pidfd,
 		types.SYS_ENTER_PIDFD_GETFD)
@@ -436,7 +436,7 @@ func TestFailedPidfdGetfdDoesNotRegisterAnFd(t *testing.T) {
 	}
 	defer ep.Recycle()
 
-	if resolved, ok := el.fdState().get(int32(failureRet)); ok {
+	if resolved, ok := el.fdState().get(int32(failureRet), execCommPid); ok {
 		t.Fatalf("a failed pidfd_getfd registered fd %d as %v", failureRet, resolved)
 	}
 	// A failed transfer keeps reporting the source pidfd, which is what the

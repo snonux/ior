@@ -71,13 +71,19 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	}
 
 	attacher := libbpfTracepointModule{module: bpfModule}
-	// Attach the exec probe before the syscall tracepoints. AttachAll walks
+	// Attach the sched probes before the syscall tracepoints. AttachAll walks
 	// hundreds of tracepoints and takes a noticeable amount of time, during
 	// which syscall records already flow from the ones attached first. Any task
 	// that execs in that window would otherwise produce syscall rows with no
-	// preceding comm record, which is exactly the stale/empty label this probe
-	// exists to prevent.
+	// preceding comm record, which is exactly the stale/empty label the exec
+	// probe exists to prevent. The exit probe has no ordering requirement but
+	// costs nothing to attach here.
 	releaseExecProbe := attachProcessExecProbe(attacher)
+	releaseExitProbe := attachProcessExitProbe(attacher)
+	releaseSchedProbes := func() {
+		releaseExecProbe()
+		releaseExitProbe()
+	}
 
 	mgr := probemanager.NewManager(attacher)
 	// Per-syscall attach failures are non-fatal: on older kernels the
@@ -88,7 +94,7 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 		fmt.Fprintf(os.Stderr, "ior: skipping tracepoint for %s: %v\n", syscall, err)
 	}
 	if err := mgr.AttachAll(cfg.TracepointSelector.ShouldAttach, tracepoints.List, warn); err != nil {
-		releaseExecProbe()
+		releaseSchedProbes()
 		mgr.Close()
 		bpfModule.Close()
 		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)
@@ -99,52 +105,71 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 		bindings.SetProbeManager(mgr)
 		releaseBindings = func() {
 			bindings.SetProbeManager(nil)
-			releaseExecProbe()
+			releaseSchedProbes()
 		}
 		return bpfModule, mgr, releaseBindings, nil
 	}
-	return bpfModule, mgr, releaseExecProbe, nil
+	return bpfModule, mgr, releaseSchedProbes, nil
 }
 
 // processExecProgName is the BPF program in internal/c/exec.c that reports the
 // post-exec task comm.
 const processExecProgName = "handle_sched_process_exec"
 
+// processExitProgName is the BPF program in internal/c/exec.c that reports an
+// exiting task's tgid, so the fdTracker can evict its per-(pid, fd) entries.
+const processExitProgName = "handle_sched_process_exit"
+
 // attachProcessExecProbe attaches sched:sched_process_exec, whose records keep
 // the pid->comm cache correct across execve (see internal/c/exec.c and
 // eventLoop.handleProcessExecEvent). It is not a syscall tracepoint, so it is
 // outside the probemanager's enter/exit pair model and is attached directly
 // here, for the whole run, independently of -trace-* selection.
+func attachProcessExecProbe(attacher probemanager.Attacher) func() {
+	return attachSchedProbe(attacher, processExecProgName, "sched_process_exec")
+}
+
+// attachProcessExitProbe attaches sched:sched_process_exit, whose control
+// records evict a dead process's fdTracker entries (see internal/c/exec.c and
+// eventLoop.handleProcessExitEvent). Same attach policy as the exec probe:
+// direct attach, whole run, independent of -trace-* selection.
+func attachProcessExitProbe(attacher probemanager.Attacher) func() {
+	return attachSchedProbe(attacher, processExitProgName, "sched_process_exit")
+}
+
+// attachSchedProbe attaches one hand-written sched tracepoint program from
+// internal/c/exec.c.
 //
 // Failure is deliberately non-fatal and mirrors the per-syscall attach policy:
-// without this probe comms fall back to the asynchronous procfs resolver, which
-// is exactly the pre-fix behaviour - degraded labelling, not a broken trace.
+// without the exec probe comms fall back to the asynchronous procfs resolver,
+// and without the exit probe the fd table falls back to LRU eviction - both
+// are exactly the pre-fix behaviour: degraded, not a broken trace.
 //
 // It takes the same probemanager.Attacher seam the syscall probes use rather
 // than a *bpf.Module, so both non-fatal failure paths and the detach path are
 // reachable from tests without a live BPF module. The returned release closure
 // is idempotent: setupBPFModule hands it out both directly and wrapped inside
 // releaseBindings, and a double Destroy on a libbpf link is not safe.
-func attachProcessExecProbe(attacher probemanager.Attacher) func() {
+func attachSchedProbe(attacher probemanager.Attacher, progName, tracepointName string) func() {
 	noop := func() {}
 	if attacher == nil {
 		return noop
 	}
-	prog, err := attacher.GetProgram(processExecProgName)
+	prog, err := attacher.GetProgram(progName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ior: skipping sched_process_exec probe: get program %s: %v\n", processExecProgName, err)
+		fmt.Fprintf(os.Stderr, "ior: skipping %s probe: get program %s: %v\n", tracepointName, progName, err)
 		return noop
 	}
-	link, err := prog.AttachTracepoint("sched", "sched_process_exec")
+	link, err := prog.AttachTracepoint("sched", tracepointName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ior: skipping sched_process_exec probe: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ior: skipping %s probe: %v\n", tracepointName, err)
 		return noop
 	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			if err := link.Destroy(); err != nil {
-				fmt.Fprintf(os.Stderr, "ior: sched_process_exec probe detach error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "ior: %s probe detach error: %v\n", tracepointName, err)
 			}
 		})
 	}

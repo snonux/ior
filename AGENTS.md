@@ -282,6 +282,25 @@ committed set contains syscalls that only exist on recent mainline kernels
   stages must move together: when only some of them widen, a `-path <oldname>`
   rename row is counted in the aggregates but missing from the row list that
   is supposed to correspond to them.
+- **The fd table is keyed by (pid, fd), never by the bare fd number**: a
+  descriptor is only meaningful inside the process that owns it, and fd 3 and
+  fd 6 are near-universal, so the flat per-fd map `fdTracker.files` used to be
+  made whichever process registered last own an entry - labelling every other
+  process's rows with the wrong filename - and let one process's close evict
+  another's still-open mapping. Both fdTracker maps now key on
+  `fdKey(pid, fd)` (pid = the tgid the kernel stamps on every event), every
+  fd-creating/evicting handler passes its enter event's `Pid` along, and
+  `close`/`close_range` evict only the calling process's slice. Two
+  reclamation paths keep the now-per-process key space bounded: the LRU cap
+  `defaultMaxFdTableEntries` (the flat map had no cap at all; eviction is
+  safe because `resolve` falls back to the procfs cache and then
+  `/proc/<pid>/fd`), and a `sched:sched_process_exit` control record — the
+  sibling of `sched_process_exec` in `internal/c/exec.c`, attached the same
+  way in `internal/ior_bpfsetup.go` — whose `handleProcessExitEvent`
+  (`internal/eventloop_processexit.go`) drops the exited tgid's entries from
+  both maps. It fires per *task*, so a thread exit in a still-living
+  multithreaded process evicts that process early: degraded, not wrong — the
+  procfs fallback still answers and re-populates the table.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.

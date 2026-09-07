@@ -52,6 +52,9 @@ const (
 	// emitted by sched:sched_process_exec. 4+4+8+4+4+16 = 40 bytes with no
 	// trailing padding, so kernel and binary.Write payloads share one size.
 	processExecEventSize = 40
+	// process_exit_event is the sibling control record emitted by
+	// sched:sched_process_exit. 4+4+8+4+4 = 24 bytes, no trailing padding.
+	processExitEventSize = 24
 )
 
 func NewOpenEventFast(raw []byte) *OpenEvent {
@@ -522,5 +525,23 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	copy(p.Comm[:], raw[24:40])
+	return p
+}
+
+// NewProcessExitEventFast decodes the sched:sched_process_exit control record
+// identifying the tgid whose fd-table entries userspace must evict.
+func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
+	if len(raw) < processExitEventSize {
+		return nil
+	}
+	if len(raw) != processExitEventSize {
+		return NewProcessExitEvent(raw)
+	}
+	p := poolOfProcessExitEvents.Get().(*ProcessExitEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	return p
 }

@@ -58,7 +58,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	ep.Comm = comm
 	if fd := int32(retEvent.Ret); fd >= 0 {
 		fdFile := file.NewFd(fd, types.StringValue(openEv.Filename[:]), openEv.Flags)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
 		// Keep path information for failed opens so error scenarios remain observable.
@@ -152,7 +152,7 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 			// mapping just like handleOpenExit does for open/openat/openat2.
 			fdFile := file.NewFd(fd, types.StringValue(pathEv.Pathname[:]),
 				syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
-			e.fdState().set(fd, fdFile)
+			e.fdState().set(fd, pathEv.Pid, fdFile)
 			ep.File = fdFile
 		} else {
 			// Failed creat (-1): keep the path so error scenarios stay
@@ -211,7 +211,7 @@ func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 	if !ok || retEv.Ret != 0 {
 		return
 	}
-	e.fdState().delete(fd)
+	e.fdState().delete(fd, pid)
 	e.fdState().deleteProcFdCache(fd, pid)
 }
 
@@ -233,7 +233,7 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 			e.recyclePair(ep, "Dropped malformed dup exit event")
 			return false
 		}
-		e.registerDup(fdFile, int32(retEvent.Ret), 0)
+		e.registerDup(fdFile, fdEv.Pid, int32(retEvent.Ret), 0)
 	}
 	if ep.Is(types.SYS_ENTER_PIDFD_GETFD) {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
@@ -243,7 +243,7 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 		}
 		if newFd := int32(retEv.Ret); newFd >= 0 {
 			transferredFile := file.NewFdWithPid(newFd, fdEv.Pid)
-			e.fdState().set(newFd, transferredFile)
+			e.fdState().set(newFd, fdEv.Pid, transferredFile)
 			ep.File = transferredFile
 		}
 	}
@@ -268,7 +268,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 		e.recyclePair(ep, "Dropped malformed dup3 exit event")
 		return false
 	}
-	e.registerDup(fdFile, int32(retEvent.Ret), dup3Ev.Flags&syscall.O_CLOEXEC)
+	e.registerDup(fdFile, dup3Ev.Pid, int32(retEvent.Ret), dup3Ev.Flags&syscall.O_CLOEXEC)
 	return e.finishPair(ep)
 }
 
@@ -290,14 +290,14 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 
 	if pathname, ok := e.pendingHandleState().consume(tid); ok {
 		fdFile := file.NewFd(fd, pathname, openByHandleEv.Flags)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
 		fdFile := file.NewFdWithPid(fd, openByHandleEv.Pid)
 		if fdFile.Flags() == file.Flags(-1) {
 			fdFile.SetFlags(openByHandleEv.Flags)
 		}
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
 	}
 	// This kind has no raw enter filter at all (see rawRuntimeEvents), so
@@ -323,7 +323,7 @@ func (e *eventLoop) handleSocketExit(ep *event.Pair, socketEv *types.SocketEvent
 
 	if fd := int32(retEvent.Ret); fd >= 0 {
 		fdFile := file.NewFd(fd, socketDescriptorName(socketEv.Family, socketEv.Type, socketEv.Protocol), -1)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, socketEv.Pid, fdFile)
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(socketEv.GetTid())
@@ -353,12 +353,12 @@ func (e *eventLoop) handleSocketpairExit(ep *event.Pair, socketpairEv *types.Soc
 	if exitEv.Ret == 0 {
 		if exitEv.Sv0 >= 0 {
 			fdFile := file.NewFd(exitEv.Sv0, socketDescriptorName(family, typ, protocol), -1)
-			e.fdState().set(exitEv.Sv0, fdFile)
+			e.fdState().set(exitEv.Sv0, socketpairEv.Pid, fdFile)
 			ep.File = fdFile
 		}
 		if exitEv.Sv1 >= 0 {
 			fdFile := file.NewFd(exitEv.Sv1, socketDescriptorName(family, typ, protocol), -1)
-			e.fdState().set(exitEv.Sv1, fdFile)
+			e.fdState().set(exitEv.Sv1, socketpairEv.Pid, fdFile)
 			if ep.File == nil {
 				ep.File = fdFile
 			}
@@ -378,7 +378,7 @@ func (e *eventLoop) handleAcceptExit(ep *event.Pair, acceptEv *types.AcceptEvent
 	listening := e.fdState().resolve(acceptEv.Fd, acceptEv.Pid)
 	if fd := int32(exitEv.Ret); fd >= 0 {
 		fdFile := file.NewFd(fd, acceptedSocketDescriptorName(listening), -1)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, acceptEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
 		ep.File = listening
@@ -416,12 +416,12 @@ func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool
 	if exitEv.Ret == 0 {
 		if exitEv.Fd0 >= 0 {
 			fdFile := file.NewFd(exitEv.Fd0, pipeDescriptorName(flags, exitEv.Fd0, exitEv.Fd1), flags)
-			e.fdState().set(exitEv.Fd0, fdFile)
+			e.fdState().set(exitEv.Fd0, pipeEv.Pid, fdFile)
 			ep.File = fdFile
 		}
 		if exitEv.Fd1 >= 0 {
 			fdFile := file.NewFd(exitEv.Fd1, pipeDescriptorName(flags, exitEv.Fd0, exitEv.Fd1), flags)
-			e.fdState().set(exitEv.Fd1, fdFile)
+			e.fdState().set(exitEv.Fd1, pipeEv.Pid, fdFile)
 			if ep.File == nil {
 				ep.File = fdFile
 			}
@@ -444,7 +444,7 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 	}
 	if fd := int32(exitEv.Ret); fd >= 0 {
 		fdFile := file.NewFd(fd, eventfdDescriptorName(eventfdEv.GetTraceId(), flags), flags)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, eventfdEv.Pid, fdFile)
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(eventfdEv.GetTid())
@@ -494,7 +494,7 @@ func (e *eventLoop) applyCloseRangeState(ep *event.Pair, ev *types.TwoFdEvent) {
 	if ev.Extra&closeRangeCloexec != 0 {
 		return
 	}
-	e.fdState().closeRange(ev.FdA, ev.FdB)
+	e.fdState().closeRange(ev.FdA, ev.FdB, ev.Pid)
 	e.fdState().deleteProcFdCacheRange(ev.FdA, ev.FdB, ev.Pid)
 }
 
@@ -523,7 +523,7 @@ func (e *eventLoop) handlePerfOpenExit(ep *event.Pair, perfOpenEv *types.PerfOpe
 
 	if fd := int32(retEvent.Ret); fd >= 0 {
 		fdFile := file.NewFd(fd, perfDescriptorName(perfOpenEv), -1)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, perfOpenEv.Pid, fdFile)
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(perfOpenEv.GetTid())
@@ -583,7 +583,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 		}
 		if fd := int32(retEvent.Ret); fd >= 0 {
 			fdFile := file.NewFdWithPid(fd, nullEv.Pid)
-			e.fdState().set(fd, fdFile)
+			e.fdState().set(fd, nullEv.Pid, fdFile)
 			ep.File = fdFile
 		}
 	}
@@ -655,16 +655,16 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 		const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
 		fdFile.MergeFlags(int32(canChange), int32(fcntlEv.Arg))
 		ep.File = fdFile
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, fcntlEv.Pid, fdFile)
 	case syscall.F_DUPFD:
-		e.registerDup(fdFile, int32(retEvent.Ret), 0)
+		e.registerDup(fdFile, fcntlEv.Pid, int32(retEvent.Ret), 0)
 	case syscall.F_DUPFD_CLOEXEC:
-		e.registerDup(fdFile, int32(retEvent.Ret), syscall.O_CLOEXEC)
+		e.registerDup(fdFile, fcntlEv.Pid, int32(retEvent.Ret), syscall.O_CLOEXEC)
 	}
 	return true
 }
 
-func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int32) {
+func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd, extraFlags int32) {
 	if newFd < 0 {
 		return
 	}
@@ -672,7 +672,7 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int
 	if extraFlags != 0 {
 		duppedFdFile.AddFlags(extraFlags)
 	}
-	e.fdState().set(newFd, duppedFdFile)
+	e.fdState().set(newFd, pid, duppedFdFile)
 }
 
 func (e *eventLoop) finishPairForTid(ep *event.Pair, tid uint32) bool {

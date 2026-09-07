@@ -64,7 +64,7 @@ func TestTracepointExitedFinalizesRuntimeKindPair(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	fd := int32(42)
 	tracked := file.NewFd(fd, "/tmp/read-source", 0)
-	el.fdState().set(fd, tracked)
+	el.fdState().set(fd, defaultPid, tracked)
 
 	enter := &types.FdEvent{
 		EventType: types.ENTER_FD_EVENT,

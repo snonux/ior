@@ -129,7 +129,7 @@ func TestOpenNameFixupRecoversAnEmptyFilename(t *testing.T) {
 		// The whole point of recovering the name is that it also un-poisons
 		// the fd table: before, every later read/write/close on the descriptor
 		// inherited the empty string the open registered.
-		fdFile, ok := el.fdState().get(openedFd)
+		fdFile, ok := el.fdState().get(openedFd, execCommPid)
 		if !ok {
 			t.Fatalf("fd %d was not registered", openedFd)
 		}

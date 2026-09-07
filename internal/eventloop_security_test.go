@@ -81,7 +81,7 @@ func TestHandlePerfOpenExitFailedReturnNoFd(t *testing.T) {
 	if ep.File != nil {
 		t.Fatalf("expected no fd recorded for failed perf_event_open, got file=%v", ep.File)
 	}
-	if _, ok := el.fdState().get(-1); ok {
+	if _, ok := el.fdState().get(-1, 300); ok {
 		t.Fatal("failed perf_event_open must not register an fd in fdState")
 	}
 }

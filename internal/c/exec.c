@@ -1,9 +1,10 @@
 //+build ignore
 
 /**
- * exec.c holds the hand-written sched:sched_process_exec handler.
+ * exec.c holds the hand-written sched tracepoint handlers that are not
+ * syscall tracepoints: sched_process_exec and sched_process_exit.
  *
- * Why this exists: the comm shown for a syscall used to come from an
+ * Why sched_process_exec exists: the comm shown for a syscall used to come from an
  * asynchronous /proc/<tid>/comm read (internal/eventloop_comm.go). A task that
  * forks and then execve()s keeps its tid across the exec, so a lookup that
  * landed in the post-fork/pre-exec window cached the *old* program name for
@@ -48,6 +49,50 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     __builtin_memset(&(ev->comm), 0, sizeof(ev->comm));
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+// Why sched_process_exit exists: the userspace fdTracker keys its fd table by
+// (tgid, fd), because a descriptor number is only meaningful inside the
+// process that owns it. Close and close_range evict a process's own entries,
+// but nothing in the syscall stream reports that a *process* went away, so
+// every descriptor a dead process left behind would sit in the table until LRU
+// eviction got around to it - pure garbage for any fd number that process ever
+// held, and memory that only grows with process churn.
+//
+// sched:sched_process_exit fires per exiting task and carries the task in
+// context, so this handler emits a small control record with the tgid, and
+// userspace evicts that tgid's entries (internal/eventloop_processexit.go).
+// The record fires for *thread* exits too, so a multithreaded process whose
+// thread dies while the rest live has its fd entries evicted early - that is
+// correct-but-degraded, not wrong: the next syscall on such a descriptor falls
+// back to the procfs resolution path (/proc/<pid>/fd), which still answers
+// correctly while the process lives, and re-populates the table.
+//
+// Cost: one 24-byte record per task exit, comparable to the per-exec record
+// above, on the same ring buffer.
+SEC("tracepoint/sched/sched_process_exit")
+int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx) {
+    __u32 pid, tid;
+    struct process_exit_event *ev;
+
+    if (filter(&pid, &tid))
+        return 0;
+
+    ev = bpf_ringbuf_reserve(&event_map, sizeof(struct process_exit_event), 0);
+    if (!ev) {
+        ior_count_ringbuf_drop();
+        return 0;
+    }
+
+    ev->event_type = PROCESS_EXIT_EVENT;
+    // Not a syscall tracepoint: there is no enter/exit trace id to report.
+    ev->trace_id = 0;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

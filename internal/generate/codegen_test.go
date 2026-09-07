@@ -2944,4 +2944,7 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 	if !strings.Contains(typesH, "#define OPEN_NAME_FIXUP_EVENT 48") {
 		t.Error("types.h must define OPEN_NAME_FIXUP_EVENT (the Go constant is generated from it)")
 	}
+	if !strings.Contains(typesH, "#define PROCESS_EXIT_EVENT 49") {
+		t.Error("types.h must define PROCESS_EXIT_EVENT (the Go constant is generated from it)")
+	}
 }

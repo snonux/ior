@@ -165,3 +165,72 @@ func TestAttachProcessExecProbeWithoutAttacher(t *testing.T) {
 	}
 	release()
 }
+
+// TestAttachProcessExitProbeAttachesTheSchedTracepoint pins the exit probe's
+// program and tracepoint the same way the exec probe tests above pin theirs:
+// the fdTracker eviction depends on sched:sched_process_exit records, and the
+// release closure must stay idempotent for the same double-handout reason.
+func TestAttachProcessExitProbeAttachesTheSchedTracepoint(t *testing.T) {
+	link := &fakeProbeLink{}
+	prog := &fakeProbeProgram{link: link}
+	attacher := &fakeProbeAttacher{prog: prog}
+
+	release := attachProcessExitProbe(attacher)
+
+	if attacher.requested != processExitProgName {
+		t.Fatalf("requested program %q, want %q", attacher.requested, processExitProgName)
+	}
+	if prog.category != "sched" || prog.name != "sched_process_exit" {
+		t.Fatalf("attached %s:%s, want sched:sched_process_exit", prog.category, prog.name)
+	}
+
+	release()
+	release()
+	if link.destroys != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	}
+}
+
+// TestAttachProcessExitProbeFailuresAreNonFatal mirrors the exec probe's
+// policy: a missing program or tracepoint degrades to LRU-only fd-table
+// eviction, never an aborted trace, and leaves a usable no-op release.
+func TestAttachProcessExitProbeFailuresAreNonFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attacher *fakeProbeAttacher
+		wantLog  string
+	}{
+		{
+			name:     "program missing from the object",
+			attacher: &fakeProbeAttacher{err: errors.New("no such program")},
+			wantLog:  "get program " + processExitProgName,
+		},
+		{
+			name: "tracepoint missing on this kernel",
+			attacher: &fakeProbeAttacher{
+				prog: &fakeProbeProgram{err: errors.New("no such tracepoint")},
+			},
+			wantLog: "no such tracepoint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var release func()
+			logged := captureStderr(t, func() {
+				release = attachProcessExitProbe(tc.attacher)
+			})
+
+			if release == nil {
+				t.Fatal("expected a non-nil release closure even on failure")
+			}
+			release()
+			release()
+
+			if !strings.Contains(logged, "skipping sched_process_exit probe") {
+				t.Fatalf("stderr = %q, want it to report the skipped probe", logged)
+			}
+			if !strings.Contains(logged, tc.wantLog) {
+				t.Fatalf("stderr = %q, want it to contain %q", logged, tc.wantLog)
+			}
+		})
+	}
+}

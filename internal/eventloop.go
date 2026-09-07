@@ -21,8 +21,23 @@ const (
 	defaultMaxPendingEnterEvs      = 16384
 	defaultMaxPendingHandleEntries = 8192
 	defaultMaxProcFdCacheSize      = 8192
-	cacheTrimDivisor               = 4
-	defaultAggregateDrainEvery     = time.Second
+	// defaultMaxFdTableEntries caps the fdTracker's (pid, fd) table. The flat
+	// per-fd map it replaced had no cap at all, but its key space was bounded
+	// by the number of distinct descriptor *numbers* (a few hundred per
+	// process, shared system-wide). Keying per pid makes the space grow with
+	// every traced process, and nothing in the syscall stream alone reclaims
+	// the entries of a process that exited - hence both this cap and the
+	// sched_process_exit eviction that usually makes it moot: between close,
+	// close_range, dup-overwrites and process exits, steady state tracks the
+	// genuinely-open descriptors of live traced processes, and 32768 covers
+	// that with headroom (32 processes at the RLIMIT_NOFILE soft default of
+	// 1024, or ~8 busy ones at 4096) before LRU trimming starts. Trimming is
+	// not lossy-by-design either: resolve falls back to the procfs cache and
+	// then to a live /proc/<pid>/fd readlink, so an evicted-but-open
+	// descriptor still resolves correctly.
+	defaultMaxFdTableEntries   = 32768
+	cacheTrimDivisor           = 4
+	defaultAggregateDrainEvery = time.Second
 )
 
 type syscallAggregateSource interface {
@@ -149,7 +164,22 @@ func configuredFDTracker(injected *fdTracker) *fdTracker {
 		return newFDTracker(nil)
 	}
 	if injected.files == nil {
-		injected.files = make(map[int32]file.File)
+		injected.files = make(map[uint64]file.File)
+	}
+	// Symmetric hardening: a hand-built tracker could carry entries without a
+	// presence set, and deletePid's nil-set guard would then silently skip
+	// eviction. Seed the set from whatever is already in the maps so the
+	// over-approximation invariant holds from construction.
+	if injected.pidPresent == nil {
+		injected.pidPresent = make(map[uint32]struct{})
+		for key := range injected.files {
+			pid, _ := fdKeyParts(key)
+			injected.pidPresent[pid] = struct{}{}
+		}
+		for key := range injected.procFdCache {
+			pid, _ := fdKeyParts(key)
+			injected.pidPresent[pid] = struct{}{}
+		}
 	}
 	return injected
 }
@@ -175,7 +205,7 @@ func (e *eventLoop) fdState() *fdTracker {
 		e.fdTracker = newFDTracker(nil)
 	}
 	if e.fdTracker.files == nil {
-		e.fdTracker.files = make(map[int32]file.File)
+		e.fdTracker.files = make(map[uint64]file.File)
 	}
 	return e.fdTracker
 }
@@ -237,13 +267,15 @@ func (e *eventLoop) stats() string {
 	// *seen*, not records successfully turned into something: records that fail
 	// to decode (dropMalformedRawEvent) and records of an unhandled event type
 	// are included, and so are - since the sched_process_exec probe - control
-	// records (one per successful execve) alongside the syscall enter/exit
+	// records (one per successful execve and one per task exit, since the
+	// sched probes) alongside the syscall enter/exit
 	// records. Both denominators below are deliberately left on that total: the
 	// kernel-side drop counter also counts control records it failed to reserve
 	// (internal/c/exec.c), so "drops as a share of events" only stays
 	// arithmetically honest if the events side counts them too. The mismatch
 	// share is diluted by the same records, which is acceptable - execve is
-	// rare next to syscall traffic, and both figures describe the ring-buffer
+	// rare next to syscall traffic, task exits less so on thread-churning
+	// workloads, and both figures describe the ring-buffer
 	// stream as a whole rather than the syscall pairs alone.
 	mismatchPct := 0.0
 	if e.numTracepoints > 0 {

@@ -187,7 +187,7 @@ func (e *recycleCountingEvent) Recycle()                  { atomic.AddInt32(e.re
 func TestTracepointEnteredRecyclesDroppedEnterEvent(t *testing.T) {
 	el := &eventLoop{
 		pairs:        newPairTracker(),
-		fdTracker:    newFDTracker(make(map[int32]file.File)),
+		fdTracker:    newFDTracker(make(map[uint64]file.File)),
 		commResolver: newHermeticCommResolver(),
 		cfg:          eventLoopConfig{synchronousRawProcessing: true},
 		done:         make(chan struct{}),
@@ -221,7 +221,7 @@ func TestTracepointEnteredRecyclesDroppedEnterEvent(t *testing.T) {
 func TestTracepointEnteredRetainsFilteredEnterEvent(t *testing.T) {
 	el := &eventLoop{
 		pairs:        newPairTracker(),
-		fdTracker:    newFDTracker(make(map[int32]file.File)),
+		fdTracker:    newFDTracker(make(map[uint64]file.File)),
 		commResolver: newHermeticCommResolver(),
 		cfg:          eventLoopConfig{synchronousRawProcessing: true},
 		done:         make(chan struct{}),

@@ -208,7 +208,7 @@ func BenchmarkHandleFdExit(b *testing.B) {
 		b.Fatal(err)
 	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
-	el.fdState().set(99, file.NewFd(99, "/tmp/fd", syscall.O_RDONLY))
+	el.fdState().set(99, componentBenchPID, file.NewFd(99, "/tmp/fd", syscall.O_RDONLY))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -325,7 +325,7 @@ func BenchmarkHandleFcntlExit(b *testing.B) {
 		b.Fatal(err)
 	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
-	el.fdState().set(7, file.NewFd(7, "/tmp/fcntl", syscall.O_RDONLY))
+	el.fdState().set(7, componentBenchPID, file.NewFd(7, "/tmp/fcntl", syscall.O_RDONLY))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -355,7 +355,7 @@ func BenchmarkHandleDup3Exit(b *testing.B) {
 		b.Fatal(err)
 	}
 	el := newComponentBenchEventLoop(b, componentBenchTID)
-	el.fdState().set(9, file.NewFd(9, "/tmp/dup3", syscall.O_RDONLY))
+	el.fdState().set(9, componentBenchPID, file.NewFd(9, "/tmp/dup3", syscall.O_RDONLY))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -381,8 +381,8 @@ func BenchmarkFdTrackerGetSet(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		fd := int32(i % 1024)
-		tracker.set(fd, fdFile)
-		_, _ = tracker.get(fd)
+		tracker.set(fd, componentBenchPID, fdFile)
+		_, _ = tracker.get(fd, componentBenchPID)
 	}
 }
 
