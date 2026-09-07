@@ -244,14 +244,18 @@ committed set contains syscalls that only exist on recent mainline kernels
     (`TestPidfdGetfdIsFilteredOnTheFileItReports`). This is the hazard the
     `handleOpenExit` comment argues against, and the same reason
     `applyDerivedPairValues` runs before the handlers (below).
-  - The name (rename-like) kinds use `finishPairEitherName`
-    (`Filter.MatchPairEitherName`): every dimension exactly as `MatchPair`
-    applies it, except that the file dimension is satisfied by *either*
-    `Pair.File.Name()` (the newname) or `Pair.Oldname`. That mirrors the raw
-    enter filter `MatchNameEvent`, which matches oldname-or-newname, while
-    `oldnameNewnameFile.Name()` reports only the newname — a plain `MatchPair`
-    would drop legitimate `-path <oldname>` matches. Widening *only* the file
-    dimension is what let these kinds stop skipping the pair filter altogether.
+  - The name (rename-like) kinds end in the same `finishPairForTid` as every
+    other kind. Their oldname-OR-newname rule is not a separate checkpoint any
+    more: the file dimension of `Filter.Matches` is either-name-aware
+    (`Candidate.OldFileValue` reports `Pair.Oldname` / `streamrow.Row.OldName`
+    as the alternate value), mirroring the raw enter filter `MatchNameEvent`,
+    which matches oldname-or-newname while `oldnameNewnameFile.Name()` reports
+    only the newname. `MatchPairEitherName`/`MatchesEitherName` and
+    `finishPairEitherName` used to exist as per-stage variants each caller had
+    to remember to pick; they were deleted because picking the plain one was
+    exactly how a `-path <oldname>` row counted in one stage went missing in
+    another. Widening *only* the file dimension is what lets these kinds run
+    the full pair filter at all.
   - The path kinds and `open_by_handle_at` run the full `finishPairForTid`; for
     `open_by_handle_at` that is the *only* filtering it gets, because its raw
     enter filter is `nil` (see `rawRuntimeEvents`).
@@ -273,15 +277,14 @@ committed set contains syscalls that only exist on recent mainline kernels
   `-pid`/`-tid` (pushed kernel-side via `PID_FILTER`/`TID_FILTER` in
   `internal/c/filter.c`). The value is that a future raw-mode filter source
   cannot silently reintroduce the gap. The TUI reaches every dimension through
-  its filter modal and filters in two further stages, both of which use the
-  either-name form so they agree with the checkpoint above instead of
-  narrowing it back: `shouldIngestTracePair` (`internal/ior.go`, feeding the
-  stats engine, flamegraph and parquet recorder) uses `MatchPairEitherName`,
-  and the Stream tab's `applyFilter` plus its CSV export
-  (`internal/tui/eventstream/`) use `Filter.MatchesEitherName`. All three
-  stages must move together: when only some of them widen, a `-path <oldname>`
-  rename row is counted in the aggregates but missing from the row list that
-  is supposed to correspond to them.
+  its filter modal and filters in two further stages — `shouldIngestTracePair`
+  (`internal/ior.go`, feeding the stats engine, flamegraph and parquet
+  recorder) and the Stream tab's `applyFilter` plus its CSV export
+  (`internal/tui/eventstream/`). Both call the same central predicate
+  (`MatchPair`/`Matches`), whose file dimension carries the either-name rule,
+  so the stages agree with the checkpoint by construction instead of by
+  discipline; `TestAllFilterStagesAgreeOnRenameRows` is the fitness test that
+  fails if a stage ever re-narrows on its own.
 - **The fd table is keyed by (pid, fd), never by the bare fd number**: a
   descriptor is only meaningful inside the process that owns it, and fd 3 and
   fd 6 are near-universal, so the flat per-fd map `fdTracker.files` used to be

@@ -122,10 +122,14 @@ func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool
 	// File.Name() resolves to the "new" path (newname); surface the captured
 	// source path (oldname, at args[1] for the AT-variants) separately on the
 	// Pair so it reaches the output schema rather than living only in the
-	// TUI String() repr ("old:... ->new:...").
+	// TUI String() repr ("old:... ->new:..."). MatchPair's file dimension
+	// picks Oldname up as the alternate value (Candidate.OldFileValue), so
+	// the plain finishPairForTid applies every dimension here without
+	// dropping the rows a `-path <oldname>` filter legitimately selected - the
+	// raw enter filter (MatchNameEvent) already matched them on the oldname.
 	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
 	ep.Oldname = types.StringValue(nameEv.Oldname[:])
-	return e.finishPairEitherName(ep, nameEv.GetTid())
+	return e.finishPairForTid(ep, nameEv.GetTid())
 }
 
 func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
@@ -164,8 +168,9 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 	}
 	// ep.File carries the very pathname matchRawPathEvent already matched, so
 	// the full pair filter is safe here: unlike the rename kinds it cannot
-	// disagree with the raw match. See finishPairEitherName for why the name
-	// kinds need their file dimension widened instead.
+	// disagree with the raw match. The rename kinds' widening lives inside
+	// MatchPair's file dimension now (Candidate.OldFileValue), not in a
+	// separate checkpoint variant.
 	return e.finishPairForTid(ep, pathEv.GetTid())
 }
 
@@ -675,33 +680,20 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd, extraFla
 	e.fdState().set(newFd, pid, duppedFdFile)
 }
 
+// finishPairForTid is the one finish path for every runtime kind. The
+// rename-like (name-carrying) kinds need no variant of their own any more:
+// the oldname-OR-newname widening of the file dimension - exactly the
+// semantics of the raw enter filter these pairs already passed
+// (Filter.MatchNameEvent) - is part of MatchPair itself
+// (Candidate.OldFileValue), so the plain checkpoint cannot disagree with it.
+// Until e1 this left the name kinds unfiltered entirely; the widening used
+// to live in a separate finishPairEitherName/MatchPairEitherName pair of
+// methods each caller had to remember to pick, and picking the plain one was
+// exactly how a `-path <oldname>` row counted in one stage went missing in the
+// next.
 func (e *eventLoop) finishPairForTid(ep *event.Pair, tid uint32) bool {
 	ep.Comm = e.comm(tid)
 	return e.finishPair(ep)
-}
-
-// finishPairEitherName is finishPairForTid for the rename-like (name-carrying)
-// kinds. It attaches the resolved comm for tid and applies every filter
-// dimension, but treats the file dimension as satisfied when either the newname
-// (ep.File.Name()) or the captured oldname (ep.Oldname) matches - exactly the
-// oldname-OR-newname semantics of the raw enter filter these pairs already
-// passed (Filter.MatchNameEvent).
-//
-// These kinds carry no comm in their kernel payload, so their raw filter can
-// only check paths, and the enter-side comm gate in tracepointEntered only
-// requires that *some* comm is known for the tid, not that it matches. Until
-// e1 that left the rows unfiltered entirely; e1 added a comm-only checkpoint
-// because a plain MatchPair would have dropped every row a -path <oldname>
-// filter legitimately selected, which left -latency/-bytes/-ret/-fd/-family and
-// non-equality -pid/-tid applied nowhere on this path. Matching on either name
-// closes that gap instead of trading one wrong answer for another.
-func (e *eventLoop) finishPairEitherName(ep *event.Pair, tid uint32) bool {
-	ep.Comm = e.comm(tid)
-	if e.Filter().MatchPairEitherName(ep) {
-		return true
-	}
-	ep.Recycle()
-	return false
 }
 
 func (e *eventLoop) finishPair(ep *event.Pair) bool {

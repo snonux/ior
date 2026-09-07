@@ -125,9 +125,10 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 		rows = make([]StreamEvent, 0, len(snapshot))
 		for i := range snapshot {
 			ev := snapshot[i]
-			// Either-name matching, as in Model.applyFilter: the export must
-			// contain exactly the rows the Stream tab is showing.
-			if filter.MatchesEitherName(&ev, ev.OldName) {
+			// Plain Matches, as in Model.applyFilter: the either-name rule is
+			// inside it now, so the export must contain exactly the rows the
+			// Stream tab is showing.
+			if filter.Matches(&ev) {
 				rows = append(rows, ev)
 			}
 		}

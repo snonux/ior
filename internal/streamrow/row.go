@@ -59,6 +59,14 @@ func (r Row) FileValue() string {
 	return r.FileName
 }
 
+// OldFileValue reports the rename/link source path, the alternate value of
+// the file dimension. Empty for every other row; see the comment on
+// globalfilter.Candidate.OldFileValue for why Matches treats it as a second
+// legitimate `-path` value instead of each caller deciding.
+func (r Row) OldFileValue() string {
+	return r.OldName
+}
+
 func (r Row) PIDValue() uint32 {
 	return r.PID
 }

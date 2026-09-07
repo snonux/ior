@@ -706,10 +706,12 @@ func TestShouldIngestTracePairAppliesFullGlobalFilter(t *testing.T) {
 }
 
 // TestShouldIngestTracePairMatchesOnEitherRenameName pins that the TUI's
-// second filtering stage uses the same either-name file semantics as the
-// event-loop checkpoint (Filter.MatchPairEitherName). Using plain MatchPair
-// here silently narrowed the contract, so a `-path <oldname>` filter kept a
-// rename row in -plain output but dropped it on the dashboard.
+// second filtering stage calls the same MatchPair as the event-loop
+// checkpoint, whose file dimension is either-name-aware for rename pairs
+// (Candidate.OldFileValue). Before the rule was centralized this stage had
+// to remember to pick the wide variant; picking the plain one silently
+// narrowed the contract, so a `-path <oldname>` filter kept a rename row in
+// -plain output but dropped it on the dashboard.
 func TestShouldIngestTracePairMatchesOnEitherRenameName(t *testing.T) {
 	pair := &event.Pair{
 		File:    file.NewOldnameNewname([]byte("/tmp/old.txt"), []byte("/tmp/new.txt")),

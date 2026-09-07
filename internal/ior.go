@@ -400,17 +400,17 @@ func tuiTraceStarterFromRunTrace(
 // filter after a live swap so a pair admitted under the previous filter cannot
 // reach the dashboard under the new one.
 //
-// It uses MatchPairEitherName rather than MatchPair so that this stage agrees
-// with the event-loop checkpoint: the rename-like kinds are filtered on either
-// their old or their new path (see Filter.MatchPairEitherName). Plain MatchPair
-// here would silently narrow that contract, so `-path <oldname>` would keep a
-// rename row in -plain output but drop it on the dashboard. For every other
-// kind Oldname is empty and MatchPairEitherName is exactly MatchPair.
+// It uses the same MatchPair as the event-loop checkpoint; the either-name
+// rule for rename-like kinds is part of that one method now (see
+// Filter.MatchPair), so this stage cannot narrow the contract the checkpoint
+// applied - previously it had to remember to pick the wide variant, and
+// forgetting exactly that made `-path <oldname>` rows survive in -plain but
+// vanish on the dashboard.
 func shouldIngestTracePair(filter globalfilter.Filter, pair *event.Pair) bool {
 	if !filter.IsActive() {
 		return true
 	}
-	return filter.MatchPairEitherName(pair)
+	return filter.MatchPair(pair)
 }
 
 func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filter) {

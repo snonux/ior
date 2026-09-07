@@ -56,6 +56,15 @@ type Candidate interface {
 	FamilyValue() string
 	CommValue() string
 	FileValue() string
+	// OldFileValue reports the alternate value of the file dimension: the
+	// source (oldname) path of a rename-like event, whose reported name
+	// (FileValue) is only the destination (newname) path. It is empty for
+	// every single-name candidate, and the file dimension of Matches treats it
+	// as a second legitimate value — this method is the ONE place that knows a
+	// candidate can carry two names, so no filter stage can re-narrow or
+	// re-widen the rule on its own (the raw kernel-side counterpart is
+	// MatchNameEvent, which reads oldname/newname straight from the payload).
+	OldFileValue() string
 	PIDValue() uint32
 	TIDValue() uint32
 	FDValue() int32
@@ -142,7 +151,19 @@ func (f Filter) Matches(candidate Candidate) bool {
 	if !matchString(f.Comm, candidate.CommValue()) {
 		return false
 	}
-	if !matchString(f.File, candidate.FileValue()) {
+	// The file dimension is the one dimension that can carry two legitimate
+	// values: a rename-like candidate reports its destination path as
+	// FileValue and its source path as OldFileValue, and `-path <oldname>` is
+	// as valid a selection as `-path <newname>` (the raw enter filter
+	// MatchNameEvent has always matched either). Evaluating both here means
+	// every stage that calls Matches — pair checkpoint, dashboard ingest,
+	// Stream tab, CSV export — applies the same rule by construction, and no
+	// stage can silently diverge from the others again. The empty-OldFileValue
+	// guard matters for one degenerate input: the anchored pattern `^$` (an
+	// empty path) matches the empty string, so without the guard every
+	// single-name candidate would satisfy it through the absent oldname.
+	if !matchString(f.File, candidate.FileValue()) &&
+		(candidate.OldFileValue() == "" || !matchString(f.File, candidate.OldFileValue())) {
 		return false
 	}
 	if !matchNumeric(f.PID, int64(candidate.PIDValue())) {

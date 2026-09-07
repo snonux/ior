@@ -24,6 +24,7 @@ func (s sampleCandidate) SyscallValue() string { return s.syscall }
 func (s sampleCandidate) FamilyValue() string  { return s.family }
 func (s sampleCandidate) CommValue() string    { return s.comm }
 func (s sampleCandidate) FileValue() string    { return s.file }
+func (s sampleCandidate) OldFileValue() string { return "" }
 func (s sampleCandidate) PIDValue() uint32     { return s.pid }
 func (s sampleCandidate) TIDValue() uint32     { return s.tid }
 func (s sampleCandidate) FDValue() int32       { return s.fd }

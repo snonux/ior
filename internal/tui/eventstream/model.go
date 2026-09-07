@@ -619,10 +619,10 @@ func (m *Model) applyFilter() {
 	filtered := make([]StreamEvent, 0, len(m.allEvents))
 	for i := range m.allEvents {
 		ev := m.allEvents[i]
-		// MatchesEitherName, not Matches: a rename row's FileValue is its
-		// newname, so a `-path <oldname>` filter must still match it here or
-		// the Stream tab would hide a row the aggregates already counted.
-		if m.filter.MatchesEitherName(&ev, ev.OldName) {
+		// Plain Matches: the either-name rule for rename rows lives inside it
+		// now (Candidate.OldFileValue), so this stage cannot re-narrow what the
+		// event loop and the dashboard ingest already applied.
+		if m.filter.Matches(&ev) {
 			filtered = append(filtered, ev)
 		}
 	}

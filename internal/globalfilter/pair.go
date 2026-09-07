@@ -12,17 +12,13 @@ type pairCandidate struct {
 	pair *event.Pair
 }
 
-// oldnameCandidate is a pairCandidate that reports the rename-like pair's
-// *source* path as the file dimension. Every other dimension is inherited
-// unchanged from the embedded candidate.
-type oldnameCandidate struct {
-	pairCandidate
-}
-
-func (p oldnameCandidate) FileValue() string {
+func (p pairCandidate) OldFileValue() string {
 	if p.pair == nil {
 		return ""
 	}
+	// The rename-like kinds carry their source path here (Pair.Oldname);
+	// every other kind leaves it empty, where the file dimension of Matches
+	// is exactly its single-name behaviour.
 	return p.pair.Oldname
 }
 
