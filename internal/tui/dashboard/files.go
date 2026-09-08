@@ -50,10 +50,6 @@ func renderFiles(snap *statsengine.Snapshot, width, height int) string {
 	return renderFilesWithSort(snap, width, height, 0, 0, tableSortState[fileSortKey]{})
 }
 
-func renderFilesWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
-	return renderFilesWithSort(snap, width, height, offset, selectedCol, tableSortState[fileSortKey]{})
-}
-
 func renderFilesWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[fileSortKey]) string {
 	if snap == nil {
 		return "Files: waiting for stats..."
@@ -78,10 +74,6 @@ func renderFilesWithSort(snap *statsengine.Snapshot, width, height, offset, sele
 		"d:dirs",
 		"v:mode in dirs",
 	)
-}
-
-func renderFilesDirGrouped(snap *statsengine.Snapshot, width, height, offset, selectedCol int) string {
-	return renderFilesDirGroupedWithSort(snap, width, height, offset, selectedCol, tableSortState[fileDirSortKey]{})
 }
 
 func renderFilesDirGroupedWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[fileDirSortKey]) string {

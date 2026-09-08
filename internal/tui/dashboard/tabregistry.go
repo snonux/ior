@@ -22,9 +22,14 @@ type tabRenderFn func(m *Model, snap *statsengine.Snapshot, stream *eventstream.
 // are not active (bubble scroll is handled before tab dispatch).
 type tabScrollFn func(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd)
 
-// tabDescriptor captures all per-tab metadata and behaviour so that adding a
-// new tab only requires registering a new entry — no switch statements need to
-// be modified.
+// tabDescriptor captures all per-tab metadata and behaviour. Registering a
+// new tab requires a new entry here plus the pieces that are genuinely
+// tab-specific: a tableTabState field on Model (and its tableTabFor case)
+// for a table tab, its column definitions, row-count and sort-key mapping,
+// a key-map binding for its numeric shortcut, and - if it draws its own
+// view - a Render function. The tab-agnostic dispatches (navigation, Enter,
+// sort, bubble feeding, init ticks, shortcut lookup) all hang off the
+// registry and never need editing when a tab is added.
 type tabDescriptor struct {
 	// Name is the full display label shown in the tab bar (e.g. "Overview").
 	Name string
@@ -49,6 +54,19 @@ type tabDescriptor struct {
 	// HandleScroll handles direction keys for this tab when bubbles are off.
 	// Nil means the tab does not process scroll/navigation keys.
 	HandleScroll tabScrollFn
+	// HandleEnter applies Enter-on-the-selected-row for this tab, returning
+	// whether the key was handled plus an optional command (the standard
+	// shape is requestSelectedFilter over the tab's selected-row filter).
+	// Nil means Enter does nothing on this tab.
+	HandleEnter func(m *Model) (bool, tea.Cmd)
+	// HandleSort applies the sort / reverse-sort key for this tab to the
+	// currently selected column, re-anchoring the selection. Nil means the
+	// tab is not sortable.
+	HandleSort func(m *Model, reverse bool) (bool, tea.Cmd)
+	// RefreshBubble feeds the tab's bubble chart from the latest snapshot and
+	// reports whether the chart is still animating. Nil means the tab has no
+	// bubble chart.
+	RefreshBubble func(m *Model) bool
 	// ShortcutKey extracts the numeric shortcut key binding for this tab from
 	// a KeyMap. It is called at runtime against the model's configured key map
 	// so that custom key maps (e.g. in tests) are respected. Nil means the tab
@@ -86,27 +104,42 @@ var tabDescriptors = map[Tab]tabDescriptor{
 		ShortName:       "Sys",
 		Position:        30,
 		AllowedVizModes: []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
-		Render:          tabRenderSyscalls,
-		HandleScroll:    tabScrollSyscalls,
-		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Three },
+		// Render stays nil: the sort-aware renderActiveContentTable owns the
+		// Syscalls tab's drawing (Render is only the fallback a tab without
+		// its own path would need).
+		HandleScroll: tabScrollSyscalls,
+		HandleEnter:  handleSyscallsEnter,
+		HandleSort:   func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleSyscallsSortKey(reverse) },
+		RefreshBubble: func(m *Model) bool {
+			return m.syscallsTab.bubble.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest)))
+		},
+		ShortcutKey: func(k common.KeyMap) key.Binding { return k.Three },
 	},
 	TabFiles: {
 		Name:            "Files",
 		ShortName:       "Fil",
 		Position:        40,
 		AllowedVizModes: []tabVizMode{tabVizModeTable},
-		Render:          tabRenderFiles,
-		HandleScroll:    tabScrollFiles,
-		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Four },
+		// Render stays nil: the sort-aware renderActiveContentTable owns the
+		// Files tab's drawing.
+		HandleScroll:  tabScrollFiles,
+		HandleEnter:   handleFilesEnter,
+		HandleSort:    func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleFilesSortKey(reverse) },
+		RefreshBubble: func(m *Model) bool { return m.refreshFilesBubbleData() },
+		ShortcutKey:   func(k common.KeyMap) key.Binding { return k.Four },
 	},
 	TabProcesses: {
 		Name:            "Processes",
 		ShortName:       "Pro",
 		Position:        50,
 		AllowedVizModes: []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
-		Render:          tabRenderProcesses,
-		HandleScroll:    tabScrollProcesses,
-		ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Five },
+		// Render stays nil: the sort-aware renderActiveContentTable owns the
+		// Processes tab's drawing.
+		HandleScroll:  tabScrollProcesses,
+		HandleEnter:   handleProcessesEnter,
+		HandleSort:    func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleProcessesSortKey(reverse) },
+		RefreshBubble: func(m *Model) bool { return m.processesTab.bubble.SetData(processBubbleData(m.latest)) },
+		ShortcutKey:   func(k common.KeyMap) key.Binding { return k.Five },
 	},
 	TabLatency: {
 		Name:            "Latency+Gaps",
@@ -196,28 +229,6 @@ func tabRenderOverview(_ *Model, snap *statsengine.Snapshot, _ *eventstream.Mode
 	return renderOverview(snap, width, height)
 }
 
-// tabRenderSyscalls adapts renderSyscalls to the tabRenderFn signature, scoping
-// the rows to the active global filter via the shared visibleSyscallRows helper.
-// Sort-state rendering is handled by renderActiveContentTable before this path.
-func tabRenderSyscalls(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
-	return renderSyscalls(snap, m.visibleSyscallRows(snap), width, height)
-}
-
-// tabRenderFiles adapts renderFiles to the tabRenderFn signature, choosing
-// between the dir-grouped and plain view based on model state.
-// Sort-state rendering is handled by renderActiveContentTable before this path.
-func tabRenderFiles(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
-	if m.filesDirGrouped {
-		return renderFilesDirGrouped(snap, width, height, m.filesDirOffset, m.filesDirCol)
-	}
-	return renderFilesWithOffset(snap, width, height, m.filesOffset, m.filesCol)
-}
-
-// tabRenderProcesses adapts renderProcessesWithOffset to the tabRenderFn signature.
-func tabRenderProcesses(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
-	return renderProcessesWithOffset(snap, width, height, m.processesOffset, m.processesCol, m.pidFilter)
-}
-
 // tabRenderLatency adapts renderLatencyGapsTab to the tabRenderFn signature.
 func tabRenderLatency(_ *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
 	return renderLatencyGapsTab(snap, width, height)
@@ -232,33 +243,34 @@ func tabRenderStream(_ *Model, _ *statsengine.Snapshot, stream *eventstream.Mode
 }
 
 // tabScrollSyscalls handles navigation keys for the syscalls tab. When the
-// treemap viz is active it uses offset-based navigation; otherwise table nav.
+// treemap viz is active it uses offset-based navigation over the flattened
+// treemap items; otherwise the generic table-tab navigation.
 func tabScrollSyscalls(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
-	if m.syscallsVizMode == tabVizModeTreemap {
-		return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.maxSyscallsRows()), nil
+	if m.syscallsTab.mode == tabVizModeTreemap {
+		return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.syscallsRowCount()), nil
 	}
-	return common.HandleTableNavigationKey(keyStr, &m.syscallsOffset, &m.syscallsCol,
-		m.maxSyscallsRows(), len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
+	return m.syscallsTab.navigate(keyStr, m.syscallsRowCount(),
+		len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 }
 
 // tabScrollFiles handles navigation keys for the files tab, selecting between
-// the dir-grouped and plain navigation paths based on model state.
+// the dir-grouped and plain navigation paths based on model state. Both are
+// the generic table-tab navigation over the respective tableTabState.
 func tabScrollFiles(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	if m.filesDirGrouped {
-		return common.HandleTableNavigationKey(keyStr, &m.filesDirOffset, &m.filesDirCol,
-			m.maxFilesDirRowsForMode(), len(fileDirColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
+		return m.filesDirTab.navigate(keyStr, m.filesDirRowCountForMode(),
+			len(fileDirColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 	}
-	return common.HandleTableNavigationKey(keyStr, &m.filesOffset, &m.filesCol,
-		m.maxFilesRows(), len(fileColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
+	return m.filesTab.navigate(keyStr, m.filesPlainRowCount(),
+		len(fileColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 }
 
 // tabScrollProcesses handles navigation keys for the processes tab.
 func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	keyStr := msg.String()
-	return common.HandleTableNavigationKey(keyStr, &m.processesOffset, &m.processesCol,
-		m.maxProcessesRows(), len(processColumns()), tablePageStep(m.activeTableHeight())), nil
+	return m.processesTab.navigate(msg.String(), m.processesRowCount(),
+		len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 }
 
 // tabScrollStream handles navigation, filter, and editor-open keys for the
