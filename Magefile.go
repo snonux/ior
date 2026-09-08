@@ -209,20 +209,17 @@ const (
 // any real finding. BpfBuild is a dependency because internal/bpfembed.go
 // embeds c/ior.bpf.o, which must exist before the package can be built.
 //
-// It runs twice: once for the default build, once with the mage build tag so
-// Magefile.go itself is covered.
+// It runs with the mage build tag so Magefile.go itself is covered.
 func Lint() error {
 	mg.Deps(BpfBuild)
 	if _, err := exec.LookPath(golangciLintBin); err != nil {
 		return fmt.Errorf("%s not on PATH; install it with `go install %s`", golangciLintBin, golangciLintPkg)
 	}
-	if err := sh.RunWithV(goEnv(), golangciLintBin, "run", "./..."); err != nil {
-		return err
-	}
-	// Second pass with the mage build tag so this file is linted too. Without
-	// it the one file that defines the gate is the one file outside it: the
-	// default build ignores `//go:build mage`, so Magefile.go is not in any
-	// package golangci-lint loads above.
+	// The mage build tag is passed so Magefile.go is linted too: without it
+	// the one file that defines the gate is the one file outside it, because
+	// the default build ignores `//go:build mage`. One pass covers everything
+	// only while no file carries a `!mage` constraint, which
+	// internal/buildgate.TestNoNegatedMageConstraint asserts.
 	return sh.RunWithV(goEnv(), golangciLintBin, "run", "--build-tags", "mage", "./...")
 }
 
@@ -614,13 +611,14 @@ func Mrproper() error {
 	return nil
 }
 
-// World runs clean, generate, test, fmtCheck, vet, lint, and build targets.
+// World runs clean, generate, fmtCheck, vet, lint, test, and build targets.
 //
-// FmtCheck, Vet and Lint sit between the tests and the build so a static
-// finding fails the gate before the (slower) build runs. All three existed as
-// standalone targets before they were part of any gate, which is exactly how
-// their findings accumulated unnoticed: they only ran when somebody remembered
-// to run them.
+// FmtCheck, Vet and Lint run before the tests: they are the cheap gates
+// (FmtCheck is instant, the whole trio is seconds against ~45s of tests), so
+// a static finding fails the run without waiting for the suite. All three
+// existed as standalone targets before they were part of any gate, which is
+// exactly how their findings accumulated unnoticed: they only ran when
+// somebody remembered to run them.
 func World() error {
 	fmt.Println("World: cleaning...")
 	if err := Clean(); err != nil {
@@ -628,10 +626,6 @@ func World() error {
 	}
 	fmt.Println("World: generating...")
 	if err := Generate(); err != nil {
-		return err
-	}
-	fmt.Println("World: running tests...")
-	if err := Test(); err != nil {
 		return err
 	}
 	fmt.Println("World: checking formatting...")
@@ -644,6 +638,10 @@ func World() error {
 	}
 	fmt.Println("World: linting...")
 	if err := Lint(); err != nil {
+		return err
+	}
+	fmt.Println("World: running tests...")
+	if err := Test(); err != nil {
 		return err
 	}
 	fmt.Println("World: building... (BPF + Go)")

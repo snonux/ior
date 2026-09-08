@@ -34,7 +34,7 @@ and `os.RemoveAll`. That binary exists to make specific syscalls fire so the
 tracer has something to observe; by the time its scenarios tear a descriptor
 down, the syscall they were written to emit has already been traced, so a
 failing teardown carries no information and checking it would bury each
-scenario's syscall sequence under 137 `if err != nil` blocks. The exemption is
+scenario's syscall sequence under 160 `if err != nil` blocks. The exemption is
 scoped to that one package *and* to those four calls — `internal/`, `cmd/ior`
 and `integrationtests` are checked in full, and an ioworkload scenario that
 drops the error of the syscall it exists to exercise is still a finding.
@@ -43,25 +43,36 @@ A second, narrower exemption is errcheck's own built-in
 `DefaultExcludedSymbols`, which stays on (`disable-default-exclusions` is not
 set). That is why unchecked `fmt.Fprintf(os.Stderr, …)` and
 `strings.Builder`/`bytes.Buffer` writes are reported nowhere in the tree, while
-the same `Fprintf` to a generic `io.Writer` is — e.g.
-`integrationtests/harness.go` writes `_, _ = fmt.Fprintln(w, line)` a few lines
-from unannotated `fmt.Fprintf(os.Stderr, …)` calls. That asymmetry is the
-default exclusion list, not an oversight.
+the same `Fprintf` to a generic `io.Writer` is: `internal/ior_bpfsetup.go:94`
+writes an unannotated `fmt.Fprintf(os.Stderr, …)`, while
+`integrationtests/harness.go:296` has to write `_, _ = fmt.Fprintln(w, line)`
+because `w` is an `io.Writer`. That asymmetry is the default exclusion list,
+not an oversight. There are 16 such unannotated stderr writes tree-wide.
 
 **What actually runs the gates.** There is no CI in this repo, and `mage world`
 cannot complete on a host older than the generation kernel (its `generate` step
 is diff-gated; see "Generation host / kernel"). In practice the gates run when
 somebody types `mage lint` / `mage world` on a suitable host, so treat them as
 a pre-commit habit rather than something enforced for you. `internal/buildgate`
-is what pins them: it fails if `World` stops running `FmtCheck`/`Vet`/`Lint`,
-if `PrReview` stops running `World`, if `Lint` stops covering `./...`, if
-errcheck or staticcheck's SA checks are disabled, if the errcheck exclusion
-widens beyond `cmd/ioworkload` and those four calls, or if a `//nolint`
-directive appears anywhere in the tree. Its config assertions are
-deny-by-default: an unreviewed key under `linters.exclusions` or
-`linters.settings` fails the test, because `exclusions.paths`,
-`exclusions.presets` and `errcheck.exclude-functions` can each silence the gate
-tree-wide without touching the rule the tests were watching.
+is what pins them. It fails if `World` stops running `FmtCheck`/`Vet`/`Lint`
+**or discards their errors**, if `PrReview` stops running `World`, if `Lint`
+stops covering `./...` with the mage tag or is pointed at another binary or
+told to exit 0 regardless, if errcheck or staticcheck's SA checks are disabled
+(including via `linters.disable`, which overrides `enable`), if the errcheck
+exclusion widens to match any Go file outside `cmd/ioworkload` or any call
+beyond those four, if a second `.golangci.yaml`/`.toml`/`.json` appears and
+shadows the reviewed config, or if a `//nolint` directive — with or without a
+space after the slashes — appears anywhere in the tree.
+
+Its config assertions are deny-by-default over the **whole document**: any key
+not on the reviewed list fails the test. That matters because the ways found so
+far to silence this gate were each a different key from the one the tests were
+watching — `linters.disable` beats `enable`, `exclusions.paths` and `.presets`
+beat `exclusions.rules`, `settings.errcheck.exclude-functions` exempts a
+function module-wide, and `run.issues-exit-code: 0` or `run.tests: false`
+silence it from a section none of those appear in. When adding a key, read what
+it does and then add it to the known set in
+`internal/buildgate/buildgate_test.go`.
 
 `golangci-lint` itself is not pinned (`mage lint` names `@latest` when it is
 missing), so a check set can differ between machines; the gate is a floor, not
@@ -458,15 +469,16 @@ committed set contains syscalls that only exist on recent mainline kernels
 - Deliberately discarded errors are written as an explicit `_ =` (or
   `defer func() { _ = f.Close() }()`), never as a bare call with a
   `//nolint:errcheck` comment: the annotations were how these sites drifted
-  apart in the first place, with 24 of ~160 identical discards annotated and
-  the rest bare. `//nolint` is banned outright and
+  apart in the first place — 24 of them had accumulated across `cmd/ioworkload`
+  (16), `integrationtests` (7) and `audit/check` (1), of which 15 sat on one of
+  the 160 otherwise-identical teardown calls and the rest did not. `//nolint` is banned outright and
   `internal/buildgate.TestNoNolintDirectives` enforces it, because the lint
   gate cannot: golangci-lint honours the directive by construction, so one
   comment removes a file from the gate while `mage lint` still reports
   "0 issues". Blanket exemptions live in `.golangci.yml` (see Linting above),
   stated once with their reasoning instead of re-litigated per call site.
   Inside `cmd/ioworkload` the covered teardown calls are written plainly, with
-  no `_ =`, so all 137 look the same and the config is the single place the
+  no `_ =`, so all 160 look the same and the config is the single place the
   exemption is expressed.
 - Compare errors with `errors.Is`, not `==`/`!=`, whenever the value is typed
   `error` (e.g. `errors.Is(err, syscall.EINTR)`). A bare `errno` returned by

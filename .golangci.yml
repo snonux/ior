@@ -45,7 +45,7 @@ linters:
       # dir) exist to keep the process tidy between scenarios, and a failing
       # one carries no information the scenario cares about - the syscall it
       # was there to emit has already been traced by then. Checking them would
-      # mean 137 `if err != nil { return err }` blocks that no test asserts on
+      # mean 160 `if err != nil { return err }` blocks that no test asserts on
       # and that would obscure the syscall sequence each scenario is written to
       # document.
       #
