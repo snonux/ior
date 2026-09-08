@@ -192,6 +192,30 @@ func vetPackagesExcept(excluded string) ([]string, error) {
 	return packages, nil
 }
 
+// golangciLintBin is the linter driven by the Lint target, and golangciLintPkg
+// is the module path `mage lint` names when it is missing from PATH.
+const (
+	golangciLintBin = "golangci-lint"
+	golangciLintPkg = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"
+)
+
+// Lint runs golangci-lint over the module with the libbpfgo cgo environment.
+//
+// The configured linters are errcheck and staticcheck's SA checks; see
+// .golangci.yml for what is enabled and which exclusions apply. As with Vet,
+// the cgo environment is the reason this has to go through Mage: every package
+// that imports libbpfgo fails to typecheck without it, so a bare
+// `golangci-lint run` reports "bpf/bpf.h: No such file or directory" instead of
+// any real finding. BpfBuild is a dependency because internal/bpfembed.go
+// embeds c/ior.bpf.o, which must exist before the package can be built.
+func Lint() error {
+	mg.Deps(BpfBuild)
+	if _, err := exec.LookPath(golangciLintBin); err != nil {
+		return fmt.Errorf("%s not on PATH; install it with `go install %s`", golangciLintBin, golangciLintPkg)
+	}
+	return sh.RunWithV(goEnv(), golangciLintBin, "run", "./...")
+}
+
 // Fmt runs gofmt -w on all Go source files to enforce canonical formatting.
 func Fmt() error {
 	return fmtGoFiles(false)
@@ -295,7 +319,8 @@ func Bench() error {
 	return BenchFlame()
 }
 
-// PrReview runs a reproducible baseline for Codex-assisted PR reviews.
+// PrReview runs a reproducible baseline for Codex-assisted PR reviews. It
+// inherits the vet and lint gates from World.
 func PrReview() error {
 	fmt.Println("Running PR review baseline: world + benchProf")
 	if err := World(); err != nil {
@@ -579,7 +604,12 @@ func Mrproper() error {
 	return nil
 }
 
-// World runs clean, generate, test, and build targets.
+// World runs clean, generate, test, vet, lint, and build targets.
+//
+// Vet and Lint sit between the tests and the build so a static finding fails
+// the gate before the (slower) build runs. Both existed as standalone targets
+// before they were part of any gate, which is exactly how their findings
+// accumulated unnoticed: they only ran when somebody remembered to run them.
 func World() error {
 	fmt.Println("World: cleaning...")
 	if err := Clean(); err != nil {
@@ -591,6 +621,14 @@ func World() error {
 	}
 	fmt.Println("World: running tests...")
 	if err := Test(); err != nil {
+		return err
+	}
+	fmt.Println("World: vetting...")
+	if err := Vet(); err != nil {
+		return err
+	}
+	fmt.Println("World: linting...")
+	if err := Lint(); err != nil {
 		return err
 	}
 	fmt.Println("World: building... (BPF + Go)")

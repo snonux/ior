@@ -45,7 +45,7 @@ func socketAcceptLifecycle() error {
 	if err != nil {
 		return fmt.Errorf("listener socket: %w", err)
 	}
-	defer syscall.Close(listenerFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(listenerFD) }()
 
 	if err := syscall.Bind(listenerFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
 		return fmt.Errorf("bind: %w", err)
@@ -58,7 +58,7 @@ func socketAcceptLifecycle() error {
 	if err != nil {
 		return fmt.Errorf("client socket: %w", err)
 	}
-	defer syscall.Close(clientFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(clientFD) }()
 
 	if err := syscall.Connect(clientFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -68,7 +68,7 @@ func socketAcceptLifecycle() error {
 	if err != nil {
 		return fmt.Errorf("accept4: %w", err)
 	}
-	defer syscall.Close(acceptedFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(acceptedFD) }()
 
 	if err := syscall.Shutdown(acceptedFD, syscall.SHUT_RDWR); err != nil {
 		return fmt.Errorf("shutdown accepted fd: %w", err)
@@ -89,7 +89,7 @@ func socketAcceptLifecyclePlain() error {
 	if err != nil {
 		return fmt.Errorf("listener socket: %w", err)
 	}
-	defer syscall.Close(listenerFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(listenerFD) }()
 
 	if err := syscall.Bind(listenerFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
 		return fmt.Errorf("bind: %w", err)
@@ -102,7 +102,7 @@ func socketAcceptLifecyclePlain() error {
 	if err != nil {
 		return fmt.Errorf("client socket: %w", err)
 	}
-	defer syscall.Close(clientFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(clientFD) }()
 
 	if err := syscall.Connect(clientFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -113,7 +113,7 @@ func socketAcceptLifecyclePlain() error {
 		return fmt.Errorf("accept: %w", errno)
 	}
 	acceptedFD := int(acceptedFDRaw)
-	defer syscall.Close(acceptedFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(acceptedFD) }()
 
 	if err := syscall.Shutdown(acceptedFD, syscall.SHUT_RDWR); err != nil {
 		return fmt.Errorf("shutdown accepted fd: %w", err)
@@ -134,7 +134,7 @@ func socketIntrospection() error {
 	if err != nil {
 		return fmt.Errorf("listener socket: %w", err)
 	}
-	defer syscall.Close(listenerFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(listenerFD) }()
 
 	if err := syscall.Bind(listenerFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
 		return fmt.Errorf("bind: %w", err)
@@ -147,7 +147,7 @@ func socketIntrospection() error {
 	if err != nil {
 		return fmt.Errorf("client socket: %w", err)
 	}
-	defer syscall.Close(clientFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(clientFD) }()
 
 	if err := syscall.Connect(clientFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -157,7 +157,7 @@ func socketIntrospection() error {
 	if err != nil {
 		return fmt.Errorf("accept4: %w", err)
 	}
-	defer syscall.Close(acceptedFD) //nolint:errcheck
+	defer func() { _ = syscall.Close(acceptedFD) }()
 
 	if _, err := syscall.Getsockname(acceptedFD); err != nil {
 		return fmt.Errorf("getsockname: %w", err)

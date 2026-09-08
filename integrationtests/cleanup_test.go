@@ -82,7 +82,7 @@ func TestCleanupOutputDirContainsOnlyExpectedFiles(t *testing.T) {
 
 	// Run returns error because the .ior.zst has no valid data, but that's fine;
 	// we only care about what files ended up in OutputDir.
-	h.Run("test", 5) //nolint:errcheck
+	_, _, _ = h.Run("test", 5)
 
 	entries, err := os.ReadDir(outputDir)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestCleanupDetectsLeakedWorkloadTempDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create leaked dir: %v", err)
 	}
-	defer os.RemoveAll(leaked)
+	defer func() { _ = os.RemoveAll(leaked) }()
 
 	if len(newLeakedDirs(t, prefix, before)) == 0 {
 		t.Error("leak detection failed: new ioworkload temp dir was not detected")
@@ -147,7 +147,7 @@ func TestCleanupLeakedWorkloadTempDirCaughtByAssertion(t *testing.T) {
 		OutputDir:      outputDir,
 	}
 
-	h.Run("test", 5) //nolint:errcheck
+	_, _, _ = h.Run("test", 5)
 
 	// Verify that the leaked dir IS detected.
 	leaked := newLeakedDirs(t, prefix, before)
@@ -156,7 +156,7 @@ func TestCleanupLeakedWorkloadTempDirCaughtByAssertion(t *testing.T) {
 	}
 	// Clean up the intentionally leaked dir(s) — all share this test's prefix.
 	for _, dir := range leaked {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 	}
 }
 
@@ -203,7 +203,7 @@ func TestCleanupNoArtifactsOutsideOutputDir(t *testing.T) {
 		OutputDir:      outputDir,
 	}
 
-	h.Run("test", 5) //nolint:errcheck
+	_, _, _ = h.Run("test", 5)
 
 	// Verify no artifacts were created in the script dir (outside outputDir).
 	entries, err := os.ReadDir(tmpDir)

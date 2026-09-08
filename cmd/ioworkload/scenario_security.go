@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"syscall"
@@ -32,7 +33,7 @@ func securityGetrandom() error {
 		// Use unix.Getrandom so the exact sys_enter_getrandom tracepoint fires.
 		n, err := unix.Getrandom(buf[off:], 0)
 		if err != nil {
-			if err == unix.EINTR {
+			if errors.Is(err, unix.EINTR) {
 				continue
 			}
 			return fmt.Errorf("getrandom: %w", err)

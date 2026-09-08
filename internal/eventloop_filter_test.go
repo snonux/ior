@@ -84,19 +84,19 @@ func makeCommPropagationTestData(t *testing.T) (td testData) {
 	commName := "testapp"
 
 	// Step 1: OpenEvent establishes comm name
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, tid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, tid)
 	copy(openEnterEv.Filename[:], "comm_test.txt")
 	// Clear the comm buffer first to avoid leftover characters
 	for i := range openEnterEv.Comm {
 		openEnterEv.Comm[i] = 0
 	}
 	copy(openEnterEv.Comm[:], commName)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, tid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, tid)
 	openExitEv.Ret = int64(fd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open establishes comm name
@@ -241,19 +241,19 @@ func TestEventTypeFiltering(t *testing.T) {
 
 func makeOpenEventFilterTestData(t *testing.T, commFilter, pathFilter string) (td testData) {
 	// Test 1: Event that matches both filters (should pass)
-	openEnterEv1, openEnterBytes1 := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv1, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv1.Filename[:], "/var/log/nginx/access.log")
 	// Clear the comm buffer first to avoid leftover characters
 	for i := range openEnterEv1.Comm {
 		openEnterEv1.Comm[i] = 0
 	}
 	copy(openEnterEv1.Comm[:], "nginx-worker")
-	openEnterBytes1, _ = openEnterEv1.Bytes()
+	openEnterBytes1 := eventBytes(t, &openEnterEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes1)
 
-	openExitEv1, openExitBytes1 := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv1, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv1.Ret = 42
-	openExitBytes1, _ = openExitEv1.Bytes()
+	openExitBytes1 := eventBytes(t, &openExitEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes1)
 
 	// Should receive this event
@@ -264,18 +264,18 @@ func makeOpenEventFilterTestData(t *testing.T, commFilter, pathFilter string) (t
 	})
 
 	// Test 2: Event with wrong comm (should be filtered)
-	openEnterEv2, openEnterBytes2 := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid+1)
+	openEnterEv2, _ := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid+1)
 	copy(openEnterEv2.Filename[:], "/var/log/apache/error.log")
 	for i := range openEnterEv2.Comm {
 		openEnterEv2.Comm[i] = 0
 	}
 	copy(openEnterEv2.Comm[:], "apache")
-	openEnterBytes2, _ = openEnterEv2.Bytes()
+	openEnterBytes2 := eventBytes(t, &openEnterEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes2)
 
-	openExitEv2, openExitBytes2 := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid+1)
+	openExitEv2, _ := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid+1)
 	openExitEv2.Ret = 43
-	openExitBytes2, _ = openExitEv2.Bytes()
+	openExitBytes2 := eventBytes(t, &openExitEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes2)
 
 	// Should NOT receive this event
@@ -286,18 +286,18 @@ func makeOpenEventFilterTestData(t *testing.T, commFilter, pathFilter string) (t
 	})
 
 	// Test 3: Event with wrong path (should be filtered)
-	openEnterEv3, openEnterBytes3 := makeEnterOpenEvent(t, defaulTime+400, defaultPid, defaultTid+2)
+	openEnterEv3, _ := makeEnterOpenEvent(t, defaulTime+400, defaultPid, defaultTid+2)
 	copy(openEnterEv3.Filename[:], "/etc/nginx/nginx.conf")
 	for i := range openEnterEv3.Comm {
 		openEnterEv3.Comm[i] = 0
 	}
 	copy(openEnterEv3.Comm[:], "nginx")
-	openEnterBytes3, _ = openEnterEv3.Bytes()
+	openEnterBytes3 := eventBytes(t, &openEnterEv3)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes3)
 
-	openExitEv3, openExitBytes3 := makeExitOpenEvent(t, defaulTime+500, defaultPid, defaultTid+2)
+	openExitEv3, _ := makeExitOpenEvent(t, defaulTime+500, defaultPid, defaultTid+2)
 	openExitEv3.Ret = 44
-	openExitBytes3, _ = openExitEv3.Bytes()
+	openExitBytes3 := eventBytes(t, &openExitEv3)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes3)
 
 	// Should NOT receive this event
@@ -392,19 +392,19 @@ func makeFdEventFilterTestData(t *testing.T, commFilter, pathFilter string) (td 
 	fd := int32(42)
 
 	// First establish comm name and file with open
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], "/var/www/index.html")
 	// Clear the comm buffer first to avoid leftover characters
 	for i := range openEnterEv.Comm {
 		openEnterEv.Comm[i] = 0
 	}
 	copy(openEnterEv.Comm[:], "apache2")
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(fd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Open should pass filters

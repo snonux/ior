@@ -712,7 +712,7 @@ func readCSVRecords(t *testing.T, path string) [][]string {
 	if err != nil {
 		t.Fatalf("open csv: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	r := csv.NewReader(f)
 	records, err := r.ReadAll()
 	if err != nil {

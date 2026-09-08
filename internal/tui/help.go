@@ -34,7 +34,7 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 		boxWidth = 72
 	}
 
-	box := common.Current().PanelStyle.Copy().
+	box := common.Current().PanelStyle.
 		Width(boxWidth).
 		Render(strings.Join(lines, "\n"))
 
@@ -137,7 +137,7 @@ func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
 		lines = append(lines, truncateHelpLine("... (resize for full help)", contentWidth))
 	}
 
-	box := common.Current().PanelStyle.Copy().Width(boxWidth).Render(strings.Join(lines, "\n"))
+	box := common.Current().PanelStyle.Width(boxWidth).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 

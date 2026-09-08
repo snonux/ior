@@ -270,7 +270,7 @@ func (m Model) View() tea.View {
 
 	b.WriteString("\n")
 	viewWidth, _ := common.EffectiveViewport(m.width, m.height)
-	helpStyle := theme.HelpBarStyle.Copy().Width(viewWidth)
+	helpStyle := theme.HelpBarStyle.Width(viewWidth)
 	b.WriteString(helpStyle.Render(renderHelp(m.keys.PickerShortHelp())))
 	return tea.NewView(theme.ScreenStyle.Render(b.String()))
 }

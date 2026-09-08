@@ -102,8 +102,8 @@ func miscVmsplice() error {
 		return fmt.Errorf("pipe for vmsplice: %w", err)
 	}
 	readEnd, writeEnd := fds[0], fds[1]
-	defer unix.Close(readEnd)
-	defer unix.Close(writeEnd)
+	defer func() { _ = unix.Close(readEnd) }()
+	defer func() { _ = unix.Close(writeEnd) }()
 
 	buf := make([]byte, miscVmspliceLen)
 	iov := unix.Iovec{Base: &buf[0], Len: uint64(len(buf))}

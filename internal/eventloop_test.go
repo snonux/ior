@@ -406,9 +406,9 @@ func makeOpenEventFailureTestData(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
-	exitEv, exitEvBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	exitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	exitEv.Ret = -2
-	exitEvBytes, _ = exitEv.Bytes()
+	exitEvBytes := eventBytes(t, &exitEv)
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, _ *eventLoop, ep *event.Pair) {
@@ -430,6 +430,28 @@ func makeOpenEventFailureTestData(t *testing.T) (td testData) {
 	})
 
 	return td
+}
+
+// byteSerializable is any generated event type that can serialize itself into
+// the wire format the event loop decodes.
+type byteSerializable interface {
+	Bytes() ([]byte, error)
+}
+
+// eventBytes serializes ev and fails the test if that does not work.
+//
+// The make*Event helpers return both the event and its bytes, but a test that
+// customizes the event afterwards has to re-serialize it. Doing that inline as
+// `b, _ = ev.Bytes()` swallowed the serialization error and left the helper's
+// original slice as a dead store, so a test whose event no longer serializes
+// would have fed the event loop the *unmodified* bytes and still passed.
+func eventBytes(t *testing.T, ev byteSerializable) []byte {
+	t.Helper()
+	b, err := ev.Bytes()
+	if err != nil {
+		t.Fatalf("serialize %T: %v", ev, err)
+	}
+	return b
 }
 
 func makeEnterOpenEvent(t *testing.T, time uint64, pid, tid uint32) (types.OpenEvent, []byte) {
@@ -562,7 +584,6 @@ func makeReadEventTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	retBytes := int64(128)
-	_, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_READ)
 	retEvent := types.RetEvent{
 		EventType: types.EXIT_RET_EVENT,
 		TraceId:   types.SYS_EXIT_READ,
@@ -576,8 +597,7 @@ func makeReadEventTestData(t *testing.T) (td testData) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exitEvBytes = retEventBytes
-	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+	td.rawTracepoints = append(td.rawTracepoints, retEventBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		if !enterEv.Equals(ep.EnterEv) {
@@ -607,7 +627,6 @@ func makeWriteEventTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	retBytes := int64(256)
-	_, exitEvBytes := makeExitFdEvent(t, defaulTime+100, defaultPid, defaultTid, fd, types.SYS_EXIT_WRITE)
 	retEvent := types.RetEvent{
 		EventType: types.EXIT_RET_EVENT,
 		TraceId:   types.SYS_EXIT_WRITE,
@@ -621,8 +640,7 @@ func makeWriteEventTestData(t *testing.T) (td testData) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exitEvBytes = retEventBytes
-	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
+	td.rawTracepoints = append(td.rawTracepoints, retEventBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		if !enterEv.Equals(ep.EnterEv) {
@@ -674,34 +692,34 @@ func makeCloseRangeEventTestData(t *testing.T) (td testData) {
 	filename2 := "close_range_2.txt"
 	filename3 := "close_range_3.txt"
 
-	openEnterEv1, openEnterBytes1 := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv1, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv1.Filename[:], filename1)
-	openEnterBytes1, _ = openEnterEv1.Bytes()
+	openEnterBytes1 := eventBytes(t, &openEnterEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes1)
 
-	openExitEv1, openExitBytes1 := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv1, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv1.Ret = int64(fd1)
-	openExitBytes1, _ = openExitEv1.Bytes()
+	openExitBytes1 := eventBytes(t, &openExitEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes1)
 
-	openEnterEv2, openEnterBytes2 := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
+	openEnterEv2, _ := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
 	copy(openEnterEv2.Filename[:], filename2)
-	openEnterBytes2, _ = openEnterEv2.Bytes()
+	openEnterBytes2 := eventBytes(t, &openEnterEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes2)
 
-	openExitEv2, openExitBytes2 := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
+	openExitEv2, _ := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
 	openExitEv2.Ret = int64(fd2)
-	openExitBytes2, _ = openExitEv2.Bytes()
+	openExitBytes2 := eventBytes(t, &openExitEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes2)
 
-	openEnterEv3, openEnterBytes3 := makeEnterOpenEvent(t, defaulTime+400, defaultPid, defaultTid)
+	openEnterEv3, _ := makeEnterOpenEvent(t, defaulTime+400, defaultPid, defaultTid)
 	copy(openEnterEv3.Filename[:], filename3)
-	openEnterBytes3, _ = openEnterEv3.Bytes()
+	openEnterBytes3 := eventBytes(t, &openEnterEv3)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes3)
 
-	openExitEv3, openExitBytes3 := makeExitOpenEvent(t, defaulTime+500, defaultPid, defaultTid)
+	openExitEv3, _ := makeExitOpenEvent(t, defaulTime+500, defaultPid, defaultTid)
 	openExitEv3.Ret = int64(fd3)
-	openExitBytes3, _ = openExitEv3.Bytes()
+	openExitBytes3 := eventBytes(t, &openExitEv3)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes3)
 
 	// close_range(fd2, fd3, 0): closes the inclusive window [fd2, fd3], leaving fd1 tracked.
@@ -766,24 +784,24 @@ func makeCloseRangeFailureTestData(t *testing.T) (td testData) {
 	filename1 := "close_range_fail_1.txt"
 	filename2 := "close_range_fail_2.txt"
 
-	openEnterEv1, openEnterBytes1 := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv1, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv1.Filename[:], filename1)
-	openEnterBytes1, _ = openEnterEv1.Bytes()
+	openEnterBytes1 := eventBytes(t, &openEnterEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes1)
 
-	openExitEv1, openExitBytes1 := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv1, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv1.Ret = int64(fd1)
-	openExitBytes1, _ = openExitEv1.Bytes()
+	openExitBytes1 := eventBytes(t, &openExitEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes1)
 
-	openEnterEv2, openEnterBytes2 := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
+	openEnterEv2, _ := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
 	copy(openEnterEv2.Filename[:], filename2)
-	openEnterBytes2, _ = openEnterEv2.Bytes()
+	openEnterBytes2 := eventBytes(t, &openEnterEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes2)
 
-	openExitEv2, openExitBytes2 := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
+	openExitEv2, _ := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
 	openExitEv2.Ret = int64(fd2)
-	openExitBytes2, _ = openExitEv2.Bytes()
+	openExitBytes2 := eventBytes(t, &openExitEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes2)
 
 	// close_range(fd1, fd2, 0) that fails (ret=-1): no fds should be evicted.
@@ -834,14 +852,14 @@ func makeCloseFailureTestData(t *testing.T) (td testData) {
 	fd := int32(48)
 	filename := "close_fail.txt"
 
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(fd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -1004,7 +1022,7 @@ func makePidfdGetfdEventTestData(t *testing.T) (td testData) {
 	if err != nil {
 		t.Fatalf("open source file: %v", err)
 	}
-	t.Cleanup(func() { syscall.Close(fd) })
+	t.Cleanup(func() { _ = syscall.Close(fd) })
 
 	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, pid, tid, 9999, types.SYS_ENTER_PIDFD_GETFD)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
@@ -1822,14 +1840,14 @@ func makeDup3WithCloexecTestData(t *testing.T) (td testData) {
 	filename := "dup3_cloexec_test.txt"
 
 	// Step 1: Open file to get original fd
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(origFd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -1907,14 +1925,14 @@ func makeDup2TestData(t *testing.T) (td testData) {
 	filename := "dup2_test.txt"
 
 	// Step 1: Open file to get original fd
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(origFd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -2058,14 +2076,14 @@ func makeFcntlSetFlagsTestData(t *testing.T) (td testData) {
 	filename := "fcntl_setfl_test.txt"
 
 	// Step 1: Open file to get fd
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(fd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -2161,14 +2179,14 @@ func makeFcntlDupfdTestData(t *testing.T) (td testData) {
 	filename := "fcntl_dupfd_test.txt"
 
 	// Step 1: Open file to get original fd
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(origFd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -2267,14 +2285,14 @@ func makeFcntlDupfdCloexecTestData(t *testing.T) (td testData) {
 	filename := "fcntl_dupfd_cloexec_test.txt"
 
 	// Step 1: Open file to get original fd
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(origFd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -2389,14 +2407,14 @@ func makeFcntlErrorTestData(t *testing.T) (td testData) {
 	filename := "fcntl_error_test.txt"
 
 	// Step 1: Open file to get fd
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(fd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -2524,14 +2542,14 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 	realFd := uint32(66)
 	filename := "fcntl_invalid_test.txt"
 
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
 	openExitEv.Ret = int64(realFd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2675,14 +2693,14 @@ func makeFdLifecycleTestData(t *testing.T) (td testData) {
 	filename := "lifecycle_test.txt"
 
 	// Step 1: Open file
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(fd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -2761,14 +2779,14 @@ func makeFdDupTestData(t *testing.T) (td testData) {
 	filename := "dup_test.txt"
 
 	// Step 1: Open file to get original fd
-	openEnterEv, openEnterBytes := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv.Filename[:], filename)
-	openEnterBytes, _ = openEnterEv.Bytes()
+	openEnterBytes := eventBytes(t, &openEnterEv)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes)
 
-	openExitEv, openExitBytes := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv.Ret = int64(origFd)
-	openExitBytes, _ = openExitEv.Bytes()
+	openExitBytes := eventBytes(t, &openExitEv)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
 	// Validate open created the fd
@@ -2880,14 +2898,14 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 
 	// Open 3 files in sequence
 	// File 1
-	openEnterEv1, openEnterBytes1 := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
+	openEnterEv1, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	copy(openEnterEv1.Filename[:], filename1)
-	openEnterBytes1, _ = openEnterEv1.Bytes()
+	openEnterBytes1 := eventBytes(t, &openEnterEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes1)
 
-	openExitEv1, openExitBytes1 := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
+	openExitEv1, _ := makeExitOpenEvent(t, defaulTime+100, defaultPid, defaultTid)
 	openExitEv1.Ret = int64(fd1)
-	openExitBytes1, _ = openExitEv1.Bytes()
+	openExitBytes1 := eventBytes(t, &openExitEv1)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes1)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2895,14 +2913,14 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 	})
 
 	// File 2
-	openEnterEv2, openEnterBytes2 := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
+	openEnterEv2, _ := makeEnterOpenEvent(t, defaulTime+200, defaultPid, defaultTid)
 	copy(openEnterEv2.Filename[:], filename2)
-	openEnterBytes2, _ = openEnterEv2.Bytes()
+	openEnterBytes2 := eventBytes(t, &openEnterEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes2)
 
-	openExitEv2, openExitBytes2 := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
+	openExitEv2, _ := makeExitOpenEvent(t, defaulTime+300, defaultPid, defaultTid)
 	openExitEv2.Ret = int64(fd2)
-	openExitBytes2, _ = openExitEv2.Bytes()
+	openExitBytes2 := eventBytes(t, &openExitEv2)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes2)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -2912,14 +2930,14 @@ func makeMultipleFdsTestData(t *testing.T) (td testData) {
 	})
 
 	// File 3
-	openEnterEv3, openEnterBytes3 := makeEnterOpenEvent(t, defaulTime+400, defaultPid, defaultTid)
+	openEnterEv3, _ := makeEnterOpenEvent(t, defaulTime+400, defaultPid, defaultTid)
 	copy(openEnterEv3.Filename[:], filename3)
-	openEnterBytes3, _ = openEnterEv3.Bytes()
+	openEnterBytes3 := eventBytes(t, &openEnterEv3)
 	td.rawTracepoints = append(td.rawTracepoints, openEnterBytes3)
 
-	openExitEv3, openExitBytes3 := makeExitOpenEvent(t, defaulTime+500, defaultPid, defaultTid)
+	openExitEv3, _ := makeExitOpenEvent(t, defaulTime+500, defaultPid, defaultTid)
 	openExitEv3.Ret = int64(fd3)
-	openExitBytes3, _ = openExitEv3.Bytes()
+	openExitBytes3 := eventBytes(t, &openExitEv3)
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes3)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
@@ -3153,9 +3171,9 @@ func makeCrossThreadEventTestData(t *testing.T) (td testData) {
 	td.rawTracepoints = append(td.rawTracepoints, enterBBytes)
 
 	// Send exit for thread B first
-	exitB, exitBBytes := makeExitOpenEvent(t, defaulTime+200, defaultPid, tidB)
+	exitB, _ := makeExitOpenEvent(t, defaulTime+200, defaultPid, tidB)
 	exitB.Ret = 43
-	exitBBytes, _ = exitB.Bytes()
+	exitBBytes := eventBytes(t, &exitB)
 	td.rawTracepoints = append(td.rawTracepoints, exitBBytes)
 
 	// Validate thread B event
@@ -3169,9 +3187,9 @@ func makeCrossThreadEventTestData(t *testing.T) (td testData) {
 	})
 
 	// Send exit for thread A
-	exitA, exitABytes := makeExitOpenEvent(t, defaulTime+300, defaultPid, tidA)
+	exitA, _ := makeExitOpenEvent(t, defaulTime+300, defaultPid, tidA)
 	exitA.Ret = 42
-	exitABytes, _ = exitA.Bytes()
+	exitABytes := eventBytes(t, &exitA)
 	td.rawTracepoints = append(td.rawTracepoints, exitABytes)
 
 	// Validate thread A event

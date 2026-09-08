@@ -22,6 +22,23 @@ integer. Every other package — and every other analyzer in `cmd/ioworkload` �
 is vetted normally, so bare `go vet ./...` reports that one known finding and
 exits non-zero by design.
 
+**Linting**: use `mage lint`, not bare `golangci-lint run` — for the same
+reason as `mage vet`: without the cgo environment every package that imports
+libbpfgo fails to typecheck, and the linter reports `bpf/bpf.h: No such file or
+directory` instead of any real finding. The configuration is `.golangci.yml`:
+errcheck plus staticcheck's SA (correctness) checks, with the ST/QF/S style
+families off so the gate stays about bugs rather than taste.
+
+`cmd/ioworkload` is exempt from errcheck for `syscall.Close`/`Munmap`/`Chdir`
+and `os.RemoveAll`. That binary exists to make specific syscalls fire so the
+tracer has something to observe; by the time its scenarios tear a descriptor
+down, the syscall they were written to emit has already been traced, so a
+failing teardown carries no information and checking it would bury each
+scenario's syscall sequence under ~140 `if err != nil` blocks. The exemption is
+scoped to that one package — `internal/`, `cmd/ior` and `integrationtests` are
+checked in full, and `internal/buildgate` fails the build if the exclusion ever
+widens to reach them or if `mage world` stops running vet and lint at all.
+
 ```bash
 mage build                             # Build BPF object + Go binary (all is an alias)
 mage buildDocker                       # Build ior inside a Rocky Linux 9 container (writes binary to repo root)
@@ -32,12 +49,13 @@ TEST_NAME=TestEventloop mage testWithName  # Run specific test
 mage integrationTest                   # Build + run integration tests in parallel (parallelism capped to NumCPU)
 mage integrationTestSerial             # Build + run integration tests one at a time
 mage vet                               # go vet with the libbpfgo cgo env (use instead of bare `go vet ./...`)
+mage lint                              # golangci-lint (errcheck + staticcheck SA) with the same cgo env
 mage generate     # Generate code (required after modifying tracepoint definitions)
 mage bench        # Run benchmarks
 mage prReview     # Run PR review baseline: world + benchProf
 mage clean        # Clean build artifacts
 mage mrproper     # Clean + remove generated outputs (*.zst, *.svg, *.prof, *.pdf, *.tmp…)
-mage world        # Clean + generate + test + build (recommended reset path)
+mage world        # Clean + generate + test + vet + lint + build (recommended reset path)
 mage demo         # Regen docs/tutorial/ GIFs + screenshots (needs vhs+ttyd, sudo -v warmed)
 TAPE=07-stream-live mage demoOne       # Regen one demo tape only
 mage installDemoTools  # One-time: install vhs (go install) + ttyd (dnf) — Fedora/RHEL/Rocky only
@@ -409,6 +427,17 @@ committed set contains syscalls that only exist on recent mainline kernels
 - BPF C code in `/internal/c/ior.bpf.c` should be minimal for verification
 - Import style: `"ior/internal/packagename"` for internal packages
 - Error handling: Return errors, don't panic except for setup validation
+- Deliberately discarded errors are written as an explicit `_ =` (or
+  `defer func() { _ = f.Close() }()`), never as a bare call with a
+  `//nolint:errcheck` comment: the annotations were how these sites drifted
+  apart in the first place, with 23 of ~160 identical discards annotated and
+  the rest bare. The one blanket exemption lives in `.golangci.yml` (see
+  Linting above) so it is stated once, with its reasoning, instead of
+  re-litigated per call site.
+- Compare errors with `errors.Is`, not `==`/`!=`, whenever the value is typed
+  `error` (e.g. `errors.Is(err, syscall.EINTR)`). A bare `errno` returned by
+  `syscall.RawSyscall` is a concrete `syscall.Errno` that cannot be wrapped, so
+  `errno != 0` and `errno != syscall.EAGAIN` stay as direct comparisons.
 
 ## Rollback
 

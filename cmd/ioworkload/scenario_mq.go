@@ -28,8 +28,8 @@ func mqPosixBasic() error {
 	if err != nil {
 		return err
 	}
-	defer syscall.Close(mqd) //nolint:errcheck
-	defer mqUnlink(name)     //nolint:errcheck
+	defer func() { _ = syscall.Close(mqd) }()
+	defer func() { _ = mqUnlink(name) }()
 
 	if err := mqNotify(mqd); err != nil {
 		return err
