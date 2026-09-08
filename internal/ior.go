@@ -303,7 +303,7 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 				}
 			})
 		}
-		el.printCb = func(ep *event.Pair) {
+		el.SetPrintCallback(func(ep *event.Pair) {
 			if !shouldIngestTracePair(el.Filter(), ep) {
 				ep.Recycle()
 				return
@@ -318,12 +318,12 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 			// Both downstream consumers snapshot the pair synchronously, so
 			// the pooled pair can be recycled immediately afterwards.
 			ep.Recycle()
-		}
-		el.warningCb = func(message string) {
+		})
+		el.SetWarningCallback(func(message string) {
 			rt.streamBuf.Push(streamrow.NewWarning(rt.streamSeq.Next(), message))
-		}
+		})
 		if sink, ok := rt.snapSource.(aggregateSink); ok {
-			el.aggregateSink = sink
+			el.SetAggregateSink(sink)
 		}
 		if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
 			bindings.SetLiveFilterSetter(el.SetFilter)
@@ -500,7 +500,7 @@ func configureEventLoopOutput(el *eventLoop, mgr *probemanager.Manager, configur
 		configure(el)
 	}
 	origPrintCb := el.printCb
-	el.printCb = func(ep *event.Pair) {
+	el.SetPrintCallback(func(ep *event.Pair) {
 		if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
 			ep.Recycle()
 			return
@@ -508,7 +508,7 @@ func configureEventLoopOutput(el *eventLoop, mgr *probemanager.Manager, configur
 		if origPrintCb != nil {
 			origPrintCb(ep)
 		}
-	}
+	})
 }
 
 // startTraceShutdownWatcher launches a goroutine that waits for ctx to be
@@ -540,10 +540,10 @@ func maybePrependFlamegraphConfigure(cfg flags.Config, configure func(*eventLoop
 	}
 	recorder := flamegraph.NewRecorder(cfg.OutputName)
 	recordOutput := func(el *eventLoop) {
-		el.printCb = func(ep *event.Pair) {
+		el.SetPrintCallback(func(ep *event.Pair) {
 			recorder.AddPair(ep)
 			ep.Recycle()
-		}
+		})
 	}
 	return chainEventLoopConfigure(recordOutput, configure), recorder
 }

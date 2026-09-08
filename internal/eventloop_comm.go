@@ -101,6 +101,29 @@ func newCommResolver(comms map[uint32]string) *commResolver {
 	return r
 }
 
+// ensureInitialized makes any resolver usable by completing every lazily
+// created structure behind the resolver's own methods: the comms cache and
+// its LRU metadata, the pending-lookup set, and the worker/queue/resolveFn
+// defaults. The constructor and the loop's injection seam
+// (configuredCommResolver) both go through it, so the resolver's invariants
+// are spelled out in exactly one file.
+func (r *commResolver) ensureInitialized() {
+	r.ensureCommsAllocated()
+	if r.pending == nil {
+		r.pending = make(map[uint32]struct{})
+	}
+	r.ensureLookupConfig()
+}
+
+// setDefaultWarningFn installs fn as the lookup-failure reporting sink only
+// when none is wired yet, so an injected resolver keeps its own sink and the
+// event loop's default wiring cannot override it.
+func (r *commResolver) setDefaultWarningFn(fn func(string)) {
+	if r.warningFn == nil {
+		r.warningFn = fn
+	}
+}
+
 // ensureCommsAllocated initializes the comms cache and its LRU age metadata
 // when absent. Safe both in constructors/lazy-init paths (before concurrent
 // use) and under r.mu from the mutation helpers. When age metadata is created

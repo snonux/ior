@@ -7,9 +7,10 @@ import "ior/internal/event"
 // separates "what to do with a completed event pair" and "how to report
 // non-fatal problems" from the core event-matching and FD-tracking logic.
 //
-// The struct is embedded (not pointed-to) inside eventLoop so that existing
-// call sites — including tests — can still write e.printCb = ... and
-// e.warningCb = ... without any changes.
+// The struct is embedded (not pointed-to) inside eventLoop. Production
+// wiring goes through the Set*Callback setters below so the loop's mutation
+// surface is explicit; the fields themselves stay writable for same-package
+// tests that construct loops directly.
 type outputFormatter struct {
 	// printCb is called for each completed, filter-passing event pair.
 	// The callback owns the pair after the call: it must either recycle it
@@ -19,6 +20,20 @@ type outputFormatter struct {
 	// warningCb is an optional callback for non-fatal event-processing
 	// warnings (e.g. malformed events, unresolved comms). nil means silent.
 	warningCb func(message string)
+}
+
+// SetPrintCallback replaces the pair-emission callback. The callback owns
+// each pair after the call: it must either recycle it (ep.Recycle) or hand it
+// off to another owner. This is the production wiring seam for the mode
+// packages (plain output, TUI ingest, parquet/flamegraph recorders).
+func (e *eventLoop) SetPrintCallback(cb func(ep *event.Pair)) {
+	e.printCb = cb
+}
+
+// SetWarningCallback replaces the warning-notification sink. nil silences
+// warnings; the callback receives one human-readable message per problem.
+func (e *eventLoop) SetWarningCallback(cb func(message string)) {
+	e.warningCb = cb
 }
 
 // emit invokes printCb for the given pair, falling back to a safe recycle-only

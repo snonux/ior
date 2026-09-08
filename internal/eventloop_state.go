@@ -48,37 +48,81 @@ type pendingHandleTracker struct {
 	age          uint64
 }
 
-func newFDTracker(files map[uint64]file.File) *fdTracker {
-	if files == nil {
-		files = make(map[uint64]file.File)
+// ensureInit makes any tracker usable: every map is allocated, and the
+// pid-presence set is seeded from whatever entries already exist. It is the
+// one place the tracker's map representation and invariants are spelled
+// out for the hand-built / injected case (the constructors produce fully
+// usable trackers, and the individual mutators lazily allocate their own
+// map, so the zero value is safe - but a hand-built tracker carrying
+// entries without a presence set would make deletePid's nil-set guard
+// silently skip eviction, which is what the seeding closes).
+//
+// Unlike newFDTracker, ensureInit does NOT stamp LRU ages for pre-existing
+// files - those entries keep age 0 and evict first until touched, exactly
+// the behaviour the old configuredFDTracker had for hand-built trackers.
+// The constructors add the insertion-order stamping (see newFDTracker).
+func (t *fdTracker) ensureInit() {
+	if t.files == nil {
+		t.files = make(map[uint64]file.File)
 	}
-	fileAges := make(map[uint64]uint64, len(files))
-	// An injected map comes with no ages, so stamp insertion order here:
-	// ages of zero would otherwise make the LRU order degenerate on the
-	// first eviction under the cap.
-	age := uint64(0)
-	for key := range files {
-		age++
-		fileAges[key] = age
+	if t.fileAges == nil {
+		// Pre-sized to the injected entry count: the constructors are the hot
+		// path here, and the old code pre-allocated the same capacity.
+		t.fileAges = make(map[uint64]uint64, len(t.files))
 	}
-	pidPresent := make(map[uint32]struct{})
-	for key := range files {
-		pid, _ := fdKeyParts(key)
-		pidPresent[pid] = struct{}{}
+	if t.procFdCache == nil {
+		t.procFdCache = make(map[uint64]*file.FdFile)
 	}
-	return &fdTracker{
-		files:       files,
-		fileAges:    fileAges,
-		pidPresent:  pidPresent,
-		procFdCache: make(map[uint64]*file.FdFile),
-		procFdAges:  make(map[uint64]uint64),
+	if t.procFdAges == nil {
+		t.procFdAges = make(map[uint64]uint64)
+	}
+	if t.pidPresent == nil {
+		pidPresent := make(map[uint32]struct{})
+		for key := range t.files {
+			pid, _ := fdKeyParts(key)
+			pidPresent[pid] = struct{}{}
+		}
+		for key := range t.procFdCache {
+			pid, _ := fdKeyParts(key)
+			pidPresent[pid] = struct{}{}
+		}
+		t.pidPresent = pidPresent
 	}
 }
 
+func newFDTracker(files map[uint64]file.File) *fdTracker {
+	t := &fdTracker{files: files}
+	t.ensureInit()
+	// An injected map comes with no ages, so stamp insertion order here:
+	// ages of zero would otherwise make the LRU order degenerate on the
+	// first eviction under the cap.
+	if len(t.fileAges) < len(t.files) {
+		age := uint64(0)
+		for key := range t.files {
+			age++
+			t.fileAges[key] = age
+		}
+	}
+	return t
+}
+
 func newPendingHandleTracker() *pendingHandleTracker {
-	return &pendingHandleTracker{
-		paths:    make(map[uint32]string),
-		pathAges: make(map[uint32]uint64),
+	t := &pendingHandleTracker{}
+	t.ensureInit()
+	return t
+}
+
+// ensureInit makes any pending-handle tracker usable by allocating its maps.
+// The constructor and the set() method both go through it, so a zero value
+// is safe too; the method exists so the loop's injection seam
+// (configured* helpers) can complete a hand-built tracker without spelling
+// out its map fields.
+func (t *pendingHandleTracker) ensureInit() {
+	if t.paths == nil {
+		t.paths = make(map[uint32]string)
+	}
+	if t.pathAges == nil {
+		t.pathAges = make(map[uint32]uint64)
 	}
 }
 
