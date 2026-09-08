@@ -43,6 +43,7 @@ type Model struct {
 	isDark  bool
 }
 
+// NewModel constructs a probes modal listing manager's probe states.
 func NewModel(manager Manager) Model {
 	ti := textinput.New()
 	ti.Prompt = "/ "
@@ -56,8 +57,10 @@ func NewModel(manager Manager) Model {
 	}
 }
 
+// Visible reports whether the probes modal is shown.
 func (m Model) Visible() bool { return m.visible }
 
+// Open shows the probes modal and reloads the probe list.
 func (m Model) Open() Model {
 	m.visible = true
 	m.searching = false
@@ -68,6 +71,7 @@ func (m Model) Open() Model {
 	return m
 }
 
+// Close hides the probes modal.
 func (m Model) Close() Model {
 	m.visible = false
 	m.searching = false

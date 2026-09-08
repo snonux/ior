@@ -19,6 +19,9 @@ const (
 	liveTrieVisibleChildrenFallbackMaxDepth = 1
 )
 
+// SnapshotNode is one node of a serialised flamegraph snapshot tree: a frame
+// with its own value, its subtree total, an optional height metric and its
+// children. The short JSON keys keep snapshot payloads small.
 type SnapshotNode struct {
 	Name        string          `json:"n"`
 	Value       uint64          `json:"v"`

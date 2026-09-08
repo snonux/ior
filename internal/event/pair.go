@@ -80,6 +80,8 @@ func (c EpollCtl) OpName() string {
 	}
 }
 
+// NewPair takes ownership of enterEv and wraps it in a fresh pooled Pair
+// with every other field zeroed, ready for the matching exit event.
 func NewPair(enterEv Event) *Pair {
 	e := poolOfEventPairs.Get().(*Pair)
 	// Zero all fields via struct literal to prevent stale data from previous pool reuse.
@@ -87,6 +89,9 @@ func NewPair(enterEv Event) *Pair {
 	return e
 }
 
+// CalculateDurations derives the pair's latency (exit minus enter time) and
+// its inter-syscall gap (enter minus prevPairTime, the same TID's previous
+// exit), clamping both to zero on non-monotonic BPF timestamps.
 func (e *Pair) CalculateDurations(prevPairTime uint64) {
 	exitTime := e.ExitEv.GetTime()
 	enterTime := e.EnterEv.GetTime()
@@ -114,6 +119,8 @@ func (e *Pair) CalculateDurations(prevPairTime uint64) {
 	}
 }
 
+// Is reports whether the pair's enter event carries the given trace ID, the
+// idiomatic check for dispatching on the syscall kind.
 func (e *Pair) Is(id types.TraceId) bool {
 	return e.EnterEv.GetTraceId() == id
 }
@@ -212,6 +219,8 @@ func (e *Pair) String() string {
 	return sb.String()
 }
 
+// Flags returns the open flags of the pair's associated file, or zero when
+// no file is attached.
 func (e *Pair) Flags() file.Flags {
 	if e.File == nil {
 		return file.Flags(0)
@@ -219,6 +228,8 @@ func (e *Pair) Flags() file.Flags {
 	return e.File.Flags()
 }
 
+// FileName returns the associated file's path, or the "N:file" placeholder
+// when the pair carries no file.
 func (e *Pair) FileName() string {
 	if e.File == nil {
 		return "N:file"
@@ -238,10 +249,14 @@ func (e *Pair) FileDescriptor() (int32, bool) {
 	return fd, true
 }
 
+// Dump renders the pair for debugging: the CSV row plus both raw events.
 func (e *Pair) Dump() string {
 	return fmt.Sprintf("%v with enterEv(%v) and exitEv(%v)", e, e.EnterEv, e.ExitEv)
 }
 
+// Recycle returns the pair and both of its events to their pools. Every
+// code path that drops a pair must go through here; a leaked pool object is
+// a silent allocation regression on the hot path.
 func (e *Pair) Recycle() {
 	if e.EnterEv != nil {
 		e.EnterEv.Recycle()

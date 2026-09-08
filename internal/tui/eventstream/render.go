@@ -24,6 +24,8 @@ type columnLayout struct {
 	file    int
 }
 
+// RenderStreamTable renders the stream tab's main panel: status line, filter
+// line and the (selected) event rows, fitted to width.
 func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, filterStack []string, events []StreamEvent, selectedVisibleIdx int, selectedCol int) string {
 	if width <= 0 {
 		width = 100
@@ -45,6 +47,8 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 	return common.Current().PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
 }
 
+// RenderFDTraceTable renders the fd-trace view: all events of one pid/fd
+// pair, the stream tab's drill-down from a selected row.
 func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events []StreamEvent) string {
 	if width <= 0 {
 		width = 100

@@ -80,6 +80,8 @@ func NewFdWithPid(fd int32, pid uint32) *FdFile {
 	return f
 }
 
+// Dup copies the FdFile metadata onto the duplicated descriptor number fd,
+// the userspace mirror of dup(2)/fcntl(F_DUPFD): same name and flags, new fd.
 func (f *FdFile) Dup(fd int32) *FdFile {
 	dupFd := *f
 	dupFd.fd = fd
@@ -113,10 +115,14 @@ func parseFlagsFromFdInfo(data []byte) (Flags, error) {
 	return unknownFlag, fmt.Errorf("flags field not found in fdinfo")
 }
 
+// Name returns the file's path, or the empty string when it was never
+// resolved (e.g. a name whose sys_enter read faulted and never recovered).
 func (f *FdFile) Name() string {
 	return f.name
 }
 
+// String renders the file for the plain-mode CSV row: the name (or "E:name"
+// when empty) followed by "%(fd,flags)".
 func (f *FdFile) String() string {
 	var sb strings.Builder
 
@@ -134,18 +140,23 @@ func (f *FdFile) String() string {
 	return sb.String()
 }
 
+// Flags returns the file's open-flags word.
 func (f *FdFile) Flags() Flags {
 	return f.flags
 }
 
+// FD returns the descriptor number the metadata was recorded for.
 func (f *FdFile) FD() int32 {
 	return f.fd
 }
 
+// SetFlags replaces the flag word outright. Use MergeFlags for the
+// fcntl(2)-shaped partial update.
 func (f *FdFile) SetFlags(flags int32) {
 	f.flags = Flags(flags)
 }
 
+// AddFlags ORs the given bits into the flag word.
 func (f *FdFile) AddFlags(flags int32) {
 	f.flags = Flags(int32(f.flags) | flags)
 }

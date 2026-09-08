@@ -8,13 +8,19 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// SearchDirection is which way the stream search scans from the current
+// selection.
 type SearchDirection int
 
 const (
-	SearchForward  SearchDirection = 1
+	// SearchForward scans towards newer rows.
+	SearchForward SearchDirection = 1
+	// SearchBackward scans towards older rows.
 	SearchBackward SearchDirection = -1
 )
 
+// SearchModal is the stream tab's search-term entry modal. Like the sibling
+// modals it is value-flow: every mutator returns the updated SearchModal.
 type SearchModal struct {
 	visible   bool
 	textInput textinput.Model
@@ -22,6 +28,8 @@ type SearchModal struct {
 	direction SearchDirection
 }
 
+// NewSearchModal constructs a dark-mode search modal, defaulting to
+// forward search.
 func NewSearchModal() SearchModal {
 	input := textinput.New()
 	input.Prompt = ""
@@ -31,10 +39,12 @@ func NewSearchModal() SearchModal {
 	return SearchModal{textInput: input, direction: SearchForward}
 }
 
+// Visible reports whether the modal is shown.
 func (m SearchModal) Visible() bool {
 	return m.visible
 }
 
+// Direction returns the direction the modal searches in.
 func (m SearchModal) Direction() SearchDirection {
 	return m.direction
 }
@@ -45,6 +55,7 @@ func (m SearchModal) SetDarkMode(isDark bool) SearchModal {
 	return m
 }
 
+// Open shows the modal searching in direction with defaultTerm pre-filled.
 func (m SearchModal) Open(direction SearchDirection, defaultTerm string) SearchModal {
 	m.visible = true
 	m.err = ""
@@ -55,6 +66,8 @@ func (m SearchModal) Open(direction SearchDirection, defaultTerm string) SearchM
 	return m
 }
 
+// Close hides the modal; the entered term stays in the input and is
+// replaced by the next Open.
 func (m SearchModal) Close() SearchModal {
 	m.visible = false
 	m.err = ""
@@ -86,6 +99,7 @@ func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 	return m, "", false
 }
 
+// View renders the centered modal box within the given viewport.
 func (m SearchModal) View(width, height int) string {
 	if !m.visible {
 		return ""

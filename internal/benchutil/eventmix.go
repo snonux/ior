@@ -16,36 +16,58 @@ const (
 	defaultBaseFd     int32  = 64
 )
 
+// MixEvent identifies one synthetic syscall kind a mixed benchmark stream can
+// contain.
 type MixEvent uint8
 
 const (
+	// MixRead is a read-like fd pair.
 	MixRead MixEvent = iota + 1
+	// MixWrite is a write-like fd pair.
 	MixWrite
+	// MixOpen is an open pair.
 	MixOpen
+	// MixClose is a close pair.
 	MixClose
+	// MixStat is a stat-like fd pair.
 	MixStat
+	// MixSync is a sync-like fd pair.
 	MixSync
+	// MixFsync is an fsync-like fd pair.
 	MixFsync
+	// MixAccess is an access-like path pair.
 	MixAccess
+	// MixMkdir is a mkdir-like path pair.
 	MixMkdir
+	// MixUnlink is an unlink-like path pair.
 	MixUnlink
+	// MixRename is a rename-like name pair.
 	MixRename
+	// MixLink is a link-like name pair.
 	MixLink
+	// MixFcntl is a fcntl pair.
 	MixFcntl
+	// MixDup3 is a dup3 pair.
 	MixDup3
+	// MixOpenByHandleAt is an open_by_handle_at pair.
 	MixOpenByHandleAt
 )
 
+// MixEntry is one weighted kind in an EventMix: the generator picks Event
+// with probability Weight divided by the total weight.
 type MixEntry struct {
 	Event  MixEvent
 	Weight int
 }
 
+// EventMix is a probability distribution over syscall kinds, used to generate
+// synthetic benchmark streams with a realistic workload shape.
 type EventMix struct {
 	Entries []MixEntry
 	Seed    int64
 }
 
+// ReadHeavy is a read/write-dominated mix.
 var ReadHeavy = EventMix{
 	Entries: []MixEntry{
 		{Event: MixRead, Weight: 30},
@@ -58,6 +80,7 @@ var ReadHeavy = EventMix{
 	Seed: defaultMixSeed,
 }
 
+// WriteHeavy is a write/fsync-dominated mix.
 var WriteHeavy = EventMix{
 	Entries: []MixEntry{
 		{Event: MixWrite, Weight: 40},
@@ -70,6 +93,7 @@ var WriteHeavy = EventMix{
 	Seed: defaultMixSeed,
 }
 
+// MetadataHeavy is a metadata-dominated mix (stat, mkdir, rename, ...).
 var MetadataHeavy = EventMix{
 	Entries: []MixEntry{
 		{Event: MixStat, Weight: 15},
@@ -86,6 +110,8 @@ var MetadataHeavy = EventMix{
 	Seed: defaultMixSeed,
 }
 
+// DiverseAllTypes spreads events uniformly across many kinds, exercising
+// every pair shape rather than any realistic workload shape.
 var DiverseAllTypes = EventMix{
 	Entries: []MixEntry{
 		{Event: MixOpen, Weight: 1},
@@ -101,6 +127,9 @@ var DiverseAllTypes = EventMix{
 	Seed: defaultMixSeed,
 }
 
+// GenerateStream produces n synthetic enter/exit pairs (2n payloads) drawn
+// from the mix's weighted distribution, spread over numThreads synthetic
+// threads with monotonically increasing timestamps.
 func (m EventMix) GenerateStream(gen EventGenerator, n, numThreads int) ([][]byte, error) {
 	if n <= 0 {
 		return nil, nil

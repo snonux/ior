@@ -4,6 +4,8 @@ import (
 	"ior/internal/event"
 )
 
+// MatchPair is the package-level form of Filter.MatchPair, kept for callers
+// that hold the filter and pair as separate values.
 func MatchPair(filter Filter, pair *event.Pair) bool {
 	return filter.MatchPair(pair)
 }

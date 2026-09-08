@@ -2,46 +2,104 @@ package generate
 
 import "strings"
 
+// TracepointKind is the payload shape a syscall tracepoint was classified
+// into: it decides which C event struct the generated handler stores the
+// payload in and, on the userspace side, which exit handler consumes the
+// pair.
 type TracepointKind int
 
 const (
+	// KindNone means the format could not be classified.
 	KindNone TracepointKind = iota
+	// KindFd carries the descriptor number at the classifier-selected
+	// argument slot - args[0] for nearly all of the cohort, with mmap's fd
+	// arriving at args[4].
 	KindFd
+	// KindOpen carries a pathname plus open flags.
 	KindOpen
+	// KindMqOpen is the mq_open variant of the open shape.
 	KindMqOpen
+	// KindExec carries a filename and the caller's comm.
 	KindExec
+	// KindPathname carries the pathname argument selected by the
+	// classifier's PathnameField - args[1] for the *at() cohort, args[0]
+	// for the mount/chmod-style callers.
 	KindPathname
+	// KindName carries two pathnames (oldname, newname) for the rename family.
 	KindName
+	// KindRet is the bare enter/exit shape carrying only the return value.
 	KindRet
+	// KindFcntl carries fd, cmd and arg.
 	KindFcntl
+	// KindNull carries no extra payload beyond the common header.
 	KindNull
+	// KindDup3 carries fd plus the dup3 flags.
 	KindDup3
+	// KindOpenByHandleAt carries the open flags.
 	KindOpenByHandleAt
+	// KindSocket carries family, type and protocol.
 	KindSocket
+	// KindSocketpair carries family, type, protocol and both returned fds.
 	KindSocketpair
+	// KindAccept carries the listening fd and the accepted fd's return.
 	KindAccept
+	// KindPipe carries flags and both returned fds.
 	KindPipe
+	// KindEventfd carries flags and the returned fd (the eventfd/epoll/signalfd
+	// family of fd-creating calls).
 	KindEventfd
+	// KindPidfd is the pidfd_open variant of the eventfd shape.
 	KindPidfd
+	// KindEpollCtl carries epfd, op, target fd and events.
 	KindEpollCtl
+	// KindTwoFd carries two descriptor numbers: close_range's first/last
+	// bounds, move_mount's from/to fds, and kcmp's two queried fds.
 	KindTwoFd
+	// KindPoll carries the polled fd count and timeout.
 	KindPoll
+	// KindMem carries address, length (plus length2 for the mremap
+	// variants) and flags - the mprotect/mremap/mlock cohort; mmap itself
+	// classifies as KindFd.
 	KindMem
+	// KindSleep carries the requested sleep duration.
 	KindSleep
+	// KindKeyctl carries the keyctl option, key serial and value.
 	KindKeyctl
+	// KindPtrace carries the request, target pid and data.
 	KindPtrace
+	// KindPerfOpen carries the perf_event_attr subset plus target/cpu/group.
 	KindPerfOpen
+	// KindSeccomp maps to the header-only null_event: the seccomp operation
+	// and flags are not captured.
 	KindSeccomp
+	// KindModule maps to the header-only null_event: the module flags are
+	// not captured.
 	KindModule
+	// KindSysVId maps to the header-only null_event: the SysV IPC id is
+	// not captured.
 	KindSysVId
+	// KindSysVOp maps to the header-only null_event: the SysV IPC operation
+	// buffer is not captured.
 	KindSysVOp
+	// KindProc maps to the header-only null_event: the pid/proc argument is
+	// not captured.
 	KindProc
+	// KindBpf maps to the header-only null_event: the bpf command and attr
+	// pointer are not captured.
 	KindBpf
+	// KindFutex maps to the header-only null_event: argument capture is
+	// deliberately skipped (see the futex comment in family.go).
 	KindFutex
+	// KindPrctl maps to the header-only null_event: the option and arg are
+	// not captured.
 	KindPrctl
+	// KindTimerObj maps to the header-only null_event: the timer object id
+	// is not captured.
 	KindTimerObj
 )
 
+// MetadataName returns the kind's stable name as written into
+// generated_tracepoints.c metadata comments and the Go tracepoint list.
 func (k TracepointKind) MetadataName() string {
 	switch k {
 	case KindFd:
@@ -117,15 +175,25 @@ func (k TracepointKind) MetadataName() string {
 	}
 }
 
+// RetClassification labels what a KindRet syscall's return value counts, so
+// the userspace exit handler can extract transferred bytes from it.
 type RetClassification string
 
 const (
-	Unclassified       RetClassification = "UNCLASSIFIED"
-	ReadClassified     RetClassification = "READ_CLASSIFIED"
-	WriteClassified    RetClassification = "WRITE_CLASSIFIED"
+	// Unclassified means the return carries no byte semantics.
+	Unclassified RetClassification = "UNCLASSIFIED"
+	// ReadClassified means a positive return is a byte count read.
+	ReadClassified RetClassification = "READ_CLASSIFIED"
+	// WriteClassified means a positive return is a byte count written.
+	WriteClassified RetClassification = "WRITE_CLASSIFIED"
+	// TransferClassified means a positive return is a byte count moved
+	// (splice, sendfile, copy_file_range, ...).
 	TransferClassified RetClassification = "TRANSFER_CLASSIFIED"
 )
 
+// ClassificationResult is what ClassifyFormat decided about one tracepoint:
+// its payload kind and, for the pathname kinds, which format field carries
+// the path.
 type ClassificationResult struct {
 	Kind          TracepointKind
 	PathnameField string // for KindPathname: e.g. "pathname", "path", "filename", "name", "u_name"

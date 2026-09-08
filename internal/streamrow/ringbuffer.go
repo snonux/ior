@@ -2,6 +2,8 @@ package streamrow
 
 import "sync"
 
+// RingBufferCapacity is the number of rows the stream ring buffer retains;
+// the oldest rows are dropped once the buffer is full.
 const RingBufferCapacity = 10000
 
 // RingBuffer is a fixed-capacity circular buffer of stream rows used by the

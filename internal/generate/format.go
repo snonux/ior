@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+// Field is one parsed field of a tracepoint format section: its C type
+// name, field name, byte offset and size, and signedness.
 type Field struct {
 	Type   string
 	Name   string
@@ -16,6 +18,10 @@ type Field struct {
 	Signed bool
 }
 
+// Format is one parsed tracepoint format: the tracepoint's name, its event
+// ID, its syscall family, and its fields split into the internal
+// (common_*) header fields and the external syscall-argument fields the
+// classifier reads.
 type Format struct {
 	Name           string
 	ID             int

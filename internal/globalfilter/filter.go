@@ -4,17 +4,27 @@ import (
 	"strings"
 )
 
+// CompareOp is the comparison a NumericFilter applies between a candidate
+// value and the filter's reference value.
 type CompareOp int
 
 const (
+	// OpEq selects values equal to the reference.
 	OpEq CompareOp = iota
+	// OpNeq selects values different from the reference.
 	OpNeq
+	// OpGt selects values strictly greater than the reference.
 	OpGt
+	// OpGte selects values greater than or equal to the reference.
 	OpGte
+	// OpLt selects values strictly less than the reference.
 	OpLt
+	// OpLte selects values less than or equal to the reference.
 	OpLte
 )
 
+// NumericFilter constrains one numeric dimension (pid, fd, latency, ...) to
+// the comparison Op against Value.
 type NumericFilter struct {
 	// Op is the comparison operator applied when matching a candidate value.
 	Op CompareOp
@@ -45,12 +55,21 @@ func (f *NumericFilter) EqValue() (int64, bool) {
 	return f.Value, true
 }
 
+// StringFilter constrains one string dimension (comm, path, syscall, ...) by
+// substring, case-insensitively. The anchors ^ and $ switch the match to
+// prefix/suffix/exact; a blank or nil filter matches everything.
 type StringFilter struct {
 	// Pattern is the substring (or anchored prefix/suffix) matched against the
 	// candidate string value; matching is case-insensitive.
 	Pattern string
 }
 
+// Candidate is the per-dimension view of a filterable item - a syscall pair,
+// a stream row, or any other row-shaped value. Each Value method reports one
+// dimension of the candidate, and Filter.Matches applies every configured
+// filter dimension against them. The file dimension is special: OldFileValue
+// carries the rename source path, which Matches accepts as the dimension's
+// alternate value (see its comment).
 type Candidate interface {
 	SyscallValue() string
 	FamilyValue() string
@@ -75,6 +94,9 @@ type Candidate interface {
 	ErrorValue() bool
 }
 
+// Filter is the active global event filter: one optional constraint per
+// dimension plus the ErrorsOnly switch. A zero Filter matches everything;
+// any single failing dimension rejects the candidate.
 type Filter struct {
 	// Syscall filters events by syscall/tracepoint name substring.
 	Syscall *StringFilter
@@ -104,6 +126,8 @@ type Filter struct {
 	ErrorsOnly bool
 }
 
+// Clone returns a deep copy with every pointer field duplicated, so the
+// clone can be mutated without affecting the original's sub-filters.
 func (f Filter) Clone() Filter {
 	out := f
 	out.Syscall = cloneFilter(f.Syscall)
@@ -120,6 +144,8 @@ func (f Filter) Clone() Filter {
 	return out
 }
 
+// Equal reports whether both filters configure identical constraints,
+// pointer fields compared by value.
 func (f Filter) Equal(other Filter) bool {
 	return sameFilter(f.Syscall, other.Syscall) &&
 		sameFilter(f.Family, other.Family) &&
@@ -135,6 +161,8 @@ func (f Filter) Equal(other Filter) bool {
 		f.ErrorsOnly == other.ErrorsOnly
 }
 
+// Matches reports whether the candidate satisfies every configured
+// dimension. A nil candidate matches nothing.
 func (f Filter) Matches(candidate Candidate) bool {
 	if candidate == nil {
 		return false
@@ -200,6 +228,8 @@ func (f Filter) MatchesSyscallRow(name, family string) bool {
 	return matchString(f.Syscall, name) && matchString(f.Family, family)
 }
 
+// IsActive reports whether any dimension is configured; an inactive filter
+// is a pass-through and lets hot paths skip evaluation.
 func (f Filter) IsActive() bool {
 	if f.ErrorsOnly {
 		return true
