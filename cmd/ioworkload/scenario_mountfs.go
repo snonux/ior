@@ -74,7 +74,7 @@ func mountfsManagement() error {
 	_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, uintptr(fsContextFd), uintptr(unix.FSCONFIG_SET_STRING), uintptr(unsafe.Pointer(keyName)), uintptr(unsafe.Pointer(keyValue)), 0, 0)
 	_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, uintptr(fsContextFd), uintptr(unix.FSCONFIG_CMD_CREATE), 0, 0, 0, 0)
 	if fsContextFd >= 0 {
-		_ = syscall.Close(fsContextFd)
+		syscall.Close(fsContextFd)
 	}
 
 	// fspick(dfd, path, flags) creates a filesystem context for an EXISTING mount
@@ -82,7 +82,7 @@ func mountfsManagement() error {
 	// We point it at "/" (always present) with FSPICK_NO_AUTOMOUNT and close any
 	// returned fscontext fd. This reconfigures nothing and creates no mount.
 	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSPICK, atFDCWD, uintptr(unsafe.Pointer(rootPath)), uintptr(unix.FSPICK_NO_AUTOMOUNT)); errno == 0 {
-		_ = syscall.Close(int(fd))
+		syscall.Close(int(fd))
 	}
 
 	// open_tree(dfd, path, flags) clones or references a mount subtree, returning
@@ -91,7 +91,7 @@ func mountfsManagement() error {
 	// close any returned fd. A detached clone is not attached anywhere in the
 	// mount tree, so closing the fd releases it without touching host mounts.
 	if fd, _, errno := syscall.RawSyscall(unix.SYS_OPEN_TREE, atFDCWD, uintptr(unsafe.Pointer(mountPath)), uintptr(unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC)); errno == 0 {
-		_ = syscall.Close(int(fd))
+		syscall.Close(int(fd))
 	}
 
 	// mount_setattr(dirfd, path, flags, attr, size) changes the per-mount
@@ -123,7 +123,7 @@ func mountfsManagement() error {
 	// like the quotactl call above, so MinCount>=1 holds regardless of errno.
 	if quotaFd, err := syscall.Open(mountPoint, syscall.O_RDONLY, 0); err == nil {
 		_, _, _ = syscall.RawSyscall6(unix.SYS_QUOTACTL_FD, uintptr(quotaFd), 0, 0, 0, 0, 0)
-		_ = syscall.Close(quotaFd)
+		syscall.Close(quotaFd)
 	}
 
 	_, _, _ = syscall.RawSyscall(unix.SYS_SWAPON, uintptr(unsafe.Pointer(swapPath)), 0, 0)

@@ -32,8 +32,11 @@ linters:
         - -S1*
 
   exclusions:
-    # `lax` skips files whose header marks them as generated, which is what we
-    # want for internal/{c,types,tracepoints}/generated_*.go.
+    # `lax` skips files whose header marks them as generated. The two
+    # generated Go files - internal/types/generated_types.go and
+    # internal/tracepoints/generated_tracepoints.go - say "Code generated -
+    # don't change manually!", which `strict` would not recognize.
+    # (internal/c/ holds generated C, which no Go linter reads.)
     generated: lax
     rules:
       # cmd/ioworkload is not a library: it is the stimulus binary whose entire
@@ -42,14 +45,21 @@ linters:
       # dir) exist to keep the process tidy between scenarios, and a failing
       # one carries no information the scenario cares about - the syscall it
       # was there to emit has already been traced by then. Checking them would
-      # mean ~160 `if err != nil { return err }` blocks that no test asserts on
+      # mean 137 `if err != nil { return err }` blocks that no test asserts on
       # and that would obscure the syscall sequence each scenario is written to
       # document.
       #
       # This is scoped to that one package by design: the same calls in
       # internal/ or cmd/ior are still checked, and
       # internal/buildgate.TestErrcheckExclusionsStayScopedToTheStimulusBinary
-      # fails if this path regex ever widens to cover them.
+      # fails if either regex widens - the path to reach another package, or
+      # the text to cover a call other than these four.
+      #
+      # Note this is not the only thing errcheck lets through: its built-in
+      # DefaultExcludedSymbols is still active (disable-default-exclusions is
+      # not set), which is why unchecked fmt.Fprintf(os.Stderr, ...) and
+      # strings.Builder writes are not reported anywhere in the tree, while
+      # the same Fprintf to a generic io.Writer is.
       - path: ^cmd/ioworkload/
         linters:
           - errcheck

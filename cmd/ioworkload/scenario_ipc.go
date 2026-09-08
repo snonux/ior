@@ -111,6 +111,6 @@ func armAndReadTimerfd(fd int) {
 
 func closeIfValid(fd int) {
 	if fd >= 0 {
-		_ = syscall.Close(fd)
+		syscall.Close(fd)
 	}
 }

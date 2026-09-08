@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -105,7 +106,7 @@ func readAllRecords(t *testing.T, path string) []Record {
 		if err == nil {
 			continue
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return rows
 		}
 		t.Fatalf("Read() error = %v", err)

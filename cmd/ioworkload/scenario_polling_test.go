@@ -77,8 +77,8 @@ func TestClassicPollingSyscallsReturnReadyCount(t *testing.T) {
 	if err := syscall.Pipe(pipefd[:]); err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	defer func() { _ = syscall.Close(pipefd[0]) }()
-	defer func() { _ = syscall.Close(pipefd[1]) }()
+	defer syscall.Close(pipefd[0])
+	defer syscall.Close(pipefd[1])
 
 	waiters := []struct {
 		name string
