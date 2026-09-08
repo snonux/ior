@@ -38,7 +38,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	// emit() already handles a nil printCb safely, but guard here so that
 	// hot-path event emission never pays for a nil check inside the loop.
 	if e.printCb == nil {
-		e.printCb = func(ep *event.Pair) { ep.Recycle() }
+		e.SetPrintCallback(func(ep *event.Pair) { ep.Recycle() })
 	}
 	e.initRawHandlers()
 	if e.cfg.synchronousRawProcessing {

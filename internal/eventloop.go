@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"ior/internal/event"
-	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
 	"ior/internal/types"
@@ -126,6 +125,14 @@ func (e *eventLoop) SetFilter(filter globalfilter.Filter) {
 	e.filterPtr.Store(&cloned)
 }
 
+// SetAggregateSink wires the syscall-aggregate ingestion sink (the stats
+// engine), so the kernel-side aggregate map's drained rows reach the same
+// aggregates the per-event stream feeds. Part of the loop's explicit output
+// mutation surface alongside SetPrintCallback/SetWarningCallback.
+func (e *eventLoop) SetAggregateSink(sink syscallAggregateSink) {
+	e.aggregateSink = sink
+}
+
 func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	fdState := configuredFDTracker(cfg.fdTracker)
 	commState := configuredCommResolver(cfg.commResolver)
@@ -163,24 +170,9 @@ func configuredFDTracker(injected *fdTracker) *fdTracker {
 	if injected == nil {
 		return newFDTracker(nil)
 	}
-	if injected.files == nil {
-		injected.files = make(map[uint64]file.File)
-	}
-	// Symmetric hardening: a hand-built tracker could carry entries without a
-	// presence set, and deletePid's nil-set guard would then silently skip
-	// eviction. Seed the set from whatever is already in the maps so the
-	// over-approximation invariant holds from construction.
-	if injected.pidPresent == nil {
-		injected.pidPresent = make(map[uint32]struct{})
-		for key := range injected.files {
-			pid, _ := fdKeyParts(key)
-			injected.pidPresent[pid] = struct{}{}
-		}
-		for key := range injected.procFdCache {
-			pid, _ := fdKeyParts(key)
-			injected.pidPresent[pid] = struct{}{}
-		}
-	}
+	// The tracker owns its own invariants (map allocation, pid-presence
+	// seeding); the loop only decides WHICH tracker to use.
+	injected.ensureInit()
 	return injected
 }
 
@@ -188,11 +180,9 @@ func configuredCommResolver(injected *commResolver) *commResolver {
 	if injected == nil {
 		return newCommResolver(nil)
 	}
-	injected.ensureCommsAllocated()
-	if injected.pending == nil {
-		injected.pending = make(map[uint32]struct{})
-	}
-	injected.ensureLookupConfig()
+	// The resolver owns its own invariants; the loop only decides WHICH
+	// resolver to use.
+	injected.ensureInitialized()
 	return injected
 }
 
@@ -204,21 +194,12 @@ func (e *eventLoop) fdState() *fdTracker {
 	if e.fdTracker == nil {
 		e.fdTracker = newFDTracker(nil)
 	}
-	if e.fdTracker.files == nil {
-		e.fdTracker.files = make(map[uint64]file.File)
-	}
 	return e.fdTracker
 }
 
 func (e *eventLoop) pendingHandleState() *pendingHandleTracker {
 	if e.pendingHandles == nil {
 		e.pendingHandles = newPendingHandleTracker()
-	}
-	if e.pendingHandles.paths == nil {
-		e.pendingHandles.paths = make(map[uint32]string)
-	}
-	if e.pendingHandles.pathAges == nil {
-		e.pendingHandles.pathAges = make(map[uint32]uint64)
 	}
 	return e.pendingHandles
 }
@@ -227,23 +208,17 @@ func (e *eventLoop) commState() *commResolver {
 	if e.commResolver == nil {
 		e.commResolver = newCommResolver(nil)
 	}
-	e.commResolver.ensureCommsAllocated()
-	if e.commResolver.pending == nil {
-		e.commResolver.pending = make(map[uint32]struct{})
-	}
-	if e.commResolver.warningFn == nil {
-		e.commResolver.warningFn = e.notifyWarning
-	}
-	e.commResolver.ensureLookupConfig()
+	e.commResolver.ensureInitialized()
+	e.commResolver.setDefaultWarningFn(e.notifyWarning)
 	return e.commResolver
 }
 
 func (e *eventLoop) configureOutputCallback() {
 	switch {
 	case e.cfg.pprofEnable:
-		e.printCb = func(ep *event.Pair) {
+		e.SetPrintCallback(func(ep *event.Pair) {
 			ep.Recycle()
-		}
+		})
 	}
 }
 
