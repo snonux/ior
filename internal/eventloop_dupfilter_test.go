@@ -260,7 +260,7 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create transferred file: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	transferredFd := int32(f.Fd())
 	// The runtime resolves the descriptor by readlinking /proc/self/fd, which
 	// returns the fully resolved path. Compare against that, not against the

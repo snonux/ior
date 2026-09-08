@@ -390,7 +390,7 @@ func drawTreemapLabel(grid [][]treemapCell, tile syscallTreemapTile, selected bo
 	}
 	label := abbreviateTreemapLabel(tile.item.Name, maxLabel)
 	col := tile.x
-	for _, r := range []rune(label) {
+	for _, r := range label {
 		if col >= width {
 			break
 		}

@@ -1,0 +1,62 @@
+# golangci-lint configuration for ior.
+#
+# Run it through `mage lint` rather than directly: the Mage target injects the
+# libbpfgo cgo environment (CGO_CFLAGS/CGO_LDFLAGS/LIBBPFGO) that every package
+# importing libbpfgo needs to typecheck at all. A bare `golangci-lint run`
+# fails with "bpf/bpf.h: No such file or directory", the same way a bare
+# `go vet ./...` does (see AGENTS.md).
+#
+# `mage lint` runs as part of `mage world`, and therefore of `mage prReview`.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    # Unchecked errors. This is the linter this config primarily exists for:
+    # before it was wired in, errcheck findings accumulated silently and were
+    # only ever seen in ad-hoc local runs.
+    - errcheck
+    # staticcheck's correctness analyses. Restricted to the SA (bug) checks
+    # below; the style families are deliberately not part of a merge gate.
+    - staticcheck
+
+  settings:
+    staticcheck:
+      # staticcheck's own upstream default is the SA family only. golangci-lint
+      # instead turns on ST (style), S (simplification) and QF (quickfix) too,
+      # which turns this gate into a taste argument rather than a bug hunt.
+      checks:
+        - all
+        - -ST*
+        - -QF*
+        - -S1*
+
+  exclusions:
+    # `lax` skips files whose header marks them as generated, which is what we
+    # want for internal/{c,types,tracepoints}/generated_*.go.
+    generated: lax
+    rules:
+      # cmd/ioworkload is not a library: it is the stimulus binary whose entire
+      # job is to make specific syscalls fire so the tracer has something to
+      # observe. Its teardown calls (close/munmap/chdir back/remove the temp
+      # dir) exist to keep the process tidy between scenarios, and a failing
+      # one carries no information the scenario cares about - the syscall it
+      # was there to emit has already been traced by then. Checking them would
+      # mean ~160 `if err != nil { return err }` blocks that no test asserts on
+      # and that would obscure the syscall sequence each scenario is written to
+      # document.
+      #
+      # This is scoped to that one package by design: the same calls in
+      # internal/ or cmd/ior are still checked, and
+      # internal/buildgate.TestErrcheckExclusionsStayScopedToTheStimulusBinary
+      # fails if this path regex ever widens to cover them.
+      - path: ^cmd/ioworkload/
+        linters:
+          - errcheck
+        text: 'Error return value of `(syscall\.(Close|Munmap|Chdir)|os\.RemoveAll)` is not checked'
+
+issues:
+  # A gate must report everything it found, not a sample of it. golangci-lint
+  # otherwise truncates to 50 issues per linter and 3 per distinct message.
+  max-issues-per-linter: 0
+  max-same-issues: 0

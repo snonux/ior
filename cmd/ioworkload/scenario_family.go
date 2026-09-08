@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"syscall"
@@ -96,7 +97,7 @@ func familyMixedProcessSchedTime() error {
 	if _, _, errno := syscall.RawSyscall(syscall.SYS_SCHED_YIELD, 0, 0, 0); errno != 0 {
 		return fmt.Errorf("sched_yield: %w", errno)
 	}
-	if err := syscall.Nanosleep(&syscall.Timespec{Nsec: 1000}, nil); err != nil && err != syscall.EINTR {
+	if err := syscall.Nanosleep(&syscall.Timespec{Nsec: 1000}, nil); err != nil && !errors.Is(err, syscall.EINTR) {
 		return fmt.Errorf("nanosleep: %w", err)
 	}
 	return nil

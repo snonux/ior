@@ -16,14 +16,14 @@ func pollingEpoll() error {
 	if err != nil {
 		return fmt.Errorf("epoll_create1: %w", err)
 	}
-	defer syscall.Close(epfd) //nolint:errcheck
+	defer func() { _ = syscall.Close(epfd) }()
 
 	var pipefd [2]int
 	if err := syscall.Pipe(pipefd[:]); err != nil {
 		return fmt.Errorf("pipe: %w", err)
 	}
-	defer syscall.Close(pipefd[0]) //nolint:errcheck
-	defer syscall.Close(pipefd[1]) //nolint:errcheck
+	defer func() { _ = syscall.Close(pipefd[0]) }()
+	defer func() { _ = syscall.Close(pipefd[1]) }()
 
 	event := unix.EpollEvent{Events: unix.EPOLLIN, Fd: int32(pipefd[0])}
 	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, pipefd[0], &event); err != nil {

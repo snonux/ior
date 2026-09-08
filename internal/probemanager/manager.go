@@ -138,7 +138,6 @@ func (m *Manager) Toggle(syscall string) error {
 }
 
 // Attach attaches enter/exit tracepoints for a registered syscall.
-// Attach attaches enter/exit tracepoints for a registered syscall.
 func (m *Manager) Attach(syscall string) error {
 	if syscall == "" {
 		return errors.New("syscall is required")
@@ -156,7 +155,7 @@ func (m *Manager) Attach(syscall string) error {
 
 	// Re-acquire the lock after the per-entry mutex to prevent races with
 	// concurrent Detach calls on the same syscall.
-	enterTP, exitTP, attacher, err := m.snapshotAttachParams(syscall, entry)
+	enterTP, exitTP, attacher, err := m.snapshotAttachParams(syscall)
 	if err != nil {
 		return err
 	}
@@ -165,15 +164,25 @@ func (m *Manager) Attach(syscall string) error {
 	}
 
 	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
-	return m.commitAttach(syscall, entry, enterLink, exitLink, attachErr)
+	return m.commitAttach(syscall, enterLink, exitLink, attachErr)
 }
 
 // snapshotAttachParams re-validates the entry under the manager lock and
 // returns the tracepoint names and attacher needed for attachPair. It returns
 // (nil attacher, nil error) when the probe is already active.
-func (m *Manager) snapshotAttachParams(syscall string, entry *probeEntry) (enterTP, exitTP string, attacher Attacher, err error) {
+//
+// It re-looks the entry up by name rather than taking the one Attach already
+// resolved. The *probeEntry pointer itself is stable - entries are only ever
+// added to m.probes, never removed - which is why passing it in looked
+// harmless and was in fact dead: the parameter was shadowed by this lookup
+// before it was ever read. What the lookup is actually for is the state around
+// the pointer, re-read under m.mu after Attach released it to take attachMu:
+// entryLocked re-checks m.closed, so a Close that landed in that window is
+// reported instead of attaching to a closed manager, and entry.active below is
+// re-read rather than trusted from before the gap.
+func (m *Manager) snapshotAttachParams(syscall string) (enterTP, exitTP string, attacher Attacher, err error) {
 	m.mu.Lock()
-	entry, err = m.entryLocked(syscall)
+	entry, err := m.entryLocked(syscall)
 	if err != nil {
 		m.mu.Unlock()
 		return "", "", nil, err
@@ -189,13 +198,18 @@ func (m *Manager) snapshotAttachParams(syscall string, entry *probeEntry) (enter
 	return enterTP, exitTP, attacher, nil
 }
 
-// commitAttach stores the newly attached link pair in entry under the manager
-// lock, recording any attach error or cleaning up on a concurrent manager close.
-func (m *Manager) commitAttach(syscall string, entry *probeEntry, enterLink, exitLink Link, attachErr error) error {
+// commitAttach stores the newly attached link pair under the manager lock,
+// recording any attach error or cleaning up on a concurrent manager close.
+//
+// Like snapshotAttachParams it resolves the entry by name under m.mu rather
+// than accepting a *probeEntry: attachPair ran with m.mu released, so this has
+// to re-check that the manager was not closed underneath it before publishing
+// the links - otherwise Close would have already walked the entries and the
+// two links stored here would leak.
+func (m *Manager) commitAttach(syscall string, enterLink, exitLink Link, attachErr error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var err error
-	entry, err = m.entryLocked(syscall)
+	entry, err := m.entryLocked(syscall)
 	if err != nil {
 		return errors.Join(
 			err,

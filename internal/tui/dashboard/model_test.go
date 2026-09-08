@@ -254,7 +254,7 @@ func TestProcessesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	m.processesTab.offset = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on processes tab to emit a filter request")
 	}
@@ -283,7 +283,7 @@ func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
 	m.processesTab.col = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on processes comm column to emit a filter request")
 	}
@@ -360,7 +360,7 @@ func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
 	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted processes tab to emit a filter request")
 	}
@@ -448,7 +448,7 @@ func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	m.syscallsTab.offset = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on syscalls tab to emit a filter request")
 	}
@@ -542,7 +542,7 @@ func TestSyscallsSortEnterUsesSortedVisibleRow(t *testing.T) {
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
 	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted syscalls tab to emit a filter request")
 	}
@@ -655,7 +655,7 @@ func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	m.filesTab.offset = 1
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on files tab to emit a filter request")
 	}
@@ -756,7 +756,7 @@ func TestFilesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
 	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted files tab to emit a filter request")
 	}
@@ -785,7 +785,7 @@ func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'s'}[0], Text: string([]rune{'s'})})
 	m = next.(*Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected enter on sorted grouped files tab to emit a filter request")
 	}
@@ -1659,7 +1659,7 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 	// while blurred — handleAutoResetTick gates on m.focused.
 	currentTick := autoResetTickMsg{generation: m.autoResetGen}
 	next, cmd = m.Update(currentTick)
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd != nil {
 		t.Fatalf("blurred dashboard must not re-arm even on a current-gen tick, got %v", cmd)
 	}
@@ -1693,7 +1693,7 @@ func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
 	// and a fresh tick must be re-armed for the next interval.
 	tick := autoResetTickMsg{generation: m.autoResetGen}
 	next, cmd := m.Update(tick)
-	m = next.(*Model)
+	_ = next.(*Model)
 	if cmd == nil {
 		t.Fatalf("focused dashboard should re-arm timer and emit reset cmd, got nil")
 	}

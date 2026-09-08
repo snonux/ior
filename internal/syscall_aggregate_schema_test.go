@@ -87,7 +87,7 @@ func parseSyscallAggregateFromMapsH(t *testing.T) generate.CStruct {
 	if err != nil {
 		t.Fatalf("open maps.h: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	structs, _, err := generate.ParseCTypesInput(f)
 	if err != nil {

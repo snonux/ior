@@ -162,13 +162,13 @@ func withAioTarget(label string, fn func(ctx uint64, fd int) error) error {
 	if err != nil {
 		return fmt.Errorf("open aio target: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	ctx, err := ioSetupContext(aioMaxEvents)
 	if err != nil {
 		return err
 	}
-	defer ioDestroyContext(ctx)
+	defer func() { _ = ioDestroyContext(ctx) }()
 
 	return fn(ctx, int(f.Fd()))
 }

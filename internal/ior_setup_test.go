@@ -38,12 +38,12 @@ func TestLoadBPFModuleUsesEmbeddedObjectByDefault(t *testing.T) {
 		newBPFModuleFromFile = origFile
 		newBPFModuleFromBuffer = origBuffer
 		if hadOverride {
-			os.Setenv(bpfObjectOverrideEnv, origOverride)
+			_ = os.Setenv(bpfObjectOverrideEnv, origOverride)
 			return
 		}
-		os.Unsetenv(bpfObjectOverrideEnv)
+		_ = os.Unsetenv(bpfObjectOverrideEnv)
 	})
-	os.Unsetenv(bpfObjectOverrideEnv)
+	_ = os.Unsetenv(bpfObjectOverrideEnv)
 
 	wantErr := errors.New("buffer load failed")
 	newBPFModuleFromFile = func(string) (*bpf.Module, error) {
@@ -85,10 +85,10 @@ func TestLoadBPFModuleUsesOverridePathWhenConfigured(t *testing.T) {
 		newBPFModuleFromFile = origFile
 		newBPFModuleFromBuffer = origBuffer
 		if hadOverride {
-			os.Setenv(bpfObjectOverrideEnv, origOverride)
+			_ = os.Setenv(bpfObjectOverrideEnv, origOverride)
 			return
 		}
-		os.Unsetenv(bpfObjectOverrideEnv)
+		_ = os.Unsetenv(bpfObjectOverrideEnv)
 	})
 
 	overridePath := "/tmp/custom-ior.bpf.o"

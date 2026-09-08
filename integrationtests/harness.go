@@ -51,8 +51,8 @@ func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs
 
 	iorCmd, readyCh, err := h.startIorForRun(workloadPID, scenario, duration, extraIorArgs)
 	if err != nil {
-		workloadCmd.Process.Kill()
-		workloadCmd.Wait()
+		_ = workloadCmd.Process.Kill()
+		_ = workloadCmd.Wait()
 		return TestResult{}, workloadPID, err
 	}
 	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, iorCmd, readyCh); err != nil {
@@ -99,8 +99,8 @@ func (h *TestHarness) RunParquetWithIorArgs(scenario string, duration int, extra
 
 	iorCmd, readyCh, err := h.startIorParquetForRun(workloadPID, parquetPath, duration, extraIorArgs)
 	if err != nil {
-		workloadCmd.Process.Kill()
-		workloadCmd.Wait()
+		_ = workloadCmd.Process.Kill()
+		_ = workloadCmd.Wait()
 		return "", workloadPID, err
 	}
 	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, iorCmd, readyCh); err != nil {
@@ -131,7 +131,7 @@ func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, in
 	if len(h.WorkloadEnv) > 0 || startupFile != "" {
 		cmd.Env = append(os.Environ(), h.WorkloadEnv...)
 		if startupFile != "" {
-			os.Remove(startupFile) //nolint:errcheck
+			_ = os.Remove(startupFile)
 			cmd.Env = append(cmd.Env, workloadStartupFileEnv+"="+startupFile)
 		}
 	}
@@ -162,7 +162,7 @@ func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, in
 			errCh <- fmt.Errorf("workload produced no output")
 		}
 		// Drain remaining pipe data so cmd.Wait() does not block.
-		io.Copy(io.Discard, stdout) //nolint:errcheck
+		_, _ = io.Copy(io.Discard, stdout)
 	}()
 
 	startupTimer := time.NewTimer(workloadStartupTimeout)
@@ -172,12 +172,12 @@ func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, in
 	case pid := <-pidCh:
 		return cmd, pid, stderr, nil
 	case err := <-errCh:
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return nil, 0, nil, err
 	case <-startupTimer.C:
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return nil, 0, nil, fmt.Errorf("timeout waiting for workload PID")
 	}
 }
@@ -293,7 +293,7 @@ func scanIorOutput(r io.Reader, w io.Writer, signalReady func(error), wg *sync.W
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Fprintln(w, line)
+		_, _ = fmt.Fprintln(w, line)
 		if strings.Contains(line, iorReadyLine) {
 			signalReady(nil)
 		}
@@ -336,8 +336,8 @@ func killAndWait(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	cmd.Process.Kill() //nolint:errcheck
-	cmd.Wait()         //nolint:errcheck
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }
 
 // waitBoth waits for both the workload and ior commands concurrently.
@@ -364,12 +364,12 @@ func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int, grace time.Duration) 
 			iorDone = nil
 		case <-timeout.C:
 			if iorDone != nil {
-				iorCmd.Process.Kill()
+				_ = iorCmd.Process.Kill()
 				iorErr = fmt.Errorf("ior timed out")
 				iorDone = nil
 			}
 			if workloadDone != nil {
-				workloadCmd.Process.Kill()
+				_ = workloadCmd.Process.Kill()
 				workloadErr = fmt.Errorf("workload timed out")
 				workloadDone = nil
 			}

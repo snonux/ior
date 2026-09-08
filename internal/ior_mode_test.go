@@ -1312,10 +1312,10 @@ func readRecordedParquet(t *testing.T, path string) []parquet.Record {
 	if err != nil {
 		t.Fatalf("open parquet %q: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	reader := parquetgo.NewGenericReader[parquet.Record](f)
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	var rows []parquet.Record
 	buf := make([]parquet.Record, 4)

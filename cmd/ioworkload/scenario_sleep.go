@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"syscall"
@@ -15,7 +16,7 @@ const sleepSyscallsEmitFor = 2 * time.Second
 func sleepSyscalls() error {
 	deadline := time.Now().Add(sleepSyscallsEmitFor)
 	for time.Now().Before(deadline) {
-		if err := syscall.Nanosleep(&syscall.Timespec{Sec: 0, Nsec: 2_000_000}, nil); err != nil && err != syscall.EINTR {
+		if err := syscall.Nanosleep(&syscall.Timespec{Sec: 0, Nsec: 2_000_000}, nil); err != nil && !errors.Is(err, syscall.EINTR) {
 			return fmt.Errorf("nanosleep: %w", err)
 		}
 		if err := callClockNanosleep(3_000_000); err != nil {

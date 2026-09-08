@@ -101,11 +101,11 @@ func armAndReadTimerfd(fd int) {
 	newValue := unix.ItimerSpec{
 		Value: unix.Timespec{Sec: 1, Nsec: 0},
 	}
-	syscall.RawSyscall6(unix.SYS_TIMERFD_SETTIME, uintptr(fd), 0,
+	_, _, _ = syscall.RawSyscall6(unix.SYS_TIMERFD_SETTIME, uintptr(fd), 0,
 		uintptr(unsafe.Pointer(&newValue)), 0, 0, 0)
 
 	var curValue unix.ItimerSpec
-	syscall.RawSyscall(unix.SYS_TIMERFD_GETTIME, uintptr(fd),
+	_, _, _ = syscall.RawSyscall(unix.SYS_TIMERFD_GETTIME, uintptr(fd),
 		uintptr(unsafe.Pointer(&curValue)), 0)
 }
 

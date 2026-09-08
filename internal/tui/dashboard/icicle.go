@@ -300,7 +300,7 @@ func drawIcicleLabel(grid [][]treemapCell, tile icicleTile, selected bool) {
 	maxLabel := tile.w - 1
 	label := abbreviateTreemapLabel(rootPathLabelFromFSPath(tile.node.fullPath), maxLabel)
 	col := tile.x
-	for _, r := range []rune(label) {
+	for _, r := range label {
 		if col < 0 {
 			col++
 			continue

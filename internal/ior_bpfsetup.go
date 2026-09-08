@@ -95,7 +95,11 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	}
 	if err := mgr.AttachAll(cfg.TracepointSelector.ShouldAttach, tracepoints.List, warn); err != nil {
 		releaseSchedProbes()
-		mgr.Close()
+		// This is already the error-cleanup path, so a failing Close is
+		// reported rather than discarding or masking the attach error.
+		if closeErr := mgr.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "ior: probe manager close after failed attach: %v\n", closeErr)
+		}
 		bpfModule.Close()
 		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)
 	}
