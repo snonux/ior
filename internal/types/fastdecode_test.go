@@ -6,7 +6,7 @@ import (
 )
 
 // rawBytes serializes ev and fails the test if that does not work. Writing it
-// inline as `raw := rawBytes(t, ev)` discarded the error and handed the decoders
+// inline as `raw, _ := ev.Bytes()` discarded the error and handed the decoders
 // a nil slice, turning a serialization failure into a confusing decode
 // mismatch instead of naming the actual problem.
 func rawBytes(t *testing.T, ev interface{ Bytes() ([]byte, error) }) []byte {
