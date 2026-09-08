@@ -166,7 +166,7 @@ func runPerfEventOpenSyscall(nr securitySyscalls) {
 		0,
 	)
 	if int64(fd) >= 0 {
-		_ = syscall.Close(int(fd))
+		syscall.Close(int(fd))
 	}
 }
 
@@ -262,7 +262,7 @@ func securityLandlockCreateRuleset() error {
 	addLandlockReadRule(rulesetFd)
 
 	if rulesetFd >= 0 {
-		_ = syscall.Close(rulesetFd)
+		syscall.Close(rulesetFd)
 	}
 	return nil
 }

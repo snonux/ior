@@ -5,12 +5,25 @@ import (
 	"testing"
 )
 
+// rawBytes serializes ev and fails the test if that does not work. Writing it
+// inline as `raw := rawBytes(t, ev)` discarded the error and handed the decoders
+// a nil slice, turning a serialization failure into a confusing decode
+// mismatch instead of naming the actual problem.
+func rawBytes(t *testing.T, ev interface{ Bytes() ([]byte, error) }) []byte {
+	t.Helper()
+	raw, err := ev.Bytes()
+	if err != nil {
+		t.Fatalf("serialize %T: %v", ev, err)
+	}
+	return raw
+}
+
 func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	t.Run("OpenEvent", func(t *testing.T) {
 		ev := &OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 2, Tid: 3, Flags: 4}
 		copy(ev.Filename[:], "a")
 		copy(ev.Comm[:], "b")
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewOpenEvent(raw)
 		fast := NewOpenEventFast(raw)
@@ -25,7 +38,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3, Dirfd: -100, Flags: 4}
 		copy(ev.Filename[:], "a")
 		copy(ev.Comm[:], "b")
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewExecEvent(raw)
 		fast := NewExecEventFast(raw)
@@ -38,7 +51,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("NullEvent", func(t *testing.T) {
 		ev := &NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 2, Tid: 3}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewNullEvent(raw)
 		fast := NewNullEventFast(raw)
@@ -51,7 +64,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("FdEvent", func(t *testing.T) {
 		ev := &FdEvent{EventType: ENTER_FD_EVENT, TraceId: SYS_ENTER_READ, Time: 1, Pid: 2, Tid: 3, Fd: 4}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewFdEvent(raw)
 		fast := NewFdEventFast(raw)
@@ -64,7 +77,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("RetEvent", func(t *testing.T) {
 		ev := &RetEvent{EventType: EXIT_RET_EVENT, TraceId: SYS_EXIT_READ, Time: 1, Ret: 2, Pid: 3, Tid: 4, RetType: READ_CLASSIFIED}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewRetEvent(raw)
 		fast := NewRetEventFast(raw)
@@ -79,7 +92,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		ev := &NameEvent{EventType: ENTER_NAME_EVENT, TraceId: SYS_ENTER_RENAME, Time: 1, Pid: 2, Tid: 3}
 		copy(ev.Oldname[:], "old")
 		copy(ev.Newname[:], "new")
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewNameEvent(raw)
 		fast := NewNameEventFast(raw)
@@ -93,7 +106,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	t.Run("PathEvent", func(t *testing.T) {
 		ev := &PathEvent{EventType: ENTER_PATH_EVENT, TraceId: SYS_ENTER_MKDIR, Time: 1, Pid: 2, Tid: 3}
 		copy(ev.Pathname[:], "path")
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewPathEvent(raw)
 		fast := NewPathEventFast(raw)
@@ -106,7 +119,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("FcntlEvent", func(t *testing.T) {
 		ev := &FcntlEvent{EventType: ENTER_FCNTL_EVENT, TraceId: SYS_ENTER_FCNTL, Time: 1, Pid: 2, Tid: 3, Fd: 4, Cmd: 5, Arg: 6}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewFcntlEvent(raw)
 		fast := NewFcntlEventFast(raw)
@@ -119,7 +132,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("Dup3Event", func(t *testing.T) {
 		ev := &Dup3Event{EventType: ENTER_DUP3_EVENT, TraceId: SYS_ENTER_DUP3, Time: 1, Pid: 2, Tid: 3, Fd: 4, Flags: 5}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewDup3Event(raw)
 		fast := NewDup3EventFast(raw)
@@ -132,7 +145,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("OpenByHandleAtEvent", func(t *testing.T) {
 		ev := &OpenByHandleAtEvent{EventType: ENTER_OPEN_BY_HANDLE_AT_EVENT, TraceId: SYS_ENTER_OPEN_BY_HANDLE_AT, Time: 1, Pid: 2, Tid: 3, Flags: 4}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewOpenByHandleAtEvent(raw)
 		fast := NewOpenByHandleAtEventFast(raw)
@@ -145,7 +158,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("SocketEvent", func(t *testing.T) {
 		ev := &SocketEvent{EventType: ENTER_SOCKET_EVENT, TraceId: SYS_ENTER_SOCKET, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 3}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewSocketEvent(raw)
 		fast := NewSocketEventFast(raw)
@@ -158,7 +171,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("SocketpairEvent", func(t *testing.T) {
 		ev := &SocketpairEvent{EventType: ENTER_SOCKETPAIR_EVENT, TraceId: SYS_ENTER_SOCKETPAIR, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 0, Sv0: 10, Sv1: 11, Ret: -1}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewSocketpairEvent(raw)
 		fast := NewSocketpairEventFast(raw)
@@ -171,7 +184,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("AcceptEvent", func(t *testing.T) {
 		ev := &AcceptEvent{EventType: ENTER_ACCEPT_EVENT, TraceId: SYS_ENTER_ACCEPT4, Time: 1, Pid: 2, Tid: 3, Fd: 4, Ret: -1}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewAcceptEvent(raw)
 		fast := NewAcceptEventFast(raw)
@@ -184,7 +197,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("PipeEvent", func(t *testing.T) {
 		ev := &PipeEvent{EventType: ENTER_PIPE_EVENT, TraceId: SYS_ENTER_PIPE2, Time: 1, Pid: 2, Tid: 3, Flags: 0x80000, Fd0: -1, Fd1: -1, Ret: 0}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewPipeEvent(raw)
 		fast := NewPipeEventFast(raw)
@@ -197,7 +210,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("EventfdEvent", func(t *testing.T) {
 		ev := &EventfdEvent{EventType: ENTER_EVENTFD_EVENT, TraceId: SYS_ENTER_EVENTFD2, Time: 1, Pid: 2, Tid: 3, Flags: 0x800, Ret: -1}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewEventfdEvent(raw)
 		fast := NewEventfdEventFast(raw)
@@ -210,7 +223,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("EpollCtlEvent", func(t *testing.T) {
 		ev := &EpollCtlEvent{EventType: ENTER_EPOLL_CTL_EVENT, TraceId: SYS_ENTER_EPOLL_CTL, Time: 1, Pid: 2, Tid: 3, Epfd: 10, Op: 1, Fd: 11, Events: 5}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewEpollCtlEvent(raw)
 		fast := NewEpollCtlEventFast(raw)
@@ -223,7 +236,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("TwoFdEvent", func(t *testing.T) {
 		ev := &TwoFdEvent{EventType: ENTER_TWO_FD_EVENT, TraceId: SYS_ENTER_MOVE_MOUNT, Time: 1, Pid: 2, Tid: 3, FdA: 10, FdB: 11, Extra: 0x2}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewTwoFdEvent(raw)
 		fast := NewTwoFdEventFast(raw)
@@ -236,7 +249,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("PollEvent", func(t *testing.T) {
 		ev := &PollEvent{EventType: ENTER_POLL_EVENT, TraceId: SYS_ENTER_POLL, Time: 1, Pid: 2, Tid: 3, Nfds: 4, TimeoutNs: 5_000_000}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewPollEvent(raw)
 		fast := NewPollEventFast(raw)
@@ -259,7 +272,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			Length2:   8192,
 			Flags:     1,
 		}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewMemEvent(raw)
 		fast := NewMemEventFast(raw)
@@ -279,7 +292,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			Tid:         3,
 			RequestedNs: 9_000_000,
 		}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewSleepEvent(raw)
 		fast := NewSleepEventFast(raw)
@@ -292,7 +305,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("KeyctlEvent", func(t *testing.T) {
 		ev := &KeyctlEvent{EventType: ENTER_KEYCTL_EVENT, TraceId: SYS_ENTER_KEYCTL, Time: 1, Pid: 2, Tid: 3, Option: 1, KeySerial: 2, Value: 3}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewKeyctlEvent(raw)
 		fast := NewKeyctlEventFast(raw)
@@ -305,7 +318,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 	t.Run("PtraceEvent", func(t *testing.T) {
 		ev := &PtraceEvent{EventType: ENTER_PTRACE_EVENT, TraceId: SYS_ENTER_PTRACE, Time: 1, Pid: 2, Tid: 3, Request: 4, TargetPid: 5, Data: 6}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewPtraceEvent(raw)
 		fast := NewPtraceEventFast(raw)
@@ -331,7 +344,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			GroupFd:   -1,
 			Flags:     0,
 		}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewPerfOpenEvent(raw)
 		fast := NewPerfOpenEventFast(raw)
@@ -350,7 +363,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	t.Run("ProcessExecEvent", func(t *testing.T) {
 		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 3}
 		copy(ev.Comm[:], "cat")
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewProcessExecEvent(raw)
 		fast := NewProcessExecEventFast(raw)
@@ -366,7 +379,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	// rationale as ProcessExecEvent above.
 	t.Run("ProcessExitEvent", func(t *testing.T) {
 		ev := &ProcessExitEvent{EventType: PROCESS_EXIT_EVENT, Time: 1, Pid: 2, Tid: 3}
-		raw, _ := ev.Bytes()
+		raw := rawBytes(t, ev)
 
 		slow := NewProcessExitEvent(raw)
 		fast := NewProcessExitEventFast(raw)

@@ -208,12 +208,22 @@ const (
 // `golangci-lint run` reports "bpf/bpf.h: No such file or directory" instead of
 // any real finding. BpfBuild is a dependency because internal/bpfembed.go
 // embeds c/ior.bpf.o, which must exist before the package can be built.
+//
+// It runs twice: once for the default build, once with the mage build tag so
+// Magefile.go itself is covered.
 func Lint() error {
 	mg.Deps(BpfBuild)
 	if _, err := exec.LookPath(golangciLintBin); err != nil {
 		return fmt.Errorf("%s not on PATH; install it with `go install %s`", golangciLintBin, golangciLintPkg)
 	}
-	return sh.RunWithV(goEnv(), golangciLintBin, "run", "./...")
+	if err := sh.RunWithV(goEnv(), golangciLintBin, "run", "./..."); err != nil {
+		return err
+	}
+	// Second pass with the mage build tag so this file is linted too. Without
+	// it the one file that defines the gate is the one file outside it: the
+	// default build ignores `//go:build mage`, so Magefile.go is not in any
+	// package golangci-lint loads above.
+	return sh.RunWithV(goEnv(), golangciLintBin, "run", "--build-tags", "mage", "./...")
 }
 
 // Fmt runs gofmt -w on all Go source files to enforce canonical formatting.
@@ -604,12 +614,13 @@ func Mrproper() error {
 	return nil
 }
 
-// World runs clean, generate, test, vet, lint, and build targets.
+// World runs clean, generate, test, fmtCheck, vet, lint, and build targets.
 //
-// Vet and Lint sit between the tests and the build so a static finding fails
-// the gate before the (slower) build runs. Both existed as standalone targets
-// before they were part of any gate, which is exactly how their findings
-// accumulated unnoticed: they only ran when somebody remembered to run them.
+// FmtCheck, Vet and Lint sit between the tests and the build so a static
+// finding fails the gate before the (slower) build runs. All three existed as
+// standalone targets before they were part of any gate, which is exactly how
+// their findings accumulated unnoticed: they only ran when somebody remembered
+// to run them.
 func World() error {
 	fmt.Println("World: cleaning...")
 	if err := Clean(); err != nil {
@@ -621,6 +632,10 @@ func World() error {
 	}
 	fmt.Println("World: running tests...")
 	if err := Test(); err != nil {
+		return err
+	}
+	fmt.Println("World: checking formatting...")
+	if err := FmtCheck(); err != nil {
 		return err
 	}
 	fmt.Println("World: vetting...")

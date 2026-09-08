@@ -178,8 +178,8 @@ func (m *Manager) Attach(syscall string) error {
 // before it was ever read. What the lookup is actually for is the state around
 // the pointer, re-read under m.mu after Attach released it to take attachMu:
 // entryLocked re-checks m.closed, so a Close that landed in that window is
-// reported instead of attaching to a closed manager, and entry.active below is
-// re-read rather than trusted from before the gap.
+// reported instead of attaching to a closed manager, and entry.active is read
+// here under m.mu rather than anywhere outside it.
 func (m *Manager) snapshotAttachParams(syscall string) (enterTP, exitTP string, attacher Attacher, err error) {
 	m.mu.Lock()
 	entry, err := m.entryLocked(syscall)

@@ -1327,7 +1327,7 @@ func readRecordedParquet(t *testing.T, path string) []parquet.Record {
 		if err == nil {
 			continue
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return rows
 		}
 		t.Fatalf("read parquet rows: %v", err)

@@ -128,7 +128,7 @@ func mmapMremapMunmap() error {
 	newSize := uintptr(pageSize * 2)
 	newAddr, _, errno := syscall.Syscall6(syscall.SYS_MREMAP, oldAddr, uintptr(len(mapped)), newSize, mremapMayMove, 0, 0)
 	if errno != 0 {
-		_ = syscall.Munmap(mapped)
+		syscall.Munmap(mapped)
 		return fmt.Errorf("mremap: %w", errno)
 	}
 

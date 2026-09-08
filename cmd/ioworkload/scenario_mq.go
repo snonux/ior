@@ -28,7 +28,7 @@ func mqPosixBasic() error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = syscall.Close(mqd) }()
+	defer syscall.Close(mqd)
 	defer func() { _ = mqUnlink(name) }()
 
 	if err := mqNotify(mqd); err != nil {
