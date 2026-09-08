@@ -101,34 +101,26 @@ type Model struct {
 	// autoResetEvery; autoResetStatus uses this to render the live
 	// countdown ("12s/30s") in the chrome. Updated on every arm
 	// (SetAutoResetInterval, focus regain, tick re-arm).
-	autoResetArmedAt         time.Time
-	keys                     common.KeyMap
-	globalFilter             globalfilter.Filter
-	filterStack              []string
-	recordingStatus          string
-	pidFilter                int
-	syscallsOffset           int
-	syscallsCol              int
-	syscallsSort             tableSortState[syscallSortKey]
+	autoResetArmedAt time.Time
+	keys             common.KeyMap
+	globalFilter     globalfilter.Filter
+	filterStack      []string
+	recordingStatus  string
+	pidFilter        int
+	// The three table tabs' state (selected offset/col, live sort, viz mode,
+	// bubble chart) plus the Files tab's directory-grouped sub-table, which
+	// shares the navigation and sort machinery but never has a viz mode or
+	// chart of its own. syscallsTreemapSelection stays a plain field: it is
+	// an offset into the treemap's flattened item list, not the table the
+	// state above selects in. See tabletab.go for what the component is for.
+	syscallsTab              tableTabState[syscallSortKey]
 	syscallsTreemapSelection int
-	filesOffset              int
-	filesCol                 int
-	filesSort                tableSortState[fileSortKey]
+	filesTab                 tableTabState[fileSortKey]
 	filesDirGrouped          bool
-	filesDirOffset           int
-	filesDirCol              int
-	filesDirSort             tableSortState[fileDirSortKey]
-	processesOffset          int
-	processesCol             int
-	processesSort            tableSortState[processSortKey]
-	syscallsVizMode          tabVizMode
-	filesVizMode             tabVizMode
-	processesVizMode         tabVizMode
+	filesDirTab              tableTabState[fileDirSortKey]
+	processesTab             tableTabState[processSortKey]
 	streamModel              eventstream.Model
 	flamegraphModel          *flamegraphtui.Model
-	syscallsChart            bubbleChart
-	filesChart               bubbleChart
-	processesChart           bubbleChart
 	showHelp                 bool
 	isDark                   bool
 	focused                  bool
@@ -158,17 +150,16 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 		fastRefreshEvery: time.Duration(fastRefreshMs) * time.Millisecond,
 		keys:             keys,
 		pidFilter:        -1,
-		syscallsVizMode:  tabVizModeTable,
-		filesVizMode:     tabVizModeTable,
-		processesVizMode: tabVizModeTable,
 		streamModel:      eventstream.NewModel(streamSource),
 		flamegraphModel:  flamegraphtui.NewModel(nil),
-		syscallsChart:    newBubbleChart(),
-		filesChart:       newBubbleChart(),
-		processesChart:   newBubbleChart(),
 		isDark:           true,
 		focused:          true,
 	}
+	// The tableTabState zero value already means table mode; only the bubble
+	// charts need construction.
+	m.syscallsTab.bubble = newBubbleChart()
+	m.filesTab.bubble = newBubbleChart()
+	m.processesTab.bubble = newBubbleChart()
 	// showHelp starts false; align the stream footer visibility so it matches
 	// from the first render without relying on View() to fix up the mismatch.
 	m.streamModel.SetFooterVisible(false)
@@ -298,18 +289,18 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 	selectedFile := ""
 	selectedDir := ""
 	selectedProcess := uint32(0)
-	if m.syscallsSort.active {
+	if m.syscallsTab.sort.active {
 		selectedSyscall = m.selectedSyscallName()
 	}
-	if m.filesVizMode == tabVizModeTable {
-		if !m.filesDirGrouped && m.filesSort.active {
+	if m.filesTab.mode == tabVizModeTable {
+		if !m.filesDirGrouped && m.filesTab.sort.active {
 			selectedFile = m.selectedFilePath()
 		}
-		if m.filesDirGrouped && m.filesDirSort.active {
+		if m.filesDirGrouped && m.filesDirTab.sort.active {
 			selectedDir = m.selectedDirPath()
 		}
 	}
-	if m.processesVizMode == tabVizModeTable && m.processesSort.active {
+	if m.processesTab.mode == tabVizModeTable && m.processesTab.sort.active {
 		selectedProcess = m.selectedProcessPID()
 	}
 	m.latest = msg.Snap
@@ -317,7 +308,7 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 	m.reanchorFilesOffset(selectedFile)
 	m.reanchorFilesDirOffset(selectedDir)
 	m.reanchorProcessesOffset(selectedProcess)
-	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
+	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.syscallsRowCount())
 	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
@@ -380,38 +371,53 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
 }
 
+// handleEnterKey applies Enter-on-selected-row through the active tab's
+// registered HandleEnter hook, so a new table tab needs only a registry
+// entry - this dispatcher is tab-agnostic.
 func (m *Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !key.Matches(msg, m.keys.Enter) {
 		return false, nil
 	}
-	switch m.activeTab {
-	case TabSyscalls:
-		if m.syscallsVizMode != tabVizModeTable {
-			return false, nil
-		}
-		filter, action, ok := m.selectedSyscallFilter()
-		if !ok {
-			return false, nil
-		}
-		return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
-	case TabFiles:
-		if m.filesVizMode != tabVizModeTable {
-			return false, nil
-		}
-		filter, action, ok := m.selectedFileFilter()
-		if !ok {
-			return false, nil
-		}
-		return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
-	case TabProcesses:
-		filter, action, ok := m.selectedProcessFilter()
-		if !ok {
-			return false, nil
-		}
-		return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
-	default:
+	if d := lookupTab(m.activeTab); d.HandleEnter != nil {
+		return d.HandleEnter(m)
+	}
+	return false, nil
+}
+
+// handleSyscallsEnter is the Syscalls tab's HandleEnter hook: Enter on the
+// selected row requests a global filter on that row's syscall name, or on
+// its family when the Family column is selected.
+func handleSyscallsEnter(m *Model) (bool, tea.Cmd) {
+	if m.syscallsTab.mode != tabVizModeTable {
 		return false, nil
 	}
+	return requestSelectedFilter(m.selectedSyscallFilter())
+}
+
+// handleFilesEnter is the Files tab's HandleEnter hook, covering both the
+// dir-grouped and the plain sub-table.
+func handleFilesEnter(m *Model) (bool, tea.Cmd) {
+	if m.filesTab.mode != tabVizModeTable {
+		return false, nil
+	}
+	return requestSelectedFilter(m.selectedFileFilter())
+}
+
+// handleProcessesEnter is the Processes tab's HandleEnter hook. Enter also
+// works from the treemap and bubbles views there: both select whole rows,
+// so the filter request is well-defined in every mode.
+func handleProcessesEnter(m *Model) (bool, tea.Cmd) {
+	return requestSelectedFilter(m.selectedProcessFilter())
+}
+
+// requestSelectedFilter turns a tab's selected-row filter into the standard
+// GlobalFilterRequestedMsg command; the shared shape of every table tab's
+// HandleEnter hook.
+func requestSelectedFilter(filter globalfilter.Filter, action string, ok bool) (bool, tea.Cmd) {
+	if !ok {
+		return false, nil
+	}
+	return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
 }
 
 // syscallFamilyColumn is the index of the Family column in the Syscalls table
@@ -425,7 +431,7 @@ func (m *Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 	if !ok {
 		return globalfilter.Filter{}, "", false
 	}
-	if m.syscallsCol == syscallFamilyColumn {
+	if m.syscallsTab.col == syscallFamilyColumn {
 		family := string(selected.TraceID.Family())
 		if strings.TrimSpace(family) == "" {
 			return globalfilter.Filter{}, "", false
@@ -442,18 +448,40 @@ func (m *Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 	return filter, "syscall~" + selected.Name, true
 }
 
+// The re-anchor helpers keep a table's selection stable across a snapshot
+// refresh (handleStatsTick) and across a sort change (applySort's closure):
+// each finds the previously selected row - by name, path or PID - in the
+// freshly ordered rows and falls back to clamping the current offset.
+func (m *Model) reanchorSyscallsOffset(selectedName string) {
+	m.syscallsTab.offset = reanchorOffset(m.syscallsTab.offset, m.sortedSyscallRows(), selectedName, findSyscallOffset)
+}
+
+func (m *Model) reanchorFilesOffset(selectedPath string) {
+	m.filesTab.offset = reanchorOffset(m.filesTab.offset, m.sortedFileRows(), selectedPath, findFileOffset)
+}
+
+func (m *Model) reanchorFilesDirOffset(selectedDir string) {
+	m.filesDirTab.offset = reanchorOffset(m.filesDirTab.offset, m.sortedDirRows(), selectedDir, findDirOffset)
+}
+
+func (m *Model) reanchorProcessesOffset(selectedPID uint32) {
+	m.processesTab.offset = reanchorOffset(m.processesTab.offset, m.sortedProcessTableRows(), selectedPID, findProcessOffset)
+}
+
+// selectedSyscallSnapshot returns the row Enter and the stats-tick
+// re-anchor operate on, via the generic tableTabState selection.
 func (m *Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
 	rows := m.sortedSyscallRows()
-	if len(rows) == 0 {
+	index, ok := m.syscallsTab.selected(len(rows))
+	if !ok {
 		return statsengine.SyscallSnapshot{}, false
 	}
-	index := clampOffset(m.syscallsOffset, len(rows))
 	return rows[index], true
 }
 
 func (m *Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
 	snap := m.snapshotOrZero()
-	return sortedSyscallSnapshots(m.visibleSyscallRows(&snap), m.syscallsSort)
+	return sortedSyscallSnapshots(m.visibleSyscallRows(&snap), m.syscallsTab.sort)
 }
 
 // visibleSyscallRows returns the syscall rows of snap scoped to the active
@@ -490,89 +518,92 @@ func (m *Model) selectedSyscallName() string {
 	return selected.Name
 }
 
+// handleSortKey applies the sort / reverse-sort keys through the active
+// tab's registered HandleSort hook, so a new table tab needs only a
+// registry entry - this dispatcher is tab-agnostic.
 func (m *Model) handleSortKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	reverse := key.Matches(msg, m.keys.ReverseSort)
 	if !reverse && !key.Matches(msg, m.keys.Sort) {
 		return false, nil
 	}
-	switch m.activeTab {
-	case TabSyscalls:
-		return m.handleSyscallsSortKey(reverse)
-	case TabFiles:
-		return m.handleFilesSortKey(reverse)
-	case TabProcesses:
-		return m.handleProcessesSortKey(reverse)
-	default:
-		return false, nil
+	if d := lookupTab(m.activeTab); d.HandleSort != nil {
+		return d.HandleSort(m, reverse)
 	}
+	return false, nil
 }
 
+// handleSyscallsSortKey is the Syscalls tab's HandleSort hook: capture the
+// selected syscall name, toggle the selected column's sort, and re-anchor
+// the selection so that row stays in view in the new order. All the state
+// mechanics live in tableTabState.applySort.
 func (m *Model) handleSyscallsSortKey(reverse bool) (bool, tea.Cmd) {
-	if m.syscallsVizMode != tabVizModeTable {
-		return false, nil
+	rows := m.sortedSyscallRows()
+	idx := m.syscallsTab.selectedIndex(len(rows))
+	var selectedName string
+	if idx < len(rows) {
+		selectedName = rows[idx].Name
 	}
-	key, ok := syscallSortKeyForColumn(m.width, m.syscallsCol)
-	if !ok {
-		return false, nil
-	}
-	selectedName := m.selectedSyscallName()
-	m.syscallsSort = m.syscallsSort.toggled(key, reverse)
-	m.reanchorSyscallsOffset(selectedName)
-	return true, nil
+	handled := m.syscallsTab.applySort(reverse, m.syscallsTab.col,
+		func(col int) (syscallSortKey, bool) { return syscallSortKeyForColumn(m.width, col) },
+		func(current int) int {
+			return reanchorOffset(current, m.sortedSyscallRows(), selectedName, findSyscallOffset)
+		})
+	return handled, nil
 }
 
+// handleFilesSortKey is the Files tab's HandleSort hook, dispatching between
+// the dir-grouped and the plain sub-table; both use the same applySort
+// mechanics with their own anchor row.
 func (m *Model) handleFilesSortKey(reverse bool) (bool, tea.Cmd) {
-	if m.filesVizMode != tabVizModeTable {
+	// The whole tab is gated on its viz mode, covering both sub-tables: the
+	// dir sub-table has no mode of its own, and the old switch arm ignored
+	// the sort key in bubbles/treemap/icicle exactly like this gate does.
+	if m.filesTab.mode != tabVizModeTable {
 		return false, nil
 	}
 	if m.filesDirGrouped {
-		key, ok := fileDirSortKeyForColumn(m.filesDirCol)
-		if !ok {
-			return false, nil
+		rows := m.sortedDirRows()
+		idx := m.filesDirTab.selectedIndex(len(rows))
+		var selectedDir string
+		if idx < len(rows) {
+			selectedDir = rows[idx].Dir
 		}
-		selectedDir := m.selectedDirPath()
-		m.filesDirSort = m.filesDirSort.toggled(key, reverse)
-		m.reanchorFilesDirOffset(selectedDir)
-		return true, nil
+		handled := m.filesDirTab.applySort(reverse, m.filesDirTab.col,
+			fileDirSortKeyForColumn,
+			func(current int) int {
+				return reanchorOffset(current, m.sortedDirRows(), selectedDir, findDirOffset)
+			})
+		return handled, nil
 	}
-	key, ok := fileSortKeyForColumn(m.filesCol)
-	if !ok {
-		return false, nil
+	rows := m.sortedFileRows()
+	idx := m.filesTab.selectedIndex(len(rows))
+	var selectedPath string
+	if idx < len(rows) {
+		selectedPath = rows[idx].Path
 	}
-	selectedPath := m.selectedFilePath()
-	m.filesSort = m.filesSort.toggled(key, reverse)
-	m.reanchorFilesOffset(selectedPath)
-	return true, nil
+	handled := m.filesTab.applySort(reverse, m.filesTab.col,
+		fileSortKeyForColumn,
+		func(current int) int {
+			return reanchorOffset(current, m.sortedFileRows(), selectedPath, findFileOffset)
+		})
+	return handled, nil
 }
 
+// handleProcessesSortKey is the Processes tab's HandleSort hook; the anchor
+// row is the selected PID, so the selection survives the re-order.
 func (m *Model) handleProcessesSortKey(reverse bool) (bool, tea.Cmd) {
-	if m.processesVizMode != tabVizModeTable {
-		return false, nil
+	rows := m.sortedProcessTableRows()
+	idx := m.processesTab.selectedIndex(len(rows))
+	var selectedPID uint32
+	if idx < len(rows) {
+		selectedPID = rows[idx].PID
 	}
-	key, ok := processSortKeyForColumn(m.processesCol)
-	if !ok {
-		return false, nil
-	}
-	selectedPID := m.selectedProcessPID()
-	m.processesSort = m.processesSort.toggled(key, reverse)
-	m.reanchorProcessesOffset(selectedPID)
-	return true, nil
-}
-
-func (m *Model) reanchorSyscallsOffset(selectedName string) {
-	m.syscallsOffset = reanchorOffset(m.syscallsOffset, m.sortedSyscallRows(), selectedName, findSyscallOffset)
-}
-
-func (m *Model) reanchorFilesOffset(selectedPath string) {
-	m.filesOffset = reanchorOffset(m.filesOffset, m.sortedFileRows(), selectedPath, findFileOffset)
-}
-
-func (m *Model) reanchorFilesDirOffset(selectedDir string) {
-	m.filesDirOffset = reanchorOffset(m.filesDirOffset, m.sortedDirRows(), selectedDir, findDirOffset)
-}
-
-func (m *Model) reanchorProcessesOffset(selectedPID uint32) {
-	m.processesOffset = reanchorOffset(m.processesOffset, m.sortedProcessTableRows(), selectedPID, findProcessOffset)
+	handled := m.processesTab.applySort(reverse, m.processesTab.col,
+		processSortKeyForColumn,
+		func(current int) int {
+			return reanchorOffset(current, m.sortedProcessTableRows(), selectedPID, findProcessOffset)
+		})
+	return handled, nil
 }
 
 func reanchorOffset[T any, K comparable](current int, rows []T, selected K, find func([]T, K) (int, bool)) int {
@@ -617,15 +648,15 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 
 func (m *Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
 	rows := m.sortedFileRows()
-	if len(rows) == 0 {
+	index, ok := m.filesTab.selected(len(rows))
+	if !ok {
 		return statsengine.FileSnapshot{}, false
 	}
-	index := clampOffset(m.filesOffset, len(rows))
 	return rows[index], true
 }
 
 func (m *Model) sortedFileRows() []statsengine.FileSnapshot {
-	return sortedFileSnapshots(m.snapshotOrZero().Files(), m.filesSort)
+	return sortedFileSnapshots(m.snapshotOrZero().Files(), m.filesTab.sort)
 }
 
 func (m *Model) selectedFilePath() string {
@@ -638,15 +669,15 @@ func (m *Model) selectedFilePath() string {
 
 func (m *Model) selectedDirSnapshot() (DirSnapshot, bool) {
 	rows := m.sortedDirRows()
-	if len(rows) == 0 {
+	index, ok := m.filesDirTab.selected(len(rows))
+	if !ok {
 		return DirSnapshot{}, false
 	}
-	index := clampOffset(m.filesDirOffset, len(rows))
 	return rows[index], true
 }
 
 func (m *Model) sortedDirRows() []DirSnapshot {
-	return sortedDirSnapshots(aggregateFilesByDir(m.snapshotOrZero().Files()), m.filesDirSort)
+	return sortedDirSnapshots(aggregateFilesByDir(m.snapshotOrZero().Files()), m.filesDirTab.sort)
 }
 
 func (m *Model) selectedDirPath() string {
@@ -721,8 +752,8 @@ func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 
 func (m *Model) toggleFilesDirGrouping() tea.Cmd {
 	m.filesDirGrouped = !m.filesDirGrouped
-	if !m.filesDirGrouped && m.filesVizMode != tabVizModeTable {
-		m.filesVizMode = tabVizModeTable
+	if !m.filesDirGrouped && m.filesTab.mode != tabVizModeTable {
+		m.filesTab.mode = tabVizModeTable
 	}
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
 		return bubbleTickCmdFn()
@@ -745,7 +776,7 @@ func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 		return globalfilter.Filter{}, "", false
 	}
 	filter := m.globalFilter.Clone()
-	if m.processesCol == 1 {
+	if m.processesTab.col == 1 {
 		comm := strings.TrimSpace(proc.Comm)
 		if comm != "" {
 			filter.Comm = &globalfilter.StringFilter{Pattern: comm}
@@ -763,17 +794,17 @@ func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 	}
 
 	switch {
-	case m.processesVizMode == tabVizModeTreemap:
-		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesChart.Metric(), maxSyscallTreemapItems), m.processesOffset)
-	case m.processesVizMode == tabVizModeBubbles:
-		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesChart.Metric(), bubbleMaxItems), m.processesChart.selected)
+	case m.processesTab.mode == tabVizModeTreemap:
+		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesTab.bubble.Metric(), maxSyscallTreemapItems), m.processesTab.offset)
+	case m.processesTab.mode == tabVizModeBubbles:
+		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesTab.bubble.Metric(), bubbleMaxItems), m.processesTab.bubble.selected)
 	default:
-		return indexedProcessSnapshot(m.sortedProcessTableRows(), m.processesOffset)
+		return indexedProcessSnapshot(m.sortedProcessTableRows(), m.processesTab.offset)
 	}
 }
 
 func (m *Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
-	return sortedProcessTableRows(m.snapshotOrZero().Processes(), m.processesSort)
+	return sortedProcessTableRows(m.snapshotOrZero().Processes(), m.processesTab.sort)
 }
 
 func (m *Model) selectedProcessPID() uint32 {
@@ -930,34 +961,37 @@ func scrollOffset(keyStr string, offset *int, maxRows int) bool {
 }
 
 func (m *Model) clampTableColumns() {
-	m.syscallsCol = common.ClampTableCol(m.syscallsCol, len(syscallColumns(m.width)))
-	m.filesCol = common.ClampTableCol(m.filesCol, len(fileColumns(m.width)))
-	m.filesDirCol = common.ClampTableCol(m.filesDirCol, len(fileDirColumns(m.width)))
-	m.processesCol = common.ClampTableCol(m.processesCol, len(processColumns()))
+	m.syscallsTab.col = common.ClampTableCol(m.syscallsTab.col, len(syscallColumns(m.width)))
+	m.filesTab.col = common.ClampTableCol(m.filesTab.col, len(fileColumns(m.width)))
+	m.filesDirTab.col = common.ClampTableCol(m.filesDirTab.col, len(fileDirColumns(m.width)))
+	m.processesTab.col = common.ClampTableCol(m.processesTab.col, len(processColumns()))
 }
 
-func (m *Model) maxSyscallsRows() int {
+// The row-count helpers feed the tab registry's RowCount hooks and the
+// scroll handlers' clamping. They read the live snapshot on every call so
+// a stats tick that changes the row set immediately changes the clamp.
+func (m *Model) syscallsRowCount() int {
 	snap := m.snapshotOrZero()
 	return len(m.visibleSyscallRows(&snap))
 }
 
-func (m *Model) maxFilesRows() int {
+func (m *Model) filesPlainRowCount() int {
 	return m.snapshotOrZero().FilesCount()
 }
 
-func (m *Model) maxFilesDirRows() int {
+func (m *Model) filesDirRowCount() int {
 	return len(aggregateFilesByDir(m.snapshotOrZero().Files()))
 }
 
-func (m *Model) maxFilesDirRowsForMode() int {
-	if m.filesVizMode != tabVizModeIcicle {
-		return m.maxFilesDirRows()
+func (m *Model) filesDirRowCountForMode() int {
+	if m.filesTab.mode != tabVizModeIcicle {
+		return m.filesDirRowCount()
 	}
 	width, height := flameViewport(m.width, m.height, m.showHelp)
-	return filesIcicleTileCount(m.latest, width, height, m.filesChart.Metric())
+	return filesIcicleTileCount(m.latest, width, height, m.filesTab.bubble.Metric())
 }
 
-func (m *Model) maxProcessesRows() int {
+func (m *Model) processesRowCount() int {
 	return m.snapshotOrZero().ProcessesCount()
 }
 
@@ -1170,9 +1204,9 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
 	m.streamModel.SetDarkMode(isDark)
 	m.flamegraphModel.SetDarkMode(isDark)
-	m.syscallsChart.SetDarkMode(isDark)
-	m.filesChart.SetDarkMode(isDark)
-	m.processesChart.SetDarkMode(isDark)
+	m.syscallsTab.bubble.SetDarkMode(isDark)
+	m.filesTab.bubble.SetDarkMode(isDark)
+	m.processesTab.bubble.SetDarkMode(isDark)
 }
 
 // SetFocused controls whether periodic refresh ticks are processed and
@@ -1322,23 +1356,23 @@ func (m *Model) renderActiveContent(width, activeHeight int, streamModel *events
 // returns "", false so the caller can fall through to the next renderer.
 func (m *Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
 	switch {
-	case m.activeTab == TabSyscalls && m.syscallsVizMode == tabVizModeTreemap:
-		return renderSyscallsTreemap(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsChart.Metric(), m.syscallsTreemapSelection, m.isDark), true
-	case m.activeTab == TabFiles && m.filesVizMode == tabVizModeTreemap && m.filesDirGrouped:
-		return renderFilesTreemap(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark), true
-	case m.activeTab == TabFiles && m.filesVizMode == tabVizModeIcicle && m.filesDirGrouped:
-		return renderFilesIcicle(m.latest, width, activeHeight, m.filesChart.Metric(), m.filesDirOffset, m.isDark), true
-	case m.activeTab == TabProcesses && m.processesVizMode == tabVizModeTreemap:
-		return renderProcessesTreemap(m.latest, width, activeHeight, m.processesChart.Metric(), m.processesOffset, m.isDark), true
+	case m.activeTab == TabSyscalls && m.syscallsTab.mode == tabVizModeTreemap:
+		return renderSyscallsTreemap(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsTab.bubble.Metric(), m.syscallsTreemapSelection, m.isDark), true
+	case m.activeTab == TabFiles && m.filesTab.mode == tabVizModeTreemap && m.filesDirGrouped:
+		return renderFilesTreemap(m.latest, width, activeHeight, m.filesTab.bubble.Metric(), m.filesDirTab.offset, m.isDark), true
+	case m.activeTab == TabFiles && m.filesTab.mode == tabVizModeIcicle && m.filesDirGrouped:
+		return renderFilesIcicle(m.latest, width, activeHeight, m.filesTab.bubble.Metric(), m.filesDirTab.offset, m.isDark), true
+	case m.activeTab == TabProcesses && m.processesTab.mode == tabVizModeTreemap:
+		return renderProcessesTreemap(m.latest, width, activeHeight, m.processesTab.bubble.Metric(), m.processesTab.offset, m.isDark), true
 	}
 	if m.bubbleEnabledForTab(m.activeTab) {
 		switch m.activeTab {
 		case TabSyscalls:
-			return m.syscallsChart.Render("Syscalls", width, activeHeight), true
+			return m.syscallsTab.bubble.Render("Syscalls", width, activeHeight), true
 		case TabFiles:
-			return m.filesChart.Render("Files/Dirs", width, activeHeight), true
+			return m.filesTab.bubble.Render("Files/Dirs", width, activeHeight), true
 		case TabProcesses:
-			return m.processesChart.Render("Processes", width, activeHeight), true
+			return m.processesTab.bubble.Render("Processes", width, activeHeight), true
 		}
 	}
 	return "", false
@@ -1350,14 +1384,14 @@ func (m *Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
 func (m *Model) renderActiveContentTable(width, activeHeight int) (string, bool) {
 	switch {
 	case m.activeTab == TabSyscalls && m.latest != nil:
-		return renderSyscallsWithSort(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsOffset, m.syscallsCol, m.syscallsSort), true
-	case m.activeTab == TabFiles && m.latest != nil && m.filesVizMode == tabVizModeTable:
+		return renderSyscallsWithSort(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsTab.offset, m.syscallsTab.col, m.syscallsTab.sort), true
+	case m.activeTab == TabFiles && m.latest != nil && m.filesTab.mode == tabVizModeTable:
 		if m.filesDirGrouped {
-			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirOffset, m.filesDirCol, m.filesDirSort), true
+			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirTab.offset, m.filesDirTab.col, m.filesDirTab.sort), true
 		}
-		return renderFilesWithSort(m.latest, width, activeHeight, m.filesOffset, m.filesCol, m.filesSort), true
-	case m.activeTab == TabProcesses && m.latest != nil && m.processesVizMode == tabVizModeTable:
-		return renderProcessesWithSort(m.latest, width, activeHeight, m.processesOffset, m.processesCol, m.pidFilter, m.processesSort), true
+		return renderFilesWithSort(m.latest, width, activeHeight, m.filesTab.offset, m.filesTab.col, m.filesTab.sort), true
+	case m.activeTab == TabProcesses && m.latest != nil && m.processesTab.mode == tabVizModeTable:
+		return renderProcessesWithSort(m.latest, width, activeHeight, m.processesTab.offset, m.processesTab.col, m.pidFilter, m.processesTab.sort), true
 	}
 	return "", false
 }
@@ -1367,109 +1401,104 @@ func (m *Model) activeTableHeight() int {
 	return activeHeight
 }
 
+// setBubbleViewports sizes every table tab's bubble chart to the current
+// active-content viewport, so any chart is ready before it becomes the
+// active view.
 func (m *Model) setBubbleViewports(width, height int) {
-	m.syscallsChart.SetViewport(width, height)
-	m.filesChart.SetViewport(width, height)
-	m.processesChart.SetViewport(width, height)
+	m.syscallsTab.bubble.SetViewport(width, height)
+	m.filesTab.bubble.SetViewport(width, height)
+	m.processesTab.bubble.SetViewport(width, height)
 }
 
-// refreshBubbleData pushes the latest snapshot data into all three bubble
-// charts and returns whether the currently active tab's chart is still
-// animating. This drives the bubble tick loop.
+// refreshBubbleData pushes the latest snapshot data into EVERY registered
+// bubble chart (through the registry RefreshBubble hooks) and returns
+// whether the ACTIVE tab's chart is still animating, which drives the
+// bubble tick loop. Feeding is deliberately not limited to the active tab:
+// a tab left in bubbles mode renders the moment the user switches back to
+// it, and the nil-snapshot feed is what clears the charts of non-active
+// tabs after a trace restart (PrepareForTraceRestart resets only the
+// active one) - lazily feeding only the active tab left both of those
+// windows showing stale or previous-session data (review finding).
 func (m *Model) refreshBubbleData() bool {
 	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
 	m.setBubbleViewports(flameWidth, flameHeight)
-
-	syscallsAnimating := m.syscallsChart.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest)))
-	filesAnimating := m.refreshFilesBubbleData()
-	processesAnimating := m.processesChart.SetData(processBubbleData(m.latest))
-
-	// Return whether the active tab's chart is animating; the caller uses this
-	// to decide whether to schedule another bubble tick.
+	animating := false
+	for _, tab := range orderedTabs() {
+		if d := tabDescriptors[tab]; d.RefreshBubble != nil && d.RefreshBubble(m) && tab == m.activeTab {
+			animating = true
+		}
+	}
 	if !m.bubbleEnabledForTab(m.activeTab) {
 		return false
 	}
-	switch m.activeTab {
-	case TabSyscalls:
-		return syscallsAnimating
-	case TabFiles:
-		return filesAnimating
-	case TabProcesses:
-		return processesAnimating
-	default:
-		return false
-	}
+	return animating
 }
 
 // refreshFilesBubbleData updates the files bubble chart. When not in
 // dir-grouped mode the chart is cleared with a status hint explaining why.
 func (m *Model) refreshFilesBubbleData() bool {
 	if m.filesDirGrouped {
-		m.filesChart.SetStatusHint("")
-		return m.filesChart.SetData(filesDirBubbleData(m.latest))
+		m.filesTab.bubble.SetStatusHint("")
+		return m.filesTab.bubble.SetData(filesDirBubbleData(m.latest))
 	}
-	m.filesChart.SetStatusHint("Files bubble view requires directory mode (press d).")
-	m.filesChart.SetData(nil)
+	m.filesTab.bubble.SetStatusHint("Files bubble view requires directory mode (press d).")
+	m.filesTab.bubble.SetData(nil)
 	return false
 }
 
-// bubbleChartFor returns a pointer to the bubble chart for the given tab, or
-// nil when that tab has no bubble chart. This eliminates repeated switch
-// statements over tab identity for chart operations.
-func (m *Model) bubbleChartFor(tab Tab) *bubbleChart {
+// tableTabFor returns the table-tab state component for tab, or nil for the
+// tabs that have none (flame, overview, latency, stream). It is the ONE
+// place that maps tab identity to tab state; the viz-mode and bubble
+// dispatches below go through it generically instead of switching on the
+// tab again. Adding a table tab means adding a case here and a state
+// field - everything else hangs off the tableTab interface.
+func (m *Model) tableTabFor(tab Tab) tableTab {
 	switch tab {
 	case TabSyscalls:
-		return &m.syscallsChart
+		return &m.syscallsTab
 	case TabFiles:
-		return &m.filesChart
+		return &m.filesTab
 	case TabProcesses:
-		return &m.processesChart
+		return &m.processesTab
 	default:
 		return nil
 	}
 }
 
-// tabVizModeFor returns the current visualization mode for tab. Only the three
-// bubble-capable tabs (syscalls, files, processes) carry per-tab mode state;
-// all other tabs implicitly use tabVizModeTable.
-func (m *Model) tabVizModeFor(tab Tab) tabVizMode {
-	switch tab {
-	case TabSyscalls:
-		return m.syscallsVizMode
-	case TabFiles:
-		return m.filesVizMode
-	case TabProcesses:
-		return m.processesVizMode
-	default:
-		return tabVizModeTable
+// bubbleChartFor returns the bubble chart for the given tab, or nil when
+// that tab has no bubble chart.
+func (m *Model) bubbleChartFor(tab Tab) *bubbleChart {
+	if t := m.tableTabFor(tab); t != nil {
+		return t.bubbleChart()
 	}
+	return nil
+}
+
+// tabVizModeFor returns the current visualization mode for tab. Only the
+// table tabs carry per-tab mode state; all other tabs implicitly use the
+// table view.
+func (m *Model) tabVizModeFor(tab Tab) tabVizMode {
+	if t := m.tableTabFor(tab); t != nil {
+		return t.currentVizMode()
+	}
+	return tabVizModeTable
 }
 
 // setTabVizMode updates the stored viz mode for tab.
 func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
-	switch tab {
-	case TabSyscalls:
-		m.syscallsVizMode = mode
-	case TabFiles:
-		m.filesVizMode = mode
-	case TabProcesses:
-		m.processesVizMode = mode
+	if t := m.tableTabFor(tab); t != nil {
+		t.setVizMode(mode)
 	}
 }
 
 // bubbleEnabledForTab reports whether the bubble chart is the active view for
-// tab. The Files tab additionally requires dir-grouped mode to be on.
+// tab. The Files tab additionally requires dir-grouped mode to be on - the
+// one runtime condition the registry cannot express (see tabAllowedVizModes).
 func (m *Model) bubbleEnabledForTab(tab Tab) bool {
-	switch tab {
-	case TabSyscalls:
-		return m.syscallsVizMode == tabVizModeBubbles
-	case TabFiles:
-		return m.filesDirGrouped && m.filesVizMode == tabVizModeBubbles
-	case TabProcesses:
-		return m.processesVizMode == tabVizModeBubbles
-	default:
+	if tab == TabFiles && !m.filesDirGrouped {
 		return false
 	}
+	return m.tabVizModeFor(tab) == tabVizModeBubbles
 }
 
 // tickActiveBubbleChart advances the animation frame for the active tab's
@@ -1580,13 +1609,17 @@ func tickCmd(d time.Duration) tea.Cmd {
 // individual render functions can assume snap is non-nil (stream and flame
 // tabs receive snap=nil and handle the absent-model case themselves).
 func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height int) string {
+	// Stream and flame manage their own "waiting" state; all others need a
+	// snapshot. This guard runs before the Render==nil check so the three
+	// table tabs - whose registered Render is nil because the sort-aware
+	// renderActiveContentTable owns their drawing - still show the waiting
+	// line rather than "Unknown tab" while no snapshot has arrived yet.
+	if tab != TabStream && tab != TabFlame && snap == nil {
+		return common.Current().PanelStyle.Render(tab.String() + ": waiting for stats...")
+	}
 	d := lookupTab(tab)
 	if d.Render == nil {
 		return common.Current().PanelStyle.Render("Unknown tab")
-	}
-	// Stream and flame manage their own "waiting" state; all others need a snapshot.
-	if tab != TabStream && tab != TabFlame && snap == nil {
-		return common.Current().PanelStyle.Render(tab.String() + ": waiting for stats...")
 	}
 	return d.Render(m, snap, streamModel, flameModel, width, height)
 }

@@ -26,10 +26,6 @@ const (
 	syscallSortKeyErrors
 )
 
-func renderSyscalls(snap *statsengine.Snapshot, rows []statsengine.SyscallSnapshot, width, height int) string {
-	return renderSyscallsWithSort(snap, rows, width, height, 0, 0, tableSortState[syscallSortKey]{})
-}
-
 // renderSyscallsWithSort renders the Syscalls table from the already
 // filter-scoped row set rowsData (see Model.visibleSyscallRows). snap is passed
 // only to distinguish the "waiting for stats" state (nil snapshot) from the

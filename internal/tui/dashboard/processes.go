@@ -24,10 +24,6 @@ func renderProcesses(snap *statsengine.Snapshot, width, height int) string {
 	return renderProcessesWithSort(snap, width, height, 0, 0, -1, tableSortState[processSortKey]{})
 }
 
-func renderProcessesWithOffset(snap *statsengine.Snapshot, width, height, offset, selectedCol, pidFilter int) string {
-	return renderProcessesWithSort(snap, width, height, offset, selectedCol, pidFilter, tableSortState[processSortKey]{})
-}
-
 func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol, pidFilter int, sortState tableSortState[processSortKey]) string {
 	if snap == nil {
 		return "Processes: waiting for stats..."
