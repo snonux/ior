@@ -43,18 +43,22 @@ type Row struct {
 	OldName string
 }
 
+// SyscallValue reports the syscall name.
 func (r Row) SyscallValue() string {
 	return r.Syscall
 }
 
+// FamilyValue reports the syscall family (FS, Network, ...).
 func (r Row) FamilyValue() string {
 	return r.Family
 }
 
+// CommValue reports the process command name.
 func (r Row) CommValue() string {
 	return r.Comm
 }
 
+// FileValue reports the file path, the rename destination for rename-like rows.
 func (r Row) FileValue() string {
 	return r.FileName
 }
@@ -67,34 +71,42 @@ func (r Row) OldFileValue() string {
 	return r.OldName
 }
 
+// PIDValue reports the process (tgid) id.
 func (r Row) PIDValue() uint32 {
 	return r.PID
 }
 
+// TIDValue reports the thread id.
 func (r Row) TIDValue() uint32 {
 	return r.TID
 }
 
+// FDValue reports the descriptor number, UnknownFD when the row has none.
 func (r Row) FDValue() int32 {
 	return r.FD
 }
 
+// LatencyValue reports the syscall latency in nanoseconds.
 func (r Row) LatencyValue() uint64 {
 	return r.DurationNs
 }
 
+// GapValue reports the inter-syscall gap in nanoseconds.
 func (r Row) GapValue() uint64 {
 	return r.GapNs
 }
 
+// BytesValue reports the number of bytes transferred.
 func (r Row) BytesValue() uint64 {
 	return r.Bytes
 }
 
+// ReturnValue reports the syscall's return value.
 func (r Row) ReturnValue() int64 {
 	return r.RetVal
 }
 
+// ErrorValue reports whether the syscall returned an error.
 func (r Row) ErrorValue() bool {
 	return r.IsError
 }

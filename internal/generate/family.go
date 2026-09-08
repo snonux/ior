@@ -6,18 +6,32 @@ import "strings"
 type SyscallFamily string
 
 const (
-	FamilyNetwork  SyscallFamily = "Network"
-	FamilyIPC      SyscallFamily = "IPC"
-	FamilyMemory   SyscallFamily = "Memory"
-	FamilyProcess  SyscallFamily = "Process"
-	FamilySignals  SyscallFamily = "Signals"
-	FamilyTime     SyscallFamily = "Time"
-	FamilySched    SyscallFamily = "Sched"
-	FamilyFS       SyscallFamily = "FS"
-	FamilyPolling  SyscallFamily = "Polling"
-	FamilyAIO      SyscallFamily = "AIO"
+	// FamilyNetwork groups network sockets and the splice/tee byte-mover cohort.
+	FamilyNetwork SyscallFamily = "Network"
+	// FamilyIPC groups SysV IPC, pipes, and the eventfd/signalfd/inotify
+	// notification descriptors.
+	FamilyIPC SyscallFamily = "IPC"
+	// FamilyMemory groups memory management (mmap, mremap, ...).
+	FamilyMemory SyscallFamily = "Memory"
+	// FamilyProcess groups process lifecycle (fork/clone, exit, wait, ...).
+	FamilyProcess SyscallFamily = "Process"
+	// FamilySignals groups signal delivery and handling.
+	FamilySignals SyscallFamily = "Signals"
+	// FamilyTime groups clock/time retrieval and the sleep/timer calls.
+	FamilyTime SyscallFamily = "Time"
+	// FamilySched groups scheduler control (sched_setparam, ...).
+	FamilySched SyscallFamily = "Sched"
+	// FamilyFS groups the filesystem family - the default attach set.
+	FamilyFS SyscallFamily = "FS"
+	// FamilyPolling groups fd multiplexing (poll, epoll, select).
+	FamilyPolling SyscallFamily = "Polling"
+	// FamilyAIO groups async I/O (io_uring, aio).
+	FamilyAIO SyscallFamily = "AIO"
+	// FamilySecurity groups LSM and capability syscalls plus the
+	// privileged neighbours (bpf, ptrace, perf_event_open, keyctl, ...).
 	FamilySecurity SyscallFamily = "Security"
-	FamilyMisc     SyscallFamily = "Misc"
+	// FamilyMisc groups everything without a more specific family.
+	FamilyMisc SyscallFamily = "Misc"
 )
 
 var syscallFamilies = map[string]SyscallFamily{

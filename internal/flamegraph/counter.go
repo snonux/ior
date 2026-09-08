@@ -28,6 +28,8 @@ func (c Counter) add(other Counter) Counter {
 	return c
 }
 
+// ValueByName returns the counter's named aggregate (count, duration,
+// durationToPrev, bytes) for the frame-value field selection.
 func (c Counter) ValueByName(name string) (uint64, error) {
 	switch name {
 	case "count":

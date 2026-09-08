@@ -8,12 +8,16 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// ExportModal is the stream tab's filename-entry modal for CSV export.
+// Like the sibling modals it is value-flow: every mutator returns the
+// updated ExportModal.
 type ExportModal struct {
 	visible   bool
 	textInput textinput.Model
 	err       string
 }
 
+// NewExportModal constructs a dark-mode export modal with an empty input.
 func NewExportModal() ExportModal {
 	input := textinput.New()
 	input.Prompt = ""
@@ -23,6 +27,7 @@ func NewExportModal() ExportModal {
 	return ExportModal{textInput: input}
 }
 
+// Visible reports whether the modal is shown.
 func (m ExportModal) Visible() bool {
 	return m.visible
 }
@@ -33,6 +38,7 @@ func (m ExportModal) SetDarkMode(isDark bool) ExportModal {
 	return m
 }
 
+// Open shows the modal with defaultName pre-filled and focused.
 func (m ExportModal) Open(defaultName string) ExportModal {
 	m.visible = true
 	m.err = ""
@@ -42,6 +48,8 @@ func (m ExportModal) Open(defaultName string) ExportModal {
 	return m
 }
 
+// Close hides the modal; the entered filename stays in the input and is
+// replaced by the next Open.
 func (m ExportModal) Close() ExportModal {
 	m.visible = false
 	m.err = ""
@@ -73,6 +81,7 @@ func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 	return m, "", false
 }
 
+// View renders the centered modal box within the given viewport.
 func (m ExportModal) View(width, height int) string {
 	if !m.visible {
 		return ""

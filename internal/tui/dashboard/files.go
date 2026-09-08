@@ -10,6 +10,8 @@ import (
 	common "ior/internal/tui/common"
 )
 
+// DirSnapshot is one aggregated directory row of the Files tab's dir-grouped
+// view: the directory's access, byte, latency and file-count totals.
 type DirSnapshot struct {
 	Dir string
 

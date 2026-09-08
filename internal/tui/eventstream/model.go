@@ -32,6 +32,10 @@ type Source interface {
 	Snapshot() []StreamEvent
 }
 
+// Model is the stream tab: the live event view over a Source, with its own
+// selection, filter, search and export modals. Receiver policy: every
+// method takes *Model - this is the all-pointer template the other TUI
+// models follow (see internal/tui/dashboard and AGENTS.md).
 type Model struct {
 	source Source
 
@@ -83,6 +87,9 @@ type fdTraceViewState struct {
 	offset  int
 }
 
+// NewModel constructs a stream model over source with its modals ready.
+// The value return matches the field-embedding style of the parents that
+// hold it; all methods are on *Model.
 func NewModel(source Source) Model {
 	m := Model{
 		source:        source,
@@ -589,6 +596,8 @@ func (m *Model) appendStreamFooter(base string, start int) string {
 	return b.String()
 }
 
+// Refresh pulls a fresh snapshot from the source and re-applies the filter,
+// unless the stream is paused. Driven by the high-frequency stream tick.
 func (m *Model) Refresh() {
 	if m.paused {
 		return

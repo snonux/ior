@@ -24,6 +24,8 @@ import (
 	"ior/internal/generate"
 )
 
+// Build-input and output paths used by the Mage targets. Exported names
+// (VMLINUXPath) are referenced by targets that regenerate vmlinux.h.
 const (
 	clickhouseImage           = "clickhouse/clickhouse-server:latest"
 	binaryName                = "ior"
@@ -43,10 +45,11 @@ const (
 	dockerBuildScript         = "scripts/build-with-docker.sh"
 	dockerBuildScriptEl8      = "scripts/build-with-docker-el8.sh"
 	typesHeaderPath           = "internal/c/types.h"
-	VMLINUXPath               = "internal/c/vmlinux.h"
-	benchProfilesDir          = "bench-profiles"
-	integrationParallel       = "INTEGRATION_PARALLEL"
-	integrationParallelE      = "IOR_INTEGRATION_PARALLEL"
+	// VMLINUXPath is the BTF-dumped kernel header the BPF object builds against.
+	VMLINUXPath          = "internal/c/vmlinux.h"
+	benchProfilesDir     = "bench-profiles"
+	integrationParallel  = "INTEGRATION_PARALLEL"
+	integrationParallelE = "IOR_INTEGRATION_PARALLEL"
 )
 
 // Default builds the project.

@@ -57,6 +57,10 @@ const (
 	processExitEventSize = 24
 )
 
+// NewOpenEventFast decodes one open ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewOpenEventFast(raw []byte) *OpenEvent {
 	if len(raw) < openEventSizeV1 {
 		return nil
@@ -76,6 +80,10 @@ func NewOpenEventFast(raw []byte) *OpenEvent {
 	return o
 }
 
+// NewExecEventFast decodes one exec ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewExecEventFast(raw []byte) *ExecEvent {
 	if len(raw) < execEventSize {
 		return nil
@@ -96,6 +104,10 @@ func NewExecEventFast(raw []byte) *ExecEvent {
 	return e
 }
 
+// NewNullEventFast decodes one null ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewNullEventFast(raw []byte) *NullEvent {
 	if len(raw) < nullEventSize {
 		return nil
@@ -112,6 +124,10 @@ func NewNullEventFast(raw []byte) *NullEvent {
 	return n
 }
 
+// NewFdEventFast decodes one fd ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewFdEventFast(raw []byte) *FdEvent {
 	if len(raw) < fdEventSizeV1 {
 		return nil
@@ -129,6 +145,10 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	return f
 }
 
+// NewRetEventFast decodes one ret ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewRetEventFast(raw []byte) *RetEvent {
 	if len(raw) < retEventSizeV1 {
 		return nil
@@ -147,6 +167,10 @@ func NewRetEventFast(raw []byte) *RetEvent {
 	return r
 }
 
+// NewNameEventFast decodes one name ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewNameEventFast(raw []byte) *NameEvent {
 	if len(raw) < nameEventSize {
 		return nil
@@ -165,6 +189,10 @@ func NewNameEventFast(raw []byte) *NameEvent {
 	return n
 }
 
+// NewPathEventFast decodes one path ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewPathEventFast(raw []byte) *PathEvent {
 	if len(raw) < pathEventSize {
 		return nil
@@ -182,6 +210,10 @@ func NewPathEventFast(raw []byte) *PathEvent {
 	return p
 }
 
+// NewFcntlEventFast decodes one fcntl ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewFcntlEventFast(raw []byte) *FcntlEvent {
 	if len(raw) < fcntlEventSize {
 		return nil
@@ -201,6 +233,10 @@ func NewFcntlEventFast(raw []byte) *FcntlEvent {
 	return f
 }
 
+// NewDup3EventFast decodes one dup3 ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewDup3EventFast(raw []byte) *Dup3Event {
 	if len(raw) < dup3EventSize {
 		return nil
@@ -219,6 +255,10 @@ func NewDup3EventFast(raw []byte) *Dup3Event {
 	return d
 }
 
+// NewOpenByHandleAtEventFast decodes one open_by_handle_at ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
 	if len(raw) < openByHandleAtEventSizeV1 {
 		return nil
@@ -236,6 +276,10 @@ func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
 	return o
 }
 
+// NewSocketEventFast decodes one socket ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewSocketEventFast(raw []byte) *SocketEvent {
 	if len(raw) < socketEventSizeV1 {
 		return nil
@@ -255,6 +299,10 @@ func NewSocketEventFast(raw []byte) *SocketEvent {
 	return s
 }
 
+// NewSocketpairEventFast decodes one socketpair ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewSocketpairEventFast(raw []byte) *SocketpairEvent {
 	if len(raw) < socketpairEventSizeV1 {
 		return nil
@@ -281,6 +329,10 @@ func NewSocketpairEventFast(raw []byte) *SocketpairEvent {
 	return s
 }
 
+// NewAcceptEventFast decodes one accept ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewAcceptEventFast(raw []byte) *AcceptEvent {
 	if len(raw) < acceptEventSizeV1 {
 		return nil
@@ -303,6 +355,10 @@ func NewAcceptEventFast(raw []byte) *AcceptEvent {
 	return a
 }
 
+// NewPipeEventFast decodes one pipe ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewPipeEventFast(raw []byte) *PipeEvent {
 	if len(raw) < pipeEventSizeV1 {
 		return nil
@@ -327,6 +383,10 @@ func NewPipeEventFast(raw []byte) *PipeEvent {
 	return p
 }
 
+// NewEventfdEventFast decodes one eventfd ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewEventfdEventFast(raw []byte) *EventfdEvent {
 	if len(raw) < eventfdEventSizeV1 {
 		return nil
@@ -349,6 +409,10 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 	return e
 }
 
+// NewEpollCtlEventFast decodes one epoll_ctl ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewEpollCtlEventFast(raw []byte) *EpollCtlEvent {
 	if len(raw) < epollCtlEventSize {
 		return nil
@@ -369,6 +433,10 @@ func NewEpollCtlEventFast(raw []byte) *EpollCtlEvent {
 	return e
 }
 
+// NewTwoFdEventFast decodes one two-fd ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 	if len(raw) < twoFdEventSize {
 		return nil
@@ -388,6 +456,10 @@ func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 	return t
 }
 
+// NewPollEventFast decodes one poll ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewPollEventFast(raw []byte) *PollEvent {
 	if len(raw) < pollEventSizeV1 {
 		return nil
@@ -410,6 +482,10 @@ func NewPollEventFast(raw []byte) *PollEvent {
 	return p
 }
 
+// NewMemEventFast decodes one mem ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewMemEventFast(raw []byte) *MemEvent {
 	if len(raw) < memEventSize {
 		return nil
@@ -430,6 +506,10 @@ func NewMemEventFast(raw []byte) *MemEvent {
 	return m
 }
 
+// NewSleepEventFast decodes one sleep ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewSleepEventFast(raw []byte) *SleepEvent {
 	if len(raw) < sleepEventSize {
 		return nil
@@ -447,6 +527,10 @@ func NewSleepEventFast(raw []byte) *SleepEvent {
 	return s
 }
 
+// NewKeyctlEventFast decodes one keyctl ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewKeyctlEventFast(raw []byte) *KeyctlEvent {
 	if len(raw) < keyctlEventSize {
 		return nil
@@ -466,6 +550,10 @@ func NewKeyctlEventFast(raw []byte) *KeyctlEvent {
 	return k
 }
 
+// NewPtraceEventFast decodes one ptrace ring-buffer payload in a
+// single pass, falling back to the slow binary.Read decoder when the
+// payload size does not match the size constant(s) above. Returns nil
+// for a short payload.
 func NewPtraceEventFast(raw []byte) *PtraceEvent {
 	if len(raw) < ptraceEventSize {
 		return nil
@@ -486,6 +574,9 @@ func NewPtraceEventFast(raw []byte) *PtraceEvent {
 	return p
 }
 
+// NewPerfOpenEventFast decodes one perf_event_open payload in a single pass,
+// falling back to the slow binary.Read decoder on unexpected lengths and
+// returning nil for a short payload.
 func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
 	if len(raw) < perfOpenEventSize {
 		return nil

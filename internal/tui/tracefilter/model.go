@@ -65,6 +65,7 @@ var compareOps = []globalfilter.CompareOp{
 
 var compareOpLabels = []string{">", "<", "=", ">=", "<=", "!="}
 
+// NewModel constructs a filter modal with the default field layout.
 func NewModel() Model {
 	input := textinput.New()
 	input.Prompt = ""
@@ -77,19 +78,23 @@ func NewModel() Model {
 	return model
 }
 
+// Visible reports whether the filter modal is shown.
 func (m Model) Visible() bool {
 	return m.visible
 }
 
+// Filter returns the filter built from the last applied modal edit.
 func (m Model) Filter() globalfilter.Filter {
 	return m.filter
 }
 
+// SetDarkMode restyles the text input for the given colour scheme.
 func (m Model) SetDarkMode(isDark bool) Model {
 	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
 	return m
 }
 
+// Open shows the modal with its fields initialised from initial.
 func (m Model) Open(initial globalfilter.Filter) Model {
 	m.visible = true
 	m.activeField = 0
@@ -101,6 +106,7 @@ func (m Model) Open(initial globalfilter.Filter) Model {
 	return m
 }
 
+// Close hides the modal; the applied filter is left as it was.
 func (m Model) Close() Model {
 	m.visible = false
 	m.editing = false
@@ -193,6 +199,7 @@ func (m Model) toggleBoolField(index int) Model {
 	return m
 }
 
+// View renders the centered modal box within the given viewport.
 func (m Model) View(width, height int) string {
 	if !m.visible {
 		return ""

@@ -8,17 +8,22 @@ import (
 	"strings"
 )
 
+// CConstant is one #define parsed from the C sources, emitted as a Go const.
 type CConstant struct {
 	Name  string
 	Value string
 }
 
+// CMember is one struct member parsed from the C sources: its type name,
+// field name and, for arrays, the element-count expression.
 type CMember struct {
 	TypeName  string
 	FieldName string
 	ArraySize string
 }
 
+// CStruct is one C struct parsed from the C sources, emitted as a Go struct
+// with matching field order and layout.
 type CStruct struct {
 	Name    string
 	Members []CMember

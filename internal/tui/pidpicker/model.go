@@ -16,10 +16,13 @@ import (
 const allPIDsLabel = "All PIDs"
 const allTIDsLabel = "All TIDs"
 
+// PickerMode selects which id column the picker screen shows and emits.
 type PickerMode int
 
 const (
+	// PickerModePID lists processes (tgids).
 	PickerModePID PickerMode = iota
+	// PickerModeTID lists threads of the selected process.
 	PickerModeTID
 )
 
@@ -39,6 +42,7 @@ func DefaultKeyMap() KeyMap {
 	}
 }
 
+// PickerShortHelp returns the picker's key bindings in short-help order.
 func (k KeyMap) PickerShortHelp() []key.Binding {
 	return []key.Binding{k.Enter, k.Refresh, k.Esc}
 }
