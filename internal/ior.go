@@ -45,11 +45,6 @@ func SetTUIRunners(
 	defaultRegistry.deps.runTUITestLiveFlames = runTUITestLiveFlames
 }
 
-// streamEventSink is the write-side contract for the stream ring buffer used
-// by the TUI trace starter. It is identical to runtime.EventSink but defined
-// here to avoid a second import alias at the call sites below.
-type streamEventSink = runtime.EventSink
-
 // Run is the main entry point for the ior binary.
 // cfg must be provided by the caller; it should not be fetched from the global singleton here.
 func Run(cfg flags.Config) error {
@@ -190,11 +185,14 @@ func shouldRunTraceMode(cfg flags.Config) bool {
 type tuiRuntime struct {
 	accumulator statsengine.Accumulator
 	snapSource  runtime.SnapshotSource
-	streamBuf   streamEventSink
+	streamBuf   runtime.EventSink
 	streamSrc   runtime.StreamSource
-	streamSeq   *streamrow.Sequencer
+	streamSeq   runtime.Sequencer
 	liveTrie    *flamegraph.LiveTrie
-	recorder    *parquet.Recorder
+	// recorder stays behind the one-method runtime.RowRecorder seam: the
+	// core only records rows, so parquet's wider surface (start/stop/status,
+	// the TUI's concern) cannot ripple into this wiring.
+	recorder runtime.RowRecorder
 	// filterEpochFn reads the live filter epoch from the TUI-owned runtime
 	// bindings at row-stamp time, so in-place filter swaps advance the epoch
 	// recorded in parquet rows without a trace restart. Nil (headless modes
@@ -244,13 +242,12 @@ func buildTUIRuntime(ctx context.Context, cfg flags.Config) (*tuiRuntime, error)
 // built components back to the TUI so the new trace session is visible.
 // It is called only when a TraceRuntimeBindings is present in the context.
 func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) error {
+	// StreamBuffer returns the EventSink the core needs directly - the old
+	// read-only StreamSource return forced a downcast here, which turned a
+	// compile-time contract into a runtime failure path.
 	if persistent := bindings.StreamBuffer(); persistent != nil {
 		rt.streamSrc = persistent
-		sink, ok := persistent.(streamEventSink)
-		if !ok {
-			return fmt.Errorf("runtime stream source does not support event pushes")
-		}
-		rt.streamBuf = sink
+		rt.streamBuf = persistent
 	}
 	if persistentSeq := bindings.StreamSequencer(); persistentSeq != nil {
 		rt.streamSeq = persistentSeq

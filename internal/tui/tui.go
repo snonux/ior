@@ -120,24 +120,41 @@ func (r *runtimeBindings) SetEventStreamSource(source runtime.StreamSource) {
 	r.mu.Unlock()
 }
 
-// StreamBuffer returns the TUI-owned ring buffer, which satisfies runtime.StreamSource.
-func (r *runtimeBindings) StreamBuffer() runtime.StreamSource {
+// StreamBuffer returns the TUI-owned ring buffer. The full EventSink (push
+// plus read side) is returned because the tracing engine pushes events into
+// it; the TUI itself reads through the SetEventStreamSource wiring. A nil
+// buffer is returned as a nil interface, not as a typed nil: handing a
+// typed-nil pointer through would defeat the caller's nil check.
+func (r *runtimeBindings) StreamBuffer() runtime.EventSink {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.streamBuffer == nil {
+		return nil
+	}
 	return r.streamBuffer
 }
 
-// Recorder returns the parquet recorder for optional stream recording.
-func (r *runtimeBindings) Recorder() *parquet.Recorder {
+// Recorder returns the parquet recorder for optional stream recording,
+// behind the runtime contract (the concrete recorder stays an implementation
+// detail of these bindings). A nil recorder is returned as a nil interface:
+// handing a typed-nil pointer through would make the caller's nil check see
+// a non-nil interface whose every call panics.
+func (r *runtimeBindings) Recorder() runtime.RecordingController {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.recorder == nil {
+		return nil
+	}
 	return r.recorder
 }
 
 // StreamSequencer returns the shared monotonic counter for stream row sequencing.
-func (r *runtimeBindings) StreamSequencer() *eventstream.Sequencer {
+func (r *runtimeBindings) StreamSequencer() runtime.Sequencer {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.streamSeq == nil {
+		return nil
+	}
 	return r.streamSeq
 }
 

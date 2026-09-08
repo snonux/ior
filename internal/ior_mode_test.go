@@ -1248,15 +1248,26 @@ func (b *traceRuntimeBindingsStub) currentLiveFilterSetter() func(globalfilter.F
 	return b.liveFilterSetter
 }
 
-func (b *traceRuntimeBindingsStub) StreamBuffer() runtime.StreamSource {
+func (b *traceRuntimeBindingsStub) StreamBuffer() runtime.EventSink {
+	if b.streamBuffer == nil {
+		return nil
+	}
 	return b.streamBuffer
 }
 
-func (b *traceRuntimeBindingsStub) Recorder() *parquet.Recorder {
+func (b *traceRuntimeBindingsStub) Recorder() runtime.RecordingController {
+	// Typed-nil guard, mirroring the real bindings: a nil recorder must come
+	// back as a nil interface.
+	if b.recorder == nil {
+		return nil
+	}
 	return b.recorder
 }
 
-func (b *traceRuntimeBindingsStub) StreamSequencer() *streamrow.Sequencer {
+func (b *traceRuntimeBindingsStub) StreamSequencer() runtime.Sequencer {
+	if b.streamSeq == nil {
+		return nil
+	}
 	return b.streamSeq
 }
 

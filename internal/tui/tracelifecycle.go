@@ -8,6 +8,7 @@ import (
 
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
+	"ior/internal/runtime"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -108,7 +109,7 @@ func defaultTraceStarter(context.Context) error {
 // recorderStart opens the parquet recorder at the given path.
 // It calls syncFn (typically syncDashboardFilterState) after the attempt
 // (success or failure) so the status bar stays in sync.
-func recorderStart(recorder *parquet.Recorder, path string, syncFn func()) error {
+func recorderStart(recorder runtime.RecordingController, path string, syncFn func()) error {
 	if recorder == nil {
 		return errors.New("recording runtime is unavailable")
 	}
@@ -120,7 +121,7 @@ func recorderStart(recorder *parquet.Recorder, path string, syncFn func()) error
 // recorderStop closes the active parquet recorder.
 // Returns nil without error when no recording is active.
 // Calls syncFn after the attempt so the status bar stays in sync.
-func recorderStop(recorder *parquet.Recorder, syncFn func()) error {
+func recorderStop(recorder runtime.RecordingController, syncFn func()) error {
 	if recorder == nil {
 		return nil
 	}
@@ -134,7 +135,7 @@ func recorderStop(recorder *parquet.Recorder, syncFn func()) error {
 }
 
 // recorderActive returns true when the recorder is currently recording.
-func recorderActive(recorder *parquet.Recorder) bool {
+func recorderActive(recorder runtime.RecordingController) bool {
 	if recorder == nil {
 		return false
 	}
@@ -143,7 +144,7 @@ func recorderActive(recorder *parquet.Recorder) bool {
 
 // recorderStatus returns the human-readable recording status string shown
 // in the status bar.
-func recorderStatus(recorder *parquet.Recorder) string {
+func recorderStatus(recorder runtime.RecordingController) string {
 	if recorder == nil {
 		return "rec: unavailable"
 	}
