@@ -35,6 +35,52 @@ type EventSink interface {
 	Push(streamrow.Row)
 }
 
+// Sequencer is the one-method stream-row sequencing contract the tracing
+// core needs: a monotonically increasing row number. It exists so the core's
+// wiring (and its tests) can depend on the behaviour rather than on
+// *streamrow.Sequencer, whose other surface is a construction-time detail.
+// *streamrow.Sequencer satisfies it.
+type Sequencer interface {
+	// Next returns the next strictly increasing sequence number.
+	Next() uint64
+}
+
+// RowRecorder is the one-method write side of the parquet recorder that the
+// tracing core needs: appending one stream row, stamped with the filter epoch
+// it was captured under. Keeping the core seam at exactly this method means
+// core wiring can be tested against a fake, and parquet signature changes
+// cannot ripple through this contract unnoticed.
+// *parquet.Recorder satisfies it.
+type RowRecorder interface {
+	Record(row streamrow.Row, filterEpoch uint64) error
+}
+
+// RecordingController is the full recorder surface the TUI needs on top of
+// row recording: opening and closing recordings and polling their status.
+// Declaring it here (rather than handing the TUI *parquet.Recorder) keeps the
+// neutral contract a contract - the concrete recorder stays an
+// implementation detail of the bindings that construct it.
+// *parquet.Recorder satisfies it.
+type RecordingController interface {
+	RowRecorder
+	// Start opens a new recording at path with the given options.
+	Start(path string, options parquet.StartOptions) error
+	// Stop closes the active recording. When no recording is active it
+	// reports the last session's terminal state instead of starting one.
+	Stop() error
+	// Status reports the recording's state, including queue-overflow drops.
+	Status() parquet.Status
+}
+
+// Compile-time assertions that the concrete types the runtime bindings
+// construct satisfy the contract; drift surfaces here instead of at the
+// bindings' call sites.
+var (
+	_ RowRecorder         = (*parquet.Recorder)(nil)
+	_ RecordingController = (*parquet.Recorder)(nil)
+	_ Sequencer           = (*streamrow.Sequencer)(nil)
+)
+
 // SnapshotSource provides statsengine snapshots for the TUI dashboard.
 // The core tracing engine passes a *statsengine.Engine; the TUI stores it
 // behind this interface so the dashboard can retrieve live snapshots.
@@ -130,11 +176,17 @@ type RuntimePublisher interface {
 // A trace starter calls these methods to obtain persistent state owned by the TUI.
 type RuntimeState interface {
 	// StreamBuffer returns the TUI-owned ring buffer used for stream events.
-	StreamBuffer() StreamSource
+	// The sink (not the read-only StreamSource) is returned because the
+	// tracing engine pushes events into it; the TUI reads through the
+	// publisher's SetEventStreamSource wiring instead.
+	StreamBuffer() EventSink
 	// Recorder returns the parquet recorder for optional stream recording.
-	Recorder() *parquet.Recorder
+	// The controller surface (record + start/stop/status) is returned because
+	// the TUI drives recording state; the core records rows through the
+	// embedded RowRecorder seam.
+	Recorder() RecordingController
 	// StreamSequencer returns the shared monotonic sequence counter for stream rows.
-	StreamSequencer() *streamrow.Sequencer
+	StreamSequencer() Sequencer
 	// FilterEpoch returns the current filter epoch used for parquet recording.
 	FilterEpoch() uint64
 }
