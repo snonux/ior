@@ -291,8 +291,12 @@ func (e *eventLoop) stats() string {
 // read already failed) would state "no loss" as fact about a loss nobody
 // measured.
 func (e *eventLoop) ringbufDropStatLine(rate func(uint64) float64) string {
+	// Flag first, then the total: handleRingbufDropResult publishes them in
+	// the opposite order, so seeing a cleared flag here guarantees the total
+	// below is the one that cleared it rather than a stale reading.
+	readFailed := e.ringbufDropReadFailed.Load()
 	drops := e.numRingbufDrops.Load()
-	if e.ringbufDropReadFailed.Load() {
+	if readFailed {
 		if drops == 0 {
 			return "\tring buffer drops: unknown (drop counter unreadable)\n"
 		}

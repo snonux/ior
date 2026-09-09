@@ -480,3 +480,40 @@ func TestAggregateDrainFailureReachesStderrWithoutWarningSink(t *testing.T) {
 		t.Fatalf("stderr = %q, want the aggregate drain failure", logged)
 	}
 }
+
+// TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal pins the half of
+// the publication order that is deterministically observable.
+//
+// handleRingbufDropResult stores the total first and clears the failure flag
+// second, and stats() reads them in the opposite order, so a reader that sees
+// a cleared flag is guaranteed to see the total that cleared it. The window
+// between two adjacent atomic stores is far too narrow to hit from a test - a
+// racing version of this passed against both orderings inverted, so it was not
+// worth keeping - but the intermediate state it protects is not: with the
+// total already published and the flag not yet cleared, stats() must still
+// report unknown. That is what says the claim is gated on evidence of a
+// successful read rather than on the total merely being non-zero.
+func TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal(t *testing.T) {
+	el := &eventLoop{}
+	el.ringbufDropReadFailed.Store(true)
+	el.numRingbufDrops.Store(4242)
+
+	line := el.ringbufDropStatLine(func(uint64) float64 { return 0 })
+	if !strings.Contains(line, "unknown") {
+		t.Errorf("stats line = %q, want unknown: a total published while the last read is still marked failed says nothing about the run", strings.TrimSpace(line))
+	}
+	if !strings.Contains(line, "4242 counted before the failure") {
+		t.Errorf("stats line = %q, want the last known count reported as counted-before-the-failure rather than as the run total", strings.TrimSpace(line))
+	}
+
+	// Clearing the flag - what handleRingbufDropResult does second - is what
+	// turns the same total into a statement of fact.
+	el.ringbufDropReadFailed.Store(false)
+	line = el.ringbufDropStatLine(func(uint64) float64 { return 0 })
+	if strings.Contains(line, "unknown") {
+		t.Errorf("stats line = %q, want the total reported as fact once a read has succeeded", strings.TrimSpace(line))
+	}
+	if !strings.Contains(line, "4242") {
+		t.Errorf("stats line = %q, want the counted total", strings.TrimSpace(line))
+	}
+}
