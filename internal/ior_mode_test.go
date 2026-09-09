@@ -1345,16 +1345,25 @@ func TestTuiTraceStarterSurfacesAFailureArrivingAfterStart(t *testing.T) {
 		streamBuffer: streamrow.NewRingBuffer(),
 		streamSeq:    streamrow.NewSequencer(0),
 	}
+	// The fake must not return until the starter has, or the failure is not
+	// the "arrives after start" case this test is about: with both the
+	// started and error channels ready at once, the starter's select picks
+	// uniformly at random and roughly 1 run in 100 takes the error arm and
+	// returns the failure directly.
+	released := make(chan struct{})
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
 		func(_ context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
 			close(started)
+			<-released
 			return errors.New("get syscall_aggregate_map: not found")
 		},
 	)
 
 	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
-	if err := starter(ctx); err != nil {
+	err := starter(ctx)
+	close(released)
+	if err != nil {
 		t.Fatalf("starter() error = %v, want nil: the trace did signal start", err)
 	}
 

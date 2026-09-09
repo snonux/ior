@@ -238,6 +238,24 @@ committed set contains syscalls that only exist on recent mainline kernels
 - **Additional metric dimensions**:
   - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints).
+- **The trace-started signal is a promise, not a progress report**: in TUI mode
+  `setupTraceInfra` closing the `started` channel is what makes
+  `tuiTraceStarterFromRunTrace` report success, and from that moment nothing is
+  selecting on its error channel any more. So `signalTraceStarted` is the last
+  statement before the success return, after every fallible step - the filter
+  validation, `setupBPFModule`, the event channel, profiling, and
+  `newTraceEventLoop` (which exists to group `newEventLoop` and
+  `newSyscallAggregateConsumer` so that ordering is visible in the shape of the
+  function rather than resting on the reader noticing which calls can still
+  fail). Signalling earlier is not a small bug: the dashboard leaves the
+  "Attaching tracepoints" overlay and shows a live-looking, permanently empty
+  session with no error anywhere - reachable from the UI with a comm pattern
+  longer than `MAX_PROGNAME_LENGTH`, or from a stale `IOR_BPF_OBJECT` lacking
+  `syscall_aggregate_map`. A failure that genuinely arrives after the signal
+  (end-of-run work) goes to `reportLateTraceError`, which pushes a warning row
+  into the stream buffer - the same channel the event loop warns through.
+  Pinned by `TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup`,
+  `TestNewTraceEventLoop*` and `TestTuiTraceStarterSurfacesAFailureArrivingAfterStart`.
 - **Drop observability**: every generated handler counts a kernel-side event loss
   (`bpf_ringbuf_reserve` returning NULL, i.e. `event_map` full under userspace
   backpressure) in the per-CPU BPF map `ringbuf_drop_map` via
