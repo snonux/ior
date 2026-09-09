@@ -157,15 +157,10 @@ func TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup(t *testing.T) {
 	}
 
 	started := make(chan struct{})
-	_, _, cancel, _, _, _, teardown, err := setupTraceInfra(
-		context.Background(), cfg, started, func(...any) {},
-	)
-	if cancel != nil {
-		cancel()
-	}
-	if teardown != nil {
-		teardown()
-	}
+	infra, err := setupTraceInfra(context.Background(), cfg, started, func(...any) {})
+	// Close is nil-safe: a rejected filter builds no infrastructure at all, so
+	// there is nothing to release and infra is nil.
+	infra.Close()
 
 	if err == nil {
 		t.Fatal("setupTraceInfra accepted a comm filter longer than the kernel comm field")
@@ -246,6 +241,13 @@ func TestNewTraceEventLoopRejectsAnUnusableFilter(t *testing.T) {
 // In TUI mode that signal is what makes the starter report success, so an
 // error returned afterwards has no caller left to receive it and the dashboard
 // shows a live-looking, permanently empty session.
+//
+// setupTraceInfra returns (*traceInfra, error), so "returns an error" is read
+// off the last result of every return statement below the signal: the success
+// return is the only one allowed, and it spells its error result as a literal
+// nil. The signature check above it is what keeps that reading honest - if the
+// error result were ever dropped or moved, a nil last result would stop
+// meaning "no error" and this test would pass for the wrong reason.
 func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
 	_, thisFile, _, ok := goruntime.Caller(0)
 	if !ok {
@@ -268,6 +270,18 @@ func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
 	if decl == nil {
 		t.Fatal("internal/ior.go declares no func setupTraceInfra")
 	}
+	results := decl.Type.Results
+	if results == nil || len(results.List) == 0 {
+		t.Fatal("setupTraceInfra returns nothing; it must still hand its setup failures back")
+	}
+	lastResult := results.List[len(results.List)-1].Type
+	if ident, isIdent := lastResult.(*ast.Ident); !isIdent || ident.Name != "error" {
+		t.Fatalf(
+			"setupTraceInfra's last result is %T, want error: the check below reads the last "+
+				"result of every return to decide whether it carries a failure",
+			lastResult,
+		)
+	}
 
 	var signalPos token.Pos
 	ast.Inspect(decl.Body, func(n ast.Node) bool {
@@ -275,7 +289,11 @@ func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
 		if !isCall {
 			return true
 		}
-		if ident, isIdent := call.Fun.(*ast.Ident); isIdent && ident.Name == "signalTraceStarted" {
+		// The *first* signal is the binding one: from the moment the started
+		// channel is closed the starter has reported success, so a second
+		// call further down would not make an error in between reachable
+		// again (it would panic on the closed channel anyway).
+		if ident, isIdent := call.Fun.(*ast.Ident); isIdent && ident.Name == "signalTraceStarted" && !signalPos.IsValid() {
 			signalPos = call.Pos()
 		}
 		return true
@@ -286,8 +304,9 @@ func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
 
 	// A return whose last result is a bare nil is the success return. Anything
 	// else after the signal is an error the caller can no longer be told about
-	// - including a naked `return`, which this function's named results make
-	// perfectly capable of carrying a non-nil err.
+	// - `return nil, err` and `return infra, wrap(err)` alike, and also a naked
+	// `return`, which named results (the shape this function used to have)
+	// would make perfectly capable of carrying a non-nil err.
 	ast.Inspect(decl.Body, func(n ast.Node) bool {
 		ret, isReturn := n.(*ast.ReturnStmt)
 		if !isReturn || ret.Pos() <= signalPos {
