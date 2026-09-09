@@ -89,8 +89,18 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	}
 	// The kernel counter is cumulative, so one successful read supersedes any
 	// earlier failure: the total is authoritative again.
-	e.ringbufDropReadFailed.Store(false)
+	//
+	// The total is published before the flag is cleared, and stats() reads
+	// them in the opposite order, so a reader that sees "not failed" is
+	// guaranteed to see the total that cleared it. Storing the flag first
+	// would leave a window where stats() reads the stale total (0, on a run
+	// whose first read failed) together with a cleared flag and prints it as a
+	// confident "no loss" - the very statement this whole change exists to
+	// prevent. The two goroutines do overlap: startTraceShutdownWatcher calls
+	// stats() on ctx.Done() while the monitor is still winding down on the
+	// same signal.
 	e.numRingbufDrops.Store(result.total)
+	e.ringbufDropReadFailed.Store(false)
 	if result.delta == 0 {
 		return
 	}
