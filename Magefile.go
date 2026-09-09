@@ -215,6 +215,13 @@ func Lint() error {
 	if _, err := exec.LookPath(golangciLintBin); err != nil {
 		return fmt.Errorf("%s not on PATH; install it with `go install %s`", golangciLintBin, golangciLintPkg)
 	}
+	// Verify the configuration before trusting a clean run. golangci-lint's
+	// `run` silently ignores keys it does not recognize, so a typo or a stray
+	// key in .golangci.yml otherwise reports "0 issues" from a config that is
+	// not the one anybody reviewed. `config verify` rejects it instead.
+	if err := sh.RunWithV(goEnv(), golangciLintBin, "config", "verify"); err != nil {
+		return err
+	}
 	// The mage build tag is passed so Magefile.go is linted too: without it
 	// the one file that defines the gate is the one file outside it, because
 	// the default build ignores `//go:build mage`. One pass covers everything
