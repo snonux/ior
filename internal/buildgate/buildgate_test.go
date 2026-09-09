@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -233,67 +232,53 @@ func goFilesOutside(t *testing.T, prefix string) []string {
 	return files
 }
 
-// TestNoNegatedMageConstraint underwrites Lint running a single pass. `mage
-// lint` passes --build-tags mage, which covers every package plus Magefile.go
-// only while nothing is excluded *by* that tag. A file that builds without the
-// tag but not with it would never be linted at all.
+// TestMageTagHidesNoFile underwrites Lint running a single pass. `mage lint`
+// passes --build-tags mage, which covers every package plus Magefile.go only
+// while nothing is excluded *by* that tag; a file that the default build
+// includes and the tagged build drops would never be linted at all.
 //
-// The constraint is evaluated rather than pattern-matched. Three rounds of
-// regex each missed a spelling the toolchain accepts - `!mage`, then `!(mage)`
-// and `! mage`, then `!(linux && mage)` - and there is no reason to expect the
-// fourth to be the last. go/build/constraint answers the actual question:
-// is there a file the default build includes and the tagged build drops?
-func TestNoNegatedMageConstraint(t *testing.T) {
+// The two package lists are compared rather than the constraints parsed. Three
+// rounds of regex each missed a spelling the toolchain accepts (`!mage`, then
+// `!(mage)` and `! mage`, then `!(linux && mage)`), and parsing //go:build in
+// turn missed a file carrying only the older `// +build` form. Asking `go
+// list` twice cannot miss a spelling, because it is the toolchain answering.
+func TestMageTagHidesNoFile(t *testing.T) {
 	root := repoRoot(t)
-	for _, rel := range goFilesOutside(t, "\x00") {
-		src, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			t.Fatalf("read %s: %v", rel, err)
-		}
-		line, expr := buildConstraint(t, rel, string(src))
-		if expr == nil {
-			continue
-		}
-		withTag := expr.Eval(func(tag string) bool { return tag == "mage" || tag == "linux" || tag == "amd64" })
-		withoutTag := expr.Eval(func(tag string) bool { return tag == "linux" || tag == "amd64" })
-		if withoutTag && !withTag {
-			t.Errorf("%s:%d is excluded by the mage build tag (%s); `mage lint` runs a single pass with -tags mage, so this file would not be linted at all", rel, line, strings.TrimSpace(constraintText(string(src))))
+	plain := goFilesByPackage(t, root)
+	tagged := goFilesByPackage(t, root, "-tags", "mage")
+	for pkg, files := range plain {
+		for _, f := range files {
+			if !slices.Contains(tagged[pkg], f) {
+				t.Errorf("%s (package %s) is in the default build but not the -tags mage build, so `mage lint`'s single pass never sees it", f, pkg)
+			}
 		}
 	}
 }
 
-// buildConstraint returns the parsed //go:build expression of a file, or nil
-// when it has none.
-func buildConstraint(t *testing.T, rel, src string) (int, constraint.Expr) {
+// goFilesByPackage returns the Go files of every package in the module, as the
+// toolchain resolves them under the given extra flags.
+func goFilesByPackage(t *testing.T, root string, flags ...string) map[string][]string {
 	t.Helper()
-	for i, line := range strings.Split(src, "\n") {
-		if strings.HasPrefix(line, "package ") {
-			return 0, nil // constraints must precede the package clause
-		}
-		if !constraint.IsGoBuild(line) {
+	args := append([]string{"list", "-e"}, flags...)
+	args = append(args, "-f", "{{.ImportPath}}\t{{range .GoFiles}}{{.}} {{end}}{{range .TestGoFiles}}{{.}} {{end}}", "./...")
+	cmd := exec.Command("go", args...)
+	cmd.Dir = root
+	// go list needs the cgo environment for the libbpfgo-importing packages,
+	// exactly as the Mage targets do; `mage test` has already exported it.
+	cmd.Env = os.Environ()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Skipf("go list %v failed (cgo environment not exported?): %v", flags, err)
+	}
+	byPkg := map[string][]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		pkg, files, ok := strings.Cut(line, "\t")
+		if !ok {
 			continue
 		}
-		expr, err := constraint.Parse(line)
-		if err != nil {
-			t.Errorf("%s:%d has an unparseable build constraint %q: %v", rel, i+1, line, err)
-			return 0, nil
-		}
-		return i + 1, expr
+		byPkg[pkg] = strings.Fields(files)
 	}
-	return 0, nil
-}
-
-// constraintText returns the //go:build line of a file, for error messages.
-func constraintText(src string) string {
-	for _, line := range strings.Split(src, "\n") {
-		if strings.HasPrefix(line, "package ") {
-			return ""
-		}
-		if constraint.IsGoBuild(line) {
-			return line
-		}
-	}
-	return ""
+	return byPkg
 }
 
 // TestNoNestedModules underwrites every `./...` in this repository. A go.mod
