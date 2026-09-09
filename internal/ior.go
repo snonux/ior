@@ -611,25 +611,85 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	logln := newLogger(verbose)
 	configure, recorder := maybePrependFlamegraphConfigure(cfg, configure)
 
-	ch, ctx, cancel, profiling, el, mgr, teardown, err := setupTraceInfra(parentCtx, cfg, started, logln)
+	infra, err := setupTraceInfra(parentCtx, cfg, started, logln)
 	if err != nil {
 		return err
 	}
-	defer teardown()
-	defer profiling.stop(logln)
-	defer cancel()
+	defer infra.Close()
 
-	configureEventLoopOutput(el, mgr, configure)
-	watcherDone := startTraceShutdownWatcher(ctx, verbose, el, profiling, logln)
+	configureEventLoopOutput(infra.el, infra.mgr, configure)
+	watcherDone := startTraceShutdownWatcher(infra.ctx, verbose, infra.el, infra.profiling, logln)
 
 	startTime := time.Now()
-	el.run(ctx, ch)
-	return finaliseTrace(watcherDone, recorder, profiling, time.Since(startTime), logln)
+	infra.el.run(infra.ctx, infra.ch)
+	return finaliseTrace(watcherDone, recorder, infra.profiling, time.Since(startTime), logln)
+}
+
+// traceInfra is the runtime infrastructure of one trace run - BPF module and
+// probe manager, event channel and ring buffer, trace context, profiling
+// control and event loop - together with the teardown stack that releases it.
+//
+// Each setup step registers its own cleanup the moment that step has
+// succeeded, so a failure part-way through releases exactly what was built and
+// nothing else. That replaces five hand-written error arms which each had to
+// repeat the canonical teardown call with positionally-correct nils for the
+// collaborators that did not exist yet: two audit findings (domain-10 F2/F3,
+// discarded teardown errors and probes left attached on early abort) and one
+// -pprof leak that made the next trace fail with "cpu profiling already in
+// use" were all a mis-permuted arm, and the arms were the place a newly added
+// setup step had to remember to appear in four times over.
+type traceInfra struct {
+	ch        <-chan []byte
+	ctx       context.Context
+	cancel    context.CancelFunc
+	profiling *profilingControl
+	el        *eventLoop
+	mgr       *probemanager.Manager
+
+	// rb and stopSignals are read by the BPF-side cleanup when it runs rather
+	// than captured when it is registered, because later steps create them.
+	// A nil field is exactly the "not built yet" that each error arm used to
+	// spell out as an explicit nil argument to closeTraceInfra. rb is typed as
+	// the interface so an absent ring buffer stays a true nil instead of a
+	// typed nil pointer, which would defeat that function's nil checks.
+	rb          ringBufferStopper
+	stopSignals func()
+
+	cleanups []func()
+}
+
+// onClose registers a cleanup for Close to run. Call it only after the step
+// that created the resource has succeeded, so the stack always describes what
+// actually exists.
+func (in *traceInfra) onClose(cleanup func()) {
+	in.cleanups = append(in.cleanups, cleanup)
+}
+
+// Close releases everything the run has built. The trace context is cancelled
+// first - goroutines watching it (the signal forwarder, the exec-trace timer)
+// have to be told to stop before what they touch goes away - and the
+// registered cleanups then run in reverse registration order, so every step is
+// undone before the step it was built on. Safe on a nil receiver and on a
+// partially built traceInfra; a second Close runs no cleanup twice, because a
+// repeated probe detach or module close is not safe.
+func (in *traceInfra) Close() {
+	if in == nil {
+		return
+	}
+	if in.cancel != nil {
+		in.cancel()
+	}
+	for i := len(in.cleanups) - 1; i >= 0; i-- {
+		in.cleanups[i]()
+	}
+	in.cleanups = nil
 }
 
 // setupTraceInfra creates all the BPF/runtime infrastructure for a trace run:
 // BPF module + probe manager, event channel + ring buffer, trace context,
-// profiling control, and event loop. teardown must be deferred by the caller.
+// profiling control, and event loop. The returned traceInfra owns the teardown
+// of every step that succeeded and its Close must be deferred by the caller;
+// on failure setup closes it here and returns no infra at all.
 // started is signalled once setup completes (nil in non-TUI modes) - and only
 // after the last step that can still fail, because in TUI mode that signal is
 // what makes the starter report success (see tuiTraceStarterFromRunTrace).
@@ -638,28 +698,19 @@ func setupTraceInfra(
 	cfg flags.Config,
 	started chan<- struct{},
 	logln func(...any),
-) (
-	ch <-chan []byte,
-	ctx context.Context,
-	cancel context.CancelFunc,
-	profiling *profilingControl,
-	el *eventLoop,
-	mgr *probemanager.Manager,
-	teardown func(),
-	err error,
-) {
+) (*traceInfra, error) {
 	// Reject a filter the trace cannot honour before touching the kernel:
 	// newEventLoop below matches comm/path patterns against fixed-size kernel
 	// event fields and refuses over-long ones. Doing it here means the caller
 	// gets that error instead of a running trace that never matches, and it
 	// costs no probe attach/detach cycle.
 	if err := traceFilterFromConfig(cfg).ValidateTracepointFields(); err != nil {
-		return nil, nil, nil, nil, nil, nil, func() {}, err
+		return nil, err
 	}
 
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, func() {}, err
+		return nil, err
 	}
 
 	// Teardown errors must stay visible in every mode: the mode-dependent
@@ -667,41 +718,42 @@ func setupTraceInfra(
 	// probe-detach failures (audit domain-10 F2).
 	logTeardown := newLogger(true)
 
+	infra := &traceInfra{mgr: mgr}
+	// The BPF side is released as one unit in closeTraceInfra's canonical
+	// order (ring buffer, probes, bindings, module, signal handler), which is
+	// why it is one cleanup rather than one per resource. Registering it here
+	// is what detaches the probes on every later abort (audit domain-10 F3).
+	infra.onClose(func() {
+		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals)
+	})
+
 	eventCh, rb, err := setupEventChannel(bpfModule)
 	if err != nil {
-		// Probes are already attached (setupBPFModule succeeded), so detach
-		// them too on this early-abort path (audit domain-10 F3). The ring
-		// buffer does not exist yet and no context was created, hence the
-		// explicit nils for rb and stopSignals; the bindings are released
-		// because setupBPFModule already wired them.
-		closeTraceInfra(logTeardown, nil, mgr, releaseBindings, bpfModule, nil)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
+		infra.Close()
+		return nil, err
 	}
+	infra.ch, infra.rb = eventCh, rb
 
-	ctx, cancel, stopSignals := setupTraceContext(parentCtx, cfg, logln)
+	infra.ctx, infra.cancel, infra.stopSignals = setupTraceContext(parentCtx, cfg, logln)
 
-	profiling, err = setupProfiling(ctx, cfg, started)
+	profiling, err := setupProfiling(infra.ctx, cfg, started)
 	if err != nil {
-		cancel()
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
+		infra.Close()
+		return nil, err
 	}
+	infra.profiling = profiling
+	// Profiling is running from here on and the caller cannot see it until
+	// setup returns, so nothing else would stop it: with -pprof the CPU
+	// profile would stay active and the next trace fail with "cpu profiling
+	// already in use" instead of reporting whatever really went wrong.
+	infra.onClose(func() { profiling.stop(logln) })
 
-	el, err = newTraceEventLoop(cfg, bpfModule, logTeardown)
+	el, err := newTraceEventLoop(cfg, bpfModule, logTeardown)
 	if err != nil {
-		cancel()
-		// profiling is already running by here and the caller never sees it,
-		// so nothing else will stop it: with -pprof the CPU profile stays
-		// active and the next trace fails with "cpu profiling already in use"
-		// instead of reporting whatever really went wrong.
-		profiling.stop(logln)
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
+		infra.Close()
+		return nil, err
 	}
-
-	teardown = func() {
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-	}
+	infra.el = el
 
 	// Nothing fallible may follow. Every step above still reaches the caller
 	// through err, and in TUI mode that is the only path an error has: once
@@ -709,7 +761,7 @@ func setupTraceInfra(
 	// left to receive one. Pinned by
 	// TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
 	signalTraceStarted(started)
-	return eventCh, ctx, cancel, profiling, el, mgr, teardown, nil
+	return infra, nil
 }
 
 // newTraceEventLoop builds the event loop and wires its kernel-side data
