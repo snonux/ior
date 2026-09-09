@@ -158,23 +158,24 @@ func toolCallsIn(t *testing.T, file *ast.File, fn string) []toolCall {
 					}
 				}
 			case *ast.AssignStmt:
-				// Any other assignment form, including `_ = sh.Run...()`.
-				if _, ok := n.(*ast.AssignStmt); ok {
-					for _, rhs := range stmt.Rhs {
-						call, ok := rhs.(*ast.CallExpr)
-						if !ok || !isRunner(call) {
-							continue
-						}
-						blank := true
-						for _, lhs := range stmt.Lhs {
-							if ident, ok := lhs.(*ast.Ident); !ok || ident.Name != "_" {
-								blank = false
-							}
-						}
-						if blank {
-							calls = append(calls, toolCall{args: argsOf(call), returned: false})
+				// `err := sh.Run...()` outside an if-init. Gated when that
+				// variable is returned later, which is an ordinary way to
+				// write it; ungated for `_ = sh.Run...()`, which is not.
+				for i, rhs := range stmt.Rhs {
+					call, ok := rhs.(*ast.CallExpr)
+					if !ok || !isRunner(call) {
+						continue
+					}
+					name := ""
+					if i < len(stmt.Lhs) {
+						if ident, ok := stmt.Lhs[i].(*ast.Ident); ok {
+							name = ident.Name
 						}
 					}
+					calls = append(calls, toolCall{
+						args:     argsOf(call),
+						returned: name != "" && name != "_" && returnsIdent(decl.Body, name, stmt.Pos()),
+					})
 				}
 			}
 			return true
@@ -182,6 +183,31 @@ func toolCallsIn(t *testing.T, file *ast.File, fn string) []toolCall {
 	}
 	walk(decl.Body, false)
 	return calls
+}
+
+// returnsIdent reports whether body has a `return name` (possibly among other
+// results, as in `return nil, err`) that appears *after* pos.
+//
+// The position matters. Lint assigns err twice - once for the config
+// pre-flight, once for the run - and searching the whole body for any
+// `return err` let the pre-flight's return vouch for a later
+// `err := sh.Run...(); _ = err; return nil`, which is the same any-versus-every
+// mistake this file has now made three times.
+func returnsIdent(body ast.Node, name string, pos token.Pos) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok || ret.Pos() <= pos {
+			return true
+		}
+		for _, res := range ret.Results {
+			if ident, ok := res.(*ast.Ident); ok && ident.Name == name {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // propagatesError reports whether the branch taken when a call failed returns
