@@ -328,3 +328,155 @@ func TestEventLoopDropMonitorWithoutWarningSinkDoesNotPanic(t *testing.T) {
 		t.Fatalf("numRingbufDrops = %d, want 3", got)
 	}
 }
+
+// ringbufDropSourceFunc adapts a plain function to ringbufDropSource so a test
+// can script a sequence that mixes read failures with successful readings -
+// something the slice/error stub above cannot express.
+type ringbufDropSourceFunc func() (uint64, error)
+
+func (f ringbufDropSourceFunc) Total() (uint64, error) { return f() }
+
+// startAndStopDropMonitor runs one full monitor lifecycle (start, cancel, stop),
+// which yields exactly one final tick, and returns whatever it wrote to stderr.
+func startAndStopDropMonitor(t *testing.T, el *eventLoop) string {
+	t.Helper()
+	return captureStderr(t, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		stop := el.startRingbufDropMonitor(ctx)
+		cancel()
+		stop()
+	})
+}
+
+// TestEventLoopDropMonitorReadFailureReachesStderrWithoutWarningSink is the
+// headless half of the drop-observability contract. -plain, -flamegraph and
+// headless -parquet wire no warning callback (only makeTUIEventLoopConfigurer
+// does), so the read-failure branch's plain notifyWarning discarded the message
+// outright: a run whose drop counter could not be read said nothing at all,
+// while the drop-delta branch right below it had had a stderr fallback all
+// along. The failure must reach the user in every mode.
+func TestEventLoopDropMonitorReadFailureReachesStderrWithoutWarningSink(t *testing.T) {
+	el := &eventLoop{
+		cfg:     eventLoopConfig{aggregateDrainEvery: time.Hour},
+		dropSrc: &ringbufDropSourceStub{err: errors.New("boom")},
+		done:    make(chan struct{}),
+	}
+	// No warningCb is wired: exactly the headless configuration.
+
+	logged := startAndStopDropMonitor(t, el)
+
+	if !strings.Contains(logged, "drop counter read failed") || !strings.Contains(logged, "boom") {
+		t.Fatalf("stderr = %q, want the drop-counter read failure", logged)
+	}
+}
+
+// TestStatsReportsUnknownRingbufDropsWhenTheCounterCannotBeRead is the other
+// half: a failed read leaves numRingbufDrops at its last value (0 here, since
+// the very first read failed), and the statistics block documents a zero as an
+// explicit "no loss" statement. Printing it would assert as fact a figure
+// nobody measured.
+func TestStatsReportsUnknownRingbufDropsWhenTheCounterCannotBeRead(t *testing.T) {
+	el := &eventLoop{
+		cfg:     eventLoopConfig{aggregateDrainEvery: time.Hour},
+		dropSrc: &ringbufDropSourceStub{err: errors.New("boom")},
+		done:    make(chan struct{}),
+	}
+	el.startTime = time.Now().Add(-time.Second)
+	el.numTracepoints = 10
+
+	_ = startAndStopDropMonitor(t, el)
+	close(el.done)
+
+	stats := el.stats()
+	if strings.Contains(stats, "ring buffer drops: 0") {
+		t.Fatalf("an unreadable counter must not be reported as zero drops:\n%s", stats)
+	}
+	if !strings.Contains(stats, "ring buffer drops: unknown") {
+		t.Fatalf("stats should report the drop total as unknown:\n%s", stats)
+	}
+}
+
+// TestStatsKeepsTheLastKnownCountWhenTheCounterStopsBeingReadable covers a run
+// that lost events and then lost the counter: the total is unknown from there
+// on, but what was already counted is still worth reporting - and must not be
+// mistaken for the run total.
+func TestStatsKeepsTheLastKnownCountWhenTheCounterStopsBeingReadable(t *testing.T) {
+	el := &eventLoop{done: make(chan struct{})}
+	el.startTime = time.Now().Add(-time.Second)
+	el.numTracepoints = 10
+
+	failing := errors.New("boom")
+	calls := 0
+	monitor := newRingbufDropMonitor(ringbufDropSourceFunc(func() (uint64, error) {
+		calls++
+		if calls == 1 {
+			return 6, nil
+		}
+		return 0, failing
+	}))
+	logged := captureStderr(t, func() {
+		el.handleRingbufDropResult(monitor.Tick())
+		el.handleRingbufDropResult(monitor.Tick())
+	})
+	if !strings.Contains(logged, "6 events dropped kernel-side") {
+		t.Fatalf("stderr = %q, want the drop burst reported", logged)
+	}
+
+	close(el.done)
+	stats := el.stats()
+	if strings.Contains(stats, "ring buffer drops: 6 (") {
+		t.Fatalf("a stale count must not be reported as the run total:\n%s", stats)
+	}
+	if !strings.Contains(stats, "ring buffer drops: unknown (drop counter unreadable; 6 counted before the failure)") {
+		t.Fatalf("stats should report an unknown total with what was counted:\n%s", stats)
+	}
+}
+
+// TestStatsReportsTheTotalAgainAfterTheCounterRecovers pins the other
+// direction: the kernel counter is cumulative, so one successful read after a
+// failure recovers the full total and the figure is a fact again.
+func TestStatsReportsTheTotalAgainAfterTheCounterRecovers(t *testing.T) {
+	el := &eventLoop{done: make(chan struct{})}
+	el.startTime = time.Now().Add(-time.Second)
+	el.numTracepoints = 96
+
+	calls := 0
+	monitor := newRingbufDropMonitor(ringbufDropSourceFunc(func() (uint64, error) {
+		calls++
+		if calls == 1 {
+			return 0, errors.New("boom")
+		}
+		return 4, nil
+	}))
+	_ = captureStderr(t, func() {
+		el.handleRingbufDropResult(monitor.Tick())
+		el.handleRingbufDropResult(monitor.Tick())
+	})
+
+	close(el.done)
+	stats := el.stats()
+	if strings.Contains(stats, "unknown") {
+		t.Fatalf("a recovered counter must report its total, not unknown:\n%s", stats)
+	}
+	if !strings.Contains(stats, "ring buffer drops: 4 (") || !strings.Contains(stats, "4.00% of events") {
+		t.Fatalf("stats should report the recovered total:\n%s", stats)
+	}
+}
+
+// TestAggregateDrainFailureReachesStderrWithoutWarningSink guards the sibling
+// swallow. The aggregate drain loop only runs with an aggregate sink wired,
+// which today means TUI mode only - where a warning callback always exists - so
+// this path is not reachable in production. It shares the fallback anyway, so
+// that a future headless aggregate consumer cannot silently reintroduce the
+// defect this file fixes.
+func TestAggregateDrainFailureReachesStderrWithoutWarningSink(t *testing.T) {
+	el := &eventLoop{done: make(chan struct{})}
+
+	logged := captureStderr(t, func() {
+		el.handleAggregateDrainResult(aggregateDrainResult{warning: "drain syscall_aggregate_map: boom"})
+	})
+
+	if !strings.Contains(logged, "drain syscall_aggregate_map: boom") {
+		t.Fatalf("stderr = %q, want the aggregate drain failure", logged)
+	}
+}
