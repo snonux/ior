@@ -2,9 +2,15 @@ package internal
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
+
+	"ior/internal/flags"
+	"ior/internal/globalfilter"
+	"ior/internal/types"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -120,5 +126,44 @@ func TestLoadBPFModuleUsesOverridePathWhenConfigured(t *testing.T) {
 	}
 	if got, want := gotPath, overridePath; got != want {
 		t.Fatalf("override path = %q, want %q", got, want)
+	}
+}
+
+// TestSetupTraceInfraRejectsAnUnusableFilterBeforeSignallingStart pins the
+// contract the TUI trace starter depends on: the started channel is closed
+// only for a trace that is really running. A comm pattern longer than the
+// kernel's fixed-size comm field can never match, so setup must fail with that
+// error and leave the signal unsent - the TUI reads a closed channel as
+// "attached" and stops listening for errors, so a failure signalled afterwards
+// reaches nobody and leaves a live-looking, permanently empty dashboard.
+func TestSetupTraceInfraRejectsAnUnusableFilterBeforeSignallingStart(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.GlobalFilter = globalfilter.Filter{
+		Comm: &globalfilter.StringFilter{
+			Pattern: strings.Repeat("a", types.MAX_PROGNAME_LENGTH+1),
+		},
+	}
+
+	started := make(chan struct{})
+	_, _, cancel, _, _, _, teardown, err := setupTraceInfra(
+		context.Background(), cfg, started, func(...any) {},
+	)
+	if cancel != nil {
+		cancel()
+	}
+	if teardown != nil {
+		teardown()
+	}
+
+	if err == nil {
+		t.Fatal("setupTraceInfra accepted a comm filter longer than the kernel comm field")
+	}
+	if !strings.Contains(err.Error(), "comm filter max size") {
+		t.Fatalf("setupTraceInfra error = %v, want the comm-filter length rejection", err)
+	}
+	select {
+	case <-started:
+		t.Fatal("setupTraceInfra signalled trace start for a trace it could not start")
+	default:
 	}
 }

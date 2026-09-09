@@ -1333,3 +1333,90 @@ func readRecordedParquet(t *testing.T, path string) []parquet.Record {
 		t.Fatalf("read parquet rows: %v", err)
 	}
 }
+
+// TestTuiTraceStarterSurfacesAFailureArrivingAfterStart covers the second half
+// of the same defect: a trace that signals started and only then fails. The
+// starter has already reported success to the TUI by that point, so nothing is
+// selecting on its error channel any more; the failure has to reach the user
+// through the stream buffer instead of being discarded, which is what left the
+// dashboard live-looking and empty.
+func TestTuiTraceStarterSurfacesAFailureArrivingAfterStart(t *testing.T) {
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
+	}
+	starter := tuiTraceStarterFromRunTrace(
+		flags.NewFlags(),
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
+			close(started)
+			return errors.New("get syscall_aggregate_map: not found")
+		},
+	)
+
+	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
+	if err := starter(ctx); err != nil {
+		t.Fatalf("starter() error = %v, want nil: the trace did signal start", err)
+	}
+
+	rows := waitForStreamRowsEventually(t, bindings.streamBuffer, 1)
+	if !rows[0].IsError || rows[0].Syscall != "warning" {
+		t.Fatalf("late trace failure row = %+v, want a warning row", rows[0])
+	}
+	if !strings.Contains(rows[0].FileName, "syscall_aggregate_map") {
+		t.Fatalf("late trace failure message = %q, want the starter's error", rows[0].FileName)
+	}
+}
+
+// TestTuiTraceStarterKeepsAnOrdinaryStopSilent guards the other side of
+// reportLateTraceError: a trace that ends without an error (the normal stop
+// and restart path, e.g. every filter or PID change) must not push a warning
+// row, or the stream would fill with noise on every restart.
+func TestTuiTraceStarterKeepsAnOrdinaryStopSilent(t *testing.T) {
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
+	}
+	stopped := make(chan struct{})
+	starter := tuiTraceStarterFromRunTrace(
+		flags.NewFlags(),
+		func(ctx context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
+			close(started)
+			<-ctx.Done()
+			close(stopped)
+			return nil
+		},
+	)
+
+	ctx, cancel := context.WithCancel(runtime.ContextWithRuntimeBindings(context.Background(), bindings))
+	if err := starter(ctx); err != nil {
+		t.Fatalf("starter() error = %v, want nil", err)
+	}
+	cancel()
+	<-stopped
+
+	// The push, if any, happens on the trace goroutine right after it
+	// returns, so give it a window in which it could have landed.
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if got := bindings.streamBuffer.Len(); got != 0 {
+			t.Fatalf("stream buffer rows = %d, want 0 for a clean stop", got)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForStreamRowsEventually polls the buffer until it holds want rows, for
+// pushes that happen on the trace goroutine after the starter returned.
+func waitForStreamRowsEventually(t *testing.T, buffer *streamrow.RingBuffer, want int) []streamrow.Row {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if rows := buffer.Snapshot(); len(rows) >= want {
+			return rows
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stream buffer len = %d after 5s, want %d", buffer.Len(), want)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}

@@ -339,7 +339,8 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 // returns for any reason (ctx cancellation, successful start, or startup
 // error).  The trace goroutine selects on both errCh and done when delivering
 // its result, so it can always exit regardless of which exit arm the outer
-// caller took.
+// caller took.  A result that arrives on the done arm has no caller left to
+// return it to, so it goes to reportLateTraceError instead of being dropped.
 func tuiTraceStarterFromRunTrace(
 	baseCfg flags.Config,
 	startTrace func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error,
@@ -379,6 +380,7 @@ func tuiTraceStarterFromRunTrace(
 			select {
 			case errCh <- err:
 			case <-done:
+				reportLateTraceError(rt, err)
 			}
 		}()
 
@@ -391,6 +393,23 @@ func tuiTraceStarterFromRunTrace(
 			return err
 		}
 	}
+}
+
+// reportLateTraceError surfaces a trace failure that arrives after the starter
+// already returned. The starter reports success the moment the trace signals
+// started, so from then on nothing is selecting on errCh; without this the
+// error is discarded and the dashboard keeps showing a live-looking session
+// that has stopped producing events. The stream buffer is the same warning
+// channel the event loop uses, so the message lands where the user is looking.
+// A cancelled context is the ordinary stop path, not a failure.
+func reportLateTraceError(rt *tuiRuntime, err error) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	if rt == nil || rt.streamBuf == nil || rt.streamSeq == nil {
+		return
+	}
+	rt.streamBuf.Push(streamrow.NewWarning(rt.streamSeq.Next(), fmt.Sprintf("Trace stopped: %v", err)))
 }
 
 // shouldIngestTracePair is the TUI's second filtering stage, re-applying the
@@ -589,7 +608,9 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 // setupTraceInfra creates all the BPF/runtime infrastructure for a trace run:
 // BPF module + probe manager, event channel + ring buffer, trace context,
 // profiling control, and event loop. teardown must be deferred by the caller.
-// started is signalled once setup completes (nil in non-TUI modes).
+// started is signalled once setup completes (nil in non-TUI modes) - and only
+// after the last step that can still fail, because in TUI mode that signal is
+// what makes the starter report success (see tuiTraceStarterFromRunTrace).
 func setupTraceInfra(
 	parentCtx context.Context,
 	cfg flags.Config,
@@ -605,6 +626,15 @@ func setupTraceInfra(
 	teardown func(),
 	err error,
 ) {
+	// Reject a filter the trace cannot honour before touching the kernel:
+	// newEventLoop below matches comm/path patterns against fixed-size kernel
+	// event fields and refuses over-long ones. Doing it here means the caller
+	// gets that error instead of a running trace that never matches, and it
+	// costs no probe attach/detach cycle.
+	if err := traceFilterFromConfig(cfg).ValidateTracepointFields(); err != nil {
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
+
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, func() {}, err
@@ -635,27 +665,45 @@ func setupTraceInfra(
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
-	signalTraceStarted(started)
+	el, err = newTraceEventLoop(cfg, bpfModule, logTeardown)
+	if err != nil {
+		cancel()
+		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
+		return nil, nil, nil, nil, nil, nil, func() {}, err
+	}
 
-	el, err = newEventLoop(newEventLoopConfig(cfg))
-	if err != nil {
-		cancel()
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
-	}
-	aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
-	if err != nil {
-		cancel()
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
-	}
-	el.aggregateSrc = aggregateConsumer
-	attachRingbufDropCounter(el, bpfModule, logTeardown)
+	// Last statement before the success return: every fallible step above
+	// still reaches the caller through err, and in TUI mode that is the only
+	// path an error has - once started is closed the starter has already
+	// reported success and nobody is left to receive one.
+	signalTraceStarted(started)
 
 	teardown = func() {
 		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 	}
 	return eventCh, ctx, cancel, profiling, el, mgr, teardown, nil
+}
+
+// newTraceEventLoop builds the event loop and wires its kernel-side data
+// sources. Every fallible step of the post-attach setup lives here, so
+// setupTraceInfra can hold the trace-started signal until the last of them
+// succeeded: an invalid filter (newEventLoop) or a BPF object without
+// syscall_aggregate_map (newSyscallAggregateConsumer) used to fail after the
+// TUI had already been told the trace was running, which left the dashboard
+// live-looking and permanently empty.
+func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, logTeardown func(...any)) (*eventLoop, error) {
+	el, err := newEventLoop(newEventLoopConfig(cfg))
+	if err != nil {
+		return nil, err
+	}
+	aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
+	if err != nil {
+		return nil, err
+	}
+	el.aggregateSrc = aggregateConsumer
+	// Deliberately non-fatal, see attachRingbufDropCounter.
+	attachRingbufDropCounter(el, bpfModule, logTeardown)
+	return el, nil
 }
 
 // attachRingbufDropCounter wires the kernel-side ring-buffer drop counter into
