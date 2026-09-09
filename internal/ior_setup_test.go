@@ -330,8 +330,8 @@ func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
 	})
 }
 
-// TestTraceInfraCloseRunsEveryCleanupLIFO pins the two properties Close has to
-// hold for the teardown stack to be equivalent to the hand-written arms it
+// TestTraceInfraCloseRunsEveryCleanupLIFO pins the properties Close has to hold
+// for the teardown stack to be equivalent to the hand-written arms it
 // replaced.
 //
 // Order, because each step is built on the one before it: a cleanup must run
@@ -361,8 +361,8 @@ func TestTraceInfraCloseRunsEveryCleanupLIFO(t *testing.T) {
 
 		func() {
 			defer func() {
-				if recover() == nil {
-					t.Error("Close swallowed a cleanup panic; it must propagate")
+				if r := recover(); r != "profiling blew up" {
+					t.Errorf("recovered %v, want the cleanup's own panic to propagate", r)
 				}
 			}()
 			infra.Close()
@@ -382,6 +382,29 @@ func TestTraceInfraCloseRunsEveryCleanupLIFO(t *testing.T) {
 
 		if calls != 1 {
 			t.Errorf("cleanup ran %d times across two Close calls, want 1: a repeated probe detach or module close is not safe", calls)
+		}
+	})
+
+	t.Run("cancel runs first and strands nothing when it panics", func(t *testing.T) {
+		var order []string
+		infra := &traceInfra{cancel: func() { order = append(order, "cancel") }}
+		infra.onClose(func() { order = append(order, "cleanup") })
+		infra.Close()
+		if want := []string{"cancel", "cleanup"}; !slices.Equal(order, want) {
+			t.Errorf("order = %v, want %v: goroutines watching the context must be told to stop before what they touch goes away", order, want)
+		}
+
+		// cancel is a teardown step like any other, so a panic in it must not
+		// strand the cleanups either.
+		var ran []string
+		panicky := &traceInfra{cancel: func() { panic("cancel blew up") }}
+		panicky.onClose(func() { ran = append(ran, "cleanup") })
+		func() {
+			defer func() { _ = recover() }()
+			panicky.Close()
+		}()
+		if want := []string{"cleanup"}; !slices.Equal(ran, want) {
+			t.Errorf("cleanups run = %v, want %v: a panicking cancel must not strand them", ran, want)
 		}
 	})
 
