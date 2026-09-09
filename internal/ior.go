@@ -676,26 +676,27 @@ func (in *traceInfra) onClose(cleanup func()) {
 // have to be told to stop before what they touch goes away - and the
 // registered cleanups then run in reverse registration order, so every step is
 // undone before the step it was built on. Safe on a nil receiver and on a
-// partially built traceInfra; a second Close runs no cleanup twice, because a
-// repeated probe detach or module close is not safe.
+// partially built traceInfra, and a second sequential Close runs no cleanup
+// twice - a repeated probe detach or module close is not safe. It is not safe
+// against concurrent callers, which it does not need to be: each traceInfra
+// has exactly one, through the caller's defer.
 func (in *traceInfra) Close() {
 	if in == nil {
 		return
 	}
-	if in.cancel != nil {
-		in.cancel()
-	}
-	// Taken and cleared first so a second Close runs no cleanup twice: a
-	// repeated probe detach or module close is not safe.
 	cleanups := in.cleanups
 	in.cleanups = nil
 	// Deferred rather than called in the loop body, which both reverses the
 	// order and keeps the panic behaviour of the three separate defers this
-	// replaced: a cleanup that panics must not take the ones below it with it,
-	// or a panic in profiling.stop would leave the probes attached and the BPF
-	// module open.
+	// replaced: no one step that panics may strand the others. cancel is
+	// deferred last so it runs first, which is the order every hand-written
+	// arm used - goroutines watching the context have to be told to stop
+	// before what they touch goes away.
 	for i := range cleanups {
 		defer cleanups[i]()
+	}
+	if in.cancel != nil {
+		defer in.cancel()
 	}
 }
 
