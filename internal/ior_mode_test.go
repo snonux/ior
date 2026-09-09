@@ -1415,6 +1415,39 @@ func TestTuiTraceStarterKeepsACancelledStartSilent(t *testing.T) {
 	}
 }
 
+// TestTuiTraceStarterReportsAStopEvenWhenTheFailureIsReady covers the race the
+// silence rule has to survive. When a stop lands at the same moment setup
+// fails, both the error channel and ctx.Done() are ready and Go picks between
+// them uniformly - so gating only the ctx.Done() arm leaves roughly one run in
+// a hundred returning the real setup error for a trace the user stopped. The
+// TUI turns that into TracingErrorMsg, which clears the *next* session's
+// attach spinner and shows it a failure the previous trace produced.
+//
+// Both arms must therefore report the cancellation, whichever one wins.
+func TestTuiTraceStarterReportsAStopEvenWhenTheFailureIsReady(t *testing.T) {
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
+	}
+	starter := tuiTraceStarterFromRunTrace(
+		flags.NewFlags(),
+		func(_ context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop)) error {
+			return errors.New("setup BPF module: attach tracepoints: no such file or directory")
+		},
+	)
+
+	ctx, cancel := context.WithCancel(runtime.ContextWithRuntimeBindings(context.Background(), bindings))
+	cancel()
+	// Repeated because the arms are chosen at random: a single run takes the
+	// unguarded one only about half the time, and the regression this pins was
+	// measured at well under 1% per run before both arms were gated.
+	for i := range 200 {
+		if err := starter(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("run %d: starter() error = %v, want context.Canceled: the user stopped this trace", i, err)
+		}
+	}
+}
+
 // TestTuiTraceStarterKeepsAnOrdinaryStopSilent guards the other side of
 // reportLateTraceError: a trace that ends without an error (the normal stop
 // and restart path, e.g. every filter or PID change) must not push a warning

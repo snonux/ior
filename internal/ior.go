@@ -391,28 +391,37 @@ func tuiTraceStarterFromRunTrace(
 		case <-startedCh:
 			return nil
 		case err := <-errCh:
+			// A stop that races the failure leaves both this arm and
+			// ctx.Done() ready, and Go picks between them at random, so this
+			// one has to apply the same rule: the user asked for the trace to
+			// end. Returning the failure instead raises TracingErrorMsg
+			// against the *next* session, clearing its attach spinner and
+			// showing it an error the previous trace produced.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		}
 	}
 }
 
-// reportLateTraceError surfaces a trace failure that has no caller left to
-// return it to, because the starter already returned. The starter reports
-// success the moment the trace signals started, and it also returns when its
-// context is cancelled, so in both cases nothing is selecting on errCh any
-// more and without this the error is simply discarded.
+// reportLateTraceError is the last resort for a trace result that has no
+// caller left to receive it, because the starter already returned - on the
+// started signal, or because its context was cancelled.
 //
-// What actually reaches here is a setup failure that lost the race with a
-// cancellation, not end-of-run work: in TUI mode nothing after
-// signalTraceStarted can fail. runTraceWithContext's only remaining error
-// source is finaliseTrace's recorder.Write, and the recorder is non-nil only
-// for -flamegraph, which the mode registry makes mutually exclusive with the
-// TUI.
+// In the current code it never fires in TUI mode, and that is worth stating
+// rather than leaving as a puzzle. Nothing after signalTraceStarted can fail
+// (runTraceWithContext's only remaining error source is finaliseTrace's
+// recorder.Write, and the recorder is non-nil only for -flamegraph, which the
+// mode registry makes mutually exclusive with the TUI), and the one thing that
+// does reach here - a setup failure that raced a stop - is deliberately
+// silenced, because the user asked for the trace to end. What this exists for
+// is the case neither of those covers: a post-signal failure added later would
+// otherwise be dropped on the floor exactly the way the original defect
+// dropped setup failures.
 //
-// ctx is the starter's context, and it is what decides silence: the caller
-// asked for this trace to stop, so a failure on the way down is the ordinary
-// restart path rather than something to show. Testing the error for
-// context.Canceled instead would let a genuine setup failure that raced a
+// ctx is the starter's context and is what decides silence. Testing the error
+// for context.Canceled instead would let a genuine setup failure that raced a
 // restart print "Trace stopped: ..." into the *next* session's stream, since
 // the TUI resets that buffer in place and hands the same object to every run.
 func reportLateTraceError(ctx context.Context, rt *tuiRuntime, err error) {
@@ -685,27 +694,29 @@ func setupTraceInfra(
 		// so nothing else will stop it: with -pprof the CPU profile stays
 		// active and the next trace fails with "cpu profiling already in use"
 		// instead of reporting whatever really went wrong.
-		profiling.stop(logTeardown)
+		profiling.stop(logln)
 		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
-	// Last statement before the success return: every fallible step above
-	// still reaches the caller through err, and in TUI mode that is the only
-	// path an error has - once started is closed the starter has already
-	// reported success and nobody is left to receive one.
-	signalTraceStarted(started)
-
 	teardown = func() {
 		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 	}
+
+	// Nothing fallible may follow. Every step above still reaches the caller
+	// through err, and in TUI mode that is the only path an error has: once
+	// started is closed the starter has already reported success and nobody is
+	// left to receive one. Pinned by
+	// TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
+	signalTraceStarted(started)
 	return eventCh, ctx, cancel, profiling, el, mgr, teardown, nil
 }
 
 // newTraceEventLoop builds the event loop and wires its kernel-side data
-// sources. Every fallible step of the post-attach setup lives here, so
-// setupTraceInfra can hold the trace-started signal until the last of them
-// succeeded: an invalid filter (newEventLoop) or a BPF object without
+// sources. Every fallible step of the event-loop construction lives here (the
+// other post-attach steps, setupEventChannel and setupProfiling, can fail too
+// and stay in setupTraceInfra above), so that this is the last thing that can
+// fail before the trace-started signal: an invalid filter (newEventLoop) or a BPF object without
 // syscall_aggregate_map (newSyscallAggregateConsumer) used to fail after the
 // TUI had already been told the trace was running, which left the dashboard
 // live-looking and permanently empty.

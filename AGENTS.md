@@ -258,15 +258,23 @@ committed set contains syscalls that only exist on recent mainline kernels
   Nothing after the signal can fail in TUI mode: `runTraceWithContext`'s only
   remaining error source is `finaliseTrace`'s `recorder.Write`, and the
   recorder is non-nil only for `-flamegraph`, which the mode registry makes
-  mutually exclusive with the TUI. What `reportLateTraceError` actually catches
-  is a *setup* failure that lost the race with a stop, and it stays silent when
-  the context was cancelled - gating on the error's identity instead would
-  print the old trace's failure into the next session's stream, because the TUI
-  resets that buffer in place and hands the same object to every run. Pinned by
+  mutually exclusive with the TUI. `reportLateTraceError` therefore never fires
+  in TUI production today - it is there so that a post-signal failure added
+  later is not dropped the way the original defect dropped setup failures.
+
+  A stop that races a setup failure is silenced on *both* arms of the starter's
+  select, on the context rather than on the error: the two are ready at once
+  and Go picks between them at random, so gating one arm left about one run in
+  a hundred reporting the old trace's failure against the next session -
+  clearing its attach spinner, or writing into the stream buffer the TUI resets
+  in place and hands to every run. Pinned by
+  `TestSetupTraceInfraSignalsStartAfterEveryFallibleStep` (structural - the
+  ordering itself cannot be reached behaviourally without root),
   `TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup`,
   `TestNewTraceEventLoop*`,
-  `TestTuiTraceStarterSurfacesAFailureArrivingAfterStart` and
-  `TestTuiTraceStarterKeepsACancelledStartSilent`.
+  `TestTuiTraceStarterSurfacesAFailureArrivingAfterStart`,
+  `TestTuiTraceStarterKeepsACancelledStartSilent` and
+  `TestTuiTraceStarterReportsAStopEvenWhenTheFailureIsReady`.
 - **Drop observability**: every generated handler counts a kernel-side event loss
   (`bpf_ringbuf_reserve` returning NULL, i.e. `event_map` full under userspace
   backpressure) in the per-CPU BPF map `ringbuf_drop_map` via
