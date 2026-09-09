@@ -175,21 +175,29 @@ func TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup(t *testing.T) {
 	}
 }
 
-// TestNewTraceEventLoopFailsWhenTheAggregateMapIsMissing covers the other half
-// of the defect setupTraceInfra's signal ordering exists for. The reported
+// TestNewTraceEventLoopPropagatesAnAggregateConsumerFailure covers the other
+// half of the defect setupTraceInfra's signal ordering exists for. The reported
 // trigger was an over-long comm filter, which fails in newEventLoop; a stale
 // IOR_BPF_OBJECT without syscall_aggregate_map fails one step later, in
 // newSyscallAggregateConsumer. Both used to happen after the TUI had been told
 // the trace was running.
 //
-// Grouping them in newTraceEventLoop is what lets setupTraceInfra hold the
-// signal until every fallible step has passed, so what matters here is that
-// this function reports the second failure rather than swallowing it: a nil
-// module stands in for a BPF object whose map is absent.
-func TestNewTraceEventLoopFailsWhenTheAggregateMapIsMissing(t *testing.T) {
+// What is pinned here is that newTraceEventLoop hands that second failure back
+// rather than swallowing it, and returns no event loop alongside it. The
+// specific missing-map error is deliberately NOT what this reaches: a nil
+// module trips newSyscallAggregateConsumer's own nil guard first, so the error
+// asserted below is "nil bpf module", not "get syscall_aggregate_map". Getting
+// to the GetMap branch would mean loading a real BPF object built without that
+// map, which is not worth a kernel dependency for one error path - but the
+// assertion names the error it actually gets, so this test cannot quietly
+// start passing because some earlier step began failing instead.
+func TestNewTraceEventLoopPropagatesAnAggregateConsumerFailure(t *testing.T) {
 	el, err := newTraceEventLoop(flags.NewFlags(), nil, func(...any) {})
 	if err == nil {
-		t.Fatal("newTraceEventLoop accepted a module with no syscall aggregate map")
+		t.Fatal("newTraceEventLoop accepted a nil BPF module")
+	}
+	if !strings.Contains(err.Error(), "nil bpf module") {
+		t.Fatalf("newTraceEventLoop error = %v, want the aggregate consumer's nil-module rejection", err)
 	}
 	if el != nil {
 		t.Errorf("newTraceEventLoop returned an event loop alongside its error: %v", el)
