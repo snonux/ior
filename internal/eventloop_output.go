@@ -57,3 +57,22 @@ func (f *outputFormatter) notifyWarning(message string) {
 	}
 	f.warningCb(message)
 }
+
+// notifyWarningOrLog delivers message to warningCb when one is registered and
+// falls back to stderr when none is. Modes without a warning sink (-plain,
+// -flamegraph, headless -parquet) never wire warningCb - only
+// makeTUIEventLoopConfigurer does - so plain notifyWarning silently discards
+// everything they report. That is acceptable for a per-event nuisance warning,
+// but not for a signal about lost data: use this for warnings the user must
+// see in every mode. stdout stays machine-readable because logStatus writes to
+// stderr.
+func (f *outputFormatter) notifyWarningOrLog(message string) {
+	if message == "" {
+		return
+	}
+	if f.warningCb != nil {
+		f.warningCb(message)
+		return
+	}
+	logStatus("Warning:", message)
+}

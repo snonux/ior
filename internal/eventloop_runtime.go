@@ -77,9 +77,19 @@ func (e *eventLoop) startRingbufDropMonitor(ctx context.Context) func() {
 // TUI stream (and in -plain runs via the end-of-run statistics).
 func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	if result.warning != "" {
-		e.notifyWarning(result.warning)
+		// The counter could not be read, so the run total is not "unchanged"
+		// - it is unknown. Record that so stats() stops asserting the last
+		// reading (0, for a run whose first read already failed) as fact, and
+		// surface the failure in every mode: a headless run that only called
+		// notifyWarning here learnt nothing at all, which is precisely the
+		// silence this counter exists to end.
+		e.ringbufDropReadFailed.Store(true)
+		e.notifyWarningOrLog(result.warning)
 		return
 	}
+	// The kernel counter is cumulative, so one successful read supersedes any
+	// earlier failure: the total is authoritative again.
+	e.ringbufDropReadFailed.Store(false)
 	e.numRingbufDrops.Store(result.total)
 	if result.delta == 0 {
 		return
@@ -92,22 +102,24 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	// comm cache; the flag is consumed in applyPendingCommRefresh because this
 	// callback runs on the monitor goroutine.
 	e.commRefreshPending.Store(true)
-	message := formatRingbufDropWarning(result)
-	if e.warningCb != nil {
-		e.notifyWarning(message)
-		return
-	}
 	// Modes without a warning sink (-plain, -flamegraph, headless -parquet)
 	// would otherwise only learn about the loss from the end-of-run
 	// statistics, which can be hours away. Losing events silently is exactly
-	// the finding this counter closes, so fall back to stderr - stdout stays
-	// machine-readable.
-	logStatus("Warning:", message)
+	// the finding this counter closes, so notifyWarningOrLog falls back to
+	// stderr - stdout stays machine-readable.
+	e.notifyWarningOrLog(formatRingbufDropWarning(result))
 }
 
+// handleAggregateDrainResult ingests one drained batch of kernel-side syscall
+// aggregates, or reports why the drain failed. The drain loop only runs with an
+// aggregate sink wired, which today means TUI mode only (makeTUIEventLoopConfigurer
+// is the sole caller of both SetAggregateSink and SetWarningCallback), so the
+// stderr fallback is unreachable in production right now. It is used anyway
+// rather than plain notifyWarning: a future headless aggregate consumer would
+// otherwise silently reintroduce exactly the swallow this file just fixed.
 func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 	if result.warning != "" {
-		e.notifyWarning(result.warning)
+		e.notifyWarningOrLog(result.warning)
 		return
 	}
 	if len(result.rows) == 0 {

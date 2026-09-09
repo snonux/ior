@@ -283,6 +283,27 @@ committed set contains syscalls that only exist on recent mainline kernels
   (a TUI stream warning row, stderr in `-plain`/headless modes) and the run
   total is always printed in the end-of-run `Statistics:` block as
   `ring buffer drops: N (N/s, N% of events)`.
+
+  That line is a statement of fact, which is why *both* of its inputs are
+  guarded. **Every mode must hear about a failed reading**: only
+  `makeTUIEventLoopConfigurer` wires `warningCb`, so a bare `notifyWarning` is a
+  no-op in `-plain`/`-flamegraph`/headless `-parquet`. Warnings the user must
+  see in any mode therefore go through `notifyWarningOrLog`
+  (`internal/eventloop_output.go`), which falls back to stderr — the drop
+  monitor's read-failure and drop-delta branches and the aggregate drainer all
+  use it. And **an unknown figure is never printed as `0`**: if the last counter
+  read failed, `numRingbufDrops` still holds the previous reading (`0` for a run
+  whose first read already failed), so `ringbufDropStatLine` prints
+  `ring buffer drops: unknown (drop counter unreadable[; N counted before the
+  failure])` instead. The counter is cumulative, so one later successful read
+  restores the total and the line goes back to reporting it (task 42;
+  `TestEventLoopDropMonitorReadFailureReachesStderrWithoutWarningSink`,
+  `TestStatsReportsUnknownRingbufDropsWhenTheCounterCannotBeRead`,
+  `TestStatsKeepsTheLastKnownCountWhenTheCounterStopsBeingReadable`,
+  `TestStatsReportsTheTotalAgainAfterTheCounterRecovers`). One gap stays open on
+  purpose: a binary whose BPF object has no `ringbuf_drop_map` leaves `dropSrc`
+  nil and still prints `0`, because `attachRingbufDropCounter` already says so
+  on stderr at startup.
 - **Comm resolution across `execve`**: most event payloads carry no command
   name, so it comes from `commResolver` (`internal/eventloop_comm.go`), an
   asynchronous `/proc/<tid>/comm` cache. Every lookup is bounded by

@@ -98,6 +98,12 @@ type eventLoop struct {
 	// numRingbufDrops is the cumulative kernel-side ring-buffer drop count.
 	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
 	numRingbufDrops atomic.Uint64
+	// ringbufDropReadFailed records whether the most recent reading of the
+	// kernel drop counter failed. numRingbufDrops is then stale (or still 0,
+	// if the very first read failed) and says nothing about the real loss, so
+	// stats() reports the total as unknown rather than as a confident count.
+	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
+	ringbufDropReadFailed atomic.Bool
 	// commRefreshPending is raised by the drop-monitor goroutine when the
 	// kernel lost events (one of which may have been a sched_process_exec
 	// control record) and consumed by the event-loop goroutine in
@@ -257,29 +263,47 @@ func (e *eventLoop) stats() string {
 		mismatchPct = (float64(e.numTracepointMismatches) / float64(e.numTracepoints)) * 100
 	}
 
-	// Kernel-side ring-buffer drops used to be invisible (audit findings
-	// D2 F1 / D9 Y2): a full event_map makes bpf_ringbuf_reserve() return
-	// NULL and the generated handlers skip the event. The counter is always
-	// reported, so a zero line is an explicit "no loss" statement.
-	drops := e.numRingbufDrops.Load()
-	dropPct := 0.0
-	if total := uint64(e.numTracepoints) + drops; total > 0 {
-		dropPct = (float64(drops) / float64(total)) * 100
-	}
-
 	stats := fmt.Sprintf(
 		"Statistics:\n"+
 			"\tduration: %v\n"+
 			"\ttracepoints: %v (%.2f/s) with %d mismatches (%.2f%%)\n"+
 			"\tsyscalls: %d (%.2f/s)\n"+
 			"\tsyscalls after filter: %d (%.2f/s)\n"+
-			"\tring buffer drops: %d (%.2f/s, %.2f%% of events)\n",
+			"%s",
 		duration,
 		e.numTracepoints, rate(uint64(e.numTracepoints)), e.numTracepointMismatches, mismatchPct,
 		e.numSyscalls, rate(uint64(e.numSyscalls)),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
-		drops, rate(drops), dropPct,
+		e.ringbufDropStatLine(rate),
 	)
 
 	return stats
+}
+
+// ringbufDropStatLine renders the end-of-run "ring buffer drops" line.
+//
+// Kernel-side ring-buffer drops used to be invisible (audit findings D2 F1 /
+// D9 Y2): a full event_map makes bpf_ringbuf_reserve() return NULL and the
+// generated handlers skip the event. The counter is always reported, so a zero
+// line is an explicit "no loss" statement - which is exactly why it may only be
+// printed when the counter was actually read. If the last read failed the run
+// total is unknown, and printing the last reading (0, for a run whose first
+// read already failed) would state "no loss" as fact about a loss nobody
+// measured.
+func (e *eventLoop) ringbufDropStatLine(rate func(uint64) float64) string {
+	drops := e.numRingbufDrops.Load()
+	if e.ringbufDropReadFailed.Load() {
+		if drops == 0 {
+			return "\tring buffer drops: unknown (drop counter unreadable)\n"
+		}
+		return fmt.Sprintf(
+			"\tring buffer drops: unknown (drop counter unreadable; %d counted before the failure)\n",
+			drops,
+		)
+	}
+	dropPct := 0.0
+	if total := uint64(e.numTracepoints) + drops; total > 0 {
+		dropPct = (float64(drops) / float64(total)) * 100
+	}
+	return fmt.Sprintf("\tring buffer drops: %d (%.2f/s, %.2f%% of events)\n", drops, rate(drops), dropPct)
 }
