@@ -792,6 +792,16 @@ func Fixture() string {
 }
 `
 
+// lintFixtureTest puts the same unchecked error in a test file.
+const lintFixtureTest = `package fixture
+
+import "os"
+
+func helper() {
+	os.Remove("/nonexistent/lint-gate-fixture-test")
+}
+`
+
 // TestLintConfigRejectsAKnownDefect runs the repository's own .golangci.yml
 // against a package that is known to violate both enabled linters, and
 // requires it to be reported.
@@ -822,6 +832,10 @@ func TestLintConfigRejectsAKnownDefect(t *testing.T) {
 	}
 	write("go.mod", "module lintfixture\n\ngo 1.26.0\n")
 	write("fixture.go", lintFixture)
+	// A defect in a _test.go file too, so `run.tests: false` - which removes
+	// every test file in the repository from the gate, and most of what this
+	// gate has caught lives in test files - fails here as well.
+	write("fixture_test.go", lintFixtureTest)
 
 	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), ".golangci.yml"))
 	if err != nil {
@@ -837,12 +851,13 @@ func TestLintConfigRejectsAKnownDefect(t *testing.T) {
 	if err == nil {
 		t.Errorf("the configured linter accepted a package with an unchecked error and a dead store; the gate reports nothing and would pass any tree.\n%s", report)
 	}
-	for _, want := range []struct{ linter, marker string }{
-		{"errcheck", "os.Remove"},
+	for _, want := range []struct{ what, marker string }{
+		{"errcheck", "fixture.go"},
 		{"staticcheck", "SA4006"},
+		{"errcheck in a _test.go file", "fixture_test.go"},
 	} {
 		if !strings.Contains(report, want.marker) {
-			t.Errorf("%s reported nothing for the fixture (looked for %q); it is enabled in name only.\n%s", want.linter, want.marker, report)
+			t.Errorf("%s reported nothing for the fixture (looked for %q); it is enabled in name only.\n%s", want.what, want.marker, report)
 		}
 	}
 }
