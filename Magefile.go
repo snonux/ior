@@ -21,6 +21,7 @@ import (
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 
+	"ior/internal/gatecmd"
 	"ior/internal/generate"
 )
 
@@ -112,10 +113,10 @@ func BpfExport() error {
 // Test runs the full test suite.
 func Test() error {
 	mg.Deps(BpfBuild)
-	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
+	if err := run(gatecmd.CleanTestCache()); err != nil {
 		return err
 	}
-	return sh.RunWithV(goEnv(), "go", "test", "./...", "-failfast", "-timeout=90m")
+	return run(gatecmd.TestAll())
 }
 
 // TestRace runs the full test suite with the race detector enabled.
@@ -140,38 +141,21 @@ func TestTUI() error {
 		"-run", "TestTUIIntegration", "-count=1", "-v")
 }
 
-// vetUnsafeptrExempt is the one package where the unsafeptr analyzer is
-// disabled. cmd/ioworkload/scenario_sysv.go converts the address returned by
-// SYS_SHMAT into a []byte so the workload can fault the shared page in, and
-// vet cannot tell a kernel-supplied mapping address from a raw integer.
-//
-// The exemption is deliberate and could not be avoided by restructuring: the
-// uintptr -> unsafe.Pointer conversion is reported wherever it appears (behind
-// a helper, inline with the syscall, or held as an unsafe.Pointer), and
-// golang.org/x/sys/unix uses the identical idiom in mremap.go. The conversion
-// is safe because the segment is kernel-owned rather than Go-heap memory, so
-// it is never relocated by the GC, and it stays mapped until shmdt.
-//
-// Every other package is vetted with the full analyzer set, including
-// unsafeptr, so a new misuse elsewhere still fails this gate.
-const vetUnsafeptrExempt = "ior/cmd/ioworkload"
-
 // Vet runs go vet over the module with the libbpfgo cgo environment.
 //
 // It is split into two passes so the single unsafeptr exemption stays scoped
 // to one package instead of disabling the analyzer module-wide; see
-// vetUnsafeptrExempt for why that package needs it.
+// gatecmd.VetUnsafeptrExempt for why that package needs it.
 func Vet() error {
 	mg.Deps(BpfBuild)
-	packages, err := vetPackagesExcept(vetUnsafeptrExempt)
+	packages, err := vetPackagesExcept(gatecmd.VetUnsafeptrExempt)
 	if err != nil {
 		return err
 	}
-	args := append([]string{"vet"}, packages...)
-	if err := sh.RunWithV(goEnv(), "go", args...); err != nil {
+	if err := run(gatecmd.VetAll(packages)); err != nil {
 		return err
 	}
-	return sh.RunWithV(goEnv(), "go", "vet", "-unsafeptr=false", vetUnsafeptrExempt)
+	return run(gatecmd.VetUnsafeptrExempted())
 }
 
 // vetPackagesExcept lists the module's packages minus the excluded one.
@@ -192,13 +176,6 @@ func vetPackagesExcept(excluded string) ([]string, error) {
 	return packages, nil
 }
 
-// golangciLintBin is the linter driven by the Lint target, and golangciLintPkg
-// is the module path `mage lint` names when it is missing from PATH.
-const (
-	golangciLintBin = "golangci-lint"
-	golangciLintPkg = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"
-)
-
 // Lint runs golangci-lint over the module with the libbpfgo cgo environment.
 //
 // The configured linters are errcheck and staticcheck's SA checks; see
@@ -212,22 +189,20 @@ const (
 // It runs with the mage build tag so Magefile.go itself is covered.
 func Lint() error {
 	mg.Deps(BpfBuild)
-	if _, err := exec.LookPath(golangciLintBin); err != nil {
-		return fmt.Errorf("%s not on PATH; install it with `go install %s`", golangciLintBin, golangciLintPkg)
+	if _, err := exec.LookPath(gatecmd.GolangciLintBin); err != nil {
+		return fmt.Errorf("%s not on PATH; install it with `go install %s`", gatecmd.GolangciLintBin, gatecmd.GolangciLintPkg)
 	}
-	// Verify the configuration before trusting a clean run. golangci-lint's
-	// `run` silently ignores keys it does not recognize, so a typo or a stray
-	// key in .golangci.yml otherwise reports "0 issues" from a config that is
-	// not the one anybody reviewed. `config verify` rejects it instead.
-	if err := sh.RunWithV(goEnv(), golangciLintBin, "config", "verify"); err != nil {
+	if err := run(gatecmd.LintConfigVerify()); err != nil {
 		return err
 	}
-	// The mage build tag is passed so Magefile.go is linted too: without it
-	// the one file that defines the gate is the one file outside it, because
-	// the default build ignores `//go:build mage`. One pass covers everything
-	// only while no file carries a `!mage` constraint, which
-	// internal/buildgate.TestNoNegatedMageConstraint asserts.
-	return sh.RunWithV(goEnv(), golangciLintBin, "run", "--build-tags", "mage", "./...")
+	return run(gatecmd.LintRun())
+}
+
+// run executes one gate command line with the libbpfgo cgo environment. The
+// argv comes from internal/gatecmd so it is ordinary data that
+// internal/buildgate can both assert on and execute; see that package for why.
+func run(argv []string) error {
+	return sh.RunWithV(goEnv(), argv[0], argv[1:]...)
 }
 
 // Fmt runs gofmt -w on all Go source files to enforce canonical formatting.
