@@ -4,7 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -225,4 +230,78 @@ func TestNewTraceEventLoopRejectsAnUnusableFilter(t *testing.T) {
 	if el != nil {
 		t.Errorf("newTraceEventLoop returned an event loop alongside its error: %v", el)
 	}
+}
+
+// TestSetupTraceInfraSignalsStartAfterEveryFallibleStep pins the ordering the
+// whole trace-start contract rests on, structurally, because behaviour cannot
+// reach it: every step that could fail after the signal needs either root or a
+// deliberately broken BPF object, so the suite stays green with the defect
+// reintroduced. Moving signalTraceStarted back above newTraceEventLoop - the
+// exact regression - is invisible to every other test in this package.
+//
+// The repo already pins structural properties this way; see
+// streamrow.TestNewCoversEveryRetCarryingEventType.
+//
+// The rule: after signalTraceStarted, setupTraceInfra may not return an error.
+// In TUI mode that signal is what makes the starter report success, so an
+// error returned afterwards has no caller left to receive it and the dashboard
+// shows a live-looking, permanently empty session.
+func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
+	_, thisFile, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller could not locate this test file")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "ior.go")
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse ior.go: %v", err)
+	}
+
+	var decl *ast.FuncDecl
+	for _, d := range parsed.Decls {
+		if fd, isFunc := d.(*ast.FuncDecl); isFunc && fd.Recv == nil && fd.Name.Name == "setupTraceInfra" {
+			decl = fd
+			break
+		}
+	}
+	if decl == nil {
+		t.Fatal("internal/ior.go declares no func setupTraceInfra")
+	}
+
+	var signalPos token.Pos
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		call, isCall := n.(*ast.CallExpr)
+		if !isCall {
+			return true
+		}
+		if ident, isIdent := call.Fun.(*ast.Ident); isIdent && ident.Name == "signalTraceStarted" {
+			signalPos = call.Pos()
+		}
+		return true
+	})
+	if !signalPos.IsValid() {
+		t.Fatal("setupTraceInfra no longer calls signalTraceStarted; the TUI would never leave the attaching overlay")
+	}
+
+	// A return whose last result is a bare nil is the success return. Anything
+	// else after the signal is an error the caller can no longer be told about.
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		ret, isReturn := n.(*ast.ReturnStmt)
+		if !isReturn || ret.Pos() <= signalPos || len(ret.Results) == 0 {
+			return true
+		}
+		last := ret.Results[len(ret.Results)-1]
+		if ident, isIdent := last.(*ast.Ident); isIdent && ident.Name == "nil" {
+			return true
+		}
+		t.Errorf(
+			"setupTraceInfra returns an error at %s, after signalTraceStarted at %s.\n"+
+				"In TUI mode closing the started channel is what makes the trace starter report success, "+
+				"so an error returned after it reaches nobody and the dashboard shows a live-looking, empty trace. "+
+				"Move the fallible step above the signal (newTraceEventLoop is where the others live).",
+			fset.Position(ret.Pos()), fset.Position(signalPos),
+		)
+		return true
+	})
 }
