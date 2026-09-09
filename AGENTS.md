@@ -47,7 +47,8 @@ the same `Fprintf` to a generic `io.Writer` is: `internal/ior_bpfsetup.go:94`
 writes an unannotated `fmt.Fprintf(os.Stderr, …)`, while
 `integrationtests/harness.go:296` has to write `_, _ = fmt.Fprintln(w, line)`
 because `w` is an `io.Writer`. That asymmetry is the default exclusion list,
-not an oversight. There are 16 such unannotated stderr writes tree-wide.
+not an oversight, and unannotated stderr writes are common throughout the
+tree.
 
 **What actually runs the gates.** There is no CI in this repo, and `mage world`
 cannot complete on a host older than the generation kernel (its `generate` step
@@ -56,8 +57,8 @@ somebody types `mage lint` / `mage world` on a suitable host, so treat them as
 a pre-commit habit rather than something enforced for you. `internal/buildgate`
 is what pins them. It fails if `World` stops running `FmtCheck`/`Vet`/`Lint`
 **or discards their errors**, if `PrReview` stops running `World`, if `Lint`
-stops covering `./...` with the mage tag or is pointed at another binary or
-told to exit 0 regardless, if errcheck or staticcheck's SA checks are disabled
+stops invoking the linter at all, stops covering `./...` with the mage tag, is
+pointed at another binary, or is told to exit 0 regardless, if errcheck or staticcheck's SA checks are disabled
 (including via `linters.disable`, which overrides `enable`), if the errcheck
 exclusion widens to match any Go file outside `cmd/ioworkload` or any call
 beyond those four, if a second `.golangci.yaml`/`.toml`/`.json` appears and
