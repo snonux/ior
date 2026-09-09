@@ -54,38 +54,54 @@ tree.
 cannot complete on a host older than the generation kernel (its `generate` step
 is diff-gated; see "Generation host / kernel"). In practice the gates run when
 somebody types `mage lint` / `mage world` on a suitable host, so treat them as
-a pre-commit habit rather than something enforced for you. `internal/buildgate`
-is what pins them. It fails if `World` stops running `FmtCheck`/`Vet`/`Lint`
-**or discards their errors**, if `PrReview` stops running `World`, if `Lint`
-stops invoking the linter at all, stops covering `./...` with the mage tag, is
-pointed at another binary, or is told to exit 0 regardless, if errcheck or staticcheck's SA checks are disabled
-(including via `linters.disable`, which overrides `enable`), if the errcheck
-exclusion widens to match any Go file outside `cmd/ioworkload` or any call
-beyond those four, if a second `.golangci.yaml`/`.toml`/`.json` appears and
-shadows the reviewed config, or if a `//nolint` directive — with or without a
-space after the slashes — appears anywhere in the tree.
+a pre-commit habit rather than something enforced for you.
 
-Its config assertions are deny-by-default down to the sections it walks — top
-level, `linters`, `linters.settings`, `linters.exclusions` and `issues` — so a
-key not on the reviewed list fails the test. That matters because the ways
-found so far to silence this gate were each a different key from the one the
-tests were watching: `linters.disable` beats `enable`, `exclusions.paths` and
-`.presets` beat `exclusions.rules`, `settings.errcheck.exclude-functions`
-exempts a function module-wide, and `run.issues-exit-code: 0` or
-`run.tests: false` silence it from a section none of those appear in. When
-adding a key, read what it does and then add it to the known set in
-`internal/buildgate/buildgate_test.go`. `mage lint` also runs
-`golangci-lint config verify` before the run itself, because `run` ignores keys
-it does not recognize and would otherwise report "0 issues" from a config
-nobody reviewed.
+**Where the gates are defined.** `Magefile.go` is behind `//go:build mage`, so
+nothing can import it, and for several rounds every assertion about what `mage
+lint` really runs had to be made against the *source text* of a function no
+test could call. That lost repeatedly — a body that merely mentions the right
+strings and runs nothing, a flag routed through a constant, a helper wrapping
+the invocation, an early `return nil`. So the command lines live in
+`internal/gatecmd` as ordinary data, and the Mage targets are thin wrappers
+that supply the cgo environment and check the error. Change a gate's arguments
+there, not in `Magefile.go`.
 
-Pinning a configuration by its spelling is a losing game, though — three rounds
-of review each found another spelling that turned the gate off, twice by a
-single character. So the assertion that actually matters is behavioural:
-`TestLintConfigRejectsAKnownDefect` runs this repository's `.golangci.yml`
-against a throwaway package containing an unchecked error and a dead store, and
-requires both to be reported. A configuration that is plausible key by key and
-collectively inert fails there regardless of how it was spelled.
+`internal/buildgate` pins the result, in three layers, weakest first:
+
+1. *Argv.* Each `gatecmd` command line is compared against the reviewed one
+   exactly — an allow-list, because blocklisting flags lost by one character
+   twice (`--issues-exit-code` banned, `--issues-exit-code=0` walked past).
+2. *Configuration.* Deny-by-default over the sections it walks — top level,
+   `linters`, `linters.settings`, `linters.settings.staticcheck`,
+   `linters.exclusions` and `issues` — because every way found to silence this
+   gate was a different key from the one being watched: `linters.disable`
+   beats `enable`, `exclusions.paths` and `.presets` beat `exclusions.rules`,
+   `settings.errcheck.exclude-functions` exempts a function module-wide, and
+   `run.issues-exit-code: 0` or `run.tests: false` work from a section none of
+   those appear in. Adding a key means reading what it does and then adding it
+   to the known set in `internal/buildgate/buildgate_test.go`.
+3. *Behaviour — the layer that actually matters.* Pinning a configuration by
+   its spelling is a losing game; five rounds of review each found another
+   spelling. So `TestLintArgvRejectsAKnownDefect` runs the real lint argv with
+   this repository's `.golangci.yml` against a throwaway module containing an
+   unchecked error (in both a `.go` and a `_test.go` file) and two different
+   staticcheck findings, and requires all of them to be reported — a config
+   that is plausible key by key and collectively inert fails there.
+   `TestMageLintFailsOnAPlantedDefect` goes one further and runs `mage lint`
+   itself against a `git archive` of HEAD with an unchecked error added; it is
+   the only test that sees the target as a whole, and the only one that catches
+   an early-return guard clause or an error cleared before it is returned. It
+   takes ~24s and is skipped under `-short`.
+
+Two tree properties are pinned the same way — by asking the toolchain rather
+than by matching text. `TestMageTagHidesNoFile` diffs `go list ./...` against
+`go list -tags mage ./...`, because the single lint pass is sound only while no
+file is excluded *by* that tag, and three rounds of regex plus one `//go:build`
+parser each missed a spelling. `TestNoNestedModules` fails on any `go.mod`
+below the root, since one would cut its subtree out of every `./...` at once.
+`mage lint` also runs `golangci-lint config verify` before the run, because
+`run` ignores keys it does not recognize and would otherwise report "0 issues"
+from a config nobody reviewed.
 
 `golangci-lint` itself is not pinned (`mage lint` names `@latest` when it is
 missing), so a check set can differ between machines; the gate is a floor, not
