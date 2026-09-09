@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -57,11 +58,12 @@ func funcDecl(t *testing.T, file *ast.File, fn string) *ast.FuncDecl {
 	return nil
 }
 
-// discardedCallsIn returns the names of functions whose result is thrown away
-// with `_ = f()` in the body of fn.
-func discardedCallsIn(t *testing.T, file *ast.File, fn string) []string {
+// hasBlankDiscard reports whether fn throws away any call result with `_ =`.
+// In a gate function that is always a bug: `_ = sh.RunWithV(...)` runs the
+// tool, prints every finding, and returns nil.
+func hasBlankDiscard(t *testing.T, file *ast.File, fn string) bool {
 	t.Helper()
-	var discarded []string
+	found := false
 	ast.Inspect(funcDecl(t, file, fn).Body, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)
 		if !ok {
@@ -72,16 +74,67 @@ func discardedCallsIn(t *testing.T, file *ast.File, fn string) []string {
 				return true
 			}
 		}
-		for _, rhs := range assign.Rhs {
-			if call, ok := rhs.(*ast.CallExpr); ok {
-				if ident, ok := call.Fun.(*ast.Ident); ok {
-					discarded = append(discarded, ident.Name)
+		found = true
+		return true
+	})
+	return found
+}
+
+// failsOn reports whether a failure of gate() makes fn stop. It looks for the
+// `if err := gate(); err != nil { ... return ... }` shape: the gate called in
+// an if-statement's init, and a return somewhere in the branch taken when it
+// errored. A bare `return gate()` counts too.
+//
+// Checking for a return rather than for the absence of `_ =` is deliberate:
+// logging the error and carrying on is the more natural way to make a gate
+// advisory, it passes errcheck, and it leaves every other assertion here
+// happy.
+func failsOn(t *testing.T, file *ast.File, fn, gate string) bool {
+	t.Helper()
+	callsGate := func(n ast.Node) bool {
+		found := false
+		ast.Inspect(n, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == gate {
+				found = true
+			}
+			return true
+		})
+		return found
+	}
+	hasReturn := func(n ast.Node) bool {
+		found := false
+		ast.Inspect(n, func(n ast.Node) bool {
+			if _, ok := n.(*ast.ReturnStmt); ok {
+				found = true
+			}
+			return true
+		})
+		return found
+	}
+
+	fails := false
+	ast.Inspect(funcDecl(t, file, fn).Body, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.ReturnStmt:
+			// return gate()
+			for _, res := range stmt.Results {
+				if callsGate(res) {
+					fails = true
 				}
+			}
+		case *ast.IfStmt:
+			// if err := gate(); err != nil { ... return ... }
+			if stmt.Init != nil && callsGate(stmt.Init) && hasReturn(stmt.Body) {
+				fails = true
 			}
 		}
 		return true
 	})
-	return discarded
+	return fails
 }
 
 // calleesOf returns the names of the functions the top-level function fn calls
@@ -162,7 +215,10 @@ func goFilesOutside(t *testing.T, prefix string) []string {
 // drop a file out of the one pass that runs.
 func TestNoNegatedMageConstraint(t *testing.T) {
 	root := repoRoot(t)
-	negated := regexp.MustCompile(`^//\s*(go:build|\+build).*!mage`)
+	// `!(mage)` and `! mage` are both accepted by the toolchain and exclude
+	// the file just as thoroughly as `!mage`, so match a negation followed by
+	// anything but a word character before the tag.
+	negated := regexp.MustCompile(`^//\s*(go:build|\+build).*![\s(]*mage\b`)
 	for _, rel := range goFilesOutside(t, "\x00") {
 		src, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
@@ -179,6 +235,37 @@ func TestNoNegatedMageConstraint(t *testing.T) {
 	}
 }
 
+// TestNoNestedModules underwrites every `./...` in this repository. A go.mod
+// below the root cuts its whole subtree out of the main module, so `mage
+// lint`, `mage vet` and `mage test` all stop seeing it at once and all three
+// keep reporting success.
+func TestNoNestedModules(t *testing.T) {
+	root := repoRoot(t)
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "vendor" || strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() != "go.mod" || filepath.Dir(path) == root {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		t.Errorf("%s is a nested module; everything under %s drops out of ./... , so lint, vet and test all stop covering it while still reporting success", rel, filepath.Dir(rel))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+}
+
 // TestWorldRunsTheStaticAnalysisGates pins the wiring this package exists for.
 // Vet, Lint and FmtCheck are useful only if something runs them; before they
 // were part of World their findings accumulated between the occasions somebody
@@ -187,25 +274,32 @@ func TestWorldRunsTheStaticAnalysisGates(t *testing.T) {
 	file := parseMagefile(t)
 
 	worldCalls := calleesOf(t, file, "World")
-	// A gate whose error is discarded still runs and still prints its
-	// findings, and World still succeeds - so calling it is not enough.
-	worldDiscards := discardedCallsIn(t, file, "World")
 	for _, gate := range []string{"FmtCheck", "Vet", "Lint"} {
 		if !slices.Contains(worldCalls, gate) {
 			t.Errorf("World() does not run %s(); that gate is unwired (World runs: %v)", gate, worldCalls)
 			continue
 		}
-		if slices.Contains(worldDiscards, gate) {
-			t.Errorf("World() discards the result of %s() with `_ =`; its findings are printed but no longer fail the build", gate)
+		// Calling a gate is not enough, and neither is checking that its error
+		// is not thrown away with `_ =`. The natural way to make a gate
+		// advisory is to keep the `if err != nil` and log instead of
+		// returning, which is errcheck-clean and reads like real code:
+		//
+		//	if err := Lint(); err != nil {
+		//		fmt.Println("World: lint findings (non-fatal):", err)
+		//	}
+		//
+		// So what is asserted is that World stops: the gate's error has to
+		// reach a return statement.
+		if !failsOn(t, file, "World", gate) {
+			t.Errorf("World() runs %s() but does not return when it fails; its findings are reported and World succeeds anyway", gate)
 		}
 	}
 
 	prCalls := calleesOf(t, file, "PrReview")
 	if !slices.Contains(prCalls, "World") {
 		t.Errorf("PrReview() does not run World(), so it no longer inherits the static-analysis gates (PrReview runs: %v)", prCalls)
-	}
-	if slices.Contains(discardedCallsIn(t, file, "PrReview"), "World") {
-		t.Error("PrReview() discards the result of World(); the gates run but no longer fail it")
+	} else if !failsOn(t, file, "PrReview", "World") {
+		t.Error("PrReview() runs World() but does not return when it fails; the gates run but no longer fail it")
 	}
 }
 
@@ -278,15 +372,23 @@ func TestLintTargetActuallyRunsTheLinter(t *testing.T) {
 	lits := stringLiteralsIn(t, file, "Lint")
 	// "mage" is required because Lint runs a single pass carrying that build
 	// tag, which is the only reason Magefile.go is inside its own gate.
-	for _, want := range []string{"run", "./...", "--build-tags", "mage"} {
+	// "config"/"verify" are the pre-flight that rejects a config golangci-lint
+	// would otherwise silently half-ignore.
+	for _, want := range []string{"config", "verify", "run", "./...", "--build-tags", "mage"} {
 		if !slices.Contains(lits, want) {
-			t.Errorf("Lint() passes no %q argument; it must run the linter over the whole module with the mage build tag (args seen: %v)", want, lits)
+			t.Errorf("Lint() passes no %q argument; it must verify the config and then run the linter over the whole module with the mage build tag (args seen: %v)", want, lits)
 		}
 	}
-	// Flags that would make the linter report findings and still succeed.
-	for _, banned := range []string{"--issues-exit-code", "--no-config", "-c", "--config"} {
-		if slices.Contains(lits, banned) {
-			t.Errorf("Lint() passes %q; the gate must fail the build on a finding and must use the repository's own .golangci.yml (args seen: %v)", banned, lits)
+	// Deny-by-default, not a list of flags known to be bad. Blocklisting was
+	// tried and lost by one character every time: --issues-exit-code was
+	// banned and --issues-exit-code=0 walked past it, --config was banned and
+	// --new-from-rev, --new, -D and --enable-only were never on the list at
+	// all. Each of those makes the linter report findings and exit 0, or hides
+	// findings outright, and every one of them has to be spelled somewhere in
+	// this function to take effect.
+	for _, lit := range lits {
+		if !slices.Contains(allowedLintArgs, lit) {
+			t.Errorf("Lint() passes an unreviewed argument %q. Flags here can make the linter exit 0 with findings (--issues-exit-code=0), limit what it looks at (--new-from-rev, --new), turn a linter off (-D, --enable-only) or point it at another config (--config=...). Review it, then add it to allowedLintArgs (args seen: %v).", lit, lits)
 		}
 	}
 
@@ -294,6 +396,56 @@ func TestLintTargetActuallyRunsTheLinter(t *testing.T) {
 	if !slices.Contains(callees, "goEnv") {
 		t.Errorf("Lint() does not use goEnv(); without the libbpfgo cgo environment every package that imports libbpfgo fails to typecheck and the linter reports a missing bpf/bpf.h instead of any real finding (calls: %v)", callees)
 	}
+
+	// A gate that runs its tool and drops the result reports every finding and
+	// still exits 0. World checking Lint's error does not help if Lint never
+	// produces one, so each gate has to be able to fail on its own.
+	for _, gate := range []string{"Lint", "Vet", "FmtCheck"} {
+		if !returnsAnError(t, file, gate) {
+			t.Errorf("%s() has no return statement that can be non-nil; the gate runs its tool and succeeds whatever it reports", gate)
+		}
+		// Checking only for a non-nil return is not enough: Lint's config
+		// pre-flight already supplies one, so `_ = sh.RunWithV(..., "run", ...)`
+		// followed by `return nil` kept that assertion happy while the run
+		// itself became advisory.
+		if hasBlankDiscard(t, file, gate) {
+			t.Errorf("%s() throws away a call result with `_ =`; a gate that discards what its tool returned reports findings and still succeeds", gate)
+		}
+	}
+}
+
+// allowedLintArgs is every string literal Lint may pass. Adding one is a
+// deliberate act: see TestLintTargetActuallyRunsTheLinter for why this is an
+// allow-list rather than a list of flags known to be dangerous.
+var allowedLintArgs = []string{
+	"config", "verify", // pre-flight: reject a config `run` would half-ignore
+	"run",          // the gate itself
+	"--build-tags", //
+	"mage",         // so Magefile.go is inside its own gate
+	"./...",        // the whole module
+	// Diagnostics, not behaviour.
+	"%s not on PATH; install it with `go install %s`",
+}
+
+// returnsAnError reports whether fn has any return statement that is not a
+// bare `nil`, i.e. whether it can fail at all.
+func returnsAnError(t *testing.T, file *ast.File, fn string) bool {
+	t.Helper()
+	found := false
+	ast.Inspect(funcDecl(t, file, fn).Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, res := range ret.Results {
+			if ident, ok := res.(*ast.Ident); ok && ident.Name == "nil" {
+				continue
+			}
+			found = true
+		}
+		return true
+	})
+	return found
 }
 
 // golangciConfig models .golangci.yml as raw maps on purpose, all the way
@@ -307,11 +459,25 @@ func TestLintTargetActuallyRunsTheLinter(t *testing.T) {
 // document and treat an unreviewed key as a failure.
 type golangciConfig map[string]any
 
-// section returns cfg[key] as a mapping, or nil when it is absent. yaml.v3
-// decodes nested mappings into the named type, not a bare map[string]any, so
-// the assertion has to name golangciConfig.
-func (c golangciConfig) section(key string) golangciConfig {
-	m, _ := c[key].(golangciConfig)
+// section returns cfg[key] as a mapping, or nil when it is absent. It fails
+// the test when the key is present but not a mapping this code can walk.
+//
+// That case is not hypothetical: yaml.v3 decodes a mapping into the named type
+// golangciConfig only while every key in it is a string. A single non-string
+// key - `true: 1` is enough - makes it a map[any]any instead, and a silent
+// type assertion would hand back nil, which assertOnlyKnownKeys would then
+// walk to a clean pass. One stray key would blind the check on that whole
+// section.
+func (c golangciConfig) section(t *testing.T, key string) golangciConfig {
+	t.Helper()
+	raw, present := c[key]
+	if !present || raw == nil {
+		return nil
+	}
+	m, ok := raw.(golangciConfig)
+	if !ok {
+		t.Fatalf("%q in .golangci.yml is %T, not a mapping this test can inspect; a non-string key inside it would otherwise silently disable every assertion about that section", key, raw)
+	}
 	return m
 }
 
@@ -385,20 +551,20 @@ func TestLintConfigHasNoUnreviewedSections(t *testing.T) {
 	cfg := loadGolangciConfig(t)
 	assertOnlyKnownKeys(t, "top-level", cfg, "version", "linters", "issues")
 
-	linters := cfg.section("linters")
-	settings := linters.section("settings")
-	exclusions := linters.section("exclusions")
+	linters := cfg.section(t, "linters")
+	settings := linters.section(t, "settings")
+	exclusions := linters.section(t, "exclusions")
 	assertOnlyKnownKeys(t, "linters", linters, "default", "enable", "settings", "exclusions")
 	assertOnlyKnownKeys(t, "linters.settings", settings, "staticcheck")
 	assertOnlyKnownKeys(t, "linters.exclusions", exclusions, "generated", "rules")
-	assertOnlyKnownKeys(t, "issues", cfg.section("issues"), "max-issues-per-linter", "max-same-issues")
+	assertOnlyKnownKeys(t, "issues", cfg.section(t, "issues"), "max-issues-per-linter", "max-same-issues")
 }
 
 // TestLintConfigEnablesErrcheckAndStaticcheck fails if a linter is dropped from
 // the enabled set, which would make `mage lint` pass while the findings it was
 // added for come back.
 func TestLintConfigEnablesErrcheckAndStaticcheck(t *testing.T) {
-	linters := loadGolangciConfig(t).section("linters")
+	linters := loadGolangciConfig(t).section(t, "linters")
 	enabled := mapStrings(linters, "enable")
 	disabled := mapStrings(linters, "disable")
 	for _, want := range []string{"errcheck", "staticcheck"} {
@@ -418,11 +584,11 @@ func TestLintConfigEnablesErrcheckAndStaticcheck(t *testing.T) {
 // its analyses run: `checks: [all, -SA*]` leaves it enabled and silent, which
 // is indistinguishable from a passing gate.
 func TestStaticcheckKeepsItsCorrectnessChecks(t *testing.T) {
-	settings := loadGolangciConfig(t).section("linters").section("settings")
+	settings := loadGolangciConfig(t).section(t, "linters").section(t, "settings")
 	if settings == nil {
 		return // no settings block: golangci-lint's default check set applies
 	}
-	staticcheck := settings.section("staticcheck")
+	staticcheck := settings.section(t, "staticcheck")
 	if staticcheck == nil {
 		return
 	}
@@ -433,14 +599,24 @@ func TestStaticcheckKeepsItsCorrectnessChecks(t *testing.T) {
 	if !slices.Contains(checks, "all") {
 		t.Errorf("staticcheck.checks does not start from `all` (%v); the SA correctness checks may not be running", checks)
 	}
+	// Deny-by-default again: `-SA*` was the only spelling rejected, and `-*`
+	// walked straight past it while disabling the SA family just as
+	// thoroughly. Only the three reviewed style-family negations are allowed.
+	reviewedNegations := []string{"-ST*", "-QF*", "-S1*"}
 	for _, check := range checks {
-		// The SA family is the bug-finding half of staticcheck and the reason
-		// it is in this gate at all. Disabling ST/QF/S is deliberate.
-		if strings.HasPrefix(check, "-SA") {
-			t.Errorf("staticcheck.checks disables %q; the SA correctness checks are the reason staticcheck is enabled (checks: %v)", check, checks)
+		if !strings.HasPrefix(check, "-") {
+			continue
+		}
+		if !slices.Contains(reviewedNegations, check) {
+			t.Errorf("staticcheck.checks disables %q, which is not one of the reviewed style-family negations %v. The SA correctness checks are the reason staticcheck is in this gate (checks: %v)", check, reviewedNegations, checks)
 		}
 	}
 }
+
+// reviewedExclusionText is the exact `text` regex of the one exclusion rule in
+// .golangci.yml, kept here so a change to it fails loudly instead of being
+// judged by whichever function names this test happens to probe.
+const reviewedExclusionText = "Error return value of `(syscall\\.(Close|Munmap|Chdir)|os\\.RemoveAll)` is not checked"
 
 // errcheckMessage renders the message errcheck emits for an unchecked call to
 // fn, which is what an exclusion rule's `text` regex is matched against.
@@ -473,19 +649,18 @@ func TestErrcheckExclusionsStayScopedToTheStimulusBinary(t *testing.T) {
 	exempt := []string{"syscall.Close", "syscall.Munmap", "syscall.Chdir", "os.RemoveAll"}
 	notExempt := []string{"os.Chmod", "syscall.Unlink", "unix.Getrandom", "f.Write"}
 
-	rules, _ := cfg.section("linters").section("exclusions")["rules"].([]any)
+	rules, _ := cfg.section(t, "linters").section(t, "exclusions")["rules"].([]any)
 	stimulusExempt := map[string]bool{}
 	for i, raw := range rules {
 		rule, ok := raw.(golangciConfig)
 		if !ok {
 			t.Fatalf("exclusion rule %d is %T, want a mapping", i, raw)
 		}
-		linters, _ := rule["linters"].([]any)
-		var names []string
-		for _, l := range linters {
-			names = append(names, fmt.Sprint(l))
-		}
-		if len(names) != 0 && !slices.Contains(names, "errcheck") {
+		names := mapStrings(rule, "linters")
+		// A rule naming no linters silences every one of them, and a rule
+		// naming staticcheck silences the correctness half of the gate just as
+		// effectively as one naming errcheck. Both have to be scoped.
+		if len(names) != 0 && !slices.Contains(names, "errcheck") && !slices.Contains(names, "staticcheck") {
 			continue
 		}
 		path, _ := rule["path"].(string)
@@ -511,6 +686,15 @@ func TestErrcheckExclusionsStayScopedToTheStimulusBinary(t *testing.T) {
 			t.Errorf("exclusion rule %d exempts all of cmd/ioworkload from errcheck; it must name the teardown calls it covers via `text`", i)
 			continue
 		}
+		// Compared literally, not sampled. Probing a handful of function names
+		// only proves the regex does not cover *those*: widening it to
+		// `…|.*\.(Close|Sync)` exempted every Close and Sync in the package
+		// while every probe still passed. The reviewed exemption is four named
+		// calls, so the regex that expresses it is pinned as a whole.
+		if text != reviewedExclusionText {
+			t.Errorf("exclusion rule %d's text regex has changed.\n  is:   %s\n  want: %s\nThe exemption covers four teardown calls; any other regex is a different exemption and needs reviewing, not just matching.", i, text, reviewedExclusionText)
+			continue
+		}
 		textRe, err := regexp.Compile(text)
 		if err != nil {
 			t.Fatalf("exclusion rule %d has an invalid text regex %q: %v", i, text, err)
@@ -520,6 +704,8 @@ func TestErrcheckExclusionsStayScopedToTheStimulusBinary(t *testing.T) {
 				stimulusExempt[fn] = true
 			}
 		}
+		// Kept as a cross-check on reviewedExclusionText itself: if that
+		// constant is ever updated to something broader, these still fail.
 		for _, fn := range notExempt {
 			if textRe.MatchString(errcheckMessage(fn)) {
 				t.Errorf("exclusion rule %d (text %q) also exempts %s in cmd/ioworkload; the exemption is for teardown calls, not for the syscalls a scenario exists to exercise", i, text, fn)
@@ -584,5 +770,79 @@ func TestNoNolintDirectives(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
+	}
+}
+
+// lintFixture is a package that violates exactly the two linters this gate
+// exists to run: an unchecked error (errcheck) and a dead store (staticcheck
+// SA4006). It is written to a temp directory rather than committed, so it
+// cannot itself be caught by the gate it is used to test.
+const lintFixture = `package fixture
+
+import (
+	"fmt"
+	"os"
+)
+
+func Fixture() string {
+	os.Remove("/nonexistent/lint-gate-fixture")
+	s := fmt.Sprintf("dead %d", 1)
+	s = fmt.Sprintf("live %d", 2)
+	return s
+}
+`
+
+// TestLintConfigRejectsAKnownDefect runs the repository's own .golangci.yml
+// against a package that is known to violate both enabled linters, and
+// requires it to be reported.
+//
+// Every other test in this file pins the gate by its *spelling* - which key is
+// set, which argument is passed - and each round of review has found another
+// spelling that turns it off. This one asks the only question that finally
+// matters: given this configuration, does a real defect still fail? It is what
+// catches a config that is individually plausible key by key and collectively
+// inert.
+//
+// Skipped when golangci-lint is not installed, so `go test ./...` still works
+// on a machine that has never run `mage lint`.
+func TestLintConfigRejectsAKnownDefect(t *testing.T) {
+	bin, err := exec.LookPath("golangci-lint")
+	if err != nil {
+		t.Skip("golangci-lint not on PATH; `mage lint` would report the same")
+	}
+
+	// The fixture lives in its own module so the linter does not try to load
+	// the real one, which needs the libbpfgo cgo environment to typecheck.
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	write("go.mod", "module lintfixture\n\ngo 1.26.0\n")
+	write("fixture.go", lintFixture)
+
+	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), ".golangci.yml"))
+	if err != nil {
+		t.Fatalf("read .golangci.yml: %v", err)
+	}
+	write(".golangci.yml", string(cfg))
+
+	cmd := exec.Command(bin, "run", "--output.text.path", "stdout", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	report := string(out)
+
+	if err == nil {
+		t.Errorf("the configured linter accepted a package with an unchecked error and a dead store; the gate reports nothing and would pass any tree.\n%s", report)
+	}
+	for _, want := range []struct{ linter, marker string }{
+		{"errcheck", "os.Remove"},
+		{"staticcheck", "SA4006"},
+	} {
+		if !strings.Contains(report, want.marker) {
+			t.Errorf("%s reported nothing for the fixture (looked for %q); it is enabled in name only.\n%s", want.linter, want.marker, report)
+		}
 	}
 }

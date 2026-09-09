@@ -37,7 +37,7 @@ linters:
     # internal/tracepoints/generated_tracepoints.go - say "Code generated -
     # don't change manually!", which `strict` would not recognize.
     # (internal/c/ holds generated C, which no Go linter reads.)
-    generated: lax
+    generated: disable
     rules:
       # cmd/ioworkload is not a library: it is the stimulus binary whose entire
       # job is to make specific syscalls fire so the tracer has something to

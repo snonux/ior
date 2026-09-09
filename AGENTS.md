@@ -64,15 +64,27 @@ beyond those four, if a second `.golangci.yaml`/`.toml`/`.json` appears and
 shadows the reviewed config, or if a `//nolint` directive — with or without a
 space after the slashes — appears anywhere in the tree.
 
-Its config assertions are deny-by-default over the **whole document**: any key
-not on the reviewed list fails the test. That matters because the ways found so
-far to silence this gate were each a different key from the one the tests were
-watching — `linters.disable` beats `enable`, `exclusions.paths` and `.presets`
-beat `exclusions.rules`, `settings.errcheck.exclude-functions` exempts a
-function module-wide, and `run.issues-exit-code: 0` or `run.tests: false`
-silence it from a section none of those appear in. When adding a key, read what
-it does and then add it to the known set in
-`internal/buildgate/buildgate_test.go`.
+Its config assertions are deny-by-default down to the sections it walks — top
+level, `linters`, `linters.settings`, `linters.exclusions` and `issues` — so a
+key not on the reviewed list fails the test. That matters because the ways
+found so far to silence this gate were each a different key from the one the
+tests were watching: `linters.disable` beats `enable`, `exclusions.paths` and
+`.presets` beat `exclusions.rules`, `settings.errcheck.exclude-functions`
+exempts a function module-wide, and `run.issues-exit-code: 0` or
+`run.tests: false` silence it from a section none of those appear in. When
+adding a key, read what it does and then add it to the known set in
+`internal/buildgate/buildgate_test.go`. `mage lint` also runs
+`golangci-lint config verify` before the run itself, because `run` ignores keys
+it does not recognize and would otherwise report "0 issues" from a config
+nobody reviewed.
+
+Pinning a configuration by its spelling is a losing game, though — three rounds
+of review each found another spelling that turned the gate off, twice by a
+single character. So the assertion that actually matters is behavioural:
+`TestLintConfigRejectsAKnownDefect` runs this repository's `.golangci.yml`
+against a throwaway package containing an unchecked error and a dead store, and
+requires both to be reported. A configuration that is plausible key by key and
+collectively inert fails there regardless of how it was spelled.
 
 `golangci-lint` itself is not pinned (`mage lint` names `@latest` when it is
 missing), so a check set can differ between machines; the gate is a floor, not
@@ -94,7 +106,7 @@ mage bench        # Run benchmarks
 mage prReview     # Run PR review baseline: world + benchProf
 mage clean        # Clean build artifacts
 mage mrproper     # Clean + remove generated outputs (*.zst, *.svg, *.prof, *.pdf, *.tmp…)
-mage world        # Clean + generate + test + fmtCheck + vet + lint + build (recommended reset path)
+mage world        # Clean + generate + fmtCheck + vet + lint + test + build (recommended reset path)
 mage demo         # Regen docs/tutorial/ GIFs + screenshots (needs vhs+ttyd, sudo -v warmed)
 TAPE=07-stream-live mage demoOne       # Regen one demo tape only
 mage installDemoTools  # One-time: install vhs (go install) + ttyd (dnf) — Fedora/RHEL/Rocky only
