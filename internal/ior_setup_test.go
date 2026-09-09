@@ -129,14 +129,21 @@ func TestLoadBPFModuleUsesOverridePathWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestSetupTraceInfraRejectsAnUnusableFilterBeforeSignallingStart pins the
+// TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup pins the
 // contract the TUI trace starter depends on: the started channel is closed
 // only for a trace that is really running. A comm pattern longer than the
-// kernel's fixed-size comm field can never match, so setup must fail with that
-// error and leave the signal unsent - the TUI reads a closed channel as
-// "attached" and stops listening for errors, so a failure signalled afterwards
-// reaches nobody and leaves a live-looking, permanently empty dashboard.
-func TestSetupTraceInfraRejectsAnUnusableFilterBeforeSignallingStart(t *testing.T) {
+// kernel's fixed-size comm field can never match, so setup must reject it and
+// leave the signal unsent - the TUI reads a closed channel as "attached" and
+// stops listening for errors, so a failure after that point is invisible.
+//
+// The name says "before any BPF setup" rather than "before signalling start"
+// because that is the stronger thing this actually pins when run unprivileged:
+// setupBPFModule fails first on rlimit for a normal user, so the only way to
+// see the filter error here is for validation to precede it. As root the
+// started-channel assertion below is the one that carries the test. Both are
+// worth having - the ordering also means an unusable filter costs no probe
+// attach/detach cycle.
+func TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.GlobalFilter = globalfilter.Filter{
 		Comm: &globalfilter.StringFilter{
@@ -165,5 +172,49 @@ func TestSetupTraceInfraRejectsAnUnusableFilterBeforeSignallingStart(t *testing.
 	case <-started:
 		t.Fatal("setupTraceInfra signalled trace start for a trace it could not start")
 	default:
+	}
+}
+
+// TestNewTraceEventLoopFailsWhenTheAggregateMapIsMissing covers the other half
+// of the defect setupTraceInfra's signal ordering exists for. The reported
+// trigger was an over-long comm filter, which fails in newEventLoop; a stale
+// IOR_BPF_OBJECT without syscall_aggregate_map fails one step later, in
+// newSyscallAggregateConsumer. Both used to happen after the TUI had been told
+// the trace was running.
+//
+// Grouping them in newTraceEventLoop is what lets setupTraceInfra hold the
+// signal until every fallible step has passed, so what matters here is that
+// this function reports the second failure rather than swallowing it: a nil
+// module stands in for a BPF object whose map is absent.
+func TestNewTraceEventLoopFailsWhenTheAggregateMapIsMissing(t *testing.T) {
+	el, err := newTraceEventLoop(flags.NewFlags(), nil, func(...any) {})
+	if err == nil {
+		t.Fatal("newTraceEventLoop accepted a module with no syscall aggregate map")
+	}
+	if el != nil {
+		t.Errorf("newTraceEventLoop returned an event loop alongside its error: %v", el)
+	}
+}
+
+// TestNewTraceEventLoopRejectsAnUnusableFilter is the first half of the same
+// pair: newEventLoop validates the filter, and its failure has to reach
+// setupTraceInfra rather than being reported as a running trace.
+func TestNewTraceEventLoopRejectsAnUnusableFilter(t *testing.T) {
+	cfg := flags.NewFlags()
+	cfg.GlobalFilter = globalfilter.Filter{
+		Comm: &globalfilter.StringFilter{
+			Pattern: strings.Repeat("a", types.MAX_PROGNAME_LENGTH+1),
+		},
+	}
+
+	el, err := newTraceEventLoop(cfg, nil, func(...any) {})
+	if err == nil {
+		t.Fatal("newTraceEventLoop accepted a comm filter longer than the kernel comm field")
+	}
+	if !strings.Contains(err.Error(), "comm filter max size") {
+		t.Fatalf("newTraceEventLoop error = %v, want the comm-filter length rejection", err)
+	}
+	if el != nil {
+		t.Errorf("newTraceEventLoop returned an event loop alongside its error: %v", el)
 	}
 }
