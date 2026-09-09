@@ -285,15 +285,19 @@ func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
 	}
 
 	// A return whose last result is a bare nil is the success return. Anything
-	// else after the signal is an error the caller can no longer be told about.
+	// else after the signal is an error the caller can no longer be told about
+	// - including a naked `return`, which this function's named results make
+	// perfectly capable of carrying a non-nil err.
 	ast.Inspect(decl.Body, func(n ast.Node) bool {
 		ret, isReturn := n.(*ast.ReturnStmt)
-		if !isReturn || ret.Pos() <= signalPos || len(ret.Results) == 0 {
+		if !isReturn || ret.Pos() <= signalPos {
 			return true
 		}
-		last := ret.Results[len(ret.Results)-1]
-		if ident, isIdent := last.(*ast.Ident); isIdent && ident.Name == "nil" {
-			return true
+		if len(ret.Results) != 0 {
+			last := ret.Results[len(ret.Results)-1]
+			if ident, isIdent := last.(*ast.Ident); isIdent && ident.Name == "nil" {
+				return true
+			}
 		}
 		t.Errorf(
 			"setupTraceInfra returns an error at %s, after signalTraceStarted at %s.\n"+
