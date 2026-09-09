@@ -841,7 +841,15 @@ func TestLintArgvRejectsAKnownDefect(t *testing.T) {
 // test in this package passing while `mage lint` reports success on a tree
 // full of findings.
 //
-// Cost is a git archive plus a BPF build, around 20s. That is why it is
+// It tests HEAD, not the working tree, because `git archive` is what makes the
+// copy hermetic - no build artifacts, no half-finished edits. So an
+// *uncommitted* .golangci.yml change is invisible here; that is deliberate and
+// covered elsewhere: TestLintArgvRejectsAKnownDefect reads the working tree's
+// config and fails on it. Between them the target is checked as committed and
+// the configuration as it currently stands. Verified: an uncommitted
+// `linters.disable: [errcheck]` passes this test and fails that one.
+//
+// Cost is a git archive plus a BPF build, around 24s. That is why it is
 // skipped under -short; `mage test` does not pass -short, so the gate's own
 // gate runs in the suite that matters.
 func TestMageLintFailsOnAPlantedDefect(t *testing.T) {
