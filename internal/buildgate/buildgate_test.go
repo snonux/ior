@@ -3,6 +3,7 @@ package buildgate
 import (
 	"fmt"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -58,37 +59,158 @@ func funcDecl(t *testing.T, file *ast.File, fn string) *ast.FuncDecl {
 	return nil
 }
 
-// hasBlankDiscard reports whether fn throws away any call result with `_ =`.
-// In a gate function that is always a bug: `_ = sh.RunWithV(...)` runs the
-// tool, prints every finding, and returns nil.
-func hasBlankDiscard(t *testing.T, file *ast.File, fn string) bool {
+// toolCall is one invocation of an external tool from a Mage target: the
+// literal arguments it was given, and whether its result reaches a return.
+type toolCall struct {
+	args     []string
+	returned bool
+}
+
+// shRunners are the sh helpers that actually execute something. A target that
+// calls none of them runs no tool, whatever its body says.
+var shRunners = []string{"Run", "RunV", "RunWith", "RunWithV", "Output", "OutputWith"}
+
+// toolCallsIn returns every `sh.Run*(...)` invocation in the body of fn.
+//
+// This models what a gate has to do - run a tool and fail when it fails -
+// rather than what its source happens to contain. Asserting on the text was
+// tried and lost repeatedly: a `fmt.Println(goEnv(), "run", "./...")` body
+// satisfies a check for those literals while running nothing, a helper that
+// wraps the call moves the discard out of the function being inspected, and an
+// argument supplied by a top-level const never appears in the body at all.
+// Each of those left `mage lint` exiting 0 with real findings present.
+func toolCallsIn(t *testing.T, file *ast.File, fn string) []toolCall {
 	t.Helper()
+	decl := funcDecl(t, file, fn)
+
+	isRunner := func(call *ast.CallExpr) bool {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "sh" && slices.Contains(shRunners, sel.Sel.Name)
+	}
+	// String literals, plus identifiers that resolve to a top-level string
+	// constant - routing a flag through a const is otherwise a way to keep it
+	// out of the body entirely. Anything still unreadable is recorded as the
+	// empty string, which the allow-list rejects: an argument this test cannot
+	// read is one it cannot vouch for.
+	argsOf := func(call *ast.CallExpr) []string {
+		var args []string
+		for _, arg := range call.Args {
+			switch a := arg.(type) {
+			case *ast.BasicLit:
+				if a.Kind != token.STRING {
+					args = append(args, "")
+					continue
+				}
+				unquoted, err := strconv.Unquote(a.Value)
+				if err != nil {
+					args = append(args, "")
+					continue
+				}
+				args = append(args, unquoted)
+			case *ast.Ident:
+				if value, ok := lookupConstString(file, a.Name); ok {
+					args = append(args, value)
+					continue
+				}
+				// A slice built up in the body (Vet's package list) is covered
+				// by that target's own assertions rather than here.
+				if a.Name == "packages" || a.Name == "args" {
+					continue
+				}
+				args = append(args, "")
+			case *ast.CallExpr:
+				continue // goEnv(), append(...) and friends supply no flags
+			default:
+				args = append(args, "")
+			}
+		}
+		return args
+	}
+
+	var calls []toolCall
+	var walk func(n ast.Node, returned bool)
+	walk = func(n ast.Node, returned bool) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			switch stmt := n.(type) {
+			case *ast.ReturnStmt:
+				for _, res := range stmt.Results {
+					if call, ok := res.(*ast.CallExpr); ok && isRunner(call) {
+						calls = append(calls, toolCall{args: argsOf(call), returned: true})
+						return false
+					}
+				}
+			case *ast.IfStmt:
+				// if err := sh.Run...(); err != nil { ... return err ... }
+				if stmt.Init != nil {
+					assign, ok := stmt.Init.(*ast.AssignStmt)
+					if ok {
+						for _, rhs := range assign.Rhs {
+							call, ok := rhs.(*ast.CallExpr)
+							if !ok || !isRunner(call) {
+								continue
+							}
+							calls = append(calls, toolCall{args: argsOf(call), returned: propagatesError(stmt.Body)})
+						}
+					}
+				}
+			case *ast.AssignStmt:
+				// Any other assignment form, including `_ = sh.Run...()`.
+				if _, ok := n.(*ast.AssignStmt); ok {
+					for _, rhs := range stmt.Rhs {
+						call, ok := rhs.(*ast.CallExpr)
+						if !ok || !isRunner(call) {
+							continue
+						}
+						blank := true
+						for _, lhs := range stmt.Lhs {
+							if ident, ok := lhs.(*ast.Ident); !ok || ident.Name != "_" {
+								blank = false
+							}
+						}
+						if blank {
+							calls = append(calls, toolCall{args: argsOf(call), returned: false})
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	walk(decl.Body, false)
+	return calls
+}
+
+// propagatesError reports whether the branch taken when a call failed returns
+// something other than a bare nil. `return nil` there, or no return at all,
+// means the failure was swallowed and the caller succeeds anyway.
+func propagatesError(body ast.Node) bool {
 	found := false
-	ast.Inspect(funcDecl(t, file, fn).Body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
+	ast.Inspect(body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
 		if !ok {
 			return true
 		}
-		for _, lhs := range assign.Lhs {
-			if ident, ok := lhs.(*ast.Ident); !ok || ident.Name != "_" {
-				return true
-			}
+		if len(ret.Results) == 0 {
+			return true
 		}
-		found = true
+		for _, res := range ret.Results {
+			if ident, ok := res.(*ast.Ident); ok && ident.Name == "nil" {
+				continue
+			}
+			found = true
+		}
 		return true
 	})
 	return found
 }
 
-// failsOn reports whether a failure of gate() makes fn stop. It looks for the
-// `if err := gate(); err != nil { ... return ... }` shape: the gate called in
-// an if-statement's init, and a return somewhere in the branch taken when it
-// errored. A bare `return gate()` counts too.
-//
-// Checking for a return rather than for the absence of `_ =` is deliberate:
-// logging the error and carrying on is the more natural way to make a gate
-// advisory, it passes errcheck, and it leaves every other assertion here
-// happy.
+// failsOn reports whether a failure of gate() makes fn stop: the gate called
+// in an if-statement whose branch propagates a non-nil error, `return gate()`,
+// or mg.Deps/mg.SerialDeps, which abort the run on any dependency failure.
 func failsOn(t *testing.T, file *ast.File, fn, gate string) bool {
 	t.Helper()
 	callsGate := func(n ast.Node) bool {
@@ -105,31 +227,34 @@ func failsOn(t *testing.T, file *ast.File, fn, gate string) bool {
 		})
 		return found
 	}
-	hasReturn := func(n ast.Node) bool {
-		found := false
-		ast.Inspect(n, func(n ast.Node) bool {
-			if _, ok := n.(*ast.ReturnStmt); ok {
-				found = true
-			}
-			return true
-		})
-		return found
-	}
 
 	fails := false
 	ast.Inspect(funcDecl(t, file, fn).Body, func(n ast.Node) bool {
 		switch stmt := n.(type) {
 		case *ast.ReturnStmt:
-			// return gate()
 			for _, res := range stmt.Results {
 				if callsGate(res) {
 					fails = true
 				}
 			}
 		case *ast.IfStmt:
-			// if err := gate(); err != nil { ... return ... }
-			if stmt.Init != nil && callsGate(stmt.Init) && hasReturn(stmt.Body) {
+			if stmt.Init != nil && callsGate(stmt.Init) && propagatesError(stmt.Body) {
 				fails = true
+			}
+		case *ast.CallExpr:
+			// mg.Deps(Vet, Lint) / mg.SerialDeps(...) abort on failure.
+			sel, ok := stmt.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "mg" || !strings.HasSuffix(sel.Sel.Name, "Deps") {
+				return true
+			}
+			for _, arg := range stmt.Args {
+				if ident, ok := arg.(*ast.Ident); ok && ident.Name == gate {
+					fails = true
+				}
 			}
 		}
 		return true
@@ -211,28 +336,65 @@ func goFilesOutside(t *testing.T, prefix string) []string {
 
 // TestNoNegatedMageConstraint underwrites Lint running a single pass. `mage
 // lint` passes --build-tags mage, which covers every package plus Magefile.go
-// only while nothing is excluded *by* that tag. A `!mage` constraint would
-// drop a file out of the one pass that runs.
+// only while nothing is excluded *by* that tag. A file that builds without the
+// tag but not with it would never be linted at all.
+//
+// The constraint is evaluated rather than pattern-matched. Three rounds of
+// regex each missed a spelling the toolchain accepts - `!mage`, then `!(mage)`
+// and `! mage`, then `!(linux && mage)` - and there is no reason to expect the
+// fourth to be the last. go/build/constraint answers the actual question:
+// is there a file the default build includes and the tagged build drops?
 func TestNoNegatedMageConstraint(t *testing.T) {
 	root := repoRoot(t)
-	// `!(mage)` and `! mage` are both accepted by the toolchain and exclude
-	// the file just as thoroughly as `!mage`, so match a negation followed by
-	// anything but a word character before the tag.
-	negated := regexp.MustCompile(`^//\s*(go:build|\+build).*![\s(]*mage\b`)
 	for _, rel := range goFilesOutside(t, "\x00") {
 		src, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
-		for i, line := range strings.Split(string(src), "\n") {
-			if strings.HasPrefix(line, "package ") {
-				break // build constraints must precede the package clause
-			}
-			if negated.MatchString(line) {
-				t.Errorf("%s:%d has a !mage build constraint (%s); `mage lint` runs a single pass with -tags mage, so this file would not be linted at all", rel, i+1, strings.TrimSpace(line))
-			}
+		line, expr := buildConstraint(t, rel, string(src))
+		if expr == nil {
+			continue
+		}
+		withTag := expr.Eval(func(tag string) bool { return tag == "mage" || tag == "linux" || tag == "amd64" })
+		withoutTag := expr.Eval(func(tag string) bool { return tag == "linux" || tag == "amd64" })
+		if withoutTag && !withTag {
+			t.Errorf("%s:%d is excluded by the mage build tag (%s); `mage lint` runs a single pass with -tags mage, so this file would not be linted at all", rel, line, strings.TrimSpace(constraintText(string(src))))
 		}
 	}
+}
+
+// buildConstraint returns the parsed //go:build expression of a file, or nil
+// when it has none.
+func buildConstraint(t *testing.T, rel, src string) (int, constraint.Expr) {
+	t.Helper()
+	for i, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(line, "package ") {
+			return 0, nil // constraints must precede the package clause
+		}
+		if !constraint.IsGoBuild(line) {
+			continue
+		}
+		expr, err := constraint.Parse(line)
+		if err != nil {
+			t.Errorf("%s:%d has an unparseable build constraint %q: %v", rel, i+1, line, err)
+			return 0, nil
+		}
+		return i + 1, expr
+	}
+	return 0, nil
+}
+
+// constraintText returns the //go:build line of a file, for error messages.
+func constraintText(src string) string {
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(line, "package ") {
+			return ""
+		}
+		if constraint.IsGoBuild(line) {
+			return line
+		}
+	}
+	return ""
 }
 
 // TestNoNestedModules underwrites every `./...` in this repository. A go.mod
@@ -274,7 +436,11 @@ func TestWorldRunsTheStaticAnalysisGates(t *testing.T) {
 	file := parseMagefile(t)
 
 	worldCalls := calleesOf(t, file, "World")
-	for _, gate := range []string{"FmtCheck", "Vet", "Lint"} {
+	// Test is in this list for a reason that is easy to miss: everything else
+	// in this package is a test, so a World that stops running the suite - or
+	// a Test narrowed to a subset of packages - switches every assertion here
+	// off in one edit while the gate keeps reporting success.
+	for _, gate := range []string{"FmtCheck", "Vet", "Lint", "Test"} {
 		if !slices.Contains(worldCalls, gate) {
 			t.Errorf("World() does not run %s(); that gate is unwired (World runs: %v)", gate, worldCalls)
 			continue
@@ -324,6 +490,37 @@ func stringLiteralsIn(t *testing.T, file *ast.File, fn string) []string {
 	return lits
 }
 
+// lookupConstString returns the value of the top-level string constant name.
+func lookupConstString(file *ast.File, name string) (string, bool) {
+	for _, d := range file.Decls {
+		gen, ok := d.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, ident := range vs.Names {
+				if ident.Name != name || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				unquoted, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					return "", false
+				}
+				return unquoted, true
+			}
+		}
+	}
+	return "", false
+}
+
 // constString returns the value of the top-level string constant name.
 func constString(t *testing.T, file *ast.File, name string) string {
 	t.Helper()
@@ -357,74 +554,132 @@ func constString(t *testing.T, file *ast.File, name string) string {
 	return ""
 }
 
-// TestLintTargetActuallyRunsTheLinter guards the half of the wiring World
-// cannot see. World can call Lint() faithfully while Lint has been narrowed to
-// a subset of packages, pointed at a different binary, told to exit 0
-// regardless, or stubbed out entirely - and every one of those leaves `mage
-// lint` printing a reassuring "0 issues".
-func TestLintTargetActuallyRunsTheLinter(t *testing.T) {
+// allowedToolArgs lists, per Mage target, every literal argument it may pass
+// to an external tool. It is an allow-list because blocklisting lost by one
+// character twice: --issues-exit-code was banned and --issues-exit-code=0
+// walked past it, --config was banned and --new-from-rev, --new, -D and
+// --enable-only were never on the list at all. Each of those makes the linter
+// report findings and exit 0, or hides them outright.
+//
+// An argument this test cannot read as a string literal is recorded as "" and
+// rejected here too, so routing a flag through a const or a variable does not
+// evade the list.
+var allowedToolArgs = map[string][]string{
+	"Lint": {
+		"golangci-lint",    // the binary, via golangciLintBin
+		"config", "verify", // pre-flight: reject a config `run` would half-ignore
+		"run",          // the gate itself
+		"--build-tags", // so Magefile.go is inside its own gate
+		"mage",
+		"./...", // the whole module
+	},
+	"Vet": {
+		"go", // the binary
+		"vet",
+		"-unsafeptr=false", // the one scoped analyzer exemption
+		vetUnsafeptrExempt,
+	},
+}
+
+// vetUnsafeptrExempt is the single package vetted with unsafeptr disabled. It
+// is duplicated from Magefile.go rather than imported because that file is
+// behind the mage build tag; TestVetExemptionStaysScoped keeps them in step.
+const vetUnsafeptrExempt = "ior/cmd/ioworkload"
+
+// requiredToolArgs are arguments each target must pass, as opposed to merely
+// being allowed to.
+var requiredToolArgs = map[string][]string{
+	"Lint": {"run", "--build-tags", "mage", "./..."},
+	"Vet":  {"vet"},
+}
+
+// TestGatesActuallyRunTheirTool is the structural half of the gate's guarantee:
+// each target has to invoke a tool, over the whole module, and stop when it
+// fails.
+//
+// Every assertion here is on the *call* rather than on the text of the
+// function, because the text has been a poor proxy. A body of
+// `fmt.Println(goEnv(), "run", "./...")` contains every required literal and
+// runs nothing; a helper wrapping the invocation moves the swallowed error out
+// of the function; a flag supplied by a top-level const never appears in the
+// body. All three left `mage lint` reporting success with real findings
+// present.
+func TestGatesActuallyRunTheirTool(t *testing.T) {
 	file := parseMagefile(t)
 
 	if bin := constString(t, file, "golangciLintBin"); bin != "golangci-lint" {
 		t.Errorf("golangciLintBin is %q, not \"golangci-lint\"; Lint runs something else", bin)
 	}
 
-	lits := stringLiteralsIn(t, file, "Lint")
-	// "mage" is required because Lint runs a single pass carrying that build
-	// tag, which is the only reason Magefile.go is inside its own gate.
-	// "config"/"verify" are the pre-flight that rejects a config golangci-lint
-	// would otherwise silently half-ignore.
-	for _, want := range []string{"config", "verify", "run", "./...", "--build-tags", "mage"} {
-		if !slices.Contains(lits, want) {
-			t.Errorf("Lint() passes no %q argument; it must verify the config and then run the linter over the whole module with the mage build tag (args seen: %v)", want, lits)
+	for _, target := range []string{"Lint", "Vet"} {
+		calls := toolCallsIn(t, file, target)
+		if len(calls) == 0 {
+			t.Errorf("%s() makes no sh.Run* call; it runs no tool at all, whatever its body says", target)
+			continue
 		}
-	}
-	// Deny-by-default, not a list of flags known to be bad. Blocklisting was
-	// tried and lost by one character every time: --issues-exit-code was
-	// banned and --issues-exit-code=0 walked past it, --config was banned and
-	// --new-from-rev, --new, -D and --enable-only were never on the list at
-	// all. Each of those makes the linter report findings and exit 0, or hides
-	// findings outright, and every one of them has to be spelled somewhere in
-	// this function to take effect.
-	for _, lit := range lits {
-		if !slices.Contains(allowedLintArgs, lit) {
-			t.Errorf("Lint() passes an unreviewed argument %q. Flags here can make the linter exit 0 with findings (--issues-exit-code=0), limit what it looks at (--new-from-rev, --new), turn a linter off (-D, --enable-only) or point it at another config (--config=...). Review it, then add it to allowedLintArgs (args seen: %v).", lit, lits)
+
+		var seen []string
+		// Every invocation has to be gated, not just one of them. Lint makes
+		// two - the config pre-flight and the run - and accepting "any" let
+		// the pre-flight's `return err` vouch for a run whose error was
+		// printed and dropped.
+		ungated := 0
+		for _, call := range calls {
+			seen = append(seen, call.args...)
+			if !call.returned {
+				ungated++
+			}
+			for _, arg := range call.args {
+				if arg == "" {
+					t.Errorf("%s() passes a non-literal argument this test cannot read; route flags through literals so the allow-list can vouch for them", target)
+					continue
+				}
+				if !slices.Contains(allowedToolArgs[target], arg) {
+					t.Errorf("%s() passes an unreviewed argument %q. Flags here can make the tool exit 0 with findings (--issues-exit-code=0), limit what it looks at (--new-from-rev, --new), turn a linter off (-D, --enable-only) or point it at another config (--config=...). Review it, then add it to allowedToolArgs (args seen: %v).", target, arg, seen)
+				}
+			}
+		}
+		if ungated != 0 {
+			t.Errorf("%s() makes %d sh.Run* call(s) whose error never reaches a return; that tool's findings are printed and the target succeeds anyway (args seen: %v)", target, ungated, seen)
+		}
+		for _, want := range requiredToolArgs[target] {
+			if !slices.Contains(seen, want) {
+				t.Errorf("%s() passes no %q argument (args seen: %v)", target, want, seen)
+			}
 		}
 	}
 
-	callees := calleesOf(t, file, "Lint")
-	if !slices.Contains(callees, "goEnv") {
-		t.Errorf("Lint() does not use goEnv(); without the libbpfgo cgo environment every package that imports libbpfgo fails to typecheck and the linter reports a missing bpf/bpf.h instead of any real finding (calls: %v)", callees)
+	// FmtCheck walks the tree itself rather than shelling out, so it is pinned
+	// by the weaker property that it can fail at all.
+	if !returnsAnError(t, file, "FmtCheck") {
+		t.Error("FmtCheck() has no return statement that can be non-nil; it reports formatting drift and succeeds anyway")
 	}
 
-	// A gate that runs its tool and drops the result reports every finding and
-	// still exits 0. World checking Lint's error does not help if Lint never
-	// produces one, so each gate has to be able to fail on its own.
-	for _, gate := range []string{"Lint", "Vet", "FmtCheck"} {
-		if !returnsAnError(t, file, gate) {
-			t.Errorf("%s() has no return statement that can be non-nil; the gate runs its tool and succeeds whatever it reports", gate)
+	if testArgs := toolCallsIn(t, file, "Test"); len(testArgs) == 0 {
+		t.Error("Test() makes no sh.Run* call; it runs no tests at all")
+	} else {
+		var seen []string
+		for _, call := range testArgs {
+			seen = append(seen, call.args...)
 		}
-		// Checking only for a non-nil return is not enough: Lint's config
-		// pre-flight already supplies one, so `_ = sh.RunWithV(..., "run", ...)`
-		// followed by `return nil` kept that assertion happy while the run
-		// itself became advisory.
-		if hasBlankDiscard(t, file, gate) {
-			t.Errorf("%s() throws away a call result with `_ =`; a gate that discards what its tool returned reports findings and still succeeds", gate)
+		if !slices.Contains(seen, "./...") {
+			t.Errorf("Test() does not run ./... ; narrowing it drops packages out of `mage world` - internal/buildgate included, which would disable every assertion in this file (args seen: %v)", seen)
 		}
+	}
+
+	if !slices.Contains(calleesOf(t, file, "Lint"), "goEnv") {
+		t.Error("Lint() does not use goEnv(); without the libbpfgo cgo environment every package that imports libbpfgo fails to typecheck and the linter reports a missing bpf/bpf.h instead of any real finding")
 	}
 }
 
-// allowedLintArgs is every string literal Lint may pass. Adding one is a
-// deliberate act: see TestLintTargetActuallyRunsTheLinter for why this is an
-// allow-list rather than a list of flags known to be dangerous.
-var allowedLintArgs = []string{
-	"config", "verify", // pre-flight: reject a config `run` would half-ignore
-	"run",          // the gate itself
-	"--build-tags", //
-	"mage",         // so Magefile.go is inside its own gate
-	"./...",        // the whole module
-	// Diagnostics, not behaviour.
-	"%s not on PATH; install it with `go install %s`",
+// TestVetExemptionStaysScoped pins the one analyzer exemption to one package.
+// Widening it (to "./..." , say) disables unsafeptr module-wide while `mage
+// vet` keeps exiting 0, and the constant lives in Magefile.go where no other
+// test reads it.
+func TestVetExemptionStaysScoped(t *testing.T) {
+	if got := constString(t, parseMagefile(t), "vetUnsafeptrExempt"); got != vetUnsafeptrExempt {
+		t.Errorf("vetUnsafeptrExempt is %q, want %q. It disables the unsafeptr analyzer for whatever it names; see the comment above it in Magefile.go for why exactly one package needs that.", got, vetUnsafeptrExempt)
+	}
 }
 
 // returnsAnError reports whether fn has any return statement that is not a
@@ -557,61 +812,25 @@ func TestLintConfigHasNoUnreviewedSections(t *testing.T) {
 	assertOnlyKnownKeys(t, "linters", linters, "default", "enable", "settings", "exclusions")
 	assertOnlyKnownKeys(t, "linters.settings", settings, "staticcheck")
 	assertOnlyKnownKeys(t, "linters.exclusions", exclusions, "generated", "rules")
+	// The value matters, not just the key. Under golangci-lint's default
+	// `lax`, prefixing any file with "// Code generated by hand. DO NOT EDIT."
+	// removes it from the gate exactly the way //nolint does - and //nolint is
+	// banned outright for that reason. `strict` does not help: it matches that
+	// header too. Only `disable` closes it, and it costs nothing, because the
+	// repository's two generated Go files have no findings under any setting.
+	if generated, _ := exclusions["generated"].(string); generated != "disable" {
+		t.Errorf("linters.exclusions.generated is %q, want \"disable\". Any other value lets a hand-written \"Code generated\" header take a file out of the gate.", generated)
+	}
 	assertOnlyKnownKeys(t, "issues", cfg.section(t, "issues"), "max-issues-per-linter", "max-same-issues")
 }
 
-// TestLintConfigEnablesErrcheckAndStaticcheck fails if a linter is dropped from
-// the enabled set, which would make `mage lint` pass while the findings it was
-// added for come back.
-func TestLintConfigEnablesErrcheckAndStaticcheck(t *testing.T) {
-	linters := loadGolangciConfig(t).section(t, "linters")
-	enabled := mapStrings(linters, "enable")
-	disabled := mapStrings(linters, "disable")
-	for _, want := range []string{"errcheck", "staticcheck"} {
-		if !slices.Contains(enabled, want) {
-			t.Errorf("%s is not enabled in .golangci.yml (enabled: %v)", want, enabled)
-		}
-		// `disable` wins over `enable`, so naming a linter in both leaves it
-		// listed as enabled and reporting nothing.
-		if slices.Contains(disabled, want) {
-			t.Errorf("%s appears in linters.disable, which overrides linters.enable; it reports nothing", want)
-		}
-	}
-}
-
-// TestStaticcheckKeepsItsCorrectnessChecks guards the settings side of the
-// same question. Naming staticcheck under `enable` says nothing about which of
-// its analyses run: `checks: [all, -SA*]` leaves it enabled and silent, which
-// is indistinguishable from a passing gate.
-func TestStaticcheckKeepsItsCorrectnessChecks(t *testing.T) {
-	settings := loadGolangciConfig(t).section(t, "linters").section(t, "settings")
-	if settings == nil {
-		return // no settings block: golangci-lint's default check set applies
-	}
-	staticcheck := settings.section(t, "staticcheck")
-	if staticcheck == nil {
-		return
-	}
-	checks := mapStrings(staticcheck, "checks")
-	if len(checks) == 0 {
-		return
-	}
-	if !slices.Contains(checks, "all") {
-		t.Errorf("staticcheck.checks does not start from `all` (%v); the SA correctness checks may not be running", checks)
-	}
-	// Deny-by-default again: `-SA*` was the only spelling rejected, and `-*`
-	// walked straight past it while disabling the SA family just as
-	// thoroughly. Only the three reviewed style-family negations are allowed.
-	reviewedNegations := []string{"-ST*", "-QF*", "-S1*"}
-	for _, check := range checks {
-		if !strings.HasPrefix(check, "-") {
-			continue
-		}
-		if !slices.Contains(reviewedNegations, check) {
-			t.Errorf("staticcheck.checks disables %q, which is not one of the reviewed style-family negations %v. The SA correctness checks are the reason staticcheck is in this gate (checks: %v)", check, reviewedNegations, checks)
-		}
-	}
-}
+// The behavioural test above subsumes two assertions that used to live here:
+// that errcheck and staticcheck are named under `linters.enable`, and that
+// staticcheck's SA family is not switched off. Both were spelling checks for
+// conditions TestLintConfigRejectsAKnownDefect detects directly, and detects
+// better - it also catches a linter that is enabled and inert, which naming
+// alone cannot. They were deleted rather than kept as belt and braces, since
+// the whole argument of this file is that spelling assertions lose.
 
 // reviewedExclusionText is the exact `text` regex of the one exclusion rule in
 // .golangci.yml, kept here so a change to it fails loudly instead of being
@@ -712,10 +931,20 @@ func TestErrcheckExclusionsStayScopedToTheStimulusBinary(t *testing.T) {
 			}
 		}
 	}
-	for _, fn := range exempt {
-		if !stimulusExempt[fn] {
-			t.Errorf("no errcheck exclusion covers %s in %s; either the stimulus-binary exclusion was removed (and `mage lint` now fails) or its regexes no longer match", fn, stimulus)
+	// Deliberately not "every one of the four must be covered". Deleting the
+	// exclusion and checking all 160 call sites instead is a strengthening,
+	// and `mage lint` would fail loudly if it were done by halves - so that
+	// direction needs no guard here. What this catches is the exclusion
+	// silently ceasing to match what it names while still being present: some
+	// covered, some not, which is drift rather than a decision.
+	if len(stimulusExempt) != 0 && len(stimulusExempt) != len(exempt) {
+		var missing []string
+		for _, fn := range exempt {
+			if !stimulusExempt[fn] {
+				missing = append(missing, fn)
+			}
 		}
+		t.Errorf("the cmd/ioworkload exclusion covers some of its teardown calls but not %v; its regexes have drifted from the set they are documented to cover", missing)
 	}
 }
 
@@ -735,7 +964,13 @@ func TestNoNolintDirectives(t *testing.T) {
 	// The spacing is deliberate: golangci-lint honours `// nolint` with any
 	// run of spaces after the slashes exactly as it honours `//nolint`, so
 	// matching the tight form alone left the ban one keystroke wide.
-	needle := regexp.MustCompile(`//[ \t]*` + "nolint")
+	// golangci-lint trims the cutset "/ " after the comment marker before it
+	// looks for the directive, so `// /nolint` and `//  /  nolint` are honoured
+	// exactly as `//nolint` is - and a pattern matching only spaces left the
+	// ban one character wide for the second time. A tab is *not* trimmed, so
+	// `//\tnolint` does not suppress anything; it is matched anyway, because a
+	// directive that looks live and is not is worse than one that is banned.
+	needle := regexp.MustCompile(`//[/ \t]*` + "nolint")
 	_, self, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller could not identify this test file")
