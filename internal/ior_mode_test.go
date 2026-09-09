@@ -1376,6 +1376,45 @@ func TestTuiTraceStarterSurfacesAFailureArrivingAfterStart(t *testing.T) {
 	}
 }
 
+// TestTuiTraceStarterKeepsACancelledStartSilent pins the second silence rule.
+// A setup failure that loses the race with a stop is not something to show:
+// the user asked for the trace to end, and the stream buffer it would land in
+// is the TUI-owned one that gets reset in place and handed to the *next*
+// session, so the message would surface under a trace it has nothing to do
+// with. Gating on the error's identity rather than the context is what used to
+// let that through - a cancelled starter returns context.Canceled, but the
+// trace goroutine's own error is whatever really failed.
+func TestTuiTraceStarterKeepsACancelledStartSilent(t *testing.T) {
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
+	}
+	released := make(chan struct{})
+	starter := tuiTraceStarterFromRunTrace(
+		flags.NewFlags(),
+		func(_ context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop)) error {
+			<-released
+			return errors.New("setup BPF module: attach tracepoints: no such file or directory")
+		},
+	)
+
+	ctx, cancel := context.WithCancel(runtime.ContextWithRuntimeBindings(context.Background(), bindings))
+	cancel()
+	err := starter(ctx)
+	close(released)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("starter() error = %v, want context.Canceled", err)
+	}
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if rows := bindings.streamBuffer.Snapshot(); len(rows) != 0 {
+			t.Fatalf("cancelled start pushed %+v; a trace the user stopped must not warn, least of all into the next session's stream", rows[0])
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestTuiTraceStarterKeepsAnOrdinaryStopSilent guards the other side of
 // reportLateTraceError: a trace that ends without an error (the normal stop
 // and restart path, e.g. every filter or PID change) must not push a warning

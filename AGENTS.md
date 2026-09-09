@@ -249,13 +249,24 @@ committed set contains syscalls that only exist on recent mainline kernels
   function rather than resting on the reader noticing which calls can still
   fail). Signalling earlier is not a small bug: the dashboard leaves the
   "Attaching tracepoints" overlay and shows a live-looking, permanently empty
-  session with no error anywhere - reachable from the UI with a comm pattern
-  longer than `MAX_PROGNAME_LENGTH`, or from a stale `IOR_BPF_OBJECT` lacking
-  `syscall_aggregate_map`. A failure that genuinely arrives after the signal
-  (end-of-run work) goes to `reportLateTraceError`, which pushes a warning row
-  into the stream buffer - the same channel the event loop warns through.
-  Pinned by `TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup`,
-  `TestNewTraceEventLoop*` and `TestTuiTraceStarterSurfacesAFailureArrivingAfterStart`.
+  session with no error anywhere - reachable on the next trace restart from a
+  comm pattern longer than `MAX_PROGNAME_LENGTH`, or from a stale
+  `IOR_BPF_OBJECT` lacking `syscall_aggregate_map`. (Typing that pattern into
+  the filter modal takes the live-swap path, which restarts nothing and
+  validates nothing - a separate gap, task l3.)
+
+  Nothing after the signal can fail in TUI mode: `runTraceWithContext`'s only
+  remaining error source is `finaliseTrace`'s `recorder.Write`, and the
+  recorder is non-nil only for `-flamegraph`, which the mode registry makes
+  mutually exclusive with the TUI. What `reportLateTraceError` actually catches
+  is a *setup* failure that lost the race with a stop, and it stays silent when
+  the context was cancelled - gating on the error's identity instead would
+  print the old trace's failure into the next session's stream, because the TUI
+  resets that buffer in place and hands the same object to every run. Pinned by
+  `TestSetupTraceInfraRejectsAnUnusableFilterBeforeAnyBPFSetup`,
+  `TestNewTraceEventLoop*`,
+  `TestTuiTraceStarterSurfacesAFailureArrivingAfterStart` and
+  `TestTuiTraceStarterKeepsACancelledStartSilent`.
 - **Drop observability**: every generated handler counts a kernel-side event loss
   (`bpf_ringbuf_reserve` returning NULL, i.e. `event_map` full under userspace
   backpressure) in the per-CPU BPF map `ringbuf_drop_map` via

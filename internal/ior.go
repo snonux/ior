@@ -340,7 +340,8 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 // error).  The trace goroutine selects on both errCh and done when delivering
 // its result, so it can always exit regardless of which exit arm the outer
 // caller took.  A result that arrives on the done arm has no caller left to
-// return it to, so it goes to reportLateTraceError instead of being dropped.
+// return it to, so it goes to reportLateTraceError instead of being dropped -
+// unless the context was cancelled, which means the caller asked for the stop.
 func tuiTraceStarterFromRunTrace(
 	baseCfg flags.Config,
 	startTrace func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error,
@@ -380,7 +381,7 @@ func tuiTraceStarterFromRunTrace(
 			select {
 			case errCh <- err:
 			case <-done:
-				reportLateTraceError(rt, err)
+				reportLateTraceError(ctx, rt, err)
 			}
 		}()
 
@@ -395,15 +396,27 @@ func tuiTraceStarterFromRunTrace(
 	}
 }
 
-// reportLateTraceError surfaces a trace failure that arrives after the starter
-// already returned. The starter reports success the moment the trace signals
-// started, so from then on nothing is selecting on errCh; without this the
-// error is discarded and the dashboard keeps showing a live-looking session
-// that has stopped producing events. The stream buffer is the same warning
-// channel the event loop uses, so the message lands where the user is looking.
-// A cancelled context is the ordinary stop path, not a failure.
-func reportLateTraceError(rt *tuiRuntime, err error) {
-	if err == nil || errors.Is(err, context.Canceled) {
+// reportLateTraceError surfaces a trace failure that has no caller left to
+// return it to, because the starter already returned. The starter reports
+// success the moment the trace signals started, and it also returns when its
+// context is cancelled, so in both cases nothing is selecting on errCh any
+// more and without this the error is simply discarded.
+//
+// What actually reaches here is a setup failure that lost the race with a
+// cancellation, not end-of-run work: in TUI mode nothing after
+// signalTraceStarted can fail. runTraceWithContext's only remaining error
+// source is finaliseTrace's recorder.Write, and the recorder is non-nil only
+// for -flamegraph, which the mode registry makes mutually exclusive with the
+// TUI.
+//
+// ctx is the starter's context, and it is what decides silence: the caller
+// asked for this trace to stop, so a failure on the way down is the ordinary
+// restart path rather than something to show. Testing the error for
+// context.Canceled instead would let a genuine setup failure that raced a
+// restart print "Trace stopped: ..." into the *next* session's stream, since
+// the TUI resets that buffer in place and hands the same object to every run.
+func reportLateTraceError(ctx context.Context, rt *tuiRuntime, err error) {
+	if err == nil || ctx.Err() != nil {
 		return
 	}
 	if rt == nil || rt.streamBuf == nil || rt.streamSeq == nil {
@@ -668,6 +681,11 @@ func setupTraceInfra(
 	el, err = newTraceEventLoop(cfg, bpfModule, logTeardown)
 	if err != nil {
 		cancel()
+		// profiling is already running by here and the caller never sees it,
+		// so nothing else will stop it: with -pprof the CPU profile stays
+		// active and the next trace fails with "cpu profiling already in use"
+		// instead of reporting whatever really went wrong.
+		profiling.stop(logTeardown)
 		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
