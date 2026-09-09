@@ -651,7 +651,13 @@ type traceInfra struct {
 	// A nil field is exactly the "not built yet" that each error arm used to
 	// spell out as an explicit nil argument to closeTraceInfra. rb is typed as
 	// the interface so an absent ring buffer stays a true nil instead of a
-	// typed nil pointer, which would defeat that function's nil checks.
+	// typed nil pointer, which would defeat that function's nil checks -
+	// (*bpf.RingBuffer).Stop dereferences its receiver immediately.
+	//
+	// mgr above may stay a concrete pointer only because the cleanup captures
+	// the local, which setupBPFModule never returns nil alongside a nil error.
+	// Reading it from the field at call time instead would put it in exactly
+	// the position rb is in here.
 	rb          ringBufferStopper
 	stopSignals func()
 
@@ -679,10 +685,18 @@ func (in *traceInfra) Close() {
 	if in.cancel != nil {
 		in.cancel()
 	}
-	for i := len(in.cleanups) - 1; i >= 0; i-- {
-		in.cleanups[i]()
-	}
+	// Taken and cleared first so a second Close runs no cleanup twice: a
+	// repeated probe detach or module close is not safe.
+	cleanups := in.cleanups
 	in.cleanups = nil
+	// Deferred rather than called in the loop body, which both reverses the
+	// order and keeps the panic behaviour of the three separate defers this
+	// replaced: a cleanup that panics must not take the ones below it with it,
+	// or a panic in profiling.stop would leave the probes attached and the BPF
+	// module open.
+	for i := range cleanups {
+		defer cleanups[i]()
+	}
 }
 
 // setupTraceInfra creates all the BPF/runtime infrastructure for a trace run:

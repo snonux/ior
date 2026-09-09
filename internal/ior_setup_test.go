@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -326,5 +327,66 @@ func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
 			fset.Position(ret.Pos()), fset.Position(signalPos),
 		)
 		return true
+	})
+}
+
+// TestTraceInfraCloseRunsEveryCleanupLIFO pins the two properties Close has to
+// hold for the teardown stack to be equivalent to the hand-written arms it
+// replaced.
+//
+// Order, because each step is built on the one before it: a cleanup must run
+// before the cleanup of the step it depends on. And isolation, because Close
+// replaced three separate deferred calls in runTraceWithContext - Go keeps
+// running deferred calls while a panic unwinds, so a panic in profiling.stop
+// still let the probes detach and the BPF module close. A plain loop would
+// have silently dropped that.
+func TestTraceInfraCloseRunsEveryCleanupLIFO(t *testing.T) {
+	t.Run("reverse registration order", func(t *testing.T) {
+		var order []string
+		infra := &traceInfra{}
+		infra.onClose(func() { order = append(order, "first") })
+		infra.onClose(func() { order = append(order, "second") })
+		infra.Close()
+
+		if want := []string{"second", "first"}; !slices.Equal(order, want) {
+			t.Errorf("cleanup order = %v, want %v", order, want)
+		}
+	})
+
+	t.Run("a panicking cleanup does not strand the others", func(t *testing.T) {
+		var ran []string
+		infra := &traceInfra{}
+		infra.onClose(func() { ran = append(ran, "bpf teardown") })
+		infra.onClose(func() { panic("profiling blew up") })
+
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Error("Close swallowed a cleanup panic; it must propagate")
+				}
+			}()
+			infra.Close()
+		}()
+
+		if want := []string{"bpf teardown"}; !slices.Equal(ran, want) {
+			t.Errorf("cleanups run = %v, want %v: a panicking cleanup must not take the ones below it with it", ran, want)
+		}
+	})
+
+	t.Run("second Close repeats no cleanup", func(t *testing.T) {
+		calls := 0
+		infra := &traceInfra{}
+		infra.onClose(func() { calls++ })
+		infra.Close()
+		infra.Close()
+
+		if calls != 1 {
+			t.Errorf("cleanup ran %d times across two Close calls, want 1: a repeated probe detach or module close is not safe", calls)
+		}
+	})
+
+	t.Run("nil receiver", func(t *testing.T) {
+		var infra *traceInfra
+		infra.Close() // must not panic: a rejected filter returns no infra
 	})
 }
