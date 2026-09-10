@@ -5,8 +5,8 @@ import (
 )
 
 // handleProcessExitEvent applies a sched:sched_process_exit control record to
-// the three pieces of state that outlive the task the kernel just reported
-// dead.
+// the four pieces of state that would otherwise outlive the task the kernel
+// just reported dead.
 //
 // The fd table: the exited task belonged to tgid ev.Pid, so every (pid, fd)
 // entry of that process is dropped from the fdTracker and its procfs cache.
@@ -74,10 +74,10 @@ import (
 //     degraded, not wrong: the next syscall on one of those descriptors
 //     resolves through the procfs fallback (/proc/<pid>/fd), which still
 //     answers correctly while the process lives and re-populates the table.
-//   - For the comm cache and the pair tracker, both keyed by tid, per-task is
-//     exactly the right granularity: only the name, parked enter and gap
-//     baseline of the thread that actually died are dropped, and its siblings
-//     keep theirs.
+//   - For the comm cache, the pair tracker and the pending-handle tracker, all
+//     keyed by tid, per-task is exactly the right granularity: only the name,
+//     parked enter, gap baseline and unconsumed name_to_handle_at pathname of
+//     the thread that actually died are dropped, and its siblings keep theirs.
 //
 // A record lost to ring-buffer backpressure simply never evicts (counted in
 // ringbuf_drop_map like every other record); the stale entries linger until

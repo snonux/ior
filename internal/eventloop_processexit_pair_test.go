@@ -54,12 +54,7 @@ func feedAccessExit(t *testing.T, el *eventLoop, out chan *event.Pair,
 	t.Helper()
 	_, raw := makeExitRetEvent(t, at, execCommPid, tid, types.SYS_EXIT_ACCESS, 0)
 	el.processRawEvent(raw, out)
-	select {
-	case ep := <-out:
-		return ep
-	default:
-		return nil
-	}
+	return readRow(out)
 }
 
 // feedTaskExit delivers the sched:sched_process_exit control record for tid.
@@ -218,7 +213,7 @@ func TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle(t *testing.T) {
 	// The dead task resolves a handle for its own path, then dies without ever
 	// opening it.
 	_, enterName := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
-		"/dead/process/path", types.SYS_ENTER_NAME_TO_HANDLE_AT)
+		deadTaskPath, types.SYS_ENTER_NAME_TO_HANDLE_AT)
 	el.processRawEvent(enterName, out)
 	_, exitName := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
 		types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
@@ -235,14 +230,30 @@ func TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle(t *testing.T) {
 		types.SYS_EXIT_OPEN_BY_HANDLE_AT, recycledFd)
 	el.processRawEvent(exitOpen, out)
 
-	if ep := readRow(out); ep != nil && rowFile(ep) == "/dead/process/path" {
-		t.Fatalf("recycled tid's open_by_handle_at row inherited the dead task's parked pathname: file=%s", rowFile(ep))
+	// The row is still emitted - the eviction must cost the recycled task
+	// nothing but the dead path. Asserting only "not the dead path" would be
+	// satisfied by a handler that emits nothing at all.
+	ep := readRow(out)
+	if ep == nil {
+		t.Fatal("the recycled task's own open_by_handle_at pair was not emitted")
 	}
+	defer ep.Recycle()
+	if got := rowFile(ep); got == deadTaskPath {
+		t.Fatalf("recycled tid's open_by_handle_at row inherited the dead task's parked pathname: file=%s", got)
+	}
+
 	// The lasting half: the fd table must not carry the dead path either, or
-	// every later syscall on this descriptor reports it.
-	if got := el.fdState().resolve(recycledFd, execCommPid).Name(); got == "/dead/process/path" {
+	// every later syscall on this descriptor reports it. It must still carry
+	// an entry, resolved through the procfs fallback rather than the parked
+	// pathname.
+	fdFile := el.fdState().resolve(recycledFd, execCommPid)
+	if got := fdFile.Name(); got == deadTaskPath {
 		t.Fatalf("fd table entry for (pid=%d, fd=%d) = %s; the dead task's path now labels the new process's descriptor",
 			execCommPid, recycledFd, got)
+	}
+	if fdFile.FD() != recycledFd {
+		t.Fatalf("fd table entry for (pid=%d, fd=%d) = fd %d; the descriptor was not registered at all",
+			execCommPid, recycledFd, fdFile.FD())
 	}
 }
 
@@ -251,7 +262,8 @@ func TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle(t *testing.T) {
 func drainRows(out chan *event.Pair) {
 	for {
 		select {
-		case <-out:
+		case ep := <-out:
+			ep.Recycle()
 		default:
 			return
 		}
