@@ -400,8 +400,8 @@ committed set contains syscalls that only exist on recent mainline kernels
   `pairTracker.prevTimes` (`pairTracker.evictTid`), and
   `pendingHandleTracker.paths`, are all tid-keyed too. Of the pair tracker's
   two, the parked enter is the sharper: a task killed *inside* a syscall never
-  gets its `sys_exit`, so
-  its enter stays parked, and the next task handed that tid number has its own
+  gets its `sys_exit`, so its enter stays parked, and the next task handed that
+  tid number has its own
   exit consume it: the row is emitted with the dead task's filename and enter
   timestamp, i.e. a syscall that never happened with a latency as long as the
   gap between the two tasks. The trace-ID guard in `tracepointExited` cannot
@@ -420,8 +420,11 @@ committed set contains syscalls that only exist on recent mainline kernels
   that found its enter, and `numTracepointMismatches` means *the tracker paired
   two records that do not belong together*, so putting ordinary
   kill-inside-syscall traffic there would mask a real pairing regression - and
-  would cancel out a real gain, since the eviction *removes* the spurious
-  mismatches every `exit_group` used to leave parked. Pinned by
+  would cancel out a real gain: on a run tracing the `Process` family,
+  `exit_group` emits an enter with no matching exit trace ID, so the enter
+  parks forever and any exit that reaches it is necessarily a spurious
+  mismatch. (Usually the recycled tid's own enter supersedes it first and
+  nothing is counted - the mismatch needs that enter to be missing.) Pinned by
   `TestRecycledTidDoesNotPairWithTheDeadTasksEnter`,
   `TestRecycledTidDoesNotInheritTheDeadTasksGap` and
   `TestProcessExitEvictsOnlyTheExitedTasksPairState`

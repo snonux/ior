@@ -54,11 +54,14 @@ import (
 // routine traffic. This eviction in fact *removes* false positives from that
 // counter, which is the strongest argument for keeping them apart:
 // exit/exit_group/rt_sigreturn emit an enter and have no exit handler at all
-// (ior_on_noreturn_syscall_enter), so before this every task exit left a
-// permanently parked enter whose only possible fate was to be consumed by a
-// recycled tid - and always as a spurious mismatch, since no matching exit
-// trace ID exists. Routing eviction drops into the same counter would have
-// exactly cancelled that improvement.
+// (ior_on_noreturn_syscall_enter), and no matching exit trace ID exists, so
+// such an enter parks forever and any exit that does consume it is
+// necessarily counted as a mismatch. Usually the recycled tid's own enter
+// supersedes it first and nothing is counted; the mismatch needs that enter to
+// be missing, which is the ring-buffer loss and -comm enter-gate case below.
+// Routing eviction drops into the same counter would have cancelled that
+// improvement rather than measured anything. Note this concerns runs tracing
+// the Process family: exit_group is not in the default FS-only allowlist.
 //
 // A statistic of its own is a judgement call rather than an impossibility. An
 // enter can die unpaired four ways - here, superseded in set() when an exit
@@ -87,6 +90,10 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	defer ev.Recycle()
 	e.fdState().deletePid(ev.Pid)
 	e.evictCachedComm(ev.Tid)
+	// Neither of these guards tid == 0 the way commResolver.evictTid does:
+	// there the guard exists because a zero tid is the resolver's "unknown"
+	// sentinel, while here it is simply a key no live task uses, so deleting
+	// it is a no-op rather than a hazard.
 	e.pairs.evictTid(ev.Tid)
 	// name_to_handle_at parks a pathname under the tid for the matching
 	// open_by_handle_at to consume, and a task that resolves a handle and dies
