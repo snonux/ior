@@ -357,6 +357,36 @@ func startAndStopDropMonitor(t *testing.T, el *eventLoop) string {
 // outright: a run whose drop counter could not be read said nothing at all,
 // while the drop-delta branch right below it had had a stderr fallback all
 // along. The failure must reach the user in every mode.
+// TestEventLoopDropMonitorDeltaReachesStderrWithoutWarningSink pins the
+// fallback the read-failure branch was originally copied from.
+//
+// It predates this file's fix and was never covered: reverting the delta
+// branch to plain notifyWarning left every test passing, which is how the
+// sibling branch came to lack the fallback in the first place. Now that both
+// branches share notifyWarningOrLog, one untested call site is enough to lose
+// the behaviour for both.
+//
+// Actual loss is the loudest thing this counter has to say, and a headless run
+// would otherwise only learn of it from the end-of-run statistics, which can
+// be hours away.
+func TestEventLoopDropMonitorDeltaReachesStderrWithoutWarningSink(t *testing.T) {
+	el := &eventLoop{
+		cfg:     eventLoopConfig{aggregateDrainEvery: time.Hour},
+		dropSrc: &ringbufDropSourceStub{totals: []uint64{7}},
+		done:    make(chan struct{}),
+	}
+	// No warningCb is wired: exactly the headless configuration.
+
+	logged := startAndStopDropMonitor(t, el)
+
+	if !strings.Contains(logged, "7") {
+		t.Fatalf("stderr = %q, want the kernel-side drop count", logged)
+	}
+	if el.numRingbufDrops.Load() != 7 {
+		t.Errorf("numRingbufDrops = %d, want 7", el.numRingbufDrops.Load())
+	}
+}
+
 func TestEventLoopDropMonitorReadFailureReachesStderrWithoutWarningSink(t *testing.T) {
 	el := &eventLoop{
 		cfg:     eventLoopConfig{aggregateDrainEvery: time.Hour},
