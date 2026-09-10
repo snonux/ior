@@ -209,3 +209,54 @@ func TestProcessExitEvictsOnlyTheExitedTasksComm(t *testing.T) {
 		t.Fatalf("sibling thread comm = %q (present=%v), want \"sibling\"", got, ok)
 	}
 }
+
+// TestLookupSampledAfterAnEvictionIsAccepted pins the positive direction of
+// the eviction guard, which the other tests only cover indirectly.
+//
+// An exit record can land after a lookup was enqueued but before its worker
+// sampled the generation counters. That worker then samples the *bumped*
+// value, and its procfs read therefore happens after the exit - so the name it
+// comes back with belongs to whoever holds the tid now, and discarding it
+// would be wrong: the recycled tid would keep going back to procfs and never
+// cache a name.
+//
+// The interleaving is between two points inside the resolver - the enqueue and
+// the worker's sample - with no seam to drive it through the event loop, so
+// the state machine is stepped directly. The pending flag is set by hand for
+// the same reason: going through queueLookup would start real workers that
+// would race these steps.
+func TestLookupSampledAfterAnEvictionIsAccepted(t *testing.T) {
+	resolver := newCommResolver(nil)
+	t.Cleanup(resolver.shutdown)
+
+	const tid = uint32(4242)
+	resolver.setCachedFromKernel(tid, "dead-owner")
+	resolver.mu.Lock()
+	if resolver.pending == nil {
+		resolver.pending = make(map[uint32]struct{})
+	}
+	resolver.pending[tid] = struct{}{}
+	resolver.mu.Unlock()
+
+	// The exit lands while that lookup is pending but before its worker
+	// sampled, so the counter is bumped for it.
+	resolver.evictTid(tid)
+	if got, ok := resolver.cached(tid); ok {
+		t.Fatalf("comm %q survived the eviction", got)
+	}
+
+	// The worker now samples - reading the bumped counter - and lands.
+	state := resolver.sampleLookupState(tid)
+	if state.evictGen == 0 {
+		t.Fatal("the eviction did not bump the counter for a pending lookup; this test would prove nothing")
+	}
+	resolver.storeLookupResult(tid, "recycled-owner", state)
+
+	got, ok := resolver.cached(tid)
+	if !ok {
+		t.Fatal("a lookup that sampled after the eviction was discarded; the recycled tid would never cache a name")
+	}
+	if got != "recycled-owner" {
+		t.Fatalf("cached comm = %q, want the recycled owner's name", got)
+	}
+}
