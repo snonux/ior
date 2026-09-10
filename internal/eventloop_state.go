@@ -450,6 +450,29 @@ func (p *pairTracker) consume(tid uint32) (*event.Pair, bool) {
 	return pair, true
 }
 
+// evictTid drops every trace the tracker still holds for a task the kernel
+// reported dead: its parked enter event, if it was killed inside a syscall so
+// that no sys_exit will ever arrive for it, and its previous-exit timestamp.
+//
+// Both maps are keyed by tid and the kernel hands tid numbers out again, so an
+// entry that outlives its owner belongs to whichever task is handed that
+// number next. Leaving the enter behind is worse than a stale label: the next
+// owner's exit consumes it and the pair is emitted with the dead task's
+// filename, arguments and enter timestamp - a row for a syscall that never
+// happened. Leaving prevTimes behind gives the new owner's first pair a
+// DurationToPrev measured from the dead task's last syscall, which -gap
+// filters on.
+//
+// The parked enter is recycled rather than emitted; see handleProcessExitEvent
+// for why dropping it is the only truthful option and why it is not counted.
+func (p *pairTracker) evictTid(tid uint32) {
+	if pair, ok := p.consume(tid); ok && pair != nil {
+		pair.Recycle()
+	}
+	delete(p.prevTimes, tid)
+	delete(p.prevTimeAges, tid)
+}
+
 // pending returns the still-unmatched enter pair for tid without consuming it,
 // so a control record can amend the enter event in place before its exit
 // arrives (handleOpenNameFixupEvent). It deliberately does not touch the LRU
