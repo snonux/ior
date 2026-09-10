@@ -398,8 +398,9 @@ committed set contains syscalls that only exist on recent mainline kernels
   **The same record evicts the tid's pair state and its pending handle**, for
   the same reason and with the same precision: `pairTracker.enters` and
   `pairTracker.prevTimes` (`pairTracker.evictTid`), and
-  `pendingHandleTracker.paths`, are all tid-keyed too. The parked enter is the sharper
-  of the two - a task killed *inside* a syscall never gets its `sys_exit`, so
+  `pendingHandleTracker.paths`, are all tid-keyed too. Of the pair tracker's
+  two, the parked enter is the sharper: a task killed *inside* a syscall never
+  gets its `sys_exit`, so
   its enter stays parked, and the next task handed that tid number has its own
   exit consume it: the row is emitted with the dead task's filename and enter
   timestamp, i.e. a syscall that never happened with a latency as long as the
@@ -415,10 +416,12 @@ committed set contains syscalls that only exist on recent mainline kernels
   has no return value, bytes or latency, and the only timestamp available is
   the task's death, which would fabricate the very latency the eviction
   removes - and the drop is counted nowhere: `numTracepoints` already counted
-  the enter record when it was seen, `numSyscalls` only ever counted completed
-  pairs, and `numTracepointMismatches` means *the tracker paired two records
-  that do not belong together*, so putting ordinary kill-inside-syscall traffic
-  there would mask a real pairing regression. Pinned by
+  the enter record when it was seen, `numSyscalls` is only reached by a pair
+  that found its enter, and `numTracepointMismatches` means *the tracker paired
+  two records that do not belong together*, so putting ordinary
+  kill-inside-syscall traffic there would mask a real pairing regression - and
+  would cancel out a real gain, since the eviction *removes* the spurious
+  mismatches every `exit_group` used to leave parked. Pinned by
   `TestRecycledTidDoesNotPairWithTheDeadTasksEnter`,
   `TestRecycledTidDoesNotInheritTheDeadTasksGap` and
   `TestProcessExitEvictsOnlyTheExitedTasksPairState`
