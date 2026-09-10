@@ -43,19 +43,32 @@ import (
 // absent from the trace, the same way it already is when the enter falls off
 // the pending-enter LRU or when the run ends with enters still parked.
 //
-// The drop is deliberately not counted anywhere. It costs no accounting:
-// numTracepoints counted the enter record when it was seen, and numSyscalls
-// only ever counted completed pairs, so nothing that was already tallied
-// disappears. It is not a mismatch either - numTracepointMismatches means the
-// tracker paired two records that do not belong together, and a task killed
-// inside a syscall is ordinary kernel behaviour, so counting it there would
-// both inflate the health percentage stats() prints and mask a real pairing
-// regression behind a routine one. A statistic of its own would be worse than
-// none: it would cover one of the three ways an enter dies unpaired (this one,
-// the LRU trim, and end-of-run leftovers), so a reader would take its zero for
-// "no enters were dropped".
+// The drop is deliberately not counted anywhere. Nothing already tallied
+// disappears: numTracepoints counted the enter record when it was seen, and
+// numSyscalls is only reached by a pair that found its enter.
 //
-// sched_process_exit fires per *task*, which lands differently on the three:
+// It is emphatically not a mismatch. numTracepointMismatches means the tracker
+// paired two records that do not belong together, and a task killed inside a
+// syscall is ordinary kernel behaviour - counting it there would inflate the
+// health percentage stats() prints and mask a real pairing regression behind
+// routine traffic. This eviction in fact *removes* false positives from that
+// counter, which is the strongest argument for keeping them apart:
+// exit/exit_group/rt_sigreturn emit an enter and have no exit handler at all
+// (ior_on_noreturn_syscall_enter), so before this every task exit left a
+// permanently parked enter whose only possible fate was to be consumed by a
+// recycled tid - and always as a spurious mismatch, since no matching exit
+// trace ID exists. Routing eviction drops into the same counter would have
+// exactly cancelled that improvement.
+//
+// A statistic of its own is a judgement call rather than an impossibility. An
+// enter can die unpaired four ways - here, superseded in set() when an exit
+// record is lost, trimmed from the pending-enter LRU, and left parked at
+// end of run - and all four are reachable, so a counter *could* be complete.
+// It is not worth one: the number would mix a kernel fact (tasks die inside
+// syscalls) with a tracer symptom (records were lost), and a reader cannot act
+// on the sum.
+//
+// sched_process_exit fires per *task*, which lands differently on the four:
 //   - For the fd table, keyed by tgid, a thread exit inside a still-living
 //     multithreaded process evicts that process's entries early. That is
 //     degraded, not wrong: the next syscall on one of those descriptors
@@ -75,4 +88,13 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	e.fdState().deletePid(ev.Pid)
 	e.evictCachedComm(ev.Tid)
 	e.pairs.evictTid(ev.Tid)
+	// name_to_handle_at parks a pathname under the tid for the matching
+	// open_by_handle_at to consume, and a task that resolves a handle and dies
+	// - or simply hands it to another process, which is what the API is for -
+	// leaves it parked. Left behind, the recycled tid's next open_by_handle_at
+	// takes the dead task's path, and handleOpenByHandleAtExit then registers
+	// that path in the fd table for the *new* process, so every later read,
+	// write and close on the descriptor reports it too: a wrong row rather
+	// than a missing one, and a persistent one.
+	e.pendingHandleState().delete(ev.Tid)
 }

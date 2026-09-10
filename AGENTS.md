@@ -379,9 +379,26 @@ committed set contains syscalls that only exist on recent mainline kernels
   never-before-seen one (async lookup, and under `-comm` its first
   non-open/exec syscall dropped at the enter-side gate).
 
-  **The same record evicts the tid's pair state**, for the same reason and with
-  the same precision: `pairTracker.enters` and `pairTracker.prevTimes`
-  (`pairTracker.evictTid`) are tid-keyed too. The parked enter is the sharper
+  Retiring an in-flight lookup needs its own counter here: the entry's exec
+  epoch cannot do it, because eviction *deletes* the entry, so a result landing
+  afterwards would read epoch `0` back and match the `0` it sampled for a tid
+  that had no entry either - reinstating the exact name the eviction removed.
+  `commResolver.evictedLookups` is a per-tid counter bumped only when a lookup
+  is actually in flight, sampled into `lookupState` and checked in
+  `storeLookupResult`; it lives outside `comms` so it cannot be LRU-pruned out
+  from under that lookup, and it is dropped together with the tid's pending
+  flag, so it cannot leak. A lookup that samples the counter *after* the
+  eviction is accepted - that read followed the exit, so it is the recycled
+  tid's real name. Pinned by
+  `TestRecycledTidDoesNotInheritTheDeadProcessComm`,
+  `TestExitEvictionSurvivesAnInFlightLookup` and
+  `TestProcessExitEvictsOnlyTheExitedTasksComm`
+  (`internal/eventloop_processexit_comm_test.go`).
+
+  **The same record evicts the tid's pair state and its pending handle**, for
+  the same reason and with the same precision: `pairTracker.enters` and
+  `pairTracker.prevTimes` (`pairTracker.evictTid`), and
+  `pendingHandleTracker.paths`, are all tid-keyed too. The parked enter is the sharper
   of the two - a task killed *inside* a syscall never gets its `sys_exit`, so
   its enter stays parked, and the next task handed that tid number has its own
   exit consume it: the row is emitted with the dead task's filename and enter
@@ -407,21 +424,17 @@ committed set contains syscalls that only exist on recent mainline kernels
   `TestProcessExitEvictsOnlyTheExitedTasksPairState`
   (`internal/eventloop_processexit_pair_test.go`).
 
-  Retiring an in-flight lookup needs its own counter here: the entry's exec
-  epoch cannot do it, because eviction *deletes* the entry, so a result landing
-  afterwards would read epoch `0` back and match the `0` it sampled for a tid
-  that had no entry either - reinstating the exact name the eviction removed.
-  `commResolver.evictedLookups` is a per-tid counter bumped only when a lookup
-  is actually in flight, sampled into `lookupState` and checked in
-  `storeLookupResult`; it lives outside `comms` so it cannot be LRU-pruned out
-  from under that lookup, and it is dropped together with the tid's pending
-  flag, so it cannot leak. A lookup that samples the counter *after* the
-  eviction is accepted - that read followed the exit, so it is the recycled
-  tid's real name. Pinned by
-  `TestRecycledTidDoesNotInheritTheDeadProcessComm`,
-  `TestExitEvictionSurvivesAnInFlightLookup` and
-  `TestProcessExitEvictsOnlyTheExitedTasksComm`
-  (`internal/eventloop_processexit_comm_test.go`).
+  `pendingHandleTracker` is the one with the longest reach.
+  `name_to_handle_at` parks a pathname under the tid until the matching
+  `open_by_handle_at` consumes it, and the two need not be the same task -
+  passing the handle to another process is what the API is for - so an
+  unconsumed pathname outliving its task is ordinary rather than exceptional.
+  Left behind it does more damage than a parked enter: `handleOpenByHandleAtExit`
+  labels the row with the dead task's path *and* registers that path in the fd
+  table for the new process, so every later read, write and close on the
+  descriptor reports it too. Both syscalls are FS-family, so a default run
+  reaches it. Pinned by
+  `TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle`.
 
   A failed attach is non-fatal and simply degrades to the old procfs-only
   labelling. Correspondingly, `handleExecExit` deliberately does **not** cache
@@ -543,13 +556,13 @@ committed set contains syscalls that only exist on recent mainline kernels
   way in `internal/ior_bpfsetup.go` — whose `handleProcessExitEvent`
   (`internal/eventloop_processexit.go`) drops the exited tgid's entries from
   both maps, and — keyed by tid rather than tgid — the exited task's cached
-  comm and its pair state (parked enter plus gap baseline; see "Comm resolution
-  across `execve`"). It fires per *task*, so a
-  thread exit in a still-living multithreaded process evicts that process
-  early: degraded, not wrong — the procfs fallback still answers and
-  re-populates the table. For the tid-keyed comm cache and pair tracker the
+  comm, its pair state (parked enter plus gap baseline) and its unconsumed
+  `name_to_handle_at` pathname (see "Comm resolution across `execve`"). It
+  fires per *task*, so a thread exit in a still-living multithreaded process
+  evicts that process early: degraded, not wrong — the procfs fallback still
+  answers and re-populates the table. For the three tid-keyed structures the
   same record is precise rather than degraded, which is why one record serves
-  all three.
+  all four.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
