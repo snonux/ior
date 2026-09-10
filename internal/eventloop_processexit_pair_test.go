@@ -199,3 +199,71 @@ func TestProcessExitEvictsOnlyTheExitedTasksPairState(t *testing.T) {
 			ep.DurationToPrev)
 	}
 }
+
+// TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle covers the fourth
+// piece of tid-keyed state the exit record has to clear.
+//
+// name_to_handle_at parks its pathname under the tid until the matching
+// open_by_handle_at consumes it, and the two need not be the same task at all:
+// handing the handle to another process is what the API is for. So an
+// unconsumed pathname outliving its task is ordinary, and left behind it does
+// more damage than the parked enter above - handleOpenByHandleAtExit both
+// labels the row with the dead task's path and registers that path in the fd
+// table for the *new* process, so every later read, write and close on the
+// descriptor reports it too.
+func TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle(t *testing.T) {
+	el := newPairEvictionEventLoop(t)
+	out := make(chan *event.Pair, 4)
+
+	// The dead task resolves a handle for its own path, then dies without ever
+	// opening it.
+	_, enterName := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
+		"/dead/process/path", types.SYS_ENTER_NAME_TO_HANDLE_AT)
+	el.processRawEvent(enterName, out)
+	_, exitName := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
+		types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
+	el.processRawEvent(exitName, out)
+	drainRows(out)
+
+	feedTaskExit(t, el, out, defaulTime+200, execCommTid)
+
+	// The tid is recycled and its new owner opens a handle of its own.
+	const recycledFd = 77
+	_, enterOpen := makeEnterOpenByHandleAtEvent(t, defaulTime+300, execCommPid, execCommTid, 0)
+	el.processRawEvent(enterOpen, out)
+	_, exitOpen := makeExitRetEvent(t, defaulTime+400, execCommPid, execCommTid,
+		types.SYS_EXIT_OPEN_BY_HANDLE_AT, recycledFd)
+	el.processRawEvent(exitOpen, out)
+
+	if ep := readRow(out); ep != nil && rowFile(ep) == "/dead/process/path" {
+		t.Fatalf("recycled tid's open_by_handle_at row inherited the dead task's parked pathname: file=%s", rowFile(ep))
+	}
+	// The lasting half: the fd table must not carry the dead path either, or
+	// every later syscall on this descriptor reports it.
+	if got := el.fdState().resolve(recycledFd, execCommPid).Name(); got == "/dead/process/path" {
+		t.Fatalf("fd table entry for (pid=%d, fd=%d) = %s; the dead task's path now labels the new process's descriptor",
+			execCommPid, recycledFd, got)
+	}
+}
+
+// drainRows empties whatever rows the setup emitted, so a test asserts only on
+// the row it actually cares about.
+func drainRows(out chan *event.Pair) {
+	for {
+		select {
+		case <-out:
+		default:
+			return
+		}
+	}
+}
+
+// readRow returns the next row, or nil when none was emitted.
+func readRow(out chan *event.Pair) *event.Pair {
+	select {
+	case ep := <-out:
+		return ep
+	default:
+		return nil
+	}
+}
