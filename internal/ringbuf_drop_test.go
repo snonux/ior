@@ -245,7 +245,7 @@ func TestEventLoopWithoutDropSourceStartsNoMonitor(t *testing.T) {
 // the line is always present (an explicit "no loss" statement) and carries the
 // count, the rate and the share of events lost.
 func TestStatsReportsRingbufDrops(t *testing.T) {
-	el := &eventLoop{done: make(chan struct{})}
+	el := &eventLoop{done: make(chan struct{}), dropSrc: &ringbufDropSourceStub{}}
 	el.startTime = time.Now().Add(-2 * time.Second)
 	el.numTracepoints = 98
 	el.numRingbufDrops.Store(2)
@@ -261,7 +261,9 @@ func TestStatsReportsRingbufDrops(t *testing.T) {
 }
 
 func TestStatsReportsZeroRingbufDrops(t *testing.T) {
-	el := &eventLoop{done: make(chan struct{})}
+	// A drop source is required for a zero to mean anything: without one the
+	// line reports unknown, because nothing was measured.
+	el := &eventLoop{done: make(chan struct{}), dropSrc: &ringbufDropSourceStub{}}
 	el.startTime = time.Now().Add(-time.Second)
 	el.numTracepoints = 10
 	close(el.done)
@@ -391,8 +393,32 @@ func TestStatsReportsUnknownRingbufDropsWhenTheCounterCannotBeRead(t *testing.T)
 	if strings.Contains(stats, "ring buffer drops: 0") {
 		t.Fatalf("an unreadable counter must not be reported as zero drops:\n%s", stats)
 	}
-	if !strings.Contains(stats, "ring buffer drops: unknown") {
-		t.Fatalf("stats should report the drop total as unknown:\n%s", stats)
+	// The specific cause, not just "unknown": a counter that is present but
+	// unreadable is a different problem from one that was never there, and
+	// they want different remedies.
+	if !strings.Contains(stats, "ring buffer drops: unknown (drop counter unreadable)") {
+		t.Fatalf("stats should report the drop total as unknown because the counter could not be read:\n%s", stats)
+	}
+}
+
+// TestStatsReportsUnknownRingbufDropsWithoutADropCounter covers the purest
+// form of the same problem: a BPF object with no ringbuf_drop_map leaves
+// dropSrc nil, the monitor never runs, and nothing is ever measured. The line
+// used to print a confident 0 for that - a "no loss" claim backed by no
+// reading at all. attachRingbufDropCounter does warn on stderr at startup, but
+// a long run's summary is read hours later and on its own.
+func TestStatsReportsUnknownRingbufDropsWithoutADropCounter(t *testing.T) {
+	el := &eventLoop{done: make(chan struct{})}
+	el.startTime = time.Now().Add(-time.Second)
+	el.numTracepoints = 10
+	close(el.done)
+
+	stats := el.stats()
+	if strings.Contains(stats, "ring buffer drops: 0") {
+		t.Fatalf("a run with no drop counter must not be reported as zero drops:\n%s", stats)
+	}
+	if !strings.Contains(stats, "ring buffer drops: unknown (drop counter unavailable)") {
+		t.Fatalf("stats should report the drop total as unknown because there was no counter:\n%s", stats)
 	}
 }
 
@@ -401,7 +427,7 @@ func TestStatsReportsUnknownRingbufDropsWhenTheCounterCannotBeRead(t *testing.T)
 // on, but what was already counted is still worth reporting - and must not be
 // mistaken for the run total.
 func TestStatsKeepsTheLastKnownCountWhenTheCounterStopsBeingReadable(t *testing.T) {
-	el := &eventLoop{done: make(chan struct{})}
+	el := &eventLoop{done: make(chan struct{}), dropSrc: &ringbufDropSourceStub{}}
 	el.startTime = time.Now().Add(-time.Second)
 	el.numTracepoints = 10
 
@@ -436,7 +462,7 @@ func TestStatsKeepsTheLastKnownCountWhenTheCounterStopsBeingReadable(t *testing.
 // direction: the kernel counter is cumulative, so one successful read after a
 // failure recovers the full total and the figure is a fact again.
 func TestStatsReportsTheTotalAgainAfterTheCounterRecovers(t *testing.T) {
-	el := &eventLoop{done: make(chan struct{})}
+	el := &eventLoop{done: make(chan struct{}), dropSrc: &ringbufDropSourceStub{}}
 	el.startTime = time.Now().Add(-time.Second)
 	el.numTracepoints = 96
 
@@ -494,7 +520,7 @@ func TestAggregateDrainFailureReachesStderrWithoutWarningSink(t *testing.T) {
 // report unknown. That is what says the claim is gated on evidence of a
 // successful read rather than on the total merely being non-zero.
 func TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal(t *testing.T) {
-	el := &eventLoop{}
+	el := &eventLoop{dropSrc: &ringbufDropSourceStub{}}
 	el.ringbufDropReadFailed.Store(true)
 	el.numRingbufDrops.Store(4242)
 

@@ -300,10 +300,28 @@ committed set contains syscalls that only exist on recent mainline kernels
   `TestEventLoopDropMonitorReadFailureReachesStderrWithoutWarningSink`,
   `TestStatsReportsUnknownRingbufDropsWhenTheCounterCannotBeRead`,
   `TestStatsKeepsTheLastKnownCountWhenTheCounterStopsBeingReadable`,
-  `TestStatsReportsTheTotalAgainAfterTheCounterRecovers`). One gap stays open on
-  purpose: a binary whose BPF object has no `ringbuf_drop_map` leaves `dropSrc`
-  nil and still prints `0`, because `attachRingbufDropCounter` already says so
-  on stderr at startup.
+  `TestStatsReportsTheTotalAgainAfterTheCounterRecovers`). A binary whose BPF
+  object has no `ringbuf_drop_map` leaves `dropSrc` nil, and that reports
+  `unknown (drop counter unavailable)` for the same reason - nothing was
+  measured, so there is nothing to state. The two causes are worded apart
+  because they want different remedies, and `attachRingbufDropCounter`'s
+  startup warning is not a substitute: a long run's summary is read hours later
+  and on its own (`TestStatsReportsUnknownRingbufDropsWithoutADropCounter`).
+
+  The corollary for tests: an `eventLoop` built without a `dropSrc` reports
+  unknown, so a test asserting on a drop *figure* has to wire one - which is
+  the honest precondition, not a nuisance.
+
+  The flag and the total are published in the opposite order to the one
+  `stats()` reads them in (total stored, then flag cleared; flag read, then
+  total), so a reader that sees a cleared flag is guaranteed to see the total
+  that cleared it. `startTraceShutdownWatcher` calls `stats()` on `ctx.Done()`
+  while the monitor is still winding down on the same signal, so the two really
+  do overlap; the other order leaves a window that prints the stale `0` as
+  fact. The race detector cannot see it - both are atomics, so it is a logical
+  ordering bug, not a data race - and nor can a test: what is pinned instead is
+  the intermediate state
+  (`TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal`).
 - **Comm resolution across `execve`**: most event payloads carry no command
   name, so it comes from `commResolver` (`internal/eventloop_comm.go`), an
   asynchronous `/proc/<tid>/comm` cache. Every lookup is bounded by
