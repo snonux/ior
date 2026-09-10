@@ -286,14 +286,22 @@ func (e *eventLoop) stats() string {
 // D9 Y2): a full event_map makes bpf_ringbuf_reserve() return NULL and the
 // generated handlers skip the event. The counter is always reported, so a zero
 // line is an explicit "no loss" statement - which is exactly why it may only be
-// printed when the counter was actually read. If the last read failed the run
-// total is unknown, and printing the last reading (0, for a run whose first
-// read already failed) would state "no loss" as fact about a loss nobody
-// measured.
+// printed when the counter was actually read. Two things make it unreadable:
+// no drop map in the loaded BPF object (dropSrc nil, so the monitor never ran)
+// and a read that failed (ringbufDropReadFailed). In either case the run total
+// is unknown, and printing the last reading - 0, for a run that never got one -
+// would state "no loss" as fact about a loss nobody measured.
 func (e *eventLoop) ringbufDropStatLine(rate func(uint64) float64) string {
 	// Flag first, then the total: handleRingbufDropResult publishes them in
 	// the opposite order, so seeing a cleared flag here guarantees the total
 	// below is the one that cleared it rather than a stale reading.
+	// No counter at all is the purest form of the same problem: nothing was
+	// ever measured, so there is nothing to report as fact. attachRingbufDropCounter
+	// already says so on stderr at startup, but a long run's summary is read
+	// hours later and on its own.
+	if e.dropSrc == nil {
+		return "\tring buffer drops: unknown (drop counter unavailable)\n"
+	}
 	readFailed := e.ringbufDropReadFailed.Load()
 	drops := e.numRingbufDrops.Load()
 	if readFailed {
