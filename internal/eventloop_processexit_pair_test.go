@@ -54,7 +54,7 @@ func feedAccessExit(t *testing.T, el *eventLoop, out chan *event.Pair,
 	t.Helper()
 	_, raw := makeExitRetEvent(t, at, execCommPid, tid, types.SYS_EXIT_ACCESS, 0)
 	el.processRawEvent(raw, out)
-	return readRow(out)
+	return nextRow(out)
 }
 
 // feedTaskExit delivers the sched:sched_process_exit control record for tid.
@@ -233,7 +233,7 @@ func TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle(t *testing.T) {
 	// The row is still emitted - the eviction must cost the recycled task
 	// nothing but the dead path. Asserting only "not the dead path" would be
 	// satisfied by a handler that emits nothing at all.
-	ep := readRow(out)
+	ep := nextRow(out)
 	if ep == nil {
 		t.Fatal("the recycled task's own open_by_handle_at pair was not emitted")
 	}
@@ -242,18 +242,21 @@ func TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle(t *testing.T) {
 		t.Fatalf("recycled tid's open_by_handle_at row inherited the dead task's parked pathname: file=%s", got)
 	}
 
-	// The lasting half: the fd table must not carry the dead path either, or
-	// every later syscall on this descriptor reports it. It must still carry
-	// an entry, resolved through the procfs fallback rather than the parked
-	// pathname.
-	fdFile := el.fdState().resolve(recycledFd, execCommPid)
+	// The lasting half: the descriptor must still be registered - the eviction
+	// costs the recycled task the dead path, not its fd-table entry - and that
+	// entry must not carry the dead path, or every later read, write and close
+	// on this descriptor reports it too.
+	//
+	// get, not resolve: resolve falls back to /proc/<pid>/fd and returns a
+	// File built around the fd it was handed either way, so its FD() is the
+	// argument and asserting on it proves nothing.
+	fdFile, ok := el.fdState().get(recycledFd, execCommPid)
+	if !ok {
+		t.Fatalf("fd %d was never registered in the fd table for pid %d", recycledFd, execCommPid)
+	}
 	if got := fdFile.Name(); got == deadTaskPath {
 		t.Fatalf("fd table entry for (pid=%d, fd=%d) = %s; the dead task's path now labels the new process's descriptor",
 			execCommPid, recycledFd, got)
-	}
-	if fdFile.FD() != recycledFd {
-		t.Fatalf("fd table entry for (pid=%d, fd=%d) = fd %d; the descriptor was not registered at all",
-			execCommPid, recycledFd, fdFile.FD())
 	}
 }
 
@@ -270,8 +273,8 @@ func drainRows(out chan *event.Pair) {
 	}
 }
 
-// readRow returns the next row, or nil when none was emitted.
-func readRow(out chan *event.Pair) *event.Pair {
+// nextRow returns the next row, or nil when none was emitted.
+func nextRow(out chan *event.Pair) *event.Pair {
 	select {
 	case ep := <-out:
 		return ep
