@@ -379,6 +379,34 @@ committed set contains syscalls that only exist on recent mainline kernels
   never-before-seen one (async lookup, and under `-comm` its first
   non-open/exec syscall dropped at the enter-side gate).
 
+  **The same record evicts the tid's pair state**, for the same reason and with
+  the same precision: `pairTracker.enters` and `pairTracker.prevTimes`
+  (`pairTracker.evictTid`) are tid-keyed too. The parked enter is the sharper
+  of the two - a task killed *inside* a syscall never gets its `sys_exit`, so
+  its enter stays parked, and the next task handed that tid number has its own
+  exit consume it: the row is emitted with the dead task's filename and enter
+  timestamp, i.e. a syscall that never happened with a latency as long as the
+  gap between the two tasks. The trace-ID guard in `tracepointExited` cannot
+  see it, because a recycled tid running the same syscall produces matching
+  IDs. (Reaching it needs the new owner's own enter to be missing, which is
+  routine: ring-buffer loss, or - under `-comm` - the enter-side gate dropping
+  a brand-new tid's first non-open/exec syscall, which the comm eviction above
+  guarantees is the recycled tid's state.) `prevTimes` is the milder half: it
+  gave the new owner's first pair a `DurationToPrev` measured from the dead
+  task's last syscall, which `-gap` filters on. The parked enter is *dropped*
+  rather than emitted as a synthetic row - the syscall never returned, so it
+  has no return value, bytes or latency, and the only timestamp available is
+  the task's death, which would fabricate the very latency the eviction
+  removes - and the drop is counted nowhere: `numTracepoints` already counted
+  the enter record when it was seen, `numSyscalls` only ever counted completed
+  pairs, and `numTracepointMismatches` means *the tracker paired two records
+  that do not belong together*, so putting ordinary kill-inside-syscall traffic
+  there would mask a real pairing regression. Pinned by
+  `TestRecycledTidDoesNotPairWithTheDeadTasksEnter`,
+  `TestRecycledTidDoesNotInheritTheDeadTasksGap` and
+  `TestProcessExitEvictsOnlyTheExitedTasksPairState`
+  (`internal/eventloop_processexit_pair_test.go`).
+
   Retiring an in-flight lookup needs its own counter here: the entry's exec
   epoch cannot do it, because eviction *deletes* the entry, so a result landing
   afterwards would read epoch `0` back and match the `0` it sampled for a tid
@@ -515,11 +543,13 @@ committed set contains syscalls that only exist on recent mainline kernels
   way in `internal/ior_bpfsetup.go` — whose `handleProcessExitEvent`
   (`internal/eventloop_processexit.go`) drops the exited tgid's entries from
   both maps, and — keyed by tid rather than tgid — the exited task's cached
-  comm (see "Comm resolution across `execve`"). It fires per *task*, so a
+  comm and its pair state (parked enter plus gap baseline; see "Comm resolution
+  across `execve`"). It fires per *task*, so a
   thread exit in a still-living multithreaded process evicts that process
   early: degraded, not wrong — the procfs fallback still answers and
-  re-populates the table. For the tid-keyed comm cache the same record is
-  precise rather than degraded, which is why one record serves both.
+  re-populates the table. For the tid-keyed comm cache and pair tracker the
+  same record is precise rather than degraded, which is why one record serves
+  all three.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
