@@ -362,34 +362,38 @@ committed set contains syscalls that only exist on recent mainline kernels
     the epoch moved on. Both writes are mutex-protected, so this is a logical
     race the race detector cannot see.
 
-  - *Exited task.* The cache is keyed by tid and the kernel recycles tid
-    numbers, so an entry outliving its owner labelled the *next* process handed
-    that number with the dead one's name - until it exec'd (bumping the entry)
-    or the entry fell off the 8192-entry LRU, neither of which is quick on a box
-    churning short-lived processes. The `sched:sched_process_exit` control
-    record already attached for the fd table (below) therefore also evicts the
-    comm entry for its `ev.Tid` (`commResolver.evictTid`, called from
-    `handleProcessExitEvent`). The record fires per *task* and this cache is
-    keyed per task, so unlike the fd-table eviction this is precise rather than
-    degraded: a thread exit drops only that thread's name. Eviction, not
-    `markAllStale`, is right here because there is nothing left to serve - the
-    value is not merely at risk of being outdated, its owner is gone; the
-    recycled tid then behaves exactly like a never-before-seen one (async
-    lookup, and under `-comm` its first non-open syscall dropped at the
-    enter-side gate). Retiring an in-flight lookup needs its own counter here:
-    the entry's exec epoch cannot do it, because eviction *deletes* the entry,
-    so a result landing afterwards would read epoch `0` back and match the `0`
-    it sampled for a tid that had no entry either - reinstating the exact name
-    the eviction removed. `commResolver.evictedLookups` is a per-tid counter
-    bumped only when a lookup is actually in flight, sampled into `lookupState`
-    and checked in `storeLookupResult`; it lives outside `comms` so it cannot be
-    LRU-pruned out from under that lookup, and it is dropped together with the
-    tid's pending flag, so it can neither leak nor poison the *next* lookup for
-    a recycled tid. Pinned by
-    `TestRecycledTidDoesNotInheritTheDeadProcessComm`,
-    `TestExitEvictionSurvivesAnInFlightLookup` and
-    `TestProcessExitEvictsOnlyTheExitedTasksComm`
-    (`internal/eventloop_processexit_comm_test.go`).
+  **Tid recycling is a separate failure mode with the same symptom.** The two
+  paths above are residuals of the exec record; this one is not about `execve`
+  at all. The cache is keyed by tid and the kernel recycles tid numbers, so an
+  entry outliving its owner labelled the *next* process handed that number with
+  the dead one's name - until it exec'd (bumping the entry) or the entry fell
+  off the 8192-entry LRU, neither of which is quick on a box churning
+  short-lived processes. The `sched:sched_process_exit` control record already
+  attached for the fd table (below) therefore also evicts the comm entry for
+  its `ev.Tid` (`commResolver.evictTid`, called from `handleProcessExitEvent`).
+  The record fires per *task* and this cache is keyed per task, so unlike the
+  fd-table eviction this is precise rather than degraded: a thread exit drops
+  only that thread's name. Eviction, not `markAllStale`, is right here because
+  there is nothing left to serve - the value is not merely at risk of being
+  outdated, its owner is gone; the recycled tid then behaves exactly like a
+  never-before-seen one (async lookup, and under `-comm` its first
+  non-open/exec syscall dropped at the enter-side gate).
+
+  Retiring an in-flight lookup needs its own counter here: the entry's exec
+  epoch cannot do it, because eviction *deletes* the entry, so a result landing
+  afterwards would read epoch `0` back and match the `0` it sampled for a tid
+  that had no entry either - reinstating the exact name the eviction removed.
+  `commResolver.evictedLookups` is a per-tid counter bumped only when a lookup
+  is actually in flight, sampled into `lookupState` and checked in
+  `storeLookupResult`; it lives outside `comms` so it cannot be LRU-pruned out
+  from under that lookup, and it is dropped together with the tid's pending
+  flag, so it cannot leak. A lookup that samples the counter *after* the
+  eviction is accepted - that read followed the exit, so it is the recycled
+  tid's real name. Pinned by
+  `TestRecycledTidDoesNotInheritTheDeadProcessComm`,
+  `TestExitEvictionSurvivesAnInFlightLookup` and
+  `TestProcessExitEvictsOnlyTheExitedTasksComm`
+  (`internal/eventloop_processexit_comm_test.go`).
 
   A failed attach is non-fatal and simply degrades to the old procfs-only
   labelling. Correspondingly, `handleExecExit` deliberately does **not** cache
@@ -511,9 +515,11 @@ committed set contains syscalls that only exist on recent mainline kernels
   way in `internal/ior_bpfsetup.go` — whose `handleProcessExitEvent`
   (`internal/eventloop_processexit.go`) drops the exited tgid's entries from
   both maps, and — keyed by tid rather than tgid — the exited task's cached
-  comm (see "Comm resolution across `execve`"). It fires per *task*, so a thread exit in a still-living
-  multithreaded process evicts that process early: degraded, not wrong — the
-  procfs fallback still answers and re-populates the table.
+  comm (see "Comm resolution across `execve`"). It fires per *task*, so a
+  thread exit in a still-living multithreaded process evicts that process
+  early: degraded, not wrong — the procfs fallback still answers and
+  re-populates the table. For the tid-keyed comm cache the same record is
+  precise rather than degraded, which is why one record serves both.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
@@ -606,8 +612,9 @@ committed set contains syscalls that only exist on recent mainline kernels
   `//nolint:errcheck` comment: the annotations were how these sites drifted
   apart in the first place — 24 of them had accumulated across `cmd/ioworkload`
   (16), `integrationtests` (7) and `audit/check` (1), of which 15 sat on one of
-  the 160 otherwise-identical teardown calls and the rest did not. `//nolint` is banned outright and
-  `internal/buildgate.TestNoNolintDirectives` enforces it, because the lint
+  the 160 otherwise-identical teardown calls and the rest did not. `//nolint`
+  is banned outright and `internal/buildgate.TestNoNolintDirectives` enforces
+  it, because the lint
   gate cannot: golangci-lint honours the directive by construction, so one
   comment removes a file from the gate while `mage lint` still reports
   "0 issues". Blanket exemptions live in `.golangci.yml` (see Linting above),

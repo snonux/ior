@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -133,6 +134,13 @@ func TestExitEvictionSurvivesAnInFlightLookup(t *testing.T) {
 
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
+	// Released at the point the test needs it, but also on every other exit
+	// path: a t.Fatal on the handshake below would otherwise leave a worker
+	// parked in resolveFn and deadlock the registered resolver.shutdown,
+	// replacing the assertion failure with a ten-minute timeout and a
+	// goroutine dump.
+	releaseWorker := sync.OnceFunc(func() { close(release) })
+	defer releaseWorker()
 	read := resolver.resolveFn
 	resolver.resolveFn = func(ctx context.Context, tid uint32) (string, error) {
 		if tid != execCommTid {
@@ -157,7 +165,7 @@ func TestExitEvictionSurvivesAnInFlightLookup(t *testing.T) {
 
 	el.processRawEvent(makeProcessExitEvent(t, defaulTime, execCommPid, execCommTid),
 		make(chan *event.Pair, 1))
-	close(release)
+	releaseWorker()
 	waitForNoPendingLookup(t, resolver)
 
 	if got, ok := el.cachedComm(execCommTid); ok {
