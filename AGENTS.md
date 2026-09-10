@@ -362,6 +362,35 @@ committed set contains syscalls that only exist on recent mainline kernels
     the epoch moved on. Both writes are mutex-protected, so this is a logical
     race the race detector cannot see.
 
+  - *Exited task.* The cache is keyed by tid and the kernel recycles tid
+    numbers, so an entry outliving its owner labelled the *next* process handed
+    that number with the dead one's name - until it exec'd (bumping the entry)
+    or the entry fell off the 8192-entry LRU, neither of which is quick on a box
+    churning short-lived processes. The `sched:sched_process_exit` control
+    record already attached for the fd table (below) therefore also evicts the
+    comm entry for its `ev.Tid` (`commResolver.evictTid`, called from
+    `handleProcessExitEvent`). The record fires per *task* and this cache is
+    keyed per task, so unlike the fd-table eviction this is precise rather than
+    degraded: a thread exit drops only that thread's name. Eviction, not
+    `markAllStale`, is right here because there is nothing left to serve - the
+    value is not merely at risk of being outdated, its owner is gone; the
+    recycled tid then behaves exactly like a never-before-seen one (async
+    lookup, and under `-comm` its first non-open syscall dropped at the
+    enter-side gate). Retiring an in-flight lookup needs its own counter here:
+    the entry's exec epoch cannot do it, because eviction *deletes* the entry,
+    so a result landing afterwards would read epoch `0` back and match the `0`
+    it sampled for a tid that had no entry either - reinstating the exact name
+    the eviction removed. `commResolver.evictedLookups` is a per-tid counter
+    bumped only when a lookup is actually in flight, sampled into `lookupState`
+    and checked in `storeLookupResult`; it lives outside `comms` so it cannot be
+    LRU-pruned out from under that lookup, and it is dropped together with the
+    tid's pending flag, so it can neither leak nor poison the *next* lookup for
+    a recycled tid. Pinned by
+    `TestRecycledTidDoesNotInheritTheDeadProcessComm`,
+    `TestExitEvictionSurvivesAnInFlightLookup` and
+    `TestProcessExitEvictsOnlyTheExitedTasksComm`
+    (`internal/eventloop_processexit_comm_test.go`).
+
   A failed attach is non-fatal and simply degrades to the old procfs-only
   labelling. Correspondingly, `handleExecExit` deliberately does **not** cache
   the `sys_enter_execve` comm of a *successful* execve (that is the *calling*
@@ -481,7 +510,8 @@ committed set contains syscalls that only exist on recent mainline kernels
   sibling of `sched_process_exec` in `internal/c/exec.c`, attached the same
   way in `internal/ior_bpfsetup.go` — whose `handleProcessExitEvent`
   (`internal/eventloop_processexit.go`) drops the exited tgid's entries from
-  both maps. It fires per *task*, so a thread exit in a still-living
+  both maps, and — keyed by tid rather than tgid — the exited task's cached
+  comm (see "Comm resolution across `execve`"). It fires per *task*, so a thread exit in a still-living
   multithreaded process evicts that process early: degraded, not wrong — the
   procfs fallback still answers and re-populates the table.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls

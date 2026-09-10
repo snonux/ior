@@ -50,12 +50,13 @@ type commEntry struct {
 	stale bool
 }
 
-// lookupState is the pair of generation counters a resolver worker samples
+// lookupState is the set of generation counters a resolver worker samples
 // before its procfs read, so that storeLookupResult can tell what happened to
 // the cache while the read was in flight. See storeLookupResult.
 type lookupState struct {
 	epoch    uint64
 	staleGen uint64
+	evictGen uint64
 }
 
 type commResolver struct {
@@ -75,6 +76,22 @@ type commResolver struct {
 	// Workers sample the counter before their procfs read and storeLookupResult
 	// re-flags any result that predates the current sweep.
 	staleGen uint64
+
+	// evictedLookups counts, per tid, the evictTid calls that landed while a
+	// lookup for that tid was in flight, so storeLookupResult can throw away a
+	// name read from a process that has since exited.
+	//
+	// The entry's own epoch cannot carry this, because eviction *deletes* the
+	// entry: a result landing afterwards would find no entry, read epoch 0 back
+	// and match the 0 it sampled for a tid that had none either - reinstating
+	// exactly the dead process's name the eviction removed. Leaving a zeroed
+	// entry behind as a tombstone would carry the epoch, but it would sit in
+	// comms and therefore in the LRU, where pruning could drop it while the very
+	// lookup it guards is still in flight. A counter beside the pending set has
+	// neither problem, and no lifetime problem either: it is only created for a
+	// tid whose lookup is actually in flight, and storeLookupResult drops it
+	// together with that lookup's pending flag.
+	evictedLookups map[uint32]uint64
 
 	lookupQueue      chan uint32
 	lookupWorkers    int
@@ -211,11 +228,16 @@ func (r *commResolver) isClosed() bool {
 
 // sampleLookupState snapshots the generation counters that decide whether a
 // lookup result is still usable when it lands: the tid's kernel-rename
-// generation and the resolver-wide staleness-sweep generation.
+// generation, the resolver-wide staleness-sweep generation, and the tid's
+// exit-eviction generation.
 func (r *commResolver) sampleLookupState(tid uint32) lookupState {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return lookupState{epoch: r.comms[tid].epoch, staleGen: r.staleGen}
+	return lookupState{
+		epoch:    r.comms[tid].epoch,
+		staleGen: r.staleGen,
+		evictGen: r.evictedLookups[tid],
+	}
 }
 
 // storeLookupResult clears the pending flag for tid and caches comm, subject to
@@ -226,6 +248,12 @@ func (r *commResolver) sampleLookupState(tid uint32) lookupState {
 // while the lookup was in flight. That name is exact and this result - read
 // before the rename, or concurrently with it - would put the older name back,
 // so it is discarded outright.
+//
+// evictGen: the tid exited while the lookup was in flight (evictTid). The name
+// this worker is holding was read from a process that is gone, and the tid may
+// already have been recycled by a new one, so it is discarded outright -
+// without this the eviction would be silently undone by the very lookup it was
+// meant to outrank.
 //
 // staleGen: a markAllStale sweep ran while the lookup was in flight, so this
 // value may predate the exec record whose loss triggered the sweep. The sweep
@@ -239,7 +267,15 @@ func (r *commResolver) storeLookupResult(tid uint32, comm string, state lookupSt
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.pending, tid)
+	// At most one lookup per tid is ever in flight (enqueueLookupLocked refuses
+	// a second while pending is set), so the tid's eviction counter has done its
+	// job the moment that lookup lands and dies with its pending flag.
+	evicted := r.evictedLookups[tid]
+	delete(r.evictedLookups, tid)
 	if comm == "" {
+		return
+	}
+	if evicted != state.evictGen {
 		return
 	}
 	if r.comms[tid].epoch != state.epoch {
@@ -374,6 +410,53 @@ func (r *commResolver) refreshStaleComm(tid uint32) {
 	r.comms[tid] = entry
 }
 
+// evictTid drops the cached command name of a task the kernel reported as
+// exited (a sched:sched_process_exit control record, handleProcessExitEvent).
+//
+// Tids are recycled, and nothing else in the cache's write paths reaches an
+// entry whose owner is gone: an entry is only ever overwritten by an
+// authoritative kernel-sourced name (setCachedFromKernel) or by a completed
+// procfs lookup. So without this the next process to be handed the same tid
+// number was labelled with the dead process's comm until it happened to
+// execve() or the entry aged out of the 8192-entry LRU - and on a box churning
+// short-lived processes that reuse is neither rare nor slow.
+//
+// The record fires per *task*, and the comm cache is keyed per task, so
+// evicting exactly ev.Tid is precise rather than degraded: a thread exiting
+// inside a still-living multithreaded process drops that thread's name only,
+// which is the very name that has just become meaningless. (The sibling
+// fdTracker eviction cannot be that precise, because its key is the tgid - see
+// handleProcessExitEvent.)
+//
+// A lookup already in flight for the tid is retired via evictedLookups rather
+// than by touching the entry, because the entry is about to stop existing; see
+// storeLookupResult. Evicting - as opposed to the markAllStale treatment given
+// to a lost exec record - is right here because there is nothing left to serve:
+// the value does not merely risk being outdated, its owner is gone. The next
+// use of the tid queues a fresh lookup (comm) and, under an active -comm
+// filter, the recycled tid's first non-open syscall is dropped at the
+// enter-side gate exactly as a never-before-seen tid's would be.
+func (r *commResolver) evictTid(tid uint32) {
+	if tid == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, cached := r.comms[tid]
+	_, inFlight := r.pending[tid]
+	if !cached && !inFlight {
+		return
+	}
+	delete(r.comms, tid)
+	delete(r.commAges, tid)
+	if inFlight {
+		if r.evictedLookups == nil {
+			r.evictedLookups = make(map[uint32]uint64)
+		}
+		r.evictedLookups[tid]++
+	}
+}
+
 func (r *commResolver) setCached(tid uint32, comm string) {
 	if comm == "" {
 		return
@@ -501,6 +584,7 @@ func (r *commResolver) shutdown() {
 		r.closed = true
 		for tid := range r.pending {
 			delete(r.pending, tid)
+			delete(r.evictedLookups, tid)
 		}
 		queue := r.lookupQueue
 		r.mu.Unlock()
@@ -546,6 +630,12 @@ func (e *eventLoop) setCachedComm(tid uint32, comm string) {
 // commResolver.setCachedFromKernel).
 func (e *eventLoop) setCachedCommFromKernel(tid uint32, comm string) {
 	e.commState().setCachedFromKernel(tid, comm)
+}
+
+// evictCachedComm drops the cached command name of an exited task (see
+// commResolver.evictTid).
+func (e *eventLoop) evictCachedComm(tid uint32) {
+	e.commState().evictTid(tid)
 }
 
 // applyPendingCommRefresh consumes a refresh request raised by the ring-buffer
