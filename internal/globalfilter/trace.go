@@ -94,7 +94,10 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 	if !hasStringPattern(filter) {
 		return nil
 	}
-	pattern := strings.TrimSpace(filter.Pattern)
+	// Measure what the matcher actually compares, not what the user typed:
+	// trimAnchors drops the `^`/`$` syntax so an anchored pattern is judged on
+	// the text that has to fit the kernel field. See trimAnchors.
+	pattern, _, _ := trimAnchors(strings.TrimSpace(filter.Pattern))
 	if len(pattern) > maxLen {
 		return fmt.Errorf("%s filter max size is %d (got %d)", name, maxLen, len(pattern))
 	}

@@ -295,11 +295,15 @@ committed set contains syscalls that only exist on recent mainline kernels
   `TestFilterNoticeClearsWhenUnset`
   (`internal/tui/dashboard/filternotice_test.go`).
 
-  Known adjacent defect, deliberately not fixed here (task m3):
-  `ValidateTracepointFields` counts regex anchors toward the field limit, so
-  `^` + 16 characters + `$` is rejected although the pattern it anchors fits.
-  Running the validation on the swap path makes that pre-existing bug easier to
-  reach, not worse.
+  Validation measures the text the matcher compares, not what the user typed.
+  `matchString` strips `^`/`$` before comparing and the filter modal advertises
+  `^exact$`, so counting the anchors against the field size rejected `^` plus a
+  15-character comm plus `$` - the documented way to exact-match the longest
+  comm Linux allows, since `TASK_COMM_LEN` includes the NUL. That was harmless
+  while the check only ran on a trace restart; guarding the swap path turned it
+  into a refusal of a working, advertised filter, so both sites now share
+  `trimAnchors` and cannot drift again (task m3;
+  `TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors`).
 
   Nothing after the signal can fail in TUI mode: `runTraceWithContext`'s only
   remaining error source is `finaliseTrace`'s `recorder.Write`, and the

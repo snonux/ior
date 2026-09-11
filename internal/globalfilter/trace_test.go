@@ -77,3 +77,33 @@ func TestMatchOpenEventCommDropsOnlyTheFileDimension(t *testing.T) {
 		t.Error("MatchOpenEventComm(nil) must not match")
 	}
 }
+
+// TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors pins the
+// agreement between the length check and the matcher.
+//
+// The anchors are syntax: matchString strips `^`/`$` before comparing, and the
+// filter modal advertises `^exact$` as the way to match exactly. Measuring the
+// raw pattern rejected `^` plus a 15-character comm plus `$` as 17 characters
+// for a 16-byte field - the documented way to exact-match the longest comm
+// Linux allows, since TASK_COMM_LEN includes the NUL.
+//
+// This only became user-visible when the TUI started validating live filter
+// swaps (task l3); before that the check ran solely on a trace restart.
+func TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors(t *testing.T) {
+	longestComm := strings.Repeat("a", types.MAX_PROGNAME_LENGTH-1)
+
+	anchored := Filter{Comm: &StringFilter{Pattern: "^" + longestComm + "$"}}
+	if err := anchored.ValidateTracepointFields(); err != nil {
+		t.Errorf("anchored exact match on the longest possible comm was rejected: %v", err)
+	}
+	// And it really does match, so rejecting it cost a working filter.
+	if !matchString(anchored.Comm, longestComm) {
+		t.Errorf("%q does not match %q; the premise of this test is wrong", anchored.Comm.Pattern, longestComm)
+	}
+
+	// The anchors buy no extra room for the text itself.
+	tooLong := Filter{Comm: &StringFilter{Pattern: "^" + strings.Repeat("a", types.MAX_PROGNAME_LENGTH+1) + "$"}}
+	if err := tooLong.ValidateTracepointFields(); err == nil {
+		t.Error("an over-long pattern was accepted because it was anchored")
+	}
+}
