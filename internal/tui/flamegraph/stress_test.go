@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -14,103 +16,233 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+const (
+	stressWorkerCount     = 10
+	stressEventsPerWorker = 10000
+	stressTotalEvents     = stressWorkerCount * stressEventsPerWorker
+	stressViewWidth       = 120
+	stressViewHeight      = 40
+	stressRenderFPS       = 30
+	stressFrameBudget     = time.Second / stressRenderFPS
+
+	// Ceilings for one full render pass over the trie this test builds —
+	// snapshot rebuild, JSON round-trip and terminal layout. Both are
+	// allocation counters rather than wall clock, so a busy host does not
+	// move them: across idle runs, -race runs and runs under 6x CPU
+	// oversubscription the pass cost 28920-28940 allocations and 1.47-1.63
+	// MiB — a spread under 0.1% on the allocation count — while wall-clock
+	// latency over the same three conditions went 6.7ms, 33.6ms, 199ms. The
+	// ceilings leave ~1.5x headroom on top of the measured cost.
+	stressMaxRenderAllocs = 45000
+	stressMaxRenderBytes  = 2400000
+	stressCostSamples     = 20
+)
+
+// stressRenderStats accumulates what the concurrent render loop observed while
+// the ingest workers were still writing into the trie.
+type stressRenderStats struct {
+	err         error
+	samples     int
+	maxFrames   int
+	lastTotal   uint64
+	total       time.Duration
+	maxDuration time.Duration
+}
+
+// TestStressHighEventRate renders the flamegraph at the live refresh cadence
+// while ten goroutines ingest 100k events into the same trie, and asserts on
+// properties that do not depend on how much CPU the host has left: no event is
+// lost or double-counted, every intermediate snapshot decodes and lays out
+// inside the viewport, snapshot totals never go backwards, and one render pass
+// costs a bounded number of allocations. The wall-clock frame budget is
+// measured and logged on every run but only *asserted* under IOR_STRESS_TEST=1
+// — asserting it by default made this test fail whenever the machine was
+// loaded, and -failfast then took the rest of the suite down with it.
 func TestStressHighEventRate(t *testing.T) {
-	t.Parallel()
-
-	const (
-		workerCount     = 10
-		eventsPerWorker = 10000
-		testDuration    = 5 * time.Second
-		renderFPS       = 30
-		frameBudget     = time.Second / renderFPS
-	)
-	allowedBudget := frameBudget * time.Duration(stressBudgetMultiplier())
-
+	// Deliberately not t.Parallel: the render-cost phase reads process-wide
+	// allocation counters, which only attribute to this test while no other
+	// test in the package is running.
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
+
+	ingestDone := make(chan struct{})
+	renderDone := make(chan stressRenderStats, 1)
+	go func() { renderDone <- runStressRenderLoop(liveTrie, ingestDone) }()
+
 	var ingestWG sync.WaitGroup
-
-	type renderMetrics struct {
-		err         error
-		samples     int
-		total       time.Duration
-		maxDuration time.Duration
-	}
-	renderDone := make(chan renderMetrics, 1)
-
-	go func() {
-		ticker := time.NewTicker(frameBudget)
-		defer ticker.Stop()
-		deadline := time.NewTimer(testDuration)
-		defer deadline.Stop()
-
-		metrics := renderMetrics{}
-		for {
-			select {
-			case <-ticker.C:
-				start := time.Now()
-				payload, _ := liveTrie.SnapshotJSON()
-				var snapshot snapshotNode
-				if err := json.Unmarshal(payload, &snapshot); err != nil {
-					metrics.err = fmt.Errorf("decode snapshot: %w", err)
-					renderDone <- metrics
-					return
-				}
-				frames := BuildTerminalLayout(&snapshot, 120, 40)
-				_ = frames
-
-				elapsed := time.Since(start)
-				metrics.samples++
-				metrics.total += elapsed
-				if elapsed > metrics.maxDuration {
-					metrics.maxDuration = elapsed
-				}
-			case <-deadline.C:
-				renderDone <- metrics
-				return
-			}
-		}
-	}()
-
-	for worker := 0; worker < workerCount; worker++ {
+	for worker := 0; worker < stressWorkerCount; worker++ {
 		worker := worker
 		ingestWG.Add(1)
 		go func() {
 			defer ingestWG.Done()
-			for i := 0; i < eventsPerWorker; i++ {
-				seed := worker*eventsPerWorker + i
-				traceID := types.SYS_ENTER_READ
-				if seed%2 == 0 {
-					traceID = types.SYS_ENTER_WRITE
-				}
-				pair := newBenchmarkPair(
-					fmt.Sprintf("worker-%d", worker),
-					traceID,
-					uint32(1000+worker),
-					uint32(200000+seed),
-					buildBenchmarkPath(6, 3, seed),
-				)
-				liveTrie.Ingest(pair)
-				pair.Recycle()
+			for i := 0; i < stressEventsPerWorker; i++ {
+				ingestStressEvent(liveTrie, fmt.Sprintf("worker-%d", worker),
+					uint32(1000+worker), worker*stressEventsPerWorker+i)
 			}
 		}()
 	}
-
 	ingestWG.Wait()
-	metrics := <-renderDone
+	close(ingestDone)
+	stats := <-renderDone
 
-	if metrics.err != nil {
-		t.Fatalf("render loop failed: %v", metrics.err)
+	if stats.err != nil {
+		t.Fatalf("render loop failed: %v", stats.err)
 	}
-	if metrics.samples == 0 {
+	if stats.samples == 0 {
 		t.Fatal("render loop produced no samples")
 	}
-	avg := metrics.total / time.Duration(metrics.samples)
+	if stats.maxFrames == 0 {
+		t.Fatal("render loop never produced a frame")
+	}
+	// Every frame occupies at least one column of one row, and rows stop at
+	// the viewport height, so the layout can never exceed the cell count.
+	if maxFrames := stressViewWidth * stressViewHeight; stats.maxFrames > maxFrames {
+		t.Fatalf("layout produced more frames than the viewport has cells: got=%d max=%d", stats.maxFrames, maxFrames)
+	}
+	if stats.lastTotal != stressTotalEvents {
+		t.Fatalf("concurrent ingest lost or duplicated events: snapshot total=%d want=%d", stats.lastTotal, stressTotalEvents)
+	}
+	if version := liveTrie.Version(); version != stressTotalEvents {
+		t.Fatalf("trie version = %d, want %d", version, stressTotalEvents)
+	}
+
+	avg := stats.total / time.Duration(stats.samples)
+	allowedBudget := stressFrameBudget * time.Duration(stressBudgetMultiplier())
+	t.Logf("render latency: avg=%s max=%s samples=%d frames=%d budget=%s",
+		avg, stats.maxDuration, stats.samples, stats.maxFrames, allowedBudget)
+	assertStressFrameBudget(t, avg, stats.maxDuration, allowedBudget)
+
+	measureStressRenderCost(t, liveTrie)
+}
+
+// runStressRenderLoop renders at the live refresh cadence until ingestDone is
+// closed, then renders once more so the final trie is covered too. It checks
+// the per-sample invariants itself because they must hold for every
+// intermediate snapshot, not only the last one.
+func runStressRenderLoop(liveTrie *coreflamegraph.LiveTrie, ingestDone <-chan struct{}) stressRenderStats {
+	ticker := time.NewTicker(stressFrameBudget)
+	defer ticker.Stop()
+
+	stats := stressRenderStats{}
+	for {
+		if stats.err = renderStressSample(liveTrie, &stats); stats.err != nil {
+			return stats
+		}
+		select {
+		case <-ingestDone:
+			// One last pass over the completed trie.
+			stats.err = renderStressSample(liveTrie, &stats)
+			return stats
+		case <-ticker.C:
+		}
+	}
+}
+
+// renderStressSample runs one render pass and folds it into stats, failing on
+// any snapshot that cannot be decoded, lays out beyond the viewport, or
+// reports a total outside the append-only range the trie guarantees.
+func renderStressSample(liveTrie *coreflamegraph.LiveTrie, stats *stressRenderStats) error {
+	start := time.Now()
+	snapshot, frames, err := renderStressFrame(liveTrie)
+	elapsed := time.Since(start)
+	if err != nil {
+		return err
+	}
+	if err := frameBoundsError(frames, stressViewWidth, stressViewHeight); err != nil {
+		return err
+	}
+	if snapshot.Total < stats.lastTotal {
+		return fmt.Errorf("snapshot total went backwards on an append-only trie: got=%d previous=%d",
+			snapshot.Total, stats.lastTotal)
+	}
+	if snapshot.Total > stressTotalEvents {
+		return fmt.Errorf("snapshot total exceeds the ingested events: got=%d max=%d",
+			snapshot.Total, stressTotalEvents)
+	}
+	stats.lastTotal = snapshot.Total
+	stats.samples++
+	stats.total += elapsed
+	if elapsed > stats.maxDuration {
+		stats.maxDuration = elapsed
+	}
+	if len(frames) > stats.maxFrames {
+		stats.maxFrames = len(frames)
+	}
+	return nil
+}
+
+// renderStressFrame runs the whole render pipeline the flame tab runs per
+// refresh tick: snapshot the trie as JSON, decode it, and lay it out.
+func renderStressFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []tuiFrame, error) {
+	payload, _ := liveTrie.SnapshotJSON()
+	var snapshot snapshotNode
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return nil, nil, fmt.Errorf("decode snapshot: %w", err)
+	}
+	return &snapshot, BuildTerminalLayout(&snapshot, stressViewWidth, stressViewHeight), nil
+}
+
+// measureStressRenderCost bounds the cost of one render pass in allocations
+// instead of nanoseconds. Each pass ingests one more event first so the trie
+// version moves and SnapshotJSON cannot serve its cache — that is what the
+// live refresh does while events are streaming in.
+func measureStressRenderCost(t *testing.T, liveTrie *coreflamegraph.LiveTrie) {
+	t.Helper()
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < stressCostSamples; i++ {
+		ingestStressEvent(liveTrie, "worker-0", 1000, stressTotalEvents+i)
+		_, frames, err := renderStressFrame(liveTrie)
+		if err != nil {
+			t.Fatalf("render cost sample %d failed: %v", i, err)
+		}
+		if len(frames) == 0 {
+			t.Fatalf("render cost sample %d produced no frames", i)
+		}
+	}
+	runtime.ReadMemStats(&after)
+
+	allocs := (after.Mallocs - before.Mallocs) / stressCostSamples
+	bytesPerPass := (after.TotalAlloc - before.TotalAlloc) / stressCostSamples
+	t.Logf("render cost: allocs/pass=%d bytes/pass=%d (ceilings %d / %d)",
+		allocs, bytesPerPass, stressMaxRenderAllocs, stressMaxRenderBytes)
+	if allocs > stressMaxRenderAllocs {
+		t.Errorf("render pass allocates too much: allocs/pass=%d ceiling=%d", allocs, stressMaxRenderAllocs)
+	}
+	if bytesPerPass > stressMaxRenderBytes {
+		t.Errorf("render pass allocates too many bytes: bytes/pass=%d ceiling=%d", bytesPerPass, stressMaxRenderBytes)
+	}
+}
+
+// assertStressFrameBudget checks measured render latency against the frame
+// budget, but only when IOR_STRESS_TEST=1 asks for it. Wall-clock latency here
+// measures the host as much as the code — a contended box showed a 10-11x
+// slowdown — so it is a manual benchmarking signal, not a gate.
+func assertStressFrameBudget(t *testing.T, avg, maxSample, allowedBudget time.Duration) {
+	t.Helper()
+	if os.Getenv("IOR_STRESS_TEST") != "1" {
+		return
+	}
 	if avg > allowedBudget {
-		t.Fatalf("average render latency exceeded frame budget: avg=%s budget=%s samples=%d", avg, allowedBudget, metrics.samples)
+		t.Errorf("average render latency exceeded frame budget: avg=%s budget=%s", avg, allowedBudget)
 	}
-	if metrics.maxDuration > allowedBudget*6 {
-		t.Fatalf("max render latency too high: max=%s budget=%s", metrics.maxDuration, allowedBudget)
+	if maxSample > allowedBudget*6 {
+		t.Errorf("max render latency too high: max=%s budget=%s", maxSample, allowedBudget)
 	}
+}
+
+// ingestStressEvent ingests one deterministic event derived from seed, so the
+// trie this test builds is a function of its inputs alone and the render cost
+// measured over it is reproducible.
+func ingestStressEvent(liveTrie *coreflamegraph.LiveTrie, comm string, pid uint32, seed int) {
+	traceID := types.SYS_ENTER_READ
+	if seed%2 == 0 {
+		traceID = types.SYS_ENTER_WRITE
+	}
+	pair := newBenchmarkPair(comm, traceID, pid, uint32(200000+seed), buildBenchmarkPath(6, 3, seed))
+	liveTrie.Ingest(pair)
+	pair.Recycle()
 }
 
 func TestStressRapidResize(t *testing.T) {
@@ -201,17 +333,27 @@ func settleStressAnimation(model *Model, maxTicks int) *Model {
 
 func assertFramesWithinBounds(t *testing.T, frames []tuiFrame, width, height int) {
 	t.Helper()
+	if err := frameBoundsError(frames, width, height); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// frameBoundsError reports the first frame that falls outside a width x height
+// viewport. It returns an error rather than failing a *testing.T so the
+// concurrent render loop can check the same invariant from its own goroutine.
+func frameBoundsError(frames []tuiFrame, width, height int) error {
 	for _, frame := range frames {
 		if frame.Col < 0 || frame.Width <= 0 {
-			t.Fatalf("invalid frame geometry: %+v", frame)
+			return fmt.Errorf("invalid frame geometry: %+v", frame)
 		}
 		if frame.Col+frame.Width > width {
-			t.Fatalf("frame exceeds width %d: %+v", width, frame)
+			return fmt.Errorf("frame exceeds width %d: %+v", width, frame)
 		}
 		if frame.Row < 0 || frame.Row >= height {
-			t.Fatalf("frame row outside height %d: %+v", height, frame)
+			return fmt.Errorf("frame row outside height %d: %+v", height, frame)
 		}
 	}
+	return nil
 }
 
 func ingestStressEvents(liveTrie *coreflamegraph.LiveTrie, count, seedBase int) {
