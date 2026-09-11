@@ -95,11 +95,20 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 		return nil
 	}
 	// Measure what the matcher actually compares, not what the user typed:
-	// trimAnchors drops the `^`/`$` syntax so an anchored pattern is judged on
-	// the text that has to fit the kernel field. See trimAnchors.
-	pattern, _, _ := trimAnchors(strings.TrimSpace(filter.Pattern))
-	if len(pattern) > maxLen {
-		return fmt.Errorf("%s filter max size is %d (got %d)", name, maxLen, len(pattern))
+	// trimAnchors drops the `^`/`$` syntax, and ToLower matches matchString's
+	// own normalisation, so the pattern is judged as the bytes that have to be
+	// found in the kernel field. Measuring anything else is how this check and
+	// matchString came to disagree in the first place.
+	pattern, _, _ := trimAnchors(strings.ToLower(strings.TrimSpace(filter.Pattern)))
+	// maxLen is the field's buffer size, and the kernel NUL-terminates what it
+	// writes there (bpf_get_current_comm, bpf_probe_read_user_str), so the
+	// longest value that can ever arrive is one byte shorter. A pattern of
+	// exactly maxLen bytes is unmatchable, not merely unlikely - accepting it
+	// produces exactly the live-looking, permanently empty stream this check
+	// exists to prevent.
+	usable := maxLen - 1
+	if len(pattern) > usable {
+		return fmt.Errorf("%s filter max size is %d (got %d)", name, usable, len(pattern))
 	}
 	return nil
 }

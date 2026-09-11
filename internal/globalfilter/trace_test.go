@@ -83,12 +83,18 @@ func TestMatchOpenEventCommDropsOnlyTheFileDimension(t *testing.T) {
 //
 // The anchors are syntax: matchString strips `^`/`$` before comparing, and the
 // filter modal advertises `^exact$` as the way to match exactly. Measuring the
-// raw pattern rejected `^` plus a 15-character comm plus `$` as 17 characters
-// for a 16-byte field - the documented way to exact-match the longest comm
-// Linux allows, since TASK_COMM_LEN includes the NUL.
+// raw pattern rejected `^` plus the longest possible comm plus `$` - the
+// documented way to exact-match it.
+//
+// The boundary is one byte below the buffer size, because the kernel
+// NUL-terminates what it writes: MAX_PROGNAME_LENGTH is 16, so 15 bytes is the
+// longest comm that can ever arrive and a 16-byte pattern is unmatchable. That
+// case is the one the anchor fix nearly let through - unanchored it was always
+// wrongly accepted, and trimming the anchors would have started accepting the
+// anchored form too.
 //
 // This only became user-visible when the TUI started validating live filter
-// swaps (task l3); before that the check ran solely on a trace restart.
+// swaps (task l3); before that an over-long pattern failed the trace outright.
 func TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors(t *testing.T) {
 	longestComm := strings.Repeat("a", types.MAX_PROGNAME_LENGTH-1)
 
@@ -101,9 +107,21 @@ func TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors(t *testing.
 		t.Errorf("%q does not match %q; the premise of this test is wrong", anchored.Comm.Pattern, longestComm)
 	}
 
-	// The anchors buy no extra room for the text itself.
-	tooLong := Filter{Comm: &StringFilter{Pattern: "^" + strings.Repeat("a", types.MAX_PROGNAME_LENGTH+1) + "$"}}
-	if err := tooLong.ValidateTracepointFields(); err == nil {
-		t.Error("an over-long pattern was accepted because it was anchored")
+	// A pattern the width of the whole buffer cannot match anything, anchored
+	// or not: the NUL takes the last byte.
+	bufferWidth := strings.Repeat("a", types.MAX_PROGNAME_LENGTH)
+	for _, pattern := range []string{bufferWidth, "^" + bufferWidth + "$"} {
+		f := Filter{Comm: &StringFilter{Pattern: pattern}}
+		if err := f.ValidateTracepointFields(); err == nil {
+			t.Errorf("pattern %q is as wide as the whole comm buffer and can never match, but was accepted", pattern)
+		}
+	}
+
+	// The validator normalises case the way matchString does, so a pattern
+	// whose lowered form fits is not rejected on its raw length. U+212A lowers
+	// to a single-byte "k".
+	kelvin := Filter{Comm: &StringFilter{Pattern: strings.Repeat("\u212A", 6)}}
+	if err := kelvin.ValidateTracepointFields(); err != nil {
+		t.Errorf("a pattern whose lowered form is 6 bytes was rejected on its raw length: %v", err)
 	}
 }
