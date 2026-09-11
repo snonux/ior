@@ -87,6 +87,21 @@ func isQuitMsg(msg tea.Msg) bool {
 // fell through to handleQuitKeyPress's swallowing return and the TUI could
 // only be left with a SIGKILL from another terminal.
 func TestErrorScreenQuitsOnEveryQuitKey(t *testing.T) {
+	// Only these keys. `isErrorScreenQuitKey` returning true for everything
+	// would pass every other assertion here, and the whole rationale for
+	// putting this branch first is that it takes three keys and leaves the
+	// rest alone.
+	for _, msg := range []tea.KeyPressMsg{
+		{Code: '1', Text: "1"},
+		{Code: 'H', Text: "H"},
+		{Code: tea.KeyEnter},
+	} {
+		m := newErrorScreenModel(t, errors.New("boom"))
+		if _, cmd := m.Update(msg); cmd != nil && isQuitMsg(cmd()) {
+			t.Errorf("key %v quit the error screen; only q, ctrl+c and esc may", msg)
+		}
+	}
+
 	for name, press := range quitKeys() {
 		t.Run(name, func(t *testing.T) {
 			m := newErrorScreenModel(t, errors.New("comm filter max size is 15 (got 19)"))
@@ -366,5 +381,39 @@ func TestErrorScreenQuitOutranksTheHelpOverlay(t *testing.T) {
 	}
 	if !next.(*Model).quitting {
 		t.Error("the model did not enter the quitting state")
+	}
+}
+
+// TestExportedEntryPointsReportTheError pins that production actually goes
+// through runProgram.
+//
+// Testing runProgram directly leaves the entry points free to bypass it:
+// reverting either to `tea.NewProgram(...).Run()` keeps runProgram,
+// finalModelError and the seam all present and fully tested, merely orphaned,
+// and the binary is back to exiting 0 with no reason after a quit from the
+// error screen. That is the "mentions the right strings and runs nothing"
+// shape AGENTS.md warns about, one level up from the function it warns in.
+func TestExportedEntryPointsReportTheError(t *testing.T) {
+	original := runTeaProgram
+	t.Cleanup(func() { runTeaProgram = original })
+
+	wantErr := errors.New("create event filter: comm filter max size is 15 (got 20)")
+	runTeaProgram = func(m *Model) (tea.Model, error) {
+		m.lastErr = wantErr
+		return m, nil
+	}
+	starter := func(context.Context) error { return nil }
+
+	for name, run := range map[string]func() error{
+		"RunWithTraceStarterConfig": func() error {
+			return RunWithTraceStarterConfig(flags.NewFlags(), starter)
+		},
+		"RunTestFlamesWithTraceStarterConfig": func() error {
+			return RunTestFlamesWithTraceStarterConfig(flags.NewFlags(), starter)
+		},
+	} {
+		if err := run(); !errors.Is(err, wantErr) {
+			t.Errorf("%s() = %v, want the error the model was showing", name, err)
+		}
 	}
 }

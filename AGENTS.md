@@ -342,7 +342,7 @@ committed set contains syscalls that only exist on recent mainline kernels
   so `handleQuitKeyPress` fell through to its "handled, do nothing" return -
   and there was no way out of the TUI from the keyboard. (bubbletea answers
   SIGTERM and SIGINT itself, so a signal from another terminal always worked -
-  which is no help to someone sitting in front of it.) The
+  which is no help to someone sitting in front of it.)
   One case is a loss, not a gain: `esc` on the PID picker after a failed
   `recorderStop` used to clear the error and return to a working dashboard,
   and now leaves the session. That is the trade the rule forces - the screen
@@ -363,7 +363,7 @@ committed set contains syscalls that only exist on recent mainline kernels
     already calls worse than an error. Quitting is the honest action, and the
     trace has either not started or is being cancelled on the way out anyway.
   - *Cleanup is best effort.* `quitFromErrorScreen` runs the same two steps as
-    the dashboard quit path - `recorderStop`, then `tracer.stop()` (a no-op
+    the dashboard quit path - `recorderStop` and `tracer.stop()` (in that order, matching the dashboard quit; the recorder guards itself with a mutex and a stopOnce, so the order is for symmetry rather than safety) (a no-op
     when no trace ever started) - but discards the recorder error instead of
     routing it to `lastErr` and returning. The dashboard path does return
     without quitting on that error, which is precisely how a broken recorder
@@ -381,10 +381,11 @@ committed set contains syscalls that only exist on recent mainline kernels
     now `cmd/ior` prints `Failed to run: ...` and exits non-zero, as the raw
     modes always did for the same failure. Pinned by
     `TestErrorScreenQuitsOnEveryQuitKey`,
-  `TestErrorScreenQuitOutranksAnOpenModal`,
-  `TestErrorScreenQuitOutranksThePickerCancel`,
-  `TestErrorScreenQuitOutranksTheHelpOverlay`,
-  `TestRunProgramReportsTheFinalModelError`, `TestErrorScreenQuitCancelsTheTrace`,
+    `TestErrorScreenQuitOutranksAnOpenModal`,
+    `TestErrorScreenQuitOutranksThePickerCancel`,
+    `TestErrorScreenQuitOutranksTheHelpOverlay`,
+    `TestRunProgramReportsTheFinalModelError`,
+    `TestExportedEntryPointsReportTheError`, `TestErrorScreenQuitCancelsTheTrace`,
     `TestErrorScreenQuitStopsAnActiveRecording`,
     `TestErrorScreenQuitSurvivesARecorderThatCannotStop`,
     `TestOverLongCLICommFilterStaysQuittable`,
