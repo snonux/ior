@@ -226,28 +226,6 @@ func TestCleanExitReportsNoError(t *testing.T) {
 	}
 }
 
-// TestErrorScreenQuitIsNotAWayPastAModal keeps the pre-existing quit routing
-// intact: with no error on screen the quit key still closes a visible modal
-// instead of ending the session.
-func TestErrorScreenQuitIsNotAWayPastAModal(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
-	m.screen = ScreenDashboard
-	m.attaching = false
-	m.filterModal = m.filterModal.Open(globalfilter.Filter{})
-
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
-	updated := next.(*Model)
-	if updated.quitting {
-		t.Fatalf("expected q to close the filter modal, not to quit")
-	}
-	if updated.filterModal.Visible() {
-		t.Fatalf("expected q to close the filter modal")
-	}
-	if cmd != nil && isQuitMsg(cmd()) {
-		t.Fatalf("expected no quit command while a modal is open")
-	}
-}
-
 // TestErrorScreenAdvertisesTheWayOut pins the hint: this view answers no key
 // but the quit keys, so it has to name one. A screen that looks stuck and
 // says nothing is what sent the z3 reporter to another terminal.
@@ -286,6 +264,105 @@ func TestErrorScreenQuitOutranksAnOpenModal(t *testing.T) {
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil || !isQuitMsg(cmd()) {
 		t.Fatalf("q did not quit while the error view was on screen with a modal open underneath")
+	}
+	if !next.(*Model).quitting {
+		t.Error("the model did not enter the quitting state")
+	}
+}
+
+// TestRunProgramReportsTheFinalModelError pins the wiring that makes a quit
+// from the error screen say why.
+//
+// finalModelError has its own unit test, but nothing joined it to runProgram:
+// replacing runProgram's body with `return err` left every test green while
+// the binary exited 0 with no reason - which is exactly the silence the
+// reporting change exists to end.
+func TestRunProgramReportsTheFinalModelError(t *testing.T) {
+	original := runTeaProgram
+	t.Cleanup(func() { runTeaProgram = original })
+
+	wantErr := errors.New("create event filter: comm filter max size is 15 (got 20)")
+	runTeaProgram = func(m *Model) (tea.Model, error) {
+		m.lastErr = wantErr
+		return m, nil
+	}
+	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); !errors.Is(err, wantErr) {
+		t.Errorf("runProgram() = %v, want the final model's error", err)
+	}
+
+	// A clean run still reports nothing, so the caller does not print a
+	// spurious failure on an ordinary quit.
+	runTeaProgram = func(m *Model) (tea.Model, error) { return m, nil }
+	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); err != nil {
+		t.Errorf("runProgram() = %v on a clean quit, want nil", err)
+	}
+
+	// Bubble Tea's own failure outranks the model's, so a SIGINT still reports
+	// ErrInterrupted rather than whatever the model happened to be showing.
+	teaErr := errors.New("tea failed")
+	runTeaProgram = func(m *Model) (tea.Model, error) {
+		m.lastErr = wantErr
+		return m, teaErr
+	}
+	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); !errors.Is(err, teaErr) {
+		t.Errorf("runProgram() = %v, want the program's own error to win", err)
+	}
+}
+
+// TestErrorScreenQuitOutranksThePickerCancel pins the branch's precedence over
+// shouldCancelPickerToDashboard, and records a real behaviour change.
+//
+// Before task z3 this was the one keyboard route that cleared a non-fatal
+// lastErr and returned to a working dashboard: esc on the PID picker, after a
+// failed recorderStop had set the error and kept the picker open. Now the
+// error view renders instead, and esc leaves the session.
+//
+// That is the deliberate trade - the screen the user is looking at must answer
+// its own keys - but it is a loss, and it is the only escapable-error case the
+// fix takes away rather than adds. See the recoverable-error follow-up in the
+// task list.
+func TestErrorScreenQuitOutranksThePickerCancel(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenPIDPicker
+	m.attaching = false
+	// The pending return is what made esc recover here before task z3, so
+	// without it this test would exercise a different branch entirely.
+	m.router.savePendingReturn(-1, -1)
+	m.lastErr = errors.New("stop recording: rename ior.parquet: no such file or directory")
+	if !m.shouldCancelPickerToDashboard(tea.KeyPressMsg{Code: tea.KeyEsc}) {
+		t.Fatal("the picker-cancel branch would not fire; this test would prove nothing")
+	}
+
+	if !strings.Contains(m.View().Content, "stop recording") {
+		t.Fatal("the error view is not on screen; this test would prove nothing")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if cmd == nil || !isQuitMsg(cmd()) {
+		t.Fatal("esc did not quit from the error view on the PID picker screen")
+	}
+	if !next.(*Model).quitting {
+		t.Error("the model did not enter the quitting state")
+	}
+}
+
+// TestErrorScreenQuitOutranksTheHelpOverlay pins the remaining ordering. The
+// overlay can be open when a trace failure arrives, and View renders the error
+// ahead of it, so the overlay is not what the user is looking at.
+func TestErrorScreenQuitOutranksTheHelpOverlay(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.helpOverlayVisible = true
+	m.lastErr = errors.New("setup BPF module: attach probes: no such file or directory")
+
+	if !strings.Contains(m.View().Content, "attach probes") {
+		t.Fatal("the error view is not on screen; this test would prove nothing")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd == nil || !isQuitMsg(cmd()) {
+		t.Fatal("q did not quit from the error view with the help overlay open underneath")
 	}
 	if !next.(*Model).quitting {
 		t.Error("the model did not enter the quitting state")

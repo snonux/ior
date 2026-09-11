@@ -329,8 +329,19 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // clean shell, no rows, no message, exit status 0. Returning it makes cmd/ior
 // print "Failed to run: ..." on stderr and exit non-zero, the same as the raw
 // modes do for the identical failure.
+// runTeaProgram runs a Bubble Tea program to completion. It is a variable so a
+// test can substitute the one thing tea.NewProgram(...).Run() makes
+// untestable: that runProgram consults finalModelError at all. Without a seam
+// here the reporting half of the error-screen fix is pinned by nothing - a
+// runProgram that simply returned err would leave every test green while a
+// quit from the error screen exited 0 with no reason, which is the state that
+// fix exists to end.
+var runTeaProgram = func(model *Model) (tea.Model, error) {
+	return tea.NewProgram(model).Run()
+}
+
 func runProgram(model *Model) error {
-	final, err := tea.NewProgram(model).Run()
+	final, err := runTeaProgram(model)
 	if err != nil {
 		return err
 	}
@@ -788,11 +799,15 @@ func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	// The full-screen error view is a dead end by construction: View renders
 	// m.lastErr ahead of the help overlay, every modal and both screens, so
-	// nothing else the model believes is open is on screen to react to a key.
-	// Leaving it must therefore work from here, before the branches below
+	// nothing else the model believes is open is on screen. Other keys still
+	// reach whatever is behind it, which is pre-existing and harmless; what
+	// must not depend on it is *leaving*, so that happens here, before the
+	// branches below
 	// route the key into something invisible - or, as before task z3, drop it
-	// on the floor in handleQuitKeyPress and leave SIGKILL from another
-	// terminal as the only way out.
+	// on the floor in handleQuitKeyPress and leave a signal from another
+	// terminal as the only way out. (bubbletea does answer SIGTERM/SIGINT, so
+	// "no way out" was always "no way out from the keyboard" - which is the
+	// one that matters to someone sitting in front of it.)
 	if m.lastErr != nil && m.isErrorScreenQuitKey(msg) {
 		return m.quitFromErrorScreen()
 	}
