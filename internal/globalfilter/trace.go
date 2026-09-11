@@ -94,21 +94,28 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 	if !hasStringPattern(filter) {
 		return nil
 	}
-	// Measure what the matcher actually compares, not what the user typed:
-	// trimAnchors drops the `^`/`$` syntax, and ToLower matches matchString's
-	// own normalisation, so the pattern is judged as the bytes that have to be
-	// found in the kernel field. Measuring anything else is how this check and
-	// matchString came to disagree in the first place.
-	pattern, _, _ := trimAnchors(strings.ToLower(strings.TrimSpace(filter.Pattern)))
-	// maxLen is the field's buffer size, and the kernel NUL-terminates what it
+	// The question is not how long the pattern is, it is whether any value the
+	// kernel can deliver could match it. matchString lowercases both sides, so
+	// a pattern is usable when *either* its raw or its lowered form fits the
+	// field - whichever it is becomes a witness value that matches.
+	//
+	// Measuring one form only has been wrong in both directions: the raw form
+	// rejects six U+212A (18 bytes) that lower to six, and the lowered form
+	// rejects seven U+023A (15 bytes) that grow to 21. strings.ToLower is not
+	// length-preserving either way, so neither form alone is the answer.
+	raw, _, _ := trimAnchors(strings.TrimSpace(filter.Pattern))
+	lowered, _, _ := trimAnchors(strings.ToLower(strings.TrimSpace(filter.Pattern)))
+	shortest := min(len(raw), len(lowered))
+
+	// maxLen is the field's buffer size and the kernel NUL-terminates what it
 	// writes there (bpf_get_current_comm, bpf_probe_read_user_str), so the
-	// longest value that can ever arrive is one byte shorter. A pattern of
-	// exactly maxLen bytes is unmatchable, not merely unlikely - accepting it
+	// longest value that can ever arrive is one byte shorter. A pattern that
+	// needs the whole buffer is unmatchable, not merely unlikely - accepting it
 	// produces exactly the live-looking, permanently empty stream this check
 	// exists to prevent.
 	usable := maxLen - 1
-	if len(pattern) > usable {
-		return fmt.Errorf("%s filter max size is %d (got %d)", name, usable, len(pattern))
+	if shortest > usable {
+		return fmt.Errorf("%s filter max size is %d (got %d)", name, usable, shortest)
 	}
 	return nil
 }

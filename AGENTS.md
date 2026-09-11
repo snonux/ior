@@ -250,7 +250,7 @@ committed set contains syscalls that only exist on recent mainline kernels
   fail). Signalling earlier is not a small bug: the dashboard leaves the
   "Attaching tracepoints" overlay and shows a live-looking, permanently empty
   session with no error anywhere - reachable on the next trace restart from a
-  comm pattern longer than `MAX_PROGNAME_LENGTH`, or from a stale
+  comm pattern as long as `MAX_PROGNAME_LENGTH`, or from a stale
   `IOR_BPF_OBJECT` lacking `syscall_aggregate_map`.
 - **A filter the pipeline cannot honour is refused, not swapped in**: typing an
   over-long comm/path pattern into the filter modal takes the *live-swap* path,
@@ -258,10 +258,14 @@ committed set contains syscalls that only exist on recent mainline kernels
   it. Until task l3 nothing else did either, and the swap succeeded into a
   running trace that could then match nothing at all: `matchString` looks for
   the pattern as a substring of a fixed-size kernel field, so a comm pattern
-  longer than `MAX_PROGNAME_LENGTH` (or a path longer than
-  `MAX_FILENAME_LENGTH`) is unmatchable by construction and the dashboard goes
-  live-looking and permanently empty - the same symptom as the signalling bug
-  above, reached without any restart. `Model.refuseUnusableFilter`
+  that does not fit `MAX_PROGNAME_LENGTH` (or a path that does not fit
+  `MAX_FILENAME_LENGTH`) cannot be found in anything the raw enter gates see,
+  and the dashboard goes live-looking and permanently empty - the same symptom
+  as the signalling bug above, reached without any restart. The limits are one
+  byte below those constants, because the kernel NUL-terminates what it writes.
+  "Cannot be found" is scoped to the kernel-field gates: a path resolved
+  through the procfs fallback (`/proc/<pid>/fd`, getcwd) can be longer than the
+  event field, so the check is conservative for those rows. `Model.refuseUnusableFilter`
   (`internal/tui/tui.go`) therefore runs `ValidateTracepointFields` at *both*
   entry points into the pipeline tail - `applyGlobalFilter` (modal apply,
   table drill-downs, undo-stack pushes) and `replaceGlobalFilter` (the `[`/`]`
