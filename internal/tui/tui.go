@@ -1131,6 +1131,11 @@ func (m *Model) setProcessFilters(pid, tid int) {
 	m.proc.pid = pid
 	m.proc.tid = tid
 	m.filters.rebindProcessFilters(pid, tid)
+	// The notice describes a filter that was refused in favour of the one
+	// showing. This changes the one showing - and restarts the trace - so the
+	// notice would be left explaining a filter the user is no longer looking
+	// at, in a session it never applied to.
+	m.dashboard.SetFilterNotice("")
 	m.syncDashboardFilterState()
 }
 
@@ -1163,9 +1168,12 @@ func (m *Model) syncDashboardFilterState() {
 // MAX_PROGNAME_LENGTH left a live-looking dashboard matching nothing at all,
 // because matchString compares the pattern as a substring of a fixed-size
 // kernel field that can never contain it. A refusal has to be visible or it is
-// the same silence with an extra step, so this is also the one place that
-// writes the dashboard's filter notice: the reason on refusal, "" on every
-// accepted filter, so the notice cannot outlive the filter it describes.
+// the same silence with an extra step, so this also writes the dashboard's
+// filter notice: the reason on refusal, "" on every accepted filter. It is not
+// the only writer - undoGlobalFilter and setProcessFilters clear it too,
+// because both change the filter on screen without going through here - but it
+// is the only one that ever sets a reason, and between the three the notice
+// cannot outlive the filter it describes.
 func (m *Model) refuseUnusableFilter(filter globalfilter.Filter) bool {
 	err := filter.ValidateTracepointFields()
 	if err == nil {

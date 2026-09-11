@@ -175,3 +175,62 @@ func TestFamilyCycleRefusesAnUnusableFilter(t *testing.T) {
 		t.Fatalf("expected the dashboard to report the refusal, got:\n%s", view)
 	}
 }
+
+// noticeText returns the chrome's refusal notice if the rendered view carries
+// one, so a test asserts on what the user sees rather than on model state.
+func noticeText(t *testing.T, m *Model) string {
+	t.Helper()
+	if strings.Contains(m.View().Content, "FILTER REFUSED") {
+		return "FILTER REFUSED"
+	}
+	return ""
+}
+
+// TestUndoClearsTheRefusalNotice pins one of the two clears that do not go
+// through refuseUnusableFilter. Undo changes the filter on screen, so a notice
+// explaining why some *other* filter was refused no longer describes anything
+// the user is looking at.
+func TestUndoClearsTheRefusalNotice(t *testing.T) {
+	m, _ := newLiveSwapModel(t)
+
+	// A filter that is accepted, so undo has somewhere to go back to.
+	next, _ := m.Update(messages.GlobalFilterRequestedMsg{
+		Filter: globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "firefox"}},
+	})
+	m = next.(*Model)
+
+	next, _ = m.Update(messages.GlobalFilterRequestedMsg{
+		Filter: globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: overLongComm()}},
+	})
+	m = next.(*Model)
+	if noticeText(t, m) == "" {
+		t.Fatal("the over-long filter was not refused; this test would prove nothing")
+	}
+
+	next, _ = m.Update(messages.GlobalFilterUndoRequestedMsg{})
+	m = next.(*Model)
+	if got := noticeText(t, m); got != "" {
+		t.Errorf("the refusal notice survived an undo; it now explains a filter the user is not looking at")
+	}
+}
+
+// TestPidSelectionClearsTheRefusalNotice pins the other one. Choosing a PID
+// rebinds the filter's process dimensions and restarts the trace, so a notice
+// from the previous session describes neither the filter on screen nor the
+// session it is running in.
+func TestPidSelectionClearsTheRefusalNotice(t *testing.T) {
+	m, _ := newLiveSwapModel(t)
+
+	next, _ := m.Update(messages.GlobalFilterRequestedMsg{
+		Filter: globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: overLongComm()}},
+	})
+	m = next.(*Model)
+	if noticeText(t, m) == "" {
+		t.Fatal("the over-long filter was not refused; this test would prove nothing")
+	}
+
+	m.setProcessFilters(4242, 0)
+	if got := noticeText(t, m); got != "" {
+		t.Errorf("the refusal notice survived a PID change and trace restart")
+	}
+}

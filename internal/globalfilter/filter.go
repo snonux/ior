@@ -247,6 +247,29 @@ func (f Filter) IsActive() bool {
 	return false
 }
 
+// trimAnchors splits a string pattern into the text actually compared against
+// the value and the two anchor flags. The anchors are syntax, not content:
+// `^exact$` matches a value of exactly `exact`, so the `^` and `$` are never
+// part of what has to fit in the field being matched.
+//
+// It exists so the matcher and the length validator cannot disagree about what
+// the pattern is. They did: validateTraceStringFilter measured the raw pattern
+// against the kernel field size, so `^` plus a 15-character comm plus `$` -
+// the documented way to exact-match the longest possible comm, and the syntax
+// the filter modal advertises - was rejected as 17 characters for a 16-byte
+// field it would have matched.
+func trimAnchors(pattern string) (trimmed string, anchoredStart, anchoredEnd bool) {
+	anchoredStart = strings.HasPrefix(pattern, "^")
+	if anchoredStart {
+		pattern = pattern[1:]
+	}
+	anchoredEnd = strings.HasSuffix(pattern, "$")
+	if anchoredEnd && len(pattern) > 0 {
+		pattern = pattern[:len(pattern)-1]
+	}
+	return pattern, anchoredStart, anchoredEnd
+}
+
 func matchString(sf *StringFilter, value string) bool {
 	if sf == nil {
 		return true
@@ -256,14 +279,7 @@ func matchString(sf *StringFilter, value string) bool {
 		return true
 	}
 	value = strings.ToLower(value)
-	anchoredStart := strings.HasPrefix(pattern, "^")
-	anchoredEnd := strings.HasSuffix(pattern, "$")
-	if anchoredStart {
-		pattern = pattern[1:]
-	}
-	if anchoredEnd && len(pattern) > 0 {
-		pattern = pattern[:len(pattern)-1]
-	}
+	pattern, anchoredStart, anchoredEnd := trimAnchors(pattern)
 	switch {
 	case anchoredStart && anchoredEnd:
 		return value == pattern
