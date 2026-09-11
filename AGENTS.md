@@ -340,8 +340,19 @@ committed set contains syscalls that only exist on recent mainline kernels
   z3 every one of those keys was swallowed - `canHandleDashboardShortcut`
   gates on `lastErr == nil` and `shouldRouteQuitToEsc` needs a visible modal,
   so `handleQuitKeyPress` fell through to its "handled, do nothing" return -
-  and the only way out of the TUI was a SIGKILL from another terminal. The
-  route needed no exotic setup: an over-long `-comm` on the CLI failed
+  and there was no way out of the TUI from the keyboard. (bubbletea answers
+  SIGTERM and SIGINT itself, so a signal from another terminal always worked -
+  which is no help to someone sitting in front of it.) The
+  One case is a loss, not a gain: `esc` on the PID picker after a failed
+  `recorderStop` used to clear the error and return to a working dashboard,
+  and now leaves the session. That is the trade the rule forces - the screen
+  the user is looking at answers its own keys - and it is the only escapable
+  error the fix takes away. Seven of the eight sites that set `lastErr` are
+  `recorderStop` failures where the trace is still healthy, so a recoverable
+  variant is worth its own task; an unquittable screen was the worse of the
+  two problems and is the one fixed here.
+
+  The route needed no exotic setup: an over-long `-comm` on the CLI failed
   `setupTraceInfra`'s validation, arrived as `TracingErrorMsg` and set
   `lastErr` (that particular route is now also refused at parse time, below).
   Four details are load-bearing:
@@ -369,7 +380,11 @@ committed set contains syscalls that only exist on recent mainline kernels
     error view into a clean shell with no rows, no message and status 0;
     now `cmd/ior` prints `Failed to run: ...` and exits non-zero, as the raw
     modes always did for the same failure. Pinned by
-    `TestErrorScreenQuitsOnEveryQuitKey`, `TestErrorScreenQuitCancelsTheTrace`,
+    `TestErrorScreenQuitsOnEveryQuitKey`,
+  `TestErrorScreenQuitOutranksAnOpenModal`,
+  `TestErrorScreenQuitOutranksThePickerCancel`,
+  `TestErrorScreenQuitOutranksTheHelpOverlay`,
+  `TestRunProgramReportsTheFinalModelError`, `TestErrorScreenQuitCancelsTheTrace`,
     `TestErrorScreenQuitStopsAnActiveRecording`,
     `TestErrorScreenQuitSurvivesARecorderThatCannotStop`,
     `TestOverLongCLICommFilterStaysQuittable`,
