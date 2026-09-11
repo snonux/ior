@@ -141,7 +141,17 @@ func TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors(t *testing.
 // A pattern is accepted only if some value of at most the usable field width
 // matches it. The witness is the pattern's own text: whichever of the raw or
 // lowered form fits, matchString accepts it under every anchor mode, because
-// it lowercases both sides.
+// it lowercases both sides. That the two forms always agree on the anchor
+// flags is not assumed - checked exhaustively over every valid rune: ToLower
+// is idempotent and never creates or destroys a leading `^` or trailing `$`
+// (UTF-8 is self-synchronising, so no multi-byte rune can end in the byte
+// 0x24 either).
+//
+// Honest about its limits: the witness is built the same way the validator
+// computes its length, so this does not independently re-derive the bound.
+// What it does independently is run the real matchString, and every one of the
+// four bugs was the validator disagreeing with that function - which is why it
+// catches all four.
 func TestEveryAcceptedPatternHasADeliverableWitness(t *testing.T) {
 	usable := types.MAX_PROGNAME_LENGTH - 1
 
