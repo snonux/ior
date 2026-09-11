@@ -105,7 +105,12 @@ type Model struct {
 	keys             common.KeyMap
 	globalFilter     globalfilter.Filter
 	filterStack      []string
-	recordingStatus  string
+	// filterNotice explains why the last requested filter change was not
+	// applied. It is empty whenever the displayed globalFilter is the one
+	// the user last asked for, and is rendered ahead of the filter summary
+	// in the chrome so a refusal is read before the filter that survived it.
+	filterNotice    string
+	recordingStatus string
 	pidFilter        int
 	// The three table tabs' state (selected offset/col, live sort, viz mode,
 	// bubble chart) plus the Files tab's directory-grouped sub-table, which
@@ -1177,6 +1182,14 @@ func (m *Model) SetFilterStack(stack []string) {
 	m.streamModel.SetFilterStack(stack)
 }
 
+// SetFilterNotice sets (or, with an empty string, clears) the chrome line
+// explaining why a requested filter change was refused. The TUI model calls it
+// on every filter change - with the reason when the filter cannot be honoured,
+// with "" when it can - so the notice never outlives the filter it describes.
+func (m *Model) SetFilterNotice(notice string) {
+	m.filterNotice = notice
+}
+
 // SetRecordingStatus updates the visible recording state summary rendered in the dashboard chrome.
 func (m *Model) SetRecordingStatus(status string) {
 	m.recordingStatus = status
@@ -1275,6 +1288,12 @@ func (m *Model) filterSummary() string {
 	// Use a Builder to avoid repeated string copies for the optional suffix segments
 	// (filter stack, recording status, auto-reset label) on every render tick.
 	var b strings.Builder
+	// The refusal goes first: it is the newest thing that happened to the
+	// filter, and appendStatusText trims this summary from the right.
+	if m.filterNotice != "" {
+		b.WriteString(m.filterNotice)
+		b.WriteString(" | ")
+	}
 	b.WriteString("filter: ")
 	b.WriteString(presenter.FilterSummary(m.globalFilter))
 	if len(m.filterStack) > 0 {

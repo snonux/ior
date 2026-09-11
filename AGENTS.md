@@ -251,9 +251,55 @@ committed set contains syscalls that only exist on recent mainline kernels
   "Attaching tracepoints" overlay and shows a live-looking, permanently empty
   session with no error anywhere - reachable on the next trace restart from a
   comm pattern longer than `MAX_PROGNAME_LENGTH`, or from a stale
-  `IOR_BPF_OBJECT` lacking `syscall_aggregate_map`. (Typing that pattern into
-  the filter modal takes the live-swap path, which restarts nothing and
-  validates nothing - a separate gap, task l3.)
+  `IOR_BPF_OBJECT` lacking `syscall_aggregate_map`.
+- **A filter the pipeline cannot honour is refused, not swapped in**: typing an
+  over-long comm/path pattern into the filter modal takes the *live-swap* path,
+  which restarts nothing - so `setupTraceInfra`'s validation above never runs on
+  it. Until task l3 nothing else did either, and the swap succeeded into a
+  running trace that could then match nothing at all: `matchString` looks for
+  the pattern as a substring of a fixed-size kernel field, so a comm pattern
+  longer than `MAX_PROGNAME_LENGTH` (or a path longer than
+  `MAX_FILENAME_LENGTH`) is unmatchable by construction and the dashboard goes
+  live-looking and permanently empty - the same symptom as the signalling bug
+  above, reached without any restart. `Model.refuseUnusableFilter`
+  (`internal/tui/tui.go`) therefore runs `ValidateTracepointFields` at *both*
+  entry points into the pipeline tail - `applyGlobalFilter` (modal apply,
+  table drill-downs, undo-stack pushes) and `replaceGlobalFilter` (the `[`/`]`
+  family re-scope) - **before** the stack push, the `setGlobal` and the filter
+  epoch advance, so a refused filter leaves no half-applied state and no undo
+  level behind.
+
+  A refusal that says nothing is the same silence with an extra step, so the
+  same function owns the user-visible half: it writes
+  `dashboard.SetFilterNotice` with the reason on refusal and `""` on every
+  accepted filter, so the notice cannot outlive the filter it describes (the
+  undo path clears it for the same reason). The notice renders in the chrome's
+  status row, ahead of the filter summary - the row is present on every tab and
+  already answers "which filter am I running?", which is exactly the question a
+  refusal changes the answer to. Two surfaces were rejected: `m.lastErr` is the
+  full-screen terminal error (right for a trace that failed to start, a dead end
+  for a typo in a modal while the trace is still running fine), and a stream
+  warning row is carried by `streamrow.NewWarning` with `Comm: "ior"`, so the
+  *still-active* comm filter would filter the warning about it out of the
+  stream tab. Because the notice lives in the status half of a shared row,
+  `appendStatusText` now trims the static help text rather than the live status
+  when the row cannot hold both. Pinned by
+  `TestLiveFilterSwapRefusesAnOverLongCommPattern`,
+  `TestLiveFilterSwapRefusesAnOverLongPathPattern`,
+  `TestRefusedLiveFilterKeepsTheFilterStackUntouched`,
+  `TestAcceptedLiveFilterSwapClearsTheRefusalNotice`,
+  `TestFamilyCycleRefusesAnUnusableFilter`
+  (`internal/tui/filterguard_test.go`) and
+  `TestFilterNoticeIsVisibleOnANarrowDashboard`,
+  `TestFilterNoticePrecedesTheFilterItKept`,
+  `TestFilterNoticeClearsWhenUnset`
+  (`internal/tui/dashboard/filternotice_test.go`).
+
+  Known adjacent defect, deliberately not fixed here (task m3):
+  `ValidateTracepointFields` counts regex anchors toward the field limit, so
+  `^` + 16 characters + `$` is rejected although the pattern it anchors fits.
+  Running the validation on the swap path makes that pre-existing bug easier to
+  reach, not worse.
 
   Nothing after the signal can fail in TUI mode: `runTraceWithContext`'s only
   remaining error source is `finaliseTrace`'s `recorder.Write`, and the

@@ -1153,9 +1153,36 @@ func (m *Model) syncDashboardFilterState() {
 	m.dashboard.SetRecordingStatus(recorderStatus(m.runtime.Recorder()))
 }
 
+// refuseUnusableFilter reports whether filter is one the trace pipeline cannot
+// honour, and when it is, says so instead of applying it.
+//
+// The check is globalfilter.ValidateTracepointFields - the same one
+// setupTraceInfra runs before any BPF setup on the restart path. The live-swap
+// path never restarts the trace, so nothing else on it would ever run that
+// check: handing the running eventloop a comm pattern longer than
+// MAX_PROGNAME_LENGTH left a live-looking dashboard matching nothing at all,
+// because matchString compares the pattern as a substring of a fixed-size
+// kernel field that can never contain it. A refusal has to be visible or it is
+// the same silence with an extra step, so this is also the one place that
+// writes the dashboard's filter notice: the reason on refusal, "" on every
+// accepted filter, so the notice cannot outlive the filter it describes.
+func (m *Model) refuseUnusableFilter(filter globalfilter.Filter) bool {
+	err := filter.ValidateTracepointFields()
+	if err == nil {
+		m.dashboard.SetFilterNotice("")
+		return false
+	}
+	m.dashboard.SetFilterNotice(fmt.Sprintf("FILTER REFUSED (%v) - keeping the previous filter", err))
+	return true
+}
+
 // applyGlobalFilter pushes a new filter onto the filter stack, applies it
-// in-place when possible, or falls back to a full trace restart.
+// in-place when possible, or falls back to a full trace restart. A filter the
+// pipeline cannot honour is refused here, before it reaches the stack.
 func (m *Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
+	if m.refuseUnusableFilter(filter) {
+		return m, nil
+	}
 	changed := m.filters.push(filter, action)
 	m.setGlobalFilter(m.filters.current())
 	return m.reapplyActiveFilter(changed)
@@ -1166,6 +1193,9 @@ func (m *Model) applyGlobalFilter(filter globalfilter.Filter, action string) (te
 // the running pipeline using the same live-swap/restart path as
 // applyGlobalFilter. The stack label stays the same length across calls.
 func (m *Model) replaceGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
+	if m.refuseUnusableFilter(filter) {
+		return m, nil
+	}
 	changed := !m.filters.current().Equal(filter)
 	m.setGlobalFilter(filter)
 	return m.reapplyActiveFilter(changed)
@@ -1215,6 +1245,11 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	// Only validated filters ever reach the stack (applyGlobalFilter refuses
+	// the rest), so there is nothing to re-check here - but the filter on
+	// screen is about to change, so a refusal notice describing the previous
+	// one must not survive it.
+	m.dashboard.SetFilterNotice("")
 	m.setGlobalFilter(prev)
 	if m.screen != ScreenDashboard {
 		return m, nil
