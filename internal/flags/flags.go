@@ -319,7 +319,17 @@ func validateConfig(cfg Config) error {
 	if err := validateProcessID("pid", cfg.PidFilter); err != nil {
 		return err
 	}
-	return validateProcessID("tid", cfg.TidFilter)
+	if err := validateProcessID("tid", cfg.TidFilter); err != nil {
+		return err
+	}
+	// A -comm/-path pattern longer than the fixed-size kernel event field it
+	// is matched against can never be found in anything the tracepoint gates
+	// see, so it is another silently empty trace - the same class as the
+	// checks above. setupTraceInfra rejects it too, but only after the TUI is
+	// already up, where it arrives as TracingErrorMsg and takes over the
+	// screen; refusing it here means the user gets the reason on stderr with
+	// a non-zero exit, before any terminal is taken over at all.
+	return BuildTraceFilter(cfg).ValidateTracepointFields()
 }
 
 // fallbackPidMax is used when /proc/sys/kernel/pid_max cannot be read (for

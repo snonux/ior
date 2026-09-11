@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"ior/internal/types"
 )
 
 // withPinnedPidMax pins the pid_max validation bound for one test so
@@ -85,5 +87,62 @@ func TestValidateProcessIDUsesDynamicPidMax(t *testing.T) {
 	}
 	if err := validateProcessID("pid", 32769); err == nil {
 		t.Fatalf("value beyond the pinned pid_max accepted, want rejection")
+	}
+}
+
+// TestParseRejectsUnmatchablePatternFilters locks the CLI half of task z3: a
+// -comm/-path pattern longer than the fixed-size kernel event field it is
+// compared against can never match anything, so it belongs in the same class
+// as the -pid/-tid values above - flags that produce a silently empty trace.
+// Rejecting it at parse time also keeps it out of the TUI, where it used to
+// arrive as a full-screen error instead of a line on stderr.
+func TestParseRejectsUnmatchablePatternFilters(t *testing.T) {
+	cases := []struct {
+		name    string
+		flag    string
+		value   string
+		wantErr string
+	}{
+		{
+			name:    "comm longer than the kernel comm field",
+			flag:    "comm",
+			value:   strings.Repeat("a", types.MAX_PROGNAME_LENGTH+4),
+			wantErr: "comm filter max size",
+		},
+		{
+			name:    "path longer than the kernel filename field",
+			flag:    "path",
+			value:   strings.Repeat("a", types.MAX_FILENAME_LENGTH+4),
+			wantErr: "path filter max size",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseForTest(t, "-"+tc.flag, tc.value)
+			if err == nil {
+				t.Fatalf("parse accepted an unmatchable -%s, want rejection", tc.flag)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("parse error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestParseAcceptsTheLongestUsablePatternFilters is the other side of the
+// same bound: the longest comm Linux can report (TASK_COMM_LEN includes the
+// NUL) must still parse, anchored exactly as the filter modal advertises it.
+func TestParseAcceptsTheLongestUsablePatternFilters(t *testing.T) {
+	longestComm := strings.Repeat("a", types.MAX_PROGNAME_LENGTH-1)
+	for _, value := range []string{longestComm, "^" + longestComm + "$"} {
+		t.Run(value, func(t *testing.T) {
+			cfg, err := parseForTest(t, "-comm", value)
+			if err != nil {
+				t.Fatalf("parse rejected -comm %s: %v", value, err)
+			}
+			if cfg.CommFilter != value {
+				t.Fatalf("cfg.CommFilter = %q, want %q", cfg.CommFilter, value)
+			}
+		})
 	}
 }

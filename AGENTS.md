@@ -282,7 +282,9 @@ committed set contains syscalls that only exist on recent mainline kernels
   already answers "which filter am I running?", which is exactly the question a
   refusal changes the answer to. Two surfaces were rejected: `m.lastErr` is the
   full-screen terminal error (right for a trace that failed to start, a dead end
-  for a typo in a modal while the trace is still running fine), and a stream
+  for a typo in a modal while the trace is still running fine - still true after
+  task z3 made that screen quittable, because the only way off it is *out*, and
+  a typo in a modal must not cost the session), and a stream
   warning row is carried by `streamrow.NewWarning` with `Comm: "ior"`, so the
   *still-active* comm filter would filter the warning about it out of the
   stream tab. Because the notice lives in the status half of a shared row,
@@ -329,6 +331,67 @@ committed set contains syscalls that only exist on recent mainline kernels
   `TestTuiTraceStarterSurfacesAFailureArrivingAfterStart`,
   `TestTuiTraceStarterKeepsACancelledStartSilent` and
   `TestTuiTraceStarterReportsAStopEvenWhenTheFailureIsReady`.
+- **The full-screen error view is always quittable, and always says why**:
+  `View` renders `m.lastErr` ahead of the help overlay, every modal and both
+  screens, so once it is set nothing else on the model is on screen. Key
+  handling now matches that precedence: `handleGlobalKeyPress` takes `q`,
+  `ctrl+c` and `esc` (`isErrorScreenQuitKey`) straight to
+  `quitFromErrorScreen` **before** the overlay and modal branches. Until task
+  z3 every one of those keys was swallowed - `canHandleDashboardShortcut`
+  gates on `lastErr == nil` and `shouldRouteQuitToEsc` needs a visible modal,
+  so `handleQuitKeyPress` fell through to its "handled, do nothing" return -
+  and the only way out of the TUI was a SIGKILL from another terminal. The
+  route needed no exotic setup: an over-long `-comm` on the CLI failed
+  `setupTraceInfra`'s validation, arrived as `TracingErrorMsg` and set
+  `lastErr` (that particular route is now also refused at parse time, below).
+  Four details are load-bearing:
+  - *Esc quits rather than dismisses.* Clearing `lastErr` and returning to the
+    dashboard was the obvious alternative and is wrong for the common cause: a
+    setup failure means nothing was wired up, so the dashboard behind the
+    error would be live-looking and permanently empty - the symptom this file
+    already calls worse than an error. Quitting is the honest action, and the
+    trace has either not started or is being cancelled on the way out anyway.
+  - *Cleanup is best effort.* `quitFromErrorScreen` runs the same two steps as
+    the dashboard quit path - `recorderStop`, then `tracer.stop()` (a no-op
+    when no trace ever started) - but discards the recorder error instead of
+    routing it to `lastErr` and returning. The dashboard path does return
+    without quitting on that error, which is precisely how a broken recorder
+    lands the user on this screen; making the escape depend on the same call
+    succeeding would swallow the key a second time.
+  - *The view names its own way out.* `View` renders a `q / esc  quit` hint
+    under the message; a screen that answers exactly one key and says nothing
+    is what sent the reporter to another terminal in the first place
+    (`TestErrorScreenAdvertisesTheWayOut`).
+  - *The reason outlives the alt screen.* `RunWithTraceStarterConfig` and
+    `RunTestFlamesWithTraceStarterConfig` go through `runProgram`, which
+    returns the final model's `lastErr` (`finalModelError`). The terminal
+    discards the alternate screen on exit, so before this the user quit the
+    error view into a clean shell with no rows, no message and status 0;
+    now `cmd/ior` prints `Failed to run: ...` and exits non-zero, as the raw
+    modes always did for the same failure. Pinned by
+    `TestErrorScreenQuitsOnEveryQuitKey`, `TestErrorScreenQuitCancelsTheTrace`,
+    `TestErrorScreenQuitStopsAnActiveRecording`,
+    `TestErrorScreenQuitSurvivesARecorderThatCannotStop`,
+    `TestOverLongCLICommFilterStaysQuittable`,
+    `TestErrorScreenQuitReportsTheFailureToTheCaller` and
+    `TestCleanExitReportsNoError` (`internal/tui/errorscreen_test.go`).
+
+  Not fixed here, and still true: the "Attaching tracepoints..." overlay
+  swallows the quit keys the same way. It is bounded by
+  `defaultStartupTimeout` and resolves itself, so it is a wait rather than a
+  dead end.
+- **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
+  (`internal/flags/flags.go`) ends in
+  `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than
+  the fixed-size kernel field it is compared against is refused next to the
+  `-pid`/`-tid` bounds checks and for the same reason - all of them otherwise
+  produce a silently empty trace. `setupTraceInfra` still validates (it is the
+  only gate for a filter that did not come from the CLI), but the CLI case no
+  longer gets that far: the user reads `comm filter max size is 15 (got 20)` on
+  stderr with exit status 2 instead of having a terminal taken over to show it
+  (`TestParseRejectsUnmatchablePatternFilters`,
+  `TestParseAcceptsTheLongestUsablePatternFilters`,
+  `internal/flags/validation_test.go`).
 - **Drop observability**: every generated handler counts a kernel-side event loss
   (`bpf_ringbuf_reserve` returning NULL, i.e. `event_map` full under userspace
   backpressure) in the per-CPU BPF map `ringbuf_drop_map` via

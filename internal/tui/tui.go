@@ -319,9 +319,34 @@ func newRunModel(cfg flags.Config, starter TraceStarter) *Model {
 
 // RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
 func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
-	program := tea.NewProgram(newRunModel(cfg, starter))
-	_, err := program.Run()
-	return err
+	return runProgram(newRunModel(cfg, starter))
+}
+
+// runProgram runs one Bubble Tea program and reports the error the model was
+// still displaying when it exited. The TUI draws on the alternate screen,
+// which the terminal discards on exit, so a trace that failed to start used to
+// vanish without trace the moment the user left the error view: back in a
+// clean shell, no rows, no message, exit status 0. Returning it makes cmd/ior
+// print "Failed to run: ..." on stderr and exit non-zero, the same as the raw
+// modes do for the identical failure.
+func runProgram(model *Model) error {
+	final, err := tea.NewProgram(model).Run()
+	if err != nil {
+		return err
+	}
+	return finalModelError(final)
+}
+
+// finalModelError extracts the error a finished program's model was showing.
+// A model of another type reports nothing rather than panicking: Bubble Tea
+// returns whatever the last Update handed back, and a future refactor that
+// swaps the returned type must not turn a clean exit into a crash.
+func finalModelError(final tea.Model) error {
+	model, ok := final.(*Model)
+	if !ok {
+		return nil
+	}
+	return model.lastErr
 }
 
 // NewTestFlamesModel builds the test-flames dashboard model without running the
@@ -359,9 +384,7 @@ func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) *Model {
 
 // RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
 func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
-	program := tea.NewProgram(NewTestFlamesModel(cfg, starter))
-	_, err := program.Run()
-	return err
+	return runProgram(NewTestFlamesModel(cfg, starter))
 }
 
 // keyboardState groups keyboard event tracking and press-suppression fields.
@@ -763,6 +786,16 @@ func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 // (model, cmd, handled); when handled is false the caller falls through to
 // screen-specific routing.
 func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	// The full-screen error view is a dead end by construction: View renders
+	// m.lastErr ahead of the help overlay, every modal and both screens, so
+	// nothing else the model believes is open is on screen to react to a key.
+	// Leaving it must therefore work from here, before the branches below
+	// route the key into something invisible - or, as before task z3, drop it
+	// on the floor in handleQuitKeyPress and leave SIGKILL from another
+	// terminal as the only way out.
+	if m.lastErr != nil && m.isErrorScreenQuitKey(msg) {
+		return m.quitFromErrorScreen()
+	}
 	if m.helpOverlayVisible {
 		return m.handleHelpOverlayKeyPress(msg)
 	}
@@ -811,6 +844,34 @@ func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 		return m.routeQuitAsEsc()
 	}
 	return m, nil, true
+}
+
+// isErrorScreenQuitKey reports whether msg is one of the keys that leave the
+// full-screen error view: the quit binding (q, ctrl+c) plus Esc. Esc is
+// included because the view has nowhere to go back to - the trace it reports
+// on either never started or has already been torn down, so "dismiss" and
+// "quit" are the same action - and because Esc is what a user presses first
+// when a screen looks stuck. It is deliberately *not* the option of clearing
+// m.lastErr and returning to the dashboard: for the common cause (a setup
+// failure arriving as TracingErrorMsg) that dashboard is wired to nothing and
+// would render live-looking and permanently empty, which is the exact symptom
+// AGENTS.md records as worse than an error.
+func (m *Model) isErrorScreenQuitKey(msg tea.KeyPressMsg) bool {
+	return key.Matches(msg, m.keys.Quit) || isEscKey(msg)
+}
+
+// quitFromErrorScreen leaves the full-screen error view. It performs the same
+// cleanup as the dashboard quit path - stop the recorder, cancel the trace
+// context - but treats the recorder result as best effort: the dashboard path
+// turns a recorderStop failure into m.lastErr and returns *without* quitting,
+// and doing that here would swallow the key for a second error the user is
+// already looking at. m.lastErr is left untouched so the displayed error is
+// the one runProgram reports to the caller on exit.
+func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
+	_ = recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
+	m.quitting = true
+	m.tracer.stop()
+	return m, tea.Quit, true
 }
 
 // routeQuitAsEsc synthesises an Esc key press and forwards it to whichever
@@ -1334,7 +1395,10 @@ func (m *Model) View() tea.View {
 
 	if m.lastErr != nil {
 		theme := common.Current()
-		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(theme.ErrorStyle.Render(m.lastErr.Error()))), title)
+		// The hint is part of the fix, not decoration: this view answers no
+		// other key, so the one key it does answer has to be on it.
+		body := theme.ErrorStyle.Render(m.lastErr.Error()) + "\n\n" + theme.HelpBarStyle.Render("q / esc  quit")
+		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(body)), title)
 	}
 	if m.helpOverlayVisible {
 		helpView := renderGlobalHelpOverlay(width, height, m.helpSections())
