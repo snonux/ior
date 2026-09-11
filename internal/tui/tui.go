@@ -322,6 +322,17 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 	return runProgram(newRunModel(cfg, starter))
 }
 
+// runTeaProgram runs a Bubble Tea program to completion. It is a variable so a
+// test can substitute the one thing tea.NewProgram(...).Run() makes
+// untestable: that the exported entry points report what the model was
+// showing. Without a seam here that half of the error-screen fix is pinned by
+// nothing - wiring tea.NewProgram directly into those entry points leaves
+// every test green while a quit from the error screen exits 0 with no reason,
+// which is the state the fix exists to end.
+var runTeaProgram = func(model *Model) (tea.Model, error) {
+	return tea.NewProgram(model).Run()
+}
+
 // runProgram runs one Bubble Tea program and reports the error the model was
 // still displaying when it exited. The TUI draws on the alternate screen,
 // which the terminal discards on exit, so a trace that failed to start used to
@@ -329,17 +340,10 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // clean shell, no rows, no message, exit status 0. Returning it makes cmd/ior
 // print "Failed to run: ..." on stderr and exit non-zero, the same as the raw
 // modes do for the identical failure.
-// runTeaProgram runs a Bubble Tea program to completion. It is a variable so a
-// test can substitute the one thing tea.NewProgram(...).Run() makes
-// untestable: that runProgram consults finalModelError at all. Without a seam
-// here the reporting half of the error-screen fix is pinned by nothing - a
-// runProgram that simply returned err would leave every test green while a
-// quit from the error screen exited 0 with no reason, which is the state that
-// fix exists to end.
-var runTeaProgram = func(model *Model) (tea.Model, error) {
-	return tea.NewProgram(model).Run()
-}
-
+//
+// Every exported entry point must go through here rather than calling
+// tea.NewProgram itself, which is what TestExportedEntryPointsReportTheError
+// pins - testing runProgram alone leaves the entry points free to bypass it.
 func runProgram(model *Model) error {
 	final, err := runTeaProgram(model)
 	if err != nil {
