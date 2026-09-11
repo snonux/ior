@@ -144,15 +144,30 @@ func renderHelpHintWithStatus(width int, status string) string {
 	return common.Current().HelpBarStyle.Width(width).Render(hint)
 }
 
+// appendStatusText joins the chrome's static help text and its live status
+// half into one row of at most width cells.
+//
+// When both do not fit, the HELP half is the one that gives way. The status
+// half is where the dashboard reports state the user cannot get anywhere else
+// - the active filter, a filter that was refused, the recording status - while
+// the help half is reference text that the help overlay repeats in full.
+// Truncating the joined line from the right (as this did) dropped precisely
+// the half worth reading, which is how a refused filter could go unnoticed on
+// a narrow terminal.
 func appendStatusText(base, status string, width int) string {
 	if status == "" {
 		return base
 	}
-	line := base + " | " + status
-	if width > 0 {
-		return truncatePlain(line, width)
+	const separator = " | "
+	if width <= 0 {
+		return base + separator + status
 	}
-	return line
+	statusText := truncatePlain(status, width)
+	room := width - utf8.RuneCountInString(statusText) - utf8.RuneCountInString(separator)
+	if room < 1 {
+		return statusText
+	}
+	return truncatePlain(base, room) + separator + statusText
 }
 
 func wrapHelpLines(parts []string, width int) (string, string) {
