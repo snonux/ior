@@ -28,14 +28,25 @@ const (
 	// Ceilings for one full render pass over the trie this test builds —
 	// snapshot rebuild, JSON round-trip and terminal layout. Both are
 	// allocation counters rather than wall clock, so a busy host does not
-	// move them: across idle runs, -race runs and runs under 6x CPU
-	// oversubscription the pass cost 28920-28940 allocations and 1.47-1.63
-	// MiB — a spread under 0.1% on the allocation count — while wall-clock
-	// latency over the same three conditions went 6.7ms, 33.6ms, 199ms. The
-	// ceilings leave ~1.5x headroom on top of the measured cost.
-	stressMaxRenderAllocs = 45000
-	stressMaxRenderBytes  = 2400000
+	// move them: across idle runs, -race runs and runs under 8x CPU
+	// oversubscription the pass cost 28923-28934 allocations (a 0.04%
+	// spread) and 1487146-1572729 bytes, while peak wall-clock render
+	// latency over the same three conditions went 11.6ms, 63.0ms and
+	// 249.6ms.
+	//
+	// The ceilings sit ~1.15x above the highest measurement. That is loose
+	// enough not to flake — the allocation count barely moves at all, and the
+	// byte total's 5.8% spread comes from allocation *sizes* (map and slice
+	// growth steps), not from load — and tight enough to catch a regression
+	// that makes the pass meaningfully more expensive: swapping
+	// json.Marshal for MarshalIndent lands at 2620274 bytes/pass.
+	stressMaxRenderAllocs = 33000
+	stressMaxRenderBytes  = 1800000
 	stressCostSamples     = 20
+
+	// stressExpectedFrames is how many frames the completed fixture trie lays
+	// out. See the assertion in TestStressHighEventRate for why it is exact.
+	stressExpectedFrames = 321
 )
 
 // stressRenderStats accumulates what the concurrent render loop observed while
@@ -44,6 +55,7 @@ type stressRenderStats struct {
 	err         error
 	samples     int
 	maxFrames   int
+	lastFrames  int
 	lastTotal   uint64
 	total       time.Duration
 	maxDuration time.Duration
@@ -90,13 +102,27 @@ func TestStressHighEventRate(t *testing.T) {
 	if stats.samples == 0 {
 		t.Fatal("render loop produced no samples")
 	}
-	if stats.maxFrames == 0 {
-		t.Fatal("render loop never produced a frame")
-	}
-	// Every frame occupies at least one column of one row, and rows stop at
-	// the viewport height, so the layout can never exceed the cell count.
-	if maxFrames := stressViewWidth * stressViewHeight; stats.maxFrames > maxFrames {
-		t.Fatalf("layout produced more frames than the viewport has cells: got=%d max=%d", stats.maxFrames, maxFrames)
+	// The final sample renders the completed trie, so its frame count is a
+	// property of the fixture rather than of the host: 321 idle, under -race
+	// and under 8x oversubscription alike. maxFrames is not, and must not be
+	// asserted on - pruning is relative to the running root total, so an early
+	// snapshot legitimately keeps more nodes, and how many depends on where
+	// the render loop's ticks happen to fall (330 and 523 on two runs of the
+	// same fixture). It is logged, not checked.
+	//
+	// Asserting the last sample exactly is what gives this test any grip on
+	// pruning at all. The bound it replaced - maxFrames against the viewport's
+	// cell count - could not fail: allocateChildWidths never over-allocates a
+	// span, and frameBoundsError would catch a violation first. With only that
+	// bound, raising liveTrieMinFraction from 0.001 to 0.05 dropped the
+	// flamegraph from 321 frames to 21 - most of it gone - and the whole suite
+	// still passed.
+	//
+	// If a fixture or pruning change moves this legitimately, read the new
+	// number off the failure and update it deliberately.
+	if stats.lastFrames != stressExpectedFrames {
+		t.Errorf("completed trie laid out %d frames, want %d: pruning or the fixture changed",
+			stats.lastFrames, stressExpectedFrames)
 	}
 	if stats.lastTotal != stressTotalEvents {
 		t.Fatalf("concurrent ingest lost or duplicated events: snapshot total=%d want=%d", stats.lastTotal, stressTotalEvents)
@@ -107,8 +133,8 @@ func TestStressHighEventRate(t *testing.T) {
 
 	avg := stats.total / time.Duration(stats.samples)
 	allowedBudget := stressFrameBudget * time.Duration(stressBudgetMultiplier())
-	t.Logf("render latency: avg=%s max=%s samples=%d frames=%d budget=%s",
-		avg, stats.maxDuration, stats.samples, stats.maxFrames, allowedBudget)
+	t.Logf("render latency: avg=%s max=%s samples=%d frames=%d peakFrames=%d budget=%s",
+		avg, stats.maxDuration, stats.samples, stats.lastFrames, stats.maxFrames, allowedBudget)
 	assertStressFrameBudget(t, avg, stats.maxDuration, allowedBudget)
 
 	measureStressRenderCost(t, liveTrie)
@@ -164,14 +190,24 @@ func renderStressSample(liveTrie *coreflamegraph.LiveTrie, stats *stressRenderSt
 	if elapsed > stats.maxDuration {
 		stats.maxDuration = elapsed
 	}
+	stats.lastFrames = len(frames)
 	if len(frames) > stats.maxFrames {
 		stats.maxFrames = len(frames)
 	}
 	return nil
 }
 
-// renderStressFrame runs the whole render pipeline the flame tab runs per
-// refresh tick: snapshot the trie as JSON, decode it, and lay it out.
+// renderStressFrame runs the JSON snapshot pipeline — SnapshotJSON, decode,
+// BuildTerminalLayout — end to end.
+//
+// This is the path external consumers take, not the one the flame tab takes:
+// the tab calls SnapshotTree() and skips the marshal/unmarshal round-trip.
+// Both start from the same buildSnapshot output, and
+// TestSnapshotTreeMatchesJSONRoundTrip pins that the two produce identical
+// layouts, so the cost and pruning bounds measured here carry over to the tab.
+// The JSON form is used here because the round-trip also exercises the
+// SnapshotNode JSON tags, and because decoding is what catches a snapshot torn
+// by a concurrent ingest.
 func renderStressFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []tuiFrame, error) {
 	payload, _ := liveTrie.SnapshotJSON()
 	var snapshot snapshotNode
@@ -243,6 +279,49 @@ func ingestStressEvent(liveTrie *coreflamegraph.LiveTrie, comm string, pid uint3
 	pair := newBenchmarkPair(comm, traceID, pid, uint32(200000+seed), buildBenchmarkPath(6, 3, seed))
 	liveTrie.Ingest(pair)
 	pair.Recycle()
+}
+
+// TestSnapshotTreeMatchesJSONRoundTrip pins the equivalence the stress test's
+// cost and frame-count bounds rely on: the tree the flame tab renders
+// (SnapshotTree) and the tree the JSON path yields (SnapshotJSON + decode) lay
+// out to the same frames. Without this, a divergence — a field losing its JSON
+// tag, say — would leave TestStressHighEventRate measuring a pipeline the TUI
+// no longer runs, and it would still pass.
+func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
+	for i := 0; i < 2000; i++ {
+		ingestStressEvent(liveTrie, fmt.Sprintf("worker-%d", i%10), uint32(1000+i%10), i)
+	}
+
+	tree, treeVersion := liveTrie.SnapshotTree()
+	decoded, _, err := renderStressFrame(liveTrie)
+	if err != nil {
+		t.Fatalf("JSON snapshot path failed: %v", err)
+	}
+	if treeVersion != uint64(2000) {
+		t.Fatalf("snapshot version = %d, want 2000", treeVersion)
+	}
+
+	treeFrames := BuildTerminalLayout(tree, stressViewWidth, stressViewHeight)
+	jsonFrames := BuildTerminalLayout(decoded, stressViewWidth, stressViewHeight)
+	if len(treeFrames) == 0 {
+		t.Fatal("SnapshotTree laid out no frames")
+	}
+	if len(treeFrames) != len(jsonFrames) {
+		t.Fatalf("frame count differs between snapshot paths: tree=%d json=%d",
+			len(treeFrames), len(jsonFrames))
+	}
+	for i := range treeFrames {
+		if treeFrames[i] != jsonFrames[i] {
+			t.Fatalf("frame %d differs between snapshot paths:\n tree=%+v\n json=%+v",
+				i, treeFrames[i], jsonFrames[i])
+		}
+	}
+	if tree.Total != decoded.Total {
+		t.Errorf("root total differs between snapshot paths: tree=%d json=%d", tree.Total, decoded.Total)
+	}
 }
 
 func TestStressRapidResize(t *testing.T) {
