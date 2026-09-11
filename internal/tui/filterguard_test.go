@@ -67,7 +67,7 @@ func TestLiveFilterSwapRefusesAnOverLongCommPattern(t *testing.T) {
 	if !strings.Contains(view, "FILTER REFUSED") {
 		t.Fatalf("expected the dashboard to tell the user the filter was refused, got:\n%s", view)
 	}
-	if !strings.Contains(view, "comm filter max size is 16") {
+	if !strings.Contains(view, "comm filter max size is 15") {
 		t.Fatalf("expected the refusal to state the limit it broke, got:\n%s", view)
 	}
 }
@@ -176,14 +176,11 @@ func TestFamilyCycleRefusesAnUnusableFilter(t *testing.T) {
 	}
 }
 
-// noticeText returns the chrome's refusal notice if the rendered view carries
-// one, so a test asserts on what the user sees rather than on model state.
-func noticeText(t *testing.T, m *Model) string {
+// showsRefusal reports whether the rendered view carries the refusal notice,
+// so a test asserts on what the user sees rather than on model state.
+func showsRefusal(t *testing.T, m *Model) bool {
 	t.Helper()
-	if strings.Contains(m.View().Content, "FILTER REFUSED") {
-		return "FILTER REFUSED"
-	}
-	return ""
+	return strings.Contains(m.View().Content, "FILTER REFUSED")
 }
 
 // TestUndoClearsTheRefusalNotice pins one of the two clears that do not go
@@ -203,14 +200,14 @@ func TestUndoClearsTheRefusalNotice(t *testing.T) {
 		Filter: globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: overLongComm()}},
 	})
 	m = next.(*Model)
-	if noticeText(t, m) == "" {
+	if !showsRefusal(t, m) {
 		t.Fatal("the over-long filter was not refused; this test would prove nothing")
 	}
 
 	next, _ = m.Update(messages.GlobalFilterUndoRequestedMsg{})
 	m = next.(*Model)
-	if got := noticeText(t, m); got != "" {
-		t.Errorf("the refusal notice survived an undo; it now explains a filter the user is not looking at")
+	if showsRefusal(t, m) {
+		t.Error("the refusal notice survived an undo; it now explains a filter the user is not looking at")
 	}
 }
 
@@ -225,12 +222,37 @@ func TestPidSelectionClearsTheRefusalNotice(t *testing.T) {
 		Filter: globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: overLongComm()}},
 	})
 	m = next.(*Model)
-	if noticeText(t, m) == "" {
+	if !showsRefusal(t, m) {
 		t.Fatal("the over-long filter was not refused; this test would prove nothing")
 	}
 
-	m.setProcessFilters(4242, 0)
-	if got := noticeText(t, m); got != "" {
-		t.Errorf("the refusal notice survived a PID change and trace restart")
+	// Driven through the real message rather than setProcessFilters directly,
+	// so this also pins that the PID picker still routes through the clear.
+	next, _ = m.Update(messages.PidSelectedMsg{Pid: 4242})
+	m = next.(*Model)
+	if showsRefusal(t, m) {
+		t.Error("the refusal notice survived a PID change and trace restart")
+	}
+}
+
+// TestLiveFilterSwapAcceptsAnAnchoredLongestComm pins the m3 regression on the
+// surface that exposed it. The guard added for l3 turned a latent length-check
+// bug into a refusal of `^exact$` - the syntax the filter modal advertises -
+// for any comm at the longest length the kernel can deliver. The globalfilter
+// test covers the validator; this covers the path a user actually takes.
+func TestLiveFilterSwapAcceptsAnAnchoredLongestComm(t *testing.T) {
+	m, recorder := newLiveSwapModel(t)
+
+	pattern := "^" + strings.Repeat("a", types.MAX_PROGNAME_LENGTH-1) + "$"
+	next, _ := m.Update(messages.GlobalFilterRequestedMsg{
+		Filter: globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: pattern}},
+	})
+	m = next.(*Model)
+
+	if showsRefusal(t, m) {
+		t.Fatalf("anchored exact match %q was refused; it is the documented way to match the longest comm", pattern)
+	}
+	if len(recorder.applied) != 1 {
+		t.Errorf("live setter received %d filters, want 1: the swap did not reach the pipeline", len(recorder.applied))
 	}
 }

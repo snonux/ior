@@ -111,7 +111,7 @@ type Model struct {
 	// in the chrome so a refusal is read before the filter that survived it.
 	filterNotice    string
 	recordingStatus string
-	pidFilter        int
+	pidFilter       int
 	// The three table tabs' state (selected offset/col, live sort, viz mode,
 	// bubble chart) plus the Files tab's directory-grouped sub-table, which
 	// shares the navigation and sort machinery but never has a viz mode or
@@ -1183,9 +1183,12 @@ func (m *Model) SetFilterStack(stack []string) {
 }
 
 // SetFilterNotice sets (or, with an empty string, clears) the chrome line
-// explaining why a requested filter change was refused. The TUI model calls it
-// on every filter change - with the reason when the filter cannot be honoured,
-// with "" when it can - so the notice never outlives the filter it describes.
+// explaining why a requested filter change was refused.
+//
+// The notice must never outlive the filter it describes, so the TUI model
+// clears it on every path that changes the filter on screen - not only when a
+// filter is accepted (refuseUnusableFilter) but also on undo and on a PID/TID
+// pick, neither of which goes through the refusal check.
 func (m *Model) SetFilterNotice(notice string) {
 	m.filterNotice = notice
 }

@@ -16,7 +16,7 @@ func noticeModel(t *testing.T, width, height int, showHelp bool) *Model {
 	m.width = width
 	m.height = height
 	m.showHelp = showHelp
-	m.SetFilterNotice("FILTER REFUSED (comm filter max size is 16 (got 20)) - keeping the previous filter")
+	m.SetFilterNotice("FILTER REFUSED (comm filter max size is 15 (got 20)) - keeping the previous filter")
 	return m
 }
 
