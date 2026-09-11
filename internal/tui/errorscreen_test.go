@@ -261,3 +261,33 @@ func TestErrorScreenAdvertisesTheWayOut(t *testing.T) {
 		}
 	}
 }
+
+// TestErrorScreenQuitOutranksAnOpenModal pins the ordering of the error-screen
+// branch, which the other tests do not: moving it below the modal routing
+// leaves them all green.
+//
+// View renders m.lastErr ahead of every modal, so when both are set the modal
+// is not on screen. A key routed to it would close something invisible and
+// leave the user on the error view with nothing having visibly happened - the
+// dead end again, one keystroke further in. What is on screen is what must
+// answer the key.
+func TestErrorScreenQuitOutranksAnOpenModal(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.filterModal = m.filterModal.Open(globalfilter.Filter{})
+	m.lastErr = errors.New("create event filter: comm filter max size is 15 (got 20)")
+
+	// Precondition: the error view really is what is rendered.
+	if !strings.Contains(m.View().Content, "comm filter max size") {
+		t.Fatal("the error view is not on screen; this test would prove nothing")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd == nil || !isQuitMsg(cmd()) {
+		t.Fatalf("q did not quit while the error view was on screen with a modal open underneath")
+	}
+	if !next.(*Model).quitting {
+		t.Error("the model did not enter the quitting state")
+	}
+}
