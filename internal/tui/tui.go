@@ -1164,10 +1164,11 @@ func (m *Model) syncDashboardFilterState() {
 // The check is globalfilter.ValidateTracepointFields - the same one
 // setupTraceInfra runs before any BPF setup on the restart path. The live-swap
 // path never restarts the trace, so nothing else on it would ever run that
-// check: handing the running eventloop a comm pattern longer than
-// MAX_PROGNAME_LENGTH left a live-looking dashboard matching nothing at all,
-// because matchString compares the pattern as a substring of a fixed-size
-// kernel field that can never contain it. A refusal has to be visible or it is
+// check: handing the running eventloop a comm pattern that does not fit
+// MAX_PROGNAME_LENGTH - which the kernel's NUL makes one byte smaller than it
+// looks - left a live-looking dashboard matching nothing at all, because
+// matchString compares the pattern as a substring of a fixed-size kernel field
+// that can never contain it. A refusal has to be visible or it is
 // the same silence with an extra step, so this also writes the dashboard's
 // filter notice: the reason on refusal, "" on every accepted filter. It is not
 // the only writer - undoGlobalFilter and setProcessFilters clear it too,

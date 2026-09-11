@@ -125,3 +125,77 @@ func TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors(t *testing.
 		t.Errorf("a pattern whose lowered form is 6 bytes was rejected on its raw length: %v", err)
 	}
 }
+
+// TestEveryAcceptedPatternHasADeliverableWitness pins the property the length
+// check actually has to hold, rather than the individual cases it has been
+// wrong about.
+//
+// That check has now been wrong four separate ways: it counted `^`/`$` the
+// matcher strips, it used the buffer size where the kernel's NUL leaves one
+// byte less, it measured the raw pattern where matchString compares the
+// lowered one, and then it measured the lowered one where ToLower grows two
+// runes. Every one was a different special case of one question - can any
+// value the kernel can deliver match this pattern? - so that is what is
+// asserted here.
+//
+// A pattern is accepted only if some value of at most the usable field width
+// matches it. The witness is the pattern's own text: whichever of the raw or
+// lowered form fits, matchString accepts it under every anchor mode, because
+// it lowercases both sides.
+func TestEveryAcceptedPatternHasADeliverableWitness(t *testing.T) {
+	usable := types.MAX_PROGNAME_LENGTH - 1
+
+	// Runes chosen for how ToLower changes their byte length: shrinking
+	// (U+212A lowers to one-byte "k"), growing (U+023A lowers to a three-byte
+	// rune), and neutral.
+	for _, base := range []string{"a", "A", "K", "Ⱥ", "ß", " "} {
+		for count := 1; count <= 12; count++ {
+			body := strings.Repeat(base, count)
+			for _, pattern := range []string{body, "^" + body, body + "$", "^" + body + "$"} {
+				f := Filter{Comm: &StringFilter{Pattern: pattern}}
+				accepted := f.ValidateTracepointFields() == nil
+
+				// Does a value the kernel could deliver match this pattern?
+				// Both forms are tried because either may be the shorter one.
+				matchable := false
+				for _, witness := range []string{
+					strings.TrimSpace(pattern),
+					strings.ToLower(strings.TrimSpace(pattern)),
+				} {
+					trimmed, _, _ := trimAnchors(witness)
+					if len(trimmed) <= usable && matchString(f.Comm, trimmed) {
+						matchable = true
+						break
+					}
+				}
+
+				// Both directions matter, and the check has been wrong in each
+				// of them: accepting an unmatchable pattern is the silent empty
+				// stream this validation exists to prevent, and rejecting a
+				// matchable one takes away a filter that works.
+				switch {
+				case accepted && !matchable:
+					t.Errorf("pattern %q was accepted but no value of %d bytes or fewer can match it", pattern, usable)
+				case !accepted && matchable:
+					t.Errorf("pattern %q was rejected although a %d-byte value matches it", pattern, usable)
+				}
+			}
+		}
+	}
+}
+
+// TestPathFilterUsesTheSameUsableWidthAsComm pins the path dimension's own
+// off-by-one. Only comm was covered, so reverting the path limit to the raw
+// buffer size left the whole suite green.
+func TestPathFilterUsesTheSameUsableWidthAsComm(t *testing.T) {
+	bufferWidth := strings.Repeat("a", types.MAX_FILENAME_LENGTH)
+	f := Filter{File: &StringFilter{Pattern: bufferWidth}}
+	if err := f.ValidateTracepointFields(); err == nil {
+		t.Error("a path pattern as wide as the whole filename buffer was accepted; the NUL takes the last byte")
+	}
+
+	usable := Filter{File: &StringFilter{Pattern: strings.Repeat("a", types.MAX_FILENAME_LENGTH-1)}}
+	if err := usable.ValidateTracepointFields(); err != nil {
+		t.Errorf("the longest deliverable path was rejected: %v", err)
+	}
+}
