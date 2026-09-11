@@ -1501,3 +1501,48 @@ func waitForStreamRowsEventually(t *testing.T, buffer *streamrow.RingBuffer, wan
 		time.Sleep(2 * time.Millisecond)
 	}
 }
+
+// TestModeHandlersReportTheirRunnersError pins the last link in the chain that
+// carries a TUI failure to the user.
+//
+// The TUI reports what the model was showing (finalModelError), the exported
+// entry points go through that, and cmd/ior prints whatever internal.Run
+// returns and exits 2 - but nothing pinned the step between: a mode handler
+// that dropped its runner's error left every test green while the binary
+// exited 0 saying nothing, which is the silence the whole error-reporting
+// change exists to end.
+//
+// Each round of review on this found the survivor one level further out than
+// the last - the key branch, then the seam, then the exported entry points -
+// so this covers every mode handler that delegates to an injected runner, not
+// only the TUI one that prompted it.
+func TestModeHandlersReportTheirRunnersError(t *testing.T) {
+	wantErr := errors.New("create event filter: comm filter max size is 15 (got 20)")
+
+	cases := map[string]struct {
+		handler modeHandler
+		deps    func(runnerDeps) runnerDeps
+	}{
+		"tui": {
+			handler: &tuiModeHandler{},
+			deps: func(d runnerDeps) runnerDeps {
+				d.runTUI = func(flags.Config, runtime.TraceStarter) error { return wantErr }
+				return d
+			},
+		},
+		"plain trace": {
+			handler: &plainTraceModeHandler{},
+			deps: func(d runnerDeps) runnerDeps {
+				d.runTrace = func(flags.Config) error { return wantErr }
+				return d
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		deps := tc.deps(stubDeps())
+		if err := tc.handler.run(flags.NewFlags(), deps); !errors.Is(err, wantErr) {
+			t.Errorf("%s handler returned %v, want its runner's error", name, err)
+		}
+	}
+}
