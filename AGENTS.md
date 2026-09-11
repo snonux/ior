@@ -141,15 +141,33 @@ IOR_STRESS_TEST=1 go test -count=1 -run TestStressHighEventRate ./internal/tui/f
 ```
 
 Asserting that budget by default is what made `TestStressHighEventRate` flake:
-the same run measured 6.7ms idle, 33.6ms under `-race` and 199ms under 6x CPU
-oversubscription, so a loaded machine failed it deterministically and
+peak render latency measured 11.6ms idle, 63.0ms under `-race` and 249.6ms
+under 8x CPU oversubscription, so a loaded machine failed it deterministically and
 `-failfast` then hid every package that had not yet run. What it gates on now
 is load-independent instead — no event lost or double-counted by 10-way
 concurrent ingest, every intermediate snapshot decoding and laying out inside
-the viewport, snapshot totals never going backwards, and a ceiling on the
-*allocations* one render pass costs (28.9k allocations / ~1.5MiB measured; the
-ceilings sit ~1.5x above). Allocation counters do not move with CPU pressure:
-across idle, `-race` and 6x oversubscription they varied by under 0.1%.
+the viewport, snapshot totals never going backwards, an exact frame count for
+the completed fixture trie, and a ceiling on the *allocations* one render pass
+costs (28.9k allocations / 1.49-1.57 MB measured; the ceilings sit ~1.15x
+above). Allocation counters do not move with CPU pressure: across idle, `-race`
+and 8x oversubscription the allocation *count* varied by 0.04%, and the byte
+total by 5.8% — that spread is allocation sizes stepping through map and slice
+growth, not load, which is why the byte ceiling is the looser of the two.
+
+The exact frame count is what gives the test grip on pruning. The bound it
+replaced — frame count against the viewport's cell count — could not fail, and
+with only that bound in place, raising `liveTrieMinFraction` from 0.001 to 0.05
+dropped the flamegraph from 321 frames to 21 and the whole suite still passed.
+Assert the *last* sample, never the peak: pruning is relative to the running
+root total, so an early snapshot legitimately keeps more nodes, and how many
+depends on where the render loop's ticks land (330 and 523 on two runs of the
+same fixture). The completed trie is a property of the fixture alone.
+
+`TestSnapshotTreeMatchesJSONRoundTrip` is what makes those bounds transfer. The
+stress test drives `SnapshotJSON` + decode; the flame tab drives
+`SnapshotTree()` and skips the round-trip. Pinning that both lay out to
+identical frames is what stops the stress test from silently measuring a
+pipeline the TUI no longer runs.
 
 ## Demo Pipeline
 
