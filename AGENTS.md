@@ -171,6 +171,15 @@ round-trip. Neither alone is enough: the equivalence test never touches the
 tab's code, so on its own it would keep passing if the tab stopped calling
 `SnapshotTree` altogether.
 
+Pin the *dispatched* path, not the helper underneath it. The dashboard refreshes
+by calling `RefreshFromLiveTrieCmd()` and running the returned `tea.Cmd`; that
+closure is its own call site, and an earlier version of this test called
+`buildSnapshotMsg` directly, so rewriting only the closure to round-trip through
+JSON passed the whole package. Same trap in the same test: `flameSnapshotReadyMsg`
+is a struct value, so `msg == nil` after boxing into `tea.Msg` can never fire —
+assert the message carries a snapshot and frames instead, or the test passes on
+a refresh that renders nothing.
+
 Be precise about what the equivalence test catches. `SnapshotJSON` is
 `json.Marshal(SnapshotTree())` decoded back into the same struct, so marshal
 and unmarshal stay self-consistent under any *rename* of a JSON tag — renaming
@@ -185,17 +194,22 @@ bytes/pass rises with GC frequency and therefore with memory pressure. Left
 alone it reached 1813350 under `-race` with `GOGC=1` and 16x load — a ceiling
 that measures the machine, which is the defect the task existed to remove.
 
-Two things fix it, and both are load-bearing. `measureStressRenderCost` pins the
-collector (`debug.SetGCPercent(-1)`, restored on exit), which makes the non-race
-measurement deterministic at 1466874. `stressByteCeilingPercent`
-(`stress_race_{enabled,disabled}_test.go`) then scales the ceiling by 130% under
-`-race`, covering the residual the pin does not remove — 1537298-1624470,
-including a sample taken while the whole race suite ran alongside.
+Three things fix it, and all are load-bearing. `measureStressRenderCost` pins
+**both** GC triggers for the measurement window, restoring each on exit:
+`debug.SetGCPercent(-1)` stops GOGC-driven and sysmon's periodic collections,
+and `debug.SetMemoryLimit(math.MaxInt64)` stops the one `GOMEMLIMIT` forces
+regardless — reachable in any memory-capped container, and worth 1699908 bytes
+under `GOGC=1 GOMEMLIMIT=16MiB` with only the first pin in place. With both,
+non-race holds to 0.45% (1466874-1473450 idle, 1491120 worst adversarial).
+`stressByteCeilingPercent` (`stress_race_{enabled,disabled}_test.go`) then
+scales the ceiling by 130% under `-race`, covering the residual no pin removes —
+1550467-1589738, including a sample taken while the whole race suite ran
+alongside.
 
-Do not simply widen the byte ceiling instead. It is the *only* assertion that
-catches an allocation regression that stays under the count ceiling: dropping
-the `childStates` preallocation in `livetrie.go` lands at 32561 allocs (below
-the 33000 ceiling) and 1823513 bytes.
+Do not simply widen the byte ceiling instead. On the non-race build it is the
+*only* assertion that catches an allocation regression staying under the count
+ceiling: dropping the `childStates` preallocation in `livetrie.go` lands at
+32560-32561 allocs (below the 33000 ceiling) and 1816954-1823520 bytes.
 
 ## Demo Pipeline
 
