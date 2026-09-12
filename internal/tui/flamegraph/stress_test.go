@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -27,19 +28,25 @@ const (
 
 	// Ceilings for one full render pass over the trie this test builds —
 	// snapshot rebuild, JSON round-trip and terminal layout. Both are
-	// allocation counters rather than wall clock, so a busy host does not
-	// move them: across idle runs, -race runs and runs under 8x CPU
-	// oversubscription the pass cost 28923-28934 allocations (a 0.04%
-	// spread) and 1487146-1572729 bytes, while peak wall-clock render
-	// latency over the same three conditions went 11.6ms, 63.0ms and
-	// 249.6ms.
+	// allocation counters rather than wall clock, which is what keeps them
+	// from measuring the host: across idle runs, -race runs and runs under 8x
+	// to 16x CPU oversubscription the pass cost 28917-28958 allocations (a
+	// 0.14% spread), while peak wall-clock render latency over the same
+	// conditions went 11.6ms, 63.0ms and 249.6ms.
 	//
-	// The ceilings sit ~1.15x above the highest measurement. That is loose
-	// enough not to flake — the allocation count barely moves at all, and the
-	// byte total's 5.8% spread comes from allocation *sizes* (map and slice
-	// growth steps), not from load — and tight enough to catch a regression
-	// that makes the pass meaningfully more expensive: swapping
-	// json.Marshal for MarshalIndent lands at 2620274 bytes/pass.
+	// The byte total needed more care. It is not naturally load-independent —
+	// see measureStressRenderCost, which pins the GC to make it so, and
+	// stressByteCeilingPercent for the residual that pinning does not remove.
+	// With the GC pinned the non-race measurement is deterministic at 1466874,
+	// so stressMaxRenderBytes sits 1.23x above that; -race scales it up.
+	//
+	// Both are tight enough to catch a regression that makes the pass
+	// meaningfully more expensive. json.Marshal -> MarshalIndent lands at
+	// 2613730 bytes/pass with a two-space indent (and 2023531 with a tab,
+	// which the looser ceiling this replaced would have missed). Dropping the
+	// childStates preallocation in livetrie.go lands at 32561 allocs /
+	// 1823513 bytes — under the allocation ceiling, so the byte ceiling is the
+	// only thing that catches it, and why it must not simply be widened.
 	stressMaxRenderAllocs = 33000
 	stressMaxRenderBytes  = 1800000
 	stressCostSamples     = 20
@@ -224,6 +231,15 @@ func renderStressFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []tuiF
 func measureStressRenderCost(t *testing.T, liveTrie *coreflamegraph.LiveTrie) {
 	t.Helper()
 
+	// Disable GC for the measurement window. encoding/json keeps its
+	// encodeState buffers in a sync.Pool, which GC drains; the more often GC
+	// runs, the more of those buffers each pass has to allocate afresh. That
+	// makes bytes/pass a function of GC frequency - and so of CPU pressure and
+	// of -race's memory overhead - which is exactly the host-dependence this
+	// test exists to avoid. With the collector off the pass allocates the same
+	// bytes every time, so the ceiling gates the code and not the machine.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -241,13 +257,14 @@ func measureStressRenderCost(t *testing.T, liveTrie *coreflamegraph.LiveTrie) {
 
 	allocs := (after.Mallocs - before.Mallocs) / stressCostSamples
 	bytesPerPass := (after.TotalAlloc - before.TotalAlloc) / stressCostSamples
+	byteCeiling := stressMaxRenderBytes * stressByteCeilingPercent() / 100
 	t.Logf("render cost: allocs/pass=%d bytes/pass=%d (ceilings %d / %d)",
-		allocs, bytesPerPass, stressMaxRenderAllocs, stressMaxRenderBytes)
+		allocs, bytesPerPass, stressMaxRenderAllocs, byteCeiling)
 	if allocs > stressMaxRenderAllocs {
 		t.Errorf("render pass allocates too much: allocs/pass=%d ceiling=%d", allocs, stressMaxRenderAllocs)
 	}
-	if bytesPerPass > stressMaxRenderBytes {
-		t.Errorf("render pass allocates too many bytes: bytes/pass=%d ceiling=%d", bytesPerPass, stressMaxRenderBytes)
+	if bytesPerPass > byteCeiling {
+		t.Errorf("render pass allocates too many bytes: bytes/pass=%d ceiling=%d", bytesPerPass, byteCeiling)
 	}
 }
 
@@ -281,17 +298,31 @@ func ingestStressEvent(liveTrie *coreflamegraph.LiveTrie, comm string, pid uint3
 	pair.Recycle()
 }
 
-// TestSnapshotTreeMatchesJSONRoundTrip pins the equivalence the stress test's
-// cost and frame-count bounds rely on: the tree the flame tab renders
-// (SnapshotTree) and the tree the JSON path yields (SnapshotJSON + decode) lay
-// out to the same frames. Without this, a divergence — a field losing its JSON
-// tag, say — would leave TestStressHighEventRate measuring a pipeline the TUI
-// no longer runs, and it would still pass.
+// equivalenceFixtureEvents is how many events the snapshot-path fixtures
+// ingest. The trie version is one per ingested event, so the two are pinned
+// together.
+const equivalenceFixtureEvents = 2000
+
+// TestSnapshotTreeMatchesJSONRoundTrip pins round-trip fidelity between the
+// two snapshot APIs: the typed tree from SnapshotTree and the tree the JSON
+// path yields (SnapshotJSON + decode) lay out to identical frames.
+//
+// What this does and does not buy, precisely. SnapshotJSON is
+// json.Marshal(SnapshotTree()) and decodes back into the same struct, so
+// marshal and unmarshal stay self-consistent under any *rename* of a JSON tag
+// — renaming SnapshotNode.HeightTotal's tag, or deleting the tag outright,
+// does not fail this test, and it is not meant to. What it catches is a field
+// dropping out of serialization altogether (json:"-" on HeightTotal fails it
+// at frame 0), which is the divergence that would make the JSON path stop
+// representing the typed one.
+//
+// It is TestFlameRefreshUsesTheTreeSnapshot, not this test, that pins which
+// API the TUI actually calls.
 func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < equivalenceFixtureEvents; i++ {
 		ingestStressEvent(liveTrie, fmt.Sprintf("worker-%d", i%10), uint32(1000+i%10), i)
 	}
 
@@ -300,8 +331,8 @@ func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JSON snapshot path failed: %v", err)
 	}
-	if treeVersion != uint64(2000) {
-		t.Fatalf("snapshot version = %d, want 2000", treeVersion)
+	if treeVersion != equivalenceFixtureEvents {
+		t.Fatalf("snapshot version = %d, want %d", treeVersion, equivalenceFixtureEvents)
 	}
 
 	treeFrames := BuildTerminalLayout(tree, stressViewWidth, stressViewHeight)
@@ -313,14 +344,80 @@ func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
 		t.Fatalf("frame count differs between snapshot paths: tree=%d json=%d",
 			len(treeFrames), len(jsonFrames))
 	}
+	// tuiFrame is comparable today (its only non-numeric field, Fill, is a
+	// color.RGBA), so == compares every field. If a field ever becomes an
+	// interface holding a non-comparable dynamic type this would panic rather
+	// than fail; switch to reflect.DeepEqual if that happens.
 	for i := range treeFrames {
 		if treeFrames[i] != jsonFrames[i] {
 			t.Fatalf("frame %d differs between snapshot paths:\n tree=%+v\n json=%+v",
 				i, treeFrames[i], jsonFrames[i])
 		}
 	}
-	if tree.Total != decoded.Total {
-		t.Errorf("root total differs between snapshot paths: tree=%d json=%d", tree.Total, decoded.Total)
+}
+
+// countingTrie records which snapshot API its caller reached for. It embeds a
+// real LiveTrie so the snapshots it returns are the real ones and it satisfies
+// the whole LiveTrieSource contract without a hand-written stub.
+type countingTrie struct {
+	*coreflamegraph.LiveTrie
+	treeCalls int
+	jsonCalls int
+}
+
+func (c *countingTrie) SnapshotTree() (*snapshotNode, uint64) {
+	c.treeCalls++
+	return c.LiveTrie.SnapshotTree()
+}
+
+func (c *countingTrie) SnapshotJSON() ([]byte, uint64) {
+	c.jsonCalls++
+	return c.LiveTrie.SnapshotJSON()
+}
+
+// TestFlameRefreshUsesTheTreeSnapshot pins that the flame tab's refresh paths
+// take SnapshotTree and never the JSON round-trip.
+//
+// This is what lets the stress test's cost and frame-count bounds transfer to
+// the TUI. Those bounds are measured over the JSON path (see
+// renderStressFrame); together with TestSnapshotTreeMatchesJSONRoundTrip, this
+// is what stops that from being a measurement of a pipeline the tab does not
+// run. It also guards the performance property the tree API exists for: a
+// refresh that fell back to SnapshotJSON would marshal and re-parse the whole
+// trie on every tick.
+func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
+	t.Parallel()
+
+	trie := &countingTrie{LiveTrie: coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")}
+	for i := 0; i < equivalenceFixtureEvents; i++ {
+		ingestStressEvent(trie.LiveTrie, fmt.Sprintf("worker-%d", i%10), uint32(1000+i%10), i)
+	}
+
+	model := NewModel(trie)
+	model.SetViewport(stressViewWidth, stressViewHeight)
+	if changed := model.RefreshFromLiveTrie(); !changed {
+		t.Fatal("expected the first refresh to apply a snapshot")
+	}
+	if len(model.frames) == 0 {
+		t.Fatal("refresh produced no frames")
+	}
+	if trie.treeCalls == 0 {
+		t.Error("RefreshFromLiveTrie never called SnapshotTree")
+	}
+	if trie.jsonCalls != 0 {
+		t.Errorf("RefreshFromLiveTrie took the JSON round-trip: SnapshotJSON calls=%d", trie.jsonCalls)
+	}
+
+	// The background refresh the tab actually dispatches per tick.
+	beforeTree, beforeJSON := trie.treeCalls, trie.jsonCalls
+	if msg := buildSnapshotMsg(trie, stressViewWidth, stressViewHeight, ""); msg == nil {
+		t.Fatal("buildSnapshotMsg returned no message")
+	}
+	if trie.treeCalls == beforeTree {
+		t.Error("buildSnapshotMsg never called SnapshotTree")
+	}
+	if trie.jsonCalls != beforeJSON {
+		t.Errorf("buildSnapshotMsg took the JSON round-trip: SnapshotJSON calls=%d", trie.jsonCalls-beforeJSON)
 	}
 }
 
