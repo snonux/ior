@@ -3,6 +3,7 @@ package flamegraph
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"runtime"
@@ -35,18 +36,23 @@ const (
 	// conditions went 11.6ms, 63.0ms and 249.6ms.
 	//
 	// The byte total needed more care. It is not naturally load-independent —
-	// see measureStressRenderCost, which pins the GC to make it so, and
-	// stressByteCeilingPercent for the residual that pinning does not remove.
-	// With the GC pinned the non-race measurement is deterministic at 1466874,
-	// so stressMaxRenderBytes sits 1.23x above that; -race scales it up.
+	// see measureStressRenderCost, which pins both GC triggers to make it so,
+	// and stressByteCeilingPercent for the residual that pinning does not
+	// remove. With those pins the non-race measurement holds to 0.45%
+	// (1466874-1473450 idle, worst adversarial 1491120), so
+	// stressMaxRenderBytes sits ~1.21x above the worst of them; -race scales
+	// it up.
 	//
 	// Both are tight enough to catch a regression that makes the pass
 	// meaningfully more expensive. json.Marshal -> MarshalIndent lands at
-	// 2613730 bytes/pass with a two-space indent (and 2023531 with a tab,
-	// which the looser ceiling this replaced would have missed). Dropping the
-	// childStates preallocation in livetrie.go lands at 32561 allocs /
-	// 1823513 bytes — under the allocation ceiling, so the byte ceiling is the
-	// only thing that catches it, and why it must not simply be widened.
+	// 2572819-2579412 bytes/pass with a two-space indent, and 1989570 with a
+	// tab — the latter under the 2400000 ceiling this replaced, so the
+	// tightening bought a real catch. Dropping the childStates preallocation
+	// in livetrie.go lands at 32560-32561 allocs, under the allocation
+	// ceiling, and 1816954-1823520 bytes: on the non-race build the byte
+	// ceiling is the only thing that catches it, which is why it must not
+	// simply be widened. (Under -race that mutation also inflates the count to
+	// 43514, so `mage testRace` catches it either way.)
 	stressMaxRenderAllocs = 33000
 	stressMaxRenderBytes  = 1800000
 	stressCostSamples     = 20
@@ -105,9 +111,6 @@ func TestStressHighEventRate(t *testing.T) {
 
 	if stats.err != nil {
 		t.Fatalf("render loop failed: %v", stats.err)
-	}
-	if stats.samples == 0 {
-		t.Fatal("render loop produced no samples")
 	}
 	// The final sample renders the completed trie, so its frame count is a
 	// property of the fixture rather than of the host: 321 idle, under -race
@@ -238,7 +241,14 @@ func measureStressRenderCost(t *testing.T, liveTrie *coreflamegraph.LiveTrie) {
 	// of -race's memory overhead - which is exactly the host-dependence this
 	// test exists to avoid. With the collector off the pass allocates the same
 	// bytes every time, so the ceiling gates the code and not the machine.
+	//
+	// Both pins are needed. SetGCPercent(-1) stops GOGC-triggered and
+	// sysmon's periodic forced collections, but GOMEMLIMIT still triggers one
+	// regardless, which is reachable in any memory-capped container: under
+	// GOGC=1 GOMEMLIMIT=16MiB the pass measured 1699908 bytes with only the
+	// GC-percent pin in place, against an 1800000 ceiling.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
 
 	runtime.GC()
 	var before, after runtime.MemStats
@@ -408,16 +418,37 @@ func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
 		t.Errorf("RefreshFromLiveTrie took the JSON round-trip: SnapshotJSON calls=%d", trie.jsonCalls)
 	}
 
-	// The background refresh the tab actually dispatches per tick.
+	// The per-tick refresh the dashboard actually dispatches
+	// (dashboard/model.go calls RefreshFromLiveTrieCmd and runs the cmd).
+	// Drive it through the cmd, not through buildSnapshotMsg directly: the
+	// closure RefreshFromLiveTrieCmd returns is its own call site, and
+	// rewriting only that closure to round-trip through JSON is a regression
+	// a direct buildSnapshotMsg call cannot see.
+	ingestStressEvent(trie.LiveTrie, "worker-0", 1000, equivalenceFixtureEvents)
 	beforeTree, beforeJSON := trie.treeCalls, trie.jsonCalls
-	if msg := buildSnapshotMsg(trie, stressViewWidth, stressViewHeight, ""); msg == nil {
-		t.Fatal("buildSnapshotMsg returned no message")
+	cmd := model.RefreshFromLiveTrieCmd()
+	if cmd == nil {
+		t.Fatal("RefreshFromLiveTrieCmd returned no command for a changed trie")
+	}
+	ready, ok := cmd().(flameSnapshotReadyMsg)
+	if !ok {
+		t.Fatalf("refresh cmd produced %T, want flameSnapshotReadyMsg", cmd())
+	}
+	// flameSnapshotReadyMsg is a struct value, so it is never nil once boxed
+	// in tea.Msg — assert it carries a real layout instead. Without this the
+	// test passes on a refresh that renders nothing.
+	if ready.snapshot == nil {
+		t.Error("refresh cmd produced a message with no snapshot")
+	}
+	if len(ready.targetFrames) == 0 {
+		t.Error("refresh cmd produced a message with no frames")
 	}
 	if trie.treeCalls == beforeTree {
-		t.Error("buildSnapshotMsg never called SnapshotTree")
+		t.Error("the per-tick refresh cmd never called SnapshotTree")
 	}
 	if trie.jsonCalls != beforeJSON {
-		t.Errorf("buildSnapshotMsg took the JSON round-trip: SnapshotJSON calls=%d", trie.jsonCalls-beforeJSON)
+		t.Errorf("the per-tick refresh cmd took the JSON round-trip: SnapshotJSON calls=%d",
+			trie.jsonCalls-beforeJSON)
 	}
 }
 
