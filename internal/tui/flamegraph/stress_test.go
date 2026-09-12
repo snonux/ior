@@ -38,21 +38,25 @@ const (
 	// The byte total needed more care. It is not naturally load-independent —
 	// see measureStressRenderCost, which pins both GC triggers to make it so,
 	// and stressByteCeilingPercent for the residual that pinning does not
-	// remove. With those pins the non-race measurement holds to 0.45%
-	// (1466874-1473450 idle, worst adversarial 1491120), so
-	// stressMaxRenderBytes sits ~1.21x above the worst of them; -race scales
-	// it up.
+	// remove. With those pins the non-race measurement holds to 0.45% idle
+	// (1466874-1473450) and to 1.65% counting the worst adversarial run
+	// (1491120), so stressMaxRenderBytes sits ~1.21x above that worst; -race
+	// scales it up.
 	//
 	// Both are tight enough to catch a regression that makes the pass
 	// meaningfully more expensive. json.Marshal -> MarshalIndent lands at
-	// 2572819-2579412 bytes/pass with a two-space indent, and 1989570 with a
+	// 2572819-2586022 bytes/pass with a two-space indent, and 1989570 with a
 	// tab — the latter under the 2400000 ceiling this replaced, so the
-	// tightening bought a real catch. Dropping the childStates preallocation
-	// in livetrie.go lands at 32560-32561 allocs, under the allocation
-	// ceiling, and 1816954-1823520 bytes: on the non-race build the byte
-	// ceiling is the only thing that catches it, which is why it must not
-	// simply be widened. (Under -race that mutation also inflates the count to
-	// 43514, so `mage testRace` catches it either way.)
+	// tightening bought a real catch.
+	//
+	// Dropping the childStates preallocation in livetrie.go is caught by
+	// exactly one ceiling in each build, and not the same one. Non-race it is
+	// 32560-32561 allocs — under the 33000 count ceiling — and 1816954-1823530
+	// bytes, so only the byte ceiling fires; that is why the byte ceiling must
+	// not simply be widened. Under -race the race detector's own allocations
+	// invert it: the count inflates to 43510-43514 and fires, while the bytes
+	// land at 2232950-2272218, under the scaled 2340000 ceiling. Neither build
+	// catches it with both.
 	stressMaxRenderAllocs = 33000
 	stressMaxRenderBytes  = 1800000
 	stressCostSamples     = 20
@@ -244,9 +248,10 @@ func measureStressRenderCost(t *testing.T, liveTrie *coreflamegraph.LiveTrie) {
 	//
 	// Both pins are needed. SetGCPercent(-1) stops GOGC-triggered and
 	// sysmon's periodic forced collections, but GOMEMLIMIT still triggers one
-	// regardless, which is reachable in any memory-capped container: under
-	// GOGC=1 GOMEMLIMIT=16MiB the pass measured 1699908 bytes with only the
-	// GC-percent pin in place, against an 1800000 ceiling.
+	// regardless, which is reachable in any memory-capped container: with only
+	// the GC-percent pin in place the pass measured 1660073-1699908 bytes under
+	// GOGC=1 GOMEMLIMIT=16MiB (how close it gets depends on the host's memory
+	// pressure), against an 1800000 ceiling.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
 
@@ -430,9 +435,10 @@ func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("RefreshFromLiveTrieCmd returned no command for a changed trie")
 	}
-	ready, ok := cmd().(flameSnapshotReadyMsg)
+	msg := cmd()
+	ready, ok := msg.(flameSnapshotReadyMsg)
 	if !ok {
-		t.Fatalf("refresh cmd produced %T, want flameSnapshotReadyMsg", cmd())
+		t.Fatalf("refresh cmd produced %T, want flameSnapshotReadyMsg", msg)
 	}
 	// flameSnapshotReadyMsg is a struct value, so it is never nil once boxed
 	// in tea.Msg — assert it carries a real layout instead. Without this the

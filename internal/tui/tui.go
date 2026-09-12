@@ -611,10 +611,33 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.pidPicker.Init())
 }
 
+// fallbackWindowSizeMsg carries the viewport size initialWindowSizeCmd guesses
+// when the terminal cannot be queried. It is a distinct type from
+// tea.WindowSizeMsg so Update can tell a guess from a real size and refuse to
+// let the guess win.
+//
+// Init batches this cmd alongside tea.RequestWindowSize, and bubbletea also
+// sends a WindowSizeMsg of its own from checkResize. Both are asynchronous, so
+// nothing orders them: when stdout is not a TTY the guess is
+// common.EffectiveViewport's 80x24 default, and if it landed last it would
+// clobber the real terminal size for the rest of the run. Every width-dependent
+// rendering decision then flips with it - the dashboard's tab bar abbreviates
+// below 90 columns, and syscallColumns returns 9 columns below 140 and 12
+// at or above.
+type fallbackWindowSizeMsg tea.WindowSizeMsg
+
+// applyWindowSize records a viewport size and forwards it to the active model.
+func (m *Model) applyWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool) {
+	m.width = msg.Width
+	m.height = msg.Height
+	next, cmd := m.updateActiveModel(msg)
+	return next, cmd, true
+}
+
 func initialWindowSizeCmd() tea.Cmd {
 	return func() tea.Msg {
 		width, height := common.EffectiveViewport(0, 0)
-		return tea.WindowSizeMsg{Width: width, Height: height}
+		return fallbackWindowSizeMsg{Width: width, Height: height}
 	}
 }
 
@@ -646,10 +669,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		next, cmd := m.updateActiveModel(msg)
-		return next, cmd, true
+		return m.applyWindowSize(msg)
+	case fallbackWindowSizeMsg:
+		// Only fills in a size nothing else supplied. A real WindowSizeMsg
+		// already applied wins regardless of which arrived first.
+		if m.width > 0 && m.height > 0 {
+			return m, nil, true
+		}
+		return m.applyWindowSize(tea.WindowSizeMsg(msg))
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
 		return m, nil, true

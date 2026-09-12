@@ -186,30 +186,55 @@ and unmarshal stay self-consistent under any *rename* of a JSON tag — renaming
 `SnapshotNode.HeightTotal`'s tag, or dropping the tag, does not fail it. Only a
 field leaving serialization entirely (`json:"-"`) does.
 
+### A guessed terminal size must never override a real one
+
+`initialWindowSizeCmd` (`internal/tui/tui.go`) guesses a viewport when the
+terminal cannot be queried — `common.EffectiveViewport`'s 80x24 default, which
+is what a test binary or a redirected stdout gets. bubbletea independently
+sends a real `WindowSizeMsg`. Both are asynchronous and nothing orders them, so
+whichever landed last used to win for the rest of the run.
+
+That is not cosmetic: the dashboard's tab bar abbreviates below 90 columns, and
+`syscallColumns` returns 9 columns below 140 and 12 at or above. Six
+`TestTUIIntegration_Syscalls_*` tests were written against the 80-column layout
+and passed only because the guess usually landed last; when it did not, they
+failed — roughly one full `mage testRace` run in three, which is how this was
+finally caught.
+
+The guess is now a distinct `fallbackWindowSizeMsg` that `Update` applies only
+when no real size has arrived, so the harness renders at the 160x48 it asks for
+and the assertions are written against that width.
+`TestFallbackWindowSizeNeverOverridesARealSize` pins both directions: a guess
+after a real size is ignored, a guess before one still fills in the unknown.
+
 ### The byte ceiling is not load-independent for free
 
 The allocation *count* is genuinely host-independent. The byte total is not:
 `encoding/json` pools its `encodeState` buffers, GC drains that pool, so
 bytes/pass rises with GC frequency and therefore with memory pressure. Left
-alone it reached 1813350 under `-race` with `GOGC=1` and 16x load — a ceiling
-that measures the machine, which is the defect the task existed to remove.
+alone it reached 1718885-1813350 under `-race` with `GOGC=1` and 16x load — a
+ceiling that measures the machine, which is the defect the task existed to
+remove.
 
 Three things fix it, and all are load-bearing. `measureStressRenderCost` pins
 **both** GC triggers for the measurement window, restoring each on exit:
 `debug.SetGCPercent(-1)` stops GOGC-driven and sysmon's periodic collections,
 and `debug.SetMemoryLimit(math.MaxInt64)` stops the one `GOMEMLIMIT` forces
-regardless — reachable in any memory-capped container, and worth 1699908 bytes
-under `GOGC=1 GOMEMLIMIT=16MiB` with only the first pin in place. With both,
-non-race holds to 0.45% (1466874-1473450 idle, 1491120 worst adversarial).
+regardless — reachable in any memory-capped container, and worth 1660073-1699908
+bytes under `GOGC=1 GOMEMLIMIT=16MiB` with only the first pin in place. With
+both, non-race holds to 0.45% idle (1466874-1473450) and 1.65% counting the
+worst adversarial run (1491120).
 `stressByteCeilingPercent` (`stress_race_{enabled,disabled}_test.go`) then
 scales the ceiling by 130% under `-race`, covering the residual no pin removes —
 1550467-1589738, including a sample taken while the whole race suite ran
 alongside.
 
-Do not simply widen the byte ceiling instead. On the non-race build it is the
-*only* assertion that catches an allocation regression staying under the count
-ceiling: dropping the `childStates` preallocation in `livetrie.go` lands at
-32560-32561 allocs (below the 33000 ceiling) and 1816954-1823520 bytes.
+Do not simply widen the byte ceiling instead. Each build catches the
+`childStates` preallocation regression with exactly one ceiling, and not the
+same one: non-race it is 32560-32561 allocs (below the 33000 ceiling) and
+1816954-1823530 bytes, so only the byte ceiling fires; under `-race` the count
+inflates to 43510-43514 and fires while the bytes stay under the scaled
+ceiling.
 
 ## Demo Pipeline
 
