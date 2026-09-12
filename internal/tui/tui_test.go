@@ -2437,3 +2437,40 @@ func TestNewModelWithConfigInitialPIDStillFilters(t *testing.T) {
 		t.Fatalf("expected a PID predicate on the startup filter, got %+v", f)
 	}
 }
+
+// TestFallbackWindowSizeNeverOverridesARealSize pins the precedence that keeps
+// width-dependent rendering deterministic.
+//
+// initialWindowSizeCmd guesses a viewport when the terminal cannot be queried
+// (the 80x24 default, which is what a test binary or a redirected stdout gets).
+// bubbletea independently sends a real WindowSizeMsg. Both are asynchronous and
+// nothing orders them, so before fallbackWindowSizeMsg existed whichever landed
+// last won: the dashboard would settle at 80 columns on a 160-column terminal
+// roughly whenever the guess came second. Every width-dependent rendering
+// decision rides on this - the tab bar abbreviates below 90 columns, and
+// syscallColumns returns 9 columns below 140 and 12 at or above.
+func TestFallbackWindowSizeNeverOverridesARealSize(t *testing.T) {
+	realSize := tea.WindowSizeMsg{Width: 160, Height: 48}
+	fallback := fallbackWindowSizeMsg{Width: 80, Height: 24}
+
+	t.Run("guess after real size is ignored", func(t *testing.T) {
+		m := NewModel(-1, func(context.Context) error { return nil })
+		m.Update(realSize)
+		m.Update(fallback)
+		if m.width != 160 || m.height != 48 {
+			t.Errorf("the guessed size overrode the real one: got %dx%d, want 160x48", m.width, m.height)
+		}
+	})
+
+	t.Run("guess before real size is applied, then replaced", func(t *testing.T) {
+		m := NewModel(-1, func(context.Context) error { return nil })
+		m.Update(fallback)
+		if m.width != 80 || m.height != 24 {
+			t.Fatalf("the guess did not fill in an unknown size: got %dx%d, want 80x24", m.width, m.height)
+		}
+		m.Update(realSize)
+		if m.width != 160 || m.height != 48 {
+			t.Errorf("a real size did not replace the guess: got %dx%d, want 160x48", m.width, m.height)
+		}
+	})
+}

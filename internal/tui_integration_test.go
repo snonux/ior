@@ -1317,28 +1317,22 @@ func TestTUIIntegration_ProbesModal_NavSearchToggleClose(t *testing.T) {
 // while cycling tabs 2..8, so its presence proves the chrome survives tab
 // switches.
 //
-// The token is deliberately the "1:Fl" prefix rather than a whole label,
-// because the label the dashboard renders depends on the terminal width and
-// that width is not deterministic in this harness. Two window sizes race at
-// startup, both delivered asynchronously (bubbletea runs "go p.checkResize()"
-// in tea.go, which sends a WindowSizeMsg from tty.go), and whichever lands
-// last wins for the rest of the run:
+// The token is the "1:Fl" prefix rather than a whole label, which both the
+// full bar ("1:Flame") and the abbreviated one ("1:Flm",
+// internal/tui/dashboard/tabs.go, below 90 columns) emit. It proves what this
+// assertion is for - the tab bar is there - without pinning a width.
 //
-//   - teatest's WithInitialTermSize -> tea.WithWindowSize -> tuiTermWidth x
-//     tuiTermHeight (160x48), where renderTabBar draws full labels: "1:Flame".
-//   - the program's own initialWindowSizeCmd (internal/tui/tui.go), which falls
-//     back to common.EffectiveViewport's 80x24 default because the test binary's
-//     stdout is not a TTY. Below 90 columns renderTabBar degrades to the plain
-//     abbreviated bar (internal/tui/dashboard/tabs.go): "1:Flm".
-//
-// Asserting either whole label therefore depends on an ordering nothing
-// guarantees: it only looks stable because one ordering dominates in practice.
-// This test was seen to fail once under full-suite race load with the settled
-// 160-col bar on screen while the assertion waited for the 80-col form; that
-// exact failure has not been reproduced on demand since, but the ordering it
-// depends on is unspecified either way. "1:Fl" is the prefix both renderers
-// emit, so the assertion holds for whichever size wins without weakening what
-// it proves: the tab bar is there.
+// It used to be load-bearing. Two window sizes raced at startup, both delivered
+// asynchronously (bubbletea runs "go p.checkResize()" in tea.go, which sends a
+// WindowSizeMsg from tty.go), and whichever landed last won for the rest of the
+// run: teatest's WithInitialTermSize (160x48), or the program's own
+// initialWindowSizeCmd, which falls back to common.EffectiveViewport's 80x24
+// default because the test binary's stdout is not a TTY. Every width-dependent
+// assertion in this file rode on that ordering. It is settled at the source now
+// - initialWindowSizeCmd emits a fallbackWindowSizeMsg that Update applies only
+// when no real size has arrived (internal/tui/tui.go) - so the harness renders
+// at the 160x48 it asks for, and width-dependent assertions here are written
+// against that width.
 const tuiChrome = "1:Fl"
 
 // TestTUIIntegration_AllTabs_RenderPopulatedAndKeepChrome cycles through every
@@ -1411,7 +1405,7 @@ func TestTUIIntegration_Syscalls_TableRenders(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	s.waitFor("Syscall", "Family", "Polling", "epoll_wait", "[Row 1/8 Col 1/9]", "[sort: default]")
+	s.waitFor("Syscall", "Family", "Polling", "epoll_wait", "[Row 1/8 Col 1/12]", "[sort: default]")
 }
 
 // TestTUIIntegration_Syscalls_SortToggles presses "s" then "S" on the selected
@@ -1433,7 +1427,7 @@ func TestTUIIntegration_Syscalls_SortToggles(t *testing.T) {
 	// Move selection to the Family column (index 1) and sort by it, grouping
 	// families together.
 	s.press('l')
-	s.waitFor("[Row 1/8 Col 2/9]")
+	s.waitFor("[Row 1/8 Col 2/12]")
 	s.press('s') // sort ascending by Family
 	s.waitFor("[sort: Family asc]")
 	s.press('S') // reverse to descending
@@ -1447,12 +1441,12 @@ func TestTUIIntegration_Syscalls_ColumnNav(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	s.waitFor("[Row 1/8 Col 1/9]")
+	s.waitFor("[Row 1/8 Col 1/12]")
 
 	s.press('l') // move selection one column to the right
-	s.waitFor("[Row 1/8 Col 2/9]")
+	s.waitFor("[Row 1/8 Col 2/12]")
 	s.press('h') // move back to the first column
-	s.waitFor("[Row 1/8 Col 1/9]")
+	s.waitFor("[Row 1/8 Col 1/12]")
 }
 
 // TestTUIIntegration_Syscalls_Scroll presses "j"/"k" and PgDown/PgUp and asserts
@@ -1463,19 +1457,19 @@ func TestTUIIntegration_Syscalls_Scroll(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	s.waitFor("Syscall", "[Row 1/8 Col 1/9]")
+	s.waitFor("Syscall", "[Row 1/8 Col 1/12]")
 
 	s.press('j') // move selection down one row
-	s.waitFor("[Row 2/8 Col 1/9]")
+	s.waitFor("[Row 2/8 Col 1/12]")
 	s.press('k') // back up to the top row
-	s.waitFor("[Row 1/8 Col 1/9]")
+	s.waitFor("[Row 1/8 Col 1/12]")
 
 	// Paging keys clamp within the 8 seeded rows: PgDown lands on the last row,
 	// PgUp returns to the first. The table header stays rendered throughout.
 	s.press(tea.KeyPgDown)
-	s.waitFor("Syscall", "[Row 8/8 Col 1/9]")
+	s.waitFor("Syscall", "[Row 8/8 Col 1/12]")
 	s.press(tea.KeyPgUp)
-	s.waitFor("Syscall", "[Row 1/8 Col 1/9]")
+	s.waitFor("Syscall", "[Row 1/8 Col 1/12]")
 }
 
 // TestTUIIntegration_Syscalls_VizCycle presses "v" to cycle the visualization
@@ -1493,7 +1487,7 @@ func TestTUIIntegration_Syscalls_VizCycle(t *testing.T) {
 	s.press('v') // bubbles -> treemap
 	s.waitFor("Syscalls treemap")
 	s.press('v') // treemap -> table (header returns)
-	s.waitFor("Syscall", "[Row 1/8 Col 1/9]")
+	s.waitFor("Syscall", "[Row 1/8 Col 1/12]")
 }
 
 // TestTUIIntegration_Syscalls_MetricToggle switches to bubbles mode and presses
@@ -1547,11 +1541,11 @@ func TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	s.waitFor("Syscall", "filter: pid=1", "[Row 1/8 Col 1/9]")
+	s.waitFor("Syscall", "filter: pid=1", "[Row 1/8 Col 1/12]")
 
 	// Move the column selection from Syscall (0) to Family (1).
 	s.press('l')
-	s.waitFor("[Row 1/8 Col 2/9]")
+	s.waitFor("[Row 1/8 Col 2/12]")
 
 	// Enter on the Family column scopes the dashboard to the top row's family.
 	s.press(tea.KeyEnter)
