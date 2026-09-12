@@ -148,11 +148,10 @@ is load-independent instead — no event lost or double-counted by 10-way
 concurrent ingest, every intermediate snapshot decoding and laying out inside
 the viewport, snapshot totals never going backwards, an exact frame count for
 the completed fixture trie, and a ceiling on the *allocations* one render pass
-costs (28.9k allocations / 1.49-1.57 MB measured; the ceilings sit ~1.15x
-above). Allocation counters do not move with CPU pressure: across idle, `-race`
-and 8x oversubscription the allocation *count* varied by 0.04%, and the byte
-total by 5.8% — that spread is allocation sizes stepping through map and slice
-growth, not load, which is why the byte ceiling is the looser of the two.
+costs. The allocation *count* does not move with CPU pressure: across idle,
+`-race` and 8x-16x oversubscription it varied by 0.14% (28917-28958), against a
+33000 ceiling. The byte total takes more work to make load-independent — see
+below.
 
 The exact frame count is what gives the test grip on pruning. The bound it
 replaced — frame count against the viewport's cell count — could not fail, and
@@ -163,11 +162,40 @@ root total, so an early snapshot legitimately keeps more nodes, and how many
 depends on where the render loop's ticks land (330 and 523 on two runs of the
 same fixture). The completed trie is a property of the fixture alone.
 
-`TestSnapshotTreeMatchesJSONRoundTrip` is what makes those bounds transfer. The
-stress test drives `SnapshotJSON` + decode; the flame tab drives
-`SnapshotTree()` and skips the round-trip. Pinning that both lay out to
-identical frames is what stops the stress test from silently measuring a
-pipeline the TUI no longer runs.
+Two tests make those bounds transfer to the TUI, and it takes both. The stress
+test drives `SnapshotJSON` + decode; the flame tab drives `SnapshotTree()` and
+skips the round-trip. `TestSnapshotTreeMatchesJSONRoundTrip` pins that the two
+lay out to identical frames, and `TestFlameRefreshUsesTheTreeSnapshot` pins
+that the tab's refresh paths really do call `SnapshotTree` and never the
+round-trip. Neither alone is enough: the equivalence test never touches the
+tab's code, so on its own it would keep passing if the tab stopped calling
+`SnapshotTree` altogether.
+
+Be precise about what the equivalence test catches. `SnapshotJSON` is
+`json.Marshal(SnapshotTree())` decoded back into the same struct, so marshal
+and unmarshal stay self-consistent under any *rename* of a JSON tag — renaming
+`SnapshotNode.HeightTotal`'s tag, or dropping the tag, does not fail it. Only a
+field leaving serialization entirely (`json:"-"`) does.
+
+### The byte ceiling is not load-independent for free
+
+The allocation *count* is genuinely host-independent. The byte total is not:
+`encoding/json` pools its `encodeState` buffers, GC drains that pool, so
+bytes/pass rises with GC frequency and therefore with memory pressure. Left
+alone it reached 1813350 under `-race` with `GOGC=1` and 16x load — a ceiling
+that measures the machine, which is the defect the task existed to remove.
+
+Two things fix it, and both are load-bearing. `measureStressRenderCost` pins the
+collector (`debug.SetGCPercent(-1)`, restored on exit), which makes the non-race
+measurement deterministic at 1466874. `stressByteCeilingPercent`
+(`stress_race_{enabled,disabled}_test.go`) then scales the ceiling by 130% under
+`-race`, covering the residual the pin does not remove — 1537298-1624470,
+including a sample taken while the whole race suite ran alongside.
+
+Do not simply widen the byte ceiling instead. It is the *only* assertion that
+catches an allocation regression that stays under the count ceiling: dropping
+the `childStates` preallocation in `livetrie.go` lands at 32561 allocs (below
+the 33000 ceiling) and 1823513 bytes.
 
 ## Demo Pipeline
 
