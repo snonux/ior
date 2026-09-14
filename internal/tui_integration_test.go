@@ -1387,15 +1387,14 @@ func TestTUIIntegration_Latency_ShowsHistogramTotals(t *testing.T) {
 //
 // The Syscalls tab (number key "3") renders a selectable table of seeded
 // syscalls (write/read/close/fsync/openat/epoll_wait/getpid/poll). At the
-// 160-col test width the dashboard body falls into the 9-column "compact"
-// layout (Syscall, Family, Count, Rate/s, Avg, p95, p99, Bytes, Errors), so the
-// selectable-column index runs 1..9 and column 0 is the "Syscall" name column,
-// with the "Family" column at index 1. These tests drive the table's sort,
-// column-nav, scroll, visualization-cycle, metric-toggle, and enter-to-filter
-// handlers and assert on stable rendered tokens (the table hint line
-// "[Row r/8 Col c/9]", the sort label "[sort: ...]", the bubbles/treemap
-// headers, and the "filter:" status line) rather than data-dependent row
-// ordering.
+// 160-col test width the dashboard body uses the 12-column full layout, so the
+// selectable-column index runs 1..12 and column 0 is the "Syscall" name
+// column, with the "Family" column at index 1. These tests drive the table's
+// sort, column-nav, scroll, visualization-cycle, metric-toggle, and
+// enter-to-filter handlers and assert on stable rendered tokens (the table
+// hint line "[Row r/8 Col c/12]", the sort label "[sort: ...]", the
+// bubbles/treemap headers, and the "filter:" status line) rather than
+// data-dependent row ordering.
 
 // TestTUIIntegration_Syscalls_TableRenders asserts the Syscalls tab renders its
 // table header (including the Family column), a seeded non-FS family value, and
