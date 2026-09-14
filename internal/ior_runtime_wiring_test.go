@@ -105,9 +105,11 @@ func (b *fakeRuntimeBindings) SetDashboardSnapshotSource(source runtime.Snapshot
 func (b *fakeRuntimeBindings) SetEventStreamSource(source runtime.StreamSource) {
 	b.publishedStreamSource = source
 }
-func (b *fakeRuntimeBindings) SetLiveTrie(runtime.LiveTrieSource)            {}
-func (b *fakeRuntimeBindings) SetProbeManager(runtime.ProbeManager)          {}
-func (b *fakeRuntimeBindings) SetLiveFilterSetter(func(globalfilter.Filter)) {}
+func (b *fakeRuntimeBindings) SetLiveTrie(runtime.LiveTrieSource)   {}
+func (b *fakeRuntimeBindings) SetProbeManager(runtime.ProbeManager) {}
+func (b *fakeRuntimeBindings) SetLiveFilterSetter(func(globalfilter.Filter)) func() {
+	return func() {}
+}
 
 // Compile-time proof that the fake satisfies the whole contract.
 var _ runtime.TraceRuntimeBindings = (*fakeRuntimeBindings)(nil)

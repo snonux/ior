@@ -979,8 +979,9 @@ func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T)
 // printCb admits, without any restart of the trace pipeline.
 func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 	bindings := &traceRuntimeBindingsStub{
-		streamBuffer: streamrow.NewRingBuffer(),
-		streamSeq:    streamrow.NewSequencer(0),
+		streamBuffer:               streamrow.NewRingBuffer(),
+		streamSeq:                  streamrow.NewSequencer(0),
+		liveFilterUnregisteredDone: make(chan struct{}, 1),
 	}
 	base := flags.NewFlags()
 	base.GlobalFilter = globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "keep"}}
@@ -989,7 +990,7 @@ func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 	// run. In production, startTrace blocks on el.run for the trace's
 	// lifetime, so the runtime bindings keep their live filter setter
 	// registered the whole time. Returning immediately would race against
-	// the trace starter's deferred SetLiveFilterSetter(nil) cleanup.
+	// the trace starter's ownership-aware cleanup.
 	release := make(chan struct{})
 	captured := make(chan *eventLoop, 1)
 	starter := tuiTraceStarterFromRunTrace(
@@ -1036,6 +1037,82 @@ func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 	if err := <-starterErr; err != nil {
 		t.Fatalf("starter() error = %v", err)
 	}
+	select {
+	case <-bindings.liveFilterUnregisteredDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the trace to unregister its live filter setter")
+	}
+	if setter := bindings.currentLiveFilterSetter(); setter != nil {
+		t.Fatal("expected the live filter setter to be unregistered after the trace stopped")
+	}
+}
+
+// TestTuiTraceStarterSlowTeardownKeepsNextSessionLiveFilterSetter exercises
+// the whole registration lifetime across overlapping trace sessions. Session
+// one stops only after session two has installed its setter; its late cleanup
+// must not disable in-place filter swaps for the newer session.
+func TestTuiTraceStarterSlowTeardownKeepsNextSessionLiveFilterSetter(t *testing.T) {
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer:               streamrow.NewRingBuffer(),
+		streamSeq:                  streamrow.NewSequencer(0),
+		liveFilterUnregisteredDone: make(chan struct{}, 2),
+	}
+	base := flags.NewFlags()
+	base.GlobalFilter = globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "initial"}}
+	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
+
+	startSession := func() (*eventLoop, chan struct{}) {
+		t.Helper()
+		release := make(chan struct{})
+		captured := make(chan *eventLoop, 1)
+		starter := tuiTraceStarterFromRunTrace(
+			base,
+			func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+				el := &eventLoop{}
+				configure(el)
+				captured <- el
+				close(started)
+				<-release
+				return nil
+			},
+		)
+		if err := starter(ctx); err != nil {
+			t.Fatalf("starter() error = %v", err)
+		}
+		return <-captured, release
+	}
+	waitForUnregister := func() {
+		t.Helper()
+		select {
+		case <-bindings.liveFilterUnregisteredDone:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for a trace session to unregister its live filter setter")
+		}
+	}
+
+	firstEventLoop, finishFirstSession := startSession()
+	secondEventLoop, finishSecondSession := startSession()
+
+	close(finishFirstSession)
+	waitForUnregister()
+
+	setter := bindings.currentLiveFilterSetter()
+	if setter == nil {
+		t.Fatal("slow teardown from the first session unregistered the second session's setter")
+	}
+	setter(globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "second"}})
+	if got := secondEventLoop.Filter().Comm; got == nil || got.Pattern != "second" {
+		t.Fatalf("second session filter = %+v, want comm pattern second", got)
+	}
+	if got := firstEventLoop.Filter().Comm; got == nil || got.Pattern != "initial" {
+		t.Fatalf("first session filter = %+v, want its unchanged initial filter", got)
+	}
+
+	close(finishSecondSession)
+	waitForUnregister()
+	if setter := bindings.currentLiveFilterSetter(); setter != nil {
+		t.Fatal("second session teardown left its live filter setter registered")
+	}
 }
 
 // TestTuiTraceStarterInPlaceFilterSwapAdvancesRecordedEpoch regresses audit
@@ -1062,8 +1139,8 @@ func TestTuiTraceStarterInPlaceFilterSwapAdvancesRecordedEpoch(t *testing.T) {
 
 	// release keeps the starter alive so the live filter setter stays
 	// registered while the test drives pairs through the print callback.
-	// Returning immediately would race against the trace starter's deferred
-	// SetLiveFilterSetter(nil) cleanup (see
+	// Returning immediately would race against the trace starter's
+	// ownership-aware cleanup (see
 	// TestTuiTraceStarterAppliesLiveFilterSwapInPlace).
 	release := make(chan struct{})
 	captured := make(chan *eventLoop, 1)
@@ -1220,8 +1297,10 @@ type traceRuntimeBindingsStub struct {
 	// mu guards liveFilterSetter, which is mutated from the trace-starter
 	// goroutine (via SetLiveFilterSetter) and read from the test goroutine
 	// when invoking the in-place swap.
-	mu               sync.Mutex
-	liveFilterSetter func(globalfilter.Filter)
+	mu                         sync.Mutex
+	liveFilterSetter           func(globalfilter.Filter)
+	liveFilterRegistration     *struct{ marker byte }
+	liveFilterUnregisteredDone chan struct{}
 }
 
 func (b *traceRuntimeBindingsStub) SetDashboardSnapshotSource(source runtime.SnapshotSource) {
@@ -1236,10 +1315,24 @@ func (b *traceRuntimeBindingsStub) SetLiveTrie(runtime.LiveTrieSource) {}
 
 func (b *traceRuntimeBindingsStub) SetProbeManager(runtime.ProbeManager) {}
 
-func (b *traceRuntimeBindingsStub) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
+func (b *traceRuntimeBindingsStub) SetLiveFilterSetter(setter func(globalfilter.Filter)) func() {
+	registration := &struct{ marker byte }{}
 	b.mu.Lock()
 	b.liveFilterSetter = setter
+	b.liveFilterRegistration = registration
 	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		if b.liveFilterRegistration == registration {
+			b.liveFilterSetter = nil
+			b.liveFilterRegistration = nil
+		}
+		unregisteredDone := b.liveFilterUnregisteredDone
+		b.mu.Unlock()
+		if unregisteredDone != nil {
+			unregisteredDone <- struct{}{}
+		}
+	}
 }
 
 func (b *traceRuntimeBindingsStub) currentLiveFilterSetter() func(globalfilter.Filter) {
