@@ -165,11 +165,12 @@ type RuntimePublisher interface {
 	SetLiveTrie(liveTrie LiveTrieSource)
 	// SetProbeManager wires the BPF probe manager into the TUI probes modal.
 	SetProbeManager(manager ProbeManager)
-	// SetLiveFilterSetter registers (or, with nil, unregisters) a callback that
-	// applies a new global filter to the running trace pipeline in-place without
-	// restarting BPF probes. The trace starter passes its eventloop's SetFilter;
+	// SetLiveFilterSetter registers a callback that applies a new global filter
+	// to the running trace pipeline in-place without restarting BPF probes. The
+	// returned function unregisters this callback only if a newer trace session
+	// has not replaced it. The trace starter passes its eventloop's SetFilter;
 	// the TUI calls it on every filter change.
-	SetLiveFilterSetter(setter func(globalfilter.Filter))
+	SetLiveFilterSetter(setter func(globalfilter.Filter)) func()
 }
 
 // RuntimeState is the read side of the TUI runtime contract.

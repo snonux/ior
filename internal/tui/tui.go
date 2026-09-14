@@ -67,6 +67,12 @@ type RuntimeState = runtime.RuntimeState
 // It is a type alias for runtime.TraceRuntimeBindings.
 type TraceRuntimeBindings = runtime.TraceRuntimeBindings
 
+// liveFilterRegistration gives each installed live-filter setter a distinct,
+// comparable identity so an older trace session can clear only its own setter.
+type liveFilterRegistration struct {
+	_ byte
+}
+
 // runtimeBindings is the TUI-owned concrete implementation of
 // runtime.TraceRuntimeBindings. It guards all fields with a read-write mutex so
 // the trace starter goroutine and the Bubble Tea update loop can safely exchange
@@ -91,7 +97,8 @@ type runtimeBindings struct {
 	probeManager runtime.ProbeManager
 	// liveFilterSetter, when non-nil, applies filter changes to the running
 	// event loop in-place so BPF probes need not be restarted.
-	liveFilterSetter func(globalfilter.Filter)
+	liveFilterSetter       func(globalfilter.Filter)
+	liveFilterRegistration *liveFilterRegistration
 	// filterEpoch increments on every filter change and is stored in parquet rows.
 	filterEpoch atomic.Uint64
 }
@@ -177,12 +184,25 @@ func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) {
 	r.mu.Unlock()
 }
 
-// SetLiveFilterSetter registers (or, with nil, unregisters) the live filter
-// callback so the TUI can update the running trace pipeline in-place.
-func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
+// SetLiveFilterSetter registers the live filter callback so the TUI can update
+// the running trace pipeline in-place. The returned function clears the setter
+// only while this registration still owns it, preventing a slow teardown from
+// an older trace session from unregistering a newer session's callback.
+func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) func() {
+	registration := &liveFilterRegistration{}
 	r.mu.Lock()
 	r.liveFilterSetter = setter
+	r.liveFilterRegistration = registration
 	r.mu.Unlock()
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.liveFilterRegistration != registration {
+			return
+		}
+		r.liveFilterSetter = nil
+		r.liveFilterRegistration = nil
+	}
 }
 
 // applyLiveFilter swaps the active global filter in place via the setter

@@ -270,19 +270,22 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 }
 
 // makeTUIEventLoopConfigurer returns the func(*eventLoop) callback that wires
-// the event loop into the TUI runtime: it sets the initial filter, installs
-// the print callback that fans out to engine/stream/trie, and registers the
-// live-filter setter so the TUI can swap filters without restarting BPF probes.
-func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRuntime) func(*eventLoop) {
+// the event loop into the TUI runtime and an ownership-aware function that
+// unregisters its live-filter setter. The callback sets the initial filter,
+// installs the print callback that fans out to engine/stream/trie, and
+// registers the setter so the TUI can swap filters without restarting BPF
+// probes.
+func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRuntime) (func(*eventLoop), func()) {
 	// Overflow and genuine failures are warned about independently: a shed
 	// storm must not consume the once-guard that would later surface a
 	// real recorder error in the stream.
 	var recorderOverflowWarningOnce sync.Once
 	var recorderFailureWarningOnce sync.Once
+	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {
 		IngestSyscallAggregates([]statsengine.SyscallAggregate)
 	}
-	return func(el *eventLoop) {
+	configure := func(el *eventLoop) {
 		// Seed the event loop's filter from config so subsequent reads via
 		// el.Filter() see the same filter the trace was started with.
 		el.SetFilter(cfg.GlobalFilter)
@@ -327,9 +330,15 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 			el.SetAggregateSink(sink)
 		}
 		if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
-			bindings.SetLiveFilterSetter(el.SetFilter)
+			unregisterLiveFilterSetter = bindings.SetLiveFilterSetter(el.SetFilter)
 		}
 	}
+	unregister := func() {
+		if unregisterLiveFilterSetter != nil {
+			unregisterLiveFilterSetter()
+		}
+	}
+	return configure, unregister
 }
 
 // tuiTraceStarterFromRunTrace returns a runtime.TraceStarter that drives a
@@ -363,7 +372,7 @@ func tuiTraceStarterFromRunTrace(
 		if err != nil {
 			return err
 		}
-		configureEl := makeTUIEventLoopConfigurer(ctx, cfg, rt)
+		configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(ctx, cfg, rt)
 
 		startedCh := make(chan struct{})
 		// errCh carries at most one result from the trace goroutine to the
@@ -376,9 +385,7 @@ func tuiTraceStarterFromRunTrace(
 
 		go func() {
 			err := startTrace(ctx, cfg, startedCh, configureEl)
-			if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
-				bindings.SetLiveFilterSetter(nil)
-			}
+			unregisterLiveFilterSetter()
 			// Deliver the result only if the caller is still selecting.
 			// done is closed when the outer function returns, so the goroutine
 			// will always proceed through this select and never block.
