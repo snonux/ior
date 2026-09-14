@@ -2,7 +2,9 @@ package types
 
 import (
 	"encoding/binary"
+	"fmt"
 	"testing"
+	"unsafe"
 )
 
 // rawBytes serializes ev and fails the test if that does not work. Writing it
@@ -31,6 +33,20 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		defer fast.Recycle()
 		if !slow.Equals(fast) {
 			t.Fatalf("open decode mismatch")
+		}
+	})
+
+	t.Run("OpenNameFixupEvent", func(t *testing.T) {
+		ev := &OpenNameFixupEvent{EventType: OPEN_NAME_FIXUP_EVENT, TraceId: SYS_ENTER_OPENAT, Tid: 3}
+		copy(ev.Filename[:], "recovered")
+		raw := rawBytes(t, ev)
+
+		slow := NewOpenNameFixupEvent(raw)
+		fast := NewOpenNameFixupEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("open-name fixup decode mismatch")
 		}
 	})
 
@@ -627,6 +643,60 @@ func TestNewOpenEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+func TestNewOpenNameFixupEventFastCompactKernelLayout(t *testing.T) {
+	if got := unsafe.Sizeof(OpenNameFixupEvent{}); got != openNameFixupEventSize {
+		t.Fatalf("sizeof(OpenNameFixupEvent) = %d, want %d", got, openNameFixupEventSize)
+	}
+	if got := unsafe.Sizeof(OpenEvent{}); got != openEventSize {
+		t.Fatalf("sizeof(OpenEvent) = %d, want %d", got, openEventSize)
+	}
+	if got := openEventSize - openNameFixupEventSize; got != 36 {
+		t.Fatalf("compact fixup saves %d bytes over an open event, want 36", got)
+	}
+
+	raw := make([]byte, openNameFixupEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(OPEN_NAME_FIXUP_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_OPENAT))
+	binary.LittleEndian.PutUint32(raw[8:12], 33)
+	copy(raw[12:268], "recovered")
+
+	fast := NewOpenNameFixupEventFast(raw)
+	if fast == nil {
+		t.Fatal("expected decoded open-name fixup event for compact kernel payload")
+	}
+	defer fast.Recycle()
+	if fast.EventType != OPEN_NAME_FIXUP_EVENT || fast.TraceId != SYS_ENTER_OPENAT ||
+		fast.Tid != 33 || StringValue(fast.Filename[:]) != "recovered" {
+		t.Fatalf("unexpected open-name fixup decode: %#v", fast)
+	}
+}
+
+func TestNewOpenNameFixupEventFastLegacyOpenEventLayout(t *testing.T) {
+	for _, size := range []int{openEventSizeV1, openEventSize} {
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			raw := make([]byte, size)
+			fillCommonHeader(raw, OPEN_NAME_FIXUP_EVENT, SYS_ENTER_OPENAT)
+			copy(raw[28:284], "legacy-recovered")
+
+			fixup := NewOpenNameFixupEventFast(raw)
+			if fixup == nil {
+				t.Fatal("expected legacy open-event fixup payload to decode")
+			}
+			defer fixup.Recycle()
+			if fixup.Tid != 33 || StringValue(fixup.Filename[:]) != "legacy-recovered" {
+				t.Fatalf("unexpected legacy fixup decode: %#v", fixup)
+			}
+		})
+	}
+}
+
+func TestNewOpenNameFixupEventFastRejectsUnknownLayout(t *testing.T) {
+	if got := NewOpenNameFixupEventFast(make([]byte, openNameFixupEventSize+1)); got != nil {
+		got.Recycle()
+		t.Fatal("unexpected fixup layout decoded instead of being rejected")
+	}
+}
+
 func TestNewFdEventFastKernelLayout(t *testing.T) {
 	raw := make([]byte, fdEventSize) // 32: sizeof(struct fd_event)
 	fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
@@ -701,6 +771,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		decode func([]byte) bool
 	}{
 		{name: "OpenEvent", decode: func(raw []byte) bool { return NewOpenEventFast(raw) == nil }},
+		{name: "OpenNameFixupEvent", decode: func(raw []byte) bool { return NewOpenNameFixupEventFast(raw) == nil }},
 		{name: "ExecEvent", decode: func(raw []byte) bool { return NewExecEventFast(raw) == nil }},
 		{name: "NullEvent", decode: func(raw []byte) bool { return NewNullEventFast(raw) == nil }},
 		{name: "FdEvent", decode: func(raw []byte) bool { return NewFdEventFast(raw) == nil }},

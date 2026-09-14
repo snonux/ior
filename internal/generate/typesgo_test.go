@@ -27,6 +27,13 @@ struct open_event {
     char comm[MAX_PROGNAME_LENGTH];
 };
 
+struct open_name_fixup_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u32 tid;
+    char filename[MAX_FILENAME_LENGTH];
+};
+
 struct null_event {
     __u32 event_type;
     __u32 trace_id;
@@ -57,8 +64,8 @@ func TestParseCTypesInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCTypesInput failed: %v", err)
 	}
-	if len(structs) != 3 {
-		t.Fatalf("expected 3 structs, got %d", len(structs))
+	if len(structs) != 4 {
+		t.Fatalf("expected 4 structs, got %d", len(structs))
 	}
 	if structs[0].Name != "open_event" {
 		t.Errorf("first struct name = %q, want open_event", structs[0].Name)
@@ -87,9 +94,9 @@ func TestParseCStructMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fd := structs[2] // fd_event
+	fd := structs[3] // fd_event
 	if fd.Name != "fd_event" {
-		t.Fatalf("third struct = %q, want fd_event", fd.Name)
+		t.Fatalf("fourth struct = %q, want fd_event", fd.Name)
 	}
 	if len(fd.Members) != 6 {
 		t.Fatalf("fd_event members = %d, want 6", len(fd.Members))
@@ -151,6 +158,33 @@ func TestGenerateTypesGoStructs(t *testing.T) {
 	requireContains(t, output, "Flags int32")
 	requireContains(t, output, "Filename [MAX_FILENAME_LENGTH]byte")
 	requireContains(t, output, "Comm [MAX_PROGNAME_LENGTH]byte")
+	requireContains(t, output, "type OpenNameFixupEvent struct {")
+	requireContains(t, output, "EventType EventType; TraceId TraceId; Tid uint32; Filename [MAX_FILENAME_LENGTH]byte")
+}
+
+func TestGenerateTypesGoOmitsGettersForFieldsARecordDoesNotCarry(t *testing.T) {
+	structs, constants, err := ParseCTypesInput(strings.NewReader(testTypesH + testDefines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+	start := strings.Index(output, "type OpenNameFixupEvent struct {")
+	if start < 0 {
+		t.Fatal("generated output has no OpenNameFixupEvent")
+	}
+	end := strings.Index(output[start:], "type NullEvent struct {")
+	if end < 0 {
+		t.Fatal("could not isolate generated OpenNameFixupEvent")
+	}
+	fixup := output[start : start+end]
+	for _, getter := range []string{"GetEventType", "GetTraceId", "GetTid"} {
+		requireContains(t, fixup, getter)
+	}
+	for _, getter := range []string{"GetPid", "GetTime"} {
+		if strings.Contains(fixup, getter) {
+			t.Errorf("compact fixup record unexpectedly has %s", getter)
+		}
+	}
 }
 
 func TestGenerateTypesGoMethods(t *testing.T) {

@@ -25,24 +25,27 @@ import (
 // recoveredName is the path an empty-name open recovers at sys_exit.
 const recoveredName = "/usr/lib/locale/locale-archive"
 
-// makeOpenNameFixupEvent builds the control record the generated exit handler
-// emits (ior_emit_open_name_fixup, internal/c/filter.c). It reuses struct
-// open_event - the record carries exactly one thing, the enter payload's
-// filename read a second time - and is stamped with the *enter* trace ID.
-func makeOpenNameFixupEvent(t *testing.T, time uint64, pid, tid uint32, traceID types.TraceId, filename string) []byte {
+func TestOpenNameFixupUsesTheNarrowControlRecordContract(t *testing.T) {
+	var decoded runtimeDecodedEvent = &types.OpenNameFixupEvent{}
+	if _, ok := decoded.(event.Event); ok {
+		t.Fatal("OpenNameFixupEvent must not claim syscall PID/time semantics")
+	}
+}
+
+// makeOpenNameFixupEvent builds the compact control record the generated exit
+// handler emits (ior_emit_open_name_fixup, internal/c/filter.c). It carries the
+// pending enter's tid and trace ID plus the filename read a second time.
+func makeOpenNameFixupEvent(t *testing.T, tid uint32, traceID types.TraceId, filename string) []byte {
 	t.Helper()
-	ev := types.OpenEvent{
+	ev := types.OpenNameFixupEvent{
 		EventType: types.OPEN_NAME_FIXUP_EVENT,
 		TraceId:   traceID,
-		Time:      time,
-		Pid:       pid,
 		Tid:       tid,
-		Flags:     -1,
 	}
 	copy(ev.Filename[:], filename)
 	raw, err := ev.Bytes()
 	if err != nil {
-		t.Fatalf("OpenEvent.Bytes() error = %v", err)
+		t.Fatalf("OpenNameFixupEvent.Bytes() error = %v", err)
 	}
 	return raw
 }
@@ -75,8 +78,7 @@ func feedOpenPairWithFixup(t *testing.T, el *eventLoop, payloadName, fixupName, 
 	out := make(chan *event.Pair, 1)
 	el.processRawEvent(makeOpenEnterEvent(t, payloadName, comm), out)
 	if fixupName != "" {
-		el.processRawEvent(makeOpenNameFixupEvent(t, defaulTime+50, execCommPid, execCommTid,
-			types.SYS_ENTER_OPENAT, fixupName), out)
+		el.processRawEvent(makeOpenNameFixupEvent(t, execCommTid, types.SYS_ENTER_OPENAT, fixupName), out)
 	}
 	_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, execCommPid, execCommTid,
 		types.SYS_EXIT_OPENAT, ret)
@@ -162,8 +164,7 @@ func TestOpenNameFixupIgnoresAForeignPendingEnter(t *testing.T) {
 		_, enterRaw := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
 			"/etc/ld.so.preload", types.SYS_ENTER_ACCESS)
 		el.processRawEvent(enterRaw, out)
-		el.processRawEvent(makeOpenNameFixupEvent(t, defaulTime+50, execCommPid, execCommTid,
-			types.SYS_ENTER_OPENAT, recoveredName), out)
+		el.processRawEvent(makeOpenNameFixupEvent(t, execCommTid, types.SYS_ENTER_OPENAT, recoveredName), out)
 		_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, execCommPid, execCommTid,
 			types.SYS_EXIT_ACCESS, -2)
 		el.processRawEvent(exitRaw, out)
@@ -200,8 +201,7 @@ func TestOpenNameFixupIgnoresAForeignPendingEnter(t *testing.T) {
 			t.Fatalf("OpenEvent.Bytes() error = %v", err)
 		}
 		el.processRawEvent(enterRaw, out)
-		el.processRawEvent(makeOpenNameFixupEvent(t, defaulTime+50, execCommPid, execCommTid,
-			types.SYS_ENTER_OPENAT, recoveredName), out)
+		el.processRawEvent(makeOpenNameFixupEvent(t, execCommTid, types.SYS_ENTER_OPENAT, recoveredName), out)
 		_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, execCommPid, execCommTid,
 			types.SYS_EXIT_OPEN, 9)
 		el.processRawEvent(exitRaw, out)

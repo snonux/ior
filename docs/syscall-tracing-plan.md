@@ -115,7 +115,10 @@ Memory extent is tracked separately via address-space metrics.
   handler stashes the user pointer on failure and the exit handler re-reads it
   once the kernel's own `getname()` has faulted the page in, publishing an
   `OPEN_NAME_FIXUP_EVENT` control record that userspace splices into the
-  pending enter event. See AGENTS.md, "Recovering a faulted open filename".
+  pending enter event. The control payload is a dedicated 268-byte record with
+  only event type, enter trace ID, tid and filename; it does not pay for the
+  unused fields or comm lookup of the 304-byte open-enter record. See AGENTS.md,
+  "Recovering a faulted open filename".
   The same loss still applies to the other kinds that read a user string
   (`KindPathname`, `KindName`, `KindExec`); the mechanism is not open-specific
   and could be extended to them, but only the open kinds were measurably

@@ -6,14 +6,18 @@ import (
 	"ior/internal/types"
 )
 
-type runtimeEventDecoder func(raw []byte) event.Event
+type runtimeDecodedEvent interface {
+	event.EventLifecycle
+}
+
+type runtimeEventDecoder func(raw []byte) runtimeDecodedEvent
 type runtimeExitHandler func(e *eventLoop, ep *event.Pair) bool
 type runtimeEnterFilter func(filter globalfilter.Filter, ev event.Event) bool
 
 // runtimeControlHandler consumes a control event: a ring-buffer record that
 // carries state for the event loop instead of a syscall to report. The handler
 // owns the event and must recycle it.
-type runtimeControlHandler func(e *eventLoop, ev event.Event)
+type runtimeControlHandler func(e *eventLoop, ev runtimeDecodedEvent)
 
 type runtimeEventKind struct {
 	enterEventType types.EventType
@@ -26,8 +30,7 @@ const (
 	rawEnterEvent rawEventDirection = iota
 	rawExitEvent
 	// rawControlEvent is neither side of a syscall pair. It updates event-loop
-	// state (currently: the post-exec comm of a tid) and is never emitted as a
-	// row.
+	// state and is never emitted as a row.
 	rawControlEvent
 )
 
@@ -44,8 +47,13 @@ type eventPtr[T any] interface {
 	event.Event
 }
 
-func rawDecoder[T any, P eventPtr[T]](decode func([]byte) P) runtimeEventDecoder {
-	return func(raw []byte) event.Event {
+type decodedEventPtr[T any] interface {
+	*T
+	runtimeDecodedEvent
+}
+
+func rawDecoder[T any, P decodedEventPtr[T]](decode func([]byte) P) runtimeEventDecoder {
+	return func(raw []byte) runtimeDecodedEvent {
 		ev := decode(raw)
 		if ev == nil {
 			return nil
@@ -54,8 +62,8 @@ func rawDecoder[T any, P eventPtr[T]](decode func([]byte) P) runtimeEventDecoder
 	}
 }
 
-func typedRuntimeControl[T any, P eventPtr[T]](handle func(*eventLoop, P)) runtimeControlHandler {
-	return func(e *eventLoop, ev event.Event) {
+func typedRuntimeControl[T any, P decodedEventPtr[T]](handle func(*eventLoop, P)) runtimeControlHandler {
+	return func(e *eventLoop, ev runtimeDecodedEvent) {
 		typed, ok := ev.(P)
 		if !ok {
 			e.notifyWarning("Dropped malformed control event")
@@ -143,12 +151,11 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		// holding them until LRU eviction (internal/eventloop_processexit.go).
 		controlRaw(types.PROCESS_EXIT_EVENT, rawDecoder[types.ProcessExitEvent](types.NewProcessExitEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExitEvent)),
-		// The open-name fixup reuses struct open_event because that is exactly
-		// what it carries: the enter payload's filename, read a second time at
-		// sys_exit once the kernel had faulted the page in. It needs no decoder
-		// or Go type of its own, only its own event type so the dispatch table
-		// routes it to the control path instead of building a pair from it.
-		controlRaw(types.OPEN_NAME_FIXUP_EVENT, rawDecoder[types.OpenEvent](types.NewOpenEventFast),
+		// The open-name fixup carries only the pending enter's identity and the
+		// filename re-read at sys_exit once the kernel had faulted the page in.
+		// Its dedicated decoder keeps the compact control record separate from
+		// the much larger open syscall payload.
+		controlRaw(types.OPEN_NAME_FIXUP_EVENT, rawDecoder[types.OpenNameFixupEvent](types.NewOpenNameFixupEventFast),
 			typedRuntimeControl((*eventLoop).handleOpenNameFixupEvent)),
 	}
 }

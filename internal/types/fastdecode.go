@@ -17,6 +17,7 @@ const (
 	// fast path. The trailing pad bytes carry no data and are ignored.
 	openEventSize             = 304
 	openEventSizeV1           = 300
+	openNameFixupEventSize    = 268
 	execEventSize             = 304
 	nullEventSize             = 24
 	fdEventSize               = 32
@@ -77,6 +78,32 @@ func NewOpenEventFast(raw []byte) *OpenEvent {
 	o.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	copy(o.Filename[:], raw[28:284])
 	copy(o.Comm[:], raw[284:300])
+	return o
+}
+
+// NewOpenNameFixupEventFast decodes the compact control record that carries a
+// filename recovered at sys_exit. It also accepts the former open_event layout
+// so a pre-change IOR_BPF_OBJECT remains compatible. Unknown layouts return
+// nil rather than risk interpreting an unrelated offset as the tid or name.
+func NewOpenNameFixupEventFast(raw []byte) *OpenNameFixupEvent {
+	var tidOffset, filenameOffset int
+	switch len(raw) {
+	case openNameFixupEventSize:
+		tidOffset = 8
+		filenameOffset = 12
+	case openEventSize, openEventSizeV1:
+		// OPEN_NAME_FIXUP_EVENT originally reused struct open_event. Accept
+		// both its kernel sizeof and historical binary.Write layouts.
+		tidOffset = 20
+		filenameOffset = 28
+	default:
+		return nil
+	}
+	o := poolOfOpenNameFixupEvents.Get().(*OpenNameFixupEvent)
+	o.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	o.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	o.Tid = binary.LittleEndian.Uint32(raw[tidOffset : tidOffset+4])
+	copy(o.Filename[:], raw[filenameOffset:filenameOffset+MAX_FILENAME_LENGTH])
 	return o
 }
 

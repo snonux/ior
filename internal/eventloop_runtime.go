@@ -266,19 +266,25 @@ func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHan
 			rawEvent.control(e, ev)
 			return
 		}
-		if rawEvent.direction == rawExitEvent {
-			e.tracepointExited(ev, ch)
-			return
-		}
-		if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), ev) {
+		syscallEvent, ok := ev.(event.Event)
+		if !ok {
+			e.notifyWarning("Dropped malformed syscall event")
 			ev.Recycle()
 			return
 		}
-		e.tracepointEntered(ev)
+		if rawEvent.direction == rawExitEvent {
+			e.tracepointExited(syscallEvent, ch)
+			return
+		}
+		if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), syscallEvent) {
+			syscallEvent.Recycle()
+			return
+		}
+		e.tracepointEntered(syscallEvent)
 	}
 }
 
-func (e *eventLoop) decodeRuntimeEvent(rawEvent rawRuntimeEvent, raw []byte) (event.Event, bool) {
+func (e *eventLoop) decodeRuntimeEvent(rawEvent rawRuntimeEvent, raw []byte) (runtimeDecodedEvent, bool) {
 	decoded := rawEvent.decode(raw)
 	if decoded == nil {
 		e.dropMalformedRawEvent(rawEvent.eventType, raw)

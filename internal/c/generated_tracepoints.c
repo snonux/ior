@@ -2637,7 +2637,7 @@ int handle_sys_exit_mq_open(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_OPEN, ctx->ret))
         return 0;
 
-    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_MQ_OPEN, pending_filename);
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MQ_OPEN, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7551,7 +7551,7 @@ int handle_sys_exit_open_tree(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN_TREE, ctx->ret))
         return 0;
 
-    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPEN_TREE, pending_filename);
+    ior_emit_open_name_fixup(tid, SYS_ENTER_OPEN_TREE, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7903,7 +7903,7 @@ int handle_sys_exit_open_tree_attr(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN_TREE_ATTR, ctx->ret))
         return 0;
 
-    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPEN_TREE_ATTR, pending_filename);
+    ior_emit_open_name_fixup(tid, SYS_ENTER_OPEN_TREE_ATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11948,7 +11948,7 @@ int handle_sys_exit_open(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPEN, ctx->ret))
         return 0;
 
-    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPEN, pending_filename);
+    ior_emit_open_name_fixup(tid, SYS_ENTER_OPEN, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12011,7 +12011,7 @@ int handle_sys_exit_openat(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPENAT, ctx->ret))
         return 0;
 
-    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPENAT, pending_filename);
+    ior_emit_open_name_fixup(tid, SYS_ENTER_OPENAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12074,7 +12074,7 @@ int handle_sys_exit_openat2(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_OPENAT2, ctx->ret))
         return 0;
 
-    ior_emit_open_name_fixup(pid, tid, SYS_ENTER_OPENAT2, pending_filename);
+    ior_emit_open_name_fixup(tid, SYS_ENTER_OPENAT2, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {

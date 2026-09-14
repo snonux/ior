@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"ior/internal/event"
@@ -8,6 +9,38 @@ import (
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
+
+type lifecycleOnlyDecodedEvent struct {
+	recycles *int32
+}
+
+func (e *lifecycleOnlyDecodedEvent) Recycle() {
+	atomic.AddInt32(e.recycles, 1)
+}
+
+func TestRawSyscallPathRejectsALifecycleOnlyControlRecord(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	warnings := make(chan string, 1)
+	el.warningCb = func(message string) { warnings <- message }
+	var recycles int32
+	rawEvent := enterRaw(types.OPEN_NAME_FIXUP_EVENT, func([]byte) runtimeDecodedEvent {
+		return &lifecycleOnlyDecodedEvent{recycles: &recycles}
+	}, nil)
+
+	el.rawRuntimeEventHandler(rawEvent)([]byte{byte(types.OPEN_NAME_FIXUP_EVENT)}, make(chan *event.Pair, 1))
+
+	if got := atomic.LoadInt32(&recycles); got != 1 {
+		t.Fatalf("lifecycle-only syscall record recycled %d times, want 1", got)
+	}
+	select {
+	case message := <-warnings:
+		if message != "Dropped malformed syscall event" {
+			t.Fatalf("warning = %q, want malformed syscall warning", message)
+		}
+	default:
+		t.Fatal("expected warning for lifecycle-only record on syscall path")
+	}
+}
 
 func TestHandleTracepointExitDispatchesViaRuntimeKindRegistry(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})

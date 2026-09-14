@@ -923,6 +923,64 @@ func (o *OpenEvent) Recycle() {
 	poolOfOpenEvents.Put(o)
 }
 
+type OpenNameFixupEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Tid       uint32
+	Filename  [MAX_FILENAME_LENGTH]byte
+}
+
+func (o OpenNameFixupEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Tid:%v Filename:%v", o.EventType, o.TraceId, o.Tid, string(o.Filename[:]))
+}
+
+func (o OpenNameFixupEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*OpenNameFixupEvent)
+	if !ok {
+		return false
+	}
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Tid == otherConcrete.Tid && o.Filename == otherConcrete.Filename
+}
+
+func (o *OpenNameFixupEvent) GetEventType() EventType {
+	return o.EventType
+}
+
+func (o *OpenNameFixupEvent) GetTraceId() TraceId {
+	return o.TraceId
+}
+
+func (o *OpenNameFixupEvent) GetTid() uint32 {
+	return o.Tid
+}
+
+var poolOfOpenNameFixupEvents = sync.Pool{
+	New: func() any { return &OpenNameFixupEvent{} },
+}
+
+func NewOpenNameFixupEvent(raw []byte) *OpenNameFixupEvent {
+	o := poolOfOpenNameFixupEvents.Get().(*OpenNameFixupEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, o); err != nil {
+		*o = OpenNameFixupEvent{}
+		poolOfOpenNameFixupEvents.Put(o)
+		return nil
+	}
+	return o
+}
+
+func (o *OpenNameFixupEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, o)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (o *OpenNameFixupEvent) Recycle() {
+	poolOfOpenNameFixupEvents.Put(o)
+}
+
 type ExecEvent struct {
 	EventType EventType
 	TraceId   TraceId
