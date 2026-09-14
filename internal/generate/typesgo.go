@@ -306,7 +306,7 @@ func writeGoStruct(b *strings.Builder, s CStruct) {
 
 	writeStringMethod(b, goName, selfRef, s.Members)
 	writeEqualsMethod(b, goName, selfRef, s.Members)
-	writeGetterMethods(b, goName, selfRef)
+	writeGetterMethods(b, goName, selfRef, s.Members)
 	writeRetGetterMethod(b, goName, selfRef, s.Members)
 
 	if strings.HasSuffix(goName, "Event") {
@@ -362,7 +362,7 @@ func writeEqualsMethod(b *strings.Builder, goName, selfRef string, members []CMe
 	b.WriteString("}\n\n")
 }
 
-func writeGetterMethods(b *strings.Builder, goName, selfRef string) {
+func writeGetterMethods(b *strings.Builder, goName, selfRef string, members []CMember) {
 	getters := []struct {
 		method     string
 		returnType string
@@ -375,9 +375,21 @@ func writeGetterMethods(b *strings.Builder, goName, selfRef string) {
 		{"GetTime", "uint64", "Time"},
 	}
 	for _, g := range getters {
+		if !hasMember(members, g.field) {
+			continue
+		}
 		fmt.Fprintf(b, "func (%s *%s) %s() %s {\n\treturn %s.%s\n}\n\n",
 			selfRef, goName, g.method, g.returnType, selfRef, g.field)
 	}
+}
+
+func hasMember(members []CMember, goField string) bool {
+	for _, member := range members {
+		if snakeToCamel(member.FieldName) == goField {
+			return true
+		}
+	}
+	return false
 }
 
 // retMemberName is the C field name that carries a syscall return value.

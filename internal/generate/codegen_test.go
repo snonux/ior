@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -2782,7 +2783,7 @@ func openNameTakeLine(enterConst string) string {
 // openNameEmitLine must precede this handler's own ring-buffer reserve, so the
 // fixup record reaches userspace while the enter event is still pending.
 func openNameEmitLine(enterConst string) string {
-	return "    ior_emit_open_name_fixup(pid, tid, " + enterConst + ", pending_filename);\n"
+	return "    ior_emit_open_name_fixup(tid, " + enterConst + ", pending_filename);\n"
 }
 
 // TestGenerateOpenHandlersRecoverAFaultedFilename pins the generator emission
@@ -2909,7 +2910,7 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 	for _, helper := range []string{
 		"static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr)",
 		"static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id)",
-		"static __always_inline void ior_emit_open_name_fixup(",
+		"static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,",
 	} {
 		if !strings.Contains(filterC, helper) {
 			t.Errorf("filter.c must define %q", helper)
@@ -2927,6 +2928,24 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 	}
 	if !strings.Contains(filterC, "ev->event_type = OPEN_NAME_FIXUP_EVENT;") {
 		t.Error("the fixup record must carry OPEN_NAME_FIXUP_EVENT")
+	}
+	emitStart := strings.Index(filterC, "static __always_inline void ior_emit_open_name_fixup(")
+	if emitStart < 0 {
+		t.Fatal("could not find ior_emit_open_name_fixup")
+	}
+	emitEnd := strings.Index(filterC[emitStart:], "\n// filter()")
+	if emitEnd < 0 {
+		t.Fatal("could not isolate ior_emit_open_name_fixup")
+	}
+	emitBody := filterC[emitStart : emitStart+emitEnd]
+	if !strings.Contains(emitBody, "struct open_name_fixup_event *ev;") ||
+		!strings.Contains(emitBody, "sizeof(struct open_name_fixup_event)") {
+		t.Error("ior_emit_open_name_fixup must reserve the dedicated compact record")
+	}
+	for _, discarded := range []string{"bpf_get_current_comm", "ev->pid", "ev->time", "ev->flags", "ev->comm"} {
+		if strings.Contains(emitBody, discarded) {
+			t.Errorf("ior_emit_open_name_fixup still populates discarded field/call %q", discarded)
+		}
 	}
 
 	mapsH, err := readCSource("maps.h")
@@ -2946,5 +2965,28 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 	}
 	if !strings.Contains(typesH, "#define PROCESS_EXIT_EVENT 49") {
 		t.Error("types.h must define PROCESS_EXIT_EVENT (the Go constant is generated from it)")
+	}
+	structs, _, err := ParseCTypesInput(strings.NewReader(typesH))
+	if err != nil {
+		t.Fatalf("parse types.h: %v", err)
+	}
+	var fixup *CStruct
+	for i := range structs {
+		if structs[i].Name == "open_name_fixup_event" {
+			fixup = &structs[i]
+			break
+		}
+	}
+	if fixup == nil {
+		t.Fatal("types.h must define struct open_name_fixup_event")
+	}
+	wantMembers := []CMember{
+		{TypeName: "__u32", FieldName: "event_type"},
+		{TypeName: "__u32", FieldName: "trace_id"},
+		{TypeName: "__u32", FieldName: "tid"},
+		{TypeName: "char", FieldName: "filename", ArraySize: "MAX_FILENAME_LENGTH"},
+	}
+	if !reflect.DeepEqual(fixup.Members, wantMembers) {
+		t.Errorf("open_name_fixup_event members = %#v, want only %#v", fixup.Members, wantMembers)
 	}
 }

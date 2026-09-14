@@ -33,7 +33,7 @@ import (
 //
 // Like every control record it never becomes a row, and it owns the event it is
 // handed, so it must recycle it.
-func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenEvent) {
+func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 	defer ev.Recycle()
 	name := types.StringValue(ev.Filename[:])
 	if name == "" {

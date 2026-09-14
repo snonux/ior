@@ -69,6 +69,13 @@ struct open_event {
     char comm[MAX_PROGNAME_LENGTH];
 };
 
+struct open_name_fixup_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u32 tid;
+    char filename[MAX_FILENAME_LENGTH];
+};
+
 struct exec_event {
     __u32 event_type;
     __u32 trace_id;

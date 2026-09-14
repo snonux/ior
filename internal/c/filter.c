@@ -206,23 +206,21 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
 }
 
 // ior_emit_open_name_fixup re-reads the filename at sys_exit and publishes it
-// as an OPEN_NAME_FIXUP_EVENT control record. The record reuses struct
-// open_event because that is precisely what it carries: the enter payload's
-// filename, read a second time. It is reserved and submitted before the exit
-// event of the same syscall, and the ring buffer preserves that order, so the
-// single userspace consumer always applies the fix while the enter event is
-// still pending and unpaired.
+// as a compact OPEN_NAME_FIXUP_EVENT control record. It is reserved and
+// submitted before the exit event of the same syscall, and the ring buffer
+// preserves that order, so the single userspace consumer always applies the
+// fix while the enter event is still pending and unpaired.
 //
 // A still-failing read is discarded rather than submitted: an empty fixup
 // carries no information and would only cost a ring-buffer record.
-static __always_inline void ior_emit_open_name_fixup(__u32 pid, __u32 tid, __u32 enter_trace_id,
+static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,
                                                      __u64 filename_ptr) {
-    struct open_event *ev;
+    struct open_name_fixup_event *ev;
 
     if (!filename_ptr)
         return;
 
-    ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
+    ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_name_fixup_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return;
@@ -230,16 +228,12 @@ static __always_inline void ior_emit_open_name_fixup(__u32 pid, __u32 tid, __u32
 
     ev->event_type = OPEN_NAME_FIXUP_EVENT;
     ev->trace_id = enter_trace_id;
-    ev->pid = pid;
     ev->tid = tid;
-    ev->time = bpf_ktime_get_boot_ns();
-    ev->flags = -1;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
     if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)filename_ptr) < 0) {
         bpf_ringbuf_discard(ev, 0);
         return;
     }
-    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
 
     bpf_ringbuf_submit(ev, 0);
 }

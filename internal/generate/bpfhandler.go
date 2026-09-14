@@ -122,7 +122,7 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 	b.WriteString("        return 0;\n")
 	b.WriteString("\n")
 	if h.recoverFilename {
-		fmt.Fprintf(b, "    ior_emit_open_name_fixup(pid, tid, %s, pending_filename);\n", h.enterName)
+		fmt.Fprintf(b, "    ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
 		b.WriteString("\n")
 	}
 }

@@ -841,10 +841,16 @@ committed set contains syscalls that only exist on recent mainline kernels
     as an `OPEN_NAME_FIXUP_EVENT` (48) control record **before** reserving the
     handler's own exit record. All three helpers live in `internal/c/filter.c`.
 
-  The record reuses `struct open_event` (it carries exactly one thing: the enter
-  payload's filename, read a second time), so it needs no Go type and no
-  `fastdecode` entry of its own — only the generated constant and a
-  `controlRaw` row in `rawRuntimeEvents`. `handleOpenNameFixupEvent`
+  The record uses a dedicated `struct open_name_fixup_event` carrying only the
+  enter trace ID, tid and filename alongside its event type: 268 bytes instead
+  of the 304-byte `struct open_event`, with no unused comm lookup, timestamp,
+  pid or flags. Its generated `OpenNameFixupEvent` and dedicated `fastdecode`
+  entry travel through the narrow control-record dispatch contract rather than
+  claiming the PID/time semantics of a syscall `event.Event`. The decoder also
+  accepts the former 300/304-byte `open_event` layouts so a pre-change
+  `IOR_BPF_OBJECT` override remains compatible; every other size is rejected
+  rather than decoded at the wrong offsets.
+  `handleOpenNameFixupEvent`
   (`internal/eventloop_openfixup.go`) splices it into the still-pending enter
   event: the ring buffer preserves reservation order and the event loop has a
   single consumer goroutine, so the fixup always lands while the enter event is
