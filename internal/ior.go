@@ -29,6 +29,10 @@ import (
 // never imports the TUI layer.
 type tuiRunFunc func(flags.Config, runtime.TraceStarter) error
 
+// traceEventLoopFactory builds the mode-specific event loop after the shared
+// BPF, channel, context, and profiling setup has succeeded.
+type traceEventLoopFactory func(flags.Config, *bpf.Module, func(...any)) (*eventLoop, error)
+
 var errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
 
 // SetTUIRunners injects the concrete TUI runner functions from the cmd layer
@@ -714,6 +718,20 @@ func setupTraceInfra(
 	started chan<- struct{},
 	logln func(...any),
 ) (*traceInfra, error) {
+	return setupTraceInfraWithEventLoop(parentCtx, cfg, started, logln, newTraceEventLoop)
+}
+
+// setupTraceInfraWithEventLoop owns the setup sequence shared by interactive,
+// raw, and headless Parquet traces. The factory preserves the one intentional
+// mode difference: regular traces wire the syscall aggregate source, while
+// headless Parquet has no aggregate sink and leaves that source unwired.
+func setupTraceInfraWithEventLoop(
+	parentCtx context.Context,
+	cfg flags.Config,
+	started chan<- struct{},
+	logln func(...any),
+	buildEventLoop traceEventLoopFactory,
+) (*traceInfra, error) {
 	// Reject a filter the trace cannot honour before touching the kernel:
 	// newEventLoop below matches comm/path patterns against fixed-size kernel
 	// event fields and refuses over-long ones. Doing it here means the caller
@@ -763,7 +781,7 @@ func setupTraceInfra(
 	// already in use" instead of reporting whatever really went wrong.
 	infra.onClose(func() { profiling.stop(logln) })
 
-	el, err := newTraceEventLoop(cfg, bpfModule, logTeardown)
+	el, err := buildEventLoop(cfg, bpfModule, logTeardown)
 	if err != nil {
 		infra.Close()
 		return nil, err

@@ -11,8 +11,9 @@ import (
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
-	"ior/internal/probemanager"
 	"ior/internal/streamrow"
+
+	bpf "github.com/aquasecurity/libbpfgo"
 )
 
 // headlessParquetSink streams traced events directly to a Parquet file,
@@ -104,33 +105,31 @@ func runHeadlessParquet(cfg flags.Config) error {
 	cfg = headlessParquetTraceConfig(cfg)
 	logln := newLogger(true)
 
-	ch, ctx, cancel, profiling, el, mgr, cleanup, err := setupHeadlessParquetInfra(cfg, logln)
+	infra, err := setupHeadlessParquetInfra(cfg, logln)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	defer profiling.stop(logln)
-	defer cancel()
+	defer infra.Close()
 
 	recorder := parquet.NewRecorder(parquet.RecorderConfig{})
 	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: parquet.NewFileMetadata("headless")}); err != nil {
 		return err
 	}
 
-	sink := newHeadlessParquetSink(recorder, cancel)
+	sink := newHeadlessParquetSink(recorder, infra.cancel)
 	// sink.configure wires the event loop's print callback to record each pair
 	// to Parquet; the mgr filter wraps it to skip inactive probes.
-	configureEventLoopOutput(el, mgr, sink.configure)
+	configureEventLoopOutput(infra.el, infra.mgr, sink.configure)
 	// startTraceShutdownWatcher returns a done channel that must be drained
 	// before returning to prevent a goroutine leak when ctx is cancelled but
 	// the goroutine has not yet exited.
-	watcherDone := startTraceShutdownWatcher(ctx, true, el, profiling, logln)
+	watcherDone := startTraceShutdownWatcher(infra.ctx, true, infra.el, infra.profiling, logln)
 
 	startTime := time.Now()
-	el.run(ctx, ch)
+	infra.el.run(infra.ctx, infra.ch)
 	totalDuration := time.Since(startTime)
 	<-watcherDone
-	<-profiling.done
+	<-infra.profiling.done
 
 	stopErr := recorder.Stop()
 	if err := sink.err(); err != nil {
@@ -149,67 +148,25 @@ func runHeadlessParquet(cfg flags.Config) error {
 	return nil
 }
 
-// setupHeadlessParquetInfra creates the BPF module, event channel, trace
-// context, profiling control, and event loop for a headless Parquet run.
-// mgr is returned so the caller can pass it to configureEventLoopOutput with
-// the sink callback after the Parquet recorder has been started.
-// cleanup must be deferred by the caller; it stops ring-buffer polling,
-// detaches probes, releases BPF bindings, and stops signal handling.
-func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (
-	ch <-chan []byte,
-	ctx context.Context,
-	cancel context.CancelFunc,
-	profiling *profilingControl,
-	el *eventLoop,
-	mgr *probemanager.Manager,
-	cleanup func(),
-	err error,
-) {
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(context.Background(), cfg)
+// setupHeadlessParquetInfra selects the headless event-loop variant while
+// delegating the complete resource lifecycle to the shared trace setup.
+func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (*traceInfra, error) {
+	return setupTraceInfraWithEventLoop(
+		context.Background(), cfg, nil, logln, newHeadlessParquetEventLoop,
+	)
+}
+
+// newHeadlessParquetEventLoop leaves the syscall aggregate source unwired:
+// headless Parquet records event rows and has no aggregate sink to consume it.
+func newHeadlessParquetEventLoop(
+	cfg flags.Config,
+	bpfModule *bpf.Module,
+	logTeardown func(...any),
+) (*eventLoop, error) {
+	el, err := newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, func() {}, err
+		return nil, err
 	}
-
-	// Teardown errors must stay visible in every mode: the mode-dependent
-	// logln is a no-op in TUI mode, which previously silently discarded
-	// probe-detach failures (audit domain-10 F2).
-	logTeardown := newLogger(true)
-
-	eventCh, rb, err := setupEventChannel(bpfModule)
-	if err != nil {
-		// Probes are already attached (setupBPFModule succeeded), so detach
-		// them too on this early-abort path (audit domain-10 F3). The ring
-		// buffer does not exist yet and no context was created, hence the
-		// explicit nils for rb and stopSignals; the bindings are released
-		// because setupBPFModule already wired them.
-		closeTraceInfra(logTeardown, nil, mgr, releaseBindings, bpfModule, nil)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
-	}
-
-	ctx, cancel, stopSignals := setupTraceContext(context.Background(), cfg, logln)
-
-	profiling, err = setupProfiling(ctx, cfg, nil)
-	if err != nil {
-		cancel()
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
-	}
-
-	el, err = newEventLoop(newEventLoopConfig(cfg))
-	if err != nil {
-		cancel()
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-		return nil, nil, nil, nil, nil, nil, func() {}, err
-	}
-
 	attachRingbufDropCounter(el, bpfModule, logTeardown)
-
-	cleanup = func() {
-		// Teardown order: stop the ring-buffer polling goroutine before the
-		// module is closed, detach probes (failures always logged to stderr —
-		// the mode-dependent logln is a no-op in TUI mode; audit domain-10
-		// F2), release bindings, close the module, then stop signal handling.
-		closeTraceInfra(logTeardown, rb, mgr, releaseBindings, bpfModule, stopSignals)
-	}
-	return eventCh, ctx, cancel, profiling, el, mgr, cleanup, nil
+	return el, nil
 }
