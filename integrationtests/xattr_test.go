@@ -72,18 +72,18 @@ func TestXattrGetxattrat(t *testing.T) {
 // `size` argument is the INPUT value length, NOT a byte count returned by the
 // call. The exit is therefore UNCLASSIFIED (contrast getxattr/listxattr, which
 // DO return byte counts and are READ-classified), so the recorded byte total
-// must be exactly zero. This reuses the xattr-getxattrat scenario, whose
-// workload performs syscall.Setxattr(path, "user.ior", ...) and is traced via
-// xattrTraceArgs ("getxattrat,setxattr,openat").
+// must be exactly zero. This reuses the xattr-getxattr scenario, whose setup
+// performs syscall.Setxattr(path, "user.ior", ...) without requiring the
+// Linux 6.13+ *xattrat syscalls.
 func TestXattrSetxattr(t *testing.T) {
-	result, _ := runScenarioResultWithIorArgs(t, "xattr-getxattrat", []ExpectedEvent{
+	result, _ := runScenarioResultWithIorArgs(t, "xattr-getxattr", []ExpectedEvent{
 		{
 			PathContains: "xattrfile.txt",
 			Tracepoint:   "enter_setxattr",
 			Comm:         "ioworkload",
 			MinCount:     1,
 		},
-	}, xattrTraceArgs)
+	}, xattrGetTraceArgs)
 
 	// The captured path must be the filesystem path, never the xattr name.
 	for _, rec := range result.Records {
