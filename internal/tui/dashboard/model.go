@@ -330,6 +330,9 @@ func (m *Model) handleStreamEditorDone(msg streamEditorDoneMsg) (tea.Model, tea.
 }
 
 func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := m.flamegraphModel.HandleRefreshCompletion(msg, m.activeTab == TabFlame); handled {
+		return m, cmd
+	}
 	if m.activeTab != TabFlame {
 		return m, nil
 	}

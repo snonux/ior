@@ -79,6 +79,52 @@ func TestRefreshFromLiveTrieCmdCoalescesInFlight(t *testing.T) {
 	}
 }
 
+func TestDiscardedStaleRefreshCompletionReleasesInFlightSlot(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(trie, 0)
+	m := NewModel(trie)
+	m.width = 120
+	m.height = 30
+	if !m.RefreshFromLiveTrie() {
+		t.Fatal("expected initial refresh to populate a snapshot")
+	}
+	initialVersion := m.LastVersion()
+
+	coreflamegraph.SeedTestLiveFlameData(trie, 1)
+	cmd := m.RefreshFromLiveTrieCmd()
+	if cmd == nil {
+		t.Fatal("expected background refresh command")
+	}
+	msg := cmd()
+	ready, ok := msg.(flameSnapshotReadyMsg)
+	if !ok {
+		t.Fatalf("refresh command returned %T, want flameSnapshotReadyMsg", msg)
+	}
+	// Change only the current viewport field so the completion is stale without
+	// starting an unrelated resize animation inside the test.
+	m.width = ready.layoutWidth - 1
+	if ready.layoutWidth == m.width {
+		t.Fatal("test setup did not make the completion stale")
+	}
+
+	handled, followup := m.HandleRefreshCompletion(ready, false)
+	if !handled {
+		t.Fatal("expected stale refresh completion to be recognized")
+	}
+	if followup != nil {
+		t.Fatal("expected discarded stale completion not to schedule a command")
+	}
+	if m.refreshInFlight {
+		t.Fatal("discarded stale completion did not release the in-flight slot")
+	}
+	if got := m.LastVersion(); got != initialVersion {
+		t.Fatalf("discarded stale completion applied version %d, want %d", got, initialVersion)
+	}
+	if next := m.RefreshFromLiveTrieCmd(); next == nil {
+		t.Fatal("expected a later refresh to dispatch after stale completion")
+	}
+}
+
 func TestRefreshFromLiveTrieCmdSkippedWhileUserDrives(t *testing.T) {
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)

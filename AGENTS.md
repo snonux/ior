@@ -190,6 +190,20 @@ it advances the trie after `SetLiveTrie`, dispatches the dashboard's
 applied. Without that outer test, deleting the refresh dispatch from
 `handleFlameTick` freezes live updates while a direct command test stays green.
 
+The refresh completion owns the `refreshInFlight` slot even if the user has
+left the Flame tab before it arrives. The dashboard therefore offers every
+completion to `flamegraph.Model.HandleRefreshCompletion`, including while
+another tab is active. An off-tab completion releases the slot but discards its
+snapshot: applying it with existing frames can start an animation, while the
+inactive-tab route deliberately drops animation ticks, leaving animation stuck
+and `lastVersion` current so no later snapshot is requested. The dashboard
+regression starts with an existing rendered snapshot, dispatches a refresh,
+switches away before delivering a current-viewport completion, requires no
+command, version or rendered state to change, then returns to Flame and
+requires a later refresh to dispatch and apply. A separate flamegraph test
+makes a completion stale without starting a resize animation and pins that its
+discard path releases the same in-flight slot.
+
 Pin the *dispatched* path, not only the helper underneath it. The closure
 returned by `RefreshFromLiveTrieCmd()` is its own call site, so an earlier test
 that called `buildSnapshotMsg` directly missed a rewrite of the closure alone.

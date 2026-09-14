@@ -880,6 +880,81 @@ func TestFlameTickDispatchesAndAppliesFlamegraphRefresh(t *testing.T) {
 	}
 }
 
+func TestValidFlameRefreshCompletionOffTabIsDiscardedAndAllowsLaterRefresh(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 0)
+
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(*Model)
+	m.SetLiveTrie(liveTrie)
+	if !m.flamegraphModel.HasSnapshot() {
+		t.Fatal("expected an existing flame snapshot before the asynchronous refresh")
+	}
+	initialVersion := m.flamegraphModel.LastVersion()
+	initialView := m.flamegraphModel.View().Content
+
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 1)
+	wantVersion := liveTrie.Version()
+	next, cmd := m.Update(flameTickMsg{})
+	m = next.(*Model)
+	firstBatch := requireDashboardBatch(t, cmd)
+	if len(firstBatch) < 2 {
+		t.Fatalf("expected tick and background refresh commands, got %d", len(firstBatch))
+	}
+
+	m = pressKey(m, '2')
+	if m.activeTab != TabOverview {
+		t.Fatalf("expected to leave flame tab for overview, got %v", m.activeTab)
+	}
+	for _, batchedCmd := range firstBatch {
+		msg := batchedCmd()
+		var completionCmd tea.Cmd
+		next, completionCmd = m.Update(msg)
+		m = next.(*Model)
+		if completionCmd != nil {
+			t.Fatalf("off-tab batch message %T scheduled a command", msg)
+		}
+	}
+	if got := m.flamegraphModel.LastVersion(); got != initialVersion {
+		t.Fatalf("off-tab completion applied hidden snapshot version %d, want retained version %d", got, initialVersion)
+	}
+	if got := m.flamegraphModel.View().Content; got != initialView {
+		t.Fatal("off-tab completion changed the rendered flamegraph state")
+	}
+
+	m = pressKey(m, '1')
+	if m.activeTab != TabFlame {
+		t.Fatalf("expected to return to flame tab, got %v", m.activeTab)
+	}
+	next, cmd = m.Update(flameTickMsg{})
+	m = next.(*Model)
+	secondBatch := requireDashboardBatch(t, cmd)
+	if len(secondBatch) < 2 {
+		t.Fatalf("expected a later background refresh after returning to Flame, got %d commands", len(secondBatch))
+	}
+	for _, batchedCmd := range secondBatch {
+		next, _ = m.Update(batchedCmd())
+		m = next.(*Model)
+	}
+	if got := m.flamegraphModel.LastVersion(); got != wantVersion {
+		t.Fatalf("later flame refresh version=%d want=%d", got, wantVersion)
+	}
+}
+
+func requireDashboardBatch(t *testing.T, cmd tea.Cmd) tea.BatchMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected dashboard batch command")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("dashboard command returned %T, want tea.BatchMsg", msg)
+	}
+	return batch
+}
+
 func TestSetLiveTriePreloadsInitialSnapshotWithoutVersionChange(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 
