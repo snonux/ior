@@ -67,7 +67,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   close, re-check LRU cap sizing.
 - **Verify:** `mage vet && mage testRace` green; new test with two pids sharing an
   fd number asserting each row keeps its own file.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `7b266b4`): fix confirmed correct
 
 ### B2 — MEDIUM — TUI "trace started" signal fires before the last fallible setup steps — task 32
 
@@ -84,7 +84,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
 - **Verify:** force a late setup failure (oversized comm pattern via filter modal,
   or stale `IOR_BPF_OBJECT`) and assert the TUI surfaces the error instead of an
   empty dashboard; regression test if feasible.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `1eb08df`): fix confirmed correct
 
 ### B3 — LOW — Drop-counter read failures swallowed in headless modes; end-of-run stats then assert "ring buffer drops: 0" — task 42
 
@@ -99,7 +99,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   print "drops: unknown" when reads failed.
 - **Verify:** simulate `Total()` failure in headless mode; stderr shows the warning
   and final stats no longer claim zero drops as fact.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `330694d`): fix confirmed correct
 
 ### Suspicious but unconfirmed (deliberately NOT tasked)
 
@@ -135,7 +135,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   `*EitherName` API; fitness test asserting all stages agree on a rename fixture.
 - **Verify:** `*EitherName` identifiers gone from the tree; cross-stage rename
   fixture test exists and passes.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `00d77f4`): fix confirmed correct
 
 ### D2 — MEDIUM — Comm-resolver timeout documented but not enforced; can hang shutdown — task 62
 
@@ -153,7 +153,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   plumbing and fix the comments. Coordinate with pending task x1 (same file).
 - **Verify:** a resolver stub that blocks forever no longer prevents `shutdown()`
   from returning within the timeout; comments match actual behavior.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `5581959`): fix confirmed correct
 
 ### D3 — MEDIUM — `setupTraceInfra`: 8-value return, four hand-permuted teardown arms — task 72 (depends: 32)
 
@@ -168,7 +168,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   `(*traceInfra, error)`. Land after B2/task 32 (same function).
 - **Verify:** no multi-nil teardown calls remain; error paths are
   `infra.Close(); return err`; behavior on early-abort unchanged (probes detached).
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `8bff09b`): fix confirmed correct
 
 ### D4 — MEDIUM — Dashboard Model: per-tab state bag; tab registry doesn't deliver its no-switch contract — task 82
 
@@ -185,7 +185,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   the pattern); migrate tab by tab; keep the registry comment honest until done.
 - **Verify:** the triplicated sort/reanchor/filter helpers are gone or generic; the
   registry comment matches reality.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `0a9f075`): fix confirmed correct
 
 ### D5 — MEDIUM — Trackers don't own their invariants; eventLoop pokes their internals — task 92 (depends: 22, u1)
 
@@ -204,7 +204,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   `internal/eventloop` / `internal/bpfsetup` / `internal/modes`.
 - **Verify:** no direct field access into tracker internals from `eventloop.go`/
   `ior.go`; map representation defined in exactly one file.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `93161af`): fix confirmed correct
 
 ### D6 — MEDIUM — `internal/runtime` boundary leaks concrete types; runtime downcast — task a2
 
@@ -223,7 +223,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   `StreamBuffer()` to return `runtime.EventSink`; delete the downcast.
 - **Verify:** no `*parquet.Recorder`/`*streamrow.Sequencer` in the runtime
   interface; the type assertion at ior.go:246-253 is gone.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `ed15ee1`): fix confirmed correct
 
 ### D7 — MEDIUM — Mixed value/pointer receivers on TUI Model types — task b2
 
@@ -241,7 +241,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   value-receiver helpers returning `Model`. Coordinate with D4/task 82 (same files).
 - **Verify:** each Model type is single-style; `go vet` copylocks clean; TUI tests
   pass.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commit: `b7fc76b`): fix confirmed correct
 
 ### D8 — MEDIUM — ~150 undocumented exported identifiers — task c2
 
@@ -254,7 +254,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   `event`, `streamrow`. Excludes generated code and `internal/generate/testdata.go`.
 - **Verify:** spot-check the listed identifiers; optionally a doc-comment linter in
   the D9 gate.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (commits: `b796520`, `37e940d`): fix confirmed correct
 
 ### D9 — MEDIUM — No errcheck/lint gate in Mage/CI — task d2
 
@@ -269,7 +269,7 @@ findings**, all tasked below, plus untasked LOW findings at the end.
   explicit (`_ =`); check-or-discard `mgr.Close()` at ior_bpfsetup.go:92.
 - **Verify:** `mage lint` exists, is in the gates, and passes; fresh unchecked
   errors fail the build.
-- [ ] REVIEWED (commit: ______): fix confirmed correct
+- [x] REVIEWED (final hardening commit: `1a8ef17`): fix confirmed correct
 
 ---
 
@@ -375,3 +375,42 @@ encapsulation-via-methods first and leaves the split optional.
    opportunistically.
 6. Mark gate task **e2** done; update this file's checkboxes and append a
    "Review outcome" section with date, commit range, and verdict per finding.
+
+## Review outcome — 2026-09-14
+
+The audit was reviewed from its original base `2ddd880` (including the
+then-uncommitted fd-tracker work later committed in `7b266b4`) through
+`develop` at `37e940d`. The reviewed range is `2ddd880..37e940d` (61 commits).
+All twelve closure dependencies — tasks 22, 32, 42, 52, 62, 72, 82, 92, a2,
+b2, c2 and d2 — are complete.
+
+| Finding | Verdict | Fix and review evidence |
+|---------|---------|-------------------------|
+| B1 / 22 | PASS | `(pid, fd)` tracking and cross-process regressions landed in `7b266b4`. |
+| B2 / 32 | PASS | Start/error ordering landed in `1eb08df` and was hardened through `5ba2ef9`; shared regular/headless setup in `e8bdd89` preserves the invariant. |
+| B3 / 42 | PASS | Headless warning and unknown-counter reporting landed in `330694d` and was hardened through `aaeba32`. |
+| D1 / 52 | PASS | The either-name rule is centralized in `Filter.Matches` by `00d77f4`; the cross-stage rename fixture passes. |
+| D2 / 62 | PASS | Context-bounded procfs reads and prompt shutdown landed in `5581959`. |
+| D3 / 72 | PASS | `traceInfra` lifecycle ownership landed in `8bff09b` and teardown panic/cancel handling was hardened through `b07b456`; `e8bdd89` reuses it for headless Parquet. |
+| D4 / 82 | PASS | Generic per-tab state and registry-owned enter/sort hooks landed in `0a9f075`. |
+| D5 / 92 | PASS | Tracker-owned initialization and setter-based output wiring landed in `93161af`. |
+| D6 / a2 | PASS | Interface-typed runtime capabilities and removal of the downcast landed in `ed15ee1`. |
+| D7 / b2 | PASS | Pointer-only main/dashboard/flamegraph models and value-only tracefilter flow landed in `b7fc76b`; race coverage passes. |
+| D8 / c2 | PASS | The main documentation sweep landed in `b796520`; closure review found and `37e940d` corrected the final two exported-comment omissions. A production-only `golint` comment scan reports zero findings after the stated generated/testdata exclusions. |
+| D9 / d2 | PASS | The lint gate landed in `28cddd8`; behavioural and command-data hardening culminated in `1a8ef17`. `mage lint` reports zero issues and the planted-defect tests pass. |
+
+Part 3 LOW findings were spot-checked. Items 1 and 3 were fixed
+opportunistically; item 5 was addressed and deliberately scoped by D9. Items 4
+and 6 were partially improved by the receiver and trace-infrastructure
+refactors. Items 2 and 7–18 remain accepted, untasked LOW observations. Later
+tasks 14, o3, 04, 24 and 34 are separately recorded follow-ups, not dependencies
+or blockers for this 2026-09-06 audit cycle.
+
+Closure guardrails were rerun at `37e940d`: `mage fmtCheck`, `mage vet`,
+`mage lint` (0 issues), `mage test`, `mage build` and `mage testRace` all passed.
+The five existing `vmlinux.h` declaration warnings and static-linker glibc
+warnings remain unchanged. No privileged live-BPF end-to-end trace was run.
+
+**Final verdict: PASS.** Every tasked finding is fixed and independently
+reviewed, the audit's declared dependency set is complete, and the full local
+guardrail set is green.
