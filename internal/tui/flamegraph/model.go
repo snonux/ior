@@ -316,6 +316,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// HandleRefreshCompletion consumes a background refresh result and reports
+// whether msg was one. A hidden flame tab discards the result while still
+// releasing the in-flight slot; applying it would start an animation whose
+// ticks the dashboard does not route while another tab is active.
+func (m *Model) HandleRefreshCompletion(msg tea.Msg, apply bool) (bool, tea.Cmd) {
+	ready, ok := msg.(flameSnapshotReadyMsg)
+	if !ok {
+		return false, nil
+	}
+	if !apply {
+		m.refreshInFlight = false
+		return true, nil
+	}
+	_, cmd := m.handleSnapshotReady(ready)
+	return true, cmd
+}
+
 // handleSearchInput processes key events while search mode is active.
 // Delegates key dispatch (esc/enter/text) to SearchController, then updates
 // match state and status message on the Model.
