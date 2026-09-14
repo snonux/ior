@@ -20,6 +20,12 @@ const pathSeparatorByte = '\x1f'
 const minFlameWidth = 60
 const maxBarVisualHeight = 3
 
+type childWidth struct {
+	idx   int
+	total uint64
+	raw   float64
+}
+
 // BuildTerminalLayout converts a live trie snapshot into terminal frame cells.
 func BuildTerminalLayout(snapshot *snapshotNode, width, height int) []tuiFrame {
 	return buildTerminalLayoutWithPath(snapshot, width, height, "")
@@ -70,13 +76,22 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		return
 	}
 
+	childrenTotal := childSnapshotTotal(node.Children)
 	layoutTotal := total
+	layoutSpan := span
 	if normalizeRootChildren && depth == 0 {
-		if childrenTotal := childSnapshotTotal(node.Children); childrenTotal > 0 {
+		if childrenTotal > 0 {
 			layoutTotal = childrenTotal
 		}
+	} else if representedTotal := node.Value + childrenTotal; representedTotal > 0 && representedTotal < total {
+		// Snapshot totals retain the contribution of pruned descendants. Size
+		// the remaining children against their represented total so pruning
+		// does not leave a hole in the original child band. A node's own value
+		// determines that band's span and therefore keeps its proportional gap.
+		layoutTotal = childrenTotal
+		layoutSpan = proportionalChildSpan(span, total-node.Value, total)
 	}
-	childWidths := allocateChildWidths(node.Children, layoutTotal, span)
+	childWidths := allocateChildWidths(node.Children, layoutTotal, layoutSpan)
 	cursor := col
 	for idx, child := range node.Children {
 		childWidth := childWidths[idx]
@@ -88,6 +103,17 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		collectTerminalLayout(out, child, rootTotal, height, depth+1, cursor, childPath, childWidth, false)
 		cursor += childWidth
 	}
+}
+
+func proportionalChildSpan(span int, childTotal, parentTotal uint64) int {
+	if span <= 0 || childTotal == 0 || parentTotal == 0 {
+		return 0
+	}
+	if childTotal >= parentTotal {
+		return span
+	}
+	childSpan := int(math.Floor(float64(span) * (float64(childTotal) / float64(parentTotal))))
+	return max(1, childSpan)
 }
 
 func childSnapshotTotal(children []*snapshotNode) uint64 {
@@ -104,18 +130,15 @@ func allocateChildWidths(children []*snapshotNode, parentTotal uint64, span int)
 		return widths
 	}
 
-	type childWidth struct {
-		idx   int
-		total uint64
-		raw   float64
-	}
 	items := make([]childWidth, 0, len(children))
+	childrenTotal := uint64(0)
 	used := 0
 	for idx, child := range children {
 		total := snapshotTotal(child)
 		if total == 0 {
 			continue
 		}
+		childrenTotal += total
 		raw := float64(span) * (float64(total) / float64(parentTotal))
 		width := int(math.Floor(raw))
 		if width > 0 {
@@ -131,18 +154,69 @@ func allocateChildWidths(children []*snapshotNode, parentTotal uint64, span int)
 	// If proportional rounding culled every child, surface top contributors so
 	// the user can still navigate beyond the root frame.
 	if used == 0 {
-		slices.SortFunc(items, func(a, b childWidth) int {
-			if a.total != b.total {
-				return cmp.Compare(b.total, a.total)
-			}
-			return cmp.Compare(a.idx, b.idx)
-		})
-		visible := min(span, len(items))
-		for i := 0; i < visible; i++ {
-			widths[items[i].idx] = 1
-		}
+		fallbackSpan := proportionalChildSpan(span, childrenTotal, parentTotal)
+		keepLargestChildrenVisible(widths, items, fallbackSpan)
+		return widths
 	}
+
+	partitionVisibleChildWidths(widths, items, childrenTotal, parentTotal, span)
 	return widths
+}
+
+func keepLargestChildrenVisible(widths []int, items []childWidth, span int) {
+	slices.SortFunc(items, func(a, b childWidth) int {
+		if a.total != b.total {
+			return cmp.Compare(b.total, a.total)
+		}
+		return cmp.Compare(a.idx, b.idx)
+	})
+	visible := min(span, len(items))
+	for i := 0; i < visible; i++ {
+		widths[items[i].idx] = 1
+	}
+}
+
+func partitionVisibleChildWidths(widths []int, items []childWidth, childrenTotal, parentTotal uint64, span int) {
+	// Floors deliberately cull sub-cell children, but the cells lost to
+	// rounding (and to those culled children) still belong to this child band.
+	// Reallocate the band's target span among the already-visible children so
+	// their widths form a stable, gap-free partition without reviving noise.
+	targetSpan := span
+	if childrenTotal < parentTotal {
+		targetSpan = int(math.Floor(float64(span) * (float64(childrenTotal) / float64(parentTotal))))
+	}
+	visibleItems := items[:0]
+	visibleTotal := uint64(0)
+	for _, item := range items {
+		if widths[item.idx] == 0 {
+			continue
+		}
+		visibleItems = append(visibleItems, item)
+		visibleTotal += item.total
+	}
+	if len(visibleItems) == 0 {
+		return
+	}
+	used := 0
+	for idx := range visibleItems {
+		raw := float64(targetSpan) * (float64(visibleItems[idx].total) / float64(visibleTotal))
+		visibleItems[idx].raw = raw
+		width := int(math.Floor(raw))
+		widths[visibleItems[idx].idx] = width
+		used += width
+	}
+	slices.SortFunc(visibleItems, func(a, b childWidth) int {
+		aRemainder := a.raw - math.Floor(a.raw)
+		bRemainder := b.raw - math.Floor(b.raw)
+		if aRemainder != bRemainder {
+			return cmp.Compare(bRemainder, aRemainder)
+		}
+		return cmp.Compare(a.idx, b.idx)
+	})
+	for idx := 0; used < targetSpan; idx++ {
+		widths[visibleItems[idx%len(visibleItems)].idx]++
+		used++
+	}
 }
 
 func snapshotTotal(node *snapshotNode) uint64 {

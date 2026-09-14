@@ -483,6 +483,63 @@ func TestLiveTrieSnapshotJSONPrunesTinyNodes(t *testing.T) {
 	}
 }
 
+func TestLiveTrieSnapshotTreePrunesAtTheConfiguredFractionBoundary(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
+	records := []struct {
+		comm  string
+		count uint64
+	}{
+		{comm: "dominant", count: 1994},
+		{comm: "below", count: 1},
+		{comm: "boundary", count: 2},
+		{comm: "above", count: 3},
+	}
+	for _, record := range records {
+		lt.AddRecord(IterRecord{Comm: record.comm, Cnt: Counter{Count: record.count}})
+	}
+
+	snapshot, _ := lt.SnapshotTree()
+	if got, want := snapshot.Total, uint64(2000); got != want {
+		t.Fatalf("root total = %d, want %d", got, want)
+	}
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{name: "below", want: false},
+		{name: "boundary", want: true},
+		{name: "above", want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := findSnapshotChild(snapshot, tc.name) != nil
+			if got != tc.want {
+				t.Fatalf("node present = %v, want %v at the 0.1%% pruning boundary", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLiveTrieSnapshotTreePrunesAgainstTheRunningRootTotal(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "count")
+	lt.AddRecord(IterRecord{Comm: "target", Cnt: Counter{Count: 2}})
+	lt.AddRecord(IterRecord{Comm: "dominant", Cnt: Counter{Count: 998}})
+
+	partial, _ := lt.SnapshotTree()
+	if findSnapshotChild(partial, "target") == nil {
+		t.Fatal("target should be visible while 2/1000 of the running total")
+	}
+
+	lt.AddRecord(IterRecord{Comm: "dominant", Cnt: Counter{Count: 2000}})
+	completed, _ := lt.SnapshotTree()
+	if got, want := completed.Total, uint64(3000); got != want {
+		t.Fatalf("completed root total = %d, want %d", got, want)
+	}
+	if findSnapshotChild(completed, "target") != nil {
+		t.Fatal("target should be pruned after falling to 2/3000 of the running total")
+	}
+}
+
 func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	const total = 6000
