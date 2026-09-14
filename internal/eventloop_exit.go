@@ -202,19 +202,17 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	return e.finishPair(ep)
 }
 
-// applyFdCloseState updates fd-tracking state for the close syscall. The fd is
-// deregistered only on a SUCCESSFUL close (ret == 0): per close(2), a failed
-// close — most importantly EBADF, "fd isn't a valid open file descriptor" —
-// did not release any descriptor we are tracking, so evicting the mapping there
-// would drop a still-valid fd->path entry and let a later genuine close (or a
-// reuse of the number) resolve against a stale/empty state. This mirrors the
-// ret == 0 gate already applied by applyCloseRangeState for close_range.
+// applyFdCloseState updates fd-tracking state for the close syscall. On Linux,
+// close releases the descriptor even when it later reports errors such as
+// EINTR or EIO; only EBADF means that fd was not an open descriptor. Keeping
+// any other return leaves a stale fd->path entry that can mislabel a later use
+// of the same descriptor number. A malformed exit event leaves state unchanged.
 func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 	if !ep.Is(types.SYS_ENTER_CLOSE) {
 		return
 	}
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok || retEv.Ret != 0 {
+	if !ok || retEv.Ret == -int64(syscall.EBADF) {
 		return
 	}
 	e.fdState().delete(fd, pid)
