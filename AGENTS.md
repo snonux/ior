@@ -427,71 +427,56 @@ committed set contains syscalls that only exist on recent mainline kernels
   `TestTuiTraceStarterSurfacesAFailureArrivingAfterStart`,
   `TestTuiTraceStarterKeepsACancelledStartSilent` and
   `TestTuiTraceStarterReportsAStopEvenWhenTheFailureIsReady`.
-- **The full-screen error view is always quittable, and always says why**:
-  `View` renders `m.lastErr` ahead of the help overlay, every modal and both
-  screens, so once it is set nothing else on the model is on screen. Key
-  handling now matches that precedence: `handleGlobalKeyPress` takes `q`,
-  `ctrl+c` and `esc` (`isErrorScreenQuitKey`) straight to
-  `quitFromErrorScreen` **before** the overlay and modal branches. Until task
-  z3 every one of those keys was swallowed - `canHandleDashboardShortcut`
-  gates on `lastErr == nil` and `shouldRouteQuitToEsc` needs a visible modal,
-  so `handleQuitKeyPress` fell through to its "handled, do nothing" return -
-  and there was no way out of the TUI from the keyboard. (bubbletea answers
-  SIGTERM and SIGINT itself, so a signal from another terminal always worked -
-  which is no help to someone sitting in front of it.)
-  One case is a loss, not a gain: `esc` on the PID picker after a failed
-  `recorderStop` used to clear the error and return to a working dashboard,
-  and now leaves the session. That is the trade the rule forces - the screen
-  the user is looking at answers its own keys - and it is the only escapable
-  error the fix takes away. Seven of the eight sites that set `lastErr` are
-  `recorderStop` failures where the trace is still healthy, so a recoverable
-  variant is worth its own task; an unquittable screen was the worse of the
-  two problems and is the one fixed here.
+- **The full-screen error view owns its keys, and distinguishes fatal from
+  recoverable failures**: `View` renders `m.lastErr` ahead of the help overlay,
+  every modal and both screens. `handleGlobalKeyPress` therefore dispatches its
+  advertised keys through `handleErrorScreenKeyPress` before any invisible
+  overlay, modal or picker can consume them. Before task z3, `q`, `ctrl+c` and
+  `esc` all fell through to a handled/no-op path and the TUI had no keyboard
+  exit (bubbletea still answered a signal from another terminal).
 
-  The route needed no exotic setup: an over-long `-comm` on the CLI failed
-  `setupTraceInfra`'s validation, arrived as `TracingErrorMsg` and set
-  `lastErr` (that particular route is now also refused at parse time, below).
-  Four details are load-bearing:
-  - *Esc quits rather than dismisses.* Clearing `lastErr` and returning to the
-    dashboard was the obvious alternative and is wrong for the common cause: a
-    setup failure means nothing was wired up, so the dashboard behind the
-    error would be live-looking and permanently empty - the symptom this file
-    already calls worse than an error. Quitting is the honest action, and the
-    trace has either not started or is being cancelled on the way out anyway.
-  - *Cleanup is best effort.* `quitFromErrorScreen` runs the same two steps as
-    the dashboard quit path - `recorderStop` and `tracer.stop()` (in that order, matching the dashboard quit; the recorder guards itself with a mutex and a stopOnce, so the order is for symmetry rather than safety) (a no-op
-    when no trace ever started) - but discards the recorder error instead of
-    routing it to `lastErr` and returning. The dashboard path does return
-    without quitting on that error, which is precisely how a broken recorder
-    lands the user on this screen; making the escape depend on the same call
-    succeeding would swallow the key a second time.
-  - *The view names its own way out.* `View` renders a `q / esc  quit` hint
-    under the message; a screen that answers exactly one key and says nothing
-    is what sent the reporter to another terminal in the first place
-    (`TestErrorScreenAdvertisesTheWayOut`).
-  - *The reason outlives the alt screen.* `RunWithTraceStarterConfig` and
-    `RunTestFlamesWithTraceStarterConfig` go through `runProgram`, which
-    returns the final model's `lastErr` (`finalModelError`). The terminal
-    discards the alternate screen on exit, so before this the user quit the
-    error view into a clean shell with no rows, no message and status 0;
-    now `cmd/ior` prints `Failed to run: ...` and exits non-zero, as the raw
-    modes always did for the same failure. Pinned by
-    `TestErrorScreenQuitsOnEveryQuitKey`,
-    `TestErrorScreenQuitOutranksAnOpenModal`,
-    `TestErrorScreenQuitOutranksThePickerCancel`,
-    `TestErrorScreenQuitOutranksTheHelpOverlay`,
-    `TestRunProgramReportsTheFinalModelError`,
-    `TestExportedEntryPointsReportTheError`, `TestErrorScreenQuitCancelsTheTrace`,
-    `TestErrorScreenQuitStopsAnActiveRecording`,
-    `TestErrorScreenQuitSurvivesARecorderThatCannotStop`,
-    `TestOverLongCLICommFilterStaysQuittable`,
-    `TestErrorScreenQuitReportsTheFailureToTheCaller` and
-    `TestCleanExitReportsNoError` (`internal/tui/errorscreen_test.go`).
+  `Model.errorKind` makes the exit decision explicit at the source. A
+  `TracingErrorMsg` is fatal: startup failed, so `esc`, `q` and `ctrl+c` all
+  quit rather than reveal a live-looking dashboard wired to nothing. Each of
+  the seven `recorderStop` failure sites marks the error recoverable: the trace
+  is still usable, so `esc` clears the error and returns, while `q` and
+  `ctrl+c` still quit. Fatal is the zero value, so an accidentally unclassified
+  error fails closed instead of exposing a broken session.
 
-  Not fixed here, and still true: the "Attaching tracepoints..." overlay
-  swallows the quit keys the same way. It is bounded by
-  `defaultStartupTimeout` and resolves itself, so it is a wait rather than a
-  dead end.
+  A recoverable error can cover a re-selection picker whose return bookmark is
+  still pending. The error-screen branch still owns `esc`; its deliberate
+  recovery tail then resumes `cancelPickerToDashboard`, restoring the saved
+  PID/TID and trace-start routing cleanly. This is not permission for the
+  invisible picker to answer the key. The same precedence makes `q`/`ctrl+c`
+  quit from that state rather than behave as picker Back.
+
+  Quit cleanup remains best effort: `quitFromErrorScreen` calls
+  `recorderStop` and then `tracer.stop()`, but ignores a repeated recorder
+  failure so the same broken finalisation cannot swallow the exit again.
+  `lastErr` stays set, and `runProgram` returns it from the final model so
+  `cmd/ior` can print the reason after the alternate screen disappears. The
+  hints match the classification: fatal shows `q / esc  quit`; recoverable
+  shows `esc  back  •  q  quit`.
+
+  The sensitive coverage reaches a real recorder rename failure through the
+  `R` shortcut and pins trace-preserving Esc, q/ctrl+c cleanup and reporting,
+  fatal startup handling, both hints, and error-screen precedence over modal,
+  help and picker routing. See `TestRecorderStopErrorEscReturnsToDashboard`,
+  `TestRecorderStopErrorQuitKeysStillQuit`,
+  `TestRecoverableErrorScreenEscOutranksAndResumesPickerCancel`,
+  `TestRecoverableErrorScreenQuitOutranksPickerCancel`,
+  `TestErrorScreenQuitsOnEveryQuitKey`,
+  `TestErrorScreenQuitOutranksAnOpenModal`,
+  `TestErrorScreenQuitOutranksTheHelpOverlay` and the reporting/cleanup tests in
+  `internal/tui/errorscreen_test.go`.
+
+  The startup PID picker follows the same visible-screen rule: with no pending
+  dashboard return, `q`/`ctrl+c` quit with best-effort cleanup; during a
+  re-selection they remain Back, like `esc`
+  (`TestStartupPIDPickerQuitsOnQuitKeys`,
+  `TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc`). The bounded
+  "Attaching tracepoints..." overlay still swallows quit keys until
+  `defaultStartupTimeout` resolves it; it is a wait rather than a dead end.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
   (`internal/flags/flags.go`) ends in
   `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than

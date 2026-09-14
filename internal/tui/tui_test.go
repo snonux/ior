@@ -146,6 +146,9 @@ func TestTracingErrorMessageClearsAttachingState(t *testing.T) {
 	if updated.lastErr == nil || updated.lastErr.Error() != "boom" {
 		t.Fatalf("expected tracing error to be stored")
 	}
+	if updated.errorKind != errorScreenFatal {
+		t.Fatalf("tracing error kind = %v, want fatal", updated.errorKind)
+	}
 }
 
 func TestViewShowsAttachingAndErrorStates(t *testing.T) {
@@ -157,7 +160,7 @@ func TestViewShowsAttachingAndErrorStates(t *testing.T) {
 	}
 
 	m.attaching = false
-	m.lastErr = errors.New("failed")
+	m.setError(errors.New("failed"), errorScreenFatal)
 	errorView := m.View().Content
 	if !strings.Contains(errorView, "failed") {
 		t.Fatalf("expected error view, got %q", errorView)
