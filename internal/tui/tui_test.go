@@ -2453,6 +2453,13 @@ func TestFallbackWindowSizeNeverOverridesARealSize(t *testing.T) {
 	realSize := tea.WindowSizeMsg{Width: 160, Height: 48}
 	fallback := fallbackWindowSizeMsg{Width: 80, Height: 24}
 
+	t.Run("initial size command marks its result as fallback", func(t *testing.T) {
+		cmd := initialWindowSizeCmd()
+		if _, ok := cmd().(fallbackWindowSizeMsg); !ok {
+			t.Fatal("initialWindowSizeCmd did not produce fallbackWindowSizeMsg")
+		}
+	})
+
 	t.Run("guess after real size is ignored", func(t *testing.T) {
 		m := NewModel(-1, func(context.Context) error { return nil })
 		m.Update(realSize)

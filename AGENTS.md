@@ -145,13 +145,13 @@ peak render latency measured 11.6ms idle, 63.0ms under `-race` and 249.6ms
 under 8x CPU oversubscription, so a loaded machine failed it deterministically and
 `-failfast` then hid every package that had not yet run. What it gates on now
 is load-independent instead — no event lost or double-counted by 10-way
-concurrent ingest, every intermediate snapshot decoding and laying out inside
-the viewport, snapshot totals never going backwards, an exact frame count for
-the completed fixture trie, and a ceiling on the *allocations* one render pass
-costs. The allocation *count* does not move with CPU pressure: across idle,
-`-race` and 8x-16x oversubscription it varied by 0.14% (28917-28958), against a
-33000 ceiling. The byte total takes more work to make load-independent — see
-below.
+concurrent ingest, a deterministically observed partial snapshot, every
+production refresh laying out inside the viewport with a complete ancestry
+index, snapshot totals never going backwards, an exact frame count for the
+completed fixture trie, and ceilings on the allocations one dispatched and
+applied refresh costs. Workers stop at their midpoint until the renderer
+acknowledges a partial snapshot, so that coverage cannot disappear merely
+because ingestion wins a scheduling race.
 
 The exact frame count is what gives the test grip on pruning. The bound it
 replaced — frame count against the viewport's cell count — could not fail, and
@@ -162,23 +162,24 @@ root total, so an early snapshot legitimately keeps more nodes, and how many
 depends on where the render loop's ticks land (330 and 523 on two runs of the
 same fixture). The completed trie is a property of the fixture alone.
 
-Two tests make those bounds transfer to the TUI, and it takes both. The stress
-test drives `SnapshotJSON` + decode; the flame tab drives `SnapshotTree()` and
-skips the round-trip. `TestSnapshotTreeMatchesJSONRoundTrip` pins that the two
-lay out to identical frames, and `TestFlameRefreshUsesTheTreeSnapshot` pins
-that the tab's refresh paths really do call `SnapshotTree` and never the
-round-trip. Neither alone is enough: the equivalence test never touches the
-tab's code, so on its own it would keep passing if the tab stopped calling
-`SnapshotTree` altogether.
+The cost and timing measurements execute `RefreshFromLiveTrieCmd()` and apply
+its `flameSnapshotReadyMsg`, so they cover the production `SnapshotTree`, zoom,
+layout, ancestry and update path rather than the heavier but irrelevant JSON
+round-trip. `TestFlameRefreshUsesTheTreeSnapshot` independently pins that both
+refresh entry points call `SnapshotTree` and never `SnapshotJSON`, and
+`TestFlameTickDispatchesAndAppliesFlamegraphRefresh` starts one level higher:
+it advances the trie after `SetLiveTrie`, dispatches the dashboard's
+`flameTickMsg`, executes the returned batch and requires the new version to be
+applied. Without that outer test, deleting the refresh dispatch from
+`handleFlameTick` freezes live updates while a direct command test stays green.
 
-Pin the *dispatched* path, not the helper underneath it. The dashboard refreshes
-by calling `RefreshFromLiveTrieCmd()` and running the returned `tea.Cmd`; that
-closure is its own call site, and an earlier version of this test called
-`buildSnapshotMsg` directly, so rewriting only the closure to round-trip through
-JSON passed the whole package. Same trap in the same test: `flameSnapshotReadyMsg`
-is a struct value, so `msg == nil` after boxing into `tea.Msg` can never fire —
-assert the message carries a snapshot and frames instead, or the test passes on
-a refresh that renders nothing.
+Pin the *dispatched* path, not only the helper underneath it. The closure
+returned by `RefreshFromLiveTrieCmd()` is its own call site, so an earlier test
+that called `buildSnapshotMsg` directly missed a rewrite of the closure alone.
+Same trap in the returned value: `flameSnapshotReadyMsg` is a struct, so
+`msg == nil` after boxing it in `tea.Msg` can never fire. Assert that it carries
+a snapshot, frames and ancestry, apply it, and assert the model reaches the new
+version.
 
 Be precise about what the equivalence test catches. `SnapshotJSON` is
 `json.Marshal(SnapshotTree())` decoded back into the same struct, so marshal
@@ -204,37 +205,25 @@ finally caught.
 The guess is now a distinct `fallbackWindowSizeMsg` that `Update` applies only
 when no real size has arrived, so the harness renders at the 160x48 it asks for
 and the assertions are written against that width.
-`TestFallbackWindowSizeNeverOverridesARealSize` pins both directions: a guess
-after a real size is ignored, a guess before one still fills in the unknown.
+`TestFallbackWindowSizeNeverOverridesARealSize` pins all three load-bearing
+parts: `initialWindowSizeCmd` emits the distinct fallback type, a guess after a
+real size is ignored, and a guess before one still fills in the unknown.
 
-### The byte ceiling is not load-independent for free
+### The cost ceiling measures the production path
 
-The allocation *count* is genuinely host-independent. The byte total is not:
-`encoding/json` pools its `encodeState` buffers, GC drains that pool, so
-bytes/pass rises with GC frequency and therefore with memory pressure. Left
-alone it reached 1718885-1813350 under `-race` with `GOGC=1` and 16x load — a
-ceiling that measures the machine, which is the defect the task existed to
-remove.
+Measuring the JSON round-trip was both indirect and noisier: it omitted
+production-only work such as ancestry construction, while `encoding/json`'s
+pooled buffers made the byte total depend on GC frequency. The test now measures
+each real refresh between its own `runtime.ReadMemStats` pair, with the event
+that advances the trie version outside the interval. No GC setting is changed.
 
-Three things fix it, and all are load-bearing. `measureStressRenderCost` pins
-**both** GC triggers for the measurement window, restoring each on exit:
-`debug.SetGCPercent(-1)` stops GOGC-driven and sysmon's periodic collections,
-and `debug.SetMemoryLimit(math.MaxInt64)` stops the one `GOMEMLIMIT` forces
-regardless — reachable in any memory-capped container, and worth 1660073-1699908
-bytes under `GOGC=1 GOMEMLIMIT=16MiB` with only the first pin in place. With
-both, non-race holds to 0.45% idle (1466874-1473450) and 1.65% counting the
-worst adversarial run (1491120).
-`stressByteCeilingPercent` (`stress_race_{enabled,disabled}_test.go`) then
-scales the ceiling by 130% under `-race`, covering the residual no pin removes —
-1550467-1589738, including a sample taken while the whole race suite ran
-alongside.
-
-Do not simply widen the byte ceiling instead. Each build catches the
-`childStates` preallocation regression with exactly one ceiling, and not the
-same one: non-race it is 32560-32561 allocs (below the 33000 ceiling) and
-1816954-1823530 bytes, so only the byte ceiling fires; under `-race` the count
-inflates to 43510-43514 and fires while the bytes stay under the scaled
-ceiling.
+The completed fixture costs 25766 allocations / 1408896 bytes per refresh in
+idle non-race runs and 25766 / 1413683 under `-race`. With `GOGC=1`,
+`GOMEMLIMIT=16MiB` and `GOMAXPROCS=128`, five unpinned runs held to
+25772-25777 / 1409618-1410148. The ceilings are 30000 allocations and 1650000
+bytes. Both dimensions matter: removing the `childStates` preallocation in
+`livetrie.go` reaches 29409 / 1758976 outside `-race`, so only the byte ceiling
+catches it there; under `-race` it reaches 40350 / 2113875 and trips both.
 
 ## Demo Pipeline
 

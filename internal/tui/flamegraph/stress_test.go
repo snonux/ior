@@ -3,11 +3,9 @@ package flamegraph
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
 	"runtime"
-	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -27,38 +25,25 @@ const (
 	stressRenderFPS       = 30
 	stressFrameBudget     = time.Second / stressRenderFPS
 
-	// Ceilings for one full render pass over the trie this test builds —
-	// snapshot rebuild, JSON round-trip and terminal layout. Both are
-	// allocation counters rather than wall clock, which is what keeps them
-	// from measuring the host: across idle runs, -race runs and runs under 8x
-	// to 16x CPU oversubscription the pass cost 28917-28958 allocations (a
-	// 0.14% spread), while peak wall-clock render latency over the same
-	// conditions went 11.6ms, 63.0ms and 249.6ms.
+	// Ceilings for one dispatched production refresh over the trie this test
+	// builds: SnapshotTree, zoom handling, terminal layout, ancestry
+	// construction, total extraction, and application of the ready message.
+	// The ingest that advances the trie version happens outside each measured
+	// interval. Allocation counters, unlike wall clock, do not measure how much
+	// CPU the host has left.
 	//
-	// The byte total needed more care. It is not naturally load-independent —
-	// see measureStressRenderCost, which pins both GC triggers to make it so,
-	// and stressByteCeilingPercent for the residual that pinning does not
-	// remove. With those pins the non-race measurement holds to 0.45% idle
-	// (1466874-1473450) and to 1.65% counting the worst adversarial run
-	// (1491120), so stressMaxRenderBytes sits ~1.21x above that worst; -race
-	// scales it up.
+	// The production path measured 25766 allocations / 1408896 bytes in idle
+	// non-race runs and 25766 / 1413683 under -race. Without any GC pinning it
+	// held to 25772-25777 / 1409618-1410148 under GOGC=1,
+	// GOMEMLIMIT=16MiB and GOMAXPROCS=128. The ceilings leave about 16-17%
+	// headroom over those adverse observations.
 	//
-	// Both are tight enough to catch a regression that makes the pass
-	// meaningfully more expensive. json.Marshal -> MarshalIndent lands at
-	// 2572819-2586022 bytes/pass with a two-space indent, and 1989570 with a
-	// tab — the latter under the 2400000 ceiling this replaced, so the
-	// tightening bought a real catch.
-	//
-	// Dropping the childStates preallocation in livetrie.go is caught by
-	// exactly one ceiling in each build, and not the same one. Non-race it is
-	// 32560-32561 allocs — under the 33000 count ceiling — and 1816954-1823530
-	// bytes, so only the byte ceiling fires; that is why the byte ceiling must
-	// not simply be widened. Under -race the race detector's own allocations
-	// invert it: the count inflates to 43510-43514 and fires, while the bytes
-	// land at 2232950-2272218, under the scaled 2340000 ceiling. Neither build
-	// catches it with both.
-	stressMaxRenderAllocs = 33000
-	stressMaxRenderBytes  = 1800000
+	// Dropping the childStates preallocation in livetrie.go demonstrates that
+	// both dimensions matter: non-race rises to 29409 allocations (still below
+	// the count ceiling) and 1758976 bytes (above the byte ceiling); under
+	// -race it rises to 40350 / 2113875 and trips both.
+	stressMaxRenderAllocs = 30000
+	stressMaxRenderBytes  = 1650000
 	stressCostSamples     = 20
 
 	// stressExpectedFrames is how many frames the completed fixture trie lays
@@ -69,19 +54,20 @@ const (
 // stressRenderStats accumulates what the concurrent render loop observed while
 // the ingest workers were still writing into the trie.
 type stressRenderStats struct {
-	err         error
-	samples     int
-	maxFrames   int
-	lastFrames  int
-	lastTotal   uint64
-	total       time.Duration
-	maxDuration time.Duration
+	err            error
+	samples        int
+	partialSamples int
+	maxFrames      int
+	lastFrames     int
+	lastTotal      uint64
+	total          time.Duration
+	maxDuration    time.Duration
 }
 
 // TestStressHighEventRate renders the flamegraph at the live refresh cadence
 // while ten goroutines ingest 100k events into the same trie, and asserts on
 // properties that do not depend on how much CPU the host has left: no event is
-// lost or double-counted, every intermediate snapshot decodes and lays out
+// lost or double-counted, every intermediate snapshot builds and lays out
 // inside the viewport, snapshot totals never go backwards, and one render pass
 // costs a bounded number of allocations. The wall-clock frame budget is
 // measured and logged on every run but only *asserted* under IOR_STRESS_TEST=1
@@ -94,20 +80,48 @@ func TestStressHighEventRate(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 
 	ingestDone := make(chan struct{})
+	partialObserved := make(chan struct{}, 1)
+	releaseFinalHalf := make(chan struct{})
 	renderDone := make(chan stressRenderStats, 1)
-	go func() { renderDone <- runStressRenderLoop(liveTrie, ingestDone) }()
+	go func() { renderDone <- runStressRenderLoop(liveTrie, ingestDone, partialObserved) }()
 
 	var ingestWG sync.WaitGroup
+	var midpointWG sync.WaitGroup
+	midpointWG.Add(stressWorkerCount)
 	for worker := 0; worker < stressWorkerCount; worker++ {
 		worker := worker
 		ingestWG.Add(1)
 		go func() {
 			defer ingestWG.Done()
 			for i := 0; i < stressEventsPerWorker; i++ {
+				if i == stressEventsPerWorker/2 {
+					midpointWG.Done()
+					<-releaseFinalHalf
+				}
 				ingestStressEvent(liveTrie, fmt.Sprintf("worker-%d", worker),
 					uint32(1000+worker), worker*stressEventsPerWorker+i)
 			}
 		}()
+	}
+
+	// Hold every worker at its midpoint until the renderer acknowledges a
+	// partial snapshot. This makes the concurrent-snapshot coverage
+	// deterministic: the token may describe any strict partial snapshot, and
+	// if none arrived during the first half, the stable 50k-event trie gives
+	// the renderer another chance before the workers may finish. A sample-count
+	// or wall-clock delay would put the same host-load flake back into the test
+	// through a side door.
+	midpointWG.Wait()
+	select {
+	case <-partialObserved:
+		close(releaseFinalHalf)
+	case earlyStats := <-renderDone:
+		close(releaseFinalHalf)
+		ingestWG.Wait()
+		if earlyStats.err != nil {
+			t.Fatalf("render loop failed before observing a partial snapshot: %v", earlyStats.err)
+		}
+		t.Fatal("render loop stopped before observing a partial snapshot")
 	}
 	ingestWG.Wait()
 	close(ingestDone)
@@ -115,6 +129,9 @@ func TestStressHighEventRate(t *testing.T) {
 
 	if stats.err != nil {
 		t.Fatalf("render loop failed: %v", stats.err)
+	}
+	if stats.partialSamples == 0 {
+		t.Fatal("render loop observed no partial snapshot during concurrent ingest")
 	}
 	// The final sample renders the completed trie, so its frame count is a
 	// property of the fixture rather than of the host: 321 idle, under -race
@@ -155,22 +172,32 @@ func TestStressHighEventRate(t *testing.T) {
 }
 
 // runStressRenderLoop renders at the live refresh cadence until ingestDone is
-// closed, then renders once more so the final trie is covered too. It checks
-// the per-sample invariants itself because they must hold for every
-// intermediate snapshot, not only the last one.
-func runStressRenderLoop(liveTrie *coreflamegraph.LiveTrie, ingestDone <-chan struct{}) stressRenderStats {
+// closed, then renders once more when the last sample predates the final trie
+// version. It checks the per-sample invariants itself because they must hold
+// for every intermediate snapshot, not only the last one.
+func runStressRenderLoop(
+	liveTrie *coreflamegraph.LiveTrie,
+	ingestDone <-chan struct{},
+	partialObserved chan<- struct{},
+) stressRenderStats {
 	ticker := time.NewTicker(stressFrameBudget)
 	defer ticker.Stop()
 
+	model := NewModel(liveTrie)
+	model.SetViewport(stressViewWidth, stressViewHeight)
 	stats := stressRenderStats{}
 	for {
-		if stats.err = renderStressSample(liveTrie, &stats); stats.err != nil {
+		if stats.err = renderStressSample(model, &stats, partialObserved); stats.err != nil {
 			return stats
 		}
 		select {
 		case <-ingestDone:
-			// One last pass over the completed trie.
-			stats.err = renderStressSample(liveTrie, &stats)
+			// Take one last pass when the preceding snapshot raced ahead of
+			// the final writes. If it already captured the completed trie, no
+			// production refresh would be dispatched for the same version.
+			if model.LastVersion() != liveTrie.Version() {
+				stats.err = renderStressSample(model, &stats, partialObserved)
+			}
 			return stats
 		case <-ticker.C:
 		}
@@ -178,14 +205,21 @@ func runStressRenderLoop(liveTrie *coreflamegraph.LiveTrie, ingestDone <-chan st
 }
 
 // renderStressSample runs one render pass and folds it into stats, failing on
-// any snapshot that cannot be decoded, lays out beyond the viewport, or
+// any snapshot that cannot be built, lays out beyond the viewport, or
 // reports a total outside the append-only range the trie guarantees.
-func renderStressSample(liveTrie *coreflamegraph.LiveTrie, stats *stressRenderStats) error {
+func renderStressSample(
+	model *Model,
+	stats *stressRenderStats,
+	partialObserved chan<- struct{},
+) error {
 	start := time.Now()
-	snapshot, frames, err := renderStressFrame(liveTrie)
+	snapshot, frames, changed, err := renderStressFrame(model)
 	elapsed := time.Since(start)
 	if err != nil {
 		return err
+	}
+	if !changed {
+		return nil
 	}
 	if err := frameBoundsError(frames, stressViewWidth, stressViewHeight); err != nil {
 		return err
@@ -197,6 +231,13 @@ func renderStressSample(liveTrie *coreflamegraph.LiveTrie, stats *stressRenderSt
 	if snapshot.Total > stressTotalEvents {
 		return fmt.Errorf("snapshot total exceeds the ingested events: got=%d max=%d",
 			snapshot.Total, stressTotalEvents)
+	}
+	if snapshot.Total > 0 && snapshot.Total < stressTotalEvents {
+		stats.partialSamples++
+		select {
+		case partialObserved <- struct{}{}:
+		default:
+		}
 	}
 	stats.lastTotal = snapshot.Total
 	stats.samples++
@@ -211,18 +252,57 @@ func renderStressSample(liveTrie *coreflamegraph.LiveTrie, stats *stressRenderSt
 	return nil
 }
 
-// renderStressFrame runs the JSON snapshot pipeline — SnapshotJSON, decode,
-// BuildTerminalLayout — end to end.
-//
-// This is the path external consumers take, not the one the flame tab takes:
-// the tab calls SnapshotTree() and skips the marshal/unmarshal round-trip.
-// Both start from the same buildSnapshot output, and
-// TestSnapshotTreeMatchesJSONRoundTrip pins that the two produce identical
-// layouts, so the cost and pruning bounds measured here carry over to the tab.
-// The JSON form is used here because the round-trip also exercises the
-// SnapshotNode JSON tags, and because decoding is what catches a snapshot torn
-// by a concurrent ingest.
-func renderStressFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []tuiFrame, error) {
+// renderStressFrame runs and applies the production refresh command end to end:
+// SnapshotTree, zoom handling, terminal layout, ancestry construction, total
+// extraction, and the ready-message update dispatched by the dashboard.
+// A false changed result is the production no-op for an unchanged trie.
+func renderStressFrame(model *Model) (*snapshotNode, []tuiFrame, bool, error) {
+	sourceVersion := uint64(0)
+	if model.liveTrie != nil {
+		sourceVersion = model.liveTrie.Version()
+	}
+	cmd := model.RefreshFromLiveTrieCmd()
+	if cmd == nil {
+		switch {
+		case model.liveTrie == nil:
+			return nil, nil, false, fmt.Errorf("refresh source disappeared")
+		case model.refreshInFlight:
+			return nil, nil, false, fmt.Errorf("refresh remained in flight after applying its result")
+		case model.paused && model.snapshot != nil:
+			return nil, nil, false, fmt.Errorf("stress model became paused")
+		case model.userDriving() && model.snapshot != nil:
+			return nil, nil, false, fmt.Errorf("stress model unexpectedly entered the user-driving window")
+		case model.snapshot != nil && model.LastVersion() == sourceVersion:
+			return nil, nil, false, nil
+		}
+		return nil, nil, false, fmt.Errorf(
+			"refresh command was not dispatched for model version %d and source version %d",
+			model.LastVersion(), sourceVersion,
+		)
+	}
+	msg := cmd()
+	ready, ok := msg.(flameSnapshotReadyMsg)
+	if !ok {
+		return nil, nil, false, fmt.Errorf("snapshot job returned %T, want flameSnapshotReadyMsg", msg)
+	}
+	if ready.snapshot == nil {
+		return nil, nil, false, fmt.Errorf("snapshot job returned no snapshot")
+	}
+	if len(ready.ancestry.parent) != len(ready.targetFrames) {
+		return nil, nil, false, fmt.Errorf("snapshot ancestry has %d entries for %d frames",
+			len(ready.ancestry.parent), len(ready.targetFrames))
+	}
+	next, _ := model.Update(ready)
+	if next != model {
+		return nil, nil, false, fmt.Errorf("snapshot update returned a different model %T", next)
+	}
+	return ready.snapshot, ready.targetFrames, true, nil
+}
+
+// renderStressJSONFrame runs the external-consumer snapshot pipeline. Keeping
+// it separate from renderStressFrame makes JSON fidelity a correctness check
+// without mistaking its allocation profile for the TUI refresh cost.
+func renderStressJSONFrame(liveTrie Snapshotter) (*snapshotNode, []tuiFrame, error) {
 	payload, _ := liveTrie.SnapshotJSON()
 	var snapshot snapshotNode
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
@@ -231,55 +311,50 @@ func renderStressFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []tuiF
 	return &snapshot, BuildTerminalLayout(&snapshot, stressViewWidth, stressViewHeight), nil
 }
 
-// measureStressRenderCost bounds the cost of one render pass in allocations
-// instead of nanoseconds. Each pass ingests one more event first so the trie
-// version moves and SnapshotJSON cannot serve its cache — that is what the
-// live refresh does while events are streaming in.
+// measureStressRenderCost bounds the cost of the dispatched production refresh
+// in allocations instead of nanoseconds. Each pass ingests one more event
+// before the measurement so the trie version moves, then executes
+// RefreshFromLiveTrieCmd and applies its result exactly as the dashboard does.
 func measureStressRenderCost(t *testing.T, liveTrie *coreflamegraph.LiveTrie) {
 	t.Helper()
 
-	// Disable GC for the measurement window. encoding/json keeps its
-	// encodeState buffers in a sync.Pool, which GC drains; the more often GC
-	// runs, the more of those buffers each pass has to allocate afresh. That
-	// makes bytes/pass a function of GC frequency - and so of CPU pressure and
-	// of -race's memory overhead - which is exactly the host-dependence this
-	// test exists to avoid. With the collector off the pass allocates the same
-	// bytes every time, so the ceiling gates the code and not the machine.
-	//
-	// Both pins are needed. SetGCPercent(-1) stops GOGC-triggered and
-	// sysmon's periodic forced collections, but GOMEMLIMIT still triggers one
-	// regardless, which is reachable in any memory-capped container: with only
-	// the GC-percent pin in place the pass measured 1660073-1699908 bytes under
-	// GOGC=1 GOMEMLIMIT=16MiB (how close it gets depends on the host's memory
-	// pressure), against an 1800000 ceiling.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64))
+	model := NewModel(liveTrie)
+	model.SetViewport(stressViewWidth, stressViewHeight)
+	if !model.RefreshFromLiveTrie() {
+		t.Fatal("render cost setup did not load the baseline snapshot")
+	}
 
 	runtime.GC()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
+	var totalAllocs, totalBytes uint64
 	for i := 0; i < stressCostSamples; i++ {
 		ingestStressEvent(liveTrie, "worker-0", 1000, stressTotalEvents+i)
-		_, frames, err := renderStressFrame(liveTrie)
+
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, frames, changed, err := renderStressFrame(model)
 		if err != nil {
 			t.Fatalf("render cost sample %d failed: %v", i, err)
+		}
+		if !changed {
+			t.Fatalf("render cost sample %d did not dispatch after ingest", i)
 		}
 		if len(frames) == 0 {
 			t.Fatalf("render cost sample %d produced no frames", i)
 		}
+		runtime.ReadMemStats(&after)
+		totalAllocs += after.Mallocs - before.Mallocs
+		totalBytes += after.TotalAlloc - before.TotalAlloc
 	}
-	runtime.ReadMemStats(&after)
 
-	allocs := (after.Mallocs - before.Mallocs) / stressCostSamples
-	bytesPerPass := (after.TotalAlloc - before.TotalAlloc) / stressCostSamples
-	byteCeiling := stressMaxRenderBytes * stressByteCeilingPercent() / 100
+	allocs := totalAllocs / stressCostSamples
+	bytesPerPass := totalBytes / stressCostSamples
 	t.Logf("render cost: allocs/pass=%d bytes/pass=%d (ceilings %d / %d)",
-		allocs, bytesPerPass, stressMaxRenderAllocs, byteCeiling)
+		allocs, bytesPerPass, stressMaxRenderAllocs, stressMaxRenderBytes)
 	if allocs > stressMaxRenderAllocs {
 		t.Errorf("render pass allocates too much: allocs/pass=%d ceiling=%d", allocs, stressMaxRenderAllocs)
 	}
-	if bytesPerPass > byteCeiling {
-		t.Errorf("render pass allocates too many bytes: bytes/pass=%d ceiling=%d", bytesPerPass, byteCeiling)
+	if bytesPerPass > stressMaxRenderBytes {
+		t.Errorf("render pass allocates too many bytes: bytes/pass=%d ceiling=%d", bytesPerPass, stressMaxRenderBytes)
 	}
 }
 
@@ -342,7 +417,7 @@ func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
 	}
 
 	tree, treeVersion := liveTrie.SnapshotTree()
-	decoded, _, err := renderStressFrame(liveTrie)
+	decoded, _, err := renderStressJSONFrame(liveTrie)
 	if err != nil {
 		t.Fatalf("JSON snapshot path failed: %v", err)
 	}
@@ -393,13 +468,12 @@ func (c *countingTrie) SnapshotJSON() ([]byte, uint64) {
 // TestFlameRefreshUsesTheTreeSnapshot pins that the flame tab's refresh paths
 // take SnapshotTree and never the JSON round-trip.
 //
-// This is what lets the stress test's cost and frame-count bounds transfer to
-// the TUI. Those bounds are measured over the JSON path (see
-// renderStressFrame); together with TestSnapshotTreeMatchesJSONRoundTrip, this
-// is what stops that from being a measurement of a pipeline the tab does not
-// run. It also guards the performance property the tree API exists for: a
-// refresh that fell back to SnapshotJSON would marshal and re-parse the whole
-// trie on every tick.
+// The stress test measures this production path directly through
+// RefreshFromLiveTrieCmd. This spy independently guards the performance
+// property the tree API exists for: a refresh that fell back to SnapshotJSON
+// would marshal and re-parse the whole trie on every tick. The dashboard-level
+// TestFlameTickDispatchesAndAppliesFlamegraphRefresh pins the outer tick
+// dispatch that reaches this command.
 func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
 	t.Parallel()
 

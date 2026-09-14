@@ -844,21 +844,39 @@ func TestStreamSpaceUnpauseSchedulesStreamTick(t *testing.T) {
 	}
 }
 
-func TestFlameTickRefreshesFlamegraphModel(t *testing.T) {
+func TestFlameTickDispatchesAndAppliesFlamegraphRefresh(t *testing.T) {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
-	liveTrie.Reset()
 
-	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
 	m.SetLiveTrie(liveTrie)
 	m.activeTab = TabFlame
+	initialVersion := m.flamegraphModel.LastVersion()
+	coreflamegraph.SeedTestFlameData(liveTrie)
+	wantVersion := liveTrie.Version()
+	if wantVersion == initialVersion {
+		t.Fatal("seed data did not advance the live trie version")
+	}
 
 	next, cmd := m.Update(flameTickMsg{})
 	model := next.(*Model)
 	if cmd == nil {
 		t.Fatalf("expected flame tick to schedule next tick command")
 	}
-	if got, want := model.flamegraphModel.LastVersion(), liveTrie.Version(); got != want {
-		t.Fatalf("expected flame model version %d, got %d", want, got)
+	if got := model.flamegraphModel.LastVersion(); got != initialVersion {
+		t.Fatalf("flame tick applied the background refresh synchronously: version=%d want=%d", got, initialVersion)
+	}
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("flame tick returned a non-batch command")
+	}
+	for _, batchedCmd := range batch {
+		msg := batchedCmd()
+		next, _ = model.Update(msg)
+		model = next.(*Model)
+	}
+	if got := model.flamegraphModel.LastVersion(); got != wantVersion {
+		t.Fatalf("dashboard did not dispatch and apply the flame refresh: version=%d want=%d", got, wantVersion)
 	}
 }
 
