@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"syscall"
 
@@ -612,13 +613,13 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 	return e.finishPair(ep)
 }
 
-// handleFcntlExit applies the fd-state effect of the command (F_SETFL flag
-// update, F_DUPFD/F_DUPFD_CLOEXEC descriptor registration) before filtering the
-// pair - see handleFdExit for why the ordering matters. F_SETFL belongs to the
-// same class even though no filter dimension reads flags: for a descriptor
-// known only to the procfs cache it is the call that promotes the entry into
-// the fd table, so behind the checkpoint a dropped row left that promotion, and
-// the new flags with it, unrecorded.
+// handleFcntlExit applies the fd-state effect of the command (F_GETFL flag
+// resynchronization, F_SETFL flag update, F_DUPFD/F_DUPFD_CLOEXEC descriptor
+// registration) before filtering the pair - see handleFdExit for why the
+// ordering matters. The flag commands belong to the same class even though no
+// filter dimension reads flags: for a descriptor known only to the procfs
+// cache they promote the entry into the fd table, so behind the checkpoint a
+// dropped row left that promotion, and the new flags with it, unrecorded.
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
@@ -651,6 +652,19 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 
 	// See fcntl(2) for implementation details
 	switch fcntlEv.Cmd {
+	case syscall.F_GETFL:
+		// Unlike F_SETFL's partial update, a successful F_GETFL return is the
+		// kernel's complete authoritative flag word. Replace even an unknown or
+		// stale word, and promote a procfs-resolved entry into the fd table so
+		// later rows inherit it. Linux returns this value as an int; reject a
+		// malformed raw event that cannot be represented by FdFile's int32 word.
+		if retEvent.Ret > math.MaxInt32 {
+			e.recyclePair(ep, "Dropped malformed fcntl F_GETFL return value")
+			return false
+		}
+		fdFile.SetFlags(int32(retEvent.Ret))
+		ep.File = fdFile
+		e.fdState().set(fd, fcntlEv.Pid, fdFile)
 	case syscall.F_SETFL:
 		// F_SETFL changes the settable status flags only; the access mode and
 		// the creation flags stay exactly as open(2) set them. Merge, do not

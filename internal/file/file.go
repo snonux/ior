@@ -152,8 +152,8 @@ func (f *FdFile) FD() int32 {
 	return f.fd
 }
 
-// SetFlags replaces the flag word outright. Use MergeFlags for the
-// fcntl(2)-shaped partial update.
+// SetFlags replaces the flag word outright. This is the update shape of an
+// authoritative F_GETFL result; use MergeFlags for F_SETFL's partial update.
 func (f *FdFile) SetFlags(flags int32) {
 	f.flags = Flags(flags)
 }
