@@ -1,7 +1,9 @@
 package flamegraph
 
 import (
+	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -62,6 +64,154 @@ func TestBuildTerminalLayoutWidthScaling(t *testing.T) {
 	}
 }
 
+func TestBuildTerminalLayoutProducesAStableDepthFirstOrder(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 12,
+		Children: []*snapshotNode{
+			{
+				Name:  "zeta",
+				Total: 7,
+				Children: []*snapshotNode{
+					{Name: "zeta-two", Total: 4},
+					{Name: "zeta-one", Total: 3},
+				},
+			},
+			{Name: "alpha", Total: 5},
+		},
+	}
+	want := []string{
+		"root",
+		"root" + pathSeparator + "zeta",
+		"root" + pathSeparator + "zeta" + pathSeparator + "zeta-two",
+		"root" + pathSeparator + "zeta" + pathSeparator + "zeta-one",
+		"root" + pathSeparator + "alpha",
+	}
+
+	for run := 0; run < 3; run++ {
+		frames := BuildTerminalLayout(snapshot, 120, 10)
+		got := make([]string, 0, len(frames))
+		for _, frame := range frames {
+			got = append(got, frame.Path)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("run %d paths = %q, want stable depth-first order %q", run, got, want)
+		}
+	}
+}
+
+func TestBuildTerminalLayoutPartitionsAParentSpanAfterRounding(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 3,
+		Children: []*snapshotNode{
+			{Name: "first", Total: 1},
+			{Name: "second", Total: 1},
+			{Name: "third", Total: 1},
+		},
+	}
+
+	frames := BuildTerminalLayout(snapshot, 10, 4)
+	children := framesAtRowRenderer(frames, 1)
+	if got, want := len(children), 3; got != want {
+		t.Fatalf("depth-one frame count = %d, want %d", got, want)
+	}
+	assertFramesPartitionSpan(t, children, 0, 10)
+	if got, want := []int{children[0].Width, children[1].Width, children[2].Width}, []int{4, 3, 3}; !slices.Equal(got, want) {
+		t.Fatalf("equal child widths = %v, want stable remainder allocation %v", got, want)
+	}
+}
+
+func TestBuildTerminalLayoutLeavesNoGapForAPrunedSubtree(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{Name: "visible-a", Total: 60},
+			{Name: "visible-b", Total: 30},
+			// The missing ten samples model a child omitted by LiveTrie pruning.
+		},
+	}
+
+	frames := BuildTerminalLayout(snapshot, 100, 4)
+	children := framesAtRowRenderer(frames, 1)
+	if got, want := len(children), 2; got != want {
+		t.Fatalf("depth-one frame count = %d, want %d", got, want)
+	}
+	assertFramesPartitionSpan(t, children, 0, 100)
+	if got, want := []int{children[0].Width, children[1].Width}, []int{67, 33}; !slices.Equal(got, want) {
+		t.Fatalf("visible child widths = %v, want pruned share redistributed as %v", got, want)
+	}
+}
+
+func TestBuildTerminalLayoutRedistributesPrunedShareWithoutChangingSelfValueGap(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Value: 10,
+		Total: 100,
+		Children: []*snapshotNode{
+			{Name: "visible-a", Total: 50},
+			{Name: "visible-b", Total: 30},
+			// The missing ten samples model a child omitted by LiveTrie pruning.
+		},
+	}
+
+	frames := BuildTerminalLayout(snapshot, 100, 4)
+	children := framesAtRowRenderer(frames, 1)
+	if got, want := len(children), 2; got != want {
+		t.Fatalf("depth-one frame count = %d, want %d", got, want)
+	}
+	assertFramesPartitionSpan(t, children, 0, 90)
+	if got, want := []int{children[0].Width, children[1].Width}, []int{56, 34}; !slices.Equal(got, want) {
+		t.Fatalf("visible child widths = %v, want pruned share redistributed within self-time band as %v", got, want)
+	}
+}
+
+func TestBuildTerminalLayoutPreservesAParentSelfValueGap(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Value: 10,
+		Total: 100,
+		Children: []*snapshotNode{
+			{Name: "child-a", Total: 60},
+			{Name: "child-b", Total: 30},
+		},
+	}
+
+	frames := BuildTerminalLayout(snapshot, 100, 4)
+	children := framesAtRowRenderer(frames, 1)
+	if got, want := len(children), 2; got != want {
+		t.Fatalf("depth-one frame count = %d, want %d", got, want)
+	}
+	if got, want := children[len(children)-1].Col+children[len(children)-1].Width, 90; got != want {
+		t.Fatalf("children end at column %d, want %d so parent self value keeps its span", got, want)
+	}
+}
+
+func TestBuildTerminalLayoutClampsADeepTreeToViewportHeight(t *testing.T) {
+	const (
+		viewportHeight = 4
+		fixtureDepth   = 16
+	)
+	root := &snapshotNode{Name: "root", Total: 1}
+	node := root
+	for depth := 1; depth <= fixtureDepth; depth++ {
+		child := &snapshotNode{Name: "child", Total: 1}
+		node.Children = []*snapshotNode{child}
+		node = child
+	}
+
+	frames := BuildTerminalLayout(root, 80, viewportHeight)
+	if got, want := len(frames), viewportHeight; got != want {
+		t.Fatalf("deep layout frame count = %d, want %d viewport rows", got, want)
+	}
+	for depth, frame := range frames {
+		if frame.Row != depth {
+			t.Fatalf("frame %d row = %d, want %d", depth, frame.Row, depth)
+		}
+	}
+}
+
 func TestBuildTerminalLayoutCullsSubCellFramesAndRespectsHeight(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",
@@ -106,6 +256,45 @@ func TestBuildTerminalLayoutKeepsChildrenVisibleWhenRoundingWouldCullAll(t *test
 	}
 	if depthOne == 0 {
 		t.Fatalf("expected at least one visible depth-1 frame, got none")
+	}
+}
+
+func TestBuildTerminalLayoutCapsAllSubCellFallbackToTheChildBand(t *testing.T) {
+	tests := []struct {
+		name      string
+		rootTotal uint64
+		rootValue uint64
+	}{
+		{name: "proportional band", rootTotal: 10000, rootValue: 9900},
+		{name: "one-cell minimum", rootTotal: 1000000, rootValue: 999900},
+		{name: "one-cell minimum after pruning", rootTotal: 1000000, rootValue: 999800},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			children := make([]*snapshotNode, 0, 100)
+			for idx := 0; idx < 100; idx++ {
+				children = append(children, &snapshotNode{Name: fmt.Sprintf("child-%03d", idx), Total: 1})
+			}
+			snapshot := &snapshotNode{
+				Name:     "root",
+				Value:    tc.rootValue,
+				Total:    tc.rootTotal,
+				Children: children,
+			}
+
+			frames := BuildTerminalLayout(snapshot, 120, 4)
+			depthOne := framesAtRowRenderer(frames, 1)
+			if got, want := len(depthOne), 1; got != want {
+				t.Fatalf("fallback child count = %d, want %d within the proportional child band", got, want)
+			}
+			child := depthOne[0]
+			if got, want := child.Path, "root"+pathSeparator+"child-000"; got != want {
+				t.Fatalf("fallback child = %q, want stable first contributor %q", got, want)
+			}
+			if got, want := child.Col+child.Width, 1; got != want {
+				t.Fatalf("fallback band ends at column %d, want %d", got, want)
+			}
+		})
 	}
 }
 
@@ -614,6 +803,33 @@ func mustFindFrame(t *testing.T, frames []tuiFrame, path string) tuiFrame {
 	}
 	t.Fatalf("frame with path %q not found", path)
 	return tuiFrame{}
+}
+
+func framesAtRowRenderer(frames []tuiFrame, row int) []tuiFrame {
+	var matches []tuiFrame
+	for _, frame := range frames {
+		if frame.Row == row {
+			matches = append(matches, frame)
+		}
+	}
+	return matches
+}
+
+func assertFramesPartitionSpan(t *testing.T, children []tuiFrame, col, width int) {
+	t.Helper()
+	if len(children) == 0 {
+		t.Fatal("expected at least one child frame")
+	}
+	cursor := col
+	for _, child := range children {
+		if child.Col != cursor {
+			t.Fatalf("child %q starts at %d, want contiguous column %d", child.Path, child.Col, cursor)
+		}
+		cursor += child.Width
+	}
+	if want := col + width; cursor != want {
+		t.Fatalf("children end at column %d, want span end %d", cursor, want)
+	}
 }
 
 func hasFrame(frames []tuiFrame, path string) bool {

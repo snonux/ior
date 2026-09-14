@@ -153,14 +153,31 @@ applied refresh costs. Workers stop at their midpoint until the renderer
 acknowledges a partial snapshot, so that coverage cannot disappear merely
 because ingestion wins a scheduling race.
 
-The exact frame count is what gives the test grip on pruning. The bound it
-replaced — frame count against the viewport's cell count — could not fail, and
-with only that bound in place, raising `liveTrieMinFraction` from 0.001 to 0.05
-dropped the flamegraph from 321 frames to 21 and the whole suite still passed.
-Assert the *last* sample, never the peak: pruning is relative to the running
-root total, so an early snapshot legitimately keeps more nodes, and how many
-depends on where the render loop's ticks land (330 and 523 on two runs of the
-same fixture). The completed trie is a property of the fixture alone.
+Direct `LiveTrie` tests now pin the 0.1% pruning rule below, exactly at and
+above its boundary, plus the fact that it is evaluated against the running
+root total: the same node can be visible in a partial snapshot and pruned from
+the completed one. The stress test's exact completed-frame count remains as a
+broader integration sentinel, but is no longer the only test with grip on the
+rule. The bound it replaced — frame count against the viewport's cell count —
+could not fail, and with only that bound in place, raising
+`liveTrieMinFraction` from 0.001 to 0.05 dropped the then-current flamegraph
+from 321 frames to 21 and the whole suite still passed. The completed fixture
+now lays out 381 frames after gap-free child-span allocation. Assert the *last*
+sample, never the peak: pruning is relative to the running root total, so an
+early snapshot
+legitimately keeps more nodes, and how many depends on where the render loop's
+ticks land (330 and 523 on two runs of the same fixture). The completed trie
+is a property of the fixture alone.
+
+The terminal renderer has direct structural coverage as well: snapshot child
+order stays stable and depth-first, rounding partitions a represented child
+band without gaps, omitted pruned totals are redistributed over the retained
+children, and a node's own value still reserves its proportional self-time
+gap. A 16-level fixture rendered into four rows makes the viewport depth clamp
+observable instead of relying on the shallower stress fixture. When every
+child is narrower than one cell, the fallback stays inside that same
+proportional child band and keeps exactly one cell visible when the band would
+otherwise round to zero.
 
 The cost and timing measurements execute `RefreshFromLiveTrieCmd()` and apply
 its `flameSnapshotReadyMsg`, so they cover the production `SnapshotTree`, zoom,
@@ -217,13 +234,13 @@ pooled buffers made the byte total depend on GC frequency. The test now measures
 each real refresh between its own `runtime.ReadMemStats` pair, with the event
 that advances the trie version outside the interval. No GC setting is changed.
 
-The completed fixture costs 25766 allocations / 1408896 bytes per refresh in
-idle non-race runs and 25766 / 1413683 under `-race`. With `GOGC=1`,
-`GOMEMLIMIT=16MiB` and `GOMAXPROCS=128`, five unpinned runs held to
-25772-25777 / 1409618-1410148. The ceilings are 30000 allocations and 1650000
-bytes. Both dimensions matter: removing the `childStates` preallocation in
-`livetrie.go` reaches 29409 / 1758976 outside `-race`, so only the byte ceiling
-catches it there; under `-race` it reaches 40350 / 2113875 and trips both.
+With gap-free child-span allocation, the completed fixture costs 26366
+allocations / 1479201 bytes per refresh in an idle non-race run. With
+`GOGC=1`, `GOMEMLIMIT=16MiB` and `GOMAXPROCS=128`, it held to 26376 / 1480425;
+a full `-race` run also stayed below the ceilings. The ceilings are 30000
+allocations and 1650000 bytes. Both dimensions still matter: removing the
+`childStates` preallocation in `livetrie.go` reaches 30009 / 1829280 outside
+`-race` and trips both.
 
 ## Demo Pipeline
 

@@ -32,23 +32,22 @@ const (
 	// interval. Allocation counters, unlike wall clock, do not measure how much
 	// CPU the host has left.
 	//
-	// The production path measured 25766 allocations / 1408896 bytes in idle
-	// non-race runs and 25766 / 1413683 under -race. Without any GC pinning it
-	// held to 25772-25777 / 1409618-1410148 under GOGC=1,
-	// GOMEMLIMIT=16MiB and GOMAXPROCS=128. The ceilings leave about 16-17%
-	// headroom over those adverse observations.
+	// With gap-free child-span allocation, the production path measured 26366
+	// allocations / 1479201 bytes in an idle non-race run and 26376 / 1480425
+	// with GOGC=1, GOMEMLIMIT=16MiB and GOMAXPROCS=128. A full -race run also
+	// stayed below the ceilings. They leave about 11-14% headroom over the
+	// measured non-race costs.
 	//
 	// Dropping the childStates preallocation in livetrie.go demonstrates that
-	// both dimensions matter: non-race rises to 29409 allocations (still below
-	// the count ceiling) and 1758976 bytes (above the byte ceiling); under
-	// -race it rises to 40350 / 2113875 and trips both.
+	// both dimensions still matter: non-race rises to 30009 allocations and
+	// 1829280 bytes, tripping both ceilings.
 	stressMaxRenderAllocs = 30000
 	stressMaxRenderBytes  = 1650000
 	stressCostSamples     = 20
 
 	// stressExpectedFrames is how many frames the completed fixture trie lays
 	// out. See the assertion in TestStressHighEventRate for why it is exact.
-	stressExpectedFrames = 321
+	stressExpectedFrames = 381
 )
 
 // stressRenderStats accumulates what the concurrent render loop observed while
@@ -134,7 +133,7 @@ func TestStressHighEventRate(t *testing.T) {
 		t.Fatal("render loop observed no partial snapshot during concurrent ingest")
 	}
 	// The final sample renders the completed trie, so its frame count is a
-	// property of the fixture rather than of the host: 321 idle, under -race
+	// property of the fixture rather than of the host: 381 idle, under -race
 	// and under 8x oversubscription alike. maxFrames is not, and must not be
 	// asserted on - pruning is relative to the running root total, so an early
 	// snapshot legitimately keeps more nodes, and how many depends on where
@@ -149,7 +148,9 @@ func TestStressHighEventRate(t *testing.T) {
 	// flamegraph from 321 frames to 21 - most of it gone - and the whole suite
 	// still passed.
 	//
-	// If a fixture or pruning change moves this legitimately, read the new
+	// Direct tests pin the pruning boundary and layout partitioning, but this
+	// exact count remains a useful end-to-end sentinel across both stages. If a
+	// fixture, pruning or layout change moves it legitimately, read the new
 	// number off the failure and update it deliberately.
 	if stats.lastFrames != stressExpectedFrames {
 		t.Errorf("completed trie laid out %d frames, want %d: pruning or the fixture changed",
