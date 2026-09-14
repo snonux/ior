@@ -294,60 +294,88 @@ func TestQuitInvokesTraceStop(t *testing.T) {
 	}
 }
 
-func TestQuitKeyDoesNotExitOnPIDPickerScreen(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
-	if m.screen != ScreenPIDPicker {
-		t.Fatalf("expected default screen to be PID picker")
+func TestStartupPIDPickerQuitsOnQuitKeys(t *testing.T) {
+	tests := []struct {
+		name  string
+		press tea.KeyPressMsg
+	}{
+		{name: "q", press: tea.KeyPressMsg{Code: 'q', Text: "q"}},
+		{name: "ctrl+c", press: tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}},
 	}
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
-	updated := next.(*Model)
-	if cmd != nil {
-		t.Fatalf("expected no quit command outside main dashboard")
-	}
-	if updated.quitting {
-		t.Fatalf("expected q outside main dashboard not to set quitting state")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(-1, func(context.Context) error { return nil })
+			if m.screen != ScreenPIDPicker || m.router.hasPendingReturn() {
+				t.Fatalf("expected startup PID picker with no pending return")
+			}
+			stopCalls := 0
+			m.tracer.traceStop = func() { stopCalls++ }
+
+			next, cmd := m.Update(tt.press)
+			updated := assertQuits(t, next, cmd)
+			if stopCalls != 1 {
+				t.Fatalf("expected startup quit to stop tracing once, got %d calls", stopCalls)
+			}
+			if updated.tracer.traceStop != nil {
+				t.Fatalf("expected startup quit to clear the trace stop function")
+			}
+		})
 	}
 }
 
-func TestQuitKeyOnReselectPIDPickerReturnsToDashboardLikeEsc(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
-	m.screen = ScreenDashboard
-	m.attaching = false
-	m.width = 120
-	m.height = 30
-	m.proc.pid = 1111
-	m.proc.tid = 2222
-	m.dashboard.SetPidFilter(1111)
-
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'2'}[0], Text: string([]rune{'2'})})
-	m = next.(*Model)
-
-	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
-	m = next.(*Model)
-	if m.screen != ScreenPIDPicker {
-		t.Fatalf("expected pid picker screen after reselect, got %v", m.screen)
+func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
+	tests := []struct {
+		name  string
+		press tea.KeyPressMsg
+	}{
+		{name: "q", press: tea.KeyPressMsg{Code: 'q', Text: "q"}},
+		{name: "ctrl+c", press: tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}},
 	}
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
-	updated := next.(*Model)
-	if cmd == nil {
-		t.Fatalf("expected q in reselect picker to return to dashboard and restart tracing")
-	}
-	if updated.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen after q cancel, got %v", updated.screen)
-	}
-	if !updated.attaching {
-		t.Fatalf("expected attaching=true after q cancel")
-	}
-	if updated.quitting {
-		t.Fatalf("expected q in reselect picker to behave like esc, not quit")
-	}
-	if updated.router.pickerReturn != nil {
-		t.Fatalf("expected picker return context to clear after cancel")
-	}
-	if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
-		t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.proc.pid, updated.proc.tid)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(-1, func(context.Context) error { return nil })
+			m.screen = ScreenDashboard
+			m.attaching = false
+			m.width = 120
+			m.height = 30
+			m.proc.pid = 1111
+			m.proc.tid = 2222
+			m.dashboard.SetPidFilter(1111)
+
+			next, _ := m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+			m = next.(*Model)
+			next, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+			m = next.(*Model)
+			if m.screen != ScreenPIDPicker || !m.router.hasPendingReturn() {
+				t.Fatalf("expected reselect PID picker with a pending return")
+			}
+
+			next, cmd := m.Update(tt.press)
+			updated := next.(*Model)
+			if cmd == nil {
+				t.Fatalf("expected %s in reselect picker to restart tracing", tt.name)
+			}
+			if isQuitMsg(cmd()) {
+				t.Fatalf("expected %s in reselect picker to return, not quit", tt.name)
+			}
+			if updated.screen != ScreenDashboard {
+				t.Fatalf("expected dashboard screen after %s cancel, got %v", tt.name, updated.screen)
+			}
+			if !updated.attaching {
+				t.Fatalf("expected attaching=true after %s cancel", tt.name)
+			}
+			if updated.quitting {
+				t.Fatalf("expected %s in reselect picker to behave like esc, not quit", tt.name)
+			}
+			if updated.router.pickerReturn != nil {
+				t.Fatalf("expected picker return context to clear after %s cancel", tt.name)
+			}
+			if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
+				t.Fatalf("expected previous pid/tid filters restored, got pid=%d tid=%d", updated.proc.pid, updated.proc.tid)
+			}
+		})
 	}
 }
 

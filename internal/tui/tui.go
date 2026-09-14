@@ -874,8 +874,9 @@ func (m *Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.C
 }
 
 // handleQuitKeyPress handles the quit key. On the dashboard it stops the
-// trace and quits; when a modal is active the quit key is re-routed as Esc
-// so modals close before the user needs to press q again.
+// trace and quits; on the startup picker it quits with best-effort cleanup;
+// when a modal is active the quit key is re-routed as Esc so modals close
+// before the user needs to press q again.
 func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.canHandleDashboardShortcut(msg) {
 		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
@@ -889,7 +890,17 @@ func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 	if m.shouldRouteQuitToEsc(msg) {
 		return m.routeQuitAsEsc()
 	}
+	if m.screen == ScreenPIDPicker && !m.router.hasPendingReturn() {
+		return m.quitFromStartupPicker()
+	}
 	return m, nil, true
+}
+
+// quitFromStartupPicker leaves the initial picker when there is no dashboard
+// return bookmark. As with the error screen, cleanup is best effort: startup
+// has no useful screen to remain on if cleanup itself fails.
+func (m *Model) quitFromStartupPicker() (tea.Model, tea.Cmd, bool) {
+	return m.quitWithBestEffortCleanup()
 }
 
 // isErrorScreenQuitKey reports whether msg is one of the keys that leave the
@@ -914,6 +925,10 @@ func (m *Model) isErrorScreenQuitKey(msg tea.KeyPressMsg) bool {
 // already looking at. m.lastErr is left untouched so the displayed error is
 // the one runProgram reports to the caller on exit.
 func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
+	return m.quitWithBestEffortCleanup()
+}
+
+func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
 	_ = recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
 	m.quitting = true
 	m.tracer.stop()
