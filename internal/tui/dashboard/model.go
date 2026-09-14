@@ -1109,11 +1109,6 @@ func (m *Model) AutoResetInterval() time.Duration {
 	return m.autoResetEvery
 }
 
-// SetFastRefreshInterval overrides the high-frequency tick cadence used by the
-// stream and flame tabs. A zero or negative value resets the behaviour to the
-// package-level constants (streamRefreshMs / flameRefreshMs). Callers such as
-// RunWithTraceStarterConfig use this to wire in cfg.TUIFastRefreshInterval
-// after construction without changing the NewModelWithConfig call chain.
 // FastRefreshInterval reports the high-frequency tick cadence for the stream
 // and flame tabs (0 when the built-in default applies). It exists so the
 // parent package can assert its startup wiring without running the program.
@@ -1121,9 +1116,10 @@ func (m *Model) FastRefreshInterval() time.Duration {
 	return m.fastRefreshEvery
 }
 
-// SetFastRefreshInterval configures the high-frequency tick cadence for the
-// stream and flame tabs (the -tui-fast-refresh value); zero falls back to
-// the package-level stream/flame constants.
+// SetFastRefreshInterval overrides the high-frequency tick cadence used by the
+// stream and flame tabs. A zero or negative value resets the behaviour to the
+// package-level constants. Callers use this to apply -tui-fast-refresh after
+// constructing the dashboard model.
 func (m *Model) SetFastRefreshInterval(d time.Duration) {
 	if d < 0 {
 		d = 0
