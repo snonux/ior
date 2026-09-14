@@ -2,7 +2,7 @@ package types
 
 import "bytes"
 
-// As data comes in from arrays, converted to slices, there will be null-bytes at the end..
+// StringValue converts a NUL-terminated byte slice to a Go string.
 func StringValue(byteStr []byte) string {
 	idx := bytes.IndexByte(byteStr, 0)
 	if idx == -1 {
