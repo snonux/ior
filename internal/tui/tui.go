@@ -38,6 +38,13 @@ const (
 	ScreenDashboard
 )
 
+type errorScreenKind uint8
+
+const (
+	errorScreenFatal errorScreenKind = iota
+	errorScreenRecoverable
+)
+
 // TraceStarter starts tracing and returns when startup succeeds or fails.
 // It is a type alias for runtime.TraceStarter so TUI callers need not import
 // the runtime package directly.
@@ -477,6 +484,7 @@ type Model struct {
 	attaching bool
 	spin      spinner.Model
 	lastErr   error
+	errorKind errorScreenKind
 
 	// tracer owns trace start/stop and the active context.CancelFunc.
 	tracer traceLifecycle
@@ -758,7 +766,7 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 	case TracingErrorMsg:
 		m.attaching = false
-		m.lastErr = msg.Err
+		m.setError(msg.Err, errorScreenFatal)
 		return m, nil, true
 	case messages.GlobalFilterRequestedMsg:
 		next, cmd := m.applyGlobalFilter(msg.Filter, msg.Action)
@@ -848,19 +856,16 @@ func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 // (model, cmd, handled); when handled is false the caller falls through to
 // screen-specific routing.
 func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
-	// The full-screen error view is a dead end by construction: View renders
+	// The full-screen error view owns its keys by construction: View renders
 	// m.lastErr ahead of the help overlay, every modal and both screens, so
 	// nothing else the model believes is open is on screen. Other keys still
-	// reach whatever is behind it, which is pre-existing and harmless; what
-	// must not depend on it is *leaving*, so that happens here, before the
-	// branches below
-	// route the key into something invisible - or, as before task z3, drop it
-	// on the floor in handleQuitKeyPress and leave a signal from another
-	// terminal as the only way out. (bubbletea does answer SIGTERM/SIGINT, so
-	// "no way out" was always "no way out from the keyboard" - which is the
-	// one that matters to someone sitting in front of it.)
-	if m.lastErr != nil && m.isErrorScreenQuitKey(msg) {
-		return m.quitFromErrorScreen()
+	// reach whatever is behind it, which is pre-existing and harmless. Its
+	// leaving keys are handled here, before any invisible overlay, modal or
+	// picker can consume them.
+	if m.lastErr != nil {
+		if next, cmd, handled := m.handleErrorScreenKeyPress(msg); handled {
+			return next, cmd, true
+		}
 	}
 	if m.helpOverlayVisible {
 		return m.handleHelpOverlayKeyPress(msg)
@@ -900,7 +905,7 @@ func (m *Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.C
 func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.canHandleDashboardShortcut(msg) {
 		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-			m.lastErr = err
+			m.setError(err, errorScreenRecoverable)
 			return m, nil, true
 		}
 		m.quitting = true
@@ -923,18 +928,33 @@ func (m *Model) quitFromStartupPicker() (tea.Model, tea.Cmd, bool) {
 	return m.quitWithBestEffortCleanup()
 }
 
-// isErrorScreenQuitKey reports whether msg is one of the keys that leave the
-// full-screen error view: the quit binding (q, ctrl+c) plus Esc. Esc is
-// included because the view has nowhere to go back to - the trace it reports
-// on either never started or has already been torn down, so "dismiss" and
-// "quit" are the same action - and because Esc is what a user presses first
-// when a screen looks stuck. It is deliberately *not* the option of clearing
-// m.lastErr and returning to the dashboard: for the common cause (a setup
-// failure arriving as TracingErrorMsg) that dashboard is wired to nothing and
-// would render live-looking and permanently empty, which is the exact symptom
-// AGENTS.md records as worse than an error.
-func (m *Model) isErrorScreenQuitKey(msg tea.KeyPressMsg) bool {
-	return key.Matches(msg, m.keys.Quit) || isEscKey(msg)
+// handleErrorScreenKeyPress handles only the keys advertised by the error
+// view. Quit always leaves the program. Esc dismisses an auxiliary recorder
+// failure, but remains a quit for a fatal trace failure because there is no
+// healthy dashboard to return to in that case.
+func (m *Model) handleErrorScreenKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if key.Matches(msg, m.keys.Quit) {
+		return m.quitFromErrorScreen()
+	}
+	if !isEscKey(msg) {
+		return m, nil, false
+	}
+	if m.errorKind == errorScreenRecoverable {
+		return m.dismissRecoverableError()
+	}
+	return m.quitFromErrorScreen()
+}
+
+// dismissRecoverableError returns to the still-usable UI. A recorder failure
+// may have occurred while cancelling a re-selection picker; resume that
+// existing return route so its saved filters and trace restart are preserved.
+func (m *Model) dismissRecoverableError() (tea.Model, tea.Cmd, bool) {
+	m.clearError()
+	if m.screen == ScreenPIDPicker && m.router.hasPendingReturn() {
+		next, cmd := m.cancelPickerToDashboard()
+		return next, cmd, true
+	}
+	return m, nil, true
 }
 
 // quitFromErrorScreen leaves the full-screen error view. It performs the same
@@ -953,6 +973,16 @@ func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
 	m.quitting = true
 	m.tracer.stop()
 	return m, tea.Quit, true
+}
+
+func (m *Model) setError(err error, kind errorScreenKind) {
+	m.lastErr = err
+	m.errorKind = kind
+}
+
+func (m *Model) clearError() {
+	m.lastErr = nil
+	m.errorKind = errorScreenFatal
 }
 
 // routeQuitAsEsc synthesises an Esc key press and forwards it to whichever
@@ -1032,7 +1062,7 @@ func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea
 func (m *Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 	if recorderActive(m.runtime.Recorder()) {
 		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-			m.lastErr = err
+			m.setError(err, errorScreenRecoverable)
 		}
 		return m, nil, true
 	}
@@ -1147,7 +1177,7 @@ func (m *Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := selectedPIDFilter(msg.Pid)
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
+		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
 	m.tracer.stop()
@@ -1156,7 +1186,7 @@ func (m *Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.router.pickerReturn = nil
 	m.screen = ScreenDashboard
 	m.attaching = true
-	m.lastErr = nil
+	m.clearError()
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
@@ -1169,7 +1199,7 @@ func (m *Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 		pid = msg.Pid
 	}
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
+		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
 	m.tracer.stop()
@@ -1178,7 +1208,7 @@ func (m *Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	m.router.pickerReturn = nil
 	m.screen = ScreenDashboard
 	m.attaching = true
-	m.lastErr = nil
+	m.clearError()
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
@@ -1186,14 +1216,14 @@ func (m *Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 // user can choose a different process without losing dashboard state.
 func (m *Model) reselectPID() (tea.Model, tea.Cmd) {
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
+		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
 	m.router.savePendingReturn(m.proc.pid, m.proc.tid)
 	m.tracer.stop()
 	m.screen = ScreenPIDPicker
 	m.attaching = false
-	m.lastErr = nil
+	m.clearError()
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
@@ -1209,14 +1239,14 @@ func (m *Model) reselectPID() (tea.Model, tea.Cmd) {
 func (m *Model) reselectTID() (tea.Model, tea.Cmd) {
 	pid := m.proc.pid
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
+		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
 	m.router.savePendingReturn(m.proc.pid, m.proc.tid)
 	m.tracer.stop()
 	m.screen = ScreenPIDPicker
 	m.attaching = false
-	m.lastErr = nil
+	m.clearError()
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
@@ -1242,7 +1272,7 @@ func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
+		m.setError(err, errorScreenRecoverable)
 		// Restore the pending return state since we didn't complete the transition.
 		m.router.pickerReturn = &returnState
 		return m, nil
@@ -1251,7 +1281,7 @@ func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 	m.setProcessFilters(returnState.pidFilter, returnState.tidFilter)
 	m.screen = ScreenDashboard
 	m.attaching = true
-	m.lastErr = nil
+	m.clearError()
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
@@ -1375,7 +1405,7 @@ func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 		// the flamegraph to the still-running trace's live trie here.
 		// Without this the Flame tab gets stuck on 'waiting for data...'.
 		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
-		m.lastErr = nil
+		m.clearError()
 		return m, nil
 	}
 
@@ -1385,7 +1415,7 @@ func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 	m.tracer.stop()
 	m.dashboard.PrepareForTraceRestart()
 	m.attaching = true
-	m.lastErr = nil
+	m.clearError()
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
@@ -1411,14 +1441,14 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	if m.runtime.applyLiveFilter(prev) {
 		m.dashboard.PrepareForTraceRestart()
 		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
-		m.lastErr = nil
+		m.clearError()
 		return m, nil
 	}
 
 	m.tracer.stop()
 	m.dashboard.PrepareForTraceRestart()
 	m.attaching = true
-	m.lastErr = nil
+	m.clearError()
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
@@ -1476,9 +1506,11 @@ func (m *Model) View() tea.View {
 
 	if m.lastErr != nil {
 		theme := common.Current()
-		// The hint is part of the fix, not decoration: this view answers no
-		// other key, so the one key it does answer has to be on it.
-		body := theme.ErrorStyle.Render(m.lastErr.Error()) + "\n\n" + theme.HelpBarStyle.Render("q / esc  quit")
+		hint := "q / esc  quit"
+		if m.errorKind == errorScreenRecoverable {
+			hint = "esc  back  •  q  quit"
+		}
+		body := theme.ErrorStyle.Render(m.lastErr.Error()) + "\n\n" + theme.HelpBarStyle.Render(hint)
 		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(body)), title)
 	}
 	if m.helpOverlayVisible {

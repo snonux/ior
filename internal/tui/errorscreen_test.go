@@ -24,16 +24,54 @@ func newErrorScreenModel(t *testing.T, err error) *Model {
 	m.attaching = false
 	m.width = 120
 	m.height = 40
-	m.lastErr = err
+	m.setError(err, errorScreenFatal)
 	if !strings.Contains(m.View().Content, err.Error()) {
 		t.Fatalf("precondition: expected the error view to be on screen, got %q", m.View().Content)
 	}
 	return m
 }
 
-// quitKeys are the three keys a user reaches for on a screen that shows an
-// error and nothing else. Esc is included deliberately: the error view has
-// nothing to go back to, so dismissing it and quitting are the same action.
+// newRecorderStopErrorScreen reaches the recoverable error state through the
+// dashboard's real record-stop shortcut rather than setting model fields.
+func newRecorderStopErrorScreen(t *testing.T) *Model {
+	t.Helper()
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 120
+	m.height = 40
+
+	dir := filepath.Join(t.TempDir(), "recordings")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := m.startRecording(filepath.Join(dir, "capture.parquet")); err != nil {
+		t.Fatalf("startRecording() error = %v", err)
+	}
+	// Finalisation renames the recorder's temporary file into dir. Removing
+	// it makes the R shortcut's recorderStop call fail after the trace itself
+	// has remained untouched.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'R', Text: "R"})
+	if cmd != nil {
+		t.Fatal("record-stop failure returned a command, want nil")
+	}
+	m = next.(*Model)
+	if m.lastErr == nil {
+		t.Fatal("record-stop failure did not open the error screen")
+	}
+	if m.errorKind != errorScreenRecoverable {
+		t.Fatalf("record-stop error kind = %v, want recoverable", m.errorKind)
+	}
+	return m
+}
+
+// quitKeys are the three keys that leave a fatal error screen. Esc is included
+// because a fatal trace failure has no healthy dashboard to return to, so
+// dismissing it and quitting are the same action.
 func quitKeys() map[string]tea.KeyPressMsg {
 	return map[string]tea.KeyPressMsg{
 		"q":      {Code: 'q', Text: "q"},
@@ -181,6 +219,62 @@ func TestErrorScreenQuitSurvivesARecorderThatCannotStop(t *testing.T) {
 	}
 }
 
+// TestRecorderStopErrorEscReturnsToDashboard pins both halves of the new
+// classification: the R shortcut marks a recorder finalisation failure as
+// recoverable, and Esc dismisses it without stopping the healthy trace.
+func TestRecorderStopErrorEscReturnsToDashboard(t *testing.T) {
+	m := newRecorderStopErrorScreen(t)
+	stops := 0
+	m.tracer.traceStop = func() { stops++ }
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if cmd != nil && isQuitMsg(cmd()) {
+		t.Fatal("Esc quit from a recoverable recorder error")
+	}
+	updated := next.(*Model)
+	if updated.lastErr != nil {
+		t.Fatalf("Esc left the recoverable error on screen: %v", updated.lastErr)
+	}
+	if updated.errorKind != errorScreenFatal {
+		t.Fatalf("dismissed error kind = %v, want reset fatal default", updated.errorKind)
+	}
+	if updated.screen != ScreenDashboard {
+		t.Fatalf("screen after dismiss = %v, want dashboard", updated.screen)
+	}
+	if updated.quitting {
+		t.Fatal("Esc put the model into quitting state")
+	}
+	if stops != 0 {
+		t.Fatalf("Esc stopped the healthy trace %d times", stops)
+	}
+}
+
+// TestRecorderStopErrorQuitKeysStillQuit ensures recoverability changes only
+// Esc. The explicit quit binding must still stop the trace and leave the
+// recorder error available for finalModelError to report.
+func TestRecorderStopErrorQuitKeysStillQuit(t *testing.T) {
+	for name, press := range map[string]tea.KeyPressMsg{
+		"q":      {Code: 'q', Text: "q"},
+		"ctrl+c": {Code: 'c', Mod: tea.ModCtrl},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newRecorderStopErrorScreen(t)
+			wantErr := m.lastErr
+			stops := 0
+			m.tracer.traceStop = func() { stops++ }
+
+			next, cmd := m.Update(press)
+			updated := assertQuits(t, next, cmd)
+			if stops != 1 {
+				t.Fatalf("trace stop calls = %d, want 1", stops)
+			}
+			if !errors.Is(finalModelError(updated), wantErr) {
+				t.Fatalf("finalModelError() = %v, want %v", finalModelError(updated), wantErr)
+			}
+		})
+	}
+}
+
 // TestOverLongCLICommFilterStaysQuittable walks the reported route at the
 // model level: an over-long -comm reaches setupTraceInfra's
 // ValidateTracepointFields, arrives as TracingErrorMsg and sets m.lastErr.
@@ -255,6 +349,17 @@ func TestErrorScreenAdvertisesTheWayOut(t *testing.T) {
 	}
 }
 
+func TestRecoverableErrorScreenAdvertisesBackAndQuit(t *testing.T) {
+	m := newRecorderStopErrorScreen(t)
+
+	view := m.View().Content
+	for _, want := range []string{"esc", "back", "q", "quit"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected the recoverable error view to mention %q, got %q", want, view)
+		}
+	}
+}
+
 // TestErrorScreenQuitOutranksAnOpenModal pins the ordering of the error-screen
 // branch, which the other tests do not: moving it below the modal routing
 // leaves them all green.
@@ -269,7 +374,7 @@ func TestErrorScreenQuitOutranksAnOpenModal(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.filterModal = m.filterModal.Open(globalfilter.Filter{})
-	m.lastErr = errors.New("create event filter: comm filter max size is 15 (got 20)")
+	m.setError(errors.New("create event filter: comm filter max size is 15 (got 20)"), errorScreenFatal)
 
 	// Precondition: the error view really is what is rendered.
 	if !strings.Contains(m.View().Content, "comm filter max size") {
@@ -298,7 +403,7 @@ func TestRunProgramReportsTheFinalModelError(t *testing.T) {
 
 	wantErr := errors.New("create event filter: comm filter max size is 15 (got 20)")
 	runTeaProgram = func(m *Model) (tea.Model, error) {
-		m.lastErr = wantErr
+		m.setError(wantErr, errorScreenFatal)
 		return m, nil
 	}
 	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); !errors.Is(err, wantErr) {
@@ -316,7 +421,7 @@ func TestRunProgramReportsTheFinalModelError(t *testing.T) {
 	// ErrInterrupted rather than whatever the model happened to be showing.
 	teaErr := errors.New("tea failed")
 	runTeaProgram = func(m *Model) (tea.Model, error) {
-		m.lastErr = wantErr
+		m.setError(wantErr, errorScreenFatal)
 		return m, teaErr
 	}
 	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); !errors.Is(err, teaErr) {
@@ -324,26 +429,18 @@ func TestRunProgramReportsTheFinalModelError(t *testing.T) {
 	}
 }
 
-// TestErrorScreenQuitOutranksThePickerCancel pins the branch's precedence over
-// shouldCancelPickerToDashboard, and records a real behaviour change.
-//
-// Before task z3 this was the one keyboard route that cleared a non-fatal
-// lastErr and returned to a working dashboard: esc on the PID picker, after a
-// failed recorderStop had set the error and kept the picker open. Now the
-// error view renders instead, and esc leaves the session.
-//
-// That is the deliberate trade - the screen the user is looking at must answer
-// its own keys - but it is a loss, and it is the only escapable-error case the
-// fix takes away rather than adds. See the recoverable-error follow-up in the
-// task list.
-func TestErrorScreenQuitOutranksThePickerCancel(t *testing.T) {
+// TestRecoverableErrorScreenEscOutranksAndResumesPickerCancel pins both the
+// error screen's routing precedence and the recovered behaviour. The visible
+// screen handles Esc itself, then deliberately resumes the saved picker-return
+// route rather than letting an invisible picker consume the key.
+func TestRecoverableErrorScreenEscOutranksAndResumesPickerCancel(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenPIDPicker
 	m.attaching = false
 	// The pending return is what made esc recover here before task z3, so
 	// without it this test would exercise a different branch entirely.
 	m.router.savePendingReturn(-1, -1)
-	m.lastErr = errors.New("stop recording: rename ior.parquet: no such file or directory")
+	m.setError(errors.New("stop recording: rename ior.parquet: no such file or directory"), errorScreenRecoverable)
 	if !m.shouldCancelPickerToDashboard(tea.KeyPressMsg{Code: tea.KeyEsc}) {
 		t.Fatal("the picker-cancel branch would not fire; this test would prove nothing")
 	}
@@ -353,11 +450,48 @@ func TestErrorScreenQuitOutranksThePickerCancel(t *testing.T) {
 	}
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if cmd == nil || !isQuitMsg(cmd()) {
-		t.Fatal("esc did not quit from the error view on the PID picker screen")
+	if cmd == nil {
+		t.Fatal("Esc did not resume the picker-return trace start")
 	}
-	if !next.(*Model).quitting {
-		t.Error("the model did not enter the quitting state")
+	if isQuitMsg(cmd()) {
+		t.Fatal("Esc quit from the recoverable error view on the PID picker")
+	}
+	updated := next.(*Model)
+	if updated.screen != ScreenDashboard || !updated.attaching {
+		t.Fatalf("state after Esc = screen %v, attaching %t; want dashboard attaching", updated.screen, updated.attaching)
+	}
+	if updated.lastErr != nil {
+		t.Fatalf("Esc left the recoverable error on screen: %v", updated.lastErr)
+	}
+	if updated.router.hasPendingReturn() {
+		t.Fatal("Esc left the picker return bookmark pending")
+	}
+}
+
+// TestRecoverableErrorScreenQuitOutranksPickerCancel distinguishes the error
+// route from the invisible picker's own q/ctrl+c-as-back route. On the error
+// screen those keys must quit, leaving the return bookmark untouched.
+func TestRecoverableErrorScreenQuitOutranksPickerCancel(t *testing.T) {
+	for name, press := range map[string]tea.KeyPressMsg{
+		"q":      {Code: 'q', Text: "q"},
+		"ctrl+c": {Code: 'c', Mod: tea.ModCtrl},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := NewModel(-1, func(context.Context) error { return nil })
+			m.screen = ScreenPIDPicker
+			m.attaching = false
+			m.router.savePendingReturn(-1, -1)
+			m.setError(errors.New("stop recording: rename failed"), errorScreenRecoverable)
+			if !m.shouldCancelPickerToDashboard(press) {
+				t.Fatal("the picker-cancel branch would not fire; this test would prove nothing")
+			}
+
+			next, cmd := m.Update(press)
+			updated := assertQuits(t, next, cmd)
+			if !updated.router.hasPendingReturn() {
+				t.Fatal("quit key reached the picker cancel route and consumed its bookmark")
+			}
+		})
 	}
 }
 
@@ -369,7 +503,7 @@ func TestErrorScreenQuitOutranksTheHelpOverlay(t *testing.T) {
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.helpOverlayVisible = true
-	m.lastErr = errors.New("setup BPF module: attach probes: no such file or directory")
+	m.setError(errors.New("setup BPF module: attach probes: no such file or directory"), errorScreenFatal)
 
 	if !strings.Contains(m.View().Content, "attach probes") {
 		t.Fatal("the error view is not on screen; this test would prove nothing")
@@ -399,7 +533,7 @@ func TestExportedEntryPointsReportTheError(t *testing.T) {
 
 	wantErr := errors.New("create event filter: comm filter max size is 15 (got 20)")
 	runTeaProgram = func(m *Model) (tea.Model, error) {
-		m.lastErr = wantErr
+		m.setError(wantErr, errorScreenFatal)
 		return m, nil
 	}
 	starter := func(context.Context) error { return nil }
