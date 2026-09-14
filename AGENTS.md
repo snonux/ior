@@ -723,7 +723,11 @@ committed set contains syscalls that only exist on recent mainline kernels
     other side — `applyFdCloseState` and `applyCloseRangeState` also run ahead of
     the checkpoint, because a *stale* entry mislabels the next syscall that
     reuses the descriptor number (`TestDroppedCloseStillEvictsTheFd` and
-    `TestDroppedCloseRangeStillEvictsTheFds` respectively). Because these
+    `TestDroppedCloseRangeStillEvictsTheFds` respectively). Linux `close(2)`
+    releases the descriptor even when it returns errors such as `EINTR` or
+    `EIO`; only `EBADF` means there was no open descriptor to release, so
+    `applyFdCloseState` evicts on every return except `-EBADF`
+    (`TestApplyFdCloseStateFollowsLinuxCloseSemantics`). Because these
     mutations now run on every pair rather than only surviving ones, the failure
     guards matter too: `registerDup` ignores a negative return
     (`TestFailedDupDoesNotRegisterAnFd`) and so does the `pidfd_getfd` branch

@@ -193,6 +193,59 @@ func TestHandleFdExitCloseClearsProcFdCache(t *testing.T) {
 	verifyProcFdNotCached(t, el, pid, fd)
 }
 
+func TestApplyFdCloseStateFollowsLinuxCloseSemantics(t *testing.T) {
+	const (
+		pid      = uint32(1002)
+		fd       = int32(56)
+		filename = "/tmp/close-return.txt"
+	)
+	cases := []struct {
+		name        string
+		ret         int64
+		wantEvicted bool
+	}{
+		{name: "success", ret: 0, wantEvicted: true},
+		{name: "EINTR", ret: -int64(syscall.EINTR), wantEvicted: true},
+		{name: "EIO", ret: -int64(syscall.EIO), wantEvicted: true},
+		{name: "EBADF", ret: -int64(syscall.EBADF), wantEvicted: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			tracked := file.NewFd(fd, filename, syscall.O_RDONLY)
+			el.fdState().set(fd, pid, tracked)
+			el.fdState().setProcFdCache(fd, pid, tracked)
+
+			ep := &event.Pair{
+				EnterEv: &types.FdEvent{
+					TraceId: types.SYS_ENTER_CLOSE,
+					Pid:     pid,
+					Tid:     pid,
+					Fd:      fd,
+				},
+				ExitEv: &types.RetEvent{
+					EventType: types.EXIT_RET_EVENT,
+					TraceId:   types.SYS_EXIT_CLOSE,
+					Pid:       pid,
+					Tid:       pid,
+					Ret:       tc.ret,
+				},
+			}
+
+			el.applyFdCloseState(ep, fd, pid)
+
+			if tc.wantEvicted {
+				verifyFdNotTracked(t, el, pid, fd)
+				verifyProcFdNotCached(t, el, pid, fd)
+				return
+			}
+			verifyFileDescriptor(t, el, pid, fd, filename)
+			verifyProcFdCached(t, el, pid, fd)
+		})
+	}
+}
+
 func TestHandleTwoFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	pid := uint32(2002)
@@ -572,7 +625,7 @@ func makeExitRetEvent(t *testing.T, time uint64, pid, tid uint32, traceId types.
 // EXIT_RET_EVENT whose Ret is the close return value (0 on success, -errno on
 // failure), NOT an fd_event. Tests must feed this so the userspace exit handler
 // sees the same event type it gets at runtime; in particular applyFdCloseState
-// only deregisters the fd when Ret == 0.
+// can distinguish EBADF from errors that still release the descriptor.
 func makeExitCloseEvent(t *testing.T, time uint64, pid, tid uint32, ret int64) (types.RetEvent, []byte) {
 	return makeExitRetEvent(t, time, pid, tid, types.SYS_EXIT_CLOSE, ret)
 }
@@ -844,10 +897,9 @@ func makeCloseRangeFailureTestData(t *testing.T) (td testData) {
 	return td
 }
 
-// makeCloseFailureTestData opens a file, then issues a close that FAILS
-// (ret=-1, e.g. EBADF/EINTR). applyFdCloseState only deregisters on ret==0, so
-// the fd->path mapping must survive a failed close — otherwise a later genuine
-// close or a reuse of the fd number would resolve against stale/empty state.
+// makeCloseFailureTestData opens a file, then issues a close that fails with
+// EBADF. That is the one close error that means no descriptor was released, so
+// the fd->path mapping must survive.
 func makeCloseFailureTestData(t *testing.T) (td testData) {
 	fd := int32(48)
 	filename := "close_fail.txt"
@@ -866,11 +918,11 @@ func makeCloseFailureTestData(t *testing.T) (td testData) {
 		verifyFileDescriptor(t, el, defaultPid, fd, filename)
 	})
 
-	// close(fd) that fails with ret=-1: the fd must remain tracked.
+	// close(fd) that fails with EBADF: the fd must remain tracked.
 	closeEnterEv, closeEnterBytes := makeEnterFdEvent(t, defaulTime+200, defaultPid, defaultTid, fd, types.SYS_ENTER_CLOSE)
 	td.rawTracepoints = append(td.rawTracepoints, closeEnterBytes)
 
-	closeExitEv, closeExitBytes := makeExitCloseEvent(t, defaulTime+300, defaultPid, defaultTid, -1)
+	closeExitEv, closeExitBytes := makeExitCloseEvent(t, defaulTime+300, defaultPid, defaultTid, -int64(syscall.EBADF))
 	td.rawTracepoints = append(td.rawTracepoints, closeExitBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
