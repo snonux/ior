@@ -496,6 +496,7 @@ func (e *eventLoop) applyCloseRangeState(ep *event.Pair, ev *types.TwoFdEvent) {
 		return
 	}
 	if ev.Extra&closeRangeCloexec != 0 {
+		e.fdState().addFlagsRange(ev.FdA, ev.FdB, ev.Pid, syscall.O_CLOEXEC)
 		return
 	}
 	e.fdState().closeRange(ev.FdA, ev.FdB, ev.Pid)

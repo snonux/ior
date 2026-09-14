@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestReadwriteBasic(t *testing.T) {
 	const payloadLen = uint64(len("hello from ioworkload"))
@@ -289,17 +292,11 @@ func TestReadwriteReadaheadEbadf(t *testing.T) {
 	// enter_readahead tracepoint because arguments are read on syscall entry
 	// before the kernel returns the error. The UNCLASSIFIED -1 return must not
 	// be attributed as bytes.
-	result, _ := runScenarioResult(t, "readwrite-readahead-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_readahead",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
-	assertEventBytesEqual(t, result, ExpectedEvent{
-		Tracepoint: "enter_readahead",
-		Comm:       "ioworkload",
-	}, 0)
+	runParquetErrorScenario(t, "readwrite-readahead-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "readahead",
+		FD:      ptrTo(int32(99999)),
+		Bytes:   ptrTo(uint64(0)),
+	}, nil)
 }
 
 func TestReadwriteFadvise64(t *testing.T) {
@@ -332,17 +329,11 @@ func TestReadwriteFadvise64Ebadf(t *testing.T) {
 	// enter_fadvise64 tracepoint because arguments are read on syscall entry
 	// before the kernel returns the error. The UNCLASSIFIED -1 return must not
 	// be attributed as bytes.
-	result, _ := runScenarioResult(t, "readwrite-fadvise64-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_fadvise64",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
-	assertEventBytesEqual(t, result, ExpectedEvent{
-		Tracepoint: "enter_fadvise64",
-		Comm:       "ioworkload",
-	}, 0)
+	runParquetErrorScenario(t, "readwrite-fadvise64-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "fadvise64",
+		FD:      ptrTo(int32(99999)),
+		Bytes:   ptrTo(uint64(0)),
+	}, nil)
 }
 
 func TestReadwriteCachestat(t *testing.T) {

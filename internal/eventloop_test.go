@@ -288,10 +288,16 @@ func TestHandleTwoFdExitCloseRangeClearsProcFdCacheRange(t *testing.T) {
 
 func TestHandleTwoFdExitCloseRangeCloexecKeepsFds(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(4, 3003, file.NewFd(4, "below-range", syscall.O_RDONLY))
 	el.fdState().set(5, 3003, file.NewFd(5, "stays-open", syscall.O_RDONLY))
 	el.fdState().set(6, 3003, file.NewFd(6, "stays-open", syscall.O_RDONLY))
+	el.fdState().set(9, 3003, file.NewFd(9, "above-range", syscall.O_RDONLY))
+	el.fdState().set(5, 4004, file.NewFd(5, "other-pid", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(7, 3003, file.NewFd(7, "cached-in-range", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(9, 3003, file.NewFd(9, "cached-above-range", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(7, 4004, file.NewFd(7, "cached-other-pid", syscall.O_RDONLY))
 
-	// close_range(5, 6, CLOSE_RANGE_CLOEXEC): the kernel only marks the fds
+	// close_range(5, 8, CLOSE_RANGE_CLOEXEC): the kernel only marks the fds
 	// close-on-exec, so they remain open and must stay tracked.
 	enter := &types.TwoFdEvent{
 		EventType: types.ENTER_TWO_FD_EVENT,
@@ -299,7 +305,7 @@ func TestHandleTwoFdExitCloseRangeCloexecKeepsFds(t *testing.T) {
 		Pid:       3003,
 		Tid:       3003,
 		FdA:       5,
-		FdB:       6,
+		FdB:       8,
 		Extra:     closeRangeCloexec,
 	}
 	exit := &types.RetEvent{
@@ -317,6 +323,49 @@ func TestHandleTwoFdExitCloseRangeCloexecKeepsFds(t *testing.T) {
 
 	verifyFileDescriptor(t, el, 3003, 5, "stays-open")
 	verifyFileDescriptor(t, el, 3003, 6, "stays-open")
+	for _, fd := range []int32{5, 6} {
+		tracked, ok := el.fdState().get(fd, 3003)
+		if !ok {
+			t.Fatalf("fd %d was not retained", fd)
+		}
+		if !tracked.Flags().Is(syscall.O_CLOEXEC) {
+			t.Errorf("fd %d flags = %s, want O_CLOEXEC", fd, tracked.Flags())
+		}
+	}
+	for _, tc := range []struct {
+		pid uint32
+		fd  int32
+	}{
+		{pid: 3003, fd: 4},
+		{pid: 3003, fd: 9},
+		{pid: 4004, fd: 5},
+	} {
+		tracked, ok := el.fdState().get(tc.fd, tc.pid)
+		if !ok {
+			t.Fatalf("fd %d for pid %d was not retained", tc.fd, tc.pid)
+		}
+		if tracked.Flags().Is(syscall.O_CLOEXEC) {
+			t.Errorf("fd %d for pid %d unexpectedly gained O_CLOEXEC", tc.fd, tc.pid)
+		}
+	}
+	for _, tc := range []struct {
+		pid         uint32
+		fd          int32
+		wantCloexec bool
+	}{
+		{pid: 3003, fd: 7, wantCloexec: true},
+		{pid: 3003, fd: 9, wantCloexec: false},
+		{pid: 4004, fd: 7, wantCloexec: false},
+	} {
+		cached, ok := el.fdState().cachedProcFdFile(tc.fd, tc.pid)
+		if !ok {
+			t.Fatalf("cached fd %d for pid %d was not retained", tc.fd, tc.pid)
+		}
+		if got := cached.Flags().Is(syscall.O_CLOEXEC); got != tc.wantCloexec {
+			t.Errorf("cached fd %d for pid %d O_CLOEXEC = %t, want %t",
+				tc.fd, tc.pid, got, tc.wantCloexec)
+		}
+	}
 }
 
 func TestHandleTwoFdExitCloseRangeUnboundedClosesAll(t *testing.T) {

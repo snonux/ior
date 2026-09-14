@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestSyncBasic(t *testing.T) {
 	runScenario(t, "sync-basic", []ExpectedEvent{
@@ -57,31 +60,22 @@ func TestSyncSyncFileRangeToEOF(t *testing.T) {
 }
 
 func TestSyncFsyncEbadf(t *testing.T) {
-	runScenario(t, "sync-fsync-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_fsync",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "sync-fsync-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "fsync",
+		FD:      ptrTo(int32(99999)),
+	}, nil)
 }
 
 func TestSyncFdatasyncEbadf(t *testing.T) {
-	runScenario(t, "sync-fdatasync-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_fdatasync",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "sync-fdatasync-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "fdatasync",
+		FD:      ptrTo(int32(99999)),
+	}, nil)
 }
 
 func TestSyncFileRangeEbadf(t *testing.T) {
-	runScenario(t, "sync-file-range-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_sync_file_range",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "sync-file-range-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "sync_file_range",
+		FD:      ptrTo(int32(99999)),
+	}, nil)
 }

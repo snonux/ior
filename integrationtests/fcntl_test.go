@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestFcntlDupfd(t *testing.T) {
 	runScenario(t, "fcntl-dupfd", []ExpectedEvent{
@@ -9,6 +12,16 @@ func TestFcntlDupfd(t *testing.T) {
 			Tracepoint:   "enter_fcntl",
 			Comm:         "ioworkload",
 			MinCount:     1,
+		},
+		{
+			PathContains: "fcntlfile.txt",
+			Tracepoint:   "enter_write",
+			Comm:         "ioworkload",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Clear:      syscall.O_CLOEXEC,
+			},
 		},
 	})
 }
@@ -19,7 +32,33 @@ func TestFcntlSetfl(t *testing.T) {
 			PathContains: "fcntlsetflfile.txt",
 			Tracepoint:   "enter_fcntl",
 			Comm:         "ioworkload",
-			MinCount:     2,
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Clear:      syscall.O_CREAT | syscall.O_APPEND,
+			},
+		},
+		{
+			PathContains: "fcntlsetflfile.txt",
+			Tracepoint:   "enter_fcntl",
+			Comm:         "ioworkload",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Set:        syscall.O_APPEND,
+				Clear:      syscall.O_CREAT,
+			},
+		},
+		{
+			PathContains: "fcntlsetflfile.txt",
+			Tracepoint:   "enter_write",
+			Comm:         "ioworkload",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Set:        syscall.O_APPEND,
+				Clear:      syscall.O_CREAT,
+			},
 		},
 	})
 }
@@ -32,26 +71,29 @@ func TestFcntlDupfdCloexec(t *testing.T) {
 			Comm:         "ioworkload",
 			MinCount:     1,
 		},
+		{
+			PathContains: "fcntlcloexecfile.txt",
+			Tracepoint:   "enter_write",
+			Comm:         "ioworkload",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Set:        syscall.O_CLOEXEC,
+			},
+		},
 	})
 }
 
 func TestFcntlInvalidFd(t *testing.T) {
-	runScenario(t, "fcntl-invalid-fd", []ExpectedEvent{
-		{
-			Tracepoint: "enter_fcntl",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "fcntl-invalid-fd", syscall.EBADF, ExpectedRow{
+		Syscall: "fcntl",
+		FD:      ptrTo(int32(99999)),
+	}, nil)
 }
 
 func TestFcntlDupfdMax(t *testing.T) {
-	runScenario(t, "fcntl-dupfd-max", []ExpectedEvent{
-		{
-			PathContains: "fcntldupfdmaxfile.txt",
-			Tracepoint:   "enter_fcntl",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "fcntl-dupfd-max", syscall.EINVAL, ExpectedRow{
+		FileContains: "fcntldupfdmaxfile.txt",
+		Syscall:      "fcntl",
+	}, nil)
 }

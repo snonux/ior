@@ -180,6 +180,20 @@ func (t *fdTracker) closeRange(first, last int32, pid uint32) {
 	}
 }
 
+// addFlagsRange adds descriptor flags to pid's tracked fds in the inclusive
+// range [first, last]. It updates both authoritative entries and cached procfs
+// resolutions because either may satisfy the next lookup.
+func (t *fdTracker) addFlagsRange(first, last int32, pid uint32, flags int32) {
+	for _, key := range fdKeysInRange(t.files, first, last, pid) {
+		if fdFile, ok := t.files[key].(*file.FdFile); ok {
+			fdFile.AddFlags(flags)
+		}
+	}
+	for _, key := range fdKeysInRange(t.procFdCache, first, last, pid) {
+		t.procFdCache[key].AddFlags(flags)
+	}
+}
+
 // deletePid removes every entry of pid from the fd table and the procfs
 // cache. Called from handleProcessExitEvent on a sched_process_exit control
 // record: a process that exited owns no descriptors anymore, so its slice of

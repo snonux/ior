@@ -2,6 +2,7 @@ package integrationtests
 
 import (
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -39,14 +40,10 @@ func TestRenameRenameat2(t *testing.T) {
 }
 
 func TestRenameEnoent(t *testing.T) {
-	runScenario(t, "rename-enoent", []ExpectedEvent{
-		{
-			PathContains: "rename-enoent-new.txt",
-			Tracepoint:   "enter_rename",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "rename-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "rename-enoent-new.txt",
+		Syscall:      "rename",
+	}, nil)
 }
 
 func TestRenameNoreplace(t *testing.T) {

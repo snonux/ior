@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestDirBasic(t *testing.T) {
 	runScenario(t, "dir-basic", []ExpectedEvent{
@@ -85,22 +88,15 @@ func TestDirMkdirEexist(t *testing.T) {
 }
 
 func TestDirChdirEnoent(t *testing.T) {
-	runScenario(t, "dir-chdir-enoent", []ExpectedEvent{
-		{
-			PathContains: "chdir-enoent-missing",
-			Tracepoint:   "enter_chdir",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "dir-chdir-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "chdir-enoent-missing",
+		Syscall:      "chdir",
+	}, nil)
 }
 
 func TestDirGetdentsEbadf(t *testing.T) {
-	runScenario(t, "dir-getdents-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_getdents64",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "dir-getdents-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "getdents64",
+		FD:      ptrTo(int32(9999)),
+	}, nil)
 }

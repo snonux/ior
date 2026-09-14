@@ -2,6 +2,7 @@ package integrationtests
 
 import (
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -12,6 +13,10 @@ func TestOpenBasic(t *testing.T) {
 			Tracepoint:   "enter_openat",
 			Comm:         "ioworkload",
 			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Set:        syscall.O_CREAT,
+			},
 		},
 	})
 }
@@ -39,6 +44,10 @@ func TestOpenCreat(t *testing.T) {
 			Tracepoint:   "enter_creat",
 			Comm:         "ioworkload",
 			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_WRONLY),
+				Set:        syscall.O_CREAT | syscall.O_TRUNC,
+			},
 		},
 	})
 }
@@ -82,29 +91,29 @@ func TestOpenByHandleAtCommFilterDropsNonMatchingRows(t *testing.T) {
 }
 
 func TestOpenEnoent(t *testing.T) {
-	runScenario(t, "open-enoent", []ExpectedEvent{
-		{
-			PathContains: "enoentfile.txt",
-			Tracepoint:   "enter_openat",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "open-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "enoentfile.txt",
+		Syscall:      "openat",
+	}, nil)
 }
 
 func TestOpenRdonlyWrite(t *testing.T) {
-	runScenario(t, "open-rdonly-write", []ExpectedEvent{
+	rows, _ := runParquetScenarioRows(t, "open-rdonly-write", defaultDuration, nil, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
 		{
-			PathContains: "rdonlyfile.txt",
-			Tracepoint:   "enter_openat",
-			Comm:         "ioworkload",
-			MinCount:     1,
+			FileContains:  "rdonlyfile.txt",
+			Syscall:       "openat",
+			Comm:          "ioworkload",
+			RetValAtLeast: ptrTo(int64(1)),
+			IsError:       ptrTo(false),
 		},
 		{
-			PathContains: "rdonlyfile.txt",
-			Tracepoint:   "enter_write",
+			FileContains: "rdonlyfile.txt",
+			Syscall:      "write",
 			Comm:         "ioworkload",
-			MinCount:     1,
+			FDAtLeast:    ptrTo(int32(1)),
+			RetVal:       ptrTo(-int64(syscall.EBADF)),
+			IsError:      ptrTo(true),
 		},
 	})
 }

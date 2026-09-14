@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestCopyFileRangeBasic(t *testing.T) {
 	result, _ := runScenarioResult(t, "copy-file-range-basic", []ExpectedEvent{
@@ -24,12 +27,9 @@ func TestCopyFileRangeBasic(t *testing.T) {
 }
 
 func TestCopyFileRangeBadDstFd(t *testing.T) {
-	runScenario(t, "copy-file-range-bad-dst-fd", []ExpectedEvent{
-		{
-			PathContains: "copyrangeebadfsrc.txt",
-			Tracepoint:   "enter_copy_file_range",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "copy-file-range-bad-dst-fd", syscall.EBADF, ExpectedRow{
+		FileContains: "copyrangeebadfsrc.txt",
+		Syscall:      "copy_file_range",
+		Bytes:        ptrTo(uint64(0)),
+	}, nil)
 }

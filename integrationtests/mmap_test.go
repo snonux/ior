@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 const (
 	mmapParquetDuration           = 6
@@ -23,64 +26,45 @@ func TestMmapBasic(t *testing.T) {
 			Tracepoint:   "enter_mmap",
 			Comm:         "ioworkload",
 			MinCount:     1,
+			Flags:        &ExpectedFlags{AccessMode: ptrTo(syscall.O_RDWR)},
 		},
 	}, mmapTraceArgs)
 }
 
 func TestMmapMsyncSync(t *testing.T) {
-	runScenarioResultWithIorArgs(t, "mmap-msync-sync", []ExpectedEvent{
+	rows, _ := runParquetScenarioRows(t, "mmap-msync-sync", defaultDuration, mmapTraceArgs, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
 		{
-			PathContains: "msyncfile.txt",
-			Tracepoint:   "enter_mmap",
+			FileContains: "msyncfile.txt",
+			Syscall:      "mmap",
 			Comm:         "ioworkload",
-			MinCount:     1,
+			IsError:      ptrTo(false),
 		},
 		{
-			Tracepoint: "enter_msync",
-			Comm:       "ioworkload",
-			MinCount:   1,
+			Syscall: "msync",
+			Comm:    "ioworkload",
+			RetVal:  ptrTo(int64(0)),
+			IsError: ptrTo(false),
 		},
-	}, mmapTraceArgs)
+	})
 }
 
 func TestMmapMsyncInvalidFlags(t *testing.T) {
-	runScenarioResultWithIorArgs(t, "mmap-msync-invalid-flags", []ExpectedEvent{
+	rows, _ := runParquetScenarioRows(t, "mmap-msync-invalid-flags", defaultDuration, mmapTraceArgs, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
 		{
-			PathContains: "msyncinvalidfile.txt",
-			Tracepoint:   "enter_mmap",
+			FileContains: "msyncinvalidfile.txt",
+			Syscall:      "mmap",
 			Comm:         "ioworkload",
-			MinCount:     1,
+			IsError:      ptrTo(false),
 		},
 		{
-			Tracepoint: "enter_msync",
-			Comm:       "ioworkload",
-			MinCount:   1,
+			Syscall: "msync",
+			Comm:    "ioworkload",
+			RetVal:  ptrTo(-int64(syscall.EINVAL)),
+			IsError: ptrTo(true),
 		},
-	}, mmapTraceArgs)
-}
-
-func TestMmapMremapMunmap(t *testing.T) {
-	result, _ := runScenarioResultWithIorArgs(t, "mmap-mremap-munmap", []ExpectedEvent{
-		{
-			Tracepoint: "enter_mremap",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-		{
-			Tracepoint: "enter_munmap",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	}, mmapTraceArgs)
-
-	assertEventBytesEqual(t, result, ExpectedEvent{
-		Tracepoint: "enter_mremap",
-		Comm:       "ioworkload",
-	}, 0)
-	assertEventBytesEqual(t, result, ExpectedEvent{
-		Tracepoint: "enter_munmap",
-		Comm:       "ioworkload",
-	}, 0)
+	})
 }
 
 // TestMmapMemoryLock asserts the memory-locking cluster fires its enter
@@ -119,47 +103,37 @@ func TestMmapMemoryLock(t *testing.T) {
 }
 
 func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
-	h := newTestHarness(t)
-	h.WorkloadEnv = []string{mmapWorkloadStartupEnv}
-	path, pid, err := h.RunParquetWithIorArgs("mmap-mremap-munmap", mmapParquetDuration, mmapTraceArgs)
-	if err != nil {
-		t.Fatalf("run mmap-mremap-munmap parquet scenario: %v", err)
-	}
+	rows, _ := runParquetScenarioRows(t, "mmap-mremap-munmap", mmapParquetDuration,
+		mmapTraceArgs, []string{mmapWorkloadStartupEnv})
+	zeroBytes := uint64(0)
+	AssertRowsPresent(t, rows, []ExpectedRow{
+		{
+			Syscall:           "mremap",
+			Comm:              "ioworkload",
+			IsError:           ptrTo(false),
+			Bytes:             &zeroBytes,
+			AddressSpaceBytes: ptrTo(uint64(mmapScenarioAddressSpaceBytes)),
+		},
+		{
+			Syscall:           "munmap",
+			Comm:              "ioworkload",
+			RetVal:            ptrTo(int64(0)),
+			IsError:           ptrTo(false),
+			Bytes:             &zeroBytes,
+			AddressSpaceBytes: ptrTo(uint64(mmapScenarioAddressSpaceBytes)),
+		},
+	})
 
-	rows := filterRecordsByPID(readParquetRecords(t, path), uint32(pid))
-	if len(rows) == 0 {
-		t.Fatalf("expected parquet rows for workload PID %d", pid)
-	}
-
-	var foundMremap, foundMunmap bool
 	var addressSpaceTotal uint64
 	for _, row := range rows {
 		switch row.Syscall {
 		case "mremap":
-			if row.Bytes != 0 {
-				t.Fatalf("mremap bytes = %d, want 0 (I/O bytes must stay separate)", row.Bytes)
-			}
-			if row.AddressSpaceBytes == mmapScenarioAddressSpaceBytes {
-				foundMremap = true
-			}
 			addressSpaceTotal += row.AddressSpaceBytes
 		case "munmap":
-			if row.Bytes != 0 {
-				t.Fatalf("munmap bytes = %d, want 0 (I/O bytes must stay separate)", row.Bytes)
-			}
-			if row.AddressSpaceBytes == mmapScenarioAddressSpaceBytes {
-				foundMunmap = true
-			}
 			addressSpaceTotal += row.AddressSpaceBytes
 		}
 	}
 
-	if !foundMremap {
-		t.Fatalf("expected mremap row with AddressSpaceBytes=%d", mmapScenarioAddressSpaceBytes)
-	}
-	if !foundMunmap {
-		t.Fatalf("expected munmap row with AddressSpaceBytes=%d", mmapScenarioAddressSpaceBytes)
-	}
 	if addressSpaceTotal < mmapMinAddressSpaceBytesTotal {
 		t.Fatalf("mremap+munmap AddressSpaceBytes total = %d, want >= %d", addressSpaceTotal, mmapMinAddressSpaceBytesTotal)
 	}
