@@ -673,10 +673,18 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd, extraFla
 	if newFd < 0 {
 		return
 	}
-	duppedFdFile := fdFile.Dup(newFd)
-	if extraFlags != 0 {
-		duppedFdFile.AddFlags(extraFlags)
+	// dup2(oldfd, oldfd) succeeds without creating a descriptor or changing
+	// its close-on-exec flag. Every other successful caller creates a distinct
+	// descriptor.
+	if newFd == fdFile.FD() {
+		return
 	}
+	duppedFdFile := fdFile.Dup(newFd)
+	// The duplicate shares the source's open file description and therefore
+	// its status flags, but FD_CLOEXEC belongs to the descriptor itself. The
+	// kernel clears it for dup/dup2/F_DUPFD and sets it only when dup3 or
+	// F_DUPFD_CLOEXEC requests O_CLOEXEC.
+	duppedFdFile.MergeFlags(syscall.O_CLOEXEC, extraFlags)
 	e.fdState().set(newFd, pid, duppedFdFile)
 }
 

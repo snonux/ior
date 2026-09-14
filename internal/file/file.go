@@ -80,8 +80,10 @@ func NewFdWithPid(fd int32, pid uint32) *FdFile {
 	return f
 }
 
-// Dup copies the FdFile metadata onto the duplicated descriptor number fd,
-// the userspace mirror of dup(2)/fcntl(F_DUPFD): same name and flags, new fd.
+// Dup copies the FdFile metadata onto descriptor number fd. Callers modelling
+// a descriptor-creating syscall must apply descriptor-specific flag semantics
+// to the copy; unlike status flags, O_CLOEXEC is not shared by duplicates.
+// This method is also used to detach metadata before a pair is emitted.
 func (f *FdFile) Dup(fd int32) *FdFile {
 	dupFd := *f
 	dupFd.fd = fd
