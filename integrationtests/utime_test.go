@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 // TestUtimeBasic verifies that ior captures the enter_utime tracepoint with the
 // real file path. utime(2) takes a genuine filesystem path at args[0]
@@ -64,12 +67,8 @@ func TestUtimeUtimensat(t *testing.T) {
 // utime(2) on a missing file fails with ENOENT, but ior records enter_utime
 // because the filename is read on syscall entry.
 func TestUtimeEnoent(t *testing.T) {
-	runScenario(t, "utime-enoent", []ExpectedEvent{
-		{
-			PathContains: "utime-enoent-missing.txt",
-			Tracepoint:   "enter_utime",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "utime-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "utime-enoent-missing.txt",
+		Syscall:      "utime",
+	}, nil)
 }

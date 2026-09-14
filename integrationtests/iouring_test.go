@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 var iouringTraceArgs = []string{"-trace-syscalls", "io_uring_setup,io_uring_enter,io_uring_register,close"}
 
@@ -35,21 +38,15 @@ func TestIouringRegister(t *testing.T) {
 }
 
 func TestIouringEnterEbadf(t *testing.T) {
-	runScenarioResultWithIorArgs(t, "iouring-enter-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_io_uring_enter",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
+	runParquetErrorScenario(t, "iouring-enter-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "io_uring_enter",
+		FD:      ptrTo(int32(99999)),
 	}, iouringTraceArgs)
 }
 
 func TestIouringRegisterEbadf(t *testing.T) {
-	runScenarioResultWithIorArgs(t, "iouring-register-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_io_uring_register",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
+	runParquetErrorScenario(t, "iouring-register-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "io_uring_register",
+		FD:      ptrTo(int32(99999)),
 	}, iouringTraceArgs)
 }

@@ -1,14 +1,9 @@
 package integrationtests
 
 import (
-	"errors"
-	"io"
-	"os"
 	"testing"
 
 	iorparquet "ior/internal/parquet"
-
-	parquetgo "github.com/parquet-go/parquet-go"
 )
 
 const (
@@ -84,35 +79,6 @@ func filterRecordsByPID(rows []iorparquet.Record, pid uint32) []iorparquet.Recor
 		}
 	}
 	return filtered
-}
-
-func readParquetRecords(t *testing.T, path string) []iorparquet.Record {
-	t.Helper()
-
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open parquet %q: %v", path, err)
-	}
-	defer func() { _ = f.Close() }()
-
-	reader := parquetgo.NewGenericReader[iorparquet.Record](f)
-	defer func() { _ = reader.Close() }()
-
-	var rows []iorparquet.Record
-	buf := make([]iorparquet.Record, 16)
-	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			rows = append(rows, buf[:n]...)
-		}
-		if err == nil {
-			continue
-		}
-		if errors.Is(err, io.EOF) {
-			return rows
-		}
-		t.Fatalf("read parquet rows: %v", err)
-	}
 }
 
 func aggregateRecordedFamilies(rows []iorparquet.Record) map[string]uint64 {

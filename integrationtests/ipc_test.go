@@ -2,6 +2,7 @@ package integrationtests
 
 import (
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -13,7 +14,11 @@ var inotifyTraceArgs = []string{"-trace-syscalls", "inotify_init1,inotify_add_wa
 
 func TestPipeBasic(t *testing.T) {
 	result, _ := runScenarioResultWithIorArgs(t, "pipe-basic", []ExpectedEvent{
-		{Tracepoint: "enter_pipe", MinCount: 1},
+		{
+			Tracepoint: "enter_pipe",
+			MinCount:   1,
+			Flags:      &ExpectedFlags{AccessMode: ptrTo(syscall.O_RDONLY)},
+		},
 		{Tracepoint: "enter_close", MinCount: 2},
 	}, ipcDescriptorTraceArgs)
 
@@ -25,7 +30,14 @@ func TestPipeBasic(t *testing.T) {
 
 func TestPipe2Basic(t *testing.T) {
 	result, _ := runScenarioResultWithIorArgs(t, "pipe2-basic", []ExpectedEvent{
-		{Tracepoint: "enter_pipe2", MinCount: 1},
+		{
+			Tracepoint: "enter_pipe2",
+			MinCount:   1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
+			},
+		},
 		{Tracepoint: "enter_close", MinCount: 2},
 	}, ipcDescriptorTraceArgs)
 

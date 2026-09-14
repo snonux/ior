@@ -27,21 +27,26 @@ func TestSocketBasic(t *testing.T) {
 }
 
 func TestSocketpairBasic(t *testing.T) {
-	result, _ := runScenarioResultWithIorArgs(t, "socketpair-basic", []ExpectedEvent{
+	rows, _ := runParquetScenarioRows(t, "socketpair-basic", defaultDuration, socketTraceArgs, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
 		{
-			Tracepoint: "enter_socketpair",
-			MinCount:   1,
+			FileContains: "socket:1:",
+			Syscall:      "socketpair",
+			Comm:         "ioworkload",
+			FDAtLeast:    ptrTo(int32(1)),
+			RetVal:       ptrTo(int64(0)),
+			IsError:      ptrTo(false),
 		},
 		{
-			Tracepoint: "enter_close",
-			MinCount:   2,
+			FileContains: "socket:1:",
+			Syscall:      "close",
+			Comm:         "ioworkload",
+			MinCount:     2,
+			FDAtLeast:    ptrTo(int32(1)),
+			RetVal:       ptrTo(int64(0)),
+			IsError:      ptrTo(false),
 		},
-	}, socketTraceArgs)
-
-	assertTracepointPathPrefix(t, result, "enter_socketpair", "socket:1:")
-	if got := totalTracepointPathCount(result, "enter_close", "socket:1:"); got < 2 {
-		t.Fatalf("enter_close records with tracked socket descriptor prefix = %d, want >= 2", got)
-	}
+	})
 }
 
 func TestSocketAcceptLifecycle(t *testing.T) {

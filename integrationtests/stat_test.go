@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestStatBasic(t *testing.T) {
 	runScenario(t, "stat-basic", []ExpectedEvent{
@@ -80,25 +83,17 @@ func TestStatFaccessat(t *testing.T) {
 }
 
 func TestStatEnoent(t *testing.T) {
-	runScenario(t, "stat-enoent", []ExpectedEvent{
-		{
-			PathContains: "stat-enoent-missing.txt",
-			Tracepoint:   "enter_newstat",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "stat-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "stat-enoent-missing.txt",
+		Syscall:      "newstat",
+	}, nil)
 }
 
 func TestStatAccessEnoent(t *testing.T) {
-	runScenario(t, "stat-access-enoent", []ExpectedEvent{
-		{
-			PathContains: "access-enoent-missing.txt",
-			Tracepoint:   "enter_access",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "stat-access-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "access-enoent-missing.txt",
+		Syscall:      "access",
+	}, nil)
 }
 
 // TestStatStatfs verifies the statfs family (statfs/fstatfs) is traced
@@ -121,11 +116,8 @@ func TestStatStatfs(t *testing.T) {
 }
 
 func TestStatFstatEbadf(t *testing.T) {
-	runScenario(t, "stat-fstat-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_newfstat",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "stat-fstat-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "newfstat",
+		FD:      ptrTo(int32(99999)),
+	}, nil)
 }

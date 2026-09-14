@@ -328,6 +328,25 @@ committed set contains syscalls that only exist on recent mainline kernels
 - **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
 
+## Integration-test output ownership
+
+The integration harness has two complementary persisted outputs. Collapsed
+`.ior.zst` records are the authoritative end-to-end surface for descriptor
+flags; assert them with `ExpectedEvent.Flags` using access-mode plus required /
+forbidden bit constraints so `O_RDONLY` (zero) is testable without pinning
+unrelated kernel-added bits. Per-event syscall semantics live in Parquet;
+`ExpectedRow` uses optional pointers so exact zero and `false` remain distinct
+from "not asserted" for fd, return/error, epoll metadata, address-space bytes
+and requested sleep duration.
+
+Use `runParquetScenarioRows` for those row assertions. It reads through the
+repo-local `internal/parquet.Record` schema and checks PID/comm ownership before
+returning rows. A scenario should normally run in only one output mode: keep it
+on collapsed output when flags are the semantic under test, and use Parquet for
+the row-only fields. Dedicated deterministic ENOENT/EBADF scenarios assert both
+the exact negative errno in `RetVal` and `IsError=true`; presence/count alone is
+not sufficient.
+
 ## TUI Behavior
 
 - **Default mode** is TUI (`-plain` disables TUI and prints CSV rows to stdout).

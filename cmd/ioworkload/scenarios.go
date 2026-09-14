@@ -60,6 +60,7 @@ var scenarios = map[string]func() error{
 	"close-basic":                   closeBasic,
 	"close-range":                   closeRange,
 	"close-range-bounded":           closeRangeBounded,
+	"close-range-cloexec":           closeRangeCloexec,
 	"close-invalid-fd":              closeInvalidFd,
 	"close-double-close":            closeDoubleClose,
 	"close-range-empty":             closeRangeEmpty,
