@@ -15,6 +15,9 @@ func pipeBasic() error {
 	}
 	defer syscall.Close(pipefd[0])
 	defer syscall.Close(pipefd[1])
+	if _, err := syscall.Write(pipefd[1], []byte{1}); err != nil {
+		return fmt.Errorf("write pipe: %w", err)
+	}
 	return nil
 }
 
@@ -26,6 +29,9 @@ func pipe2Basic() error {
 	}
 	defer syscall.Close(pipefd[0])
 	defer syscall.Close(pipefd[1])
+	if _, err := syscall.Write(pipefd[1], []byte{1}); err != nil {
+		return fmt.Errorf("write pipe2: %w", err)
+	}
 	return nil
 }
 

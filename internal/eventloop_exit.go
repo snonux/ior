@@ -450,13 +450,14 @@ func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool
 		flags = pipeEv.Flags
 	}
 	if exitEv.Ret == 0 {
+		name := pipeDescriptorName(flags, exitEv.Fd0, exitEv.Fd1)
 		if exitEv.Fd0 >= 0 {
-			fdFile := file.NewFd(exitEv.Fd0, pipeDescriptorName(flags, exitEv.Fd0, exitEv.Fd1), flags)
+			fdFile := file.NewFd(exitEv.Fd0, name, flags|syscall.O_RDONLY)
 			e.fdState().set(exitEv.Fd0, pipeEv.Pid, fdFile)
 			ep.File = fdFile
 		}
 		if exitEv.Fd1 >= 0 {
-			fdFile := file.NewFd(exitEv.Fd1, pipeDescriptorName(flags, exitEv.Fd0, exitEv.Fd1), flags)
+			fdFile := file.NewFd(exitEv.Fd1, name, flags|syscall.O_WRONLY)
 			e.fdState().set(exitEv.Fd1, pipeEv.Pid, fdFile)
 			if ep.File == nil {
 				ep.File = fdFile

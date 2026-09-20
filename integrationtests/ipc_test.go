@@ -8,7 +8,7 @@ import (
 
 const mqPayloadLen = uint64(14)
 
-var ipcDescriptorTraceArgs = []string{"-trace-syscalls", "pipe,pipe2,eventfd,eventfd2,close"}
+var ipcDescriptorTraceArgs = []string{"-trace-syscalls", "pipe,pipe2,eventfd,eventfd2,write,close"}
 
 var inotifyTraceArgs = []string{"-trace-syscalls", "inotify_init1,inotify_add_watch,inotify_rm_watch,close"}
 
@@ -18,6 +18,12 @@ func TestPipeBasic(t *testing.T) {
 			Tracepoint: "enter_pipe",
 			MinCount:   1,
 			Flags:      &ExpectedFlags{AccessMode: ptrTo(syscall.O_RDONLY)},
+		},
+		{
+			PathContains: "pipe:",
+			Tracepoint:   "enter_write",
+			MinCount:     1,
+			Flags:        &ExpectedFlags{AccessMode: ptrTo(syscall.O_WRONLY)},
 		},
 		{Tracepoint: "enter_close", MinCount: 2},
 	}, ipcDescriptorTraceArgs)
@@ -35,6 +41,15 @@ func TestPipe2Basic(t *testing.T) {
 			MinCount:   1,
 			Flags: &ExpectedFlags{
 				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
+			},
+		},
+		{
+			PathContains: "pipe:",
+			Tracepoint:   "enter_write",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_WRONLY),
 				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
 			},
 		},
