@@ -220,6 +220,7 @@ struct eventfd_event {
     __u32 tid;
     __s32 flags;
     __s64 ret;
+    __s32 fd;
 };
 
 struct epoll_ctl_event {

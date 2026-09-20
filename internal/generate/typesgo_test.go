@@ -237,6 +237,30 @@ func TestGenerateTypesGoSyncPool(t *testing.T) {
 	requireContains(t, output, "func NewFdEvent(raw []byte) *FdEvent")
 }
 
+func TestGenerateTypesGoEventfdCodecPreservesKernelPadding(t *testing.T) {
+	structs := []CStruct{{
+		Name: "eventfd_event",
+		Members: []CMember{
+			{TypeName: "__u32", FieldName: "event_type"},
+			{TypeName: "__u32", FieldName: "trace_id"},
+			{TypeName: "__u64", FieldName: "time"},
+			{TypeName: "__u32", FieldName: "pid"},
+			{TypeName: "__u32", FieldName: "tid"},
+			{TypeName: "__s32", FieldName: "flags"},
+			{TypeName: "__s64", FieldName: "ret"},
+			{TypeName: "__s32", FieldName: "fd"},
+		},
+	}}
+	output := GenerateTypesGo(structs, nil)
+
+	requireContains(t, output, "if len(raw) != 48 && len(raw) != 40 && len(raw) != 36")
+	requireContains(t, output, "binary.LittleEndian.Uint64(raw[retOffset : retOffset+8])")
+	requireContains(t, output, "binary.LittleEndian.Uint32(raw[40:44])")
+	requireContains(t, output, "raw := make([]byte, 48)")
+	requireContains(t, output, "binary.LittleEndian.PutUint64(raw[32:40], uint64(e.Ret))")
+	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[40:44], uint32(e.Fd))")
+}
+
 func TestGenerateTypesGoConstants(t *testing.T) {
 	input := testTypesH + testDefines
 	structs, constants, err := ParseCTypesInput(strings.NewReader(input))

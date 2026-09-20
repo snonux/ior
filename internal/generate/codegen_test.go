@@ -1646,6 +1646,9 @@ func TestGenerateEventfdHandler(t *testing.T) {
 	requireContains(t, output, "bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);")
 	requireContains(t, output, "ev->flags = flags;")
 	requireContains(t, output, "ev->ret = -1;")
+	if got := strings.Count(output, "ev->fd = -1;"); got != 2 {
+		t.Fatalf("eventfd2 enter/exit fd initializers = %d, want 2", got)
+	}
 	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_eventfd2\")")
 	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
 	requireContains(t, output, "ev->ret = ctx->ret;")
@@ -1718,6 +1721,7 @@ func TestGenerateSignalfd4HandlerUsesArg3Flags(t *testing.T) {
 	requireContains(t, output, "struct eventfd_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_SIGNALFD4;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 	// signalfd4(ufd, mask, sizemask, flags): flags is at args[3].
 	requireContains(t, output, "__s32 flags = (__s32)ctx->args[3];")
 	// Must not mistake ufd (args[0]), the mask pointer (args[1]) or sizemask
@@ -1735,6 +1739,22 @@ func TestGenerateSignalfd4HandlerUsesArg3Flags(t *testing.T) {
 	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_signalfd4\")")
 	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
 	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->fd = -1;")
+}
+
+func TestGenerateSignalfdHandlerCapturesExistingFD(t *testing.T) {
+	// The signalfd and signalfd4 tracepoint formats share the common syscall
+	// argument slots needed by this generator path. Rename the reviewed fixture
+	// so the independent plain-signalfd mapping is exercised directly.
+	enter := strings.ReplaceAll(FormatSignalfd4, "signalfd4", "signalfd")
+	exit := strings.ReplaceAll(FormatExitSignalfd4, "signalfd4", "signalfd")
+	output := generateFromPair(t, enter, exit)
+
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SIGNALFD;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "__s32 flags = 0;")
+	requireContains(t, output, "ev->trace_id = SYS_EXIT_SIGNALFD;")
+	requireContains(t, output, "ev->fd = -1;")
 }
 
 func TestGenerateEpollCtlHandler(t *testing.T) {

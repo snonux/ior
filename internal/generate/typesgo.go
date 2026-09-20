@@ -427,6 +427,10 @@ func writeRetGetterMethod(b *strings.Builder, goName, selfRef string, members []
 }
 
 func writeSyncPool(b *strings.Builder, goName, selfRef string) {
+	if goName == "EventfdEvent" {
+		writeEventfdSyncPool(b, selfRef)
+		return
+	}
 	fmt.Fprintf(b, "var poolOf%ss = sync.Pool{\n\tNew: func() any { return &%s{} },\n}\n\n", goName, goName)
 	fmt.Fprintf(b, "func New%s(raw []byte) *%s {\n", goName, goName)
 	fmt.Fprintf(b, "\t%s := poolOf%ss.Get().(*%s)\n", selfRef, goName, goName)
@@ -443,6 +447,44 @@ func writeSyncPool(b *strings.Builder, goName, selfRef string) {
 	b.WriteString("\treturn buf.Bytes(), nil\n}\n\n")
 
 	fmt.Fprintf(b, "func (%s *%s) Recycle() {\n\tpoolOf%ss.Put(%s)\n}\n", selfRef, goName, goName, selfRef)
+}
+
+// writeEventfdSyncPool emits the eventfd codec with the kernel's explicit C
+// padding. eventfd_event places ret at offset 32 and fd at offset 40, making
+// the current payload 48 bytes. Encoding the Go fields with binary.Write would
+// instead produce an ambiguous packed 40-byte payload that is indistinguishable
+// from the legacy kernel layout.
+func writeEventfdSyncPool(b *strings.Builder, selfRef string) {
+	b.WriteString("var poolOfEventfdEvents = sync.Pool{\n\tNew: func() any { return &EventfdEvent{} },\n}\n\n")
+	b.WriteString("func NewEventfdEvent(raw []byte) *EventfdEvent {\n")
+	b.WriteString("\tif len(raw) != 48 && len(raw) != 40 && len(raw) != 36 {\n\t\treturn nil\n\t}\n")
+	fmt.Fprintf(b, "\t%s := poolOfEventfdEvents.Get().(*EventfdEvent)\n", selfRef)
+	fmt.Fprintf(b, "\t%s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Time = binary.LittleEndian.Uint64(raw[8:16])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Pid = binary.LittleEndian.Uint32(raw[16:20])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Tid = binary.LittleEndian.Uint32(raw[20:24])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Fd = -1\n", selfRef)
+	b.WriteString("\tretOffset := 28\n\tif len(raw) >= 40 {\n\t\tretOffset = 32\n\t}\n")
+	fmt.Fprintf(b, "\t%s.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))\n", selfRef)
+	b.WriteString("\tif len(raw) == 48 {\n")
+	fmt.Fprintf(b, "\t\t%s.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))\n", selfRef)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
+
+	fmt.Fprintf(b, "func (%s *EventfdEvent) Bytes() ([]byte, error) {\n", selfRef)
+	b.WriteString("\traw := make([]byte, 48)\n")
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[0:4], uint32(%s.EventType))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[4:8], uint32(%s.TraceId))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[8:16], %s.Time)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Flags))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], uint64(%s.Ret))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[40:44], uint32(%s.Fd))\n", selfRef)
+	b.WriteString("\treturn raw, nil\n}\n\n")
+	fmt.Fprintf(b, "func (%s *EventfdEvent) Recycle() {\n\tpoolOfEventfdEvents.Put(%s)\n}\n", selfRef, selfRef)
 }
 
 func snakeToCamel(s string) string {

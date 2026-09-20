@@ -225,7 +225,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("EventfdEvent", func(t *testing.T) {
-		ev := &EventfdEvent{EventType: ENTER_EVENTFD_EVENT, TraceId: SYS_ENTER_EVENTFD2, Time: 1, Pid: 2, Tid: 3, Flags: 0x800, Ret: -1}
+		ev := &EventfdEvent{EventType: ENTER_EVENTFD_EVENT, TraceId: SYS_ENTER_EVENTFD2, Time: 1, Pid: 2, Tid: 3, Flags: 0x800, Ret: -1, Fd: 7}
 		raw := rawBytes(t, ev)
 
 		slow := NewEventfdEvent(raw)
@@ -233,7 +233,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		defer slow.Recycle()
 		defer fast.Recycle()
 		if !slow.Equals(fast) {
-			t.Fatalf("eventfd decode mismatch")
+			t.Fatalf("eventfd decode mismatch: slow=%#v fast=%#v", slow, fast)
 		}
 	})
 
@@ -509,6 +509,7 @@ func TestNewEventfdEventFastKernelLayout(t *testing.T) {
 	binary.LittleEndian.PutUint32(raw[20:24], 3)
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(0x800))
 	binary.LittleEndian.PutUint64(raw[32:40], uint64(42))
+	binary.LittleEndian.PutUint32(raw[40:44], uint32(17))
 
 	fast := NewEventfdEventFast(raw)
 	if fast == nil {
@@ -522,8 +523,30 @@ func TestNewEventfdEventFastKernelLayout(t *testing.T) {
 		fast.Pid != 2 ||
 		fast.Tid != 3 ||
 		fast.Flags != 0x800 ||
-		fast.Ret != 42 {
+		fast.Ret != 42 ||
+		fast.Fd != 17 {
 		t.Fatalf("unexpected eventfd decode: %#v", fast)
+	}
+}
+
+func TestNewEventfdEventFastLegacyKernelLayout(t *testing.T) {
+	raw := make([]byte, eventfdEventSizeV2)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(EXIT_EVENTFD_EVENT))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_EXIT_EVENTFD2))
+	binary.LittleEndian.PutUint64(raw[8:16], 1)
+	binary.LittleEndian.PutUint32(raw[16:20], 2)
+	binary.LittleEndian.PutUint32(raw[20:24], 3)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(0x800))
+	binary.LittleEndian.PutUint64(raw[32:40], uint64(42))
+
+	fast := NewEventfdEventFast(raw)
+	if fast == nil {
+		t.Fatalf("expected decoded legacy eventfd event")
+	}
+	defer fast.Recycle()
+
+	if fast.Ret != 42 || fast.Fd != -1 {
+		t.Fatalf("unexpected legacy eventfd decode: %#v", fast)
 	}
 }
 

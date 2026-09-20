@@ -1911,10 +1911,11 @@ type EventfdEvent struct {
 	Tid       uint32
 	Flags     int32
 	Ret       int64
+	Fd        int32
 }
 
 func (e EventfdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Ret:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Flags, e.Ret)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Ret:%v Fd:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Flags, e.Ret, e.Fd)
 }
 
 func (e EventfdEvent) Equals(other any) bool {
@@ -1922,7 +1923,7 @@ func (e EventfdEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Flags == otherConcrete.Flags && e.Ret == otherConcrete.Ret
+	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Flags == otherConcrete.Flags && e.Ret == otherConcrete.Ret && e.Fd == otherConcrete.Fd
 }
 
 func (e *EventfdEvent) GetEventType() EventType {
@@ -1955,22 +1956,39 @@ var poolOfEventfdEvents = sync.Pool{
 }
 
 func NewEventfdEvent(raw []byte) *EventfdEvent {
-	e := poolOfEventfdEvents.Get().(*EventfdEvent)
-	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, e); err != nil {
-		*e = EventfdEvent{}
-		poolOfEventfdEvents.Put(e)
+	if len(raw) != 48 && len(raw) != 40 && len(raw) != 36 {
 		return nil
+	}
+	e := poolOfEventfdEvents.Get().(*EventfdEvent)
+	e.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	e.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	e.Time = binary.LittleEndian.Uint64(raw[8:16])
+	e.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	e.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	e.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	e.Fd = -1
+	retOffset := 28
+	if len(raw) >= 40 {
+		retOffset = 32
+	}
+	e.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
+	if len(raw) == 48 {
+		e.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))
 	}
 	return e
 }
 
 func (e *EventfdEvent) Bytes() ([]byte, error) {
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.LittleEndian, e)
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	raw := make([]byte, 48)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(e.EventType))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(e.TraceId))
+	binary.LittleEndian.PutUint64(raw[8:16], e.Time)
+	binary.LittleEndian.PutUint32(raw[16:20], e.Pid)
+	binary.LittleEndian.PutUint32(raw[20:24], e.Tid)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(e.Flags))
+	binary.LittleEndian.PutUint64(raw[32:40], uint64(e.Ret))
+	binary.LittleEndian.PutUint32(raw[40:44], uint32(e.Fd))
+	return raw, nil
 }
 
 func (e *EventfdEvent) Recycle() {

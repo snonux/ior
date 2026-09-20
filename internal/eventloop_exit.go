@@ -11,6 +11,38 @@ import (
 	"ior/internal/types"
 )
 
+// These raw CLOEXEC/NONBLOCK values come from distinct Linux UAPI flag words.
+// Keep them named separately even where their values coincide: merging them
+// would recreate the assumption that made syscall-specific bits look like
+// open(2) flags.
+const (
+	fanotifyCloexecFlag  = int32(1)
+	fanotifyNonblockFlag = int32(2)
+	memfdCloexecFlag     = int32(1)
+	fsopenCloexecFlag    = int32(1)
+	fsmountCloexecFlag   = int32(1)
+)
+
+type eventfdFlagMasks struct {
+	cloexec  int32
+	nonblock int32
+}
+
+var eventfdOpenFlagMasks = map[types.TraceId]eventfdFlagMasks{
+	types.SYS_ENTER_EPOLL_CREATE1:  {cloexec: syscall.O_CLOEXEC},
+	types.SYS_ENTER_INOTIFY_INIT1:  {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_FANOTIFY_INIT:  {cloexec: fanotifyCloexecFlag, nonblock: fanotifyNonblockFlag},
+	types.SYS_ENTER_EVENTFD2:       {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_MEMFD_CREATE:   {cloexec: memfdCloexecFlag},
+	types.SYS_ENTER_MEMFD_SECRET:   {cloexec: syscall.O_CLOEXEC},
+	types.SYS_ENTER_USERFAULTFD:    {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_SIGNALFD4:      {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_TIMERFD_CREATE: {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_PIDFD_OPEN:     {nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_FSMOUNT:        {cloexec: fsmountCloexecFlag},
+	types.SYS_ENTER_FSOPEN:         {cloexec: fsopenCloexecFlag},
+}
+
 func (e *eventLoop) initRuntimeEventKinds() {
 	if e.exitHandlers == nil {
 		e.exitHandlers = make(map[types.EventType]runtimeExitHandler)
@@ -447,12 +479,36 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 		flags = eventfdEv.Flags
 	}
 	if fd := int32(exitEv.Ret); fd >= 0 {
-		fdFile := file.NewFd(fd, eventfdDescriptorName(eventfdEv.GetTraceId(), flags), flags)
-		e.fdState().set(fd, eventfdEv.Pid, fdFile)
-		ep.File = fdFile
+		if eventfdReusesExistingFD(eventfdEv.GetTraceId(), eventfdEv.Fd) {
+			ep.File = e.fdState().resolve(fd, eventfdEv.Pid)
+		} else {
+			fdFile := file.NewFd(
+				fd,
+				eventfdDescriptorName(eventfdEv.GetTraceId(), flags),
+				eventfdOpenFlags(eventfdEv.GetTraceId(), flags),
+			)
+			e.fdState().set(fd, eventfdEv.Pid, fdFile)
+			ep.File = fdFile
+		}
 	}
 	ep.Comm = e.comm(eventfdEv.GetTid())
 	return e.finishPair(ep)
+}
+
+func eventfdOpenFlags(traceID types.TraceId, rawFlags int32) int32 {
+	masks := eventfdOpenFlagMasks[traceID]
+	var flags int32
+	if masks.cloexec != 0 && rawFlags&masks.cloexec != 0 {
+		flags |= syscall.O_CLOEXEC
+	}
+	if masks.nonblock != 0 && rawFlags&masks.nonblock != 0 {
+		flags |= syscall.O_NONBLOCK
+	}
+	return flags
+}
+
+func eventfdReusesExistingFD(traceID types.TraceId, fd int32) bool {
+	return fd >= 0 && (traceID == types.SYS_ENTER_SIGNALFD || traceID == types.SYS_ENTER_SIGNALFD4)
 }
 
 func (e *eventLoop) handleEpollCtlExit(ep *event.Pair, epollCtlEv *types.EpollCtlEvent) bool {

@@ -2112,6 +2112,7 @@ int handle_sys_enter_landlock_create_ruleset(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2146,6 +2147,7 @@ int handle_sys_exit_landlock_create_ruleset(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4207,6 +4209,7 @@ int handle_sys_enter_userfaultfd(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4241,6 +4244,7 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4271,6 +4275,7 @@ int handle_sys_enter_eventfd2(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4305,6 +4310,7 @@ int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4335,6 +4341,7 @@ int handle_sys_enter_eventfd(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4369,6 +4376,7 @@ int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4399,6 +4407,7 @@ int handle_sys_enter_timerfd_create(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4433,6 +4442,7 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4573,6 +4583,7 @@ int handle_sys_enter_signalfd4(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4607,6 +4618,7 @@ int handle_sys_exit_signalfd4(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4637,6 +4649,7 @@ int handle_sys_enter_signalfd(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4671,6 +4684,7 @@ int handle_sys_exit_signalfd(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4701,6 +4715,7 @@ int handle_sys_enter_epoll_create1(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4735,6 +4750,7 @@ int handle_sys_exit_epoll_create1(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4765,6 +4781,7 @@ int handle_sys_enter_epoll_create(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4799,6 +4816,7 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5058,6 +5076,7 @@ int handle_sys_enter_fanotify_init(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5092,6 +5111,7 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5178,6 +5198,7 @@ int handle_sys_enter_inotify_init1(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5212,6 +5233,7 @@ int handle_sys_exit_inotify_init1(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5242,6 +5264,7 @@ int handle_sys_enter_inotify_init(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5276,6 +5299,7 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5528,6 +5552,7 @@ int handle_sys_enter_fsopen(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5562,6 +5587,7 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7652,6 +7678,7 @@ int handle_sys_enter_fsmount(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7686,6 +7713,7 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12284,6 +12312,7 @@ int handle_sys_enter_memfd_create(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12318,6 +12347,7 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12348,6 +12378,7 @@ int handle_sys_enter_memfd_secret(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12382,6 +12413,7 @@ int handle_sys_exit_memfd_secret(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17216,6 +17248,7 @@ int handle_sys_enter_pidfd_open(struct syscall_trace_enter *ctx) {
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17250,6 +17283,7 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     }
     ev->flags = flags;
     ev->ret = ctx->ret;
+    ev->fd = -1;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
