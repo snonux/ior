@@ -39,7 +39,7 @@ func eventfdBasic() error {
 }
 
 func eventfd2Basic() error {
-	flags := uintptr(unix.EFD_CLOEXEC | unix.EFD_NONBLOCK)
+	flags := uintptr(unix.EFD_SEMAPHORE | unix.EFD_CLOEXEC | unix.EFD_NONBLOCK)
 	fd, err := createEventfd(syscall.SYS_EVENTFD2, 1, flags)
 	if err != nil {
 		return err
@@ -57,25 +57,43 @@ func createEventfd(number uintptr, initval, flags uintptr) (int, error) {
 }
 
 func fdFromAirEventfdUsers() error {
+	const kernelSigsetSize = uintptr(8) // _NSIG / 8 on Linux
+
 	memfdName, err := syscall.BytePtrFromString("ior-memfd")
 	if err != nil {
 		return fmt.Errorf("memfd name: %w", err)
 	}
-	fd, _, _ := syscall.RawSyscall(unix.SYS_MEMFD_CREATE, uintptr(unsafe.Pointer(memfdName)), uintptr(unix.MFD_CLOEXEC), 0)
+	memfdFlags := unix.MFD_CLOEXEC | unix.MFD_ALLOW_SEALING
+	fd, _, _ := syscall.RawSyscall(unix.SYS_MEMFD_CREATE, uintptr(unsafe.Pointer(memfdName)), uintptr(memfdFlags), 0)
 	closeIfValid(int(fd))
 
-	fd, _, _ = syscall.RawSyscall(unix.SYS_MEMFD_SECRET, 0, 0, 0)
+	fd, _, _ = syscall.RawSyscall(unix.SYS_MEMFD_SECRET, uintptr(unix.O_CLOEXEC), 0, 0)
 	closeIfValid(int(fd))
 
 	fd, _, _ = syscall.RawSyscall(unix.SYS_USERFAULTFD, uintptr(unix.O_CLOEXEC), 0, 0)
 	closeIfValid(int(fd))
 
 	var mask unix.Sigset_t
-	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), uintptr(unsafe.Sizeof(mask)))
+	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), kernelSigsetSize)
 	closeIfValid(int(fd))
 
 	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD4, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), uintptr(unsafe.Sizeof(mask)))
 	closeIfValid(int(fd))
+
+	// signalfd4 updates the signal mask of an existing signalfd when fd is
+	// nonnegative. Its flags argument applies only while creating a descriptor;
+	// issue both forms so tracing can prove the update keeps the creation flags.
+	signalFd, err := unix.Signalfd(-1, &mask, unix.SFD_CLOEXEC)
+	if err == nil {
+		_, _, _ = syscall.RawSyscall(
+			unix.SYS_SIGNALFD,
+			uintptr(signalFd),
+			uintptr(unsafe.Pointer(&mask)),
+			kernelSigsetSize,
+		)
+		_, _ = unix.Signalfd(signalFd, &mask, unix.SFD_NONBLOCK)
+		closeIfValid(signalFd)
+	}
 
 	// Create a timerfd and, while it is still open, arm it with
 	// timerfd_settime and read it back with timerfd_gettime. Both of those
@@ -87,6 +105,19 @@ func fdFromAirEventfdUsers() error {
 	fd, _, _ = syscall.RawSyscall(unix.SYS_TIMERFD_CREATE, uintptr(unix.CLOCK_MONOTONIC), uintptr(unix.TFD_CLOEXEC), 0)
 	if int(fd) >= 0 {
 		armAndReadTimerfd(int(fd))
+		closeIfValid(int(fd))
+	}
+	return nil
+}
+
+func fanotifyFlags() error {
+	fd, _, errno := syscall.RawSyscall(
+		unix.SYS_FANOTIFY_INIT,
+		uintptr(unix.FAN_CLOEXEC|unix.FAN_NONBLOCK),
+		uintptr(unix.O_RDONLY|unix.O_LARGEFILE),
+		0,
+	)
+	if errno == 0 {
 		closeIfValid(int(fd))
 	}
 	return nil

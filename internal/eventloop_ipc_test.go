@@ -1,9 +1,11 @@
 package internal
 
 import (
+	"syscall"
 	"testing"
 
 	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
@@ -110,6 +112,123 @@ func TestHandleEventfdExitTracksReturnedFd(t *testing.T) {
 		t.Fatal("handleEventfdExit returned false")
 	}
 	verifyFileDescriptor(t, el, 80, 61, "eventfd:2048")
+}
+
+func TestHandleEventfdExitTranslatesSyscallFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		traceID types.TraceId
+		raw     int32
+		want    string
+	}{
+		{name: "epoll_create", traceID: types.SYS_ENTER_EPOLL_CREATE, raw: 1, want: "O_RDONLY"},
+		{name: "epoll_create1", traceID: types.SYS_ENTER_EPOLL_CREATE1, raw: syscall.O_CLOEXEC, want: "O_RDONLY|O_CLOEXEC"},
+		{name: "inotify_init", traceID: types.SYS_ENTER_INOTIFY_INIT, raw: 2, want: "O_RDONLY"},
+		{name: "inotify_init1", traceID: types.SYS_ENTER_INOTIFY_INIT1, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "fanotify_init", traceID: types.SYS_ENTER_FANOTIFY_INIT, raw: 1 | 2, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "landlock_create_ruleset", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, raw: 1, want: "O_RDONLY"},
+		{name: "eventfd", traceID: types.SYS_ENTER_EVENTFD, raw: 1, want: "O_RDONLY"},
+		{name: "eventfd2", traceID: types.SYS_ENTER_EVENTFD2, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, raw: 1 | 2 | 4, want: "O_RDONLY|O_CLOEXEC"},
+		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, raw: syscall.O_CLOEXEC, want: "O_RDONLY|O_CLOEXEC"},
+		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "signalfd", traceID: types.SYS_ENTER_SIGNALFD, raw: 1, want: "O_RDONLY"},
+		{name: "signalfd4", traceID: types.SYS_ENTER_SIGNALFD4, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "timerfd_create", traceID: types.SYS_ENTER_TIMERFD_CREATE, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "pidfd_open", traceID: types.SYS_ENTER_PIDFD_OPEN, raw: syscall.O_NONBLOCK, want: "O_RDONLY|O_NONBLOCK"},
+		{name: "fsmount", traceID: types.SYS_ENTER_FSMOUNT, raw: 1, want: "O_RDONLY|O_CLOEXEC"},
+		{name: "fsopen", traceID: types.SYS_ENTER_FSOPEN, raw: 1, want: "O_RDONLY|O_CLOEXEC"},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			fd := int32(100 + i)
+			pid := uint32(200 + i)
+			enter := &types.EventfdEvent{
+				EventType: types.ENTER_EVENTFD_EVENT,
+				TraceId:   tt.traceID,
+				Pid:       pid,
+				Tid:       pid,
+				Flags:     tt.raw,
+				Fd:        -1,
+				Ret:       -1,
+			}
+			exit := &types.EventfdEvent{
+				EventType: types.EXIT_EVENTFD_EVENT,
+				Pid:       pid,
+				Tid:       pid,
+				Flags:     tt.raw,
+				Fd:        -1,
+				Ret:       int64(fd),
+			}
+			ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+			if ok := el.handleEventfdExit(ep, enter); !ok {
+				t.Fatal("handleEventfdExit returned false")
+			}
+			tracked, ok := el.fdState().files[fdKey(pid, fd)]
+			if !ok {
+				t.Fatalf("pid %d fd %d was not tracked", pid, fd)
+			}
+			if got := tracked.Flags().String(); got != tt.want {
+				t.Fatalf("tracked flags = %q, want %q (raw %#x)", got, tt.want, tt.raw)
+			}
+		})
+	}
+}
+
+func TestHandleSignalfdUpdateKeepsExistingDescriptorMetadata(t *testing.T) {
+	tests := []struct {
+		name  string
+		enter types.TraceId
+		exit  types.TraceId
+		flags int32
+	}{
+		{name: "signalfd", enter: types.SYS_ENTER_SIGNALFD, exit: types.SYS_EXIT_SIGNALFD},
+		{name: "signalfd4", enter: types.SYS_ENTER_SIGNALFD4, exit: types.SYS_EXIT_SIGNALFD4, flags: syscall.O_NONBLOCK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			const (
+				pid = uint32(90)
+				fd  = int32(62)
+			)
+			existing := file.NewFd(fd, "signalfd:existing", syscall.O_CLOEXEC)
+			el.fdState().set(fd, pid, existing)
+			enter := &types.EventfdEvent{
+				EventType: types.ENTER_EVENTFD_EVENT,
+				TraceId:   tt.enter,
+				Pid:       pid,
+				Tid:       91,
+				Flags:     tt.flags,
+				Fd:        fd,
+				Ret:       -1,
+			}
+			exit := &types.EventfdEvent{
+				EventType: types.EXIT_EVENTFD_EVENT,
+				TraceId:   tt.exit,
+				Pid:       pid,
+				Tid:       91,
+				Flags:     tt.flags,
+				Fd:        -1,
+				Ret:       int64(fd),
+			}
+			ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+			if ok := el.handleEventfdExit(ep, enter); !ok {
+				t.Fatal("handleEventfdExit returned false")
+			}
+			tracked := el.fdState().files[fdKey(pid, fd)]
+			if tracked != existing {
+				t.Fatal("signalfd update replaced the existing tracked descriptor")
+			}
+			if got := tracked.Flags().String(); got != "O_RDONLY|O_CLOEXEC" {
+				t.Fatalf("tracked flags = %q, want unchanged O_RDONLY|O_CLOEXEC", got)
+			}
+		})
+	}
 }
 
 func TestHandleEventfdExitAppliesPairFilter(t *testing.T) {

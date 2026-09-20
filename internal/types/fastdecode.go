@@ -38,17 +38,21 @@ const (
 	acceptEventSizeV1         = 36
 	pipeEventSize             = 48
 	pipeEventSizeV1           = 44
-	eventfdEventSize          = 40
-	eventfdEventSizeV1        = 36
-	epollCtlEventSize         = 40
-	twoFdEventSize            = 40
-	pollEventSize             = 40
-	pollEventSizeV1           = 36
-	memEventSize              = 56
-	sleepEventSize            = 32
-	keyctlEventSize           = 40
-	ptraceEventSize           = 48
-	perfOpenEventSize         = 56
+	eventfdEventSize          = 48
+	// eventfdEventSizeV2 is the former kernel layout, before fd was appended.
+	// EventfdEvent.Bytes emits the padded 48-byte current layout so it cannot be
+	// confused with this legacy payload.
+	eventfdEventSizeV2 = 40
+	eventfdEventSizeV1 = 36
+	epollCtlEventSize  = 40
+	twoFdEventSize     = 40
+	pollEventSize      = 40
+	pollEventSizeV1    = 36
+	memEventSize       = 56
+	sleepEventSize     = 32
+	keyctlEventSize    = 40
+	ptraceEventSize    = 48
+	perfOpenEventSize  = 56
 	// process_exec_event is not a syscall event; it is the control record
 	// emitted by sched:sched_process_exec. 4+4+8+4+4+16 = 40 bytes with no
 	// trailing padding, so kernel and binary.Write payloads share one size.
@@ -418,7 +422,7 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 	if len(raw) < eventfdEventSizeV1 {
 		return nil
 	}
-	if len(raw) != eventfdEventSize && len(raw) != eventfdEventSizeV1 {
+	if len(raw) != eventfdEventSize && len(raw) != eventfdEventSizeV2 && len(raw) != eventfdEventSizeV1 {
 		return NewEventfdEvent(raw)
 	}
 	e := poolOfEventfdEvents.Get().(*EventfdEvent)
@@ -428,11 +432,15 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 	e.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	e.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	e.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	e.Fd = -1
 	retOffset := 28
-	if len(raw) == eventfdEventSize {
+	if len(raw) >= eventfdEventSizeV2 {
 		retOffset = 32
 	}
 	e.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
+	if len(raw) == eventfdEventSize {
+		e.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))
+	}
 	return e
 }
 

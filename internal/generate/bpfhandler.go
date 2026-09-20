@@ -379,19 +379,32 @@ var eventfdFlagsExpr = map[string]string{
 	"sys_enter_fsopen":                  "(__s32)ctx->args[1]",
 }
 
+// eventfdFDExpr maps eventfd-family syscalls that can update an existing
+// descriptor to the argument carrying that descriptor. The other syscalls
+// always create a descriptor and use -1.
+var eventfdFDExpr = map[string]string{
+	"sys_enter_signalfd":  "(__s32)ctx->args[0]",
+	"sys_enter_signalfd4": "(__s32)ctx->args[0]",
+}
+
 // generateExtraEventfd emits the enter/exit body for eventfd-family syscalls.
 // Enter: reads the flags expression from eventfdFlagsExpr (defaults to "0"),
-// stashes it in eventfd_flags_map, and sets ev->ret = -1.
-// Exit: retrieves the stashed flags from the map and captures ctx->ret.
+// stashes it in eventfd_flags_map, captures an existing descriptor when the
+// syscall accepts one, and sets ev->ret = -1. Exit retrieves the stashed flags
+// from the map and captures ctx->ret.
 func generateExtraEventfd(f *Format, isEnter bool) string {
 	if isEnter {
 		flagsExpr := eventfdFlagsExpr[f.Name] // empty string if not found
 		if flagsExpr == "" {
 			flagsExpr = "0"
 		}
-		return "    __s32 flags = " + flagsExpr + ";\n    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n    ev->flags = flags;\n    ev->ret = -1;\n"
+		fdExpr := eventfdFDExpr[f.Name]
+		if fdExpr == "" {
+			fdExpr = "-1"
+		}
+		return "    __s32 flags = " + flagsExpr + ";\n    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n    ev->flags = flags;\n    ev->ret = -1;\n    ev->fd = " + fdExpr + ";\n"
 	}
-	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n"
+	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
 }
 
 func generateExtraEpollCtl() string {

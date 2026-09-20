@@ -253,10 +253,14 @@ func TestEventfdEventSerialization(t *testing.T) {
 		Tid:       39,
 		Flags:     0x800,
 		Ret:       12,
+		Fd:        7,
 	}
 	bytes, err := eventfdEv1.Bytes()
 	if err != nil {
 		t.Error(err)
+	}
+	if len(bytes) != eventfdEventSize {
+		t.Fatalf("serialized eventfd size = %d, want %d", len(bytes), eventfdEventSize)
 	}
 	eventfdEv2 := NewEventfdEvent(bytes)
 
@@ -267,6 +271,7 @@ func TestEventfdEventSerialization(t *testing.T) {
 	assertEquals(t, eventfdEv1.Tid, eventfdEv2.Tid)
 	assertEquals(t, eventfdEv1.Flags, eventfdEv2.Flags)
 	assertEquals(t, eventfdEv1.Ret, eventfdEv2.Ret)
+	assertEquals(t, eventfdEv1.Fd, eventfdEv2.Fd)
 }
 
 func TestEpollCtlEventSerialization(t *testing.T) {

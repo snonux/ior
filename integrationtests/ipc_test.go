@@ -59,7 +59,14 @@ func TestEventfdBasic(t *testing.T) {
 
 func TestEventfd2Basic(t *testing.T) {
 	result, _ := runScenarioResultWithIorArgs(t, "eventfd2-basic", []ExpectedEvent{
-		{Tracepoint: "enter_eventfd2", MinCount: 1},
+		{
+			Tracepoint: "enter_eventfd2",
+			MinCount:   1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
+			},
+		},
 		{Tracepoint: "enter_close", MinCount: 1},
 	}, ipcDescriptorTraceArgs)
 
@@ -79,7 +86,14 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 	AssertNoUnexpectedPID(t, result, pid)
 	AssertNoUnexpectedComm(t, result, "ioworkload")
 	AssertEventsPresent(t, result, []ExpectedEvent{
-		{Tracepoint: "enter_memfd_create", MinCount: 1},
+		{
+			Tracepoint: "enter_memfd_create",
+			MinCount:   1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC,
+			},
+		},
 		{Tracepoint: "enter_memfd_secret", MinCount: 1},
 		{Tracepoint: "enter_userfaultfd", MinCount: 1},
 		{Tracepoint: "enter_signalfd", MinCount: 1},
@@ -89,6 +103,26 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 		// timerfd_settime/gettime fire against the existing descriptor.
 		{Tracepoint: "enter_timerfd_settime", MinCount: 1},
 		{Tracepoint: "enter_timerfd_gettime", MinCount: 1},
+		{
+			Tracepoint:   "enter_signalfd",
+			PathContains: "signalfd:",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC,
+				Clear:      syscall.O_NONBLOCK,
+			},
+		},
+		{
+			Tracepoint:   "enter_close",
+			PathContains: "signalfd:",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC,
+				Clear:      syscall.O_NONBLOCK,
+			},
+		},
 	})
 
 	assertTracepointPathPrefix(t, result, "enter_memfd_create", "memfd:")
@@ -99,6 +133,39 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 	// fd_event rather than emitting a null event, locking in the 6ac9fa4 fix.
 	assertTracepointPathPrefix(t, result, "enter_timerfd_settime", "timerfd:")
 	assertTracepointPathPrefix(t, result, "enter_timerfd_gettime", "timerfd:")
+}
+
+func TestFanotifyFlags(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "fanotify-flags", []ExpectedEvent{
+		{Tracepoint: "enter_fanotify_init", MinCount: 1},
+	}, []string{"-trace-syscalls", "fanotify_init,close"})
+
+	// This isolated workload closes a descriptor only when fanotify_init
+	// succeeds. Use that syscall outcome, not the label under test, to decide
+	// whether an unprivileged EPERM skip is expected.
+	if totalTracepointPathCount(result, "enter_close", "") == 0 {
+		return
+	}
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{
+			Tracepoint:   "enter_fanotify_init",
+			PathContains: "fanotifyfd:",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
+			},
+		},
+		{
+			Tracepoint:   "enter_close",
+			PathContains: "fanotifyfd:",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDONLY),
+				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
+			},
+		},
+	})
 }
 
 // TestInotifyBasic asserts end-to-end tracing of the inotify IPC family.
