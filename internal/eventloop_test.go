@@ -629,6 +629,45 @@ func makeExitFdEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, trace
 	return ev, bytes
 }
 
+func makeEnterMmapEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, length, flags uint64) (types.MmapEvent, []byte) {
+	t.Helper()
+	ev := types.MmapEvent{
+		EventType: types.ENTER_MMAP_EVENT,
+		TraceId:   types.SYS_ENTER_MMAP,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Length:    length,
+		Flags:     flags,
+		Fd:        fd,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ev, bytes
+}
+
+func makeEnterMemEvent(t *testing.T, time uint64, pid, tid uint32, traceID types.TraceId, length, flags uint64) (types.MemEvent, []byte) {
+	t.Helper()
+	ev := types.MemEvent{
+		EventType: types.ENTER_MEM_EVENT,
+		TraceId:   traceID,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Length:    length,
+		Flags:     flags,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ev, bytes
+}
+
 // makeEnterTwoFdEvent builds an enter two_fd_event and its wire bytes. For
 // close_range the three fields carry (first, last, flags).
 func makeEnterTwoFdEvent(t *testing.T, time uint64, pid, tid uint32, fdA, fdB int32, extra uint64, traceId types.TraceId) (types.TwoFdEvent, []byte) {
@@ -1286,7 +1325,8 @@ func makeMmapEventTestData(t *testing.T) (td testData) {
 	}
 	td.rawTracepoints = append(td.rawTracepoints, openExitBytes)
 
-	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime+200, defaultPid, defaultTid, fd, types.SYS_ENTER_MMAP)
+	const mappingLength = uint64(4096)
+	enterEv, enterEvBytes := makeEnterMmapEvent(t, defaulTime+200, defaultPid, defaultTid, fd, mappingLength, syscall.MAP_SHARED)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	const fakeMappedAddr = int64(0x70000000)
@@ -1316,13 +1356,17 @@ func makeMmapEventTestData(t *testing.T) (td testData) {
 		if ep.File.Name() != filename {
 			t.Errorf("Expected mmap file name '%s' but got '%s'", filename, ep.File.Name())
 		}
+		if ep.AddressSpaceBytes != mappingLength {
+			t.Errorf("Expected mmap address-space bytes %d but got %d", mappingLength, ep.AddressSpaceBytes)
+		}
 	})
 
 	return td
 }
 
 func makeMsyncEventTestData(t *testing.T) (td testData) {
-	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_MSYNC)
+	const syncLength = uint64(8192)
+	enterEv, enterEvBytes := makeEnterMemEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_MSYNC, syncLength, syscall.MS_SYNC)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_MSYNC, 0)
@@ -1337,6 +1381,9 @@ func makeMsyncEventTestData(t *testing.T) (td testData) {
 		}
 		if ep.File != nil {
 			t.Errorf("Expected msync event to not carry file metadata, got %v", ep.File)
+		}
+		if ep.AddressSpaceBytes != syncLength {
+			t.Errorf("Expected msync address-space bytes %d but got %d", syncLength, ep.AddressSpaceBytes)
 		}
 	})
 

@@ -49,6 +49,8 @@ const (
 	pollEventSize      = 40
 	pollEventSizeV1    = 36
 	memEventSize       = 56
+	mmapEventSize      = 64
+	mmapEventSizeV1    = 60
 	sleepEventSize     = 32
 	keyctlEventSize    = 40
 	ptraceEventSize    = 48
@@ -538,6 +540,30 @@ func NewMemEventFast(raw []byte) *MemEvent {
 	m.Length = binary.LittleEndian.Uint64(raw[32:40])
 	m.Length2 = binary.LittleEndian.Uint64(raw[40:48])
 	m.Flags = binary.LittleEndian.Uint64(raw[48:56])
+	return m
+}
+
+// NewMmapEventFast decodes one mmap ring-buffer payload in a single pass.
+// It accepts both the kernel's aligned sizeof(struct mmap_event) payload and
+// the unpadded field-sum layout emitted by MmapEvent.Bytes in tests.
+func NewMmapEventFast(raw []byte) *MmapEvent {
+	if len(raw) < mmapEventSizeV1 {
+		return nil
+	}
+	if len(raw) != mmapEventSize && len(raw) != mmapEventSizeV1 {
+		return NewMmapEvent(raw)
+	}
+	m := poolOfMmapEvents.Get().(*MmapEvent)
+	m.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	m.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	m.Time = binary.LittleEndian.Uint64(raw[8:16])
+	m.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	m.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	m.Addr = binary.LittleEndian.Uint64(raw[24:32])
+	m.Length = binary.LittleEndian.Uint64(raw[32:40])
+	m.Prot = binary.LittleEndian.Uint64(raw[40:48])
+	m.Flags = binary.LittleEndian.Uint64(raw[48:56])
+	m.Fd = int32(binary.LittleEndian.Uint32(raw[56:60]))
 	return m
 }
 

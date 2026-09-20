@@ -1157,10 +1157,26 @@ func TestGenerateMmapHandlerUsesFdArgumentIndex(t *testing.T) {
 	output := generateFromPair(t, FormatMmap, FormatExitMmap)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mmap")`)
-	requireContains(t, output, "struct fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "struct mmap_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MMAP_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_MMAP;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->prot = (__u64)ctx->args[2];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[3];")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[4];")
+}
+
+func TestGenerateMsyncHandlerCapturesMemoryRange(t *testing.T) {
+	output := generateFromPair(t, FormatMsync, FormatExitMsync)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_msync")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
 }
 
 func TestGenerateMemHandler(t *testing.T) {
@@ -2284,6 +2300,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindTwoFd, "ENTER_TWO_FD_EVENT", "EXIT_TWO_FD_EVENT"},
 		{KindPoll, "ENTER_POLL_EVENT", "EXIT_POLL_EVENT"},
 		{KindMem, "ENTER_MEM_EVENT", "EXIT_MEM_EVENT"},
+		{KindMmap, "ENTER_MMAP_EVENT", "EXIT_MMAP_EVENT"},
 		{KindSleep, "ENTER_SLEEP_EVENT", "EXIT_SLEEP_EVENT"},
 		{KindKeyctl, "ENTER_KEYCTL_EVENT", "EXIT_KEYCTL_EVENT"},
 		{KindPtrace, "ENTER_PTRACE_EVENT", "EXIT_PTRACE_EVENT"},
@@ -2336,6 +2353,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindTwoFd, "two_fd_event"},
 		{KindPoll, "poll_event"},
 		{KindMem, "mem_event"},
+		{KindMmap, "mmap_event"},
 		{KindSleep, "sleep_event"},
 		{KindKeyctl, "keyctl_event"},
 		{KindPtrace, "ptrace_event"},
@@ -2367,7 +2385,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

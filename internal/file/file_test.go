@@ -75,6 +75,23 @@ func TestNewPathnameEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAnonymousMapping(t *testing.T) {
+	f := NewAnonymousMapping()
+
+	if got := f.Name(); got != "anon" {
+		t.Fatalf("Name() = %q, want anon", got)
+	}
+	if got := f.String(); got != "anon" {
+		t.Fatalf("String() = %q, want anon", got)
+	}
+	if got := f.FD(); got != -1 {
+		t.Fatalf("FD() = %d, want -1", got)
+	}
+	if got := f.Flags(); got != unknownFlag {
+		t.Fatalf("Flags() = %v, want unknown", got)
+	}
+}
+
 func TestFdFileSetFlags(t *testing.T) {
 	fdFile := NewFd(1, "test.txt", 0)
 	if fdFile.Flags() != Flags(0) {

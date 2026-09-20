@@ -13,9 +13,8 @@ import (
 
 // File is the common interface for file-like syscall payload representations.
 //
-// Implementations may represent either a live file descriptor-backed handle
-// (FdFile) or partial path metadata for syscalls that do not resolve to a
-// stable descriptor (for example rename-like or pathname-only events).
+// Implementations may represent a live file descriptor-backed handle (FdFile),
+// partial path metadata, or a descriptor-free anonymous memory mapping.
 //
 // Semantics:
 //   - Name returns the best single-path identifier for the event. For
@@ -252,6 +251,30 @@ func (f pathnameFile) String() string {
 	return sb.String()
 }
 
+type anonymousMappingFile struct{}
+
+// NewAnonymousMapping creates the file representation for an mmap mapping
+// whose MAP_ANONYMOUS flag makes the descriptor argument irrelevant.
+func NewAnonymousMapping() anonymousMappingFile {
+	return anonymousMappingFile{}
+}
+
+func (anonymousMappingFile) Name() string {
+	return "anon"
+}
+
+func (anonymousMappingFile) Flags() Flags {
+	return unknownFlag
+}
+
+func (anonymousMappingFile) FD() int32 {
+	return -1
+}
+
+func (anonymousMappingFile) String() string {
+	return "anon"
+}
+
 // --- compile-time interface satisfaction assertions ---
 //
 // *FdFile is the primary public implementation of File used throughout the
@@ -259,3 +282,4 @@ func (f pathnameFile) String() string {
 // with the File interface contract.
 
 var _ File = (*FdFile)(nil)
+var _ File = anonymousMappingFile{}
