@@ -67,6 +67,22 @@ func TestClassifySendfile64CapturesOutFd(t *testing.T) {
 	}
 }
 
+// TestClassifyOpenTreeSyscallsUseDedicatedKind pins open_tree(2) and
+// open_tree_attr(2) ahead of the generic "open"+filename rule. Their flags
+// are OPEN_TREE_*/AT_* bits rather than an open(2) O_* word, so classifying
+// either as KindOpen would let those raw bits reach ordinary open-flag
+// rendering and fd registration unchanged.
+func TestClassifyOpenTreeSyscallsUseDedicatedKind(t *testing.T) {
+	for i, name := range []string{"open_tree", "open_tree_attr"} {
+		t.Run(name, func(t *testing.T) {
+			formats := openTreeFormats(name, 9600+i*2)
+			if got := ClassifyFormat(&formats[0]).Kind; got != KindOpenTree {
+				t.Fatalf("%s kind = %v, want KindOpenTree", name, got)
+			}
+		})
+	}
+}
+
 // --- End-to-end codegen: enter+exit pairs must be accepted and emit handlers ---
 
 func TestClassifySyscallPairAccepted(t *testing.T) {
@@ -432,6 +448,38 @@ func mqFormats(name string, enterID int) []Format {
 			Name:   "sys_exit_" + name,
 			ID:     enterID - 1,
 			Family: ClassifySyscallFamily("sys_exit_" + name),
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "long", Name: "ret"},
+			},
+		},
+	}
+}
+
+func openTreeFormats(name string, enterID int) []Format {
+	enterFields := []Field{
+		{Type: "long", Name: "__syscall_nr"},
+		{Type: "int", Name: "dfd"},
+		{Type: "const char *", Name: "filename"},
+		{Type: "unsigned int", Name: "flags"},
+	}
+	if name == "open_tree_attr" {
+		enterFields = append(enterFields,
+			Field{Type: "struct mount_attr *", Name: "attr"},
+			Field{Type: "size_t", Name: "size"},
+		)
+	}
+	return []Format{
+		{
+			Name:           "sys_enter_" + name,
+			ID:             enterID,
+			Family:         FamilyFS,
+			ExternalFields: enterFields,
+		},
+		{
+			Name:   "sys_exit_" + name,
+			ID:     enterID - 1,
+			Family: FamilyFS,
 			ExternalFields: []Field{
 				{Type: "long", Name: "__syscall_nr"},
 				{Type: "long", Name: "ret"},

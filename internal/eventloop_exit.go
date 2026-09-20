@@ -9,6 +9,8 @@ import (
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
+
+	"golang.org/x/sys/unix"
 )
 
 // These raw CLOEXEC/NONBLOCK values come from distinct Linux UAPI flag words.
@@ -90,7 +92,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	comm := types.StringValue(openEv.Comm[:])
 	ep.Comm = comm
 	if fd := int32(retEvent.Ret); fd >= 0 {
-		fdFile := file.NewFd(fd, types.StringValue(openEv.Filename[:]), openEv.Flags)
+		fdFile := file.NewFd(fd, types.StringValue(openEv.Filename[:]), openEventFlags(openEv))
 		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
@@ -111,6 +113,19 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	// payload bytes MatchOpenEvent already matched, so the two can never
 	// disagree, and there is no oldname/newname asymmetry to preserve.
 	return e.finishPair(ep)
+}
+
+func openEventFlags(openEv *types.OpenEvent) int32 {
+	switch openEv.GetTraceId() {
+	case types.SYS_ENTER_OPEN_TREE, types.SYS_ENTER_OPEN_TREE_ATTR:
+		flags := int32(unix.O_PATH)
+		if openEv.Flags&int32(unix.OPEN_TREE_CLOEXEC) != 0 {
+			flags |= syscall.O_CLOEXEC
+		}
+		return flags
+	default:
+		return openEv.Flags
+	}
 }
 
 func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool {
