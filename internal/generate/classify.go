@@ -12,8 +12,7 @@ const (
 	// KindNone means the format could not be classified.
 	KindNone TracepointKind = iota
 	// KindFd carries the descriptor number at the classifier-selected
-	// argument slot - args[0] for nearly all of the cohort, with mmap's fd
-	// arriving at args[4].
+	// argument slot - args[0] for nearly all of the cohort.
 	KindFd
 	// KindOpen carries a pathname plus open flags.
 	KindOpen
@@ -63,9 +62,13 @@ const (
 	// KindPoll carries the polled fd count and timeout.
 	KindPoll
 	// KindMem carries address, length (plus length2 for the mremap
-	// variants) and flags - the mprotect/mremap/mlock cohort; mmap itself
-	// classifies as KindFd.
+	// variants) and flags - the mprotect/mremap/mlock/msync cohort.
 	KindMem
+	// KindMmap carries mmap's fd together with the complete mapping range,
+	// protection and flags. It is distinct from KindFd because mmap's length
+	// contributes to address-space accounting, and distinct from KindMem
+	// because file-backed mappings still need descriptor resolution.
+	KindMmap
 	// KindSleep carries the requested sleep duration.
 	KindSleep
 	// KindKeyctl carries the keyctl option, key serial and value.
@@ -151,6 +154,8 @@ func (k TracepointKind) MetadataName() string {
 		return "poll"
 	case KindMem:
 		return "mem"
+	case KindMmap:
+		return "mmap"
 	case KindSleep:
 		return "sleep"
 	case KindKeyctl:
@@ -248,7 +253,7 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_fcntl":             KindFcntl,
 	"sys_enter_syslog":            KindNull,
 	"sys_enter_sync":              KindNull,
-	"sys_enter_msync":             KindNull,
+	"sys_enter_msync":             KindMem,
 	"sys_enter_getcwd":            KindNull,
 
 	"sys_enter_socket":     KindSocket,
@@ -387,6 +392,7 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_bpf": KindBpf,
 
 	"sys_enter_mprotect":         KindMem,
+	"sys_enter_mmap":             KindMmap,
 	"sys_enter_madvise":          KindMem,
 	"sys_enter_pkey_mprotect":    KindMem,
 	"sys_enter_brk":              KindMem,

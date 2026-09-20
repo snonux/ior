@@ -52,6 +52,8 @@
 #define PROCESS_EXEC_EVENT 47
 #define OPEN_NAME_FIXUP_EVENT 48
 #define PROCESS_EXIT_EVENT 49
+#define ENTER_MMAP_EVENT 50
+#define EXIT_MMAP_EVENT 51
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -255,6 +257,19 @@ struct mem_event {
     __u64 length;
     __u64 length2;
     __u64 flags;
+};
+
+struct mmap_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u64 addr;
+    __u64 length;
+    __u64 prot;
+    __u64 flags;
+    __s32 fd;
 };
 
 struct sleep_event {

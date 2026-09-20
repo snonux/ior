@@ -579,6 +579,15 @@ func (e *eventLoop) handleMemExit(ep *event.Pair, memEv *types.MemEvent) bool {
 	return e.finishPairForTid(ep, memEv.GetTid())
 }
 
+func (e *eventLoop) handleMmapExit(ep *event.Pair, mmapEv *types.MmapEvent) bool {
+	if mmapEv.Flags&syscall.MAP_ANON != 0 {
+		ep.File = file.NewAnonymousMapping()
+	} else {
+		ep.File = e.fdState().resolve(mmapEv.Fd, mmapEv.Pid)
+	}
+	return e.finishPairForTid(ep, mmapEv.GetTid())
+}
+
 func (e *eventLoop) handleSleepExit(ep *event.Pair, sleepEv *types.SleepEvent) bool {
 	return e.finishPairForTid(ep, sleepEv.GetTid())
 }
@@ -817,15 +826,16 @@ func applyAddressSpaceBytes(ep *event.Pair) {
 	if ep == nil {
 		return
 	}
-	memEv, ok := ep.EnterEv.(*types.MemEvent)
-	if !ok {
-		return
-	}
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok || retEv.Ret < 0 {
 		return
 	}
-	ep.AddressSpaceBytes = addressSpaceBytesFromMem(memEv)
+	switch enterEv := ep.EnterEv.(type) {
+	case *types.MemEvent:
+		ep.AddressSpaceBytes = addressSpaceBytesFromMem(enterEv.TraceId, enterEv.Length, enterEv.Length2)
+	case *types.MmapEvent:
+		ep.AddressSpaceBytes = addressSpaceBytesFromMem(enterEv.TraceId, enterEv.Length, 0)
+	}
 }
 
 func applyRequestedSleepNs(ep *event.Pair) {
@@ -859,18 +869,15 @@ func bytesFromRet(retEv *types.RetEvent) uint64 {
 	}
 }
 
-func addressSpaceBytesFromMem(memEv *types.MemEvent) uint64 {
-	if memEv == nil {
-		return 0
-	}
-	switch memEv.GetTraceId() {
-	case types.SYS_ENTER_MUNMAP:
-		return memEv.Length
+func addressSpaceBytesFromMem(traceID types.TraceId, length, length2 uint64) uint64 {
+	switch traceID {
+	case types.SYS_ENTER_MMAP, types.SYS_ENTER_MSYNC, types.SYS_ENTER_MUNMAP:
+		return length
 	case types.SYS_ENTER_MREMAP:
-		if memEv.Length > memEv.Length2 {
-			return memEv.Length
+		if length > length2 {
+			return length
 		}
-		return memEv.Length2
+		return length2
 	default:
 		return 0
 	}

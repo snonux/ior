@@ -177,6 +177,7 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindTwoFd:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraTwoFd(tp.Format.Name) },
 	KindPoll:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraPoll(tp.Format.Name) },
 	KindMem:            func(tp GeneratedTracepoint, _ bool) string { return generateExtraMem(tp.Format.Name) },
+	KindMmap:           func(_ GeneratedTracepoint, _ bool) string { return generateExtraMmap() },
 	KindSleep:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraSleep(tp.Format.Name) },
 	KindKeyctl:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraKeyctl(tp.Format.Name) },
 	KindPtrace:         func(_ GeneratedTracepoint, _ bool) string { return generateExtraPtrace() },
@@ -546,6 +547,7 @@ type memFieldSpec struct {
 // the default (unregistered) case emits all zeroes.
 var memFieldOverrides = map[string]memFieldSpec{
 	"sys_enter_mprotect":         {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
+	"sys_enter_msync":            {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
 	"sys_enter_madvise":          {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", flags: "(__u64)ctx->args[2]"},
 	"sys_enter_pkey_mprotect":    {addr: "(__u64)ctx->args[0]", length: "(__u64)ctx->args[1]", length2: "(__u64)ctx->args[3]", flags: "(__u64)ctx->args[2]"},
 	"sys_enter_brk":              {addr: "(__u64)ctx->args[0]"},
@@ -566,6 +568,17 @@ func generateExtraMem(name string) string {
 	spec := memFieldOverrides[name] // zero-value memFieldSpec if not found
 	return fmt.Sprintf("    ev->addr = %s;\n    ev->length = %s;\n    ev->length2 = %s;\n    ev->flags = %s;\n",
 		memExpr(spec.addr), memExpr(spec.length), memExpr(spec.length2), memExpr(spec.flags))
+}
+
+// generateExtraMmap emits mmap's complete mapping semantics. mmap is the one
+// memory-range syscall that also needs descriptor resolution, so it has a
+// dedicated event rather than widening every mem_event with fd and prot.
+func generateExtraMmap() string {
+	return "    ev->addr = (__u64)ctx->args[0];\n" +
+		"    ev->length = (__u64)ctx->args[1];\n" +
+		"    ev->prot = (__u64)ctx->args[2];\n" +
+		"    ev->flags = (__u64)ctx->args[3];\n" +
+		"    ev->fd = (__s32)ctx->args[4];\n"
 }
 
 // memExpr returns expr if non-empty, otherwise the literal "0".

@@ -9,7 +9,10 @@ const (
 	mmapParquetDuration           = 6
 	mmapWorkloadStartupEnv        = "IOR_WORKLOAD_STARTUP_DELAY_MS=1000"
 	mmapScenarioAddressSpaceBytes = 8192
-	mmapMinAddressSpaceBytesTotal = mmapScenarioAddressSpaceBytes * 2
+	mmapInitialAddressSpaceBytes  = 4096
+	mmapMinAddressSpaceBytesTotal = mmapInitialAddressSpaceBytes + mmapScenarioAddressSpaceBytes*2
+	mmapBasicLength               = uint64(len("mmap shared page data"))
+	mmapMsyncLength               = uint64(len("msync shared page data"))
 )
 
 var mmapTraceArgs = []string{"-trace-syscalls", "openat,write,close,mmap,msync,mremap,munmap"}
@@ -31,20 +34,35 @@ func TestMmapBasic(t *testing.T) {
 	}, mmapTraceArgs)
 }
 
+func TestMmapBasicAddressSpaceBytesInParquet(t *testing.T) {
+	rows, _ := runParquetScenarioRows(t, "mmap-basic", defaultDuration, mmapTraceArgs, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
+		{
+			FileContains:      "mmapfile.txt",
+			Syscall:           "mmap",
+			Comm:              "ioworkload",
+			IsError:           ptrTo(false),
+			AddressSpaceBytes: ptrTo(mmapBasicLength),
+		},
+	})
+}
+
 func TestMmapMsyncSync(t *testing.T) {
 	rows, _ := runParquetScenarioRows(t, "mmap-msync-sync", defaultDuration, mmapTraceArgs, nil)
 	AssertRowsPresent(t, rows, []ExpectedRow{
 		{
-			FileContains: "msyncfile.txt",
-			Syscall:      "mmap",
-			Comm:         "ioworkload",
-			IsError:      ptrTo(false),
+			FileContains:      "msyncfile.txt",
+			Syscall:           "mmap",
+			Comm:              "ioworkload",
+			IsError:           ptrTo(false),
+			AddressSpaceBytes: ptrTo(mmapMsyncLength),
 		},
 		{
-			Syscall: "msync",
-			Comm:    "ioworkload",
-			RetVal:  ptrTo(int64(0)),
-			IsError: ptrTo(false),
+			Syscall:           "msync",
+			Comm:              "ioworkload",
+			RetVal:            ptrTo(int64(0)),
+			IsError:           ptrTo(false),
+			AddressSpaceBytes: ptrTo(mmapMsyncLength),
 		},
 	})
 }
@@ -59,10 +77,11 @@ func TestMmapMsyncInvalidFlags(t *testing.T) {
 			IsError:      ptrTo(false),
 		},
 		{
-			Syscall: "msync",
-			Comm:    "ioworkload",
-			RetVal:  ptrTo(-int64(syscall.EINVAL)),
-			IsError: ptrTo(true),
+			Syscall:           "msync",
+			Comm:              "ioworkload",
+			RetVal:            ptrTo(-int64(syscall.EINVAL)),
+			IsError:           ptrTo(true),
+			AddressSpaceBytes: ptrTo(uint64(0)),
 		},
 	})
 }
@@ -108,6 +127,14 @@ func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
 	zeroBytes := uint64(0)
 	AssertRowsPresent(t, rows, []ExpectedRow{
 		{
+			FileContains:      "anon",
+			Syscall:           "mmap",
+			Comm:              "ioworkload",
+			IsError:           ptrTo(false),
+			Bytes:             &zeroBytes,
+			AddressSpaceBytes: ptrTo(uint64(mmapInitialAddressSpaceBytes)),
+		},
+		{
 			Syscall:           "mremap",
 			Comm:              "ioworkload",
 			IsError:           ptrTo(false),
@@ -127,6 +154,8 @@ func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
 	var addressSpaceTotal uint64
 	for _, row := range rows {
 		switch row.Syscall {
+		case "mmap":
+			addressSpaceTotal += row.AddressSpaceBytes
 		case "mremap":
 			addressSpaceTotal += row.AddressSpaceBytes
 		case "munmap":
@@ -135,6 +164,6 @@ func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
 	}
 
 	if addressSpaceTotal < mmapMinAddressSpaceBytesTotal {
-		t.Fatalf("mremap+munmap AddressSpaceBytes total = %d, want >= %d", addressSpaceTotal, mmapMinAddressSpaceBytesTotal)
+		t.Fatalf("mmap+mremap+munmap AddressSpaceBytes total = %d, want >= %d", addressSpaceTotal, mmapMinAddressSpaceBytesTotal)
 	}
 }

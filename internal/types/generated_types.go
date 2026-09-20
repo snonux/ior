@@ -117,6 +117,8 @@ const EXIT_EXEC_EVENT = 46
 const PROCESS_EXEC_EVENT = 47
 const OPEN_NAME_FIXUP_EVENT = 48
 const PROCESS_EXIT_EVENT = 49
+const ENTER_MMAP_EVENT = 50
+const EXIT_MMAP_EVENT = 51
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -2204,6 +2206,78 @@ func (m *MemEvent) Bytes() ([]byte, error) {
 
 func (m *MemEvent) Recycle() {
 	poolOfMemEvents.Put(m)
+}
+
+type MmapEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Addr      uint64
+	Length    uint64
+	Prot      uint64
+	Flags     uint64
+	Fd        int32
+}
+
+func (m MmapEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Addr:%v Length:%v Prot:%v Flags:%v Fd:%v", m.EventType, m.TraceId, m.Time, m.Pid, m.Tid, m.Addr, m.Length, m.Prot, m.Flags, m.Fd)
+}
+
+func (m MmapEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*MmapEvent)
+	if !ok {
+		return false
+	}
+	return m.EventType == otherConcrete.EventType && m.TraceId == otherConcrete.TraceId && m.Time == otherConcrete.Time && m.Pid == otherConcrete.Pid && m.Tid == otherConcrete.Tid && m.Addr == otherConcrete.Addr && m.Length == otherConcrete.Length && m.Prot == otherConcrete.Prot && m.Flags == otherConcrete.Flags && m.Fd == otherConcrete.Fd
+}
+
+func (m *MmapEvent) GetEventType() EventType {
+	return m.EventType
+}
+
+func (m *MmapEvent) GetTraceId() TraceId {
+	return m.TraceId
+}
+
+func (m *MmapEvent) GetPid() uint32 {
+	return m.Pid
+}
+
+func (m *MmapEvent) GetTid() uint32 {
+	return m.Tid
+}
+
+func (m *MmapEvent) GetTime() uint64 {
+	return m.Time
+}
+
+var poolOfMmapEvents = sync.Pool{
+	New: func() any { return &MmapEvent{} },
+}
+
+func NewMmapEvent(raw []byte) *MmapEvent {
+	m := poolOfMmapEvents.Get().(*MmapEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, m); err != nil {
+		*m = MmapEvent{}
+		poolOfMmapEvents.Put(m)
+		return nil
+	}
+	return m
+}
+
+func (m *MmapEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, m)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *MmapEvent) Recycle() {
+	poolOfMmapEvents.Put(m)
 }
 
 type SleepEvent struct {

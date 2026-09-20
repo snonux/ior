@@ -299,6 +299,30 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		}
 	})
 
+	t.Run("MmapEvent", func(t *testing.T) {
+		ev := &MmapEvent{
+			EventType: ENTER_MMAP_EVENT,
+			TraceId:   SYS_ENTER_MMAP,
+			Time:      1,
+			Pid:       2,
+			Tid:       3,
+			Addr:      0x1000,
+			Length:    4096,
+			Prot:      3,
+			Flags:     0x22,
+			Fd:        -1,
+		}
+		raw := rawBytes(t, ev)
+
+		slow := NewMmapEvent(raw)
+		fast := NewMmapEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("mmap decode mismatch")
+		}
+	})
+
 	t.Run("SleepEvent", func(t *testing.T) {
 		ev := &SleepEvent{
 			EventType:   ENTER_SLEEP_EVENT,
@@ -788,6 +812,35 @@ func TestNewOpenByHandleAtEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+func TestNewMmapEventFastKernelLayout(t *testing.T) {
+	ev := &MmapEvent{
+		EventType: ENTER_MMAP_EVENT,
+		TraceId:   SYS_ENTER_MMAP,
+		Time:      111,
+		Pid:       22,
+		Tid:       33,
+		Addr:      0x1000,
+		Length:    4096,
+		Prot:      3,
+		Flags:     0x22,
+		Fd:        -1,
+	}
+	raw := rawBytes(t, ev)
+	raw = append(raw, 0, 0, 0, 0)
+	if len(raw) != mmapEventSize {
+		t.Fatalf("padded mmap payload size = %d, want %d", len(raw), mmapEventSize)
+	}
+
+	fast := NewMmapEventFast(raw)
+	if fast == nil {
+		t.Fatal("expected decoded mmap event for padded kernel payload")
+	}
+	defer fast.Recycle()
+	if !ev.Equals(fast) {
+		t.Fatalf("unexpected mmap decode: %#v", fast)
+	}
+}
+
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -817,6 +870,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "PtraceEvent", decode: func(raw []byte) bool { return NewPtraceEventFast(raw) == nil }},
 		{name: "PerfOpenEvent", decode: func(raw []byte) bool { return NewPerfOpenEventFast(raw) == nil }},
 		{name: "MemEvent", decode: func(raw []byte) bool { return NewMemEventFast(raw) == nil }},
+		{name: "MmapEvent", decode: func(raw []byte) bool { return NewMmapEventFast(raw) == nil }},
 		{name: "ProcessExecEvent", decode: func(raw []byte) bool { return NewProcessExecEventFast(raw) == nil }},
 		{name: "ProcessExitEvent", decode: func(raw []byte) bool { return NewProcessExitEventFast(raw) == nil }},
 	}

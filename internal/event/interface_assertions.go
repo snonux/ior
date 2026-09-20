@@ -71,6 +71,9 @@ var (
 	// *types.MemEvent carries memory-operation metadata (addr/length/flags).
 	_ Event = (*types.MemEvent)(nil)
 
+	// *types.MmapEvent carries mmap's memory and descriptor metadata.
+	_ Event = (*types.MmapEvent)(nil)
+
 	// *types.SleepEvent carries requested sleep duration metadata.
 	_ Event = (*types.SleepEvent)(nil)
 

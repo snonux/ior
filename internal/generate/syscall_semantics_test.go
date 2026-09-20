@@ -284,12 +284,8 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"mlock":             {kind: "mem", args: map[string]int{"addr": 0, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
 	"mlock2":            {kind: "mem", args: map[string]int{"addr": 0, "flags": 2, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
 	"mlockall":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
-	// TODO(h4): delete temporary when mmap carries its complete mapping semantics.
 	"mmap": {
 		kind: "mmap", args: map[string]int{"addr": 0, "fd": 4, "flags": 3, "length": 1, "prot": 2}, ret: "UNCLASSIFIED", family: "Memory",
-		temporary: &temporarySyscallSemantics{task: "h4", current: syscallSemantics{
-			kind: "fd", args: map[string]int{"fd": 4}, ret: "UNCLASSIFIED", family: "Memory",
-		}},
 	},
 	"modify_ldt":    {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"mount":         {kind: "pathname", args: map[string]int{"pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
@@ -314,12 +310,8 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"msgget":          {kind: "sysv-id", args: map[string]int{}, ret: "UNCLASSIFIED", family: "IPC"},
 	"msgrcv":          {kind: "sysv-op", args: map[string]int{}, ret: "READ_CLASSIFIED", family: "IPC"},
 	"msgsnd":          {kind: "sysv-op", args: map[string]int{}, ret: "UNCLASSIFIED", family: "IPC"},
-	// TODO(h4): delete temporary when msync becomes a memory-range event.
 	"msync": {
 		kind: "mem", args: map[string]int{"addr": 0, "flags": 2, "length": 1}, ret: "UNCLASSIFIED", family: "FS",
-		temporary: &temporarySyscallSemantics{task: "h4", current: syscallSemantics{
-			kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "FS",
-		}},
 	},
 	"munlock":           {kind: "mem", args: map[string]int{"addr": 0, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
 	"munlockall":        {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},

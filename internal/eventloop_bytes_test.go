@@ -92,38 +92,69 @@ func TestApplyRetBytesForNullEnterRetExitPair(t *testing.T) {
 
 func TestAddressSpaceBytesFromMem(t *testing.T) {
 	tests := []struct {
-		name string
-		ev   *types.MemEvent
-		want uint64
+		name    string
+		traceID types.TraceId
+		length  uint64
+		length2 uint64
+		want    uint64
 	}{
 		{
-			name: "munmap",
-			ev:   &types.MemEvent{TraceId: types.SYS_ENTER_MUNMAP, Length: 4096},
-			want: 4096,
+			name:    "mmap",
+			traceID: types.SYS_ENTER_MMAP,
+			length:  4096,
+			want:    4096,
 		},
 		{
-			name: "mremap uses larger extent",
-			ev:   &types.MemEvent{TraceId: types.SYS_ENTER_MREMAP, Length: 4096, Length2: 8192},
-			want: 8192,
+			name:    "msync",
+			traceID: types.SYS_ENTER_MSYNC,
+			length:  8192,
+			want:    8192,
 		},
 		{
-			name: "non-memory",
-			ev:   &types.MemEvent{TraceId: types.SYS_ENTER_READ, Length: 123},
-			want: 0,
+			name:    "munmap",
+			traceID: types.SYS_ENTER_MUNMAP,
+			length:  4096,
+			want:    4096,
 		},
 		{
-			name: "nil",
-			ev:   nil,
-			want: 0,
+			name:    "mremap uses larger extent",
+			traceID: types.SYS_ENTER_MREMAP,
+			length:  4096,
+			length2: 8192,
+			want:    8192,
+		},
+		{
+			name:    "non-memory",
+			traceID: types.SYS_ENTER_READ,
+			length:  123,
+			want:    0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := addressSpaceBytesFromMem(tt.ev); got != tt.want {
+			if got := addressSpaceBytesFromMem(tt.traceID, tt.length, tt.length2); got != tt.want {
 				t.Fatalf("addressSpaceBytesFromMem() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestApplyAddressSpaceBytesIgnoresFailedMmap(t *testing.T) {
+	pair := &event.Pair{
+		EnterEv: &types.MmapEvent{
+			TraceId: types.SYS_ENTER_MMAP,
+			Length:  16384,
+		},
+		ExitEv: &types.RetEvent{
+			TraceId: types.SYS_EXIT_MMAP,
+			Ret:     -1,
+		},
+	}
+
+	applyAddressSpaceBytes(pair)
+	if pair.AddressSpaceBytes != 0 {
+		t.Fatalf("failed mmap AddressSpaceBytes = %d, want 0", pair.AddressSpaceBytes)
 	}
 }
 
