@@ -2241,6 +2241,20 @@ func TestGenerateHandlerStructure(t *testing.T) {
 	requireContains(t, output, "return 0;")
 }
 
+func TestGenerateOpenTreeHandlersUseOpenTransport(t *testing.T) {
+	for i, name := range []string{"open_tree", "open_tree_attr"} {
+		t.Run(name, func(t *testing.T) {
+			output := GenerateTracepointsC(openTreeFormats(name, 9600+i*2))
+
+			requireContains(t, output, "/// sys_enter_"+name+" is a struct open_event (kind=open-tree)")
+			requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
+			requireContains(t, output, "(void *)ctx->args[1]")
+			requireContains(t, output, "ev->flags = ctx->args[2];")
+			requireContains(t, output, "ior_take_pending_filename(tid, SYS_ENTER_"+strings.ToUpper(name)+")")
+		})
+	}
+}
+
 func TestGenerateAllEventTypes(t *testing.T) {
 	// Verify every event type constant appears correctly
 	tests := []struct {
@@ -2251,6 +2265,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindFd, "ENTER_FD_EVENT", "EXIT_FD_EVENT"},
 		{KindOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
 		{KindMqOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
+		{KindOpenTree, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
 		{KindExec, "ENTER_EXEC_EVENT", "EXIT_EXEC_EVENT"},
 		{KindPathname, "ENTER_PATH_EVENT", "EXIT_PATH_EVENT"},
 		{KindName, "ENTER_NAME_EVENT", "EXIT_NAME_EVENT"},
@@ -2302,6 +2317,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindFd, "fd_event"},
 		{KindOpen, "open_event"},
 		{KindMqOpen, "open_event"},
+		{KindOpenTree, "open_event"},
 		{KindExec, "exec_event"},
 		{KindPathname, "path_event"},
 		{KindName, "name_event"},
@@ -2351,7 +2367,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)
@@ -2881,7 +2897,7 @@ func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 		t.Fatalf("read generated tracepoints C: %v", err)
 	}
 
-	openEnters := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct open_event \(kind=(?:open|mq-open)\)$`).
+	openEnters := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct open_event \(kind=(?:open|mq-open|open-tree)\)$`).
 		FindAllStringSubmatch(artifact, -1)
 	if len(openEnters) == 0 {
 		t.Fatal("no open-kind enter handlers in the generated artifact")

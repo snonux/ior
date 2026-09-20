@@ -1,25 +1,47 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+
+	"golang.org/x/sys/unix"
+)
 
 var mountfsTraceArgs = []string{
 	"-trace-syscalls",
-	"mount,umount,move_mount,fsopen,fsconfig,fspick,open_tree,mount_setattr,fsmount,pivot_root,quotactl,quotactl_fd,statmount,listmount,listns,swapon,swapoff",
+	"mount,umount,move_mount,fsopen,fsconfig,fspick,open_tree,open_tree_attr,mount_setattr,fsmount,pivot_root,quotactl,quotactl_fd,statmount,listmount,listns,swapon,swapoff,close",
 }
 
 func TestMountFsManagementSyscalls(t *testing.T) {
+	openTreeFlags := &ExpectedFlags{
+		AccessMode: ptrTo(syscall.O_RDONLY),
+		Set:        unix.O_PATH | syscall.O_CLOEXEC,
+		Clear:      syscall.O_WRONLY | syscall.O_NOCTTY | syscall.O_NONBLOCK,
+	}
 	runScenarioResultWithIorArgs(t, "mountfs-management", []ExpectedEvent{
 		{Tracepoint: "enter_mount", MinCount: 1},
 		{Tracepoint: "enter_umount", MinCount: 1},
 		{Tracepoint: "enter_move_mount", MinCount: 1},
 		{Tracepoint: "enter_fsopen", MinCount: 1},
-		// fsconfig (KindFd), fspick (KindPathname), and open_tree (KindOpen) are
+		// fsconfig (KindFd), fspick (KindPathname), and the open_tree family are
 		// best-effort new-mount-API calls in the scenario. Their sys_enter_
 		// tracepoints fire on kernel entry regardless of permission/validity, so
 		// MinCount>=1 holds even when the syscalls themselves return an error.
 		{Tracepoint: "enter_fsconfig", MinCount: 1},
 		{Tracepoint: "enter_fspick", MinCount: 1},
-		{Tracepoint: "enter_open_tree", MinCount: 1},
+		{
+			PathContains: "open-tree-target",
+			Tracepoint:   "enter_open_tree",
+			MinCount:     1,
+			Flags:        openTreeFlags,
+		},
+		{
+			PathContains: "open-tree-target",
+			Tracepoint:   "enter_close",
+			MinCount:     1,
+			Flags:        openTreeFlags,
+		},
+		{Tracepoint: "enter_open_tree_attr", MinCount: 1},
 		// mount_setattr (KindPathname, path@arg1) changes per-mount attributes
 		// of an existing mount and needs CAP_SYS_ADMIN (Linux 5.12+), so it
 		// returns EPERM/EINVAL in the scenario. Its sys_enter_ tracepoint fires

@@ -5,7 +5,28 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestFlagsStringRendersPathDescriptorsWithoutReadAccess(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags Flags
+		want  string
+	}{
+		{name: "path only", flags: Flags(unix.O_PATH), want: "O_PATH"},
+		{name: "path with cloexec", flags: Flags(unix.O_PATH | syscall.O_CLOEXEC), want: "O_CLOEXEC|O_PATH"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.flags.String(); got != tt.want {
+				t.Fatalf("Flags(%#x).String() = %q, want %q", int(tt.flags), got, tt.want)
+			}
+		})
+	}
+}
 
 func TestFlagsBuildStringConcurrent(t *testing.T) {
 	flagsToHumanCache = sync.Map{}

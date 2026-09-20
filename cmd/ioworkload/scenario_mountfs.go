@@ -29,6 +29,10 @@ func mountfsManagement() error {
 	if err := os.Mkdir(mountPoint, 0o755); err != nil {
 		return fmt.Errorf("mkdir mountpoint: %w", err)
 	}
+	openTreeTarget := filepath.Join(dir, "open-tree-target")
+	if err := os.Mkdir(openTreeTarget, 0o755); err != nil {
+		return fmt.Errorf("mkdir open_tree target: %w", err)
+	}
 
 	swapFile := filepath.Join(dir, "swapfile")
 	if err := os.WriteFile(swapFile, []byte("swap"), 0o600); err != nil {
@@ -36,6 +40,7 @@ func mountfsManagement() error {
 	}
 
 	mountPath := mustCStringPtr(mountPoint)
+	openTreePath := mustCStringPtr(openTreeTarget)
 	swapPath := mustCStringPtr(swapFile)
 	newRoot := mustCStringPtr(mountPoint)
 	putOld := mustCStringPtr(dir)
@@ -85,12 +90,20 @@ func mountfsManagement() error {
 		syscall.Close(int(fd))
 	}
 
-	// open_tree(dfd, path, flags) clones or references a mount subtree, returning
-	// a detached O_PATH-like fd. It is a KindOpen syscall: args[0] is the dirfd.
-	// We clone the scenario mount point (OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC) and
-	// close any returned fd. A detached clone is not attached anywhere in the
-	// mount tree, so closing the fd releases it without touching host mounts.
-	if fd, _, errno := syscall.RawSyscall(unix.SYS_OPEN_TREE, atFDCWD, uintptr(unsafe.Pointer(mountPath)), uintptr(unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC)); errno == 0 {
+	// open_tree(dfd, path, flags) returns an O_PATH-like fd. Use a dedicated
+	// pathname and non-cloning flags so the call succeeds without CAP_SYS_ADMIN;
+	// the AT_* bits deliberately overlap unrelated O_* bits and exercise ior's
+	// translation of the mount-API word before descriptor registration.
+	openTreeFlags := unix.OPEN_TREE_CLOEXEC | unix.AT_NO_AUTOMOUNT | unix.AT_SYMLINK_NOFOLLOW
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_OPEN_TREE, atFDCWD, uintptr(unsafe.Pointer(openTreePath)), uintptr(openTreeFlags)); errno == 0 {
+		syscall.Close(int(fd))
+	}
+
+	// open_tree_attr is the Linux 6.15 sibling that adds mount_attr/size. It
+	// shares open_tree's path and flags positions, so issue it best-effort even
+	// on older kernels (where it returns ENOSYS) to cover its generated handler.
+	openTreeAttr := unix.MountAttr{}
+	if fd, _, errno := syscall.RawSyscall6(unix.SYS_OPEN_TREE_ATTR, atFDCWD, uintptr(unsafe.Pointer(openTreePath)), uintptr(unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC), uintptr(unsafe.Pointer(&openTreeAttr)), unsafe.Sizeof(openTreeAttr), 0); errno == 0 {
 		syscall.Close(int(fd))
 	}
 

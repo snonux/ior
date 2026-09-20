@@ -26,6 +26,7 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindFd:             {structName: "fd_event", enterAccepted: true},
 	KindOpen:           {structName: "open_event", enterAccepted: true, recoversFilename: true},
 	KindMqOpen:         {structName: "open_event", enterAccepted: true, recoversFilename: true},
+	KindOpenTree:       {structName: "open_event", enterAccepted: true, recoversFilename: true},
 	KindExec:           {structName: "exec_event", enterAccepted: true},
 	KindPathname:       {structName: "path_event", enterAccepted: true},
 	KindName:           {structName: "name_event", enterAccepted: true},

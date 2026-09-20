@@ -19,6 +19,11 @@ const (
 	KindOpen
 	// KindMqOpen is the mq_open variant of the open shape.
 	KindMqOpen
+	// KindOpenTree carries an open_tree/open_tree_attr pathname plus their
+	// mount-API flags. It uses the open_event transport, but remains distinct
+	// from KindOpen so userspace can translate that syscall-specific flag word
+	// before registering the returned O_PATH descriptor.
+	KindOpenTree
 	// KindExec carries a filename and the caller's comm.
 	KindExec
 	// KindPathname carries the pathname argument selected by the
@@ -108,6 +113,8 @@ func (k TracepointKind) MetadataName() string {
 		return "open"
 	case KindMqOpen:
 		return "mq-open"
+	case KindOpenTree:
+		return "open-tree"
 	case KindExec:
 		return "exec"
 	case KindPathname:
@@ -234,6 +241,8 @@ func ClassifyFormat(f *Format) ClassificationResult {
 // switch churn and merge conflicts across incremental tracing phases.
 var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_open_by_handle_at": KindOpenByHandleAt,
+	"sys_enter_open_tree":         KindOpenTree,
+	"sys_enter_open_tree_attr":    KindOpenTree,
 	"sys_enter_io_uring_enter":    KindFd,
 	"sys_enter_io_uring_register": KindFd,
 	"sys_enter_fcntl":             KindFcntl,

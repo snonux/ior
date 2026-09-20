@@ -333,17 +333,17 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"newuname":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"open":              {kind: "open", args: map[string]int{"filename": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"open_by_handle_at": {kind: "open-by-handle-at", args: map[string]int{"flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
-	// TODO(f4,i4): delete the open-tree overrides when dedicated flag semantics and dirfd capture land.
+	// TODO(i4): delete the open-tree overrides when dirfd capture lands.
 	"open_tree": {
 		kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS",
-		temporary: &temporarySyscallSemantics{task: "f4,i4", current: syscallSemantics{
-			kind: "open", args: map[string]int{"filename": 1, "flags": 2},
+		temporary: &temporarySyscallSemantics{task: "i4", current: syscallSemantics{
+			kind: "open-tree", args: map[string]int{"filename": 1, "flags": 2},
 		}},
 	},
 	"open_tree_attr": {
 		kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS",
-		temporary: &temporarySyscallSemantics{task: "f4,i4", current: syscallSemantics{
-			kind: "open", args: map[string]int{"filename": 1, "flags": 2},
+		temporary: &temporarySyscallSemantics{task: "i4", current: syscallSemantics{
+			kind: "open-tree", args: map[string]int{"filename": 1, "flags": 2},
 		}},
 	},
 	"openat": {kind: "open", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS", temporary: temporaryArgs("i4", map[string]int{"filename": 1, "flags": 2})},

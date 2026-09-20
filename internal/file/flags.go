@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // Flags is a file's open-flags word (O_RDONLY, O_CREAT, ...), the raw int
@@ -38,6 +40,7 @@ var flagsToHuman = []tuple{
 	{syscall.O_NOCTTY, "O_NOCTTY"},
 	{syscall.O_NOFOLLOW, "O_NOFOLLOW"},
 	{syscall.O_NONBLOCK, "O_NONBLOCK"},
+	{unix.O_PATH, "O_PATH"},
 	{syscall.O_SYNC, "O_SYNC"},
 	{syscall.O_TRUNC, "O_TRUNC"},
 }
@@ -79,7 +82,7 @@ func (f Flags) String() string {
 		return "O_NONE"
 	}
 
-	if int(f)&(os.O_WRONLY|os.O_RDWR) == 0 {
+	if int(f)&(os.O_WRONLY|os.O_RDWR|unix.O_PATH) == 0 {
 		// Must be read only then
 		strs = append(strs, "O_RDONLY")
 	}

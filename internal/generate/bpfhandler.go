@@ -183,6 +183,7 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindPerfOpen:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraPerfOpen() },
 	KindOpen:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
 	KindMqOpen:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraMqOpen(tp.Format) },
+	KindOpenTree:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
 	KindExec:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraExec(tp.Format) },
 	KindPathname:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraPathname(tp, tp.Format) },
 	KindName:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraName(tp.Format) },

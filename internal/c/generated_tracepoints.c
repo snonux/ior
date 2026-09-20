@@ -7534,7 +7534,7 @@ int handle_sys_exit_umount(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_open_tree is a struct open_event (kind=open)
+/// sys_enter_open_tree is a struct open_event (kind=open-tree)
 SEC("tracepoint/syscalls/sys_enter_open_tree")
 int handle_sys_enter_open_tree(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -7888,7 +7888,7 @@ int handle_sys_exit_mount_setattr(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_open_tree_attr is a struct open_event (kind=open)
+/// sys_enter_open_tree_attr is a struct open_event (kind=open-tree)
 SEC("tracepoint/syscalls/sys_enter_open_tree_attr")
 int handle_sys_enter_open_tree_attr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
