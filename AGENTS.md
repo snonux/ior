@@ -281,6 +281,16 @@ Generated files (do not edit manually):
 Generator source code:
 - `internal/generate/` - Parser, classifier, and code generation logic
 
+`internal/generate/syscall_semantics_test.go` is the independent, reviewed
+semantics oracle for the committed syscall handlers. Every `sys_enter_*`
+handler must have exactly one literal row covering its kind, captured event
+fields and source argument indices, exit return classification, and family.
+Do not derive those expected rows from the generator tables. Rows awaiting a
+known semantic fix keep the correct target in the ordinary fields and the
+currently generated value in a `temporarySyscallSemantics` override labeled
+with its task ID; the owning fix deletes that override when the artifact is
+correct.
+
 ### Generation host / kernel
 
 The generator reads the *running* kernel's `/sys/kernel/tracing` tracepoint
