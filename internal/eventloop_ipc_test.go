@@ -10,38 +10,87 @@ import (
 	"ior/internal/types"
 )
 
-func TestHandlePipeExitTracksReturnedFds(t *testing.T) {
-	el := mustNewEventLoop(t, eventLoopConfig{})
+type pipeExitTestCase struct {
+	name       string
+	enterTrace types.TraceId
+	exitTrace  types.TraceId
+	flags      int32
+	wantName   string
+	wantRead   string
+	wantWrite  string
+}
 
+func TestHandlePipeExitTracksReturnedFds(t *testing.T) {
+	tests := []pipeExitTestCase{
+		{
+			name:       "pipe",
+			enterTrace: types.SYS_ENTER_PIPE,
+			exitTrace:  types.SYS_EXIT_PIPE,
+			wantName:   "pipe:0:52:53",
+			wantRead:   "O_RDONLY",
+			wantWrite:  "O_WRONLY",
+		},
+		{
+			name:       "pipe2",
+			enterTrace: types.SYS_ENTER_PIPE2,
+			exitTrace:  types.SYS_EXIT_PIPE2,
+			flags:      syscall.O_CLOEXEC | syscall.O_NONBLOCK,
+			wantName:   "pipe:526336:52:53",
+			wantRead:   "O_RDONLY|O_CLOEXEC|O_NONBLOCK",
+			wantWrite:  "O_WRONLY|O_CLOEXEC|O_NONBLOCK",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testPipeExitTracking(t, tt)
+		})
+	}
+}
+
+func testPipeExitTracking(t *testing.T, tt pipeExitTestCase) {
+	t.Helper()
+	el := mustNewEventLoop(t, eventLoopConfig{})
 	enter := &types.PipeEvent{
 		EventType: types.ENTER_PIPE_EVENT,
-		TraceId:   types.SYS_ENTER_PIPE2,
+		TraceId:   tt.enterTrace,
 		Time:      100,
 		Pid:       70,
 		Tid:       71,
-		Flags:     0x80000,
+		Flags:     tt.flags,
 		Fd0:       -1,
 		Fd1:       -1,
-		Ret:       0,
 	}
 	exit := &types.PipeEvent{
 		EventType: types.EXIT_PIPE_EVENT,
-		TraceId:   types.SYS_EXIT_PIPE2,
+		TraceId:   tt.exitTrace,
 		Time:      200,
 		Pid:       70,
 		Tid:       71,
-		Flags:     0x80000,
+		Flags:     tt.flags,
 		Fd0:       52,
 		Fd1:       53,
-		Ret:       0,
 	}
 	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
 
 	if ok := el.handlePipeExit(ep, enter); !ok {
 		t.Fatal("handlePipeExit returned false")
 	}
-	verifyFileDescriptor(t, el, 70, 52, "pipe:524288:52:53")
-	verifyFileDescriptor(t, el, 70, 53, "pipe:524288:52:53")
+	verifyFileDescriptor(t, el, 70, 52, tt.wantName)
+	verifyFileDescriptor(t, el, 70, 53, tt.wantName)
+	verifyFileDescriptorFlags(t, el, 70, 52, tt.wantRead)
+	verifyFileDescriptorFlags(t, el, 70, 53, tt.wantWrite)
+}
+
+func verifyFileDescriptorFlags(t *testing.T, el *eventLoop, pid uint32, fd int32, want string) {
+	t.Helper()
+	tracked, ok := el.fdState().files[fdKey(pid, fd)]
+	if !ok {
+		t.Fatalf("pid %d fd %d was not tracked", pid, fd)
+	}
+	if got := tracked.Flags().String(); got != want {
+		t.Errorf("pid %d fd %d flags = %q, want %q", pid, fd, got, want)
+	}
 }
 
 // TestHandlePipeExitFailureTracksNoFds locks in the pipe(2) failure path:
