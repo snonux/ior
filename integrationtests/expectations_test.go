@@ -225,3 +225,24 @@ func TestAssertEventsAbsentRejectsZeroValue(t *testing.T) {
 		t.Error("AssertEventsAbsent should reject zero-value ExpectedEvent")
 	}
 }
+
+func TestExpectedRowToleratesUnresolvedCommButRejectsAForeignOne(t *testing.T) {
+	exp := ExpectedRow{Syscall: "mmap", Comm: "ioworkload"}
+	tests := []struct {
+		name string
+		comm string
+		want bool
+	}{
+		{name: "resolved and equal", comm: "ioworkload", want: true},
+		{name: "not resolved yet", comm: "", want: true},
+		{name: "foreign", comm: "bash", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := iorparquet.Record{Syscall: "mmap", Comm: tt.comm}
+			if got := matchesRowExpectation(row, exp); got != tt.want {
+				t.Fatalf("matchesRowExpectation(comm=%q) = %v, want %v", tt.comm, got, tt.want)
+			}
+		})
+	}
+}
