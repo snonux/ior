@@ -25,6 +25,15 @@ func TestPollingEpollSemanticsInParquet(t *testing.T) {
 	add := "ADD"
 	empty := ""
 	events := uint32(unix.EPOLLIN)
+	maxEvents := int32(4)
+	oneFD := int32(1)
+	epollWaitTimeout := int64(250_000_000)
+	shortTimeout := int64(100_000_000)
+	infiniteTimeout := int64(-1)
+	unknownTimeout := int64(-2)
+	efault := -int64(unix.EFAULT)
+	einval := -int64(unix.EINVAL)
+	isError := true
 	expected := []ExpectedRow{
 		{
 			Syscall:              "epoll_ctl",
@@ -37,15 +46,16 @@ func TestPollingEpollSemanticsInParquet(t *testing.T) {
 			EpollEvents:          &events,
 		},
 	}
-	for _, syscallName := range []string{"epoll_wait", "epoll_pwait", "poll", "ppoll", "select", "pselect6"} {
-		expected = append(expected, ExpectedRow{
-			Syscall:       syscallName,
-			Comm:          "ioworkload",
-			RetValAtLeast: &positive,
-			IsError:       &notError,
-			Bytes:         &zeroBytes,
-			EpollOp:       &empty,
-		})
+	expected = append(expected,
+		ExpectedRow{Syscall: "epoll_wait", Comm: "ioworkload", FDAtLeast: &positiveFD, RetValAtLeast: &positive, IsError: &notError, Bytes: &zeroBytes, EpollOp: &empty, Nfds: &maxEvents, TimeoutNs: &epollWaitTimeout},
+		ExpectedRow{Syscall: "epoll_pwait", Comm: "ioworkload", FDAtLeast: &positiveFD, RetValAtLeast: &positive, IsError: &notError, Bytes: &zeroBytes, EpollOp: &empty, Nfds: &maxEvents, TimeoutNs: &shortTimeout},
+		ExpectedRow{Syscall: "poll", Comm: "ioworkload", RetValAtLeast: &positive, IsError: &notError, Bytes: &zeroBytes, EpollOp: &empty, Nfds: &oneFD, TimeoutNs: &infiniteTimeout},
+		ExpectedRow{Syscall: "ppoll", Comm: "ioworkload", RetValAtLeast: &positive, IsError: &notError, Bytes: &zeroBytes, EpollOp: &empty, Nfds: &oneFD, TimeoutNs: &shortTimeout},
+		ExpectedRow{Syscall: "ppoll", Comm: "ioworkload", RetVal: &efault, IsError: &isError, Nfds: &oneFD, TimeoutNs: &unknownTimeout},
+		ExpectedRow{Syscall: "ppoll", Comm: "ioworkload", RetVal: &einval, IsError: &isError, Nfds: &oneFD, TimeoutNs: &unknownTimeout},
+	)
+	for _, syscallName := range []string{"select", "pselect6"} {
+		expected = append(expected, ExpectedRow{Syscall: syscallName, Comm: "ioworkload", RetValAtLeast: &positive, IsError: &notError, Bytes: &zeroBytes, EpollOp: &empty, TimeoutNs: &shortTimeout})
 	}
 	AssertRowsPresent(t, rows, expected)
 
@@ -64,6 +74,9 @@ func TestPollingEpollSemanticsInParquet(t *testing.T) {
 			IsError:       &notError,
 			Bytes:         &zeroBytes,
 			EpollOp:       &empty,
+			FDAtLeast:     &positiveFD,
+			Nfds:          &maxEvents,
+			TimeoutNs:     &shortTimeout,
 		}})
 	} else {
 		t.Log("epoll_pwait2 parquet rows not observed; treating as unsupported-kernel path")

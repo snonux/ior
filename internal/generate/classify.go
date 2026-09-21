@@ -340,9 +340,9 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_getsockopt":  KindFd,
 	"sys_enter_setsockopt":  KindFd,
 
-	"sys_enter_epoll_wait":   KindFd,
-	"sys_enter_epoll_pwait":  KindFd,
-	"sys_enter_epoll_pwait2": KindFd,
+	"sys_enter_epoll_wait":   KindPoll,
+	"sys_enter_epoll_pwait":  KindPoll,
+	"sys_enter_epoll_pwait2": KindPoll,
 	"sys_enter_epoll_ctl":    KindEpollCtl,
 
 	"sys_enter_move_mount": KindTwoFd,

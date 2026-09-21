@@ -72,7 +72,7 @@ inotify and path-only fanotify payloads, with the original missing fields.
 - eventfd: `epoll_create`, `epoll_create1`, `eventfd`, `eventfd2`, `fanotify_init`, `fsmount`, `fsopen`, `inotify_init`, `inotify_init1`, `landlock_create_ruleset`, `memfd_create`, `memfd_secret`, `signalfd`, `signalfd4`, `timerfd_create`, `userfaultfd`
 - exec: `execve`, `execveat`
 - fcntl: `fcntl`
-- fd: `bind`, `cachestat`, `close`, `connect`, `copy_file_range`, `dup`, `dup2`, `epoll_pwait`, `epoll_pwait2`, `epoll_wait`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `ioctl`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendfile64`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `splice`, `sync_file_range`, `syncfs`, `tee`, `timerfd_gettime`, `timerfd_settime`, `vmsplice`, `write`, `writev`
+- fd: `bind`, `cachestat`, `close`, `connect`, `copy_file_range`, `dup`, `dup2`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `ioctl`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendfile64`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `splice`, `sync_file_range`, `syncfs`, `tee`, `timerfd_gettime`, `timerfd_settime`, `vmsplice`, `write`, `writev`
 - fd-pathname: `fanotify_mark`, `inotify_add_watch`
 - futex: `futex`, `futex_requeue`, `futex_wait`, `futex_waitv`, `futex_wake`
 - keyctl: `add_key`, `keyctl`, `request_key`
@@ -89,7 +89,7 @@ inotify and path-only fanotify payloads, with the original missing fields.
 - perf-open: `perf_event_open`
 - pidfd: `pidfd_open`
 - pipe: `pipe`, `pipe2`
-- poll: `poll`, `ppoll`, `pselect6`, `select`
+- poll: `epoll_pwait`, `epoll_pwait2`, `epoll_wait`, `poll`, `ppoll`, `pselect6`, `select`
 - prctl: `prctl`
 - proc: `clone`, `clone3`, `fork`, `vfork`, `wait4`, `waitid`
 - ptrace: `ptrace`
@@ -101,6 +101,15 @@ inotify and path-only fanotify payloads, with the original missing fields.
 - sysv-op: `msgctl`, `msgrcv`, `msgsnd`, `semctl`, `semop`, `semtimedop`, `shmat`, `shmctl`, `shmdt`
 - timer-obj: `timer_create`, `timer_delete`, `timer_getoverrun`, `timer_gettime`, `timer_settime`
 - two-fd: `close_range`, `kcmp`, `move_mount`
+
+Polling payloads preserve `nfds` (`maxevents` for epoll waits), timeout, and
+the epoll instance descriptor where applicable. `timeout_ns = -1` means the
+caller deliberately requested an infinite wait (a negative millisecond timeout
+or a NULL timespec/timeval). `timeout_ns = -2` means the timeout was unreadable,
+invalid, or too large to represent as signed nanoseconds, so the value is
+unknown. Non-negative values are captured durations in nanoseconds. The
+versioned payload keeps the released 36/40-byte layout decodable while adding
+`fd` and `schema_version` in the 44/48-byte layout.
 
 ## Bytes vs Non-Bytes Classification
 

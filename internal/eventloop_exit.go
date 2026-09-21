@@ -752,6 +752,11 @@ func (e *eventLoop) handleEpollCtlExit(ep *event.Pair, epollCtlEv *types.EpollCt
 }
 
 func (e *eventLoop) handlePollExit(ep *event.Pair, pollEv *types.PollEvent) bool {
+	ep.Nfds = pollEv.Nfds
+	ep.TimeoutNs = pollEv.TimeoutNs
+	if pollEv.Fd >= 0 {
+		ep.File = e.fdState().resolve(pollEv.Fd, pollEv.Pid)
+	}
 	return e.finishPairForTid(ep, pollEv.GetTid())
 }
 

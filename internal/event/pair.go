@@ -33,6 +33,12 @@ type Pair struct {
 	AddressSpaceBytes uint64
 	// RequestedSleepNs tracks requested sleep duration for nanosleep-style syscalls.
 	RequestedSleepNs int64
+	// Nfds and TimeoutNs carry poll/select readiness metadata. For epoll waits,
+	// Nfds is maxevents. TimeoutNs uses -1 for an infinite wait and -2 when a
+	// timeout is unreadable, invalid, or unrepresentable; both are zero for
+	// unrelated syscalls.
+	Nfds      int32
+	TimeoutNs int64
 	// Epoll carries epoll_ctl control metadata (op, target fd, requested event
 	// mask). It is only populated for epoll_ctl pairs; HasEpoll reports whether
 	// it is set. The Pair-level File still resolves to the epoll instance (epfd);

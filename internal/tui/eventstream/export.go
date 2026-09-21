@@ -185,7 +185,7 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 // writeStreamCSV writes the CSV header and all event rows to w, calling fail
 // on the first write error to close the underlying file before returning.
 func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string, error)) error {
-	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns"}
+	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
 	if err := w.Write(header); err != nil {
 		_, err = fail(err)
 		return err
@@ -208,6 +208,8 @@ func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string,
 			fmt.Sprintf("%t", ev.IsError),
 			ev.Family,
 			fmt.Sprintf("%d", ev.RequestedSleepNs),
+			fmt.Sprintf("%d", ev.Nfds),
+			fmt.Sprintf("%d", ev.TimeoutNs),
 		}
 		if err := w.Write(record); err != nil {
 			_, err = fail(err)

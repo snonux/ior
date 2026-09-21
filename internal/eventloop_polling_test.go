@@ -145,3 +145,38 @@ func TestHandlePollExitCarriesCommAndAppliesFilter(t *testing.T) {
 		}
 	})
 }
+
+func TestHandlePollExitResolvesEpollFDAndCarriesWaitMetadata(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(61, 130, file.NewFd(61, "anon_inode:[eventpoll]", -1))
+	enter := &types.PollEvent{
+		EventType:     types.ENTER_POLL_EVENT,
+		TraceId:       types.SYS_ENTER_EPOLL_WAIT,
+		Time:          400,
+		Pid:           130,
+		Tid:           131,
+		Nfds:          4,
+		TimeoutNs:     250_000_000,
+		Fd:            61,
+		SchemaVersion: types.POLL_EVENT_SCHEMA_VERSION,
+	}
+	exit := &types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   types.SYS_EXIT_EPOLL_WAIT,
+		Time:      420,
+		Ret:       1,
+		Pid:       130,
+		Tid:       131,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handlePollExit(ep, enter); !ok {
+		t.Fatal("handlePollExit returned false")
+	}
+	if ep.File == nil || ep.File.FD() != 61 {
+		t.Fatalf("expected resolved epoll fd 61, got %v", ep.File)
+	}
+	if ep.Nfds != 4 || ep.TimeoutNs != 250_000_000 {
+		t.Fatalf("poll metadata = %d/%d, want 4/250000000", ep.Nfds, ep.TimeoutNs)
+	}
+}

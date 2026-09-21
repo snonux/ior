@@ -56,6 +56,12 @@ func pollingEpoll() error {
 		if err := waitAndDrainReadiness(pipefd, callPpoll); err != nil {
 			return err
 		}
+		if err := triggerPpollUnreadableTimeout(pipefd); err != nil {
+			return err
+		}
+		if err := triggerPpollInvalidTimeout(pipefd); err != nil {
+			return err
+		}
 		if err := waitAndDrainReadiness(pipefd, callSelect); err != nil {
 			return err
 		}
@@ -114,7 +120,7 @@ func callEpollWait(epfd int, events []unix.EpollEvent) (int, error) {
 		uintptr(epfd),
 		uintptr(eventPtr),
 		uintptr(len(events)),
-		uintptr(100),
+		uintptr(250),
 		0,
 		0,
 	)
@@ -165,17 +171,62 @@ func callEpollPwait2(epfd int, events []unix.EpollEvent) (int, error) {
 
 func callPoll(pipefd [2]int) (int, error) {
 	fds := []unix.PollFd{{Fd: int32(pipefd[0]), Events: unix.POLLIN}}
+	timeout := -1
 	r1, _, errno := syscall.RawSyscall(
 		syscall.SYS_POLL,
 		uintptr(unsafe.Pointer(&fds[0])),
 		uintptr(len(fds)),
-		uintptr(100),
+		uintptr(timeout),
 	)
 	runtime.KeepAlive(fds)
 	if errno != 0 {
 		return 0, fmt.Errorf("poll: %w", errno)
 	}
 	return int(r1), nil
+}
+
+func triggerPpollUnreadableTimeout(pipefd [2]int) error {
+	if _, err := syscall.Write(pipefd[1], []byte{1}); err != nil {
+		return fmt.Errorf("write ppoll EFAULT wake byte: %w", err)
+	}
+	fds := []unix.PollFd{{Fd: int32(pipefd[0]), Events: unix.POLLIN}}
+	_, _, errno := syscall.RawSyscall6(
+		unix.SYS_PPOLL,
+		uintptr(unsafe.Pointer(&fds[0])),
+		uintptr(len(fds)),
+		1, // Deliberately unreadable non-NULL timespec pointer.
+		0,
+		0,
+		0,
+	)
+	runtime.KeepAlive(fds)
+	if errno != syscall.EFAULT {
+		return fmt.Errorf("ppoll unreadable timeout: got %v, want EFAULT", errno)
+	}
+	return drainWakeByte(pipefd[0])
+}
+
+func triggerPpollInvalidTimeout(pipefd [2]int) error {
+	if _, err := syscall.Write(pipefd[1], []byte{1}); err != nil {
+		return fmt.Errorf("write ppoll EINVAL wake byte: %w", err)
+	}
+	fds := []unix.PollFd{{Fd: int32(pipefd[0]), Events: unix.POLLIN}}
+	timeout := unix.Timespec{Nsec: -1}
+	_, _, errno := syscall.RawSyscall6(
+		unix.SYS_PPOLL,
+		uintptr(unsafe.Pointer(&fds[0])),
+		uintptr(len(fds)),
+		uintptr(unsafe.Pointer(&timeout)),
+		0,
+		0,
+		0,
+	)
+	runtime.KeepAlive(fds)
+	runtime.KeepAlive(timeout)
+	if errno != syscall.EINVAL {
+		return fmt.Errorf("ppoll invalid timeout: got %v, want EINVAL", errno)
+	}
+	return drainWakeByte(pipefd[0])
 }
 
 func callPpoll(pipefd [2]int) (int, error) {

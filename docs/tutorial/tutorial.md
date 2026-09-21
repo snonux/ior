@@ -184,7 +184,7 @@ For unattended captures or scripting, skip the TUI entirely. The demo runs all t
 
 #### Plain CSV schema
 
-`-plain` prints the header `durationToPrevNs,durationNs,comm,pid.tid,name,ret,file` once, then one RFC 4180 CSV row per event. It is a reduced schema: there is no timestamp, byte count, or `requested_sleep_ns` column, and pid/tid share one dot-separated column. Fields that may contain commas (process names, file paths) are CSV-quoted, so parse the rows with any CSV reader rather than a naive comma split. For the full per-event schema (with `seq`, `time_ns`, `bytes`, `error`, `family`, `requested_sleep_ns`, ...) use the TUI stream CSV export (`e` in the dashboard, writes `ior-stream-<timestamp>.csv`) or headless Parquet instead.
+`-plain` prints the header `durationToPrevNs,durationNs,comm,pid.tid,name,ret,file` once, then one RFC 4180 CSV row per event. It is a reduced schema: there is no timestamp, byte count, `requested_sleep_ns`, `nfds`, or `timeout_ns` column, and pid/tid share one dot-separated column. Fields that may contain commas (process names, file paths) are CSV-quoted, so parse the rows with any CSV reader rather than a naive comma split. For the full per-event schema (with `seq`, `time_ns`, `bytes`, `error`, `family`, `requested_sleep_ns`, `nfds`, `timeout_ns`, ...) use the TUI stream CSV export (`e` in the dashboard, writes `ior-stream-<timestamp>.csv`) or headless Parquet instead.
 
 ## Regenerating the demo
 

@@ -1204,6 +1204,7 @@ var expectedParquetColumns = []string{
 	"seq", "time_ns", "gap_ns", "latency_ns", "comm",
 	"pid", "tid", "syscall", "family", "fd", "ret",
 	"bytes", "address_space_bytes", "requested_sleep_ns",
+	"nfds", "timeout_ns",
 	"file", "old_file", "is_error", "filter_epoch",
 	"epoll_op", "epoll_target_fd", "epoll_events",
 }

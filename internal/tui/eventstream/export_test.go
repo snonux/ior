@@ -199,7 +199,7 @@ func TestExportRowsToCSVPathTraversal(t *testing.T) {
 	_ = traversal // silence unused-variable warning
 }
 
-func TestWriteStreamCSVAppendsFamilyColumn(t *testing.T) {
+func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
 	var buf bytes.Buffer
 	rows := []StreamEvent{{
 		Seq:              7,
@@ -217,6 +217,8 @@ func TestWriteStreamCSVAppendsFamilyColumn(t *testing.T) {
 		IsError:          false,
 		Family:           "Network",
 		RequestedSleepNs: 4_200_000,
+		Nfds:             8,
+		TimeoutNs:        -1,
 	}}
 	fail := func(err error) (string, error) { return "", err }
 
@@ -228,12 +230,15 @@ func TestWriteStreamCSVAppendsFamilyColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read CSV: %v", err)
 	}
-	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns"}
+	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
 	if !reflect.DeepEqual(records[0], wantHeader) {
 		t.Fatalf("header = %#v, want %#v", records[0], wantHeader)
 	}
 	if records[1][8] != "4" || records[1][12] != "false" || records[1][13] != "Network" || records[1][14] != "4200000" {
 		t.Fatalf("family should be appended without shifting legacy columns, got %#v", records[1])
+	}
+	if records[1][15] != "8" || records[1][16] != "-1" {
+		t.Fatalf("poll metadata = %q/%q, want 8/-1", records[1][15], records[1][16])
 	}
 }
 

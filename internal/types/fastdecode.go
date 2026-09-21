@@ -55,22 +55,24 @@ const (
 	eventfdEventSize             = 312
 	// V3 is the former padded layout with fd. V2 predates fd, while V1 is its
 	// compact binary.Write form.
-	eventfdEventSizeV3 = 48
-	eventfdEventSizeV2 = 40
-	eventfdEventSizeV1 = 36
-	epollCtlEventSize  = 40
-	twoFdEventSize     = 568
-	twoFdCompactSize   = 564
-	twoFdLegacySize    = 40
-	pollEventSize      = 40
-	pollEventSizeV1    = 36
-	memEventSize       = 56
-	mmapEventSize      = 64
-	mmapEventSizeV1    = 60
-	sleepEventSize     = 32
-	keyctlEventSize    = 40
-	ptraceEventSize    = 48
-	perfOpenEventSize  = 56
+	eventfdEventSizeV3         = 48
+	eventfdEventSizeV2         = 40
+	eventfdEventSizeV1         = 36
+	epollCtlEventSize          = 40
+	twoFdEventSize             = 568
+	twoFdCompactSize           = 564
+	twoFdLegacySize            = 40
+	pollEventSize              = 48
+	pollEventCompactSize       = 44
+	pollEventLegacyKernelSize  = 40
+	pollEventLegacyCompactSize = 36
+	memEventSize               = 56
+	mmapEventSize              = 64
+	mmapEventSizeV1            = 60
+	sleepEventSize             = 32
+	keyctlEventSize            = 40
+	ptraceEventSize            = 48
+	perfOpenEventSize          = 56
 	// process_exec_event is not a syscall event; it is the control record
 	// emitted by sched:sched_process_exec. 4+4+8+4+4+16 = 40 bytes with no
 	// trailing padding, so kernel and binary.Write payloads share one size.
@@ -665,15 +667,16 @@ func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 }
 
 // NewPollEventFast decodes one poll ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant(s) above. Returns nil
-// for a short payload.
+// single pass. The released 36/40-byte legacy layouts and the schema-gated
+// 44/48-byte current layouts are accepted; all other sizes fail closed.
 func NewPollEventFast(raw []byte) *PollEvent {
-	if len(raw) < pollEventSizeV1 {
+	if len(raw) < pollEventLegacyCompactSize {
 		return nil
 	}
-	if len(raw) != pollEventSize && len(raw) != pollEventSizeV1 {
-		return NewPollEvent(raw)
+	legacy := len(raw) == pollEventLegacyCompactSize || len(raw) == pollEventLegacyKernelSize
+	current := len(raw) == pollEventCompactSize || len(raw) == pollEventSize
+	if !legacy && !current {
+		return nil
 	}
 	p := poolOfPollEvents.Get().(*PollEvent)
 	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -683,10 +686,21 @@ func NewPollEventFast(raw []byte) *PollEvent {
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	p.Nfds = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	timeoutOffset := 28
-	if len(raw) == pollEventSize {
+	if len(raw) == pollEventLegacyKernelSize || len(raw) == pollEventSize {
 		timeoutOffset = 32
 	}
 	p.TimeoutNs = int64(binary.LittleEndian.Uint64(raw[timeoutOffset : timeoutOffset+8]))
+	p.Fd = -1
+	p.SchemaVersion = 0
+	if current {
+		p.Fd = int32(binary.LittleEndian.Uint32(raw[timeoutOffset+8 : timeoutOffset+12]))
+		p.SchemaVersion = binary.LittleEndian.Uint32(raw[timeoutOffset+12 : timeoutOffset+16])
+		if p.SchemaVersion != POLL_EVENT_SCHEMA_VERSION {
+			*p = PollEvent{}
+			p.Recycle()
+			return nil
+		}
+	}
 	return p
 }
 
