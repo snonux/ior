@@ -679,6 +679,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	msg = normalizedMsg
 
+	if handled, cmd := m.dashboard.HandleFlameRefreshCompletion(msg, m.canApplyFlameRefresh()); handled {
+		return m, cmd
+	}
 	if next, cmd, handled := m.dispatchTypedMsg(msg); handled {
 		return next, cmd
 	}
@@ -691,6 +694,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m.updateActiveModel(msg)
+}
+
+// canApplyFlameRefresh reports whether the dashboard itself is visible and
+// able to receive the animation ticks a newly applied snapshot may schedule.
+// Hidden completions are still consumed by their persistent dashboard owner,
+// but are discarded after releasing the matching in-flight slot.
+func (m *Model) canApplyFlameRefresh() bool {
+	return m.screen == ScreenDashboard &&
+		!m.quitting &&
+		!m.attaching &&
+		m.lastErr == nil &&
+		!m.helpOverlayVisible &&
+		!m.filterModal.Visible() &&
+		!m.recordModal.Visible() &&
+		!m.probeModal.Visible() &&
+		!m.exporter.Visible()
 }
 
 // dispatchTypedMsg handles all typed message cases that require no modal check.

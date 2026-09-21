@@ -55,6 +55,7 @@ type flameViewCache struct {
 // Bubble Tea goroutine can swap in the new state without blocking on JSON or
 // frame layout work.
 type flameSnapshotReadyMsg struct {
+	generation   uint64
 	version      uint64
 	layoutWidth  int
 	layoutHeight int
@@ -193,6 +194,10 @@ type Model struct {
 	// running. It coalesces flameTickMsg dispatches so we never queue more
 	// than one snapshot rebuild concurrently.
 	refreshInFlight bool
+	// refreshGeneration identifies the live-trie binding that owns an
+	// in-flight refresh. SetLiveTrie advances it so a completion from an old
+	// trace session cannot release or overwrite a newer session's refresh.
+	refreshGeneration uint64
 
 	width  int
 	height int
@@ -325,6 +330,9 @@ func (m *Model) HandleRefreshCompletion(msg tea.Msg, apply bool) (bool, tea.Cmd)
 	if !ok {
 		return false, nil
 	}
+	if ready.generation != m.refreshGeneration {
+		return true, nil
+	}
 	if !apply {
 		m.refreshInFlight = false
 		return true, nil
@@ -440,9 +448,13 @@ func (m *Model) handleMovementKey(msg tea.KeyPressMsg) bool {
 // handleSnapshotReady applies the result of a background snapshot+layout job.
 // Discards the result if viewport or zoom changed while the job was in flight
 // (the next tick will dispatch a fresh refresh), or if the user paused after a
-// snapshot already exists. Always clears refreshInFlight so subsequent ticks
-// can dispatch the next refresh.
+// snapshot already exists. A current-generation completion always clears
+// refreshInFlight so subsequent ticks can dispatch the next refresh; an old
+// generation cannot clear a newer session's slot.
 func (m *Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cmd) {
+	if msg.generation != m.refreshGeneration {
+		return m, nil
+	}
 	m.refreshInFlight = false
 	if msg.snapshot == nil {
 		return m, nil
@@ -601,9 +613,12 @@ func (m *Model) currentViewCacheKey() flameViewCacheKey {
 	}
 }
 
-// SetLiveTrie updates the data source. Resets all sub-controllers and clears
-// snapshot state so the new trie starts fresh.
+// SetLiveTrie updates the data source. It invalidates any in-flight refresh,
+// resets all sub-controllers, and clears snapshot state so the new trie starts
+// fresh.
 func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
+	m.refreshGeneration++
+	m.refreshInFlight = false
 	m.liveTrie = liveTrie
 	m.syncFieldPresetToTrie()
 	m.syncCountFieldToTrie()
@@ -703,10 +718,10 @@ func (m *Model) RefreshFromLiveTrie() bool {
 // to apply the new frame layout without blocking the UI goroutine.
 // Only snapshot reads are needed here, so the parameter is narrowed to
 // Snapshotter rather than the full LiveTrieSource.
-func buildSnapshotMsg(liveTrie Snapshotter, width, height int, zoomPath string) tea.Msg {
+func buildSnapshotMsg(liveTrie Snapshotter, generation uint64, width, height int, zoomPath string) tea.Msg {
 	tree, ver := liveTrie.SnapshotTree()
 	if tree == nil {
-		return flameSnapshotReadyMsg{version: ver, layoutWidth: width, layoutHeight: height, zoomPath: zoomPath}
+		return flameSnapshotReadyMsg{generation: generation, version: ver, layoutWidth: width, layoutHeight: height, zoomPath: zoomPath}
 	}
 	var zoomRoot *snapshotNode
 	layoutRoot := tree
@@ -723,6 +738,7 @@ func buildSnapshotMsg(liveTrie Snapshotter, width, height int, zoomPath string) 
 		targetFrames = applyZoomLineage(targetFrames, tree, zoomPath, width)
 	}
 	return flameSnapshotReadyMsg{
+		generation:   generation,
 		version:      ver,
 		layoutWidth:  width,
 		layoutHeight: height,
@@ -756,9 +772,10 @@ func (m *Model) RefreshFromLiveTrieCmd() tea.Cmd {
 	m.refreshInFlight = true
 	// Capture the fields needed by the goroutine to avoid concurrent reads of
 	// Model fields from outside the Bubble Tea Update goroutine.
-	liveTrie, width, height, zoomPath := m.liveTrie, m.width, m.height, m.zoomPath
+	liveTrie, generation := m.liveTrie, m.refreshGeneration
+	width, height, zoomPath := m.width, m.height, m.zoomPath
 	return func() tea.Msg {
-		return buildSnapshotMsg(liveTrie, width, height, zoomPath)
+		return buildSnapshotMsg(liveTrie, generation, width, height, zoomPath)
 	}
 }
 
