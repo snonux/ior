@@ -54,10 +54,10 @@ func TestFGetflMakesUnknownFlagsConcreteAndPropagatesThem(t *testing.T) {
 	assertPairFdFlags(t, readPair, fGetflFd, wantFlags)
 }
 
-func TestFGetflReplacesAStaleKnownFlagWord(t *testing.T) {
+func TestFGetflReplacesStaleStatusFlagsAndPreservesCloseOnExec(t *testing.T) {
 	const (
 		staleFlags = syscall.O_WRONLY | syscall.O_APPEND | syscall.O_CLOEXEC | syscall.O_CREAT
-		wantFlags  = int32(syscall.O_RDWR|syscall.O_NONBLOCK) | linuxOLargefile
+		wantFlags  = int32(syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC) | linuxOLargefile
 	)
 	el := newFilteredEventLoop(t, globalfilter.Filter{})
 	el.fdState().set(fGetflFd, execCommPid,

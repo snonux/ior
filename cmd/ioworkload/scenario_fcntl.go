@@ -64,6 +64,48 @@ func fcntlSetfl() error {
 	return nil
 }
 
+// fcntlSetfd clears FD_CLOEXEC on a descriptor opened with O_CLOEXEC and then
+// writes through it so the tracer's next fd row exposes the updated state.
+func fcntlSetfd() error {
+	dir, cleanup, err := makeTempDir("fcntl-setfd")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "fcntlsetfdfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+	if errno != 0 {
+		return fmt.Errorf("fcntl F_GETFD before clear: %w", errno)
+	}
+	if flags&syscall.FD_CLOEXEC == 0 {
+		return fmt.Errorf("fcntl F_GETFD before clear: FD_CLOEXEC is not set")
+	}
+
+	_, _, errno = syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFD, 0)
+	if errno != 0 {
+		return fmt.Errorf("fcntl F_SETFD clear: %w", errno)
+	}
+	if _, err := syscall.Write(fd, []byte("after fcntl setfd clear")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	flags, _, errno = syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+	if errno != 0 {
+		return fmt.Errorf("fcntl F_GETFD after clear: %w", errno)
+	}
+	if flags&syscall.FD_CLOEXEC != 0 {
+		return fmt.Errorf("fcntl F_GETFD after clear: FD_CLOEXEC is still set")
+	}
+	return nil
+}
+
 // fcntlDupfdCloexec uses fcntl F_DUPFD_CLOEXEC to duplicate a file descriptor
 // with the close-on-exec flag set.
 func fcntlDupfdCloexec() error {

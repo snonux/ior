@@ -78,6 +78,7 @@ var scenarios = map[string]func() error{
 	"dup3-invalid-flags":            dup3InvalidFlags,
 	"fcntl-dupfd":                   fcntlDupfd,
 	"fcntl-setfl":                   fcntlSetfl,
+	"fcntl-setfd":                   fcntlSetfd,
 	"fcntl-dupfd-cloexec":           fcntlDupfdCloexec,
 	"fcntl-invalid-fd":              fcntlInvalidFd,
 	"fcntl-dupfd-max":               fcntlDupfdMax,

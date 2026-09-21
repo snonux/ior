@@ -103,6 +103,33 @@ func TestFdFileSetFlags(t *testing.T) {
 	}
 }
 
+func TestFdFileKeepsKnownCloseOnExecAcrossUnknownStatus(t *testing.T) {
+	fdFile := NewFd(1, "test.txt", -1)
+	fdFile.MergeFlags(syscall.O_CLOEXEC, syscall.O_CLOEXEC)
+	if got := fdFile.Flags(); got != unknownFlag {
+		t.Fatalf("partial flags = %v, want unknown status word", got)
+	}
+
+	fdFile.SetStatusFlags(syscall.O_RDWR | syscall.O_NONBLOCK)
+	want := Flags(syscall.O_RDWR | syscall.O_NONBLOCK | syscall.O_CLOEXEC)
+	if got := fdFile.Flags(); got != want {
+		t.Fatalf("combined flags = %v, want %v", got, want)
+	}
+}
+
+func TestFdFileKeepsUnknownStatusWhenCloseOnExecIsKnownClear(t *testing.T) {
+	fdFile := NewFd(1, "test.txt", -1)
+	fdFile.MergeFlags(syscall.O_CLOEXEC, 0)
+	if got := fdFile.Flags(); got != unknownFlag {
+		t.Fatalf("known-clear descriptor materialized unknown status as %v", got)
+	}
+
+	fdFile.SetStatusFlags(syscall.O_RDWR)
+	if got := fdFile.Flags(); got != Flags(syscall.O_RDWR) {
+		t.Fatalf("combined flags = %v, want O_RDWR", got)
+	}
+}
+
 func TestFdFileAddFlags(t *testing.T) {
 	fdFile := NewFd(1, "test.txt", syscall.O_RDWR)
 	fdFile.AddFlags(syscall.O_APPEND)

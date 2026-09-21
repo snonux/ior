@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"ior/internal/types"
 )
@@ -33,22 +34,21 @@ type File interface {
 
 // FdFile represents a file descriptor-backed file reference.
 type FdFile struct {
-	fd              int32
-	name            string
-	flags           Flags
-	flagsFromProcFS bool
+	fd               int32
+	name             string
+	flags            Flags
+	closeOnExecKnown bool
+	closeOnExec      bool
+	flagsFromProcFS  bool
 }
 
 // NewFd constructs an FdFile from explicit descriptor metadata.
 func NewFd(fd int32, name string, flags int32) *FdFile {
 	f := &FdFile{
-		fd:    fd,
-		name:  name,
-		flags: Flags(flags),
+		fd:   fd,
+		name: name,
 	}
-	if f.flags == -1 {
-		f.flags = unknownFlag
-	}
+	f.SetFlags(flags)
 	return f
 }
 
@@ -63,16 +63,16 @@ func NewFdWithPid(fd int32, pid uint32) *FdFile {
 	f.name, err = os.Readlink(procPath)
 	if err != nil {
 		f.name = ""
-		f.flags = unknownFlag
+		f.SetFlags(-1)
 		f.flagsFromProcFS = true
 		return f
 	}
 
 	flags, err := readFlagsFromFdInfo(fd, pid)
 	if err != nil {
-		f.flags = unknownFlag
+		f.SetFlags(-1)
 	} else {
-		f.flags = flags
+		f.SetFlags(int32(flags))
 	}
 	f.flagsFromProcFS = true
 
@@ -143,6 +143,10 @@ func (f *FdFile) String() string {
 
 // Flags returns the file's open-flags word.
 func (f *FdFile) Flags() Flags {
+	// Keep a partially known word unknown. Returning O_CLOEXEC alone when the
+	// status word is unavailable would make its zero access-mode bits look like
+	// an authoritative O_RDONLY. The separately remembered descriptor bit is
+	// folded in when F_GETFL later supplies the status word.
 	return f.flags
 }
 
@@ -151,14 +155,40 @@ func (f *FdFile) FD() int32 {
 	return f.fd
 }
 
-// SetFlags replaces the flag word outright. This is the update shape of an
-// authoritative F_GETFL result; use MergeFlags for F_SETFL's partial update.
+// SetFlags replaces a complete combined flag word outright. Use SetStatusFlags
+// for F_GETFL and MergeFlags for partial updates.
 func (f *FdFile) SetFlags(flags int32) {
+	f.flags = Flags(flags)
+	if f.flags == unknownFlag {
+		f.closeOnExecKnown = false
+		f.closeOnExec = false
+		return
+	}
+	f.closeOnExecKnown = true
+	f.closeOnExec = flags&syscall.O_CLOEXEC != 0
+}
+
+// SetStatusFlags replaces the status word reported by F_GETFL while retaining
+// any separately learned FD_CLOEXEC state. When that descriptor bit is still
+// unknown, the flattened output keeps the historical clear representation;
+// a later F_GETFD will make it authoritative.
+func (f *FdFile) SetStatusFlags(flags int32) {
+	flags &^= syscall.O_CLOEXEC
+	if f.closeOnExecKnown && f.closeOnExec {
+		flags |= syscall.O_CLOEXEC
+	}
 	f.flags = Flags(flags)
 }
 
 // AddFlags ORs the given bits into the flag word.
 func (f *FdFile) AddFlags(flags int32) {
+	if flags&syscall.O_CLOEXEC != 0 {
+		f.closeOnExecKnown = true
+		f.closeOnExec = true
+	}
+	if f.flags == unknownFlag {
+		return
+	}
 	f.flags = Flags(int32(f.flags) | flags)
 }
 
@@ -172,11 +202,16 @@ func (f *FdFile) AddFlags(flags int32) {
 // arg&mask would mask the access mode away and make a read-write descriptor
 // report as read-only for the rest of its life.
 //
-// Flags that are not known at all are left unknown: with no base word there is
-// nothing to merge into, and materialising one from the masked bits alone
-// would assert an access mode (O_RDONLY is the zero value) that was never
-// observed.
+// Status flags that are not known at all are left unknown: with no base word
+// there is nothing to merge into, and materialising one from the masked bits
+// alone would assert an access mode (O_RDONLY is the zero value) that was never
+// observed. Descriptor-level O_CLOEXEC knowledge is still retained separately
+// and is folded in when SetStatusFlags supplies that base word.
 func (f *FdFile) MergeFlags(mask, flags int32) {
+	if mask&syscall.O_CLOEXEC != 0 {
+		f.closeOnExecKnown = true
+		f.closeOnExec = flags&syscall.O_CLOEXEC != 0
+	}
 	if f.flags == unknownFlag {
 		return
 	}

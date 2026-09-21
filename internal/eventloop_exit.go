@@ -971,13 +971,14 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 	return e.finishPair(ep)
 }
 
-// handleFcntlExit applies the fd-state effect of the command (F_GETFL flag
-// resynchronization, F_SETFL flag update, F_DUPFD/F_DUPFD_CLOEXEC descriptor
-// registration) before filtering the pair - see handleFdExit for why the
-// ordering matters. The flag commands belong to the same class even though no
-// filter dimension reads flags: for a descriptor known only to the procfs
-// cache they promote the entry into the fd table, so behind the checkpoint a
-// dropped row left that promotion, and the new flags with it, unrecorded.
+// handleFcntlExit applies the fd-state effect of the command (F_GETFL/F_GETFD
+// resynchronization, F_SETFL/F_SETFD flag update, F_DUPFD/F_DUPFD_CLOEXEC
+// descriptor registration) before filtering the pair - see handleFdExit for
+// why the ordering matters. The flag commands belong to the same class even
+// though no filter dimension reads flags: for a descriptor known only to the
+// procfs cache they promote the entry into the fd table, so behind the
+// checkpoint a dropped row left that promotion, and the new flags with it,
+// unrecorded.
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
@@ -1012,15 +1013,17 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 	switch fcntlEv.Cmd {
 	case syscall.F_GETFL:
 		// Unlike F_SETFL's partial update, a successful F_GETFL return is the
-		// kernel's complete authoritative flag word. Replace even an unknown or
-		// stale word, and promote a procfs-resolved entry into the fd table so
-		// later rows inherit it. Linux returns this value as an int; reject a
-		// malformed raw event that cannot be represented by FdFile's int32 word.
+		// kernel's complete authoritative status-flag word. FD_CLOEXEC is a
+		// separate descriptor flag that F_GETFL cannot report, so preserve its
+		// O_CLOEXEC representation while replacing every other bit. Promote a
+		// procfs-resolved entry into the fd table so later rows inherit it. Linux
+		// returns the status word as an int; reject a malformed raw event that
+		// cannot be represented by FdFile's int32 word.
 		if retEvent.Ret > math.MaxInt32 {
 			e.recyclePair(ep, "Dropped malformed fcntl F_GETFL return value")
 			return false
 		}
-		fdFile.SetFlags(int32(retEvent.Ret))
+		fdFile.SetStatusFlags(int32(retEvent.Ret))
 		ep.File = fdFile
 		e.fdState().set(fd, fcntlEv.Pid, fdFile)
 	case syscall.F_SETFL:
@@ -1031,6 +1034,34 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 		// report O_RDONLY on the fcntl row and on every later row for that fd.
 		const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
 		fdFile.MergeFlags(int32(canChange), int32(fcntlEv.Arg))
+		ep.File = fdFile
+		e.fdState().set(fd, fcntlEv.Pid, fdFile)
+	case syscall.F_GETFD:
+		// FD_CLOEXEC is a descriptor flag, not part of the F_GETFL status-flag
+		// word. The file model carries it as O_CLOEXEC so every row can render
+		// the descriptor's complete tracked state. Translate the authoritative
+		// F_GETFD result into that representation without disturbing status or
+		// creation flags.
+		cloexec := int32(0)
+		if retEvent.Ret&syscall.FD_CLOEXEC != 0 {
+			cloexec = syscall.O_CLOEXEC
+		}
+		fdFile.MergeFlags(syscall.O_CLOEXEC, cloexec)
+		ep.File = fdFile
+		e.fdState().set(fd, fcntlEv.Pid, fdFile)
+	case syscall.F_SETFD:
+		// F_SETFD currently controls only FD_CLOEXEC. As above, translate the
+		// descriptor flag into the O_CLOEXEC bit used by the combined model and
+		// leave the open-file-description flags untouched.
+		if retEvent.Ret != 0 {
+			e.recyclePair(ep, "Dropped malformed fcntl F_SETFD return value")
+			return false
+		}
+		cloexec := int32(0)
+		if fcntlEv.Arg&syscall.FD_CLOEXEC != 0 {
+			cloexec = syscall.O_CLOEXEC
+		}
+		fdFile.MergeFlags(syscall.O_CLOEXEC, cloexec)
 		ep.File = fdFile
 		e.fdState().set(fd, fcntlEv.Pid, fdFile)
 	case syscall.F_DUPFD:
