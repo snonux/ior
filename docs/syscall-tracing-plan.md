@@ -106,12 +106,25 @@ inotify and path-only fanotify payloads, with the original missing fields.
 
 Payload bytes classified by return value:
 
-- ReadClassified: `fgetxattr`, `flistxattr`, `getcwd`, `getdents`, `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`, `listxattr`, `listxattrat`, `llistxattr`, `mq_timedreceive`, `msgrcv`, `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`, `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `sched_getaffinity`, `syslog`
+- ReadClassified: `fgetxattr`, `flistxattr`, `getcwd`, `getdents`, `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`, `listxattr`, `listxattrat`, `llistxattr`, `mq_timedreceive`, `msgrcv`, `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`, `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `sched_getaffinity`
 - TransferClassified: `copy_file_range`, `sendfile64`, `splice`, `tee`, `vmsplice`
 - WriteClassified: `process_vm_writev`, `pwrite64`, `pwritev`, `pwritev2`, `sendmsg`, `sendto`, `write`, `writev`
 
 All other traced syscalls are treated as non-bytes for throughput accounting.
 Memory extent is tracked separately via address-space metrics.
+
+For `getxattr*` and `listxattr*`, a zero output-buffer size is a size probe:
+the positive return reports required capacity, but throughput bytes stay zero.
+`syslog` is non-bytes because its return meaning depends on the action; this
+conservatively avoids counting its size/status actions as data copied.
+
+TRANSFER syscalls with two fd endpoints use one per-file attribution direction:
+the destination fd. That is `out_fd` for `sendfile64`, `fd_out` for
+`copy_file_range`/`splice`, and `fdout` for `tee`. `vmsplice` has only one fd
+endpoint and always attributes to that pipe fd; the pipe is the destination for
+user-to-pipe calls and the source for pipe-to-user calls. Aggregate transfer
+bytes still contribute to both read and write totals because a transfer moves
+data between endpoints even though the single file row names only one endpoint.
 
 ## Pointer-Backed Argument Capture
 

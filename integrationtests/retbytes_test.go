@@ -14,28 +14,27 @@ func TestRetbytesPhaseA(t *testing.T) {
 		{Tracepoint: "enter_recvmsg", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_sendmmsg", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_recvmmsg", Comm: "ioworkload", MinCount: 1},
-		{Tracepoint: "enter_sendfile64", Comm: "ioworkload", MinCount: 1},
-		{Tracepoint: "enter_splice", Comm: "ioworkload", MinCount: 1},
-		{Tracepoint: "enter_tee", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "sendfiledst.txt", Tracepoint: "enter_sendfile64", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "pipe:", Tracepoint: "enter_splice", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "teedst.fifo", Tracepoint: "enter_tee", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_process_vm_writev", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_getdents64", Comm: "ioworkload", MinCount: 1},
 		{Tracepoint: "enter_readlinkat", Comm: "ioworkload", MinCount: 1},
-		{Tracepoint: "enter_vmsplice", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "pipe:", Tracepoint: "enter_vmsplice", Comm: "ioworkload", MinCount: 1},
 	}, retbytesTraceArgs)
 
-	for _, tracepoint := range []string{
-		"enter_sendto",
-		"enter_recvfrom",
-		"enter_sendmsg",
-		"enter_recvmsg",
-		"enter_sendfile64",
-		"enter_splice",
-		"enter_tee",
-		"enter_process_vm_writev",
-		"enter_process_vm_readv",
+	for _, exp := range []ExpectedEvent{
+		{Tracepoint: "enter_sendto", Comm: "ioworkload"},
+		{Tracepoint: "enter_recvfrom", Comm: "ioworkload"},
+		{Tracepoint: "enter_sendmsg", Comm: "ioworkload"},
+		{Tracepoint: "enter_recvmsg", Comm: "ioworkload"},
+		{PathContains: "sendfiledst.txt", Tracepoint: "enter_sendfile64", Comm: "ioworkload"},
+		{PathContains: "pipe:", Tracepoint: "enter_splice", Comm: "ioworkload"},
+		{PathContains: "teedst.fifo", Tracepoint: "enter_tee", Comm: "ioworkload"},
+		{Tracepoint: "enter_process_vm_writev", Comm: "ioworkload"},
+		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload"},
 	} {
-		exp := ExpectedEvent{Tracepoint: tracepoint, Comm: "ioworkload"}
 		assertEventBytesAtLeast(t, result, exp, payloadLen)
 		assertEventDurationPositive(t, result, exp)
 	}
@@ -68,7 +67,7 @@ func TestRetbytesPhaseA(t *testing.T) {
 	// into the pipe reports ctx->ret = bytes moved. The retbytes driver gathers
 	// exactly payloadLen (18) bytes each iteration, so the exit byte count is at
 	// least that. This locks in the TRANSFER byte attribution like splice/tee.
-	vmspliceExp := ExpectedEvent{Tracepoint: "enter_vmsplice", Comm: "ioworkload"}
+	vmspliceExp := ExpectedEvent{PathContains: "pipe:", Tracepoint: "enter_vmsplice", Comm: "ioworkload"}
 	assertEventBytesAtLeast(t, result, vmspliceExp, payloadLen)
 	assertEventDurationPositive(t, result, vmspliceExp)
 }

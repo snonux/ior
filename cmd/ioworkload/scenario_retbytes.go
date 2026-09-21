@@ -357,25 +357,40 @@ func retbytesSplice() error {
 }
 
 func retbytesTee() error {
-	pipeA := make([]int, 2)
-	if err := syscall.Pipe2(pipeA, syscall.O_CLOEXEC); err != nil {
-		return fmt.Errorf("pipe2 source: %w", err)
+	dir, cleanup, err := makeTempDir("retbytes-tee")
+	if err != nil {
+		return err
 	}
-	defer syscall.Close(pipeA[0])
-	defer syscall.Close(pipeA[1])
+	defer cleanup()
 
-	pipeB := make([]int, 2)
-	if err := syscall.Pipe2(pipeB, syscall.O_CLOEXEC); err != nil {
-		return fmt.Errorf("pipe2 dest: %w", err)
+	sourcePath := filepath.Join(dir, "teesrc.fifo")
+	destinationPath := filepath.Join(dir, "teedst.fifo")
+	for _, path := range []string{sourcePath, destinationPath} {
+		if err := syscall.Mkfifo(path, 0o600); err != nil {
+			return fmt.Errorf("mkfifo %s: %w", filepath.Base(path), err)
+		}
 	}
-	defer syscall.Close(pipeB[0])
-	defer syscall.Close(pipeB[1])
+
+	// Open both ends read/write so neither FIFO open blocks waiting for a
+	// peer. Named FIFOs remain pipe-backed descriptors for tee(2), while their
+	// distinct procfs names let the integration test prove destination rather
+	// than merely observing an anonymous "pipe:" endpoint.
+	sourceFD, err := syscall.Open(sourcePath, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open tee source: %w", err)
+	}
+	defer syscall.Close(sourceFD)
+	destinationFD, err := syscall.Open(destinationPath, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open tee destination: %w", err)
+	}
+	defer syscall.Close(destinationFD)
 
 	payload := []byte("phase-a-tee-bytes!")
-	if _, err := syscall.Write(pipeA[1], payload); err != nil {
-		return fmt.Errorf("write pipe: %w", err)
+	if _, err := syscall.Write(sourceFD, payload); err != nil {
+		return fmt.Errorf("write tee source: %w", err)
 	}
-	n, err := syscall.Tee(pipeA[0], pipeB[1], len(payload), 0)
+	n, err := syscall.Tee(sourceFD, destinationFD, len(payload), 0)
 	if err != nil {
 		return fmt.Errorf("tee: %w", err)
 	}

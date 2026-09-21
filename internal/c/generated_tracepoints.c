@@ -901,6 +901,9 @@ int handle_sys_enter_bind(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -956,6 +959,9 @@ int handle_sys_enter_listen(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1131,6 +1137,9 @@ int handle_sys_enter_connect(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1186,6 +1195,9 @@ int handle_sys_enter_getsockname(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1241,6 +1253,9 @@ int handle_sys_enter_getpeername(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1296,6 +1311,9 @@ int handle_sys_enter_sendto(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1351,6 +1369,9 @@ int handle_sys_enter_recvfrom(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1406,6 +1427,9 @@ int handle_sys_enter_setsockopt(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1461,6 +1485,9 @@ int handle_sys_enter_getsockopt(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1516,6 +1543,9 @@ int handle_sys_enter_shutdown(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1571,6 +1601,9 @@ int handle_sys_enter_sendmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1626,6 +1659,9 @@ int handle_sys_enter_sendmmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1681,6 +1717,9 @@ int handle_sys_enter_recvmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1736,6 +1775,9 @@ int handle_sys_enter_recvmmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1845,6 +1887,9 @@ int handle_sys_enter_io_uring_register(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1900,6 +1945,9 @@ int handle_sys_enter_io_uring_enter(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2189,6 +2237,9 @@ int handle_sys_enter_landlock_add_rule(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2244,6 +2295,9 @@ int handle_sys_enter_landlock_restrict_self(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2715,6 +2769,8 @@ int handle_sys_enter_mq_unlink(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -2771,6 +2827,9 @@ int handle_sys_enter_mq_timedsend(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2826,6 +2885,9 @@ int handle_sys_enter_mq_timedreceive(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2881,6 +2943,9 @@ int handle_sys_enter_mq_notify(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2936,6 +3001,9 @@ int handle_sys_enter_mq_getsetattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3649,6 +3717,8 @@ int handle_sys_enter_quotactl(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -3705,6 +3775,9 @@ int handle_sys_enter_quotactl_fd(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3770,6 +3843,8 @@ int handle_sys_enter_name_to_handle_at(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -3881,6 +3956,9 @@ int handle_sys_enter_flock(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4548,6 +4626,9 @@ int handle_sys_enter_timerfd_settime(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4603,6 +4684,9 @@ int handle_sys_enter_timerfd_gettime(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5010,6 +5094,9 @@ int handle_sys_enter_epoll_wait(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5065,6 +5152,9 @@ int handle_sys_enter_epoll_pwait(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5120,6 +5210,9 @@ int handle_sys_enter_epoll_pwait2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5523,6 +5616,9 @@ int handle_sys_enter_inotify_rm_watch(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5588,6 +5684,8 @@ int handle_sys_enter_file_getattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -5654,6 +5752,8 @@ int handle_sys_enter_file_setattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -5804,6 +5904,8 @@ int handle_sys_enter_fspick(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -5860,6 +5962,9 @@ int handle_sys_enter_fsconfig(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5925,6 +6030,8 @@ int handle_sys_enter_statfs(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -5981,6 +6088,9 @@ int handle_sys_enter_fstatfs(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6163,6 +6273,8 @@ int handle_sys_enter_utimensat(struct syscall_trace_enter *ctx) {
             ev->target_status = PATH_TARGET_SKIPPED;
         }
     }
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -6229,6 +6341,8 @@ int handle_sys_enter_futimesat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -6295,6 +6409,8 @@ int handle_sys_enter_utimes(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -6361,6 +6477,8 @@ int handle_sys_enter_utime(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -6471,6 +6589,9 @@ int handle_sys_enter_syncfs(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6526,6 +6647,9 @@ int handle_sys_enter_fsync(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6581,6 +6705,9 @@ int handle_sys_enter_fdatasync(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6636,6 +6763,9 @@ int handle_sys_enter_sync_file_range(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6691,6 +6821,9 @@ int handle_sys_enter_vmsplice(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6745,7 +6878,10 @@ int handle_sys_enter_splice(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd = (__s32)ctx->args[2];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6800,7 +6936,10 @@ int handle_sys_enter_tee(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd = (__s32)ctx->args[1];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6866,6 +7005,8 @@ int handle_sys_enter_setxattrat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -6932,6 +7073,8 @@ int handle_sys_enter_setxattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -6998,6 +7141,8 @@ int handle_sys_enter_lsetxattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7054,6 +7199,9 @@ int handle_sys_enter_fsetxattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7119,6 +7267,15 @@ int handle_sys_enter_getxattrat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
+    if (ctx->args[4] != 0) {
+        struct { __u64 value; __u32 size; __u32 flags; } ior_xattr_args = {};
+        if (bpf_probe_read_user(&ior_xattr_args, sizeof(ior_xattr_args), (void *)ctx->args[4]) == 0) {
+            ev->size = ior_xattr_args.size;
+            ev->size_valid = 1;
+        }
+    }
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7185,6 +7342,10 @@ int handle_sys_enter_getxattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[3];
+    ev->size_valid = 1;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7251,6 +7412,10 @@ int handle_sys_enter_lgetxattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[3];
+    ev->size_valid = 1;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7307,6 +7472,11 @@ int handle_sys_enter_fgetxattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[3];
+    ev->size_valid = 1;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7372,6 +7542,10 @@ int handle_sys_enter_listxattrat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[4];
+    ev->size_valid = 1;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7438,6 +7612,10 @@ int handle_sys_enter_listxattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[2];
+    ev->size_valid = 1;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7504,6 +7682,10 @@ int handle_sys_enter_llistxattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[2];
+    ev->size_valid = 1;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7560,6 +7742,11 @@ int handle_sys_enter_flistxattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[2];
+    ev->size_valid = 1;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7625,6 +7812,8 @@ int handle_sys_enter_removexattrat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7691,6 +7880,8 @@ int handle_sys_enter_removexattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7757,6 +7948,8 @@ int handle_sys_enter_lremovexattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -7813,6 +8006,9 @@ int handle_sys_enter_fremovexattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7878,6 +8074,8 @@ int handle_sys_enter_umount(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -8017,6 +8215,8 @@ int handle_sys_enter_mount(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -8228,6 +8428,8 @@ int handle_sys_enter_pivot_root(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -8294,6 +8496,8 @@ int handle_sys_enter_mount_setattr(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -8702,6 +8906,9 @@ int handle_sys_enter_dup2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8757,6 +8964,9 @@ int handle_sys_enter_dup(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9067,6 +9277,9 @@ int handle_sys_enter_getdents(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9122,6 +9335,9 @@ int handle_sys_enter_getdents64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9177,6 +9393,9 @@ int handle_sys_enter_ioctl(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9299,6 +9518,8 @@ int handle_sys_enter_mknodat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -9365,6 +9586,8 @@ int handle_sys_enter_mknod(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -9431,6 +9654,8 @@ int handle_sys_enter_mkdirat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -9497,6 +9722,8 @@ int handle_sys_enter_mkdir(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -9563,6 +9790,8 @@ int handle_sys_enter_rmdir(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -9629,6 +9858,8 @@ int handle_sys_enter_unlinkat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -9695,6 +9926,8 @@ int handle_sys_enter_unlink(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -10548,6 +10781,8 @@ int handle_sys_enter_newstat(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -10614,6 +10849,8 @@ int handle_sys_enter_newlstat(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -10680,6 +10917,8 @@ int handle_sys_enter_newfstatat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[3];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -10736,6 +10975,9 @@ int handle_sys_enter_newfstat(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10801,6 +11043,8 @@ int handle_sys_enter_readlinkat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -10867,6 +11111,8 @@ int handle_sys_enter_readlink(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -10933,6 +11179,8 @@ int handle_sys_enter_statx(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -10989,6 +11237,9 @@ int handle_sys_enter_lseek(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11044,6 +11295,9 @@ int handle_sys_enter_read(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11099,6 +11353,9 @@ int handle_sys_enter_write(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11154,6 +11411,9 @@ int handle_sys_enter_pread64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11209,6 +11469,9 @@ int handle_sys_enter_pwrite64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11264,6 +11527,9 @@ int handle_sys_enter_readv(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11319,6 +11585,9 @@ int handle_sys_enter_writev(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11374,6 +11643,9 @@ int handle_sys_enter_preadv(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11429,6 +11701,9 @@ int handle_sys_enter_preadv2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11484,6 +11759,9 @@ int handle_sys_enter_pwritev(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11539,6 +11817,9 @@ int handle_sys_enter_pwritev2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11594,6 +11875,9 @@ int handle_sys_enter_sendfile64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11648,7 +11932,10 @@ int handle_sys_enter_copy_file_range(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd = (__s32)ctx->args[2];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11714,6 +12001,8 @@ int handle_sys_enter_truncate(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -11770,6 +12059,9 @@ int handle_sys_enter_ftruncate(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11825,6 +12117,9 @@ int handle_sys_enter_fallocate(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11890,6 +12185,8 @@ int handle_sys_enter_faccessat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -11956,6 +12253,8 @@ int handle_sys_enter_faccessat2(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[3];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12022,6 +12321,8 @@ int handle_sys_enter_access(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12088,6 +12389,8 @@ int handle_sys_enter_chdir(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12144,6 +12447,9 @@ int handle_sys_enter_fchdir(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12209,6 +12515,8 @@ int handle_sys_enter_chroot(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12265,6 +12573,9 @@ int handle_sys_enter_fchmod(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12330,6 +12641,8 @@ int handle_sys_enter_fchmodat2(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[3];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12396,6 +12709,8 @@ int handle_sys_enter_fchmodat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12462,6 +12777,8 @@ int handle_sys_enter_chmod(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12528,6 +12845,8 @@ int handle_sys_enter_fchownat(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12594,6 +12913,8 @@ int handle_sys_enter_chown(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12660,6 +12981,8 @@ int handle_sys_enter_lchown(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -12716,6 +13039,9 @@ int handle_sys_enter_fchown(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13006,6 +13332,8 @@ int handle_sys_enter_creat(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -13062,6 +13390,9 @@ int handle_sys_enter_close(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13661,6 +13992,8 @@ int handle_sys_enter_swapoff(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -13727,6 +14060,8 @@ int handle_sys_enter_swapon(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -13841,6 +14176,9 @@ int handle_sys_enter_process_madvise(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14916,6 +15254,9 @@ int handle_sys_enter_readahead(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14971,6 +15312,9 @@ int handle_sys_enter_fadvise64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15026,6 +15370,9 @@ int handle_sys_enter_process_mrelease(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15081,6 +15428,9 @@ int handle_sys_enter_cachestat(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15372,6 +15722,9 @@ int handle_sys_enter_kexec_file_load(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15491,6 +15844,8 @@ int handle_sys_enter_acct(struct syscall_trace_enter *ctx) {
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
     ev->target_status = PATH_TARGET_REQUIRED;
+    ev->size_valid = 0;
+    ev->size = 0;
     ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -17088,6 +17443,9 @@ int handle_sys_enter_finit_module(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17147,7 +17505,7 @@ int handle_sys_enter_syslog(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_syslog is a struct ret_event (READ_CLASSIFIED) (kind=ret)
+/// sys_exit_syslog is a struct ret_event (UNCLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_syslog")
 int handle_sys_exit_syslog(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -17169,7 +17527,7 @@ int handle_sys_exit_syslog(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = READ_CLASSIFIED;
+    ev->ret_type = UNCLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18115,6 +18473,9 @@ int handle_sys_enter_setns(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18242,6 +18603,9 @@ int handle_sys_enter_pidfd_getfd(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20511,6 +20875,9 @@ int handle_sys_enter_pidfd_send_signal(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

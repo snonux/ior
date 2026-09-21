@@ -223,14 +223,64 @@ func generateExtraOpenByHandleAt() string {
 
 // generateExtraFd returns the fd-capture lines for fd-family events.
 func generateExtraFd(f *Format) string {
-	if f.Name == "sys_enter_pidfd_getfd" {
-		return "    ev->fd = (__s32)ctx->args[0];\n"
-	}
 	fdIdx := f.FieldNumber("fd")
-	if fdIdx >= 0 {
-		return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdIdx)
+	if override, ok := fdArgumentOverrides[f.Name]; ok {
+		fdIdx = override
+	} else if fdIdx < 0 {
+		fdIdx = 0
 	}
-	return "    ev->fd = (__s32)ctx->args[0];\n"
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "    ev->fd = (__s32)ctx->args[%d];\n", fdIdx)
+	writeRequestedSizeCapture(&b, f)
+	b.WriteString("    ev->schema_version = FD_EVENT_SCHEMA_VERSION;\n")
+	return b.String()
+}
+
+// fdArgumentOverrides chooses the one descriptor represented by a single-fd
+// payload when the syscall has multiple descriptors or names none literally
+// "fd". Transfers with two fd endpoints consistently use the destination;
+// vmsplice has only one fd endpoint and therefore always uses its pipe fd.
+var fdArgumentOverrides = map[string]int{
+	"sys_enter_copy_file_range": 2,
+	"sys_enter_pidfd_getfd":     0,
+	"sys_enter_sendfile64":      0,
+	"sys_enter_splice":          2,
+	"sys_enter_tee":             1,
+	"sys_enter_vmsplice":        0,
+}
+
+// requestedSizeArgument records output-buffer capacity only for xattr read
+// syscalls. A zero capacity makes these calls size probes: their positive
+// return is required capacity, not bytes copied.
+var requestedSizeArgument = map[string]int{
+	"sys_enter_fgetxattr":   3,
+	"sys_enter_flistxattr":  2,
+	"sys_enter_getxattr":    3,
+	"sys_enter_getxattrat":  4,
+	"sys_enter_lgetxattr":   3,
+	"sys_enter_listxattr":   2,
+	"sys_enter_listxattrat": 4,
+	"sys_enter_llistxattr":  2,
+}
+
+func writeRequestedSizeCapture(b *strings.Builder, f *Format) {
+	b.WriteString("    ev->size_valid = 0;\n")
+	b.WriteString("    ev->size = 0;\n")
+	if f.Name == "sys_enter_getxattrat" {
+		b.WriteString("    if (ctx->args[4] != 0) {\n")
+		b.WriteString("        struct { __u64 value; __u32 size; __u32 flags; } ior_xattr_args = {};\n")
+		b.WriteString("        if (bpf_probe_read_user(&ior_xattr_args, sizeof(ior_xattr_args), (void *)ctx->args[4]) == 0) {\n")
+		b.WriteString("            ev->size = ior_xattr_args.size;\n")
+		b.WriteString("            ev->size_valid = 1;\n")
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
+		return
+	}
+	if idx, ok := requestedSizeArgument[f.Name]; ok {
+		fmt.Fprintf(b, "    ev->size = (__u64)ctx->args[%d];\n", idx)
+		b.WriteString("    ev->size_valid = 1;\n")
+	}
 }
 
 // generateExtraOpen returns the filename/comm/flags capture lines for open-family events.
@@ -356,6 +406,7 @@ func generateExtraPathname(tp GeneratedTracepoint, f *Format) string {
 	writeDirfdCapture(&b, f, "dirfd", "dfd", "dirfd")
 	writePathFlagsCapture(&b, f)
 	writePathTargetCapture(&b, f)
+	writeRequestedSizeCapture(&b, f)
 	b.WriteString("    ev->schema_version = PATH_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
 }

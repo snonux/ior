@@ -1152,11 +1152,7 @@ func (e *eventLoop) recyclePair(ep *event.Pair, warning string) {
 }
 
 func applyRetBytes(ep *event.Pair) {
-	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok {
-		return
-	}
-	ep.Bytes = bytesFromRet(retEv)
+	ep.Bytes = bytesFromRet(ep)
 }
 
 func applyAddressSpaceBytes(ep *event.Pair) {
@@ -1192,10 +1188,16 @@ func (e *eventLoop) dropMalformedRawEvent(evType types.EventType, raw []byte) {
 	e.notifyWarning(fmt.Sprintf("Dropped malformed raw event type %d (len=%d)", evType, len(raw)))
 }
 
-// bytesFromRet extracts the number of bytes transferred from a RetEvent.
-// Returns 0 for nil events, errors (Ret <= 0), or unclassified syscalls.
-func bytesFromRet(retEv *types.RetEvent) uint64 {
-	if retEv == nil || retEv.Ret <= 0 {
+// bytesFromRet extracts the number of bytes transferred from a paired return.
+// A zero-capacity xattr read is a size probe: its positive return describes the
+// required capacity, but no bytes were copied. Older payloads carry no explicit
+// requested-size validity and therefore retain their historical byte count.
+func bytesFromRet(ep *event.Pair) uint64 {
+	if ep == nil {
+		return 0
+	}
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok || retEv == nil || retEv.Ret <= 0 || isZeroSizeProbe(ep.EnterEv) {
 		return 0
 	}
 	switch retEv.RetType {
@@ -1203,6 +1205,17 @@ func bytesFromRet(retEv *types.RetEvent) uint64 {
 		return uint64(retEv.Ret)
 	default:
 		return 0
+	}
+}
+
+func isZeroSizeProbe(enterEv event.Event) bool {
+	switch ev := enterEv.(type) {
+	case *types.FdEvent:
+		return ev.SizeValid != 0 && ev.Size == 0
+	case *types.PathEvent:
+		return ev.SizeValid != 0 && ev.Size == 0
+	default:
+		return false
 	}
 }
 

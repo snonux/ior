@@ -85,7 +85,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("FdEvent", func(t *testing.T) {
-		ev := &FdEvent{EventType: ENTER_FD_EVENT, TraceId: SYS_ENTER_READ, Time: 1, Pid: 2, Tid: 3, Fd: 4}
+		ev := &FdEvent{EventType: ENTER_FD_EVENT, TraceId: SYS_ENTER_READ, Time: 1, Pid: 2, Tid: 3, Fd: 4, SchemaVersion: FD_EVENT_SCHEMA_VERSION}
 		raw := rawBytes(t, ev)
 
 		slow := NewFdEvent(raw)
@@ -1030,6 +1030,8 @@ func TestNewPathEventFastLegacyAndCurrentLayouts(t *testing.T) {
 		"flags":           {unsafe.Offsetof(pathLayout.Flags), 288},
 		"schema_version":  {unsafe.Offsetof(pathLayout.SchemaVersion), 292},
 		"target_status":   {unsafe.Offsetof(pathLayout.TargetStatus), 296},
+		"size_valid":      {unsafe.Offsetof(pathLayout.SizeValid), 300},
+		"size":            {unsafe.Offsetof(pathLayout.Size), 304},
 	} {
 		if offset.got != offset.want {
 			t.Fatalf("PathEvent.%s offset = %d, want %d", field, offset.got, offset.want)
@@ -1047,21 +1049,28 @@ func TestNewPathEventFastLegacyAndCurrentLayouts(t *testing.T) {
 		flags         uint32
 		schemaVersion uint32
 		targetStatus  uint32
+		sizeValid     uint32
+		requestedSize uint64
 	}{
 		{name: "legacy", size: pathEventLegacySize, dirfd: legacyPathDirfd},
-		{name: "current compact", size: pathEventCompactSize, dirfd: 9, status: PATH_READ_FAILED, flags: 0x1000, schemaVersion: 3, targetStatus: PATH_TARGET_UNKNOWN},
-		{name: "current kernel", size: pathEventSize, dirfd: 9, status: PATH_READ_NULL, flags: 0x1000, schemaVersion: 3, targetStatus: PATH_TARGET_SKIPPED},
+		{name: "v3 compact", size: pathEventV3CompactSize, dirfd: 9, status: PATH_READ_FAILED, flags: 0x1000, schemaVersion: 3, targetStatus: PATH_TARGET_UNKNOWN},
+		{name: "v3 kernel", size: pathEventV3KernelSize, dirfd: 9, status: PATH_READ_NULL, flags: 0x1000, schemaVersion: 3, targetStatus: PATH_TARGET_SKIPPED},
+		{name: "current", size: pathEventSize, dirfd: 9, status: PATH_READ_OK, flags: 0x2000, schemaVersion: PATH_EVENT_SCHEMA_VERSION, targetStatus: PATH_TARGET_REQUIRED, sizeValid: 1, requestedSize: 4096},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := make([]byte, tc.size)
 			fillCommonHeader(raw, ENTER_PATH_EVENT, SYS_ENTER_STATX)
-			if tc.size == pathEventCompactSize || tc.size == pathEventSize {
+			if tc.size != pathEventLegacySize {
 				binary.LittleEndian.PutUint32(raw[280:284], uint32(tc.dirfd))
 				binary.LittleEndian.PutUint32(raw[284:288], tc.status)
 				binary.LittleEndian.PutUint32(raw[288:292], tc.flags)
 				binary.LittleEndian.PutUint32(raw[292:296], tc.schemaVersion)
 				binary.LittleEndian.PutUint32(raw[296:300], tc.targetStatus)
+			}
+			if tc.size == pathEventSize {
+				binary.LittleEndian.PutUint32(raw[300:304], tc.sizeValid)
+				binary.LittleEndian.PutUint64(raw[304:312], tc.requestedSize)
 			}
 
 			fast := NewPathEventFast(raw)
@@ -1070,12 +1079,13 @@ func TestNewPathEventFastLegacyAndCurrentLayouts(t *testing.T) {
 			}
 			defer fast.Recycle()
 			if fast.Dirfd != tc.dirfd || fast.PathnameStatus != tc.status || fast.Flags != tc.flags ||
-				fast.SchemaVersion != tc.schemaVersion || fast.TargetStatus != tc.targetStatus {
+				fast.SchemaVersion != tc.schemaVersion || fast.TargetStatus != tc.targetStatus ||
+				fast.SizeValid != tc.sizeValid || fast.Size != tc.requestedSize {
 				t.Fatalf("unexpected path decode: %#v", fast)
 			}
 		})
 	}
-	for _, size := range []int{284, 288, 296} {
+	for _, size := range []int{284, 288, 296, 308} {
 		if got := NewPathEventFast(make([]byte, size)); got != nil {
 			got.Recycle()
 			t.Fatalf("ambiguous intermediate %d-byte path layout decoded", size)
@@ -1088,11 +1098,14 @@ func TestNewPathEventFastLegacyAndCurrentLayouts(t *testing.T) {
 		t.Fatal("current-size path layout with wrong schema decoded")
 	}
 
-	// A recycled current record must not leak its target status into a legacy
-	// payload, whose absent field receives the compatibility default.
+	// A recycled current record must not leak its target status or requested
+	// size into a legacy payload, whose absent fields receive compatibility
+	// defaults.
 	current := make([]byte, pathEventCompactSize)
 	binary.LittleEndian.PutUint32(current[292:296], PATH_EVENT_SCHEMA_VERSION)
 	binary.LittleEndian.PutUint32(current[296:300], PATH_TARGET_UNKNOWN)
+	binary.LittleEndian.PutUint32(current[300:304], 1)
+	binary.LittleEndian.PutUint64(current[304:312], 4096)
 	decodedCurrent := NewPathEventFast(current)
 	if decodedCurrent == nil {
 		t.Fatal("current path payload did not decode")
@@ -1103,8 +1116,8 @@ func TestNewPathEventFastLegacyAndCurrentLayouts(t *testing.T) {
 		t.Fatal("legacy path payload did not decode")
 	}
 	defer legacy.Recycle()
-	if legacy.TargetStatus != PATH_TARGET_REQUIRED {
-		t.Fatalf("legacy target status = %d, want PATH_TARGET_REQUIRED", legacy.TargetStatus)
+	if legacy.TargetStatus != PATH_TARGET_REQUIRED || legacy.SizeValid != 0 || legacy.Size != 0 {
+		t.Fatalf("legacy metadata leaked from recycled current payload: %#v", legacy)
 	}
 }
 
@@ -1162,18 +1175,48 @@ func TestNewOpenNameFixupEventFastRejectsUnknownLayout(t *testing.T) {
 	}
 }
 
-func TestNewFdEventFastKernelLayout(t *testing.T) {
-	raw := make([]byte, fdEventSize) // 32: sizeof(struct fd_event)
-	fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
-	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(9)))
-
-	fast := NewFdEventFast(raw)
-	if fast == nil {
-		t.Fatalf("expected decoded fd event for padded kernel payload")
+func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
+	fdLayout := FdEvent{}
+	if got := unsafe.Sizeof(fdLayout); got != fdEventSize {
+		t.Fatalf("sizeof(FdEvent) = %d, want %d", got, fdEventSize)
 	}
-	defer fast.Recycle()
-	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 {
-		t.Fatalf("unexpected fd decode: %#v", fast)
+	if got := len(rawBytes(t, &fdLayout)); got != fdEventCompactSize {
+		t.Fatalf("FdEvent.Bytes size = %d, want %d", got, fdEventCompactSize)
+	}
+
+	tests := []struct {
+		name          string
+		payloadSize   int
+		sizeOffset    int
+		requestedSize uint64
+		sizeValid     uint32
+	}{
+		{name: "legacy compact", payloadSize: fdEventLegacyCompactSize},
+		{name: "legacy kernel", payloadSize: fdEventLegacyKernelSize},
+		{name: "current compact", payloadSize: fdEventCompactSize, sizeOffset: 28, requestedSize: 4096, sizeValid: 1},
+		{name: "current kernel", payloadSize: fdEventSize, sizeOffset: 32, requestedSize: 8192, sizeValid: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := make([]byte, tc.payloadSize)
+			fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
+			binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(9)))
+			if tc.sizeOffset != 0 {
+				binary.LittleEndian.PutUint64(raw[tc.sizeOffset:tc.sizeOffset+8], tc.requestedSize)
+				binary.LittleEndian.PutUint32(raw[tc.sizeOffset+8:tc.sizeOffset+12], tc.sizeValid)
+				binary.LittleEndian.PutUint32(raw[tc.sizeOffset+12:tc.sizeOffset+16], FD_EVENT_SCHEMA_VERSION)
+			}
+
+			fast := NewFdEventFast(raw)
+			if fast == nil {
+				t.Fatal("expected fd payload to decode")
+			}
+			defer fast.Recycle()
+			if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 ||
+				fast.Size != tc.requestedSize || fast.SizeValid != tc.sizeValid {
+				t.Fatalf("unexpected fd decode: %#v", fast)
+			}
+		})
 	}
 }
 
