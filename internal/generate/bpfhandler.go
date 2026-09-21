@@ -59,6 +59,11 @@ func handlerComment(tp GeneratedTracepoint, eventStruct string) string {
 	return fmt.Sprintf("%s (kind=%s)", eventStruct, tp.Classification.Kind.MetadataName())
 }
 
+// clockReadLine is the single clock read of every generated syscall handler.
+// bpf_ktime_get_boot_ns is kept deliberately: it keeps counting across
+// suspend, so a syscall that spans a suspend reports its true wall duration.
+const clockReadLine = "    __u64 now = bpf_ktime_get_boot_ns();\n"
+
 // handlerSpec carries everything renderHandler needs for one tracepoint.
 type handlerSpec struct {
 	name            string
@@ -106,6 +111,10 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 		fmt.Fprintf(b, "    __u64 pending_filename = ior_take_pending_filename(tid, %s);\n", h.enterName)
 		b.WriteString("\n")
 	}
+	// The handler reads the clock exactly once (clockReadLine) and hands that
+	// value to the enter/exit hook and to ev->time, instead of the hook and the
+	// body each calling bpf_ktime_get_boot_ns(). The hook's duration and the
+	// pair's ev->time delta are then the same two instants.
 	switch {
 	case isEnter && h.noreturn:
 		// Noreturn enter: only the sampling decision, no enter-state write. The
@@ -113,13 +122,20 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 		// would ever look up or delete a recorded enter-state entry. Skipping
 		// the write avoids leaking stale per-tid entries in the bounded
 		// syscall_enter_state_map; the enter null_event is still emitted below.
+		// The hook needs no timestamp, so the clock is read only once the event
+		// is known to be emitted, as before.
 		fmt.Fprintf(b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(name))
+		b.WriteString("        return 0;\n")
+		b.WriteString(clockReadLine)
 	case isEnter:
-		fmt.Fprintf(b, "    if (!ior_on_syscall_enter(tid, %s))\n", strings.ToUpper(name))
+		b.WriteString(clockReadLine)
+		fmt.Fprintf(b, "    if (!ior_on_syscall_enter(tid, %s, now))\n", strings.ToUpper(name))
+		b.WriteString("        return 0;\n")
 	default:
-		fmt.Fprintf(b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret))\n", h.enterName)
+		b.WriteString(clockReadLine)
+		fmt.Fprintf(b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret, now))\n", h.enterName)
+		b.WriteString("        return 0;\n")
 	}
-	b.WriteString("        return 0;\n")
 	b.WriteString("\n")
 	if h.recoverFilename {
 		fmt.Fprintf(b, "    ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
@@ -144,7 +160,7 @@ func renderHandler(h handlerSpec) string {
 	fmt.Fprintf(&b, "    ev->trace_id = %s;\n", strings.ToUpper(h.name))
 	b.WriteString("    ev->pid = pid;\n")
 	b.WriteString("    ev->tid = tid;\n")
-	b.WriteString("    ev->time = bpf_ktime_get_boot_ns();\n")
+	b.WriteString("    ev->time = now;\n")
 	if h.extra != "" {
 		b.WriteString(h.extra)
 	}

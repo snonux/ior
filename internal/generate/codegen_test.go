@@ -2292,7 +2292,7 @@ func TestClockNanosleepExitHandlerIsUnclassifiedRet(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 	// The exit handler must not try to read a timespec or treat ret as an fd.
-	requireNotContains(t, output, "handle_sys_exit_clock_nanosleep(struct syscall_trace_exit *ctx) {\n    __u32 pid, tid;\n    if (filter(&pid, &tid))\n        return 0;\n\n    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_NANOSLEEP, ctx->ret))\n        return 0;\n\n    struct sleep_event")
+	requireNotContains(t, output, "handle_sys_exit_clock_nanosleep(struct syscall_trace_exit *ctx) {\n    __u32 pid, tid;\n    if (filter(&pid, &tid))\n        return 0;\n\n    __u64 now = bpf_ktime_get_boot_ns();\n    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_NANOSLEEP, ctx->ret, now))\n        return 0;\n\n    struct sleep_event")
 }
 
 func TestGenerateKeyctlHandler(t *testing.T) {
@@ -2451,7 +2451,7 @@ func TestGenerateReturningSyscallEnterRecordsState(t *testing.T) {
 		enterBody = output[enterStart : enterStart+len(enterSec)+enterEnd]
 	}
 
-	if !strings.Contains(enterBody, "ior_on_syscall_enter(tid, "+strings.ToUpper("sys_enter_"+syscall)+")") {
+	if !strings.Contains(enterBody, "ior_on_syscall_enter(tid, "+strings.ToUpper("sys_enter_"+syscall)+", now)") {
 		t.Errorf("%s: returning syscall enter handler must record enter-state via ior_on_syscall_enter", syscall)
 	}
 	if strings.Contains(enterBody, "ior_on_noreturn_syscall_enter(") {
@@ -2582,7 +2582,8 @@ func TestGenerateHandlerStructure(t *testing.T) {
 	requireContains(t, output, "if (filter(&pid, &tid))")
 	requireContains(t, output, "ev->pid = pid;")
 	requireContains(t, output, "ev->tid = tid;")
-	requireContains(t, output, "ev->time = bpf_ktime_get_boot_ns();")
+	requireContains(t, output, "__u64 now = bpf_ktime_get_boot_ns();")
+	requireContains(t, output, "ev->time = now;")
 	requireContains(t, output, "bpf_ringbuf_submit(ev, 0);")
 	requireContains(t, output, "return 0;")
 }
@@ -2855,7 +2856,7 @@ func TestEnterConstForHandler(t *testing.T) {
 func TestExitHandlerPassesEnterTraceID(t *testing.T) {
 	output := generateFromPair(t, FormatRead, FormatExitRead)
 
-	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret)")
+	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret, now)")
 	if strings.Contains(output, "ior_on_syscall_exit(tid, SYS_EXIT_READ") {
 		t.Error("exit handler must pass the enter trace ID, not the exit trace ID")
 	}
@@ -2885,7 +2886,7 @@ func TestExitHandlerDoesNotRelyOnIDAdjacency(t *testing.T) {
 	if strings.Contains(output, "ior_on_syscall_exit(tid, SYS_EXIT_") {
 		t.Error("generated exit handler passes exit trace ID; should pass enter trace ID to avoid adjacency dependency")
 	}
-	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret)")
+	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret, now)")
 }
 
 func syntheticPair(syscall string) string {
