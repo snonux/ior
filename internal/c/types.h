@@ -94,7 +94,9 @@
 #define PATH_EVENT_SCHEMA_VERSION 3
 #define NAME_EVENT_SCHEMA_VERSION 2
 #define EVENTFD_EVENT_SCHEMA_VERSION 2
-#define TWO_FD_EVENT_SCHEMA_VERSION 2
+// Schema 2 predates the kcmp pid1/type packing used for safe file attribution.
+#define TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION 2
+#define TWO_FD_EVENT_SCHEMA_VERSION 3
 #define FD_PATH_EVENT_SCHEMA_VERSION 1
 
 struct open_event {

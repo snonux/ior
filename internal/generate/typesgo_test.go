@@ -296,7 +296,7 @@ func TestGenerateTypesGoTwoFdCodecPinsCurrentAndLegacyLayouts(t *testing.T) {
 
 	requireContains(t, output, "if len(raw) != 568 && len(raw) != 564 && len(raw) != 40")
 	requireContains(t, output, "if len(raw) != 40")
-	requireContains(t, output, "t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION")
+	requireContains(t, output, "t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION && t.SchemaVersion != TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION")
 	requireContains(t, output, "raw := make([]byte, 568)")
 	requireContains(t, output, "copy(raw[40:296], t.Oldname[:])")
 	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[560:564], t.SchemaVersion)")

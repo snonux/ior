@@ -138,7 +138,8 @@ const OPEN_EVENT_SCHEMA_VERSION = 3
 const PATH_EVENT_SCHEMA_VERSION = 3
 const NAME_EVENT_SCHEMA_VERSION = 2
 const EVENTFD_EVENT_SCHEMA_VERSION = 2
-const TWO_FD_EVENT_SCHEMA_VERSION = 2
+const TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION = 2
+const TWO_FD_EVENT_SCHEMA_VERSION = 3
 const FD_PATH_EVENT_SCHEMA_VERSION = 1
 const SYS_ENTER_SOCKET TraceId = 1847
 const SYS_EXIT_SOCKET TraceId = 1846
@@ -2553,7 +2554,7 @@ func NewTwoFdEvent(raw []byte) *TwoFdEvent {
 		t.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])
 		t.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])
 		t.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])
-		if t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {
+		if t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION && t.SchemaVersion != TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION {
 			t.Recycle()
 			return nil
 		}

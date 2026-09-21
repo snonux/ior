@@ -591,7 +591,19 @@ type twoFdFieldSpec struct {
 // non-standard positions, register it here.
 var twoFdOverrides = map[string]twoFdFieldSpec{
 	"sys_enter_move_mount": {fdA: "(__s32)ctx->args[0]", fdB: "(__s32)ctx->args[2]", extra: "(__u64)ctx->args[4]"},
-	"sys_enter_kcmp":       {fdA: "(__s32)ctx->args[3]", fdB: "(__s32)ctx->args[4]", extra: "(__u64)ctx->args[2]"},
+	// Only KCMP_FILE (0) interprets both indices as descriptors. The primary
+	// descriptor belongs to pid1, not necessarily the caller. At sys_enter,
+	// compare pid1 with the caller's namespace-local TGID and pack the stable
+	// host owner only for a self comparison; userspace must not repeat this
+	// lifetime-sensitive proof through /proc. The low word remains the type.
+	// Older payloads copied the whole type argument, including unspecified upper
+	// bits, so their schema cannot safely attribute a file even when those bits
+	// resemble an owner.
+	"sys_enter_kcmp": {
+		fdA:   "(__u32)ctx->args[2] == 0 ? (__s32)ctx->args[3] : -1",
+		fdB:   "(__u32)ctx->args[2] == 0 ? (__s32)ctx->args[4] : -1",
+		extra: "((__u64)(ior_kcmp_pid_is_current((__s32)ctx->args[0]) ? pid : 0) << 32) | (__u32)ctx->args[2]",
+	},
 }
 
 // twoFdDefault is the fallback for two-fd syscalls not in twoFdOverrides.

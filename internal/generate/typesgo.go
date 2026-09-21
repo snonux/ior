@@ -536,7 +536,7 @@ func writeTwoFdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\t\t%s.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])\n", selfRef)
 	fmt.Fprintf(b, "\t\t%s.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])\n", selfRef)
 	fmt.Fprintf(b, "\t\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])\n", selfRef)
-	fmt.Fprintf(b, "\t\tif %s.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {\n\t\t\t%s.Recycle()\n\t\t\treturn nil\n\t\t}\n", selfRef, selfRef)
+	fmt.Fprintf(b, "\t\tif %s.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION && %s.SchemaVersion != TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION {\n\t\t\t%s.Recycle()\n\t\t\treturn nil\n\t\t}\n", selfRef, selfRef, selfRef)
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
 
