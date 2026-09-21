@@ -36,7 +36,7 @@ func TestHandlePipeExitTracksReturnedFds(t *testing.T) {
 			exitTrace:  types.SYS_EXIT_PIPE2,
 			flags:      syscall.O_CLOEXEC | syscall.O_NONBLOCK,
 			wantName:   "pipe:526336:52:53",
-			wantRead:   "O_RDONLY|O_CLOEXEC|O_NONBLOCK",
+			wantRead:   "O_CLOEXEC|O_NONBLOCK",
 			wantWrite:  "O_WRONLY|O_CLOEXEC|O_NONBLOCK",
 		},
 	}
@@ -171,22 +171,22 @@ func TestHandleEventfdExitTranslatesSyscallFlags(t *testing.T) {
 		want    string
 	}{
 		{name: "epoll_create", traceID: types.SYS_ENTER_EPOLL_CREATE, raw: 1, want: "O_RDONLY"},
-		{name: "epoll_create1", traceID: types.SYS_ENTER_EPOLL_CREATE1, raw: syscall.O_CLOEXEC, want: "O_RDONLY|O_CLOEXEC"},
+		{name: "epoll_create1", traceID: types.SYS_ENTER_EPOLL_CREATE1, raw: syscall.O_CLOEXEC, want: "O_CLOEXEC"},
 		{name: "inotify_init", traceID: types.SYS_ENTER_INOTIFY_INIT, raw: 2, want: "O_RDONLY"},
-		{name: "inotify_init1", traceID: types.SYS_ENTER_INOTIFY_INIT1, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
-		{name: "fanotify_init", traceID: types.SYS_ENTER_FANOTIFY_INIT, raw: 1 | 2, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "inotify_init1", traceID: types.SYS_ENTER_INOTIFY_INIT1, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_CLOEXEC|O_NONBLOCK"},
+		{name: "fanotify_init", traceID: types.SYS_ENTER_FANOTIFY_INIT, raw: 1 | 2, want: "O_CLOEXEC|O_NONBLOCK"},
 		{name: "landlock_create_ruleset", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, raw: 1, want: "O_RDONLY"},
 		{name: "eventfd", traceID: types.SYS_ENTER_EVENTFD, raw: 1, want: "O_RDONLY"},
-		{name: "eventfd2", traceID: types.SYS_ENTER_EVENTFD2, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
-		{name: "memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, raw: 1 | 2 | 4, want: "O_RDONLY|O_CLOEXEC"},
-		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, raw: syscall.O_CLOEXEC, want: "O_RDONLY|O_CLOEXEC"},
-		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
+		{name: "eventfd2", traceID: types.SYS_ENTER_EVENTFD2, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_CLOEXEC|O_NONBLOCK"},
+		{name: "memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, raw: 1 | 2 | 4, want: "O_CLOEXEC"},
+		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, raw: syscall.O_CLOEXEC, want: "O_CLOEXEC"},
+		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_CLOEXEC|O_NONBLOCK"},
 		{name: "signalfd", traceID: types.SYS_ENTER_SIGNALFD, raw: 1, want: "O_RDONLY"},
-		{name: "signalfd4", traceID: types.SYS_ENTER_SIGNALFD4, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
-		{name: "timerfd_create", traceID: types.SYS_ENTER_TIMERFD_CREATE, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_RDONLY|O_CLOEXEC|O_NONBLOCK"},
-		{name: "pidfd_open", traceID: types.SYS_ENTER_PIDFD_OPEN, raw: syscall.O_NONBLOCK, want: "O_RDONLY|O_NONBLOCK"},
-		{name: "fsmount", traceID: types.SYS_ENTER_FSMOUNT, raw: 1, want: "O_RDONLY|O_CLOEXEC"},
-		{name: "fsopen", traceID: types.SYS_ENTER_FSOPEN, raw: 1, want: "O_RDONLY|O_CLOEXEC"},
+		{name: "signalfd4", traceID: types.SYS_ENTER_SIGNALFD4, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_CLOEXEC|O_NONBLOCK"},
+		{name: "timerfd_create", traceID: types.SYS_ENTER_TIMERFD_CREATE, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: "O_CLOEXEC|O_NONBLOCK"},
+		{name: "pidfd_open", traceID: types.SYS_ENTER_PIDFD_OPEN, raw: syscall.O_NONBLOCK, want: "O_NONBLOCK"},
+		{name: "fsmount", traceID: types.SYS_ENTER_FSMOUNT, raw: 1, want: "O_CLOEXEC"},
+		{name: "fsopen", traceID: types.SYS_ENTER_FSOPEN, raw: 1, want: "O_CLOEXEC"},
 	}
 
 	for i, tt := range tests {
@@ -273,8 +273,8 @@ func TestHandleSignalfdUpdateKeepsExistingDescriptorMetadata(t *testing.T) {
 			if tracked != existing {
 				t.Fatal("signalfd update replaced the existing tracked descriptor")
 			}
-			if got := tracked.Flags().String(); got != "O_RDONLY|O_CLOEXEC" {
-				t.Fatalf("tracked flags = %q, want unchanged O_RDONLY|O_CLOEXEC", got)
+			if got := tracked.Flags().String(); got != "O_CLOEXEC" {
+				t.Fatalf("tracked flags = %q, want unchanged O_CLOEXEC", got)
 			}
 		})
 	}
