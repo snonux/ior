@@ -45,26 +45,36 @@ A label must start with a letter or digit and may contain only letters,
 digits and `.` `_` `+` `-` (no `/`, no `..`, not empty); anything else is
 refused before any work starts.
 
-If the tree differs from `HEAD` outside `perf/` (tracked changes, or untracked
-files that git does not ignore — `git ls-files --exclude-standard`, so
-`.gitignore`, `.git/info/exclude` and the global `core.excludesFile` all count —
-since `go test` compiles a new uncommitted `.go` file just the same), the
-recording measures code that no
-commit contains. The label then always gets a `-dirty` suffix, explicit labels
+If the tree differs from `HEAD` outside `perf/` (tracked edits or deletions, or
+non-ignored untracked files — `.gitignore`, `.git/info/exclude` and the global
+`core.excludesFile` all count — since `go test` compiles a new uncommitted
+`.go` file just the same), the recording measures code that no commit
+contains. The label then always gets a `-dirty` suffix, explicit labels
 included, and the header's `commit:` line ends in `+uncommitted changes`.
 Conversely, an explicit label ending in `-dirty` on a clean tree is refused.
 Commit first and record from a clean tree.
 
+The check stages the whole tree outside `perf/` into a throwaway index
+(`git read-tree HEAD`, `git add -A`, `git write-tree`) and compares the
+resulting tree id with `HEAD^{tree}`, so the real index, diff settings such as
+`diff.external` or `GIT_EXTERNAL_DIFF`, and symlink targets play no part. An
+untracked nested git repository counts as dirty, but edits inside it are not
+tracked; a file git cannot read (e.g. mode `000`) aborts the recording with
+"cannot fingerprint the tree". The loose blobs `git add` writes are
+unreferenced and pruned by `git gc`; the throwaway index lives in a temporary
+directory under `$TMPDIR` (default `/tmp`) that is removed on exit.
+
 An existing `perf/bench-<label>.txt` or `perf/static-<label>.txt` is never
 overwritten silently: the script refuses before any benchmark runs unless
-`PERF_FORCE=1` is set. Both files are written to temporary files in `perf/`
+`PERF_FORCE=1` is set (right after the dirty check, which decides the final
+label). Both files are written to temporary files in `perf/`
 and renamed into place only after the run produced benchmark results and no
 package failed, so a failed, empty or interrupted (Ctrl-C) recording leaves
 nothing behind and can simply be rerun with the same label. Stray temporary
 files (`perf/.bench-*`, `perf/.static-*`, e.g. after `kill -9`) are ignored by
-git and safe to delete. If `HEAD` or the tree outside `perf/` (tracked diff,
-untracked files) changed between the start and the end of the run, the
-recording is discarded with "tree changed during recording; nothing written",
+git and safe to delete. If `HEAD` or the tree outside `perf/` (the same tree
+id as above) changed between the start and the end of the run, the recording
+is discarded with "tree changed during recording; nothing written",
 since the header would describe a different tree than the one measured. The
 written files get the usual mode (`0666` minus the umask, e.g. `0644`).
 
