@@ -22267,6 +22267,7 @@ int handle_sys_enter_exit(struct syscall_trace_enter *ctx) {
 
     if (!ior_on_noreturn_syscall_enter(SYS_ENTER_EXIT))
         return 0;
+
     __u64 now = bpf_ktime_get_boot_ns();
 
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
@@ -22294,6 +22295,7 @@ int handle_sys_enter_exit_group(struct syscall_trace_enter *ctx) {
 
     if (!ior_on_noreturn_syscall_enter(SYS_ENTER_EXIT_GROUP))
         return 0;
+
     __u64 now = bpf_ktime_get_boot_ns();
 
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
@@ -23282,6 +23284,7 @@ int handle_sys_enter_rt_sigreturn(struct syscall_trace_enter *ctx) {
 
     if (!ior_on_noreturn_syscall_enter(SYS_ENTER_RT_SIGRETURN))
         return 0;
+
     __u64 now = bpf_ktime_get_boot_ns();
 
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);

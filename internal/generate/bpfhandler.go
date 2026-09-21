@@ -126,6 +126,7 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 		// is known to be emitted, as before.
 		fmt.Fprintf(b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(name))
 		b.WriteString("        return 0;\n")
+		b.WriteString("\n")
 		b.WriteString(clockReadLine)
 	case isEnter:
 		b.WriteString(clockReadLine)
