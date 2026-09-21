@@ -1,9 +1,12 @@
 package integrationtests
 
 import (
+	"errors"
 	"strings"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 const mqPayloadLen = uint64(14)
@@ -91,6 +94,13 @@ func TestEventfd2Basic(t *testing.T) {
 
 func TestFdFromAirEventfdUsers(t *testing.T) {
 	enableParallelIfRequested(t)
+	memfdSecretExpected := ExpectedEvent{Tracepoint: "enter_memfd_secret", MinCount: 1}
+	if supportsMemfdSecret(t) {
+		memfdSecretExpected.Flags = &ExpectedFlags{
+			AccessMode: ptrTo(syscall.O_RDWR),
+			Set:        syscall.O_CLOEXEC,
+		}
+	}
 	h := newTestHarness(t)
 	result, pid, err := h.RunWithIorArgs("fd-from-air-eventfd-users", defaultDuration, []string{
 		"-trace-families", "IPC", "-trace-syscalls", "close",
@@ -109,7 +119,7 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 				Set:        syscall.O_CLOEXEC,
 			},
 		},
-		{Tracepoint: "enter_memfd_secret", MinCount: 1},
+		memfdSecretExpected,
 		{Tracepoint: "enter_userfaultfd", MinCount: 1},
 		{Tracepoint: "enter_signalfd", MinCount: 1},
 		{Tracepoint: "enter_signalfd4", MinCount: 1},
@@ -148,6 +158,21 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 	// fd_event rather than emitting a null event, locking in the 6ac9fa4 fix.
 	assertTracepointPathPrefix(t, result, "enter_timerfd_settime", "timerfd:")
 	assertTracepointPathPrefix(t, result, "enter_timerfd_gettime", "timerfd:")
+}
+
+func supportsMemfdSecret(t *testing.T) bool {
+	t.Helper()
+	fd, err := unix.MemfdSecret(unix.O_CLOEXEC)
+	if errors.Is(err, syscall.ENOSYS) {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("probe memfd_secret: %v", err)
+	}
+	if err := syscall.Close(fd); err != nil {
+		t.Fatalf("close memfd_secret probe fd: %v", err)
+	}
+	return true
 }
 
 func assertTracepointExactPath(t *testing.T, result TestResult, tracepoint, wantPath string) {

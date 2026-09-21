@@ -179,7 +179,7 @@ func TestHandleEventfdExitTranslatesSyscallFlags(t *testing.T) {
 		{name: "eventfd", traceID: types.SYS_ENTER_EVENTFD, raw: 1, want: syscall.O_RDWR},
 		{name: "eventfd2", traceID: types.SYS_ENTER_EVENTFD2, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NONBLOCK},
 		{name: "memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, raw: 1 | 2 | 4, want: syscall.O_RDWR | syscall.O_CLOEXEC},
-		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, raw: syscall.FD_CLOEXEC, want: syscall.O_RDWR | syscall.O_CLOEXEC},
+		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, raw: syscall.O_CLOEXEC, want: syscall.O_RDWR | syscall.O_CLOEXEC},
 		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NONBLOCK},
 		{name: "signalfd", traceID: types.SYS_ENTER_SIGNALFD, raw: 1, want: syscall.O_RDWR},
 		{name: "signalfd4", traceID: types.SYS_ENTER_SIGNALFD4, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NONBLOCK},
