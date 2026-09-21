@@ -144,7 +144,7 @@ func runHeadlessParquet(cfg flags.Config) error {
 	if dropped := recorder.Status().RowsDropped; dropped > 0 {
 		logln("Warning:", dropped, "events were dropped (parquet recorder queue overflow) - the recording is partial")
 	}
-	logln("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
+	logln("Trace stopped after", totalDuration, "- cleaning up...")
 	return nil
 }
 

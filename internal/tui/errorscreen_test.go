@@ -11,6 +11,7 @@ import (
 
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
+	"ior/internal/runtime"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -169,6 +170,58 @@ func TestErrorScreenQuitCancelsTheTrace(t *testing.T) {
 				t.Fatalf("expected the trace context to be cancelled on quit")
 			}
 		})
+	}
+}
+
+// TestStartupTimeoutQuitWaitsForClaimedSessionCleanup covers the partial
+// startup case: the real starter has claimed shutdown ownership and may have
+// attached resources, but no TracingStartedMsg reached the model before the
+// timeout. Quitting the error screen must keep rendering shutdown feedback
+// until cancellation cleanup publishes completion.
+func TestStartupTimeoutQuitWaitsForClaimedSessionCleanup(t *testing.T) {
+	m := newErrorScreenModel(t, errors.New("trace startup timed out after 30s"))
+	reporter := runtime.NewTraceShutdownReporter()
+	reporter.Claim()
+	m.tracer.shutdownReporter = reporter
+	cancelled := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	m.tracer.traceStop = func() {
+		close(cancelled)
+		go func() {
+			<-releaseCleanup
+			reporter.Complete()
+		}()
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	updated := next.(*Model)
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("timeout quit did not cancel the partial trace session")
+	}
+	if !updated.quitting {
+		t.Fatal("timeout quit did not enter the shutdown view")
+	}
+	if got := updated.View().Content; !strings.Contains(got, "Stopping trace and releasing BPF resources") {
+		t.Fatalf("timeout shutdown view = %q", got)
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("timeout quit command = %T, want spinner + completion wait", batch)
+	}
+
+	close(releaseCleanup)
+	completeMsg := batch[1]()
+	completeNext, quitCmd := updated.Update(completeMsg)
+	if _, ok := completeNext.(*Model); !ok {
+		t.Fatalf("completion model = %T, want *Model", completeNext)
+	}
+	if quitCmd == nil {
+		t.Fatal("cleanup completion did not dispatch tea.Quit")
+	}
+	if _, ok := quitCmd().(tea.QuitMsg); !ok {
+		t.Fatalf("cleanup completion command = %T, want tea.QuitMsg", quitCmd())
 	}
 }
 

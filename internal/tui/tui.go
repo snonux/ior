@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -480,6 +481,7 @@ type Model struct {
 	width    int
 	height   int
 	quitting bool
+	shutdown runtime.TraceShutdownProgress
 
 	attaching bool
 	spin      spinner.Model
@@ -725,6 +727,9 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		m.dashboard.SetFocused(false)
 		return m, nil, true
 	case tea.KeyPressMsg:
+		if m.quitting {
+			return m, nil, true
+		}
 		if next, cmd, handled := m.handleGlobalKeyPress(msg); handled {
 			return next, cmd, true
 		}
@@ -768,6 +773,13 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		m.attaching = false
 		m.setError(msg.Err, errorScreenFatal)
 		return m, nil, true
+	case tracingShutdownProgressMsg:
+		m.shutdown = msg.progress
+		if msg.progress.Phase == runtime.TraceShutdownComplete {
+			m.tracer.shutdownReporter = nil
+			return m, tea.Quit, true
+		}
+		return m, m.tracer.waitForShutdownCmd(), true
 	case messages.GlobalFilterRequestedMsg:
 		next, cmd := m.applyGlobalFilter(msg.Filter, msg.Action)
 		return next, cmd, true
@@ -903,14 +915,15 @@ func (m *Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.C
 // when a modal is active the quit key is re-routed as Esc so modals close
 // before the user needs to press q again.
 func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.screen == ScreenDashboard && m.attaching {
+		return m.quitWithBestEffortCleanup()
+	}
 	if m.canHandleDashboardShortcut(msg) {
 		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
 			m.setError(err, errorScreenRecoverable)
 			return m, nil, true
 		}
-		m.quitting = true
-		m.tracer.stop()
-		return m, tea.Quit, true
+		return m.beginShutdown()
 	}
 	if m.shouldRouteQuitToEsc(msg) {
 		return m.routeQuitAsEsc()
@@ -970,9 +983,13 @@ func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
 
 func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
 	_ = recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
+	return m.beginShutdown()
+}
+
+func (m *Model) beginShutdown() (tea.Model, tea.Cmd, bool) {
 	m.quitting = true
-	m.tracer.stop()
-	return m, tea.Quit, true
+	m.shutdown = runtime.TraceShutdownProgress{Phase: runtime.TraceShutdownStopping}
+	return m, tea.Batch(m.spin.Tick, m.tracer.stopAndWaitCmd()), true
 }
 
 func (m *Model) setError(err error, kind errorScreenKind) {
@@ -1133,6 +1150,11 @@ func (m *Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if m.quitting {
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd, true
+	}
 	if m.attaching {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
@@ -1478,6 +1500,9 @@ func (m *Model) applyTheme(isDark bool) {
 }
 
 func (m *Model) windowTitle() string {
+	if m.quitting {
+		return "ior - shutting down"
+	}
 	switch m.screen {
 	case ScreenPIDPicker:
 		return "ior - select process"
@@ -1493,7 +1518,10 @@ func (m *Model) windowTitle() string {
 func (m *Model) View() tea.View {
 	title := m.windowTitle()
 	if m.quitting {
-		return altScreenView("", title)
+		width, height := common.EffectiveViewport(m.width, m.height)
+		theme := common.Current()
+		line := m.shutdownView()
+		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(theme.PanelStyle.Render(line))), title)
 	}
 
 	width, height := common.EffectiveViewport(m.width, m.height)
@@ -1526,6 +1554,20 @@ func (m *Model) View() tea.View {
 	default:
 		return altScreenView("", title)
 	}
+}
+
+func (m *Model) shutdownView() string {
+	if m.shutdown.Phase == runtime.TraceShutdownReleasing {
+		return fmt.Sprintf("%s Releasing remaining BPF resources...", m.spin.View())
+	}
+	if m.shutdown.Phase != runtime.TraceShutdownDetaching || m.shutdown.Total <= 0 {
+		return fmt.Sprintf("%s Stopping trace and releasing BPF resources...", m.spin.View())
+	}
+	const barWidth = 28
+	completed := min(m.shutdown.Completed, m.shutdown.Total)
+	filled := completed * barWidth / m.shutdown.Total
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	return fmt.Sprintf("Detaching BPF probe pairs... %d/%d\n[%s]", completed, m.shutdown.Total, bar)
 }
 
 // viewPickerScreen renders the PID picker screen with optional export overlay.

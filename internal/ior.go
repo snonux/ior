@@ -360,7 +360,17 @@ func tuiTraceStarterFromRunTrace(
 	startTrace func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error,
 ) runtime.TraceStarter {
 	return func(ctx context.Context) error {
+		shutdownReporter, _ := runtime.TraceShutdownReporterFromContext(ctx)
+		if shutdownReporter != nil && !shutdownReporter.Claim() {
+			return context.Canceled
+		}
 		bpf.SetLoggerCbs(bpf.Callbacks{Log: func(int, string) {}})
+		backgroundOwnsCompletion := false
+		defer func() {
+			if !backgroundOwnsCompletion {
+				shutdownReporter.Complete()
+			}
+		}()
 
 		cfg := baseCfg
 		if filter, ok := runtime.TraceFiltersFromContext(ctx); ok {
@@ -373,7 +383,6 @@ func tuiTraceStarterFromRunTrace(
 			return err
 		}
 		configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(ctx, cfg, rt)
-
 		startedCh := make(chan struct{})
 		// errCh carries at most one result from the trace goroutine to the
 		// outer select below.  done is closed on return so the goroutine can
@@ -383,7 +392,9 @@ func tuiTraceStarterFromRunTrace(
 		done := make(chan struct{})
 		defer close(done)
 
+		backgroundOwnsCompletion = true
 		go func() {
+			defer shutdownReporter.Complete()
 			err := startTrace(ctx, cfg, startedCh, configureEl)
 			unregisterLiveFilterSetter()
 			// Deliver the result only if the caller is still selecting.
@@ -610,7 +621,7 @@ func finaliseTrace(watcherDone <-chan struct{}, recorder *flamegraph.Recorder, p
 			return err
 		}
 	}
-	logln("Good bye... (unloading BPF tracepoints will take a few seconds...) after", totalDuration)
+	logln("Trace stopped after", totalDuration, "- cleaning up...")
 	return nil
 }
 
@@ -671,6 +682,9 @@ type traceInfra struct {
 	// the position rb is in here.
 	rb          ringBufferStopper
 	stopSignals func()
+	shutdownLog func(...any)
+	progress    func(completed, total int)
+	releasing   func()
 
 	cleanups []func()
 }
@@ -697,17 +711,20 @@ func (in *traceInfra) Close() {
 	}
 	cleanups := in.cleanups
 	in.cleanups = nil
-	// Deferred rather than called in the loop body, which both reverses the
-	// order and keeps the panic behaviour of the three separate defers this
-	// replaced: no one step that panics may strand the others. cancel is
-	// deferred last so it runs first, which is the order every hand-written
-	// arm used - goroutines watching the context have to be told to stop
-	// before what they touch goes away.
-	for i := range cleanups {
-		defer cleanups[i]()
-	}
-	if in.cancel != nil {
-		defer in.cancel()
+	// The inner closure preserves defer isolation and LIFO ordering: one
+	// cleanup that panics cannot strand the remaining resources. Completion is
+	// logged only after the closure returns normally; a panic must not print a
+	// false claim that every resource was released.
+	func() {
+		for i := range cleanups {
+			defer cleanups[i]()
+		}
+		if in.cancel != nil {
+			defer in.cancel()
+		}
+	}()
+	if len(cleanups) > 0 && in.shutdownLog != nil {
+		in.shutdownLog("Shutdown complete.")
 	}
 }
 
@@ -758,13 +775,35 @@ func setupTraceInfraWithEventLoop(
 	// probe-detach failures (audit domain-10 F2).
 	logTeardown := newLogger(true)
 
-	infra := &traceInfra{mgr: mgr}
+	reporter, _ := runtime.TraceShutdownReporterFromContext(parentCtx)
+	infra := &traceInfra{
+		mgr:         mgr,
+		shutdownLog: logln,
+	}
+	infra.progress = func(completed, total int) {
+		if completed == 0 {
+			logln("Detaching", total, "active BPF probe pairs...")
+		}
+		if reporter != nil {
+			reporter.Publish(runtime.TraceShutdownProgress{
+				Phase:     runtime.TraceShutdownDetaching,
+				Completed: completed,
+				Total:     total,
+			})
+		}
+	}
+	infra.releasing = func() {
+		logln("Releasing remaining BPF resources...")
+		if reporter != nil {
+			reporter.Publish(runtime.TraceShutdownProgress{Phase: runtime.TraceShutdownReleasing})
+		}
+	}
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
 	// is what detaches the probes on every later abort (audit domain-10 F3).
 	infra.onClose(func() {
-		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals)
+		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals, infra.progress, infra.releasing)
 	})
 
 	eventCh, rb, err := setupEventChannel(bpfModule)
@@ -854,6 +893,13 @@ type probeCloser interface {
 	Close() error
 }
 
+// progressProbeCloser is implemented by the production probe manager. The
+// optional extension keeps the teardown helper compatible with narrow test
+// doubles while allowing exact progress over synchronous link destruction.
+type progressProbeCloser interface {
+	CloseWithProgress(func(completed, total int)) error
+}
+
 // moduleCloser abstracts the BPF module, whose libbpfgo Close releases the
 // module without reporting an error.
 type moduleCloser interface {
@@ -877,14 +923,25 @@ func closeTraceInfra(
 	releaseBindings func(),
 	bpfModule moduleCloser,
 	stopSignals func(),
+	progress func(completed, total int),
+	releasing func(),
 ) {
 	if rb != nil {
 		rb.Stop()
 	}
 	if mgr != nil {
-		if err := mgr.Close(); err != nil {
+		var err error
+		if progressMgr, ok := mgr.(progressProbeCloser); ok {
+			err = progressMgr.CloseWithProgress(progress)
+		} else {
+			err = mgr.Close()
+		}
+		if err != nil {
 			logErr("BPF probe manager close error:", err)
 		}
+	}
+	if releasing != nil {
+		releasing()
 	}
 	if releaseBindings != nil {
 		releaseBindings()
