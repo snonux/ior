@@ -123,6 +123,16 @@ const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
 const TRANSFER_CLASSIFIED = 3
+const PATH_READ_OK = 0
+const PATH_READ_NULL = 1
+const PATH_READ_FAILED = 2
+const PATH_TARGET_REQUIRED = 0
+const PATH_TARGET_SKIPPED = 1
+const PATH_TARGET_UNKNOWN = 2
+const IOR_UTIME_OMIT = 1073741822
+const OPEN_EVENT_SCHEMA_VERSION = 3
+const PATH_EVENT_SCHEMA_VERSION = 3
+const NAME_EVENT_SCHEMA_VERSION = 2
 const SYS_ENTER_SOCKET TraceId = 1847
 const SYS_EXIT_SOCKET TraceId = 1846
 const SYS_ENTER_SOCKETPAIR TraceId = 1845
@@ -856,18 +866,22 @@ const SYS_EXIT_IOPL TraceId = 92
 const SYS_ENTER_RT_SIGRETURN TraceId = 57
 
 type OpenEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Flags     int32
-	Filename  [MAX_FILENAME_LENGTH]byte
-	Comm      [MAX_PROGNAME_LENGTH]byte
+	EventType      EventType
+	TraceId        TraceId
+	Time           uint64
+	Pid            uint32
+	Tid            uint32
+	Flags          int32
+	Filename       [MAX_FILENAME_LENGTH]byte
+	Comm           [MAX_PROGNAME_LENGTH]byte
+	Dirfd          int32
+	SchemaVersion  uint32
+	FilenameStatus uint32
+	SchemaReserved uint32
 }
 
 func (o OpenEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Filename:%v Comm:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, string(o.Filename[:]), string(o.Comm[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Filename:%v Comm:%v Dirfd:%v SchemaVersion:%v FilenameStatus:%v SchemaReserved:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, string(o.Filename[:]), string(o.Comm[:]), o.Dirfd, o.SchemaVersion, o.FilenameStatus, o.SchemaReserved)
 }
 
 func (o OpenEvent) Equals(other any) bool {
@@ -875,7 +889,7 @@ func (o OpenEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags && o.Filename == otherConcrete.Filename && o.Comm == otherConcrete.Comm
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags && o.Filename == otherConcrete.Filename && o.Comm == otherConcrete.Comm && o.Dirfd == otherConcrete.Dirfd && o.SchemaVersion == otherConcrete.SchemaVersion && o.FilenameStatus == otherConcrete.FilenameStatus && o.SchemaReserved == otherConcrete.SchemaReserved
 }
 
 func (o *OpenEvent) GetEventType() EventType {
@@ -1264,17 +1278,23 @@ func (r *RetEvent) Recycle() {
 }
 
 type NameEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Oldname   [MAX_FILENAME_LENGTH]byte
-	Newname   [MAX_FILENAME_LENGTH]byte
+	EventType     EventType
+	TraceId       TraceId
+	Time          uint64
+	Pid           uint32
+	Tid           uint32
+	Oldname       [MAX_FILENAME_LENGTH]byte
+	Newname       [MAX_FILENAME_LENGTH]byte
+	Olddirfd      int32
+	Newdirfd      int32
+	OldnameStatus uint32
+	NewnameStatus uint32
+	Flags         uint32
+	SchemaVersion uint32
 }
 
 func (n NameEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Oldname:%v Newname:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid, string(n.Oldname[:]), string(n.Newname[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Oldname:%v Newname:%v Olddirfd:%v Newdirfd:%v OldnameStatus:%v NewnameStatus:%v Flags:%v SchemaVersion:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid, string(n.Oldname[:]), string(n.Newname[:]), n.Olddirfd, n.Newdirfd, n.OldnameStatus, n.NewnameStatus, n.Flags, n.SchemaVersion)
 }
 
 func (n NameEvent) Equals(other any) bool {
@@ -1282,7 +1302,7 @@ func (n NameEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return n.EventType == otherConcrete.EventType && n.TraceId == otherConcrete.TraceId && n.Time == otherConcrete.Time && n.Pid == otherConcrete.Pid && n.Tid == otherConcrete.Tid && n.Oldname == otherConcrete.Oldname && n.Newname == otherConcrete.Newname
+	return n.EventType == otherConcrete.EventType && n.TraceId == otherConcrete.TraceId && n.Time == otherConcrete.Time && n.Pid == otherConcrete.Pid && n.Tid == otherConcrete.Tid && n.Oldname == otherConcrete.Oldname && n.Newname == otherConcrete.Newname && n.Olddirfd == otherConcrete.Olddirfd && n.Newdirfd == otherConcrete.Newdirfd && n.OldnameStatus == otherConcrete.OldnameStatus && n.NewnameStatus == otherConcrete.NewnameStatus && n.Flags == otherConcrete.Flags && n.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (n *NameEvent) GetEventType() EventType {
@@ -1333,16 +1353,21 @@ func (n *NameEvent) Recycle() {
 }
 
 type PathEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Pathname  [MAX_FILENAME_LENGTH]byte
+	EventType      EventType
+	TraceId        TraceId
+	Time           uint64
+	Pid            uint32
+	Tid            uint32
+	Pathname       [MAX_FILENAME_LENGTH]byte
+	Dirfd          int32
+	PathnameStatus uint32
+	Flags          uint32
+	SchemaVersion  uint32
+	TargetStatus   uint32
 }
 
 func (p PathEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Pathname:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, string(p.Pathname[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Pathname:%v Dirfd:%v PathnameStatus:%v Flags:%v SchemaVersion:%v TargetStatus:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, string(p.Pathname[:]), p.Dirfd, p.PathnameStatus, p.Flags, p.SchemaVersion, p.TargetStatus)
 }
 
 func (p PathEvent) Equals(other any) bool {
@@ -1350,7 +1375,7 @@ func (p PathEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Pathname == otherConcrete.Pathname
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Pathname == otherConcrete.Pathname && p.Dirfd == otherConcrete.Dirfd && p.PathnameStatus == otherConcrete.PathnameStatus && p.Flags == otherConcrete.Flags && p.SchemaVersion == otherConcrete.SchemaVersion && p.TargetStatus == otherConcrete.TargetStatus
 }
 
 func (p *PathEvent) GetEventType() EventType {

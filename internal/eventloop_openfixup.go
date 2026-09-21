@@ -35,13 +35,6 @@ import (
 // handed, so it must recycle it.
 func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 	defer ev.Recycle()
-	name := types.StringValue(ev.Filename[:])
-	if name == "" {
-		// The kernel discards a still-failing re-read rather than submitting
-		// it, so this should not happen; if it ever does, an empty fixup
-		// carries no information.
-		return
-	}
 	pair, ok := e.pairs.pending(ev.Tid)
 	if !ok {
 		return
@@ -58,6 +51,12 @@ func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 	if openEv.GetTraceId() != ev.GetTraceId() {
 		return
 	}
+	// Only a failed non-NULL enter-side read can have stashed a pointer for the
+	// exit helper. Requiring that state prevents a synthetic or stale control
+	// record from turning a genuine NULL argument into a valid empty path.
+	if openEv.FilenameStatus != types.PATH_READ_FAILED {
+		return
+	}
 	// Never overwrite a name the enter side captured itself. That read is the
 	// authoritative one - it saw the caller's buffer at the moment of the call,
 	// while this one saw it after the kernel had already copied it in.
@@ -65,4 +64,9 @@ func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 		return
 	}
 	copy(openEv.Filename[:], ev.Filename[:])
+	// A submitted fixup is proof that the non-NULL pointer which failed at
+	// sys_enter was read successfully at sys_exit. That includes a return of 1
+	// for a valid empty C string, whose all-zero payload must remain
+	// distinguishable from receiving no control record at all.
+	openEv.FilenameStatus = types.PATH_READ_OK
 }

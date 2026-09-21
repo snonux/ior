@@ -284,9 +284,19 @@ func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) st
 	// internal/c/filter.c). Without this the row printed "E:name", the
 	// descriptor was registered under the empty string, and -path could not
 	// match a name that was never captured.
-	fmt.Fprintf(&b, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0)\n", filenameIdx)
-	fmt.Fprintf(&b, "        ior_stash_pending_filename(tid, ctx->args[%d]);\n", filenameIdx)
+	fmt.Fprintf(&b, "    if (ctx->args[%d] == 0) {\n", filenameIdx)
+	b.WriteString("        ev->filename_status = PATH_READ_NULL;\n")
+	b.WriteString("    } else {\n")
+	b.WriteString("        ev->filename_status = PATH_READ_OK;\n")
+	fmt.Fprintf(&b, "        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0) {\n", filenameIdx)
+	b.WriteString("            ev->filename_status = PATH_READ_FAILED;\n")
+	fmt.Fprintf(&b, "            ior_stash_pending_filename(tid, ctx->args[%d]);\n", filenameIdx)
+	b.WriteString("        }\n")
+	b.WriteString("    }\n")
 	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
+	writeDirfdCapture(&b, f, "dirfd", "dfd", "dirfd")
+	b.WriteString("    ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;\n")
+	b.WriteString("    ev->schema_reserved = 0;\n")
 	if flagsIdx > -1 {
 		fmt.Fprintf(&b, "    ev->flags = ctx->args[%d];\n", flagsIdx)
 	} else {
@@ -306,8 +316,41 @@ func generateExtraPathname(tp GeneratedTracepoint, f *Format) string {
 	fieldIdx := f.FieldNumber(fieldName)
 	var b strings.Builder
 	b.WriteString("    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));\n")
-	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[%d]);\n", fieldIdx)
+	writePathReadCapture(&b, "pathname", "pathname_status", fieldIdx)
+	writeDirfdCapture(&b, f, "dirfd", "dfd", "dirfd")
+	writePathFlagsCapture(&b, f)
+	writePathTargetCapture(&b, f)
+	b.WriteString("    ev->schema_version = PATH_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
+}
+
+// writePathTargetCapture records whether a successful syscall necessarily
+// validated its path target. Most path syscalls do. utimensat is exceptional:
+// when both timestamps are UTIME_OMIT the kernel returns success without
+// validating the pathname, dirfd, or flags. A nofault read failure is kept
+// distinct and fails closed in userspace.
+func writePathTargetCapture(b *strings.Builder, f *Format) {
+	b.WriteString("    ev->target_status = PATH_TARGET_REQUIRED;\n")
+	if f.Name != "sys_enter_utimensat" {
+		return
+	}
+	timesIdx := f.FieldNumber("utimes")
+	if timesIdx < 0 {
+		timesIdx = f.FieldNumber("times")
+	}
+	if timesIdx < 0 {
+		b.WriteString("    ev->target_status = PATH_TARGET_UNKNOWN; // timespec argument not found\n")
+		return
+	}
+	b.WriteString("    struct __kernel_timespec ior_times[2] = {};\n")
+	fmt.Fprintf(b, "    if (ctx->args[%d] != 0) {\n", timesIdx)
+	fmt.Fprintf(b, "        if (bpf_probe_read_user(&ior_times, sizeof(ior_times), (void *)ctx->args[%d]) < 0) {\n", timesIdx)
+	b.WriteString("            ev->target_status = PATH_TARGET_UNKNOWN;\n")
+	b.WriteString("        } else if (IOR_UTIME_OMIT == ior_times[0].tv_nsec &&\n")
+	b.WriteString("                   IOR_UTIME_OMIT == ior_times[1].tv_nsec) {\n")
+	b.WriteString("            ev->target_status = PATH_TARGET_SKIPPED;\n")
+	b.WriteString("        }\n")
+	b.WriteString("    }\n")
 }
 
 // generateExtraName returns the oldname/newname capture lines for rename/link-family events.
@@ -316,9 +359,82 @@ func generateExtraName(f *Format) string {
 	newIdx := f.FieldNumber("newname")
 	var b strings.Builder
 	b.WriteString("    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));\n")
-	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[%d]);\n", oldIdx)
-	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[%d]);\n", newIdx)
+	writePathReadCapture(&b, "oldname", "oldname_status", oldIdx)
+	writePathReadCapture(&b, "newname", "newname_status", newIdx)
+	writeDirfdCapture(&b, f, "olddirfd", "olddfd", "olddirfd")
+	writeDirfdCapture(&b, f, "newdirfd", "newdfd", "newdirfd")
+	if f.Name == "sys_enter_linkat" {
+		writeArgumentCapture(&b, f, "flags", "flags", "flag")
+	} else {
+		b.WriteString("    ev->flags = 0;\n")
+	}
+	b.WriteString("    ev->schema_version = NAME_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
+}
+
+var pathFlagSyscalls = map[string]struct{}{
+	"sys_enter_faccessat2":        {},
+	"sys_enter_fchmodat2":         {},
+	"sys_enter_fchownat":          {},
+	"sys_enter_file_getattr":      {},
+	"sys_enter_file_setattr":      {},
+	"sys_enter_fspick":            {},
+	"sys_enter_getxattrat":        {},
+	"sys_enter_listxattrat":       {},
+	"sys_enter_mount_setattr":     {},
+	"sys_enter_name_to_handle_at": {},
+	"sys_enter_newfstatat":        {},
+	"sys_enter_removexattrat":     {},
+	"sys_enter_setxattrat":        {},
+	"sys_enter_statx":             {},
+	"sys_enter_utimensat":         {},
+}
+
+func writePathFlagsCapture(b *strings.Builder, f *Format) {
+	if _, ok := pathFlagSyscalls[f.Name]; !ok {
+		b.WriteString("    ev->flags = 0;\n")
+		return
+	}
+	writeArgumentCapture(b, f, "flags", "flags", "flag", "at_flags")
+}
+
+func writeArgumentCapture(b *strings.Builder, f *Format, eventField string, formatFields ...string) {
+	for _, field := range formatFields {
+		if idx := f.FieldNumber(field); idx >= 0 {
+			fmt.Fprintf(b, "    ev->%s = (__u32)ctx->args[%d];\n", eventField, idx)
+			return
+		}
+	}
+	b.WriteString("    ev->" + eventField + " = 0;\n")
+}
+
+// writePathReadCapture distinguishes all three results that otherwise leave a
+// zero-filled event string: a valid empty string, an actual NULL pointer, and
+// a failed nofault read of a non-NULL pointer. The probe remains directly in an
+// if guard so the independent syscall-semantics oracle can verify its source
+// argument and destination.
+func writePathReadCapture(b *strings.Builder, eventField, statusField string, argIdx int) {
+	fmt.Fprintf(b, "    if (ctx->args[%d] == 0) {\n", argIdx)
+	fmt.Fprintf(b, "        ev->%s = PATH_READ_NULL;\n", statusField)
+	b.WriteString("    } else {\n")
+	fmt.Fprintf(b, "        ev->%s = PATH_READ_OK;\n", statusField)
+	fmt.Fprintf(b, "        if (bpf_probe_read_user_str(ev->%s, sizeof(ev->%s), (void*)ctx->args[%d]) < 0)\n", eventField, eventField, argIdx)
+	fmt.Fprintf(b, "            ev->%s = PATH_READ_FAILED;\n", statusField)
+	b.WriteString("    }\n")
+}
+
+// writeDirfdCapture emits one directory-fd field, using AT_FDCWD when the
+// syscall has no such argument. The sentinel makes ordinary absolute/relative
+// path syscalls share the same userspace resolution path without accidentally
+// resolving argument zero as a descriptor.
+func writeDirfdCapture(b *strings.Builder, f *Format, eventField string, formatFields ...string) {
+	for _, field := range formatFields {
+		if idx := f.FieldNumber(field); idx >= 0 {
+			fmt.Fprintf(b, "    ev->%s = (__s32)ctx->args[%d];\n", eventField, idx)
+			return
+		}
+	}
+	fmt.Fprintf(b, "    ev->%s = -100; // AT_FDCWD: no dirfd argument\n", eventField)
 }
 
 // generateExtraFcntl returns the fd/cmd/arg capture lines for fcntl events.

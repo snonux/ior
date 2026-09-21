@@ -211,8 +211,9 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
 // preserves that order, so the single userspace consumer always applies the
 // fix while the enter event is still pending and unpaired.
 //
-// A still-failing read is discarded rather than submitted: an empty fixup
-// carries no information and would only cost a ring-buffer record.
+// A still-failing read is discarded rather than submitted. A successful read
+// of an empty C string returns 1 and is deliberately submitted: that control
+// record proves the original non-NULL pathname was a valid empty string.
 static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,
                                                      __u64 filename_ptr) {
     struct open_name_fixup_event *ev;

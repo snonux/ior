@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	defaulTime = 1234567
-	defaultPid = 10
-	defaultTid = 11
+	defaulTime   = 1234567
+	defaultPid   = 10
+	defaultTid   = 11
+	defaultDirfd = -100
 )
 
 type testData struct {
@@ -558,14 +559,16 @@ func eventBytes(t *testing.T, ev byteSerializable) []byte {
 
 func makeEnterOpenEvent(t *testing.T, time uint64, pid, tid uint32) (types.OpenEvent, []byte) {
 	ev := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Flags:     syscall.O_RDWR,
-		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
-		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
+		Flags:         syscall.O_RDWR,
+		Filename:      [types.MAX_FILENAME_LENGTH]byte{},
+		Comm:          [types.MAX_PROGNAME_LENGTH]byte{},
 	}
 	copy(ev.Filename[:], "testfile.txt")
 	copy(ev.Comm[:], "testcomm")
@@ -1413,12 +1416,14 @@ func makeFtruncateEventTestData(t *testing.T) (td testData) {
 // Helper functions for PathEvent
 func makeEnterPathEvent(t *testing.T, time uint64, pid, tid uint32, pathname string, traceId types.TraceId) (types.PathEvent, []byte) {
 	ev := types.PathEvent{
-		EventType: types.ENTER_PATH_EVENT,
-		TraceId:   traceId,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Pathname:  [types.MAX_FILENAME_LENGTH]byte{},
+		EventType:     types.ENTER_PATH_EVENT,
+		TraceId:       traceId,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.PATH_EVENT_SCHEMA_VERSION,
+		Pathname:      [types.MAX_FILENAME_LENGTH]byte{},
 	}
 	copy(ev.Pathname[:], pathname)
 
@@ -1432,13 +1437,16 @@ func makeEnterPathEvent(t *testing.T, time uint64, pid, tid uint32, pathname str
 // Helper functions for NameEvent
 func makeEnterNameEvent(t *testing.T, time uint64, pid, tid uint32, oldname, newname string, traceId types.TraceId) (types.NameEvent, []byte) {
 	ev := types.NameEvent{
-		EventType: types.ENTER_NAME_EVENT,
-		TraceId:   traceId,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Oldname:   [types.MAX_FILENAME_LENGTH]byte{},
-		Newname:   [types.MAX_FILENAME_LENGTH]byte{},
+		EventType:     types.ENTER_NAME_EVENT,
+		TraceId:       traceId,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Olddirfd:      defaultDirfd,
+		Newdirfd:      defaultDirfd,
+		SchemaVersion: types.NAME_EVENT_SCHEMA_VERSION,
+		Oldname:       [types.MAX_FILENAME_LENGTH]byte{},
+		Newname:       [types.MAX_FILENAME_LENGTH]byte{},
 	}
 	copy(ev.Oldname[:], oldname)
 	copy(ev.Newname[:], newname)
@@ -3282,14 +3290,16 @@ func makeCrossThreadEventTestData(t *testing.T) (td testData) {
 
 	// Send enter from thread A
 	enterA := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      defaulTime,
-		Pid:       defaultPid,
-		Tid:       tidA,
-		Flags:     syscall.O_RDWR,
-		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
-		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          defaulTime,
+		Pid:           defaultPid,
+		Tid:           tidA,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
+		Flags:         syscall.O_RDWR,
+		Filename:      [types.MAX_FILENAME_LENGTH]byte{},
+		Comm:          [types.MAX_PROGNAME_LENGTH]byte{},
 	}
 	copy(enterA.Filename[:], "fileA.txt")
 	copy(enterA.Comm[:], "testcomm")
@@ -3301,14 +3311,16 @@ func makeCrossThreadEventTestData(t *testing.T) (td testData) {
 
 	// Send enter from thread B
 	enterB := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      defaulTime + 100,
-		Pid:       defaultPid,
-		Tid:       tidB,
-		Flags:     syscall.O_RDWR,
-		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
-		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          defaulTime + 100,
+		Pid:           defaultPid,
+		Tid:           tidB,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
+		Flags:         syscall.O_RDWR,
+		Filename:      [types.MAX_FILENAME_LENGTH]byte{},
+		Comm:          [types.MAX_PROGNAME_LENGTH]byte{},
 	}
 	copy(enterB.Filename[:], "fileB.txt")
 	copy(enterB.Comm[:], "testcomm")

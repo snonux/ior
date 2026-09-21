@@ -797,6 +797,213 @@ func TestGenerateOpenHandler(t *testing.T) {
 	requireContains(t, output, "ev->flags = ctx->args[2];")
 }
 
+func TestGenerateDirfdFieldsForEveryPathEventShape(t *testing.T) {
+	tests := []struct {
+		name  string
+		enter string
+		exit  string
+		want  []string
+	}{
+		{
+			name:  "openat",
+			enter: FormatOpenat,
+			exit:  FormatExitOpenat,
+			want: []string{
+				"ev->dirfd = (__s32)ctx->args[0];",
+				"ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;",
+			},
+		},
+		{
+			name:  "pathname-at",
+			enter: FormatMkdirat,
+			exit:  FormatExitMkdirat,
+			want:  []string{"ev->dirfd = (__s32)ctx->args[0];"},
+		},
+		{
+			name:  "two-path-at",
+			enter: FormatLinkat,
+			exit:  strings.Replace(FormatExitRename, "sys_exit_rename", "sys_exit_linkat", 1),
+			want: []string{
+				"ev->olddirfd = (__s32)ctx->args[0];",
+				"ev->newdirfd = (__s32)ctx->args[2];",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := generateFromPair(t, tc.enter, tc.exit)
+			for _, want := range tc.want {
+				requireContains(t, output, want)
+			}
+		})
+	}
+}
+
+func TestGenerateNonAtPathEventsUseATFDCWD(t *testing.T) {
+	tests := []struct {
+		name  string
+		enter string
+		exit  string
+		want  []string
+	}{
+		{name: "open", enter: FormatOpen, exit: FormatExitOpen, want: []string{"ev->dirfd = -100; // AT_FDCWD: no dirfd argument"}},
+		{name: "pathname", enter: FormatMkdir, exit: FormatExitMkdir, want: []string{"ev->dirfd = -100; // AT_FDCWD: no dirfd argument"}},
+		{name: "two-path", enter: FormatRename, exit: FormatExitRename, want: []string{
+			"ev->olddirfd = -100; // AT_FDCWD: no dirfd argument",
+			"ev->newdirfd = -100; // AT_FDCWD: no dirfd argument",
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := generateFromPair(t, tc.enter, tc.exit)
+			for _, want := range tc.want {
+				requireContains(t, output, want)
+			}
+		})
+	}
+}
+
+func TestGeneratePathReadStatusDistinguishesEmptyNullAndFailure(t *testing.T) {
+	open := generateFromPair(t, FormatOpenat, FormatExitOpenat)
+	for _, want := range []string{
+		"if (ctx->args[1] == 0) {",
+		"ev->filename_status = PATH_READ_NULL;",
+		"ev->filename_status = PATH_READ_OK;",
+		"ev->filename_status = PATH_READ_FAILED;",
+		"ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;",
+		"ev->schema_reserved = 0;",
+	} {
+		requireContains(t, open, want)
+	}
+
+	pathname := generateFromPair(t, FormatMkdirat, FormatExitMkdirat)
+	requireContains(t, pathname, "if (ctx->args[1] == 0) {")
+	requireContains(t, pathname, "ev->pathname_status = PATH_READ_NULL;")
+	requireContains(t, pathname, "ev->pathname_status = PATH_READ_OK;")
+	requireContains(t, pathname, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
+	requireContains(t, pathname, "ev->pathname_status = PATH_READ_FAILED;")
+	requireContains(t, pathname, "ev->flags = 0;")
+	requireContains(t, pathname, "ev->target_status = PATH_TARGET_REQUIRED;")
+	requireContains(t, pathname, "ev->schema_version = PATH_EVENT_SCHEMA_VERSION;")
+	// args[0] is mkdirat's dirfd, never the pathname pointer whose nullness or
+	// probe result the status describes.
+	requireNotContains(t, pathname, "if (ctx->args[0] == 0) {")
+	requireNotContains(t, pathname, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0])")
+
+	name := generateFromPair(t, FormatLinkat,
+		strings.Replace(FormatExitRename, "sys_exit_rename", "sys_exit_linkat", 1))
+	for _, want := range []string{
+		"if (ctx->args[1] == 0) {",
+		"ev->oldname_status = PATH_READ_NULL;",
+		"ev->oldname_status = PATH_READ_OK;",
+		"if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0)",
+		"ev->oldname_status = PATH_READ_FAILED;",
+		"if (ctx->args[3] == 0) {",
+		"ev->newname_status = PATH_READ_NULL;",
+		"ev->newname_status = PATH_READ_OK;",
+		"if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0)",
+		"ev->newname_status = PATH_READ_FAILED;",
+	} {
+		requireContains(t, name, want)
+	}
+	requireContains(t, name, "ev->flags = (__u32)ctx->args[4];")
+	requireContains(t, name, "ev->schema_version = NAME_EVENT_SCHEMA_VERSION;")
+	// The two directory descriptors at args[0]/args[2] must not be mistaken
+	// for either pathname pointer.
+	requireNotContains(t, name, "if (ctx->args[0] == 0) {")
+	requireNotContains(t, name, "if (ctx->args[2] == 0) {")
+}
+
+func TestGenerateUtimensatDistinguishesDoubleOmitFromTargetValidation(t *testing.T) {
+	output := GenerateTracepointsC([]Format{
+		{
+			Name:   "sys_enter_utimensat",
+			ID:     24_000,
+			Family: FamilyFS,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "int", Name: "dfd"},
+				{Type: "const char *", Name: "filename"},
+				{Type: "const struct __kernel_timespec *", Name: "utimes"},
+				{Type: "int", Name: "flags"},
+			},
+		},
+		{
+			Name:   "sys_exit_utimensat",
+			ID:     23_999,
+			Family: FamilyFS,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "long", Name: "ret"},
+			},
+		},
+	})
+	for _, want := range []string{
+		"ev->target_status = PATH_TARGET_REQUIRED;",
+		"struct __kernel_timespec ior_times[2] = {};",
+		"if (ctx->args[2] != 0) {",
+		"if (bpf_probe_read_user(&ior_times, sizeof(ior_times), (void *)ctx->args[2]) < 0) {",
+		"ev->target_status = PATH_TARGET_UNKNOWN;",
+		"IOR_UTIME_OMIT == ior_times[0].tv_nsec",
+		"IOR_UTIME_OMIT == ior_times[1].tv_nsec",
+		"ev->target_status = PATH_TARGET_SKIPPED;",
+		"ev->schema_version = PATH_EVENT_SCHEMA_VERSION;",
+	} {
+		requireContains(t, output, want)
+	}
+	requireContains(t, output, "IOR_UTIME_OMIT == ior_times[0].tv_nsec &&")
+	requireNotContains(t, output, "IOR_UTIME_OMIT == ior_times[0].tv_nsec ||")
+	// The target metadata is an independent field. Invalid user flags must not
+	// be repurposed as a hidden sentinel because the double-OMIT kernel path
+	// returns before validating them.
+	requireContains(t, output, "ev->flags = (__u32)ctx->args[3];")
+}
+
+func TestGeneratePathFlagsForEmptyPathSemantics(t *testing.T) {
+	output := generateFromPair(t, FormatNameToHandleAt, FormatExitNameToHandleAt)
+	requireContains(t, output, "ev->flags = (__u32)ctx->args[4];")
+	requireContains(t, output, "ev->schema_version = PATH_EVENT_SCHEMA_VERSION;")
+}
+
+func TestGenerateNewerAtFlagsForEmptyPathSemantics(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagsArg int
+	}{
+		{name: "getxattrat", flagsArg: 2},
+		{name: "setxattrat", flagsArg: 2},
+		{name: "listxattrat", flagsArg: 2},
+		{name: "removexattrat", flagsArg: 2},
+		{name: "file_getattr", flagsArg: 4},
+		{name: "file_setattr", flagsArg: 4},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "int", Name: "dfd"},
+				{Type: "const char *", Name: "pathname"},
+			}
+			for arg := 2; arg < tc.flagsArg; arg++ {
+				fields = append(fields, Field{Type: "unsigned long", Name: "arg" + itoa(arg)})
+			}
+			fields = append(fields, Field{Type: "unsigned int", Name: "at_flags"})
+			id := 20_000 + i*2
+			output := GenerateTracepointsC([]Format{
+				{Name: "sys_enter_" + tc.name, ID: id, Family: FamilyFS, ExternalFields: fields},
+				{Name: "sys_exit_" + tc.name, ID: id - 1, Family: FamilyFS, ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "ret"},
+				}},
+			})
+			requireContains(t, output, "ev->flags = (__u32)ctx->args["+itoa(tc.flagsArg)+"];")
+			requireNotContains(t, output, "ev->flags = 0;")
+		})
+	}
+}
+
 func TestGenerateOpenHandlerDirect(t *testing.T) {
 	output := generateFromPair(t, FormatOpen, FormatExitOpen)
 
@@ -830,9 +1037,9 @@ func TestGenerateMkdiratHandlerCapturesPathFromArgs1(t *testing.T) {
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_MKDIRAT;")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
 	// Negative guard: the path must NOT be read from args[0] (the dirfd).
-	requireNotContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireNotContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 	// Return value is a 0/-1 status code, not a byte count: UNCLASSIFIED.
 	requireContains(t, output, "ev->trace_id = SYS_EXIT_MKDIRAT;")
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
@@ -847,7 +1054,7 @@ func TestGenerateMkdirHandlerCapturesPathFromArgs0(t *testing.T) {
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mkdir")`)
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_MKDIR;")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 	requireContains(t, output, "ev->trace_id = SYS_EXIT_MKDIR;")
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
@@ -870,9 +1077,9 @@ func TestGenerateRmdirHandlerCapturesPathFromArgs0(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_RMDIR;")
 	requireContains(t, output, "__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 	// Negative guard: rmdir has no dirfd, so the path must NOT be read from args[1].
-	requireNotContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	requireNotContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
 	// Return value is a 0/-1 status code, not a byte count: UNCLASSIFIED.
 	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
 }
@@ -946,8 +1153,8 @@ func TestGenerateNameHandler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_NAME_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_RENAME;")
 	requireContains(t, output, "__builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0)")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0)")
 }
 
 func TestGeneratePathnameHandler(t *testing.T) {
@@ -959,7 +1166,7 @@ func TestGeneratePathnameHandler(t *testing.T) {
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 }
 
 // TestGenerateAccessFaccessatHandlers locks in the generated BPF C for
@@ -979,7 +1186,7 @@ func TestGenerateAccessFaccessatHandlers(t *testing.T) {
 	requireContains(t, accessOut, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, accessOut, "ev->trace_id = SYS_ENTER_ACCESS;")
 	// access(2): path (filename) is at args[0] — no dirfd precedes it.
-	requireContains(t, accessOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireContains(t, accessOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 
 	exitFaccessat := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_faccessat", 1)
 	exitFaccessat = strings.Replace(exitFaccessat, "ID: 843", "ID: 820", 1)
@@ -988,7 +1195,7 @@ func TestGenerateAccessFaccessatHandlers(t *testing.T) {
 	requireContains(t, faccessatOut, "struct path_event *ev")
 	requireContains(t, faccessatOut, "ev->trace_id = SYS_ENTER_FACCESSAT;")
 	// faccessat(2): dfd is at args[0], so the path (filename) is at args[1].
-	requireContains(t, faccessatOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	requireContains(t, faccessatOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
 }
 
 // TestGenerateMknodMknodatHandlers locks in the generated BPF C for mknod(2)
@@ -1008,7 +1215,7 @@ func TestGenerateMknodMknodatHandlers(t *testing.T) {
 	requireContains(t, mknodOut, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, mknodOut, "ev->trace_id = SYS_ENTER_MKNOD;")
 	// mknod(2): path (filename) is at args[0] — no dirfd precedes it.
-	requireContains(t, mknodOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireContains(t, mknodOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 
 	exitMknodat := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_mknodat", 1)
 	exitMknodat = strings.Replace(exitMknodat, "ID: 843", "ID: 895", 1)
@@ -1017,7 +1224,7 @@ func TestGenerateMknodMknodatHandlers(t *testing.T) {
 	requireContains(t, mknodatOut, "struct path_event *ev")
 	requireContains(t, mknodatOut, "ev->trace_id = SYS_ENTER_MKNODAT;")
 	// mknodat(2): dfd is at args[0], so the path (filename) is at args[1].
-	requireContains(t, mknodatOut, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	requireContains(t, mknodatOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
 }
 
 func TestGenerateFcntlHandler(t *testing.T) {
@@ -2035,7 +2242,7 @@ func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_NAME_TO_HANDLE_AT;")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
 }
 
 func TestGenerateFallbackNullHandler(t *testing.T) {
@@ -2824,8 +3031,15 @@ func TestSyscallAggregateCountsOnlyNonEmittedEvents(t *testing.T) {
 // openNameStashLine is the enter-side emission: the nofault read is now tested
 // and its user pointer stashed for the exit handler when it fails.
 func openNameStashLine(argIdx string) string {
-	return "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[" + argIdx + "]) < 0)\n" +
-		"        ior_stash_pending_filename(tid, ctx->args[" + argIdx + "]);\n"
+	return "    if (ctx->args[" + argIdx + "] == 0) {\n" +
+		"        ev->filename_status = PATH_READ_NULL;\n" +
+		"    } else {\n" +
+		"        ev->filename_status = PATH_READ_OK;\n" +
+		"        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[" + argIdx + "]) < 0) {\n" +
+		"            ev->filename_status = PATH_READ_FAILED;\n" +
+		"            ior_stash_pending_filename(tid, ctx->args[" + argIdx + "]);\n" +
+		"        }\n" +
+		"    }\n"
 }
 
 // openNameTakeLine must precede ior_on_syscall_exit, which deletes the per-tid

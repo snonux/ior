@@ -21,6 +21,24 @@ func TestOpenBasic(t *testing.T) {
 	})
 }
 
+func TestOpenDirfdPaths(t *testing.T) {
+	rows, _ := runParquetScenarioRows(t, "open-dirfd-paths", defaultDuration, nil, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
+		{
+			FileContains: "dirfd-base/relative-openat.txt",
+			Syscall:      "openat",
+			Comm:         "ioworkload",
+			FDAtLeast:    ptrTo(int32(1)),
+		},
+		{
+			FileContains: "dirfd-base",
+			Syscall:      "statx",
+			Comm:         "ioworkload",
+			FDAtLeast:    ptrTo(int32(1)),
+		},
+	})
+}
+
 // TestOpenOpenat2 exercises the raw openat2(2) syscall. openat2 differs from
 // open/openat in that its flags/mode live inside an open_how struct (args[2]),
 // not a plain int; the path is still at args[1]. This test verifies ior reads

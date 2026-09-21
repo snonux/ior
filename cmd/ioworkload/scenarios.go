@@ -9,6 +9,7 @@ import (
 var scenarios = map[string]func() error{
 	"crash":                         crash,
 	"open-basic":                    openBasic,
+	"open-dirfd-paths":              openDirfdPaths,
 	"open-openat2":                  openOpenat2,
 	"open-creat":                    openCreat,
 	"open-by-handle-at":             openByHandleAt,
@@ -133,6 +134,8 @@ var scenarios = map[string]func() error{
 	"utime-utimes":                  utimeUtimes,
 	"utime-futimesat":               utimeFutimesat,
 	"utime-utimensat":               utimeUtimensat,
+	"utime-utimensat-double-omit":   utimeUtimensatDoubleOmit,
+	"utime-utimensat-one-omit":      utimeUtimensatOneOmit,
 	"utime-enoent":                  utimeEnoent,
 	"sync-basic":                    syncBasic,
 	"sync-fdatasync":                syncFdatasync,

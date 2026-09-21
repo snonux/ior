@@ -32,12 +32,13 @@ func feedOpenPairForPid(t *testing.T, el *eventLoop, filename string, pid, tid u
 	t.Helper()
 
 	enterEv := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      defaulTime,
-		Pid:       pid,
-		Tid:       tid,
-		Flags:     syscall.O_RDONLY,
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          defaulTime,
+		Pid:           pid,
+		Tid:           tid,
+		Flags:         syscall.O_RDONLY,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
 	}
 	copy(enterEv.Filename[:], filename)
 	copy(enterEv.Comm[:], "crosspid")

@@ -171,3 +171,80 @@ func TestOpenEventFlagsLeavesOpenFlagsUnchanged(t *testing.T) {
 		t.Fatalf("openEventFlags(openat) = %#x, want unchanged %#x", got, want)
 	}
 }
+
+func TestHandleFspickExitRegistersFilesystemContextBeforeFiltering(t *testing.T) {
+	const (
+		pid      = uint32(740)
+		tid      = uint32(741)
+		dirfd    = int32(42)
+		fspickFD = int32(43)
+	)
+	base := t.TempDir()
+	wantPath := base + "/selected-mount"
+
+	newPair := func() (*event.Pair, *types.PathEvent) {
+		enter := &types.PathEvent{
+			EventType:      types.ENTER_PATH_EVENT,
+			TraceId:        types.SYS_ENTER_FSPICK,
+			Time:           100,
+			Pid:            pid,
+			Tid:            tid,
+			Dirfd:          dirfd,
+			PathnameStatus: types.PATH_READ_OK,
+			Flags:          unix.FSPICK_CLOEXEC,
+			SchemaVersion:  types.PATH_EVENT_SCHEMA_VERSION,
+			TargetStatus:   types.PATH_TARGET_REQUIRED,
+		}
+		copy(enter.Pathname[:], "selected-mount")
+		exit := &types.RetEvent{
+			EventType: types.EXIT_RET_EVENT,
+			TraceId:   types.SYS_EXIT_FSPICK,
+			Time:      200,
+			Pid:       pid,
+			Tid:       tid,
+			Ret:       int64(fspickFD),
+		}
+		return &event.Pair{EnterEv: enter, ExitEv: exit}, enter
+	}
+
+	t.Run("row and later fd consumer use selected path", func(t *testing.T) {
+		el := mustNewEventLoop(t, eventLoopConfig{})
+		el.fdState().set(dirfd, pid, file.NewFd(dirfd, base, syscall.O_DIRECTORY))
+		ep, enter := newPair()
+		if !el.handlePathExit(ep, enter) {
+			t.Fatal("fspick pair was dropped")
+		}
+		if ep.File.Name() != wantPath || ep.File.FD() != fspickFD ||
+			int(ep.File.Flags())&syscall.O_ACCMODE != syscall.O_RDWR ||
+			!ep.File.Flags().Is(syscall.O_CLOEXEC) {
+			t.Fatalf("fspick file = %q fd %d flags %s", ep.File.Name(), ep.File.FD(), ep.File.Flags())
+		}
+
+		fsconfig := &types.FdEvent{EventType: types.ENTER_FD_EVENT, TraceId: types.SYS_ENTER_FSCONFIG, Pid: pid, Tid: tid, Fd: fspickFD}
+		fsconfigExit := &types.RetEvent{EventType: types.EXIT_RET_EVENT, TraceId: types.SYS_EXIT_FSCONFIG, Pid: pid, Tid: tid, Ret: 0}
+		fsconfigPair := &event.Pair{EnterEv: fsconfig, ExitEv: fsconfigExit}
+		if !el.handleFdExit(fsconfigPair, fsconfig) {
+			t.Fatal("fsconfig pair was dropped")
+		}
+		if fsconfigPair.File.Name() != wantPath || fsconfigPair.File.FD() != fspickFD {
+			t.Fatalf("fsconfig file = %q fd %d, want %q fd %d", fsconfigPair.File.Name(), fsconfigPair.File.FD(), wantPath, fspickFD)
+		}
+	})
+
+	t.Run("registration survives a filtered fspick row", func(t *testing.T) {
+		el := mustNewEventLoop(t, eventLoopConfig{filter: globalfilter.Filter{
+			Syscall: &globalfilter.StringFilter{Pattern: "read"},
+		}})
+		el.fdState().set(dirfd, pid, file.NewFd(dirfd, base, syscall.O_DIRECTORY))
+		ep, enter := newPair()
+		if el.handlePathExit(ep, enter) {
+			t.Fatal("fspick pair unexpectedly passed the syscall filter")
+		}
+		tracked, ok := el.fdState().get(fspickFD, pid)
+		if !ok || tracked.Name() != wantPath ||
+			int(tracked.Flags())&syscall.O_ACCMODE != syscall.O_RDWR ||
+			!tracked.Flags().Is(syscall.O_CLOEXEC) {
+			t.Fatalf("tracked fspick fd = %#v, want %q with O_RDWR|O_CLOEXEC", tracked, wantPath)
+		}
+	})
+}
