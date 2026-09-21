@@ -775,3 +775,93 @@ suitable newer-kernel host. Self-review found no simpler trustworthy closure:
 forcing generation here would replace reviewed newer-kernel artifacts with an
 older subset, and treating unsupported integration scenarios as passes would
 weaken the stated gate.
+
+### Independent verification (Part 4) — 2026-09-21
+
+A second, independent pass (not the fixing agent) checked the state of `develop`
+at `5a3f82c` against each Part 4 Verify line: the argument captures were
+re-extracted from the committed `generated_tracepoints.c`, the exit handlers in
+`internal/eventloop_exit.go` were read, the semantics oracle was run, and
+descriptor access modes were measured on the live kernel through
+`/proc/self/fdinfo`. `mage fmtCheck`, `mage vet`, `mage lint`, `mage test`,
+`mage testRace` and `mage build` all passed at `5a3f82c`. No privileged
+integration run and no `mage generate` were performed, so the two open items in
+the review outcome above stand unchanged.
+
+**Confirmed as landed:** S1–S11, S13–S16, T1–T3. Notable checks: the close
+eviction gate is now "anything but `-EBADF`"; pipe ends carry `O_RDONLY` /
+`O_WRONLY` (matches fdinfo `00`/`01`); `open_tree*` has its own kind and maps to
+`O_PATH` (+`O_CLOEXEC`); `mmap` has a dedicated event with addr/length/prot/
+flags/fd and `msync` is a `mem_event`; every `*at()` kind carries its dirfd(s)
+and AT flags, with `AT_EMPTY_PATH`/NULL handling gated per syscall and a
+read-status field so a faulted read never inherits the dirfd's identity;
+`openat2` reads `open_how.flags`; TRANSFER bytes are attributed to the
+destination fd consistently (`sendfile64` 0, `splice` 2, `tee` 1,
+`copy_file_range` 2); xattr size-0 probes report 0 bytes and `syslog` is
+unclassified; the errno window `-4095..-1` is one Go helper plus the same
+window in `filter.c`; epoll waits are `poll_event`s with epfd, maxevents and
+timeout, with distinct infinite/unknown sentinels; the semantics oracle covers
+every enter handler, carries no `TODO` rows and has mutation tests.
+
+**Defects found in the fixes (tasked, added to gate x4):**
+
+#### V1 — MEDIUM — `Flags.String()` drops `O_RDONLY` when any other flag is set — task n8
+
+- **Where:** `internal/file/flags.go` `String()` (regression from `bcdd787`, S12).
+- **What:** `O_RDONLY` is emitted only when no other name matched. Measured:
+  `0x80000 → O_CLOEXEC`, `0x80800 → O_CLOEXEC|O_NONBLOCK`, while
+  `0x80001 → O_WRONLY|O_CLOEXEC`. The S12 Verify cases pass, but the most
+  common open in any trace (`O_RDONLY|O_CLOEXEC`) lost its access mode.
+- **Verify:** `0x80000` renders `O_RDONLY|O_CLOEXEC`; `O_PATH|O_CLOEXEC` renders
+  without `O_RDONLY`.
+- [x] REVIEWED (commit: `f60ef1a`): PASS.
+
+#### V2 — MEDIUM — fd-creating syscalls assert access mode `O_RDONLY` — task o8
+
+- **Where:** `socketCreationFlags`/`acceptOpenFlags`, `eventfdOpenFlags` +
+  `eventfdOpenFlagMasks` (S1/S8 fixes); `integrationtests/ipc_test.go` pins
+  `AccessMode: O_RDONLY` for `eventfd2`, `memfd_create`, `signalfd4`.
+- **What:** fdinfo on this host reports `O_RDWR` for socket, socketpair,
+  eventfd2, epoll_create1, memfd_create, timerfd_create, signalfd and
+  pidfd_open; pidfd_open is additionally always `O_CLOEXEC`; only
+  inotify_init1 is `O_RDONLY`. Sockets moved from "unknown" (`-1`) to a
+  definite wrong value.
+- **Verify:** tracked flags equal the fdinfo word modulo `O_LARGEFILE` for each
+  fd-creating trace id; the three integration pins are corrected.
+- [x] REVIEWED (commit: `2032a89`): PASS.
+
+**Observations, not tasked:** `two_fd_event` now carries two 256-byte names for
+every `close_range`/`kcmp` and `eventfd_event` a 256-byte name for every
+eventfd-kind call, which raises ring-buffer pressure for those rows;
+`2e0165a` classifies `getcwd` and `sched_getaffinity` returns as bytes read,
+which is correct for the raw syscalls but adds non-I/O bytes to read totals;
+`AddressSpaceBytes` now also counts `msync` ranges, i.e. it means "extent
+touched", not "address space changed"; the oracle's mutation test takes ~56 s
+and is not skipped under `-short`.
+
+#### Follow-up verification after V1/V2 — 2026-09-21
+
+V1 was fixed by `f60ef1a`: read-only access mode is emitted alongside other
+status flags, while `O_PATH` descriptors still omit `O_RDONLY`. Two fresh
+review passes and the full test suite passed. V2 was fixed by `2032a89`:
+fd-creating syscall families now carry their kernel access modes, pidfd and
+io_uring include their implicit close-on-exec flag, syscall-specific flag
+words are translated rather than copied, and families whose complete mode is
+not captured remain unknown. The first independent review found four further
+edge cases (the `memfd_secret` `FD_CLOEXEC` bit, io_uring's implicit
+`O_CLOEXEC`, incomplete legacy `accept4` flags, and missing perf CLOEXEC test
+coverage); all four were fixed, and a fresh follow-up review passed.
+
+At `2032a89`, `mage fmtCheck`, `mage vet`, `mage lint`, `mage test`,
+`mage testRace`, and `mage build` pass. The affected privileged live scenarios
+also pass on this host: `TestEventfd2Basic`, `TestFdFromAirEventfdUsers`,
+`TestSocketBasic`, `TestSocketAcceptLifecycle`,
+`TestSocketAcceptLifecyclePlain`, and `TestFanotifyFlags`.
+
+`mage generate` was rerun on `5.14.0-687.42.1.el9_8.x86_64`; the diff gate
+again refused only deletions for newer-kernel syscalls and left the working
+tree unchanged. Therefore the overall x4 gate remains open for the same two
+external prerequisites: a no-op generation run on a host at least as new as
+the generation kernel, and a complete privileged integration-suite pass on a
+host that provides the required newer tracepoints/syscalls and permits
+io_uring. The V1/V2 follow-ups themselves are fully reviewed and passing.
