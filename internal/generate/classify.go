@@ -29,6 +29,9 @@ const (
 	// classifier's PathnameField - args[1] for the *at() cohort, args[0]
 	// for the mount/chmod-style callers.
 	KindPathname
+	// KindFdPathname carries a notification-group fd and its watched pathname,
+	// with independent dirfd context for fanotify_mark.
+	KindFdPathname
 	// KindName carries two pathnames (oldname, newname) for the rename family.
 	KindName
 	// KindRet is the bare enter/exit shape carrying only the return value.
@@ -126,6 +129,8 @@ func (k TracepointKind) MetadataName() string {
 		return "exec"
 	case KindPathname:
 		return "pathname"
+	case KindFdPathname:
+		return "fd-pathname"
 	case KindName:
 		return "name"
 	case KindRet:
@@ -251,6 +256,8 @@ func ClassifyFormat(f *Format) ClassificationResult {
 // Keep newly-added syscall expansion mappings in this table first to reduce
 // switch churn and merge conflicts across incremental tracing phases.
 var nameOnlyKindsTable = map[string]TracepointKind{
+	"sys_enter_inotify_add_watch": KindFdPathname,
+	"sys_enter_fanotify_mark":     KindFdPathname,
 	"sys_enter_open_by_handle_at": KindOpenByHandleAt,
 	"sys_enter_open_tree":         KindOpenTree,
 	"sys_enter_open_tree_attr":    KindOpenTree,

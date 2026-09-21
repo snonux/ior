@@ -189,6 +189,7 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindOpenTree:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
 	KindExec:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraExec(tp.Format) },
 	KindPathname:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraPathname(tp, tp.Format) },
+	KindFdPathname:     func(tp GeneratedTracepoint, _ bool) string { return generateExtraFdPathname(tp.Format) },
 	KindName:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraName(tp.Format) },
 	KindFcntl:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraFcntl(tp.Format) },
 	KindRet:            func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp.Format) },
@@ -309,6 +310,23 @@ func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) st
 		// verifier-tested, emit the -1 sentinel and say why.
 		b.WriteString("    ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)\n")
 	}
+	return b.String()
+}
+
+// generateExtraFdPathname preserves both the notification group and its target.
+// Mark flags are syscall metadata, never descriptor open flags.
+func generateExtraFdPathname(f *Format) string {
+	var b strings.Builder
+	b.WriteString("    ev->fd = (__s32)ctx->args[0];\n")
+	b.WriteString("    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));\n")
+	writePathReadCapture(&b, "pathname", "pathname_status", f.FieldNumber("pathname"))
+	writeDirfdCapture(&b, f, "dirfd", "dfd")
+	if f.Name == "sys_enter_fanotify_mark" {
+		writeArgumentCapture(&b, f, "flags", "flags")
+	} else {
+		b.WriteString("    ev->flags = 0;\n")
+	}
+	b.WriteString("    ev->schema_version = FD_PATH_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
 }
 

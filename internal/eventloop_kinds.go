@@ -93,6 +93,7 @@ func runtimeEventKinds() []runtimeEventKind {
 		{enterEventType: types.ENTER_EXEC_EVENT, exit: typedRuntimeExit((*eventLoop).handleExecExit)},
 		{enterEventType: types.ENTER_NAME_EVENT, exit: typedRuntimeExit((*eventLoop).handleNameExit)},
 		{enterEventType: types.ENTER_PATH_EVENT, exit: typedRuntimeExit((*eventLoop).handlePathExit)},
+		{enterEventType: types.ENTER_FD_PATH_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdPathExit)},
 		{enterEventType: types.ENTER_FD_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
 		{enterEventType: types.ENTER_DUP3_EVENT, exit: typedRuntimeExit((*eventLoop).handleDup3Exit)},
 		{enterEventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT, exit: typedRuntimeExit((*eventLoop).handleOpenByHandleAtExit)},
@@ -127,6 +128,8 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		exitRaw(types.EXIT_RET_EVENT, rawDecoder[types.RetEvent](types.NewRetEventFast)),
 		enterRaw(types.ENTER_NAME_EVENT, rawDecoder[types.NameEvent](types.NewNameEventFast), matchRawNameEvent),
 		enterRaw(types.ENTER_PATH_EVENT, rawDecoder[types.PathEvent](types.NewPathEventFast), matchRawPathEvent),
+		// The target may need dirfd resolution; filter the completed pair.
+		enterRaw(types.ENTER_FD_PATH_EVENT, rawDecoder[types.FdPathEvent](types.NewFdPathEventFast), nil),
 		enterRaw(types.ENTER_FCNTL_EVENT, rawDecoder[types.FcntlEvent](types.NewFcntlEventFast), nil),
 		enterRaw(types.ENTER_OPEN_BY_HANDLE_AT_EVENT, rawDecoder[types.OpenByHandleAtEvent](types.NewOpenByHandleAtEventFast), nil),
 		enterRaw(types.ENTER_DUP3_EVENT, rawDecoder[types.Dup3Event](types.NewDup3EventFast), nil),

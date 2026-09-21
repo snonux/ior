@@ -56,6 +56,8 @@
 #define EXIT_MMAP_EVENT 51
 #define ENTER_BPF_EVENT 52
 #define EXIT_BPF_EVENT 53
+#define ENTER_FD_PATH_EVENT 54
+#define EXIT_FD_PATH_EVENT 55
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -93,6 +95,7 @@
 #define NAME_EVENT_SCHEMA_VERSION 2
 #define EVENTFD_EVENT_SCHEMA_VERSION 2
 #define TWO_FD_EVENT_SCHEMA_VERSION 2
+#define FD_PATH_EVENT_SCHEMA_VERSION 1
 
 struct open_event {
     __u32 event_type;
@@ -183,6 +186,22 @@ struct path_event {
     __u32 flags;
     __u32 schema_version;
     __u32 target_status;
+};
+
+// Notification group fd and watched pathname are different identities. Keep
+// this separate from path_event so older BPF objects retain their old layouts.
+struct fd_path_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd;
+    __s32 dirfd;
+    char pathname[MAX_FILENAME_LENGTH];
+    __u32 pathname_status;
+    __u32 flags;
+    __u32 schema_version;
 };
 
 struct fcntl_event {

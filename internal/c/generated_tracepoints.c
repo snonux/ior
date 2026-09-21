@@ -5217,7 +5217,7 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_fanotify_mark is a struct path_event (kind=pathname)
+/// sys_enter_fanotify_mark is a struct fd_path_event (kind=fd-pathname)
 SEC("tracepoint/syscalls/sys_enter_fanotify_mark")
 int handle_sys_enter_fanotify_mark(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -5227,17 +5227,18 @@ int handle_sys_enter_fanotify_mark(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_FANOTIFY_MARK))
         return 0;
 
-    struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
+    struct fd_path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_path_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_PATH_EVENT;
+    ev->event_type = ENTER_FD_PATH_EVENT;
     ev->trace_id = SYS_ENTER_FANOTIFY_MARK;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->fd = (__s32)ctx->args[0];
     __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[4] == 0) {
         ev->pathname_status = PATH_READ_NULL;
@@ -5247,9 +5248,8 @@ int handle_sys_enter_fanotify_mark(struct syscall_trace_enter *ctx) {
             ev->pathname_status = PATH_READ_FAILED;
     }
     ev->dirfd = (__s32)ctx->args[3];
-    ev->flags = 0;
-    ev->target_status = PATH_TARGET_REQUIRED;
-    ev->schema_version = PATH_EVENT_SCHEMA_VERSION;
+    ev->flags = (__u32)ctx->args[1];
+    ev->schema_version = FD_PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5427,7 +5427,7 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_inotify_add_watch is a struct fd_event (kind=fd)
+/// sys_enter_inotify_add_watch is a struct fd_path_event (kind=fd-pathname)
 SEC("tracepoint/syscalls/sys_enter_inotify_add_watch")
 int handle_sys_enter_inotify_add_watch(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -5437,18 +5437,29 @@ int handle_sys_enter_inotify_add_watch(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_INOTIFY_ADD_WATCH))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fd_path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_path_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FD_PATH_EVENT;
     ev->trace_id = SYS_ENTER_INOTIFY_ADD_WATCH;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
+    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
+    if (ctx->args[1] == 0) {
+        ev->pathname_status = PATH_READ_NULL;
+    } else {
+        ev->pathname_status = PATH_READ_OK;
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+            ev->pathname_status = PATH_READ_FAILED;
+    }
+    ev->dirfd = -100; // AT_FDCWD: no dirfd argument
+    ev->flags = 0;
+    ev->schema_version = FD_PATH_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestClassifyNotificationsKeepsGroupAndPath(t *testing.T) {
+	for _, format := range notificationFormats() {
+		want := KindFdPathname
+		if strings.HasPrefix(format.Name, "sys_exit_") {
+			want = KindRet
+		}
+		if got := ClassifyFormat(&format); got.Kind != want {
+			t.Errorf("%s: kind = %v, want %v", format.Name, got.Kind, want)
+		}
+	}
+}
+
 // This file retains only the classifier tests that exercise actual code
 // generation (tracing behavior / argument extraction / event-kind selection),
 // plus the shared test helpers used by codegen_test.go and family-codegen
