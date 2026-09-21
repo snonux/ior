@@ -82,21 +82,22 @@ func (f Flags) BuildString(sb *strings.Builder) {
 
 // String renders the flag word as a pipe-separated list of open(2) flag
 // names ("O_RDWR|O_CREAT"), or "O_NONE" for the unknown word. Because
-// O_RDONLY is zero, it is emitted only when no nonzero flag name matches.
+// O_RDONLY is zero, it is emitted explicitly when the access-mode bits are
+// clear. O_PATH descriptors omit it because they have no usable access mode.
 func (f Flags) String() string {
 	var strs []string
 
 	if f == unknownFlag {
 		return "O_NONE"
 	}
+	if int(f)&syscall.O_ACCMODE == syscall.O_RDONLY && int(f)&unix.O_PATH == 0 {
+		strs = append(strs, "O_RDONLY")
+	}
 
 	for _, toHuman := range flagsToHuman {
 		if int(f)&toHuman.mask == toHuman.value {
 			strs = append(strs, toHuman.name)
 		}
-	}
-	if len(strs) == 0 {
-		strs = append(strs, "O_RDONLY")
 	}
 
 	return strings.Join(strs, "|")
