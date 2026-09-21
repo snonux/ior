@@ -246,6 +246,7 @@ func TestFailedExecCachesTheCallerComm(t *testing.T) {
 		wantCache bool
 	}{
 		{name: "failed execve caches the caller name", ret: -2, wantComm: "bash", wantCache: true},
+		{name: "negative raw word is not an errno", ret: -4096, wantCache: false},
 		{name: "successful execve caches nothing", ret: 0, wantCache: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -173,21 +173,31 @@ func TestAddressSpaceBytesFromMem(t *testing.T) {
 	}
 }
 
-func TestApplyAddressSpaceBytesIgnoresFailedMmap(t *testing.T) {
-	pair := &event.Pair{
-		EnterEv: &types.MmapEvent{
-			TraceId: types.SYS_ENTER_MMAP,
-			Length:  16384,
-		},
-		ExitEv: &types.RetEvent{
-			TraceId: types.SYS_EXIT_MMAP,
-			Ret:     -1,
-		},
+func TestApplyAddressSpaceBytesUsesTheErrnoReturnWindow(t *testing.T) {
+	tests := []struct {
+		ret  int64
+		want uint64
+	}{
+		{ret: -4096, want: 16384},
+		{ret: -4095, want: 0},
 	}
 
-	applyAddressSpaceBytes(pair)
-	if pair.AddressSpaceBytes != 0 {
-		t.Fatalf("failed mmap AddressSpaceBytes = %d, want 0", pair.AddressSpaceBytes)
+	for _, tt := range tests {
+		pair := &event.Pair{
+			EnterEv: &types.MmapEvent{
+				TraceId: types.SYS_ENTER_MMAP,
+				Length:  16384,
+			},
+			ExitEv: &types.RetEvent{
+				TraceId: types.SYS_EXIT_MMAP,
+				Ret:     tt.ret,
+			},
+		}
+
+		applyAddressSpaceBytes(pair)
+		if pair.AddressSpaceBytes != tt.want {
+			t.Errorf("ret %d AddressSpaceBytes = %d, want %d", tt.ret, pair.AddressSpaceBytes, tt.want)
+		}
 	}
 }
 

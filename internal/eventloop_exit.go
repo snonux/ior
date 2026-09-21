@@ -86,6 +86,19 @@ func eventTypeForRuntimeEvent(ev event.Event) (types.EventType, bool) {
 	return typed.GetEventType(), true
 }
 
+// fdFromRet validates the syscall error window before narrowing a successful
+// descriptor return to the int32 representation used by the fd tracker.
+func fdFromRet(ret int64) (int32, bool) {
+	if event.IsErrnoRet(ret) {
+		return 0, false
+	}
+	if ret < 0 || ret > math.MaxInt32 {
+		return 0, false
+	}
+	fd := int32(ret)
+	return fd, fd >= 0
+}
+
 func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool {
 	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
@@ -96,9 +109,9 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	comm := types.StringValue(openEv.Comm[:])
 	filename := e.resolveCapturedDirfdPath(openEv.Dirfd, openEv.Pid,
 		types.StringValue(openEv.Filename[:]), openEv.FilenameStatus,
-		openEventAllowsEmptyPath(openEv, retEvent.Ret >= 0))
+		openEventAllowsEmptyPath(openEv, !event.IsErrnoRet(retEvent.Ret)))
 	ep.Comm = comm
-	if fd := int32(retEvent.Ret); fd >= 0 {
+	if fd, ok := fdFromRet(retEvent.Ret); ok {
 		fdFile := file.NewFd(fd, filename.Name(), openEventFlags(openEv))
 		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
@@ -167,7 +180,7 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 // resolver worker descheduled with an older name cannot land on top of it.
 func (e *eventLoop) cacheCommOfFailedExec(ep *event.Pair, execEv *types.ExecEvent) {
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok || retEv.Ret >= 0 {
+	if !ok || !event.IsErrnoRet(retEv.Ret) {
 		return
 	}
 	e.setCachedCommFromKernel(execEv.GetTid(), types.StringValue(execEv.Comm[:]))
@@ -198,7 +211,7 @@ func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool
 func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
 	if pathEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
-		if !ok || retEv.Ret < 0 {
+		if !ok || event.IsErrnoRet(retEv.Ret) {
 			ep.Recycle()
 			return false
 		}
@@ -215,7 +228,7 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 			e.recyclePair(ep, "Dropped malformed fspick exit event")
 			return false
 		}
-		if fd := int32(retEvent.Ret); fd >= 0 {
+		if fd, ok := fdFromRet(retEvent.Ret); ok {
 			// fspick returns a read/write filesystem-context descriptor. Its
 			// userspace flags word controls only close-on-exec; preserve the
 			// kernel-selected access mode as well as that optional bit.
@@ -235,7 +248,7 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 			e.recyclePair(ep, "Dropped malformed creat exit event")
 			return false
 		}
-		if fd := int32(retEvent.Ret); fd >= 0 {
+		if fd, ok := fdFromRet(retEvent.Ret); ok {
 			// creat(pathname, mode) == open(pathname, O_CREAT|O_WRONLY|O_TRUNC,
 			// mode): on success it returns a new fd, so register the fd->path
 			// mapping just like handleOpenExit does for open/openat/openat2.
@@ -324,7 +337,7 @@ func pathEventTargetRequired(ev *types.PathEvent) bool {
 
 func retEventSucceeded(ep *event.Pair) bool {
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	return ok && retEv.Ret >= 0
+	return ok && !event.IsErrnoRet(retEv.Ret)
 }
 
 func openEventAllowsEmptyPath(ev *types.OpenEvent, succeeded bool) bool {
@@ -435,7 +448,9 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 			e.recyclePair(ep, "Dropped malformed dup exit event")
 			return false
 		}
-		e.registerDup(fdFile, fdEv.Pid, int32(retEvent.Ret), 0)
+		if newFd, ok := fdFromRet(retEvent.Ret); ok {
+			e.registerDup(fdFile, fdEv.Pid, newFd, 0)
+		}
 	}
 	if ep.Is(types.SYS_ENTER_PIDFD_GETFD) {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
@@ -443,7 +458,7 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 			e.recyclePair(ep, "Dropped malformed pidfd_getfd exit event")
 			return false
 		}
-		if newFd := int32(retEv.Ret); newFd >= 0 {
+		if newFd, ok := fdFromRet(retEv.Ret); ok {
 			transferredFile := file.NewFdWithPid(newFd, fdEv.Pid)
 			e.fdState().set(newFd, fdEv.Pid, transferredFile)
 			ep.File = transferredFile
@@ -470,7 +485,9 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 		e.recyclePair(ep, "Dropped malformed dup3 exit event")
 		return false
 	}
-	e.registerDup(fdFile, dup3Ev.Pid, int32(retEvent.Ret), dup3Ev.Flags&syscall.O_CLOEXEC)
+	if newFd, ok := fdFromRet(retEvent.Ret); ok {
+		e.registerDup(fdFile, dup3Ev.Pid, newFd, dup3Ev.Flags&syscall.O_CLOEXEC)
+	}
 	return e.finishPair(ep)
 }
 
@@ -483,8 +500,8 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 		return false
 	}
 
-	fd := int32(retEvent.Ret)
-	if fd < 0 {
+	fd, ok := fdFromRet(retEvent.Ret)
+	if !ok {
 		e.pendingHandleState().delete(tid)
 		ep.Recycle()
 		return false
@@ -523,7 +540,7 @@ func (e *eventLoop) handleSocketExit(ep *event.Pair, socketEv *types.SocketEvent
 		return false
 	}
 
-	if fd := int32(retEvent.Ret); fd >= 0 {
+	if fd, ok := fdFromRet(retEvent.Ret); ok {
 		fdFile := file.NewFd(fd, socketDescriptorName(socketEv.Family, socketEv.Type, socketEv.Protocol), socketOpenFlags(socketEv.Type))
 		e.fdState().set(fd, socketEv.Pid, fdFile)
 		ep.File = fdFile
@@ -578,7 +595,7 @@ func (e *eventLoop) handleAcceptExit(ep *event.Pair, acceptEv *types.AcceptEvent
 	}
 
 	listening := e.fdState().resolve(acceptEv.Fd, acceptEv.Pid)
-	if fd := int32(exitEv.Ret); fd >= 0 {
+	if fd, ok := fdFromRet(exitEv.Ret); ok {
 		fdFile := file.NewFd(fd, acceptedSocketDescriptorName(listening), acceptOpenFlags(acceptEv))
 		e.fdState().set(fd, acceptEv.Pid, fdFile)
 		ep.File = fdFile
@@ -676,7 +693,7 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 		identity = types.StringValue(eventfdEv.Filename[:])
 	}
 	descriptorName := eventfdDescriptorName(eventfdEv.GetTraceId(), flags, identity, identityKnown)
-	if fd := int32(exitEv.Ret); fd >= 0 {
+	if fd, ok := fdFromRet(exitEv.Ret); ok {
 		if eventfdReusesExistingFD(eventfdEv.GetTraceId(), eventfdEv.Fd) {
 			ep.File = e.fdState().resolve(fd, eventfdEv.Pid)
 		} else if eventfdEv.GetTraceId() == types.SYS_ENTER_FSMOUNT && eventfdEv.Fd >= 0 {
@@ -827,7 +844,7 @@ func (e *eventLoop) handlePerfOpenExit(ep *event.Pair, perfOpenEv *types.PerfOpe
 		return false
 	}
 
-	if fd := int32(retEvent.Ret); fd >= 0 {
+	if fd, ok := fdFromRet(retEvent.Ret); ok {
 		fdFile := file.NewFd(fd, perfDescriptorName(perfOpenEv), -1)
 		e.fdState().set(fd, perfOpenEv.Pid, fdFile)
 		ep.File = fdFile
@@ -901,7 +918,7 @@ func (e *eventLoop) handleBpfExit(ep *event.Pair, bpfEv *types.BpfEvent) bool {
 		e.recyclePair(ep, "Dropped malformed bpf exit event")
 		return false
 	}
-	if fd := int32(retEvent.Ret); fd >= 0 && bpfCommandReturnsFD(bpfEv.Cmd) {
+	if fd, ok := fdFromRet(retEvent.Ret); ok && bpfCommandReturnsFD(bpfEv.Cmd) {
 		resolved := file.NewFdWithPid(fd, bpfEv.Pid)
 		fdFile := file.NewFd(fd, "bpf:"+bpfCommandName(bpfEv.Cmd), int32(resolved.Flags()))
 		e.fdState().set(fd, bpfEv.Pid, fdFile)
@@ -973,7 +990,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 			e.recyclePair(ep, "Dropped malformed io_uring_setup exit event")
 			return false
 		}
-		if fd := int32(retEvent.Ret); fd >= 0 {
+		if fd, ok := fdFromRet(retEvent.Ret); ok {
 			fdFile := file.NewFdWithPid(fd, nullEv.Pid)
 			e.fdState().set(fd, nullEv.Pid, fdFile)
 			ep.File = fdFile
@@ -985,7 +1002,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 			e.recyclePair(ep, "Dropped malformed getcwd exit event")
 			return false
 		}
-		if retEvent.Ret > 0 {
+		if retEvent.Ret != 0 && !event.IsErrnoRet(retEvent.Ret) {
 			cwd, err := os.Readlink(procTidPathPrefix(nullEv.GetTid()) + "/cwd")
 			switch {
 			case err == nil:
@@ -1027,7 +1044,7 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 		return false
 	}
 	// Syscall returned a negative errno, nothing was changed with the fd.
-	if retEvent.Ret < 0 {
+	if event.IsErrnoRet(retEvent.Ret) {
 		return true
 	}
 
@@ -1093,9 +1110,13 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 		ep.File = fdFile
 		e.fdState().set(fd, fcntlEv.Pid, fdFile)
 	case syscall.F_DUPFD:
-		e.registerDup(fdFile, fcntlEv.Pid, int32(retEvent.Ret), 0)
+		if newFd, ok := fdFromRet(retEvent.Ret); ok {
+			e.registerDup(fdFile, fcntlEv.Pid, newFd, 0)
+		}
 	case syscall.F_DUPFD_CLOEXEC:
-		e.registerDup(fdFile, fcntlEv.Pid, int32(retEvent.Ret), syscall.O_CLOEXEC)
+		if newFd, ok := fdFromRet(retEvent.Ret); ok {
+			e.registerDup(fdFile, fcntlEv.Pid, newFd, syscall.O_CLOEXEC)
+		}
 	}
 	return true
 }
@@ -1160,7 +1181,7 @@ func applyAddressSpaceBytes(ep *event.Pair) {
 		return
 	}
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok || retEv.Ret < 0 {
+	if !ok || event.IsErrnoRet(retEv.Ret) {
 		return
 	}
 	switch enterEv := ep.EnterEv.(type) {

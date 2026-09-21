@@ -104,6 +104,21 @@ func TestMatchPairSeesRetOnKindSpecificExits(t *testing.T) {
 	}
 }
 
+func TestMatchPairErrorsOnlyUsesTheErrnoReturnWindow(t *testing.T) {
+	pair := samplePair()
+	retEvent := pair.ExitEv.(*types.RetEvent)
+
+	retEvent.Ret = -4096
+	if MatchPair(Filter{ErrorsOnly: true}, pair) {
+		t.Fatal("errors-only filter matched -4096 outside the errno window")
+	}
+
+	retEvent.Ret = -4095
+	if !MatchPair(Filter{ErrorsOnly: true}, pair) {
+		t.Fatal("errors-only filter rejected -4095 at the errno boundary")
+	}
+}
+
 // renamePair models what handleNameExit builds: File.Name() is the newname and
 // the source path only reaches the filter through Pair.Oldname.
 func renamePair() *event.Pair {

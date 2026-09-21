@@ -3145,6 +3145,117 @@ func TestSyscallAggregateCountsOnlyNonEmittedEvents(t *testing.T) {
 	}
 }
 
+func TestSyscallAggregateUsesTheKernelErrnoReturnWindow(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+
+	if !syscallAggregateUsesErrnoWindow(filterC) {
+		t.Fatal("filter.c must use the exact kernel errno window in both aggregate branches")
+	}
+
+	mutations := []struct {
+		name   string
+		mutate func(string) string
+	}{
+		{
+			name: "an earlier sign check overrides the helper result",
+			mutate: func(source string) string {
+				return strings.Replace(source,
+					"return ret >= -IOR_MAX_ERRNO && ret < 0;",
+					"if (ret < 0) return 1;\n    return ret >= -IOR_MAX_ERRNO && ret < 0;", 1)
+			},
+		},
+		{
+			name: "helper calls move outside the aggregate",
+			mutate: func(source string) string {
+				source = strings.ReplaceAll(source,
+					"if (ior_is_errno_ret(ret))",
+					"if (ret < 0)")
+				return source + `
+static __always_inline void decoy_errno_calls(__s64 ret) {
+    if (ior_is_errno_ret(ret)) {}
+    if (ior_is_errno_ret(ret)) {}
+}
+`
+			},
+		},
+		{
+			name: "a stale sign check overwrites the fresh error count",
+			mutate: func(source string) string {
+				return strings.Replace(source,
+					"fresh.errors = 1;",
+					"fresh.errors = 1;\n    fresh.errors = ret < 0;", 1)
+			},
+		},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if syscallAggregateUsesErrnoWindow(mutation.mutate(filterC)) {
+				t.Fatal("errno-window source contract accepted a semantic mutation")
+			}
+		})
+	}
+}
+
+func syscallAggregateUsesErrnoWindow(source string) bool {
+	source = stripCComments(source)
+	if !strings.Contains(source, "#define IOR_MAX_ERRNO 4095") {
+		return false
+	}
+
+	helper, ok := cFunctionBody(source, "static __always_inline int ior_is_errno_ret(__s64 ret)")
+	if !ok || strings.TrimSpace(helper) != "return ret >= -IOR_MAX_ERRNO && ret < 0;" {
+		return false
+	}
+
+	aggregate, ok := cFunctionBody(source,
+		"static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, __u64 duration_ns, __s64 ret)")
+	if !ok || strings.Count(aggregate, "if (ior_is_errno_ret(ret))") != 2 {
+		return false
+	}
+	if strings.Count(aggregate,
+		"if (ior_is_errno_ret(ret))\n            existing->errors += 1;") != 1 {
+		return false
+	}
+	if strings.Count(aggregate,
+		"if (ior_is_errno_ret(ret))\n        fresh.errors = 1;") != 1 {
+		return false
+	}
+	// The two guarded increments above must be the only aggregate error-field
+	// writes. Otherwise a later stale sign check can silently override them.
+	return strings.Count(aggregate, "errors") == 2
+}
+
+// cFunctionBody returns the text enclosed by the outermost braces of the
+// function with signature. Callers strip comments first so braces in comments
+// cannot disguise the structural boundary being asserted.
+func cFunctionBody(source, signature string) (string, bool) {
+	start := strings.Index(source, signature)
+	if start < 0 {
+		return "", false
+	}
+	openOffset := strings.IndexByte(source[start+len(signature):], '{')
+	if openOffset < 0 {
+		return "", false
+	}
+	open := start + len(signature) + openOffset
+	depth := 0
+	for i := open; i < len(source); i++ {
+		switch source[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return source[open+1 : i], true
+			}
+		}
+	}
+	return "", false
+}
+
 // --- open filename recovery (task w1) ---
 //
 // bpf_probe_read_user_str() at sys_enter is a nofault read, so it returns

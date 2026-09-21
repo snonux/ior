@@ -209,3 +209,24 @@ func TestEngineCountsErrorsForKindSpecificExits(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineCountsOnlyTheErrnoReturnWindowAsErrors(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	engine := newEngineWithClock(4, clock.Now)
+	for _, ret := range []int64{-4096, -4095} {
+		engine.Ingest(newEnginePair(types.SYS_ENTER_MMAP, ret, types.UNCLASSIFIED,
+			"mapper", 1, "", 0, 0, 10, 0))
+	}
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.TotalErrors != 1 {
+		t.Fatalf("TotalErrors = %d, want 1", snap.TotalErrors)
+	}
+	rows := snap.Syscalls()
+	if len(rows) != 1 || rows[0].Errors != 1 {
+		t.Fatalf("syscall rows = %+v, want one mmap row with one error", rows)
+	}
+}

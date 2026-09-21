@@ -231,6 +231,29 @@ func TestSequencerNilSafeNext(t *testing.T) {
 	}
 }
 
+func TestNewClassifiesOnlyTheErrnoReturnWindowAsErrors(t *testing.T) {
+	tests := []struct {
+		ret         int64
+		wantIsError bool
+	}{
+		{ret: -4096, wantIsError: false},
+		{ret: -4095, wantIsError: true},
+	}
+
+	for _, tt := range tests {
+		enter := &types.NullEvent{TraceId: types.SYS_ENTER_MMAP, Pid: 5, Tid: 6}
+		pair := event.NewPair(enter)
+		pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_MMAP, Ret: tt.ret, Pid: 5, Tid: 6}
+
+		got := New(1, pair)
+		pair.Recycle()
+		if got.RetVal != tt.ret || got.IsError != tt.wantIsError {
+			t.Errorf("ret %d produced RetVal/IsError = %d/%t, want %d/%t",
+				tt.ret, got.RetVal, got.IsError, tt.ret, tt.wantIsError)
+		}
+	}
+}
+
 // TestNewCarriesRetForSeccompAndModuleExits locks in audit finding M1/F2 at the
 // row level. seccomp/init_module/delete_module used to emit a payload-less
 // null_event on the exit side, so New() found no *types.RetEvent and every row

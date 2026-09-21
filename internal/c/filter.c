@@ -4,6 +4,11 @@
 #define FILTER 1
 #define IOR_HISTOGRAM_BUCKETS 8
 #define IOR_MAX_PID_NS_LEVEL 32
+#define IOR_MAX_ERRNO 4095
+
+static __always_inline int ior_is_errno_ret(__s64 ret) {
+    return ret >= -IOR_MAX_ERRNO && ret < 0;
+}
 
 // Return the current thread group's PID as seen in its active PID namespace.
 // bpf_get_current_pid_tgid() reports the kernel's host TGID, while syscall PID
@@ -87,7 +92,7 @@ static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, _
     if (existing) {
         existing->count += 1;
         existing->total_duration_ns += duration_ns;
-        if (ret < 0)
+        if (ior_is_errno_ret(ret))
             existing->errors += 1;
         if (existing->count == 1 || duration_ns < existing->min_duration_ns)
             existing->min_duration_ns = duration_ns;
@@ -101,7 +106,7 @@ static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, _
     fresh.total_duration_ns = duration_ns;
     fresh.min_duration_ns = duration_ns;
     fresh.max_duration_ns = duration_ns;
-    if (ret < 0)
+    if (ior_is_errno_ret(ret))
         fresh.errors = 1;
     fresh.duration_histogram[bucket_idx] = 1;
     bpf_map_update_elem(&syscall_aggregate_map, &enter_trace_id, &fresh, BPF_ANY);
