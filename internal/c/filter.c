@@ -125,10 +125,16 @@ static __always_inline int ior_should_emit_trace(__u32 enter_trace_id) {
     return (bpf_get_prandom_u32() % rate) == 0;
 }
 
-static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id) {
+// The per-syscall hooks below take the handler's timestamp instead of reading
+// the clock themselves. Each generated handler calls bpf_ktime_get_boot_ns()
+// exactly once and uses that one value both here and for ev->time, so a traced
+// syscall costs two clock helper calls (one per side) instead of four, and the
+// kernel-side duration (syscall_aggregate_map) and the userspace duration
+// (exit ev->time - enter ev->time) are derived from the same two instants.
+static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id, __u64 now) {
     struct syscall_enter_state state = {};
 
-    state.start_ns = bpf_ktime_get_boot_ns();
+    state.start_ns = now;
     state.enter_trace_id = enter_trace_id;
     state.emit_event = ior_should_emit_trace(enter_trace_id) ? 1 : 0;
     bpf_map_update_elem(&syscall_enter_state_map, &tid, &state, BPF_ANY);
@@ -152,8 +158,7 @@ static __always_inline int ior_on_noreturn_syscall_enter(__u32 enter_trace_id) {
     return ior_should_emit_trace(enter_trace_id);
 }
 
-static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret) {
-    __u64 now;
+static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now) {
     __u64 duration = 0;
     __u8 emit_event = 1;
     struct syscall_enter_state *state;
@@ -162,7 +167,6 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
     if (!state)
         return 1;
 
-    now = bpf_ktime_get_boot_ns();
     if (now >= state->start_ns)
         duration = now - state->start_ns;
 
