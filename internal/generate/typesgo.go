@@ -437,6 +437,10 @@ func writeSyncPool(b *strings.Builder, goName, selfRef string) {
 	}
 	fmt.Fprintf(b, "var poolOf%ss = sync.Pool{\n\tNew: func() any { return &%s{} },\n}\n\n", goName, goName)
 	fmt.Fprintf(b, "func New%s(raw []byte) *%s {\n", goName, goName)
+	if goName == "FdPathEvent" {
+		b.WriteString("\tif len(raw) != 300 && len(raw) != 304 {\n\t\treturn nil\n\t}\n")
+		b.WriteString("\tif binary.LittleEndian.Uint32(raw[296:300]) != FD_PATH_EVENT_SCHEMA_VERSION {\n\t\treturn nil\n\t}\n")
+	}
 	fmt.Fprintf(b, "\t%s := poolOf%ss.Get().(*%s)\n", selfRef, goName, goName)
 	fmt.Fprintf(b, "\tif err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, %s); err != nil {\n", selfRef)
 	fmt.Fprintf(b, "\t\t*%s = %s{}\n", selfRef, goName)

@@ -193,35 +193,17 @@ func TestFanotifyFlags(t *testing.T) {
 	})
 }
 
-// TestInotifyBasic asserts end-to-end tracing of the inotify IPC family.
-// The inotify-basic scenario issues inotify_init1(IN_CLOEXEC) ->
-// inotify_add_watch(fd, file, IN_CREATE|IN_DELETE|IN_MODIFY) ->
-// inotify_rm_watch(fd, wd) -> close(fd). We assert all three inotify enter
-// tracepoints fire at least once, with positive durations and the hermetic
-// PID/comm guards already applied by runScenarioResultWithIorArgs. The
-// inotify_init1 instance fd resolves to the "inotifyfd:" path label, and the
-// close on that same fd carries the same label.
+// TestInotifyBasic pins the watched path and notification group fd in the same
+// row, including errors. Later group operations must retain their group label.
 func TestInotifyBasic(t *testing.T) {
-	result, _ := runScenarioResultWithIorArgs(t, "inotify-basic", []ExpectedEvent{
-		{Tracepoint: "enter_inotify_init1", MinCount: 1},
-		{Tracepoint: "enter_inotify_add_watch", MinCount: 1},
-		{Tracepoint: "enter_inotify_rm_watch", MinCount: 1},
-		{Tracepoint: "enter_close", MinCount: 1},
-	}, inotifyTraceArgs)
-
-	// inotify_init1 returns a registered fd labelled inotifyfd:, and the
-	// subsequent close of that fd resolves to the same tracked label.
-	assertTracepointPathPrefix(t, result, "enter_inotify_init1", "inotifyfd:")
-	assertTracepointPathPrefix(t, result, "enter_close", "inotifyfd:")
-
-	// inotify_add_watch / inotify_rm_watch capture the inotify instance fd
-	// (kind=fd@arg0), so they too resolve to the tracked inotifyfd: label.
-	assertTracepointPathPrefix(t, result, "enter_inotify_add_watch", "inotifyfd:")
-	assertTracepointPathPrefix(t, result, "enter_inotify_rm_watch", "inotifyfd:")
-
-	assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: "enter_inotify_init1", Comm: "ioworkload"})
-	assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: "enter_inotify_add_watch", Comm: "ioworkload"})
-	assertEventDurationPositive(t, result, ExpectedEvent{Tracepoint: "enter_inotify_rm_watch", Comm: "ioworkload"})
+	rows, _ := runParquetScenarioRows(t, "inotify-basic", defaultDuration, inotifyTraceArgs, nil)
+	groupFD := notificationGroupFD(t, rows, "inotify_init1")
+	AssertRowsPresent(t, rows, []ExpectedRow{
+		{Syscall: "inotify_add_watch", FileContains: "/watched", FD: &groupFD, RetValAtLeast: ptrTo(int64(1)), IsError: ptrTo(false), Bytes: ptrTo(uint64(0))},
+		{Syscall: "inotify_add_watch", FileContains: "/missing", FD: &groupFD, RetVal: ptrTo(-int64(syscall.ENOENT)), IsError: ptrTo(true)},
+		{Syscall: "inotify_rm_watch", FileContains: "inotifyfd:", FD: &groupFD, RetVal: ptrTo(int64(0)), IsError: ptrTo(false)},
+		{Syscall: "close", FileContains: "inotifyfd:", FD: &groupFD, RetVal: ptrTo(int64(0)), IsError: ptrTo(false)},
+	})
 }
 
 func TestPosixMqBasic(t *testing.T) {

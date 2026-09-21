@@ -138,12 +138,8 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"fadvise64":     {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"fallocate":     {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"fanotify_init": {kind: "eventfd", args: map[string]int{"flags": 0}, ret: "UNCLASSIFIED", family: "IPC"},
-	// TODO(j4): delete temporary when the group fd and pathname are captured together.
 	"fanotify_mark": {
-		kind: "fd-pathname", args: map[string]int{"dirfd": 3, "fd": 0, "pathname": 4}, ret: "UNCLASSIFIED", family: "IPC",
-		temporary: &temporarySyscallSemantics{task: "j4", current: syscallSemantics{
-			kind: "pathname", args: map[string]int{"dirfd": 3, "pathname": 4}, ret: "UNCLASSIFIED", family: "IPC",
-		}},
+		kind: "fd-pathname", args: map[string]int{"dirfd": 3, "fd": 0, "flags": 1, "pathname": 4}, ret: "UNCLASSIFIED", family: "IPC",
 	},
 	"fchdir":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"fchmod":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
@@ -213,12 +209,8 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 		}},
 	},
 	"init_module": {kind: "module", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Security"},
-	// TODO(j4): delete temporary when the inotify fd and watched pathname are captured together.
 	"inotify_add_watch": {
 		kind: "fd-pathname", args: map[string]int{"fd": 0, "pathname": 1}, ret: "UNCLASSIFIED", family: "IPC",
-		temporary: &temporarySyscallSemantics{task: "j4", current: syscallSemantics{
-			kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "IPC",
-		}},
 	},
 	"inotify_init":            {kind: "eventfd", args: map[string]int{}, ret: "UNCLASSIFIED", family: "IPC"},
 	"inotify_init1":           {kind: "eventfd", args: map[string]int{"flags": 0}, ret: "UNCLASSIFIED", family: "IPC"},

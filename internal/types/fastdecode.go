@@ -32,6 +32,8 @@ const (
 	pathEventSize              = 304
 	pathEventCompactSize       = 300
 	pathEventLegacySize        = 280
+	fdPathEventSize            = 304
+	fdPathEventCompactSize     = 300
 	fcntlEventSize             = 40
 	dup3EventSize              = 32
 	openByHandleAtEventSize    = 32
@@ -306,6 +308,30 @@ func NewPathEventFast(raw []byte) *PathEvent {
 		p.Flags = 0
 		p.SchemaVersion = 0
 	}
+	return p
+}
+
+// NewFdPathEventFast decodes the notification-group/path payload. Its distinct
+// event type leaves legacy inotify fd and fanotify path payloads unambiguous.
+func NewFdPathEventFast(raw []byte) *FdPathEvent {
+	if len(raw) != fdPathEventSize && len(raw) != fdPathEventCompactSize {
+		return nil
+	}
+	if binary.LittleEndian.Uint32(raw[296:300]) != FD_PATH_EVENT_SCHEMA_VERSION {
+		return nil
+	}
+	p := poolOfFdPathEvents.Get().(*FdPathEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	p.Dirfd = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	copy(p.Pathname[:], raw[32:288])
+	p.PathnameStatus = binary.LittleEndian.Uint32(raw[288:292])
+	p.Flags = binary.LittleEndian.Uint32(raw[292:296])
+	p.SchemaVersion = binary.LittleEndian.Uint32(raw[296:300])
 	return p
 }
 

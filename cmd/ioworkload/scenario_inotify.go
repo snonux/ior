@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,6 +52,10 @@ func inotifyBasic() error {
 	// inotify_rm_watch removes the watch by descriptor on the instance fd.
 	if _, err := unix.InotifyRmWatch(fd, uint32(wd)); err != nil {
 		return fmt.Errorf("inotify_rm_watch: %w", err)
+	}
+	// The failed watch must retain the attempted path and group fd as well.
+	if _, err := unix.InotifyAddWatch(fd, filepath.Join(dir, "missing"), mask); !errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("inotify_add_watch missing: got %v, want ENOENT", err)
 	}
 
 	return nil

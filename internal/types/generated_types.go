@@ -121,6 +121,8 @@ const ENTER_MMAP_EVENT = 50
 const EXIT_MMAP_EVENT = 51
 const ENTER_BPF_EVENT = 52
 const EXIT_BPF_EVENT = 53
+const ENTER_FD_PATH_EVENT = 54
+const EXIT_FD_PATH_EVENT = 55
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -137,6 +139,7 @@ const PATH_EVENT_SCHEMA_VERSION = 3
 const NAME_EVENT_SCHEMA_VERSION = 2
 const EVENTFD_EVENT_SCHEMA_VERSION = 2
 const TWO_FD_EVENT_SCHEMA_VERSION = 2
+const FD_PATH_EVENT_SCHEMA_VERSION = 1
 const SYS_ENTER_SOCKET TraceId = 1847
 const SYS_EXIT_SOCKET TraceId = 1846
 const SYS_ENTER_SOCKETPAIR TraceId = 1845
@@ -1427,6 +1430,85 @@ func (p *PathEvent) Bytes() ([]byte, error) {
 
 func (p *PathEvent) Recycle() {
 	poolOfPathEvents.Put(p)
+}
+
+type FdPathEvent struct {
+	EventType      EventType
+	TraceId        TraceId
+	Time           uint64
+	Pid            uint32
+	Tid            uint32
+	Fd             int32
+	Dirfd          int32
+	Pathname       [MAX_FILENAME_LENGTH]byte
+	PathnameStatus uint32
+	Flags          uint32
+	SchemaVersion  uint32
+}
+
+func (f FdPathEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Dirfd:%v Pathname:%v PathnameStatus:%v Flags:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Dirfd, string(f.Pathname[:]), f.PathnameStatus, f.Flags, f.SchemaVersion)
+}
+
+func (f FdPathEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*FdPathEvent)
+	if !ok {
+		return false
+	}
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.Dirfd == otherConcrete.Dirfd && f.Pathname == otherConcrete.Pathname && f.PathnameStatus == otherConcrete.PathnameStatus && f.Flags == otherConcrete.Flags && f.SchemaVersion == otherConcrete.SchemaVersion
+}
+
+func (f *FdPathEvent) GetEventType() EventType {
+	return f.EventType
+}
+
+func (f *FdPathEvent) GetTraceId() TraceId {
+	return f.TraceId
+}
+
+func (f *FdPathEvent) GetPid() uint32 {
+	return f.Pid
+}
+
+func (f *FdPathEvent) GetTid() uint32 {
+	return f.Tid
+}
+
+func (f *FdPathEvent) GetTime() uint64 {
+	return f.Time
+}
+
+var poolOfFdPathEvents = sync.Pool{
+	New: func() any { return &FdPathEvent{} },
+}
+
+func NewFdPathEvent(raw []byte) *FdPathEvent {
+	if len(raw) != 300 && len(raw) != 304 {
+		return nil
+	}
+	if binary.LittleEndian.Uint32(raw[296:300]) != FD_PATH_EVENT_SCHEMA_VERSION {
+		return nil
+	}
+	f := poolOfFdPathEvents.Get().(*FdPathEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
+		*f = FdPathEvent{}
+		poolOfFdPathEvents.Put(f)
+		return nil
+	}
+	return f
+}
+
+func (f *FdPathEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (f *FdPathEvent) Recycle() {
+	poolOfFdPathEvents.Put(f)
 }
 
 type FcntlEvent struct {

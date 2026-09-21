@@ -72,11 +72,9 @@ var syscallFamilies = map[string]SyscallFamily{
 	// taking the notification-group fd as arg0). inotify_add_watch is FamilyIPC,
 	// so for sibling consistency fanotify_mark belongs in IPC too rather than
 	// falling through to Misc by omission (the same alarm/adjtimex-style
-	// misclassification just fixed for fanotify_init). Its KIND stays KindPathname
-	// capturing the (optional) pathname at args[4]: this matches the *at() cohort
-	// convention — fchmodat, fchownat, unlinkat, mkdirat, newfstatat, utimensat,
-	// name_to_handle_at all carry a dirfd at arg0 yet capture the pathname — since
-	// fanotify_mark has a dirfd@arg3 + pathname@arg4 pair. fanotify_mark returns
+	// misclassification just fixed for fanotify_init). Both watch operations use
+	// KindFdPathname to capture the group fd and target together, including the
+	// independent dirfd@arg3 + pathname@arg4 pair for fanotify_mark. It returns
 	// 0/-1, so the return is UNCLASSIFIED (not a byte count).
 	"fanotify_init":     FamilyIPC,
 	"fanotify_mark":     FamilyIPC,

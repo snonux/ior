@@ -36,6 +36,7 @@ var (
 
 	// *types.PathEvent carries a pathname field for path-only syscalls.
 	_ Event = (*types.PathEvent)(nil)
+	_ Event = (*types.FdPathEvent)(nil)
 
 	// *types.FcntlEvent carries the fcntl command and argument fields.
 	_ Event = (*types.FcntlEvent)(nil)

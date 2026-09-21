@@ -54,6 +54,17 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 
 ## Traced Syscalls by TracepointKind
 
+`fd-pathname` captures the notification group fd and watched pathname together.
+The row's fd and open flags belong to that group; adding a watch never replaces
+its descriptor-table name or registers an inotify watch descriptor as an fd.
+For `fanotify_mark`, a relative pathname is joined to a concrete `dfd`; absolute
+and `AT_FDCWD` paths retain their captured spelling. A successful NULL pathname
+targets `dfd` itself. A non-NULL empty string, a failed string read, and failed
+NULL calls do not acquire the target fd's path. `FAN_MARK_FLUSH` reports the
+group because it ignores both pathname and `dfd`. Mark flags are kept separate
+from descriptor flags. Legacy BPF objects still decode their original fd-only
+inotify and path-only fanotify payloads, with the original missing fields.
+
 - accept: `accept`, `accept4`
 - bpf: `bpf`
 - dup3: `dup3`
@@ -61,7 +72,8 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 - eventfd: `epoll_create`, `epoll_create1`, `eventfd`, `eventfd2`, `fanotify_init`, `fsmount`, `fsopen`, `inotify_init`, `inotify_init1`, `landlock_create_ruleset`, `memfd_create`, `memfd_secret`, `signalfd`, `signalfd4`, `timerfd_create`, `userfaultfd`
 - exec: `execve`, `execveat`
 - fcntl: `fcntl`
-- fd: `bind`, `cachestat`, `close`, `connect`, `copy_file_range`, `dup`, `dup2`, `epoll_pwait`, `epoll_pwait2`, `epoll_wait`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_add_watch`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `ioctl`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendfile64`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `splice`, `sync_file_range`, `syncfs`, `tee`, `timerfd_gettime`, `timerfd_settime`, `vmsplice`, `write`, `writev`
+- fd: `bind`, `cachestat`, `close`, `connect`, `copy_file_range`, `dup`, `dup2`, `epoll_pwait`, `epoll_pwait2`, `epoll_wait`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `ioctl`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendfile64`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `splice`, `sync_file_range`, `syncfs`, `tee`, `timerfd_gettime`, `timerfd_settime`, `vmsplice`, `write`, `writev`
+- fd-pathname: `fanotify_mark`, `inotify_add_watch`
 - futex: `futex`, `futex_requeue`, `futex_wait`, `futex_waitv`, `futex_wake`
 - keyctl: `add_key`, `keyctl`, `request_key`
 - mem: `brk`, `madvise`, `map_shadow_stack`, `mincore`, `mlock`, `mlock2`, `mprotect`, `mremap`, `mseal`, `msync`, `munlock`, `munmap`, `pkey_mprotect`, `remap_file_pages`
@@ -73,7 +85,7 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 - open: `open`, `openat`, `openat2`
 - open-by-handle-at: `open_by_handle_at`
 - open-tree: `open_tree`, `open_tree_attr`
-- pathname: `access`, `acct`, `chdir`, `chmod`, `chown`, `chroot`, `creat`, `faccessat`, `faccessat2`, `fanotify_mark`, `fchmodat`, `fchmodat2`, `fchownat`, `file_getattr`, `file_setattr`, `fspick`, `futimesat`, `getxattr`, `getxattrat`, `lchown`, `lgetxattr`, `listxattr`, `listxattrat`, `llistxattr`, `lremovexattr`, `lsetxattr`, `mkdir`, `mkdirat`, `mknod`, `mknodat`, `mount`, `mount_setattr`, `mq_unlink`, `name_to_handle_at`, `newfstatat`, `newlstat`, `newstat`, `pivot_root`, `quotactl`, `readlink`, `readlinkat`, `removexattr`, `removexattrat`, `rmdir`, `setxattr`, `setxattrat`, `statfs`, `statx`, `swapoff`, `swapon`, `truncate`, `umount`, `unlink`, `unlinkat`, `utime`, `utimensat`, `utimes`
+- pathname: `access`, `acct`, `chdir`, `chmod`, `chown`, `chroot`, `creat`, `faccessat`, `faccessat2`, `fchmodat`, `fchmodat2`, `fchownat`, `file_getattr`, `file_setattr`, `fspick`, `futimesat`, `getxattr`, `getxattrat`, `lchown`, `lgetxattr`, `listxattr`, `listxattrat`, `llistxattr`, `lremovexattr`, `lsetxattr`, `mkdir`, `mkdirat`, `mknod`, `mknodat`, `mount`, `mount_setattr`, `mq_unlink`, `name_to_handle_at`, `newfstatat`, `newlstat`, `newstat`, `pivot_root`, `quotactl`, `readlink`, `readlinkat`, `removexattr`, `removexattrat`, `rmdir`, `setxattr`, `setxattrat`, `statfs`, `statx`, `swapoff`, `swapon`, `truncate`, `umount`, `unlink`, `unlinkat`, `utime`, `utimensat`, `utimes`
 - perf-open: `perf_event_open`
 - pidfd: `pidfd_open`
 - pipe: `pipe`, `pipe2`

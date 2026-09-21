@@ -29,9 +29,11 @@ const miscVmspliceLen = 16
 //
 // INTENTIONALLY EXCLUDED from this scenario (and documented here so the reasons
 // travel with the code):
-//   - acct, sethostname, setdomainname, syslog, fanotify_init, fanotify_mark:
+//   - acct, sethostname, setdomainname, syslog:
 //     require CAP_SYS_ADMIN and/or mutate GLOBAL host state (hostname, kernel
 //     log, process accounting) — unsafe to invoke from a test workload.
+//   - fanotify_init, fanotify_mark: covered by the separate fanotify-marks IPC
+//     scenario, which requires CAP_SYS_ADMIN and cleans up its own group.
 //   - ioperm, iopl, modify_ldt: require CAP_SYS_RAWIO and are x86-only port/LDT
 //     manipulation — privileged and non-portable.
 //   - file_getattr, file_setattr: only exist on Linux 6.13+, so may be absent
