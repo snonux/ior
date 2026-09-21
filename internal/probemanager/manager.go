@@ -362,6 +362,15 @@ func (m *Manager) IsActive(syscall string) bool {
 // It returns the first detach error encountered (subsequent errors are
 // recorded on the probe entry but not returned).
 func (m *Manager) Close() error {
+	return m.CloseWithProgress(nil)
+}
+
+// CloseWithProgress detaches all registered probes and reports exact progress
+// over the active syscall probe pairs. The callback receives an initial
+// (0, total) update followed by one update after each active pair is detached.
+// Inactive registered probes do not contribute to total because they require
+// no kernel cleanup.
+func (m *Manager) CloseWithProgress(progress func(completed, total int)) error {
 	if m == nil {
 		return nil
 	}
@@ -370,10 +379,27 @@ func (m *Manager) Close() error {
 		return nil // already closed
 	}
 
+	total := 0
+	for _, item := range entries {
+		if item.hasLinks {
+			total++
+		}
+	}
+	if progress != nil {
+		progress(0, total)
+	}
+
 	var firstErr error
+	completed := 0
 	for _, item := range entries {
 		if err := m.detachProbeEntry(item); err != nil && firstErr == nil {
 			firstErr = err
+		}
+		if item.hasLinks {
+			completed++
+			if progress != nil {
+				progress(completed, total)
+			}
 		}
 	}
 	return firstErr
@@ -406,13 +432,18 @@ func (m *Manager) snapshotAndMarkClosed() ([]pairEntry, bool) {
 	return entries, true
 }
 
-// detachProbeEntry destroys the BPF links for a single probe entry under its
-// per-entry mutex, clears the link pointers, and records any error.
+// detachProbeEntry waits on the per-entry mutex even when the close snapshot
+// saw no links. An Attach or Toggle may already hold that mutex while blocked
+// in the module-backed attach call; Close must not return and let the caller
+// release the module until that work has finished and commitAttach has cleaned
+// up any links it could not publish to the now-closed manager.
+//
+// The manager is marked closed before this function runs. A Close called
+// re-entrantly by a destroy/progress callback therefore returns at once rather
+// than trying to acquire this mutex again.
 func (m *Manager) detachProbeEntry(item pairEntry) error {
-	if item.hasLinks {
-		item.entry.attachMu.Lock()
-		defer item.entry.attachMu.Unlock()
-	}
+	item.entry.attachMu.Lock()
+	defer item.entry.attachMu.Unlock()
 
 	m.mu.Lock()
 	enterLink := item.entry.enterLink

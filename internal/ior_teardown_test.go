@@ -44,6 +44,25 @@ type fakeProbeManager struct {
 	fail error
 }
 
+type fakeProgressProbeManager struct {
+	rec *teardownRecorder
+}
+
+func (f fakeProgressProbeManager) Close() error {
+	f.rec.record("mgr.Close")
+	return nil
+}
+
+func (f fakeProgressProbeManager) CloseWithProgress(progress func(completed, total int)) error {
+	f.rec.record("mgr.CloseWithProgress")
+	progress(0, 2)
+	f.rec.record("detach.first")
+	progress(1, 2)
+	f.rec.record("detach.second")
+	progress(2, 2)
+	return nil
+}
+
 func (f fakeProbeManager) Close() error {
 	f.rec.record("mgr.Close")
 	return f.fail
@@ -84,9 +103,11 @@ func TestCloseTraceInfraTearsDownInCanonicalOrder(t *testing.T) {
 		func() { rec.record("releaseBindings") },
 		fakeBpfModule{rec: rec},
 		func() { rec.record("stopSignals") },
+		nil,
+		func() { rec.record("releasing") },
 	)
 
-	want := []string{"rb.Stop", "mgr.Close", "releaseBindings", "module.Close", "stopSignals"}
+	want := []string{"rb.Stop", "mgr.Close", "releasing", "releaseBindings", "module.Close", "stopSignals"}
 	got := rec.snapshot()
 	if !slices.Equal(got, want) {
 		t.Fatalf("teardown order = %v, want %v", got, want)
@@ -103,7 +124,7 @@ func TestCloseTraceInfraSkipsMissingCollaborators(t *testing.T) {
 	rec := &teardownRecorder{}
 	logs := &captureLogger{}
 
-	closeTraceInfra(logs.log, nil, fakeProbeManager{rec: rec}, nil, fakeBpfModule{rec: rec}, nil)
+	closeTraceInfra(logs.log, nil, fakeProbeManager{rec: rec}, nil, fakeBpfModule{rec: rec}, nil, nil, nil)
 
 	want := []string{"mgr.Close", "module.Close"}
 	got := rec.snapshot()
@@ -127,6 +148,8 @@ func TestCloseTraceInfraLogsProbeCloseFailuresToStderrLogger(t *testing.T) {
 		nil,
 		fakeBpfModule{rec: rec},
 		nil,
+		nil,
+		nil,
 	)
 
 	if !strings.Contains(logs.joined(), "BPF probe manager close error:") ||
@@ -136,6 +159,44 @@ func TestCloseTraceInfraLogsProbeCloseFailuresToStderrLogger(t *testing.T) {
 	got := rec.snapshot()
 	if len(got) != 3 || got[0] != "rb.Stop" || got[1] != "mgr.Close" || got[2] != "module.Close" {
 		t.Fatalf("teardown must continue after a probe close error, got %v", got)
+	}
+}
+
+func TestCloseTraceInfraDispatchesProbeProgressPath(t *testing.T) {
+	rec := &teardownRecorder{}
+	logs := &captureLogger{}
+	var progress [][2]int
+
+	closeTraceInfra(
+		logs.log,
+		fakeRingBuffer{rec: rec},
+		fakeProgressProbeManager{rec: rec},
+		nil,
+		fakeBpfModule{rec: rec},
+		nil,
+		func(completed, total int) {
+			progress = append(progress, [2]int{completed, total})
+		},
+		func() { rec.record("releasing") },
+	)
+
+	wantCalls := []string{
+		"rb.Stop",
+		"mgr.CloseWithProgress",
+		"detach.first",
+		"detach.second",
+		"releasing",
+		"module.Close",
+	}
+	if got := rec.snapshot(); !slices.Equal(got, wantCalls) {
+		t.Fatalf("teardown calls = %v, want %v", got, wantCalls)
+	}
+	wantProgress := [][2]int{{0, 2}, {1, 2}, {2, 2}}
+	if !slices.Equal(progress, wantProgress) {
+		t.Fatalf("progress = %v, want %v", progress, wantProgress)
+	}
+	if logs.joined() != "" {
+		t.Fatalf("unexpected teardown log: %q", logs.joined())
 	}
 }
 

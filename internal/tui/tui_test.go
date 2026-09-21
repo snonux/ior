@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/globalfilter"
 	"ior/internal/probemanager"
+	"ior/internal/runtime"
 	"ior/internal/statsengine"
 	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/eventstream"
@@ -176,7 +178,7 @@ func TestQuitKeySetsQuittingState(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected quit cmd")
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
+	if msg := cmd(); !isQuitMsg(msg) {
 		t.Fatalf("expected tea.QuitMsg")
 	}
 
@@ -184,6 +186,177 @@ func TestQuitKeySetsQuittingState(t *testing.T) {
 	if !updated.quitting {
 		t.Fatalf("expected quitting state")
 	}
+}
+
+func TestQuitDispatchWaitsForTheActiveTraceCleanup(t *testing.T) {
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.width = 100
+	m.height = 30
+	reporter := runtime.NewTraceShutdownReporter()
+	m.tracer.shutdownReporter = reporter
+	stopped := false
+	m.tracer.traceStop = func() { stopped = true }
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	updated := next.(*Model)
+	if !stopped || !updated.quitting {
+		t.Fatalf("quit dispatched stopped=%t quitting=%t, want both true", stopped, updated.quitting)
+	}
+	if got := updated.View().Content; !strings.Contains(got, "Stopping trace and releasing BPF resources") {
+		t.Fatalf("initial shutdown view = %q", got)
+	}
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("quit command = %T with %d entries, want two-command batch", batch, len(batch))
+	}
+	// The spinner remains live while shutdown is indeterminate.
+	if tickMsg := batch[0](); tickMsg == nil {
+		t.Fatal("shutdown spinner tick returned nil")
+	} else if _, tickCmd := updated.Update(tickMsg); tickCmd == nil {
+		t.Fatal("shutdown spinner did not schedule its next tick")
+	}
+
+	reporter.Publish(runtime.TraceShutdownProgress{
+		Phase:     runtime.TraceShutdownDetaching,
+		Completed: 2,
+		Total:     5,
+	})
+	progressMsg := batch[1]()
+	progressNext, waitCmd := updated.Update(progressMsg)
+	updated = progressNext.(*Model)
+	if waitCmd == nil {
+		t.Fatal("detach progress did not dispatch the next completion wait")
+	}
+	if got := updated.View().Content; !strings.Contains(got, "2/5") || !strings.Contains(got, "Detaching BPF probe pairs") {
+		t.Fatalf("determinate shutdown view = %q, want detach count", got)
+	}
+
+	reporter.Publish(runtime.TraceShutdownProgress{Phase: runtime.TraceShutdownReleasing})
+	releasingNext, completeWaitCmd := updated.Update(waitCmd())
+	updated = releasingNext.(*Model)
+	if completeWaitCmd == nil {
+		t.Fatal("release progress did not dispatch the completion wait")
+	}
+	if got := updated.View().Content; !strings.Contains(got, "Releasing remaining BPF resources") {
+		t.Fatalf("release shutdown view = %q", got)
+	}
+
+	reporter.Complete()
+	completeNext, quitCmd := updated.Update(completeWaitCmd())
+	updated = completeNext.(*Model)
+	if quitCmd == nil {
+		t.Fatal("shutdown completion did not dispatch tea.Quit")
+	}
+	if _, ok := quitCmd().(tea.QuitMsg); !ok {
+		t.Fatalf("completion command = %T, want tea.QuitMsg", quitCmd())
+	}
+	if !updated.quitting {
+		t.Fatal("completed shutdown lost the quitting state")
+	}
+}
+
+func TestQuitWhileDashboardIsAttachingWaitsForBlockedStarterCleanup(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	claimed := make(chan bool, 1)
+	starter := func(ctx context.Context) error {
+		reporter, ok := runtime.TraceShutdownReporterFromContext(ctx)
+		claimed <- ok && reporter.Claim()
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-releaseCleanup
+		reporter.Complete()
+		return ctx.Err()
+	}
+
+	m := NewModel(-1, starter)
+	m.screen = ScreenDashboard
+	m.attaching = true
+	startResult := make(chan tea.Msg, 1)
+	go func() { startResult <- m.beginTraceCmd()() }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("starter did not begin")
+	}
+	if !<-claimed {
+		t.Fatal("blocked starter did not claim shutdown completion")
+	}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	updated := next.(*Model)
+	if !updated.quitting {
+		t.Fatal("quit while attaching did not enter shutdown view")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("attaching quit command = %T, want spinner + shutdown wait", batch)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("quit while attaching did not cancel the blocked starter")
+	}
+
+	shutdownMsg := make(chan tea.Msg, 1)
+	go func() { shutdownMsg <- batch[1]() }()
+	select {
+	case msg := <-shutdownMsg:
+		t.Fatalf("shutdown wait returned before starter cleanup: %T", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseCleanup)
+
+	var progressMsg tea.Msg
+	select {
+	case progressMsg = <-shutdownMsg:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown wait did not receive starter completion")
+	}
+	completeNext, quitCmd := updated.Update(progressMsg)
+	if _, ok := completeNext.(*Model); !ok {
+		t.Fatalf("completion model = %T, want *Model", completeNext)
+	}
+	if quitCmd == nil {
+		t.Fatal("starter cleanup completion did not dispatch tea.Quit")
+	}
+	if _, ok := quitCmd().(tea.QuitMsg); !ok {
+		t.Fatalf("cleanup completion command = %T, want tea.QuitMsg", quitCmd())
+	}
+	select {
+	case msg := <-startResult:
+		if msg != nil {
+			t.Fatalf("cancelled starter result = %T, want nil", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled starter command did not return")
+	}
+}
+
+func TestTraceShutdownReporterIsIsolatedAcrossRestarts(t *testing.T) {
+	lifecycle := newTraceLifecycle(func(context.Context) error { return nil })
+	bindings := newRuntimeBindings()
+	_ = lifecycle.beginCmd(bindings, globalfilter.Filter{})
+	oldReporter := lifecycle.shutdownReporter
+	lifecycle.stop()
+	_ = lifecycle.beginCmd(bindings, globalfilter.Filter{})
+	newReporter := lifecycle.shutdownReporter
+	if oldReporter == newReporter {
+		t.Fatal("trace restart reused the previous session's shutdown reporter")
+	}
+
+	oldReporter.Complete()
+	select {
+	case got := <-newReporter.Updates():
+		t.Fatalf("old trace completion reached the new session: %+v", got)
+	default:
+	}
+	lifecycle.stop()
 }
 
 func TestQuitKeyMatchesSingleBindingWithoutPanic(t *testing.T) {
@@ -893,22 +1066,26 @@ func TestRecordKeyStopsActiveRecording(t *testing.T) {
 }
 
 func TestQuitStopsActiveRecording(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
-	m.screen = ScreenDashboard
-	m.attaching = false
+	for _, attaching := range []bool{false, true} {
+		t.Run(fmt.Sprintf("attaching=%t", attaching), func(t *testing.T) {
+			m := NewModel(-1, func(context.Context) error { return nil })
+			m.screen = ScreenDashboard
+			m.attaching = attaching
 
-	path := filepath.Join(t.TempDir(), "capture.parquet")
-	if err := m.startRecording(path); err != nil {
-		t.Fatalf("startRecording() error = %v", err)
-	}
+			path := filepath.Join(t.TempDir(), "capture.parquet")
+			if err := m.startRecording(path); err != nil {
+				t.Fatalf("startRecording() error = %v", err)
+			}
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: "q"})
-	updated := next.(*Model)
-	if cmd == nil {
-		t.Fatalf("expected quit command")
-	}
-	if updated.runtime.Recorder().Status().Active {
-		t.Fatalf("expected quit to stop active recording")
+			next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: "q"})
+			updated := next.(*Model)
+			if cmd == nil {
+				t.Fatalf("expected quit command")
+			}
+			if updated.runtime.Recorder().Status().Active {
+				t.Fatalf("expected quit to stop active recording")
+			}
+		})
 	}
 }
 

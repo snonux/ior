@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/printer"
@@ -441,7 +442,10 @@ func TestTraceInfraCloseRunsEveryCleanupLIFO(t *testing.T) {
 
 	t.Run("a panicking cleanup does not strand the others", func(t *testing.T) {
 		var ran []string
-		infra := &traceInfra{}
+		var logs []string
+		infra := &traceInfra{shutdownLog: func(args ...any) {
+			logs = append(logs, fmt.Sprint(args...))
+		}}
 		infra.onClose(func() { ran = append(ran, "bpf teardown") })
 		infra.onClose(func() { panic("profiling blew up") })
 
@@ -457,17 +461,23 @@ func TestTraceInfraCloseRunsEveryCleanupLIFO(t *testing.T) {
 		if want := []string{"bpf teardown"}; !slices.Equal(ran, want) {
 			t.Errorf("cleanups run = %v, want %v: a panicking cleanup must not take the ones below it with it", ran, want)
 		}
+		if len(logs) != 0 {
+			t.Errorf("shutdown logs = %v, want none: a panicking cleanup must not claim completion", logs)
+		}
 	})
 
 	t.Run("second Close repeats no cleanup", func(t *testing.T) {
-		calls := 0
-		infra := &traceInfra{}
-		infra.onClose(func() { calls++ })
+		var order []string
+		infra := &traceInfra{shutdownLog: func(args ...any) {
+			order = append(order, fmt.Sprint(args...))
+		}}
+		infra.onClose(func() { order = append(order, "cleanup") })
 		infra.Close()
 		infra.Close()
 
-		if calls != 1 {
-			t.Errorf("cleanup ran %d times across two Close calls, want 1: a repeated probe detach or module close is not safe", calls)
+		want := []string{"cleanup", "Shutdown complete."}
+		if !slices.Equal(order, want) {
+			t.Errorf("close order = %v, want %v: completion must follow real cleanup and neither may repeat", order, want)
 		}
 	})
 

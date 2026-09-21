@@ -18,8 +18,15 @@ import (
 // trace so the Model can stop tracing without understanding the context
 // machinery.
 type traceLifecycle struct {
-	startTrace TraceStarter
-	traceStop  context.CancelFunc
+	startTrace       TraceStarter
+	traceStop        context.CancelFunc
+	shutdownReporter *runtime.TraceShutdownReporter
+}
+
+// tracingShutdownProgressMsg carries one progress update from the active
+// trace session back onto Bubble Tea's Update goroutine.
+type tracingShutdownProgressMsg struct {
+	progress runtime.TraceShutdownProgress
 }
 
 // newTraceLifecycle creates a traceLifecycle bound to the given starter.
@@ -35,11 +42,13 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 // beginCmd creates a tea.Cmd that runs the trace starter in a goroutine and
 // returns a TracingStartedMsg or TracingErrorMsg. It also cancels any
 // previously running trace and stores the new cancel function.
-func (t *traceLifecycle) beginCmd(runtime *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
+func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.traceStop = cancel
-	ctx = ContextWithRuntimeBindings(ctx, runtime)
+	t.shutdownReporter = runtime.NewTraceShutdownReporter()
+	ctx = ContextWithRuntimeBindings(ctx, bindings)
 	ctx = ContextWithTraceFilters(ctx, filter)
+	ctx = runtime.ContextWithTraceShutdownReporter(ctx, t.shutdownReporter)
 	return startTraceCmd(ctx, t.startTrace)
 }
 
@@ -49,6 +58,29 @@ func (t *traceLifecycle) stop() {
 	if t.traceStop != nil {
 		t.traceStop()
 		t.traceStop = nil
+	}
+}
+
+// stopAndWaitCmd cancels the active trace and returns a command that waits for
+// this exact session's next shutdown update. A nil reporter means no trace was
+// ever started (for example, quitting directly from the initial PID picker),
+// so there is no cleanup to wait for.
+func (t *traceLifecycle) stopAndWaitCmd() tea.Cmd {
+	t.stop()
+	return t.waitForShutdownCmd()
+}
+
+func (t *traceLifecycle) waitForShutdownCmd() tea.Cmd {
+	reporter := t.shutdownReporter
+	if reporter == nil {
+		return tea.Quit
+	}
+	return waitForTraceShutdownCmd(reporter.Updates())
+}
+
+func waitForTraceShutdownCmd(updates <-chan runtime.TraceShutdownProgress) tea.Cmd {
+	return func() tea.Msg {
+		return tracingShutdownProgressMsg{progress: <-updates}
 	}
 }
 
@@ -75,6 +107,9 @@ func startTraceCmd(ctx context.Context, starter TraceStarter) tea.Cmd {
 // ctx is first per Go convention (context.Context always leads the parameter list).
 func startTraceCmdWithTimeout(ctx context.Context, starter TraceStarter, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
+		if reporter, ok := runtime.TraceShutdownReporterFromContext(ctx); ok {
+			defer reporter.CompleteUnlessClaimed()
+		}
 		type starterResult struct{ err error }
 		ch := make(chan starterResult, 1)
 		go func() {

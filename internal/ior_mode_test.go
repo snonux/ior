@@ -1579,6 +1579,48 @@ func TestTuiTraceStarterKeepsAnOrdinaryStopSilent(t *testing.T) {
 	}
 }
 
+// TestTuiTraceStarterCompletesShutdownOnlyAfterTraceCleanup pins the outer
+// lifecycle seam used by the TUI quit path. The started signal is not a trace
+// completion: after cancellation the UI must keep waiting until the trace
+// function returns from all deferred cleanup.
+func TestTuiTraceStarterCompletesShutdownOnlyAfterTraceCleanup(t *testing.T) {
+	reporter := runtime.NewTraceShutdownReporter()
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	starter := tuiTraceStarterFromRunTrace(
+		flags.NewFlags(),
+		func(ctx context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
+			close(started)
+			<-ctx.Done()
+			close(cleanupStarted)
+			<-releaseCleanup
+			return nil
+		},
+	)
+
+	ctx, cancel := context.WithCancel(runtime.ContextWithTraceShutdownReporter(context.Background(), reporter))
+	if err := starter(ctx); err != nil {
+		t.Fatalf("starter() error = %v, want nil", err)
+	}
+	cancel()
+	<-cleanupStarted
+	select {
+	case got := <-reporter.Updates():
+		t.Fatalf("shutdown completed before cleanup returned: %+v", got)
+	default:
+	}
+
+	close(releaseCleanup)
+	select {
+	case got := <-reporter.Updates():
+		if got.Phase != runtime.TraceShutdownComplete {
+			t.Fatalf("shutdown update = %+v, want complete", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for shutdown completion after cleanup")
+	}
+}
+
 // waitForStreamRowsEventually polls the buffer until it holds want rows, for
 // pushes that happen on the trace goroutine after the starter returned.
 func waitForStreamRowsEventually(t *testing.T, buffer *streamrow.RingBuffer, want int) []streamrow.Row {

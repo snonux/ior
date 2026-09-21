@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"context"
+	"sync"
 
 	"ior/internal/flamegraph"
 	"ior/internal/globalfilter"
@@ -18,6 +19,121 @@ import (
 // TraceStarter starts tracing and returns when startup succeeds or fails.
 // Long-lived tracing work must continue in background goroutines.
 type TraceStarter func(context.Context) error
+
+// TraceShutdownPhase identifies the currently observable phase of a trace
+// session's shutdown. Stopping is indeterminate: the event loop and its
+// workers are draining. Detaching is determinate because the probe manager
+// knows exactly how many active syscall probe pairs it must release.
+type TraceShutdownPhase uint8
+
+const (
+	TraceShutdownStopping TraceShutdownPhase = iota
+	TraceShutdownDetaching
+	TraceShutdownReleasing
+	TraceShutdownComplete
+)
+
+// TraceShutdownProgress is one immutable shutdown-progress update.
+// Completed and Total count active syscall probe pairs, not individual enter
+// and exit links.
+type TraceShutdownProgress struct {
+	Phase     TraceShutdownPhase
+	Completed int
+	Total     int
+}
+
+// TraceShutdownReporter carries progress for exactly one trace session. Its
+// single-slot channel keeps the latest update, so a trace restart that nobody
+// waits on cannot block teardown and a slow renderer cannot backpressure BPF
+// detach. A reporter is never reused across sessions.
+type TraceShutdownReporter struct {
+	mu        sync.Mutex
+	updates   chan TraceShutdownProgress
+	claimed   bool
+	completed bool
+}
+
+// NewTraceShutdownReporter creates a per-session shutdown reporter.
+func NewTraceShutdownReporter() *TraceShutdownReporter {
+	return &TraceShutdownReporter{updates: make(chan TraceShutdownProgress, 1)}
+}
+
+// Updates returns the latest-value progress stream for this session.
+func (r *TraceShutdownReporter) Updates() <-chan TraceShutdownProgress {
+	if r == nil {
+		return nil
+	}
+	return r.updates
+}
+
+// Claim transfers completion ownership from the generic TUI starter command
+// to a starter that keeps long-lived trace work in a background goroutine.
+// It returns false when completion or another claim already won the ownership
+// transition, so a late starter cannot begin work after the TUI has already
+// observed that session as complete.
+func (r *TraceShutdownReporter) Claim() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.claimed || r.completed {
+		return false
+	}
+	r.claimed = true
+	return true
+}
+
+// Publish records progress unless this session has already completed.
+func (r *TraceShutdownReporter) Publish(progress TraceShutdownProgress) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.publishLocked(progress)
+}
+
+func (r *TraceShutdownReporter) publishLocked(progress TraceShutdownProgress) {
+	if r.completed {
+		return
+	}
+	if progress.Phase == TraceShutdownComplete {
+		r.completed = true
+	}
+	select {
+	case r.updates <- progress:
+		return
+	default:
+	}
+	// Keep only the freshest progress. Publish has a single producer per
+	// session, while the TUI is the sole consumer.
+	select {
+	case <-r.updates:
+	default:
+	}
+	r.updates <- progress
+}
+
+// Complete publishes the terminal update for this session.
+func (r *TraceShutdownReporter) Complete() {
+	r.Publish(TraceShutdownProgress{Phase: TraceShutdownComplete})
+}
+
+// CompleteUnlessClaimed completes synchronous/no-op starters. A real trace
+// starter claims the reporter before returning its startup result, then owns
+// completion until its background run and deferred cleanup have both ended.
+func (r *TraceShutdownReporter) CompleteUnlessClaimed() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.claimed || r.completed {
+		return
+	}
+	r.publishLocked(TraceShutdownProgress{Phase: TraceShutdownComplete})
+}
 
 // StreamSource is the minimal stream-buffer contract needed by the tracing
 // engine and the TUI stream view. It mirrors eventstream.Source but is defined
@@ -207,6 +323,10 @@ type runtimeBindingsKey struct{}
 // traceFiltersKey is an unexported context key for trace filter values.
 type traceFiltersKey struct{}
 
+// traceShutdownReporterKey is private so only helpers in this package can
+// install or retrieve the per-session reporter.
+type traceShutdownReporterKey struct{}
+
 // traceFilters wraps a cloned filter stored on the context by the TUI model.
 type traceFilters struct {
 	filter globalfilter.Filter
@@ -216,6 +336,21 @@ type traceFilters struct {
 // a trace starter can retrieve them via RuntimeBindingsFromContext.
 func ContextWithRuntimeBindings(ctx context.Context, bindings TraceRuntimeBindings) context.Context {
 	return context.WithValue(ctx, runtimeBindingsKey{}, bindings)
+}
+
+// ContextWithTraceShutdownReporter stores one trace session's shutdown
+// reporter on ctx.
+func ContextWithTraceShutdownReporter(ctx context.Context, reporter *TraceShutdownReporter) context.Context {
+	return context.WithValue(ctx, traceShutdownReporterKey{}, reporter)
+}
+
+// TraceShutdownReporterFromContext returns the current session's reporter.
+func TraceShutdownReporterFromContext(ctx context.Context) (*TraceShutdownReporter, bool) {
+	reporter, ok := ctx.Value(traceShutdownReporterKey{}).(*TraceShutdownReporter)
+	if !ok || reporter == nil {
+		return nil, false
+	}
+	return reporter, true
 }
 
 // RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the
