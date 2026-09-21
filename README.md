@@ -131,13 +131,13 @@ Parquet (`-parquet`).
 
 Bytes accounting is syscall-specific:
 
-- `ReadClassified`: `fgetxattr`, `flistxattr`, `getdents`, `getdents64`,
-  `getrandom`, `getxattr`, `lgetxattr`, `listxattr`, `llistxattr`,
-  `mq_timedreceive`, `msgrcv`, `pread64`, `preadv`, `preadv2`,
-  `process_vm_readv`, `read`, `readlink`, `readlinkat`, `readv`, `recvfrom`,
-  `recvmsg`, `syslog`
-- `WriteClassified`: `mq_timedsend`, `msgsnd`, `process_vm_writev`, `pwrite64`,
-  `pwritev`, `pwritev2`, `sendmsg`, `sendto`, `write`, `writev`
+- `ReadClassified`: `fgetxattr`, `flistxattr`, `getcwd`, `getdents`,
+  `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`,
+  `listxattr`, `listxattrat`, `llistxattr`, `mq_timedreceive`, `msgrcv`,
+  `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`,
+  `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `sched_getaffinity`, `syslog`
+- `WriteClassified`: `process_vm_writev`, `pwrite64`, `pwritev`, `pwritev2`,
+  `sendmsg`, `sendto`, `write`, `writev`
 - `TransferClassified`: `copy_file_range`, `sendfile64`, `splice`, `tee`,
   `vmsplice`
 - Non-bytes: all remaining traced syscalls
