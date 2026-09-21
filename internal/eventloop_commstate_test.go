@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 )
 
@@ -49,19 +51,55 @@ func TestCommStateWarmCacheMutatorsDoNotAllocate(t *testing.T) {
 	const tid = 4242
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	t.Cleanup(el.shutdownCommResolver)
+
+	// A lookup that reached a worker would clear its pending flag once
+	// resolveFn returned, hiding the enqueue from the check below. Blocking
+	// resolveFn until cleanup keeps every enqueued tid pending (queued or held
+	// by a worker), and the counter records each lookup that started. Cleanups
+	// run last-in first-out, so the workers are released before shutdown
+	// waits for them.
+	var resolveCalls atomic.Int32
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	resolver := el.commState()
+	resolver.resolveFn = func(ctx context.Context, _ uint32) (string, error) {
+		resolveCalls.Add(1)
+		<-release
+		return "", ctx.Err()
+	}
+
 	el.setCachedComm(tid, "warm")
 	// Warm up once outside the measurement: the first queueCommLookup starts
 	// the lookup workers (goroutines, a one-time cost).
 	el.queueCommLookup(tid)
 
-	resolver := el.commState()
+	resolver.mu.RLock()
 	ageBefore := resolver.commAges[tid]
+	resolver.mu.RUnlock()
+
+	if allocs := testing.AllocsPerRun(1000, func() { el.queueCommLookup(tid) }); allocs != 0 {
+		t.Errorf("queueCommLookup(cached tid) on a warm cache allocates %.1f times per call, want 0", allocs)
+	}
+	// Checked right away, before any other call can touch the tid: the calls
+	// above must have taken the refresh-age branch, advancing the LRU age
+	// without queueing a lookup.
+	resolver.mu.RLock()
+	ageAfter := resolver.commAges[tid]
+	_, pending := resolver.pending[tid]
+	queued := len(resolver.lookupQueue)
+	resolver.mu.RUnlock()
+	if ageAfter <= ageBefore {
+		t.Errorf("commAges[%d] = %d, want refreshed past %d", tid, ageAfter, ageBefore)
+	}
+	if pending || queued != 0 || resolveCalls.Load() != 0 {
+		t.Errorf("queueCommLookup on a cached tid queued a lookup: pending=%v queued=%d resolveCalls=%d",
+			pending, queued, resolveCalls.Load())
+	}
 
 	checks := []struct {
 		name string
 		fn   func()
 	}{
-		{"queueCommLookup(cached tid)", func() { el.queueCommLookup(tid) }},
 		{"setCachedCommFromKernel", func() { el.setCachedCommFromKernel(tid, "kernel") }},
 		{"evictCachedComm+setCachedComm", func() {
 			el.evictCachedComm(tid)
@@ -75,15 +113,7 @@ func TestCommStateWarmCacheMutatorsDoNotAllocate(t *testing.T) {
 		}
 	}
 
-	// The measured calls must have taken the intended branches: the cached
-	// tid's age was refreshed without queueing a lookup, and the comm ends up
-	// as the last write left it.
-	if got := resolver.commAges[tid]; got <= ageBefore {
-		t.Errorf("commAges[%d] = %d, want refreshed past %d", tid, got, ageBefore)
-	}
-	if _, pending := resolver.pending[tid]; pending {
-		t.Errorf("queueCommLookup on a cached tid must not queue a lookup")
-	}
+	// The comm ends up as the last write left it.
 	if got, ok := el.cachedComm(tid); !ok || got != "warm" {
 		t.Errorf("cachedComm(%d) = %q, %v; want %q, true", tid, got, ok, "warm")
 	}

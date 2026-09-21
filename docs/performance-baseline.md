@@ -41,14 +41,23 @@ scripts/perf-baseline.sh record my-label     # explicit label
 PERF_COUNT=10 scripts/perf-baseline.sh record
 ```
 
-If the tree differs from `HEAD` outside `perf/`, the recording measures code
-that no commit contains. The label then always gets a `-dirty` suffix, explicit
-labels included, and the header's `commit:` line ends in
-`+uncommitted changes`. Commit first and record from a clean tree.
+If the tree differs from `HEAD` outside `perf/` (tracked changes, or untracked
+files that `.gitignore` does not exclude, since `go test` compiles a new
+uncommitted `.go` file just the same), the recording measures code that no
+commit contains. The label then always gets a `-dirty` suffix, explicit labels
+included, and the header's `commit:` line ends in `+uncommitted changes`.
+Conversely, an explicit label ending in `-dirty` on a clean tree is refused.
+Commit first and record from a clean tree.
+
+An existing `perf/bench-<label>.txt` or `perf/static-<label>.txt` is never
+overwritten silently: the script refuses before any benchmark runs unless
+`PERF_FORCE=1` is set. If `HEAD` cannot be resolved, the default label cannot
+be derived and the script fails; pass an explicit label.
 
 Settings come from the environment: `PERF_COUNT` (samples per benchmark, default
 8), `PERF_BENCHTIME` (default `1s`), `PERF_BENCH` (benchmark regexp, default the
-focused set) and `LIBBPFGO` (default `../libbpfgo`). A full recording takes
+focused set), `LIBBPFGO` (default `../libbpfgo`) and `PERF_FORCE` (`1`
+overwrites an existing baseline of the same label). A full recording takes
 roughly ten minutes.
 
 Record on an idle machine. The header stores the load average at the start so a
