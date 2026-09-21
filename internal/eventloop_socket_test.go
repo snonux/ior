@@ -57,7 +57,7 @@ func TestHandleSocketExitMasksTypeAndTracksCreationFlags(t *testing.T) {
 		t.Fatal("handleSocketExit returned false")
 	}
 	verifyFileDescriptor(t, el, 42, 55, "socket:2:1:0")
-	verifySocketDescriptorFlags(t, el, 42, 55, syscall.O_NONBLOCK|syscall.O_CLOEXEC)
+	verifySocketDescriptorFlags(t, el, 42, 55, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC)
 }
 
 func TestHandleSocketExitAppliesPairFilter(t *testing.T) {
@@ -160,7 +160,7 @@ func TestHandleSocketpairExitMasksTypeAndTracksCreationFlags(t *testing.T) {
 	}
 	for _, fd := range []int32{61, 62} {
 		verifyFileDescriptor(t, el, 77, fd, "socket:1:1:0")
-		verifySocketDescriptorFlags(t, el, 77, fd, syscall.O_NONBLOCK|syscall.O_CLOEXEC)
+		verifySocketDescriptorFlags(t, el, 77, fd, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC)
 	}
 }
 
@@ -287,7 +287,7 @@ func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 		t.Fatal("handleAcceptExit returned false")
 	}
 	verifyFileDescriptor(t, el, 91, 77, "socket:1:1:0")
-	verifySocketDescriptorFlags(t, el, 91, 77, syscall.O_NONBLOCK|syscall.O_CLOEXEC)
+	verifySocketDescriptorFlags(t, el, 91, 77, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC)
 }
 
 func TestHandleAcceptExitDoesNotInheritListeningFlags(t *testing.T) {
@@ -306,7 +306,7 @@ func TestHandleAcceptExitDoesNotInheritListeningFlags(t *testing.T) {
 	if ok := el.handleAcceptExit(ep, enter); !ok {
 		t.Fatal("handleAcceptExit returned false")
 	}
-	verifySocketDescriptorFlags(t, el, 91, 77, 0)
+	verifySocketDescriptorFlags(t, el, 91, 77, syscall.O_RDWR)
 }
 
 func TestHandleLegacyAccept4ExitKeepsFlagsUnknown(t *testing.T) {

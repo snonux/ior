@@ -1885,6 +1885,8 @@ func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
 		}
 		if ep.File == nil {
 			t.Errorf("Expected io_uring fd to be tracked")
+		} else if got := ep.File.Flags(); got != file.Flags(syscall.O_RDWR|syscall.O_CLOEXEC) {
+			t.Errorf("Expected io_uring fd flags %v, got %v", file.Flags(syscall.O_RDWR|syscall.O_CLOEXEC), got)
 		}
 		if _, ok := el.fdState().files[fdKey(defaultPid, 48)]; !ok {
 			t.Errorf("Expected io_uring fd 48 to be tracked")
