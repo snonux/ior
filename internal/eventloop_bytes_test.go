@@ -10,63 +10,96 @@ import (
 func TestBytesFromRet(t *testing.T) {
 	tests := []struct {
 		name     string
-		retEvent *types.RetEvent
+		pair     *event.Pair
 		expected uint64
 	}{
-		{name: "nil", retEvent: nil, expected: 0},
+		{name: "nil pair", pair: nil, expected: 0},
+		{name: "nil exit", pair: &event.Pair{}, expected: 0},
 		{
 			name: "negative",
-			retEvent: &types.RetEvent{
+			pair: &event.Pair{ExitEv: &types.RetEvent{
 				Ret:     -1,
 				RetType: types.READ_CLASSIFIED,
-			},
+			}},
 			expected: 0,
 		},
 		{
 			name: "zero",
-			retEvent: &types.RetEvent{
+			pair: &event.Pair{ExitEv: &types.RetEvent{
 				Ret:     0,
 				RetType: types.READ_CLASSIFIED,
-			},
+			}},
 			expected: 0,
 		},
 		{
 			name: "unclassified",
-			retEvent: &types.RetEvent{
+			pair: &event.Pair{ExitEv: &types.RetEvent{
 				Ret:     512,
 				RetType: types.UNCLASSIFIED,
-			},
+			}},
 			expected: 0,
 		},
 		{
 			name: "read",
-			retEvent: &types.RetEvent{
+			pair: &event.Pair{ExitEv: &types.RetEvent{
 				Ret:     128,
 				RetType: types.READ_CLASSIFIED,
-			},
+			}},
 			expected: 128,
 		},
 		{
 			name: "write",
-			retEvent: &types.RetEvent{
+			pair: &event.Pair{ExitEv: &types.RetEvent{
 				Ret:     256,
 				RetType: types.WRITE_CLASSIFIED,
-			},
+			}},
 			expected: 256,
 		},
 		{
 			name: "transfer",
-			retEvent: &types.RetEvent{
+			pair: &event.Pair{ExitEv: &types.RetEvent{
 				Ret:     1024,
 				RetType: types.TRANSFER_CLASSIFIED,
-			},
+			}},
 			expected: 1024,
+		},
+		{
+			name: "path xattr zero-size probe",
+			pair: &event.Pair{
+				EnterEv: &types.PathEvent{Size: 0, SizeValid: 1},
+				ExitEv:  &types.RetEvent{Ret: 128, RetType: types.READ_CLASSIFIED},
+			},
+			expected: 0,
+		},
+		{
+			name: "fd xattr zero-size probe",
+			pair: &event.Pair{
+				EnterEv: &types.FdEvent{Size: 0, SizeValid: 1},
+				ExitEv:  &types.RetEvent{Ret: 128, RetType: types.READ_CLASSIFIED},
+			},
+			expected: 0,
+		},
+		{
+			name: "legacy xattr payload with unknown size",
+			pair: &event.Pair{
+				EnterEv: &types.PathEvent{Size: 0, SizeValid: 0},
+				ExitEv:  &types.RetEvent{Ret: 128, RetType: types.READ_CLASSIFIED},
+			},
+			expected: 128,
+		},
+		{
+			name: "xattr data read",
+			pair: &event.Pair{
+				EnterEv: &types.PathEvent{Size: 256, SizeValid: 1},
+				ExitEv:  &types.RetEvent{Ret: 128, RetType: types.READ_CLASSIFIED},
+			},
+			expected: 128,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := bytesFromRet(tt.retEvent); got != tt.expected {
+			if got := bytesFromRet(tt.pair); got != tt.expected {
 				t.Errorf("bytesFromRet() = %d, want %d", got, tt.expected)
 			}
 		})

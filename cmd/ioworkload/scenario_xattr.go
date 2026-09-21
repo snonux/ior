@@ -333,6 +333,27 @@ func xattrGetxattr() error {
 	return nil
 }
 
+// xattrGetxattrSizeProbe queries the required value capacity without supplying
+// an output buffer. The syscall returns the positive attribute length but
+// copies no bytes; ior must therefore report zero bytes for this row.
+func xattrGetxattrSizeProbe() error {
+	value := []byte("getxattr-size-probe-value")
+	path, cleanup, err := makeXattrFile("xattr-getxattr-size-probe", value)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	n, err := unix.Getxattr(path, xattrName, nil)
+	if err != nil {
+		return fmt.Errorf("getxattr size probe: %w", err)
+	}
+	if n != len(value) {
+		return fmt.Errorf("getxattr size probe returned %d, want %d", n, len(value))
+	}
+	return nil
+}
+
 // xattrLgetxattr is the no-follow counterpart of xattrGetxattr. lgetxattr(2)
 // does NOT follow symlinks, but since the target path is a regular file (not a
 // symlink) it behaves identically to getxattr and returns the value size — this

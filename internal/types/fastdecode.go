@@ -23,14 +23,18 @@ const (
 	openNameFixupEventSize       = 268
 	execEventSize                = 304
 	nullEventSize                = 24
-	fdEventSize                  = 32
-	fdEventSizeV1                = 28
+	fdEventSize                  = 48
+	fdEventCompactSize           = 44
+	fdEventLegacyKernelSize      = 32
+	fdEventLegacyCompactSize     = 28
 	retEventSize                 = 40
 	retEventSizeV1               = 36
 	nameEventSize                = 560
 	nameEventLegacySize          = 536
-	pathEventSize                = 304
-	pathEventCompactSize         = 300
+	pathEventSize                = 312
+	pathEventCompactSize         = 312
+	pathEventV3KernelSize        = 304
+	pathEventV3CompactSize       = 300
 	pathEventLegacySize          = 280
 	fdPathEventSize              = 304
 	fdPathEventCompactSize       = 300
@@ -191,11 +195,13 @@ func NewNullEventFast(raw []byte) *NullEvent {
 // payload size does not match the size constant(s) above. Returns nil
 // for a short payload.
 func NewFdEventFast(raw []byte) *FdEvent {
-	if len(raw) < fdEventSizeV1 {
+	if len(raw) < fdEventLegacyCompactSize {
 		return nil
 	}
-	if len(raw) != fdEventSize && len(raw) != fdEventSizeV1 {
-		return NewFdEvent(raw)
+	legacy := len(raw) == fdEventLegacyCompactSize || len(raw) == fdEventLegacyKernelSize
+	current := len(raw) == fdEventCompactSize || len(raw) == fdEventSize
+	if !legacy && !current {
+		return nil
 	}
 	f := poolOfFdEvents.Get().(*FdEvent)
 	f.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -204,6 +210,22 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	f.Size = 0
+	f.SizeValid = 0
+	f.SchemaVersion = 0
+	if current {
+		sizeOffset := 28
+		if len(raw) == fdEventSize {
+			sizeOffset = 32
+		}
+		f.Size = binary.LittleEndian.Uint64(raw[sizeOffset : sizeOffset+8])
+		f.SizeValid = binary.LittleEndian.Uint32(raw[sizeOffset+8 : sizeOffset+12])
+		f.SchemaVersion = binary.LittleEndian.Uint32(raw[sizeOffset+12 : sizeOffset+16])
+		if f.SchemaVersion != FD_EVENT_SCHEMA_VERSION {
+			f.Recycle()
+			return nil
+		}
+	}
 	return f
 }
 
@@ -282,8 +304,9 @@ func NewPathEventFast(raw []byte) *PathEvent {
 		return nil
 	}
 	legacy := len(raw) == pathEventLegacySize
+	v3 := len(raw) == pathEventV3CompactSize || len(raw) == pathEventV3KernelSize
 	current := len(raw) == pathEventCompactSize || len(raw) == pathEventSize
-	if !legacy && !current {
+	if !legacy && !v3 && !current {
 		return nil
 	}
 	p := poolOfPathEvents.Get().(*PathEvent)
@@ -296,15 +319,25 @@ func NewPathEventFast(raw []byte) *PathEvent {
 	p.Dirfd = legacyPathDirfd
 	p.PathnameStatus = PATH_READ_OK
 	p.TargetStatus = PATH_TARGET_REQUIRED
-	if current {
+	p.Size = 0
+	p.SizeValid = 0
+	if v3 || current {
 		p.Dirfd = int32(binary.LittleEndian.Uint32(raw[280:284]))
 		p.PathnameStatus = binary.LittleEndian.Uint32(raw[284:288])
 		p.Flags = binary.LittleEndian.Uint32(raw[288:292])
 		p.SchemaVersion = binary.LittleEndian.Uint32(raw[292:296])
 		p.TargetStatus = binary.LittleEndian.Uint32(raw[296:300])
-		if p.SchemaVersion != PATH_EVENT_SCHEMA_VERSION {
+		wantSchema := uint32(3)
+		if current {
+			wantSchema = PATH_EVENT_SCHEMA_VERSION
+		}
+		if p.SchemaVersion != wantSchema {
 			p.Recycle()
 			return nil
+		}
+		if current {
+			p.SizeValid = binary.LittleEndian.Uint32(raw[300:304])
+			p.Size = binary.LittleEndian.Uint64(raw[304:312])
 		}
 	} else {
 		p.Flags = 0

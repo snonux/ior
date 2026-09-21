@@ -88,10 +88,13 @@
 // and append new fields so userspace can distinguish legacy payloads by size.
 // dirfd alone would still collide with the legacy 304-byte kernel layout. The
 // schema version, filename status and reserved word make the final v3 layout
-// 320 bytes. Intermediate development layouts were never released and are not
+// 320 bytes. fd_event v1 appends requested-size metadata to its legacy 28/32-
+// byte layout. path_event v4 appends the same metadata to its v3 300/304-byte
+// layout. Intermediate development layouts were never released and are not
 // part of the decoder compatibility contract.
 #define OPEN_EVENT_SCHEMA_VERSION 3
-#define PATH_EVENT_SCHEMA_VERSION 3
+#define FD_EVENT_SCHEMA_VERSION 1
+#define PATH_EVENT_SCHEMA_VERSION 4
 #define NAME_EVENT_SCHEMA_VERSION 2
 #define EVENTFD_EVENT_SCHEMA_VERSION 2
 // accept_event v1 appends flags and a discriminator after ret. Keeping the
@@ -152,6 +155,9 @@ struct fd_event {
     __u32 pid;
     __u32 tid;
     __s32 fd;
+    __u64 size;
+    __u32 size_valid;
+    __u32 schema_version;
 };
 
 struct ret_event {
@@ -192,6 +198,8 @@ struct path_event {
     __u32 flags;
     __u32 schema_version;
     __u32 target_status;
+    __u32 size_valid;
+    __u64 size;
 };
 
 // Notification group fd and watched pathname are different identities. Keep

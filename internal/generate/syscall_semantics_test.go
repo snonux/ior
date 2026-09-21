@@ -94,8 +94,7 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"close":           {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"close_range":     {kind: "two-fd", args: map[string]int{"extra": 2, "fd_a": 0, "fd_b": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"connect":         {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network"},
-	// TODO(q4): delete temporary when transfer attribution consistently uses the destination fd.
-	"copy_file_range": {kind: "fd", args: map[string]int{"fd": 2}, ret: "TRANSFER_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
+	"copy_file_range": {kind: "fd", args: map[string]int{"fd": 2}, ret: "TRANSFER_CLASSIFIED", family: "FS"},
 	"creat":           {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"delete_module":   {kind: "module", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Security"},
 	"dup":             {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
@@ -137,20 +136,19 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"fanotify_mark": {
 		kind: "fd-pathname", args: map[string]int{"dirfd": 3, "fd": 0, "flags": 1, "pathname": 4}, ret: "UNCLASSIFIED", family: "IPC",
 	},
-	"fchdir":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"fchmod":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"fchmodat":  {kind: "pathname", args: map[string]int{"dirfd": 0, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"fchmodat2": {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 3, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"fchown":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"fchownat":  {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"fcntl":     {kind: "fcntl", args: map[string]int{"arg": 2, "cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"fdatasync": {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	// TODO(q4): delete the xattr temporaryArgs overrides when size-probe inputs are captured.
-	"fgetxattr":       {kind: "fd", args: map[string]int{"fd": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
+	"fchdir":          {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fchmod":          {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fchmodat":        {kind: "pathname", args: map[string]int{"dirfd": 0, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	"fchmodat2":       {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 3, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	"fchown":          {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fchownat":        {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	"fcntl":           {kind: "fcntl", args: map[string]int{"arg": 2, "cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fdatasync":       {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fgetxattr":       {kind: "fd", args: map[string]int{"fd": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS"},
 	"file_getattr":    {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"file_setattr":    {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"finit_module":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Security"},
-	"flistxattr":      {kind: "fd", args: map[string]int{"fd": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
+	"flistxattr":      {kind: "fd", args: map[string]int{"fd": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS"},
 	"flock":           {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"fork":            {kind: "proc", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
 	"fremovexattr":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
@@ -197,12 +195,9 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"gettid":       {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
 	"gettimeofday": {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Time"},
 	"getuid":       {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
-	"getxattr":     {kind: "pathname", args: map[string]int{"pathname": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"pathname": 0})},
+	"getxattr":     {kind: "pathname", args: map[string]int{"pathname": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS"},
 	"getxattrat": {
 		kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1, "size": 4}, ret: "READ_CLASSIFIED", family: "FS",
-		temporary: &temporarySyscallSemantics{task: "q4", current: syscallSemantics{
-			args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1},
-		}},
 	},
 	"init_module": {kind: "module", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Security"},
 	"inotify_add_watch": {
@@ -234,20 +229,17 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"landlock_create_ruleset": {kind: "eventfd", args: map[string]int{"flags": 2}, ret: "UNCLASSIFIED", family: "Security"},
 	"landlock_restrict_self":  {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Security"},
 	"lchown":                  {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"lgetxattr":               {kind: "pathname", args: map[string]int{"pathname": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"pathname": 0})},
+	"lgetxattr":               {kind: "pathname", args: map[string]int{"pathname": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS"},
 	"link":                    {kind: "name", args: map[string]int{"newname": 1, "oldname": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"linkat":                  {kind: "name", args: map[string]int{"flags": 4, "newdirfd": 2, "newname": 3, "olddirfd": 0, "oldname": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"listen":                  {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network"},
 	"listmount":               {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "FS"},
 	"listns":                  {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "FS"},
-	"listxattr":               {kind: "pathname", args: map[string]int{"pathname": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"pathname": 0})},
+	"listxattr":               {kind: "pathname", args: map[string]int{"pathname": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS"},
 	"listxattrat": {
 		kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1, "size": 4}, ret: "READ_CLASSIFIED", family: "FS",
-		temporary: &temporarySyscallSemantics{task: "q4", current: syscallSemantics{
-			args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1},
-		}},
 	},
-	"llistxattr":        {kind: "pathname", args: map[string]int{"pathname": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"pathname": 0})},
+	"llistxattr":        {kind: "pathname", args: map[string]int{"pathname": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS"},
 	"lremovexattr":      {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"lseek":             {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"lsetxattr":         {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
@@ -428,7 +420,7 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"signalfd4":               {kind: "eventfd", args: map[string]int{"fd": 0, "flags": 3}, ret: "UNCLASSIFIED", family: "IPC"},
 	"socket":                  {kind: "socket", args: map[string]int{"family": 0, "protocol": 2, "type": 1}, ret: "UNCLASSIFIED", family: "Network"},
 	"socketpair":              {kind: "socketpair", args: map[string]int{"family": 0, "protocol": 2, "type": 1, "usockvec": 3}, ret: "UNCLASSIFIED", family: "Network"},
-	"splice":                  {kind: "fd", args: map[string]int{"fd": 2}, ret: "TRANSFER_CLASSIFIED", family: "Network", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
+	"splice":                  {kind: "fd", args: map[string]int{"fd": 2}, ret: "TRANSFER_CLASSIFIED", family: "Network"},
 	"statfs":                  {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"statmount":               {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "FS"},
 	"statx":                   {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
@@ -441,14 +433,10 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"syncfs":                  {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"sysfs":                   {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"sysinfo":                 {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
-	// TODO(q4): delete temporary when syslog stops classifying status/size returns as bytes read.
 	"syslog": {
 		kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc",
-		temporary: &temporarySyscallSemantics{task: "q4", current: syscallSemantics{
-			ret: "READ_CLASSIFIED",
-		}},
 	},
-	"tee":              {kind: "fd", args: map[string]int{"fd": 1}, ret: "TRANSFER_CLASSIFIED", family: "Network", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
+	"tee":              {kind: "fd", args: map[string]int{"fd": 1}, ret: "TRANSFER_CLASSIFIED", family: "Network"},
 	"tgkill":           {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Signals"},
 	"time":             {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Time"},
 	"timer_create":     {kind: "timer-obj", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Time"},
@@ -630,8 +618,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "direct capture after submission",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "read",
-					"    ev->fd = (__s32)ctx->args[0];\n\n    bpf_ringbuf_submit(ev, 0);",
-					"    bpf_ringbuf_submit(ev, 0);\n\n    ev->fd = (__s32)ctx->args[0];")
+					"    ev->fd = (__s32)ctx->args[0];\n    ev->size_valid = 0;\n    ev->size = 0;\n    ev->schema_version = FD_EVENT_SCHEMA_VERSION;\n\n    bpf_ringbuf_submit(ev, 0);",
+					"    ev->size_valid = 0;\n    ev->size = 0;\n    ev->schema_version = FD_EVENT_SCHEMA_VERSION;\n    bpf_ringbuf_submit(ev, 0);\n\n    ev->fd = (__s32)ctx->args[0];")
 			},
 		},
 		{
@@ -1718,6 +1706,9 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 		if err := validateSchemaVersionWrite(name, pair.enter); err != nil {
 			return nil, err
 		}
+		if err := validateRequestedSizeInitialization(name, pair.enter); err != nil {
+			return nil, err
+		}
 		if err := validatePathTargetStatus(name, pair.enter); err != nil {
 			return nil, err
 		}
@@ -1761,7 +1752,7 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 }
 
 // validateSchemaVersionWrite pins the ABI discriminator in every committed
-// open/path/name/accept handler. This deliberately checks the rendered artifact, not
+// fd/open/path/name/accept handler. This deliberately checks the rendered artifact, not
 // only generator snippets, because newer-kernel-only handlers may be preserved
 // manually when mage generate is run on an older host.
 func validateSchemaVersionWrite(name, body string) error {
@@ -1771,6 +1762,7 @@ func validateSchemaVersionWrite(name, body string) error {
 		return fmt.Errorf("sys_enter_%s has no event struct", name)
 	}
 	want, ok := map[string]string{
+		"fd_event":     "FD_EVENT_SCHEMA_VERSION",
 		"open_event":   "OPEN_EVENT_SCHEMA_VERSION",
 		"path_event":   "PATH_EVENT_SCHEMA_VERSION",
 		"name_event":   "NAME_EVENT_SCHEMA_VERSION",
@@ -1786,6 +1778,29 @@ func validateSchemaVersionWrite(name, body string) error {
 		return fmt.Errorf("sys_enter_%s %s writes schema_version %d times with %d exact %s assignments, want 1/1", name, match[1], len(writes), len(exact), want)
 	}
 	return validateBeforeSubmit("sys_enter_"+name, body, exact[0][1])
+}
+
+// validateRequestedSizeInitialization pins deterministic initialization of
+// the fd/path ABI tail for every committed handler. Only xattr reads overwrite
+// these defaults with captured metadata, but all handlers reserve the expanded
+// structs and therefore must initialize every byte submitted to the ringbuf.
+func validateRequestedSizeInitialization(name, body string) error {
+	body = stripCComments(body)
+	match := eventStructRE.FindStringSubmatch(body)
+	if match == nil || (match[1] != "fd_event" && match[1] != "path_event") {
+		return nil
+	}
+	for field, value := range map[string]string{"size_valid": "0", "size": "0"} {
+		exactRE := regexp.MustCompile(`(?m)^\s*ev->` + field + `\s*=\s*` + value + `\s*;`)
+		exact := exactRE.FindAllStringIndex(body, -1)
+		if len(exact) != 1 {
+			return fmt.Errorf("sys_enter_%s %s initializes %s to %s %d times, want 1", name, match[1], field, value, len(exact))
+		}
+		if err := validateBeforeSubmit("sys_enter_"+name, body, exact[0][1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validatePathTargetStatus(name, body string) error {
@@ -2219,10 +2234,22 @@ func requireLocalEventEmission(name, pendingField, local, eventField, exitBody s
 func validateDirectCaptureAssignments(name, enterBody string, directMatches [][]string) error {
 	for _, match := range directMatches {
 		writes := cLValueWriteLocations(enterBody, "ev->"+match[1])
-		if len(writes) != 1 {
-			return fmt.Errorf("sys_enter_%s writes captured field %s %d times, want 1", name, match[1], len(writes))
+		wantWrites := 1
+		if match[1] == "size" {
+			// Requested size has one deterministic unknown/default write and one
+			// direct xattr-size capture. Keeping both visible to the oracle makes
+			// deletion of either mutation-sensitive.
+			wantWrites = 2
+			zeroRE := regexp.MustCompile(`(?m)^\s*ev->size\s*=\s*0\s*;`)
+			zero := zeroRE.FindAllStringIndex(enterBody, -1)
+			if len(zero) != 1 || (len(writes) > 0 && zero[0][0] != writes[0][0]) {
+				return fmt.Errorf("sys_enter_%s size capture has %d leading zero initializers, want 1", name, len(zero))
+			}
 		}
-		if err := validateBeforeSubmit("sys_enter_"+name, enterBody, writes[0][1]); err != nil {
+		if len(writes) != wantWrites {
+			return fmt.Errorf("sys_enter_%s writes captured field %s %d times, want %d", name, match[1], len(writes), wantWrites)
+		}
+		if err := validateBeforeSubmit("sys_enter_"+name, enterBody, writes[len(writes)-1][1]); err != nil {
 			return err
 		}
 	}

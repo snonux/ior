@@ -351,31 +351,16 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// fd_event. This lets the runtime honour the upper bound and the
 	// CLOSE_RANGE_CLOEXEC flag instead of closing every fd >= first.
 	"sys_enter_close_range": KindTwoFd,
-	// sendfile64(out_fd, in_fd, offset, count) transfers bytes between two file
-	// descriptors inside the kernel and returns the number of bytes written to
-	// out_fd (TransferClassified, see retClassifications). Its tracepoint fields
-	// (out_fd, in_fd, offset, count) carry no field literally named "fd", so
-	// without an explicit override it would fall through to KindNull and capture
-	// no descriptor at all — unlike its sibling copy_file_range, which is a
-	// KindFd event. Capture out_fd (args[0], the destination the bytes are
-	// written to) so sendfile64 attributes its transfer to a concrete fd, matching
-	// the single-fd KindFd convention used for copy_file_range and the
-	// read/write/sendto/recvfrom families.
+	// The transfer cohort uses a single-fd payload and consistently captures its
+	// destination descriptor. The per-syscall argument slots live in
+	// fdArgumentOverrides; these name-only entries keep syscalls without a field
+	// literally named "fd" from falling through to KindNull.
 	"sys_enter_sendfile64": KindFd,
-	// splice(fd_in, off_in, fd_out, off_out, len, flags) and
-	// tee(fdin, fdout, len, flags) are in-kernel transfers between two
-	// EXISTING file descriptors (TransferClassified, see retClassifications),
-	// exactly like copy_file_range/sendfile64. Their arg0 is the source fd
-	// named "fd_in"/"fdin" — not literally "fd" — so the generic field matcher
-	// (classifyByField) leaves them at KindNull, capturing NO descriptor and
-	// dropping the fds they operate on. Classify them KindFd to capture the
-	// source fd at args[0], matching the single-fd KindFd convention already
-	// used for copy_file_range and sendfile64.
-	"sys_enter_splice":    KindFd,
-	"sys_enter_tee":       KindFd,
-	"sys_enter_statmount": KindNull,
-	"sys_enter_listmount": KindNull,
-	"sys_enter_listns":    KindNull,
+	"sys_enter_splice":     KindFd,
+	"sys_enter_tee":        KindFd,
+	"sys_enter_statmount":  KindNull,
+	"sys_enter_listmount":  KindNull,
+	"sys_enter_listns":     KindNull,
 
 	"sys_enter_poll":     KindPoll,
 	"sys_enter_ppoll":    KindPoll,
@@ -739,8 +724,10 @@ var retClassifications = map[string]RetClassification{
 	"sched_getaffinity": ReadClassified,
 	"msgrcv":            ReadClassified,
 	"getrandom":         ReadClassified,
-	"syslog":            ReadClassified,
-	"mq_timedreceive":   ReadClassified,
+	// syslog has action-dependent return semantics: only actions 2/3/4 return
+	// bytes copied, while 9/10 return required sizes and the remaining actions
+	// return status. Keep it unclassified until its action is part of the event.
+	"mq_timedreceive": ReadClassified,
 
 	"copy_file_range": TransferClassified,
 	"sendfile64":      TransferClassified,

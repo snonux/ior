@@ -192,6 +192,23 @@ func TestXattrGetxattr(t *testing.T) {
 	assertEventDurationPositive(t, result, exp)
 }
 
+// TestXattrGetxattrSizeProbe verifies a positive getxattr(2) return is not
+// counted as bytes copied when the caller supplied a zero-length output buffer.
+func TestXattrGetxattrSizeProbe(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "xattr-getxattr-size-probe", []ExpectedEvent{
+		{
+			PathContains: "xattrfile.txt",
+			Tracepoint:   "enter_getxattr",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	}, xattrGetTraceArgs)
+
+	exp := ExpectedEvent{Tracepoint: "enter_getxattr", Comm: "ioworkload"}
+	assertEventBytesEqual(t, result, exp, 0)
+	assertEventDurationPositive(t, result, exp)
+}
+
 // TestXattrLgetxattr verifies ior traces the no-follow PATH-based lgetxattr(2)
 // end-to-end. lgetxattr has getxattr's signature but does NOT follow symlinks;
 // the workload targets a regular file, so it returns the value size (user.*

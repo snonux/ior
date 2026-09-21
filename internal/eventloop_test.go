@@ -600,12 +600,13 @@ func makeExitOpenEvent(t *testing.T, time uint64, pid, tid uint32) (types.RetEve
 // Helper functions for FdEvent
 func makeEnterFdEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, traceId types.TraceId) (types.FdEvent, []byte) {
 	ev := types.FdEvent{
-		EventType: types.ENTER_FD_EVENT,
-		TraceId:   traceId,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Fd:        fd,
+		EventType:     types.ENTER_FD_EVENT,
+		TraceId:       traceId,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Fd:            fd,
+		SchemaVersion: types.FD_EVENT_SCHEMA_VERSION,
 	}
 
 	bytes, err := ev.Bytes()
@@ -617,12 +618,13 @@ func makeEnterFdEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, trac
 
 func makeExitFdEvent(t *testing.T, time uint64, pid, tid uint32, fd int32, traceId types.TraceId) (types.FdEvent, []byte) {
 	ev := types.FdEvent{
-		EventType: types.EXIT_FD_EVENT,
-		TraceId:   traceId,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Fd:        fd,
+		EventType:     types.EXIT_FD_EVENT,
+		TraceId:       traceId,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Fd:            fd,
+		SchemaVersion: types.FD_EVENT_SCHEMA_VERSION,
 	}
 
 	bytes, err := ev.Bytes()

@@ -135,7 +135,7 @@ Bytes accounting is syscall-specific:
   `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`,
   `listxattr`, `listxattrat`, `llistxattr`, `mq_timedreceive`, `msgrcv`,
   `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`,
-  `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `sched_getaffinity`, `syslog`
+  `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `sched_getaffinity`
 - `WriteClassified`: `process_vm_writev`, `pwrite64`, `pwritev`, `pwritev2`,
   `sendmsg`, `sendto`, `write`, `writev`
 - `TransferClassified`: `copy_file_range`, `sendfile64`, `splice`, `tee`,
