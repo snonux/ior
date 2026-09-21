@@ -24,6 +24,9 @@ const (
 	memfdCloexecFlag     = int32(1)
 	fsopenCloexecFlag    = int32(1)
 	fsmountCloexecFlag   = int32(1)
+	// Linux reserves the low four bits of socket(2)'s type word for the
+	// descriptor kind; SOCK_NONBLOCK and SOCK_CLOEXEC live above this mask.
+	linuxSocketTypeMask = int32(0xf)
 )
 
 type eventfdFlagMasks struct {
@@ -521,7 +524,7 @@ func (e *eventLoop) handleSocketExit(ep *event.Pair, socketEv *types.SocketEvent
 	}
 
 	if fd := int32(retEvent.Ret); fd >= 0 {
-		fdFile := file.NewFd(fd, socketDescriptorName(socketEv.Family, socketEv.Type, socketEv.Protocol), -1)
+		fdFile := file.NewFd(fd, socketDescriptorName(socketEv.Family, socketEv.Type, socketEv.Protocol), socketOpenFlags(socketEv.Type))
 		e.fdState().set(fd, socketEv.Pid, fdFile)
 		ep.File = fdFile
 	}
@@ -551,12 +554,12 @@ func (e *eventLoop) handleSocketpairExit(ep *event.Pair, socketpairEv *types.Soc
 
 	if exitEv.Ret == 0 {
 		if exitEv.Sv0 >= 0 {
-			fdFile := file.NewFd(exitEv.Sv0, socketDescriptorName(family, typ, protocol), -1)
+			fdFile := file.NewFd(exitEv.Sv0, socketDescriptorName(family, typ, protocol), socketOpenFlags(typ))
 			e.fdState().set(exitEv.Sv0, socketpairEv.Pid, fdFile)
 			ep.File = fdFile
 		}
 		if exitEv.Sv1 >= 0 {
-			fdFile := file.NewFd(exitEv.Sv1, socketDescriptorName(family, typ, protocol), -1)
+			fdFile := file.NewFd(exitEv.Sv1, socketDescriptorName(family, typ, protocol), socketOpenFlags(typ))
 			e.fdState().set(exitEv.Sv1, socketpairEv.Pid, fdFile)
 			if ep.File == nil {
 				ep.File = fdFile
@@ -576,7 +579,7 @@ func (e *eventLoop) handleAcceptExit(ep *event.Pair, acceptEv *types.AcceptEvent
 
 	listening := e.fdState().resolve(acceptEv.Fd, acceptEv.Pid)
 	if fd := int32(exitEv.Ret); fd >= 0 {
-		fdFile := file.NewFd(fd, acceptedSocketDescriptorName(listening), -1)
+		fdFile := file.NewFd(fd, acceptedSocketDescriptorName(listening), acceptOpenFlags(acceptEv))
 		e.fdState().set(fd, acceptEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
@@ -587,7 +590,32 @@ func (e *eventLoop) handleAcceptExit(ep *event.Pair, acceptEv *types.AcceptEvent
 }
 
 func socketDescriptorName(family, typ, protocol int32) string {
-	return fmt.Sprintf("socket:%d:%d:%d", family, typ, protocol)
+	return fmt.Sprintf("socket:%d:%d:%d", family, typ&linuxSocketTypeMask, protocol)
+}
+
+func socketOpenFlags(rawType int32) int32 {
+	return socketCreationFlags(rawType)
+}
+
+func acceptOpenFlags(acceptEv *types.AcceptEvent) int32 {
+	if acceptEv.GetTraceId() == types.SYS_ENTER_ACCEPT {
+		return 0
+	}
+	if acceptEv.Flags < 0 {
+		return -1
+	}
+	return socketCreationFlags(acceptEv.Flags)
+}
+
+func socketCreationFlags(rawFlags int32) int32 {
+	var flags int32
+	if rawFlags&syscall.SOCK_NONBLOCK != 0 {
+		flags |= syscall.O_NONBLOCK
+	}
+	if rawFlags&syscall.SOCK_CLOEXEC != 0 {
+		flags |= syscall.O_CLOEXEC
+	}
+	return flags
 }
 
 func acceptedSocketDescriptorName(listening file.File) string {

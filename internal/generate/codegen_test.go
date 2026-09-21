@@ -1822,15 +1822,29 @@ func TestGenerateSocketpairHandler(t *testing.T) {
 
 func TestGenerateAcceptHandler(t *testing.T) {
 	output := generateFromPair(t, FormatAccept, FormatExitAccept)
+	exitBody := handlerBody(t, output, "sys_exit_accept")
 
 	requireContains(t, output, "struct accept_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_ACCEPT_EVENT;")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "ev->flags = 0;")
+	requireContains(t, output, "ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
 	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_accept\")")
 	requireContains(t, output, "ev->event_type = EXIT_ACCEPT_EVENT;")
 	requireContains(t, output, "ev->fd = -1;")
 	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, exitBody, "ev->flags = -1;\n    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
+}
+
+func TestGenerateAccept4CapturesCreationFlags(t *testing.T) {
+	output := generateFromPair(t, FormatAccept4, FormatExitAccept4)
+	exitBody := handlerBody(t, output, "sys_exit_accept4")
+
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->flags = (__s32)ctx->args[3];")
+	requireContains(t, output, "ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
+	requireContains(t, exitBody, "ev->flags = -1;\n    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
 }
 
 func TestGeneratePipeHandler(t *testing.T) {

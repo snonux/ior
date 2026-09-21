@@ -138,6 +138,7 @@ const OPEN_EVENT_SCHEMA_VERSION = 3
 const PATH_EVENT_SCHEMA_VERSION = 3
 const NAME_EVENT_SCHEMA_VERSION = 2
 const EVENTFD_EVENT_SCHEMA_VERSION = 2
+const ACCEPT_EVENT_SCHEMA_VERSION = 1
 const TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION = 2
 const TWO_FD_EVENT_SCHEMA_VERSION = 3
 const FD_PATH_EVENT_SCHEMA_VERSION = 1
@@ -1868,17 +1869,19 @@ func (s *SocketpairEvent) Recycle() {
 }
 
 type AcceptEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Fd        int32
-	Ret       int64
+	EventType     EventType
+	TraceId       TraceId
+	Time          uint64
+	Pid           uint32
+	Tid           uint32
+	Fd            int32
+	Ret           int64
+	Flags         int32
+	SchemaVersion uint32
 }
 
 func (a AcceptEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Ret:%v", a.EventType, a.TraceId, a.Time, a.Pid, a.Tid, a.Fd, a.Ret)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Ret:%v Flags:%v SchemaVersion:%v", a.EventType, a.TraceId, a.Time, a.Pid, a.Tid, a.Fd, a.Ret, a.Flags, a.SchemaVersion)
 }
 
 func (a AcceptEvent) Equals(other any) bool {
@@ -1886,7 +1889,7 @@ func (a AcceptEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return a.EventType == otherConcrete.EventType && a.TraceId == otherConcrete.TraceId && a.Time == otherConcrete.Time && a.Pid == otherConcrete.Pid && a.Tid == otherConcrete.Tid && a.Fd == otherConcrete.Fd && a.Ret == otherConcrete.Ret
+	return a.EventType == otherConcrete.EventType && a.TraceId == otherConcrete.TraceId && a.Time == otherConcrete.Time && a.Pid == otherConcrete.Pid && a.Tid == otherConcrete.Tid && a.Fd == otherConcrete.Fd && a.Ret == otherConcrete.Ret && a.Flags == otherConcrete.Flags && a.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (a *AcceptEvent) GetEventType() EventType {

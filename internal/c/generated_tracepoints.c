@@ -1012,6 +1012,8 @@ int handle_sys_enter_accept4(struct syscall_trace_enter *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
     ev->ret = -1;
+    ev->flags = (__s32)ctx->args[3];
+    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1040,6 +1042,8 @@ int handle_sys_exit_accept4(struct syscall_trace_exit *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = -1;
     ev->ret = ctx->ret;
+    ev->flags = -1;
+    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1068,6 +1072,8 @@ int handle_sys_enter_accept(struct syscall_trace_enter *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = (__s32)ctx->args[0];
     ev->ret = -1;
+    ev->flags = 0;
+    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1096,6 +1102,8 @@ int handle_sys_exit_accept(struct syscall_trace_exit *ctx) {
     ev->time = bpf_ktime_get_boot_ns();
     ev->fd = -1;
     ev->ret = ctx->ret;
+    ev->flags = -1;
+    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

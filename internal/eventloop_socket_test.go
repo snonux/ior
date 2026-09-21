@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"syscall"
 	"testing"
 
 	"ior/internal/event"
@@ -36,6 +37,27 @@ func TestHandleSocketExitTracksReturnedFd(t *testing.T) {
 		t.Fatal("handleSocketExit returned false")
 	}
 	verifyFileDescriptor(t, el, 42, 55, "socket:1:2:0")
+}
+
+func TestHandleSocketExitMasksTypeAndTracksCreationFlags(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	rawType := int32(syscall.SOCK_STREAM | syscall.SOCK_NONBLOCK | syscall.SOCK_CLOEXEC)
+	enter := &types.SocketEvent{
+		EventType: types.ENTER_SOCKET_EVENT,
+		TraceId:   types.SYS_ENTER_SOCKET,
+		Pid:       42,
+		Tid:       43,
+		Family:    syscall.AF_INET,
+		Type:      rawType,
+	}
+	exit := &types.RetEvent{TraceId: types.SYS_EXIT_SOCKET, Ret: 55, Pid: 42, Tid: 43}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleSocketExit(ep, enter); !ok {
+		t.Fatal("handleSocketExit returned false")
+	}
+	verifyFileDescriptor(t, el, 42, 55, "socket:2:1:0")
+	verifySocketDescriptorFlags(t, el, 42, 55, syscall.O_NONBLOCK|syscall.O_CLOEXEC)
 }
 
 func TestHandleSocketExitAppliesPairFilter(t *testing.T) {
@@ -106,6 +128,40 @@ func TestHandleSocketpairExitTracksReturnedFdsFromExitEvent(t *testing.T) {
 	}
 	verifyFileDescriptor(t, el, 77, 61, "socket:1:1:0")
 	verifyFileDescriptor(t, el, 77, 62, "socket:1:1:0")
+}
+
+func TestHandleSocketpairExitMasksTypeAndTracksCreationFlags(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	rawType := int32(syscall.SOCK_STREAM | syscall.SOCK_NONBLOCK | syscall.SOCK_CLOEXEC)
+	enter := &types.SocketpairEvent{
+		EventType: types.ENTER_SOCKETPAIR_EVENT,
+		TraceId:   types.SYS_ENTER_SOCKETPAIR,
+		Pid:       77,
+		Tid:       78,
+		Family:    syscall.AF_UNIX,
+		Type:      rawType,
+		Sv0:       -1,
+		Sv1:       -1,
+	}
+	exit := &types.SocketpairEvent{
+		EventType: types.EXIT_SOCKETPAIR_EVENT,
+		TraceId:   types.SYS_EXIT_SOCKETPAIR,
+		Pid:       77,
+		Tid:       78,
+		Family:    syscall.AF_UNIX,
+		Type:      rawType,
+		Sv0:       61,
+		Sv1:       62,
+	}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleSocketpairExit(ep, enter); !ok {
+		t.Fatal("handleSocketpairExit returned false")
+	}
+	for _, fd := range []int32{61, 62} {
+		verifyFileDescriptor(t, el, 77, fd, "socket:1:1:0")
+		verifySocketDescriptorFlags(t, el, 77, fd, syscall.O_NONBLOCK|syscall.O_CLOEXEC)
+	}
 }
 
 // TestHandleSocketpairExitDoesNotTrackDomainAsFd is a regression lock-in for the
@@ -214,6 +270,7 @@ func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 		Tid:       92,
 		Fd:        11,
 		Ret:       -1,
+		Flags:     syscall.SOCK_NONBLOCK | syscall.SOCK_CLOEXEC,
 	}
 	exit := &types.AcceptEvent{
 		EventType: types.EXIT_ACCEPT_EVENT,
@@ -230,6 +287,46 @@ func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 		t.Fatal("handleAcceptExit returned false")
 	}
 	verifyFileDescriptor(t, el, 91, 77, "socket:1:1:0")
+	verifySocketDescriptorFlags(t, el, 91, 77, syscall.O_NONBLOCK|syscall.O_CLOEXEC)
+}
+
+func TestHandleAcceptExitDoesNotInheritListeningFlags(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(11, 91, file.NewFd(11, "socket:1:1:0", syscall.O_NONBLOCK|syscall.O_CLOEXEC))
+	enter := &types.AcceptEvent{
+		EventType: types.ENTER_ACCEPT_EVENT,
+		TraceId:   types.SYS_ENTER_ACCEPT,
+		Pid:       91,
+		Tid:       92,
+		Fd:        11,
+	}
+	exit := &types.AcceptEvent{EventType: types.EXIT_ACCEPT_EVENT, TraceId: types.SYS_EXIT_ACCEPT, Ret: 77}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleAcceptExit(ep, enter); !ok {
+		t.Fatal("handleAcceptExit returned false")
+	}
+	verifySocketDescriptorFlags(t, el, 91, 77, 0)
+}
+
+func TestHandleLegacyAccept4ExitKeepsFlagsUnknown(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(11, 91, file.NewFd(11, "socket:1:1:0", syscall.O_NONBLOCK))
+	enter := &types.AcceptEvent{
+		EventType: types.ENTER_ACCEPT_EVENT,
+		TraceId:   types.SYS_ENTER_ACCEPT4,
+		Pid:       91,
+		Tid:       92,
+		Fd:        11,
+		Flags:     -1,
+	}
+	exit := &types.AcceptEvent{EventType: types.EXIT_ACCEPT_EVENT, TraceId: types.SYS_EXIT_ACCEPT4, Ret: 77}
+	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+	if ok := el.handleAcceptExit(ep, enter); !ok {
+		t.Fatal("handleAcceptExit returned false")
+	}
+	verifySocketDescriptorFlags(t, el, 91, 77, -1)
 }
 
 func TestHandleAcceptExitAppliesPairFilter(t *testing.T) {
@@ -282,5 +379,16 @@ func TestInitRawHandlersRegistersSocketEvents(t *testing.T) {
 	}
 	if _, ok := el.rawHandlers[types.EXIT_ACCEPT_EVENT]; !ok {
 		t.Fatal("EXIT_ACCEPT_EVENT handler is not registered")
+	}
+}
+
+func verifySocketDescriptorFlags(t *testing.T, el *eventLoop, pid uint32, fd int32, want int32) {
+	t.Helper()
+	tracked, ok := el.fdState().get(fd, pid)
+	if !ok {
+		t.Fatalf("pid %d fd %d was not tracked", pid, fd)
+	}
+	if got := int32(tracked.Flags()); got != want {
+		t.Fatalf("pid %d fd %d flags = %#x, want %#x", pid, fd, got, want)
 	}
 }
