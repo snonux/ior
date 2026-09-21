@@ -711,6 +711,10 @@ func (e *eventLoop) handlePollExit(ep *event.Pair, pollEv *types.PollEvent) bool
 }
 
 func (e *eventLoop) handleTwoFdExit(ep *event.Pair, twoFdEv *types.TwoFdEvent) bool {
+	if ep.Is(types.SYS_ENTER_KCMP) {
+		e.applyKcmpFile(ep, twoFdEv)
+		return e.finishPairForTid(ep, twoFdEv.GetTid())
+	}
 	if ep.Is(types.SYS_ENTER_MOVE_MOUNT) {
 		// The legacy two_fd payload predates pathname capture. Preserve its
 		// original source-fd attribution rather than manufacturing two empty

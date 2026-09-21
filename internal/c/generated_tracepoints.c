@@ -16904,9 +16904,9 @@ int handle_sys_enter_kcmp(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    ev->fd_a = (__s32)ctx->args[3];
-    ev->fd_b = (__s32)ctx->args[4];
-    ev->extra = (__u64)ctx->args[2];
+    ev->fd_a = (__u32)ctx->args[2] == 0 ? (__s32)ctx->args[3] : -1;
+    ev->fd_b = (__u32)ctx->args[2] == 0 ? (__s32)ctx->args[4] : -1;
+    ev->extra = ((__u64)(ior_kcmp_pid_is_current((__s32)ctx->args[0]) ? pid : 0) << 32) | (__u32)ctx->args[2];
     __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     ev->oldname_status = PATH_READ_NULL;
     ev->newname_status = PATH_READ_NULL;

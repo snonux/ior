@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -11,6 +13,40 @@ import (
 )
 
 const processExecEmitFor = 2 * time.Second
+
+func processKcmpFile() error { return processKcmp(0) }
+
+func processKcmpVM() error { return processKcmp(1) }
+
+// processKcmp compares this process with itself. Both variants deliberately
+// pass an open descriptor as each index: KCMP_FILE must report that file,
+// while KCMP_VM must ignore the same otherwise-valid descriptor numbers.
+func processKcmp(comparison uintptr) error {
+	dir, cleanup, err := makeTempDir("process-kcmp")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	fd, err := syscall.Open(filepath.Join(dir, "kcmp-target"), syscall.O_RDWR|syscall.O_CREAT, 0o600)
+	if err != nil {
+		return fmt.Errorf("open kcmp target: %w", err)
+	}
+	defer syscall.Close(fd)
+	pid := uintptr(os.Getpid())
+	ret, _, errno := syscall.RawSyscall6(unix.SYS_KCMP, pid, pid, comparison, uintptr(fd), uintptr(fd), 0)
+	// Checkpoint/restore support and ptrace policy vary by host. Even a
+	// denied comparison still produces operands whose attribution is testable.
+	if errno == syscall.EPERM || errno == syscall.ENOSYS {
+		return nil
+	}
+	if errno != 0 {
+		return fmt.Errorf("kcmp type %d: %w", comparison, errno)
+	}
+	if ret != 0 {
+		return fmt.Errorf("kcmp type %d returned %d, want equality", comparison, ret)
+	}
+	return nil
+}
 
 func processExecLifecycle() error {
 	deadline := time.Now().Add(processExecEmitFor)

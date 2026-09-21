@@ -607,7 +607,8 @@ func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 		t.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])
 		t.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])
 		t.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])
-		if t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {
+		if t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION &&
+			t.SchemaVersion != TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION {
 			t.Recycle()
 			return nil
 		}

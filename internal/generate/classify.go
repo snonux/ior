@@ -64,7 +64,7 @@ const (
 	// KindEpollCtl carries epfd, op, target fd and events.
 	KindEpollCtl
 	// KindTwoFd carries two descriptor numbers: close_range's first/last
-	// bounds, move_mount's from/to fds, and kcmp's two queried fds.
+	// bounds, move_mount's from/to fds, and kcmp's KCMP_FILE indices.
 	KindTwoFd
 	// KindPoll carries the polled fd count and timeout.
 	KindPoll

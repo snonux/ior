@@ -717,6 +717,21 @@ func TestTwoFdCodecsAcceptOnlyReviewedLayouts(t *testing.T) {
 			})
 		}
 
+		for _, size := range []int{twoFdCompactSize, twoFdEventSize} {
+			t.Run(decoder.name+"/pre-kcmp-owner/"+fmt.Sprint(size), func(t *testing.T) {
+				raw := append([]byte(nil), current[:size]...)
+				binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION)
+				ev := decoder.fn(raw)
+				if ev == nil {
+					t.Fatalf("pre-owner schema %d-byte payload did not decode", size)
+				}
+				defer ev.Recycle()
+				if ev.SchemaVersion != TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION {
+					t.Fatalf("unexpected pre-owner decode: %#v", ev)
+				}
+			})
+		}
+
 		t.Run(decoder.name+"/legacy", func(t *testing.T) {
 			ev := decoder.fn(legacy)
 			if ev == nil {

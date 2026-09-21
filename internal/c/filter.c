@@ -3,6 +3,40 @@
 #define ACCEPT 0
 #define FILTER 1
 #define IOR_HISTOGRAM_BUCKETS 8
+#define IOR_MAX_PID_NS_LEVEL 32
+
+// Return the current thread group's PID as seen in its active PID namespace.
+// bpf_get_current_pid_tgid() reports the kernel's host TGID, while syscall PID
+// arguments are interpreted in the caller's namespace. Follow the signal
+// struct's TGID pid (the backing object used by the kernel's task_tgid()) to
+// its innermost namespace number so kcmp can prove a self comparison while the
+// caller is still alive at sys_enter.
+static __always_inline __u32 ior_current_namespace_tgid(void) {
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    struct signal_struct *signal;
+    struct pid *tgid_pid;
+    __u32 level;
+    __s32 tgid;
+
+    signal = BPF_CORE_READ(task, signal);
+    if (!signal)
+        return 0;
+    tgid_pid = BPF_CORE_READ(signal, pids[PIDTYPE_TGID]);
+    if (!tgid_pid)
+        return 0;
+    level = BPF_CORE_READ(tgid_pid, level);
+    if (level > IOR_MAX_PID_NS_LEVEL)
+        return 0;
+    if (bpf_core_read(&tgid, sizeof(tgid), &tgid_pid->numbers[level].nr))
+        return 0;
+    return tgid > 0 ? (__u32)tgid : 0;
+}
+
+static __always_inline int ior_kcmp_pid_is_current(__s32 pid1) {
+    if (pid1 <= 0)
+        return 0;
+    return (__u32)pid1 == ior_current_namespace_tgid();
+}
 
 // ior_count_ringbuf_drop records one event lost to a full event_map ring
 // buffer. Every generated tracepoint handler calls it on the
