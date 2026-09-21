@@ -1,7 +1,6 @@
 package file
 
 import (
-	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,35 +13,43 @@ import (
 // could not be determined from procfs.
 type Flags int32
 
+// linuxOLargefile is the Linux amd64 kernel flag exposed by F_GETFL and
+// /proc/<pid>/fdinfo. The userspace O_LARGEFILE constant is zero on amd64,
+// so neither syscall.O_LARGEFILE nor unix.O_LARGEFILE can identify this bit.
+const linuxOLargefile = 0x8000
+
 var flagsToHumanCache sync.Map
 var unknownFlag = Flags(-1)
 
-type tuple struct {
-	syscallNr int
-	str       string
+type flagName struct {
+	mask  int
+	value int
+	name  string
 }
 
-var flagsToHuman = []tuple{
-	{-1, "O_NONE"},
-	{syscall.O_RDONLY, "O_RDONLY"},
-	{syscall.O_WRONLY, "O_WRONLY"},
-	{syscall.O_RDWR, "O_RDWR"},
-	{syscall.O_ACCMODE, "O_ACCMODE"},
-	{syscall.O_APPEND, "O_APPEND"},
-	{syscall.O_ASYNC, "O_ASYNC"},
-	{syscall.O_CLOEXEC, "O_CLOEXEC"},
-	{syscall.O_CREAT, "O_CREAT"},
-	{syscall.O_DIRECT, "O_DIRECT"},
-	{syscall.O_DIRECTORY, "O_DIRECTORY"},
-	{syscall.O_DSYNC, "O_DSYNC"},
-	{syscall.O_EXCL, "O_EXCL"},
-	{syscall.O_NOATIME, "O_NOATIME"},
-	{syscall.O_NOCTTY, "O_NOCTTY"},
-	{syscall.O_NOFOLLOW, "O_NOFOLLOW"},
-	{syscall.O_NONBLOCK, "O_NONBLOCK"},
-	{unix.O_PATH, "O_PATH"},
-	{syscall.O_SYNC, "O_SYNC"},
-	{syscall.O_TRUNC, "O_TRUNC"},
+var flagsToHuman = []flagName{
+	{mask: syscall.O_ACCMODE, value: syscall.O_WRONLY, name: "O_WRONLY"},
+	{mask: syscall.O_ACCMODE, value: syscall.O_RDWR, name: "O_RDWR"},
+	{mask: syscall.O_ACCMODE, value: syscall.O_ACCMODE, name: "O_ACCMODE"},
+	{mask: syscall.O_APPEND, value: syscall.O_APPEND, name: "O_APPEND"},
+	{mask: syscall.O_ASYNC, value: syscall.O_ASYNC, name: "O_ASYNC"},
+	{mask: syscall.O_CLOEXEC, value: syscall.O_CLOEXEC, name: "O_CLOEXEC"},
+	{mask: syscall.O_CREAT, value: syscall.O_CREAT, name: "O_CREAT"},
+	{mask: syscall.O_DIRECT, value: syscall.O_DIRECT, name: "O_DIRECT"},
+	// Broader masks distinguish each composite from its subset; list it first.
+	{mask: unix.O_TMPFILE, value: unix.O_TMPFILE, name: "O_TMPFILE"},
+	{mask: unix.O_TMPFILE, value: syscall.O_DIRECTORY, name: "O_DIRECTORY"},
+	{mask: syscall.O_SYNC, value: syscall.O_SYNC, name: "O_SYNC"},
+	{mask: syscall.O_SYNC, value: syscall.O_DSYNC, name: "O_DSYNC"},
+	{mask: syscall.O_EXCL, value: syscall.O_EXCL, name: "O_EXCL"},
+	{mask: linuxOLargefile, value: linuxOLargefile, name: "O_LARGEFILE"},
+	{mask: syscall.O_NOATIME, value: syscall.O_NOATIME, name: "O_NOATIME"},
+	{mask: syscall.O_NOCTTY, value: syscall.O_NOCTTY, name: "O_NOCTTY"},
+	{mask: syscall.O_NOFOLLOW, value: syscall.O_NOFOLLOW, name: "O_NOFOLLOW"},
+	// O_NDELAY is the same bit on Linux, so use the canonical O_NONBLOCK name.
+	{mask: syscall.O_NONBLOCK, value: syscall.O_NONBLOCK, name: "O_NONBLOCK"},
+	{mask: unix.O_PATH, value: unix.O_PATH, name: "O_PATH"},
+	{mask: syscall.O_TRUNC, value: syscall.O_TRUNC, name: "O_TRUNC"},
 }
 
 // Is reports whether every bit of flag is set in the word. An unknown
@@ -74,21 +81,18 @@ func (f Flags) BuildString(sb *strings.Builder) {
 }
 
 // String renders the flag word as a pipe-separated list of open(2) flag
-// names ("O_RDONLY|O_CREAT"), or "O_NONE" for the unknown word.
+// names ("O_RDWR|O_CREAT"), or "O_NONE" for the unknown word. Because
+// O_RDONLY is zero, it is emitted only when no nonzero flag name matches.
 func (f Flags) String() string {
 	var strs []string
 
-	if f == -1 {
+	if f == unknownFlag {
 		return "O_NONE"
 	}
 
-	if int(f)&(os.O_WRONLY|os.O_RDWR|unix.O_PATH) == 0 {
-		// Must be read only then
-		strs = append(strs, "O_RDONLY")
-	}
-	for _, toHuman := range flagsToHuman[2:] {
-		if int(f)&toHuman.syscallNr == toHuman.syscallNr {
-			strs = append(strs, toHuman.str)
+	for _, toHuman := range flagsToHuman {
+		if int(f)&toHuman.mask == toHuman.value {
+			strs = append(strs, toHuman.name)
 		}
 	}
 	if len(strs) == 0 {
