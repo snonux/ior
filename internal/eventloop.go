@@ -75,11 +75,17 @@ type eventLoop struct {
 	// the TUI can swap filters in place via SetFilter without tearing down
 	// and reattaching the BPF probes (the previous behavior caused a multi-
 	// second 'Attaching tracepoints' overlay every time the filter changed).
-	filterPtr       atomic.Pointer[globalfilter.Filter]
-	pairs           pairTracker           // enter/exit pairing state and inter-syscall duration tracking
-	pendingHandles  *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
-	fdTracker       *fdTracker            // fd table and procfs resolution cache
-	commResolver    *commResolver
+	filterPtr      atomic.Pointer[globalfilter.Filter]
+	pairs          pairTracker           // enter/exit pairing state and inter-syscall duration tracking
+	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
+	fdTracker      *fdTracker            // fd table and procfs resolution cache
+	commResolver   *commResolver
+	// commWired is the resolver commState last completed and wired to this
+	// loop's warning sink. While it still equals commResolver, commState
+	// skips that one-time wiring: evaluating the method value
+	// e.notifyWarning heap-allocates a closure, and commState runs several
+	// times per event.
+	commWired       *commResolver
 	outputFormatter // pair-emission and warning-notification callbacks (embedded collaborator)
 	rawHandlers     map[types.EventType]rawEventHandler
 	exitHandlers    map[types.EventType]runtimeExitHandler
@@ -210,12 +216,25 @@ func (e *eventLoop) pendingHandleState() *pendingHandleTracker {
 	return e.pendingHandles
 }
 
+// commState returns the loop's comm resolver, creating and wiring it on first
+// use. The wiring (the resolver completing its own invariants, then taking the
+// loop's warning sink unless it already has one) runs once per resolver
+// instance: the hot path is a single pointer comparison, and a resolver
+// swapped in later (tests do this) is still wired on its first use.
 func (e *eventLoop) commState() *commResolver {
+	if r := e.commResolver; r != nil && r == e.commWired {
+		return r
+	}
+	return e.wireCommState()
+}
+
+func (e *eventLoop) wireCommState() *commResolver {
 	if e.commResolver == nil {
 		e.commResolver = newCommResolver(nil)
 	}
 	e.commResolver.ensureInitialized()
 	e.commResolver.setDefaultWarningFn(e.notifyWarning)
+	e.commWired = e.commResolver
 	return e.commResolver
 }
 
