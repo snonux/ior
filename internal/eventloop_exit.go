@@ -642,18 +642,35 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 	if flags == 0 {
 		flags = eventfdEv.Flags
 	}
+	identity := ""
+	identityKnown := eventfdEv.FilenameStatus == types.PATH_READ_OK
+	if identityKnown {
+		identity = types.StringValue(eventfdEv.Filename[:])
+	}
+	descriptorName := eventfdDescriptorName(eventfdEv.GetTraceId(), flags, identity, identityKnown)
 	if fd := int32(exitEv.Ret); fd >= 0 {
 		if eventfdReusesExistingFD(eventfdEv.GetTraceId(), eventfdEv.Fd) {
 			ep.File = e.fdState().resolve(fd, eventfdEv.Pid)
+		} else if eventfdEv.GetTraceId() == types.SYS_ENTER_FSMOUNT && eventfdEv.Fd >= 0 {
+			source := e.fdState().resolve(eventfdEv.Fd, eventfdEv.Pid)
+			identity := source.Name()
+			if identity == "" {
+				identity = eventfdDescriptorName(eventfdEv.GetTraceId(), flags, "", false)
+			}
+			fdFile := file.NewFd(fd, identity, eventfdOpenFlags(eventfdEv.GetTraceId(), flags))
+			e.fdState().set(fd, eventfdEv.Pid, fdFile)
+			ep.File = fdFile
 		} else {
 			fdFile := file.NewFd(
 				fd,
-				eventfdDescriptorName(eventfdEv.GetTraceId(), flags),
+				descriptorName,
 				eventfdOpenFlags(eventfdEv.GetTraceId(), flags),
 			)
 			e.fdState().set(fd, eventfdEv.Pid, fdFile)
 			ep.File = fdFile
 		}
+	} else if identityKnown && eventfdCarriesIdentity(eventfdEv.GetTraceId()) {
+		ep.File = file.NewPathname([]byte(descriptorName))
 	}
 	ep.Comm = e.comm(eventfdEv.GetTid())
 	return e.finishPair(ep)
@@ -694,11 +711,34 @@ func (e *eventLoop) handlePollExit(ep *event.Pair, pollEv *types.PollEvent) bool
 }
 
 func (e *eventLoop) handleTwoFdExit(ep *event.Pair, twoFdEv *types.TwoFdEvent) bool {
+	if ep.Is(types.SYS_ENTER_MOVE_MOUNT) {
+		// The legacy two_fd payload predates pathname capture. Preserve its
+		// original source-fd attribution rather than manufacturing two empty
+		// pathnames from absent fields.
+		if twoFdEv.SchemaVersion == 0 {
+			ep.File = e.fdState().resolve(twoFdEv.FdA, twoFdEv.Pid)
+			return e.finishPairForTid(ep, twoFdEv.GetTid())
+		}
+		e.applyMoveMountPaths(ep, twoFdEv)
+		return e.finishPairForTid(ep, twoFdEv.GetTid())
+	}
 	ep.File = e.fdState().resolve(twoFdEv.FdA, twoFdEv.Pid)
 	if ep.Is(types.SYS_ENTER_CLOSE_RANGE) {
 		e.applyCloseRangeState(ep, twoFdEv)
 	}
 	return e.finishPairForTid(ep, twoFdEv.GetTid())
+}
+
+func (e *eventLoop) applyMoveMountPaths(ep *event.Pair, ev *types.TwoFdEvent) {
+	succeeded := retEventSucceeded(ep)
+	oldname := e.resolveCapturedDirfdPath(ev.FdA, ev.Pid,
+		types.StringValue(ev.Oldname[:]), ev.OldnameStatus,
+		succeeded && ev.Extra&unix.MOVE_MOUNT_F_EMPTY_PATH != 0).Name()
+	newname := e.resolveCapturedDirfdPath(ev.FdB, ev.Pid,
+		types.StringValue(ev.Newname[:]), ev.NewnameStatus,
+		succeeded && ev.Extra&unix.MOVE_MOUNT_T_EMPTY_PATH != 0).Name()
+	ep.File = file.NewOldnameNewname([]byte(oldname), []byte(newname))
+	ep.Oldname = oldname
 }
 
 // closeRangeCloexec mirrors CLOSE_RANGE_CLOEXEC from <linux/close_range.h>: when
@@ -768,7 +808,7 @@ func pipeDescriptorName(flags, fd0, fd1 int32) string {
 	return fmt.Sprintf("pipe:%d:%d:%d", flags, fd0, fd1)
 }
 
-func eventfdDescriptorName(traceID types.TraceId, flags int32) string {
+func eventfdDescriptorName(traceID types.TraceId, flags int32, identity string, identityKnown bool) string {
 	switch traceID {
 	case types.SYS_ENTER_EPOLL_CREATE, types.SYS_ENTER_EPOLL_CREATE1:
 		return fmt.Sprintf("epollfd:%d", flags)
@@ -779,9 +819,15 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32) string {
 	case types.SYS_ENTER_LANDLOCK_CREATE_RULESET:
 		return fmt.Sprintf("landlockfd:%d", flags)
 	case types.SYS_ENTER_FSOPEN:
-		return fmt.Sprintf("fsopenfd:%d", flags)
+		if !identityKnown {
+			return fmt.Sprintf("fsopenfd:%d", flags)
+		}
+		return "fsopen:" + identity
 	case types.SYS_ENTER_MEMFD_CREATE:
-		return fmt.Sprintf("memfd:%d", flags)
+		if !identityKnown {
+			return fmt.Sprintf("memfd:%d", flags)
+		}
+		return "memfd:" + identity
 	case types.SYS_ENTER_MEMFD_SECRET:
 		return fmt.Sprintf("memfd-secret:%d", flags)
 	case types.SYS_ENTER_USERFAULTFD:
@@ -794,6 +840,86 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32) string {
 		return fmt.Sprintf("pidfd:%d", flags)
 	default:
 		return fmt.Sprintf("eventfd:%d", flags)
+	}
+}
+
+func eventfdCarriesIdentity(traceID types.TraceId) bool {
+	return traceID == types.SYS_ENTER_MEMFD_CREATE || traceID == types.SYS_ENTER_FSOPEN
+}
+
+const (
+	bpfMapCreate         = uint32(0)
+	bpfProgLoad          = uint32(5)
+	bpfObjGet            = uint32(7)
+	bpfProgGetFdByID     = uint32(13)
+	bpfMapGetFdByID      = uint32(14)
+	bpfRawTracepointOpen = uint32(17)
+	bpfBtfLoad           = uint32(18)
+	bpfBtfGetFdByID      = uint32(19)
+	bpfLinkCreate        = uint32(28)
+	bpfLinkGetFdByID     = uint32(30)
+	bpfEnableStats       = uint32(32)
+	bpfIterCreate        = uint32(33)
+	bpfTokenCreate       = uint32(36)
+)
+
+func (e *eventLoop) handleBpfExit(ep *event.Pair, bpfEv *types.BpfEvent) bool {
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed bpf exit event")
+		return false
+	}
+	if fd := int32(retEvent.Ret); fd >= 0 && bpfCommandReturnsFD(bpfEv.Cmd) {
+		resolved := file.NewFdWithPid(fd, bpfEv.Pid)
+		fdFile := file.NewFd(fd, "bpf:"+bpfCommandName(bpfEv.Cmd), int32(resolved.Flags()))
+		e.fdState().set(fd, bpfEv.Pid, fdFile)
+		ep.File = fdFile
+	}
+	ep.Comm = e.comm(bpfEv.GetTid())
+	return e.finishPair(ep)
+}
+
+func bpfCommandReturnsFD(cmd uint32) bool {
+	switch cmd {
+	case bpfMapCreate, bpfProgLoad, bpfObjGet, bpfProgGetFdByID, bpfMapGetFdByID,
+		bpfRawTracepointOpen, bpfBtfLoad, bpfBtfGetFdByID, bpfLinkCreate,
+		bpfLinkGetFdByID, bpfEnableStats, bpfIterCreate, bpfTokenCreate:
+		return true
+	default:
+		return false
+	}
+}
+
+func bpfCommandName(cmd uint32) string {
+	switch cmd {
+	case bpfMapCreate:
+		return "map_create"
+	case bpfProgLoad:
+		return "prog_load"
+	case bpfObjGet:
+		return "obj_get"
+	case bpfProgGetFdByID:
+		return "prog_get_fd_by_id"
+	case bpfMapGetFdByID:
+		return "map_get_fd_by_id"
+	case bpfRawTracepointOpen:
+		return "raw_tracepoint_open"
+	case bpfBtfLoad:
+		return "btf_load"
+	case bpfBtfGetFdByID:
+		return "btf_get_fd_by_id"
+	case bpfLinkCreate:
+		return "link_create"
+	case bpfLinkGetFdByID:
+		return "link_get_fd_by_id"
+	case bpfEnableStats:
+		return "enable_stats"
+	case bpfIterCreate:
+		return "iter_create"
+	case bpfTokenCreate:
+		return "token_create"
+	default:
+		return fmt.Sprintf("cmd_%d", cmd)
 	}
 }
 

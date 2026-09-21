@@ -21,8 +21,8 @@ func TestMountFsManagementSyscalls(t *testing.T) {
 	runScenarioResultWithIorArgs(t, "mountfs-management", []ExpectedEvent{
 		{Tracepoint: "enter_mount", MinCount: 1},
 		{Tracepoint: "enter_umount", MinCount: 1},
-		{Tracepoint: "enter_move_mount", MinCount: 1},
-		{Tracepoint: "enter_fsopen", MinCount: 1},
+		{Tracepoint: "enter_move_mount", PathContains: "move-mount-destination", MinCount: 1},
+		{Tracepoint: "enter_fsopen", PathContains: "fsopen:tmpfs", MinCount: 1},
 		// fsconfig (KindFd), fspick (KindPathname), and the open_tree family are
 		// best-effort new-mount-API calls in the scenario. Their sys_enter_
 		// tracepoints fire on kernel entry regardless of permission/validity, so

@@ -110,6 +110,7 @@ func runtimeEventKinds() []runtimeEventKind {
 		{enterEventType: types.ENTER_KEYCTL_EVENT, exit: typedRuntimeExit((*eventLoop).handleKeyctlExit)},
 		{enterEventType: types.ENTER_PTRACE_EVENT, exit: typedRuntimeExit((*eventLoop).handlePtraceExit)},
 		{enterEventType: types.ENTER_PERF_OPEN_EVENT, exit: typedRuntimeExit((*eventLoop).handlePerfOpenExit)},
+		{enterEventType: types.ENTER_BPF_EVENT, exit: typedRuntimeExit((*eventLoop).handleBpfExit)},
 		{enterEventType: types.ENTER_NULL_EVENT, exit: typedRuntimeExit((*eventLoop).handleNullExit)},
 		{enterEventType: types.ENTER_FCNTL_EVENT, exit: typedRuntimeExit((*eventLoop).handleFcntlExit)},
 	}
@@ -148,6 +149,7 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_KEYCTL_EVENT, rawDecoder[types.KeyctlEvent](types.NewKeyctlEventFast), nil),
 		enterRaw(types.ENTER_PTRACE_EVENT, rawDecoder[types.PtraceEvent](types.NewPtraceEventFast), nil),
 		enterRaw(types.ENTER_PERF_OPEN_EVENT, rawDecoder[types.PerfOpenEvent](types.NewPerfOpenEventFast), nil),
+		enterRaw(types.ENTER_BPF_EVENT, rawDecoder[types.BpfEvent](types.NewBpfEvent), nil),
 		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExecEvent)),
 		// sched:sched_process_exit reports the tgid of an exiting task so the

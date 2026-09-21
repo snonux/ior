@@ -72,15 +72,14 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 			kind: "accept", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network",
 		}},
 	},
-	"access":     {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"acct":       {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "Misc"},
-	"add_key":    {kind: "keyctl", args: map[string]int{"key_serial": 4, "value": 3}, ret: "UNCLASSIFIED", family: "Security"},
-	"adjtimex":   {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Time"},
-	"alarm":      {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Time"},
-	"arch_prctl": {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
-	"bind":       {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network"},
-	// TODO(s4): delete temporary when bpf captures the command used to name returned fds.
-	"bpf":             {kind: "bpf", args: map[string]int{"cmd": 0}, ret: "UNCLASSIFIED", family: "Security", temporary: temporaryArgs("s4", map[string]int{})},
+	"access":          {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"acct":            {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "Misc"},
+	"add_key":         {kind: "keyctl", args: map[string]int{"key_serial": 4, "value": 3}, ret: "UNCLASSIFIED", family: "Security"},
+	"adjtimex":        {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Time"},
+	"alarm":           {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Time"},
+	"arch_prctl":      {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
+	"bind":            {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network"},
+	"bpf":             {kind: "bpf", args: map[string]int{"cmd": 0}, ret: "UNCLASSIFIED", family: "Security"},
 	"brk":             {kind: "mem", args: map[string]int{"addr": 0}, ret: "UNCLASSIFIED", family: "Memory"},
 	"cachestat":       {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"capget":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Security"},
@@ -155,19 +154,18 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"fcntl":     {kind: "fcntl", args: map[string]int{"arg": 2, "cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"fdatasync": {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	// TODO(q4): delete the xattr temporaryArgs overrides when size-probe inputs are captured.
-	"fgetxattr":    {kind: "fd", args: map[string]int{"fd": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
-	"file_getattr": {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"file_setattr": {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"finit_module": {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Security"},
-	"flistxattr":   {kind: "fd", args: map[string]int{"fd": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
-	"flock":        {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"fork":         {kind: "proc", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
-	"fremovexattr": {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"fsconfig":     {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"fsetxattr":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	// TODO(s4): delete these temporary overrides when identifying mount payloads are captured.
-	"fsmount":         {kind: "eventfd", args: map[string]int{"fd": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "FS", temporary: temporaryArgs("s4", map[string]int{"flags": 1})},
-	"fsopen":          {kind: "eventfd", args: map[string]int{"filename": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "FS", temporary: temporaryArgs("s4", map[string]int{"flags": 1})},
+	"fgetxattr":       {kind: "fd", args: map[string]int{"fd": 0, "size": 3}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
+	"file_getattr":    {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	"file_setattr":    {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	"finit_module":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Security"},
+	"flistxattr":      {kind: "fd", args: map[string]int{"fd": 0, "size": 2}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryArgs("q4", map[string]int{"fd": 0})},
+	"flock":           {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fork":            {kind: "proc", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
+	"fremovexattr":    {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fsconfig":        {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fsetxattr":       {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"fsmount":         {kind: "eventfd", args: map[string]int{"fd": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	"fsopen":          {kind: "eventfd", args: map[string]int{"filename": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"fspick":          {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"fstatfs":         {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"fsync":           {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
@@ -272,7 +270,7 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"map_shadow_stack":  {kind: "mem", args: map[string]int{"addr": 0, "flags": 2, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
 	"mbind":             {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
 	"membarrier":        {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
-	"memfd_create":      {kind: "eventfd", args: map[string]int{"filename": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "IPC", temporary: temporaryArgs("s4", map[string]int{"flags": 1})},
+	"memfd_create":      {kind: "eventfd", args: map[string]int{"filename": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "IPC"},
 	"memfd_secret":      {kind: "eventfd", args: map[string]int{"flags": 0}, ret: "UNCLASSIFIED", family: "IPC"},
 	"migrate_pages":     {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
 	"mincore":           {kind: "mem", args: map[string]int{"addr": 0, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
@@ -291,9 +289,6 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"mount_setattr": {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
 	"move_mount": {
 		kind: "two-fd", args: map[string]int{"extra": 4, "fd_a": 0, "fd_b": 2, "newname": 3, "oldname": 1}, ret: "UNCLASSIFIED", family: "FS",
-		temporary: &temporarySyscallSemantics{task: "s4", current: syscallSemantics{
-			args: map[string]int{"extra": 4, "fd_a": 0, "fd_b": 2},
-		}},
 	},
 	"move_pages":      {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
 	"mprotect":        {kind: "mem", args: map[string]int{"addr": 0, "flags": 2, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
@@ -514,6 +509,8 @@ var pendingArrayOutputExpectations = map[string]map[string][]string{
 }
 
 var filenameFallbackSyscalls = map[string]struct{}{
+	"fsopen":         {},
+	"memfd_create":   {},
 	"mq_open":        {},
 	"open":           {},
 	"open_tree":      {},
@@ -2278,8 +2275,14 @@ func validateStringCaptureWrites(name, enterBody string, stringMatches [][]strin
 				return err
 			}
 		}
+		filenameMemset := `__builtin_memset\(&\(ev->filename\),\s*0,\s*sizeof\(ev->filename\)\s*\+\s*sizeof\(ev->comm\)\);`
+		filenameStorageFields := []string{"filename", "comm"}
+		if name == "fsopen" || name == "memfd_create" {
+			filenameMemset = `__builtin_memset\(&\(ev->filename\),\s*0,\s*sizeof\(ev->filename\)\);`
+			filenameStorageFields = []string{"filename"}
+		}
 		memsetPattern, ok := map[string]string{
-			"filename": `__builtin_memset\(&\(ev->filename\),\s*0,\s*sizeof\(ev->filename\)\s*\+\s*sizeof\(ev->comm\)\);`,
+			"filename": filenameMemset,
 			"newname":  `__builtin_memset\(&\(ev->oldname\),\s*0,\s*sizeof\(ev->oldname\)\s*\+\s*sizeof\(ev->newname\)\);`,
 			"oldname":  `__builtin_memset\(&\(ev->oldname\),\s*0,\s*sizeof\(ev->oldname\)\s*\+\s*sizeof\(ev->newname\)\);`,
 			"pathname": `__builtin_memset\(&\(ev->pathname\),\s*0,\s*sizeof\(ev->pathname\)\);`,
@@ -2290,7 +2293,7 @@ func validateStringCaptureWrites(name, enterBody string, stringMatches [][]strin
 		memsetRE := regexp.MustCompile(`(?m)^\s*` + memsetPattern + `$`)
 		memsets := memsetRE.FindAllStringIndex(enterBody, -1)
 		storageFields := map[string][]string{
-			"filename": {"filename", "comm"},
+			"filename": filenameStorageFields,
 			"newname":  {"oldname", "newname"},
 			"oldname":  {"oldname", "newname"},
 			"pathname": {"pathname"},

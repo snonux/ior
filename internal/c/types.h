@@ -54,6 +54,8 @@
 #define PROCESS_EXIT_EVENT 49
 #define ENTER_MMAP_EVENT 50
 #define EXIT_MMAP_EVENT 51
+#define ENTER_BPF_EVENT 52
+#define EXIT_BPF_EVENT 53
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -89,6 +91,8 @@
 #define OPEN_EVENT_SCHEMA_VERSION 3
 #define PATH_EVENT_SCHEMA_VERSION 3
 #define NAME_EVENT_SCHEMA_VERSION 2
+#define EVENTFD_EVENT_SCHEMA_VERSION 2
+#define TWO_FD_EVENT_SCHEMA_VERSION 2
 
 struct open_event {
     __u32 event_type;
@@ -268,6 +272,9 @@ struct eventfd_event {
     __s32 flags;
     __s64 ret;
     __s32 fd;
+    char filename[MAX_FILENAME_LENGTH];
+    __u32 filename_status;
+    __u32 schema_version;
 };
 
 struct epoll_ctl_event {
@@ -335,6 +342,20 @@ struct two_fd_event {
     __s32 fd_a;
     __s32 fd_b;
     __u64 extra;
+    char oldname[MAX_FILENAME_LENGTH];
+    char newname[MAX_FILENAME_LENGTH];
+    __u32 oldname_status;
+    __u32 newname_status;
+    __u32 schema_version;
+};
+
+struct bpf_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u32 cmd;
 };
 
 struct keyctl_event {

@@ -119,6 +119,8 @@ const OPEN_NAME_FIXUP_EVENT = 48
 const PROCESS_EXIT_EVENT = 49
 const ENTER_MMAP_EVENT = 50
 const EXIT_MMAP_EVENT = 51
+const ENTER_BPF_EVENT = 52
+const EXIT_BPF_EVENT = 53
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -133,6 +135,8 @@ const IOR_UTIME_OMIT = 1073741822
 const OPEN_EVENT_SCHEMA_VERSION = 3
 const PATH_EVENT_SCHEMA_VERSION = 3
 const NAME_EVENT_SCHEMA_VERSION = 2
+const EVENTFD_EVENT_SCHEMA_VERSION = 2
+const TWO_FD_EVENT_SCHEMA_VERSION = 2
 const SYS_ENTER_SOCKET TraceId = 1847
 const SYS_EXIT_SOCKET TraceId = 1846
 const SYS_ENTER_SOCKETPAIR TraceId = 1845
@@ -1931,18 +1935,21 @@ func (p *PipeEvent) Recycle() {
 }
 
 type EventfdEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Flags     int32
-	Ret       int64
-	Fd        int32
+	EventType      EventType
+	TraceId        TraceId
+	Time           uint64
+	Pid            uint32
+	Tid            uint32
+	Flags          int32
+	Ret            int64
+	Fd             int32
+	Filename       [MAX_FILENAME_LENGTH]byte
+	FilenameStatus uint32
+	SchemaVersion  uint32
 }
 
 func (e EventfdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Ret:%v Fd:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Flags, e.Ret, e.Fd)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Ret:%v Fd:%v Filename:%v FilenameStatus:%v SchemaVersion:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Flags, e.Ret, e.Fd, string(e.Filename[:]), e.FilenameStatus, e.SchemaVersion)
 }
 
 func (e EventfdEvent) Equals(other any) bool {
@@ -1950,7 +1957,7 @@ func (e EventfdEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Flags == otherConcrete.Flags && e.Ret == otherConcrete.Ret && e.Fd == otherConcrete.Fd
+	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Flags == otherConcrete.Flags && e.Ret == otherConcrete.Ret && e.Fd == otherConcrete.Fd && e.Filename == otherConcrete.Filename && e.FilenameStatus == otherConcrete.FilenameStatus && e.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (e *EventfdEvent) GetEventType() EventType {
@@ -1983,7 +1990,7 @@ var poolOfEventfdEvents = sync.Pool{
 }
 
 func NewEventfdEvent(raw []byte) *EventfdEvent {
-	if len(raw) != 48 && len(raw) != 40 && len(raw) != 36 {
+	if len(raw) != 312 && len(raw) != 48 && len(raw) != 40 && len(raw) != 36 {
 		return nil
 	}
 	e := poolOfEventfdEvents.Get().(*EventfdEvent)
@@ -1994,19 +2001,31 @@ func NewEventfdEvent(raw []byte) *EventfdEvent {
 	e.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	e.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	e.Fd = -1
+	e.Filename = [MAX_FILENAME_LENGTH]byte{}
+	e.FilenameStatus = PATH_READ_NULL
+	e.SchemaVersion = 0
 	retOffset := 28
 	if len(raw) >= 40 {
 		retOffset = 32
 	}
 	e.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
-	if len(raw) == 48 {
+	if len(raw) == 48 || len(raw) == 312 {
 		e.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))
+	}
+	if len(raw) == 312 {
+		copy(e.Filename[:], raw[44:300])
+		e.FilenameStatus = binary.LittleEndian.Uint32(raw[300:304])
+		e.SchemaVersion = binary.LittleEndian.Uint32(raw[304:308])
+		if e.SchemaVersion != EVENTFD_EVENT_SCHEMA_VERSION {
+			e.Recycle()
+			return nil
+		}
 	}
 	return e
 }
 
 func (e *EventfdEvent) Bytes() ([]byte, error) {
-	raw := make([]byte, 48)
+	raw := make([]byte, 312)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(e.EventType))
 	binary.LittleEndian.PutUint32(raw[4:8], uint32(e.TraceId))
 	binary.LittleEndian.PutUint64(raw[8:16], e.Time)
@@ -2015,6 +2034,9 @@ func (e *EventfdEvent) Bytes() ([]byte, error) {
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(e.Flags))
 	binary.LittleEndian.PutUint64(raw[32:40], uint64(e.Ret))
 	binary.LittleEndian.PutUint32(raw[40:44], uint32(e.Fd))
+	copy(raw[44:300], e.Filename[:])
+	binary.LittleEndian.PutUint32(raw[300:304], e.FilenameStatus)
+	binary.LittleEndian.PutUint32(raw[304:308], e.SchemaVersion)
 	return raw, nil
 }
 
@@ -2374,18 +2396,23 @@ func (s *SleepEvent) Recycle() {
 }
 
 type TwoFdEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	FdA       int32
-	FdB       int32
-	Extra     uint64
+	EventType     EventType
+	TraceId       TraceId
+	Time          uint64
+	Pid           uint32
+	Tid           uint32
+	FdA           int32
+	FdB           int32
+	Extra         uint64
+	Oldname       [MAX_FILENAME_LENGTH]byte
+	Newname       [MAX_FILENAME_LENGTH]byte
+	OldnameStatus uint32
+	NewnameStatus uint32
+	SchemaVersion uint32
 }
 
 func (t TwoFdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v FdA:%v FdB:%v Extra:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, t.FdA, t.FdB, t.Extra)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v FdA:%v FdB:%v Extra:%v Oldname:%v Newname:%v OldnameStatus:%v NewnameStatus:%v SchemaVersion:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, t.FdA, t.FdB, t.Extra, string(t.Oldname[:]), string(t.Newname[:]), t.OldnameStatus, t.NewnameStatus, t.SchemaVersion)
 }
 
 func (t TwoFdEvent) Equals(other any) bool {
@@ -2393,7 +2420,7 @@ func (t TwoFdEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.FdA == otherConcrete.FdA && t.FdB == otherConcrete.FdB && t.Extra == otherConcrete.Extra
+	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.FdA == otherConcrete.FdA && t.FdB == otherConcrete.FdB && t.Extra == otherConcrete.Extra && t.Oldname == otherConcrete.Oldname && t.Newname == otherConcrete.Newname && t.OldnameStatus == otherConcrete.OldnameStatus && t.NewnameStatus == otherConcrete.NewnameStatus && t.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (t *TwoFdEvent) GetEventType() EventType {
@@ -2421,26 +2448,125 @@ var poolOfTwoFdEvents = sync.Pool{
 }
 
 func NewTwoFdEvent(raw []byte) *TwoFdEvent {
-	t := poolOfTwoFdEvents.Get().(*TwoFdEvent)
-	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, t); err != nil {
-		*t = TwoFdEvent{}
-		poolOfTwoFdEvents.Put(t)
+	if len(raw) != 568 && len(raw) != 564 && len(raw) != 40 {
 		return nil
+	}
+	t := poolOfTwoFdEvents.Get().(*TwoFdEvent)
+	t.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	t.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	t.Time = binary.LittleEndian.Uint64(raw[8:16])
+	t.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	t.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	t.FdA = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	t.FdB = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	t.Extra = binary.LittleEndian.Uint64(raw[32:40])
+	t.Oldname = [MAX_FILENAME_LENGTH]byte{}
+	t.Newname = [MAX_FILENAME_LENGTH]byte{}
+	t.OldnameStatus = PATH_READ_NULL
+	t.NewnameStatus = PATH_READ_NULL
+	t.SchemaVersion = 0
+	if len(raw) != 40 {
+		copy(t.Oldname[:], raw[40:296])
+		copy(t.Newname[:], raw[296:552])
+		t.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])
+		t.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])
+		t.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])
+		if t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {
+			t.Recycle()
+			return nil
+		}
 	}
 	return t
 }
 
 func (t *TwoFdEvent) Bytes() ([]byte, error) {
+	raw := make([]byte, 568)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(t.EventType))
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(t.TraceId))
+	binary.LittleEndian.PutUint64(raw[8:16], t.Time)
+	binary.LittleEndian.PutUint32(raw[16:20], t.Pid)
+	binary.LittleEndian.PutUint32(raw[20:24], t.Tid)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(t.FdA))
+	binary.LittleEndian.PutUint32(raw[28:32], uint32(t.FdB))
+	binary.LittleEndian.PutUint64(raw[32:40], t.Extra)
+	copy(raw[40:296], t.Oldname[:])
+	copy(raw[296:552], t.Newname[:])
+	binary.LittleEndian.PutUint32(raw[552:556], t.OldnameStatus)
+	binary.LittleEndian.PutUint32(raw[556:560], t.NewnameStatus)
+	binary.LittleEndian.PutUint32(raw[560:564], t.SchemaVersion)
+	return raw, nil
+}
+
+func (t *TwoFdEvent) Recycle() {
+	poolOfTwoFdEvents.Put(t)
+}
+
+type BpfEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Cmd       uint32
+}
+
+func (b BpfEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Cmd:%v", b.EventType, b.TraceId, b.Time, b.Pid, b.Tid, b.Cmd)
+}
+
+func (b BpfEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*BpfEvent)
+	if !ok {
+		return false
+	}
+	return b.EventType == otherConcrete.EventType && b.TraceId == otherConcrete.TraceId && b.Time == otherConcrete.Time && b.Pid == otherConcrete.Pid && b.Tid == otherConcrete.Tid && b.Cmd == otherConcrete.Cmd
+}
+
+func (b *BpfEvent) GetEventType() EventType {
+	return b.EventType
+}
+
+func (b *BpfEvent) GetTraceId() TraceId {
+	return b.TraceId
+}
+
+func (b *BpfEvent) GetPid() uint32 {
+	return b.Pid
+}
+
+func (b *BpfEvent) GetTid() uint32 {
+	return b.Tid
+}
+
+func (b *BpfEvent) GetTime() uint64 {
+	return b.Time
+}
+
+var poolOfBpfEvents = sync.Pool{
+	New: func() any { return &BpfEvent{} },
+}
+
+func NewBpfEvent(raw []byte) *BpfEvent {
+	b := poolOfBpfEvents.Get().(*BpfEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, b); err != nil {
+		*b = BpfEvent{}
+		poolOfBpfEvents.Put(b)
+		return nil
+	}
+	return b
+}
+
+func (b *BpfEvent) Bytes() ([]byte, error) {
 	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.LittleEndian, t)
+	err := binary.Write(buf, binary.LittleEndian, b)
 	if err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-func (t *TwoFdEvent) Recycle() {
-	poolOfTwoFdEvents.Put(t)
+func (b *BpfEvent) Recycle() {
+	poolOfBpfEvents.Put(b)
 }
 
 type KeyctlEvent struct {

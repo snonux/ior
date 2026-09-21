@@ -172,6 +172,7 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindAccept:         func(_ GeneratedTracepoint, isEnter bool) string { return generateExtraAccept(isEnter) },
 	KindPipe:           func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraPipe(tp.Format, isEnter) },
 	KindEventfd:        func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
+	KindNamedEventfd:   func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
 	KindPidfd:          func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
 	KindEpollCtl:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraEpollCtl() },
 	KindTwoFd:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraTwoFd(tp.Format.Name) },
@@ -182,6 +183,7 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindKeyctl:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraKeyctl(tp.Format.Name) },
 	KindPtrace:         func(_ GeneratedTracepoint, _ bool) string { return generateExtraPtrace() },
 	KindPerfOpen:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraPerfOpen() },
+	KindBpf:            func(_ GeneratedTracepoint, _ bool) string { return generateExtraBpf() },
 	KindOpen:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
 	KindMqOpen:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraMqOpen(tp.Format) },
 	KindOpenTree:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
@@ -503,6 +505,12 @@ var eventfdFlagsExpr = map[string]string{
 var eventfdFDExpr = map[string]string{
 	"sys_enter_signalfd":  "(__s32)ctx->args[0]",
 	"sys_enter_signalfd4": "(__s32)ctx->args[0]",
+	"sys_enter_fsmount":   "(__s32)ctx->args[0]",
+}
+
+var eventfdFilenameField = map[string]string{
+	"sys_enter_memfd_create": "uname",
+	"sys_enter_fsopen":       "_fs_name",
 }
 
 // generateExtraEventfd emits the enter/exit body for eventfd-family syscalls.
@@ -520,9 +528,32 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 		if fdExpr == "" {
 			fdExpr = "-1"
 		}
-		return "    __s32 flags = " + flagsExpr + ";\n    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n    ev->flags = flags;\n    ev->ret = -1;\n    ev->fd = " + fdExpr + ";\n"
+		var b strings.Builder
+		b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));\n")
+		if field := eventfdFilenameField[f.Name]; field != "" {
+			idx := f.FieldNumber(field)
+			if idx < 0 {
+				idx = 0
+			}
+			fmt.Fprintf(&b, "    if (ctx->args[%d] == 0) {\n", idx)
+			b.WriteString("        ev->filename_status = PATH_READ_NULL;\n")
+			b.WriteString("    } else {\n")
+			b.WriteString("        ev->filename_status = PATH_READ_OK;\n")
+			fmt.Fprintf(&b, "        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0) {\n", idx)
+			b.WriteString("            ev->filename_status = PATH_READ_FAILED;\n")
+			fmt.Fprintf(&b, "            ior_stash_pending_filename(tid, ctx->args[%d]);\n", idx)
+			b.WriteString("        }\n    }\n")
+		} else {
+			b.WriteString("    ev->filename_status = PATH_READ_NULL;\n")
+		}
+		b.WriteString("    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;\n")
+		fmt.Fprintf(&b, "    __s32 flags = %s;\n", flagsExpr)
+		b.WriteString("    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n")
+		b.WriteString("    ev->flags = flags;\n    ev->ret = -1;\n")
+		fmt.Fprintf(&b, "    ev->fd = %s;\n", fdExpr)
+		return b.String()
 	}
-	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
+	return "    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));\n    ev->filename_status = PATH_READ_NULL;\n    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;\n    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
 }
 
 func generateExtraEpollCtl() string {
@@ -560,8 +591,22 @@ func generateExtraTwoFd(name string) string {
 	if !ok {
 		spec = twoFdDefault
 	}
-	return fmt.Sprintf("    ev->fd_a = %s;\n    ev->fd_b = %s;\n    ev->extra = %s;\n",
+	var b strings.Builder
+	fmt.Fprintf(&b, "    ev->fd_a = %s;\n    ev->fd_b = %s;\n    ev->extra = %s;\n",
 		spec.fdA, spec.fdB, spec.extra)
+	b.WriteString("    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));\n")
+	if name == "sys_enter_move_mount" {
+		writePathReadCapture(&b, "oldname", "oldname_status", 1)
+		writePathReadCapture(&b, "newname", "newname_status", 3)
+	} else {
+		b.WriteString("    ev->oldname_status = PATH_READ_NULL;\n    ev->newname_status = PATH_READ_NULL;\n")
+	}
+	b.WriteString("    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;\n")
+	return b.String()
+}
+
+func generateExtraBpf() string {
+	return "    ev->cmd = (__u32)ctx->args[0];\n"
 }
 
 // pollTimeoutStyle describes how the poll-family syscall captures its timeout.

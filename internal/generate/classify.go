@@ -52,6 +52,10 @@ const (
 	// KindEventfd carries flags and the returned fd (the eventfd/epoll/signalfd
 	// family of fd-creating calls).
 	KindEventfd
+	// KindNamedEventfd adds an identifying string to the eventfd payload. It
+	// keeps the stable "eventfd" metadata name and runtime event type while
+	// enabling exit-time recovery when the enter-side nofault read misses.
+	KindNamedEventfd
 	// KindPidfd is the pidfd_open variant of the eventfd shape.
 	KindPidfd
 	// KindEpollCtl carries epfd, op, target fd and events.
@@ -92,8 +96,8 @@ const (
 	// KindProc maps to the header-only null_event: the pid/proc argument is
 	// not captured.
 	KindProc
-	// KindBpf maps to the header-only null_event: the bpf command and attr
-	// pointer are not captured.
+	// KindBpf captures the command selector used to decide whether a successful
+	// return value is a new descriptor. The attr pointer stays uncaptured.
 	KindBpf
 	// KindFutex maps to the header-only null_event: argument capture is
 	// deliberately skipped (see the futex comment in family.go).
@@ -143,6 +147,8 @@ func (k TracepointKind) MetadataName() string {
 	case KindPipe:
 		return "pipe"
 	case KindEventfd:
+		return "eventfd"
+	case KindNamedEventfd:
 		return "eventfd"
 	case KindPidfd:
 		return "pidfd"
@@ -272,7 +278,7 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_exit_eventfd":         KindEventfd,
 	"sys_enter_eventfd2":       KindEventfd,
 	"sys_exit_eventfd2":        KindEventfd,
-	"sys_enter_memfd_create":   KindEventfd,
+	"sys_enter_memfd_create":   KindNamedEventfd,
 	"sys_exit_memfd_create":    KindEventfd,
 	"sys_enter_memfd_secret":   KindEventfd,
 	"sys_exit_memfd_secret":    KindEventfd,
@@ -310,7 +316,7 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_exit_landlock_create_ruleset":  KindEventfd,
 	"sys_enter_landlock_add_rule":       KindFd,
 	"sys_enter_landlock_restrict_self":  KindFd,
-	"sys_enter_fsopen":                  KindEventfd,
+	"sys_enter_fsopen":                  KindNamedEventfd,
 	"sys_exit_fsopen":                   KindEventfd,
 	"sys_enter_fsmount":                 KindEventfd,
 	"sys_exit_fsmount":                  KindEventfd,

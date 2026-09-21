@@ -177,10 +177,10 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 // re-reads the string into a control record that userspace splices into the
 // still-pending enter event before the pair is completed.
 //
-// Only the open kinds do this. They are the ones that were measurably losing
-// names, and the only ones whose loss propagates past the row itself into the
-// fd table. The mechanism is not open-specific though: any enter handler that
-// reads a user string could stash its pointer the same way.
+// Open handlers and named descriptor creators (memfd_create/fsopen) do this.
+// In both cases a lost name propagates past the row itself into the fd table.
+// The control event keeps its original open-oriented name for wire/runtime
+// compatibility, but the recovery mechanism itself is intentionally shared.
 
 // ior_stash_pending_filename records filename_ptr on this tid's in-flight
 // syscall state so the matching exit handler can retry the read. Called only
@@ -205,7 +205,7 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
     return state->pending_filename;
 }
 
-// ior_emit_open_name_fixup re-reads the filename at sys_exit and publishes it
+// ior_emit_open_name_fixup re-reads the identifying string at sys_exit and publishes it
 // as a compact OPEN_NAME_FIXUP_EVENT control record. It is reserved and
 // submitted before the exit event of the same syscall, and the ring buffer
 // preserves that order, so the single userspace consumer always applies the

@@ -20,6 +20,12 @@ func rawBytes(t *testing.T, ev interface{ Bytes() ([]byte, error) }) []byte {
 	return raw
 }
 
+func testFilename(value string) [MAX_FILENAME_LENGTH]byte {
+	var filename [MAX_FILENAME_LENGTH]byte
+	copy(filename[:], value)
+	return filename
+}
+
 func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	t.Run("OpenEvent", func(t *testing.T) {
 		ev := &OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 2, Tid: 3, Dirfd: 5, Flags: 4, SchemaVersion: OPEN_EVENT_SCHEMA_VERSION}
@@ -225,7 +231,19 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("EventfdEvent", func(t *testing.T) {
-		ev := &EventfdEvent{EventType: ENTER_EVENTFD_EVENT, TraceId: SYS_ENTER_EVENTFD2, Time: 1, Pid: 2, Tid: 3, Flags: 0x800, Ret: -1, Fd: 7}
+		ev := &EventfdEvent{
+			EventType:      ENTER_EVENTFD_EVENT,
+			TraceId:        SYS_ENTER_MEMFD_CREATE,
+			Time:           1,
+			Pid:            2,
+			Tid:            3,
+			Flags:          0x800,
+			Ret:            -1,
+			Fd:             7,
+			Filename:       testFilename("ior-memfd"),
+			FilenameStatus: PATH_READ_OK,
+			SchemaVersion:  EVENTFD_EVENT_SCHEMA_VERSION,
+		}
 		raw := rawBytes(t, ev)
 
 		slow := NewEventfdEvent(raw)
@@ -251,7 +269,21 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("TwoFdEvent", func(t *testing.T) {
-		ev := &TwoFdEvent{EventType: ENTER_TWO_FD_EVENT, TraceId: SYS_ENTER_MOVE_MOUNT, Time: 1, Pid: 2, Tid: 3, FdA: 10, FdB: 11, Extra: 0x2}
+		ev := &TwoFdEvent{
+			EventType:     ENTER_TWO_FD_EVENT,
+			TraceId:       SYS_ENTER_MOVE_MOUNT,
+			Time:          1,
+			Pid:           2,
+			Tid:           3,
+			FdA:           10,
+			FdB:           11,
+			Extra:         0x2,
+			Oldname:       testFilename("source"),
+			Newname:       testFilename("destination"),
+			OldnameStatus: PATH_READ_OK,
+			NewnameStatus: PATH_READ_OK,
+			SchemaVersion: TWO_FD_EVENT_SCHEMA_VERSION,
+		}
 		raw := rawBytes(t, ev)
 
 		slow := NewTwoFdEvent(raw)
@@ -534,6 +566,9 @@ func TestNewEventfdEventFastKernelLayout(t *testing.T) {
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(0x800))
 	binary.LittleEndian.PutUint64(raw[32:40], uint64(42))
 	binary.LittleEndian.PutUint32(raw[40:44], uint32(17))
+	copy(raw[44:300], "ior-memfd")
+	binary.LittleEndian.PutUint32(raw[300:304], PATH_READ_OK)
+	binary.LittleEndian.PutUint32(raw[304:308], EVENTFD_EVENT_SCHEMA_VERSION)
 
 	fast := NewEventfdEventFast(raw)
 	if fast == nil {
@@ -548,7 +583,10 @@ func TestNewEventfdEventFastKernelLayout(t *testing.T) {
 		fast.Tid != 3 ||
 		fast.Flags != 0x800 ||
 		fast.Ret != 42 ||
-		fast.Fd != 17 {
+		fast.Fd != 17 ||
+		fast.Filename != testFilename("ior-memfd") ||
+		fast.FilenameStatus != PATH_READ_OK ||
+		fast.SchemaVersion != EVENTFD_EVENT_SCHEMA_VERSION {
 		t.Fatalf("unexpected eventfd decode: %#v", fast)
 	}
 }
@@ -611,6 +649,11 @@ func TestNewTwoFdEventFastKernelLayout(t *testing.T) {
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(10))
 	binary.LittleEndian.PutUint32(raw[28:32], uint32(11))
 	binary.LittleEndian.PutUint64(raw[32:40], uint64(0x80))
+	copy(raw[40:296], "source")
+	copy(raw[296:552], "destination")
+	binary.LittleEndian.PutUint32(raw[552:556], PATH_READ_OK)
+	binary.LittleEndian.PutUint32(raw[556:560], PATH_READ_OK)
+	binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_SCHEMA_VERSION)
 
 	fast := NewTwoFdEventFast(raw)
 	if fast == nil {
@@ -625,8 +668,88 @@ func TestNewTwoFdEventFastKernelLayout(t *testing.T) {
 		fast.Tid != 3 ||
 		fast.FdA != 10 ||
 		fast.FdB != 11 ||
-		fast.Extra != 0x80 {
+		fast.Extra != 0x80 ||
+		fast.Oldname != testFilename("source") ||
+		fast.Newname != testFilename("destination") ||
+		fast.OldnameStatus != PATH_READ_OK ||
+		fast.NewnameStatus != PATH_READ_OK ||
+		fast.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {
 		t.Fatalf("unexpected two_fd decode: %#v", fast)
+	}
+}
+
+func TestTwoFdCodecsAcceptOnlyReviewedLayouts(t *testing.T) {
+	current := make([]byte, twoFdEventSize)
+	binary.LittleEndian.PutUint32(current[0:4], uint32(ENTER_TWO_FD_EVENT))
+	binary.LittleEndian.PutUint32(current[4:8], uint32(SYS_ENTER_MOVE_MOUNT))
+	binary.LittleEndian.PutUint64(current[8:16], 10)
+	binary.LittleEndian.PutUint32(current[16:20], 20)
+	binary.LittleEndian.PutUint32(current[20:24], 21)
+	binary.LittleEndian.PutUint32(current[24:28], 30)
+	binary.LittleEndian.PutUint32(current[28:32], 31)
+	binary.LittleEndian.PutUint64(current[32:40], 0x80)
+	copy(current[40:296], "source")
+	copy(current[296:552], "destination")
+	binary.LittleEndian.PutUint32(current[552:556], PATH_READ_OK)
+	binary.LittleEndian.PutUint32(current[556:560], PATH_READ_OK)
+	binary.LittleEndian.PutUint32(current[560:564], TWO_FD_EVENT_SCHEMA_VERSION)
+
+	legacy := append([]byte(nil), current[:twoFdLegacySize]...)
+	decoders := []struct {
+		name string
+		fn   func([]byte) *TwoFdEvent
+	}{
+		{name: "generated", fn: NewTwoFdEvent},
+		{name: "fast", fn: NewTwoFdEventFast},
+	}
+	for _, decoder := range decoders {
+		for _, size := range []int{twoFdCompactSize, twoFdEventSize} {
+			t.Run(decoder.name+"/current/"+fmt.Sprint(size), func(t *testing.T) {
+				ev := decoder.fn(current[:size])
+				if ev == nil {
+					t.Fatalf("current %d-byte payload did not decode", size)
+				}
+				defer ev.Recycle()
+				if ev.Oldname != testFilename("source") || ev.Newname != testFilename("destination") ||
+					ev.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {
+					t.Fatalf("unexpected current decode: %#v", ev)
+				}
+			})
+		}
+
+		t.Run(decoder.name+"/legacy", func(t *testing.T) {
+			ev := decoder.fn(legacy)
+			if ev == nil {
+				t.Fatal("legacy payload did not decode")
+			}
+			defer ev.Recycle()
+			if ev.FdA != 30 || ev.FdB != 31 || ev.Extra != 0x80 ||
+				ev.Oldname != ([MAX_FILENAME_LENGTH]byte{}) || ev.Newname != ([MAX_FILENAME_LENGTH]byte{}) ||
+				ev.OldnameStatus != PATH_READ_NULL || ev.NewnameStatus != PATH_READ_NULL || ev.SchemaVersion != 0 {
+				t.Fatalf("unexpected legacy decode: %#v", ev)
+			}
+		})
+
+		for _, size := range []int{39, 41, 563, 565, 566, 567, 569} {
+			t.Run(decoder.name+"/malformed/"+fmt.Sprint(size), func(t *testing.T) {
+				raw := make([]byte, size)
+				if ev := decoder.fn(raw); ev != nil {
+					ev.Recycle()
+					t.Fatalf("malformed %d-byte payload decoded", size)
+				}
+			})
+		}
+
+		for _, size := range []int{twoFdCompactSize, twoFdEventSize} {
+			t.Run(decoder.name+"/wrong-schema/"+fmt.Sprint(size), func(t *testing.T) {
+				raw := append([]byte(nil), current[:size]...)
+				binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_SCHEMA_VERSION+1)
+				if ev := decoder.fn(raw); ev != nil {
+					ev.Recycle()
+					t.Fatalf("wrong-schema %d-byte payload decoded", size)
+				}
+			})
+		}
 	}
 }
 

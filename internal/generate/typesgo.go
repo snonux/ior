@@ -431,6 +431,10 @@ func writeSyncPool(b *strings.Builder, goName, selfRef string) {
 		writeEventfdSyncPool(b, selfRef)
 		return
 	}
+	if goName == "TwoFdEvent" {
+		writeTwoFdSyncPool(b, selfRef)
+		return
+	}
 	fmt.Fprintf(b, "var poolOf%ss = sync.Pool{\n\tNew: func() any { return &%s{} },\n}\n\n", goName, goName)
 	fmt.Fprintf(b, "func New%s(raw []byte) *%s {\n", goName, goName)
 	fmt.Fprintf(b, "\t%s := poolOf%ss.Get().(*%s)\n", selfRef, goName, goName)
@@ -450,14 +454,15 @@ func writeSyncPool(b *strings.Builder, goName, selfRef string) {
 }
 
 // writeEventfdSyncPool emits the eventfd codec with the kernel's explicit C
-// padding. eventfd_event places ret at offset 32 and fd at offset 40, making
-// the current payload 48 bytes. Encoding the Go fields with binary.Write would
-// instead produce an ambiguous packed 40-byte payload that is indistinguishable
-// from the legacy kernel layout.
+// padding. eventfd_event places ret at offset 32, fd at offset 40 and the
+// identifying filename at offset 44, making the current payload 312 bytes.
+// Encoding the Go fields with binary.Write would omit both the internal and
+// trailing C padding. The decoder also accepts the three released layouts from
+// before filename capture was added.
 func writeEventfdSyncPool(b *strings.Builder, selfRef string) {
 	b.WriteString("var poolOfEventfdEvents = sync.Pool{\n\tNew: func() any { return &EventfdEvent{} },\n}\n\n")
 	b.WriteString("func NewEventfdEvent(raw []byte) *EventfdEvent {\n")
-	b.WriteString("\tif len(raw) != 48 && len(raw) != 40 && len(raw) != 36 {\n\t\treturn nil\n\t}\n")
+	b.WriteString("\tif len(raw) != 312 && len(raw) != 48 && len(raw) != 40 && len(raw) != 36 {\n\t\treturn nil\n\t}\n")
 	fmt.Fprintf(b, "\t%s := poolOfEventfdEvents.Get().(*EventfdEvent)\n", selfRef)
 	fmt.Fprintf(b, "\t%s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))\n", selfRef)
 	fmt.Fprintf(b, "\t%s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))\n", selfRef)
@@ -466,15 +471,24 @@ func writeEventfdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\t%s.Tid = binary.LittleEndian.Uint32(raw[20:24])\n", selfRef)
 	fmt.Fprintf(b, "\t%s.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))\n", selfRef)
 	fmt.Fprintf(b, "\t%s.Fd = -1\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Filename = [MAX_FILENAME_LENGTH]byte{}\n", selfRef)
+	fmt.Fprintf(b, "\t%s.FilenameStatus = PATH_READ_NULL\n", selfRef)
+	fmt.Fprintf(b, "\t%s.SchemaVersion = 0\n", selfRef)
 	b.WriteString("\tretOffset := 28\n\tif len(raw) >= 40 {\n\t\tretOffset = 32\n\t}\n")
 	fmt.Fprintf(b, "\t%s.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))\n", selfRef)
-	b.WriteString("\tif len(raw) == 48 {\n")
+	b.WriteString("\tif len(raw) == 48 || len(raw) == 312 {\n")
 	fmt.Fprintf(b, "\t\t%s.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))\n", selfRef)
+	b.WriteString("\t}\n")
+	b.WriteString("\tif len(raw) == 312 {\n")
+	fmt.Fprintf(b, "\t\tcopy(%s.Filename[:], raw[44:300])\n", selfRef)
+	fmt.Fprintf(b, "\t\t%s.FilenameStatus = binary.LittleEndian.Uint32(raw[300:304])\n", selfRef)
+	fmt.Fprintf(b, "\t\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[304:308])\n", selfRef)
+	fmt.Fprintf(b, "\t\tif %s.SchemaVersion != EVENTFD_EVENT_SCHEMA_VERSION {\n\t\t\t%s.Recycle()\n\t\t\treturn nil\n\t\t}\n", selfRef, selfRef)
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
 
 	fmt.Fprintf(b, "func (%s *EventfdEvent) Bytes() ([]byte, error) {\n", selfRef)
-	b.WriteString("\traw := make([]byte, 48)\n")
+	b.WriteString("\traw := make([]byte, 312)\n")
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[0:4], uint32(%s.EventType))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[4:8], uint32(%s.TraceId))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[8:16], %s.Time)\n", selfRef)
@@ -483,8 +497,62 @@ func writeEventfdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Flags))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], uint64(%s.Ret))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[40:44], uint32(%s.Fd))\n", selfRef)
+	fmt.Fprintf(b, "\tcopy(raw[44:300], %s.Filename[:])\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[300:304], %s.FilenameStatus)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[304:308], %s.SchemaVersion)\n", selfRef)
 	b.WriteString("\treturn raw, nil\n}\n\n")
 	fmt.Fprintf(b, "func (%s *EventfdEvent) Recycle() {\n\tpoolOfEventfdEvents.Put(%s)\n}\n", selfRef, selfRef)
+}
+
+// writeTwoFdSyncPool emits an exact-size codec for two_fd_event. The C layout
+// has four bytes of trailing alignment padding (568 bytes), while binary.Write
+// historically produced a compact 564-byte representation. The 40-byte legacy
+// layout predates move_mount pathname capture. No other size is accepted.
+func writeTwoFdSyncPool(b *strings.Builder, selfRef string) {
+	b.WriteString("var poolOfTwoFdEvents = sync.Pool{\n\tNew: func() any { return &TwoFdEvent{} },\n}\n\n")
+	b.WriteString("func NewTwoFdEvent(raw []byte) *TwoFdEvent {\n")
+	b.WriteString("\tif len(raw) != 568 && len(raw) != 564 && len(raw) != 40 {\n\t\treturn nil\n\t}\n")
+	fmt.Fprintf(b, "\t%s := poolOfTwoFdEvents.Get().(*TwoFdEvent)\n", selfRef)
+	fmt.Fprintf(b, "\t%s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Time = binary.LittleEndian.Uint64(raw[8:16])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Pid = binary.LittleEndian.Uint32(raw[16:20])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Tid = binary.LittleEndian.Uint32(raw[20:24])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.FdA = int32(binary.LittleEndian.Uint32(raw[24:28]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.FdB = int32(binary.LittleEndian.Uint32(raw[28:32]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Extra = binary.LittleEndian.Uint64(raw[32:40])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Oldname = [MAX_FILENAME_LENGTH]byte{}\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Newname = [MAX_FILENAME_LENGTH]byte{}\n", selfRef)
+	fmt.Fprintf(b, "\t%s.OldnameStatus = PATH_READ_NULL\n", selfRef)
+	fmt.Fprintf(b, "\t%s.NewnameStatus = PATH_READ_NULL\n", selfRef)
+	fmt.Fprintf(b, "\t%s.SchemaVersion = 0\n", selfRef)
+	b.WriteString("\tif len(raw) != 40 {\n")
+	fmt.Fprintf(b, "\t\tcopy(%s.Oldname[:], raw[40:296])\n", selfRef)
+	fmt.Fprintf(b, "\t\tcopy(%s.Newname[:], raw[296:552])\n", selfRef)
+	fmt.Fprintf(b, "\t\t%s.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])\n", selfRef)
+	fmt.Fprintf(b, "\t\t%s.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])\n", selfRef)
+	fmt.Fprintf(b, "\t\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])\n", selfRef)
+	fmt.Fprintf(b, "\t\tif %s.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {\n\t\t\t%s.Recycle()\n\t\t\treturn nil\n\t\t}\n", selfRef, selfRef)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
+
+	fmt.Fprintf(b, "func (%s *TwoFdEvent) Bytes() ([]byte, error) {\n", selfRef)
+	b.WriteString("\traw := make([]byte, 568)\n")
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[0:4], uint32(%s.EventType))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[4:8], uint32(%s.TraceId))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[8:16], %s.Time)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.FdA))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[28:32], uint32(%s.FdB))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Extra)\n", selfRef)
+	fmt.Fprintf(b, "\tcopy(raw[40:296], %s.Oldname[:])\n", selfRef)
+	fmt.Fprintf(b, "\tcopy(raw[296:552], %s.Newname[:])\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[552:556], %s.OldnameStatus)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[556:560], %s.NewnameStatus)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[560:564], %s.SchemaVersion)\n", selfRef)
+	b.WriteString("\treturn raw, nil\n}\n\n")
+	fmt.Fprintf(b, "func (%s *TwoFdEvent) Recycle() {\n\tpoolOfTwoFdEvents.Put(%s)\n}\n", selfRef, selfRef)
 }
 
 func snakeToCamel(s string) string {

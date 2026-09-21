@@ -93,7 +93,7 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	result, pid, err := h.RunWithIorArgs("fd-from-air-eventfd-users", defaultDuration, []string{
-		"-trace-families", "IPC",
+		"-trace-families", "IPC", "-trace-syscalls", "close",
 	})
 	if err != nil {
 		t.Fatalf("run scenario fd-from-air-eventfd-users: %v", err)
@@ -140,7 +140,7 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 		},
 	})
 
-	assertTracepointPathPrefix(t, result, "enter_memfd_create", "memfd:")
+	assertTracepointExactPath(t, result, "enter_memfd_create", "memfd:ior-memfd")
 	assertTracepointPathPrefix(t, result, "enter_timerfd_create", "timerfd:")
 
 	// timerfd_settime/gettime take the timerfd as arg0 (kind=fd@arg0). The
@@ -148,6 +148,16 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 	// fd_event rather than emitting a null event, locking in the 6ac9fa4 fix.
 	assertTracepointPathPrefix(t, result, "enter_timerfd_settime", "timerfd:")
 	assertTracepointPathPrefix(t, result, "enter_timerfd_gettime", "timerfd:")
+}
+
+func assertTracepointExactPath(t *testing.T, result TestResult, tracepoint, wantPath string) {
+	t.Helper()
+	for _, rec := range result.Records {
+		if strings.Contains(rec.TraceID.String(), tracepoint) && rec.Path == wantPath {
+			return
+		}
+	}
+	t.Fatalf("expected at least one %s record with exact path %q", tracepoint, wantPath)
 }
 
 func TestFanotifyFlags(t *testing.T) {

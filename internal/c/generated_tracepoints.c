@@ -2108,6 +2108,9 @@ int handle_sys_enter_landlock_create_ruleset(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[2];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -2139,6 +2142,9 @@ int handle_sys_exit_landlock_create_ruleset(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4245,6 +4251,9 @@ int handle_sys_enter_userfaultfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4276,6 +4285,9 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4311,6 +4323,9 @@ int handle_sys_enter_eventfd2(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4342,6 +4357,9 @@ int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4377,6 +4395,9 @@ int handle_sys_enter_eventfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4408,6 +4429,9 @@ int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4443,6 +4467,9 @@ int handle_sys_enter_timerfd_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4474,6 +4501,9 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4619,6 +4649,9 @@ int handle_sys_enter_signalfd4(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[3];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4650,6 +4683,9 @@ int handle_sys_exit_signalfd4(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4685,6 +4721,9 @@ int handle_sys_enter_signalfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4716,6 +4755,9 @@ int handle_sys_exit_signalfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4751,6 +4793,9 @@ int handle_sys_enter_epoll_create1(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4782,6 +4827,9 @@ int handle_sys_exit_epoll_create1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4817,6 +4865,9 @@ int handle_sys_enter_epoll_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4848,6 +4899,9 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5112,6 +5166,9 @@ int handle_sys_enter_fanotify_init(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5143,6 +5200,9 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5244,6 +5304,9 @@ int handle_sys_enter_inotify_init1(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5275,6 +5338,9 @@ int handle_sys_exit_inotify_init1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5310,6 +5376,9 @@ int handle_sys_enter_inotify_init(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5341,6 +5410,9 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5618,6 +5690,17 @@ int handle_sys_enter_fsopen(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    if (ctx->args[0] == 0) {
+        ev->filename_status = PATH_READ_NULL;
+    } else {
+        ev->filename_status = PATH_READ_OK;
+        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0) {
+            ev->filename_status = PATH_READ_FAILED;
+            ior_stash_pending_filename(tid, ctx->args[0]);
+        }
+    }
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5635,8 +5718,12 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FSOPEN);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FSOPEN, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FSOPEN, pending_filename);
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
@@ -5649,6 +5736,9 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -7963,11 +8053,14 @@ int handle_sys_enter_fsmount(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
     ev->ret = -1;
-    ev->fd = -1;
+    ev->fd = (__s32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7994,6 +8087,9 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -8032,6 +8128,22 @@ int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__s32)ctx->args[0];
     ev->fd_b = (__s32)ctx->args[2];
     ev->extra = (__u64)ctx->args[4];
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    if (ctx->args[1] == 0) {
+        ev->oldname_status = PATH_READ_NULL;
+    } else {
+        ev->oldname_status = PATH_READ_OK;
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0)
+            ev->oldname_status = PATH_READ_FAILED;
+    }
+    if (ctx->args[3] == 0) {
+        ev->newname_status = PATH_READ_NULL;
+    } else {
+        ev->newname_status = PATH_READ_OK;
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0)
+            ev->newname_status = PATH_READ_FAILED;
+    }
+    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8456,6 +8568,10 @@ int handle_sys_enter_close_range(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__s32)ctx->args[0];
     ev->fd_b = (__s32)ctx->args[1];
     ev->extra = (__u64)ctx->args[2];
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    ev->oldname_status = PATH_READ_NULL;
+    ev->newname_status = PATH_READ_NULL;
+    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13029,6 +13145,17 @@ int handle_sys_enter_memfd_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    if (ctx->args[0] == 0) {
+        ev->filename_status = PATH_READ_NULL;
+    } else {
+        ev->filename_status = PATH_READ_OK;
+        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0) {
+            ev->filename_status = PATH_READ_FAILED;
+            ior_stash_pending_filename(tid, ctx->args[0]);
+        }
+    }
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -13046,8 +13173,12 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MEMFD_CREATE);
+
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MEMFD_CREATE, ctx->ret))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MEMFD_CREATE, pending_filename);
 
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
@@ -13060,6 +13191,9 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -13095,6 +13229,9 @@ int handle_sys_enter_memfd_secret(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -13126,6 +13263,9 @@ int handle_sys_exit_memfd_secret(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -15076,7 +15216,7 @@ int handle_sys_exit_perf_event_open(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_bpf is a struct null_event (kind=bpf)
+/// sys_enter_bpf is a struct bpf_event (kind=bpf)
 SEC("tracepoint/syscalls/sys_enter_bpf")
 int handle_sys_enter_bpf(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -15086,17 +15226,18 @@ int handle_sys_enter_bpf(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_BPF))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct bpf_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct bpf_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_BPF_EVENT;
     ev->trace_id = SYS_ENTER_BPF;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->cmd = (__u32)ctx->args[0];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16755,6 +16896,10 @@ int handle_sys_enter_kcmp(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__s32)ctx->args[3];
     ev->fd_b = (__s32)ctx->args[4];
     ev->extra = (__u64)ctx->args[2];
+    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    ev->oldname_status = PATH_READ_NULL;
+    ev->newname_status = PATH_READ_NULL;
+    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17999,6 +18144,9 @@ int handle_sys_enter_pidfd_open(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -18030,6 +18178,9 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename_status = PATH_READ_NULL;
+    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {

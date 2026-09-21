@@ -44,14 +44,16 @@ const (
 	acceptEventSizeV1          = 36
 	pipeEventSize              = 48
 	pipeEventSizeV1            = 44
-	eventfdEventSize           = 48
-	// eventfdEventSizeV2 is the former kernel layout, before fd was appended.
-	// EventfdEvent.Bytes emits the padded 48-byte current layout so it cannot be
-	// confused with this legacy payload.
+	eventfdEventSize           = 312
+	// V3 is the former padded layout with fd. V2 predates fd, while V1 is its
+	// compact binary.Write form.
+	eventfdEventSizeV3 = 48
 	eventfdEventSizeV2 = 40
 	eventfdEventSizeV1 = 36
 	epollCtlEventSize  = 40
-	twoFdEventSize     = 40
+	twoFdEventSize     = 568
+	twoFdCompactSize   = 564
+	twoFdLegacySize    = 40
 	pollEventSize      = 40
 	pollEventSizeV1    = 36
 	memEventSize       = 56
@@ -488,7 +490,7 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 	if len(raw) < eventfdEventSizeV1 {
 		return nil
 	}
-	if len(raw) != eventfdEventSize && len(raw) != eventfdEventSizeV2 && len(raw) != eventfdEventSizeV1 {
+	if len(raw) != eventfdEventSize && len(raw) != eventfdEventSizeV3 && len(raw) != eventfdEventSizeV2 && len(raw) != eventfdEventSizeV1 {
 		return NewEventfdEvent(raw)
 	}
 	e := poolOfEventfdEvents.Get().(*EventfdEvent)
@@ -499,13 +501,25 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 	e.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	e.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	e.Fd = -1
+	e.Filename = [MAX_FILENAME_LENGTH]byte{}
+	e.FilenameStatus = PATH_READ_NULL
+	e.SchemaVersion = 0
 	retOffset := 28
 	if len(raw) >= eventfdEventSizeV2 {
 		retOffset = 32
 	}
 	e.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
-	if len(raw) == eventfdEventSize {
+	if len(raw) == eventfdEventSizeV3 || len(raw) == eventfdEventSize {
 		e.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))
+	}
+	if len(raw) == eventfdEventSize {
+		copy(e.Filename[:], raw[44:300])
+		e.FilenameStatus = binary.LittleEndian.Uint32(raw[300:304])
+		e.SchemaVersion = binary.LittleEndian.Uint32(raw[304:308])
+		if e.SchemaVersion != EVENTFD_EVENT_SCHEMA_VERSION {
+			e.Recycle()
+			return nil
+		}
 	}
 	return e
 }
@@ -539,10 +553,12 @@ func NewEpollCtlEventFast(raw []byte) *EpollCtlEvent {
 // payload size does not match the size constant(s) above. Returns nil
 // for a short payload.
 func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
-	if len(raw) < twoFdEventSize {
+	if len(raw) < twoFdLegacySize {
 		return nil
 	}
-	if len(raw) != twoFdEventSize {
+	legacy := len(raw) == twoFdLegacySize
+	current := len(raw) == twoFdCompactSize || len(raw) == twoFdEventSize
+	if !legacy && !current {
 		return NewTwoFdEvent(raw)
 	}
 	t := poolOfTwoFdEvents.Get().(*TwoFdEvent)
@@ -554,6 +570,22 @@ func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 	t.FdA = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	t.FdB = int32(binary.LittleEndian.Uint32(raw[28:32]))
 	t.Extra = binary.LittleEndian.Uint64(raw[32:40])
+	t.Oldname = [MAX_FILENAME_LENGTH]byte{}
+	t.Newname = [MAX_FILENAME_LENGTH]byte{}
+	t.OldnameStatus = PATH_READ_NULL
+	t.NewnameStatus = PATH_READ_NULL
+	t.SchemaVersion = 0
+	if current {
+		copy(t.Oldname[:], raw[40:296])
+		copy(t.Newname[:], raw[296:552])
+		t.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])
+		t.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])
+		t.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])
+		if t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {
+			t.Recycle()
+			return nil
+		}
+	}
 	return t
 }
 

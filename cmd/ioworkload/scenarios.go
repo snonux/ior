@@ -46,6 +46,7 @@ var scenarios = map[string]func() error{
 	"eventfd-basic":                 eventfdBasic,
 	"eventfd2-basic":                eventfd2Basic,
 	"fd-from-air-eventfd-users":     fdFromAirEventfdUsers,
+	"bpf-map-create-basic":          bpfMapCreateBasic,
 	"fanotify-flags":                fanotifyFlags,
 	"inotify-basic":                 inotifyBasic,
 	"mq-posix-basic":                mqPosixBasic,
