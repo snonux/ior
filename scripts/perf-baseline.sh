@@ -72,7 +72,9 @@ go_env() {
 # they are unreferenced and `git gc` prunes them. An untracked nested git
 # repository is not added (git would record only its HEAD commit, or fail on
 # one without commits); its path is appended on a line of its own instead, so
-# it counts as dirty, but edits inside it are not seen. A file git cannot read
+# it counts as dirty, but edits inside it are not seen. An untracked linked
+# worktree (a directory whose .git is a file) is listed the same way, as
+# "path/", and counts as a nested repository too. A file git cannot read
 # fails the snapshot, as does any other git error.
 tree_fingerprint() {
     local commit=$1
@@ -213,8 +215,15 @@ record() {
     trap cleanup_tmp EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    tmp_index_dir=$(mktemp -d "${TMPDIR:-/tmp}/perf-baseline.XXXXXX") ||
-        die "cannot create a temp directory; cannot fingerprint the tree"
+    # The throwaway index lives in the git dir: its path is absolute and never
+    # inside the worktree, so neither a relative TMPDIR (GIT_INDEX_FILE would
+    # resolve against the repo root) nor one inside the tree (it would show up
+    # as untracked) can skew the fingerprint.
+    local git_dir
+    git_dir=$(git -C "$repo_root" rev-parse --absolute-git-dir) && [ -n "$git_dir" ] ||
+        die "cannot resolve the git directory; cannot fingerprint the tree"
+    tmp_index_dir=$(mktemp -d "$git_dir/perf-baseline.XXXXXX") ||
+        die "cannot create a temp directory in $git_dir; cannot fingerprint the tree"
 
     # One snapshot decides both whether the tree is dirty and what the
     # post-run check compares against.

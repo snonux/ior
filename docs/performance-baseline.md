@@ -62,7 +62,8 @@ untracked nested git repository counts as dirty, but edits inside it are not
 tracked; a file git cannot read (e.g. mode `000`) aborts the recording with
 "cannot fingerprint the tree". The loose blobs `git add` writes are
 unreferenced and pruned by `git gc`; the throwaway index lives in a temporary
-directory under `$TMPDIR` (default `/tmp`) that is removed on exit.
+`perf-baseline.*` directory inside the git directory (never in the worktree,
+whatever `$TMPDIR` is) that is removed on exit.
 
 An existing `perf/bench-<label>.txt` or `perf/static-<label>.txt` is never
 overwritten silently: the script refuses before any benchmark runs unless
