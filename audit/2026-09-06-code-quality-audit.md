@@ -865,3 +865,54 @@ external prerequisites: a no-op generation run on a host at least as new as
 the generation kernel, and a complete privileged integration-suite pass on a
 host that provides the required newer tracepoints/syscalls and permits
 io_uring. The V1/V2 follow-ups themselves are fully reviewed and passing.
+
+#### Second verification pass (Part 4) — 2026-09-21
+
+Independent re-check of `develop` at `dbb4e56`. `mage fmtCheck`, `vet`,
+`lint`, `test`, `testRace` and `build` pass. One `mage test` run failed in
+`TestMageLintFailsOnAPlantedDefect` with "parallel golangci-lint is running"
+because another linter instance was active on the host; the re-run with no
+competing linter passed, so that is environmental, not a regression.
+
+- **V1 / n8 — CONFIRMED** (`f60ef1a`): `O_RDONLY` is emitted whenever the
+  access-mode bits are clear and `O_PATH` is unset; the composite cases from S12
+  are unchanged.
+- **V2 / o8 — CONFIRMED with one defect** (`2032a89`): sockets, accept/accept4,
+  eventfd/eventfd2, epoll_create/create1, memfd_create, signalfd/signalfd4,
+  timerfd_create, pidfd_open (implicit `O_CLOEXEC`), perf_event_open and the
+  io_uring_setup fallback register `O_RDWR`; inotify_init/init1 `O_RDONLY`;
+  kinds without a known mode (fanotify_init, fsopen, fsmount, landlock) stay
+  unknown. Re-measured on the host through fdinfo: legacy `eventfd`,
+  `epoll_create` and `userfaultfd` report `02`, `inotify_init` `00`.
+
+#### V3 — LOW — `memfd_secret` close-on-exec mask changed to `FD_CLOEXEC` — task t8
+
+- **Where:** `memfdSecretCloexecFlag` in `internal/eventloop_exit.go`
+  (introduced by `2032a89`; previously `O_CLOEXEC`).
+- **What:** `memfd_secret(2)` names `FD_CLOEXEC`, but `mm/secretmem.c` accepts
+  only `O_CLOEXEC` and rejects bit 1 with `EINVAL`; the repo's own workload
+  passes `unix.O_CLOEXEC`. Tracked memfd_secret descriptors therefore lose
+  `O_CLOEXEC`. Not measurable on this host (`ENOSYS`).
+- **Caveat recorded in the task:** the `userfaultfd` access mode is kernel
+  dependent (`O_RDWR` here, `O_RDONLY` on newer mainline).
+- **Verify:** `memfd_secret(O_CLOEXEC)` renders `O_RDWR|O_CLOEXEC`.
+- [x] REVIEWED (commit: `3a43213`): PASS.
+
+#### Follow-up verification after V3 — 2026-09-21
+
+V3 was fixed by `3a43213`: `memfd_secret` now translates the kernel's
+`O_CLOEXEC` input bit, the exact mapping is pinned by the unit table, and the
+live integration expectation requires `O_CLOEXEC` when the syscall is
+available. On this 5.14 host the probe returns `ENOSYS`, so the live flag
+assertion was not executable; the tracepoint presence expectation remains in
+place. A fresh independent review confirmed that only `ENOSYS` relaxes the
+flag assertion and found no material issue.
+
+At `3a43213`, `mage fmtCheck`, `mage vet`, `mage lint`, `mage test`,
+`mage testRace`, and `mage build` pass. The focused privileged
+`TestFdFromAirEventfdUsers` scenario also passes subject to the `ENOSYS`
+qualification above. The overall x4 gate remains open for the same two
+external prerequisites: a no-op generation run on a host at least as new as
+the generation kernel, and a complete privileged integration-suite pass on a
+host that provides the required newer tracepoints/syscalls and permits
+io_uring.
