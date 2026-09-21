@@ -33,6 +33,10 @@ func mountfsManagement() error {
 	if err := os.Mkdir(openTreeTarget, 0o755); err != nil {
 		return fmt.Errorf("mkdir open_tree target: %w", err)
 	}
+	moveMountDestination := filepath.Join(dir, "move-mount-destination")
+	if err := os.Mkdir(moveMountDestination, 0o755); err != nil {
+		return fmt.Errorf("mkdir move_mount destination: %w", err)
+	}
 
 	swapFile := filepath.Join(dir, "swapfile")
 	if err := os.WriteFile(swapFile, []byte("swap"), 0o600); err != nil {
@@ -40,6 +44,8 @@ func mountfsManagement() error {
 	}
 
 	mountPath := mustCStringPtr(mountPoint)
+	moveMountDestinationPath := mustCStringPtr(moveMountDestination)
+	emptyPath := mustCStringPtr("")
 	openTreePath := mustCStringPtr(openTreeTarget)
 	swapPath := mustCStringPtr(swapFile)
 	newRoot := mustCStringPtr(mountPoint)
@@ -78,6 +84,56 @@ func mountfsManagement() error {
 	// kernels, EPERM/EINVAL/EBADF otherwise) are tolerated; no mount is created.
 	_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, uintptr(fsContextFd), uintptr(unix.FSCONFIG_SET_STRING), uintptr(unsafe.Pointer(keyName)), uintptr(unsafe.Pointer(keyValue)), 0, 0)
 	_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, uintptr(fsContextFd), uintptr(unix.FSCONFIG_CMD_CREATE), 0, 0, 0, 0)
+
+	// fsmount consumes the live filesystem-context fd and returns a detached
+	// mount fd. On capable hosts, immediately feed that fd to move_mount using
+	// MOVE_MOUNT_F_EMPTY_PATH and a distinct destination. If creation fails,
+	// still issue move_mount with two pathnames so its enter event always carries
+	// an independently assertable destination rather than the old same-path pair.
+	mountFd := -1
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSMOUNT, uintptr(fsContextFd), uintptr(unix.FSMOUNT_CLOEXEC), 0); errno == 0 {
+		mountFd = int(fd)
+	}
+	if mountFd >= 0 {
+		_, _, moveErrno := syscall.RawSyscall6(
+			unix.SYS_MOVE_MOUNT,
+			uintptr(mountFd),
+			uintptr(unsafe.Pointer(emptyPath)),
+			atFDCWD,
+			uintptr(unsafe.Pointer(moveMountDestinationPath)),
+			uintptr(unix.MOVE_MOUNT_F_EMPTY_PATH),
+			0,
+		)
+		if moveErrno == 0 {
+			// move_mount attached the detached tmpfs to the host mount
+			// namespace. Tear it down before RemoveAll tries to remove the
+			// workload directory.
+			_, _, unmountErrno := syscall.RawSyscall(
+				unix.SYS_UMOUNT2,
+				uintptr(unsafe.Pointer(moveMountDestinationPath)),
+				uintptr(unix.MNT_DETACH),
+				0,
+			)
+			if unmountErrno != 0 {
+				syscall.Close(mountFd)
+				if fsContextFd >= 0 {
+					syscall.Close(fsContextFd)
+				}
+				return fmt.Errorf("unmount move_mount destination: %w", unmountErrno)
+			}
+		}
+		syscall.Close(mountFd)
+	} else {
+		_, _, _ = syscall.RawSyscall6(
+			unix.SYS_MOVE_MOUNT,
+			atFDCWD,
+			uintptr(unsafe.Pointer(mountPath)),
+			atFDCWD,
+			uintptr(unsafe.Pointer(moveMountDestinationPath)),
+			0,
+			0,
+		)
+	}
 	if fsContextFd >= 0 {
 		syscall.Close(fsContextFd)
 	}
@@ -127,8 +183,6 @@ func mountfsManagement() error {
 	_, _, _ = syscall.RawSyscall6(unix.SYS_MOUNT, uintptr(unsafe.Pointer(none)), uintptr(unsafe.Pointer(mountPath)), uintptr(unsafe.Pointer(tmpfs)), 0, 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), uintptr(unix.MNT_DETACH), 0)
-	_, _, _ = syscall.RawSyscall6(unix.SYS_MOVE_MOUNT, atFDCWD, uintptr(unsafe.Pointer(mountPath)), atFDCWD, uintptr(unsafe.Pointer(mountPath)), 0, 0)
-	_, _, _ = syscall.RawSyscall(unix.SYS_FSMOUNT, ^uintptr(0), 0, 0)
 	_, _, _ = syscall.RawSyscall(unix.SYS_PIVOT_ROOT, uintptr(unsafe.Pointer(newRoot)), uintptr(unsafe.Pointer(putOld)), 0)
 	_, _, _ = syscall.RawSyscall6(unix.SYS_QUOTACTL, 0, uintptr(unsafe.Pointer(mountPath)), 0, 0, 0, 0)
 

@@ -257,16 +257,49 @@ func TestGenerateTypesGoEventfdCodecPreservesKernelPadding(t *testing.T) {
 			{TypeName: "__s32", FieldName: "flags"},
 			{TypeName: "__s64", FieldName: "ret"},
 			{TypeName: "__s32", FieldName: "fd"},
+			{TypeName: "char", FieldName: "filename", ArraySize: "MAX_FILENAME_LENGTH"},
+			{TypeName: "__u32", FieldName: "filename_status"},
+			{TypeName: "__u32", FieldName: "schema_version"},
 		},
 	}}
 	output := GenerateTypesGo(structs, nil)
 
-	requireContains(t, output, "if len(raw) != 48 && len(raw) != 40 && len(raw) != 36")
+	requireContains(t, output, "if len(raw) != 312 && len(raw) != 48 && len(raw) != 40 && len(raw) != 36")
 	requireContains(t, output, "binary.LittleEndian.Uint64(raw[retOffset : retOffset+8])")
 	requireContains(t, output, "binary.LittleEndian.Uint32(raw[40:44])")
-	requireContains(t, output, "raw := make([]byte, 48)")
+	requireContains(t, output, "raw := make([]byte, 312)")
 	requireContains(t, output, "binary.LittleEndian.PutUint64(raw[32:40], uint64(e.Ret))")
 	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[40:44], uint32(e.Fd))")
+	requireContains(t, output, "copy(raw[44:300], e.Filename[:])")
+}
+
+func TestGenerateTypesGoTwoFdCodecPinsCurrentAndLegacyLayouts(t *testing.T) {
+	structs := []CStruct{{
+		Name: "two_fd_event",
+		Members: []CMember{
+			{TypeName: "__u32", FieldName: "event_type"},
+			{TypeName: "__u32", FieldName: "trace_id"},
+			{TypeName: "__u64", FieldName: "time"},
+			{TypeName: "__u32", FieldName: "pid"},
+			{TypeName: "__u32", FieldName: "tid"},
+			{TypeName: "__s32", FieldName: "fd_a"},
+			{TypeName: "__s32", FieldName: "fd_b"},
+			{TypeName: "__u64", FieldName: "extra"},
+			{TypeName: "char", FieldName: "oldname", ArraySize: "MAX_FILENAME_LENGTH"},
+			{TypeName: "char", FieldName: "newname", ArraySize: "MAX_FILENAME_LENGTH"},
+			{TypeName: "__u32", FieldName: "oldname_status"},
+			{TypeName: "__u32", FieldName: "newname_status"},
+			{TypeName: "__u32", FieldName: "schema_version"},
+		},
+	}}
+	output := GenerateTypesGo(structs, nil)
+
+	requireContains(t, output, "if len(raw) != 568 && len(raw) != 564 && len(raw) != 40")
+	requireContains(t, output, "if len(raw) != 40")
+	requireContains(t, output, "t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION")
+	requireContains(t, output, "raw := make([]byte, 568)")
+	requireContains(t, output, "copy(raw[40:296], t.Oldname[:])")
+	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[560:564], t.SchemaVersion)")
 }
 
 func TestGenerateTypesGoConstants(t *testing.T) {

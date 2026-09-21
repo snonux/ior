@@ -2495,6 +2495,73 @@ func TestGenerateOpenTreeHandlersUseOpenTransport(t *testing.T) {
 	}
 }
 
+func TestGenerateNamedEventfdHandlersCaptureIdentityAndRecoverFaults(t *testing.T) {
+	tests := []struct {
+		name          string
+		filenameField string
+	}{
+		{name: "memfd_create", filenameField: "uname"},
+		{name: "fsopen", filenameField: "_fs_name"},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := GenerateTracepointsC(namedEventfdFormats(tt.name, tt.filenameField, 9700+i*2))
+			requireContains(t, output, "struct eventfd_event *ev")
+			requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+			requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0])")
+			requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
+			requireContains(t, output, "ior_take_pending_filename(tid, SYS_ENTER_"+strings.ToUpper(tt.name)+")")
+			requireContains(t, output, "ev->flags = flags;")
+		})
+	}
+}
+
+func TestGenerateFsmountCapturesSourceFd(t *testing.T) {
+	output := generateFromPair(t, FormatFsmount, FormatExitFsmount)
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[1];")
+}
+
+func TestGenerateMoveMountCapturesBothPaths(t *testing.T) {
+	output := generateFromPair(t, FormatMoveMount, FormatExitMoveMount)
+	requireContains(t, output, "ev->fd_a = (__s32)ctx->args[0];")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1])")
+	requireContains(t, output, "ev->fd_b = (__s32)ctx->args[2];")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3])")
+	requireContains(t, output, "ev->extra = (__u64)ctx->args[4];")
+}
+
+func TestGenerateBpfCapturesCommand(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("bpf")))
+	requireContains(t, output, "struct bpf_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_BPF_EVENT;")
+	requireContains(t, output, "ev->cmd = (__u32)ctx->args[0];")
+}
+
+func namedEventfdFormats(name, filenameField string, enterID int) []Format {
+	return []Format{
+		{
+			Name:   "sys_enter_" + name,
+			ID:     enterID,
+			Family: ClassifySyscallFamily("sys_enter_" + name),
+			ExternalFields: []Field{
+				{Type: "int", Name: "__syscall_nr"},
+				{Type: "const char *", Name: filenameField},
+				{Type: "unsigned int", Name: "flags"},
+			},
+		},
+		{
+			Name:   "sys_exit_" + name,
+			ID:     enterID - 1,
+			Family: ClassifySyscallFamily("sys_exit_" + name),
+			ExternalFields: []Field{
+				{Type: "int", Name: "__syscall_nr"},
+				{Type: "long", Name: "ret"},
+			},
+		},
+	}
+}
+
 func TestGenerateAllEventTypes(t *testing.T) {
 	// Verify every event type constant appears correctly
 	tests := []struct {
@@ -2519,6 +2586,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindAccept, "ENTER_ACCEPT_EVENT", "EXIT_ACCEPT_EVENT"},
 		{KindPipe, "ENTER_PIPE_EVENT", "EXIT_PIPE_EVENT"},
 		{KindEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
+		{KindNamedEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
 		{KindPidfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
 		{KindEpollCtl, "ENTER_EPOLL_CTL_EVENT", "EXIT_EPOLL_CTL_EVENT"},
 		{KindTwoFd, "ENTER_TWO_FD_EVENT", "EXIT_TWO_FD_EVENT"},
@@ -2534,7 +2602,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindSysVId, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindSysVOp, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindProc, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
-		{KindBpf, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindBpf, "ENTER_BPF_EVENT", "EXIT_BPF_EVENT"},
 		{KindFutex, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindPrctl, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindTimerObj, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
@@ -2572,6 +2640,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindAccept, "accept_event"},
 		{KindPipe, "pipe_event"},
 		{KindEventfd, "eventfd_event"},
+		{KindNamedEventfd, "eventfd_event"},
 		{KindPidfd, "eventfd_event"},
 		{KindEpollCtl, "epoll_ctl_event"},
 		{KindTwoFd, "two_fd_event"},
@@ -2587,7 +2656,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindSysVId, "null_event"},
 		{KindSysVOp, "null_event"},
 		{KindProc, "null_event"},
-		{KindBpf, "null_event"},
+		{KindBpf, "bpf_event"},
 		{KindFutex, "null_event"},
 		{KindPrctl, "null_event"},
 		{KindTimerObj, "null_event"},
@@ -2609,7 +2678,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
+	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)
@@ -3138,8 +3207,8 @@ func TestGenerateOpenHandlersRecoverAFaultedFilename(t *testing.T) {
 // TestGeneratedArtifactRecoversFaultedOpenFilenames applies the same invariant
 // to the committed internal/c/generated_tracepoints.c. `mage generate` needs
 // root and a newer kernel than this host, so the artifact is spliced by hand;
-// this test is what keeps the splice honest and complete across all six
-// open-family syscalls.
+// this test is what keeps the splice honest and complete across all open and
+// named-eventfd syscalls that recover identifying strings.
 func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 	artifact, err := readGeneratedTracepointsC()
 	if err != nil {
@@ -3170,17 +3239,86 @@ func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 			t.Errorf("sys_exit_%s does not emit the fixup record", syscallName)
 		}
 	}
+	recoveryEnters := make([]string, 0, len(openEnters)+2)
+	for _, match := range openEnters {
+		recoveryEnters = append(recoveryEnters, match[1])
+	}
+	recoveryEnters = append(recoveryEnters, "sys_enter_fsopen", "sys_enter_memfd_create")
+	for _, enter := range recoveryEnters[len(openEnters):] {
+		syscallName := strings.TrimPrefix(enter, "sys_enter_")
+		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+		enterBody := handlerBody(t, artifact, enter)
+		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[0]);") {
+			t.Errorf("%s does not stash its identifying string pointer", enter)
+		}
+		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
+			!strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+			t.Errorf("sys_exit_%s does not recover its identifying string", syscallName)
+		}
+	}
 
-	// Exactly the open-kind pairs, nothing else: an over-broad splice would
+	// Exactly the reviewed recovery pairs, nothing else: an over-broad splice would
 	// make every exit handler pay two extra map operations.
-	if got := strings.Count(artifact, "ior_take_pending_filename("); got != len(openEnters) {
-		t.Errorf("%d ior_take_pending_filename call sites, want %d (one per open-kind exit)", got, len(openEnters))
+	if got := strings.Count(artifact, "ior_take_pending_filename("); got != len(recoveryEnters) {
+		t.Errorf("%d ior_take_pending_filename call sites, want %d", got, len(recoveryEnters))
 	}
-	if got := strings.Count(artifact, "ior_emit_open_name_fixup("); got != len(openEnters) {
-		t.Errorf("%d ior_emit_open_name_fixup call sites, want %d (one per open-kind exit)", got, len(openEnters))
+	if got := strings.Count(artifact, "ior_emit_open_name_fixup("); got != len(recoveryEnters) {
+		t.Errorf("%d ior_emit_open_name_fixup call sites, want %d", got, len(recoveryEnters))
 	}
-	if got := strings.Count(artifact, "ior_stash_pending_filename("); got != len(openEnters) {
-		t.Errorf("%d ior_stash_pending_filename call sites, want %d (one per open-kind enter)", got, len(openEnters))
+	if got := strings.Count(artifact, "ior_stash_pending_filename("); got != len(recoveryEnters) {
+		t.Errorf("%d ior_stash_pending_filename call sites, want %d", got, len(recoveryEnters))
+	}
+}
+
+func TestGeneratedArtifactInitializesExtendedEventfdPayloads(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	handlers := regexp.MustCompile(`(?m)^/// (sys_(?:enter|exit)_\S+) is a struct eventfd_event`).
+		FindAllStringSubmatch(artifact, -1)
+	if len(handlers) == 0 {
+		t.Fatal("no eventfd handlers in generated artifact")
+	}
+	for _, match := range handlers {
+		body := handlerBody(t, artifact, match[1])
+		for _, statement := range []string{
+			"__builtin_memset(&(ev->filename), 0, sizeof(ev->filename));",
+			"ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;",
+		} {
+			if got := strings.Count(body, statement); got != 1 {
+				t.Errorf("%s contains %d %q statements, want 1", match[1], got, statement)
+			}
+		}
+		if got := strings.Count(body, "ev->filename_status = PATH_READ_NULL;"); got != 1 {
+			t.Errorf("%s initializes filename status %d times, want 1", match[1], got)
+		}
+	}
+}
+
+func TestGeneratedArtifactInitializesExtendedTwoFdPayloads(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	handlers := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct two_fd_event`).
+		FindAllStringSubmatch(artifact, -1)
+	if len(handlers) == 0 {
+		t.Fatal("no two_fd handlers in generated artifact")
+	}
+	for _, match := range handlers {
+		body := handlerBody(t, artifact, match[1])
+		for _, statement := range []string{
+			"__builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));",
+			"ev->oldname_status = PATH_READ_NULL;",
+			"ev->newname_status = PATH_READ_NULL;",
+			"ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;",
+		} {
+			if got := strings.Count(body, statement); got != 1 {
+				t.Errorf("%s contains %d %q statements, want 1", match[1], got, statement)
+			}
+		}
 	}
 }
 

@@ -132,7 +132,7 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"landlock_create_ruleset", syntheticEnter("landlock_create_ruleset", 9350), syntheticExit("landlock_create_ruleset", 9349), KindEventfd},
 		{"landlock_add_rule", syntheticEnter("landlock_add_rule", 9418), syntheticExit("landlock_add_rule", 9417), KindFd},
 		{"landlock_restrict_self", syntheticEnter("landlock_restrict_self", 9420), syntheticExit("landlock_restrict_self", 9419), KindFd},
-		{"fsopen", syntheticEnter("fsopen", 9352), syntheticExit("fsopen", 9351), KindEventfd},
+		{"fsopen", syntheticEnter("fsopen", 9352), syntheticExit("fsopen", 9351), KindNamedEventfd},
 		{"pidfd_open", syntheticEnter("pidfd_open", 9320), syntheticExit("pidfd_open", 9319), KindPidfd},
 		{"pidfd_send_signal", syntheticEnter("pidfd_send_signal", 9322), syntheticExit("pidfd_send_signal", 9321), KindFd},
 		{"epoll_ctl", FormatEpollCtl, FormatExitEpollCtl, KindEpollCtl},

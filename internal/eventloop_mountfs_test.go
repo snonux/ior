@@ -13,20 +13,24 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestHandleTwoFdExitUsesFirstDescriptor(t *testing.T) {
+func TestHandleMoveMountExitReportsDestinationPath(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.fdState().set(81, 70, file.NewFd(81, "/proc/self/fd/81", -1))
 
 	enter := &types.TwoFdEvent{
-		EventType: types.ENTER_TWO_FD_EVENT,
-		TraceId:   types.SYS_ENTER_MOVE_MOUNT,
-		Time:      100,
-		Pid:       70,
-		Tid:       71,
-		FdA:       81,
-		FdB:       82,
-		Extra:     0x2,
+		EventType:     types.ENTER_TWO_FD_EVENT,
+		TraceId:       types.SYS_ENTER_MOVE_MOUNT,
+		Time:          100,
+		Pid:           70,
+		Tid:           71,
+		FdA:           81,
+		FdB:           82,
+		Extra:         0x2,
+		OldnameStatus: types.PATH_READ_OK,
+		NewnameStatus: types.PATH_READ_OK,
+		SchemaVersion: types.TWO_FD_EVENT_SCHEMA_VERSION,
 	}
+	copy(enter.Oldname[:], "/source")
+	copy(enter.Newname[:], "/destination")
 	exit := &types.RetEvent{
 		EventType: types.EXIT_RET_EVENT,
 		TraceId:   types.SYS_EXIT_MOVE_MOUNT,
@@ -40,8 +44,11 @@ func TestHandleTwoFdExitUsesFirstDescriptor(t *testing.T) {
 	if ok := el.handleTwoFdExit(ep, enter); !ok {
 		t.Fatal("handleTwoFdExit returned false")
 	}
-	if ep.File == nil || ep.File.FD() != 81 {
-		t.Fatalf("expected resolved descriptor 81, got file=%v", ep.File)
+	if ep.File == nil || ep.File.Name() != "/destination" {
+		t.Fatalf("expected move_mount destination path, got file=%v", ep.File)
+	}
+	if ep.Oldname != "/source" {
+		t.Fatalf("expected move_mount source path, got %q", ep.Oldname)
 	}
 }
 

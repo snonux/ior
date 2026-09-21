@@ -62,6 +62,18 @@ func TestSecurityKeysPtracePerf(t *testing.T) {
 	}
 }
 
+func TestBpfMapCreateDescriptor(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "bpf-map-create-basic", []ExpectedEvent{
+		{Tracepoint: "enter_bpf", Comm: "ioworkload", MinCount: 1},
+	}, []string{"-trace-syscalls", "bpf,getpriority,close"})
+
+	if totalTracepointPathCount(result, "enter_getpriority", "") == 0 {
+		t.Skip("BPF_MAP_CREATE was denied by this host's capability/lockdown policy")
+	}
+	assertTracepointPathPrefix(t, result, "enter_bpf", "bpf:map_create")
+	assertTracepointPathPrefix(t, result, "enter_close", "bpf:map_create")
+}
+
 var getrandomTraceArgs = []string{"-trace-syscalls", "getrandom"}
 
 // TestSecurityGetrandom asserts end-to-end tracing of the getrandom syscall

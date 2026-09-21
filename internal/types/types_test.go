@@ -246,14 +246,17 @@ func TestPipeEventSerialization(t *testing.T) {
 
 func TestEventfdEventSerialization(t *testing.T) {
 	eventfdEv1 := EventfdEvent{
-		EventType: ENTER_EVENTFD_EVENT,
-		TraceId:   SYS_ENTER_EVENTFD2,
-		Time:      5678,
-		Pid:       38,
-		Tid:       39,
-		Flags:     0x800,
-		Ret:       12,
-		Fd:        7,
+		EventType:      ENTER_EVENTFD_EVENT,
+		TraceId:        SYS_ENTER_EVENTFD2,
+		Time:           5678,
+		Pid:            38,
+		Tid:            39,
+		Flags:          0x800,
+		Ret:            12,
+		Fd:             7,
+		Filename:       testFilename("ior-memfd"),
+		FilenameStatus: PATH_READ_OK,
+		SchemaVersion:  EVENTFD_EVENT_SCHEMA_VERSION,
 	}
 	bytes, err := eventfdEv1.Bytes()
 	if err != nil {
@@ -272,6 +275,9 @@ func TestEventfdEventSerialization(t *testing.T) {
 	assertEquals(t, eventfdEv1.Flags, eventfdEv2.Flags)
 	assertEquals(t, eventfdEv1.Ret, eventfdEv2.Ret)
 	assertEquals(t, eventfdEv1.Fd, eventfdEv2.Fd)
+	assertEquals(t, eventfdEv1.Filename, eventfdEv2.Filename)
+	assertEquals(t, eventfdEv1.FilenameStatus, eventfdEv2.FilenameStatus)
+	assertEquals(t, eventfdEv1.SchemaVersion, eventfdEv2.SchemaVersion)
 }
 
 func TestEpollCtlEventSerialization(t *testing.T) {
@@ -305,14 +311,19 @@ func TestEpollCtlEventSerialization(t *testing.T) {
 
 func TestTwoFdEventSerialization(t *testing.T) {
 	twoFdEv1 := TwoFdEvent{
-		EventType: ENTER_TWO_FD_EVENT,
-		TraceId:   SYS_ENTER_MOVE_MOUNT,
-		Time:      6790,
-		Pid:       40,
-		Tid:       41,
-		FdA:       12,
-		FdB:       34,
-		Extra:     0x20,
+		EventType:     ENTER_TWO_FD_EVENT,
+		TraceId:       SYS_ENTER_MOVE_MOUNT,
+		Time:          6790,
+		Pid:           40,
+		Tid:           41,
+		FdA:           12,
+		FdB:           34,
+		Extra:         0x20,
+		Oldname:       testFilename("source"),
+		Newname:       testFilename("destination"),
+		OldnameStatus: PATH_READ_OK,
+		NewnameStatus: PATH_READ_OK,
+		SchemaVersion: TWO_FD_EVENT_SCHEMA_VERSION,
 	}
 	bytes, err := twoFdEv1.Bytes()
 	if err != nil {
@@ -328,6 +339,11 @@ func TestTwoFdEventSerialization(t *testing.T) {
 	assertEquals(t, twoFdEv1.FdA, twoFdEv2.FdA)
 	assertEquals(t, twoFdEv1.FdB, twoFdEv2.FdB)
 	assertEquals(t, twoFdEv1.Extra, twoFdEv2.Extra)
+	assertEquals(t, twoFdEv1.Oldname, twoFdEv2.Oldname)
+	assertEquals(t, twoFdEv1.Newname, twoFdEv2.Newname)
+	assertEquals(t, twoFdEv1.OldnameStatus, twoFdEv2.OldnameStatus)
+	assertEquals(t, twoFdEv1.NewnameStatus, twoFdEv2.NewnameStatus)
+	assertEquals(t, twoFdEv1.SchemaVersion, twoFdEv2.SchemaVersion)
 }
 
 func TestPollEventSerialization(t *testing.T) {

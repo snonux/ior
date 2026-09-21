@@ -39,10 +39,19 @@ func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 	if !ok {
 		return
 	}
-	openEv, ok := pair.EnterEv.(*types.OpenEvent)
-	if !ok {
-		return
+	applyRecoveredFilename(pair.EnterEv, ev)
+}
+
+func applyRecoveredFilename(enterEv any, fixup *types.OpenNameFixupEvent) {
+	switch typed := enterEv.(type) {
+	case *types.OpenEvent:
+		applyRecoveredOpenFilename(typed, fixup)
+	case *types.EventfdEvent:
+		applyRecoveredEventfdFilename(typed, fixup)
 	}
+}
+
+func applyRecoveredOpenFilename(openEv *types.OpenEvent, ev *types.OpenNameFixupEvent) {
 	// The kernel stamps the fixup with the enter trace ID it recovered the name
 	// for, and only after checking that the per-tid enter state still belongs
 	// to that syscall. Re-checking it here closes the userspace half of the
@@ -69,4 +78,15 @@ func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 	// for a valid empty C string, whose all-zero payload must remain
 	// distinguishable from receiving no control record at all.
 	openEv.FilenameStatus = types.PATH_READ_OK
+}
+
+func applyRecoveredEventfdFilename(eventfdEv *types.EventfdEvent, ev *types.OpenNameFixupEvent) {
+	if eventfdEv.GetTraceId() != ev.GetTraceId() || eventfdEv.FilenameStatus != types.PATH_READ_FAILED {
+		return
+	}
+	if types.StringValue(eventfdEv.Filename[:]) != "" {
+		return
+	}
+	copy(eventfdEv.Filename[:], ev.Filename[:])
+	eventfdEv.FilenameStatus = types.PATH_READ_OK
 }

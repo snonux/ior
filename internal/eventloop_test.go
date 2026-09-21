@@ -675,14 +675,17 @@ func makeEnterMemEvent(t *testing.T, time uint64, pid, tid uint32, traceID types
 // close_range the three fields carry (first, last, flags).
 func makeEnterTwoFdEvent(t *testing.T, time uint64, pid, tid uint32, fdA, fdB int32, extra uint64, traceId types.TraceId) (types.TwoFdEvent, []byte) {
 	ev := types.TwoFdEvent{
-		EventType: types.ENTER_TWO_FD_EVENT,
-		TraceId:   traceId,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		FdA:       fdA,
-		FdB:       fdB,
-		Extra:     extra,
+		EventType:     types.ENTER_TWO_FD_EVENT,
+		TraceId:       traceId,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		FdA:           fdA,
+		FdB:           fdB,
+		Extra:         extra,
+		OldnameStatus: types.PATH_READ_NULL,
+		NewnameStatus: types.PATH_READ_NULL,
+		SchemaVersion: types.TWO_FD_EVENT_SCHEMA_VERSION,
 	}
 
 	bytes, err := ev.Bytes()
