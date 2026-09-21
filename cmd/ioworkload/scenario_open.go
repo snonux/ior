@@ -27,8 +27,8 @@ func openBasic() error {
 	return syscall.Close(fd)
 }
 
-// openDirfdPaths exercises both forms that require userspace dirfd
-// attribution: a relative openat pathname and an AT_EMPTY_PATH statx call.
+// openDirfdPaths exercises forms that require userspace dirfd attribution: a
+// relative openat pathname plus AT_EMPTY_PATH statx and utimensat calls.
 func openDirfdPaths() error {
 	dir, cleanup, err := makeTempDir("open-dirfd-paths")
 	if err != nil {
@@ -69,6 +69,25 @@ func openDirfdPaths() error {
 	runtime.KeepAlive(statx)
 	if errno != 0 {
 		return fmt.Errorf("statx AT_EMPTY_PATH: %w", errno)
+	}
+
+	times := [2]syscall.Timespec{
+		{Sec: 1_000_000_000},
+		{Sec: 1_000_000_000},
+	}
+	_, _, errno = syscall.Syscall6(
+		syscall.SYS_UTIMENSAT,
+		uintptr(dirFD),
+		uintptr(unsafe.Pointer(&empty[0])),
+		uintptr(unsafe.Pointer(&times[0])),
+		atEmptyPath,
+		0,
+		0,
+	)
+	runtime.KeepAlive(empty)
+	runtime.KeepAlive(times)
+	if errno != 0 {
+		return fmt.Errorf("utimensat AT_EMPTY_PATH: %w", errno)
 	}
 	return nil
 }

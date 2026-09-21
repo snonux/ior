@@ -402,6 +402,26 @@ func xattrListxattr() error {
 	return nil
 }
 
+// xattrListxattrSizeProbe queries the required name-list capacity without
+// supplying an output buffer. The positive return is metadata, not bytes
+// copied, so ior must report zero bytes for this row.
+func xattrListxattrSizeProbe() error {
+	path, cleanup, err := makeXattrFile("xattr-listxattr-size-probe", []byte("listxattr-size-probe-value"))
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	n, err := unix.Listxattr(path, nil)
+	if err != nil {
+		return fmt.Errorf("listxattr size probe: %w", err)
+	}
+	if n < len(xattrName)+1 {
+		return fmt.Errorf("listxattr size probe returned %d, want at least %d", n, len(xattrName)+1)
+	}
+	return nil
+}
+
 // xattrLlistxattr is the no-follow counterpart of xattrListxattr. As with
 // lgetxattr, the target is a regular file so llistxattr(2) returns the name-list
 // size deterministically (user.* on a bare symlink is restricted).

@@ -13,15 +13,17 @@ import (
 // never blocks waiting for room, and we drain the read end afterwards anyway.
 const miscVmspliceLen = 16
 
-// miscBasic exercises the SAFE, UNPRIVILEGED members of the Misc syscall
-// family so the enter_/exit_ tracepoints fire end-to-end. Every call here is
-// read-only or self-contained: none mutate global host state, none require
-// elevated capabilities, and none can block.
+// miscBasic exercises safe members of the Misc syscall family so the enter_/
+// exit_ tracepoints fire end-to-end. Every call here is read-only or
+// self-contained: none mutate global host state and none can block.
 //
 //   - getcpu   reports the CPU/NUMA node the caller runs on (raw syscall; the
 //     unix package has no portable wrapper).
 //   - newuname (via unix.Uname) reads the kernel/host name strings.
 //   - sysinfo  (via unix.Sysinfo) reads memory/load/uptime counters.
+//   - syslog action SIZE_BUFFER reads the kernel log ring-buffer capacity and
+//     copies no log data. A restricted host may deny it with EPERM; syscall
+//     entry still supplies the safe coverage this scenario needs.
 //   - vmsplice gathers a tiny in-memory buffer into a self-created pipe; we
 //     drain (and close) the pipe so it can never fill up or block.
 //   - alarm(0) cancels any pending SIGALRM and returns the previous value;
@@ -29,9 +31,9 @@ const miscVmspliceLen = 16
 //
 // INTENTIONALLY EXCLUDED from this scenario (and documented here so the reasons
 // travel with the code):
-//   - acct, sethostname, setdomainname, syslog:
-//     require CAP_SYS_ADMIN and/or mutate GLOBAL host state (hostname, kernel
-//     log, process accounting) — unsafe to invoke from a test workload.
+//   - acct, sethostname, setdomainname: require CAP_SYS_ADMIN and/or mutate
+//     GLOBAL host state (hostname, process accounting) — unsafe to invoke from
+//     a test workload.
 //   - fanotify_init, fanotify_mark: covered by the separate fanotify-marks IPC
 //     scenario, which requires CAP_SYS_ADMIN and cleans up its own group.
 //   - ioperm, iopl, modify_ldt: require CAP_SYS_RAWIO and are x86-only port/LDT
@@ -50,6 +52,9 @@ func miscBasic() error {
 		return err
 	}
 	if err := miscSysinfo(); err != nil {
+		return err
+	}
+	if err := miscSyslogBufferSize(); err != nil {
 		return err
 	}
 	if err := miscVmsplice(); err != nil {
@@ -90,6 +95,24 @@ func miscSysinfo() error {
 	var info unix.Sysinfo_t
 	if err := unix.Sysinfo(&info); err != nil {
 		return fmt.Errorf("sysinfo: %w", err)
+	}
+	return nil
+}
+
+// miscSyslogBufferSize queries only the kernel log ring-buffer capacity. Unlike
+// actions that read or clear log data, it has no side effects. Linux may still
+// require CAP_SYSLOG when dmesg_restrict is enabled, so EPERM is an expected
+// result: the enter/exit tracepoints have fired either way.
+func miscSyslogBufferSize() error {
+	size, err := unix.Klogctl(unix.SYSLOG_ACTION_SIZE_BUFFER, nil)
+	if err == syscall.EPERM {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("syslog size buffer: %w", err)
+	}
+	if size <= 0 {
+		return fmt.Errorf("syslog size buffer returned %d", size)
 	}
 	return nil
 }
