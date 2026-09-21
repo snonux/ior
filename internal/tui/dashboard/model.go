@@ -330,7 +330,7 @@ func (m *Model) handleStreamEditorDone(msg streamEditorDoneMsg) (tea.Model, tea.
 }
 
 func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if handled, cmd := m.flamegraphModel.HandleRefreshCompletion(msg, m.activeTab == TabFlame); handled {
+	if handled, cmd := m.HandleFlameRefreshCompletion(msg, true); handled {
 		return m, cmd
 	}
 	if m.activeTab != TabFlame {
@@ -339,6 +339,14 @@ func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
 	m.flamegraphModel = next.(*flamegraphtui.Model)
 	return m, cmd
+}
+
+// HandleFlameRefreshCompletion offers a background flamegraph result to its
+// persistent owner even when a top-level screen or modal currently owns normal
+// message routing. apply is further gated by the active tab so hidden results
+// release their in-flight slot without starting an invisible animation.
+func (m *Model) HandleFlameRefreshCompletion(msg tea.Msg, apply bool) (bool, tea.Cmd) {
+	return m.flamegraphModel.HandleRefreshCompletion(msg, apply && m.activeTab == TabFlame)
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

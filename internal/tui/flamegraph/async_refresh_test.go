@@ -53,6 +53,9 @@ func TestRefreshFromLiveTrieCmdProducesSnapshotReady(t *testing.T) {
 	if ready.snapshot == nil {
 		t.Fatalf("expected snapshot in ready message")
 	}
+	if ready.generation != m.refreshGeneration {
+		t.Fatalf("ready msg generation = %d, want %d", ready.generation, m.refreshGeneration)
+	}
 	if ready.layoutWidth != 120 || ready.layoutHeight != 30 {
 		t.Fatalf("ready msg layout = %dx%d, want 120x30", ready.layoutWidth, ready.layoutHeight)
 	}
@@ -76,6 +79,57 @@ func TestRefreshFromLiveTrieCmdCoalescesInFlight(t *testing.T) {
 	}
 	if second := m.RefreshFromLiveTrieCmd(); second != nil {
 		t.Fatalf("expected second cmd to coalesce (return nil) while a refresh is in flight")
+	}
+}
+
+func TestSetLiveTrieInvalidatesOldDispatchedCompletionWithoutReleasingNewRefresh(t *testing.T) {
+	oldTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(oldTrie, 0)
+	m := NewModel(oldTrie)
+	m.width = 120
+	m.height = 30
+
+	oldCmd := m.RefreshFromLiveTrieCmd()
+	if oldCmd == nil {
+		t.Fatal("expected old-session refresh command")
+	}
+
+	newTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(newTrie, 1)
+	m.SetLiveTrie(newTrie)
+	if m.refreshInFlight {
+		t.Fatal("SetLiveTrie left the old session's in-flight slot occupied")
+	}
+	newCmd := m.RefreshFromLiveTrieCmd()
+	if newCmd == nil {
+		t.Fatal("expected new-session refresh command")
+	}
+
+	oldReady := oldCmd()
+	handled, followup := m.HandleRefreshCompletion(oldReady, true)
+	if !handled {
+		t.Fatal("old-session completion was not recognized")
+	}
+	if followup != nil {
+		t.Fatal("old-session completion scheduled a command")
+	}
+	if !m.refreshInFlight {
+		t.Fatal("old-session completion released the new session's in-flight slot")
+	}
+	if got := m.LastVersion(); got != 0 {
+		t.Fatalf("old-session completion applied version %d to the new session", got)
+	}
+
+	newReady := newCmd()
+	handled, _ = m.HandleRefreshCompletion(newReady, true)
+	if !handled {
+		t.Fatal("new-session completion was not recognized")
+	}
+	if m.refreshInFlight {
+		t.Fatal("new-session completion did not release its in-flight slot")
+	}
+	if got, want := m.LastVersion(), newTrie.Version(); got != want {
+		t.Fatalf("new-session completion applied version %d, want %d", got, want)
 	}
 }
 
