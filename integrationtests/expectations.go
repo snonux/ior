@@ -256,7 +256,12 @@ func matchesRowExpectation(row iorparquet.Record, exp ExpectedRow) bool {
 	if exp.Syscall != "" && row.Syscall != exp.Syscall {
 		return false
 	}
-	if exp.Comm != "" && row.Comm != exp.Comm {
+	// An empty row comm is an unresolved name, not a foreign one: ior resolves
+	// comm asynchronously through procfs, so the first rows of a short scenario
+	// whose trace set has no open or exec can be emitted before the lookup
+	// lands. Tolerate it exactly as matchesExpectation does; a different
+	// non-empty comm still rejects the row.
+	if exp.Comm != "" && row.Comm != "" && row.Comm != exp.Comm {
 		return false
 	}
 	return matchesOptional(row.FD, exp.FD) &&
