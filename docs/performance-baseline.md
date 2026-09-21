@@ -60,7 +60,13 @@ overwritten silently: the script refuses before any benchmark runs unless
 `PERF_FORCE=1` is set. Both files are written to temporary files in `perf/`
 and renamed into place only after the run produced benchmark results and no
 package failed, so a failed, empty or interrupted (Ctrl-C) recording leaves
-nothing behind and can simply be rerun with the same label.
+nothing behind and can simply be rerun with the same label. Stray temporary
+files (`perf/.bench-*`, `perf/.static-*`, e.g. after `kill -9`) are ignored by
+git and safe to delete. If `HEAD` or the tree outside `perf/` (tracked diff,
+untracked files) changed between the start and the end of the run, the
+recording is discarded with "tree changed during recording; nothing written",
+since the header would describe a different tree than the one measured. The
+written files get the usual mode (`0666` minus the umask, e.g. `0644`).
 
 Every baseline names the commit it measured, so `HEAD` must resolve: on an
 unborn branch or a broken checkout the script fails whatever the label —
