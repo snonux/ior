@@ -41,9 +41,15 @@ scripts/perf-baseline.sh record my-label     # explicit label
 PERF_COUNT=10 scripts/perf-baseline.sh record
 ```
 
+A label must start with a letter or digit and may contain only letters,
+digits and `.` `_` `+` `-` (no `/`, no `..`, not empty); anything else is
+refused before any work starts.
+
 If the tree differs from `HEAD` outside `perf/` (tracked changes, or untracked
-files that `.gitignore` does not exclude, since `go test` compiles a new
-uncommitted `.go` file just the same), the recording measures code that no
+files that git does not ignore — `git ls-files --exclude-standard`, so
+`.gitignore`, `.git/info/exclude` and the global `core.excludesFile` all count —
+since `go test` compiles a new uncommitted `.go` file just the same), the
+recording measures code that no
 commit contains. The label then always gets a `-dirty` suffix, explicit labels
 included, and the header's `commit:` line ends in `+uncommitted changes`.
 Conversely, an explicit label ending in `-dirty` on a clean tree is refused.
@@ -51,8 +57,15 @@ Commit first and record from a clean tree.
 
 An existing `perf/bench-<label>.txt` or `perf/static-<label>.txt` is never
 overwritten silently: the script refuses before any benchmark runs unless
-`PERF_FORCE=1` is set. If `HEAD` cannot be resolved, the default label cannot
-be derived and the script fails; pass an explicit label.
+`PERF_FORCE=1` is set. Both files are written to temporary files in `perf/`
+and renamed into place only after the run produced benchmark results and no
+package failed, so a failed, empty or interrupted (Ctrl-C) recording leaves
+nothing behind and can simply be rerun with the same label.
+
+Every baseline names the commit it measured, so `HEAD` must resolve: on an
+unborn branch or a broken checkout the script fails whatever the label —
+commit first. A git error while checking whether the tree is clean also aborts
+the recording rather than being taken for a dirty tree.
 
 Settings come from the environment: `PERF_COUNT` (samples per benchmark, default
 8), `PERF_BENCHTIME` (default `1s`), `PERF_BENCH` (benchmark regexp, default the
