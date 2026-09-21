@@ -39,7 +39,8 @@ func testProcessKcmpAttribution(t *testing.T, scenario string, wantFile bool) {
 		if row.Ret != 0 && row.Ret != -int64(syscall.EPERM) && row.Ret != -int64(syscall.ENOSYS) {
 			t.Errorf("unexpected kcmp return: %+v", row)
 		}
-		if row.IsError != (row.Ret < 0) {
+		wantError := row.Ret >= -4095 && row.Ret < 0
+		if row.IsError != wantError {
 			t.Errorf("kcmp error flag disagrees with its return: %+v", row)
 		}
 		if wantFile && (row.File != targetPath || row.FD != targetFD) {
