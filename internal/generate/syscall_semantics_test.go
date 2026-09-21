@@ -181,8 +181,8 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"get_mempolicy":   {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
 	"get_robust_list": {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"getcpu":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
-	// TODO(l8): delete temporary when raw getcwd's byte count is classified as a read.
-	"getcwd":       {kind: "null", args: map[string]int{}, ret: "READ_CLASSIFIED", family: "FS", temporary: temporaryRet("l8", "UNCLASSIFIED")},
+	// Raw getcwd returns the copied pathname byte count including its NUL.
+	"getcwd":       {kind: "null", args: map[string]int{}, ret: "READ_CLASSIFIED", family: "FS"},
 	"getdents":     {kind: "fd", args: map[string]int{"fd": 0}, ret: "READ_CLASSIFIED", family: "FS"},
 	"getdents64":   {kind: "fd", args: map[string]int{"fd": 0}, ret: "READ_CLASSIFIED", family: "FS"},
 	"getegid":      {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
@@ -393,8 +393,8 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"rt_tgsigqueueinfo":      {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Signals"},
 	"sched_get_priority_max": {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Sched"},
 	"sched_get_priority_min": {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Sched"},
-	// TODO(l8): delete temporary when raw sched_getaffinity's byte count is classified as a read.
-	"sched_getaffinity":       {kind: "null", args: map[string]int{}, ret: "READ_CLASSIFIED", family: "Sched", temporary: temporaryRet("l8", "UNCLASSIFIED")},
+	// Raw sched_getaffinity returns the number of mask bytes copied.
+	"sched_getaffinity":       {kind: "null", args: map[string]int{}, ret: "READ_CLASSIFIED", family: "Sched"},
 	"sched_getattr":           {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Sched"},
 	"sched_getparam":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Sched"},
 	"sched_getscheduler":      {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Sched"},
@@ -1515,10 +1515,6 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 
 func temporaryArgs(task string, current map[string]int) *temporarySyscallSemantics {
 	return &temporarySyscallSemantics{task: task, current: syscallSemantics{args: current}}
-}
-
-func temporaryRet(task, current string) *temporarySyscallSemantics {
-	return &temporarySyscallSemantics{task: task, current: syscallSemantics{ret: current}}
 }
 
 func (e syscallSemanticExpectation) artifactExpectation() syscallSemantics {

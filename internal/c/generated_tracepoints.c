@@ -5985,7 +5985,7 @@ int handle_sys_enter_getcwd(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_getcwd is a struct ret_event (UNCLASSIFIED) (kind=ret)
+/// sys_exit_getcwd is a struct ret_event (READ_CLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_getcwd")
 int handle_sys_exit_getcwd(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -6007,7 +6007,7 @@ int handle_sys_exit_getcwd(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
+    ev->ret_type = READ_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17463,7 +17463,7 @@ int handle_sys_enter_sched_getaffinity(struct syscall_trace_enter *ctx) {
     return 0;
 }
 
-/// sys_exit_sched_getaffinity is a struct ret_event (UNCLASSIFIED) (kind=ret)
+/// sys_exit_sched_getaffinity is a struct ret_event (READ_CLASSIFIED) (kind=ret)
 SEC("tracepoint/syscalls/sys_exit_sched_getaffinity")
 int handle_sys_exit_sched_getaffinity(struct syscall_trace_exit *ctx) {
     __u32 pid, tid;
@@ -17485,7 +17485,7 @@ int handle_sys_exit_sched_getaffinity(struct syscall_trace_exit *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->ret = ctx->ret;
-    ev->ret_type = UNCLASSIFIED;
+    ev->ret_type = READ_CLASSIFIED;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

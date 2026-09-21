@@ -1131,6 +1131,23 @@ func TestGenerateRetHandlerRead(t *testing.T) {
 	requireContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
 }
 
+// TestGenerateReadByteCountReturnHandlers pins the raw Linux ABI for syscalls
+// whose libc wrappers hide or transform the successful return value. getcwd(2)
+// returns the copied pathname size including its terminating NUL, while
+// sched_getaffinity(2) returns the number of mask bytes copied. Both values are
+// read byte counts and must reach userspace as READ_CLASSIFIED.
+func TestGenerateReadByteCountReturnHandlers(t *testing.T) {
+	for _, name := range []string{"getcwd", "sched_getaffinity"} {
+		t.Run(name, func(t *testing.T) {
+			output := GenerateTracepointsC(mustParseAll(t, syntheticPair(name)))
+
+			requireContains(t, output, "/// sys_exit_"+name+" is a struct ret_event (READ_CLASSIFIED) (kind=ret)")
+			requireContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+			requireNotContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+		})
+	}
+}
+
 func TestGenerateRetHandlerWrite(t *testing.T) {
 	output := generateFromPair(t, FormatWrite, FormatExitWrite)
 

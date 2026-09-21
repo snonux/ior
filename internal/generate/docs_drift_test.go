@@ -25,6 +25,25 @@ func TestSyscallTracingPlanBytesClassificationStaysInSync(t *testing.T) {
 		t.Fatalf("parse bytes classification section: %v", err)
 	}
 
+	assertBytesClassificationMatchesGenerator(t, documented)
+}
+
+func TestReadmeBytesClassificationStaysInSync(t *testing.T) {
+	doc, err := readRepoFile("README.md")
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+
+	documented, err := parseDocListSection(doc, "## Bytes Classification")
+	if err != nil {
+		t.Fatalf("parse README bytes classification section: %v", err)
+	}
+	delete(documented, "Non-bytes")
+	assertBytesClassificationMatchesGenerator(t, documented)
+}
+
+func assertBytesClassificationMatchesGenerator(t *testing.T, documented map[string][]string) {
+	t.Helper()
 	expected := map[string][]string{
 		"ReadClassified":     {},
 		"WriteClassified":    {},
@@ -59,12 +78,16 @@ func TestSyscallTracingPlanBytesClassificationStaysInSync(t *testing.T) {
 }
 
 func readSyscallTracingPlan() (string, error) {
+	return readRepoFile("docs", "syscall-tracing-plan.md")
+}
+
+func readRepoFile(parts ...string) (string, error) {
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		return "", fmt.Errorf("runtime.Caller failed")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
-	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "syscall-tracing-plan.md"))
+	content, err := os.ReadFile(filepath.Join(append([]string{repoRoot}, parts...)...))
 	if err != nil {
 		return "", err
 	}
@@ -125,6 +148,16 @@ func parseDocListSection(doc, heading string) (map[string][]string, error) {
 		if !strings.HasPrefix(line, "- ") {
 			continue
 		}
+		for i+1 < len(lines) {
+			nextRaw := lines[i+1]
+			next := strings.TrimSpace(nextRaw)
+			if next == "" || strings.HasPrefix(next, "- ") || strings.HasPrefix(next, "## ") ||
+				(len(nextRaw) > 0 && nextRaw[0] != ' ' && nextRaw[0] != '\t') {
+				break
+			}
+			line += " " + next
+			i++
+		}
 		label, syscalls, err := parseDocBullet(line)
 		if err != nil {
 			return nil, err
@@ -144,16 +177,12 @@ func parseDocBullet(line string) (string, []string, error) {
 		return "", nil, fmt.Errorf("invalid list entry %q", line)
 	}
 
-	label := strings.TrimSpace(entry[:colon])
+	label := strings.Trim(strings.TrimSpace(entry[:colon]), "`")
 	if label == "" {
 		return "", nil, fmt.Errorf("missing label in %q", line)
 	}
 
 	matches := bytesListItemRE.FindAllStringSubmatch(entry[colon+1:], -1)
-	if len(matches) == 0 {
-		return "", nil, fmt.Errorf("no syscall list in %q", line)
-	}
-
 	items := make([]string, 0, len(matches))
 	for _, match := range matches {
 		items = append(items, match[1])

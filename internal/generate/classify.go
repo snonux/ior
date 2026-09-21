@@ -695,6 +695,9 @@ func ClassifyRet(name string) RetClassification {
 var retClassifications = map[string]RetClassification{
 	"fgetxattr":  ReadClassified,
 	"flistxattr": ReadClassified,
+	// The raw getcwd syscall returns the pathname byte count including its NUL;
+	// libc's getcwd wrapper turns that successful value into the buffer pointer.
+	"getcwd":     ReadClassified,
 	"getdents":   ReadClassified,
 	"getdents64": ReadClassified,
 	"getxattr":   ReadClassified,
@@ -718,10 +721,13 @@ var retClassifications = map[string]RetClassification{
 	"readv":            ReadClassified,
 	"recvmsg":          ReadClassified,
 	"recvfrom":         ReadClassified,
-	"msgrcv":           ReadClassified,
-	"getrandom":        ReadClassified,
-	"syslog":           ReadClassified,
-	"mq_timedreceive":  ReadClassified,
+	// The raw sched_getaffinity syscall returns the mask byte count copied;
+	// libc-style wrappers commonly reduce that successful value to zero.
+	"sched_getaffinity": ReadClassified,
+	"msgrcv":            ReadClassified,
+	"getrandom":         ReadClassified,
+	"syslog":            ReadClassified,
+	"mq_timedreceive":   ReadClassified,
 
 	"copy_file_range": TransferClassified,
 	"sendfile64":      TransferClassified,
