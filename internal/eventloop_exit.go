@@ -19,8 +19,10 @@ import (
 // would recreate the assumption that made syscall-specific bits look like
 // open(2) flags.
 const (
-	memfdCloexecFlag       = int32(1)
-	memfdSecretCloexecFlag = int32(syscall.FD_CLOEXEC)
+	memfdCloexecFlag = int32(1)
+	// Despite memfd_secret(2) naming FD_CLOEXEC, Linux validates and forwards
+	// O_CLOEXEC in mm/secretmem.c.
+	memfdSecretCloexecFlag = int32(syscall.O_CLOEXEC)
 	// Linux reserves the low four bits of socket(2)'s type word for the
 	// descriptor kind; SOCK_NONBLOCK and SOCK_CLOEXEC live above this mask.
 	linuxSocketTypeMask = int32(0xf)
@@ -34,14 +36,17 @@ type eventfdOpenFlagSpec struct {
 }
 
 var eventfdOpenFlagSpecs = map[types.TraceId]eventfdOpenFlagSpec{
-	types.SYS_ENTER_EPOLL_CREATE:   {accessMode: syscall.O_RDWR},
-	types.SYS_ENTER_EPOLL_CREATE1:  {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC},
-	types.SYS_ENTER_INOTIFY_INIT:   {accessMode: syscall.O_RDONLY},
-	types.SYS_ENTER_INOTIFY_INIT1:  {accessMode: syscall.O_RDONLY, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_EVENTFD:        {accessMode: syscall.O_RDWR},
-	types.SYS_ENTER_EVENTFD2:       {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_MEMFD_CREATE:   {accessMode: syscall.O_RDWR, cloexec: memfdCloexecFlag},
-	types.SYS_ENTER_MEMFD_SECRET:   {accessMode: syscall.O_RDWR, cloexec: memfdSecretCloexecFlag},
+	types.SYS_ENTER_EPOLL_CREATE:  {accessMode: syscall.O_RDWR},
+	types.SYS_ENTER_EPOLL_CREATE1: {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC},
+	types.SYS_ENTER_INOTIFY_INIT:  {accessMode: syscall.O_RDONLY},
+	types.SYS_ENTER_INOTIFY_INIT1: {accessMode: syscall.O_RDONLY, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_EVENTFD:       {accessMode: syscall.O_RDWR},
+	types.SYS_ENTER_EVENTFD2:      {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_MEMFD_CREATE:  {accessMode: syscall.O_RDWR, cloexec: memfdCloexecFlag},
+	types.SYS_ENTER_MEMFD_SECRET:  {accessMode: syscall.O_RDWR, cloexec: memfdSecretCloexecFlag},
+	// userfaultfd's access mode is kernel-version dependent: the 5.14 audit
+	// host exposes O_RDWR, while newer mainline kernels create it O_RDONLY.
+	// Keep the measured host behavior until the generation kernel is verified.
 	types.SYS_ENTER_USERFAULTFD:    {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
 	types.SYS_ENTER_SIGNALFD:       {accessMode: syscall.O_RDWR},
 	types.SYS_ENTER_SIGNALFD4:      {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
