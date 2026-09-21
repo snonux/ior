@@ -414,3 +414,364 @@ warnings remain unchanged. No privileged live-BPF end-to-end trace was run.
 **Final verdict: PASS.** Every tasked finding is fixed and independently
 reviewed, the audit's declared dependency set is complete, and the full local
 guardrail set is green.
+
+---
+
+## Part 4 — Syscall tracing semantics audit — 2026-09-14
+
+- **Scope:** every syscall tracepoint in `internal/c/generated_tracepoints_result.txt`
+  (360 enter/exit pairs), checked against the Linux man pages (section 2) for:
+  the argument slot each generated handler reads (`internal/generate/bpfhandler.go`
+  → `internal/c/generated_tracepoints.c`), the classification of the payload
+  (`internal/generate/classify.go`), the exit return-value classification
+  (`retClassifications`), the userspace state semantics applied per pair
+  (`internal/eventloop_exit.go`: fd registration/eviction, dup semantics,
+  fcntl, close_range, pipe/socketpair/eventfd descriptor naming, flags), the
+  family table (`internal/generate/family.go`), and what the tests actually
+  pin (`internal/generate/*_test.go`, `internal/eventloop_*_test.go`,
+  `cmd/ioworkload`, `integrationtests`).
+- **Method:** the emitted `ev->X = ctx->args[N]` / `bpf_probe_read_user_str(...,
+  args[N])` lines of every enter handler were extracted from the committed
+  generated C and compared, syscall by syscall, with the kernel signatures in
+  `syscalls(2)` and the per-syscall man pages. Kernel tracefs was not readable
+  (unprivileged session), so the committed artifact is the reference; no live
+  trace was run. No code was changed: every finding is a task.
+- **Tasks:** semantic findings S1–S16 → `e4 f4 g4 h4 i4 j4 k4 l4 m4 n4 o4 p4 q4 r4
+  s4 t4`; test findings T1–T3 → `u4 v4 w4`. Gate task **x4** (`+audit`) depends on
+  all of them. `ask info <id>` carries the full context per task.
+
+### Verified correct (no task)
+
+Argument indices agree with the man pages for the whole traced set, including
+the hand-pinned layouts: `mmap` fd at `args[4]`; `pidfd_getfd` pidfd at
+`args[0]` (not the target `fd` field); `socketpair` `sv` pointer at `args[3]`;
+`kcmp` `idx1/idx2/type` at `args[3]/[4]/[2]`; `move_mount` `from_dfd/to_dfd/flags`
+at `args[0]/[2]/[4]`; `close_range` `(first,last,flags)`; `linkat`/`renameat*`
+`oldname/newname` at `args[1]/[3]`, `symlinkat` at `args[0]/[2]`; `epoll_ctl`
+`events` read from `struct epoll_event` offset 0; `poll/ppoll` nfds at `args[1]`
+with timeout at `args[2]`, `select/pselect6` nfds at `args[0]` with timeout at
+`args[4]`; `nanosleep` at `args[0]`, `clock_nanosleep` request at `args[2]` with
+`TIMER_ABSTIME` (=1) at `args[1]` correctly suppressing the duration;
+`add_key` ringid/plen at `args[4]/[3]`, `request_key` destringid at `args[3]`;
+`ptrace` data at `args[3]`; `perf_event_open` `attr` layout `{u32 type, u32
+size, u64 config}`; `execveat` dirfd/flags at `args[0]/[4]`; `fanotify_mark`
+pathname at `args[4]`; `quotactl` special at `args[1]`; `mount` `dir_name` at
+`args[1]`; `mq_open` oflag at `args[1]` (real `O_*` word); `open_by_handle_at`
+flags at `args[2]`; `mremap` old/new length at `args[1]/[2]`; `pkey_mprotect` /
+`remap_file_pages` / `mlock2` / `mseal` / `map_shadow_stack` layouts.
+
+Semantics verified against the man pages: `creat` == `open(O_CREAT|O_WRONLY|
+O_TRUNC)`; `dup2(fd, fd)` creates no descriptor; `dup`/`dup2`/`F_DUPFD` clear
+`FD_CLOEXEC`, `dup3(O_CLOEXEC)`/`F_DUPFD_CLOEXEC` set it; `F_SETFL` changes only
+`O_APPEND|O_ASYNC|O_DIRECT|O_NOATIME|O_NONBLOCK` (merge, not replace); `F_GETFL`
+is the authoritative full word; `CLOSE_RANGE_CLOEXEC` (1<<2) closes nothing;
+`sendmmsg`/`recvmmsg` return message counts and are deliberately unclassified
+(pinned by `integrationtests/retbytes_test.go`); `msgsnd`/`mq_timedsend` return
+0 and are unclassified while `msgrcv`/`mq_timedreceive` return byte counts;
+`accept` does not inherit status flags from the listening socket; `execve`'s
+`sys_exit` fires (ret 0) and its payload comm is the caller's; `rt_sigreturn`
+is correctly noreturn — `restore_sigcontext` sets `orig_ax = -1`, so
+`ftrace_syscall_exit` bails on `syscall_nr < 0` and `sys_exit_rt_sigreturn`
+never fires, matching the empirical note in `codegen.go`. Family assignments
+were checked and are defensible; the futex/robust_list and set_tid_address
+boundary rules are documented in `family.go`.
+
+Overloaded-but-harmless fields noted, not tasked: `pkey_mprotect` stores `pkey`
+in `mem_event.length2` and `remap_file_pages` stores `pgoff` there
+(`addressSpaceBytesFromMem` reads `length2` only for `mremap`); `ioctl` `cmd`,
+`flock` `cmd`, `fallocate` `mode`, `fadvise64` `advice` are not captured
+(fd-only kind, by design).
+
+### Semantic findings (tag `+syscalls`)
+
+#### S1 — MEDIUM — eventfd-kind flags are syscall-specific words rendered as open(2) flags — task e4
+
+- **Where:** `internal/eventloop_exit.go` `handleEventfdExit` (`file.NewFd(fd,
+  name, flags)`), `internal/generate/bpfhandler.go` `eventfdFlagsExpr`,
+  `internal/file/flags.go`.
+- **What:** `fanotify_init` (`FAN_CLOEXEC`=1, `FAN_NONBLOCK`=2; the `O_*` word is
+  `event_f_flags` at `args[1]`, not captured), `memfd_create` (`MFD_CLOEXEC`=1,
+  `MFD_ALLOW_SEALING`=2, `MFD_HUGETLB`=4), `fsopen`/`fsmount` (`*_CLOEXEC`=1),
+  `landlock_create_ruleset` (`_VERSION`=1), `eventfd2` (`EFD_SEMAPHORE`=1),
+  `userfaultfd` (`UFFD_USER_MODE_ONLY`=1) all land in `file.Flags`, so bit 1
+  prints as `O_WRONLY` and bit 2 as `O_RDWR` in `-plain`/`-flamegraph`. Only the
+  `EFD_`/`IN_`/`SFD_`/`TFD_`/`EPOLL_CLOEXEC`/`PIDFD_NONBLOCK` values coincide
+  with `O_*`. `signalfd4` with `ufd != -1` also re-registers the existing fd with
+  the new flags although `signalfd(2)` applies them only at creation.
+- **Verify:** table-driven unit test per trace id asserting `Flags().String()`;
+  no eventfd-kind row renders a non-`O_*` bit as `O_WRONLY`/`O_RDWR`.
+- [x] REVIEWED (commit: `26a97c6`): PASS.
+
+#### S2 — MEDIUM — `open_tree`/`open_tree_attr` classified as open(2) — task f4
+
+- **Where:** `internal/generate/classify.go` generic rule (name contains "open" +
+  `filename` → `KindOpen`); result table rows `sys_enter_open_tree` /
+  `sys_enter_open_tree_attr` (`ev->flags = ctx->args[2]`); `handleOpenExit`.
+- **What:** `open_tree(2)` flags are `OPEN_TREE_CLONE`=1, `OPEN_TREE_CLOEXEC`,
+  `AT_EMPTY_PATH`, `AT_RECURSIVE`, `AT_SYMLINK_NOFOLLOW`, `AT_NO_AUTOMOUNT` — not
+  `O_*`. They are rendered as `O_WRONLY`/`O_NONBLOCK`/`O_NOCTTY` and the returned
+  fd is registered as a regular open with them.
+- **Verify:** explicit classification pinned in `classify_test.go`; `open_tree`
+  rows never show `O_*` names for `AT_*` bits; `integrationtests/mountfs_test.go`
+  asserts the flags.
+- [x] REVIEWED (commit: `16b87b9`): PASS.
+
+#### S3 — MEDIUM — pipe/pipe2 write end registered without `O_WRONLY` — task g4
+
+- **Where:** `handlePipeExit` registers `Fd0` and `Fd1` with the same word;
+  `TestHandlePipeExitTracksReturnedFds` pins identical flags on both ends.
+- **What:** `pipe(2)`: `pipefd[0]` is the read end, `pipefd[1]` the write end.
+  Every `write()` row on the write end prints `O_RDONLY`. `O_NOTIFICATION_PIPE`
+  (=`O_EXCL`) renders as `O_EXCL`.
+- **Verify:** unit test asserts read end `O_RDONLY`, write end `O_WRONLY`;
+  integration pipe scenario asserts `IterRecord.Flags` on the write end.
+- [x] REVIEWED (commit: `b6e60c9`): PASS.
+
+#### S4 — MEDIUM — `mmap` captures only the fd; `msync` is a null event — task h4
+
+- **Where:** `classify.go` (`mmap` → `KindFd` via the `fd` field; `msync` pinned
+  `KindNull`), `bpfhandler.go` `memFieldOverrides`, `eventloop_exit.go`
+  `addressSpaceBytesFromMem` (only `munmap`/`mremap`).
+- **What:** `mmap(2)` length/prot/flags never reach userspace, so
+  `AddressSpaceBytes` counts unmaps and remaps but never the mapping that created
+  a region; `MAP_ANONYMOUS` rows resolve fd `-1` to `E:name%(-1,O_NONE)`;
+  `msync(addr, len, flags)` captures nothing.
+- **Verify:** mmap rows carry the mapping length; anonymous mappings do not print
+  `E:name`; `msync` is a `mem_event`; `integrationtests/mmap_test.go` asserts
+  `AddressSpaceBytes` through the parquet path.
+- [x] REVIEWED (commit: `e132dc9`): PASS.
+
+#### S5 — MEDIUM — `dirfd` never captured for the `*at()` cohort — task i4
+
+- **Where:** `generateExtraPathname` / `generateExtraOpenWithFields` /
+  `generateExtraName` (only the pathname index is emitted; `execveat` is the
+  sole exception), `types.h` `path_event`/`open_event`/`name_event`.
+- **What:** per `openat(2)` and siblings a relative pathname is resolved against
+  `dirfd`, and `AT_EMPTY_PATH`/NULL-pathname calls (`statx`, `utimensat`,
+  `fchownat`, `linkat`, `name_to_handle_at`) operate on `dirfd` itself. ior keeps
+  only the raw string, so `openat(3, "x")` and `openat(AT_FDCWD, "x")` are
+  indistinguishable and empty-path calls yield an empty file with fd `-1`.
+- **Verify:** a relative `openat` through a directory fd reports the joined
+  path; `AT_EMPTY_PATH` rows report the dirfd's file.
+- [x] REVIEWED (commit: `874a477`): PASS.
+
+#### S6 — LOW — `inotify_add_watch` loses the pathname, `fanotify_mark` loses the fd — task j4
+
+- **Where:** `ClassifyFormat` first-matching-field rule (`fd` wins for
+  `inotify_add_watch(fd, pathname, mask)`; no `fd`-named field in
+  `fanotify_mark(fanotify_fd, flags, mask, dfd, pathname)`).
+- **Verify:** an `inotify_add_watch` row shows the watched path and the inotify
+  fd; decision pinned in `classify_test.go` and the plan doc.
+- [x] REVIEWED (commit: `b328889`): PASS.
+
+#### S7 — LOW — `openat2` flags reported as `-1` — task k4
+
+- **Where:** `generateExtraOpenWithFields` else-branch; documented gap in
+  `docs/syscall-tracing-plan.md`; `TestGenerateOpenat2FlagsGapIsDocumented`.
+- **What:** `struct open_how { u64 flags; u64 mode; u64 resolve; }` at `args[2]`
+  is readable with the same guarded `bpf_probe_read_user` pattern
+  `generateExtraPerfOpen` already uses.
+- **Verify:** `open-openat2` integration scenario asserts the real `O_*` word.
+- [x] REVIEWED (commit: `37569f7`): PASS.
+
+#### S8 — LOW — `accept4` flags dropped; socket type flag bits leak into descriptor names — task l4
+
+- **Where:** `generateExtraAccept`, `handleSocketExit`/`handleSocketpairExit`/
+  `handleAcceptExit`, `socketDescriptorName`.
+- **What:** `accept4(2)` `SOCK_NONBLOCK|SOCK_CLOEXEC` at `args[3]` are the only
+  source of the accepted fd's status flags (not inherited per `accept(2)`);
+  `socket(2)` `type` carries the same bits, which end up in
+  `socket:<family>:<raw type>:<proto>` names instead of `O_NONBLOCK|O_CLOEXEC`.
+- **Verify:** `socket:2:1:0` naming with `SOCK_CLOEXEC` set; `accept4` rows carry
+  `O_CLOEXEC`/`O_NONBLOCK`.
+- [x] REVIEWED (commit: `5e9f998`): PASS.
+
+#### S9 — MEDIUM — `close(2)` eviction only on `ret == 0` — task m4
+
+- **Where:** `applyFdCloseState`.
+- **What:** per `close(2)` NOTES the descriptor is released on Linux even when
+  `close` returns `EINTR`/`EIO`; only `EBADF` closes nothing. A stale `(pid, fd)`
+  entry survives an `EINTR` close and mislabels the next holder of that number
+  until an fd-registering syscall overwrites it.
+- **Verify:** unit tests: `-EINTR`/`-EIO`/`0` evict, `-EBADF` keeps.
+- [x] REVIEWED (commit: `7983293`): PASS.
+
+#### S10 — LOW — `F_SETFD`/`F_GETFD` ignored while `O_CLOEXEC` is tracked per descriptor — task n4
+
+- **Where:** `applyFcntlFdState` (`F_GETFL`, `F_SETFL`, `F_DUPFD`,
+  `F_DUPFD_CLOEXEC` only) vs. `registerDup` (merges `O_CLOEXEC`).
+- **Verify:** after `fcntl(fd, F_SETFD, 0)` on an `O_CLOEXEC` descriptor the next
+  row no longer prints `O_CLOEXEC`.
+- [x] REVIEWED (commit: `9ff880e`): PASS.
+
+#### S11 — LOW — `kcmp` resolves `idx1` against the caller for every type — task o4
+
+- **Where:** `twoFdOverrides` (`kcmp`), `handleTwoFdExit`.
+- **What:** per `kcmp(2)` `idx1/idx2` are fds in `pid1`'s/`pid2`'s tables only for
+  `KCMP_FILE`; for `KCMP_VM/FILES/FS/SIGHAND/IO/SYSVSEM` they are unused and for
+  `KCMP_EPOLL_TFD` `idx2` is a pointer.
+- **Verify:** `KCMP_VM` rows carry no file; `KCMP_FILE` on self resolves the right
+  file.
+- [x] REVIEWED (commit: `408a7db`): PASS.
+
+#### S12 — LOW — `Flags.String()` misdecodes `O_TMPFILE`, hides `O_PATH`, doubles `O_SYNC` — task p4
+
+- **Where:** `internal/file/flags.go`.
+- **What:** `O_TMPFILE` (0x410000) prints as `O_DIRECTORY`; `O_PATH` (0x200000) is
+  absent (prints `O_RDONLY`); `O_SYNC` ⊃ `O_DSYNC` prints both; `O_LARGEFILE`
+  (present in every `F_GETFL`/procfs word on 64-bit) is undecoded.
+- **Verify:** `0x410002 → O_RDWR|O_TMPFILE`, `0x200000 → O_PATH`,
+  `0x101000 → O_SYNC`.
+- [x] REVIEWED (commit: `bcdd787`): PASS.
+
+#### S13 — LOW — size probes counted as bytes read; TRANSFER direction inconsistent — task q4
+
+- **Where:** `retClassifications`, `bytesFromRet`, `statsengine` `RetType`
+  switches; `nameOnlyKindsTable` comments for `sendfile64` (captures `out_fd`)
+  vs `splice`/`tee`/`copy_file_range` (capture the source).
+- **What:** `getxattr(2)`/`listxattr(2)` with `size == 0` return the required size
+  and copy nothing; `syslog(2)` actions 9/10 return sizes and 0/1/5–8 return 0;
+  all count as "bytes read". Per-file TRANSFER bytes go to the destination for
+  `sendfile64` but to the source for its siblings.
+- **Verify:** a size-0 `getxattr` row reports 0 bytes; the plan doc states the
+  transfer attribution rule and `retbytes_test.go` pins it.
+- [x] REVIEWED (commit: `337ff36`): PASS.
+
+#### S14 — LOW — error detection is `ret < 0`, not the errno window `-4095..-1` — task r4
+
+- **Where:** `internal/streamrow/row.go` (`IsError = ret < 0`), `internal/c/filter.c`
+  `ior_update_syscall_aggregate`, fd gates in `eventloop_exit.go`.
+- **What:** the kernel ABI (`MAX_ERRNO` 4095) is the rule; raw-word returns
+  (`mmap`/`brk`/`shmat` addresses) with bit 63 set would be misreported. Not
+  reachable on x86_64 user addresses today; three copies of the rule and no
+  shared helper.
+- **Verify:** one helper with a unit test (`-4096` not an error, `-4095` is).
+- [x] REVIEWED (commit: `c8ea259`): PASS.
+
+#### S15 — LOW — identifying payloads not captured; `bpf()` fds never registered — task s4
+
+- **Where:** `eventfdFlagsExpr` (`memfd_create`/`fsopen`/`fsmount` flags only),
+  `twoFdOverrides` (`move_mount` fds/flags only), `handleNullExit` (registers
+  `io_uring_setup` fds but not `bpf()`'s).
+- **What:** `memfd_create` name, `fsopen` `fs_name`, `move_mount` pathnames,
+  `fsmount` `fs_fd` are cheap strings/ints that name the object per the man
+  pages; `BPF_MAP_CREATE`/`PROG_LOAD`/`OBJ_GET`/`LINK_CREATE` return fds that stay
+  unresolved until procfs.
+- **Verify:** memfd rows named `memfd:<name>`; `move_mount` rows show the
+  destination path; `bpf` fds resolve.
+- [x] REVIEWED (commit: `ebe07cc`): PASS.
+
+#### S16 — LOW — epoll wait timeouts not captured; poll `-1` sentinel conflates infinite and unknown — task t4
+
+- **Where:** `classify.go` (`epoll_wait`/`epoll_pwait`/`epoll_pwait2` → `KindFd`),
+  `pollOverrides`/`pollTimeoutBody`, `poll_event`.
+- **What:** `poll(2)` negative timeout and `ppoll(2)`/`pselect(2)` NULL timespec
+  mean infinite; an unreadable timespec is unknown; both are `-1`. The epoll wait
+  family's timeouts (`args[3]`) are dropped because the epfd wins.
+- **Verify:** `epoll_wait(…, 250)` reports 250 ms; `poll(…, -1)` is
+  distinguishable from an `EFAULT` timespec.
+- [x] REVIEWED (commit: `f457258`): PASS.
+
+### Test findings (tag `+syscalls`)
+
+#### T1 — MEDIUM — integration tests never assert flags/fd/ret/is_error/epoll/AddressSpaceBytes/RequestedSleepNs — task u4
+
+- **Where:** `integrationtests/expectations.go` (`ExpectedEvent` = path substring,
+  tracepoint substring, comm, count), `helpers_test.go` (bytes/duration only),
+  `harness.go` (`-flamegraph` run; `RunParquet` available but unused for field
+  assertions).
+- **What:** every live-kernel semantic in Part 4 (open flags, creat's synthesized
+  flags, dup/dup3/`F_DUPFD_CLOEXEC`, `F_GETFL`/`F_SETFL`, `close_range`
+  `CLOEXEC`, pipe ends, socketpair `sv`, `epoll_ctl` op/target/events,
+  `ppoll`/`pselect6`/`clock_nanosleep` timeouts, `munmap`/`mremap` bytes, the
+  `-enoent`/`-ebadf` error scenarios) is checked only with synthetic unit events.
+- **Verify:** each listed integration test asserts at least one non-count field;
+  a deliberately wrong flags expectation fails.
+- [x] REVIEWED (commit: `8e78a77`): PASS.
+
+#### T2 — MEDIUM — no man-page-derived semantics pin over the generated artifact — task v4
+
+- **Where:** `internal/generate/*_test.go` pin individual handlers;
+  `generated_tracepoints_result.txt` is a diff-gated golden of whatever was
+  generated; `docs_drift_test.go` checks docs vs lists.
+- **What:** nothing asserts, for each of the 360 syscalls, that the argument slot
+  read is the one the man page names, plus ret classification and family.
+- **Verify:** a table-driven test enumerates every enter handler in
+  `generated_tracepoints.c` against an explicit expectations map; removing an
+  entry fails it; rows the S-tasks will change carry `TODO(<task>)`.
+- [x] REVIEWED (commit: `8e811a3`): PASS.
+
+#### T3 — LOW — workload/integration coverage gaps — task w4
+
+- **Where:** `cmd/ioworkload/scenarios.go`, `integrationtests/*_test.go`.
+- **What:** no live scenario for `fanotify_init`/`fanotify_mark`, `syslog`, `bpf`,
+  `kcmp`, `open_tree_attr`, `msync` range, xattr size-0 probes, relative
+  `openat` via dirfd, `statx`/`utimensat` `AT_EMPTY_PATH`, `F_SETFD`/`F_GETFD`,
+  `accept4` flag assertions, `memfd_create` name, `signalfd4` on an existing fd,
+  epoll wait timeouts.
+- **Verify:** every listed syscall is covered by an `ExpectedEvent`, an
+  `ExpectedRow`, or an equivalent direct semantic assertion appropriate to its
+  output surface.
+- [x] REVIEWED (commit: `dbf164a`): PASS.
+
+### Review-pass checklist (Part 4)
+
+1. `ask list` — confirm e4–w4 done; gate x4 READY.
+2. Walk S1–S16 and T1–T3, run each Verify line, tick the checkbox with the
+   fixing commit hash.
+3. Re-run `mage generate` (must be a no-op diff on a host at least as new as
+   the generation kernel), `mage fmtCheck`, `mage vet`, `mage lint`,
+   `mage test`, `mage testRace`, `mage build`, and the privileged
+   `integrationtests` suite.
+4. Append a "Review outcome (Part 4)" section with date, commit range and a
+   verdict per finding; mark x4 done.
+
+### Review outcome (Part 4) — 2026-09-21
+
+**Finding verdict:** PASS for S1–S16 and T1–T3. The reviewed fixing commits
+run from `7983293` through `dbf164a`; this describes the history endpoints,
+not an inclusive commit range. The checkbox beside each finding records its
+exact fixing commit. Audit-derived follow-up `2e0165a`, found during v4's
+review, corrects two syscall return classifications but has no separate
+original finding checkbox. Two independent review passes covered S1–S10 and
+S11–T3; their focused non-privileged tests passed and their live-test
+assertions were inspected. Live assertions requiring syscalls absent from this
+host are not claimed as executed successfully. T3's Verify wording was
+corrected during review because some semantics intentionally use Parquet
+`ExpectedRow` or a direct assertion instead of collapsed-output
+`ExpectedEvent`.
+
+| Finding | Verdict | Finding | Verdict | Finding | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| S1 | PASS | S2 | PASS | S3 | PASS |
+| S4 | PASS | S5 | PASS | S6 | PASS |
+| S7 | PASS | S8 | PASS | S9 | PASS |
+| S10 | PASS | S11 | PASS | S12 | PASS |
+| S13 | PASS | S14 | PASS | S15 | PASS |
+| S16 | PASS | T1 | PASS | T2 | PASS |
+| T3 | PASS |  |  |  |  |
+
+**Guardrails:** `mage fmtCheck`, `mage vet`, `mage lint`, `mage test`,
+`mage testRace`, and `mage build` passed at `cfee406`. `mage generate` was
+attempted but this host runs `5.14.0-687.42.1.el9_8.x86_64`, older than the
+generation kernel; its diff gate correctly refused a deletion-only result for
+newer syscalls and left the tree unchanged. The required no-op regeneration on
+a host at least as new as the generation kernel therefore remains unverified.
+
+The privileged `mage integrationTest` run exercised many supported live-BPF
+scenarios, but it uses `-test.failfast`, so its nonzero result does not prove
+that every otherwise-supported scenario ran. The observed host limitations
+were: this host sets `/proc/sys/kernel/io_uring_disabled` to `2`, so
+`TestIouringEnter` receives `EPERM`; its 5.14 kernel lacks `removexattrat`, so
+`TestXattrRemovexattrat` receives `ENOSYS`; and the mountfs integration cannot
+complete because the `open_tree_attr`, `statmount`, `listmount`, and `listns`
+tracepoints are absent. The scoped sudo rule permits the integration binary
+but not changing the host sysctl. These are not Part 4 semantic regressions,
+but they mean the full privileged-suite gate is not a pass on this host.
+
+**Gate verdict:** the findings are ready, but x4 remains open pending both the
+no-op generation check and a complete privileged integration pass on a
+suitable newer-kernel host. Self-review found no simpler trustworthy closure:
+forcing generation here would replace reviewed newer-kernel artifacts with an
+older subset, and treating unsupported integration scenarios as passes would
+weaken the stated gate.
