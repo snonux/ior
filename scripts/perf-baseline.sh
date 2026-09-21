@@ -3,7 +3,9 @@
 #
 #   scripts/perf-baseline.sh record [label]   benchmark the current commit
 #                                             (a dirty tree always gets a
-#                                             "-dirty" label suffix)
+#                                             "-dirty" label suffix; a
+#                                             "-dirty" label on a clean
+#                                             tree is refused)
 #   scripts/perf-baseline.sh compare OLD NEW   benchstat + static-metric diff
 #   scripts/perf-baseline.sh static            print the static metrics only
 #
@@ -23,6 +25,8 @@
 #   PERF_BENCHTIME  -benchtime per sample         (default 1s)
 #   PERF_BENCH      benchmark regexp              (default: the focused set)
 #   LIBBPFGO        libbpfgo checkout             (default ../libbpfgo)
+#   PERF_FORCE      1 overwrites an existing baseline of the same label
+#                   (default: refuse, before any benchmark runs)
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -52,13 +56,19 @@ go_env() {
 }
 
 # tree_dirty reports whether the tree differs from HEAD outside perf/, i.e.
-# whether a recording would measure code that HEAD does not contain.
+# whether a recording would measure code that HEAD does not contain: tracked
+# changes, and untracked files that are not ignored (go test compiles a new,
+# uncommitted .go file just the same).
 tree_dirty() {
-    ! git -C "$repo_root" diff --quiet HEAD -- . ':!perf'
+    ! git -C "$repo_root" diff --quiet HEAD -- . ':!perf' ||
+        [ -n "$(git -C "$repo_root" ls-files --others --exclude-standard -- . ':!perf')" ]
 }
 
 default_label() {
-    git -C "$repo_root" rev-parse --short HEAD
+    local head
+    head=$(git -C "$repo_root" rev-parse --short HEAD) || die "cannot resolve HEAD; pass an explicit label"
+    [ -n "$head" ] || die "cannot resolve HEAD; pass an explicit label"
+    echo "$head"
 }
 
 # static_metrics prints numbers that are a pure function of the source tree.
@@ -126,15 +136,33 @@ PY
 }
 
 record() {
-    local label=${1:-$(default_label)} dirty=""
+    local label dirty=""
+    if [ -n "${1:-}" ]; then
+        label=$1
+    else
+        label=$(default_label)
+    fi
     # A dirty tree is marked whatever the label: the header names HEAD, which
-    # is not what was measured, so both the file name and the commit line say so.
+    # is not what was measured, so both the file name and the commit line say
+    # so. The reverse is refused rather than kept: a "-dirty" label on a clean
+    # tree would claim uncommitted changes that do not exist.
     if tree_dirty; then
         dirty=" +uncommitted changes"
         [[ $label == *-dirty ]] || label+="-dirty"
+    elif [[ $label == *-dirty ]]; then
+        die "label '$label' ends in -dirty but the tree is clean; drop the suffix"
     fi
     local bench_file="$perf_dir/bench-$label.txt"
     local static_file="$perf_dir/static-$label.txt"
+    # Refuse before benchmarking: a committed baseline is the evidence a later
+    # change is judged against, and the recording takes minutes.
+    if [ "${PERF_FORCE:-}" != 1 ]; then
+        local existing
+        for existing in "$bench_file" "$static_file"; do
+            [ ! -e "$existing" ] ||
+                die "${existing#"$repo_root"/} already exists; pick another label or set PERF_FORCE=1 to overwrite"
+        done
+    fi
     local count=${PERF_COUNT:-8} benchtime=${PERF_BENCHTIME:-1s}
     local bench=${PERF_BENCH:-$default_bench}
 
