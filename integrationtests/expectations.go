@@ -59,6 +59,8 @@ type ExpectedRow struct {
 	EpollEvents          *uint32
 	AddressSpaceBytes    *uint64
 	RequestedSleepNs     *int64
+	Nfds                 *int32
+	TimeoutNs            *int64
 }
 
 // AssertEventsPresent verifies that each expected event is found in the test result.
@@ -268,7 +270,9 @@ func matchesRowExpectation(row iorparquet.Record, exp ExpectedRow) bool {
 		meetsMinimum(row.EpollTargetFD, exp.EpollTargetFDAtLeast) &&
 		matchesOptional(row.EpollEvents, exp.EpollEvents) &&
 		matchesOptional(row.AddressSpaceBytes, exp.AddressSpaceBytes) &&
-		matchesOptional(row.RequestedSleepNS, exp.RequestedSleepNs)
+		matchesOptional(row.RequestedSleepNS, exp.RequestedSleepNs) &&
+		matchesOptional(row.Nfds, exp.Nfds) &&
+		matchesOptional(row.TimeoutNS, exp.TimeoutNs)
 }
 
 func matchesOptional[T comparable](got T, expected *T) bool {

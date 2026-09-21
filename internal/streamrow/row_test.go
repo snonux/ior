@@ -115,11 +115,13 @@ func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 }
 
 func TestNewCarriesReadyCountForEpollWait(t *testing.T) {
-	enter := &types.FdEvent{TraceId: types.SYS_ENTER_EPOLL_WAIT, Time: 2000, Pid: 15, Tid: 16, Fd: 9}
+	enter := &types.PollEvent{TraceId: types.SYS_ENTER_EPOLL_WAIT, Time: 2000, Pid: 15, Tid: 16, Fd: 9, Nfds: 4, TimeoutNs: 250_000_000}
 	exit := &types.RetEvent{TraceId: types.SYS_EXIT_EPOLL_WAIT, Time: 2100, Ret: 3, Pid: 15, Tid: 16}
 	pair := event.NewPair(enter)
 	pair.ExitEv = exit
 	pair.File = file.NewFd(9, "anon_inode:[eventpoll]", -1)
+	pair.Nfds = enter.Nfds
+	pair.TimeoutNs = enter.TimeoutNs
 
 	got := New(17, pair)
 	if got.Syscall != "epoll_wait" || got.FD != 9 {
@@ -131,6 +133,9 @@ func TestNewCarriesReadyCountForEpollWait(t *testing.T) {
 	if got.Bytes != 0 {
 		t.Fatalf("Bytes = %d, want 0 for epoll ready-count events", got.Bytes)
 	}
+	if got.Nfds != 4 || got.TimeoutNs != 250_000_000 {
+		t.Fatalf("Nfds/TimeoutNs = %d/%d, want 4/250000000", got.Nfds, got.TimeoutNs)
+	}
 }
 
 func TestNewCarriesReadyCountForPoll(t *testing.T) {
@@ -138,6 +143,8 @@ func TestNewCarriesReadyCountForPoll(t *testing.T) {
 	exit := &types.RetEvent{TraceId: types.SYS_EXIT_POLL, Time: 3100, Ret: 1, Pid: 22, Tid: 23}
 	pair := event.NewPair(enter)
 	pair.ExitEv = exit
+	pair.Nfds = enter.Nfds
+	pair.TimeoutNs = enter.TimeoutNs
 
 	got := New(24, pair)
 	if got.Syscall != "poll" || got.FD != UnknownFD {
@@ -148,6 +155,9 @@ func TestNewCarriesReadyCountForPoll(t *testing.T) {
 	}
 	if got.Bytes != 0 {
 		t.Fatalf("Bytes = %d, want 0 for poll ready-count events", got.Bytes)
+	}
+	if got.Nfds != 1 || got.TimeoutNs != 100_000_000 {
+		t.Fatalf("Nfds/TimeoutNs = %d/%d, want 1/100000000", got.Nfds, got.TimeoutNs)
 	}
 }
 

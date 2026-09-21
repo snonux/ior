@@ -2053,13 +2053,31 @@ func TestGenerateFsmountHandler(t *testing.T) {
 	requireContains(t, output, "ev->ret = ctx->ret;")
 }
 
-func TestGenerateEpollWaitHandlerUsesEpollFd(t *testing.T) {
+func TestGenerateEpollWaitHandlerCapturesFdMaxeventsAndMillisTimeout(t *testing.T) {
 	output := generateFromPair(t, FormatEpollWait, FormatExitEpollWait)
 
-	requireContains(t, output, "struct fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_EPOLL_WAIT;")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[2];")
+	requireContains(t, output, "__s32 timeout_ms = (__s32)ctx->args[3];")
+	requireContains(t, output, "ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;")
+	requireContains(t, output, "ev->schema_version = POLL_EVENT_SCHEMA_VERSION;")
+}
+
+func TestGenerateEpollPwait2HandlerCapturesFdMaxeventsAndTimespec(t *testing.T) {
+	output := generateFromPair(t, FormatEpollPwait2, FormatExitEpollPwait2)
+
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[2];")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "if (ctx->args[3] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;")
+	requireContains(t, output, "bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[3])")
+	requireNotContains(t, output, "ev->timeout_ns = -1;")
 }
 
 func TestGeneratePollHandlerCapturesNfdsAndTimeout(t *testing.T) {
@@ -2068,7 +2086,11 @@ func TestGeneratePollHandlerCapturesNfdsAndTimeout(t *testing.T) {
 	requireContains(t, output, "struct poll_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
 	requireContains(t, output, "ev->nfds = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "if (timeout_ms < 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;")
 	requireContains(t, output, "ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;")
+	requireContains(t, output, "ev->fd = -1;")
 	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
 }
 
@@ -2078,7 +2100,9 @@ func TestGeneratePselect6HandlerCapturesTimeoutPointer(t *testing.T) {
 	requireContains(t, output, "struct poll_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
 	requireContains(t, output, "ev->nfds = (__s32)ctx->args[0];")
-	requireContains(t, output, "if (ctx->args[4] != 0) {")
+	requireContains(t, output, "if (ctx->args[4] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;")
 	requireContains(t, output, "ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
 }
 
@@ -2101,7 +2125,8 @@ func TestGenerateSelectHandlerCapturesNfdsAndTimevalTimeout(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_SELECT;")
 	requireContains(t, output, "ev->nfds = (__s32)ctx->args[0];")
-	requireContains(t, output, "if (ctx->args[4] != 0) {")
+	requireContains(t, output, "if (ctx->args[4] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
 	requireContains(t, output, "ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;")
 
 	// Negative: nfds is a count and the fd_set args are bitmask pointers, so no
@@ -2133,7 +2158,8 @@ func TestGeneratePpollHandlerCapturesNfdsAndTimeoutPointer(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_PPOLL;")
 	requireContains(t, output, "ev->nfds = (__s32)ctx->args[1];")
-	requireContains(t, output, "if (ctx->args[2] != 0) {")
+	requireContains(t, output, "if (ctx->args[2] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
 	requireContains(t, output, "ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
 
 	// Negative: args[0] is a pollfd-array pointer and must never be captured
@@ -2144,6 +2170,65 @@ func TestGeneratePpollHandlerCapturesNfdsAndTimeoutPointer(t *testing.T) {
 	// Exit: plain ret_event recording the ready-count (>=0) or -1.
 	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
 	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+// TestGeneratePointerPollingTimeoutsRejectInvalidAndOverflowingValues pins the
+// distinction between a valid finite timeout and POLL_TIMEOUT_UNKNOWN_NS. A
+// readable userspace pointer is not sufficient: negative or non-normalized
+// subsecond fields are invalid, and a valid-looking value may still overflow
+// signed nanoseconds. In each case the handler must retain the unknown
+// sentinel rather than collide with the infinite sentinel or wrap around.
+func TestGeneratePointerPollingTimeoutsRejectInvalidAndOverflowingValues(t *testing.T) {
+	timespecOutput := generateFromPair(t, FormatPpoll, FormatExitPpoll)
+	requireContains(t, timespecOutput,
+		"            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL &&\n"+
+			"                (ts.tv_sec < 9223372036LL ||\n"+
+			"                 (ts.tv_sec == 9223372036LL && ts.tv_nsec <= 854775807LL))) {\n"+
+			"                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"            }")
+
+	timevalOutput := generateFromPair(t, FormatSelect, FormatExitSelect)
+	requireContains(t, timevalOutput,
+		"            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&\n"+
+			"                (tv.tv_sec < 9223372036LL ||\n"+
+			"                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {\n"+
+			"                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
+			"            }")
+}
+
+// TestCommittedPollingHandlersMatchGenerator keeps the targeted artifact
+// update honest on development hosts whose older kernel cannot regenerate the
+// complete committed syscall corpus. It covers both millisecond and pointer
+// timeout styles, including the epoll descriptor/maxevents extension.
+func TestCommittedPollingHandlersMatchGenerator(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	tests := []struct {
+		name  string
+		enter string
+		exit  string
+	}{
+		{name: "epoll_wait", enter: FormatEpollWait, exit: FormatExitEpollWait},
+		{name: "epoll_pwait", enter: FormatEpollPwait, exit: FormatExitEpollPwait},
+		{name: "epoll_pwait2", enter: FormatEpollPwait2, exit: FormatExitEpollPwait2},
+		{name: "poll", enter: FormatPoll, exit: FormatExitPoll},
+		{name: "ppoll", enter: FormatPpoll, exit: FormatExitPpoll},
+		{name: "select", enter: FormatSelect, exit: FormatExitSelect},
+		{name: "pselect6", enter: FormatPselect6, exit: FormatExitPselect6},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			generated := generateFromPair(t, tc.enter, tc.exit)
+			for _, phase := range []string{"enter", "exit"} {
+				name := "sys_" + phase + "_" + tc.name
+				if got, want := handlerBody(t, artifact, name), handlerBody(t, generated, name); got != want {
+					t.Errorf("committed %s handler differs from generator\n--- committed ---\n%s\n--- generated ---\n%s", name, got, want)
+				}
+			}
+		})
+	}
 }
 
 func TestGenerateSleepHandlerCapturesRequestedTimespec(t *testing.T) {

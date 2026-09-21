@@ -264,6 +264,8 @@ func testStreamRow(seq uint64, syscall string, isError bool) streamrow.Row {
 		GapNs:             seq + 2,
 		Bytes:             seq + 3,
 		AddressSpaceBytes: seq + 4,
+		Nfds:              int32(seq + 5),
+		TimeoutNs:         int64(seq + 6),
 		RetVal:            int64(seq),
 		IsError:           isError,
 		FD:                int32(seq),

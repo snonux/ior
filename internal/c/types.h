@@ -105,6 +105,14 @@
 #define TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION 2
 #define TWO_FD_EVENT_SCHEMA_VERSION 3
 #define FD_PATH_EVENT_SCHEMA_VERSION 1
+// poll_event v1 appends the optional descriptor and a schema discriminator to
+// the legacy nfds/timeout prefix. Timeout sentinels are part of the exported
+// stream contract: -1 means an intentional infinite wait, while -2 means the
+// timeout was unreadable, invalid, unrepresentable in nanoseconds, or has no
+// capture recipe.
+#define POLL_EVENT_SCHEMA_VERSION 1
+#define POLL_TIMEOUT_INFINITE_NS -1
+#define POLL_TIMEOUT_UNKNOWN_NS -2
 
 struct open_event {
     __u32 event_type;
@@ -332,6 +340,8 @@ struct poll_event {
     __u32 tid;
     __s32 nfds;
     __s64 timeout_ns;
+    __s32 fd;
+    __u32 schema_version;
 };
 
 struct mem_event {

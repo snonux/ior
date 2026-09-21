@@ -27,9 +27,14 @@ type Row struct {
 	AddressSpaceBytes uint64
 	// RequestedSleepNs stores requested sleep duration metadata for sleep syscalls.
 	RequestedSleepNs int64
-	RetVal           int64
-	IsError          bool
-	FD               int32
+	// Nfds and TimeoutNs store readiness-wait metadata. Nfds is maxevents for
+	// epoll waits. TimeoutNs is -1 for infinite and -2 for unreadable, invalid,
+	// unrepresentable, or otherwise unknown values.
+	Nfds      int32
+	TimeoutNs int64
+	RetVal    int64
+	IsError   bool
+	FD        int32
 	// EpollOp is the epoll_ctl operation as a readable token (ADD/MOD/DEL),
 	// empty for non-epoll_ctl rows. EpollTargetFD and EpollEvents hold the
 	// registered descriptor (args[2]) and requested event mask (args[3]->events)
@@ -151,6 +156,8 @@ func New(seq uint64, pair *event.Pair) Row {
 		Bytes:             pair.Bytes,
 		AddressSpaceBytes: pair.AddressSpaceBytes,
 		RequestedSleepNs:  pair.RequestedSleepNs,
+		Nfds:              pair.Nfds,
+		TimeoutNs:         pair.TimeoutNs,
 		FD:                UnknownFD,
 		// OldName carries the rename/link source path; FileName is the new path.
 		// Empty for non-rename/link syscalls (pair.Oldname is zero there).

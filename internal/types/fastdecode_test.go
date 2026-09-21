@@ -296,7 +296,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("PollEvent", func(t *testing.T) {
-		ev := &PollEvent{EventType: ENTER_POLL_EVENT, TraceId: SYS_ENTER_POLL, Time: 1, Pid: 2, Tid: 3, Nfds: 4, TimeoutNs: 5_000_000}
+		ev := &PollEvent{EventType: ENTER_POLL_EVENT, TraceId: SYS_ENTER_EPOLL_WAIT, Time: 1, Pid: 2, Tid: 3, Nfds: 4, TimeoutNs: 5_000_000, Fd: 6, SchemaVersion: POLL_EVENT_SCHEMA_VERSION}
 		raw := rawBytes(t, ev)
 
 		slow := NewPollEvent(raw)
@@ -668,6 +668,8 @@ func TestNewPollEventFastKernelLayout(t *testing.T) {
 	binary.LittleEndian.PutUint32(raw[20:24], 3)
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(8))
 	binary.LittleEndian.PutUint64(raw[32:40], uint64(75_000_000))
+	binary.LittleEndian.PutUint32(raw[40:44], uint32(9))
+	binary.LittleEndian.PutUint32(raw[44:48], POLL_EVENT_SCHEMA_VERSION)
 
 	fast := NewPollEventFast(raw)
 	if fast == nil {
@@ -681,8 +683,84 @@ func TestNewPollEventFastKernelLayout(t *testing.T) {
 		fast.Pid != 2 ||
 		fast.Tid != 3 ||
 		fast.Nfds != 8 ||
-		fast.TimeoutNs != 75_000_000 {
+		fast.TimeoutNs != 75_000_000 ||
+		fast.Fd != 9 ||
+		fast.SchemaVersion != POLL_EVENT_SCHEMA_VERSION {
 		t.Fatalf("unexpected poll decode: %#v", fast)
+	}
+}
+
+func TestNewPollEventFastLayoutsAndSchema(t *testing.T) {
+	tests := []struct {
+		name          string
+		size          int
+		timeoutOffset int
+		current       bool
+	}{
+		{name: "legacy compact", size: pollEventLegacyCompactSize, timeoutOffset: 28},
+		{name: "legacy kernel", size: pollEventLegacyKernelSize, timeoutOffset: 32},
+		{name: "current compact", size: pollEventCompactSize, timeoutOffset: 28, current: true},
+		{name: "current kernel", size: pollEventSize, timeoutOffset: 32, current: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := make([]byte, tc.size)
+			binary.LittleEndian.PutUint32(raw[0:4], uint32(ENTER_POLL_EVENT))
+			binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_EPOLL_WAIT))
+			binary.LittleEndian.PutUint32(raw[24:28], 4)
+			binary.LittleEndian.PutUint64(raw[tc.timeoutOffset:tc.timeoutOffset+8], 250_000_000)
+			if tc.current {
+				binary.LittleEndian.PutUint32(raw[tc.timeoutOffset+8:tc.timeoutOffset+12], 7)
+				binary.LittleEndian.PutUint32(raw[tc.timeoutOffset+12:tc.timeoutOffset+16], POLL_EVENT_SCHEMA_VERSION)
+			}
+
+			ev := NewPollEventFast(raw)
+			if ev == nil {
+				t.Fatal("NewPollEventFast returned nil")
+			}
+			defer ev.Recycle()
+			wantFD := int32(-1)
+			var wantSchema uint32
+			if tc.current {
+				wantFD = 7
+				wantSchema = POLL_EVENT_SCHEMA_VERSION
+			}
+			if ev.Nfds != 4 || ev.TimeoutNs != 250_000_000 || ev.Fd != wantFD || ev.SchemaVersion != wantSchema {
+				t.Fatalf("decoded poll event = %#v, want nfds=4 timeout=250ms fd=%d schema=%d", ev, wantFD, wantSchema)
+			}
+		})
+	}
+
+	badSchema := make([]byte, pollEventCompactSize)
+	binary.LittleEndian.PutUint32(badSchema[40:44], POLL_EVENT_SCHEMA_VERSION+1)
+	if got := NewPollEventFast(badSchema); got != nil {
+		got.Recycle()
+		t.Fatal("current poll payload with unknown schema must be rejected")
+	}
+	if got := NewPollEventFast(make([]byte, pollEventLegacyCompactSize+1)); got != nil {
+		got.Recycle()
+		t.Fatal("unknown poll payload size must be rejected")
+	}
+}
+
+func TestNewPollEventFastLegacyResetsAppendedPooledFields(t *testing.T) {
+	current := make([]byte, pollEventCompactSize)
+	binary.LittleEndian.PutUint32(current[36:40], 17)
+	binary.LittleEndian.PutUint32(current[40:44], POLL_EVENT_SCHEMA_VERSION)
+	ev := NewPollEventFast(current)
+	if ev == nil {
+		t.Fatal("decode current poll payload")
+	}
+	ev.Recycle()
+
+	legacy := make([]byte, pollEventLegacyCompactSize)
+	got := NewPollEventFast(legacy)
+	if got == nil {
+		t.Fatal("decode legacy poll payload")
+	}
+	defer got.Recycle()
+	if got.Fd != -1 || got.SchemaVersion != 0 {
+		t.Fatalf("legacy appended fields = fd %d schema %d, want -1/0", got.Fd, got.SchemaVersion)
 	}
 }
 

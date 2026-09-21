@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"go/format"
 	"strings"
 	"testing"
 )
@@ -144,4 +145,38 @@ sys_enter_msgsnd is a struct null_event (kind=sysv-op)
 	requireContains(t, output, `"epoll_ctl": "epoll-ctl",`)
 	requireContains(t, output, `"pidfd_open": "pidfd",`)
 	requireContains(t, output, `"msgsnd": "sysv-op",`)
+}
+
+// TestCommittedTracepointsGoMatchesDerivedArtifacts closes the generated-file
+// chain: generated_tracepoints.c supplies the ordered tracepoint list,
+// generated_tracepoints_result.txt supplies each enter kind, and the committed
+// Go artifact must be exactly what ExtractTracepointsWithKinds derives from
+// those two reviewed inputs. This remains runnable on older kernels because it
+// never regenerates the host-dependent syscall corpus.
+func TestCommittedTracepointsGoMatchesDerivedArtifacts(t *testing.T) {
+	cSource, err := readRepoFile("internal", "c", "generated_tracepoints.c")
+	if err != nil {
+		t.Fatalf("read generated C: %v", err)
+	}
+	kindsSource, err := readRepoFile("internal", "c", "generated_tracepoints_result.txt")
+	if err != nil {
+		t.Fatalf("read generated kind metadata: %v", err)
+	}
+	want, err := readRepoFile("internal", "tracepoints", "generated_tracepoints.go")
+	if err != nil {
+		t.Fatalf("read generated Go: %v", err)
+	}
+
+	derived, err := ExtractTracepointsWithKinds(strings.NewReader(cSource), strings.NewReader(kindsSource))
+	if err != nil {
+		t.Fatalf("derive generated Go: %v", err)
+	}
+	formatted, err := format.Source([]byte(derived))
+	if err != nil {
+		t.Fatalf("format derived Go: %v", err)
+	}
+	got := string(formatted)
+	if got != want {
+		t.Fatal("committed generated_tracepoints.go differs from generated C and kind metadata")
+	}
 }

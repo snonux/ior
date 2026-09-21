@@ -5072,7 +5072,7 @@ int handle_sys_exit_epoll_ctl(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_epoll_wait is a struct fd_event (kind=fd)
+/// sys_enter_epoll_wait is a struct poll_event (kind=poll)
 SEC("tracepoint/syscalls/sys_enter_epoll_wait")
 int handle_sys_enter_epoll_wait(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -5082,21 +5082,27 @@ int handle_sys_enter_epoll_wait(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_EPOLL_WAIT))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct poll_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct poll_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_POLL_EVENT;
     ev->trace_id = SYS_ENTER_EPOLL_WAIT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->nfds = (__s32)ctx->args[2];
+    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;
+    __s32 timeout_ms = (__s32)ctx->args[3];
+    if (timeout_ms < 0) {
+        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
+    } else {
+        ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;
+    }
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
+    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5130,7 +5136,7 @@ int handle_sys_exit_epoll_wait(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_epoll_pwait is a struct fd_event (kind=fd)
+/// sys_enter_epoll_pwait is a struct poll_event (kind=poll)
 SEC("tracepoint/syscalls/sys_enter_epoll_pwait")
 int handle_sys_enter_epoll_pwait(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -5140,21 +5146,27 @@ int handle_sys_enter_epoll_pwait(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_EPOLL_PWAIT))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct poll_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct poll_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_POLL_EVENT;
     ev->trace_id = SYS_ENTER_EPOLL_PWAIT;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->nfds = (__s32)ctx->args[2];
+    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;
+    __s32 timeout_ms = (__s32)ctx->args[3];
+    if (timeout_ms < 0) {
+        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
+    } else {
+        ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;
+    }
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
+    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5188,7 +5200,7 @@ int handle_sys_exit_epoll_pwait(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_epoll_pwait2 is a struct fd_event (kind=fd)
+/// sys_enter_epoll_pwait2 is a struct poll_event (kind=poll)
 SEC("tracepoint/syscalls/sys_enter_epoll_pwait2")
 int handle_sys_enter_epoll_pwait2(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -5198,21 +5210,36 @@ int handle_sys_enter_epoll_pwait2(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_EPOLL_PWAIT2))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct poll_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct poll_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_POLL_EVENT;
     ev->trace_id = SYS_ENTER_EPOLL_PWAIT2;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->nfds = (__s32)ctx->args[2];
+    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;
+    if (ctx->args[3] == 0) {
+        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
+    } else {
+        struct __ior_timespec {
+            __s64 tv_sec;
+            __s64 tv_nsec;
+        } ts = {};
+        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[3]) == 0) {
+            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL &&
+                (ts.tv_sec < 9223372036LL ||
+                 (ts.tv_sec == 9223372036LL && ts.tv_nsec <= 854775807LL))) {
+                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            }
+        }
+    }
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
+    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9022,16 +9049,24 @@ int handle_sys_enter_select(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->nfds = (__s32)ctx->args[0];
-    ev->timeout_ns = -1;
-    if (ctx->args[4] != 0) {
+    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;
+    if (ctx->args[4] == 0) {
+        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
+    } else {
         struct __ior_timeval {
             __s64 tv_sec;
             __s64 tv_usec;
         } tv = {};
         if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[4]) == 0) {
-            ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;
+            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&
+                (tv.tv_sec < 9223372036LL ||
+                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {
+                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;
+            }
         }
     }
+    ev->fd = -1;
+    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9087,16 +9122,24 @@ int handle_sys_enter_pselect6(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->nfds = (__s32)ctx->args[0];
-    ev->timeout_ns = -1;
-    if (ctx->args[4] != 0) {
+    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;
+    if (ctx->args[4] == 0) {
+        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
+    } else {
         struct __ior_timespec {
             __s64 tv_sec;
             __s64 tv_nsec;
         } ts = {};
         if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[4]) == 0) {
-            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL &&
+                (ts.tv_sec < 9223372036LL ||
+                 (ts.tv_sec == 9223372036LL && ts.tv_nsec <= 854775807LL))) {
+                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            }
         }
     }
+    ev->fd = -1;
+    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9152,11 +9195,15 @@ int handle_sys_enter_poll(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->nfds = (__s32)ctx->args[1];
-    ev->timeout_ns = -1;
+    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;
     __s32 timeout_ms = (__s32)ctx->args[2];
-    if (timeout_ms >= 0) {
+    if (timeout_ms < 0) {
+        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
+    } else {
         ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;
     }
+    ev->fd = -1;
+    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9212,16 +9259,24 @@ int handle_sys_enter_ppoll(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->nfds = (__s32)ctx->args[1];
-    ev->timeout_ns = -1;
-    if (ctx->args[2] != 0) {
+    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;
+    if (ctx->args[2] == 0) {
+        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
+    } else {
         struct __ior_timespec {
             __s64 tv_sec;
             __s64 tv_nsec;
         } ts = {};
         if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {
-            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL &&
+                (ts.tv_sec < 9223372036LL ||
+                 (ts.tv_sec == 9223372036LL && ts.tv_nsec <= 854775807LL))) {
+                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            }
         }
     }
+    ev->fd = -1;
+    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

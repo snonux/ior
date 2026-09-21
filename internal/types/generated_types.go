@@ -143,6 +143,9 @@ const ACCEPT_EVENT_SCHEMA_VERSION = 1
 const TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION = 2
 const TWO_FD_EVENT_SCHEMA_VERSION = 3
 const FD_PATH_EVENT_SCHEMA_VERSION = 1
+const POLL_EVENT_SCHEMA_VERSION = 1
+const POLL_TIMEOUT_INFINITE_NS = -1
+const POLL_TIMEOUT_UNKNOWN_NS = -2
 const SYS_ENTER_SOCKET TraceId = 1847
 const SYS_EXIT_SOCKET TraceId = 1846
 const SYS_ENTER_SOCKETPAIR TraceId = 1845
@@ -2208,17 +2211,19 @@ func (e *EpollCtlEvent) Recycle() {
 }
 
 type PollEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Nfds      int32
-	TimeoutNs int64
+	EventType     EventType
+	TraceId       TraceId
+	Time          uint64
+	Pid           uint32
+	Tid           uint32
+	Nfds          int32
+	TimeoutNs     int64
+	Fd            int32
+	SchemaVersion uint32
 }
 
 func (p PollEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Nfds:%v TimeoutNs:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.Nfds, p.TimeoutNs)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Nfds:%v TimeoutNs:%v Fd:%v SchemaVersion:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.Nfds, p.TimeoutNs, p.Fd, p.SchemaVersion)
 }
 
 func (p PollEvent) Equals(other any) bool {
@@ -2226,7 +2231,7 @@ func (p PollEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Nfds == otherConcrete.Nfds && p.TimeoutNs == otherConcrete.TimeoutNs
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Nfds == otherConcrete.Nfds && p.TimeoutNs == otherConcrete.TimeoutNs && p.Fd == otherConcrete.Fd && p.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (p *PollEvent) GetEventType() EventType {

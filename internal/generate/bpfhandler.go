@@ -731,9 +731,10 @@ const (
 )
 
 // pollFieldSpec describes argument positions and timeout style for a poll
-// syscall. nfdsArgIdx is the ctx->args index for nfds; timeoutArgIdx is the
-// index for the timeout argument.
+// syscall. fdArgIdx is -1 when the syscall has no single descriptor;
+// nfdsArgIdx and timeoutArgIdx identify the count and timeout arguments.
 type pollFieldSpec struct {
+	fdArgIdx      int
 	nfdsArgIdx    int
 	timeoutArgIdx int
 	timeoutStyle  pollTimeoutStyle
@@ -742,24 +743,36 @@ type pollFieldSpec struct {
 // pollOverrides maps poll-family syscall names to their argument layout.
 // To add a new poll variant, register it here instead of editing a switch.
 var pollOverrides = map[string]pollFieldSpec{
-	"sys_enter_poll":     {nfdsArgIdx: 1, timeoutArgIdx: 2, timeoutStyle: pollTimeoutMillis},
-	"sys_enter_ppoll":    {nfdsArgIdx: 1, timeoutArgIdx: 2, timeoutStyle: pollTimeoutTimespec},
-	"sys_enter_select":   {nfdsArgIdx: 0, timeoutArgIdx: 4, timeoutStyle: pollTimeoutTimeval},
-	"sys_enter_pselect6": {nfdsArgIdx: 0, timeoutArgIdx: 4, timeoutStyle: pollTimeoutTimespec},
+	"sys_enter_epoll_wait":   {fdArgIdx: 0, nfdsArgIdx: 2, timeoutArgIdx: 3, timeoutStyle: pollTimeoutMillis},
+	"sys_enter_epoll_pwait":  {fdArgIdx: 0, nfdsArgIdx: 2, timeoutArgIdx: 3, timeoutStyle: pollTimeoutMillis},
+	"sys_enter_epoll_pwait2": {fdArgIdx: 0, nfdsArgIdx: 2, timeoutArgIdx: 3, timeoutStyle: pollTimeoutTimespec},
+	"sys_enter_poll":         {fdArgIdx: -1, nfdsArgIdx: 1, timeoutArgIdx: 2, timeoutStyle: pollTimeoutMillis},
+	"sys_enter_ppoll":        {fdArgIdx: -1, nfdsArgIdx: 1, timeoutArgIdx: 2, timeoutStyle: pollTimeoutTimespec},
+	"sys_enter_select":       {fdArgIdx: -1, nfdsArgIdx: 0, timeoutArgIdx: 4, timeoutStyle: pollTimeoutTimeval},
+	"sys_enter_pselect6":     {fdArgIdx: -1, nfdsArgIdx: 0, timeoutArgIdx: 4, timeoutStyle: pollTimeoutTimespec},
 }
 
 // generateExtraPoll emits the nfds/timeout_ns capture body for poll-family
-// syscalls. Unregistered names get sensible defaults (-1, -1).
+// syscalls. Unregistered names get safe unknown defaults.
 func generateExtraPoll(name string) string {
 	spec, ok := pollOverrides[name]
 	if !ok {
-		return "    ev->nfds = -1;\n    ev->timeout_ns = -1;\n"
+		return "    ev->nfds = -1;\n" +
+			"    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;\n" +
+			"    ev->fd = -1;\n" +
+			"    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;\n"
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "    ev->nfds = (__s32)ctx->args[%d];\n", spec.nfdsArgIdx)
-	b.WriteString("    ev->timeout_ns = -1;\n")
+	b.WriteString("    ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;\n")
 	b.WriteString(pollTimeoutBody(spec.timeoutArgIdx, spec.timeoutStyle))
+	if spec.fdArgIdx >= 0 {
+		fmt.Fprintf(&b, "    ev->fd = (__s32)ctx->args[%d];\n", spec.fdArgIdx)
+	} else {
+		b.WriteString("    ev->fd = -1;\n")
+	}
+	b.WriteString("    ev->schema_version = POLL_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
 }
 
@@ -770,29 +783,43 @@ func pollTimeoutBody(argIdx int, style pollTimeoutStyle) string {
 	case pollTimeoutMillis:
 		return fmt.Sprintf(
 			"    __s32 timeout_ms = (__s32)ctx->args[%d];\n"+
-				"    if (timeout_ms >= 0) {\n"+
+				"    if (timeout_ms < 0) {\n"+
+				"        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;\n"+
+				"    } else {\n"+
 				"        ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;\n"+
 				"    }\n", argIdx)
 	case pollTimeoutTimespec:
 		return fmt.Sprintf(
-			"    if (ctx->args[%d] != 0) {\n"+
+			"    if (ctx->args[%d] == 0) {\n"+
+				"        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;\n"+
+				"    } else {\n"+
 				"        struct __ior_timespec {\n"+
 				"            __s64 tv_sec;\n"+
 				"            __s64 tv_nsec;\n"+
 				"        } ts = {};\n"+
 				"        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[%d]) == 0) {\n"+
-				"            ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+				"            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL &&\n"+
+				"                (ts.tv_sec < 9223372036LL ||\n"+
+				"                 (ts.tv_sec == 9223372036LL && ts.tv_nsec <= 854775807LL))) {\n"+
+				"                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+				"            }\n"+
 				"        }\n"+
 				"    }\n", argIdx, argIdx)
 	case pollTimeoutTimeval:
 		return fmt.Sprintf(
-			"    if (ctx->args[%d] != 0) {\n"+
+			"    if (ctx->args[%d] == 0) {\n"+
+				"        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;\n"+
+				"    } else {\n"+
 				"        struct __ior_timeval {\n"+
 				"            __s64 tv_sec;\n"+
 				"            __s64 tv_usec;\n"+
 				"        } tv = {};\n"+
 				"        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[%d]) == 0) {\n"+
-				"            ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
+				"            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&\n"+
+				"                (tv.tv_sec < 9223372036LL ||\n"+
+				"                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {\n"+
+				"                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
+				"            }\n"+
 				"        }\n"+
 				"    }\n", argIdx, argIdx)
 	default:
