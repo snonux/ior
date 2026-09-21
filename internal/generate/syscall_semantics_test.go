@@ -65,12 +65,8 @@ var (
 // userspace) do not need an override here.
 var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"accept": {kind: "accept", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network"},
-	// TODO(l4): delete temporary when accept4 captures its creation flags.
 	"accept4": {
 		kind: "accept", args: map[string]int{"fd": 0, "flags": 3}, ret: "UNCLASSIFIED", family: "Network",
-		temporary: &temporarySyscallSemantics{task: "l4", current: syscallSemantics{
-			kind: "accept", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network",
-		}},
 	},
 	"access":          {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"acct":            {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "Misc"},
@@ -1765,7 +1761,7 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 }
 
 // validateSchemaVersionWrite pins the ABI discriminator in every committed
-// open/path/name handler. This deliberately checks the rendered artifact, not
+// open/path/name/accept handler. This deliberately checks the rendered artifact, not
 // only generator snippets, because newer-kernel-only handlers may be preserved
 // manually when mage generate is run on an older host.
 func validateSchemaVersionWrite(name, body string) error {
@@ -1775,9 +1771,10 @@ func validateSchemaVersionWrite(name, body string) error {
 		return fmt.Errorf("sys_enter_%s has no event struct", name)
 	}
 	want, ok := map[string]string{
-		"open_event": "OPEN_EVENT_SCHEMA_VERSION",
-		"path_event": "PATH_EVENT_SCHEMA_VERSION",
-		"name_event": "NAME_EVENT_SCHEMA_VERSION",
+		"open_event":   "OPEN_EVENT_SCHEMA_VERSION",
+		"path_event":   "PATH_EVENT_SCHEMA_VERSION",
+		"name_event":   "NAME_EVENT_SCHEMA_VERSION",
+		"accept_event": "ACCEPT_EVENT_SCHEMA_VERSION",
 	}[match[1]]
 	if !ok {
 		return nil

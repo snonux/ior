@@ -169,7 +169,7 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindOpenByHandleAt: func(_ GeneratedTracepoint, _ bool) string { return generateExtraOpenByHandleAt() },
 	KindSocket:         func(_ GeneratedTracepoint, _ bool) string { return generateExtraSocket() },
 	KindSocketpair:     func(_ GeneratedTracepoint, isEnter bool) string { return generateExtraSocketpair(isEnter) },
-	KindAccept:         func(_ GeneratedTracepoint, isEnter bool) string { return generateExtraAccept(isEnter) },
+	KindAccept:         func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraAccept(tp.Format, isEnter) },
 	KindPipe:           func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraPipe(tp.Format, isEnter) },
 	KindEventfd:        func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
 	KindNamedEventfd:   func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
@@ -495,11 +495,21 @@ func generateExtraSocketpair(isEnter bool) string {
 	return "    __s32 family = -1;\n    __s32 type = -1;\n    __s32 protocol = -1;\n    __s32 sv0 = -1;\n    __s32 sv1 = -1;\n    struct socketpair_ctx *pending = bpf_map_lookup_elem(&socketpair_ctx_map, &tid);\n    if (pending) {\n        family = pending->family;\n        type = pending->type;\n        protocol = pending->protocol;\n        if (ctx->ret == 0 && pending->usockvec != 0) {\n            int sv[2];\n            if (bpf_probe_read_user(&sv, sizeof(sv), (void *)pending->usockvec) == 0) {\n                sv0 = (__s32)sv[0];\n                sv1 = (__s32)sv[1];\n            }\n        }\n        bpf_map_delete_elem(&socketpair_ctx_map, &tid);\n    }\n    ev->family = family;\n    ev->type = type;\n    ev->protocol = protocol;\n    ev->sv0 = sv0;\n    ev->sv1 = sv1;\n    ev->ret = ctx->ret;\n"
 }
 
-func generateExtraAccept(isEnter bool) string {
+func generateExtraAccept(f *Format, isEnter bool) string {
 	if isEnter {
-		return "    ev->fd = (__s32)ctx->args[0];\n    ev->ret = -1;\n"
+		flagsExpr := "0"
+		if flagsIdx := f.FieldNumber("flags"); flagsIdx >= 0 {
+			flagsExpr = fmt.Sprintf("(__s32)ctx->args[%d]", flagsIdx)
+		}
+		return "    ev->fd = (__s32)ctx->args[0];\n" +
+			"    ev->ret = -1;\n" +
+			"    ev->flags = " + flagsExpr + ";\n" +
+			"    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;\n"
 	}
-	return "    ev->fd = -1;\n    ev->ret = ctx->ret;\n"
+	return "    ev->fd = -1;\n" +
+		"    ev->ret = ctx->ret;\n" +
+		"    ev->flags = -1;\n" +
+		"    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;\n"
 }
 
 func generateExtraPipe(f *Format, isEnter bool) string {

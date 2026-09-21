@@ -205,7 +205,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("AcceptEvent", func(t *testing.T) {
-		ev := &AcceptEvent{EventType: ENTER_ACCEPT_EVENT, TraceId: SYS_ENTER_ACCEPT4, Time: 1, Pid: 2, Tid: 3, Fd: 4, Ret: -1}
+		ev := &AcceptEvent{EventType: ENTER_ACCEPT_EVENT, TraceId: SYS_ENTER_ACCEPT4, Time: 1, Pid: 2, Tid: 3, Fd: 4, Ret: -1, Flags: 0x80800, SchemaVersion: ACCEPT_EVENT_SCHEMA_VERSION}
 		raw := rawBytes(t, ev)
 
 		slow := NewAcceptEvent(raw)
@@ -498,30 +498,77 @@ func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
 	}
 }
 
-func TestNewAcceptEventFastKernelLayout(t *testing.T) {
-	raw := make([]byte, acceptEventSize)
-	binary.LittleEndian.PutUint32(raw[0:4], uint32(EXIT_ACCEPT_EVENT))
-	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_EXIT_ACCEPT4))
-	binary.LittleEndian.PutUint64(raw[8:16], 1)
-	binary.LittleEndian.PutUint32(raw[16:20], 2)
-	binary.LittleEndian.PutUint32(raw[20:24], 3)
-	binary.LittleEndian.PutUint32(raw[24:28], uint32(10))
-	binary.LittleEndian.PutUint64(raw[32:40], uint64(42))
-
-	fast := NewAcceptEventFast(raw)
-	if fast == nil {
-		t.Fatalf("expected decoded accept event for kernel layout payload")
+func TestNewAcceptEventFastLegacyAndCurrentLayouts(t *testing.T) {
+	acceptLayout := AcceptEvent{}
+	if got := unsafe.Sizeof(acceptLayout); got != acceptEventSize {
+		t.Fatalf("sizeof(AcceptEvent) = %d, want %d", got, acceptEventSize)
 	}
-	defer fast.Recycle()
+	for field, offset := range map[string]struct {
+		got  uintptr
+		want uintptr
+	}{
+		"fd":             {unsafe.Offsetof(acceptLayout.Fd), 24},
+		"ret":            {unsafe.Offsetof(acceptLayout.Ret), 32},
+		"flags":          {unsafe.Offsetof(acceptLayout.Flags), 40},
+		"schema_version": {unsafe.Offsetof(acceptLayout.SchemaVersion), 44},
+	} {
+		if offset.got != offset.want {
+			t.Fatalf("AcceptEvent.%s offset = %d, want %d", field, offset.got, offset.want)
+		}
+	}
+	if got := len(rawBytes(t, &AcceptEvent{})); got != acceptEventCompactSize {
+		t.Fatalf("AcceptEvent.Bytes size = %d, want %d", got, acceptEventCompactSize)
+	}
 
-	if fast.EventType != EXIT_ACCEPT_EVENT ||
-		fast.TraceId != SYS_EXIT_ACCEPT4 ||
-		fast.Time != 1 ||
-		fast.Pid != 2 ||
-		fast.Tid != 3 ||
-		fast.Fd != 10 ||
-		fast.Ret != 42 {
-		t.Fatalf("unexpected accept decode: %#v", fast)
+	tests := []struct {
+		name          string
+		size          int
+		flags         int32
+		schemaVersion uint32
+	}{
+		{name: "legacy compact", size: acceptEventLegacyCompactSize, flags: -1},
+		{name: "legacy kernel", size: acceptEventLegacyKernelSize, flags: -1},
+		{name: "current compact", size: acceptEventCompactSize, flags: 0x80800, schemaVersion: ACCEPT_EVENT_SCHEMA_VERSION},
+		{name: "current kernel", size: acceptEventSize, flags: 0x80800, schemaVersion: ACCEPT_EVENT_SCHEMA_VERSION},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := make([]byte, tc.size)
+			fillCommonHeader(raw, EXIT_ACCEPT_EVENT, SYS_EXIT_ACCEPT4)
+			binary.LittleEndian.PutUint32(raw[24:28], uint32(10))
+			retOffset := 28
+			if tc.size == acceptEventLegacyKernelSize || tc.size == acceptEventSize {
+				retOffset = 32
+				// Legacy padding was never initialized. Poison it to prove the
+				// decoder cannot reinterpret it as accept4 creation flags.
+				binary.LittleEndian.PutUint32(raw[28:32], 0xdeadbeef)
+			}
+			binary.LittleEndian.PutUint64(raw[retOffset:retOffset+8], uint64(42))
+			if tc.schemaVersion != 0 {
+				binary.LittleEndian.PutUint32(raw[retOffset+8:retOffset+12], uint32(tc.flags))
+				binary.LittleEndian.PutUint32(raw[retOffset+12:retOffset+16], tc.schemaVersion)
+			}
+
+			fast := NewAcceptEventFast(raw)
+			if fast == nil {
+				t.Fatal("expected decoded accept event")
+			}
+			defer fast.Recycle()
+			if fast.Fd != 10 || fast.Ret != 42 || fast.Flags != tc.flags ||
+				fast.SchemaVersion != tc.schemaVersion {
+				t.Fatalf("unexpected accept decode: %#v", fast)
+			}
+		})
+	}
+}
+
+func TestNewAcceptEventFastRejectsUnknownCurrentSchema(t *testing.T) {
+	raw := make([]byte, acceptEventSize)
+	fillCommonHeader(raw, ENTER_ACCEPT_EVENT, SYS_ENTER_ACCEPT4)
+	binary.LittleEndian.PutUint32(raw[44:48], ACCEPT_EVENT_SCHEMA_VERSION+1)
+	if got := NewAcceptEventFast(raw); got != nil {
+		got.Recycle()
+		t.Fatal("unknown accept schema decoded successfully")
 	}
 }
 

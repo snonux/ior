@@ -41,7 +41,7 @@ func socketAcceptLifecycle() error {
 
 	socketPath := filepath.Join(dir, "accept.sock")
 
-	listenerFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	listenerFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("listener socket: %w", err)
 	}
@@ -64,7 +64,7 @@ func socketAcceptLifecycle() error {
 		return fmt.Errorf("connect: %w", err)
 	}
 
-	acceptedFD, _, err := syscall.Accept4(listenerFD, 0)
+	acceptedFD, _, err := syscall.Accept4(listenerFD, syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC)
 	if err != nil {
 		return fmt.Errorf("accept4: %w", err)
 	}
@@ -85,7 +85,7 @@ func socketAcceptLifecyclePlain() error {
 
 	socketPath := filepath.Join(dir, "accept.sock")
 
-	listenerFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	listenerFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("listener socket: %w", err)
 	}

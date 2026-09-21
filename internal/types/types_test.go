@@ -192,13 +192,15 @@ func TestSocketpairEventSerialization(t *testing.T) {
 
 func TestAcceptEventSerialization(t *testing.T) {
 	acceptEv1 := AcceptEvent{
-		EventType: ENTER_ACCEPT_EVENT,
-		TraceId:   SYS_ENTER_ACCEPT4,
-		Time:      3456,
-		Pid:       34,
-		Tid:       35,
-		Fd:        9,
-		Ret:       -1,
+		EventType:     ENTER_ACCEPT_EVENT,
+		TraceId:       SYS_ENTER_ACCEPT4,
+		Time:          3456,
+		Pid:           34,
+		Tid:           35,
+		Fd:            9,
+		Ret:           -1,
+		Flags:         0x80800,
+		SchemaVersion: ACCEPT_EVENT_SCHEMA_VERSION,
 	}
 	bytes, err := acceptEv1.Bytes()
 	if err != nil {
@@ -213,6 +215,8 @@ func TestAcceptEventSerialization(t *testing.T) {
 	assertEquals(t, acceptEv1.Tid, acceptEv2.Tid)
 	assertEquals(t, acceptEv1.Fd, acceptEv2.Fd)
 	assertEquals(t, acceptEv1.Ret, acceptEv2.Ret)
+	assertEquals(t, acceptEv1.Flags, acceptEv2.Flags)
+	assertEquals(t, acceptEv1.SchemaVersion, acceptEv2.SchemaVersion)
 }
 
 func TestPipeEventSerialization(t *testing.T) {

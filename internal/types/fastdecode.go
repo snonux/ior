@@ -16,37 +16,39 @@ const (
 	// from a pre-schema-change IOR_BPF_OBJECT. The widened path-like structs
 	// retain their old field prefix, so the fast decoders can accept both and
 	// supply AT_FDCWD for the dirfd fields absent from legacy records.
-	openEventSize              = 320
-	openEventCompactSize       = 316
-	openEventLegacyKernelSize  = 304
-	openEventLegacyCompactSize = 300
-	openNameFixupEventSize     = 268
-	execEventSize              = 304
-	nullEventSize              = 24
-	fdEventSize                = 32
-	fdEventSizeV1              = 28
-	retEventSize               = 40
-	retEventSizeV1             = 36
-	nameEventSize              = 560
-	nameEventLegacySize        = 536
-	pathEventSize              = 304
-	pathEventCompactSize       = 300
-	pathEventLegacySize        = 280
-	fdPathEventSize            = 304
-	fdPathEventCompactSize     = 300
-	fcntlEventSize             = 40
-	dup3EventSize              = 32
-	openByHandleAtEventSize    = 32
-	openByHandleAtEventSizeV1  = 28
-	socketEventSize            = 40
-	socketEventSizeV1          = 36
-	socketpairEventSize        = 56
-	socketpairEventSizeV1      = 52
-	acceptEventSize            = 40
-	acceptEventSizeV1          = 36
-	pipeEventSize              = 48
-	pipeEventSizeV1            = 44
-	eventfdEventSize           = 312
+	openEventSize                = 320
+	openEventCompactSize         = 316
+	openEventLegacyKernelSize    = 304
+	openEventLegacyCompactSize   = 300
+	openNameFixupEventSize       = 268
+	execEventSize                = 304
+	nullEventSize                = 24
+	fdEventSize                  = 32
+	fdEventSizeV1                = 28
+	retEventSize                 = 40
+	retEventSizeV1               = 36
+	nameEventSize                = 560
+	nameEventLegacySize          = 536
+	pathEventSize                = 304
+	pathEventCompactSize         = 300
+	pathEventLegacySize          = 280
+	fdPathEventSize              = 304
+	fdPathEventCompactSize       = 300
+	fcntlEventSize               = 40
+	dup3EventSize                = 32
+	openByHandleAtEventSize      = 32
+	openByHandleAtEventSizeV1    = 28
+	socketEventSize              = 40
+	socketEventSizeV1            = 36
+	socketpairEventSize          = 56
+	socketpairEventSizeV1        = 52
+	acceptEventSize              = 48
+	acceptEventCompactSize       = 44
+	acceptEventLegacyKernelSize  = 40
+	acceptEventLegacyCompactSize = 36
+	pipeEventSize                = 48
+	pipeEventSizeV1              = 44
+	eventfdEventSize             = 312
 	// V3 is the former padded layout with fd. V2 predates fd, while V1 is its
 	// compact binary.Write form.
 	eventfdEventSizeV3 = 48
@@ -454,16 +456,18 @@ func NewSocketpairEventFast(raw []byte) *SocketpairEvent {
 	return s
 }
 
-// NewAcceptEventFast decodes one accept ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant(s) above. Returns nil
-// for a short payload.
+// NewAcceptEventFast decodes one accept ring-buffer payload in a single pass.
+// The legacy layouts ended after Ret; their kernel padding must never be read
+// as flags, so they decode with unknown flags. Unknown current layouts fail
+// closed instead of guessing at offsets.
 func NewAcceptEventFast(raw []byte) *AcceptEvent {
-	if len(raw) < acceptEventSizeV1 {
+	if len(raw) < acceptEventLegacyCompactSize {
 		return nil
 	}
-	if len(raw) != acceptEventSize && len(raw) != acceptEventSizeV1 {
-		return NewAcceptEvent(raw)
+	legacy := len(raw) == acceptEventLegacyCompactSize || len(raw) == acceptEventLegacyKernelSize
+	current := len(raw) == acceptEventCompactSize || len(raw) == acceptEventSize
+	if !legacy && !current {
+		return nil
 	}
 	a := poolOfAcceptEvents.Get().(*AcceptEvent)
 	a.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -473,10 +477,21 @@ func NewAcceptEventFast(raw []byte) *AcceptEvent {
 	a.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	a.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	retOffset := 28
-	if len(raw) == acceptEventSize {
+	if len(raw) == acceptEventLegacyKernelSize || len(raw) == acceptEventSize {
 		retOffset = 32
 	}
 	a.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
+	a.Flags = -1
+	a.SchemaVersion = 0
+	if current {
+		flagsOffset := retOffset + 8
+		a.Flags = int32(binary.LittleEndian.Uint32(raw[flagsOffset : flagsOffset+4]))
+		a.SchemaVersion = binary.LittleEndian.Uint32(raw[flagsOffset+4 : flagsOffset+8])
+		if a.SchemaVersion != ACCEPT_EVENT_SCHEMA_VERSION {
+			a.Recycle()
+			return nil
+		}
+	}
 	return a
 }
 

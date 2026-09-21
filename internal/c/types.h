@@ -94,6 +94,10 @@
 #define PATH_EVENT_SCHEMA_VERSION 3
 #define NAME_EVENT_SCHEMA_VERSION 2
 #define EVENTFD_EVENT_SCHEMA_VERSION 2
+// accept_event v1 appends flags and a discriminator after ret. Keeping the
+// legacy prefix intact lets userspace decode old 36/40-byte payloads without
+// mistaking the old kernel padding before ret for creation flags.
+#define ACCEPT_EVENT_SCHEMA_VERSION 1
 // Schema 2 predates the kcmp pid1/type packing used for safe file attribution.
 #define TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION 2
 #define TWO_FD_EVENT_SCHEMA_VERSION 3
@@ -270,6 +274,8 @@ struct accept_event {
     __u32 tid;
     __s32 fd;
     __s64 ret;
+    __s32 flags;
+    __u32 schema_version;
 };
 
 struct pipe_event {
