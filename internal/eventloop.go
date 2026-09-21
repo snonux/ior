@@ -85,6 +85,11 @@ type eventLoop struct {
 	// skips that one-time wiring: evaluating the method value
 	// e.notifyWarning heap-allocates a closure, and commState runs several
 	// times per event.
+	//
+	// Invariant: once a resolver is wired, nothing clears its warningFn.
+	// The fast path never re-runs setDefaultWarningFn, so a sink cleared
+	// after wiring would silently stay cleared; swap in a new resolver
+	// instead, which commState wires on its first use.
 	commWired       *commResolver
 	outputFormatter // pair-emission and warning-notification callbacks (embedded collaborator)
 	rawHandlers     map[types.EventType]rawEventHandler
@@ -220,7 +225,9 @@ func (e *eventLoop) pendingHandleState() *pendingHandleTracker {
 // use. The wiring (the resolver completing its own invariants, then taking the
 // loop's warning sink unless it already has one) runs once per resolver
 // instance: the hot path is a single pointer comparison, and a resolver
-// swapped in later (tests do this) is still wired on its first use.
+// swapped in later (tests do this) is still wired on its first use. The fast
+// path relies on the wired resolver's warningFn never being cleared (see
+// commWired).
 func (e *eventLoop) commState() *commResolver {
 	if r := e.commResolver; r != nil && r == e.commWired {
 		return r

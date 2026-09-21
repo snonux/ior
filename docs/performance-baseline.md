@@ -41,6 +41,11 @@ scripts/perf-baseline.sh record my-label     # explicit label
 PERF_COUNT=10 scripts/perf-baseline.sh record
 ```
 
+If the tree differs from `HEAD` outside `perf/`, the recording measures code
+that no commit contains. The label then always gets a `-dirty` suffix, explicit
+labels included, and the header's `commit:` line ends in
+`+uncommitted changes`. Commit first and record from a clean tree.
+
 Settings come from the environment: `PERF_COUNT` (samples per benchmark, default
 8), `PERF_BENCHTIME` (default `1s`), `PERF_BENCH` (benchmark regexp, default the
 focused set) and `LIBBPFGO` (default `../libbpfgo`). A full recording takes
