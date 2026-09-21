@@ -39,6 +39,7 @@ var (
 // captured. The path is read on syscall entry, so enter_getxattrat must carry
 // the file path "xattrfile.txt" and never the xattr name "user.ior".
 func TestXattrGetxattrat(t *testing.T) {
+	requireSyscalls(t, "getxattrat")
 	result, _ := runScenarioResultWithIorArgs(t, "xattr-getxattrat", []ExpectedEvent{
 		{
 			PathContains: "xattrfile.txt",
@@ -106,6 +107,7 @@ func TestXattrSetxattr(t *testing.T) {
 // (NOT args[0]=dfd); only the path must be captured. The path is read on
 // syscall entry, so enter_listxattrat must carry the file path "xattrfile.txt".
 func TestXattrListxattrat(t *testing.T) {
+	requireSyscalls(t, "listxattrat")
 	result, _ := runScenarioResultWithIorArgs(t, "xattr-listxattrat", []ExpectedEvent{
 		{
 			PathContains: "xattrfile.txt",
@@ -130,6 +132,7 @@ func TestXattrListxattrat(t *testing.T) {
 // captured. The path is read on syscall entry, so enter_removexattrat must
 // carry the file path "xattrfile.txt", never the name "user.ior".
 func TestXattrRemovexattrat(t *testing.T) {
+	requireSyscalls(t, "removexattrat")
 	result, _ := runScenarioResultWithIorArgs(t, "xattr-removexattrat", []ExpectedEvent{
 		{
 			PathContains: "xattrfile.txt",
@@ -319,6 +322,7 @@ func TestXattrLsetxattr(t *testing.T) {
 // like its getxattrat/listxattrat siblings), matching setxattr/lsetxattr/
 // fsetxattr.
 func TestXattrSetxattrat(t *testing.T) {
+	requireSyscalls(t, "setxattrat")
 	result, _ := runScenarioResultWithIorArgs(t, "xattr-setxattrat", []ExpectedEvent{
 		{
 			PathContains: "xattrfile.txt",

@@ -967,3 +967,29 @@ the eight host-limited tests execute. Recommendation: make those eight tests
 probe and `t.Skip` on `ENOSYS`/`EPERM`/absent tracepoints, as
 `supportsMemfdSecret` already does, so the suite can go green on RHEL 9 and a
 real regression is no longer hidden behind `-test.failfast`.
+
+#### Kernel-support probes and Fedora handoff — 2026-09-21
+
+The eight host-limited tests no longer fail on a kernel that cannot run them,
+and still run wherever it can. `integrationtests/kernel_support_test.go` asks
+the running kernel instead of a version number: a syscall counts as available
+when `syscalls/sys_enter_<name>` exists in tracefs, and io_uring when a probing
+`io_uring_setup(0, NULL)` answers anything but `EPERM`/`ENOSYS`. The four
+`*xattrat` tests and the three io_uring tests skip with the missing capability
+named; `TestMountFsManagementSyscalls` never skips as a whole and only drops the
+expectations for `open_tree_attr`, `statmount`, `listmount` and `listns` where
+the kernel lacks them. `TestKernelProbeFindsAnAlwaysPresentSyscall` fails if the
+probes cannot even find `openat`, so a blind probe cannot produce a green run.
+
+With the probes and the V4 fix in place the full privileged suite, run without
+`-test.failfast`, exits 0 on `5.14.0-687.42.1.el9_8` for the first time: no
+failures, and eight skips (the seven kernel-limited tests plus
+`TestPosixMqBasic`, which this host denies `mq_open`). `mage fmtCheck`, `vet`,
+`lint` and `test` pass.
+
+This does not close x4: a skip is not a pass. The remaining work is a run on a
+kernel that provides those syscalls and permits io_uring, described step by step
+in [`docs/fedora-gate-handoff.md`](../docs/fedora-gate-handoff.md).
+`scripts/compare-generated-handlers.py` makes the generation half of that check
+repeatable by comparing handler bodies by name and ignoring the kernel-specific
+tracepoint IDs.
