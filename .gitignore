@@ -23,3 +23,7 @@ REVIEW-COMMENTS.md
 
 # mage generate temp renders (internal/c/, removed by defer; swept by clean)
 internal/c/generated_tracepoints.c.tmp-*
+
+# scripts/perf-baseline.sh in-progress recordings (mktemp; removed on exit)
+perf/.bench-*
+perf/.static-*

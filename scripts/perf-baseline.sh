@@ -75,6 +75,21 @@ tree_dirty() {
     [ -n "$untracked" ]
 }
 
+# tree_fingerprint prints one hash over everything a recording measures besides
+# HEAD: the tracked diff against HEAD and the names and contents of untracked,
+# not ignored files, all outside perf/. record compares it before and after the
+# run, so an edit made while benchmarks ran cannot slip into a baseline that
+# claims a different tree. A git failure aborts, as in tree_dirty.
+tree_fingerprint() {
+    (
+        cd "$repo_root" || exit 1
+        {
+            git diff --binary HEAD -- . ':!perf' &&
+                git ls-files -z --others --exclude-standard -- . ':!perf' | xargs -0 -r sha256sum --
+        } | sha256sum | cut -d' ' -f1
+    ) || die "git failed; cannot fingerprint the tree"
+}
+
 # resolve_head prints the full hash of HEAD, or fails: every recording names
 # the commit it measured, so an unborn branch or a broken checkout is fatal
 # whatever the label.
@@ -187,6 +202,8 @@ record() {
     elif [[ $label == *-dirty ]]; then
         die "label '$label' ends in -dirty but the tree is clean; drop the suffix"
     fi
+    local fingerprint
+    fingerprint=$(tree_fingerprint)
     local bench_file="$perf_dir/bench-$label.txt"
     local static_file="$perf_dir/static-$label.txt"
     # Refuse before benchmarking: a committed baseline is the evidence a later
@@ -211,7 +228,9 @@ record() {
     # filesystem, so the final mv is a rename) and only moved into place once
     # every check passed. A failed, empty or interrupted recording therefore
     # leaves nothing behind that the overwrite refusal or compare would take
-    # for a baseline. INT/TERM exit through the EXIT trap.
+    # for a baseline. INT/TERM exit through the EXIT trap. A TERM sent to the
+    # script alone (not its process group) is only acted on once the running
+    # `go test` pipeline exits, as bash defers traps; the cleanup still runs.
     trap cleanup_tmp EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -251,6 +270,16 @@ record() {
     fi
 
     static_metrics > "$tmp_static"
+    # The header and file name describe the tree as it was before the run;
+    # a commit, checkout or edit since then makes them wrong.
+    local head_after fingerprint_after
+    head_after=$(resolve_head)
+    fingerprint_after=$(tree_fingerprint)
+    [ "$head_after" = "$head" ] && [ "$fingerprint_after" = "$fingerprint" ] ||
+        die "tree changed during recording; nothing written"
+    # mktemp creates 0600 files and mv keeps the mode; give the baselines the
+    # mode a plain redirect would have (0666 minus the umask).
+    chmod "$(printf '%o' $((0666 & ~$(umask))))" -- "$tmp_static" "$tmp_bench"
     # static first: compare keys on the bench file, so a pair is only visible
     # once both halves are in place.
     mv -f -- "$tmp_static" "$static_file"
