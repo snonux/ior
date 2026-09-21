@@ -35,6 +35,21 @@ env GOTOOLCHAIN=auto mage integrationTest
 
 Tests automatically skip with `t.Skip` when not running as root.
 
+### Kernel-dependent tests
+
+Some scenarios need syscalls or features an older or locked-down kernel does not
+offer (`getxattrat`/`setxattrat`/`listxattrat`/`removexattrat`, `statmount`,
+`listmount`, `listns`, `open_tree_attr`, io_uring). They run wherever the kernel
+supports them and skip, naming the missing capability, only where it does not.
+The probes live in `kernel_support_test.go` and ask the running kernel (tracefs,
+a probing `io_uring_setup`) rather than comparing version numbers.
+`TestMountFsManagementSyscalls` never skips as a whole; it drops only the
+expectations for syscalls the kernel lacks.
+
+`mage integrationTest` uses `-test.failfast`, so one failure hides every later
+test. For a complete verdict run the built binary directly, as described in
+[docs/fedora-gate-handoff.md](../docs/fedora-gate-handoff.md).
+
 To run serially (useful for debugging/flaky triage):
 
 ```bash

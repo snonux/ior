@@ -8,6 +8,7 @@ import (
 var iouringTraceArgs = []string{"-trace-syscalls", "io_uring_setup,io_uring_enter,io_uring_register,close"}
 
 func TestIouringSetup(t *testing.T) {
+	requireIoUring(t)
 	runScenarioResultWithIorArgs(t, "iouring-setup", []ExpectedEvent{
 		{
 			Tracepoint: "enter_io_uring_setup",
@@ -18,6 +19,7 @@ func TestIouringSetup(t *testing.T) {
 }
 
 func TestIouringEnter(t *testing.T) {
+	requireIoUring(t)
 	runScenarioResultWithIorArgs(t, "iouring-enter", []ExpectedEvent{
 		{
 			Tracepoint: "enter_io_uring_enter",
@@ -28,6 +30,7 @@ func TestIouringEnter(t *testing.T) {
 }
 
 func TestIouringRegister(t *testing.T) {
+	requireIoUring(t)
 	runScenarioResultWithIorArgs(t, "iouring-register", []ExpectedEvent{
 		{
 			Tracepoint: "enter_io_uring_register",
