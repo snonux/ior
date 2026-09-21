@@ -113,14 +113,15 @@ Payload bytes classified by return value:
 All other traced syscalls are treated as non-bytes for throughput accounting.
 Memory extent is tracked separately via address-space metrics.
 
-## Known Argument-Capture Gaps
+## Pointer-Backed Argument Capture
 
-- `openat2` does not report `flags`. Unlike every other `open`-family syscall,
-  openat2's flags are not a tracepoint argument: they live inside the
-  `struct open_how` the caller passes by pointer (`args[2]`), so reading them
-  would require a guarded `bpf_probe_read_user` of user memory. Until that is
-  implemented and verifier-tested, the enter handler emits the `-1` sentinel
-  and `flags` must be read as "not captured" for openat2 (not as "0 flags").
+- `openat2` reports the `flags` word from offset zero of the userspace
+  `struct open_how` pointer (`args[2]`). The enter handler initializes flags to
+  the `-1` unknown sentinel, checks for a non-NULL pointer, and publishes the
+  first `u64` only after a successful guarded `bpf_probe_read_user`. A NULL or
+  unreadable pointer therefore remains distinguishable from `O_RDONLY` (zero).
+
+## Known Argument-Capture Gaps
 
 - The open-family filename is captured at `sys_enter` with
   `bpf_probe_read_user_str`, which is a *nofault* read and therefore fails

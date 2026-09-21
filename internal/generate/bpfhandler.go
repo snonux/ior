@@ -276,7 +276,6 @@ func generateExtraExec(f *Format) string {
 
 func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) string {
 	filenameIdx := f.FieldNumber(pathnameField)
-	flagsIdx := f.FieldNumber(flagsField)
 	var b strings.Builder
 	b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
 	// bpf_probe_read_user_str cannot fault, so it returns -EFAULT whenever the
@@ -300,17 +299,34 @@ func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) st
 	writeDirfdCapture(&b, f, "dirfd", "dfd", "dirfd")
 	b.WriteString("    ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;\n")
 	b.WriteString("    ev->schema_reserved = 0;\n")
-	if flagsIdx > -1 {
-		fmt.Fprintf(&b, "    ev->flags = ctx->args[%d];\n", flagsIdx)
-	} else {
-		// Known gap: openat2(2) is the only open-family syscall whose flags are
-		// not a tracepoint argument — they live inside the struct open_how the
-		// caller passes by pointer (args[2]), so they would need a guarded
-		// bpf_probe_read_user of user memory. Until that is implemented and
-		// verifier-tested, emit the -1 sentinel and say why.
-		b.WriteString("    ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)\n")
-	}
+	writeOpenFlagsCapture(&b, f, flagsField)
 	return b.String()
+}
+
+// writeOpenFlagsCapture records the open(2) flags word. openat2 is exceptional:
+// its flags are the first u64 in the userspace struct open_how at args[2], not
+// a direct tracepoint field. Keep the unknown sentinel when the pointer is NULL
+// or the nofault read fails.
+func writeOpenFlagsCapture(b *strings.Builder, f *Format, flagsField string) {
+	if flagsIdx := f.FieldNumber(flagsField); flagsIdx >= 0 {
+		fmt.Fprintf(b, "    ev->flags = ctx->args[%d];\n", flagsIdx)
+		return
+	}
+
+	b.WriteString("    ev->flags = -1;\n")
+	if f.Name != "sys_enter_openat2" {
+		return
+	}
+	howIdx := f.FieldNumber("how")
+	if howIdx < 0 {
+		return
+	}
+	fmt.Fprintf(b, "    if (ctx->args[%d] != 0) {\n", howIdx)
+	b.WriteString("        __u64 open_how_flags = 0;\n")
+	fmt.Fprintf(b, "        if (bpf_probe_read_user(&open_how_flags, sizeof(open_how_flags), (void *)ctx->args[%d]) == 0) {\n", howIdx)
+	b.WriteString("            ev->flags = (__s32)open_how_flags;\n")
+	b.WriteString("        }\n")
+	b.WriteString("    }\n")
 }
 
 // generateExtraFdPathname preserves both the notification group and its target.

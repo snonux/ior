@@ -191,8 +191,8 @@ const sysOpenat2 = 437
 // has no openat2 wrapper and routes Open/Openat through openat, so we must issue
 // the raw syscall to actually exercise the openat2 tracepoint. The path lives at
 // args[1] (after dirfd at args[0]); the open flags/mode live INSIDE the open_how
-// struct pointed to by args[2], not as a plain int argument — ior reads the path
-// from args[1] and intentionally does not decode flags out of the struct.
+// struct pointed to by args[2], not as a plain int argument. ior reads the path
+// directly and copies the first u64 of open_how as the descriptor flags word.
 func openOpenat2() error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

@@ -42,8 +42,8 @@ func TestOpenDirfdPaths(t *testing.T) {
 // TestOpenOpenat2 exercises the raw openat2(2) syscall. openat2 differs from
 // open/openat in that its flags/mode live inside an open_how struct (args[2]),
 // not a plain int; the path is still at args[1]. This test verifies ior reads
-// the path from args[1] (not the dirfd at args[0] nor the struct ptr at args[2])
-// and that the enter_openat2 tracepoint is captured end-to-end.
+// the path from args[1] and the real O_* word through the struct pointer rather
+// than reporting the -1 unknown sentinel.
 func TestOpenOpenat2(t *testing.T) {
 	runScenario(t, "open-openat2", []ExpectedEvent{
 		{
@@ -51,6 +51,11 @@ func TestOpenOpenat2(t *testing.T) {
 			Tracepoint:   "enter_openat2",
 			Comm:         "ioworkload",
 			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Set:        syscall.O_CREAT,
+				Clear:      syscall.O_APPEND | syscall.O_TRUNC,
+			},
 		},
 	})
 }

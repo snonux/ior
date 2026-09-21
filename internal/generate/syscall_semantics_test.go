@@ -314,12 +314,8 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"open_tree":         {kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
 	"open_tree_attr":    {kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
 	"openat":            {kind: "open", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
-	// TODO(k4): delete temporary when openat2 captures open_how.flags.
 	"openat2": {
 		kind: "open", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS",
-		temporary: &temporarySyscallSemantics{task: "k4", current: syscallSemantics{
-			kind: "open", args: map[string]int{"dirfd": 0, "filename": 1}, ret: "UNCLASSIFIED", family: "FS",
-		}},
 	},
 	"pause":                  {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Signals"},
 	"perf_event_open":        {kind: "perf-open", args: map[string]int{"attr_size": 0, "attr_type": 0, "config": 0, "cpu": 2, "flags": 4, "group_fd": 3, "target_pid": 1}, ret: "UNCLASSIFIED", family: "Security"},
