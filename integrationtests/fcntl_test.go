@@ -63,6 +63,41 @@ func TestFcntlSetfl(t *testing.T) {
 	})
 }
 
+func TestFcntlSetfd(t *testing.T) {
+	runScenario(t, "fcntl-setfd", []ExpectedEvent{
+		{
+			PathContains: "fcntlsetfdfile.txt",
+			Tracepoint:   "enter_fcntl",
+			Comm:         "ioworkload",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Set:        syscall.O_CLOEXEC,
+			},
+		},
+		{
+			PathContains: "fcntlsetfdfile.txt",
+			Tracepoint:   "enter_fcntl",
+			Comm:         "ioworkload",
+			MinCount:     2,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Clear:      syscall.O_CLOEXEC,
+			},
+		},
+		{
+			PathContains: "fcntlsetfdfile.txt",
+			Tracepoint:   "enter_write",
+			Comm:         "ioworkload",
+			MinCount:     1,
+			Flags: &ExpectedFlags{
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Clear:      syscall.O_CLOEXEC,
+			},
+		},
+	})
+}
+
 func TestFcntlDupfdCloexec(t *testing.T) {
 	runScenario(t, "fcntl-dupfd-cloexec", []ExpectedEvent{
 		{
