@@ -16,6 +16,7 @@ func TestSocketBasic(t *testing.T) {
 		{
 			Tracepoint: "enter_socket",
 			MinCount:   1,
+			Flags:      &ExpectedFlags{AccessMode: ptrTo(syscall.O_RDWR)},
 		},
 		{
 			Tracepoint: "enter_close",
@@ -59,7 +60,8 @@ func TestSocketAcceptLifecycle(t *testing.T) {
 			Tracepoint: "enter_accept4",
 			MinCount:   1,
 			Flags: &ExpectedFlags{
-				Set: syscall.O_NONBLOCK | syscall.O_CLOEXEC,
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Set:        syscall.O_NONBLOCK | syscall.O_CLOEXEC,
 			},
 		},
 		{Tracepoint: "enter_shutdown", MinCount: 1},
@@ -81,7 +83,8 @@ func TestSocketAcceptLifecyclePlain(t *testing.T) {
 			Tracepoint: "enter_accept",
 			MinCount:   1,
 			Flags: &ExpectedFlags{
-				Clear: syscall.O_NONBLOCK | syscall.O_CLOEXEC,
+				AccessMode: ptrTo(syscall.O_RDWR),
+				Clear:      syscall.O_NONBLOCK | syscall.O_CLOEXEC,
 			},
 		},
 		{Tracepoint: "enter_shutdown", MinCount: 1},

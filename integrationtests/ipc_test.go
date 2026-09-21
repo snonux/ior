@@ -78,7 +78,7 @@ func TestEventfd2Basic(t *testing.T) {
 			Tracepoint: "enter_eventfd2",
 			MinCount:   1,
 			Flags: &ExpectedFlags{
-				AccessMode: ptrTo(syscall.O_RDONLY),
+				AccessMode: ptrTo(syscall.O_RDWR),
 				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
 			},
 		},
@@ -105,7 +105,7 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 			Tracepoint: "enter_memfd_create",
 			MinCount:   1,
 			Flags: &ExpectedFlags{
-				AccessMode: ptrTo(syscall.O_RDONLY),
+				AccessMode: ptrTo(syscall.O_RDWR),
 				Set:        syscall.O_CLOEXEC,
 			},
 		},
@@ -123,7 +123,7 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 			PathContains: "signalfd:",
 			MinCount:     2,
 			Flags: &ExpectedFlags{
-				AccessMode: ptrTo(syscall.O_RDONLY),
+				AccessMode: ptrTo(syscall.O_RDWR),
 				Set:        syscall.O_CLOEXEC,
 				Clear:      syscall.O_NONBLOCK,
 			},
@@ -133,7 +133,7 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 			PathContains: "signalfd:",
 			MinCount:     1,
 			Flags: &ExpectedFlags{
-				AccessMode: ptrTo(syscall.O_RDONLY),
+				AccessMode: ptrTo(syscall.O_RDWR),
 				Set:        syscall.O_CLOEXEC,
 				Clear:      syscall.O_NONBLOCK,
 			},
@@ -171,24 +171,18 @@ func TestFanotifyFlags(t *testing.T) {
 	if totalTracepointPathCount(result, "enter_close", "") == 0 {
 		return
 	}
+	// fanotify_init's event_f_flags argument is not captured, so its access
+	// mode is deliberately unknown; assert identity without inventing flags.
 	AssertEventsPresent(t, result, []ExpectedEvent{
 		{
 			Tracepoint:   "enter_fanotify_init",
 			PathContains: "fanotifyfd:",
 			MinCount:     1,
-			Flags: &ExpectedFlags{
-				AccessMode: ptrTo(syscall.O_RDONLY),
-				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
-			},
 		},
 		{
 			Tracepoint:   "enter_close",
 			PathContains: "fanotifyfd:",
 			MinCount:     1,
-			Flags: &ExpectedFlags{
-				AccessMode: ptrTo(syscall.O_RDONLY),
-				Set:        syscall.O_CLOEXEC | syscall.O_NONBLOCK,
-			},
 		},
 	})
 }

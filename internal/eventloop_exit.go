@@ -19,34 +19,34 @@ import (
 // would recreate the assumption that made syscall-specific bits look like
 // open(2) flags.
 const (
-	fanotifyCloexecFlag  = int32(1)
-	fanotifyNonblockFlag = int32(2)
-	memfdCloexecFlag     = int32(1)
-	fsopenCloexecFlag    = int32(1)
-	fsmountCloexecFlag   = int32(1)
+	memfdCloexecFlag       = int32(1)
+	memfdSecretCloexecFlag = int32(syscall.FD_CLOEXEC)
 	// Linux reserves the low four bits of socket(2)'s type word for the
 	// descriptor kind; SOCK_NONBLOCK and SOCK_CLOEXEC live above this mask.
 	linuxSocketTypeMask = int32(0xf)
 )
 
-type eventfdFlagMasks struct {
-	cloexec  int32
-	nonblock int32
+type eventfdOpenFlagSpec struct {
+	accessMode int32
+	implicit   int32
+	cloexec    int32
+	nonblock   int32
 }
 
-var eventfdOpenFlagMasks = map[types.TraceId]eventfdFlagMasks{
-	types.SYS_ENTER_EPOLL_CREATE1:  {cloexec: syscall.O_CLOEXEC},
-	types.SYS_ENTER_INOTIFY_INIT1:  {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_FANOTIFY_INIT:  {cloexec: fanotifyCloexecFlag, nonblock: fanotifyNonblockFlag},
-	types.SYS_ENTER_EVENTFD2:       {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_MEMFD_CREATE:   {cloexec: memfdCloexecFlag},
-	types.SYS_ENTER_MEMFD_SECRET:   {cloexec: syscall.O_CLOEXEC},
-	types.SYS_ENTER_USERFAULTFD:    {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_SIGNALFD4:      {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_TIMERFD_CREATE: {cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_PIDFD_OPEN:     {nonblock: syscall.O_NONBLOCK},
-	types.SYS_ENTER_FSMOUNT:        {cloexec: fsmountCloexecFlag},
-	types.SYS_ENTER_FSOPEN:         {cloexec: fsopenCloexecFlag},
+var eventfdOpenFlagSpecs = map[types.TraceId]eventfdOpenFlagSpec{
+	types.SYS_ENTER_EPOLL_CREATE:   {accessMode: syscall.O_RDWR},
+	types.SYS_ENTER_EPOLL_CREATE1:  {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC},
+	types.SYS_ENTER_INOTIFY_INIT:   {accessMode: syscall.O_RDONLY},
+	types.SYS_ENTER_INOTIFY_INIT1:  {accessMode: syscall.O_RDONLY, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_EVENTFD:        {accessMode: syscall.O_RDWR},
+	types.SYS_ENTER_EVENTFD2:       {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_MEMFD_CREATE:   {accessMode: syscall.O_RDWR, cloexec: memfdCloexecFlag},
+	types.SYS_ENTER_MEMFD_SECRET:   {accessMode: syscall.O_RDWR, cloexec: memfdSecretCloexecFlag},
+	types.SYS_ENTER_USERFAULTFD:    {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_SIGNALFD:       {accessMode: syscall.O_RDWR},
+	types.SYS_ENTER_SIGNALFD4:      {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_TIMERFD_CREATE: {accessMode: syscall.O_RDWR, cloexec: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
+	types.SYS_ENTER_PIDFD_OPEN:     {accessMode: syscall.O_RDWR, implicit: syscall.O_CLOEXEC, nonblock: syscall.O_NONBLOCK},
 }
 
 func (e *eventLoop) initRuntimeEventKinds() {
@@ -616,7 +616,7 @@ func socketOpenFlags(rawType int32) int32 {
 
 func acceptOpenFlags(acceptEv *types.AcceptEvent) int32 {
 	if acceptEv.GetTraceId() == types.SYS_ENTER_ACCEPT {
-		return 0
+		return syscall.O_RDWR
 	}
 	if acceptEv.Flags < 0 {
 		return -1
@@ -625,7 +625,7 @@ func acceptOpenFlags(acceptEv *types.AcceptEvent) int32 {
 }
 
 func socketCreationFlags(rawFlags int32) int32 {
-	var flags int32
+	flags := int32(syscall.O_RDWR)
 	if rawFlags&syscall.SOCK_NONBLOCK != 0 {
 		flags |= syscall.O_NONBLOCK
 	}
@@ -722,12 +722,15 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 }
 
 func eventfdOpenFlags(traceID types.TraceId, rawFlags int32) int32 {
-	masks := eventfdOpenFlagMasks[traceID]
-	var flags int32
-	if masks.cloexec != 0 && rawFlags&masks.cloexec != 0 {
+	spec, ok := eventfdOpenFlagSpecs[traceID]
+	if !ok {
+		return -1
+	}
+	flags := spec.accessMode | spec.implicit
+	if spec.cloexec != 0 && rawFlags&spec.cloexec != 0 {
 		flags |= syscall.O_CLOEXEC
 	}
-	if masks.nonblock != 0 && rawFlags&masks.nonblock != 0 {
+	if spec.nonblock != 0 && rawFlags&spec.nonblock != 0 {
 		flags |= syscall.O_NONBLOCK
 	}
 	return flags
@@ -850,7 +853,11 @@ func (e *eventLoop) handlePerfOpenExit(ep *event.Pair, perfOpenEv *types.PerfOpe
 	}
 
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		fdFile := file.NewFd(fd, perfDescriptorName(perfOpenEv), -1)
+		flags := int32(syscall.O_RDWR)
+		if perfOpenEv.Flags&unix.PERF_FLAG_FD_CLOEXEC != 0 {
+			flags |= syscall.O_CLOEXEC
+		}
+		fdFile := file.NewFd(fd, perfDescriptorName(perfOpenEv), flags)
 		e.fdState().set(fd, perfOpenEv.Pid, fdFile)
 		ep.File = fdFile
 	}
@@ -997,6 +1004,9 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 		}
 		if fd, ok := fdFromRet(retEvent.Ret); ok {
 			fdFile := file.NewFdWithPid(fd, nullEv.Pid)
+			if fdFile.Flags() == file.Flags(-1) {
+				fdFile.SetFlags(syscall.O_RDWR | syscall.O_CLOEXEC)
+			}
 			e.fdState().set(fd, nullEv.Pid, fdFile)
 			ep.File = fdFile
 		}

@@ -1,45 +1,61 @@
 package internal
 
 import (
+	"syscall"
 	"testing"
 
+	"golang.org/x/sys/unix"
 	"ior/internal/event"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
 
 func TestHandlePerfOpenExitTracksReturnedFd(t *testing.T) {
-	el := mustNewEventLoop(t, eventLoopConfig{})
+	tests := []struct {
+		name  string
+		flags uint32
+		want  int32
+	}{
+		{name: "read-write", want: syscall.O_RDWR},
+		{name: "close-on-exec", flags: unix.PERF_FLAG_FD_CLOEXEC, want: syscall.O_RDWR | syscall.O_CLOEXEC},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			enter := &types.PerfOpenEvent{
+				EventType: types.ENTER_PERF_OPEN_EVENT,
+				TraceId:   types.SYS_ENTER_PERF_EVENT_OPEN,
+				Time:      100,
+				Pid:       200,
+				Tid:       201,
+				AttrType:  1,
+				AttrSize:  64,
+				Config:    2,
+				TargetPid: 0,
+				Cpu:       -1,
+				GroupFd:   -1,
+				Flags:     tt.flags,
+			}
+			exit := &types.RetEvent{
+				EventType: types.EXIT_RET_EVENT,
+				TraceId:   types.SYS_EXIT_PERF_EVENT_OPEN,
+				Time:      200,
+				Ret:       77,
+				Pid:       200,
+				Tid:       201,
+			}
+			ep := &event.Pair{EnterEv: enter, ExitEv: exit}
 
-	enter := &types.PerfOpenEvent{
-		EventType: types.ENTER_PERF_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_PERF_EVENT_OPEN,
-		Time:      100,
-		Pid:       200,
-		Tid:       201,
-		AttrType:  1,
-		AttrSize:  64,
-		Config:    2,
-		TargetPid: 0,
-		Cpu:       -1,
-		GroupFd:   -1,
-		Flags:     0,
-	}
-	exit := &types.RetEvent{
-		EventType: types.EXIT_RET_EVENT,
-		TraceId:   types.SYS_EXIT_PERF_EVENT_OPEN,
-		Time:      200,
-		Ret:       77,
-		Pid:       200,
-		Tid:       201,
-	}
-	ep := &event.Pair{EnterEv: enter, ExitEv: exit}
-
-	if ok := el.handlePerfOpenExit(ep, enter); !ok {
-		t.Fatal("handlePerfOpenExit returned false")
-	}
-	if ep.File == nil || ep.File.FD() != 77 {
-		t.Fatalf("expected resolved perf fd 77, got file=%v", ep.File)
+			if ok := el.handlePerfOpenExit(ep, enter); !ok {
+				t.Fatal("handlePerfOpenExit returned false")
+			}
+			if ep.File == nil || ep.File.FD() != 77 {
+				t.Fatalf("expected resolved perf fd 77, got file=%v", ep.File)
+			}
+			if got := int32(ep.File.Flags()); got != tt.want {
+				t.Fatalf("perf fd flags = %#x, want %#x", got, tt.want)
+			}
+		})
 	}
 }
 
