@@ -14,6 +14,7 @@ const (
 	rOK            = 0x4    // R_OK
 	statxBasicMask = 0x07ff // STATX_BASIC_STATS
 	atFDCwd        = -100   // AT_FDCWD
+	atEmptyPath    = 0x1000 // AT_EMPTY_PATH
 	statRetryDelay = 20 * time.Millisecond
 )
 

@@ -60,6 +60,36 @@
 #define WRITE_CLASSIFIED 2
 #define TRANSFER_CLASSIFIED 3
 
+// Status of one pathname pointer captured with bpf_probe_read_user_str.
+// A valid empty string is PATH_READ_OK; PATH_READ_NULL records an actual NULL
+// syscall argument, and PATH_READ_FAILED records a non-NULL pointer the nofault
+// helper could not read. Userspace may attribute an empty OK/NULL value to a
+// concrete dirfd only when that exact syscall, side, flags, and result permit
+// descriptor semantics; it must never do so for FAILED.
+#define PATH_READ_OK 0
+#define PATH_READ_NULL 1
+#define PATH_READ_FAILED 2
+
+// Whether a successful path syscall necessarily validated its target. Most
+// path syscalls always do. utimensat is exceptional: two UTIME_OMIT values
+// return success before validating the path, dirfd, or flags. UNKNOWN records
+// a non-NULL timespec array that the enter probe could not safely read.
+#define PATH_TARGET_REQUIRED 0
+#define PATH_TARGET_SKIPPED 1
+#define PATH_TARGET_UNKNOWN 2
+#define IOR_UTIME_OMIT 1073741822
+
+// The first open_event schema ended after comm and occupied 300 bytes before
+// C tail padding (304 bytes in the ring buffer). Keep that field prefix stable
+// and append new fields so userspace can distinguish legacy payloads by size.
+// dirfd alone would still collide with the legacy 304-byte kernel layout. The
+// schema version, filename status and reserved word make the final v3 layout
+// 320 bytes. Intermediate development layouts were never released and are not
+// part of the decoder compatibility contract.
+#define OPEN_EVENT_SCHEMA_VERSION 3
+#define PATH_EVENT_SCHEMA_VERSION 3
+#define NAME_EVENT_SCHEMA_VERSION 2
+
 struct open_event {
     __u32 event_type;
     __u32 trace_id; 
@@ -69,6 +99,10 @@ struct open_event {
     __s32 flags;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
+    __s32 dirfd;
+    __u32 schema_version;
+    __u32 filename_status;
+    __u32 schema_reserved;
 };
 
 struct open_name_fixup_event {
@@ -125,6 +159,12 @@ struct name_event {
     __u32 tid;
     char oldname[MAX_FILENAME_LENGTH];
     char newname[MAX_FILENAME_LENGTH];
+    __s32 olddirfd;
+    __s32 newdirfd;
+    __u32 oldname_status;
+    __u32 newname_status;
+    __u32 flags;
+    __u32 schema_version;
 };
 
 struct path_event {
@@ -134,6 +174,11 @@ struct path_event {
     __u32 pid;
     __u32 tid;
     char pathname[MAX_FILENAME_LENGTH];
+    __s32 dirfd;
+    __u32 pathname_status;
+    __u32 flags;
+    __u32 schema_version;
+    __u32 target_status;
 };
 
 struct fcntl_event {

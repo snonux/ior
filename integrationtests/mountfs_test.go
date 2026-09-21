@@ -28,7 +28,7 @@ func TestMountFsManagementSyscalls(t *testing.T) {
 		// tracepoints fire on kernel entry regardless of permission/validity, so
 		// MinCount>=1 holds even when the syscalls themselves return an error.
 		{Tracepoint: "enter_fsconfig", MinCount: 1},
-		{Tracepoint: "enter_fspick", MinCount: 1},
+		{PathContains: "/", Tracepoint: "enter_fspick", MinCount: 1},
 		{
 			PathContains: "open-tree-target",
 			Tracepoint:   "enter_open_tree",

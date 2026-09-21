@@ -25,6 +25,10 @@ struct open_event {
     __s32 flags;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
+    __s32 dirfd;
+    __u32 schema_version;
+    __u32 filename_status;
+    __u32 schema_reserved;
 };
 
 struct open_name_fixup_event {
@@ -70,8 +74,8 @@ func TestParseCTypesInput(t *testing.T) {
 	if structs[0].Name != "open_event" {
 		t.Errorf("first struct name = %q, want open_event", structs[0].Name)
 	}
-	if len(structs[0].Members) != 8 {
-		t.Errorf("open_event members = %d, want 8", len(structs[0].Members))
+	if len(structs[0].Members) != 12 {
+		t.Errorf("open_event members = %d, want 12", len(structs[0].Members))
 	}
 
 	// Check array member
@@ -155,6 +159,10 @@ func TestGenerateTypesGoStructs(t *testing.T) {
 	requireContains(t, output, "TraceId TraceId")
 	requireContains(t, output, "Time uint64")
 	requireContains(t, output, "Pid uint32")
+	requireContains(t, output, "Dirfd int32")
+	requireContains(t, output, "SchemaVersion uint32")
+	requireContains(t, output, "FilenameStatus uint32")
+	requireContains(t, output, "SchemaReserved uint32")
 	requireContains(t, output, "Flags int32")
 	requireContains(t, output, "Filename [MAX_FILENAME_LENGTH]byte")
 	requireContains(t, output, "Comm [MAX_PROGNAME_LENGTH]byte")

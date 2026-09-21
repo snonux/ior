@@ -4,6 +4,8 @@ import (
 	"ior/internal/event"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
+
+	"golang.org/x/sys/unix"
 )
 
 type runtimeDecodedEvent interface {
@@ -207,10 +209,21 @@ func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {
 	// delegating straight to a helper that opens with a nil check; this one
 	// dereferences first to decide which dimension set applies, so it has to
 	// do the check itself.
-	if openEv == nil || openEv.Filename[0] == 0 {
-		// An empty payload filename means the sys_enter read faulted. Defer
-		// only the path dimension to the exit checkpoint, where the recovered
-		// name has landed; comm is always present and still applies here.
+	if openEv == nil {
+		return filter.MatchOpenEventComm(openEv)
+	}
+	filename := types.StringValue(openEv.Filename[:])
+	if openEv.FilenameStatus == types.PATH_READ_FAILED {
+		// A failed non-NULL read may still be repaired by the exit fixup, so its
+		// path dimension remains deferred even though the current buffer is
+		// empty. NULL is different: it never gets a fixup and is matched as the
+		// empty value below.
+		return filter.MatchOpenEventComm(openEv)
+	}
+	if capturedPathNeedsDeferredResolution(openEv.Dirfd, filename, openEv.FilenameStatus,
+		openEventAllowsEmptyPath(openEv, true)) {
+		// The exit handler owns fd-table lookup and successful-return checks.
+		// Comm is always present and still applies here.
 		return filter.MatchOpenEventComm(openEv)
 	}
 	return filter.MatchOpenEvent(openEv)
@@ -218,10 +231,36 @@ func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {
 
 func matchRawNameEvent(filter globalfilter.Filter, ev event.Event) bool {
 	nameEv, ok := ev.(*types.NameEvent)
-	return ok && filter.MatchNameEvent(nameEv)
+	if !ok || nameEv == nil {
+		return false
+	}
+	if capturedPathNeedsDeferredResolution(nameEv.Olddirfd, types.StringValue(nameEv.Oldname[:]),
+		nameEv.OldnameStatus, nameEventAllowsEmptyPath(nameEv, true, true)) ||
+		capturedPathNeedsDeferredResolution(nameEv.Newdirfd, types.StringValue(nameEv.Newname[:]),
+			nameEv.NewnameStatus, nameEventAllowsEmptyPath(nameEv, false, true)) {
+		return true
+	}
+	return filter.MatchNameEvent(nameEv)
 }
 
 func matchRawPathEvent(filter globalfilter.Filter, ev event.Event) bool {
 	pathEv, ok := ev.(*types.PathEvent)
-	return ok && filter.MatchPathEvent(pathEv)
+	if !ok || pathEv == nil {
+		return false
+	}
+	if pathEventTargetRequired(pathEv) && capturedPathNeedsDeferredResolution(pathEv.Dirfd, types.StringValue(pathEv.Pathname[:]),
+		pathEv.PathnameStatus, pathEventAllowsEmptyPath(pathEv, true)) {
+		return true
+	}
+	return filter.MatchPathEvent(pathEv)
+}
+
+func capturedPathNeedsDeferredResolution(dirfd int32, pathname string, status uint32, allowEmpty bool) bool {
+	if status != types.PATH_READ_OK && status != types.PATH_READ_NULL {
+		return false
+	}
+	if pathname == "" {
+		return allowEmpty && dirfd != unix.AT_FDCWD
+	}
+	return status == types.PATH_READ_OK && dirfdPathNeedsResolution(dirfd, pathname)
 }

@@ -41,12 +41,13 @@ func feedOpenPair(t *testing.T, el *eventLoop, filename, comm string, ret int64)
 	t.Helper()
 
 	enterEv := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      defaulTime,
-		Pid:       execCommPid,
-		Tid:       execCommTid,
-		Flags:     syscall.O_RDONLY,
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          defaulTime,
+		Pid:           execCommPid,
+		Tid:           execCommTid,
+		Flags:         syscall.O_RDONLY,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
 	}
 	copy(enterEv.Filename[:], filename)
 	copy(enterEv.Comm[:], comm)
@@ -416,12 +417,13 @@ func TestFilteredPairDoesNotAdvanceTheGapBaseline(t *testing.T) {
 	// exit, so if the dropped pair had advanced the baseline the gap would be
 	// measured from it instead of from the last emitted exit.
 	enterEv := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      defaulTime + 2*openPairLatency,
-		Pid:       execCommPid,
-		Tid:       execCommTid,
-		Flags:     syscall.O_RDONLY,
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          defaulTime + 2*openPairLatency,
+		Pid:           execCommPid,
+		Tid:           execCommTid,
+		Flags:         syscall.O_RDONLY,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
 	}
 	copy(enterEv.Filename[:], "/tmp/kept.txt")
 	copy(enterEv.Comm[:], "ioworkload")
@@ -480,12 +482,13 @@ func TestGapIsMeasuredFromTheLastEmittedPair(t *testing.T) {
 	feedOpenAt := func(t *testing.T, enterTime uint64, fd int64) *event.Pair {
 		t.Helper()
 		enterEv := types.OpenEvent{
-			EventType: types.ENTER_OPEN_EVENT,
-			TraceId:   types.SYS_ENTER_OPENAT,
-			Time:      enterTime,
-			Pid:       execCommPid,
-			Tid:       execCommTid,
-			Flags:     syscall.O_RDONLY,
+			EventType:     types.ENTER_OPEN_EVENT,
+			TraceId:       types.SYS_ENTER_OPENAT,
+			Time:          enterTime,
+			Pid:           execCommPid,
+			Tid:           execCommTid,
+			Flags:         syscall.O_RDONLY,
+			SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
 		}
 		copy(enterEv.Filename[:], "/tmp/gap.txt")
 		copy(enterEv.Comm[:], "ioworkload")

@@ -86,7 +86,11 @@ func mountfsManagement() error {
 	// so it can be reconfigured. It is a KindPathname syscall: args[1] is the path.
 	// We point it at "/" (always present) with FSPICK_NO_AUTOMOUNT and close any
 	// returned fscontext fd. This reconfigures nothing and creates no mount.
-	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSPICK, atFDCWD, uintptr(unsafe.Pointer(rootPath)), uintptr(unix.FSPICK_NO_AUTOMOUNT)); errno == 0 {
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSPICK, atFDCWD, uintptr(unsafe.Pointer(rootPath)), uintptr(unix.FSPICK_NO_AUTOMOUNT|unix.FSPICK_CLOEXEC)); errno == 0 {
+		// A successful fspick returns an fscontext descriptor. Feed it to
+		// fsconfig before close so integration runs on capable hosts exercise
+		// the complete fspick -> fd consumer -> close state chain.
+		_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, fd, uintptr(unix.FSCONFIG_CMD_RECONFIGURE), 0, 0, 0, 0)
 		syscall.Close(int(fd))
 	}
 

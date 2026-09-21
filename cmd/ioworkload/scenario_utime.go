@@ -108,6 +108,8 @@ type timespec struct {
 	tvNsec int64
 }
 
+const utimeOmit = 1073741822
+
 // utimeFutimesat creates a file and changes its timestamps via raw
 // SYS_FUTIMESAT. futimesat(2) takes a dirfd at args[0] and a pathname at
 // args[1] ("filename"), so ior must capture the path from args[1] (after the
@@ -200,6 +202,85 @@ func utimeUtimensat() error {
 	runtime.KeepAlive(&times)
 	if errno != 0 {
 		return fmt.Errorf("utimensat: %w", errno)
+	}
+	return nil
+}
+
+// utimeUtimensatDoubleOmit exercises the kernel's early-success path: when
+// both timestamps are UTIME_OMIT, utimensat returns 0 without validating the
+// pathname, dirfd, or flags. The nonempty relative pathname plus intentionally
+// invalid descriptor and flag word make that behavior observable and ensure
+// ior keeps the raw pathname without attributing this no-op to a descriptor
+// merely because the return value says success.
+func utimeUtimensatDoubleOmit() error {
+	times := [2]timespec{
+		{tvNsec: utimeOmit},
+		{tvNsec: utimeOmit},
+	}
+	pathBytes, err := syscall.BytePtrFromString("ignored-relative-target")
+	if err != nil {
+		return fmt.Errorf("path bytes: %w", err)
+	}
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS_UTIMENSAT,
+		99999, // deliberately invalid dirfd
+		uintptr(unsafe.Pointer(pathBytes)),
+		uintptr(unsafe.Pointer(&times[0])),
+		^uintptr(0), // deliberately invalid flags
+		0, 0,
+	)
+	runtime.KeepAlive(pathBytes)
+	runtime.KeepAlive(&times)
+	if errno != 0 {
+		return fmt.Errorf("utimensat double UTIME_OMIT: %w", errno)
+	}
+	return nil
+}
+
+// utimeUtimensatOneOmit proves that one UTIME_OMIT value does not take the
+// early no-target path. The kernel must resolve the relative pathname through
+// dirfd to update the other timestamp, and ior must do the same.
+func utimeUtimensatOneOmit() error {
+	dir, cleanup, err := makeTempDir("utime-utimensat-one-omit")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	const relativePath = "one-omit-target"
+	path := filepath.Join(dir, relativePath)
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open one-omit target: %w", err)
+	}
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("close one-omit target: %w", err)
+	}
+	dirFD, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open one-omit dirfd: %w", err)
+	}
+	defer syscall.Close(dirFD)
+
+	pathBytes, err := syscall.BytePtrFromString(relativePath)
+	if err != nil {
+		return fmt.Errorf("one-omit path bytes: %w", err)
+	}
+	times := [2]timespec{
+		{tvNsec: utimeOmit},
+		{tvSec: 1000000000},
+	}
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS_UTIMENSAT,
+		uintptr(dirFD),
+		uintptr(unsafe.Pointer(pathBytes)),
+		uintptr(unsafe.Pointer(&times[0])),
+		0, 0, 0,
+	)
+	runtime.KeepAlive(pathBytes)
+	runtime.KeepAlive(&times)
+	if errno != 0 {
+		return fmt.Errorf("utimensat one UTIME_OMIT: %w", errno)
 	}
 	return nil
 }

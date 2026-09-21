@@ -63,6 +63,34 @@ func TestUtimeUtimensat(t *testing.T) {
 	})
 }
 
+func TestUtimeUtimensatDoubleOmitDoesNotInventDescriptorAttribution(t *testing.T) {
+	rows, _ := runParquetScenarioRows(t, "utime-utimensat-double-omit", defaultDuration, nil, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
+		{
+			FileContains: "ignored-relative-target",
+			Syscall:      "utimensat",
+			Comm:         "ioworkload",
+			FD:           ptrTo(int32(-1)),
+			RetVal:       ptrTo(int64(0)),
+			IsError:      ptrTo(false),
+		},
+	})
+}
+
+func TestUtimeUtimensatOneOmitStillResolvesTarget(t *testing.T) {
+	rows, _ := runParquetScenarioRows(t, "utime-utimensat-one-omit", defaultDuration, nil, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
+		{
+			FileContains: "one-omit-target",
+			Syscall:      "utimensat",
+			Comm:         "ioworkload",
+			FDAtLeast:    ptrTo(int32(1)),
+			RetVal:       ptrTo(int64(0)),
+			IsError:      ptrTo(false),
+		},
+	})
+}
+
 // TestUtimeEnoent verifies the path is still captured on the error path:
 // utime(2) on a missing file fails with ENOENT, but ior records enter_utime
 // because the filename is read on syscall entry.

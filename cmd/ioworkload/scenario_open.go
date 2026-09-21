@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -24,6 +25,52 @@ func openBasic() error {
 		return fmt.Errorf("open: %w", err)
 	}
 	return syscall.Close(fd)
+}
+
+// openDirfdPaths exercises both forms that require userspace dirfd
+// attribution: a relative openat pathname and an AT_EMPTY_PATH statx call.
+func openDirfdPaths() error {
+	dir, cleanup, err := makeTempDir("open-dirfd-paths")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	base := filepath.Join(dir, "dirfd-base")
+	if err := os.Mkdir(base, 0o755); err != nil {
+		return fmt.Errorf("mkdir dirfd base: %w", err)
+	}
+	dirFD, err := syscall.Open(base, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open dirfd base: %w", err)
+	}
+	defer syscall.Close(dirFD)
+
+	fd, err := syscall.Openat(dirFD, "relative-openat.txt", syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("relative openat: %w", err)
+	}
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("close relative openat file: %w", err)
+	}
+
+	empty := []byte{0}
+	var statx [256]byte
+	_, _, errno := syscall.Syscall6(
+		sysStatx,
+		uintptr(dirFD),
+		uintptr(unsafe.Pointer(&empty[0])),
+		atEmptyPath,
+		statxBasicMask,
+		uintptr(unsafe.Pointer(&statx[0])),
+		0,
+	)
+	runtime.KeepAlive(empty)
+	runtime.KeepAlive(statx)
+	if errno != 0 {
+		return fmt.Errorf("statx AT_EMPTY_PATH: %w", errno)
+	}
+	return nil
 }
 
 // openCreat creates a file via raw SYS_CREAT.

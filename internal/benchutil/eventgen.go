@@ -13,6 +13,7 @@ const (
 	defaultOpenFlags int32  = syscall.O_RDWR
 	defaultOpenName         = "testfile.txt"
 	defaultOpenComm         = "testcomm"
+	defaultDirfd     int32  = -100
 )
 
 // EventGenerator produces pre-encoded kernel payload fixtures for the
@@ -31,14 +32,16 @@ func NewEventGenerator() EventGenerator {
 // EnterOpenEvent generates an open enter payload carrying the default filename, comm and flags.
 func (g EventGenerator) EnterOpenEvent(time uint64, pid, tid uint32) (types.OpenEvent, []byte, error) {
 	ev := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Flags:     defaultOpenFlags,
-		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
-		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
+		Flags:         defaultOpenFlags,
+		Filename:      [types.MAX_FILENAME_LENGTH]byte{},
+		Comm:          [types.MAX_PROGNAME_LENGTH]byte{},
 	}
 	copy(ev.Filename[:], defaultOpenName)
 	copy(ev.Comm[:], defaultOpenComm)
@@ -132,12 +135,14 @@ func (g EventGenerator) ExitRetEvent(time uint64, pid, tid uint32, traceID types
 // EnterPathEvent generates a path-event enter payload (creat, chmod, ...) carrying pathname.
 func (g EventGenerator) EnterPathEvent(time uint64, pid, tid uint32, pathname string, traceID types.TraceId) (types.PathEvent, []byte, error) {
 	ev := types.PathEvent{
-		EventType: types.ENTER_PATH_EVENT,
-		TraceId:   traceID,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Pathname:  [types.MAX_FILENAME_LENGTH]byte{},
+		EventType:     types.ENTER_PATH_EVENT,
+		TraceId:       traceID,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.PATH_EVENT_SCHEMA_VERSION,
+		Pathname:      [types.MAX_FILENAME_LENGTH]byte{},
 	}
 	copy(ev.Pathname[:], pathname)
 	raw, err := eventBytes(&ev)
@@ -147,13 +152,16 @@ func (g EventGenerator) EnterPathEvent(time uint64, pid, tid uint32, pathname st
 // EnterNameEvent generates a name-event enter payload (rename/link/symlink) carrying oldname and newname.
 func (g EventGenerator) EnterNameEvent(time uint64, pid, tid uint32, oldname, newname string, traceID types.TraceId) (types.NameEvent, []byte, error) {
 	ev := types.NameEvent{
-		EventType: types.ENTER_NAME_EVENT,
-		TraceId:   traceID,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Oldname:   [types.MAX_FILENAME_LENGTH]byte{},
-		Newname:   [types.MAX_FILENAME_LENGTH]byte{},
+		EventType:     types.ENTER_NAME_EVENT,
+		TraceId:       traceID,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Olddirfd:      defaultDirfd,
+		Newdirfd:      defaultDirfd,
+		SchemaVersion: types.NAME_EVENT_SCHEMA_VERSION,
+		Oldname:       [types.MAX_FILENAME_LENGTH]byte{},
+		Newname:       [types.MAX_FILENAME_LENGTH]byte{},
 	}
 	copy(ev.Oldname[:], oldname)
 	copy(ev.Newname[:], newname)

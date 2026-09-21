@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"ior/internal/event"
@@ -90,14 +91,17 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	}
 
 	comm := types.StringValue(openEv.Comm[:])
+	filename := e.resolveCapturedDirfdPath(openEv.Dirfd, openEv.Pid,
+		types.StringValue(openEv.Filename[:]), openEv.FilenameStatus,
+		openEventAllowsEmptyPath(openEv, retEvent.Ret >= 0))
 	ep.Comm = comm
 	if fd := int32(retEvent.Ret); fd >= 0 {
-		fdFile := file.NewFd(fd, types.StringValue(openEv.Filename[:]), openEventFlags(openEv))
+		fdFile := file.NewFd(fd, filename.Name(), openEventFlags(openEv))
 		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
 		// Keep path information for failed opens so error scenarios remain observable.
-		ep.File = file.NewPathname(openEv.Filename[:])
+		ep.File = filename
 	}
 	// The payload comm is read by BPF from task->comm at event time, so it is
 	// authoritative: it retires any procfs lookup still in flight for this tid
@@ -109,9 +113,9 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	// The raw enter filter (MatchOpenEvent) only covers the comm and path
 	// dimensions, so without this checkpoint -syscall/-family/-fd/-ret/
 	// -latency/-bytes and non-equality -pid/-tid reached open rows nowhere.
-	// The full pair filter is safe: ep.Comm and ep.File.Name() are the very
-	// payload bytes MatchOpenEvent already matched, so the two can never
-	// disagree, and there is no oldname/newname asymmetry to preserve.
+	// Absolute and AT_FDCWD paths carry the value MatchOpenEvent already
+	// checked. A concrete dirfd-relative path deferred that dimension until
+	// this checkpoint, where ep.File carries the resolved value.
 	return e.finishPair(ep)
 }
 
@@ -174,9 +178,17 @@ func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool
 	// picks Oldname up as the alternate value (Candidate.OldFileValue), so
 	// the plain finishPairForTid applies every dimension here without
 	// dropping the rows a `-path <oldname>` filter legitimately selected - the
-	// raw enter filter (MatchNameEvent) already matched them on the oldname.
-	ep.File = file.NewOldnameNewname(nameEv.Oldname[:], nameEv.Newname[:])
-	ep.Oldname = types.StringValue(nameEv.Oldname[:])
+	// raw enter filter (MatchNameEvent) already matched them on the oldname,
+	// unless a dirfd-relative name deferred that dimension to this checkpoint.
+	succeeded := retEventSucceeded(ep)
+	oldname := e.resolveCapturedDirfdPath(nameEv.Olddirfd, nameEv.Pid,
+		types.StringValue(nameEv.Oldname[:]), nameEv.OldnameStatus,
+		nameEventAllowsEmptyPath(nameEv, true, succeeded)).Name()
+	newname := e.resolveCapturedDirfdPath(nameEv.Newdirfd, nameEv.Pid,
+		types.StringValue(nameEv.Newname[:]), nameEv.NewnameStatus,
+		nameEventAllowsEmptyPath(nameEv, false, succeeded)).Name()
+	ep.File = file.NewOldnameNewname([]byte(oldname), []byte(newname))
+	ep.Oldname = oldname
 	return e.finishPairForTid(ep, nameEv.GetTid())
 }
 
@@ -187,12 +199,34 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 			ep.Recycle()
 			return false
 		}
-		e.pendingHandleState().set(pathEv.GetTid(), types.StringValue(pathEv.Pathname[:]))
+		pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, true))
+		e.pendingHandleState().set(pathEv.GetTid(), pathname.Name())
 		ep.Recycle()
 		return false
 	}
 
-	if ep.Is(types.SYS_ENTER_CREAT) {
+	pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, retEventSucceeded(ep)))
+	if ep.Is(types.SYS_ENTER_FSPICK) {
+		retEvent, ok := ep.ExitEv.(*types.RetEvent)
+		if !ok {
+			e.recyclePair(ep, "Dropped malformed fspick exit event")
+			return false
+		}
+		if fd := int32(retEvent.Ret); fd >= 0 {
+			// fspick returns a read/write filesystem-context descriptor. Its
+			// userspace flags word controls only close-on-exec; preserve the
+			// kernel-selected access mode as well as that optional bit.
+			flags := int32(syscall.O_RDWR)
+			if pathEv.Flags&unix.FSPICK_CLOEXEC != 0 {
+				flags |= syscall.O_CLOEXEC
+			}
+			fdFile := file.NewFd(fd, pathname.Name(), flags)
+			e.fdState().set(fd, pathEv.Pid, fdFile)
+			ep.File = fdFile
+		} else {
+			ep.File = pathname
+		}
+	} else if ep.Is(types.SYS_ENTER_CREAT) {
 		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
 			e.recyclePair(ep, "Dropped malformed creat exit event")
@@ -202,24 +236,138 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 			// creat(pathname, mode) == open(pathname, O_CREAT|O_WRONLY|O_TRUNC,
 			// mode): on success it returns a new fd, so register the fd->path
 			// mapping just like handleOpenExit does for open/openat/openat2.
-			fdFile := file.NewFd(fd, types.StringValue(pathEv.Pathname[:]),
+			fdFile := file.NewFd(fd, pathname.Name(),
 				syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
 			e.fdState().set(fd, pathEv.Pid, fdFile)
 			ep.File = fdFile
 		} else {
 			// Failed creat (-1): keep the path so error scenarios stay
 			// observable, mirroring handleOpenExit's failed-open branch.
-			ep.File = file.NewPathname(pathEv.Pathname[:])
+			ep.File = pathname
 		}
 	} else {
-		ep.File = file.NewPathname(pathEv.Pathname[:])
+		ep.File = pathname
 	}
-	// ep.File carries the very pathname matchRawPathEvent already matched, so
-	// the full pair filter is safe here: unlike the rename kinds it cannot
-	// disagree with the raw match. The rename kinds' widening lives inside
-	// MatchPair's file dimension now (Candidate.OldFileValue), not in a
-	// separate checkpoint variant.
+	// Absolute and AT_FDCWD paths carry the value matchRawPathEvent already
+	// matched. Concrete dirfd-relative paths defer the path dimension until
+	// this checkpoint, where ep.File carries the resolved value.
 	return e.finishPairForTid(ep, pathEv.GetTid())
+}
+
+// resolveDirfdPath resolves one pathname against its directory descriptor.
+// Absolute paths and AT_FDCWD retain their captured form. A concrete dirfd is
+// resolved exactly once: an empty path represents that descriptor itself,
+// while a relative path is joined to the descriptor's resolved directory.
+func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) file.File {
+	if !dirfdPathNeedsResolution(dirfd, pathname) {
+		return file.NewPathname([]byte(pathname))
+	}
+
+	dir := e.fdState().resolve(dirfd, pid)
+	if pathname == "" {
+		return dir
+	}
+	if dir.Name() == "" {
+		return file.NewFd(dirfd, pathname, int32(dir.Flags()))
+	}
+	return file.NewFd(dirfd, filepath.Join(dir.Name(), pathname), int32(dir.Flags()))
+}
+
+// resolveCapturedDirfdPath applies dirfd semantics only when BPF observed a
+// valid pathname string (including an empty one) or an actual NULL argument.
+// A failed non-NULL nofault read also leaves a zero-filled buffer, but that is
+// missing data rather than AT_EMPTY_PATH and must never acquire the dirfd's
+// identity. Unknown future status values fail closed for the same reason.
+func (e *eventLoop) resolveCapturedDirfdPath(
+	dirfd int32,
+	pid uint32,
+	pathname string,
+	status uint32,
+	allowEmpty bool,
+) file.File {
+	if status != types.PATH_READ_OK && status != types.PATH_READ_NULL {
+		return file.NewPathname([]byte(pathname))
+	}
+	if pathname == "" && !allowEmpty {
+		return file.NewPathname(nil)
+	}
+	if pathname != "" && status != types.PATH_READ_OK {
+		return file.NewPathname([]byte(pathname))
+	}
+	return e.resolveDirfdPath(dirfd, pid, pathname)
+}
+
+// resolvePathEvent resolves a path_event against its dirfd only when the
+// kernel actually had to validate the syscall target. utimensat can return
+// success without touching the pathname, dirfd, or flags when both timestamps
+// are UTIME_OMIT; unreadable timestamp metadata also leaves that fact unknown.
+// In either case the captured pathname is useful evidence, but attributing it
+// to a descriptor would claim kernel validation that never happened. Unknown
+// future target states fail closed for the same reason.
+func (e *eventLoop) resolvePathEvent(ev *types.PathEvent, allowEmpty bool) file.File {
+	if ev == nil {
+		return file.NewPathname(nil)
+	}
+	pathname := types.StringValue(ev.Pathname[:])
+	if !pathEventTargetRequired(ev) {
+		return file.NewPathname([]byte(pathname))
+	}
+	return e.resolveCapturedDirfdPath(ev.Dirfd, ev.Pid, pathname, ev.PathnameStatus, allowEmpty)
+}
+
+func pathEventTargetRequired(ev *types.PathEvent) bool {
+	return ev != nil && ev.TargetStatus == types.PATH_TARGET_REQUIRED
+}
+
+func retEventSucceeded(ep *event.Pair) bool {
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	return ok && retEv.Ret >= 0
+}
+
+func openEventAllowsEmptyPath(ev *types.OpenEvent, succeeded bool) bool {
+	if ev == nil || !succeeded || ev.FilenameStatus != types.PATH_READ_OK || ev.Flags&unix.AT_EMPTY_PATH == 0 {
+		return false
+	}
+	return ev.TraceId == types.SYS_ENTER_OPEN_TREE || ev.TraceId == types.SYS_ENTER_OPEN_TREE_ATTR
+}
+
+func pathEventAllowsEmptyPath(ev *types.PathEvent, succeeded bool) bool {
+	if ev == nil || !succeeded {
+		return false
+	}
+	status := ev.PathnameStatus
+	switch ev.TraceId {
+	case types.SYS_ENTER_STATX, types.SYS_ENTER_NEWFSTATAT:
+		return (status == types.PATH_READ_OK || status == types.PATH_READ_NULL) &&
+			ev.Flags&unix.AT_EMPTY_PATH != 0
+	case types.SYS_ENTER_FACCESSAT2, types.SYS_ENTER_FCHMODAT2, types.SYS_ENTER_FCHOWNAT,
+		types.SYS_ENTER_MOUNT_SETATTR, types.SYS_ENTER_NAME_TO_HANDLE_AT:
+		return status == types.PATH_READ_OK && ev.Flags&unix.AT_EMPTY_PATH != 0
+	case types.SYS_ENTER_GETXATTRAT, types.SYS_ENTER_SETXATTRAT, types.SYS_ENTER_LISTXATTRAT,
+		types.SYS_ENTER_REMOVEXATTRAT, types.SYS_ENTER_FILE_GETATTR, types.SYS_ENTER_FILE_SETATTR:
+		return (status == types.PATH_READ_OK || status == types.PATH_READ_NULL) &&
+			ev.Flags&unix.AT_EMPTY_PATH != 0
+	case types.SYS_ENTER_FSPICK:
+		return status == types.PATH_READ_OK && ev.Flags&unix.FSPICK_EMPTY_PATH != 0
+	case types.SYS_ENTER_READLINKAT:
+		return status == types.PATH_READ_OK
+	case types.SYS_ENTER_UTIMENSAT:
+		return ev.TargetStatus == types.PATH_TARGET_REQUIRED && (status == types.PATH_READ_NULL ||
+			(status == types.PATH_READ_OK && ev.Flags&unix.AT_EMPTY_PATH != 0))
+	case types.SYS_ENTER_FUTIMESAT:
+		return status == types.PATH_READ_NULL
+	default:
+		return false
+	}
+}
+
+func nameEventAllowsEmptyPath(ev *types.NameEvent, oldSide, succeeded bool) bool {
+	return ev != nil && succeeded && oldSide && ev.TraceId == types.SYS_ENTER_LINKAT &&
+		ev.OldnameStatus == types.PATH_READ_OK && ev.Flags&unix.AT_EMPTY_PATH != 0
+}
+
+func dirfdPathNeedsResolution(dirfd int32, pathname string) bool {
+	return dirfd != unix.AT_FDCWD && !filepath.IsAbs(pathname)
 }
 
 // handleFdExit processes exit events for fd-based syscalls. It resolves the fd
