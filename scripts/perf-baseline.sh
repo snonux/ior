@@ -57,37 +57,46 @@ go_env() {
     export GOOS=linux GOARCH=amd64
 }
 
-# tree_dirty reports whether the tree differs from HEAD outside perf/, i.e.
-# whether a recording would measure code that HEAD does not contain: tracked
-# changes, and untracked files that are not ignored (go test compiles a new,
-# uncommitted .go file just the same). A git failure is not an answer either
-# way, so it aborts instead of being read as "dirty" or "clean".
-tree_dirty() {
-    local rc=0 untracked
-    git -C "$repo_root" diff --quiet HEAD -- . ':!perf' || rc=$?
-    case $rc in
-    0) ;;
-    1) return 0 ;;
-    *) die "git diff failed (exit $rc); cannot tell whether the tree is clean" ;;
-    esac
-    untracked=$(git -C "$repo_root" ls-files --others --exclude-standard -- . ':!perf') ||
-        die "git ls-files failed; cannot tell whether the tree is clean"
-    [ -n "$untracked" ]
-}
-
-# tree_fingerprint prints one hash over everything a recording measures besides
-# HEAD: the tracked diff against HEAD and the names and contents of untracked,
-# not ignored files, all outside perf/. record compares it before and after the
-# run, so an edit made while benchmarks ran cannot slip into a baseline that
-# claims a different tree. A git failure aborts, as in tree_dirty.
+# tree_fingerprint COMMIT prints one snapshot of everything a recording
+# measures: the id of the tree COMMIT would have if every change outside perf/
+# were committed (tracked edits and deletions, and untracked files that are not
+# ignored, since go test compiles a new uncommitted .go file just the same),
+# built in a throwaway index so the real one is never touched. perf/ keeps
+# COMMIT's content, so a tree that is clean outside perf/ prints exactly
+# COMMIT^{tree}; record decides dirtiness and detects edits made during the run
+# from this one value.
+#
+# No diff machinery is involved, so diff.external, GIT_EXTERNAL_DIFF, textconv
+# and color settings cannot change it; symlinks are hashed as links, not by
+# target. `git add` writes loose blobs for changed files into .git/objects;
+# they are unreferenced and `git gc` prunes them. An untracked nested git
+# repository is not added (git would record only its HEAD commit, or fail on
+# one without commits); its path is appended on a line of its own instead, so
+# it counts as dirty, but edits inside it are not seen. A file git cannot read
+# fails the snapshot, as does any other git error.
 tree_fingerprint() {
-    (
-        cd "$repo_root" || exit 1
-        {
-            git diff --binary HEAD -- . ':!perf' &&
-                git ls-files -z --others --exclude-standard -- . ':!perf' | xargs -0 -r sha256sum --
-        } | sha256sum | cut -d' ' -f1
-    ) || die "git failed; cannot fingerprint the tree"
+    local commit=$1
+    [ -n "$tmp_index_dir" ] || die "internal error: no temp index directory"
+    local index=$tmp_index_dir/index others=$tmp_index_dir/others
+    local entry tree nested=() excludes=()
+    git -C "$repo_root" ls-files -z --others --exclude-standard -- . ':!perf' > "$others" ||
+        die "git ls-files failed; cannot fingerprint the tree"
+    # Without --directory, ls-files names an untracked nested repository as
+    # "path/" and never lists a plain untracked file that way.
+    while IFS= read -r -d '' entry; do
+        if [[ $entry == */ ]]; then
+            nested+=("$entry")
+            excludes+=(":(exclude,literal)$entry")
+        fi
+    done < "$others"
+    GIT_INDEX_FILE=$index git -C "$repo_root" read-tree "$commit" ||
+        die "git read-tree $commit failed; cannot fingerprint the tree"
+    GIT_INDEX_FILE=$index git -C "$repo_root" -c add.ignoreErrors=false \
+        add -A -- . ':!perf' ${excludes[@]+"${excludes[@]}"} ||
+        die "git add failed (unreadable file?); cannot fingerprint the tree"
+    tree=$(GIT_INDEX_FILE=$index git -C "$repo_root" write-tree) ||
+        die "git write-tree failed; cannot fingerprint the tree"
+    printf '%s\n' "$tree" ${nested[@]+"${nested[@]}"}
 }
 
 # resolve_head prints the full hash of HEAD, or fails: every recording names
@@ -109,13 +118,15 @@ validate_label() {
         die "label '$label' must start with a letter or digit and contain only letters, digits and . _ + -"
 }
 
-# Temp outputs of an in-progress recording, removed on any exit; a successful
-# recording renames them into place first. Globals, because the EXIT trap runs
-# after record's locals are gone.
+# Temp files of an in-progress recording, removed on any exit; a successful
+# recording renames the outputs into place first. Globals, because the EXIT
+# trap runs after record's locals are gone.
 tmp_bench=""
 tmp_static=""
+tmp_index_dir=""
 cleanup_tmp() {
     rm -f -- ${tmp_bench:+"$tmp_bench"} ${tmp_static:+"$tmp_static"}
+    rm -rf -- ${tmp_index_dir:+"$tmp_index_dir"}
 }
 
 # static_metrics prints numbers that are a pure function of the source tree.
@@ -184,30 +195,46 @@ PY
 
 record() {
     [ $# -le 1 ] || die "usage: record [label]"
-    local head label dirty=""
+    local head head_tree label dirty=""
     head=$(resolve_head)
+    head_tree=$(git -C "$repo_root" rev-parse --verify --quiet "$head^{tree}") && [ -n "$head_tree" ] ||
+        die "cannot resolve the tree of $head"
     if [ $# -eq 1 ]; then
         label=$1
     else
         label=$(git -C "$repo_root" rev-parse --short "$head") || die "cannot abbreviate $head"
     fi
     validate_label "$label"
+
+    # INT/TERM exit through the EXIT trap, which removes every temp file. A
+    # TERM sent to the script alone (not its process group) is only acted on
+    # once the running `go test` pipeline exits, as bash defers traps; the
+    # cleanup still runs.
+    trap cleanup_tmp EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    tmp_index_dir=$(mktemp -d "${TMPDIR:-/tmp}/perf-baseline.XXXXXX") ||
+        die "cannot create a temp directory; cannot fingerprint the tree"
+
+    # One snapshot decides both whether the tree is dirty and what the
+    # post-run check compares against.
+    local fingerprint
+    fingerprint=$(tree_fingerprint "$head")
     # A dirty tree is marked whatever the label: the header names HEAD, which
     # is not what was measured, so both the file name and the commit line say
     # so. The reverse is refused rather than kept: a "-dirty" label on a clean
     # tree would claim uncommitted changes that do not exist.
-    if tree_dirty; then
+    if [ "$fingerprint" != "$head_tree" ]; then
         dirty=" +uncommitted changes"
         [[ $label == *-dirty ]] || label+="-dirty"
     elif [[ $label == *-dirty ]]; then
         die "label '$label' ends in -dirty but the tree is clean; drop the suffix"
     fi
-    local fingerprint
-    fingerprint=$(tree_fingerprint)
     local bench_file="$perf_dir/bench-$label.txt"
     local static_file="$perf_dir/static-$label.txt"
     # Refuse before benchmarking: a committed baseline is the evidence a later
-    # change is judged against, and the recording takes minutes.
+    # change is judged against, and the recording takes minutes. The check
+    # follows the snapshot because a dirty tree changes the final label.
     if [ "${PERF_FORCE:-}" != 1 ]; then
         local existing
         for existing in "$bench_file" "$static_file"; do
@@ -228,12 +255,7 @@ record() {
     # filesystem, so the final mv is a rename) and only moved into place once
     # every check passed. A failed, empty or interrupted recording therefore
     # leaves nothing behind that the overwrite refusal or compare would take
-    # for a baseline. INT/TERM exit through the EXIT trap. A TERM sent to the
-    # script alone (not its process group) is only acted on once the running
-    # `go test` pipeline exits, as bash defers traps; the cleanup still runs.
-    trap cleanup_tmp EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    # for a baseline.
     tmp_bench=$(mktemp "$perf_dir/.bench-$label.XXXXXX")
     tmp_static=$(mktemp "$perf_dir/.static-$label.XXXXXX")
 
@@ -274,7 +296,7 @@ record() {
     # a commit, checkout or edit since then makes them wrong.
     local head_after fingerprint_after
     head_after=$(resolve_head)
-    fingerprint_after=$(tree_fingerprint)
+    fingerprint_after=$(tree_fingerprint "$head")
     [ "$head_after" = "$head" ] && [ "$fingerprint_after" = "$fingerprint" ] ||
         die "tree changed during recording; nothing written"
     # mktemp creates 0600 files and mv keeps the mode; give the baselines the
