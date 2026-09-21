@@ -5,7 +5,9 @@
 #                                             (a dirty tree always gets a
 #                                             "-dirty" label suffix; a
 #                                             "-dirty" label on a clean
-#                                             tree is refused)
+#                                             tree is refused; labels are
+#                                             [A-Za-z0-9][A-Za-z0-9._+-]*,
+#                                             without "..")
 #   scripts/perf-baseline.sh compare OLD NEW   benchstat + static-metric diff
 #   scripts/perf-baseline.sh static            print the static metrics only
 #
@@ -58,17 +60,47 @@ go_env() {
 # tree_dirty reports whether the tree differs from HEAD outside perf/, i.e.
 # whether a recording would measure code that HEAD does not contain: tracked
 # changes, and untracked files that are not ignored (go test compiles a new,
-# uncommitted .go file just the same).
+# uncommitted .go file just the same). A git failure is not an answer either
+# way, so it aborts instead of being read as "dirty" or "clean".
 tree_dirty() {
-    ! git -C "$repo_root" diff --quiet HEAD -- . ':!perf' ||
-        [ -n "$(git -C "$repo_root" ls-files --others --exclude-standard -- . ':!perf')" ]
+    local rc=0 untracked
+    git -C "$repo_root" diff --quiet HEAD -- . ':!perf' || rc=$?
+    case $rc in
+    0) ;;
+    1) return 0 ;;
+    *) die "git diff failed (exit $rc); cannot tell whether the tree is clean" ;;
+    esac
+    untracked=$(git -C "$repo_root" ls-files --others --exclude-standard -- . ':!perf') ||
+        die "git ls-files failed; cannot tell whether the tree is clean"
+    [ -n "$untracked" ]
 }
 
-default_label() {
+# resolve_head prints the full hash of HEAD, or fails: every recording names
+# the commit it measured, so an unborn branch or a broken checkout is fatal
+# whatever the label.
+resolve_head() {
     local head
-    head=$(git -C "$repo_root" rev-parse --short HEAD) || die "cannot resolve HEAD; pass an explicit label"
-    [ -n "$head" ] || die "cannot resolve HEAD; pass an explicit label"
+    head=$(git -C "$repo_root" rev-parse --verify --quiet 'HEAD^{commit}') && [ -n "$head" ] ||
+        die "cannot resolve HEAD (unborn branch or not a git checkout); commit first"
     echo "$head"
+}
+
+# validate_label rejects labels that would not name a plain file in perf/.
+validate_label() {
+    local label=$1
+    [ -n "$label" ] || die "the label must not be empty"
+    [[ $label != *..* ]] || die "label '$label' must not contain '..'"
+    [[ $label =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] ||
+        die "label '$label' must start with a letter or digit and contain only letters, digits and . _ + -"
+}
+
+# Temp outputs of an in-progress recording, removed on any exit; a successful
+# recording renames them into place first. Globals, because the EXIT trap runs
+# after record's locals are gone.
+tmp_bench=""
+tmp_static=""
+cleanup_tmp() {
+    rm -f -- ${tmp_bench:+"$tmp_bench"} ${tmp_static:+"$tmp_static"}
 }
 
 # static_metrics prints numbers that are a pure function of the source tree.
@@ -136,12 +168,15 @@ PY
 }
 
 record() {
-    local label dirty=""
-    if [ -n "${1:-}" ]; then
+    [ $# -le 1 ] || die "usage: record [label]"
+    local head label dirty=""
+    head=$(resolve_head)
+    if [ $# -eq 1 ]; then
         label=$1
     else
-        label=$(default_label)
+        label=$(git -C "$repo_root" rev-parse --short "$head") || die "cannot abbreviate $head"
     fi
+    validate_label "$label"
     # A dirty tree is marked whatever the label: the header names HEAD, which
     # is not what was measured, so both the file name and the commit line say
     # so. The reverse is refused rather than kept: a "-dirty" label on a clean
@@ -165,17 +200,30 @@ record() {
     fi
     local count=${PERF_COUNT:-8} benchtime=${PERF_BENCHTIME:-1s}
     local bench=${PERF_BENCH:-$default_bench}
+    local subject
+    subject=$(git -C "$repo_root" log -1 --format=%s "$head") || die "cannot read the subject of $head"
 
     mkdir -p "$perf_dir"
     go_env
     cd "$repo_root"
+
+    # Both outputs are written to temp files next to their final names (same
+    # filesystem, so the final mv is a rename) and only moved into place once
+    # every check passed. A failed, empty or interrupted recording therefore
+    # leaves nothing behind that the overwrite refusal or compare would take
+    # for a baseline. INT/TERM exit through the EXIT trap.
+    trap cleanup_tmp EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    tmp_bench=$(mktemp "$perf_dir/.bench-$label.XXXXXX")
+    tmp_static=$(mktemp "$perf_dir/.static-$label.XXXXXX")
 
     {
         # benchstat ignores lines it cannot parse, so the provenance travels
         # inside the same file as the numbers.
         echo "# ior performance baseline"
         echo "# label:      $label"
-        echo "# commit:     $(git rev-parse HEAD) ($(git log -1 --format=%s))$dirty"
+        echo "# commit:     $head ($subject)$dirty"
         echo "# date:       $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "# kernel:     $(uname -r)"
         echo "# cpu:        $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs) x$(nproc)"
@@ -184,20 +232,31 @@ record() {
         echo "# settings:   count=$count benchtime=$benchtime"
         echo "# loadavg:    $(cut -d' ' -f1-3 /proc/loadavg) (at start; keep the host idle while recording)"
         echo
-    } > "$bench_file"
+    } > "$tmp_bench"
 
     echo "perf-baseline: recording $label ($count samples x $benchtime) ..." >&2
     go test "${bench_packages[@]}" -run '^$' -bench "$bench" -benchmem \
         -count "$count" -benchtime "$benchtime" 2>&1 \
         | grep -Ev '^(#|.*warning:|.*\^|\s*[0-9]+ \||[0-9]+ warnings? generated)' \
-        | tee -a "$bench_file" | grep -E '^(ok|FAIL|---)' >&2 || true
+        | tee -a "$tmp_bench" | grep -E '^(ok|FAIL|---)' >&2 || true
 
-    grep -q '^Benchmark' "$bench_file" || die "no benchmark results were recorded; see $bench_file"
-    if grep -Eq '^(FAIL|--- FAIL)' "$bench_file"; then
-        die "a benchmark package failed; see $bench_file"
+    # The temp file is removed on exit, so its content goes to stderr.
+    if ! grep -q '^Benchmark' "$tmp_bench"; then
+        cat "$tmp_bench" >&2
+        die "no benchmark results were recorded; nothing written"
+    fi
+    if grep -Eq '^(FAIL|--- FAIL)' "$tmp_bench"; then
+        cat "$tmp_bench" >&2
+        die "a benchmark package failed; nothing written"
     fi
 
-    static_metrics > "$static_file"
+    static_metrics > "$tmp_static"
+    # static first: compare keys on the bench file, so a pair is only visible
+    # once both halves are in place.
+    mv -f -- "$tmp_static" "$static_file"
+    tmp_static=""
+    mv -f -- "$tmp_bench" "$bench_file"
+    tmp_bench=""
     echo "perf-baseline: wrote ${bench_file#"$repo_root"/} and ${static_file#"$repo_root"/}" >&2
 }
 
