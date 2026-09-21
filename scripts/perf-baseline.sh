@@ -2,6 +2,8 @@
 # Record and compare ior performance baselines.
 #
 #   scripts/perf-baseline.sh record [label]   benchmark the current commit
+#                                             (a dirty tree always gets a
+#                                             "-dirty" label suffix)
 #   scripts/perf-baseline.sh compare OLD NEW   benchstat + static-metric diff
 #   scripts/perf-baseline.sh static            print the static metrics only
 #
@@ -49,13 +51,14 @@ go_env() {
     export GOOS=linux GOARCH=amd64
 }
 
+# tree_dirty reports whether the tree differs from HEAD outside perf/, i.e.
+# whether a recording would measure code that HEAD does not contain.
+tree_dirty() {
+    ! git -C "$repo_root" diff --quiet HEAD -- . ':!perf'
+}
+
 default_label() {
-    local label
-    label=$(git -C "$repo_root" rev-parse --short HEAD)
-    if ! git -C "$repo_root" diff --quiet HEAD -- . ':!perf'; then
-        label+="-dirty"
-    fi
-    echo "$label"
+    git -C "$repo_root" rev-parse --short HEAD
 }
 
 # static_metrics prints numbers that are a pure function of the source tree.
@@ -123,7 +126,13 @@ PY
 }
 
 record() {
-    local label=${1:-$(default_label)}
+    local label=${1:-$(default_label)} dirty=""
+    # A dirty tree is marked whatever the label: the header names HEAD, which
+    # is not what was measured, so both the file name and the commit line say so.
+    if tree_dirty; then
+        dirty=" +uncommitted changes"
+        [[ $label == *-dirty ]] || label+="-dirty"
+    fi
     local bench_file="$perf_dir/bench-$label.txt"
     local static_file="$perf_dir/static-$label.txt"
     local count=${PERF_COUNT:-8} benchtime=${PERF_BENCHTIME:-1s}
@@ -138,7 +147,7 @@ record() {
         # inside the same file as the numbers.
         echo "# ior performance baseline"
         echo "# label:      $label"
-        echo "# commit:     $(git rev-parse HEAD) ($(git log -1 --format=%s))"
+        echo "# commit:     $(git rev-parse HEAD) ($(git log -1 --format=%s))$dirty"
         echo "# date:       $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "# kernel:     $(uname -r)"
         echo "# cpu:        $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs) x$(nproc)"
