@@ -251,6 +251,23 @@ func TestXattrListxattr(t *testing.T) {
 	assertEventDurationPositive(t, result, exp)
 }
 
+// TestXattrListxattrSizeProbe verifies a positive listxattr(2) return is not
+// counted as bytes copied when the caller supplied a zero-length output buffer.
+func TestXattrListxattrSizeProbe(t *testing.T) {
+	result, _ := runScenarioResultWithIorArgs(t, "xattr-listxattr-size-probe", []ExpectedEvent{
+		{
+			PathContains: "xattrfile.txt",
+			Tracepoint:   "enter_listxattr",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	}, xattrListPathTraceArgs)
+
+	exp := ExpectedEvent{Tracepoint: "enter_listxattr", Comm: "ioworkload"}
+	assertEventBytesEqual(t, result, exp, 0)
+	assertEventDurationPositive(t, result, exp)
+}
+
 // TestXattrLlistxattr verifies ior traces the no-follow PATH-based llistxattr(2)
 // end-to-end. As with lgetxattr the target is a regular file, so it returns the
 // name-list size. The PATH is at args[0]; the exit is READ-classified.

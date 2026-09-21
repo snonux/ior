@@ -65,3 +65,12 @@ If the suite fails before tracing starts, check for these common causes:
 - `*_test.go` — One file per syscall family
 
 See `../INTEGRATIONTESTS-PLAN.md` for the full design.
+
+## Known live-kernel coverage limit
+
+The suite does not try to force `close(2)` to return `EINTR` or `EIO`. On Linux
+those outcomes depend on timing, device/filesystem behavior, and delayed I/O
+errors, so a short deterministic workload cannot reproduce them without unsafe
+host-specific fault injection. The descriptor-eviction rule for `0`, `EINTR`,
+`EIO`, and `EBADF` is therefore pinned by unit tests; live integration coverage
+exercises successful and `EBADF` closes only.

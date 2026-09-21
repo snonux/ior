@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const pollingExerciseDuration = 500 * time.Millisecond
+
 func pollingEpoll() error {
 	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
@@ -31,8 +33,8 @@ func pollingEpoll() error {
 	}
 
 	pwait2Supported := true
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(pollingExerciseDuration)
+	for {
 		if err := waitAndDrain(epfd, pipefd, callEpollWait); err != nil {
 			return err
 		}
@@ -67,6 +69,9 @@ func pollingEpoll() error {
 		}
 		if err := waitAndDrainReadiness(pipefd, callPselect6); err != nil {
 			return err
+		}
+		if !time.Now().Before(deadline) {
+			break
 		}
 		time.Sleep(2 * time.Millisecond)
 	}

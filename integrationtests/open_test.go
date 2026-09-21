@@ -36,6 +36,14 @@ func TestOpenDirfdPaths(t *testing.T) {
 			Comm:         "ioworkload",
 			FDAtLeast:    ptrTo(int32(1)),
 		},
+		{
+			FileContains: "dirfd-base",
+			Syscall:      "utimensat",
+			Comm:         "ioworkload",
+			FDAtLeast:    ptrTo(int32(1)),
+			RetVal:       ptrTo(int64(0)),
+			IsError:      ptrTo(false),
+		},
 	})
 }
 

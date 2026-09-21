@@ -119,9 +119,9 @@ func TestFdFromAirEventfdUsers(t *testing.T) {
 		{Tracepoint: "enter_timerfd_settime", MinCount: 1},
 		{Tracepoint: "enter_timerfd_gettime", MinCount: 1},
 		{
-			Tracepoint:   "enter_signalfd",
+			Tracepoint:   "enter_signalfd4",
 			PathContains: "signalfd:",
-			MinCount:     1,
+			MinCount:     2,
 			Flags: &ExpectedFlags{
 				AccessMode: ptrTo(syscall.O_RDONLY),
 				Set:        syscall.O_CLOEXEC,

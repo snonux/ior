@@ -128,6 +128,7 @@ var scenarios = map[string]func() error{
 	"xattr-getxattr-size-probe":     xattrGetxattrSizeProbe,
 	"xattr-lgetxattr":               xattrLgetxattr,
 	"xattr-listxattr":               xattrListxattr,
+	"xattr-listxattr-size-probe":    xattrListxattrSizeProbe,
 	"xattr-llistxattr":              xattrLlistxattr,
 	"xattr-lsetxattr":               xattrLsetxattr,
 	"xattr-setxattrat":              xattrSetxattrat,
