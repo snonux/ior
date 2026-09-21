@@ -171,11 +171,19 @@ func TestHandleOpenTreeExitTranslatesAndTracksDescriptorFlags(t *testing.T) {
 	}
 }
 
-func TestOpenEventFlagsLeavesOpenFlagsUnchanged(t *testing.T) {
+func TestOpenEventFlagsLeavesRegularOpenFlagsUnchanged(t *testing.T) {
 	want := int32(syscall.O_RDWR | syscall.O_CREAT | syscall.O_CLOEXEC)
-	ev := &types.OpenEvent{TraceId: types.SYS_ENTER_OPENAT, Flags: want}
-	if got := openEventFlags(ev); got != want {
-		t.Fatalf("openEventFlags(openat) = %#x, want unchanged %#x", got, want)
+	for _, traceID := range []types.TraceId{
+		types.SYS_ENTER_OPEN,
+		types.SYS_ENTER_OPENAT,
+		types.SYS_ENTER_OPENAT2,
+	} {
+		t.Run(traceID.String(), func(t *testing.T) {
+			ev := &types.OpenEvent{TraceId: traceID, Flags: want}
+			if got := openEventFlags(ev); got != want {
+				t.Fatalf("openEventFlags(%s) = %#x, want unchanged %#x", traceID, got, want)
+			}
+		})
 	}
 }
 

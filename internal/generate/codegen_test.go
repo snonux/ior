@@ -1113,10 +1113,17 @@ func TestGenerateOpenat2Handler(t *testing.T) {
 		t.Fatalf("openat2 classified as %d, want KindOpen", r.Kind)
 	}
 	// openat2 has filename at args[1] but flags field name = "how" (not "flags"),
-	// so FieldNumber("flags") returns -1
+	// so FieldNumber("flags") returns -1. The open generator handles that ABI
+	// exception by reading the first u64 through the how pointer.
 	if n := f.FieldNumber("flags"); n != -1 {
 		t.Errorf("openat2 FieldNumber(flags) = %d, want -1", n)
 	}
+	output := generateFromPair(t, FormatOpenat2, syntheticExit("openat2", 781))
+	requireContains(t, output, "ev->flags = -1;")
+	requireContains(t, output, "if (ctx->args[2] != 0) {")
+	requireContains(t, output, "__u64 open_how_flags = 0;")
+	requireContains(t, output, "if (bpf_probe_read_user(&open_how_flags, sizeof(open_how_flags), (void *)ctx->args[2]) == 0) {")
+	requireContains(t, output, "ev->flags = (__s32)open_how_flags;")
 }
 
 func TestGenerateRetHandlerRead(t *testing.T) {
@@ -2917,21 +2924,41 @@ func TestGeneratePtraceZeroesPad(t *testing.T) {
 	requireContains(t, out, "ev->target_pid = (__s32)ctx->args[1];\n    ev->_pad = 0;\n    ev->data = (__u64)ctx->args[3];")
 }
 
-// TestGenerateOpenat2FlagsGapIsDocumented pins the deliberate openat2 gap
-// (audit finding F4): openat2's flags are not a tracepoint argument — they sit
-// behind the struct open_how pointer at args[2] — so the handler emits the -1
-// sentinel. The sentinel must stay self-explaining in the generated C, and the
-// gap is written up in docs/syscall-tracing-plan.md.
-func TestGenerateOpenat2FlagsGapIsDocumented(t *testing.T) {
+// TestGenerateOpenat2FlagsCaptureIsDocumented pins audit finding S7:
+// openat2's flags sit at offset zero of the struct open_how pointer at args[2].
+// The handler must retain -1 for NULL/unreadable pointers and publish the
+// captured word only after a successful nofault read.
+func TestGenerateOpenat2FlagsCaptureIsDocumented(t *testing.T) {
 	out := generateFromPair(t, FormatOpenat2, syntheticExit("openat2", 781))
-	requireContains(t, out, "ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)")
+	requireContains(t, out, `    ev->flags = -1;
+    if (ctx->args[2] != 0) {
+        __u64 open_how_flags = 0;
+        if (bpf_probe_read_user(&open_how_flags, sizeof(open_how_flags), (void *)ctx->args[2]) == 0) {
+            ev->flags = (__s32)open_how_flags;
+        }
+    }
+`)
+	requireNotContains(t, out, "flags not a tracepoint arg")
+
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	if got, want := handlerBody(t, artifact, "sys_enter_openat2"), handlerBody(t, out, "sys_enter_openat2"); got != want {
+		t.Error("committed sys_enter_openat2 handler differs from the generator")
+	}
 
 	doc, err := readSyscallTracingPlan()
 	if err != nil {
 		t.Fatalf("read syscall tracing plan: %v", err)
 	}
-	if !strings.Contains(doc, "## Known Argument-Capture Gaps") || !strings.Contains(doc, "struct open_how") {
-		t.Error("docs/syscall-tracing-plan.md must document the openat2 flags gap")
+	for _, text := range []string{"struct open_how", "bpf_probe_read_user", "`-1`"} {
+		if !strings.Contains(doc, text) {
+			t.Errorf("docs/syscall-tracing-plan.md must document openat2 flags capture with %q", text)
+		}
+	}
+	if strings.Contains(doc, "`openat2` does not report `flags`") {
+		t.Error("docs/syscall-tracing-plan.md still describes openat2 flags as uncaptured")
 	}
 }
 

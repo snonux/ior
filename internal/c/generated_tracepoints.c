@@ -12922,7 +12922,13 @@ int handle_sys_enter_openat2(struct syscall_trace_enter *ctx) {
     ev->dirfd = (__s32)ctx->args[0];
     ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;
     ev->schema_reserved = 0;
-    ev->flags = -1; // flags not a tracepoint arg (openat2: behind struct open_how *)
+    ev->flags = -1;
+    if (ctx->args[2] != 0) {
+        __u64 open_how_flags = 0;
+        if (bpf_probe_read_user(&open_how_flags, sizeof(open_how_flags), (void *)ctx->args[2]) == 0) {
+            ev->flags = (__s32)open_how_flags;
+        }
+    }
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
