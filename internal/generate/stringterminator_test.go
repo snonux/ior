@@ -2,6 +2,7 @@ package generate
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -20,8 +21,10 @@ import (
 // The checker below pins that contract for one handler body; the tests run
 // it over fresh generator output and over every committed handler.
 
-// stringFieldsByStruct lists the string fields of every event struct that has
-// any (internal/c/types.h).
+// stringFieldsByStruct lists the string fields of every event struct that a
+// generated handler emits (internal/c/types.h), except comm, which is checked
+// through structsWithComm. TestStringFieldListsMatchTypesH derives the same
+// sets from types.h and fails when the two disagree.
 var stringFieldsByStruct = map[string][]string{
 	"open_event":    {"filename"},
 	"exec_event":    {"filename"},
@@ -34,6 +37,11 @@ var stringFieldsByStruct = map[string][]string{
 
 // structsWithComm are the event structs that carry the task's comm.
 var structsWithComm = map[string]bool{"open_event": true, "exec_event": true}
+
+// handWrittenStringStructs are the structs with a string field that only
+// hand-written BPF code fills; TestHandWrittenBPFStringCapturesNeedNoMemset
+// covers them.
+var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true}
 
 var handlerStructRE = regexp.MustCompile(`(?m)^/// \S+ is a struct (\w+)`)
 
@@ -198,6 +206,51 @@ func TestGeneratedArtifactTerminatesStringFields(t *testing.T) {
 	}
 	if got := strings.Count(artifact, "__builtin_memset"); got != 0 {
 		t.Errorf("generated_tracepoints.c has %d memsets, want 0", got)
+	}
+}
+
+// TestStringFieldListsMatchTypesH keeps the hand-maintained field lists above
+// in step with internal/c/types.h: every char[] field of every struct must be
+// covered by exactly one of them, and nothing may be listed that types.h does
+// not have.
+func TestStringFieldListsMatchTypesH(t *testing.T) {
+	typesH, err := readCSource("types.h")
+	if err != nil {
+		t.Fatalf("read types.h: %v", err)
+	}
+	structs, _, err := ParseCTypesInput(strings.NewReader(typesH))
+	if err != nil {
+		t.Fatalf("parse types.h: %v", err)
+	}
+	fields := map[string][]string{} // generated-handler string fields, comm excluded
+	withComm := map[string]bool{}
+	handWritten := map[string]bool{}
+	for _, s := range structs {
+		for _, m := range s.Members {
+			if m.TypeName != "char" || m.ArraySize == "" {
+				continue
+			}
+			switch {
+			case handWrittenStringStructs[s.Name]:
+				handWritten[s.Name] = true
+			case m.FieldName == "comm":
+				withComm[s.Name] = true
+			default:
+				fields[s.Name] = append(fields[s.Name], m.FieldName)
+			}
+		}
+	}
+	if len(fields) == 0 {
+		t.Fatal("types.h has no string fields; the parser or the path is broken")
+	}
+	if !reflect.DeepEqual(fields, stringFieldsByStruct) {
+		t.Errorf("stringFieldsByStruct = %v, types.h has %v", stringFieldsByStruct, fields)
+	}
+	if !reflect.DeepEqual(withComm, structsWithComm) {
+		t.Errorf("structsWithComm = %v, types.h has %v", structsWithComm, withComm)
+	}
+	if !reflect.DeepEqual(handWritten, handWrittenStringStructs) {
+		t.Errorf("handWrittenStringStructs = %v, types.h has %v", handWrittenStringStructs, handWritten)
 	}
 }
 

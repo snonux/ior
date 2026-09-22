@@ -340,7 +340,11 @@ func writeStringMethod(b *strings.Builder, goName, selfRef string, members []CMe
 		fmtParts = append(fmtParts, goField+":%v")
 		ref := selfRef + "." + goField
 		if m.TypeName == "char" && m.ArraySize != "" {
-			ref = fmt.Sprintf("string(%s[:])", ref)
+			// Render only up to the first NUL: the BPF side terminates a
+			// string field instead of zeroing it (task 79), so the bytes after
+			// the terminator are stale ring-buffer data from earlier records
+			// and must never reach a warning, a log line or a stream row.
+			ref = fmt.Sprintf("StringValue(%s[:])", ref)
 		}
 		argParts = append(argParts, ref)
 	}
