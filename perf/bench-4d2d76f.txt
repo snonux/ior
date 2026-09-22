@@ -8,6 +8,7 @@
 # go:         go1.26.2 linux/amd64
 # settings:   count=8 benchtime=1s
 # loadavg:    2.19 1.96 2.68 (at start; keep the host idle while recording)
+# note:       noisy (load 2.19 at start). sec/op is trustworthy only for PipelineReadHeavy/WriteHeavy/MetadataHeavy/DiverseAllTypes; allocs/op, B/op (except HeadlessParquetCapture, WriterThroughput) and static metrics are valid. See docs/performance-baseline.md "Known-noisy recordings".
 
 goos: linux
 goarch: amd64
