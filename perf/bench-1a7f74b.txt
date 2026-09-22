@@ -8,7 +8,7 @@
 # go:         go1.26.2 linux/amd64
 # settings:   count=10 benchtime=1s
 # loadavg:    0.95 3.21 3.63 (at start; keep the host idle while recording)
-# note:       noisy sec/op (loadavg 0.95 1-min but 3.21/3.63 5/15-min at start; the host was not idle). Component rows spread up to 118% within this recording (HandleOpenExit 898-1955 ns, DeserializeRetEvent 325-707 ns, TracepointEntered 4507-7466 ns), so do not take their sec/op deltas; the five pipeline mixes spread 4-22% (DiverseAllTypes only 3.6%), usable only for large deltas. Static metrics and allocs/op are valid; B/op per the usual rules (WriterThroughput B/op not trustworthy). See docs/performance-baseline.md "Known-noisy recordings".
+# note:       noisy sec/op (loadavg 0.95 1-min but 3.21/3.63 5/15-min at start; the host was not idle). Component rows spread up to 118% within this recording (HandleOpenExit 898-1955 ns, DeserializeRetEvent 325-707 ns, TracepointEntered 4507-7466 ns), so do not take their sec/op deltas; the five pipeline mixes spread 3.6-22% (DiverseAllTypes tightest at 3.6%, WriteHeavy widest at 22%), usable only for large deltas. Static metrics and allocs/op are valid; B/op per the usual rules (WriterThroughput B/op not trustworthy). See docs/performance-baseline.md "Known-noisy recordings".
 
 goos: linux
 goarch: amd64
