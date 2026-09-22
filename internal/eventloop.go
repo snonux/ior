@@ -55,17 +55,14 @@ type ringbufDropSource interface {
 }
 
 type eventLoopConfig struct {
-	pidFilter   int
-	filter      globalfilter.Filter
-	pprofEnable bool
-	plainMode   bool
-	// synchronousRawProcessing keeps raw decode and callback emission in a
-	// single goroutine for deterministic test execution.
-	synchronousRawProcessing bool
-	fdTracker                *fdTracker
-	commResolver             *commResolver
-	aggregateDrainEvery      time.Duration
-	aggregateIngestTraceIDs  map[types.TraceId]struct{}
+	pidFilter               int
+	filter                  globalfilter.Filter
+	pprofEnable             bool
+	plainMode               bool
+	fdTracker               *fdTracker
+	commResolver            *commResolver
+	aggregateDrainEvery     time.Duration
+	aggregateIngestTraceIDs map[types.TraceId]struct{}
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
