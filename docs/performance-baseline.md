@@ -108,12 +108,15 @@ that changed. `benchstat` is installed with
 
 Read the result in this order:
 
-1. **`allocs/op` and `B/op`.** Rows whose samples are all equal (benchstat
-   `± 0%` with footnote "all samples are equal", e.g. every `Deserialize*`
-   row and `allocs/op` of the component benchmarks) are exact: any change
-   there is real. Pooled and allocation-heavy rows are not: within one
-   recording `B/op` varies by a few percent, up to about 10% (samples in
-   `03249c1`: `HandleNullExit` 94-103, `EventPoolGetPut` 95-105,
+1. **`allocs/op` and `B/op`.** Rows whose samples are all equal in both
+   recordings (benchstat `± 0%` with footnote "all samples are equal" on both
+   sides, e.g. every `Deserialize*` row and `allocs/op` of the component
+   benchmarks) are exact: any change there is real. A row equal in only one
+   recording is not exact (`SyscallAccumulatorSnapshot` `B/op` is 1056 in
+   every `4d2d76f` sample but 1056-1057 in `03249c1`, same code). Pooled
+   and allocation-heavy rows are not: within one recording component `B/op`
+   varies by a few percent, up to about 10% (samples in `03249c1`:
+   `HandleNullExit` 94-103, `EventPoolGetPut` 95-105,
    `HandleDup3Exit` 159-164; in `4d2d76f`: `HandleFcntlExit` 140-150), and
    `allocs/op` of the pipeline mixes by under 0.1%
    (`PipelineHeadlessParquetCapture` 9135-9140 across both). Both also drift
@@ -131,7 +134,7 @@ Read the result in this order:
    `PipelineHeadlessParquetCapture` -0.02%. For rows whose samples vary, count
    an `allocs/op` or `B/op` change as real only when it is larger than the
    row's sample spread (min to max of the raw samples) in both recordings
-   **and** larger than a drift floor (exact rows need neither): about 4%
+   **and** larger than a drift floor: about 4%
    for component `B/op`, about 0.1% for pipeline `allocs/op` and `B/op`.
    For a change near the floor, confirm it with a before/after re-run in the
    same session. `B/op` of `PipelineHeadlessParquetCapture`
@@ -216,7 +219,7 @@ What to trust in these two files:
 | Rows | 4d2d76f | 03249c1 |
 |---|---|---|
 | static metrics | yes | yes |
-| `allocs/op` and `B/op` (except the two rows below) | exact rows (all samples equal): yes, any delta; varying rows: yes, for deltas beyond both the per-row sample spread (component `B/op` up to ~7%, pipeline `allocs/op` under 0.1%) and the drift floor (component `B/op` ~4%, pipeline `allocs/op` and `B/op` ~0.1%) | yes, same rule (component `B/op` spread up to ~10%) |
+| `allocs/op` and `B/op` (except the two rows below) | exact rows (all samples equal in both files): yes, any delta; varying rows: yes, for deltas beyond both the per-row sample spread (component `B/op` up to ~7%, pipeline `allocs/op` under 0.1%) and the drift floor (component `B/op` ~4%, pipeline `allocs/op` and `B/op` ~0.1%) | yes, same rule (component `B/op` spread up to ~10%) |
 | `B/op` of `PipelineHeadlessParquetCapture` | with caution (samples spread 7%) | with caution (samples spread 13%) |
 | `B/op` of `WriterThroughput` | no (±36%) | no (±64%) |
 | `sec/op` of the four mixes above | yes (the reference for task 39's final code) | no |
