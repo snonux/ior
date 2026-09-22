@@ -182,6 +182,7 @@ type extraEmitter func(tp GeneratedTracepoint, isEnter bool) string
 // table-driven helper — no switch statement needs to grow.
 var extraEmitters = map[TracepointKind]extraEmitter{
 	KindFd:             func(tp GeneratedTracepoint, _ bool) string { return generateExtraFd(tp.Format) },
+	KindFdSize:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraFdSize(tp.Format) },
 	KindDup3:           func(_ GeneratedTracepoint, _ bool) string { return generateExtraDup3() },
 	KindOpenByHandleAt: func(_ GeneratedTracepoint, _ bool) string { return generateExtraOpenByHandleAt() },
 	KindSocket:         func(_ GeneratedTracepoint, _ bool) string { return generateExtraSocket() },
@@ -189,27 +190,30 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindAccept:         func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraAccept(tp.Format, isEnter) },
 	KindPipe:           func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraPipe(tp.Format, isEnter) },
 	KindEventfd:        func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
-	KindNamedEventfd:   func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
-	KindPidfd:          func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
-	KindEpollCtl:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraEpollCtl() },
-	KindTwoFd:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraTwoFd(tp.Format.Name) },
-	KindPoll:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraPoll(tp.Format.Name) },
-	KindMem:            func(tp GeneratedTracepoint, _ bool) string { return generateExtraMem(tp.Format.Name) },
-	KindMmap:           func(_ GeneratedTracepoint, _ bool) string { return generateExtraMmap() },
-	KindSleep:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraSleep(tp.Format.Name) },
-	KindKeyctl:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraKeyctl(tp.Format.Name) },
-	KindPtrace:         func(_ GeneratedTracepoint, _ bool) string { return generateExtraPtrace() },
-	KindPerfOpen:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraPerfOpen() },
-	KindBpf:            func(_ GeneratedTracepoint, _ bool) string { return generateExtraBpf() },
-	KindOpen:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
-	KindMqOpen:         func(tp GeneratedTracepoint, _ bool) string { return generateExtraMqOpen(tp.Format) },
-	KindOpenTree:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
-	KindExec:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraExec(tp.Format) },
-	KindPathname:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraPathname(tp, tp.Format) },
-	KindFdPathname:     func(tp GeneratedTracepoint, _ bool) string { return generateExtraFdPathname(tp.Format) },
-	KindName:           func(tp GeneratedTracepoint, _ bool) string { return generateExtraName(tp.Format) },
-	KindFcntl:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraFcntl(tp.Format) },
-	KindRet:            func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp.Format) },
+	KindNamedEventfd: func(tp GeneratedTracepoint, isEnter bool) string {
+		return generateExtraNamedEventfd(tp.Format, isEnter)
+	},
+	KindPidfd:      func(tp GeneratedTracepoint, isEnter bool) string { return generateExtraEventfd(tp.Format, isEnter) },
+	KindEpollCtl:   func(_ GeneratedTracepoint, _ bool) string { return generateExtraEpollCtl() },
+	KindTwoFd:      func(tp GeneratedTracepoint, _ bool) string { return generateExtraTwoFd(tp.Format.Name) },
+	KindTwoFdNames: func(tp GeneratedTracepoint, _ bool) string { return generateExtraTwoFdNames(tp.Format.Name) },
+	KindPoll:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraPoll(tp.Format.Name) },
+	KindMem:        func(tp GeneratedTracepoint, _ bool) string { return generateExtraMem(tp.Format.Name) },
+	KindMmap:       func(_ GeneratedTracepoint, _ bool) string { return generateExtraMmap() },
+	KindSleep:      func(tp GeneratedTracepoint, _ bool) string { return generateExtraSleep(tp.Format.Name) },
+	KindKeyctl:     func(tp GeneratedTracepoint, _ bool) string { return generateExtraKeyctl(tp.Format.Name) },
+	KindPtrace:     func(_ GeneratedTracepoint, _ bool) string { return generateExtraPtrace() },
+	KindPerfOpen:   func(_ GeneratedTracepoint, _ bool) string { return generateExtraPerfOpen() },
+	KindBpf:        func(_ GeneratedTracepoint, _ bool) string { return generateExtraBpf() },
+	KindOpen:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
+	KindMqOpen:     func(tp GeneratedTracepoint, _ bool) string { return generateExtraMqOpen(tp.Format) },
+	KindOpenTree:   func(tp GeneratedTracepoint, _ bool) string { return generateExtraOpen(tp.Format) },
+	KindExec:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraExec(tp.Format) },
+	KindPathname:   func(tp GeneratedTracepoint, _ bool) string { return generateExtraPathname(tp, tp.Format) },
+	KindFdPathname: func(tp GeneratedTracepoint, _ bool) string { return generateExtraFdPathname(tp.Format) },
+	KindName:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraName(tp.Format) },
+	KindFcntl:      func(tp GeneratedTracepoint, _ bool) string { return generateExtraFcntl(tp.Format) },
+	KindRet:        func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp.Format) },
 	// KindNull emits no extra fields — absence from the map means empty output.
 }
 
@@ -238,20 +242,32 @@ func generateExtraOpenByHandleAt() string {
 	return "    ev->flags = (__s32)ctx->args[2];\n"
 }
 
-// generateExtraFd returns the fd-capture lines for fd-family events.
+// generateExtraFd returns the fd-capture line for fd-family events.
 func generateExtraFd(f *Format) string {
-	fdIdx := f.FieldNumber("fd")
-	if override, ok := fdArgumentOverrides[f.Name]; ok {
-		fdIdx = override
-	} else if fdIdx < 0 {
-		fdIdx = 0
-	}
+	return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdArgumentIndex(f))
+}
 
+// generateExtraFdSize returns the fd capture plus the requested-size metadata
+// of the fd-based xattr reads (fd_size_event).
+func generateExtraFdSize(f *Format) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "    ev->fd = (__s32)ctx->args[%d];\n", fdIdx)
+	b.WriteString(generateExtraFd(f))
 	writeRequestedSizeCapture(&b, f)
-	b.WriteString("    ev->schema_version = FD_EVENT_SCHEMA_VERSION;\n")
+	b.WriteString("    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
+}
+
+// fdArgumentIndex selects the argument slot of the one descriptor a single-fd
+// payload represents: an explicit override, else the field literally named
+// "fd", else args[0].
+func fdArgumentIndex(f *Format) int {
+	if override, ok := fdArgumentOverrides[f.Name]; ok {
+		return override
+	}
+	if fdIdx := f.FieldNumber("fd"); fdIdx >= 0 {
+		return fdIdx
+	}
+	return 0
 }
 
 // fdArgumentOverrides chooses the one descriptor represented by a single-fd
@@ -659,36 +675,54 @@ var eventfdFilenameField = map[string]string{
 // Enter: reads the flags expression from eventfdFlagsExpr (defaults to "0"),
 // stashes it in eventfd_flags_map, captures an existing descriptor when the
 // syscall accepts one, and sets ev->ret = -1. Exit retrieves the stashed flags
-// from the map and captures ctx->ret.
+// from the map and captures ctx->ret. Every exit of the family, the named
+// kinds' included, uses this lean eventfd_event body.
 func generateExtraEventfd(f *Format, isEnter bool) string {
 	if isEnter {
-		flagsExpr := eventfdFlagsExpr[f.Name] // empty string if not found
-		if flagsExpr == "" {
-			flagsExpr = "0"
-		}
-		fdExpr := eventfdFDExpr[f.Name]
-		if fdExpr == "" {
-			fdExpr = "-1"
-		}
-		var b strings.Builder
-		if field := eventfdFilenameField[f.Name]; field != "" {
-			idx := f.FieldNumber(field)
-			if idx < 0 {
-				idx = 0
-			}
-			writeRecoverableFilenameCapture(&b, idx)
-		} else {
-			writeStringTerminator(&b, "    ", "filename")
-			b.WriteString("    ev->filename_status = PATH_READ_NULL;\n")
-		}
-		b.WriteString("    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;\n")
-		fmt.Fprintf(&b, "    __s32 flags = %s;\n", flagsExpr)
-		b.WriteString("    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n")
-		b.WriteString("    ev->flags = flags;\n    ev->ret = -1;\n")
-		fmt.Fprintf(&b, "    ev->fd = %s;\n", fdExpr)
-		return b.String()
+		return eventfdEnterCapture(f)
 	}
-	return "    ev->filename[0] = 0;\n    ev->filename_status = PATH_READ_NULL;\n    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;\n    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
+	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
+}
+
+// generateExtraNamedEventfd emits the eventfd_name_event enter body of
+// memfd_create and fsopen: the identifying name (recovered at sys_exit when
+// the enter-side read faults) ahead of the common eventfd capture. Their exits
+// classify as KindEventfd and never reach here, but an exit is rendered the
+// lean way for safety.
+func generateExtraNamedEventfd(f *Format, isEnter bool) string {
+	if !isEnter {
+		return generateExtraEventfd(f, false)
+	}
+	idx := 0
+	if field := eventfdFilenameField[f.Name]; field != "" {
+		if fieldIdx := f.FieldNumber(field); fieldIdx >= 0 {
+			idx = fieldIdx
+		}
+	}
+	var b strings.Builder
+	writeRecoverableFilenameCapture(&b, idx)
+	b.WriteString("    ev->schema_version = EVENTFD_NAME_EVENT_SCHEMA_VERSION;\n")
+	b.WriteString(eventfdEnterCapture(f))
+	return b.String()
+}
+
+// eventfdEnterCapture is the enter body shared by eventfd_event and
+// eventfd_name_event: flags (stashed for the exit), ret and the descriptor.
+func eventfdEnterCapture(f *Format) string {
+	flagsExpr := eventfdFlagsExpr[f.Name] // empty string if not found
+	if flagsExpr == "" {
+		flagsExpr = "0"
+	}
+	fdExpr := eventfdFDExpr[f.Name]
+	if fdExpr == "" {
+		fdExpr = "-1"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "    __s32 flags = %s;\n", flagsExpr)
+	b.WriteString("    bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);\n")
+	b.WriteString("    ev->flags = flags;\n    ev->ret = -1;\n")
+	fmt.Fprintf(&b, "    ev->fd = %s;\n", fdExpr)
+	return b.String()
 }
 
 func generateExtraEpollCtl() string {
@@ -734,23 +768,30 @@ var twoFdDefault = twoFdFieldSpec{
 // Syscalls with non-standard argument positions are in twoFdOverrides;
 // all others use twoFdDefault.
 func generateExtraTwoFd(name string) string {
+	var b strings.Builder
+	writeTwoFdCapture(&b, name)
+	b.WriteString("    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;\n")
+	return b.String()
+}
+
+// generateExtraTwoFdNames emits the two_fd_names_event body of move_mount:
+// the two-fd capture plus its from/to pathnames (args[1] and args[3]).
+func generateExtraTwoFdNames(name string) string {
+	var b strings.Builder
+	writeTwoFdCapture(&b, name)
+	writePathReadCapture(&b, "oldname", "oldname_status", 1)
+	writePathReadCapture(&b, "newname", "newname_status", 3)
+	b.WriteString("    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;\n")
+	return b.String()
+}
+
+func writeTwoFdCapture(b *strings.Builder, name string) {
 	spec, ok := twoFdOverrides[name]
 	if !ok {
 		spec = twoFdDefault
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "    ev->fd_a = %s;\n    ev->fd_b = %s;\n    ev->extra = %s;\n",
+	fmt.Fprintf(b, "    ev->fd_a = %s;\n    ev->fd_b = %s;\n    ev->extra = %s;\n",
 		spec.fdA, spec.fdB, spec.extra)
-	if name == "sys_enter_move_mount" {
-		writePathReadCapture(&b, "oldname", "oldname_status", 1)
-		writePathReadCapture(&b, "newname", "newname_status", 3)
-	} else {
-		writeStringTerminator(&b, "    ", "oldname")
-		writeStringTerminator(&b, "    ", "newname")
-		b.WriteString("    ev->oldname_status = PATH_READ_NULL;\n    ev->newname_status = PATH_READ_NULL;\n")
-	}
-	b.WriteString("    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;\n")
-	return b.String()
 }
 
 func generateExtraBpf() string {

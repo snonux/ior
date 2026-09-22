@@ -1,6 +1,7 @@
 package types
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -604,7 +605,7 @@ func TestNewPipeEventFastKernelLayout(t *testing.T) {
 }
 
 func TestNewEventfdEventFastKernelLayout(t *testing.T) {
-	raw := make([]byte, eventfdEventSize)
+	raw := make([]byte, eventfdNameEventSize)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(EXIT_EVENTFD_EVENT))
 	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_EXIT_EVENTFD2))
 	binary.LittleEndian.PutUint64(raw[8:16], 1)
@@ -765,7 +766,7 @@ func TestNewPollEventFastLegacyResetsAppendedPooledFields(t *testing.T) {
 }
 
 func TestNewTwoFdEventFastKernelLayout(t *testing.T) {
-	raw := make([]byte, twoFdEventSize)
+	raw := make([]byte, twoFdNamesEventSize)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(ENTER_TWO_FD_EVENT))
 	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_MOVE_MOUNT))
 	binary.LittleEndian.PutUint64(raw[8:16], 1)
@@ -804,7 +805,7 @@ func TestNewTwoFdEventFastKernelLayout(t *testing.T) {
 }
 
 func TestTwoFdCodecsAcceptOnlyReviewedLayouts(t *testing.T) {
-	current := make([]byte, twoFdEventSize)
+	current := make([]byte, twoFdNamesEventSize)
 	binary.LittleEndian.PutUint32(current[0:4], uint32(ENTER_TWO_FD_EVENT))
 	binary.LittleEndian.PutUint32(current[4:8], uint32(SYS_ENTER_MOVE_MOUNT))
 	binary.LittleEndian.PutUint64(current[8:16], 10)
@@ -828,7 +829,7 @@ func TestTwoFdCodecsAcceptOnlyReviewedLayouts(t *testing.T) {
 		{name: "fast", fn: NewTwoFdEventFast},
 	}
 	for _, decoder := range decoders {
-		for _, size := range []int{twoFdCompactSize, twoFdEventSize} {
+		for _, size := range []int{twoFdNamesCompactSize, twoFdNamesEventSize} {
 			t.Run(decoder.name+"/current/"+fmt.Sprint(size), func(t *testing.T) {
 				ev := decoder.fn(current[:size])
 				if ev == nil {
@@ -842,7 +843,7 @@ func TestTwoFdCodecsAcceptOnlyReviewedLayouts(t *testing.T) {
 			})
 		}
 
-		for _, size := range []int{twoFdCompactSize, twoFdEventSize} {
+		for _, size := range []int{twoFdNamesCompactSize, twoFdNamesEventSize} {
 			t.Run(decoder.name+"/pre-kcmp-owner/"+fmt.Sprint(size), func(t *testing.T) {
 				raw := append([]byte(nil), current[:size]...)
 				binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION)
@@ -880,7 +881,7 @@ func TestTwoFdCodecsAcceptOnlyReviewedLayouts(t *testing.T) {
 			})
 		}
 
-		for _, size := range []int{twoFdCompactSize, twoFdEventSize} {
+		for _, size := range []int{twoFdNamesCompactSize, twoFdNamesEventSize} {
 			t.Run(decoder.name+"/wrong-schema/"+fmt.Sprint(size), func(t *testing.T) {
 				raw := append([]byte(nil), current[:size]...)
 				binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_SCHEMA_VERSION+1)
@@ -1255,11 +1256,11 @@ func TestNewOpenNameFixupEventFastRejectsUnknownLayout(t *testing.T) {
 
 func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
 	fdLayout := FdEvent{}
-	if got := unsafe.Sizeof(fdLayout); got != fdEventSize {
-		t.Fatalf("sizeof(FdEvent) = %d, want %d", got, fdEventSize)
+	if got := unsafe.Sizeof(fdLayout); got != fdEventLegacyKernelSize {
+		t.Fatalf("sizeof(FdEvent) = %d, want %d", got, fdEventLegacyKernelSize)
 	}
-	if got := len(rawBytes(t, &fdLayout)); got != fdEventCompactSize {
-		t.Fatalf("FdEvent.Bytes size = %d, want %d", got, fdEventCompactSize)
+	if got := len(rawBytes(t, &fdLayout)); got != fdEventSize {
+		t.Fatalf("FdEvent.Bytes size = %d, want %d", got, fdEventSize)
 	}
 
 	tests := []struct {
@@ -1269,10 +1270,10 @@ func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
 		requestedSize uint64
 		sizeValid     uint32
 	}{
-		{name: "legacy compact", payloadSize: fdEventLegacyCompactSize},
-		{name: "legacy kernel", payloadSize: fdEventLegacyKernelSize},
-		{name: "current compact", payloadSize: fdEventCompactSize, sizeOffset: 28, requestedSize: 4096, sizeValid: 1},
-		{name: "current kernel", payloadSize: fdEventSize, sizeOffset: 32, requestedSize: 8192, sizeValid: 1},
+		{name: "lean compact", payloadSize: fdEventCompactSize},
+		{name: "lean kernel", payloadSize: fdEventSize},
+		{name: "wide compact", payloadSize: fdEventLegacyCompactSize, sizeOffset: 28, requestedSize: 4096, sizeValid: 1},
+		{name: "wide kernel", payloadSize: fdEventLegacyKernelSize, sizeOffset: 32, requestedSize: 8192, sizeValid: 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1290,12 +1291,145 @@ func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
 				t.Fatal("expected fd payload to decode")
 			}
 			defer fast.Recycle()
+			regular := NewFdEvent(raw)
+			if regular == nil || !fast.Equals(regular) {
+				t.Fatalf("regular constructor disagrees with fast decoder: %#v / %#v", regular, fast)
+			}
+			defer regular.Recycle()
 			if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 ||
 				fast.Size != tc.requestedSize || fast.SizeValid != tc.sizeValid {
 				t.Fatalf("unexpected fd decode: %#v", fast)
 			}
 		})
 	}
+}
+
+func TestSplitPayloadFastDecoders(t *testing.T) {
+	t.Run("fd size", func(t *testing.T) {
+		raw := make([]byte, fdSizeEventSize)
+		fillCommonHeader(raw, ENTER_FD_SIZE_EVENT, SYS_ENTER_FGETXATTR)
+		binary.LittleEndian.PutUint32(raw[24:28], 7)
+		binary.LittleEndian.PutUint64(raw[32:40], 4096)
+		binary.LittleEndian.PutUint32(raw[40:44], 1)
+		binary.LittleEndian.PutUint32(raw[44:48], FD_SIZE_EVENT_SCHEMA_VERSION)
+		ev := NewFdSizeEventFast(raw)
+		if ev == nil || ev.Fd != 7 || ev.Size != 4096 || ev.SizeValid != 1 {
+			t.Fatalf("fd size decode = %#v", ev)
+		}
+		ev.Recycle()
+		regular := NewFdSizeEvent(raw)
+		if regular == nil || regular.Fd != 7 || regular.Size != 4096 || regular.SizeValid != 1 {
+			t.Fatalf("regular fd size decode = %#v", regular)
+		}
+		encoded, err := regular.Bytes()
+		regular.Recycle()
+		if err != nil || !bytes.Equal(encoded, raw) {
+			t.Fatalf("fd size encode = %x, %v; want %x", encoded, err, raw)
+		}
+		binary.LittleEndian.PutUint32(raw[44:48], FD_SIZE_EVENT_SCHEMA_VERSION+1)
+		if ev := NewFdSizeEventFast(raw); ev != nil {
+			ev.Recycle()
+			t.Fatal("accepted wrong fd-size schema")
+		}
+		if ev := NewFdSizeEventFast(raw[:47]); ev != nil {
+			ev.Recycle()
+			t.Fatal("accepted truncated fd-size record")
+		}
+		if ev := NewFdSizeEvent(raw); ev != nil {
+			ev.Recycle()
+			t.Fatal("regular decoder accepted wrong fd-size schema")
+		}
+		if ev := NewFdSizeEvent(raw[:47]); ev != nil {
+			ev.Recycle()
+			t.Fatal("regular decoder accepted truncated fd-size record")
+		}
+	})
+	t.Run("eventfd name", func(t *testing.T) {
+		raw := make([]byte, eventfdNameEventSize)
+		fillCommonHeader(raw, ENTER_EVENTFD_NAME_EVENT, SYS_ENTER_MEMFD_CREATE)
+		copy(raw[44:300], "named-memfd")
+		binary.LittleEndian.PutUint32(raw[304:308], EVENTFD_NAME_EVENT_SCHEMA_VERSION)
+		ev := NewEventfdNameEventFast(raw)
+		if ev == nil || StringValue(ev.Filename[:]) != "named-memfd" {
+			t.Fatalf("eventfd name decode = %#v", ev)
+		}
+		ev.Recycle()
+		binary.LittleEndian.PutUint32(raw[304:308], EVENTFD_NAME_EVENT_SCHEMA_VERSION+1)
+		if ev := NewEventfdNameEventFast(raw); ev != nil {
+			ev.Recycle()
+			t.Fatal("accepted wrong eventfd-name schema")
+		}
+		if ev := NewEventfdNameEventFast(raw[:311]); ev != nil {
+			ev.Recycle()
+			t.Fatal("accepted truncated eventfd-name record")
+		}
+	})
+	t.Run("two fd names", func(t *testing.T) {
+		raw := make([]byte, twoFdNamesEventSize)
+		fillCommonHeader(raw, ENTER_TWO_FD_NAMES_EVENT, SYS_ENTER_MOVE_MOUNT)
+		copy(raw[40:296], "/source")
+		copy(raw[296:552], "/target")
+		binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_SCHEMA_VERSION)
+		ev := NewTwoFdNamesEventFast(raw)
+		if ev == nil || StringValue(ev.Oldname[:]) != "/source" || StringValue(ev.Newname[:]) != "/target" {
+			t.Fatalf("two-fd names decode = %#v", ev)
+		}
+		ev.Recycle()
+		binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_SCHEMA_VERSION+1)
+		if ev := NewTwoFdNamesEventFast(raw); ev != nil {
+			ev.Recycle()
+			t.Fatal("accepted wrong two-fd-names schema")
+		}
+		if ev := NewTwoFdNamesEventFast(raw[:567]); ev != nil {
+			ev.Recycle()
+			t.Fatal("accepted truncated two-fd-names record")
+		}
+	})
+	t.Run("empty two fd names retain wide layout", func(t *testing.T) {
+		ev := &TwoFdEvent{
+			EventType:     ENTER_TWO_FD_NAMES_EVENT,
+			TraceId:       SYS_ENTER_MOVE_MOUNT,
+			SchemaVersion: TWO_FD_EVENT_SCHEMA_VERSION,
+		}
+		raw, err := ev.Bytes()
+		if err != nil || len(raw) != twoFdNamesEventSize {
+			t.Fatalf("two-fd named encode size = %d, %v", len(raw), err)
+		}
+		decoded := NewTwoFdNamesEventFast(raw)
+		if decoded == nil {
+			t.Fatal("named decoder rejected empty-name record")
+		}
+		decoded.Recycle()
+	})
+	t.Run("lean two fd keeps lean layout", func(t *testing.T) {
+		ev := &TwoFdEvent{
+			EventType:     ENTER_TWO_FD_EVENT,
+			TraceId:       SYS_ENTER_CLOSE_RANGE,
+			OldnameStatus: PATH_READ_NULL,
+			NewnameStatus: PATH_READ_NULL,
+			SchemaVersion: TWO_FD_EVENT_SCHEMA_VERSION,
+		}
+		raw, err := ev.Bytes()
+		if err != nil || len(raw) != twoFdEventSize {
+			t.Fatalf("two-fd lean encode size = %d, %v", len(raw), err)
+		}
+	})
+	t.Run("legacy two fd preserves failed empty name", func(t *testing.T) {
+		raw := make([]byte, twoFdNamesEventSize)
+		fillCommonHeader(raw, ENTER_TWO_FD_EVENT, SYS_ENTER_MOVE_MOUNT)
+		binary.LittleEndian.PutUint32(raw[552:556], PATH_READ_FAILED)
+		binary.LittleEndian.PutUint32(raw[556:560], PATH_READ_OK)
+		binary.LittleEndian.PutUint32(raw[560:564], TWO_FD_EVENT_SCHEMA_VERSION)
+		ev := NewTwoFdEvent(raw)
+		if ev == nil {
+			t.Fatal("legacy named record rejected")
+		}
+		encoded, err := ev.Bytes()
+		ev.Recycle()
+		if err != nil || !bytes.Equal(encoded, raw) {
+			t.Fatalf("legacy named roundtrip = %x, %v; want %x", encoded, err, raw)
+		}
+	})
 }
 
 func TestNewRetEventFastKernelLayout(t *testing.T) {

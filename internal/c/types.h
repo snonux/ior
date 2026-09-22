@@ -58,6 +58,16 @@
 #define EXIT_BPF_EVENT 53
 #define ENTER_FD_PATH_EVENT 54
 #define EXIT_FD_PATH_EVENT 55
+// The rare payloads of fd_event, two_fd_event and eventfd_event travel in
+// their own records so that the hot kinds stay lean (task 89). Only the enter
+// side exists: the exits of these syscalls are ret_event or the lean
+// eventfd_event.
+#define ENTER_FD_SIZE_EVENT 56
+#define EXIT_FD_SIZE_EVENT 57
+#define ENTER_TWO_FD_NAMES_EVENT 58
+#define EXIT_TWO_FD_NAMES_EVENT 59
+#define ENTER_EVENTFD_NAME_EVENT 60
+#define EXIT_EVENTFD_NAME_EVENT 61
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -88,20 +98,32 @@
 // and append new fields so userspace can distinguish legacy payloads by size.
 // dirfd alone would still collide with the legacy 304-byte kernel layout. The
 // schema version, filename status and reserved word make the final v3 layout
-// 320 bytes. fd_event v1 appends requested-size metadata to its legacy 28/32-
-// byte layout. path_event v4 appends the same metadata to its v3 300/304-byte
-// layout. Intermediate development layouts were never released and are not
-// part of the decoder compatibility contract.
+// 320 bytes. path_event v4 appends requested-size metadata to its v3
+// 300/304-byte layout. Intermediate development layouts were never released
+// and are not part of the decoder compatibility contract.
+//
+// fd_size_event is the fd_event v1 layout (the legacy 28/32-byte fd_event plus
+// requested-size metadata) under its own event type; fd_event itself is the
+// legacy layout again. eventfd_name_event is the eventfd_event v2 layout and
+// eventfd_event the name-less 48-byte layout that preceded it. Older BPF
+// objects still send the wide layouts under ENTER_FD_EVENT/ENTER_EVENTFD_EVENT;
+// userspace tells them apart by size.
 #define OPEN_EVENT_SCHEMA_VERSION 3
+#define FD_SIZE_EVENT_SCHEMA_VERSION 1
+// Compatibility names for userspace decoders of records from older BPF objects.
 #define FD_EVENT_SCHEMA_VERSION 1
 #define PATH_EVENT_SCHEMA_VERSION 4
 #define NAME_EVENT_SCHEMA_VERSION 2
+#define EVENTFD_NAME_EVENT_SCHEMA_VERSION 2
 #define EVENTFD_EVENT_SCHEMA_VERSION 2
 // accept_event v1 appends flags and a discriminator after ret. Keeping the
 // legacy prefix intact lets userspace decode old 36/40-byte payloads without
 // mistaking the old kernel padding before ret for creation flags.
 #define ACCEPT_EVENT_SCHEMA_VERSION 1
 // Schema 2 predates the kcmp pid1/type packing used for safe file attribution.
+// Schema 3 is shared by the lean two_fd_event (close_range, kcmp) and by
+// two_fd_names_event (move_mount), which is the former 568-byte two_fd_event
+// layout under its own event type.
 #define TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION 2
 #define TWO_FD_EVENT_SCHEMA_VERSION 3
 #define FD_PATH_EVENT_SCHEMA_VERSION 1
@@ -156,7 +178,22 @@ struct null_event {
     __u32 tid;
 };
 
+// fd_event is the hot single-descriptor record (read, write, close, ...): 32
+// bytes in the ring buffer. It has no schema field; its layout is the legacy
+// one, which userspace has always decoded.
 struct fd_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd;
+};
+
+// fd_size_event is fd_event plus the requested output-buffer size, captured
+// only for the fd-based xattr reads (fgetxattr, flistxattr) whose zero-size
+// call is a size probe.
+struct fd_size_event {
     __u32 event_type;
     __u32 trace_id;
     __u64 time;
@@ -306,7 +343,23 @@ struct pipe_event {
     __s64 ret;
 };
 
+// eventfd_event serves the descriptor-creating calls without an identifying
+// name (eventfd2, epoll_create1, signalfd4, timerfd_create, pidfd_open, ...)
+// and every exit of the family: 48 bytes in the ring buffer.
 struct eventfd_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 flags;
+    __s64 ret;
+    __s32 fd;
+};
+
+// eventfd_name_event is the enter record of memfd_create and fsopen, the two
+// calls whose descriptor is identified by a user-supplied name.
+struct eventfd_name_event {
     __u32 event_type;
     __u32 trace_id;
     __u64 time;
@@ -378,7 +431,24 @@ struct sleep_event {
     __s64 requested_ns;
 };
 
+// two_fd_event carries two descriptor arguments and a third word (close_range
+// first/last/flags, kcmp's KCMP_FILE indices and packed owner/type): 48 bytes
+// in the ring buffer.
 struct two_fd_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd_a;
+    __s32 fd_b;
+    __u64 extra;
+    __u32 schema_version;
+};
+
+// two_fd_names_event is two_fd_event plus the two pathnames only move_mount
+// passes alongside its descriptors.
+struct two_fd_names_event {
     __u32 event_type;
     __u32 trace_id;
     __u64 time;

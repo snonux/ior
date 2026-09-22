@@ -1,0 +1,125 @@
+# ior performance baseline
+# label:      task89-before
+# commit:     5313780aa6b51c92b6a2e81e7e90ab6bff5a0034 (docs(perf): state the 1a7f74b mix spread as 3.6-22%, reflow (79))
+# date:       2026-09-22T20:59:19Z
+# kernel:     5.14.0-687.42.1.el9_8.x86_64
+# cpu:        Intel(R) N100 x4
+# clocksource: hpet
+# go:         go1.26.2 linux/amd64
+# settings:   count=3 benchtime=500ms
+# loadavg:    3.19 3.75 3.50 (at start; keep the host idle while recording)
+
+goos: linux
+goarch: amd64
+pkg: ior/internal
+cpu: Intel(R) N100
+BenchmarkDeserializeOpenEvent-4             	  149119	      4194 ns/op	     368 B/op	       2 allocs/op
+BenchmarkDeserializeOpenEvent-4             	  148110	      4018 ns/op	     368 B/op	       2 allocs/op
+BenchmarkDeserializeOpenEvent-4             	  135474	      4291 ns/op	     368 B/op	       2 allocs/op
+BenchmarkDeserializeFdEvent-4               	 1388407	       365.9 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeFdEvent-4               	 1756962	       343.7 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeFdEvent-4               	 1783876	       348.8 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeNullEvent-4             	 2398324	       271.4 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDeserializeNullEvent-4             	 1675646	       336.7 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDeserializeNullEvent-4             	 2295501	       275.6 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDeserializeRetEvent-4              	 1946630	       396.0 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeRetEvent-4              	 1554380	       325.0 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeRetEvent-4              	 1963041	       381.3 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializePathEvent-4             	  159672	      3651 ns/op	     368 B/op	       2 allocs/op
+BenchmarkDeserializePathEvent-4             	  131818	      3992 ns/op	     368 B/op	       2 allocs/op
+BenchmarkDeserializePathEvent-4             	  147652	      3860 ns/op	     368 B/op	       2 allocs/op
+BenchmarkDeserializeNameEvent-4             	   88674	      7175 ns/op	     624 B/op	       2 allocs/op
+BenchmarkDeserializeNameEvent-4             	   85528	      6910 ns/op	     624 B/op	       2 allocs/op
+BenchmarkDeserializeNameEvent-4             	   84883	      6954 ns/op	     624 B/op	       2 allocs/op
+BenchmarkDeserializeFcntlEvent-4            	 1817350	       391.4 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeFcntlEvent-4            	 1587466	       355.5 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeFcntlEvent-4            	 1524247	       383.4 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDeserializeDup3Event-4             	 1939392	       345.7 ns/op	      80 B/op	       2 allocs/op
+BenchmarkDeserializeDup3Event-4             	 1917723	       312.0 ns/op	      80 B/op	       2 allocs/op
+BenchmarkDeserializeDup3Event-4             	 1902051	       321.3 ns/op	      80 B/op	       2 allocs/op
+BenchmarkRawHandlerLookup-4                 	56273047	        12.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawHandlerLookup-4                 	59081047	        10.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawHandlerLookup-4                 	56080472	        10.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTracepointEntered-4                	  126259	      4234 ns/op	     413 B/op	       3 allocs/op
+BenchmarkTracepointEntered-4                	  138703	      4308 ns/op	     413 B/op	       3 allocs/op
+BenchmarkTracepointEntered-4                	  104446	      4826 ns/op	     414 B/op	       3 allocs/op
+BenchmarkTracepointExited-4                 	  744166	       951.5 ns/op	     144 B/op	       4 allocs/op
+BenchmarkTracepointExited-4                 	  696849	       934.8 ns/op	     144 B/op	       4 allocs/op
+BenchmarkTracepointExited-4                 	  653170	       925.4 ns/op	     144 B/op	       4 allocs/op
+BenchmarkHandleOpenExit-4                   	  607392	       964.5 ns/op	     506 B/op	       7 allocs/op
+BenchmarkHandleOpenExit-4                   	  573966	       996.6 ns/op	     504 B/op	       7 allocs/op
+BenchmarkHandleOpenExit-4                   	  585211	       989.6 ns/op	     505 B/op	       7 allocs/op
+BenchmarkHandleFdExit-4                     	 1501549	       387.2 ns/op	     141 B/op	       2 allocs/op
+BenchmarkHandleFdExit-4                     	 1573839	       382.8 ns/op	     145 B/op	       2 allocs/op
+BenchmarkHandleFdExit-4                     	 1506930	       387.8 ns/op	     150 B/op	       2 allocs/op
+BenchmarkHandlePathExit-4                   	  818196	       670.6 ns/op	     464 B/op	       5 allocs/op
+BenchmarkHandlePathExit-4                   	  873985	       680.9 ns/op	     461 B/op	       5 allocs/op
+BenchmarkHandlePathExit-4                   	  897330	       686.9 ns/op	     466 B/op	       5 allocs/op
+BenchmarkHandleNameExit-4                   	  574687	      1016 ns/op	     782 B/op	      11 allocs/op
+BenchmarkHandleNameExit-4                   	  523119	      1045 ns/op	     782 B/op	      11 allocs/op
+BenchmarkHandleNameExit-4                   	  555559	      1022 ns/op	     781 B/op	      11 allocs/op
+BenchmarkHandleNullExit-4                   	 1925245	       293.1 ns/op	      97 B/op	       2 allocs/op
+BenchmarkHandleNullExit-4                   	 1810747	       302.0 ns/op	     102 B/op	       2 allocs/op
+BenchmarkHandleNullExit-4                   	 1779742	       313.3 ns/op	      96 B/op	       2 allocs/op
+BenchmarkHandleFcntlExit-4                  	 1430977	       430.1 ns/op	     144 B/op	       2 allocs/op
+BenchmarkHandleFcntlExit-4                  	 1413079	       418.6 ns/op	     144 B/op	       2 allocs/op
+BenchmarkHandleFcntlExit-4                  	 1405849	       424.1 ns/op	     145 B/op	       2 allocs/op
+BenchmarkHandleDup3Exit-4                   	 1000000	       569.6 ns/op	     156 B/op	       3 allocs/op
+BenchmarkHandleDup3Exit-4                   	 1000000	       556.6 ns/op	     162 B/op	       3 allocs/op
+BenchmarkHandleDup3Exit-4                   	 1000000	       560.0 ns/op	     159 B/op	       3 allocs/op
+BenchmarkFdTrackerGetSet-4                  	 8280888	        72.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFdTrackerGetSet-4                  	 8142469	        70.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFdTrackerGetSet-4                  	 8119160	        70.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommResolverCachedHit-4            	 9777680	        58.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommResolverCachedHit-4            	10304029	        60.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommResolverCachedHit-4            	 9936771	        59.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEventPoolGetPut-4                  	 3253675	       200.3 ns/op	      94 B/op	       2 allocs/op
+BenchmarkEventPoolGetPut-4                  	 2975607	       171.3 ns/op	      97 B/op	       2 allocs/op
+BenchmarkEventPoolGetPut-4                  	 2902310	       188.1 ns/op	      99 B/op	       2 allocs/op
+BenchmarkPipelineReadHeavy-4                	      42	  12512727 ns/op	     10000 pairs/op	  540692 B/op	   21951 allocs/op
+BenchmarkPipelineReadHeavy-4                	      48	  12385960 ns/op	     10000 pairs/op	  540294 B/op	   21949 allocs/op
+BenchmarkPipelineReadHeavy-4                	      45	  12847029 ns/op	     10000 pairs/op	  540197 B/op	   21949 allocs/op
+BenchmarkPipelineWriteHeavy-4               	      42	  12143192 ns/op	     10000 pairs/op	  546679 B/op	   20850 allocs/op
+BenchmarkPipelineWriteHeavy-4               	      42	  12474184 ns/op	     10000 pairs/op	  546690 B/op	   20849 allocs/op
+BenchmarkPipelineWriteHeavy-4               	      42	  12335589 ns/op	     10000 pairs/op	  546800 B/op	   20850 allocs/op
+BenchmarkPipelineMetadataHeavy-4            	      36	  14915890 ns/op	     10000 pairs/op	 1379179 B/op	   55708 allocs/op
+BenchmarkPipelineMetadataHeavy-4            	      36	  15092633 ns/op	     10000 pairs/op	 1378997 B/op	   55707 allocs/op
+BenchmarkPipelineMetadataHeavy-4            	      40	  15330811 ns/op	     10000 pairs/op	 1379080 B/op	   55708 allocs/op
+BenchmarkPipelineDiverseAllTypes-4          	      32	  19520470 ns/op	     10000 pairs/op	 1141702 B/op	   42472 allocs/op
+BenchmarkPipelineDiverseAllTypes-4          	      31	  19346570 ns/op	     10000 pairs/op	 1141755 B/op	   42472 allocs/op
+BenchmarkPipelineDiverseAllTypes-4          	      31	  19255760 ns/op	     10000 pairs/op	 1141828 B/op	   42473 allocs/op
+BenchmarkPipelineHeadlessParquetCapture-4   	      86	   6557750 ns/op	      2000 pairs/op	  380817 B/op	    9137 allocs/op
+BenchmarkPipelineHeadlessParquetCapture-4   	      86	   6852305 ns/op	      2000 pairs/op	  398012 B/op	    9140 allocs/op
+BenchmarkPipelineHeadlessParquetCapture-4   	     100	   6944959 ns/op	      2000 pairs/op	  382505 B/op	    9139 allocs/op
+PASS
+ok  	ior/internal	65.463s
+goos: linux
+goarch: amd64
+pkg: ior/internal/streamrow
+cpu: Intel(R) N100
+BenchmarkNew-4   	10299464	        57.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNew-4   	 9996908	        60.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNew-4   	 9471346	        58.68 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	ior/internal/streamrow	1.958s
+goos: linux
+goarch: amd64
+pkg: ior/internal/statsengine
+cpu: Intel(R) N100
+BenchmarkSyscallAccumulatorSnapshot-4   	  444956	      1588 ns/op	    1056 B/op	       2 allocs/op
+BenchmarkSyscallAccumulatorSnapshot-4   	  409035	      1582 ns/op	    1057 B/op	       2 allocs/op
+BenchmarkSyscallAccumulatorSnapshot-4   	  401330	      1598 ns/op	    1057 B/op	       2 allocs/op
+PASS
+ok  	ior/internal/statsengine	2.800s
+goos: linux
+goarch: amd64
+pkg: ior/internal/parquet
+cpu: Intel(R) N100
+BenchmarkWriterThroughput-4       	    5018	    118690 ns/op	    3317 B/op	       8 allocs/op
+BenchmarkWriterThroughput-4       	    5054	    121141 ns/op	    2176 B/op	       8 allocs/op
+BenchmarkWriterThroughput-4       	    4816	    120409 ns/op	    1795 B/op	       8 allocs/op
+BenchmarkRecorderQueueHandoff-4   	 3831600	       138.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecorderQueueHandoff-4   	 4516837	       139.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecorderQueueHandoff-4   	 4121847	       134.8 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	ior/internal/parquet	4.513s

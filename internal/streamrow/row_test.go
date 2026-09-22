@@ -421,6 +421,9 @@ var retCarrierFixtures = map[string]func(ret int64) event.Event{
 	"EventfdEvent": func(ret int64) event.Event {
 		return &types.EventfdEvent{TraceId: types.SYS_EXIT_EVENTFD2, Time: 20, Pid: 5, Tid: 6, Ret: ret}
 	},
+	"EventfdNameEvent": func(ret int64) event.Event {
+		return &types.EventfdNameEvent{TraceId: types.SYS_EXIT_MEMFD_CREATE, Time: 20, Pid: 5, Tid: 6, Ret: ret}
+	},
 }
 
 // TestNewCoversEveryRetCarryingEventType is the anti-rot invariant for the

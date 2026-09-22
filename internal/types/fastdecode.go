@@ -23,10 +23,12 @@ const (
 	openNameFixupEventSize       = 268
 	execEventSize                = 304
 	nullEventSize                = 24
-	fdEventSize                  = 48
-	fdEventCompactSize           = 44
-	fdEventLegacyKernelSize      = 32
-	fdEventLegacyCompactSize     = 28
+	fdEventSize                  = 32
+	fdEventCompactSize           = 28
+	fdEventLegacyKernelSize      = 48
+	fdEventLegacyCompactSize     = 44
+	fdSizeEventSize              = 48
+	fdSizeEventCompactSize       = 44
 	retEventSize                 = 40
 	retEventSizeV1               = 36
 	nameEventSize                = 560
@@ -52,15 +54,18 @@ const (
 	acceptEventLegacyCompactSize = 36
 	pipeEventSize                = 48
 	pipeEventSizeV1              = 44
-	eventfdEventSize             = 312
+	eventfdEventSize             = 48
+	eventfdNameEventSize         = 312
 	// V3 is the former padded layout with fd. V2 predates fd, while V1 is its
 	// compact binary.Write form.
 	eventfdEventSizeV3         = 48
 	eventfdEventSizeV2         = 40
 	eventfdEventSizeV1         = 36
 	epollCtlEventSize          = 40
-	twoFdEventSize             = 568
-	twoFdCompactSize           = 564
+	twoFdEventSize             = 48
+	twoFdCompactSize           = 44
+	twoFdNamesEventSize        = 568
+	twoFdNamesCompactSize      = 564
 	twoFdLegacySize            = 40
 	pollEventSize              = 48
 	pollEventCompactSize       = 44
@@ -197,11 +202,11 @@ func NewNullEventFast(raw []byte) *NullEvent {
 // payload size does not match the size constant(s) above. Returns nil
 // for a short payload.
 func NewFdEventFast(raw []byte) *FdEvent {
-	if len(raw) < fdEventLegacyCompactSize {
+	if len(raw) < fdEventCompactSize {
 		return nil
 	}
-	legacy := len(raw) == fdEventLegacyCompactSize || len(raw) == fdEventLegacyKernelSize
-	current := len(raw) == fdEventCompactSize || len(raw) == fdEventSize
+	legacy := len(raw) == fdEventCompactSize || len(raw) == fdEventSize
+	current := len(raw) == fdEventLegacyCompactSize || len(raw) == fdEventLegacyKernelSize
 	if !legacy && !current {
 		return nil
 	}
@@ -217,7 +222,7 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	f.SchemaVersion = 0
 	if current {
 		sizeOffset := 28
-		if len(raw) == fdEventSize {
+		if len(raw) == fdEventLegacyKernelSize {
 			sizeOffset = 32
 		}
 		f.Size = binary.LittleEndian.Uint64(raw[sizeOffset : sizeOffset+8])
@@ -227,6 +232,32 @@ func NewFdEventFast(raw []byte) *FdEvent {
 			f.Recycle()
 			return nil
 		}
+	}
+	return f
+}
+
+// NewFdSizeEventFast decodes the requested-size variant used by fd xattrs.
+func NewFdSizeEventFast(raw []byte) *FdSizeEvent {
+	if len(raw) != fdSizeEventSize && len(raw) != fdSizeEventCompactSize {
+		return nil
+	}
+	f := poolOfFdSizeEvents.Get().(*FdSizeEvent)
+	f.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	f.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	f.Time = binary.LittleEndian.Uint64(raw[8:16])
+	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	offset := 28
+	if len(raw) == fdSizeEventSize {
+		offset = 32
+	}
+	f.Size = binary.LittleEndian.Uint64(raw[offset : offset+8])
+	f.SizeValid = binary.LittleEndian.Uint32(raw[offset+8 : offset+12])
+	f.SchemaVersion = binary.LittleEndian.Uint32(raw[offset+12 : offset+16])
+	if f.SchemaVersion != FD_SIZE_EVENT_SCHEMA_VERSION {
+		f.Recycle()
+		return nil
 	}
 	return f
 }
@@ -566,7 +597,7 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 	if len(raw) < eventfdEventSizeV1 {
 		return nil
 	}
-	if len(raw) != eventfdEventSize && len(raw) != eventfdEventSizeV3 && len(raw) != eventfdEventSizeV2 && len(raw) != eventfdEventSizeV1 {
+	if len(raw) != eventfdNameEventSize && len(raw) != eventfdEventSize && len(raw) != eventfdEventSizeV2 && len(raw) != eventfdEventSizeV1 {
 		return NewEventfdEvent(raw)
 	}
 	e := poolOfEventfdEvents.Get().(*EventfdEvent)
@@ -585,10 +616,10 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 		retOffset = 32
 	}
 	e.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))
-	if len(raw) == eventfdEventSizeV3 || len(raw) == eventfdEventSize {
+	if len(raw) == eventfdEventSize || len(raw) == eventfdNameEventSize {
 		e.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))
 	}
-	if len(raw) == eventfdEventSize {
+	if len(raw) == eventfdNameEventSize {
 		copy(e.Filename[:], raw[44:300])
 		e.FilenameStatus = binary.LittleEndian.Uint32(raw[300:304])
 		e.SchemaVersion = binary.LittleEndian.Uint32(raw[304:308])
@@ -598,6 +629,11 @@ func NewEventfdEventFast(raw []byte) *EventfdEvent {
 		}
 	}
 	return e
+}
+
+// NewEventfdNameEventFast decodes the wide name-bearing eventfd record.
+func NewEventfdNameEventFast(raw []byte) *EventfdNameEvent {
+	return NewEventfdNameEvent(raw)
 }
 
 // NewEpollCtlEventFast decodes one epoll_ctl ring-buffer payload in a
@@ -633,7 +669,8 @@ func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 		return nil
 	}
 	legacy := len(raw) == twoFdLegacySize
-	current := len(raw) == twoFdCompactSize || len(raw) == twoFdEventSize
+	current := len(raw) == twoFdCompactSize || len(raw) == twoFdEventSize ||
+		len(raw) == twoFdNamesCompactSize || len(raw) == twoFdNamesEventSize
 	if !legacy && !current {
 		return NewTwoFdEvent(raw)
 	}
@@ -651,7 +688,7 @@ func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 	t.OldnameStatus = PATH_READ_NULL
 	t.NewnameStatus = PATH_READ_NULL
 	t.SchemaVersion = 0
-	if current {
+	if len(raw) == twoFdNamesCompactSize || len(raw) == twoFdNamesEventSize {
 		copy(t.Oldname[:], raw[40:296])
 		copy(t.Newname[:], raw[296:552])
 		t.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])
@@ -662,8 +699,19 @@ func NewTwoFdEventFast(raw []byte) *TwoFdEvent {
 			t.Recycle()
 			return nil
 		}
+	} else if current {
+		t.SchemaVersion = binary.LittleEndian.Uint32(raw[40:44])
+		if t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION {
+			t.Recycle()
+			return nil
+		}
 	}
 	return t
+}
+
+// NewTwoFdNamesEventFast decodes the wide pathname-bearing two-fd record.
+func NewTwoFdNamesEventFast(raw []byte) *TwoFdNamesEvent {
+	return NewTwoFdNamesEvent(raw)
 }
 
 // NewPollEventFast decodes one poll ring-buffer payload in a

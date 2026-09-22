@@ -141,7 +141,8 @@ func TestStringValueStopsAtTheFirstNUL(t *testing.T) {
 func stringBearingEvents() []fmt.Stringer {
 	return []fmt.Stringer{
 		&OpenEvent{}, &OpenNameFixupEvent{}, &ExecEvent{}, &NameEvent{}, &PathEvent{},
-		&FdPathEvent{}, &EventfdEvent{}, &TwoFdEvent{}, &ProcessExecEvent{},
+		&FdPathEvent{}, &EventfdEvent{}, &EventfdNameEvent{}, &TwoFdEvent{},
+		&TwoFdNamesEvent{}, &ProcessExecEvent{},
 	}
 }
 

@@ -55,9 +55,11 @@ const (
 	// KindEventfd carries flags and the returned fd (the eventfd/epoll/signalfd
 	// family of fd-creating calls).
 	KindEventfd
-	// KindNamedEventfd adds an identifying string to the eventfd payload. It
-	// keeps the stable "eventfd" metadata name and runtime event type while
-	// enabling exit-time recovery when the enter-side nofault read misses.
+	// KindNamedEventfd adds an identifying string to the eventfd payload, in
+	// its own eventfd_name_event so that the other eventfd-family calls keep
+	// the lean eventfd_event. It keeps the stable "eventfd" metadata name and
+	// its exit is plain KindEventfd, while the enter side enables exit-time
+	// recovery when the enter-side nofault read misses.
 	KindNamedEventfd
 	// KindPidfd is the pidfd_open variant of the eventfd shape.
 	KindPidfd
@@ -111,13 +113,23 @@ const (
 	// KindTimerObj maps to the header-only null_event: the timer object id
 	// is not captured.
 	KindTimerObj
+	// KindFdSize is KindFd plus the requested output-buffer size, for the
+	// fd-based xattr reads whose zero-size call is a size probe. It has its
+	// own fd_size_event so that every other fd syscall - read and write above
+	// all - keeps the lean fd_event. Its metadata name stays "fd".
+	KindFdSize
+	// KindTwoFdNames is KindTwoFd plus the two pathnames move_mount passes
+	// alongside its descriptors. It has its own two_fd_names_event so that
+	// close_range and kcmp do not carry 512 unused name bytes. Its metadata
+	// name stays "two-fd".
+	KindTwoFdNames
 )
 
 // MetadataName returns the kind's stable name as written into
 // generated_tracepoints.c metadata comments and the Go tracepoint list.
 func (k TracepointKind) MetadataName() string {
 	switch k {
-	case KindFd:
+	case KindFd, KindFdSize:
 		return "fd"
 	case KindOpen:
 		return "open"
@@ -159,7 +171,7 @@ func (k TracepointKind) MetadataName() string {
 		return "pidfd"
 	case KindEpollCtl:
 		return "epoll-ctl"
-	case KindTwoFd:
+	case KindTwoFd, KindTwoFdNames:
 		return "two-fd"
 	case KindPoll:
 		return "poll"
@@ -307,6 +319,11 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// fd CREATOR (KindEventfd) and is intentionally left unchanged.
 	"sys_enter_timerfd_settime": KindFd,
 	"sys_enter_timerfd_gettime": KindFd,
+	// The fd-based xattr reads capture their requested buffer size (see
+	// requestedSizeArgument): a zero size makes the call a size probe whose
+	// positive return is not a byte count.
+	"sys_enter_fgetxattr":  KindFdSize,
+	"sys_enter_flistxattr": KindFdSize,
 
 	"sys_enter_epoll_create":  KindEventfd,
 	"sys_exit_epoll_create":   KindEventfd,
@@ -345,7 +362,8 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_epoll_pwait2": KindPoll,
 	"sys_enter_epoll_ctl":    KindEpollCtl,
 
-	"sys_enter_move_mount": KindTwoFd,
+	// move_mount is the one two-fd syscall that also passes pathnames.
+	"sys_enter_move_mount": KindTwoFdNames,
 	// close_range(first, last, flags) needs all three arguments, so it is a
 	// two_fd_event (fd_a=first, fd_b=last, extra=flags) rather than a single-fd
 	// fd_event. This lets the runtime honour the upper bound and the
