@@ -354,7 +354,8 @@ const secondPairPanic = "raw record completed more than one pair; extra pair dro
 // never blocks: the extra pair is recycled and the handler panics, which
 // processRawEventSafe turns into a warning before the loop carries on. The
 // dropped pair stays counted in numSyscalls but not in
-// numSyscallsAfterFilter, so the loss also shows in the statistics.
+// numSyscallsAfterFilter, so the loss also shows in the statistics. Its
+// tid's prevTime has already advanced, since finalizeTracepointPair runs first.
 func sendPair(ch chan<- *event.Pair, ep *event.Pair) {
 	select {
 	case ch <- ep:
