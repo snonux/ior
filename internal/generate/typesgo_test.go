@@ -204,8 +204,8 @@ func TestGenerateTypesGoMethods(t *testing.T) {
 	output := GenerateTypesGo(structs, constants)
 
 	// String method with char array conversion
-	requireContains(t, output, `string(o.Filename[:])`)
-	requireContains(t, output, `string(o.Comm[:])`)
+	requireContains(t, output, `StringValue(o.Filename[:])`)
+	requireContains(t, output, `StringValue(o.Comm[:])`)
 	requireContains(t, output, "func (o OpenEvent) String() string")
 
 	// Equals method

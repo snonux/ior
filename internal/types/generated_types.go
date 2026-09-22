@@ -894,7 +894,7 @@ type OpenEvent struct {
 }
 
 func (o OpenEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Filename:%v Comm:%v Dirfd:%v SchemaVersion:%v FilenameStatus:%v SchemaReserved:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, string(o.Filename[:]), string(o.Comm[:]), o.Dirfd, o.SchemaVersion, o.FilenameStatus, o.SchemaReserved)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Filename:%v Comm:%v Dirfd:%v SchemaVersion:%v FilenameStatus:%v SchemaReserved:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, StringValue(o.Filename[:]), StringValue(o.Comm[:]), o.Dirfd, o.SchemaVersion, o.FilenameStatus, o.SchemaReserved)
 }
 
 func (o OpenEvent) Equals(other any) bool {
@@ -960,7 +960,7 @@ type OpenNameFixupEvent struct {
 }
 
 func (o OpenNameFixupEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Tid:%v Filename:%v", o.EventType, o.TraceId, o.Tid, string(o.Filename[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Tid:%v Filename:%v", o.EventType, o.TraceId, o.Tid, StringValue(o.Filename[:]))
 }
 
 func (o OpenNameFixupEvent) Equals(other any) bool {
@@ -1023,7 +1023,7 @@ type ExecEvent struct {
 }
 
 func (e ExecEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Dirfd:%v Flags:%v Filename:%v Comm:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Dirfd, e.Flags, string(e.Filename[:]), string(e.Comm[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Dirfd:%v Flags:%v Filename:%v Comm:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Dirfd, e.Flags, StringValue(e.Filename[:]), StringValue(e.Comm[:]))
 }
 
 func (e ExecEvent) Equals(other any) bool {
@@ -1310,7 +1310,7 @@ type NameEvent struct {
 }
 
 func (n NameEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Oldname:%v Newname:%v Olddirfd:%v Newdirfd:%v OldnameStatus:%v NewnameStatus:%v Flags:%v SchemaVersion:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid, string(n.Oldname[:]), string(n.Newname[:]), n.Olddirfd, n.Newdirfd, n.OldnameStatus, n.NewnameStatus, n.Flags, n.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Oldname:%v Newname:%v Olddirfd:%v Newdirfd:%v OldnameStatus:%v NewnameStatus:%v Flags:%v SchemaVersion:%v", n.EventType, n.TraceId, n.Time, n.Pid, n.Tid, StringValue(n.Oldname[:]), StringValue(n.Newname[:]), n.Olddirfd, n.Newdirfd, n.OldnameStatus, n.NewnameStatus, n.Flags, n.SchemaVersion)
 }
 
 func (n NameEvent) Equals(other any) bool {
@@ -1385,7 +1385,7 @@ type PathEvent struct {
 }
 
 func (p PathEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Pathname:%v Dirfd:%v PathnameStatus:%v Flags:%v SchemaVersion:%v TargetStatus:%v SizeValid:%v Size:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, string(p.Pathname[:]), p.Dirfd, p.PathnameStatus, p.Flags, p.SchemaVersion, p.TargetStatus, p.SizeValid, p.Size)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Pathname:%v Dirfd:%v PathnameStatus:%v Flags:%v SchemaVersion:%v TargetStatus:%v SizeValid:%v Size:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, StringValue(p.Pathname[:]), p.Dirfd, p.PathnameStatus, p.Flags, p.SchemaVersion, p.TargetStatus, p.SizeValid, p.Size)
 }
 
 func (p PathEvent) Equals(other any) bool {
@@ -1458,7 +1458,7 @@ type FdPathEvent struct {
 }
 
 func (f FdPathEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Dirfd:%v Pathname:%v PathnameStatus:%v Flags:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Dirfd, string(f.Pathname[:]), f.PathnameStatus, f.Flags, f.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Dirfd:%v Pathname:%v PathnameStatus:%v Flags:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Dirfd, StringValue(f.Pathname[:]), f.PathnameStatus, f.Flags, f.SchemaVersion)
 }
 
 func (f FdPathEvent) Equals(other any) bool {
@@ -2044,7 +2044,7 @@ type EventfdEvent struct {
 }
 
 func (e EventfdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Ret:%v Fd:%v Filename:%v FilenameStatus:%v SchemaVersion:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Flags, e.Ret, e.Fd, string(e.Filename[:]), e.FilenameStatus, e.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v Ret:%v Fd:%v Filename:%v FilenameStatus:%v SchemaVersion:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Flags, e.Ret, e.Fd, StringValue(e.Filename[:]), e.FilenameStatus, e.SchemaVersion)
 }
 
 func (e EventfdEvent) Equals(other any) bool {
@@ -2509,7 +2509,7 @@ type TwoFdEvent struct {
 }
 
 func (t TwoFdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v FdA:%v FdB:%v Extra:%v Oldname:%v Newname:%v OldnameStatus:%v NewnameStatus:%v SchemaVersion:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, t.FdA, t.FdB, t.Extra, string(t.Oldname[:]), string(t.Newname[:]), t.OldnameStatus, t.NewnameStatus, t.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v FdA:%v FdB:%v Extra:%v Oldname:%v Newname:%v OldnameStatus:%v NewnameStatus:%v SchemaVersion:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, t.FdA, t.FdB, t.Extra, StringValue(t.Oldname[:]), StringValue(t.Newname[:]), t.OldnameStatus, t.NewnameStatus, t.SchemaVersion)
 }
 
 func (t TwoFdEvent) Equals(other any) bool {
@@ -2891,7 +2891,7 @@ type ProcessExecEvent struct {
 }
 
 func (p ProcessExecEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, string(p.Comm[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, StringValue(p.Comm[:]))
 }
 
 func (p ProcessExecEvent) Equals(other any) bool {

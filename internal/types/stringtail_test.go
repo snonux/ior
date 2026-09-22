@@ -1,6 +1,14 @@
 package types
 
-import "testing"
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"reflect"
+	"strings"
+	"testing"
+)
 
 // Since task 79 the BPF handlers terminate string fields instead of zeroing
 // them, so the bytes after a string's NUL are stale ring-buffer contents. The
@@ -124,5 +132,121 @@ func TestStringValueStopsAtTheFirstNUL(t *testing.T) {
 	empty := withStaleTail("")
 	if got := StringValue(empty[:]); got != "" {
 		t.Fatalf("StringValue of a terminated-only field = %q, want empty", got)
+	}
+}
+
+// stringBearingEvents lists a zero value of every generated event type with a
+// char[] field; TestStringBearingEventsListIsComplete keeps it in step with
+// generated_types.go.
+func stringBearingEvents() []fmt.Stringer {
+	return []fmt.Stringer{
+		&OpenEvent{}, &OpenNameFixupEvent{}, &ExecEvent{}, &NameEvent{}, &PathEvent{},
+		&FdPathEvent{}, &EventfdEvent{}, &TwoFdEvent{}, &ProcessExecEvent{},
+	}
+}
+
+// fillStringFields writes "/s<i>", its NUL, then stale bytes into every
+// string field of ev (a pointer to a generated struct) and returns the values
+// written, in field order. With terminate false the NUL is left out, as if a
+// handler had forgotten the terminator.
+func fillStringFields(ev any, terminate bool) []string {
+	v := reflect.ValueOf(ev).Elem()
+	var written []string
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.Array || f.Type().Elem().Kind() != reflect.Uint8 {
+			continue
+		}
+		s := fmt.Sprintf("/s%d", i)
+		for j := 0; j < f.Len(); j++ {
+			f.Index(j).SetUint(uint64(staleTail[j%len(staleTail)]))
+		}
+		for j := 0; j < len(s); j++ {
+			f.Index(j).SetUint(uint64(s[j]))
+		}
+		if terminate {
+			f.Index(len(s)).SetUint(0)
+		}
+		written = append(written, s)
+	}
+	return written
+}
+
+// The generated String() is what fmt's %v renders for an event, e.g. in the
+// uncached-comm warning, which the TUI turns into a searchable, exportable
+// stream row. Since task 79 the bytes after a string's terminator are stale
+// ring-buffer data, so String() must render every string field only up to its
+// first NUL.
+func TestGeneratedStringStopsAtTheTerminator(t *testing.T) {
+	for _, ev := range stringBearingEvents() {
+		name := reflect.TypeOf(ev).Elem().Name()
+		t.Run(name, func(t *testing.T) {
+			written := fillStringFields(ev, true)
+			if len(written) == 0 {
+				t.Fatal("no string field; the list is stale")
+			}
+			got := ev.String()
+			if strings.IndexByte(got, 0) >= 0 || strings.IndexByte(got, 0xff) >= 0 || strings.Contains(got, "shadow") {
+				t.Fatalf("String() renders bytes after a terminator: %q", got)
+			}
+			for _, s := range written {
+				if !strings.Contains(got, ":"+s+" ") && !strings.HasSuffix(got, ":"+s) {
+					t.Fatalf("String() lost the string %q: %q", s, got)
+				}
+			}
+		})
+	}
+}
+
+// TestGeneratedStringShowsAMissingTerminator keeps the test above honest:
+// without a terminator the stale bytes are part of the string.
+func TestGeneratedStringShowsAMissingTerminator(t *testing.T) {
+	for _, ev := range stringBearingEvents() {
+		fillStringFields(ev, false)
+		if got := ev.String(); !strings.Contains(got, "shadow") {
+			t.Errorf("%T: an unterminated field did not reach String(): %q", ev, got)
+		}
+	}
+}
+
+// TestStringBearingEventsListIsComplete fails when generated_types.go gains a
+// struct with a byte-array field that stringBearingEvents does not list.
+func TestStringBearingEventsListIsComplete(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "generated_types.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse generated_types.go: %v", err)
+	}
+	listed := map[string]bool{}
+	for _, ev := range stringBearingEvents() {
+		listed[reflect.TypeOf(ev).Elem().Name()] = true
+	}
+	found := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+		st, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return false
+		}
+		for _, field := range st.Fields.List {
+			if arr, ok := field.Type.(*ast.ArrayType); ok && arr.Len != nil {
+				if ident, ok := arr.Elt.(*ast.Ident); ok && ident.Name == "byte" {
+					found[spec.Name.Name] = true
+				}
+			}
+		}
+		return false
+	})
+	for name := range found {
+		if !listed[name] {
+			t.Errorf("%s has a string field but is not in stringBearingEvents", name)
+		}
+	}
+	for name := range listed {
+		if !found[name] {
+			t.Errorf("%s is listed in stringBearingEvents but has no string field", name)
+		}
 	}
 }

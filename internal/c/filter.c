@@ -274,11 +274,17 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
 // Decision: the bytes after the terminator stay stale. They can only come from
 // earlier records of this same ring buffer, whose whole data area ior - its
 // only reader - already has mapped read-only, so they expose nothing ior could
-// not read anyway. And ior never interprets them: the decoders copy them into
-// pooled Go structs, where they are neither rendered, compared, hashed nor
-// written to any output. The generator tests pin this shape
+// not read anyway. They must still never reach output: the decoders copy
+// them into pooled Go structs, and everything that turns a string field into
+// text has to stop at the NUL. That includes the generated String() methods -
+// fmt's %v of an event - which the uncached-comm warning renders into a
+// searchable, exportable TUI stream row; they rendered whole arrays until the
+// task 79 review and now go through types.StringValue as well
+// (writeStringMethod in internal/generate/typesgo.go). Only the test-only
+// Equals() still compares whole arrays. The generator tests pin the BPF shape
 // (internal/generate/stringterminator_test.go) and userspace tests pin that
-// garbage after the NUL cannot change a row (internal/eventloop_stringtail_test.go).
+// garbage after the NUL cannot change a row or a warning
+// (internal/eventloop_stringtail_test.go, internal/types/stringtail_test.go).
 
 // ior_emit_open_name_fixup re-reads the identifying string at sys_exit and publishes it
 // as a compact OPEN_NAME_FIXUP_EVENT control record. It is reserved and
