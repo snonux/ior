@@ -8,7 +8,7 @@
 # go:         go1.26.2 linux/amd64
 # settings:   count=8 benchtime=1s
 # loadavg:    0.82 1.32 2.59 (at start; keep the host idle while recording)
-# note:       load-polluted sec/op (load 0.82 at start, ~8.66 mid-run). Trust static metrics, and allocs/op and B/op only for deltas beyond the per-row sample spread (component B/op varies up to ~10%, pipeline allocs/op under 0.1%, HeadlessParquetCapture B/op up to 13%; WriterThroughput B/op is not trustworthy); take sec/op from bench-4d2d76f (four pipeline mixes; component and downstream rows only with caution) or re-record. See docs/performance-baseline.md "Known-noisy recordings".
+# note:       load-polluted sec/op (load 0.82 at start, ~8.66 mid-run). Trust static metrics, and allocs/op and B/op only for deltas beyond both the per-row sample spread (component B/op varies up to ~10%, pipeline allocs/op under 0.1%) and the between-recording drift floor (component B/op ~4%, pipeline allocs/op and B/op ~0.1%); HeadlessParquetCapture B/op only with caution (spread up to 13%); WriterThroughput B/op is not trustworthy. Take sec/op from bench-4d2d76f (four pipeline mixes; component and downstream rows only with caution, TracepointExited excluded) or re-record. See docs/performance-baseline.md "Known-noisy recordings".
 
 goos: linux
 goarch: amd64
