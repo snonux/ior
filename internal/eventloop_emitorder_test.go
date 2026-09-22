@@ -216,10 +216,14 @@ func TestRunDoesNotDecodeAheadOfEmission(t *testing.T) {
 // is still accounted for.
 func TestRunStopsPromptlyAfterCancel(t *testing.T) {
 	const (
-		n          = 512
-		cancelAt   = 10
-		trials     = 20
-		maxTrailer = 32 // P(>= 64 consecutive rawCh picks) = 2^-64
+		n        = 512
+		cancelAt = 10
+		trials   = 20
+		// Each pair takes two raw records, so more than 32 trailing pairs
+		// need at least 66 consecutive picks of rawCh over the ready
+		// ctx.Done() (select picks uniformly among ready cases): P = 2^-66
+		// per trial.
+		maxTrailer = 32
 	)
 	for trial := 0; trial < trials; trial++ {
 		el := newEmitOrderEventLoop(t)
@@ -274,6 +278,146 @@ func TestRunEmitsEveryProducedPairOnCancel(t *testing.T) {
 	requireEveryProducedPairEmitted(t, el, len(times), 2*n-len(rawCh))
 }
 
+// TestRunEmitsPairPendingAtCancel is the shutdown guarantee for the one
+// moment a produced pair is not yet emitted: after the handler that
+// completed it returned and before drainPairs ran. Cancelling from the
+// pair-emitting callback (as the tests above do) never hits that window,
+// so a loop that checked ctx between decode and emission would pass them
+// while losing a counted pair here.
+//
+// Two triggers cancel while pair k is pending: the exit handler itself
+// right after completing it, and the warning callback reacting to a panic
+// the handler raises after completing it (a TUI stop can land on any
+// callback). Both are deterministic; several k cover the first, an early
+// and the last pair.
+func TestRunEmitsPairPendingAtCancel(t *testing.T) {
+	const n = 32
+	for _, viaWarning := range []bool{false, true} {
+		name := "cancel inside the completing handler"
+		if viaWarning {
+			name = "cancel from the warning callback"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, k := range []int{0, 1, 13, n - 1} {
+				emitted, warnings := runCancelWithPairPending(t, n, k, viaWarning)
+				if emitted < k+1 {
+					t.Fatalf("k=%d: emitted %d pairs; pair %d, completed before the cancel, is missing", k, emitted, k)
+				}
+				wantWarnings := 0
+				if viaWarning {
+					wantWarnings = 1
+				}
+				if warnings != wantWarnings {
+					t.Fatalf("k=%d: %d warnings, want %d", k, warnings, wantWarnings)
+				}
+			}
+		})
+	}
+}
+
+// runCancelWithPairPending runs n sync pairs through run() with the exit
+// handler wrapped to cancel ctx right after it completed pair k - directly
+// or, with viaWarning, by panicking into a warning callback that cancels.
+// It checks order and accounting and returns the pairs and warnings seen.
+func runCancelWithPairPending(t *testing.T, n, k int, viaWarning bool) (emitted, warnings int) {
+	t.Helper()
+	el := newEmitOrderEventLoop(t)
+	stream := syncPairStream(t, 0, n)
+	rawCh := filledRawChannel(stream)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exitType := types.EventType(stream[1][0])
+	exitHandler := el.rawHandlers[exitType]
+	completed := 0
+	el.rawHandlers[exitType] = func(raw []byte, ch chan<- *event.Pair) {
+		exitHandler(raw, ch)
+		completed++
+		if completed != k+1 {
+			return
+		}
+		if viaWarning {
+			panic("injected panic with a pair pending")
+		}
+		cancel()
+	}
+	var times []uint64
+	el.SetPrintCallback(func(ep *event.Pair) {
+		times = append(times, ep.EnterEv.GetTime())
+		ep.Recycle()
+	})
+	el.SetWarningCallback(func(message string) {
+		if !strings.Contains(message, "injected panic with a pair pending") {
+			t.Errorf("unexpected warning %q", message)
+		}
+		warnings++
+		cancel()
+	})
+
+	el.run(ctx, rawCh)
+
+	requireOrderedPairs(t, times, len(times))
+	requireEveryProducedPairEmitted(t, el, len(times), len(stream)-len(rawCh))
+	return len(times), warnings
+}
+
+// TestRunSurvivesHandlerProducingTwoPairs pins that a handler breaking the
+// one-pair-per-record rule cannot deadlock the loop on the one-slot pair
+// channel: the extra pair is dropped with a warning, the first is emitted,
+// and the run goes on to the end of the stream.
+func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
+	const otherTid = emitOrderTestTid + 1
+	const after = 3
+	el := newEmitOrderEventLoop(t)
+	el.setCachedComm(otherTid, "emitorder2")
+	var log streamLog
+	log.attach(el)
+
+	gen := benchutil.NewEventGenerator()
+	otherEnter, otherExit, err := gen.NullPair(emitOrderTestTime(100), otherTid, otherTid,
+		types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
+	if err != nil {
+		t.Fatalf("NullPair error = %v", err)
+	}
+	first := syncPairStream(t, 0, 1)
+	exitType := types.EventType(first[1][0])
+	exitHandler := el.rawHandlers[exitType]
+	broken := false
+	el.rawHandlers[exitType] = func(raw []byte, ch chan<- *event.Pair) {
+		exitHandler(raw, ch)
+		if !broken {
+			// Complete the other tid's pair from the same record.
+			broken = true
+			exitHandler(otherExit, ch)
+		}
+	}
+
+	stream := [][]byte{otherEnter, first[0], first[1]}
+	stream = append(stream, syncPairStream(t, 1, after)...)
+	rawCh := filledRawChannel(stream)
+	close(rawCh)
+
+	go el.run(context.Background(), rawCh)
+	select {
+	case <-el.done:
+	case <-time.After(emitOrderTestWait):
+		t.Fatal("run() hung on a handler that produced two pairs for one record")
+	}
+
+	if len(log.entries) != 1+1+after {
+		t.Fatalf("callbacks saw %d entries, want %d", len(log.entries), 1+1+after)
+	}
+	if !strings.Contains(log.entries[0].warning, secondPairPanic) {
+		t.Fatalf("entry 0 = %+v, want the extra-pair warning", log.entries[0])
+	}
+	requireOrderedPairs(t, log.pairTimes(), 1+after)
+	// The dropped pair was produced, so it is counted in numSyscalls only.
+	if el.numSyscalls != 1+after+1 || el.numSyscallsAfterFilter != 1+after {
+		t.Fatalf("numSyscalls=%d numSyscallsAfterFilter=%d, want %d and %d",
+			el.numSyscalls, el.numSyscallsAfterFilter, 1+after+1, 1+after)
+	}
+}
+
 // TestRunEmitsAllPairsOnRawChannelClose covers the other stop path: rawCh
 // closing (ring buffer torn down) with records still queued.
 func TestRunEmitsAllPairsOnRawChannelClose(t *testing.T) {
@@ -322,6 +466,13 @@ func TestRunRecoversHandlerPanicInStreamOrder(t *testing.T) {
 
 // TestRunRecoversPanicAfterPairCompleted covers a handler that panics after
 // it has completed a pair: the pair is still emitted and counted.
+//
+// It also pins the resulting order: the panic warning precedes the pair,
+// because the pair waits in the channel until the handler has returned
+// (processRawEventSafe reports the panic) and only then is drained. At
+// 7280fd3 a separate emit goroutine received the pair during the send, so
+// the pair could come first. The difference is hypothetical: no real handler
+// does any work after sending its pair.
 func TestRunRecoversPanicAfterPairCompleted(t *testing.T) {
 	el := newEmitOrderEventLoop(t)
 	var log streamLog
@@ -340,8 +491,16 @@ func TestRunRecoversPanicAfterPairCompleted(t *testing.T) {
 
 	requireOrderedPairs(t, log.pairTimes(), 2)
 	requireEveryProducedPairEmitted(t, el, 2, 4)
-	if warnings := len(log.entries) - 2; warnings != 2 {
-		t.Fatalf("got %d panic-recovery warnings, want 2", warnings)
+	if len(log.entries) != 4 {
+		t.Fatalf("callbacks saw %d entries, want 2 warnings and 2 pairs", len(log.entries))
+	}
+	for i, entry := range log.entries {
+		if isWarning := entry.warning != ""; isWarning != (i%2 == 0) {
+			t.Fatalf("entry %d = %+v; want warning, pair, warning, pair", i, entry)
+		}
+		if i%2 == 0 && !strings.Contains(entry.warning, "injected panic after pair") {
+			t.Fatalf("entry %d warning %q, want the panic-recovery warning", i, entry.warning)
+		}
 	}
 }
 

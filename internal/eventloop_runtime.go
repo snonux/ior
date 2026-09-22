@@ -151,8 +151,10 @@ func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 // rawCh itself stays buffered (see appconfig.DefaultChannelBufferSize), so
 // ring-buffer polling remains decoupled from decoding.
 func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
-	// A raw record completes at most one pair (tracepointExited is the only
-	// sender), so one slot always suffices and the send never blocks.
+	// A raw record completes at most one pair (tracepointExited, through
+	// sendPair, is the only sender), so one slot always suffices. sendPair
+	// never blocks: a second pair for one record panics instead of
+	// deadlocking this goroutine, which is the channel's only reader.
 	pairs := make(chan *event.Pair, 1)
 
 	for {
@@ -337,7 +339,29 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		return
 	}
 	e.finalizeTracepointPair(ep)
-	ch <- ep
+	sendPair(ch, ep)
+}
+
+// secondPairPanic is the panic message of sendPair on a full channel.
+const secondPairPanic = "raw record completed more than one pair; extra pair dropped"
+
+// sendPair hands a completed pair to processRawEvents, which drains the
+// channel only after the handler has returned. Its one slot is enough
+// because a raw record completes at most one pair; a full channel therefore
+// means a handler broke that rule. A blocking send would then wait forever
+// for a reader that runs on this very goroutine - run() would never return,
+// e.done never close, and stats and shutdown would hang with it. So the send
+// never blocks: the extra pair is recycled and the handler panics, which
+// processRawEventSafe turns into a warning before the loop carries on. The
+// dropped pair stays counted in numSyscalls but not in
+// numSyscallsAfterFilter, so the loss also shows in the statistics.
+func sendPair(ch chan<- *event.Pair, ep *event.Pair) {
+	select {
+	case ch <- ep:
+	default:
+		ep.Recycle()
+		panic(secondPairPanic)
+	}
 }
 
 // applyDerivedPairValues computes every filterable value the Pair does not
