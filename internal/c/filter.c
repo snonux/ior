@@ -201,7 +201,7 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 //
 // bpf_probe_read_user_str() is a *nofault* read: it runs with page faults
 // disabled, so it cannot bring in a user page that is not resident and returns
-// -EFAULT instead, leaving the destination buffer untouched. For open-family
+// -EFAULT instead, leaving no name in the destination buffer. For open-family
 // syscalls that is not a rare corner case. The path string usually lives in
 // freshly mapped, never-touched memory - the classic case is the very first
 // openat a program makes through a library it has only just mmap'ed, where the
@@ -248,6 +248,38 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
     return state->pending_filename;
 }
 
+// String fields in ring-buffer records.
+//
+// bpf_ringbuf_reserve() hands out memory that is not zeroed: until a handler
+// writes them, the bytes of a record are whatever an earlier record of the same
+// ring buffer left there. (That is not a verifier concern - ring-buffer memory
+// is not stack memory, so the verifier does not track whether it has been
+// initialized.) The generated handlers used to clear every string field with a
+// full-buffer __builtin_memset before reading it - 256 bytes per path, 512 for
+// the two names of a rename, i.e. 32 or 64 stores on every event - so that a
+// record carried nothing but the captured string and zeros.
+//
+// Userspace never reads past a string's first NUL: every consumer goes through
+// types.StringValue, and the *_status field, not the bytes, says whether the
+// read succeeded. So a string field only has to be terminated. A successful
+// bpf_probe_read_user_str() writes the NUL itself (it also truncates an
+// over-long string to size - 1 bytes plus NUL); on every other path - a NULL
+// pointer, a failed read, or a kind that does not capture that string - the
+// generated code writes the first byte (writeStringTerminator in
+// internal/generate/bpfhandler.go). It does so even after a failed read, where
+// the helper zero-fills the destination as well, so the empty result does not
+// depend on that helper detail. bpf_get_current_comm() always writes all of
+// comm (NUL-padded), so comm needs no initialization at all.
+//
+// Decision: the bytes after the terminator stay stale. They can only come from
+// earlier records of this same ring buffer, whose whole data area ior - its
+// only reader - already has mapped read-only, so they expose nothing ior could
+// not read anyway. And ior never interprets them: the decoders copy them into
+// pooled Go structs, where they are neither rendered, compared, hashed nor
+// written to any output. The generator tests pin this shape
+// (internal/generate/stringterminator_test.go) and userspace tests pin that
+// garbage after the NUL cannot change a row (internal/eventloop_stringtail_test.go).
+
 // ior_emit_open_name_fixup re-reads the identifying string at sys_exit and publishes it
 // as a compact OPEN_NAME_FIXUP_EVENT control record. It is reserved and
 // submitted before the exit event of the same syscall, and the ring buffer
@@ -273,7 +305,8 @@ static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trac
     ev->event_type = OPEN_NAME_FIXUP_EVENT;
     ev->trace_id = enter_trace_id;
     ev->tid = tid;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    // No memset: a submitted record always holds a successful read, which is
+    // NUL-terminated (see "String fields in ring-buffer records" above).
     if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)filename_ptr) < 0) {
         bpf_ringbuf_discard(ev, 0);
         return;

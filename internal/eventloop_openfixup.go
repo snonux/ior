@@ -8,8 +8,8 @@ import (
 // event that is still waiting for its exit.
 //
 // Why the name can be missing in the first place: bpf_probe_read_user_str() is
-// a nofault read, so at sys_enter it returns -EFAULT and leaves the buffer
-// untouched whenever the path string's page is not resident - routinely the
+// a nofault read, so at sys_enter it returns -EFAULT and the handler leaves an
+// empty name whenever the path string's page is not resident - routinely the
 // case for the first open a program makes through a freshly mmap'ed library.
 // The kernel's own getname() faults that page in as part of servicing the
 // call, so the identical read succeeds at sys_exit; the generated exit handler

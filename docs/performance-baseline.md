@@ -31,7 +31,8 @@ needs root. They need neither and never vary between runs:
 - `clock_reads`: `bpf_ktime_get_boot_ns` calls on the path of one traced
   syscall, counting the handler body and the inlined enter/exit hook.
 - `memset_sites`: full-buffer `__builtin_memset` sites across the generated
-  handlers, by buffer.
+  handlers, by buffer. Zero since task 79: string fields are terminated
+  (`ev->FIELD[0] = 0` on the NULL and failed-read paths) instead of zeroed.
 
 ## Recording
 

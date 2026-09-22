@@ -323,8 +323,11 @@ func generateExtraExec(f *Format) string {
 		filenameIdx = 0
 	}
 	var b strings.Builder
-	b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
-	fmt.Fprintf(&b, "    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]);\n", filenameIdx)
+	// exec_event has no read status: a failed read (NULL included) leaves an
+	// empty filename, terminated here instead of by a full-buffer memset (see
+	// writeStringTerminator). comm is filled completely by the helper.
+	fmt.Fprintf(&b, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0)\n", filenameIdx)
+	writeStringTerminator(&b, "        ", "filename")
 	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
 	if dirfdIdx > -1 {
 		fmt.Fprintf(&b, "    ev->dirfd = (__s32)ctx->args[%d];\n", dirfdIdx)
@@ -344,7 +347,6 @@ func generateExtraExec(f *Format) string {
 func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) string {
 	filenameIdx := f.FieldNumber(pathnameField)
 	var b strings.Builder
-	b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n")
 	// bpf_probe_read_user_str cannot fault, so it returns -EFAULT whenever the
 	// path string's page is not resident yet - routinely the case for the first
 	// open a program makes through a freshly mmap'ed library. Stash the pointer
@@ -353,15 +355,9 @@ func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) st
 	// internal/c/filter.c). Without this the row printed "E:name", the
 	// descriptor was registered under the empty string, and -path could not
 	// match a name that was never captured.
-	fmt.Fprintf(&b, "    if (ctx->args[%d] == 0) {\n", filenameIdx)
-	b.WriteString("        ev->filename_status = PATH_READ_NULL;\n")
-	b.WriteString("    } else {\n")
-	b.WriteString("        ev->filename_status = PATH_READ_OK;\n")
-	fmt.Fprintf(&b, "        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0) {\n", filenameIdx)
-	b.WriteString("            ev->filename_status = PATH_READ_FAILED;\n")
-	fmt.Fprintf(&b, "            ior_stash_pending_filename(tid, ctx->args[%d]);\n", filenameIdx)
-	b.WriteString("        }\n")
-	b.WriteString("    }\n")
+	writeRecoverableFilenameCapture(&b, filenameIdx)
+	// bpf_get_current_comm always writes all sizeof(ev->comm) bytes (the name,
+	// NUL-padded, or zeros on error), so comm needs no initialization either.
 	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
 	writeDirfdCapture(&b, f, "dirfd", "dfd", "dirfd")
 	b.WriteString("    ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;\n")
@@ -401,7 +397,6 @@ func writeOpenFlagsCapture(b *strings.Builder, f *Format, flagsField string) {
 func generateExtraFdPathname(f *Format) string {
 	var b strings.Builder
 	b.WriteString("    ev->fd = (__s32)ctx->args[0];\n")
-	b.WriteString("    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));\n")
 	writePathReadCapture(&b, "pathname", "pathname_status", f.FieldNumber("pathname"))
 	writeDirfdCapture(&b, f, "dirfd", "dfd")
 	if f.Name == "sys_enter_fanotify_mark" {
@@ -418,7 +413,6 @@ func generateExtraPathname(tp GeneratedTracepoint, f *Format) string {
 	fieldName := tp.Classification.PathnameField
 	fieldIdx := f.FieldNumber(fieldName)
 	var b strings.Builder
-	b.WriteString("    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));\n")
 	writePathReadCapture(&b, "pathname", "pathname_status", fieldIdx)
 	writeDirfdCapture(&b, f, "dirfd", "dfd", "dirfd")
 	writePathFlagsCapture(&b, f)
@@ -462,7 +456,6 @@ func generateExtraName(f *Format) string {
 	oldIdx := f.FieldNumber("oldname")
 	newIdx := f.FieldNumber("newname")
 	var b strings.Builder
-	b.WriteString("    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));\n")
 	writePathReadCapture(&b, "oldname", "oldname_status", oldIdx)
 	writePathReadCapture(&b, "newname", "newname_status", newIdx)
 	writeDirfdCapture(&b, f, "olddirfd", "olddfd", "olddirfd")
@@ -512,19 +505,56 @@ func writeArgumentCapture(b *strings.Builder, f *Format, eventField string, form
 	b.WriteString("    ev->" + eventField + " = 0;\n")
 }
 
-// writePathReadCapture distinguishes all three results that otherwise leave a
-// zero-filled event string: a valid empty string, an actual NULL pointer, and
-// a failed nofault read of a non-NULL pointer. The probe remains directly in an
+// writePathReadCapture distinguishes all three results that otherwise leave an
+// empty event string: a valid empty string, an actual NULL pointer, and a
+// failed nofault read of a non-NULL pointer. The probe remains directly in an
 // if guard so the independent syscall-semantics oracle can verify its source
-// argument and destination.
+// argument and destination. The NULL and failed-read branches each write the
+// string's terminator (writeStringTerminator); a successful read terminates it
+// itself.
 func writePathReadCapture(b *strings.Builder, eventField, statusField string, argIdx int) {
 	fmt.Fprintf(b, "    if (ctx->args[%d] == 0) {\n", argIdx)
+	writeStringTerminator(b, "        ", eventField)
 	fmt.Fprintf(b, "        ev->%s = PATH_READ_NULL;\n", statusField)
 	b.WriteString("    } else {\n")
 	fmt.Fprintf(b, "        ev->%s = PATH_READ_OK;\n", statusField)
-	fmt.Fprintf(b, "        if (bpf_probe_read_user_str(ev->%s, sizeof(ev->%s), (void*)ctx->args[%d]) < 0)\n", eventField, eventField, argIdx)
+	fmt.Fprintf(b, "        if (bpf_probe_read_user_str(ev->%s, sizeof(ev->%s), (void*)ctx->args[%d]) < 0) {\n", eventField, eventField, argIdx)
 	fmt.Fprintf(b, "            ev->%s = PATH_READ_FAILED;\n", statusField)
+	writeStringTerminator(b, "            ", eventField)
+	b.WriteString("        }\n")
 	b.WriteString("    }\n")
+}
+
+// writeRecoverableFilenameCapture is writePathReadCapture for ev->filename of
+// the kinds whose failed enter-side read is retried at sys_exit: the failed
+// branch also stashes the user pointer (ior_stash_pending_filename).
+func writeRecoverableFilenameCapture(b *strings.Builder, argIdx int) {
+	fmt.Fprintf(b, "    if (ctx->args[%d] == 0) {\n", argIdx)
+	writeStringTerminator(b, "        ", "filename")
+	b.WriteString("        ev->filename_status = PATH_READ_NULL;\n")
+	b.WriteString("    } else {\n")
+	b.WriteString("        ev->filename_status = PATH_READ_OK;\n")
+	fmt.Fprintf(b, "        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0) {\n", argIdx)
+	b.WriteString("            ev->filename_status = PATH_READ_FAILED;\n")
+	writeStringTerminator(b, "            ", "filename")
+	fmt.Fprintf(b, "            ior_stash_pending_filename(tid, ctx->args[%d]);\n", argIdx)
+	b.WriteString("        }\n")
+	b.WriteString("    }\n")
+}
+
+// writeStringTerminator empties a ring-buffer string field by writing only its
+// first byte. The ring buffer hands out reserved memory unzeroed, so the bytes
+// of a string field are stale until written; the handlers used to clear all of
+// them with a full-buffer __builtin_memset (256 bytes per string, 32 stores)
+// before every read. Userspace only ever reads up to the first NUL
+// (types.StringValue), so a string field needs exactly one guarantee: a NUL
+// at or before its end. A successful bpf_probe_read_user_str writes one after
+// the copied bytes; every other outcome (a NULL pointer, a failed read, a
+// field the syscall does not capture) gets this terminator. What follows the
+// NUL is never interpreted. Why stale bytes there are acceptable is recorded
+// next to ior_emit_open_name_fixup in internal/c/filter.c.
+func writeStringTerminator(b *strings.Builder, indent, eventField string) {
+	fmt.Fprintf(b, "%sev->%s[0] = 0;\n", indent, eventField)
 }
 
 // writeDirfdCapture emits one directory-fd field, using AT_FDCWD when the
@@ -641,21 +671,14 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 			fdExpr = "-1"
 		}
 		var b strings.Builder
-		b.WriteString("    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));\n")
 		if field := eventfdFilenameField[f.Name]; field != "" {
 			idx := f.FieldNumber(field)
 			if idx < 0 {
 				idx = 0
 			}
-			fmt.Fprintf(&b, "    if (ctx->args[%d] == 0) {\n", idx)
-			b.WriteString("        ev->filename_status = PATH_READ_NULL;\n")
-			b.WriteString("    } else {\n")
-			b.WriteString("        ev->filename_status = PATH_READ_OK;\n")
-			fmt.Fprintf(&b, "        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0) {\n", idx)
-			b.WriteString("            ev->filename_status = PATH_READ_FAILED;\n")
-			fmt.Fprintf(&b, "            ior_stash_pending_filename(tid, ctx->args[%d]);\n", idx)
-			b.WriteString("        }\n    }\n")
+			writeRecoverableFilenameCapture(&b, idx)
 		} else {
+			writeStringTerminator(&b, "    ", "filename")
 			b.WriteString("    ev->filename_status = PATH_READ_NULL;\n")
 		}
 		b.WriteString("    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;\n")
@@ -665,7 +688,7 @@ func generateExtraEventfd(f *Format, isEnter bool) string {
 		fmt.Fprintf(&b, "    ev->fd = %s;\n", fdExpr)
 		return b.String()
 	}
-	return "    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));\n    ev->filename_status = PATH_READ_NULL;\n    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;\n    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
+	return "    ev->filename[0] = 0;\n    ev->filename_status = PATH_READ_NULL;\n    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;\n    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
 }
 
 func generateExtraEpollCtl() string {
@@ -718,11 +741,12 @@ func generateExtraTwoFd(name string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "    ev->fd_a = %s;\n    ev->fd_b = %s;\n    ev->extra = %s;\n",
 		spec.fdA, spec.fdB, spec.extra)
-	b.WriteString("    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));\n")
 	if name == "sys_enter_move_mount" {
 		writePathReadCapture(&b, "oldname", "oldname_status", 1)
 		writePathReadCapture(&b, "newname", "newname_status", 3)
 	} else {
+		writeStringTerminator(&b, "    ", "oldname")
+		writeStringTerminator(&b, "    ", "newname")
 		b.WriteString("    ev->oldname_status = PATH_READ_NULL;\n    ev->newname_status = PATH_READ_NULL;\n")
 	}
 	b.WriteString("    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;\n")

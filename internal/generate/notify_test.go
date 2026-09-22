@@ -81,7 +81,7 @@ func TestGeneratedNotificationHandlersMatchProducer(t *testing.T) {
 			"struct fd_path_event *ev = bpf_ringbuf_reserve", "ev->event_type = ENTER_FD_PATH_EVENT;",
 			"ev->fd = (__s32)ctx->args[0];", "ev->schema_version = FD_PATH_EVENT_SCHEMA_VERSION;",
 			"ev->pathname_status = PATH_READ_NULL;", "ev->pathname_status = PATH_READ_FAILED;",
-			"__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));",
+			"ev->pathname[0] = 0;",
 		} {
 			requireContains(t, body, expected)
 		}

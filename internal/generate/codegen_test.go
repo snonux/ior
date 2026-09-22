@@ -790,7 +790,7 @@ func TestGenerateOpenHandler(t *testing.T) {
 	requireContains(t, output, "struct open_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_OPENAT;")
-	requireContains(t, output, "__builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));")
+	requireNotContains(t, output, "__builtin_memset")
 	requireContains(t, output, "if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)")
 	requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[1]);")
 	requireContains(t, output, "bpf_get_current_comm(&ev->comm, sizeof(ev->comm));")
@@ -1076,7 +1076,7 @@ func TestGenerateRmdirHandlerCapturesPathFromArgs0(t *testing.T) {
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_RMDIR;")
-	requireContains(t, output, "__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));")
+	requireNotContains(t, output, "__builtin_memset")
 	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 	// Negative guard: rmdir has no dirfd, so the path must NOT be read from args[1].
 	requireNotContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
@@ -1090,7 +1090,8 @@ func TestGenerateExecHandler(t *testing.T) {
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_execveat")`)
 	requireContains(t, output, "struct exec_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_EXEC_EVENT;")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);")
+	requireContains(t, output, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)\n        ev->filename[0] = 0;\n")
+	requireNotContains(t, output, "__builtin_memset")
 	requireContains(t, output, "ev->dirfd = (__s32)ctx->args[0];")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[4];")
 }
@@ -1176,7 +1177,7 @@ func TestGenerateNameHandler(t *testing.T) {
 	requireContains(t, output, "struct name_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_NAME_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_RENAME;")
-	requireContains(t, output, "__builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));")
+	requireNotContains(t, output, "__builtin_memset")
 	requireContains(t, output, "if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0)")
 	requireContains(t, output, "if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0)")
 }
@@ -1189,7 +1190,7 @@ func TestGeneratePathnameHandler(t *testing.T) {
 
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
-	requireContains(t, output, "__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));")
+	requireNotContains(t, output, "__builtin_memset")
 	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
 }
 
@@ -3358,11 +3359,13 @@ func cFunctionBody(source, signature string) (string, bool) {
 // and its user pointer stashed for the exit handler when it fails.
 func openNameStashLine(argIdx string) string {
 	return "    if (ctx->args[" + argIdx + "] == 0) {\n" +
+		"        ev->filename[0] = 0;\n" +
 		"        ev->filename_status = PATH_READ_NULL;\n" +
 		"    } else {\n" +
 		"        ev->filename_status = PATH_READ_OK;\n" +
 		"        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[" + argIdx + "]) < 0) {\n" +
 		"            ev->filename_status = PATH_READ_FAILED;\n" +
+		"            ev->filename[0] = 0;\n" +
 		"            ior_stash_pending_filename(tid, ctx->args[" + argIdx + "]);\n" +
 		"        }\n" +
 		"    }\n"
@@ -3523,16 +3526,24 @@ func TestGeneratedArtifactInitializesExtendedEventfdPayloads(t *testing.T) {
 	}
 	for _, match := range handlers {
 		body := handlerBody(t, artifact, match[1])
-		for _, statement := range []string{
-			"__builtin_memset(&(ev->filename), 0, sizeof(ev->filename));",
-			"ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;",
-		} {
-			if got := strings.Count(body, statement); got != 1 {
-				t.Errorf("%s contains %d %q statements, want 1", match[1], got, statement)
-			}
+		if got := strings.Count(body, "ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;"); got != 1 {
+			t.Errorf("%s writes the eventfd schema version %d times, want 1", match[1], got)
 		}
 		if got := strings.Count(body, "ev->filename_status = PATH_READ_NULL;"); got != 1 {
 			t.Errorf("%s initializes filename status %d times, want 1", match[1], got)
+		}
+		// Every outcome leaves a terminated filename: the NULL path (and a
+		// syscall without a name) writes the terminator, and a named capture
+		// terminates its failed read as well (task 79).
+		wantTerminators := 1
+		if strings.Contains(body, "bpf_probe_read_user_str(ev->filename,") {
+			wantTerminators = 2
+		}
+		if got := strings.Count(body, "ev->filename[0] = 0;"); got != wantTerminators {
+			t.Errorf("%s terminates filename %d times, want %d", match[1], got, wantTerminators)
+		}
+		if strings.Contains(body, "__builtin_memset") {
+			t.Errorf("%s still memsets a string buffer", match[1])
 		}
 	}
 }
@@ -3549,8 +3560,22 @@ func TestGeneratedArtifactInitializesExtendedTwoFdPayloads(t *testing.T) {
 	}
 	for _, match := range handlers {
 		body := handlerBody(t, artifact, match[1])
+		if strings.Contains(body, "__builtin_memset") {
+			t.Errorf("%s still memsets a string buffer", match[1])
+		}
+		// move_mount captures both names (a terminator on the NULL and on the
+		// failed-read path of each); the others capture none and terminate
+		// both once.
+		wantTerminators := 1
+		if match[1] == "sys_enter_move_mount" {
+			wantTerminators = 2
+		}
+		for _, field := range []string{"oldname", "newname"} {
+			if got := strings.Count(body, "ev->"+field+"[0] = 0;"); got != wantTerminators {
+				t.Errorf("%s terminates %s %d times, want %d", match[1], field, got, wantTerminators)
+			}
+		}
 		for _, statement := range []string{
-			"__builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));",
 			"ev->oldname_status = PATH_READ_NULL;",
 			"ev->newname_status = PATH_READ_NULL;",
 			"ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;",
