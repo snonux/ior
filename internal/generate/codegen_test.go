@@ -2036,8 +2036,8 @@ func TestGenerateEpollCtlHandler(t *testing.T) {
 func TestGenerateMoveMountHandler(t *testing.T) {
 	output := generateFromPair(t, FormatMoveMount, FormatExitMoveMount)
 
-	requireContains(t, output, "struct two_fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_TWO_FD_EVENT;")
+	requireContains(t, output, "struct two_fd_names_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_TWO_FD_NAMES_EVENT;")
 	requireContains(t, output, "ev->fd_a = (__s32)ctx->args[0];")
 	requireContains(t, output, "ev->fd_b = (__s32)ctx->args[2];")
 	requireContains(t, output, "ev->extra = (__u64)ctx->args[4];")
@@ -2614,8 +2614,8 @@ func TestGenerateNamedEventfdHandlersCaptureIdentityAndRecoverFaults(t *testing.
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			output := GenerateTracepointsC(namedEventfdFormats(tt.name, tt.filenameField, 9700+i*2))
-			requireContains(t, output, "struct eventfd_event *ev")
-			requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+			requireContains(t, output, "struct eventfd_name_event *ev")
+			requireContains(t, output, "ev->event_type = ENTER_EVENTFD_NAME_EVENT;")
 			requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0])")
 			requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
 			requireContains(t, output, "ior_take_pending_filename(tid, SYS_ENTER_"+strings.ToUpper(tt.name)+")")
@@ -2695,7 +2695,7 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindAccept, "ENTER_ACCEPT_EVENT", "EXIT_ACCEPT_EVENT"},
 		{KindPipe, "ENTER_PIPE_EVENT", "EXIT_PIPE_EVENT"},
 		{KindEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
-		{KindNamedEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
+		{KindNamedEventfd, "ENTER_EVENTFD_NAME_EVENT", "EXIT_EVENTFD_NAME_EVENT"},
 		{KindPidfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
 		{KindEpollCtl, "ENTER_EPOLL_CTL_EVENT", "EXIT_EPOLL_CTL_EVENT"},
 		{KindTwoFd, "ENTER_TWO_FD_EVENT", "EXIT_TWO_FD_EVENT"},
@@ -2715,6 +2715,8 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindFutex, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindPrctl, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindTimerObj, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindFdSize, "ENTER_FD_SIZE_EVENT", "EXIT_FD_SIZE_EVENT"},
+		{KindTwoFdNames, "ENTER_TWO_FD_NAMES_EVENT", "EXIT_TWO_FD_NAMES_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -2750,7 +2752,7 @@ func TestEventStructNames(t *testing.T) {
 		{KindAccept, "accept_event"},
 		{KindPipe, "pipe_event"},
 		{KindEventfd, "eventfd_event"},
-		{KindNamedEventfd, "eventfd_event"},
+		{KindNamedEventfd, "eventfd_name_event"},
 		{KindPidfd, "eventfd_event"},
 		{KindEpollCtl, "epoll_ctl_event"},
 		{KindTwoFd, "two_fd_event"},
@@ -2770,6 +2772,8 @@ func TestEventStructNames(t *testing.T) {
 		{KindFutex, "null_event"},
 		{KindPrctl, "null_event"},
 		{KindTimerObj, "null_event"},
+		{KindFdSize, "fd_size_event"},
+		{KindTwoFdNames, "two_fd_names_event"},
 	}
 
 	for _, tt := range tests {
@@ -2788,7 +2792,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindFdPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
+	accepted := []TracepointKind{KindFd, KindFdSize, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindFdPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindTwoFdNames, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)
@@ -3519,31 +3523,34 @@ func TestGeneratedArtifactInitializesExtendedEventfdPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated tracepoints C: %v", err)
 	}
-	handlers := regexp.MustCompile(`(?m)^/// (sys_(?:enter|exit)_\S+) is a struct eventfd_event`).
+	handlers := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct eventfd_name_event`).
 		FindAllStringSubmatch(artifact, -1)
-	if len(handlers) == 0 {
-		t.Fatal("no eventfd handlers in generated artifact")
+	if len(handlers) != 2 {
+		t.Fatalf("%d named eventfd handlers in generated artifact, want 2", len(handlers))
 	}
 	for _, match := range handlers {
 		body := handlerBody(t, artifact, match[1])
-		if got := strings.Count(body, "ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;"); got != 1 {
+		if got := strings.Count(body, "ev->schema_version = EVENTFD_NAME_EVENT_SCHEMA_VERSION;"); got != 1 {
 			t.Errorf("%s writes the eventfd schema version %d times, want 1", match[1], got)
 		}
 		if got := strings.Count(body, "ev->filename_status = PATH_READ_NULL;"); got != 1 {
 			t.Errorf("%s initializes filename status %d times, want 1", match[1], got)
 		}
-		// Every outcome leaves a terminated filename: the NULL path (and a
-		// syscall without a name) writes the terminator, and a named capture
-		// terminates its failed read as well (task 79).
-		wantTerminators := 1
-		if strings.Contains(body, "bpf_probe_read_user_str(ev->filename,") {
-			wantTerminators = 2
-		}
-		if got := strings.Count(body, "ev->filename[0] = 0;"); got != wantTerminators {
-			t.Errorf("%s terminates filename %d times, want %d", match[1], got, wantTerminators)
+		if got := strings.Count(body, "ev->filename[0] = 0;"); got != 2 {
+			t.Errorf("%s terminates filename %d times, want 2", match[1], got)
 		}
 		if strings.Contains(body, "__builtin_memset") {
 			t.Errorf("%s still memsets a string buffer", match[1])
+		}
+	}
+	lean := regexp.MustCompile(`(?m)^/// (sys_(?:enter|exit)_\S+) is a struct eventfd_event`).FindAllStringSubmatch(artifact, -1)
+	if len(lean) == 0 {
+		t.Fatal("no lean eventfd handlers")
+	}
+	for _, match := range lean {
+		body := handlerBody(t, artifact, match[1])
+		if strings.Contains(body, "ev->filename") || strings.Contains(body, "ev->schema_version") {
+			t.Errorf("%s touches fields absent from lean eventfd_event", match[1])
 		}
 	}
 }
@@ -3553,26 +3560,19 @@ func TestGeneratedArtifactInitializesExtendedTwoFdPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated tracepoints C: %v", err)
 	}
-	handlers := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct two_fd_event`).
+	handlers := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct two_fd_names_event`).
 		FindAllStringSubmatch(artifact, -1)
-	if len(handlers) == 0 {
-		t.Fatal("no two_fd handlers in generated artifact")
+	if len(handlers) != 1 || handlers[0][1] != "sys_enter_move_mount" {
+		t.Fatalf("named two-fd handlers = %v, want move_mount", handlers)
 	}
 	for _, match := range handlers {
 		body := handlerBody(t, artifact, match[1])
 		if strings.Contains(body, "__builtin_memset") {
 			t.Errorf("%s still memsets a string buffer", match[1])
 		}
-		// move_mount captures both names (a terminator on the NULL and on the
-		// failed-read path of each); the others capture none and terminate
-		// both once.
-		wantTerminators := 1
-		if match[1] == "sys_enter_move_mount" {
-			wantTerminators = 2
-		}
 		for _, field := range []string{"oldname", "newname"} {
-			if got := strings.Count(body, "ev->"+field+"[0] = 0;"); got != wantTerminators {
-				t.Errorf("%s terminates %s %d times, want %d", match[1], field, got, wantTerminators)
+			if got := strings.Count(body, "ev->"+field+"[0] = 0;"); got != 2 {
+				t.Errorf("%s terminates %s %d times, want 2", match[1], field, got)
 			}
 		}
 		for _, statement := range []string{
@@ -3583,6 +3583,16 @@ func TestGeneratedArtifactInitializesExtendedTwoFdPayloads(t *testing.T) {
 			if got := strings.Count(body, statement); got != 1 {
 				t.Errorf("%s contains %d %q statements, want 1", match[1], got, statement)
 			}
+		}
+	}
+	lean := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct two_fd_event`).FindAllStringSubmatch(artifact, -1)
+	if len(lean) == 0 {
+		t.Fatal("no lean two-fd handlers")
+	}
+	for _, match := range lean {
+		body := handlerBody(t, artifact, match[1])
+		if strings.Contains(body, "ev->oldname") || strings.Contains(body, "ev->newname") {
+			t.Errorf("%s touches fields absent from lean two_fd_event", match[1])
 		}
 	}
 }

@@ -294,25 +294,49 @@ func (s TraceId) Family() SyscallFamily {
 func writeGoStruct(b *strings.Builder, s CStruct) {
 	goName := snakeToCamel(s.Name)
 	selfRef := strings.ToLower(goName[:1])
+	// These fields belong to older, wider records that can still arrive from
+	// IOR_BPF_OBJECT. Keep them in the userspace representation while the C
+	// structs used by the new BPF object stay small.
+	members := append([]CMember(nil), s.Members...)
+	members = append(members, compatibilityFields[goName]...)
 
 	b.WriteString("\n")
 	fmt.Fprintf(b, "type %s struct {\n\t", goName)
-	memberDefs := make([]string, 0, len(s.Members))
-	for _, m := range s.Members {
+	memberDefs := make([]string, 0, len(members))
+	for _, m := range members {
 		memberDefs = append(memberDefs, goMemberDef(m))
 	}
 	b.WriteString(strings.Join(memberDefs, "; "))
 	b.WriteString(" \n}\n\n")
 
-	writeStringMethod(b, goName, selfRef, s.Members)
-	writeEqualsMethod(b, goName, selfRef, s.Members)
-	writeGetterMethods(b, goName, selfRef, s.Members)
-	writeRetGetterMethod(b, goName, selfRef, s.Members)
+	writeStringMethod(b, goName, selfRef, members)
+	writeEqualsMethod(b, goName, selfRef, members)
+	writeGetterMethods(b, goName, selfRef, members)
+	writeRetGetterMethod(b, goName, selfRef, members)
 
 	if strings.HasSuffix(goName, "Event") {
 		b.WriteString("\n")
 		writeSyncPool(b, goName, selfRef)
 	}
+}
+
+var compatibilityFields = map[string][]CMember{
+	"FdEvent": {
+		{TypeName: "__u64", FieldName: "size"},
+		{TypeName: "__u32", FieldName: "size_valid"},
+		{TypeName: "__u32", FieldName: "schema_version"},
+	},
+	"EventfdEvent": {
+		{TypeName: "char", FieldName: "filename", ArraySize: "MAX_FILENAME_LENGTH"},
+		{TypeName: "__u32", FieldName: "filename_status"},
+		{TypeName: "__u32", FieldName: "schema_version"},
+	},
+	"TwoFdEvent": {
+		{TypeName: "char", FieldName: "oldname", ArraySize: "MAX_FILENAME_LENGTH"},
+		{TypeName: "char", FieldName: "newname", ArraySize: "MAX_FILENAME_LENGTH"},
+		{TypeName: "__u32", FieldName: "oldname_status"},
+		{TypeName: "__u32", FieldName: "newname_status"},
+	},
 }
 
 func goMemberDef(m CMember) string {
@@ -431,12 +455,8 @@ func writeRetGetterMethod(b *strings.Builder, goName, selfRef string, members []
 }
 
 func writeSyncPool(b *strings.Builder, goName, selfRef string) {
-	if goName == "EventfdEvent" {
-		writeEventfdSyncPool(b, selfRef)
-		return
-	}
-	if goName == "TwoFdEvent" {
-		writeTwoFdSyncPool(b, selfRef)
+	if write, ok := specialCodecs[goName]; ok {
+		write(b, selfRef)
 		return
 	}
 	fmt.Fprintf(b, "var poolOf%ss = sync.Pool{\n\tNew: func() any { return &%s{} },\n}\n\n", goName, goName)
@@ -461,27 +481,106 @@ func writeSyncPool(b *strings.Builder, goName, selfRef string) {
 	fmt.Fprintf(b, "func (%s *%s) Recycle() {\n\tpoolOf%ss.Put(%s)\n}\n", selfRef, goName, goName, selfRef)
 }
 
-// writeEventfdSyncPool emits the eventfd codec with the kernel's explicit C
-// padding. eventfd_event places ret at offset 32, fd at offset 40 and the
-// identifying filename at offset 44, making the current payload 312 bytes.
-// Encoding the Go fields with binary.Write would omit both the internal and
-// trailing C padding. The decoder also accepts the three released layouts from
-// before filename capture was added.
-func writeEventfdSyncPool(b *strings.Builder, selfRef string) {
-	b.WriteString("var poolOfEventfdEvents = sync.Pool{\n\tNew: func() any { return &EventfdEvent{} },\n}\n\n")
-	b.WriteString("func NewEventfdEvent(raw []byte) *EventfdEvent {\n")
-	b.WriteString("\tif len(raw) != 312 && len(raw) != 48 && len(raw) != 40 && len(raw) != 36 {\n\t\treturn nil\n\t}\n")
-	fmt.Fprintf(b, "\t%s := poolOfEventfdEvents.Get().(*EventfdEvent)\n", selfRef)
+// specialCodecs are the event structs whose C layout has internal padding or
+// whose decoder must accept more than one released layout, so binary.Read and
+// binary.Write of the Go struct would not match the ring-buffer payload.
+var specialCodecs = map[string]func(b *strings.Builder, selfRef string){
+	"FdEvent":          writeFdSyncPool,
+	"FdSizeEvent":      writeFdSizeSyncPool,
+	"EventfdEvent":     writeEventfdSyncPool,
+	"EventfdNameEvent": writeEventfdNameSyncPool,
+	"TwoFdEvent":       writeTwoFdSyncPool,
+	"TwoFdNamesEvent":  writeTwoFdNamesSyncPool,
+}
+
+// writeFdSyncPool keeps both the lean fd_event wire shape and the former
+// requested-size layout decodable through the regular constructor. The fast
+// decoder owns the shared validation; duplicating it here would let the two
+// public constructors disagree on schema or padding.
+func writeFdSyncPool(b *strings.Builder, selfRef string) {
+	b.WriteString("var poolOfFdEvents = sync.Pool{\n\tNew: func() any { return &FdEvent{} },\n}\n\n")
+	b.WriteString("func NewFdEvent(raw []byte) *FdEvent { return NewFdEventFast(raw) }\n\n")
+	fmt.Fprintf(b, "func (%s *FdEvent) Bytes() ([]byte, error) {\n", selfRef)
+	b.WriteString("\tsize := 32\n")
+	fmt.Fprintf(b, "\tif %s.EventType == ENTER_FD_SIZE_EVENT || %s.SchemaVersion != 0 {\n\t\tsize = 48\n\t}\n", selfRef, selfRef)
+	b.WriteString("\traw := make([]byte, size)\n")
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[0:4], uint32(%s.EventType))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[4:8], uint32(%s.TraceId))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[8:16], %s.Time)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Fd))\n", selfRef)
+	b.WriteString("\tif size == 48 {\n")
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SizeValid)\n", selfRef)
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[44:48], %s.SchemaVersion)\n", selfRef)
+	b.WriteString("\t}\n\treturn raw, nil\n}\n\n")
+	fmt.Fprintf(b, "func (%s *FdEvent) Recycle() {\n\tpoolOfFdEvents.Put(%s)\n}\n", selfRef, selfRef)
+}
+
+// writeFdSizeSyncPool keeps the requested-size record aligned with its C
+// layout. The fast decoder validates both the padded and compact forms.
+func writeFdSizeSyncPool(b *strings.Builder, selfRef string) {
+	b.WriteString("var poolOfFdSizeEvents = sync.Pool{\n\tNew: func() any { return &FdSizeEvent{} },\n}\n\n")
+	b.WriteString("func NewFdSizeEvent(raw []byte) *FdSizeEvent { return NewFdSizeEventFast(raw) }\n\n")
+	writeEncodeHeader(b, "FdSizeEvent", selfRef, 48)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Fd))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SizeValid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[44:48], %s.SchemaVersion)\n", selfRef)
+	writeCodecFooter(b, "FdSizeEvent", selfRef)
+}
+
+// writeCodecHeader emits the pool, the decoder signature, the pooled value
+// and the five common header fields shared by every special codec.
+func writeCodecHeader(b *strings.Builder, goName, selfRef, sizeCheck string) {
+	fmt.Fprintf(b, "var poolOf%ss = sync.Pool{\n\tNew: func() any { return &%s{} },\n}\n\n", goName, goName)
+	fmt.Fprintf(b, "func New%s(raw []byte) *%s {\n", goName, goName)
+	fmt.Fprintf(b, "\tif %s {\n\t\treturn nil\n\t}\n", sizeCheck)
+	fmt.Fprintf(b, "\t%s := poolOf%ss.Get().(*%s)\n", selfRef, goName, goName)
 	fmt.Fprintf(b, "\t%s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))\n", selfRef)
 	fmt.Fprintf(b, "\t%s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))\n", selfRef)
 	fmt.Fprintf(b, "\t%s.Time = binary.LittleEndian.Uint64(raw[8:16])\n", selfRef)
 	fmt.Fprintf(b, "\t%s.Pid = binary.LittleEndian.Uint32(raw[16:20])\n", selfRef)
 	fmt.Fprintf(b, "\t%s.Tid = binary.LittleEndian.Uint32(raw[20:24])\n", selfRef)
+}
+
+// writeEncodeHeader emits the Bytes signature, the kernel-sized buffer and the
+// five common header fields.
+func writeEncodeHeader(b *strings.Builder, goName, selfRef string, size int) {
+	writeEncodeHeaderWithWide(b, goName, selfRef, size, "", 0)
+}
+
+func writeEncodeHeaderWithWide(b *strings.Builder, goName, selfRef string, size int, condition string, wideSize int) {
+	fmt.Fprintf(b, "func (%s *%s) Bytes() ([]byte, error) {\n", selfRef, goName)
+	if condition == "" {
+		fmt.Fprintf(b, "\traw := make([]byte, %d)\n", size)
+	} else {
+		fmt.Fprintf(b, "\tsize := %d\n\tif %s {\n\t\tsize = %d\n\t}\n\traw := make([]byte, size)\n", size, condition, wideSize)
+	}
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[0:4], uint32(%s.EventType))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[4:8], uint32(%s.TraceId))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[8:16], %s.Time)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
+}
+
+func writeCodecFooter(b *strings.Builder, goName, selfRef string) {
+	b.WriteString("\treturn raw, nil\n}\n\n")
+	fmt.Fprintf(b, "func (%s *%s) Recycle() {\n\tpoolOf%ss.Put(%s)\n}\n", selfRef, goName, goName, selfRef)
+}
+
+// writeEventfdSyncPool emits the eventfd codec with the kernel's explicit C
+// padding. eventfd_event places ret at offset 32 and fd at offset 40, making
+// the payload 48 bytes; encoding the Go fields with binary.Write would omit
+// both the internal and the trailing C padding. The decoder also accepts the
+// two released layouts from before fd was added (40 bytes, and its 36-byte
+// compact binary.Write form).
+func writeEventfdSyncPool(b *strings.Builder, selfRef string) {
+	writeCodecHeader(b, "EventfdEvent", selfRef, "len(raw) != 312 && len(raw) != 48 && len(raw) != 40 && len(raw) != 36")
 	fmt.Fprintf(b, "\t%s.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))\n", selfRef)
 	fmt.Fprintf(b, "\t%s.Fd = -1\n", selfRef)
-	fmt.Fprintf(b, "\t%s.Filename = [MAX_FILENAME_LENGTH]byte{}\n", selfRef)
-	fmt.Fprintf(b, "\t%s.FilenameStatus = PATH_READ_NULL\n", selfRef)
-	fmt.Fprintf(b, "\t%s.SchemaVersion = 0\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Filename = [MAX_FILENAME_LENGTH]byte{}\n\t%s.FilenameStatus = PATH_READ_NULL\n\t%s.SchemaVersion = 0\n", selfRef, selfRef, selfRef)
 	b.WriteString("\tretOffset := 28\n\tif len(raw) >= 40 {\n\t\tretOffset = 32\n\t}\n")
 	fmt.Fprintf(b, "\t%s.Ret = int64(binary.LittleEndian.Uint64(raw[retOffset : retOffset+8]))\n", selfRef)
 	b.WriteString("\tif len(raw) == 48 || len(raw) == 312 {\n")
@@ -495,62 +594,96 @@ func writeEventfdSyncPool(b *strings.Builder, selfRef string) {
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
 
-	fmt.Fprintf(b, "func (%s *EventfdEvent) Bytes() ([]byte, error) {\n", selfRef)
-	b.WriteString("\traw := make([]byte, 312)\n")
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[0:4], uint32(%s.EventType))\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[4:8], uint32(%s.TraceId))\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[8:16], %s.Time)\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
+	writeEncodeHeaderWithWide(b, "EventfdEvent", selfRef, 48, selfRef+".EventType == ENTER_EVENTFD_NAME_EVENT || "+selfRef+".SchemaVersion != 0", 312)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Flags))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], uint64(%s.Ret))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[40:44], uint32(%s.Fd))\n", selfRef)
+	fmt.Fprintf(b, "\tif len(raw) == 312 {\n\t\tcopy(raw[44:300], %s.Filename[:])\n\t\tbinary.LittleEndian.PutUint32(raw[300:304], %s.FilenameStatus)\n\t\tbinary.LittleEndian.PutUint32(raw[304:308], %s.SchemaVersion)\n\t}\n", selfRef, selfRef, selfRef)
+	writeCodecFooter(b, "EventfdEvent", selfRef)
+}
+
+// writeEventfdNameSyncPool emits the exact-size codec of eventfd_name_event:
+// the eventfd layout with the identifying filename at offset 44, its read
+// status and the schema version, 312 bytes with padding. It is the former
+// 312-byte eventfd_event layout, so an older BPF object's wide eventfd record
+// decodes here too.
+func writeEventfdNameSyncPool(b *strings.Builder, selfRef string) {
+	writeCodecHeader(b, "EventfdNameEvent", selfRef, "len(raw) != 312")
+	fmt.Fprintf(b, "\t%s.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Ret = int64(binary.LittleEndian.Uint64(raw[32:40]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Fd = int32(binary.LittleEndian.Uint32(raw[40:44]))\n", selfRef)
+	fmt.Fprintf(b, "\tcopy(%s.Filename[:], raw[44:300])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.FilenameStatus = binary.LittleEndian.Uint32(raw[300:304])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[304:308])\n", selfRef)
+	fmt.Fprintf(b, "\tif %s.SchemaVersion != EVENTFD_NAME_EVENT_SCHEMA_VERSION {\n\t\t%s.Recycle()\n\t\treturn nil\n\t}\n", selfRef, selfRef)
+	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
+
+	writeEncodeHeader(b, "EventfdNameEvent", selfRef, 312)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Flags))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], uint64(%s.Ret))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[40:44], uint32(%s.Fd))\n", selfRef)
 	fmt.Fprintf(b, "\tcopy(raw[44:300], %s.Filename[:])\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[300:304], %s.FilenameStatus)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[304:308], %s.SchemaVersion)\n", selfRef)
-	b.WriteString("\treturn raw, nil\n}\n\n")
-	fmt.Fprintf(b, "func (%s *EventfdEvent) Recycle() {\n\tpoolOfEventfdEvents.Put(%s)\n}\n", selfRef, selfRef)
+	writeCodecFooter(b, "EventfdNameEvent", selfRef)
 }
 
-// writeTwoFdSyncPool emits an exact-size codec for two_fd_event. The C layout
-// has four bytes of trailing alignment padding (568 bytes), while binary.Write
-// historically produced a compact 564-byte representation. The 40-byte legacy
-// layout predates move_mount pathname capture. No other size is accepted.
+// writeTwoFdSyncPool emits the codec of the lean two_fd_event: two
+// descriptors, the extra word and the schema version, 48 bytes with trailing
+// padding (44 in binary.Write's compact form). The 40-byte legacy layout
+// predates the schema field and decodes as schema 0. No other size is
+// accepted.
 func writeTwoFdSyncPool(b *strings.Builder, selfRef string) {
-	b.WriteString("var poolOfTwoFdEvents = sync.Pool{\n\tNew: func() any { return &TwoFdEvent{} },\n}\n\n")
-	b.WriteString("func NewTwoFdEvent(raw []byte) *TwoFdEvent {\n")
-	b.WriteString("\tif len(raw) != 568 && len(raw) != 564 && len(raw) != 40 {\n\t\treturn nil\n\t}\n")
-	fmt.Fprintf(b, "\t%s := poolOfTwoFdEvents.Get().(*TwoFdEvent)\n", selfRef)
-	fmt.Fprintf(b, "\t%s.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))\n", selfRef)
-	fmt.Fprintf(b, "\t%s.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))\n", selfRef)
-	fmt.Fprintf(b, "\t%s.Time = binary.LittleEndian.Uint64(raw[8:16])\n", selfRef)
-	fmt.Fprintf(b, "\t%s.Pid = binary.LittleEndian.Uint32(raw[16:20])\n", selfRef)
-	fmt.Fprintf(b, "\t%s.Tid = binary.LittleEndian.Uint32(raw[20:24])\n", selfRef)
+	writeCodecHeader(b, "TwoFdEvent", selfRef, "len(raw) != 568 && len(raw) != 564 && len(raw) != 48 && len(raw) != 44 && len(raw) != 40")
 	fmt.Fprintf(b, "\t%s.FdA = int32(binary.LittleEndian.Uint32(raw[24:28]))\n", selfRef)
 	fmt.Fprintf(b, "\t%s.FdB = int32(binary.LittleEndian.Uint32(raw[28:32]))\n", selfRef)
 	fmt.Fprintf(b, "\t%s.Extra = binary.LittleEndian.Uint64(raw[32:40])\n", selfRef)
-	fmt.Fprintf(b, "\t%s.Oldname = [MAX_FILENAME_LENGTH]byte{}\n", selfRef)
-	fmt.Fprintf(b, "\t%s.Newname = [MAX_FILENAME_LENGTH]byte{}\n", selfRef)
-	fmt.Fprintf(b, "\t%s.OldnameStatus = PATH_READ_NULL\n", selfRef)
-	fmt.Fprintf(b, "\t%s.NewnameStatus = PATH_READ_NULL\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Oldname = [MAX_FILENAME_LENGTH]byte{}\n\t%s.Newname = [MAX_FILENAME_LENGTH]byte{}\n\t%s.OldnameStatus = PATH_READ_NULL\n\t%s.NewnameStatus = PATH_READ_NULL\n", selfRef, selfRef, selfRef, selfRef)
 	fmt.Fprintf(b, "\t%s.SchemaVersion = 0\n", selfRef)
 	b.WriteString("\tif len(raw) != 40 {\n")
-	fmt.Fprintf(b, "\t\tcopy(%s.Oldname[:], raw[40:296])\n", selfRef)
-	fmt.Fprintf(b, "\t\tcopy(%s.Newname[:], raw[296:552])\n", selfRef)
-	fmt.Fprintf(b, "\t\t%s.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])\n", selfRef)
-	fmt.Fprintf(b, "\t\t%s.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])\n", selfRef)
-	fmt.Fprintf(b, "\t\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])\n", selfRef)
-	fmt.Fprintf(b, "\t\tif %s.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION && %s.SchemaVersion != TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION {\n\t\t\t%s.Recycle()\n\t\t\treturn nil\n\t\t}\n", selfRef, selfRef, selfRef)
+	b.WriteString("\t\tif len(raw) >= 564 {\n")
+	fmt.Fprintf(b, "\t\t\tcopy(%s.Oldname[:], raw[40:296])\n\t\t\tcopy(%s.Newname[:], raw[296:552])\n", selfRef, selfRef)
+	fmt.Fprintf(b, "\t\t\t%s.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])\n\t\t\t%s.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])\n\t\t\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])\n", selfRef, selfRef, selfRef)
+	b.WriteString("\t\t} else {\n")
+	fmt.Fprintf(b, "\t\t\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[40:44])\n", selfRef)
+	b.WriteString("\t\t}\n")
+	fmt.Fprintf(b, "\t\tif %s.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION && !(len(raw) >= 564 && %s.SchemaVersion == TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION) {\n\t\t\t%s.Recycle()\n\t\t\treturn nil\n\t\t}\n", selfRef, selfRef, selfRef)
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
 
-	fmt.Fprintf(b, "func (%s *TwoFdEvent) Bytes() ([]byte, error) {\n", selfRef)
-	b.WriteString("\traw := make([]byte, 568)\n")
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[0:4], uint32(%s.EventType))\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[4:8], uint32(%s.TraceId))\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[8:16], %s.Time)\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
-	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
+	writeEncodeHeaderWithWide(b, "TwoFdEvent", selfRef, 48,
+		selfRef+".EventType == ENTER_TWO_FD_NAMES_EVENT || "+selfRef+".SchemaVersion == TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION || "+
+			selfRef+".OldnameStatus != PATH_READ_NULL || "+selfRef+".NewnameStatus != PATH_READ_NULL || "+
+			selfRef+".Oldname != [MAX_FILENAME_LENGTH]byte{} || "+selfRef+".Newname != [MAX_FILENAME_LENGTH]byte{}", 568)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.FdA))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[28:32], uint32(%s.FdB))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Extra)\n", selfRef)
+	b.WriteString("\tif len(raw) == 568 {\n")
+	fmt.Fprintf(b, "\t\tcopy(raw[40:296], %s.Oldname[:])\n\t\tcopy(raw[296:552], %s.Newname[:])\n\t\tbinary.LittleEndian.PutUint32(raw[552:556], %s.OldnameStatus)\n\t\tbinary.LittleEndian.PutUint32(raw[556:560], %s.NewnameStatus)\n\t\tbinary.LittleEndian.PutUint32(raw[560:564], %s.SchemaVersion)\n", selfRef, selfRef, selfRef, selfRef, selfRef)
+	b.WriteString("\t} else {\n")
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SchemaVersion)\n", selfRef)
+	b.WriteString("\t}\n")
+	writeCodecFooter(b, "TwoFdEvent", selfRef)
+}
+
+// writeTwoFdNamesSyncPool emits an exact-size codec for two_fd_names_event,
+// the former 568-byte two_fd_event layout: four bytes of trailing alignment
+// padding, 564 bytes in binary.Write's compact form. Schema 2 records come
+// from BPF objects that predate the kcmp owner packing.
+func writeTwoFdNamesSyncPool(b *strings.Builder, selfRef string) {
+	writeCodecHeader(b, "TwoFdNamesEvent", selfRef, "len(raw) != 568 && len(raw) != 564")
+	fmt.Fprintf(b, "\t%s.FdA = int32(binary.LittleEndian.Uint32(raw[24:28]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.FdB = int32(binary.LittleEndian.Uint32(raw[28:32]))\n", selfRef)
+	fmt.Fprintf(b, "\t%s.Extra = binary.LittleEndian.Uint64(raw[32:40])\n", selfRef)
+	fmt.Fprintf(b, "\tcopy(%s.Oldname[:], raw[40:296])\n", selfRef)
+	fmt.Fprintf(b, "\tcopy(%s.Newname[:], raw[296:552])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.OldnameStatus = binary.LittleEndian.Uint32(raw[552:556])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.NewnameStatus = binary.LittleEndian.Uint32(raw[556:560])\n", selfRef)
+	fmt.Fprintf(b, "\t%s.SchemaVersion = binary.LittleEndian.Uint32(raw[560:564])\n", selfRef)
+	fmt.Fprintf(b, "\tif %s.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION && %s.SchemaVersion != TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION {\n\t\t%s.Recycle()\n\t\treturn nil\n\t}\n", selfRef, selfRef, selfRef)
+	fmt.Fprintf(b, "\treturn %s\n}\n\n", selfRef)
+
+	writeEncodeHeader(b, "TwoFdNamesEvent", selfRef, 568)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.FdA))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[28:32], uint32(%s.FdB))\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Extra)\n", selfRef)
@@ -559,8 +692,7 @@ func writeTwoFdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[552:556], %s.OldnameStatus)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[556:560], %s.NewnameStatus)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[560:564], %s.SchemaVersion)\n", selfRef)
-	b.WriteString("\treturn raw, nil\n}\n\n")
-	fmt.Fprintf(b, "func (%s *TwoFdEvent) Recycle() {\n\tpoolOfTwoFdEvents.Put(%s)\n}\n", selfRef, selfRef)
+	writeCodecFooter(b, "TwoFdNamesEvent", selfRef)
 }
 
 func snakeToCamel(s string) string {

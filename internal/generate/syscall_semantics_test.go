@@ -602,8 +602,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "direct capture after submission",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "read",
-					"    ev->fd = (__s32)ctx->args[0];\n    ev->size_valid = 0;\n    ev->size = 0;\n    ev->schema_version = FD_EVENT_SCHEMA_VERSION;\n\n    bpf_ringbuf_submit(ev, 0);",
-					"    ev->size_valid = 0;\n    ev->size = 0;\n    ev->schema_version = FD_EVENT_SCHEMA_VERSION;\n    bpf_ringbuf_submit(ev, 0);\n\n    ev->fd = (__s32)ctx->args[0];")
+					"    ev->fd = (__s32)ctx->args[0];\n\n    bpf_ringbuf_submit(ev, 0);",
+					"    bpf_ringbuf_submit(ev, 0);\n\n    ev->fd = (__s32)ctx->args[0];")
 			},
 		},
 		{
@@ -1794,11 +1794,11 @@ func validateSchemaVersionWrite(name, body string) error {
 		return fmt.Errorf("sys_enter_%s has no event struct", name)
 	}
 	want, ok := map[string]string{
-		"fd_event":     "FD_EVENT_SCHEMA_VERSION",
-		"open_event":   "OPEN_EVENT_SCHEMA_VERSION",
-		"path_event":   "PATH_EVENT_SCHEMA_VERSION",
-		"name_event":   "NAME_EVENT_SCHEMA_VERSION",
-		"accept_event": "ACCEPT_EVENT_SCHEMA_VERSION",
+		"fd_size_event": "FD_SIZE_EVENT_SCHEMA_VERSION",
+		"open_event":    "OPEN_EVENT_SCHEMA_VERSION",
+		"path_event":    "PATH_EVENT_SCHEMA_VERSION",
+		"name_event":    "NAME_EVENT_SCHEMA_VERSION",
+		"accept_event":  "ACCEPT_EVENT_SCHEMA_VERSION",
 	}[match[1]]
 	if !ok {
 		return nil
@@ -1819,7 +1819,7 @@ func validateSchemaVersionWrite(name, body string) error {
 func validateRequestedSizeInitialization(name, body string) error {
 	body = stripCComments(body)
 	match := eventStructRE.FindStringSubmatch(body)
-	if match == nil || (match[1] != "fd_event" && match[1] != "path_event") {
+	if match == nil || (match[1] != "fd_size_event" && match[1] != "path_event") {
 		return nil
 	}
 	for field, value := range map[string]string{"size_valid": "0", "size": "0"} {
@@ -1906,16 +1906,30 @@ func validateHandlerEventStruct(name, kind, body string) error {
 	if match == nil {
 		return fmt.Errorf("sys_enter_%s has no event struct", name)
 	}
-	for registeredKind, registered := range kindRegistry {
-		if registeredKind.MetadataName() == kind {
-			want := registered.structName
-			if match[1] != want {
-				return fmt.Errorf("sys_enter_%s kind %s reserves %s, want %s", name, kind, match[1], want)
+	// The rare wire shapes share a stable metadata kind with their lean
+	// siblings. Pin which syscall uses each shape independently of the
+	// generator's kind table.
+	want := map[string]string{
+		"fgetxattr": "fd_size_event", "flistxattr": "fd_size_event",
+		"move_mount":   "two_fd_names_event",
+		"memfd_create": "eventfd_name_event", "fsopen": "eventfd_name_event",
+	}[name]
+	if want == "" {
+		for registeredKind, registered := range kindRegistry {
+			if registeredKind.MetadataName() == kind &&
+				registeredKind != KindFdSize && registeredKind != KindTwoFdNames && registeredKind != KindNamedEventfd {
+				want = registered.structName
+				break
 			}
-			return nil
 		}
 	}
-	return fmt.Errorf("sys_enter_%s has unknown kind %q", name, kind)
+	if want == "" {
+		return fmt.Errorf("sys_enter_%s has unknown kind %q", name, kind)
+	}
+	if match[1] != want {
+		return fmt.Errorf("sys_enter_%s kind %s reserves %s, want %s", name, kind, match[1], want)
+	}
+	return nil
 }
 
 func parseEnterArgSources(name, enterBody, exitBody string) (map[string]int, error) {

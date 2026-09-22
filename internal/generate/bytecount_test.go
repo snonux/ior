@@ -151,7 +151,7 @@ func requestedSizeHandlerFixtures() []GeneratedTracepoint {
 		},
 	}
 	return []GeneratedTracepoint{
-		{Format: fgetxattr, Classification: ClassificationResult{Kind: KindFd}},
+		{Format: fgetxattr, Classification: ClassificationResult{Kind: KindFdSize}},
 		{Format: getxattrat, Classification: ClassificationResult{Kind: KindPathname, PathnameField: "pathname"}},
 	}
 }

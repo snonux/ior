@@ -266,8 +266,8 @@ func TestEventfdEventSerialization(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	if len(bytes) != eventfdEventSize {
-		t.Fatalf("serialized eventfd size = %d, want %d", len(bytes), eventfdEventSize)
+	if len(bytes) != eventfdNameEventSize {
+		t.Fatalf("serialized eventfd size = %d, want %d", len(bytes), eventfdNameEventSize)
 	}
 	eventfdEv2 := NewEventfdEvent(bytes)
 

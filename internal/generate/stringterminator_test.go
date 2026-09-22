@@ -26,13 +26,13 @@ import (
 // through structsWithComm. TestStringFieldListsMatchTypesH derives the same
 // sets from types.h and fails when the two disagree.
 var stringFieldsByStruct = map[string][]string{
-	"open_event":    {"filename"},
-	"exec_event":    {"filename"},
-	"path_event":    {"pathname"},
-	"fd_path_event": {"pathname"},
-	"name_event":    {"oldname", "newname"},
-	"two_fd_event":  {"oldname", "newname"},
-	"eventfd_event": {"filename"},
+	"open_event":         {"filename"},
+	"exec_event":         {"filename"},
+	"path_event":         {"pathname"},
+	"fd_path_event":      {"pathname"},
+	"name_event":         {"oldname", "newname"},
+	"two_fd_names_event": {"oldname", "newname"},
+	"eventfd_name_event": {"filename"},
 }
 
 // structsWithComm are the event structs that carry the task's comm.
@@ -85,8 +85,8 @@ func checkHandlerStringFields(name, body string) error {
 
 func checkStringFieldTerminated(name, body, field string, submitAt int) error {
 	quoted := regexp.QuoteMeta(field)
-	terminators := regexp.MustCompile(`(?m)^[ ]+ev->` + quoted + `\[0\] = 0;\n`).FindAllStringIndex(body, -1)
-	if writes := regexp.MustCompile(`ev->` + quoted + `\[`).FindAllStringIndex(body, -1); len(writes) != len(terminators) {
+	terminators := regexp.MustCompile(`(?m)^[ ]+ev->`+quoted+`\[0\] = 0;\n`).FindAllStringIndex(body, -1)
+	if writes := regexp.MustCompile(`ev->`+quoted+`\[`).FindAllStringIndex(body, -1); len(writes) != len(terminators) {
 		return fmt.Errorf("%s: %s is written %d times other than by its terminator", name, field, len(writes)-len(terminators))
 	}
 	for _, loc := range terminators {
@@ -95,7 +95,7 @@ func checkStringFieldTerminated(name, body, field string, submitAt int) error {
 		}
 	}
 	probeCalls := strings.Count(body, "bpf_probe_read_user_str(ev->"+field+",")
-	probes := regexp.MustCompile(`(?m)^ +if \(bpf_probe_read_user_str\(ev->` + quoted + `, sizeof\(ev->` + quoted +
+	probes := regexp.MustCompile(`(?m)^ +if \(bpf_probe_read_user_str\(ev->`+quoted+`, sizeof\(ev->`+quoted+
 		`\), \(void ?\*\)ctx->args\[(\d+)\]\) < 0\)( \{)?\n`).FindAllStringSubmatchIndex(body, -1)
 	if probeCalls != len(probes) {
 		return fmt.Errorf("%s: %s is read without checking the result", name, field)
@@ -199,10 +199,9 @@ func TestGeneratedArtifactTerminatesStringFields(t *testing.T) {
 			withStrings++
 		}
 	}
-	// 110 handlers carried a full-buffer memset before task 79; they are
-	// exactly the ones with a string field.
-	if withStrings != 110 {
-		t.Errorf("%d committed handlers emit a struct with a string field, want 110", withStrings)
+	// Only the named variants still reserve a string field.
+	if withStrings != 76 {
+		t.Errorf("%d committed handlers emit a struct with a string field, want 76", withStrings)
 	}
 	if got := strings.Count(artifact, "__builtin_memset"); got != 0 {
 		t.Errorf("generated_tracepoints.c has %d memsets, want 0", got)
@@ -343,22 +342,11 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 		{"exec failed read unterminated", "sys_enter_execve", execFailed, "(void *)ctx->args[0]) < 0)\n        ;\n"},
 		{"exec terminator erases every read", "sys_enter_execve", execFailed,
 			"(void *)ctx->args[0]) < 0)\n        ;\n    ev->filename[0] = 0;\n"},
-		{"eventfd without a name unterminated", "sys_enter_eventfd2", "    ev->filename[0] = 0;\n", ""},
-		{"eventfd exit unterminated", "sys_exit_eventfd2", "    ev->filename[0] = 0;\n", ""},
-		{"eventfd terminated after submit", "sys_exit_eventfd2", "    ev->filename[0] = 0;\n", ""},
-		{"two-fd names unterminated", "sys_enter_close_range", "    ev->newname[0] = 0;\n", ""},
+		{"named eventfd unterminated", "sys_enter_memfd_create", "            ev->filename[0] = 0;\n", ""},
+		{"two-fd names unterminated", "sys_enter_move_mount", "            ev->newname[0] = 0;\n", ""},
 		{"notification path unterminated", "sys_enter_inotify_add_watch",
 			"            ev->pathname_status = PATH_READ_FAILED;\n            ev->pathname[0] = 0;\n",
 			"            ev->pathname_status = PATH_READ_FAILED;\n"},
-	}
-	// "terminated after submit" moves the terminator instead of deleting it.
-	for i := range cases {
-		if cases[i].name == "eventfd terminated after submit" {
-			body := handlers[cases[i].handler]
-			moved := strings.Replace(body, "    ev->filename[0] = 0;\n", "", 1)
-			moved = strings.Replace(moved, "    bpf_ringbuf_submit(ev, 0);\n", "    bpf_ringbuf_submit(ev, 0);\n    ev->filename[0] = 0;\n", 1)
-			cases[i].old, cases[i].replacement = body, moved
-		}
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -66,13 +66,12 @@ func (g EventGenerator) ExitOpenEvent(time uint64, pid, tid uint32) (types.RetEv
 // EnterFdEvent generates an fd-event enter payload (read/write/close/... keyed by traceID).
 func (g EventGenerator) EnterFdEvent(time uint64, pid, tid uint32, fd int32, traceID types.TraceId) (types.FdEvent, []byte, error) {
 	ev := types.FdEvent{
-		EventType:     types.ENTER_FD_EVENT,
-		TraceId:       traceID,
-		Time:          time,
-		Pid:           pid,
-		Tid:           tid,
-		Fd:            fd,
-		SchemaVersion: types.FD_EVENT_SCHEMA_VERSION,
+		EventType: types.ENTER_FD_EVENT,
+		TraceId:   traceID,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Fd:        fd,
 	}
 	raw, err := eventBytes(&ev)
 	return ev, raw, err
@@ -81,13 +80,12 @@ func (g EventGenerator) EnterFdEvent(time uint64, pid, tid uint32, fd int32, tra
 // ExitFdEvent generates an fd-event exit payload echoing the descriptor.
 func (g EventGenerator) ExitFdEvent(time uint64, pid, tid uint32, fd int32, traceID types.TraceId) (types.FdEvent, []byte, error) {
 	ev := types.FdEvent{
-		EventType:     types.EXIT_FD_EVENT,
-		TraceId:       traceID,
-		Time:          time,
-		Pid:           pid,
-		Tid:           tid,
-		Fd:            fd,
-		SchemaVersion: types.FD_EVENT_SCHEMA_VERSION,
+		EventType: types.EXIT_FD_EVENT,
+		TraceId:   traceID,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Fd:        fd,
 	}
 	raw, err := eventBytes(&ev)
 	return ev, raw, err

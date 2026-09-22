@@ -142,8 +142,14 @@ func feedKcmpPair(t *testing.T, el *eventLoop, eventPID uint32, extra uint64, fd
 		fdA, fdB, extra, types.SYS_ENTER_KCMP)
 	if legacy {
 		enterRaw = enterRaw[:40]
+	} else if schema == types.TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION {
+		// Older BPF objects used the wide named layout for all two-fd calls.
+		wide := make([]byte, 568)
+		copy(wide, enterRaw[:40])
+		binary.LittleEndian.PutUint32(wide[560:564], schema)
+		enterRaw = wide
 	} else {
-		binary.LittleEndian.PutUint32(enterRaw[560:564], schema)
+		binary.LittleEndian.PutUint32(enterRaw[40:44], schema)
 	}
 	_, exitRaw := makeExitRetEvent(t, defaulTime+openPairLatency, eventPID, crossTidA,
 		types.SYS_EXIT_KCMP, 0)

@@ -24,6 +24,7 @@ type kindMeta struct {
 // automatically via lookupKind.
 var kindRegistry = map[TracepointKind]kindMeta{
 	KindFd:             {structName: "fd_event", enterAccepted: true},
+	KindFdSize:         {structName: "fd_size_event", enterAccepted: true},
 	KindOpen:           {structName: "open_event", enterAccepted: true, recoversFilename: true},
 	KindMqOpen:         {structName: "open_event", enterAccepted: true, recoversFilename: true},
 	KindOpenTree:       {structName: "open_event", enterAccepted: true, recoversFilename: true},
@@ -41,10 +42,11 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindAccept:         {structName: "accept_event", enterAccepted: true},
 	KindPipe:           {structName: "pipe_event", enterAccepted: true},
 	KindEventfd:        {structName: "eventfd_event", enterAccepted: true},
-	KindNamedEventfd:   {structName: "eventfd_event", enterAccepted: true, recoversFilename: true},
+	KindNamedEventfd:   {structName: "eventfd_name_event", enterAccepted: true, recoversFilename: true},
 	KindPidfd:          {structName: "eventfd_event", enterAccepted: true},
 	KindEpollCtl:       {structName: "epoll_ctl_event", enterAccepted: true},
 	KindTwoFd:          {structName: "two_fd_event", enterAccepted: true},
+	KindTwoFdNames:     {structName: "two_fd_names_event", enterAccepted: true},
 	KindPoll:           {structName: "poll_event", enterAccepted: true},
 	KindMem:            {structName: "mem_event", enterAccepted: true},
 	KindMmap:           {structName: "mmap_event", enterAccepted: true},

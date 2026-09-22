@@ -906,9 +906,6 @@ int handle_sys_enter_bind(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -966,9 +963,6 @@ int handle_sys_enter_listen(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1150,9 +1144,6 @@ int handle_sys_enter_connect(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1210,9 +1201,6 @@ int handle_sys_enter_getsockname(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1270,9 +1258,6 @@ int handle_sys_enter_getpeername(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1330,9 +1315,6 @@ int handle_sys_enter_sendto(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1390,9 +1372,6 @@ int handle_sys_enter_recvfrom(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1450,9 +1429,6 @@ int handle_sys_enter_setsockopt(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1510,9 +1486,6 @@ int handle_sys_enter_getsockopt(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1570,9 +1543,6 @@ int handle_sys_enter_shutdown(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1630,9 +1600,6 @@ int handle_sys_enter_sendmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1690,9 +1657,6 @@ int handle_sys_enter_sendmmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1750,9 +1714,6 @@ int handle_sys_enter_recvmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1810,9 +1771,6 @@ int handle_sys_enter_recvmmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1926,9 +1884,6 @@ int handle_sys_enter_io_uring_register(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1986,9 +1941,6 @@ int handle_sys_enter_io_uring_enter(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2213,9 +2165,6 @@ int handle_sys_enter_landlock_create_ruleset(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[2];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -2248,9 +2197,6 @@ int handle_sys_exit_landlock_create_ruleset(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -2288,9 +2234,6 @@ int handle_sys_enter_landlock_add_rule(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2348,9 +2291,6 @@ int handle_sys_enter_landlock_restrict_self(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2901,9 +2841,6 @@ int handle_sys_enter_mq_timedsend(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2961,9 +2898,6 @@ int handle_sys_enter_mq_timedreceive(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3021,9 +2955,6 @@ int handle_sys_enter_mq_notify(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3081,9 +3012,6 @@ int handle_sys_enter_mq_getsetattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3885,9 +3813,6 @@ int handle_sys_enter_quotactl_fd(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4074,9 +3999,6 @@ int handle_sys_enter_flock(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4469,9 +4391,6 @@ int handle_sys_enter_userfaultfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4504,9 +4423,6 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4543,9 +4459,6 @@ int handle_sys_enter_eventfd2(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4578,9 +4491,6 @@ int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4617,9 +4527,6 @@ int handle_sys_enter_eventfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4652,9 +4559,6 @@ int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4691,9 +4595,6 @@ int handle_sys_enter_timerfd_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4726,9 +4627,6 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4766,9 +4664,6 @@ int handle_sys_enter_timerfd_settime(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4826,9 +4721,6 @@ int handle_sys_enter_timerfd_gettime(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4885,9 +4777,6 @@ int handle_sys_enter_signalfd4(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[3];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4920,9 +4809,6 @@ int handle_sys_exit_signalfd4(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -4959,9 +4845,6 @@ int handle_sys_enter_signalfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -4994,9 +4877,6 @@ int handle_sys_exit_signalfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5033,9 +4913,6 @@ int handle_sys_enter_epoll_create1(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5068,9 +4945,6 @@ int handle_sys_exit_epoll_create1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5107,9 +4981,6 @@ int handle_sys_enter_epoll_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5142,9 +5013,6 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5454,9 +5322,6 @@ int handle_sys_enter_fanotify_init(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5489,9 +5354,6 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5598,9 +5460,6 @@ int handle_sys_enter_inotify_init1(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5633,9 +5492,6 @@ int handle_sys_exit_inotify_init1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5672,9 +5528,6 @@ int handle_sys_enter_inotify_init(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -5707,9 +5560,6 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -5817,9 +5667,6 @@ int handle_sys_enter_inotify_rm_watch(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5998,7 +5845,7 @@ int handle_sys_exit_file_setattr(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_fsopen is a struct eventfd_event (kind=eventfd)
+/// sys_enter_fsopen is a struct eventfd_name_event (kind=eventfd)
 SEC("tracepoint/syscalls/sys_enter_fsopen")
 int handle_sys_enter_fsopen(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -6009,13 +5856,13 @@ int handle_sys_enter_fsopen(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_FSOPEN, now))
         return 0;
 
-    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
+    struct eventfd_name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_name_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_EVENTFD_EVENT;
+    ev->event_type = ENTER_EVENTFD_NAME_EVENT;
     ev->trace_id = SYS_ENTER_FSOPEN;
     ev->pid = pid;
     ev->tid = tid;
@@ -6031,7 +5878,7 @@ int handle_sys_enter_fsopen(struct syscall_trace_enter *ctx) {
             ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
+    ev->schema_version = EVENTFD_NAME_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -6068,9 +5915,6 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -6180,9 +6024,6 @@ int handle_sys_enter_fsconfig(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6312,9 +6153,6 @@ int handle_sys_enter_fstatfs(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6837,9 +6675,6 @@ int handle_sys_enter_syncfs(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6897,9 +6732,6 @@ int handle_sys_enter_fsync(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6957,9 +6789,6 @@ int handle_sys_enter_fdatasync(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7017,9 +6846,6 @@ int handle_sys_enter_sync_file_range(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7077,9 +6903,6 @@ int handle_sys_enter_vmsplice(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7137,9 +6960,6 @@ int handle_sys_enter_splice(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[2];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7197,9 +7017,6 @@ int handle_sys_enter_tee(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[1];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7473,9 +7290,6 @@ int handle_sys_enter_fsetxattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7737,7 +7551,7 @@ int handle_sys_exit_lgetxattr(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_fgetxattr is a struct fd_event (kind=fd)
+/// sys_enter_fgetxattr is a struct fd_size_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_fgetxattr")
 int handle_sys_enter_fgetxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -7748,13 +7562,13 @@ int handle_sys_enter_fgetxattr(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_FGETXATTR, now))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fd_size_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_size_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FD_SIZE_EVENT;
     ev->trace_id = SYS_ENTER_FGETXATTR;
     ev->pid = pid;
     ev->tid = tid;
@@ -7764,7 +7578,7 @@ int handle_sys_enter_fgetxattr(struct syscall_trace_enter *ctx) {
     ev->size = 0;
     ev->size = (__u64)ctx->args[3];
     ev->size_valid = 1;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
+    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8021,7 +7835,7 @@ int handle_sys_exit_llistxattr(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_flistxattr is a struct fd_event (kind=fd)
+/// sys_enter_flistxattr is a struct fd_size_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_flistxattr")
 int handle_sys_enter_flistxattr(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -8032,13 +7846,13 @@ int handle_sys_enter_flistxattr(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_FLISTXATTR, now))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fd_size_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_size_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FD_SIZE_EVENT;
     ev->trace_id = SYS_ENTER_FLISTXATTR;
     ev->pid = pid;
     ev->tid = tid;
@@ -8048,7 +7862,7 @@ int handle_sys_enter_flistxattr(struct syscall_trace_enter *ctx) {
     ev->size = 0;
     ev->size = (__u64)ctx->args[2];
     ev->size_valid = 1;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
+    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8322,9 +8136,6 @@ int handle_sys_enter_fremovexattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8601,9 +8412,6 @@ int handle_sys_enter_fsmount(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -8636,9 +8444,6 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -8653,7 +8458,7 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_move_mount is a struct two_fd_event (kind=two-fd)
+/// sys_enter_move_mount is a struct two_fd_names_event (kind=two-fd)
 SEC("tracepoint/syscalls/sys_enter_move_mount")
 int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -8664,13 +8469,13 @@ int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MOVE_MOUNT, now))
         return 0;
 
-    struct two_fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct two_fd_event), 0);
+    struct two_fd_names_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct two_fd_names_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_TWO_FD_EVENT;
+    ev->event_type = ENTER_TWO_FD_NAMES_EVENT;
     ev->trace_id = SYS_ENTER_MOVE_MOUNT;
     ev->pid = pid;
     ev->tid = tid;
@@ -9146,10 +8951,6 @@ int handle_sys_enter_close_range(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__s32)ctx->args[0];
     ev->fd_b = (__s32)ctx->args[1];
     ev->extra = (__u64)ctx->args[2];
-    ev->oldname[0] = 0;
-    ev->newname[0] = 0;
-    ev->oldname_status = PATH_READ_NULL;
-    ev->newname_status = PATH_READ_NULL;
     ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -9266,9 +9067,6 @@ int handle_sys_enter_dup2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9326,9 +9124,6 @@ int handle_sys_enter_dup(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9677,9 +9472,6 @@ int handle_sys_enter_getdents(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9737,9 +9529,6 @@ int handle_sys_enter_getdents64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9797,9 +9586,6 @@ int handle_sys_enter_ioctl(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11480,9 +11266,6 @@ int handle_sys_enter_newfstat(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11756,9 +11539,6 @@ int handle_sys_enter_lseek(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11816,9 +11596,6 @@ int handle_sys_enter_read(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11876,9 +11653,6 @@ int handle_sys_enter_write(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11936,9 +11710,6 @@ int handle_sys_enter_pread64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11996,9 +11767,6 @@ int handle_sys_enter_pwrite64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12056,9 +11824,6 @@ int handle_sys_enter_readv(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12116,9 +11881,6 @@ int handle_sys_enter_writev(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12176,9 +11938,6 @@ int handle_sys_enter_preadv(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12236,9 +11995,6 @@ int handle_sys_enter_preadv2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12296,9 +12052,6 @@ int handle_sys_enter_pwritev(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12356,9 +12109,6 @@ int handle_sys_enter_pwritev2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12416,9 +12166,6 @@ int handle_sys_enter_sendfile64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12476,9 +12223,6 @@ int handle_sys_enter_copy_file_range(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[2];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12608,9 +12352,6 @@ int handle_sys_enter_ftruncate(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12668,9 +12409,6 @@ int handle_sys_enter_fallocate(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13016,9 +12754,6 @@ int handle_sys_enter_fchdir(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13148,9 +12883,6 @@ int handle_sys_enter_fchmod(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13640,9 +13372,6 @@ int handle_sys_enter_fchown(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14006,9 +13735,6 @@ int handle_sys_enter_close(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14099,7 +13825,7 @@ int handle_sys_exit_vhangup(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_memfd_create is a struct eventfd_event (kind=eventfd)
+/// sys_enter_memfd_create is a struct eventfd_name_event (kind=eventfd)
 SEC("tracepoint/syscalls/sys_enter_memfd_create")
 int handle_sys_enter_memfd_create(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -14110,13 +13836,13 @@ int handle_sys_enter_memfd_create(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_MEMFD_CREATE, now))
         return 0;
 
-    struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
+    struct eventfd_name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_name_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_EVENTFD_EVENT;
+    ev->event_type = ENTER_EVENTFD_NAME_EVENT;
     ev->trace_id = SYS_ENTER_MEMFD_CREATE;
     ev->pid = pid;
     ev->tid = tid;
@@ -14132,7 +13858,7 @@ int handle_sys_enter_memfd_create(struct syscall_trace_enter *ctx) {
             ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
+    ev->schema_version = EVENTFD_NAME_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -14169,9 +13895,6 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -14208,9 +13931,6 @@ int handle_sys_enter_memfd_secret(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -14243,9 +13963,6 @@ int handle_sys_exit_memfd_secret(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -14823,9 +14540,6 @@ int handle_sys_enter_process_madvise(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15939,9 +15653,6 @@ int handle_sys_enter_readahead(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15999,9 +15710,6 @@ int handle_sys_enter_fadvise64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16059,9 +15767,6 @@ int handle_sys_enter_process_mrelease(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16119,9 +15824,6 @@ int handle_sys_enter_cachestat(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16423,9 +16125,6 @@ int handle_sys_enter_kexec_file_load(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18035,10 +17734,6 @@ int handle_sys_enter_kcmp(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__u32)ctx->args[2] == 0 ? (__s32)ctx->args[3] : -1;
     ev->fd_b = (__u32)ctx->args[2] == 0 ? (__s32)ctx->args[4] : -1;
     ev->extra = ((__u64)(ior_kcmp_pid_is_current((__s32)ctx->args[0]) ? pid : 0) << 32) | (__u32)ctx->args[2];
-    ev->oldname[0] = 0;
-    ev->newname[0] = 0;
-    ev->oldname_status = PATH_READ_NULL;
-    ev->newname_status = PATH_READ_NULL;
     ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
@@ -18209,9 +17904,6 @@ int handle_sys_enter_finit_module(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19277,9 +18969,6 @@ int handle_sys_enter_setns(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19336,9 +19025,6 @@ int handle_sys_enter_pidfd_open(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
     bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);
     ev->flags = flags;
@@ -19371,9 +19057,6 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->filename[0] = 0;
-    ev->filename_status = PATH_READ_NULL;
-    ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
     __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
     if (pending) {
@@ -19411,9 +19094,6 @@ int handle_sys_enter_pidfd_getfd(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21767,9 +21447,6 @@ int handle_sys_enter_pidfd_send_signal(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->size_valid = 0;
-    ev->size = 0;
-    ev->schema_version = FD_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

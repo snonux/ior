@@ -95,6 +95,7 @@ func runtimeEventKinds() []runtimeEventKind {
 		{enterEventType: types.ENTER_PATH_EVENT, exit: typedRuntimeExit((*eventLoop).handlePathExit)},
 		{enterEventType: types.ENTER_FD_PATH_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdPathExit)},
 		{enterEventType: types.ENTER_FD_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
+		{enterEventType: types.ENTER_FD_SIZE_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
 		{enterEventType: types.ENTER_DUP3_EVENT, exit: typedRuntimeExit((*eventLoop).handleDup3Exit)},
 		{enterEventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT, exit: typedRuntimeExit((*eventLoop).handleOpenByHandleAtExit)},
 		{enterEventType: types.ENTER_SOCKET_EVENT, exit: typedRuntimeExit((*eventLoop).handleSocketExit)},
@@ -102,9 +103,11 @@ func runtimeEventKinds() []runtimeEventKind {
 		{enterEventType: types.ENTER_ACCEPT_EVENT, exit: typedRuntimeExit((*eventLoop).handleAcceptExit)},
 		{enterEventType: types.ENTER_PIPE_EVENT, exit: typedRuntimeExit((*eventLoop).handlePipeExit)},
 		{enterEventType: types.ENTER_EVENTFD_EVENT, exit: typedRuntimeExit((*eventLoop).handleEventfdExit)},
+		{enterEventType: types.ENTER_EVENTFD_NAME_EVENT, exit: typedRuntimeExit((*eventLoop).handleEventfdExit)},
 		{enterEventType: types.ENTER_EPOLL_CTL_EVENT, exit: typedRuntimeExit((*eventLoop).handleEpollCtlExit)},
 		{enterEventType: types.ENTER_POLL_EVENT, exit: typedRuntimeExit((*eventLoop).handlePollExit)},
 		{enterEventType: types.ENTER_TWO_FD_EVENT, exit: typedRuntimeExit((*eventLoop).handleTwoFdExit)},
+		{enterEventType: types.ENTER_TWO_FD_NAMES_EVENT, exit: typedRuntimeExit((*eventLoop).handleTwoFdExit)},
 		{enterEventType: types.ENTER_MEM_EVENT, exit: typedRuntimeExit((*eventLoop).handleMemExit)},
 		{enterEventType: types.ENTER_MMAP_EVENT, exit: typedRuntimeExit((*eventLoop).handleMmapExit)},
 		{enterEventType: types.ENTER_SLEEP_EVENT, exit: typedRuntimeExit((*eventLoop).handleSleepExit)},
@@ -122,6 +125,7 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_OPEN_EVENT, rawDecoder[types.OpenEvent](types.NewOpenEventFast), matchRawOpenEvent),
 		exitRaw(types.EXIT_OPEN_EVENT, rawDecoder[types.RetEvent](types.NewRetEventFast)),
 		enterRaw(types.ENTER_FD_EVENT, rawDecoder[types.FdEvent](types.NewFdEventFast), nil),
+		enterRaw(types.ENTER_FD_SIZE_EVENT, decodeFdSizeEvent, nil),
 		exitRaw(types.EXIT_FD_EVENT, rawDecoder[types.FdEvent](types.NewFdEventFast)),
 		enterRaw(types.ENTER_NULL_EVENT, rawDecoder[types.NullEvent](types.NewNullEventFast), nil),
 		exitRaw(types.EXIT_NULL_EVENT, rawDecoder[types.NullEvent](types.NewNullEventFast)),
@@ -141,10 +145,12 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_PIPE_EVENT, rawDecoder[types.PipeEvent](types.NewPipeEventFast), nil),
 		exitRaw(types.EXIT_PIPE_EVENT, rawDecoder[types.PipeEvent](types.NewPipeEventFast)),
 		enterRaw(types.ENTER_EVENTFD_EVENT, rawDecoder[types.EventfdEvent](types.NewEventfdEventFast), nil),
+		enterRaw(types.ENTER_EVENTFD_NAME_EVENT, decodeEventfdNameEvent, nil),
 		exitRaw(types.EXIT_EVENTFD_EVENT, rawDecoder[types.EventfdEvent](types.NewEventfdEventFast)),
 		enterRaw(types.ENTER_EPOLL_CTL_EVENT, rawDecoder[types.EpollCtlEvent](types.NewEpollCtlEventFast), nil),
 		enterRaw(types.ENTER_POLL_EVENT, rawDecoder[types.PollEvent](types.NewPollEventFast), nil),
 		enterRaw(types.ENTER_TWO_FD_EVENT, rawDecoder[types.TwoFdEvent](types.NewTwoFdEventFast), nil),
+		enterRaw(types.ENTER_TWO_FD_NAMES_EVENT, decodeTwoFdNamesEvent, nil),
 		enterRaw(types.ENTER_MEM_EVENT, rawDecoder[types.MemEvent](types.NewMemEventFast), nil),
 		enterRaw(types.ENTER_MMAP_EVENT, rawDecoder[types.MmapEvent](types.NewMmapEventFast), nil),
 		enterRaw(types.ENTER_SLEEP_EVENT, rawDecoder[types.SleepEvent](types.NewSleepEventFast), nil),
@@ -167,6 +173,46 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		controlRaw(types.OPEN_NAME_FIXUP_EVENT, rawDecoder[types.OpenNameFixupEvent](types.NewOpenNameFixupEventFast),
 			typedRuntimeControl((*eventLoop).handleOpenNameFixupEvent)),
 	}
+}
+
+// The new wire kinds retain the established userspace event types after
+// decoding, including fields needed by older IOR_BPF_OBJECT payloads. This
+// keeps filtering, descriptor state and output on their existing paths.
+func decodeFdSizeEvent(raw []byte) runtimeDecodedEvent {
+	ev := types.NewFdSizeEventFast(raw)
+	if ev == nil {
+		return nil
+	}
+	out := &types.FdEvent{EventType: ev.EventType, TraceId: ev.TraceId, Time: ev.Time,
+		Pid: ev.Pid, Tid: ev.Tid, Fd: ev.Fd, Size: ev.Size,
+		SizeValid: ev.SizeValid, SchemaVersion: ev.SchemaVersion}
+	ev.Recycle()
+	return out
+}
+
+func decodeEventfdNameEvent(raw []byte) runtimeDecodedEvent {
+	ev := types.NewEventfdNameEventFast(raw)
+	if ev == nil {
+		return nil
+	}
+	out := &types.EventfdEvent{EventType: ev.EventType, TraceId: ev.TraceId, Time: ev.Time,
+		Pid: ev.Pid, Tid: ev.Tid, Flags: ev.Flags, Ret: ev.Ret, Fd: ev.Fd,
+		Filename: ev.Filename, FilenameStatus: ev.FilenameStatus, SchemaVersion: ev.SchemaVersion}
+	ev.Recycle()
+	return out
+}
+
+func decodeTwoFdNamesEvent(raw []byte) runtimeDecodedEvent {
+	ev := types.NewTwoFdNamesEventFast(raw)
+	if ev == nil {
+		return nil
+	}
+	out := &types.TwoFdEvent{EventType: ev.EventType, TraceId: ev.TraceId, Time: ev.Time,
+		Pid: ev.Pid, Tid: ev.Tid, FdA: ev.FdA, FdB: ev.FdB, Extra: ev.Extra,
+		Oldname: ev.Oldname, Newname: ev.Newname, OldnameStatus: ev.OldnameStatus,
+		NewnameStatus: ev.NewnameStatus, SchemaVersion: ev.SchemaVersion}
+	ev.Recycle()
+	return out
 }
 
 func enterRaw(eventType types.EventType, decode runtimeEventDecoder, filter runtimeEnterFilter) rawRuntimeEvent {
