@@ -108,17 +108,21 @@ that changed. `benchstat` is installed with
 
 Read the result in this order:
 
-1. **`allocs/op` and `B/op`.** Rows whose samples are all equal in both
-   recordings (benchstat `± 0%` with footnote "all samples are equal" on both
-   sides, e.g. every `Deserialize*` row and `allocs/op` of the component
-   benchmarks) are exact: any change there is real. A row equal in only one
-   recording is not exact (`SyscallAccumulatorSnapshot` `B/op` is 1056 in
-   every `4d2d76f` sample but 1056-1057 in `03249c1`, same code). Pooled
-   and allocation-heavy rows are not: within one recording component `B/op`
-   varies by a few percent, up to about 10% (samples in `03249c1`:
-   `HandleNullExit` 94-103, `EventPoolGetPut` 95-105,
-   `HandleDup3Exit` 159-164; in `4d2d76f`: `HandleFcntlExit` 140-150), and
-   `allocs/op` of the pipeline mixes by under 0.1%
+1. **`allocs/op` and `B/op`.** Rows whose raw samples are all equal within
+   each of the two recordings (e.g. every `Deserialize*` row and `allocs/op`
+   of the component benchmarks) are exact: any change there is real. Check
+   the raw samples, not the benchstat table: benchstat prints the footnote
+   "all samples are equal" only when both files hold the same single value,
+   i.e. for an unchanged exact row. A changed exact row shows `± 0%` on both
+   sides with no footnote, just like a varying row that rounds to `± 0%`.
+   A row equal in only one recording is not exact
+   (`SyscallAccumulatorSnapshot` `B/op` is 1056 in every `4d2d76f` sample but
+   1056-1057 in `03249c1`, same code). Pooled and allocation-heavy rows are
+   not: within one recording component `B/op` varies by a few percent, up
+   to about 10% (samples in `03249c1`: `HandleNullExit` 94-103,
+   `EventPoolGetPut` 95-105, `HandleDup3Exit` 159-164; in `4d2d76f`:
+   `HandleFcntlExit` 140-150), and `allocs/op` of the pipeline mixes by
+   under 0.1%
    (`PipelineHeadlessParquetCapture` 9135-9140 across both). Both also drift
    between recordings of the same code, so a delta beyond the sample spread
    can still be noise. Between `4d2d76f` and `03249c1`, which differ only in
