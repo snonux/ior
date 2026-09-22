@@ -145,3 +145,16 @@ tagged `+performance` in `ask`). Its static metrics at a glance:
 | `eventfd2` pair | 624 B |
 | clock reads per traced syscall | 4 (2 on enter, 2 on exit) |
 | full-buffer memset sites | 110 across 731 handlers |
+
+## Known-noisy recordings
+
+`perf/bench-03249c1.txt` (the final code of task 39) has load-polluted
+`sec/op`: the load average rose from 0.82 to about 8.66 during the run, and
+benchmarks of components task 39 never touched came out 50-92% slower than
+in `perf/bench-4d2d76f.txt`, while an interleaved re-run showed no code
+regression. Outside tests, 03249c1 differs from 4d2d76f only in `sendPair`, whose
+pair send no longer blocks (a `select` with `default`); the pipeline mixes
+and allocations of the two recordings match. Use
+`perf/bench-4d2d76f.txt` as the `sec/op` reference for task 39's final code;
+the `allocs/op` and `B/op` in `perf/bench-03249c1.txt` are valid, and so are
+its static metrics.
