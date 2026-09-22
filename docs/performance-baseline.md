@@ -127,13 +127,14 @@ Read the result in this order:
    +0.03-0.04% and `PipelineHeadlessParquetCapture` -7.43% (timing-dependent,
    see below); `allocs/op` of `PipelineMetadataHeavy` +0.00%,
    `PipelineThreadScaling` +0.00-0.01% (e.g. `threads_10` about +4,
-   `threads_1000` about +7 allocations per op) and
-   `PipelineHeadlessParquetCapture` -0.02%. Count an `allocs/op` or `B/op`
-   change as real only when it is larger than the row's sample spread (min to
-   max of the raw samples) in both recordings **and** larger than a drift
-   floor: about 4% for component `B/op`, about 0.1% for pipeline `allocs/op`
-   and `B/op`. For a change near the floor, confirm it with a before/after
-   re-run in the same session. `B/op` of `PipelineHeadlessParquetCapture`
+   `threads_1000` about +6 allocations per op, by median) and
+   `PipelineHeadlessParquetCapture` -0.02%. For rows whose samples vary, count
+   an `allocs/op` or `B/op` change as real only when it is larger than the
+   row's sample spread (min to max of the raw samples) in both recordings
+   **and** larger than a drift floor (exact rows need neither): about 4%
+   for component `B/op`, about 0.1% for pipeline `allocs/op` and `B/op`.
+   For a change near the floor, confirm it with a before/after re-run in the
+   same session. `B/op` of `PipelineHeadlessParquetCapture`
    depends on timing and spreads up to 13% within a recording, more than the
    floor; trust it only with caution. `B/op` of
    `WriterThroughput` is not trustworthy at all: its samples ranged 961-2247
@@ -215,7 +216,7 @@ What to trust in these two files:
 | Rows | 4d2d76f | 03249c1 |
 |---|---|---|
 | static metrics | yes | yes |
-| `allocs/op` and `B/op` (except the two rows below) | yes, for deltas beyond both the per-row sample spread (component `B/op` up to ~7%, pipeline `allocs/op` under 0.1%) and the drift floor (component `B/op` ~4%, pipeline `allocs/op` and `B/op` ~0.1%) | yes, same rule (component `B/op` spread up to ~10%) |
+| `allocs/op` and `B/op` (except the two rows below) | exact rows (all samples equal): yes, any delta; varying rows: yes, for deltas beyond both the per-row sample spread (component `B/op` up to ~7%, pipeline `allocs/op` under 0.1%) and the drift floor (component `B/op` ~4%, pipeline `allocs/op` and `B/op` ~0.1%) | yes, same rule (component `B/op` spread up to ~10%) |
 | `B/op` of `PipelineHeadlessParquetCapture` | with caution (samples spread 7%) | with caution (samples spread 13%) |
 | `B/op` of `WriterThroughput` | no (±36%) | no (±64%) |
 | `sec/op` of the four mixes above | yes (the reference for task 39's final code) | no |
