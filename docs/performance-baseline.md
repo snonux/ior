@@ -9,7 +9,7 @@ re-run on a machine in a different mood.
 
 | File | Content |
 |---|---|
-| `perf/bench-<label>.txt` | Raw `go test -bench -benchmem` output in benchstat format, preceded by `#` lines with commit, date, kernel, CPU, clocksource, Go version, sample settings and load average. |
+| `perf/bench-<label>.txt` | Raw `go test -bench -benchmem` output in benchstat format, preceded by `#` lines with commit, date, kernel, CPU, clocksource, Go version, sample settings and load average, plus a `# note:` line added later if the recording turned out noisy. |
 | `perf/static-<label>.txt` | Deterministic metrics of the BPF side, computed from the source tree. |
 
 The benchmark set is focused on the event hot path: the end-to-end pipeline
@@ -107,7 +107,9 @@ that changed. `benchstat` is installed with
 
 Read the result in this order:
 
-1. **`allocs/op` and `B/op`.** They are deterministic. Any change is real.
+1. **`allocs/op` and `B/op`.** They are deterministic. Any change is real,
+   except `B/op` of `PipelineHeadlessParquetCapture` and `WriterThroughput`,
+   which depends on timing and varies a few percent between runs.
 2. **`sec/op`.** Trust a delta only when benchstat reports it as significant
    (it prints `~` otherwise) and both recordings come from the same host.
 3. **Static metrics.** A BPF change that claims to shrink records or remove
@@ -115,10 +117,17 @@ Read the result in this order:
 
 Recordings from different machines are not comparable in `sec/op`. Record the
 "before" again on the machine that measures the "after" if it has changed.
+Some committed recordings are load-polluted; check
+[Known-noisy recordings](#known-noisy-recordings) and any `# note:` header line
+before trusting a `sec/op` delta against them.
 
 ## Workflow for a performance task
 
 1. Make sure a baseline exists for the commit you branch from; record one if not.
+   If the newest committed baseline is listed under
+   [Known-noisy recordings](#known-noisy-recordings) (or carries a `# note:`
+   header), record a fresh "before" at your branch point instead. `sec/op`
+   deltas are best between a "before" and "after" recorded in the same session.
 2. Make the change. Functionality must not change: same rows, fields, ordering,
    filter semantics and statistics.
 3. Commit, then `scripts/perf-baseline.sh record`.
@@ -148,13 +157,32 @@ tagged `+performance` in `ask`). Its static metrics at a glance:
 
 ## Known-noisy recordings
 
+Each file below also carries a `# note:` header line saying the same.
+
 `perf/bench-03249c1.txt` (the final code of task 39) has load-polluted
-`sec/op`: the load average rose from 0.82 to about 8.66 during the run, and
-benchmarks of components task 39 never touched came out 50-92% slower than
-in `perf/bench-4d2d76f.txt`, while an interleaved re-run showed no code
-regression. Outside tests, 03249c1 differs from 4d2d76f only in `sendPair`, whose
-pair send no longer blocks (a `select` with `default`); the pipeline mixes
-and allocations of the two recordings match. Use
-`perf/bench-4d2d76f.txt` as the `sec/op` reference for task 39's final code;
-the `allocs/op` and `B/op` in `perf/bench-03249c1.txt` are valid, and so are
-its static metrics.
+`sec/op`: the load average was 0.82 at the start and rose to about 8.66
+during the run, and many benchmarks of components task 39 never touched came
+out up to 92% slower than in `perf/bench-4d2d76f.txt`, while an interleaved
+re-run showed no code regression. Outside tests, 03249c1 differs from 4d2d76f
+only in `sendPair`, whose pair send no longer blocks (a `select` with
+`default`). Between the two recordings, `sec/op` of the four mixes
+`PipelineReadHeavy`, `PipelineWriteHeavy`, `PipelineMetadataHeavy` and
+`PipelineDiverseAllTypes` matches (benchstat `~`); the load-affected rows
+include `PipelineHeadlessParquetCapture` (+66.3% `sec/op`, -7.4% `B/op`),
+`PipelineThreadScaling` (+54..86% for 10 threads and up), the exit handlers,
+fd tracker, comm cache, event pools and the downstream stages.
+
+`perf/bench-4d2d76f.txt` is noisy too (load 2.19 at the start): its
+`Deserialize*` rows are 5-49% slower than 03249c1's, with spreads up to ±38%.
+
+What to trust in these two files:
+
+| Rows | 4d2d76f | 03249c1 |
+|---|---|---|
+| `allocs/op`, static metrics | yes | yes |
+| `B/op` (except `PipelineHeadlessParquetCapture` and `WriterThroughput`, whose `B/op` varies between runs) | yes | yes |
+| `sec/op` of the four mixes above | yes (the reference for task 39's final code) | no |
+| `sec/op` of `Deserialize*`, component, `PipelineHeadlessParquetCapture` and `PipelineThreadScaling` rows | no | no |
+
+A performance task branching from task 39's code should record a fresh
+"before" rather than compare against either file.

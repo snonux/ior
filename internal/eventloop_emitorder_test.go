@@ -398,8 +398,9 @@ func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
 	close(rawCh)
 
 	// On a timeout the run goroutine outlives the test. Cancelling its ctx
-	// at cleanup lets a merely slow run stop, and the log is read only after
-	// el.done, so a late callback write never races a reader.
+	// at cleanup lets a merely slow run stop. The log is read only after
+	// el.done: the timeout branch returns via t.Fatal before any read, so a
+	// late callback write from the leaked run never races a reader.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go el.run(ctx, rawCh)
