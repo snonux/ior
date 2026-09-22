@@ -2213,7 +2213,7 @@ int handle_sys_enter_landlock_create_ruleset(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[2];
@@ -2248,7 +2248,7 @@ int handle_sys_exit_landlock_create_ruleset(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -2752,13 +2752,14 @@ int handle_sys_enter_mq_open(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     if (ctx->args[0] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
@@ -2827,13 +2828,15 @@ int handle_sys_enter_mq_unlink(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -3809,13 +3812,15 @@ int handle_sys_enter_quotactl(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -3939,13 +3944,15 @@ int handle_sys_enter_name_to_handle_at(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
@@ -4462,7 +4469,7 @@ int handle_sys_enter_userfaultfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
@@ -4497,7 +4504,7 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -4536,7 +4543,7 @@ int handle_sys_enter_eventfd2(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
@@ -4571,7 +4578,7 @@ int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -4610,7 +4617,7 @@ int handle_sys_enter_eventfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -4645,7 +4652,7 @@ int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -4684,7 +4691,7 @@ int handle_sys_enter_timerfd_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
@@ -4719,7 +4726,7 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -4878,7 +4885,7 @@ int handle_sys_enter_signalfd4(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[3];
@@ -4913,7 +4920,7 @@ int handle_sys_exit_signalfd4(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -4952,7 +4959,7 @@ int handle_sys_enter_signalfd(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -4987,7 +4994,7 @@ int handle_sys_exit_signalfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5026,7 +5033,7 @@ int handle_sys_enter_epoll_create1(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
@@ -5061,7 +5068,7 @@ int handle_sys_exit_epoll_create1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5100,7 +5107,7 @@ int handle_sys_enter_epoll_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5135,7 +5142,7 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5447,7 +5454,7 @@ int handle_sys_enter_fanotify_init(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
@@ -5482,7 +5489,7 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5522,13 +5529,15 @@ int handle_sys_enter_fanotify_mark(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[4] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[4]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[4]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[3];
     ev->flags = (__u32)ctx->args[1];
@@ -5589,7 +5598,7 @@ int handle_sys_enter_inotify_init1(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
@@ -5624,7 +5633,7 @@ int handle_sys_exit_inotify_init1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5663,7 +5672,7 @@ int handle_sys_enter_inotify_init(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5698,7 +5707,7 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -5738,13 +5747,15 @@ int handle_sys_enter_inotify_add_watch(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -5865,13 +5876,15 @@ int handle_sys_enter_file_getattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
@@ -5935,13 +5948,15 @@ int handle_sys_enter_file_setattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
@@ -6005,13 +6020,14 @@ int handle_sys_enter_fsopen(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
     if (ctx->args[0] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
@@ -6052,7 +6068,7 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -6091,13 +6107,15 @@ int handle_sys_enter_fspick(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
@@ -6221,13 +6239,15 @@ int handle_sys_enter_statfs(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -6463,13 +6483,15 @@ int handle_sys_enter_utimensat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[3];
@@ -6542,13 +6564,15 @@ int handle_sys_enter_futimesat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
@@ -6612,13 +6636,15 @@ int handle_sys_enter_utimes(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -6682,13 +6708,15 @@ int handle_sys_enter_utime(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -7228,13 +7256,15 @@ int handle_sys_enter_setxattrat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
@@ -7298,13 +7328,15 @@ int handle_sys_enter_setxattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -7368,13 +7400,15 @@ int handle_sys_enter_lsetxattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -7498,13 +7532,15 @@ int handle_sys_enter_getxattrat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
@@ -7575,13 +7611,15 @@ int handle_sys_enter_getxattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -7647,13 +7685,15 @@ int handle_sys_enter_lgetxattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -7781,13 +7821,15 @@ int handle_sys_enter_listxattrat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
@@ -7853,13 +7895,15 @@ int handle_sys_enter_listxattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -7925,13 +7969,15 @@ int handle_sys_enter_llistxattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -8059,13 +8105,15 @@ int handle_sys_enter_removexattrat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
@@ -8129,13 +8177,15 @@ int handle_sys_enter_removexattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -8199,13 +8249,15 @@ int handle_sys_enter_lremovexattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -8329,13 +8381,15 @@ int handle_sys_enter_umount(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -8399,13 +8453,14 @@ int handle_sys_enter_open_tree(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     if (ctx->args[1] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
@@ -8474,13 +8529,15 @@ int handle_sys_enter_mount(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -8544,7 +8601,7 @@ int handle_sys_enter_fsmount(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
@@ -8579,7 +8636,7 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -8621,20 +8678,25 @@ int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__s32)ctx->args[0];
     ev->fd_b = (__s32)ctx->args[2];
     ev->extra = (__u64)ctx->args[4];
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[1] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[3] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
 
@@ -8693,13 +8755,15 @@ int handle_sys_enter_pivot_root(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -8763,13 +8827,15 @@ int handle_sys_enter_mount_setattr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
@@ -8833,13 +8899,14 @@ int handle_sys_enter_open_tree_attr(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     if (ctx->args[1] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
@@ -9079,7 +9146,8 @@ int handle_sys_enter_close_range(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__s32)ctx->args[0];
     ev->fd_b = (__s32)ctx->args[1];
     ev->extra = (__u64)ctx->args[2];
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    ev->oldname[0] = 0;
+    ev->newname[0] = 0;
     ev->oldname_status = PATH_READ_NULL;
     ev->newname_status = PATH_READ_NULL;
     ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
@@ -9847,13 +9915,15 @@ int handle_sys_enter_mknodat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
@@ -9917,13 +9987,15 @@ int handle_sys_enter_mknod(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -9987,13 +10059,15 @@ int handle_sys_enter_mkdirat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
@@ -10057,13 +10131,15 @@ int handle_sys_enter_mkdir(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -10127,13 +10203,15 @@ int handle_sys_enter_rmdir(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -10197,13 +10275,15 @@ int handle_sys_enter_unlinkat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
@@ -10267,13 +10347,15 @@ int handle_sys_enter_unlink(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -10337,20 +10419,25 @@ int handle_sys_enter_symlinkat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[0] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[2] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[2]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[2]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
     ev->newdirfd = (__s32)ctx->args[1];
@@ -10412,20 +10499,25 @@ int handle_sys_enter_symlink(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[0] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[1] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
     ev->newdirfd = -100; // AT_FDCWD: no dirfd argument
@@ -10487,20 +10579,25 @@ int handle_sys_enter_linkat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[1] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[3] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->olddirfd = (__s32)ctx->args[0];
     ev->newdirfd = (__s32)ctx->args[2];
@@ -10562,20 +10659,25 @@ int handle_sys_enter_link(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[0] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[1] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
     ev->newdirfd = -100; // AT_FDCWD: no dirfd argument
@@ -10637,20 +10739,25 @@ int handle_sys_enter_renameat2(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[1] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[3] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->olddirfd = (__s32)ctx->args[0];
     ev->newdirfd = (__s32)ctx->args[2];
@@ -10712,20 +10819,25 @@ int handle_sys_enter_renameat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[1] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[3] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->olddirfd = (__s32)ctx->args[0];
     ev->newdirfd = (__s32)ctx->args[2];
@@ -10787,20 +10899,25 @@ int handle_sys_enter_rename(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
     if (ctx->args[0] == 0) {
+        ev->oldname[0] = 0;
         ev->oldname_status = PATH_READ_NULL;
     } else {
         ev->oldname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
+            ev->oldname[0] = 0;
+        }
     }
     if (ctx->args[1] == 0) {
+        ev->newname[0] = 0;
         ev->newname_status = PATH_READ_NULL;
     } else {
         ev->newname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
+            ev->newname[0] = 0;
+        }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
     ev->newdirfd = -100; // AT_FDCWD: no dirfd argument
@@ -11024,8 +11141,8 @@ int handle_sys_enter_execve(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)
+        ev->filename[0] = 0;
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->dirfd = -1;
     ev->flags = 0;
@@ -11085,8 +11202,8 @@ int handle_sys_enter_execveat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
-    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);
+    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)
+        ev->filename[0] = 0;
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__s32)ctx->args[4];
@@ -11146,13 +11263,15 @@ int handle_sys_enter_newstat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -11216,13 +11335,15 @@ int handle_sys_enter_newlstat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -11286,13 +11407,15 @@ int handle_sys_enter_newfstatat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[3];
@@ -11416,13 +11539,15 @@ int handle_sys_enter_readlinkat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
@@ -11486,13 +11611,15 @@ int handle_sys_enter_readlink(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -11556,13 +11683,15 @@ int handle_sys_enter_statx(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[2];
@@ -12406,13 +12535,15 @@ int handle_sys_enter_truncate(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -12596,13 +12727,15 @@ int handle_sys_enter_faccessat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
@@ -12666,13 +12799,15 @@ int handle_sys_enter_faccessat2(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[3];
@@ -12736,13 +12871,15 @@ int handle_sys_enter_access(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -12806,13 +12943,15 @@ int handle_sys_enter_chdir(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -12936,13 +13075,15 @@ int handle_sys_enter_chroot(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -13066,13 +13207,15 @@ int handle_sys_enter_fchmodat2(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[3];
@@ -13136,13 +13279,15 @@ int handle_sys_enter_fchmodat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = 0;
@@ -13206,13 +13351,15 @@ int handle_sys_enter_chmod(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -13276,13 +13423,15 @@ int handle_sys_enter_fchownat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[1] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__u32)ctx->args[4];
@@ -13346,13 +13495,15 @@ int handle_sys_enter_chown(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -13416,13 +13567,15 @@ int handle_sys_enter_lchown(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -13546,13 +13699,14 @@ int handle_sys_enter_open(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     if (ctx->args[0] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
@@ -13621,13 +13775,14 @@ int handle_sys_enter_openat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     if (ctx->args[1] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
@@ -13696,13 +13851,14 @@ int handle_sys_enter_openat2(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));
     if (ctx->args[1] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
@@ -13777,13 +13933,15 @@ int handle_sys_enter_creat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -13963,13 +14121,14 @@ int handle_sys_enter_memfd_create(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
     if (ctx->args[0] == 0) {
+        ev->filename[0] = 0;
         ev->filename_status = PATH_READ_NULL;
     } else {
         ev->filename_status = PATH_READ_OK;
         if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0) {
             ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
             ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
@@ -14010,7 +14169,7 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -14049,7 +14208,7 @@ int handle_sys_enter_memfd_secret(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[0];
@@ -14084,7 +14243,7 @@ int handle_sys_exit_memfd_secret(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;
@@ -14459,13 +14618,15 @@ int handle_sys_enter_swapoff(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -14529,13 +14690,15 @@ int handle_sys_enter_swapon(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -16375,13 +16538,15 @@ int handle_sys_enter_acct(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));
     if (ctx->args[0] == 0) {
+        ev->pathname[0] = 0;
         ev->pathname_status = PATH_READ_NULL;
     } else {
         ev->pathname_status = PATH_READ_OK;
-        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)
+        if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
+            ev->pathname[0] = 0;
+        }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
     ev->flags = 0;
@@ -17870,7 +18035,8 @@ int handle_sys_enter_kcmp(struct syscall_trace_enter *ctx) {
     ev->fd_a = (__u32)ctx->args[2] == 0 ? (__s32)ctx->args[3] : -1;
     ev->fd_b = (__u32)ctx->args[2] == 0 ? (__s32)ctx->args[4] : -1;
     ev->extra = ((__u64)(ior_kcmp_pid_is_current((__s32)ctx->args[0]) ? pid : 0) << 32) | (__u32)ctx->args[2];
-    __builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));
+    ev->oldname[0] = 0;
+    ev->newname[0] = 0;
     ev->oldname_status = PATH_READ_NULL;
     ev->newname_status = PATH_READ_NULL;
     ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
@@ -19170,7 +19336,7 @@ int handle_sys_enter_pidfd_open(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = (__s32)ctx->args[1];
@@ -19205,7 +19371,7 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename));
+    ev->filename[0] = 0;
     ev->filename_status = PATH_READ_NULL;
     ev->schema_version = EVENTFD_EVENT_SCHEMA_VERSION;
     __s32 flags = 0;

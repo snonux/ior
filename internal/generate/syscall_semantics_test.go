@@ -623,27 +623,75 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			},
 		},
 		{
-			name: "string capture initialized at wrong destination",
+			name: "string terminator written at the wrong index",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "mq_unlink",
-					"__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));",
-					"__builtin_memset(&(ev->event_type), 0, sizeof(ev->pathname));")
+					"        ev->pathname[0] = 0;\n        ev->pathname_status = PATH_READ_NULL;",
+					"        ev->pathname[1] = 0;\n        ev->pathname_status = PATH_READ_NULL;")
 			},
 		},
 		{
-			name: "string capture initialized with nonzero fill",
+			name: "string terminator with nonzero fill",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "mq_unlink",
-					"__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));",
-					"__builtin_memset(&(ev->pathname), 1, sizeof(ev->pathname));")
+					"            ev->pathname_status = PATH_READ_FAILED;\n            ev->pathname[0] = 0;",
+					"            ev->pathname_status = PATH_READ_FAILED;\n            ev->pathname[0] = 1;")
 			},
 		},
 		{
-			name: "string capture initialized with short length",
+			name: "NULL branch leaves the string unterminated",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "mq_unlink",
-					"__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));",
-					"__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname) - 1);")
+					"        ev->pathname[0] = 0;\n        ev->pathname_status = PATH_READ_NULL;",
+					"        ev->pathname_status = PATH_READ_NULL;")
+			},
+		},
+		{
+			name: "failed read leaves the string unterminated",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "mq_unlink",
+					"            ev->pathname_status = PATH_READ_FAILED;\n            ev->pathname[0] = 0;",
+					"            ev->pathname_status = PATH_READ_FAILED;")
+			},
+		},
+		{
+			name: "string terminator erases a successful read",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "mq_unlink",
+					"            ev->pathname[0] = 0;\n        }\n",
+					"        }\n        ev->pathname[0] = 0;\n")
+			},
+		},
+		{
+			name: "one name side borrows the other side's terminator",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "symlinkat",
+					"            ev->newname_status = PATH_READ_FAILED;\n            ev->newname[0] = 0;",
+					"            ev->newname_status = PATH_READ_FAILED;\n            ev->oldname[0] = 0;")
+			},
+		},
+		{
+			name: "full-buffer string memset reintroduced",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "mq_unlink",
+					"    if (ctx->args[0] == 0) {",
+					"    __builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));\n    if (ctx->args[0] == 0) {")
+			},
+		},
+		{
+			name: "exec failed read leaves the filename unterminated",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "execve",
+					"(void *)ctx->args[0]) < 0)\n        ev->filename[0] = 0;\n",
+					"(void *)ctx->args[0]) < 0)\n")
+			},
+		},
+		{
+			name: "open filename memset reintroduced",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "openat",
+					"    if (ctx->args[1] == 0) {",
+					"    __builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));\n    if (ctx->args[1] == 0) {")
 			},
 		},
 		{
@@ -822,8 +870,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "unexpected exec filename fallback",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "execve",
-					"    bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);",
-					"    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0) ior_stash_pending_filename(tid, ctx->args[0]);")
+					"(void *)ctx->args[0]) < 0)\n        ev->filename[0] = 0;\n",
+					"(void *)ctx->args[0]) < 0) {\n        ev->filename[0] = 0;\n        ior_stash_pending_filename(tid, ctx->args[0]);\n    }\n")
 			},
 		},
 		{
@@ -2244,14 +2292,17 @@ func validateStringCaptureWrites(name, enterBody string, stringMatches [][]strin
 	probeIndexes := stringReadArgRE.FindAllStringSubmatchIndex(enterBody, -1)
 	for _, match := range stringMatches {
 		field := match[1]
-		if writes := cLValueAssignmentLocations(enterBody, "ev->"+field); len(writes) != 0 {
-			return fmt.Errorf("sys_enter_%s directly writes string-captured field %s %d times, want 0", name, match[1], len(writes))
+		// The only direct write a string-captured field may receive is its
+		// reviewed terminator, ev->FIELD[0] = 0 (task 79). Where it may
+		// appear is pinned below and in validatePathReadProtocol.
+		writes := cLValueAssignmentLocations(enterBody, "ev->"+field)
+		terminators := stringTerminatorRE(field).FindAllStringIndex(enterBody, -1)
+		if len(writes) != len(terminators) {
+			return fmt.Errorf("sys_enter_%s writes string-captured field %s %d times other than its terminator, want 0", name, field, len(writes)-len(terminators))
 		}
-		probeStart := -1
 		probeEnd := -1
 		for _, indexes := range probeIndexes {
 			if enterBody[indexes[2]:indexes[3]] == field {
-				probeStart = indexes[0]
 				probeEnd = indexes[1]
 				break
 			}
@@ -2271,43 +2322,54 @@ func validateStringCaptureWrites(name, enterBody string, stringMatches [][]strin
 				return err
 			}
 		}
-		filenameMemset := `__builtin_memset\(&\(ev->filename\),\s*0,\s*sizeof\(ev->filename\)\s*\+\s*sizeof\(ev->comm\)\);`
-		filenameStorageFields := []string{"filename", "comm"}
-		if name == "fsopen" || name == "memfd_create" {
-			filenameMemset = `__builtin_memset\(&\(ev->filename\),\s*0,\s*sizeof\(ev->filename\)\);`
-			filenameStorageFields = []string{"filename"}
-		}
-		memsetPattern, ok := map[string]string{
-			"filename": filenameMemset,
-			"newname":  `__builtin_memset\(&\(ev->oldname\),\s*0,\s*sizeof\(ev->oldname\)\s*\+\s*sizeof\(ev->newname\)\);`,
-			"oldname":  `__builtin_memset\(&\(ev->oldname\),\s*0,\s*sizeof\(ev->oldname\)\s*\+\s*sizeof\(ev->newname\)\);`,
-			"pathname": `__builtin_memset\(&\(ev->pathname\),\s*0,\s*sizeof\(ev->pathname\)\);`,
-		}[field]
-		if !ok {
-			return fmt.Errorf("sys_enter_%s has no reviewed initializer shape for string field %s", name, field)
-		}
-		memsetRE := regexp.MustCompile(`(?m)^\s*` + memsetPattern + `$`)
-		memsets := memsetRE.FindAllStringIndex(enterBody, -1)
-		storageFields := map[string][]string{
-			"filename": filenameStorageFields,
+		storageFields, ok := map[string][]string{
+			"filename": {"filename", "comm"},
 			"newname":  {"oldname", "newname"},
 			"oldname":  {"oldname", "newname"},
 			"pathname": {"pathname"},
 		}[field]
+		if !ok {
+			return fmt.Errorf("sys_enter_%s has no reviewed storage for string field %s", name, field)
+		}
 		quotedStorageFields := make([]string, len(storageFields))
 		for i, storageField := range storageFields {
 			quotedStorageFields[i] = regexp.QuoteMeta(storageField)
 		}
-		allStorageMemsetRE := regexp.MustCompile(`(?m)^\s*__builtin_memset\(&\(ev->(?:` + strings.Join(quotedStorageFields, `|`) + `)\),[^;]*;\s*$`)
-		allStorageMemsets := allStorageMemsetRE.FindAllStringIndex(enterBody, -1)
-		if len(memsets) != 1 || len(allStorageMemsets) != 1 || memsets[0][1] > probeStart {
-			return fmt.Errorf("sys_enter_%s initializes string-captured field %s %d times before its probe, want 1", name, field, len(memsets))
+		// A successful probe terminates the string itself and every other
+		// outcome writes the terminator, so no memset of the storage is
+		// needed - and one after the probe would erase the capture.
+		allStorageMemsetRE := regexp.MustCompile(`(?m)^\s*__builtin_memset\(\s*&\(?\s*ev->(?:` + strings.Join(quotedStorageFields, `|`) + `)\b`)
+		if memsets := allStorageMemsetRE.FindAllStringIndex(enterBody, -1); len(memsets) != 0 {
+			return fmt.Errorf("sys_enter_%s memsets string-captured storage of %s %d times, want 0", name, field, len(memsets))
 		}
-		if err := validateBeforeSubmit("sys_enter_"+name, enterBody, probeEnd); err != nil {
+		wantTerminators := 1 // exec: the failed-read branch only
+		if field != "filename" || requiresFilenameFallback(name) {
+			wantTerminators = 2 // NULL branch and failed-read branch
+		}
+		if len(terminators) != wantTerminators {
+			return fmt.Errorf("sys_enter_%s terminates string field %s %d times, want %d", name, field, len(terminators), wantTerminators)
+		}
+		if wantTerminators == 1 {
+			guardedRE := regexp.MustCompile(`(?m)^\s*if\s*\(bpf_probe_read_user_str\(\s*ev->` + regexp.QuoteMeta(field) + `,[^\n]*\)\s*<\s*0\)\s*\n\s*ev->` + regexp.QuoteMeta(field) + `\[0\]\s*=\s*0\s*;`)
+			if guarded := guardedRE.FindAllStringIndex(enterBody, -1); len(guarded) != 1 {
+				return fmt.Errorf("sys_enter_%s does not terminate %s as the guarded statement of its failed read", name, field)
+			}
+		}
+		lastWrite := probeEnd
+		if end := terminators[len(terminators)-1][1]; end > lastWrite {
+			lastWrite = end
+		}
+		if err := validateBeforeSubmit("sys_enter_"+name, enterBody, lastWrite); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// stringTerminatorRE matches the one reviewed write a string-captured field
+// may receive: its first byte set to NUL.
+func stringTerminatorRE(field string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^\s*ev->` + regexp.QuoteMeta(field) + `\[0\]\s*=\s*0\s*;`)
 }
 
 func requiresFilenameFallback(name string) bool {
@@ -2348,6 +2410,10 @@ func validatePathReadProtocol(name, enterBody, field, argIndex string) error {
 	if len(nulls) != 1 || nulls[0][0] <= nullGuards[0][0] || nulls[0][1] > nullEnd {
 		return fmt.Errorf("sys_enter_%s field %s assigns PATH_READ_NULL %d times inside its NULL guard, want 1", name, field, len(nulls))
 	}
+	terminators := stringTerminatorRE(field).FindAllStringIndex(enterBody, -1)
+	if countWithin(terminators, nullGuards[0][1], nullEnd) != 1 {
+		return fmt.Errorf("sys_enter_%s field %s is not terminated inside its NULL guard", name, field)
+	}
 
 	elseRE := regexp.MustCompile(`(?m)^\s*\}\s*else\s*\{`)
 	elseLocation := elseRE.FindStringIndex(enterBody[nullEnd:])
@@ -2371,18 +2437,30 @@ func validatePathReadProtocol(name, enterBody, field, argIndex string) error {
 	if len(failures) != 1 {
 		return fmt.Errorf("sys_enter_%s field %s assigns PATH_READ_FAILED %d times, want 1", name, field, len(failures))
 	}
-	if probeGuards[0][2] >= 0 {
-		probeEnd, matched := matchingBrace(enterBody, probeGuards[0][1]-1)
-		if !matched || failures[0][0] <= probeGuards[0][1] || failures[0][1] > probeEnd {
-			return fmt.Errorf("sys_enter_%s field %s does not assign PATH_READ_FAILED inside its failed-read block", name, field)
-		}
-	} else {
-		failedStatementRE := regexp.MustCompile(`^\s*ev->` + quotedStatus + `\s*=\s*PATH_READ_FAILED\s*;`)
-		if !failedStatementRE.MatchString(enterBody[probeGuards[0][1]:]) {
-			return fmt.Errorf("sys_enter_%s field %s does not make PATH_READ_FAILED the guarded failed-read statement", name, field)
-		}
+	// The failed-read branch sets the status and writes the terminator, so it
+	// must be a block.
+	if probeGuards[0][2] < 0 {
+		return fmt.Errorf("sys_enter_%s field %s has no failed-read block", name, field)
+	}
+	probeEnd, matched := matchingBrace(enterBody, probeGuards[0][1]-1)
+	if !matched || failures[0][0] <= probeGuards[0][1] || failures[0][1] > probeEnd {
+		return fmt.Errorf("sys_enter_%s field %s does not assign PATH_READ_FAILED inside its failed-read block", name, field)
+	}
+	if countWithin(terminators, probeGuards[0][1], probeEnd) != 1 {
+		return fmt.Errorf("sys_enter_%s field %s is not terminated inside its failed-read block", name, field)
 	}
 	return nil
+}
+
+// countWithin counts the matches that lie entirely between start and end.
+func countWithin(matches [][]int, start, end int) int {
+	n := 0
+	for _, m := range matches {
+		if m[0] >= start && m[1] <= end {
+			n++
+		}
+	}
+	return n
 }
 
 func validateFilenameFallback(name, enterBody, argIndex string) error {
@@ -2399,7 +2477,7 @@ func validateFilenameFallback(name, enterBody, argIndex string) error {
 		return nil
 	}
 	quotedArg := regexp.QuoteMeta(argIndex)
-	guardedStashRE := regexp.MustCompile(`(?ms)^\s*if\s*\(bpf_probe_read_user_str\(\s*ev->filename,\s*sizeof\(ev->filename\),\s*\(void\s*\*\)\s*ctx->args\[` + quotedArg + `\]\s*\)\s*<\s*0\)\s*\{\s*ev->filename_status\s*=\s*PATH_READ_FAILED\s*;\s*ior_stash_pending_filename\(tid,\s*ctx->args\[` + quotedArg + `\]\);\s*\}`)
+	guardedStashRE := regexp.MustCompile(`(?ms)^\s*if\s*\(bpf_probe_read_user_str\(\s*ev->filename,\s*sizeof\(ev->filename\),\s*\(void\s*\*\)\s*ctx->args\[` + quotedArg + `\]\s*\)\s*<\s*0\)\s*\{\s*ev->filename_status\s*=\s*PATH_READ_FAILED\s*;\s*ev->filename\[0\]\s*=\s*0\s*;\s*ior_stash_pending_filename\(tid,\s*ctx->args\[` + quotedArg + `\]\);\s*\}`)
 	if guarded := guardedStashRE.FindAllStringIndex(enterBody, -1); len(guarded) != 1 {
 		return fmt.Errorf("sys_enter_%s does not stash the exact filename argument once after a failed probe", name)
 	}

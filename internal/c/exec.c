@@ -47,7 +47,9 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    __builtin_memset(&(ev->comm), 0, sizeof(ev->comm));
+    // bpf_get_current_comm writes all sizeof(ev->comm) bytes (NUL-padded), so
+    // the field needs no memset first; see "String fields in ring-buffer
+    // records" in filter.c.
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
 
     bpf_ringbuf_submit(ev, 0);
