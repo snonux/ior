@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	appconfig "ior/internal/config"
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
@@ -45,6 +46,8 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		e.runSynchronously(ctx, rawCh)
 		return
 	}
+	// Ranging until the channel is closed drains the pairs still buffered
+	// when events() stops on ctx cancellation or a closed rawCh.
 	for ep := range e.events(ctx, rawCh) {
 		e.emit(ep)
 		e.numSyscallsAfterFilter++
@@ -173,8 +176,15 @@ func (e *eventLoop) drainPairs(pairs <-chan *event.Pair) {
 	}
 }
 
+// events decodes rawCh on its own goroutine and returns the completed pairs
+// in production order. The returned channel is bounded by
+// appconfig.PairChannelBufferSize, so a slow consumer stalls decoding rather
+// than letting pairs pile up. When ctx is cancelled or rawCh is closed the
+// goroutine stops decoding and closes the channel; pairs already buffered
+// stay receivable, so a consumer that ranges over the channel until it is
+// closed emits every pair that was produced.
 func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *event.Pair {
-	ch := make(chan *event.Pair)
+	ch := make(chan *event.Pair, appconfig.PairChannelBufferSize)
 
 	go func() {
 		defer close(ch)
