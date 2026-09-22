@@ -7,7 +7,6 @@ import (
 	"runtime/debug"
 	"time"
 
-	appconfig "ior/internal/config"
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
@@ -42,16 +41,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		e.SetPrintCallback(func(ep *event.Pair) { ep.Recycle() })
 	}
 	e.initRawHandlers()
-	if e.cfg.synchronousRawProcessing {
-		e.runSynchronously(ctx, rawCh)
-		return
-	}
-	// Ranging until the channel is closed drains the pairs still buffered
-	// when events() stops on ctx cancellation or a closed rawCh.
-	for ep := range e.events(ctx, rawCh) {
-		e.emit(ep)
-		e.numSyscallsAfterFilter++
-	}
+	e.processRawEvents(ctx, rawCh)
 }
 
 func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
@@ -141,7 +131,28 @@ func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 	e.aggregateSink.IngestSyscallAggregates(result.rows)
 }
 
-func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
+// processRawEvents decodes rawCh and emits every completed pair on the
+// calling goroutine, until rawCh is closed or ctx is cancelled.
+//
+// Decoding and emission share one goroutine on purpose. Handing each pair to
+// a separate emit goroutine cost a goroutine park and wake per pair, which
+// dominated the pipeline profile, and a buffered handoff let decoding run
+// ahead of emission: warnings raised while decoding (notifyWarning) then
+// overtook the pairs decoded before them in the TUI stream, and a stopped
+// trace kept emitting its buffered pairs into the next session's stream.
+// Here a pair is emitted before the next raw record is read, so
+//   - pairs and decode-side warnings reach the callbacks in stream order;
+//   - no decoded pair is ever pending when the loop returns: every pair
+//     produced (numSyscalls) is emitted and counted (numSyscallsAfterFilter),
+//     whichever way the loop stops;
+//   - a slow consumer stalls decoding directly, so backpressure reaches
+//     rawCh and, through it, the BPF ring buffer.
+//
+// rawCh itself stays buffered (see appconfig.DefaultChannelBufferSize), so
+// ring-buffer polling remains decoupled from decoding.
+func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
+	// A raw record completes at most one pair (tracepointExited is the only
+	// sender), so one slot always suffices and the send never blocks.
 	pairs := make(chan *event.Pair, 1)
 
 	for {
@@ -153,7 +164,9 @@ func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
 			if len(raw) == 0 {
 				continue
 			}
-			e.processRawEvent(raw, pairs)
+			// Recover from any panic inside a handler so a single bad
+			// event cannot crash the entire process.
+			e.processRawEventSafe(raw, pairs)
 			e.drainPairs(pairs)
 		case <-ctx.Done():
 			logStatus("Stopping event loop")
@@ -162,8 +175,7 @@ func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
 	}
 }
 
-// drainPairs consumes all immediately available pairs from the buffered channel,
-// routing each completed pair through the outputFormatter.
+// drainPairs emits the pair, if any, that the last raw record completed.
 func (e *eventLoop) drainPairs(pairs <-chan *event.Pair) {
 	for {
 		select {
@@ -174,41 +186,6 @@ func (e *eventLoop) drainPairs(pairs <-chan *event.Pair) {
 			return
 		}
 	}
-}
-
-// events decodes rawCh on its own goroutine and returns the completed pairs
-// in production order. The returned channel is bounded by
-// appconfig.PairChannelBufferSize, so a slow consumer stalls decoding rather
-// than letting pairs pile up. When ctx is cancelled or rawCh is closed the
-// goroutine stops decoding and closes the channel; pairs already buffered
-// stay receivable, so a consumer that ranges over the channel until it is
-// closed emits every pair that was produced.
-func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *event.Pair {
-	ch := make(chan *event.Pair, appconfig.PairChannelBufferSize)
-
-	go func() {
-		defer close(ch)
-
-		for {
-			select {
-			case raw, ok := <-rawCh:
-				if !ok {
-					return
-				}
-				if len(raw) == 0 {
-					continue
-				}
-				// Recover from any panic inside a callback so a single
-				// bad event cannot crash the entire process.
-				e.processRawEventSafe(raw, ch)
-			case <-ctx.Done():
-				logStatus("Stopping event loop")
-				return
-			}
-		}
-	}()
-
-	return ch
 }
 
 // processRawEventSafe calls processRawEvent and recovers from any panic,

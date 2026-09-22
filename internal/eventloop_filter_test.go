@@ -475,7 +475,7 @@ func TestCommFilterToggle(t *testing.T) {
 			pairs:        newPairTracker(),
 			fdTracker:    newFDTracker(make(map[uint64]file.File)),
 			commResolver: newCommResolver(make(map[uint32]string)),
-			cfg:          eventLoopConfig{synchronousRawProcessing: true},
+			cfg:          eventLoopConfig{},
 			outputFormatter: outputFormatter{
 				printCb: func(ep *event.Pair) {
 					next := synchronizedPair{pair: ep, ack: make(chan struct{})}
@@ -518,7 +518,7 @@ func TestCommFilterToggle(t *testing.T) {
 			pairs:        newPairTracker(),
 			fdTracker:    newFDTracker(make(map[uint64]file.File)),
 			commResolver: newCommResolver(make(map[uint32]string)),
-			cfg:          eventLoopConfig{synchronousRawProcessing: true},
+			cfg:          eventLoopConfig{},
 			outputFormatter: outputFormatter{
 				printCb: func(ep *event.Pair) {
 					next := synchronizedPair{pair: ep, ack: make(chan struct{})}
@@ -559,7 +559,7 @@ func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 		// reading /proc on the host, so filter assertions cannot pick up a real
 		// process comm for a synthetic tid (see newHermeticCommResolver).
 		commResolver: newHermeticCommResolver(),
-		cfg:          eventLoopConfig{synchronousRawProcessing: true},
+		cfg:          eventLoopConfig{},
 		outputFormatter: outputFormatter{
 			printCb: func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
 		},

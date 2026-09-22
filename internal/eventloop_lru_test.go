@@ -189,7 +189,7 @@ func TestTracepointEnteredRecyclesDroppedEnterEvent(t *testing.T) {
 		pairs:        newPairTracker(),
 		fdTracker:    newFDTracker(make(map[uint64]file.File)),
 		commResolver: newHermeticCommResolver(),
-		cfg:          eventLoopConfig{synchronousRawProcessing: true},
+		cfg:          eventLoopConfig{},
 		done:         make(chan struct{}),
 	}
 	defer el.commResolver.shutdown()
@@ -223,7 +223,7 @@ func TestTracepointEnteredRetainsFilteredEnterEvent(t *testing.T) {
 		pairs:        newPairTracker(),
 		fdTracker:    newFDTracker(make(map[uint64]file.File)),
 		commResolver: newHermeticCommResolver(),
-		cfg:          eventLoopConfig{synchronousRawProcessing: true},
+		cfg:          eventLoopConfig{},
 		done:         make(chan struct{}),
 	}
 	defer el.commResolver.shutdown()
