@@ -199,6 +199,17 @@ tagged `+performance` in `ask`). Its static metrics at a glance:
 
 Each file below also carries a `# note:` header line saying the same.
 
+`perf/bench-1a7f74b.txt` (the final code of task 79) was recorded on a host
+that was not idle (load average 0.95 1-min, but 3.21 / 3.63 over 5 and 15
+minutes at the start). Its `sec/op` is unusable for the component rows, whose
+samples spread by up to 118% within the recording (`HandleOpenExit`
+898-1955 ns, `DeserializeRetEvent` 325-707 ns, `TracepointEntered`
+4507-7466 ns); the five pipeline mixes spread 11-22%, so only a large delta
+means anything there. The static metrics and `allocs/op` are valid, and `B/op`
+follows the usual rules above. Task 79 changed only BPF C and the generated
+`String()` method, neither of which any benchmark executes, so no `sec/op`
+change was expected from it in the first place.
+
 `perf/bench-03249c1.txt` (the final code of task 39) has load-polluted
 `sec/op`: the load average was 0.82 at the start and rose to about 8.66
 during the run, and many benchmarks of components task 39 never touched came
