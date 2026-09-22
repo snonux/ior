@@ -15,7 +15,7 @@ re-run on a machine in a different mood.
 The benchmark set is focused on the event hot path: the end-to-end pipeline
 mixes (`BenchmarkPipeline{ReadHeavy,WriteHeavy,MetadataHeavy,DiverseAllTypes,HeadlessParquetCapture}`),
 the per-stage components they are made of (decode, pairing, the exit handlers,
-fd tracker, comm cache, event pools) and the downstream row, stats and parquet
+fd tracker, comm cache, the event pool) and the downstream row, stats and parquet
 stages. The scaling, TUI and flamegraph benchmarks stay with `mage benchCompare`
 and `mage benchFlameCmp`; they take much longer and do not move with the hot
 path.
@@ -93,7 +93,8 @@ roughly ten minutes.
 Record on an idle machine. The header stores the load average at the start so a
 noisy recording can be recognised later. On the RHEL 9 development VM the
 clocksource is `hpet`, which makes every goroutine park and wake expensive and
-the `ns/op` numbers jittery; allocation counts are exact regardless.
+the `ns/op` numbers jittery. `allocs/op` and `B/op` are far steadier but not
+exact for every row; see [Comparing](#comparing).
 
 ## Comparing
 
@@ -107,9 +108,25 @@ that changed. `benchstat` is installed with
 
 Read the result in this order:
 
-1. **`allocs/op` and `B/op`.** They are deterministic. Any change is real,
-   except `B/op` of `PipelineHeadlessParquetCapture` and `WriterThroughput`,
-   which depends on timing and varies a few percent between runs.
+1. **`allocs/op` and `B/op`.** Rows whose samples are all equal (benchstat
+   `± 0%` with footnote "all samples are equal", e.g. every `Deserialize*`
+   row and `allocs/op` of the component benchmarks) are exact: any change
+   there is real. Pooled and allocation-heavy rows are not: within one
+   recording `B/op` varies by a few percent, up to about 10% (samples in
+   `03249c1`: `HandleNullExit` 94-103, `EventPoolGetPut` 95-105,
+   `HandleDup3Exit` 159-164; in `4d2d76f`: `HandleFcntlExit` 140-150), and
+   `allocs/op` of the pipeline mixes by under 0.1%
+   (`PipelineHeadlessParquetCapture` 9135-9140 across both). benchstat can still call a
+   small delta significant: between `4d2d76f` and `03249c1`, which differ only
+   in `sendPair` (which allocates nothing), it reports `B/op` of
+   `HandleDup3Exit` -3.31%, `HandleFcntlExit` -2.38%, `HandleOpenExit` -1.08%,
+   `HandleNameExit` -0.32%, `TracepointEntered` +0.72% and
+   `PipelineThreadScaling` +0.03%. Count a change as real only when it is
+   larger than the row's sample spread (min to max of the raw samples) in
+   both recordings. `B/op` of `PipelineHeadlessParquetCapture` depends on
+   timing and spreads up to 13% within a recording. `B/op` of
+   `WriterThroughput` is not trustworthy at all: its samples ranged 961-2247
+   (`4d2d76f`) and 719-3224 (`03249c1`), benchstat ±36% and ±64%.
 2. **`sec/op`.** Trust a delta only when benchstat reports it as significant
    (it prints `~` otherwise) and both recordings come from the same host.
 3. **Static metrics.** A BPF change that claims to shrink records or remove
@@ -126,8 +143,11 @@ before trusting a `sec/op` delta against them.
 1. Make sure a baseline exists for the commit you branch from; record one if not.
    If the newest committed baseline is listed under
    [Known-noisy recordings](#known-noisy-recordings) (or carries a `# note:`
-   header), record a fresh "before" at your branch point instead. `sec/op`
-   deltas are best between a "before" and "after" recorded in the same session.
+   header), record a fresh "before" at your branch point instead. If that
+   commit already has a baseline, use a distinct label
+   (`scripts/perf-baseline.sh record <hash>-rerun`) or set `PERF_FORCE=1` to
+   overwrite it. `sec/op` deltas are best between a "before" and "after"
+   recorded in the same session.
 2. Make the change. Functionality must not change: same rows, fields, ordering,
    filter semantics and statistics.
 3. Commit, then `scripts/perf-baseline.sh record`.
@@ -170,19 +190,26 @@ only in `sendPair`, whose pair send no longer blocks (a `select` with
 `PipelineDiverseAllTypes` matches (benchstat `~`); the load-affected rows
 include `PipelineHeadlessParquetCapture` (+66.3% `sec/op`, -7.4% `B/op`),
 `PipelineThreadScaling` (+54..86% for 10 threads and up), the exit handlers,
-fd tracker, comm cache, event pools and the downstream stages.
+fd tracker, comm cache, the event pool and the downstream stages
+(`WriterThroughput` +58.1%, `RecorderQueueHandoff` +60.4%,
+`SyscallAccumulatorSnapshot` +65.6%, `streamrow` `New` +22.3%).
 
-`perf/bench-4d2d76f.txt` is noisy too (load 2.19 at the start): its
-`Deserialize*` rows are 5-49% slower than 03249c1's, with spreads up to ±38%.
+`perf/bench-4d2d76f.txt` is noisy too (load 2.19 at the start): 03249c1's
+`Deserialize*` rows are 5-49% faster than 4d2d76f's (all but
+`DeserializeRetEvent`, which is `~`), i.e. 4d2d76f's are up to 96% slower,
+with 4d2d76f spreads up to ±38%.
 
 What to trust in these two files:
 
 | Rows | 4d2d76f | 03249c1 |
 |---|---|---|
-| `allocs/op`, static metrics | yes | yes |
-| `B/op` (except `PipelineHeadlessParquetCapture` and `WriterThroughput`, whose `B/op` varies between runs) | yes | yes |
+| static metrics | yes | yes |
+| `allocs/op` and `B/op` (except the two rows below) | yes, for deltas beyond the per-row sample spread (component `B/op` up to ~10%, pipeline `allocs/op` under 0.1%) | same |
+| `B/op` of `PipelineHeadlessParquetCapture` | with caution (samples spread 7%) | with caution (samples spread 13%) |
+| `B/op` of `WriterThroughput` | no (±36%) | no (±64%) |
 | `sec/op` of the four mixes above | yes (the reference for task 39's final code) | no |
-| `sec/op` of `Deserialize*`, component, `PipelineHeadlessParquetCapture` and `PipelineThreadScaling` rows | no | no |
+| `sec/op` of the component rows (`RawHandlerLookup`, `Tracepoint*`, `Handle*Exit`, `FdTrackerGetSet`, `CommResolverCachedHit`, `EventPoolGetPut`) and downstream stages (`WriterThroughput`, `RecorderQueueHandoff`, `SyscallAccumulatorSnapshot`, `New`) | with caution: spreads ±1-8% except `TracepointExited` (±22%, not usable); recorded at load 2.19, so count only deltas well beyond the spread | no (up to 92% slower, spreads up to ±41%) |
+| `sec/op` of `Deserialize*`, `PipelineHeadlessParquetCapture` and `PipelineThreadScaling` rows | no | no |
 
 A performance task branching from task 39's code should record a fresh
 "before" rather than compare against either file.
