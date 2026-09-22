@@ -204,8 +204,9 @@ that was not idle (load average 0.95 1-min, but 3.21 / 3.63 over 5 and 15
 minutes at the start). Its `sec/op` is unusable for the component rows, whose
 samples spread by up to 118% within the recording (`HandleOpenExit`
 898-1955 ns, `DeserializeRetEvent` 325-707 ns, `TracepointEntered`
-4507-7466 ns); the five pipeline mixes spread 11-22%, so only a large delta
-means anything there. The static metrics and `allocs/op` are valid, and `B/op`
+4507-7466 ns); the five pipeline mixes spread 4-22% (`DiverseAllTypes` only
+3.6%), so only a large delta means anything there. The static metrics and
+`allocs/op` are valid, and `B/op`
 follows the usual rules above. Task 79 changed only BPF C and the generated
 `String()` method, neither of which any benchmark executes, so no `sec/op`
 change was expected from it in the first place.
