@@ -1,5 +1,7 @@
 # Domain 6 — Filtering & Sampling (Audit Report)
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: ior (I/O Riot NG) at `/home/paul/git/ior`
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), section "## Domain 6 — Filtering & Sampling", items 6.1–6.4 (18 checklist bullets).
 **Commit audited**: working tree at `a68bf1b` ("audit(domain-05)…", HEAD) plus the known uncommitted deletions of `docs/syscall-tracing-plan.md` / `docs/clickhouse-streaming-plan.md` (pre-existing, not restored per audit constraints; already recorded in domain-01..05 reports).

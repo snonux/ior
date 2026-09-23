@@ -1,241 +1,102 @@
-# Querying ior Parquet recordings with ClickHouse
+# Query Parquet recordings with ClickHouse
 
-ior can record I/O events to a Parquet file (press `R` in TUI, or use the `-parquet` flag in headless mode). This document explains
-how to explore those recordings interactively using `clickhouse local`, which is bundled
-inside the standard `clickhouse/clickhouse-server` Docker image. No server, no persistent
-state, no installation needed beyond Docker.
+Press `R` in the TUI to record rows while tracing, or run
+`sudo ./ior -parquet trace.parquet` for headless output. The TUI recorder follows the active
+global filter. Headless `-parquet` is a raw output mode and does not run the TUI.
 
----
+The examples use `clickhouse local` from the `clickhouse/clickhouse-server` Docker image.
+Mount the directory containing the recording read-only:
 
-## Prerequisites
+```sh
+recording_dir=$(pwd)
+recording_file=trace.parquet
+docker run --rm -v "$recording_dir:/data:ro" clickhouse/clickhouse-server:latest \
+  clickhouse local -q "SELECT count(*) FROM file('/data/$recording_file', Parquet)"
+```
 
-- Docker running locally (`docker info` must succeed)
-- A recording file, e.g. `ior-recording-20260313-170234.parquet`
+Use an absolute `recording_dir` if the file is elsewhere. The file schema comes from
+[`internal/parquet/schema.go`](../internal/parquet/schema.go):
 
----
-
-## Schema
-
-| Column | Type | Description |
+| Column | Type | Meaning |
 |---|---|---|
-| `seq` | UInt64 | Monotonically increasing event sequence number |
-| `time_ns` | UInt64 | Absolute timestamp (nanoseconds since boot) |
-| `gap_ns` | UInt64 | Time since previous event (ns) |
-| `latency_ns` | UInt64 | Syscall duration (ns) |
-| `comm` | String | Process name |
-| `pid` | UInt32 | Process ID |
-| `tid` | UInt32 | Thread ID |
-| `syscall` | String | Syscall name (e.g. `read`, `openat`) |
-| `family` | String | Broad syscall family (e.g. `FS`, `Network`, `Memory`) |
-| `fd` | Int32 | File descriptor |
-| `ret` | Int64 | Return value (negative = errno) |
-| `bytes` | UInt64 | Bytes transferred (0 if not applicable) |
-| `address_space_bytes` | UInt64 | Memory-region extent for memory syscalls (e.g. `munmap`/`mremap`); 0 otherwise |
-| `requested_sleep_ns` | Int64 | Requested sleep duration for nanosleep-style syscalls; 0 otherwise |
-| `nfds` | Int32 | Poll/select descriptor-count argument; `maxevents` for epoll waits; 0 otherwise |
-| `timeout_ns` | Int64 | Polling timeout in nanoseconds; `-1` = infinite, `-2` = unreadable/invalid/unrepresentable/unknown, 0 for unrelated syscalls |
-| `file` | String | File path (empty if not resolved); for rename/link syscalls this is the "new" path |
-| `old_file` | String | Source/old path for rename-family (`rename`/`renameat`/`renameat2`) and link-family (`link`/`linkat`/`symlink`/`symlinkat`) syscalls; empty for other syscalls |
-| `is_error` | Bool | True when `ret` is a negative errno |
+| `seq` | UInt64 | Event sequence number |
+| `time_ns` | UInt64 | Timestamp in nanoseconds since boot |
+| `gap_ns` | UInt64 | Gap since the previous traced syscall on the same thread |
+| `latency_ns` | UInt64 | Syscall duration |
+| `comm`, `syscall`, `family` | String | Process name, syscall name and family |
+| `pid`, `tid` | UInt32 | Process and thread IDs |
+| `fd` | Int32 | File descriptor, when applicable |
+| `ret` | Int64 | Return value; negative values are errno results |
+| `bytes` | UInt64 | Classified payload bytes |
+| `address_space_bytes` | UInt64 | Memory-region extent, when applicable |
+| `requested_sleep_ns` | Int64 | Requested sleep duration, when applicable |
+| `nfds` | Int32 | Poll/select count or epoll `maxevents` |
+| `timeout_ns` | Int64 | Polling timeout; `-1` infinite, `-2` unknown |
+| `file`, `old_file` | String | Resolved path and source path for rename/link calls |
+| `is_error` | Bool | Whether the return is a negative errno |
 | `filter_epoch` | UInt64 | Filter generation at capture time |
-| `epoll_op` | String | `epoll_ctl` operation (`ADD`/`MOD`/`DEL`); empty for other syscalls |
-| `epoll_target_fd` | Int32 | `epoll_ctl` target descriptor being registered (args[2]); 0 for other syscalls |
-| `epoll_events` | UInt32 | `epoll_ctl` requested event mask (args[3]->events); 0 for other syscalls |
+| `epoll_op` | String | `epoll_ctl` ADD, MOD or DEL |
+| `epoll_target_fd` | Int32 | Target descriptor of `epoll_ctl` |
+| `epoll_events` | UInt32 | Requested epoll event mask |
 
----
+Fields that do not apply to a row use zero or an empty string. In particular, `file` is the
+new path for rename and link calls, and `old_file` is the source path.
 
-## Running a query
+## Queries
 
-The general pattern mounts the directory containing the file as `/data` inside the container:
-
-```sh
-docker run --rm \
-  -v /path/to/recording/dir:/data:ro \
-  clickhouse/clickhouse-server:latest \
-  clickhouse local -q "SELECT ... FROM file('/data/recording.parquet', Parquet)"
-```
-
-For convenience, set shell variables:
-
-```sh
-FILE="ior-recording-20260313-170234.parquet"
-DIR="$(pwd)"   # or the absolute directory containing the file
-IMG="clickhouse/clickhouse-server:latest"
-
-docker run --rm -v "$DIR:/data:ro" "$IMG" clickhouse local -q \
-  "SELECT ... FROM file('/data/$FILE', Parquet)"
-```
-
----
-
-## Example queries
-
-### Inspect the schema
+Replace `recording.parquet` in these queries with the filename mounted at `/data`.
 
 ```sql
-DESCRIBE TABLE file('/data/recording.parquet', Parquet)
-```
+DESCRIBE TABLE file('/data/recording.parquet', Parquet);
 
-```
-seq           UInt64
-time_ns       UInt64
-gap_ns        UInt64
-latency_ns    UInt64
-comm          String
-pid           UInt32
-tid           UInt32
-syscall       String
-family        String
-fd                  Int32
-ret                 Int64
-bytes               UInt64
-address_space_bytes UInt64
-requested_sleep_ns  Int64
-nfds                Int32
-timeout_ns          Int64
-file                String
-old_file            String
-is_error            Bool
-filter_epoch        UInt64
-epoll_op            String
-epoll_target_fd     Int32
-epoll_events        UInt32
-```
-
-### Row count
-
-```sql
-SELECT count(*) FROM file('/data/recording.parquet', Parquet)
-```
-
-### Top syscalls by call count
-
-```sql
-SELECT syscall, count(*) AS n
+SELECT syscall, count(*) AS calls
 FROM file('/data/recording.parquet', Parquet)
 GROUP BY syscall
-ORDER BY n DESC
-LIMIT 15
-```
+ORDER BY calls DESC
+LIMIT 15;
 
-```
-read        61800
-ioctl       14642
-statx       10916
-close        8660
-openat       6310
-write        6053
-...
-```
-
-### Error breakdown
-
-```sql
-SELECT syscall, ret, count(*) AS n
+SELECT syscall, ret, count(*) AS calls
 FROM file('/data/recording.parquet', Parquet)
 WHERE is_error
 GROUP BY syscall, ret
-ORDER BY n DESC
-LIMIT 15
-```
+ORDER BY calls DESC
+LIMIT 15;
 
-```
-read     -11   23597   -- EAGAIN (non-blocking, normal)
-statx     -2    1216   -- ENOENT
-ioctl    -25     540   -- ENOTTY
-openat    -2     376   -- ENOENT
-...
-```
-
-### Latency percentiles per syscall
-
-```sql
-SELECT
-    syscall,
-    count(*) AS n,
-    quantile(0.50)(latency_ns) AS p50_ns,
-    quantile(0.90)(latency_ns) AS p90_ns,
-    quantile(0.99)(latency_ns) AS p99_ns
+SELECT syscall, count(*) AS calls,
+       quantile(0.50)(latency_ns) AS p50_ns,
+       quantile(0.99)(latency_ns) AS p99_ns
 FROM file('/data/recording.parquet', Parquet)
 GROUP BY syscall
 ORDER BY p99_ns DESC
-LIMIT 15
-```
+LIMIT 15;
 
-```
-fdatasync    11   1745501   9444892   9994682   -- ~10ms p99, flushes to disk
-fallocate    31     35062    487162    589146
-rename        3    126619    170921    180889
-ftruncate    59      5449     35776    100399
-ioctl     14642      1155      8845     63626
-...
-```
-
-### Top files by I/O bytes
-
-```sql
-SELECT file, sum(bytes) AS total_bytes, count(*) AS ops
+SELECT file, sum(bytes) AS total_bytes, count(*) AS calls
 FROM file('/data/recording.parquet', Parquet)
 WHERE file != ''
 GROUP BY file
 ORDER BY total_bytes DESC
-LIMIT 15
-```
+LIMIT 15;
 
-```
-/home/paul/.mozilla/firefox/.../cookies.sqlite-wal   7082880   432
-/dev/ptmx                                            1590757  1472
-/proc/3680458/smaps                                  1555387   419
-...
-```
-
-### Activity by process
-
-```sql
-SELECT comm, pid, count(*) AS n, sum(bytes) AS total_bytes
-FROM file('/data/recording.parquet', Parquet)
-GROUP BY comm, pid
-ORDER BY n DESC
-LIMIT 15
-```
-
-### Slow syscalls (above threshold)
-
-```sql
-SELECT time_ns, comm, pid, syscall, file, latency_ns
-FROM file('/data/recording.parquet', Parquet)
-WHERE latency_ns > 1000000   -- 1ms
-ORDER BY latency_ns DESC
-LIMIT 20
-```
-
-### Event timeline (10ms buckets)
-
-```sql
-SELECT
-    intDiv(time_ns, 10000000) AS bucket_10ms,
-    count(*) AS events,
-    sum(bytes) AS bytes
+SELECT intDiv(time_ns, 10000000) AS bucket_10ms,
+       count(*) AS calls, sum(bytes) AS bytes
 FROM file('/data/recording.parquet', Parquet)
 GROUP BY bucket_10ms
-ORDER BY bucket_10ms
+ORDER BY bucket_10ms;
 ```
 
----
+`time_ns` is a boot-relative clock, so join it to wall time only if you have an independent
+boot-time reference.
 
-## Automated validation
+## Check a recording
 
-The `mage parquetValidate` target runs schema, row-count, and sanity checks
-against the latest `*.parquet` in the repo root:
+`mage parquetValidate` uses ClickHouse in Docker. It reads the latest timestamp-named
+`*.parquet` in the repo root unless `PARQUET_FILE` is set:
 
 ```sh
-env GOTOOLCHAIN=auto mage parquetValidate
-
-# Or against a specific file:
-PARQUET_FILE=ior-recording-20260313-170234.parquet env GOTOOLCHAIN=auto mage parquetValidate
+mage parquetValidate
+PARQUET_FILE=/absolute/path/to/trace.parquet mage parquetValidate
 ```
 
-It checks:
-1. All 23 expected columns are present
-2. Row count > 0
-3. `seq` is monotonically ordered and `time_ns` is non-zero
+The target checks for all 23 columns, a nonzero row count, a nonzero minimum `time_ns`, and
+a `seq` range with `max(seq) > min(seq)`. That last check does not prove row-by-row
+ordering, and a one-row file fails it.

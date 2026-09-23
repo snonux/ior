@@ -1,5 +1,7 @@
 # I/O Riot NG (ior) — Project Overview
 
+> Historical project overview and audit plan. It records the scope used for the 2026 audit; use [README.md](./README.md) and [AGENTS.md](./AGENTS.md) for current behavior.
+
 ## What It Is
 
 **I/O Riot NG** (abbreviated **ior**) is a Linux-only, BPF-based tracing tool that intercepts synchronous system calls and analyses how long each one takes. It is the spiritual successor to the original I/O Riot project (which used SystemTap and C). The NG rewrite is built in **Go**, **C**, and **BPF** (via `libbpfgo`).

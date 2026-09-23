@@ -1,15 +1,13 @@
 # Process-Tree Following ("Follow Forks"): Implementation Plan
 
-Status: **planned, not implemented.** This document is a design/implementation
-plan only. No code in this plan has been written yet.
+Status: **planned, not implemented.** The command line has no `-follow-forks` flag yet.
+This is a design sketch; check the kernel and libbpfgo details before implementing it.
 
 ## Motivation
 
-Today ior traces exactly one TGID. `internal/c/filter.c` `filter()` accepts a
-syscall only when the current process group id equals the load-time
-`PID_FILTER` global (or `-1` for trace-all). Children that a workload forks/execs
-have a different TGID and are dropped **in-kernel**, before any userspace comm
-filtering can see them.
+With a PID selected, `internal/c/filter.c` accepts only that TGID. `PID_FILTER=-1`
+traces all processes. A child has a different TGID, so a trace scoped to its
+parent drops the child's syscalls in the kernel, before userspace filtering.
 
 This blocks any workload that does meaningful work in child processes:
 
@@ -24,8 +22,8 @@ tree, while leaving the default single-PID behavior unchanged.
 
 ## Requirements
 
-1. Opt-in via a new `-follow-forks` flag. Default OFF → existing behavior and all
-   existing tests are byte-for-byte unaffected.
+1. Opt in with a new `-follow-forks` flag. Keep it off by default and test the
+   existing single-PID behavior.
 2. When ON, trace the root PID and every descendant created after attach
    (fork/clone), including across `exec` (which preserves the TGID).
 3. **Syscall-count aggregation must still cover the whole followed tree.** The
@@ -68,16 +66,13 @@ when a new `FOLLOW_FORK` global is on. The whole feature is gated off by default
                           ior_update_syscall_aggregate (count rollup)
 ```
 
-Because `sched_process_fork` fires in the parent's context **before the child
-runs**, the child is enrolled in the map before it executes its first syscall.
-This is what makes following reliable. `exec` does not change the TGID, so a
-re-exec'd child keeps its membership — exactly what the `ci0` landlock case
-needs.
+The fork hook should add the child before it runs its first syscall. Verify that
+ordering on the target kernels. `exec` keeps the TGID, so a child that re-execs
+should keep its membership.
 
-Putting the descendant check inside `filter()` (the single gate in front of both
-event emission and `ior_update_syscall_aggregate`) is what satisfies requirement
-3 for free: any accepted descendant flows into the same aggregate-counting path
-as the root.
+The descendant check belongs in `filter()`, which gates event emission and
+aggregate counting. Tests still need to prove that sampled descendant calls
+contribute to the total.
 
 ## Changes by layer
 
@@ -96,14 +91,14 @@ as the root.
     tracepoint context (use the tracepoint format / CO-RE as the syscall
     handlers already do); if the parent's TGID is in `traced_pid_map`, insert
     the child TGID. Only act when `FOLLOW_FORK == 1`.
-  - `SEC("tracepoint/sched/sched_process_exit")`: delete the TGID, but **only on
-    thread-group-leader exit** (`pid == tgid`) so per-thread exits don't evict a
-    still-live process.
+  - `SEC("tracepoint/sched/sched_process_exit")`: reclaim TGIDs when the whole
+    process exits. A thread exit must not remove a still-live TGID; check whether
+    leader exit alone is sufficient when other threads remain.
 
 - **`filter()`** — when `FOLLOW_FORK == 1`, additionally `ACCEPT` if
   `bpf_map_lookup_elem(&traced_pid_map, &tgid)` hits. Keep the existing
   `IOR_PID_FILTER` self-exclusion and the `PID_FILTER == -1` trace-all path.
-  This is one extra hot-path lookup, gated by the flag (negligible when off).
+  This adds one map lookup on the enabled path; measure its cost.
 
 ### 2. BPF control plane (Go, `internal/`)
 
@@ -150,7 +145,7 @@ as the root.
   never sandboxed. The test runs with follow-forks and a comm-scoped assertion
   for `enter_landlock_restrict_self`. ~30 min once the infra above exists.
 
-## Effort estimate: ~2.5–4 days
+## Rough effort estimate: 2.5–4 days
 
 | Piece | Est. |
 |---|---|
@@ -160,21 +155,18 @@ as the root.
 | `ci0` scenario + test | 0.25d |
 | Verifier / edge-case buffer (thread-vs-process exit, fork tracepoint field offsets, map sizing) | 0.5–1d |
 
-## Risks & mitigations
+## Checks before shipping
 
-- **Behavior regression** → default-off `FOLLOW_FORK` global; zero change to
-  existing code paths when off. Gate sign-off on the full suite staying green.
-- **`sched_process_fork` field extraction** (`child_pid` offset) → use the
-  tracepoint format / CO-RE, consistent with the existing syscall handlers.
-- **Thread vs process exit eviction** → guard the delete on `pid == tgid`
-  (leader only) so a thread exit never drops a live process.
-- **Map exhaustion under heavy forking** → bounded hash with exit-hook reclaim;
-  optionally `LRU_HASH`. Best-effort is acceptable for a tracer.
-- **Verifier cost** → a single extra map lookup on the hot path, flag-gated; low.
-- **Count-aggregation correctness (requirement 3)** → keep the descendant check
-  inside `filter()` so accepted descendants share the root's
-  `ior_update_syscall_aggregate` path; add an explicit assertion in
-  `follow_fork_test.go` that descendant syscalls increment the aggregate counts.
+- Run the full suite with the flag off to catch changes to single-PID tracing.
+- Read `child_pid` using the tracepoint format and test it on the oldest
+  supported kernel.
+- Remove a TGID only after its last thread exits. A leader can exit while other
+  threads remain.
+- Bound the map and reclaim entries on exit. Test what happens when inserts fail
+  during a fork storm.
+- Measure the enabled map lookup and check that the verifier accepts both modes.
+- Assert that sampled child syscalls contribute to aggregate counts as well as
+  emitted rows.
 
 ## Sequencing
 
@@ -186,8 +178,7 @@ as the root.
 4. Userland filter bypass + harness tree mode + assertions.
 5. `ci0` scenario + test.
 
-Steps 1–3 deliver the reusable feature; steps 4–5 consume it. Each step is
-independently verifiable.
+Run the on/off integration test before adding the landlock scenario.
 
 ## Source-of-truth references
 

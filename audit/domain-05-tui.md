@@ -1,5 +1,7 @@
 # Domain 5 — TUI Dashboard & User Interaction (Audit Report)
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: ior (I/O Riot NG) at `/home/paul/git/ior`
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), section "## Domain 5 — TUI Dashboard & User Interaction", items 5.1–5.6 (21 checklist bullets).
 **Commit audited**: working tree at `5f91899` ("audit(domain-04)…", HEAD) plus the known uncommitted deletions of `docs/syscall-tracing-plan.md` / `docs/clickhouse-streaming-plan.md` (pre-existing, not restored per audit constraints; already recorded in domain-01..04 reports).

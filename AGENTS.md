@@ -12,7 +12,7 @@ git -C ../libbpfgo submodule update --init --recursive
 make -C ../libbpfgo libbpfgo-static
 ```
 
-If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), rerun the commands above and then run `mage world`. Prefer Mage targets over raw `go test` for packages that import `libbpfgo`; Mage wires the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
+If builds/tests fail with missing libbpf headers (for example `bpf/bpf.h` not found), rerun the commands above and then retry the failed Mage target. Run `mage world` only on a host whose tracepoint set matches the committed generated artifacts; its generation diff gate stops on older kernels. Prefer Mage targets over raw `go test` for packages that import `libbpfgo`; Mage wires the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
 
 **Vetting**: use `mage vet`, not bare `go vet ./...`. Besides wiring the cgo
 environment, it scopes a single analyzer exemption: `cmd/ioworkload` is vetted
@@ -360,9 +360,9 @@ not sufficient.
 ## TUI Behavior
 
 - **Default mode** is TUI (`-plain` disables TUI and prints CSV rows to stdout).
-- **TUI trace flow** ingests events into the in-memory stats engine; it does **not** continuously write trace rows to disk.
-- **File output in TUI** is explicit export only (`e`), writing `ior-stream-<timestamp>.csv` in the current directory from the current filtered stream snapshot. The `e` modal is an options picker (no filename shown); the default filename is generated at submit time (the stream tab's `X` "export as" modal is the one that pre-fills a name).
-- **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime, including the Stream tab's x/X/E shortcuts and their hints.
+- **TUI trace flow** ingests events into the in-memory stats engine by default. It writes rows to Parquet only while the user has an `R` recording active.
+- **File output in TUI** has two explicit paths. `e` exports the current filtered stream snapshot to `ior-stream-<timestamp>.csv` in the current directory; its modal picks an option, and the filename is generated at submit time. The Stream tab's `X` modal prompts for a filename. `R` starts or stops a Parquet recording, with a filename prompt when starting.
+- **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime, including the Stream tab's x/X/E shortcuts and their hints. It does not disable `R` Parquet recording.
 - **Tab navigation** supports `tab/shift+tab` and numeric keys `1..7` only. `left/right` and `h/l` navigate table columns (and the flame graph); they do not switch tabs.
 - **Family visibility**: the Syscalls tab shows a per-syscall Family column classified via `TraceId.Family()`; there is no dedicated Non-IO tab.
 - **When export is disabled**, export key hints are hidden from dashboard help and `e` and the Stream tab's x/X/E shortcuts do not open the export modal or write CSV files.

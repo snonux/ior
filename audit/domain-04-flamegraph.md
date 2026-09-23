@@ -1,5 +1,7 @@
 # Domain 4 — Flamegraph & Output Formats (Audit Report)
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: ior (I/O Riot NG) at `/home/paul/git/ior`
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), section "## Domain 4 — Flamegraph & Output Formats", items 4.1–4.4 (16 checklist bullets).
 **Commit audited**: `90b6569d1cb2d9ab0279fec997e0b5e15b648f5e` (HEAD, "audit(domain-03): stats engine & aggregation verification report"); the working tree additionally carries the known uncommitted deletions of `docs/syscall-tracing-plan.md` and `docs/clickhouse-streaming-plan.md` (pre-existing, cross-referenced in domain-01/02/03 reports; not restored per audit constraints).
