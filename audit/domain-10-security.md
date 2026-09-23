@@ -1,5 +1,7 @@
 # Domain 10 — Security & Privilege Model (Audit Report)
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: ior (I/O Riot NG) at `/home/paul/git/ior`
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), section "## Domain 10 — Security & Privilege Model", items 10.1–10.4.
 **Commit audited**: `2897495dfd34bf3533b599de896d85d1493b6912` (2026-06-14, "feat(dashboard): scope Syscalls tab rows by active family/syscall filter")

@@ -1,5 +1,7 @@
 # Domain 3 — Stats Engine & Aggregation (Audit Report)
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: ior (I/O Riot NG) at `/home/paul/git/ior`
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), section "## Domain 3 — Stats Engine & Aggregation", items 3.1–3.4 (11 checklist bullets).
 **Commit audited**: `1cf389203f149743688115b104bd55807cbb90f0` (HEAD; working tree additionally carries the known uncommitted deletion of `docs/syscall-tracing-plan.md`, see F6).

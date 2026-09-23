@@ -1,5 +1,7 @@
 # I/O Riot NG (ior) — Project Audit Report
 
+> Historical audit snapshot at commit `2897495`. Findings describe that tree; use [README.md](./README.md) and [AGENTS.md](./AGENTS.md) for current behavior.
+
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), all ten domains, executed 2026-08-31/09-01.
 **Commit audited**: `2897495dfd34bf3533b599de896d85d1493b6912` ("feat(dashboard): scope Syscalls tab rows by active family/syscall filter").
 **Environment**: Rocky Linux 9, kernel `5.14.0-687.36.1.el9_8.x86_64`, no interactive tty, no general root — live tracing was executed through purpose-scoped sudoers NOPASSWD rules (`sudo -n /home/paul/git/ior/ior`, `…/integrationtests.test`, `bpftool btf dump`, read-only tracefs `find|cat`), discovered during Domain 7.

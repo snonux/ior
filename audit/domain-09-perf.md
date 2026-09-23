@@ -1,5 +1,7 @@
 # Domain 9 — Performance & Resource Safety (Audit Report)
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: ior (I/O Riot NG) at `/home/paul/git/ior`
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), section "## Domain 9 — Performance & Resource Safety", items 9.1–9.3.
 **Commit audited**: `2897495dfd34bf3533b599de896d85d1493b6912`; binary freshly built by the Domain 7 task (static, gitignored `./ior`).

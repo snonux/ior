@@ -1,5 +1,7 @@
 # Audit Report — Domain 1: BPF Kernel-Side Correctness
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: I/O Riot NG (ior) at `/home/paul/git/ior`
 **Audit plan**: `PLAN-PROJECT-AUDIT.md`, section "Domain 1 — BPF Kernel-Side Correctness" (items 1.1, 1.2, 1.3)
 **Date**: 2026-09-01

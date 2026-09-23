@@ -1,5 +1,7 @@
 # Domain 2 — Event Loop & Data Pipeline (Audit Report)
 
+> Historical audit evidence for the commit named below. Use [README.md](../README.md) and [AGENTS.md](../AGENTS.md) for current behavior.
+
 **Project**: ior (I/O Riot NG) at `/home/paul/git/ior`
 **Audit basis**: `PLAN-PROJECT-AUDIT.md` (repo root), section "## Domain 2 — Event Loop & Data Pipeline", items 2.1–2.3.
 **Commit audited**: `1cf3892` ("audit(domain-10): security & privilege model verification report"); working tree additionally has uncommitted deletions of `docs/clickhouse-streaming-plan.md` and `docs/syscall-tracing-plan.md` (pre-existing, known).

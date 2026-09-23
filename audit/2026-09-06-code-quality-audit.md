@@ -1,5 +1,7 @@
 # Code-Quality Audit — 2026-09-06
 
+> Historical audit snapshot at commit `2ddd880`. Task states and findings below describe that review, not the current tree; see [README.md](../README.md) for current behavior.
+
 - **Repo:** ior, branch `develop`, HEAD `2ddd880` (plus an uncommitted WIP rewrite of
   `internal/eventloop_state.go` — see finding B1).
 - **Scope:** root package, `cmd/...` (ior, filewriter, ioworkload), `internal/...`

@@ -2,8 +2,9 @@
 # Sudoers rules for I/O Riot NG (ior) build/test hardening
 # =============================================================================
 # Purpose:
-#   Allow unprivileged users to run ONLY the specific commands that require
-#   root/CAP_BPF, while keeping Mage (the build tool) itself unprivileged.
+#   Keep Mage unprivileged while allowing the listed commands. A user who can
+#   replace integrationtests.test or ior at an allowed path can run their code
+#   as root. Install these rules only for a trusted checkout and build user.
 #
 # Installation (as root):
 #   1. Replace "%developers" below with the actual Unix group or username.
@@ -37,8 +38,8 @@
 #    mage integrationTestSerial, mage testWithName for integration targets)
 # -----------------------------------------------------------------------------
 # The binary is produced by "go test -c ./integrationtests" and lands in the
-# repository root as "integrationtests.test".  Because Go produces a static
-# binary at a predictable name, we lock the rule to that path.
+# repository root as "integrationtests.test". The rule matches its path, not
+# its contents; protect that path against untrusted writers.
 #
 # If your repo is checked out in a non-standard location, you may need a
 # symlink or wrapper script at a fixed path (e.g. /usr/local/bin/ior-test-runner)
