@@ -915,10 +915,12 @@ func frameRelation(path, selectedPath string) relation {
 	return relationNone
 }
 
-func maxFrameRowForSet(frames []tuiFrame, include map[int]bool) int {
+// maxFrameRowForSet returns the deepest row among the frames admitted by
+// include; a nil include admits every frame.
+func maxFrameRowForSet(frames []tuiFrame, include frameFilter) int {
 	maxRow := 0
 	for idx, frame := range frames {
-		if include != nil && !include[idx] {
+		if !include.admits(idx) {
 			continue
 		}
 		if frame.Row > maxRow {

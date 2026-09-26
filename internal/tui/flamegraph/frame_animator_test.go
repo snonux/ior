@@ -48,3 +48,79 @@ func TestFrameIndexAtHeightMetricMapsClicksInExpandedLeafBand(t *testing.T) {
 		t.Fatalf("y=6: expected root frame index 0, got %d", got)
 	}
 }
+
+func animatorTestFrames(width int) []tuiFrame {
+	return []tuiFrame{
+		{Name: "root", Row: 0, Col: 0, Width: width, Depth: 0, Path: "root"},
+		{Name: "a", Row: 1, Col: 0, Width: width / 2, Depth: 1, Path: "root" + pathSeparator + "a"},
+	}
+}
+
+func TestFrameAnimatorSnapsWithoutPreviousLayout(t *testing.T) {
+	fa := newFrameAnimator()
+	target := animatorTestFrames(40)
+	ancestry := buildFrameAncestry(target)
+
+	// animate=true with nothing on screen yet has nothing to animate from.
+	fa.applyTargetFrames(target, ancestry, true)
+	if fa.isAnimating() {
+		t.Fatal("animating without a previous layout")
+	}
+	if got := fa.currentFrames(); len(got) != len(target) || got[1] != target[1] {
+		t.Fatalf("currentFrames = %v, want %v", got, target)
+	}
+	if got := fa.currentAncestry(); len(got.parent) != len(target) || got.parent[1] != 0 {
+		t.Fatalf("currentAncestry not installed: %+v", got)
+	}
+}
+
+func TestFrameAnimatorAnimatesTowardsNewLayout(t *testing.T) {
+	fa := newFrameAnimator()
+	first := animatorTestFrames(40)
+	fa.applyTargetFrames(first, buildFrameAncestry(first), false)
+
+	second := animatorTestFrames(80)
+	fa.applyTargetFrames(second, buildFrameAncestry(second), false)
+	if fa.isAnimating() {
+		t.Fatal("animate=false must snap to the target")
+	}
+
+	third := animatorTestFrames(20)
+	fa.applyTargetFrames(third, buildFrameAncestry(third), true)
+	if !fa.isAnimating() {
+		t.Fatal("expected an animation between differing layouts")
+	}
+	for ticks := 0; fa.tickAnimation(); ticks++ {
+		if ticks >= 600 {
+			t.Fatal("animation did not settle within 600 ticks")
+		}
+	}
+	if fa.isAnimating() {
+		t.Fatal("animation did not settle")
+	}
+	if got := fa.currentFrames()[1].Width; got != third[1].Width {
+		t.Fatalf("settled width = %d, want %d", got, third[1].Width)
+	}
+}
+
+func TestFrameAnimatorIndexByPathAndDrop(t *testing.T) {
+	fa := newFrameAnimator()
+	frames := animatorTestFrames(40)
+	fa.applyTargetFrames(frames, buildFrameAncestry(frames), false)
+
+	if got := fa.indexByPath(frames[1].Path); got != 1 {
+		t.Fatalf("indexByPath = %d, want 1", got)
+	}
+	if got := fa.indexByPath("root" + pathSeparator + "missing"); got != -1 {
+		t.Fatalf("indexByPath(missing) = %d, want -1", got)
+	}
+
+	fa.dropFrames()
+	if len(fa.currentFrames()) != 0 || fa.indexByPath("root") != -1 {
+		t.Fatal("dropFrames kept frames")
+	}
+	fa.reset()
+	if fa.isAnimating() || len(fa.currentAncestry().parent) != 0 {
+		t.Fatal("reset kept animation or ancestry state")
+	}
+}

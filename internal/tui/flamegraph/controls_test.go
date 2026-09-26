@@ -33,7 +33,7 @@ func TestToggleHeightFieldErrorKeepsExistingState(t *testing.T) {
 	}
 	m := NewModel(liveTrie)
 	m.snapshot = &snapshotNode{Name: "root", Total: 10}
-	m.frames = []tuiFrame{{Name: "root", Path: "root", Total: 10}}
+	m.anim.frames = []tuiFrame{{Name: "root", Path: "root", Total: 10}}
 
 	m.toggleHeightField()
 
@@ -43,7 +43,7 @@ func TestToggleHeightFieldErrorKeepsExistingState(t *testing.T) {
 	if got, want := m.statusMessage, "Height toggle error: set-height failed"; got != want {
 		t.Fatalf("statusMessage = %q, want %q", got, want)
 	}
-	if m.snapshot == nil || len(m.frames) == 0 {
+	if m.snapshot == nil || len(m.anim.frames) == 0 {
 		t.Fatalf("expected snapshot/layout state to remain intact on SetHeightField error")
 	}
 }

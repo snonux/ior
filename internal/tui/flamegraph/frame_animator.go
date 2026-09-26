@@ -4,8 +4,9 @@ import "time"
 
 // FrameAnimator manages the animated transition between frame layouts. It owns
 // the current frame slice, the target frame slice, the frame ancestry index, and
-// the spring-based AnimationState. The Model delegates all layout-swap and
-// animation-tick logic here.
+// the spring-based AnimationState. It knows nothing about selection or search:
+// the Model re-establishes those invariants after each swap or tick (see
+// Model.applyTargetFrames and Model.tickAnimation).
 type FrameAnimator struct {
 	animation    AnimationState
 	animating    bool
@@ -22,23 +23,39 @@ func newFrameAnimator() FrameAnimator {
 	}
 }
 
+// currentFrames returns the frames to render now: the interpolated positions
+// while animating, otherwise the installed target layout. The slice is owned by
+// the animator and is overwritten by the next swap or tick.
+func (fa *FrameAnimator) currentFrames() []tuiFrame {
+	return fa.frames
+}
+
+// currentAncestry returns the parent/child index of the installed layout.
+func (fa *FrameAnimator) currentAncestry() frameAncestry {
+	return fa.ancestry
+}
+
+// isAnimating reports whether a spring transition is still in progress.
+func (fa *FrameAnimator) isAnimating() bool {
+	return fa.animating
+}
+
+// indexByPath returns the index of the current frame with the given path, or
+// -1 when no such frame exists.
+func (fa *FrameAnimator) indexByPath(path string) int {
+	for idx, frame := range fa.frames {
+		if frame.Path == path {
+			return idx
+		}
+	}
+	return -1
+}
+
 // applyTargetFrames installs a new frame layout and ancestry index. When animate
 // is true and a previous layout exists, it kicks off a spring animation from
 // the current positions. When animate is false (zoom transitions, user driving),
 // it snaps directly to the target.
-//
-// After swapping frames it restores the selection to prevPath, clamps it,
-// recomputes the filter state, ensures visibility, and refreshes the subtree
-// highlight — maintaining the same post-swap invariants as the old Model method.
-func (fa *FrameAnimator) applyTargetFrames(
-	targetFrames []tuiFrame,
-	ancestry frameAncestry,
-	prevPath string,
-	animate bool,
-	sel *SelectionManager,
-	search *SearchController,
-	height int,
-) {
+func (fa *FrameAnimator) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestry, animate bool) {
 	fa.targetFrames = targetFrames
 	fa.ancestry = ancestry
 	fa.animation.SetTargets(fa.targetFrames)
@@ -49,25 +66,22 @@ func (fa *FrameAnimator) applyTargetFrames(
 		fa.animating = false
 		fa.frames = append(fa.frames[:0], fa.targetFrames...)
 	}
-	if len(fa.frames) > 1 {
-		sel.hasNavigableSnapshot = true
-	}
-	sel.restoreByPath(fa.frames, prevPath)
-	sel.clamp(fa.frames)
-	search.recomputeFilterState(fa.frames, fa.ancestry)
-	sel.ensureNavigable(fa.frames, search.matchIndices, search.searchQuery, search.filterVisible)
-	sel.ensureVisible(fa.frames, height, search.searchQuery, search.filterVisible)
-	sel.subtreeSet = subtreeSetUsingAncestry(fa.frames, sel.selectedIdx, fa.ancestry, sel.subtreeSet)
 }
 
 // tickAnimation advances the spring by one frame and updates the current frames.
 // Returns true while animation is still active.
-func (fa *FrameAnimator) tickAnimation(sel *SelectionManager, search *SearchController) bool {
+func (fa *FrameAnimator) tickAnimation() bool {
 	fa.animating = fa.animation.Tick(0)
 	fa.frames = fa.animation.CurrentFrames()
-	sel.clamp(fa.frames)
-	sel.subtreeSet = subtreeSetUsingAncestry(fa.frames, sel.selectedIdx, fa.ancestry, sel.subtreeSet)
 	return fa.animating
+}
+
+// dropFrames discards the current and target layouts while leaving the spring
+// state and ancestry index untouched, as done when the snapshot state is
+// cleared. Use reset to discard the animation as well.
+func (fa *FrameAnimator) dropFrames() {
+	fa.frames = nil
+	fa.targetFrames = nil
 }
 
 // reset clears all frame/animation state, preserving the configured spring parameters.
