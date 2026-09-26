@@ -121,12 +121,17 @@ func (sc *SearchController) footerLine(frames []tuiFrame, selectedIdx int) strin
 	return fmt.Sprintf("%s  %d/%d matches", sc.searchInput.View(), pos, len(matches))
 }
 
-// jumpMatch moves the selection to the next or previous match (direction +1/-1).
-// Returns the new selectedIdx (unchanged if there are no matches).
-func jumpMatch(frames []tuiFrame, matchIndices map[int]bool, ancestry frameAncestry, selectedIdx, direction int) (int, map[int]bool) {
+// jumpMatch moves the selection to the next or previous match (direction +1/-1)
+// and returns the new selectedIdx together with its subtree highlight set.
+// `subtree` is the caller's current highlight set: with no matches the
+// selection does not move, so both selectedIdx and subtree are returned
+// unchanged, keeping m.subtreeSet in sync with the selection (a nil set was
+// only papered over by the renderer's recompute fallback). Otherwise subtree
+// is refilled in place for the new selection, like subtreeSetUsingAncestry.
+func jumpMatch(frames []tuiFrame, matchIndices map[int]bool, ancestry frameAncestry, selectedIdx, direction int, subtree map[int]bool) (int, map[int]bool) {
 	matches := orderedMatchIndices(matchIndices)
 	if len(matches) == 0 {
-		return selectedIdx, nil
+		return selectedIdx, subtree
 	}
 	currentPos := indexOf(matches, selectedIdx)
 	var nextIdx int
@@ -146,8 +151,7 @@ func jumpMatch(frames []tuiFrame, matchIndices map[int]bool, ancestry frameAnces
 		}
 		nextIdx = matches[next]
 	}
-	subtree := subtreeSetUsingAncestry(frames, nextIdx, ancestry, nil)
-	return nextIdx, subtree
+	return nextIdx, subtreeSetUsingAncestry(frames, nextIdx, ancestry, subtree)
 }
 
 // setDarkMode updates the text input style for the given theme.
