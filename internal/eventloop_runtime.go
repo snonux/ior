@@ -12,9 +12,10 @@ import (
 	"ior/internal/types"
 )
 
-// logStatus prints a human-facing status line to stderr. All event-loop
-// lifecycle messages live on stderr so stdout carries only machine-readable
-// output (the CSV header and rows in -plain mode).
+// logStatus prints a human-facing status line to stderr, so stdout carries
+// only machine-readable output (the CSV header and rows in -plain mode). It is
+// the fallback sink for notifyStatus and notifyWarningOrLog; lifecycle lines
+// go through notifyStatus so TUI mode can silence them.
 func logStatus(args ...any) {
 	_, _ = fmt.Fprintln(os.Stderr, args...)
 }
@@ -28,7 +29,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer stopDropMonitor()
 
 	if e.cfg.pprofEnable {
-		logStatus("Profiling, press Ctrl+C to stop")
+		e.notifyStatus("Profiling, press Ctrl+C to stop")
 	}
 	if e.cfg.plainMode && !e.cfg.pprofEnable {
 		fmt.Println(event.EventStreamHeader)
@@ -171,7 +172,7 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 			e.processRawEventSafe(raw, pairs)
 			e.drainPairs(pairs)
 		case <-ctx.Done():
-			logStatus("Stopping event loop")
+			e.notifyStatus("Stopping event loop")
 			return
 		}
 	}

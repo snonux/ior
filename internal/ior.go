@@ -759,15 +759,15 @@ func setupTraceInfraWithEventLoop(
 		return nil, err
 	}
 
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg)
-	if err != nil {
-		return nil, err
-	}
-
 	// Teardown errors must stay visible in every mode: the mode-dependent
 	// logln is a no-op in TUI mode, which previously silently discarded
 	// probe-detach failures (audit domain-10 F2).
 	logTeardown := newLogger(true)
+
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, bpfSetupLog{status: logln, teardown: logTeardown})
+	if err != nil {
+		return nil, err
+	}
 
 	reporter, _ := runtime.TraceShutdownReporterFromContext(parentCtx)
 	infra := &traceInfra{
@@ -827,6 +827,10 @@ func setupTraceInfraWithEventLoop(
 		return nil, err
 	}
 	infra.el = el
+	// Lifecycle lines ("Stopping event loop", which fires on every TUI trace
+	// restart) follow the mode-dependent logger so they never write over the
+	// Bubble Tea screen.
+	el.SetStatusCallback(logln)
 
 	// Nothing fallible may follow. Every step above still reaches the caller
 	// through err, and in TUI mode that is the only path an error has: once

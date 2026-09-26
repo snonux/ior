@@ -20,6 +20,14 @@ type outputFormatter struct {
 	// warningCb is an optional callback for non-fatal event-processing
 	// warnings (e.g. malformed events, unresolved comms). nil means silent.
 	warningCb func(message string)
+
+	// statusCb receives human-facing lifecycle lines ("Stopping event loop",
+	// the -pprof hint, the stats wait note). Trace setup wires it to the
+	// mode-dependent logln, which is a no-op in TUI mode: those lines used to
+	// go straight to the terminal on every trace restart while Bubble Tea
+	// owned it. nil falls back to logStatus (stderr) so loops built outside
+	// trace setup - tests, benchmarks - keep the historical behaviour.
+	statusCb func(args ...any)
 }
 
 // SetPrintCallback replaces the pair-emission callback. The callback owns
@@ -34,6 +42,23 @@ func (e *eventLoop) SetPrintCallback(cb func(ep *event.Pair)) {
 // warnings; the callback receives one human-readable message per problem.
 func (e *eventLoop) SetWarningCallback(cb func(message string)) {
 	e.warningCb = cb
+}
+
+// SetStatusCallback replaces the human-facing status-line sink. The callback
+// receives fmt.Sprintln-style arguments; nil restores the stderr default.
+func (e *eventLoop) SetStatusCallback(cb func(args ...any)) {
+	e.statusCb = cb
+}
+
+// notifyStatus delivers one lifecycle status line to statusCb, or to stderr
+// when none is wired. Unlike warnings, status lines are purely informational,
+// so a silent sink (TUI mode) is allowed to drop them.
+func (f *outputFormatter) notifyStatus(args ...any) {
+	if f.statusCb == nil {
+		logStatus(args...)
+		return
+	}
+	f.statusCb(args...)
 }
 
 // emit invokes printCb for the given pair, falling back to a safe recycle-only

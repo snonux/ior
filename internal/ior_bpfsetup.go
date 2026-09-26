@@ -2,8 +2,8 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	appconfig "ior/internal/config"
@@ -44,9 +44,24 @@ func setupBPFModuleError(stage string, err error) error {
 	return fmt.Errorf("setup BPF module: %s: %w", stage, err)
 }
 
+// bpfSetupLog routes the console output of BPF setup. Nothing in setup writes
+// to the terminal directly: in TUI mode Bubble Tea owns it, and each trace
+// restart re-runs this attach path while the dashboard is on screen.
+type bpfSetupLog struct {
+	// status receives non-fatal attach diagnostics (skipped syscall or sched
+	// probes). It is the mode-dependent logln: stderr in headless modes and a
+	// no-op in TUI mode, where a skipped syscall probe keeps its lastErr in
+	// the probe manager and States() surfaces it in the probe view instead.
+	status func(args ...any)
+	// teardown receives detach failures of the sched probes. Like every other
+	// teardown error it must stay visible in all modes (audit domain-10 F2),
+	// so trace setup wires the always-on stderr logger here.
+	teardown func(args ...any)
+}
+
 // setupBPFModule loads and attaches the BPF module, attaching tracepoints
 // and registering the probe manager with any TUI runtime bindings.
-func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *probemanager.Manager, func(), error) {
+func setupBPFModule(parentCtx context.Context, cfg flags.Config, log bpfSetupLog) (*bpf.Module, *probemanager.Manager, func(), error) {
 	releaseBindings := func() {}
 
 	bpfModule, stage, err := loadBPFModule()
@@ -78,28 +93,16 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	// preceding comm record, which is exactly the stale/empty label the exec
 	// probe exists to prevent. The exit probe has no ordering requirement but
 	// costs nothing to attach here.
-	releaseExecProbe := attachProcessExecProbe(attacher)
-	releaseExitProbe := attachProcessExitProbe(attacher)
+	releaseExecProbe := attachProcessExecProbe(attacher, log)
+	releaseExitProbe := attachProcessExitProbe(attacher, log)
 	releaseSchedProbes := func() {
 		releaseExecProbe()
 		releaseExitProbe()
 	}
 
-	mgr := probemanager.NewManager(attacher)
-	// Per-syscall attach failures are non-fatal: on older kernels the
-	// tracepoint may be absent (e.g. binary built against a newer kernel).
-	// We log and skip; the affected probe stays in the manager with its
-	// lastErr set, so States() and the TUI surface the failure.
-	warn := func(syscall string, err error) {
-		fmt.Fprintf(os.Stderr, "ior: skipping tracepoint for %s: %v\n", syscall, err)
-	}
-	if err := mgr.AttachAll(cfg.TracepointSelector.ShouldAttach, tracepoints.List, warn); err != nil {
+	mgr, err := attachSyscallProbes(attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, log.status)
+	if err != nil {
 		releaseSchedProbes()
-		// This is already the error-cleanup path, so a failing Close is
-		// reported rather than discarding or masking the attach error.
-		if closeErr := mgr.Close(); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "ior: probe manager close after failed attach: %v\n", closeErr)
-		}
 		bpfModule.Close()
 		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)
 	}
@@ -116,6 +119,32 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	return bpfModule, mgr, releaseSchedProbes, nil
 }
 
+// attachSyscallProbes registers every syscall tracepoint pair with a new probe
+// manager and attaches the ones shouldAttach selects.
+//
+// Per-syscall attach failures are non-fatal: on older kernels the tracepoint
+// may be absent (e.g. binary built against a newer kernel). They are reported
+// through logln and skipped; the affected probe stays in the manager with its
+// lastErr set, so States() and the TUI surface the failure.
+//
+// On a fatal error the manager is closed here, and a failing Close is joined
+// into the returned error rather than printed: this is already the cleanup
+// path, and the caller (in TUI mode the trace starter) is the one place that
+// can surface it without writing over the dashboard.
+func attachSyscallProbes(attacher probemanager.Attacher, shouldAttach func(string) bool, tpNames []string, logln func(args ...any)) (*probemanager.Manager, error) {
+	mgr := probemanager.NewManager(attacher)
+	warn := func(syscall string, err error) {
+		logln(fmt.Sprintf("ior: skipping tracepoint for %s: %v", syscall, err))
+	}
+	if err := mgr.AttachAll(shouldAttach, tpNames, warn); err != nil {
+		if closeErr := mgr.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close probe manager after failed attach: %w", closeErr))
+		}
+		return nil, err
+	}
+	return mgr, nil
+}
+
 // processExecProgName is the BPF program in internal/c/exec.c that reports the
 // post-exec task comm.
 const processExecProgName = "handle_sched_process_exec"
@@ -129,16 +158,16 @@ const processExitProgName = "handle_sched_process_exit"
 // eventLoop.handleProcessExecEvent). It is not a syscall tracepoint, so it is
 // outside the probemanager's enter/exit pair model and is attached directly
 // here, for the whole run, independently of -trace-* selection.
-func attachProcessExecProbe(attacher probemanager.Attacher) func() {
-	return attachSchedProbe(attacher, processExecProgName, "sched_process_exec")
+func attachProcessExecProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
+	return attachSchedProbe(attacher, processExecProgName, "sched_process_exec", log)
 }
 
 // attachProcessExitProbe attaches sched:sched_process_exit, whose control
 // records evict a dead process's fdTracker entries (see internal/c/exec.c and
 // eventLoop.handleProcessExitEvent). Same attach policy as the exec probe:
 // direct attach, whole run, independent of -trace-* selection.
-func attachProcessExitProbe(attacher probemanager.Attacher) func() {
-	return attachSchedProbe(attacher, processExitProgName, "sched_process_exit")
+func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
+	return attachSchedProbe(attacher, processExitProgName, "sched_process_exit", log)
 }
 
 // attachSchedProbe attaches one hand-written sched tracepoint program from
@@ -154,26 +183,30 @@ func attachProcessExitProbe(attacher probemanager.Attacher) func() {
 // reachable from tests without a live BPF module. The returned release closure
 // is idempotent: setupBPFModule hands it out both directly and wrapped inside
 // releaseBindings, and a double Destroy on a libbpf link is not safe.
-func attachSchedProbe(attacher probemanager.Attacher, progName, tracepointName string) func() {
+//
+// A skipped probe is reported through log.status (silent in TUI mode, where
+// the degradation is the pre-fix behaviour rather than a broken trace); a
+// detach failure goes to log.teardown, which stays visible in every mode.
+func attachSchedProbe(attacher probemanager.Attacher, progName, tracepointName string, log bpfSetupLog) func() {
 	noop := func() {}
 	if attacher == nil {
 		return noop
 	}
 	prog, err := attacher.GetProgram(progName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ior: skipping %s probe: get program %s: %v\n", tracepointName, progName, err)
+		log.status(fmt.Sprintf("ior: skipping %s probe: get program %s: %v", tracepointName, progName, err))
 		return noop
 	}
 	link, err := prog.AttachTracepoint("sched", tracepointName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ior: skipping %s probe: %v\n", tracepointName, err)
+		log.status(fmt.Sprintf("ior: skipping %s probe: %v", tracepointName, err))
 		return noop
 	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			if err := link.Destroy(); err != nil {
-				fmt.Fprintf(os.Stderr, "ior: %s probe detach error: %v\n", tracepointName, err)
+				log.teardown(fmt.Sprintf("ior: %s probe detach error: %v", tracepointName, err))
 			}
 		})
 	}
