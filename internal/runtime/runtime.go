@@ -114,12 +114,17 @@ type RuntimePublisher interface {
 	// SetLiveTrie wires the live flamegraph trie into the TUI flamegraph view.
 	SetLiveTrie(liveTrie LiveTrieSource)
 	// SetProbeManager wires the BPF probe manager into the TUI probes modal.
-	SetProbeManager(manager ProbeManager)
-	// SetLiveFilterSetter registers (or, with nil, unregisters) a callback that
-	// applies a new global filter to the running trace pipeline in-place without
-	// restarting BPF probes. The trace starter passes its eventloop's SetFilter;
-	// the TUI calls it on every filter change.
-	SetLiveFilterSetter(setter func(globalfilter.Filter))
+	// The returned release func unregisters it again, unless another trace
+	// registered its own manager in the meantime.
+	SetProbeManager(manager ProbeManager) (release func())
+	// SetLiveFilterSetter registers a callback that applies a new global
+	// filter to the running trace pipeline in-place without restarting BPF
+	// probes; the TUI calls it on every filter change. The callback returns
+	// false when the filter cannot be applied in place (e.g. it changes the
+	// BPF-level PID/TID scope) and the trace must be restarted instead. The
+	// returned release func unregisters it again, unless another trace
+	// registered its own setter in the meantime.
+	SetLiveFilterSetter(setter func(globalfilter.Filter) bool) (release func())
 }
 
 // RuntimeState is the read side of the TUI runtime contract.

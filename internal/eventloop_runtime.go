@@ -29,6 +29,10 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		e.printCb = func(ep *event.Pair) { ep.Recycle() }
 	}
 	e.initRawHandlers()
+	// Seed here rather than in newEventLoop: seeding can start the comm lookup
+	// workers, which report failures via warningCb, and callers configure
+	// warningCb between construction and run.
+	e.seedTrackedPidComm()
 	if e.cfg.synchronousRawProcessing {
 		e.runSynchronously(ctx, rawCh)
 		return
@@ -317,8 +321,27 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	tid := ep.EnterEv.GetTid()
 	ep.CalculateDurations(e.pairs.prevTime(tid))
 	e.pairs.setPrevTime(tid, ep.ExitEv.GetTime())
+	// Filter only once the pair is complete: latency, gap and bytes are not
+	// known inside the exit handlers, and fd-state changes (dup, fcntl, close)
+	// must be applied even for pairs the filter hides.
+	if pairFilteredAtExit(ep) && !e.Filter().MatchPair(ep) {
+		ep.Recycle()
+		return
+	}
 	e.freezePairForEmission(ep)
 	ch <- ep
+}
+
+// pairFilteredAtExit reports whether the pair is subject to the full pair
+// filter. Open, name and path events are filtered on their enter event
+// instead, where both names of a rename-like syscall are still available.
+func pairFilteredAtExit(ep *event.Pair) bool {
+	switch ep.EnterEv.(type) {
+	case *types.FdEvent, *types.Dup3Event, *types.NullEvent, *types.FcntlEvent:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *eventLoop) freezePairForEmission(ep *event.Pair) {

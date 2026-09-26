@@ -1827,3 +1827,170 @@ func TestFormatAutoResetRemainingFormats(t *testing.T) {
 		})
 	}
 }
+
+func TestRefreshTickChainNotDoubledAcrossBlurRefocus(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	stale := refreshTickMsg{generation: m.refreshGen}
+	m.SetFocused(false)
+	m.SetFocused(true)
+	_ = m.Init() // the TUI re-arms a fresh chain on focus regain
+
+	if _, cmd := m.Update(stale); cmd != nil {
+		t.Fatalf("expected refresh tick from before the blur to be dropped")
+	}
+	if _, cmd := m.Update(refreshTickMsg{generation: m.refreshGen}); cmd == nil {
+		t.Fatalf("expected current-generation refresh tick to re-arm")
+	}
+
+	stale = refreshTickMsg{generation: m.refreshGen}
+	_ = m.StartTicks()
+	if _, cmd := m.Update(stale); cmd != nil {
+		t.Fatalf("expected StartTicks to supersede the previous refresh chain")
+	}
+}
+
+func TestFlameTickChainNotDoubledOnQuickTabSwitch(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m.activeTab = TabFlame
+	stale := flameTickMsg{generation: m.fastTickGen}
+
+	m = pressKey(m, '2')
+	m = pressKey(m, '1')
+	if m.activeTab != TabFlame {
+		t.Fatalf("expected flame tab after switching back, got %v", m.activeTab)
+	}
+	if _, cmd := m.Update(stale); cmd != nil {
+		t.Fatalf("expected flame tick from the earlier visit to be dropped")
+	}
+	if _, cmd := m.Update(flameTickMsg{generation: m.fastTickGen}); cmd == nil {
+		t.Fatalf("expected current-generation flame tick to re-arm")
+	}
+}
+
+func TestBubbleTickChainsDoNotGrowWithStatsTicks(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.syscallsVizMode = tabVizModeBubbles
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = next.(Model)
+
+	var pending []bubbleTickMsg
+	for sec := 0; sec < 5; sec++ {
+		snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+			{Name: "read", Count: uint64(9 + sec*50)},
+			{Name: "write", Count: uint64(3 + sec*7)},
+		}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+		next, cmd := m.Update(messages.StatsTickMsg{Snap: &snap})
+		m = next.(Model)
+		if cmd != nil {
+			pending = append(pending, bubbleTickMsg{generation: m.bubbleGen})
+		}
+		for frame := 0; frame < 5; frame++ {
+			var live []bubbleTickMsg
+			for _, tick := range pending {
+				next, cmd := m.Update(tick)
+				m = next.(Model)
+				if cmd != nil {
+					live = append(live, bubbleTickMsg{generation: m.bubbleGen})
+				}
+			}
+			pending = live
+		}
+		if len(pending) > 1 {
+			t.Fatalf("after stats tick %d: expected at most one live bubble chain, got %d", sec+1, len(pending))
+		}
+	}
+}
+
+func TestFlameRefreshResumesAfterLeavingTabMidRefresh(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
+	m.SetLiveTrie(liveTrie)
+	m.activeTab = TabFlame
+	liveTrie.Reset()
+
+	next, cmd := m.Update(flameTickMsg{generation: m.fastTickGen})
+	m = next.(Model)
+	ready := findFlameSnapshotReadyMsg(t, cmd)
+	if ready == nil {
+		t.Fatalf("expected flame tick to dispatch a background refresh")
+	}
+
+	m = pressKey(m, '2')
+	next, _ = m.Update(ready)
+	m = next.(Model)
+	m = pressKey(m, '1')
+	liveTrie.Reset()
+
+	_, cmd = m.Update(flameTickMsg{generation: m.fastTickGen})
+	if findFlameSnapshotReadyMsg(t, cmd) == nil {
+		t.Fatalf("expected flame refresh to resume after a result arrived off-tab")
+	}
+}
+
+// findFlameSnapshotReadyMsg runs cmd (flattening batches) and returns the
+// flamegraph background refresh result it produced, if any.
+func findFlameSnapshotReadyMsg(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if found := findFlameSnapshotReadyMsg(t, c); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	if strings.HasSuffix(fmt.Sprintf("%T", msg), "flameSnapshotReadyMsg") {
+		return msg
+	}
+	return nil
+}
+
+func TestTreemapNavigationBoundedByDrawnTiles(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, []statsengine.SyscallSnapshot{
+		{Name: "read", Count: 9},
+		{Name: "write", Count: 3},
+		{Name: "idle", Count: 0},
+	}, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.latest = &snap
+	m.syscallsVizMode = tabVizModeTreemap
+
+	for i := 0; i < 5; i++ {
+		m = pressKey(m, 'j')
+	}
+	if m.syscallsTreemapSelection != 1 {
+		t.Fatalf("expected selection clamped to last drawn tile 1, got %d", m.syscallsTreemapSelection)
+	}
+	m = pressKey(m, 'k')
+	if m.syscallsTreemapSelection != 0 {
+		t.Fatalf("expected one k to move back to tile 0, got %d", m.syscallsTreemapSelection)
+	}
+}
+
+func TestProcessesTreemapEnterTargetsDrawnTile(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, []statsengine.ProcessSnapshot{
+		{PID: 10, Comm: "worker", Syscalls: 12},
+		{PID: 11, Comm: "agent", Syscalls: 4},
+		{PID: 5, Comm: "aaa-idle", Syscalls: 0},
+	}, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m.activeTab = TabProcesses
+	m.latest = &snap
+	m.processesVizMode = tabVizModeTreemap
+
+	for i := 0; i < 5; i++ {
+		m = pressKey(m, 'j')
+	}
+	if m.processesOffset != 1 {
+		t.Fatalf("expected treemap selection clamped to last drawn tile 1, got %d", m.processesOffset)
+	}
+	if got := m.selectedProcessPID(); got != 11 {
+		t.Fatalf("expected Enter target to be the selected tile pid 11, got %d", got)
+	}
+}

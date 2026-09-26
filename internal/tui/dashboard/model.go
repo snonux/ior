@@ -41,10 +41,14 @@ type resettableSnapshotSource interface {
 	Snapshot() (*statsengine.Snapshot, error)
 }
 
-type refreshTickMsg struct{}
-type streamTickMsg struct{}
-type flameTickMsg struct{}
-type bubbleTickMsg struct{}
+// refreshTickMsg, streamTickMsg, flameTickMsg and bubbleTickMsg carry the
+// generation of the tick chain that scheduled them. Starting a new chain
+// bumps the matching generation so any older chain still in flight is
+// dropped on arrival instead of running in parallel (see autoResetTickMsg).
+type refreshTickMsg struct{ generation uint64 }
+type streamTickMsg struct{ generation uint64 }
+type flameTickMsg struct{ generation uint64 }
+type bubbleTickMsg struct{ generation uint64 }
 
 // autoResetTickMsg fires when the auto-reset timer elapses. It carries the
 // generation it was scheduled for so that stale ticks (from a previous
@@ -88,6 +92,12 @@ type Model struct {
 	// autoResetGen is incremented every time autoResetEvery changes so
 	// in-flight ticks scheduled under the previous cadence can be ignored.
 	autoResetGen uint64
+	// refreshGen, fastTickGen and bubbleGen identify the live refresh,
+	// stream/flame and bubble tick chains. Stale-generation ticks are
+	// dropped without re-arming so at most one chain of each kind runs.
+	refreshGen  uint64
+	fastTickGen uint64
+	bubbleGen   uint64
 	// autoResetArmedAt is the wall-clock instant the current tick was
 	// scheduled. The next reset is expected at autoResetArmedAt +
 	// autoResetEvery; autoResetStatus uses this to render the live
@@ -170,14 +180,14 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 // (e.g. stream and flame use a fast cadence controlled by fastRefreshEvery,
 // defaulting to streamRefreshMs / flameRefreshMs when not explicitly set).
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
+	cmds := []tea.Cmd{m.refreshTickCmd()}
 	d := lookupTab(m.activeTab)
 	if d.InitCmd != nil {
 		// Pass the model so the closure can read fastRefreshEvery and use
 		// the configured cadence rather than falling back to a constant.
 		cmds = append(cmds, d.InitCmd(&m))
 	} else if m.bubbleEnabledForTab(m.activeTab) {
-		cmds = append(cmds, bubbleTickCmdFn())
+		cmds = append(cmds, m.bubbleTickCmd())
 	}
 	if cmd := m.autoResetTickCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
@@ -188,19 +198,35 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// StartTicks bumps every tick generation and returns Init's commands, so
+// chains armed by an earlier Init (e.g. before a blur/refocus or trace
+// restart) are dropped on arrival and exactly one chain of each kind runs.
+func (m *Model) StartTicks() tea.Cmd {
+	m.bumpTickGenerations()
+	return m.Init()
+}
+
+// bumpTickGenerations invalidates every in-flight tick chain.
+func (m *Model) bumpTickGenerations() {
+	m.refreshGen++
+	m.fastTickGen++
+	m.bubbleGen++
+	m.autoResetGen++
+}
+
 // Update handles ticks, snapshots, tab changes, and resize events.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
 	case refreshTickMsg:
-		return m.handleRefreshTick()
+		return m.handleRefreshTick(msg)
 	case streamTickMsg:
-		return m.handleStreamTick()
+		return m.handleStreamTick(msg)
 	case flameTickMsg:
-		return m.handleFlameTick()
+		return m.handleFlameTick(msg)
 	case bubbleTickMsg:
-		return m.handleBubbleTick()
+		return m.handleBubbleTick(msg)
 	case autoResetTickMsg:
 		return m.handleAutoResetTick(msg)
 	case messages.StatsTickMsg:
@@ -226,24 +252,24 @@ func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 	m.setBubbleViewports(flameWidth, flameHeight)
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return m, bubbleTickCmdFn()
+		return m, m.startBubbleTicks()
 	}
 	return m, nil
 }
 
-func (m Model) handleRefreshTick() (tea.Model, tea.Cmd) {
-	if !m.focused {
+func (m Model) handleRefreshTick(msg refreshTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || msg.generation != m.refreshGen {
 		return m, nil
 	}
 	snap := m.snapshot()
 	return m, tea.Batch(
-		tickCmd(m.refreshEvery),
+		m.refreshTickCmd(),
 		func() tea.Msg { return messages.StatsTickMsg{Snap: snap} },
 	)
 }
 
-func (m Model) handleStreamTick() (tea.Model, tea.Cmd) {
-	if !m.focused || m.activeTab != TabStream {
+func (m Model) handleStreamTick(msg streamTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || m.activeTab != TabStream || msg.generation != m.fastTickGen {
 		return m, nil
 	}
 	m.streamModel.Refresh()
@@ -251,8 +277,8 @@ func (m Model) handleStreamTick() (tea.Model, tea.Cmd) {
 	return m, m.streamTickCmd()
 }
 
-func (m Model) handleFlameTick() (tea.Model, tea.Cmd) {
-	if !m.focused || m.activeTab != TabFlame {
+func (m Model) handleFlameTick(msg flameTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || m.activeTab != TabFlame || msg.generation != m.fastTickGen {
 		return m, nil
 	}
 	// Always re-arm the fast tick. The snapshot refresh itself runs on a
@@ -268,13 +294,15 @@ func (m Model) handleFlameTick() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) handleBubbleTick() (tea.Model, tea.Cmd) {
-	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) {
+// handleBubbleTick advances the active bubble chart and re-arms the chain
+// only while the chart is still animating. Ticks from a superseded chain
+// are dropped so repeated stats ticks never stack parallel chains.
+func (m Model) handleBubbleTick(msg bubbleTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) || msg.generation != m.bubbleGen {
 		return m, nil
 	}
-	_ = m.tickActiveBubbleChart()
-	if m.activeBubbleChartHasNodes() {
-		return m, bubbleTickCmdFn()
+	if m.tickActiveBubbleChart() {
+		return m, m.bubbleTickCmd()
 	}
 	return m, nil
 }
@@ -303,11 +331,11 @@ func (m Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
 	m.reanchorFilesOffset(selectedFile)
 	m.reanchorFilesDirOffset(selectedDir)
 	m.reanchorProcessesOffset(selectedProcess)
-	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.maxSyscallsRows())
+	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.treemapItemCount(TabSyscalls))
 	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
-		return m, bubbleTickCmdFn()
+		return m, m.startBubbleTicks()
 	}
 	return m, nil
 }
@@ -321,6 +349,9 @@ func (m Model) handleStreamEditorDone(msg streamEditorDoneMsg) (tea.Model, tea.C
 
 func (m Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame {
+		// A flame refresh started before leaving the tab must still clear
+		// the flamegraph's in-flight flag, or it never refreshes again.
+		m.flamegraphModel.DiscardSnapshotReady(msg)
 		return m, nil
 	}
 	next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
@@ -340,7 +371,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	handled, cmd := m.handleScrollKey(msg)
 	if handled && isStreamResumeKey(msg) && m.activeTab == TabStream && !m.streamModel.Paused() {
 		// Re-arm the stream tick with the configurable fast-refresh cadence after
-		// the user unpauses the stream with a scroll/space key.
+		// the user unpauses the stream with a scroll/space key, replacing the
+		// chain that kept ticking while paused.
+		m.fastTickGen++
 		cmd = m.streamTickCmd()
 	}
 	if !handled {
@@ -363,7 +396,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
 		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
 	}
-	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
+	transitionCmd := m.postKeyTransitionCmd(prevActiveTab, cmd)
+	return m, transitionCmd
 }
 
 func (m Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
@@ -664,7 +698,7 @@ func (m *Model) toggleFilesDirGrouping() tea.Cmd {
 		m.filesVizMode = tabVizModeTable
 	}
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return bubbleTickCmdFn()
+		return m.startBubbleTicks()
 	}
 	return nil
 }
@@ -703,7 +737,7 @@ func (m Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 
 	switch {
 	case m.processesVizMode == tabVizModeTreemap:
-		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesChart.Metric(), maxSyscallTreemapItems), m.processesOffset)
+		return indexedProcessSnapshot(treemapProcessSnapshots(rows, m.processesChart.Metric()), m.processesOffset)
 	case m.processesVizMode == tabVizModeBubbles:
 		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesChart.Metric(), bubbleMaxItems), m.processesChart.selected)
 	default:
@@ -765,6 +799,19 @@ func sortedProcessSnapshots(rows []statsengine.ProcessSnapshot, metric bubbleMet
 	return sorted
 }
 
+// treemapProcessSnapshots returns processes in the order the treemap draws
+// them (zero-metric rows omitted, largest first, capped at
+// maxSyscallTreemapItems) so a treemap selection index maps to its tile.
+func treemapProcessSnapshots(rows []statsengine.ProcessSnapshot, metric bubbleMetric) []statsengine.ProcessSnapshot {
+	nonZero := make([]statsengine.ProcessSnapshot, 0, len(rows))
+	for _, row := range rows {
+		if processMetricValue(row, metric) > 0 {
+			nonZero = append(nonZero, row)
+		}
+	}
+	return sortedProcessSnapshots(nonZero, metric, maxSyscallTreemapItems)
+}
+
 func processMetricValue(proc statsengine.ProcessSnapshot, metric bubbleMetric) uint64 {
 	switch metric {
 	case bubbleMetricBytes:
@@ -787,17 +834,20 @@ func processSelectionLabel(proc statsengine.ProcessSnapshot) string {
 // postKeyTransitionCmd assembles the commands needed when the active tab
 // changes after a key press. Each tab's InitCmd is started when we first
 // enter that tab so high-frequency ticks (stream, flame) resume correctly.
-func (m Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
+// The fast-tick and bubble generations are bumped first so a chain from an
+// earlier visit that is still in flight is dropped rather than doubled.
+func (m *Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 4)
 	cmds = append(cmds, cmd)
 	if prevActiveTab != m.activeTab {
+		m.fastTickGen++
 		d := lookupTab(m.activeTab)
 		if d.InitCmd != nil {
 			// Pass the model so the closure reads fastRefreshEvery and honours
 			// the configured cadence from the first tick after a tab switch.
-			cmds = append(cmds, d.InitCmd(&m))
+			cmds = append(cmds, d.InitCmd(m))
 		} else if m.bubbleEnabledForTab(m.activeTab) {
-			cmds = append(cmds, bubbleTickCmdFn())
+			cmds = append(cmds, m.startBubbleTicks())
 		}
 	}
 	return batchCmds(cmds...)
@@ -888,6 +938,9 @@ func (m Model) maxFilesDirRows() int {
 }
 
 func (m Model) maxFilesDirRowsForMode() int {
+	if m.filesVizMode == tabVizModeTreemap {
+		return m.treemapItemCount(TabFiles)
+	}
 	if m.filesVizMode != tabVizModeIcicle {
 		return m.maxFilesDirRows()
 	}
@@ -897,6 +950,30 @@ func (m Model) maxFilesDirRowsForMode() int {
 
 func (m Model) maxProcessesRows() int {
 	return m.snapshotOrZero().ProcessesCount()
+}
+
+// maxProcessesRowsForMode bounds processes navigation by the tiles the
+// treemap draws when it is active, and by the table rows otherwise.
+func (m Model) maxProcessesRowsForMode() int {
+	if m.processesVizMode == tabVizModeTreemap {
+		return m.treemapItemCount(TabProcesses)
+	}
+	return m.maxProcessesRows()
+}
+
+// treemapItemCount returns how many tiles the treemap for tab draws:
+// zero-metric items are omitted and at most maxSyscallTreemapItems are
+// shown, so treemap navigation must be bounded by this, not by row count.
+func (m Model) treemapItemCount(tab Tab) int {
+	switch tab {
+	case TabSyscalls:
+		return len(buildSyscallTreemapItems(m.latest, m.syscallsChart.Metric()))
+	case TabFiles:
+		return len(buildFilesTreemapItems(m.latest, m.filesChart.Metric()))
+	case TabProcesses:
+		return len(buildProcessesTreemapItems(m.latest, m.processesChart.Metric()))
+	}
+	return 0
 }
 
 // snapshot returns the latest engine snapshot, or nil if the engine is nil or
@@ -1040,6 +1117,18 @@ func (m Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
 	return false
 }
 
+// TextInputFocused reports whether a dashboard text input (stream search or
+// export path, flame search) is currently capturing typed keys.
+func (m Model) TextInputFocused() bool {
+	switch m.activeTab {
+	case TabStream:
+		return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
+	case TabFlame:
+		return m.flamegraphModel.SearchActive()
+	}
+	return false
+}
+
 // SetStreamSource updates the live stream source used by the stream tab.
 func (m *Model) SetStreamSource(source eventstream.Source) {
 	m.streamModel.SetSource(source)
@@ -1095,9 +1184,9 @@ func (m *Model) SetDarkMode(isDark bool) {
 
 // SetFocused controls whether periodic refresh ticks are processed and
 // returns a tea.Cmd that arms a fresh auto-reset tick when focus returns
-// (or nil otherwise). The auto-reset generation counter is bumped on
-// every focus change so any in-flight tick scheduled before a blur is
-// dropped when it eventually arrives — the tick payload's generation
+// (or nil otherwise). The auto-reset, refresh, fast and bubble tick
+// generation counters are bumped on every focus change so any in-flight
+// tick scheduled before a blur is dropped when it eventually arrives — the tick payload's generation
 // will no longer match. Without bumping, a tick that was already in
 // flight when blur occurred could fire moments after the user re-focuses
 // and surprise them with a reset.
@@ -1106,7 +1195,7 @@ func (m *Model) SetFocused(focused bool) tea.Cmd {
 		return nil
 	}
 	m.focused = focused
-	m.autoResetGen++
+	m.bumpTickGenerations()
 	if !focused {
 		return nil
 	}
@@ -1435,7 +1524,7 @@ func (m *Model) cycleVisualizationMode() tea.Cmd {
 	if next == tabVizModeBubbles {
 		m.refreshBubbleData()
 		if m.activeBubbleChartHasNodes() {
-			return bubbleTickCmdFn()
+			return m.startBubbleTicks()
 		}
 	}
 	return nil
@@ -1454,7 +1543,7 @@ func (m *Model) toggleBubbleMetric() tea.Cmd {
 	ch.SetMetric(nextBubbleMetric(ch.Metric()))
 	m.refreshBubbleData()
 	if m.bubbleEnabledForTab(m.activeTab) && m.activeBubbleChartHasNodes() {
-		return bubbleTickCmdFn()
+		return m.startBubbleTicks()
 	}
 	return nil
 }
@@ -1490,8 +1579,11 @@ func nextBubbleMetric(metric bubbleMetric) bubbleMetric {
 	}
 }
 
-func tickCmd(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
+// refreshTickCmd schedules the next stats refresh tick for the current
+// refresh generation.
+func (m Model) refreshTickCmd() tea.Cmd {
+	gen := m.refreshGen
+	return tea.Tick(m.refreshEvery, func(time.Time) tea.Msg { return refreshTickMsg{generation: gen} })
 }
 
 // renderActiveTabContent dispatches to the registered render function for tab.
@@ -1519,7 +1611,8 @@ func (m Model) streamTickCmd() tea.Cmd {
 	if d <= 0 {
 		d = streamRefreshMs * time.Millisecond
 	}
-	return tea.Tick(d, func(time.Time) tea.Msg { return streamTickMsg{} })
+	gen := m.fastTickGen
+	return tea.Tick(d, func(time.Time) tea.Msg { return streamTickMsg{generation: gen} })
 }
 
 // flameTickCmd schedules the next high-frequency flame tab refresh tick.
@@ -1531,11 +1624,22 @@ func (m Model) flameTickCmd() tea.Cmd {
 	if d <= 0 {
 		d = flameRefreshMs * time.Millisecond
 	}
-	return tea.Tick(d, func(time.Time) tea.Msg { return flameTickMsg{} })
+	gen := m.fastTickGen
+	return tea.Tick(d, func(time.Time) tea.Msg { return flameTickMsg{generation: gen} })
 }
 
-func bubbleTickCmdFn() tea.Cmd {
-	return tea.Tick(bubbleRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return bubbleTickMsg{} })
+// bubbleTickCmd schedules the next bubble animation frame for the current
+// bubble generation.
+func (m Model) bubbleTickCmd() tea.Cmd {
+	gen := m.bubbleGen
+	return tea.Tick(bubbleRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return bubbleTickMsg{generation: gen} })
+}
+
+// startBubbleTicks supersedes any running bubble chain and starts a new one,
+// so at most one bubble animation chain is ever live.
+func (m *Model) startBubbleTicks() tea.Cmd {
+	m.bubbleGen++
+	return m.bubbleTickCmd()
 }
 
 func streamViewport(width, height int) (int, int) {
