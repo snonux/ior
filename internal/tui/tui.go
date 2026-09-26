@@ -815,6 +815,9 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case messages.GlobalFilterUndoRequestedMsg:
 		next, cmd := m.undoGlobalFilter()
 		return next, cmd, true
+	case messages.OpenEditorRequestedMsg:
+		next, cmd := m.handleOpenEditorRequested(msg)
+		return next, cmd, true
 	}
 	return m, nil, false
 }

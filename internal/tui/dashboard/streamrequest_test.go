@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"strings"
 	"testing"
 
 	"ior/internal/tui/messages"
@@ -76,10 +77,14 @@ func TestStreamOpenLastExportRoundTrip(t *testing.T) {
 func TestStreamOpenWithoutExportReturnsNoRequest(t *testing.T) {
 	m := newPausedStreamModel(t)
 
-	_, cmd := m.Update(runeKey('E'))
+	next, cmd := m.Update(runeKey('E'))
+	m = next.(*Model)
 	if cmd != nil {
 		if msg, ok := cmd().(messages.OpenEditorRequestedMsg); ok {
 			t.Fatalf("expected no editor request without an export, got %+v", msg)
 		}
+	}
+	if view := m.View().Content; !strings.Contains(view, "No stream export yet") {
+		t.Fatalf("expected the stream status to read %q, got %q", "No stream export yet", view)
 	}
 }
