@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -252,9 +251,10 @@ func (e *eventLoop) configureOutputCallback() {
 }
 
 func (e *eventLoop) stats() string {
-	// Human-facing progress note; stderr so stdout stays machine-readable
-	// (the CSV header/rows in -plain mode).
-	_, _ = fmt.Fprintln(os.Stderr, "Waiting for stats to be ready")
+	// Human-facing progress note; routed through the status sink (stderr in
+	// headless modes) so stdout stays machine-readable (the CSV header/rows
+	// in -plain mode).
+	e.notifyStatus("Waiting for stats to be ready")
 	<-e.done
 	duration := time.Since(e.startTime)
 

@@ -43,7 +43,7 @@ A second, narrower exemption is errcheck's own built-in
 `DefaultExcludedSymbols`, which stays on (`disable-default-exclusions` is not
 set). That is why unchecked `fmt.Fprintf(os.Stderr, …)` and
 `strings.Builder`/`bytes.Buffer` writes are reported nowhere in the tree, while
-the same `Fprintf` to a generic `io.Writer` is: `internal/ior_bpfsetup.go:94`
+the same `Fprintf` to a generic `io.Writer` is: `cmd/ior/main.go:59`
 writes an unannotated `fmt.Fprintf(os.Stderr, …)`, while
 `integrationtests/harness.go:296` has to write `_, _ = fmt.Fprintln(w, line)`
 because `w` is an `io.Writer`. That asymmetry is the default exclusion list,
