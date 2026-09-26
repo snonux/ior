@@ -34,6 +34,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	if e.cfg.plainMode && !e.cfg.pprofEnable {
 		fmt.Println(event.EventStreamHeader)
 	}
+	e.flushPendingWarnings()
 
 	e.startTime = time.Now()
 	// emit() already handles a nil printCb safely, but guard here so that

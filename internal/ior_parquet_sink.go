@@ -161,12 +161,12 @@ func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (*traceInfr
 func newHeadlessParquetEventLoop(
 	cfg flags.Config,
 	bpfModule *bpf.Module,
-	logTeardown func(...any),
+	warnSetup func(...any),
 ) (*eventLoop, error) {
 	el, err := newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
-	attachRingbufDropCounter(el, bpfModule, logTeardown)
+	attachRingbufDropCounter(el, bpfModule, warnSetup)
 	return el, nil
 }

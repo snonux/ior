@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"sync"
@@ -373,11 +374,23 @@ var runTeaProgram = func(model *Model) (tea.Model, error) {
 // tea.NewProgram itself, which is what TestExportedEntryPointsReportTheError
 // pins - testing runProgram alone leaves the entry points free to bypass it.
 func runProgram(model *Model) error {
-	final, err := runTeaProgram(model)
+	final, err := runTeaProgramQuietly(model)
 	if err != nil {
 		return err
 	}
 	return finalModelError(final)
+}
+
+// runTeaProgramQuietly runs the program with the standard logger discarded.
+// Bubble Tea owns the terminal for the whole run, so a stray log.Print from
+// any goroutine - the model's Update or a trace running underneath it - would
+// write over the rendered screen. The previous output is restored on return,
+// so the "Failed to run: ..." report after the program exits is unaffected.
+func runTeaProgramQuietly(model *Model) (tea.Model, error) {
+	previous := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(previous)
+	return runTeaProgram(model)
 }
 
 // finalModelError extracts the error a finished program's model was showing.
@@ -732,9 +745,6 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case tea.KeyboardEnhancementsMsg:
 		m.kb.enhancements = msg
 		m.kb.enhancementsKnown = true
-		if msg.SupportsKeyDisambiguation() {
-			log.Printf("tui: keyboard enhancements enabled (flags=%d, eventTypes=%t)", msg.Flags, msg.SupportsEventTypes())
-		}
 		return m, nil, true
 	case tea.FocusMsg:
 		next, cmd := m.handleFocusMsg()

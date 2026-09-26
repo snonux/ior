@@ -28,6 +28,11 @@ type outputFormatter struct {
 	// owned it. nil falls back to logStatus (stderr) so loops built outside
 	// trace setup - tests, benchmarks - keep the historical behaviour.
 	statusCb func(args ...any)
+
+	// pendingWarnings are warnings raised before the loop's output was wired
+	// (see setupWarnings). run replays them through notifyWarningOrLog before
+	// the first event, by which time every mode has installed its sinks.
+	pendingWarnings []string
 }
 
 // SetPrintCallback replaces the pair-emission callback. The callback owns
@@ -59,6 +64,25 @@ func (f *outputFormatter) notifyStatus(args ...any) {
 		return
 	}
 	f.statusCb(args...)
+}
+
+// deferWarnings queues warnings for replay when the loop starts running. It
+// must be called before run.
+func (f *outputFormatter) deferWarnings(messages []string) {
+	f.pendingWarnings = append(f.pendingWarnings, messages...)
+}
+
+// flushPendingWarnings replays the queued warnings, once, on the event-loop
+// goroutine - the same goroutine every other warning is raised on.
+// notifyWarningOrLog is used because these report degraded observability the
+// user must see in every mode: a TUI warning row, or stderr where no warning
+// sink is wired.
+func (f *outputFormatter) flushPendingWarnings() {
+	pending := f.pendingWarnings
+	f.pendingWarnings = nil
+	for _, message := range pending {
+		f.notifyWarningOrLog(message)
+	}
 }
 
 // emit invokes printCb for the given pair, falling back to a safe recycle-only

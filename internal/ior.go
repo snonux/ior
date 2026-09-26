@@ -41,7 +41,8 @@ type TUIRunners struct {
 }
 
 // traceEventLoopFactory builds the mode-specific event loop after the shared
-// BPF, channel, context, and profiling setup has succeeded.
+// BPF, channel, context, and profiling setup has succeeded. Its logger
+// argument is the setup-warning sink for non-fatal degradations.
 type traceEventLoopFactory func(flags.Config, *bpf.Module, func(...any)) (*eventLoop, error)
 
 var errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
@@ -763,8 +764,12 @@ func setupTraceInfraWithEventLoop(
 	// logln is a no-op in TUI mode, which previously silently discarded
 	// probe-detach failures (audit domain-10 F2).
 	logTeardown := newLogger(true)
+	// Non-fatal setup degradations are collected and replayed as event-loop
+	// warnings once output is wired (see setupWarnings).
+	warnings := &setupWarnings{}
+	warnSetup := warnings.add
 
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, bpfSetupLog{status: logln, teardown: logTeardown})
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
 	if err != nil {
 		return nil, err
 	}
@@ -821,16 +826,13 @@ func setupTraceInfraWithEventLoop(
 	// already in use" instead of reporting whatever really went wrong.
 	infra.onClose(func() { profiling.stop(logln) })
 
-	el, err := buildEventLoop(cfg, bpfModule, logTeardown)
+	el, err := buildEventLoop(cfg, bpfModule, warnSetup)
 	if err != nil {
 		infra.Close()
 		return nil, err
 	}
 	infra.el = el
-	// Lifecycle lines ("Stopping event loop", which fires on every TUI trace
-	// restart) follow the mode-dependent logger so they never write over the
-	// Bubble Tea screen.
-	el.SetStatusCallback(logln)
+	wireEventLoopLogging(el, logln, warnings)
 
 	// Nothing fallible may follow. Every step above still reaches the caller
 	// through err, and in TUI mode that is the only path an error has: once
@@ -849,7 +851,7 @@ func setupTraceInfraWithEventLoop(
 // syscall_aggregate_map (newSyscallAggregateConsumer) used to fail after the
 // TUI had already been told the trace was running, which left the dashboard
 // live-looking and permanently empty.
-func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, logTeardown func(...any)) (*eventLoop, error) {
+func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, warnSetup func(...any)) (*eventLoop, error) {
 	el, err := newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
 		return nil, err
@@ -860,7 +862,7 @@ func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, logTeardown func
 	}
 	el.aggregateSrc = aggregateConsumer
 	// Deliberately non-fatal, see attachRingbufDropCounter.
-	attachRingbufDropCounter(el, bpfModule, logTeardown)
+	attachRingbufDropCounter(el, bpfModule, warnSetup)
 	return el, nil
 }
 
@@ -868,13 +870,14 @@ func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, logTeardown func
 // the event loop so lost events are reported instead of vanishing silently
 // (audit findings D2 F1 / D9 Y2). A missing map is deliberately non-fatal: it
 // only means this binary was linked against an older BPF object, and losing
-// the drop telemetry must not abort an otherwise healthy trace. logErr always
-// writes to stderr, so the degraded observability stays visible in TUI mode
-// too.
-func attachRingbufDropCounter(el *eventLoop, bpfModule *bpf.Module, logErr func(...any)) {
+// the drop telemetry must not abort an otherwise healthy trace. warnSetup is
+// the setup-warning collector, which replays the message as an event-loop
+// warning: a warning row in the TUI (instead of stderr text written over the
+// screen on every trace start) and stderr in the headless modes.
+func attachRingbufDropCounter(el *eventLoop, bpfModule *bpf.Module, warnSetup func(...any)) {
 	dropCounter, err := newRingbufDropCounter(bpfModule)
 	if err != nil {
-		logErr("Ring-buffer drop counter unavailable (kernel-side drops will not be reported):", err)
+		warnSetup("Ring-buffer drop counter unavailable (kernel-side drops will not be reported):", err)
 		return
 	}
 	el.dropSrc = dropCounter

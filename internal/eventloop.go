@@ -320,8 +320,8 @@ func (e *eventLoop) ringbufDropStatLine(rate func(uint64) float64) string {
 	// below is the one that cleared it rather than a stale reading.
 	// No counter at all is the purest form of the same problem: nothing was
 	// ever measured, so there is nothing to report as fact. attachRingbufDropCounter
-	// already says so on stderr at startup, but a long run's summary is read
-	// hours later and on its own.
+	// already warns at startup (a TUI warning row, stderr headless), but a
+	// long run's summary is read hours later and on its own.
 	if e.dropSrc == nil {
 		return "\tring buffer drops: unknown (drop counter unavailable)\n"
 	}

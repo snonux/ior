@@ -652,7 +652,7 @@ func eventLoopBuildCallFromAssignment(statement ast.Stmt) (*ast.CallExpr, bool) 
 		return nil, false
 	}
 	call, ok := assignment.Rhs[0].(*ast.CallExpr)
-	if !ok || !isBareCallWithIdentifierArgs(call, "buildEventLoop", "cfg", "bpfModule", "logTeardown") {
+	if !ok || !isBareCallWithIdentifierArgs(call, "buildEventLoop", "cfg", "bpfModule", "warnSetup") {
 		return nil, false
 	}
 	return call, true
