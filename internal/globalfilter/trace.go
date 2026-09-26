@@ -73,7 +73,9 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 	if !hasStringPattern(filter) {
 		return nil
 	}
+	// The ^ and $ anchors are match operators, not part of the matched text.
 	pattern := strings.TrimSpace(filter.Pattern)
+	pattern = strings.TrimSuffix(strings.TrimPrefix(pattern, "^"), "$")
 	if len(pattern) > maxLen {
 		return fmt.Errorf("%s filter max size is %d (got %d)", name, maxLen, len(pattern))
 	}

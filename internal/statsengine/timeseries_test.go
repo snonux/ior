@@ -63,3 +63,17 @@ func TestRingTimeSeriesIgnoresTooOldSamples(t *testing.T) {
 		t.Fatalf("unexpected values with old sample: got %v want %v", got, want)
 	}
 }
+
+func TestRingTimeSeriesValuesAtScrollsThroughIdlePeriod(t *testing.T) {
+	r := newRingTimeSeriesWithConfig(time.Second, 4)
+	base := time.Unix(100, 0)
+
+	r.Add(5, base)
+	r.Add(7, base.Add(time.Second))
+
+	got := r.ValuesAt(base.Add(3 * time.Second))
+	want := []float64{5, 7, 0, 0}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected values: got %v want %v", got, want)
+	}
+}

@@ -92,7 +92,10 @@ func (r *commResolver) lookupWorker() {
 		cancel()
 		r.mu.Lock()
 		delete(r.pending, tid)
-		if comm != "" {
+		// Never overwrite a comm that was learned in the meantime (e.g. from
+		// an open event carrying the kernel-reported comm): it is more
+		// accurate than a /proc lookup, whose TID may since have been reused.
+		if _, known := r.comms[tid]; !known && comm != "" {
 			r.comms[tid] = comm
 		}
 		r.mu.Unlock()

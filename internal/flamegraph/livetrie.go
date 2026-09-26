@@ -96,12 +96,14 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 
 // AddRecord adds one already-decoded flamegraph record into the live trie.
 func (lt *LiveTrie) AddRecord(record IterRecord) {
+	lt.mu.Lock()
+	// countField is read under the lock so a concurrent SetCountField cannot
+	// race with it or leak a value in the old metric into the new baseline.
 	value, err := record.Cnt.ValueByName(lt.countField)
 	if err != nil {
+		lt.mu.Unlock()
 		return
 	}
-
-	lt.mu.Lock()
 	frames := lt.buildFrames(record)
 	lt.addLocked(frames, value)
 	lt.version.Add(1)

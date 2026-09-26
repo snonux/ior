@@ -110,21 +110,28 @@ func (iod *iorData) serializeToFile(flamegraphName string) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("create temp file %s: %w", tmpFilename, err)
 	}
+	fileClosed := false
 	defer func() {
 		// Close file on error paths; on success it is already closed before rename.
 		// Capture the close error and join it with retErr so filesystem issues
 		// (e.g. full disk detected only on close) are not silently discarded.
-		if retErr != nil {
+		if retErr == nil {
+			return
+		}
+		if !fileClosed {
 			if closeErr := file.Close(); closeErr != nil {
 				retErr = errors.Join(retErr, fmt.Errorf("close temp file %s: %w", tmpFilename, closeErr))
 			}
 		}
+		// Don't leave a partial temp file behind.
+		_ = os.Remove(tmpFilename)
 	}()
 
 	encoder := zstd.NewWriter(file)
 
 	gobEncoder := gob.NewEncoder(encoder)
 	if err := gobEncoder.Encode(iod.records); err != nil {
+		_ = encoder.Close() // release the native zstd context
 		return fmt.Errorf("encode ior records: %w", err)
 	}
 	// Close encoder before file to flush the final zstd frame, then close
@@ -132,6 +139,7 @@ func (iod *iorData) serializeToFile(flamegraphName string) (retErr error) {
 	if err := encoder.Close(); err != nil {
 		return fmt.Errorf("close zstd writer for %s: %w", tmpFilename, err)
 	}
+	fileClosed = true
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close temp file %s: %w", tmpFilename, err)
 	}

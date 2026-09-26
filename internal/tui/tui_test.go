@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -429,7 +430,7 @@ func TestQuitKeyClosesExportModalLikeEsc(t *testing.T) {
 	}
 }
 
-func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
+func TestQuitKeyTypesIntoFlameSearch(t *testing.T) {
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
@@ -442,16 +443,95 @@ func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
 		t.Fatalf("expected flame search footer to open on /")
 	}
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
 	m = next.(Model)
-	if cmd != nil {
-		t.Fatalf("expected q in flame search to close search, not quit")
-	}
 	if m.quitting {
 		t.Fatalf("expected q in flame search not to set quitting state")
 	}
-	if strings.Contains(m.View().Content, "0/0 matches") {
-		t.Fatalf("expected q to close flame search like esc")
+	if !m.dashboard.TextInputFocused() {
+		t.Fatalf("expected q to be typed into flame search, not close it")
+	}
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(plain, "/q") {
+		t.Fatalf("expected typed q in flame search prompt, got %q", plain)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if m.dashboard.TextInputFocused() || m.quitting {
+		t.Fatalf("expected ctrl+c to close flame search like esc without quitting")
+	}
+}
+
+func TestQuitKeyTypesIntoTextInputModals(t *testing.T) {
+	q := tea.KeyPressMsg{Code: 'q', Text: "q"}
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.recordModal = m.recordModal.Open("rec")
+
+	next, _ := m.Update(q)
+	m = next.(Model)
+	if !m.recordModal.Visible() || m.recordModal.textInput.Value() != "recq" {
+		t.Fatalf("expected q typed into record path, visible=%v value=%q", m.recordModal.Visible(), m.recordModal.textInput.Value())
+	}
+
+	m.recordModal = m.recordModal.Close()
+	m.filterModal = m.filterModal.Open(globalfilter.Filter{})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if !m.filterModal.Editing() {
+		t.Fatalf("expected enter to start editing the first filter field")
+	}
+	next, _ = m.Update(q)
+	m = next.(Model)
+	if !m.filterModal.Visible() || !m.filterModal.Editing() || m.quitting {
+		t.Fatalf("expected q typed into filter field, visible=%v editing=%v", m.filterModal.Visible(), m.filterModal.Editing())
+	}
+}
+
+func TestQuitKeysExitFromErrorAndAttachingScreens(t *testing.T) {
+	keys := []tea.KeyPressMsg{{Code: 'q', Text: "q"}, {Code: 'c', Mod: tea.ModCtrl}}
+	for _, k := range keys {
+		for _, attaching := range []bool{true, false} {
+			m := NewModel(1234, func(context.Context) error { return nil })
+			stopped := false
+			m.tracer.traceStop = func() { stopped = true }
+			if !attaching {
+				next, _ := m.Update(TracingErrorMsg{Err: errors.New("boom")})
+				m = next.(Model)
+			}
+			next, cmd := m.Update(k)
+			if cmd == nil {
+				t.Fatalf("key %q attaching=%v: expected quit cmd", k.String(), attaching)
+			}
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Fatalf("key %q attaching=%v: expected tea.QuitMsg", k.String(), attaching)
+			}
+			if !next.(Model).quitting || !stopped {
+				t.Fatalf("key %q attaching=%v: expected quitting and trace stop", k.String(), attaching)
+			}
+		}
+	}
+}
+
+// TestStartTraceCmdTimeoutCancelsStarter verifies the stalled starter's
+// context is cancelled once the startup timeout fires.
+func TestStartTraceCmdTimeoutCancelsStarter(t *testing.T) {
+	done := make(chan struct{})
+	blocker := func(ctx context.Context) error {
+		<-ctx.Done()
+		close(done)
+		return ctx.Err()
+	}
+	msg := startTraceCmdWithTimeout(context.Background(), blocker, 10*time.Millisecond)()
+	if _, ok := msg.(TracingErrorMsg); !ok {
+		t.Fatalf("expected TracingErrorMsg on timeout, got %T", msg)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected starter context to be cancelled after timeout")
 	}
 }
 
@@ -2258,5 +2338,54 @@ func TestNextAutoResetIntervalAdvancesCustomValueToNextPreset(t *testing.T) {
 	// A custom value larger than every preset wraps to off.
 	if got := nextAutoResetInterval(10 * time.Minute); got != 0 {
 		t.Fatalf("nextAutoResetInterval(10m) = %s, want 0 (off)", got)
+	}
+}
+
+func TestProbeModalScrollsWithTerminalHeight(t *testing.T) {
+	states := make([]probemanager.ProbeState, 0, 60)
+	for i := 0; i < 60; i++ {
+		states = append(states, probemanager.ProbeState{Syscall: fmt.Sprintf("sys_%02d", i), Active: true})
+	}
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.runtime.SetProbeManager(fakeProbeManager{states: states})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"}) // leave flame, which binds o
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	m = next.(Model)
+	if !m.probeModal.Visible() {
+		t.Fatalf("expected probes modal to open on o")
+	}
+	for i := 0; i < 30; i++ {
+		next, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+		m = next.(Model)
+	}
+	if view := m.View().Content; !strings.Contains(view, "sys_30") {
+		t.Fatalf("expected selected probe sys_30 to stay visible after scrolling")
+	}
+}
+
+// TestRuntimeBindingsReleaseKeepsSuccessorRegistration verifies that a
+// stopping trace releasing its registrations cannot clear the probe manager
+// or live filter setter that a restarted trace has already registered.
+func TestRuntimeBindingsReleaseKeepsSuccessorRegistration(t *testing.T) {
+	r := newRuntimeBindings()
+	releaseOldMgr := r.SetProbeManager(&fakeProbeManager{})
+	releaseOldSetter := r.SetLiveFilterSetter(func(globalfilter.Filter) bool { return true })
+
+	newMgr := &fakeProbeManager{}
+	r.SetProbeManager(newMgr)
+	r.SetLiveFilterSetter(func(globalfilter.Filter) bool { return true })
+	releaseOldMgr()
+	releaseOldSetter()
+
+	if r.currentProbeManager() != newMgr {
+		t.Fatalf("expected successor probe manager to stay registered")
+	}
+	if !r.applyLiveFilter(globalfilter.Filter{}) {
+		t.Fatalf("expected successor live filter setter to stay registered")
 	}
 }
