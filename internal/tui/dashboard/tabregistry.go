@@ -274,33 +274,25 @@ func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 // tabScrollStream handles navigation, filter, and editor-open keys for the
-// stream tab. It delegates to streamModel and then emits the appropriate
-// Bubble Tea messages for any filter or editor requests.
+// stream tab. The stream model returns a command emitting typed messages for
+// any filter or editor request: the global-filter messages go to the top-level
+// model, messages.OpenEditorRequestedMsg comes back to Update here.
 func tabScrollStream(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	streamWidth, streamHeight := streamViewport(m.width, m.height)
 	m.streamModel.SetViewport(streamWidth, streamHeight)
-	handled := m.streamModel.HandleTeaKey(msg)
-	if m.streamModel.ConsumeGlobalFilterUndoRequest() {
-		return true, func() tea.Msg { return messages.GlobalFilterUndoRequestedMsg{} }
-	}
-	if filter, action, ok := m.streamModel.ConsumeGlobalFilterRequest(); ok {
-		return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
-	}
-	if path, ok := m.streamModel.ConsumeOpenEditorRequest(); ok {
-		return openStreamEditor(m, path)
-	}
-	return handled, nil
+	return m.streamModel.HandleTeaKey(msg)
 }
 
-// openStreamEditor opens an external editor for the given path, recording any
-// open error into the stream model's status message so the user sees feedback.
-func openStreamEditor(m *Model, path string) (bool, tea.Cmd) {
-	editorCmd, err := eventstream.EditorCommandForPath(path)
+// handleOpenEditorRequested opens an external editor for the requested path,
+// recording any open error into the stream model's status message so the user
+// sees feedback.
+func (m *Model) handleOpenEditorRequested(msg messages.OpenEditorRequestedMsg) (tea.Model, tea.Cmd) {
+	editorCmd, err := eventstream.EditorCommandForPath(msg.Path)
 	if err != nil {
 		m.streamModel.SetStatusMessage("Open failed: " + err.Error())
-		return true, nil
+		return m, nil
 	}
-	return true, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
+	return m, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
 		return streamEditorDoneMsg{err: err}
 	})
 }

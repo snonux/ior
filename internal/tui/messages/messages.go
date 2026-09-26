@@ -33,6 +33,13 @@ type GlobalFilterRequestedMsg struct {
 // GlobalFilterUndoRequestedMsg requests popping the latest shared filter layer.
 type GlobalFilterUndoRequestedMsg struct{}
 
+// OpenEditorRequestedMsg requests opening Path (a stream export) in the
+// user's external editor. The stream tab emits it; the dashboard runs the
+// editor process.
+type OpenEditorRequestedMsg struct {
+	Path string
+}
+
 // TracingStartedMsg signals that tracing started successfully.
 type TracingStartedMsg struct{}
 
