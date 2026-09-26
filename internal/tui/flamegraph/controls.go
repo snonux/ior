@@ -29,7 +29,14 @@ func (m *Model) togglePause() {
 	m.paused = !m.paused
 }
 
+// clearSnapshotState discards the current snapshot and view state after the
+// baseline, field order or metrics changed. It also invalidates any refresh
+// still in flight: that job was computed for the previous state, so its
+// result must not be applied (and, while paused, frozen) under the new one.
+// The job keeps the in-flight slot until it completes, so refreshes against
+// the shared live trie never overlap.
 func (m *Model) clearSnapshotState(clearSearch bool) {
+	m.invalidateRefresh()
 	m.zoomRoot = nil
 	m.zoomPath = ""
 	m.zoomStack = nil
