@@ -296,3 +296,10 @@ func (m *Model) handleOpenEditorRequested(msg messages.OpenEditorRequestedMsg) (
 		return streamEditorDoneMsg{err: err}
 	})
 }
+
+// CancelOpenEditorRequest records on the stream status line that the editor
+// request for msg.Path was not carried out, replacing the "Opening in editor"
+// status the stream set when it emitted the request.
+func (m *Model) CancelOpenEditorRequest(msg messages.OpenEditorRequestedMsg) {
+	m.streamModel.SetStatusMessage("Open cancelled: " + msg.Path)
+}
