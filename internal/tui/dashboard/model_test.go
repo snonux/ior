@@ -1505,24 +1505,77 @@ func TestRefreshKeyResetDiscardsFailedSnapshot(t *testing.T) {
 	}
 }
 
-// TestRefreshTickFailureKeepsLastGoodSnapshot covers the periodic refresh
-// path: a failing source must not blank a dashboard that already has data.
+// TestRefreshTickFailureKeepsLastGoodSnapshot drives the periodic refresh
+// through Update: the StatsTickMsg that handleRefreshTick batches must carry
+// the error, and feeding it back must not blank a dashboard that has data.
 func TestRefreshTickFailureKeepsLastGoodSnapshot(t *testing.T) {
 	good := &statsengine.Snapshot{TotalSyscalls: 3}
-	engine := &fakeSnapshotSource{err: errors.New("snapshot build failed")}
+	buildErr := errors.New("snapshot build failed")
+	engine := &fakeSnapshotSource{err: buildErr}
 	m := NewModelWithConfig(engine, nil, 100, 200, common.DefaultKeyMap())
 	next, _ := m.Update(messages.StatsTickMsg{Snap: good})
 	m = next.(*Model)
 
-	tick := m.statsTick()
-	if tick.Err == nil || tick.Snap != nil {
+	next, cmd := m.Update(refreshTickMsg{})
+	m = next.(*Model)
+	tick := requireStatsTickInBatch(t, requireDashboardBatch(t, cmd))
+	if tick.Snap != nil || !errors.Is(tick.Err, buildErr) {
 		t.Fatalf("expected an error-only tick from a failing source, got %+v", tick)
 	}
+
 	next, _ = m.Update(tick)
 	m = next.(*Model)
 	if got := m.LatestSnapshot(); got != good {
 		t.Fatalf("expected last good snapshot to survive a failed refresh, got %+v", got)
 	}
+}
+
+// TestSnapshotCmdFailureKeepsLastGoodSnapshot covers SnapshotCmd, which the
+// TUI uses to refresh the dashboard on focus and trace start.
+func TestSnapshotCmdFailureKeepsLastGoodSnapshot(t *testing.T) {
+	good := &statsengine.Snapshot{TotalSyscalls: 4}
+	buildErr := errors.New("snapshot build failed")
+	engine := &fakeSnapshotSource{err: buildErr}
+	m := NewModelWithConfig(engine, nil, 100, 200, common.DefaultKeyMap())
+	next, _ := m.Update(messages.StatsTickMsg{Snap: good})
+	m = next.(*Model)
+
+	tick, ok := m.SnapshotCmd()().(messages.StatsTickMsg)
+	if !ok {
+		t.Fatalf("expected SnapshotCmd to emit a StatsTickMsg")
+	}
+	if tick.Snap != nil || !errors.Is(tick.Err, buildErr) {
+		t.Fatalf("expected an error-only tick from a failing source, got %+v", tick)
+	}
+
+	next, _ = m.Update(tick)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got != good {
+		t.Fatalf("expected last good snapshot to survive a failed SnapshotCmd, got %+v", got)
+	}
+}
+
+// requireStatsTickInBatch runs each command of a dashboard batch and returns
+// the single StatsTickMsg among their results.
+func requireStatsTickInBatch(t *testing.T, batch tea.BatchMsg) messages.StatsTickMsg {
+	t.Helper()
+	var (
+		found messages.StatsTickMsg
+		seen  int
+	)
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if stats, ok := c().(messages.StatsTickMsg); ok {
+			found = stats
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("expected exactly one StatsTickMsg in batch, got %d", seen)
+	}
+	return found
 }
 
 // TestStatsTickWithoutSourceClearsSnapshot pins the other half of the
