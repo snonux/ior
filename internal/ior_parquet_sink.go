@@ -3,9 +3,9 @@ package internal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"ior/internal/event"
 	"ior/internal/flags"
@@ -98,14 +98,31 @@ func headlessParquetTraceConfig(cfg flags.Config) flags.Config {
 	return out
 }
 
+// headlessParquetInfraSetup builds the trace infrastructure of a headless
+// Parquet run; setupHeadlessParquetInfra in production. It is a parameter of
+// runHeadlessParquetWith so the recorder lifecycle around it can be exercised
+// without the root privileges real BPF setup needs.
+type headlessParquetInfraSetup func(cfg flags.Config, logln func(...any)) (*traceInfra, error)
+
 // runHeadlessParquet records all traced syscalls directly to a Parquet file
 // without starting the TUI. Root privilege is checked by the mode handler
 // (via runnerDeps.getEUID) before this function is invoked.
 func runHeadlessParquet(cfg flags.Config) error {
+	return runHeadlessParquetWith(cfg, setupHeadlessParquetInfra)
+}
+
+// runHeadlessParquetWith runs one headless Parquet recording on the
+// infrastructure that setup builds. The shared trace setup owns every BPF and
+// runtime resource (and releases what it built when it fails part-way); this
+// function adds only the Parquet-specific lifecycle on top: the recorder is
+// started once the trace can run, so a failed setup leaves no file behind, and
+// it is stopped - flushing and finalising the file - after the event loop has
+// drained and before the infrastructure is released.
+func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) error {
 	cfg = headlessParquetTraceConfig(cfg)
 	logln := newLogger(true)
 
-	infra, err := setupHeadlessParquetInfra(cfg, logln)
+	infra, err := setup(cfg, logln)
 	if err != nil {
 		return err
 	}
@@ -113,24 +130,27 @@ func runHeadlessParquet(cfg flags.Config) error {
 
 	recorder := parquet.NewRecorder(parquet.RecorderConfig{})
 	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: parquet.NewFileMetadata("headless")}); err != nil {
-		return err
+		return fmt.Errorf("start parquet recording: %w", err)
 	}
 
 	sink := newHeadlessParquetSink(recorder, infra.cancel)
 	// sink.configure wires the event loop's print callback to record each pair
-	// to Parquet; the mgr filter wraps it to skip inactive probes.
-	configureEventLoopOutput(infra.el, infra.mgr, sink.configure)
-	// startTraceShutdownWatcher returns a done channel that must be drained
-	// before returning to prevent a goroutine leak when ctx is cancelled but
-	// the goroutine has not yet exited.
-	watcherDone := startTraceShutdownWatcher(infra.ctx, true, infra.el, infra.profiling, logln)
+	// to Parquet; runTraceLoop wraps it to skip inactive probes.
+	totalDuration := runTraceLoop(infra, true, sink.configure, logln)
+	if err := finishHeadlessParquetRecording(recorder, sink, logln); err != nil {
+		return err
+	}
+	logTraceStopped(totalDuration, logln)
+	return nil
+}
 
-	startTime := time.Now()
-	infra.el.run(infra.ctx, infra.ch)
-	totalDuration := time.Since(startTime)
-	<-watcherDone
-	<-infra.profiling.done
-
+// finishHeadlessParquetRecording stops the recorder, finalising the Parquet
+// file, and reports the run's outcome. A recorder failure the sink observed
+// during the run is the primary error - it is what cancelled the trace - with
+// a distinct Stop error joined to it; otherwise Stop's own error is returned.
+// Rows shed by queue overflow are not an error, but the recording is then
+// partial, so that is logged.
+func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessParquetSink, logln func(...any)) error {
 	stopErr := recorder.Stop()
 	if err := sink.err(); err != nil {
 		if stopErr != nil && !errors.Is(stopErr, err) {
@@ -144,7 +164,6 @@ func runHeadlessParquet(cfg flags.Config) error {
 	if dropped := recorder.Status().RowsDropped; dropped > 0 {
 		logln("Warning:", dropped, "events were dropped (parquet recorder queue overflow) - the recording is partial")
 	}
-	logln("Trace stopped after", totalDuration, "- cleaning up...")
 	return nil
 }
 

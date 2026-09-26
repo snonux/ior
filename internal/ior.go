@@ -603,21 +603,44 @@ func maybePrependFlamegraphConfigure(cfg flags.Config, configure func(*eventLoop
 	return chainEventLoopConfigure(recordOutput, configure), recorder
 }
 
-// finaliseTrace waits for the shutdown-watcher goroutine and profiling to
-// finish, flushes the flamegraph recorder if one was created, and logs the
-// total run duration. watcherDone must be the channel returned by
-// startTraceShutdownWatcher; draining it here prevents a goroutine leak when
-// the caller's context is cancelled but the goroutine has not yet exited.
-func finaliseTrace(watcherDone <-chan struct{}, recorder *flamegraph.Recorder, profiling *profilingControl, totalDuration time.Duration, logln func(...any)) error {
+// runTraceLoop drives one trace over infra - the part of a run that every
+// headless mode and the TUI share once setup has succeeded. It wires the
+// mode's output through configure (behind the probe manager's active-probe
+// filter), runs the event loop until the trace context ends, and then waits
+// for the shutdown watcher and for profiling to finish, so no goroutine of the
+// run outlives it. It returns how long the event loop ran. Mode-specific
+// finalisation (flushing a flamegraph or Parquet recorder) and infra.Close are
+// the caller's.
+func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), logln func(...any)) time.Duration {
+	configureEventLoopOutput(infra.el, infra.mgr, configure)
+	// The watcher's done channel is drained below: returning while it is
+	// still running would leak it when ctx is cancelled but the goroutine has
+	// not yet exited.
+	watcherDone := startTraceShutdownWatcher(infra.ctx, verbose, infra.el, infra.profiling, logln)
+
+	startTime := time.Now()
+	infra.el.run(infra.ctx, infra.ch)
+	totalDuration := time.Since(startTime)
 	<-watcherDone
-	<-profiling.done
+	<-infra.profiling.done
+	return totalDuration
+}
+
+// finaliseTrace flushes the flamegraph recorder if one was created and logs
+// the total run duration. It runs after runTraceLoop has returned.
+func finaliseTrace(recorder *flamegraph.Recorder, totalDuration time.Duration, logln func(...any)) error {
 	if recorder != nil {
 		if err := recorder.Write(); err != nil {
 			return err
 		}
 	}
-	logln("Trace stopped after", totalDuration, "- cleaning up...")
+	logTraceStopped(totalDuration, logln)
 	return nil
+}
+
+// logTraceStopped reports the end of a successfully finalised trace run.
+func logTraceStopped(totalDuration time.Duration, logln func(...any)) {
+	logln("Trace stopped after", totalDuration, "- cleaning up...")
 }
 
 // runTraceWithContext is the concrete BPF trace implementation. Root privilege
@@ -634,12 +657,8 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	}
 	defer infra.Close()
 
-	configureEventLoopOutput(infra.el, infra.mgr, configure)
-	watcherDone := startTraceShutdownWatcher(infra.ctx, verbose, infra.el, infra.profiling, logln)
-
-	startTime := time.Now()
-	infra.el.run(infra.ctx, infra.ch)
-	return finaliseTrace(watcherDone, recorder, infra.profiling, time.Since(startTime), logln)
+	totalDuration := runTraceLoop(infra, verbose, configure, logln)
+	return finaliseTrace(recorder, totalDuration, logln)
 }
 
 // traceInfra is the runtime infrastructure of one trace run - BPF module and
@@ -774,29 +793,7 @@ func setupTraceInfraWithEventLoop(
 		return nil, err
 	}
 
-	reporter, _ := runtime.TraceShutdownReporterFromContext(parentCtx)
-	infra := &traceInfra{
-		mgr:         mgr,
-		shutdownLog: logln,
-	}
-	infra.progress = func(completed, total int) {
-		if completed == 0 {
-			logln("Detaching", total, "active BPF probe pairs...")
-		}
-		if reporter != nil {
-			reporter.Publish(runtime.TraceShutdownProgress{
-				Phase:     runtime.TraceShutdownDetaching,
-				Completed: completed,
-				Total:     total,
-			})
-		}
-	}
-	infra.releasing = func() {
-		logln("Releasing remaining BPF resources...")
-		if reporter != nil {
-			reporter.Publish(runtime.TraceShutdownProgress{Phase: runtime.TraceShutdownReleasing})
-		}
-	}
+	infra := newTraceInfra(parentCtx, mgr, logln)
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
@@ -805,26 +802,10 @@ func setupTraceInfraWithEventLoop(
 		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals, infra.progress, infra.releasing)
 	})
 
-	eventCh, rb, err := setupEventChannel(bpfModule)
-	if err != nil {
+	if err := infra.setupRuntime(parentCtx, cfg, bpfModule, started, logln); err != nil {
 		infra.Close()
 		return nil, err
 	}
-	infra.ch, infra.rb = eventCh, rb
-
-	infra.ctx, infra.cancel, infra.stopSignals = setupTraceContext(parentCtx, cfg, logln)
-
-	profiling, err := setupProfiling(infra.ctx, cfg, started)
-	if err != nil {
-		infra.Close()
-		return nil, err
-	}
-	infra.profiling = profiling
-	// Profiling is running from here on and the caller cannot see it until
-	// setup returns, so nothing else would stop it: with -pprof the CPU
-	// profile would stay active and the next trace fail with "cpu profiling
-	// already in use" instead of reporting whatever really went wrong.
-	infra.onClose(func() { profiling.stop(logln) })
 
 	el, err := buildEventLoop(cfg, bpfModule, warnSetup)
 	if err != nil {
@@ -841,6 +822,69 @@ func setupTraceInfraWithEventLoop(
 	// TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
 	signalTraceStarted(started)
 	return infra, nil
+}
+
+// newTraceInfra returns the still-empty infrastructure of one run, with its
+// shutdown progress wired: every phase is logged through logln and, when
+// parentCtx carries a TUI shutdown reporter, published to it as well.
+func newTraceInfra(parentCtx context.Context, mgr *probemanager.Manager, logln func(...any)) *traceInfra {
+	reporter, _ := runtime.TraceShutdownReporterFromContext(parentCtx)
+	publish := func(progress runtime.TraceShutdownProgress) {
+		if reporter != nil {
+			reporter.Publish(progress)
+		}
+	}
+	return &traceInfra{
+		mgr:         mgr,
+		shutdownLog: logln,
+		progress: func(completed, total int) {
+			if completed == 0 {
+				logln("Detaching", total, "active BPF probe pairs...")
+			}
+			publish(runtime.TraceShutdownProgress{
+				Phase:     runtime.TraceShutdownDetaching,
+				Completed: completed,
+				Total:     total,
+			})
+		},
+		releasing: func() {
+			logln("Releasing remaining BPF resources...")
+			publish(runtime.TraceShutdownProgress{Phase: runtime.TraceShutdownReleasing})
+		},
+	}
+}
+
+// setupRuntime builds the post-attach runtime of a run - event channel and
+// ring buffer, trace context and profiling - on top of an already loaded BPF
+// module. Each resource is stored or registered for Close the moment it
+// exists; on error the caller closes infra, which then releases exactly what
+// was built.
+func (in *traceInfra) setupRuntime(
+	parentCtx context.Context,
+	cfg flags.Config,
+	bpfModule *bpf.Module,
+	started chan<- struct{},
+	logln func(...any),
+) error {
+	eventCh, rb, err := setupEventChannel(bpfModule)
+	if err != nil {
+		return err
+	}
+	in.ch, in.rb = eventCh, rb
+
+	in.ctx, in.cancel, in.stopSignals = setupTraceContext(parentCtx, cfg, logln)
+
+	profiling, err := setupProfiling(in.ctx, cfg, started)
+	if err != nil {
+		return err
+	}
+	in.profiling = profiling
+	// Profiling is running from here on and the caller cannot see it until
+	// setup returns, so nothing else would stop it: with -pprof the CPU
+	// profile would stay active and the next trace fail with "cpu profiling
+	// already in use" instead of reporting whatever really went wrong.
+	in.onClose(func() { profiling.stop(logln) })
+	return nil
 }
 
 // newTraceEventLoop builds the event loop and wires its kernel-side data
