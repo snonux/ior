@@ -245,10 +245,10 @@ func (m *Model) handleRefreshTick() (tea.Model, tea.Cmd) {
 	if !m.focused {
 		return m, nil
 	}
-	snap := m.snapshot()
+	tick := m.statsTick()
 	return m, tea.Batch(
 		tickCmd(m.refreshEvery),
-		func() tea.Msg { return messages.StatsTickMsg{Snap: snap} },
+		func() tea.Msg { return tick },
 	)
 }
 
@@ -290,6 +290,11 @@ func (m *Model) handleBubbleTick() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
+	if msg.Err != nil {
+		// A failed snapshot build carries no data: keep rendering the last
+		// good snapshot instead of blanking the view on a transient failure.
+		return m, nil
+	}
 	selectedSyscall := ""
 	selectedFile := ""
 	selectedDir := ""
@@ -1011,18 +1016,18 @@ func (m *Model) processesRowCount() int {
 	return m.snapshotOrZero().ProcessesCount()
 }
 
-// snapshot returns the latest engine snapshot, or nil if the engine is nil or
-// returns an error. Errors are silently dropped here because the dashboard
-// renders the last successful snapshot on transient failures.
-func (m *Model) snapshot() *statsengine.Snapshot {
+// statsTick fetches the latest engine snapshot as a StatsTickMsg. Without an
+// engine it carries a nil snapshot and no error; a failed Snapshot is reported
+// through Err so handleStatsTick keeps the last successful snapshot.
+func (m *Model) statsTick() messages.StatsTickMsg {
 	if m.engine == nil {
-		return nil
+		return messages.StatsTickMsg{}
 	}
 	snap, err := m.engine.Snapshot()
 	if err != nil {
-		return nil
+		return messages.StatsTickMsg{Err: err}
 	}
-	return snap
+	return messages.StatsTickMsg{Snap: snap}
 }
 
 func (m *Model) snapshotOrZero() statsengine.Snapshot {
@@ -1047,10 +1052,10 @@ func (m *Model) resetBaselineCmd() tea.Cmd {
 	if m.engine != nil {
 		m.engine.Reset()
 	}
-	// snapshot drops Snapshot errors; the dashboard will continue to display
-	// the last successful snapshot.
-	snap := m.snapshot()
-	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
+	// A Snapshot failure travels as StatsTickMsg.Err, so the dashboard keeps
+	// displaying the last successful snapshot.
+	tick := m.statsTick()
+	return func() tea.Msg { return tick }
 }
 
 // autoResetTickCmd returns a command that fires an autoResetTickMsg after
@@ -1257,8 +1262,8 @@ func (m *Model) SetFocused(focused bool) tea.Cmd {
 
 // SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
 func (m *Model) SnapshotCmd() tea.Cmd {
-	snap := m.snapshot()
-	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
+	tick := m.statsTick()
+	return func() tea.Msg { return tick }
 }
 
 // SetPidFilter updates the active PID filter used by tab render hints.

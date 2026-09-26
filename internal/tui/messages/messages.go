@@ -17,8 +17,16 @@ type TidSelectedMsg struct {
 }
 
 // StatsTickMsg carries a fresh immutable snapshot from the stats engine.
+//
+// The two nil-snapshot cases are distinct: Err == nil with Snap == nil means
+// no stats source is wired (the dashboard shows no data), while Err != nil
+// means building the snapshot failed; Snap is then nil and receivers keep
+// their last good snapshot rather than blanking the view on a transient
+// failure.
 type StatsTickMsg struct {
 	Snap *statsengine.Snapshot
+	// Err is non-nil when snapshot construction failed.
+	Err error
 }
 
 // ExportRequestMsg requests an export of the current UI state.

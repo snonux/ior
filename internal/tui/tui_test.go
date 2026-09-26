@@ -665,9 +665,14 @@ func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
 type fakeDashboardSource struct {
 	snap       *statsengine.Snapshot
 	resetCalls int
+	// err, when set, makes Snapshot fail.
+	err error
 }
 
 func (f *fakeDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.snap, nil
 }
 
@@ -730,9 +735,9 @@ func TestLateBoundDashboardSourceWithoutSourceIsInert(t *testing.T) {
 	}
 }
 
-func TestResetDashboardSnapshotSourceWithoutSourceReturnsNil(t *testing.T) {
-	if snap := newRuntimeBindings().resetDashboardSnapshotSource(); snap != nil {
-		t.Fatalf("expected nil snapshot without a wired source, got %+v", snap)
+func TestResetDashboardSnapshotSourceWithoutSourceReportsNothingToRefresh(t *testing.T) {
+	if tick, ok := newRuntimeBindings().resetDashboardSnapshotSource(); ok {
+		t.Fatalf("expected no tick without a wired source, got %+v", tick)
 	}
 }
 
@@ -815,6 +820,35 @@ func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 	snap := updated.dashboard.LatestSnapshot()
 	if snap == nil || snap.TotalSyscalls != 0 {
 		t.Fatalf("expected dashboard snapshot refreshed from reset source, got %+v", snap)
+	}
+}
+
+// TestProbeToggledMsgKeepsLastGoodSnapshotOnFailure mirrors the dashboard's
+// refresh/reset behaviour for the probe-toggle path: the source is reset, but
+// a failing post-reset Snapshot must not replace the last good snapshot.
+func TestProbeToggledMsgKeepsLastGoodSnapshotOnFailure(t *testing.T) {
+	good := &statsengine.Snapshot{TotalSyscalls: 99}
+	src := &fakeDashboardSource{snap: good, err: errors.New("snapshot build failed")}
+
+	m := NewModel(-1, func(context.Context) error { return nil })
+	m.runtime.SetDashboardSnapshotSource(src)
+	m.screen = ScreenDashboard
+	m.attaching = false
+	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
+	next, _ := m.Update(messages.StatsTickMsg{Snap: good})
+	m = next.(*Model)
+	if got := m.dashboard.LatestSnapshot(); got != good {
+		t.Fatalf("precondition: expected seeded snapshot, got %+v", got)
+	}
+
+	next, _ = m.Update(probes.ProbeToggledMsg{Syscall: "read"})
+	updated := next.(*Model)
+
+	if src.resetCalls != 1 {
+		t.Fatalf("expected one reset call, got %d", src.resetCalls)
+	}
+	if got := updated.dashboard.LatestSnapshot(); got != good {
+		t.Fatalf("expected last good snapshot to survive a failed post-toggle snapshot, got %+v", got)
 	}
 }
 
