@@ -35,7 +35,7 @@ func (m *Model) applySearchQuery(raw string) {
 	m.statusMessage = statusMsg
 	if jumpDir != 0 {
 		m.selectedIdx, m.subtreeSet = jumpMatch(
-			m.frames, m.matchIndices, m.ancestry, m.selectedIdx, jumpDir,
+			m.frames, m.matchIndices, m.ancestry, m.selectedIdx, jumpDir, m.subtreeSet,
 		)
 	} else {
 		m.SelectionManager.ensureNavigable(m.frames, m.matchIndices, m.searchQuery, m.filterVisible)

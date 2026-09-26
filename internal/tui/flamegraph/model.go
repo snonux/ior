@@ -357,7 +357,7 @@ func (m *Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		statusMsg, jumpDir := m.SearchController.applyQuery(query, m.frames, m.ancestry)
 		m.statusMessage = statusMsg
 		if jumpDir != 0 {
-			m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, jumpDir)
+			m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, jumpDir, m.subtreeSet)
 		} else {
 			m.SelectionManager.ensureNavigable(m.frames, m.matchIndices, m.searchQuery, m.filterVisible)
 		}
@@ -392,9 +392,9 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg) bool {
 		m.openSearch()
 	case isNextMatchKey(msg):
 		// Delegate match jump to package-level helper; update selection and subtree.
-		m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, 1)
+		m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, 1, m.subtreeSet)
 	case isPrevMatchKey(msg):
-		m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, -1)
+		m.selectedIdx, m.subtreeSet = jumpMatch(m.frames, m.matchIndices, m.ancestry, m.selectedIdx, -1, m.subtreeSet)
 	case isPauseKey(msg):
 		m.togglePause()
 	case isResetBaselineKey(msg):
