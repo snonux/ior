@@ -1,6 +1,10 @@
 package flamegraph
 
-import "strings"
+import (
+	"iter"
+	"maps"
+	"strings"
+)
 
 // frameAncestry stores parent/child relationships between frames keyed by their
 // slice index. It is rebuilt whenever the frames slice is rebuilt, and reused
@@ -77,10 +81,11 @@ func subtreeSetUsingAncestry(frames []tuiFrame, selectedIdx int, ancestry frameA
 }
 
 // filterVisibleSetUsingAncestry fills `set` with every match plus its full
-// descendant subtree and ancestor chain — same semantics as the legacy
-// computeFilterVisibleSetInto walk, but in O(sum-of-subtree-sizes) instead of
-// O(frames × matches). Falls back to building ancestry on the fly when the
-// supplied index is stale (see subtreeSetUsingAncestry).
+// descendant subtree and ancestor chain in O(sum-of-subtree-sizes) instead of
+// the O(frames × matches) path scan of the legacy computeFilterVisibleSetInto
+// (which, unlike this function, keeps only matches and ancestors). Falls back
+// to building ancestry on the fly when the supplied index is stale (see
+// subtreeSetUsingAncestry).
 func filterVisibleSetUsingAncestry(frames []tuiFrame, matchSet map[int]bool, ancestry frameAncestry, set map[int]bool) map[int]bool {
 	if set == nil {
 		set = make(map[int]bool)
@@ -95,11 +100,41 @@ func filterVisibleSetUsingAncestry(frames []tuiFrame, matchSet map[int]bool, anc
 	if len(ancestry.parent) != len(frames) {
 		ancestry = buildFrameAncestry(frames)
 	}
-	for matchIdx := range matchSet {
-		if matchIdx < 0 || matchIdx >= len(frames) {
+	markFilterVisible(ancestry, maps.Keys(matchSet), set)
+	return set
+}
+
+// markFilterVisible marks every in-range match in `matches`, its full
+// descendant subtree and its ancestor chain in `set`. The result does not
+// depend on the order in which `matches` yields indices, which matters because
+// the caller feeds it straight from map iteration. `matches` is ranged over
+// twice, so it must be re-iterable (maps.Keys and slices.Values both are).
+//
+// The work runs in two passes on purpose. markSubtree skips any frame that is
+// already marked, which is only sound while "marked" implies "whole subtree
+// marked". An ancestor walk breaks that implication: walking up from a nested
+// match marks its enclosing match without marking the enclosing match's other
+// children, so interleaving the passes per match would let a later
+// markSubtree on the enclosing match stop at its root and hide those
+// children. Marking every subtree first keeps the implication true for the
+// whole first pass.
+//
+// The second pass may then stop each ancestor walk at the first marked frame.
+// Such a frame was either marked by an earlier walk, which continued upward
+// itself, or lies in the subtree of a shallower match, whose own walk covers
+// the chain above it; by induction on match depth every ancestor ends up
+// marked whatever the iteration order.
+func markFilterVisible(ancestry frameAncestry, matches iter.Seq[int], set map[int]bool) {
+	n := len(ancestry.parent)
+	for matchIdx := range matches {
+		if matchIdx >= 0 && matchIdx < n {
+			markSubtree(ancestry, matchIdx, set)
+		}
+	}
+	for matchIdx := range matches {
+		if matchIdx < 0 || matchIdx >= n {
 			continue
 		}
-		markSubtree(ancestry, matchIdx, set)
 		for cur := ancestry.parent[matchIdx]; cur >= 0; cur = ancestry.parent[cur] {
 			if set[cur] {
 				break
@@ -107,7 +142,6 @@ func filterVisibleSetUsingAncestry(frames []tuiFrame, matchSet map[int]bool, anc
 			set[cur] = true
 		}
 	}
-	return set
 }
 
 // markSubtree marks a frame and every descendant. Uses an iterative stack
