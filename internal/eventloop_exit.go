@@ -47,7 +47,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	ep.Comm = comm
 	if fd := int32(retEvent.Ret); fd >= 0 {
 		fdFile := file.NewFd(fd, types.StringValue(openEv.Filename[:]), openEv.Flags)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
 		// Keep path information for failed opens so error scenarios remain observable.
@@ -84,7 +84,7 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 		if fd := int32(retEvent.Ret); fd >= 0 {
 			fdFile := file.NewFd(fd, types.StringValue(pathEv.Pathname[:]),
 				syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
-			e.fdState().set(fd, fdFile)
+			e.fdState().set(fd, pathEv.Pid, fdFile)
 			ep.File = fdFile
 		}
 	} else {
@@ -95,17 +95,13 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 }
 
 // handleFdExit processes exit events for fd-based syscalls. It resolves the fd
-// to a file, applies close/close_range state transitions, filters the pair, and
-// handles dup/pidfd_getfd fd-transfer operations before finalising bytes.
+// to a file, applies close/close_range state transitions, and handles
+// dup/pidfd_getfd fd-transfer operations before finalising bytes.
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	ep.File = e.fdState().resolve(fd, fdEv.Pid)
 	e.applyFdCloseState(ep, fd, fdEv.Pid)
 	ep.Comm = e.comm(fdEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
 		return false
 	}
@@ -118,7 +114,7 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 // applyFdCloseState updates fd-tracking state for close and close_range syscalls.
 func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 	if ep.Is(types.SYS_ENTER_CLOSE) {
-		e.fdState().delete(fd)
+		e.fdState().delete(fd, pid)
 		e.fdState().deleteProcFdCache(fd, pid)
 		return
 	}
@@ -127,7 +123,7 @@ func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 		// argument, so we approximate by closing all tracked fds >= first.
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
 		if ok && retEv.Ret == 0 {
-			e.fdState().closeRangeFrom(fd)
+			e.fdState().closeRangeFrom(fd, pid)
 			e.fdState().deleteProcFdCacheFrom(fd, pid)
 		}
 	}
@@ -147,7 +143,7 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 			e.recyclePair(ep, "Dropped malformed dup exit event")
 			return false
 		}
-		e.registerDup(fdFile, int32(retEvent.Ret), 0)
+		e.registerDup(fdFile, fdEv.Pid, int32(retEvent.Ret), 0)
 	}
 	if ep.Is(types.SYS_ENTER_PIDFD_GETFD) {
 		retEv, ok := ep.ExitEv.(*types.RetEvent)
@@ -157,7 +153,7 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 		}
 		if newFd := int32(retEv.Ret); newFd >= 0 {
 			transferredFile := file.NewFdWithPid(newFd, fdEv.Pid)
-			e.fdState().set(newFd, transferredFile)
+			e.fdState().set(newFd, fdEv.Pid, transferredFile)
 			ep.File = transferredFile
 		}
 	}
@@ -168,10 +164,6 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 	fd := int32(dup3Ev.Fd)
 	ep.File = e.fdState().resolve(fd, dup3Ev.Pid)
 	ep.Comm = e.comm(dup3Ev.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
 
 	fdFile, ok := ep.File.(*file.FdFile)
 	if !ok {
@@ -183,7 +175,7 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 		e.recyclePair(ep, "Dropped malformed dup3 exit event")
 		return false
 	}
-	e.registerDup(fdFile, int32(retEvent.Ret), dup3Ev.Flags&syscall.O_CLOEXEC)
+	e.registerDup(fdFile, dup3Ev.Pid, int32(retEvent.Ret), dup3Ev.Flags&syscall.O_CLOEXEC)
 	return true
 }
 
@@ -205,14 +197,14 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 
 	if pathname, ok := e.pendingHandleState().consume(tid); ok {
 		fdFile := file.NewFd(fd, pathname, openByHandleEv.Flags)
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
 		fdFile := file.NewFdWithPid(fd, openByHandleEv.Pid)
 		if fdFile.Flags() == file.Flags(-1) {
 			fdFile.SetFlags(openByHandleEv.Flags)
 		}
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
 	}
 	ep.Comm = e.comm(tid)
@@ -228,7 +220,7 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 		}
 		if fd := int32(retEvent.Ret); fd >= 0 {
 			fdFile := file.NewFdWithPid(fd, nullEv.Pid)
-			e.fdState().set(fd, fdFile)
+			e.fdState().set(fd, nullEv.Pid, fdFile)
 			ep.File = fdFile
 		}
 	}
@@ -249,10 +241,6 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 		}
 	}
 	ep.Comm = e.comm(nullEv.GetTid())
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
 	return true
 }
 
@@ -260,10 +248,6 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) b
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.fdState().resolve(fd, fcntlEv.Pid)
-	if !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return false
-	}
 
 	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
@@ -285,18 +269,23 @@ func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) b
 	switch fcntlEv.Cmd {
 	case syscall.F_SETFL:
 		const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-		fdFile.SetFlags(int32(fcntlEv.Arg) & int32(canChange))
+		// Only the status flags above change; the access mode and creation
+		// flags are kept. Unknown flags stay unknown.
+		if fdFile.Flags() != file.Flags(-1) {
+			old := int32(fdFile.Flags())
+			fdFile.SetFlags(old&^int32(canChange) | int32(fcntlEv.Arg)&int32(canChange))
+		}
 		ep.File = fdFile
-		e.fdState().set(fd, fdFile)
+		e.fdState().set(fd, fcntlEv.Pid, fdFile)
 	case syscall.F_DUPFD:
-		e.registerDup(fdFile, int32(retEvent.Ret), 0)
+		e.registerDup(fdFile, fcntlEv.Pid, int32(retEvent.Ret), 0)
 	case syscall.F_DUPFD_CLOEXEC:
-		e.registerDup(fdFile, int32(retEvent.Ret), syscall.O_CLOEXEC)
+		e.registerDup(fdFile, fcntlEv.Pid, int32(retEvent.Ret), syscall.O_CLOEXEC)
 	}
 	return true
 }
 
-func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int32) {
+func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd int32, extraFlags int32) {
 	if newFd < 0 {
 		return
 	}
@@ -304,7 +293,7 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, newFd int32, extraFlags int
 	if extraFlags != 0 {
 		duppedFdFile.AddFlags(extraFlags)
 	}
-	e.fdState().set(newFd, duppedFdFile)
+	e.fdState().set(newFd, pid, duppedFdFile)
 }
 
 // recyclePair notifies about the problem described by warning, then returns ep

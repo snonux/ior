@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"ior/internal/event"
-	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
@@ -451,7 +450,7 @@ func TestCommFilterToggle(t *testing.T) {
 		// Create eventloop without comm filter
 		el := &eventLoop{
 			pairs:        newPairTracker(),
-			fdTracker:    newFDTracker(make(map[int32]file.File)),
+			fdTracker:    newFDTracker(nil),
 			commResolver: newCommResolver(make(map[uint32]string)),
 			cfg:          eventLoopConfig{synchronousRawProcessing: true},
 			outputFormatter: outputFormatter{
@@ -494,7 +493,7 @@ func TestCommFilterToggle(t *testing.T) {
 		// Create eventloop with comm filter enabled
 		el := &eventLoop{
 			pairs:        newPairTracker(),
-			fdTracker:    newFDTracker(make(map[int32]file.File)),
+			fdTracker:    newFDTracker(nil),
 			commResolver: newCommResolver(make(map[uint32]string)),
 			cfg:          eventLoopConfig{synchronousRawProcessing: true},
 			outputFormatter: outputFormatter{
@@ -530,15 +529,10 @@ func TestCommFilterToggle(t *testing.T) {
 }
 
 func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
-	// The synthetic TIDs used here (e.g. 11) may belong to real processes on
-	// the host; stub the async /proc lookup so it cannot overwrite the comm
-	// learned from the open event and make the comm filter flaky.
-	resolver := newCommResolver(make(map[uint32]string))
-	resolver.resolveFn = func(context.Context, uint32) (string, error) { return "", nil }
 	el := &eventLoop{
 		pairs:        newPairTracker(),
-		fdTracker:    newFDTracker(make(map[int32]file.File)),
-		commResolver: resolver,
+		fdTracker:    newFDTracker(nil),
+		commResolver: newCommResolver(make(map[uint32]string)),
 		cfg:          eventLoopConfig{synchronousRawProcessing: true},
 		outputFormatter: outputFormatter{
 			printCb: func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },

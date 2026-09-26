@@ -235,7 +235,7 @@ func tabRenderStream(_ *Model, _ *statsengine.Snapshot, stream *eventstream.Mode
 func tabScrollSyscalls(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	if m.syscallsVizMode == tabVizModeTreemap {
-		return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.maxSyscallsRows()), nil
+		return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.treemapItemCount(TabSyscalls)), nil
 	}
 	return common.HandleTableNavigationKey(keyStr, &m.syscallsOffset, &m.syscallsCol,
 		m.maxSyscallsRows(), len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
@@ -257,7 +257,7 @@ func tabScrollFiles(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	return common.HandleTableNavigationKey(keyStr, &m.processesOffset, &m.processesCol,
-		m.maxProcessesRows(), len(processColumns()), tablePageStep(m.activeTableHeight())), nil
+		m.maxProcessesRowsForMode(), len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 }
 
 // tabScrollStream handles navigation, filter, and editor-open keys for the

@@ -1,6 +1,8 @@
 package probes
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"ior/internal/probemanager"
@@ -117,5 +119,32 @@ func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	}
 	if len(fm.toggles) != 3 {
 		t.Fatalf("expected all probes toggled on despite filter, got toggles=%+v", fm.toggles)
+	}
+}
+
+func TestNavigationKeepsCursorInsideScrolledWindow(t *testing.T) {
+	states := make([]probemanager.ProbeState, 0, 60)
+	for i := 0; i < 60; i++ {
+		states = append(states, probemanager.ProbeState{Syscall: fmt.Sprintf("sys_%02d", i), Active: true})
+	}
+	m := NewModel(&fakeManager{states: states}).SetHeight(24).Open()
+	for i := 0; i < 30; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	if m.cursor != 30 {
+		t.Fatalf("expected cursor 30, got %d", m.cursor)
+	}
+	rows := m.visibleRows()
+	if m.cursor < m.offset || m.cursor >= m.offset+rows {
+		t.Fatalf("expected cursor %d inside window [%d,%d)", m.cursor, m.offset, m.offset+rows)
+	}
+	if view := m.View(100, 24); !strings.Contains(view, "sys_30") {
+		t.Fatalf("expected selected probe sys_30 to be rendered")
+	}
+	for i := 0; i < 30; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
+	}
+	if m.cursor != 0 || m.offset != 0 {
+		t.Fatalf("expected cursor and offset back at 0, got cursor=%d offset=%d", m.cursor, m.offset)
 	}
 }
