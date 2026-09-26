@@ -139,13 +139,13 @@ func TestShouldRunTraceMode(t *testing.T) {
 	withTestFlames := base
 	withTestFlames.TestFlames = true
 	if shouldRunTraceMode(withTestFlames) {
-		t.Fatalf("expected --testflames to stay in TUI mode")
+		t.Fatalf("expected -testflames to stay in TUI mode")
 	}
 
 	withTestLiveFlames := base
 	withTestLiveFlames.TestLiveFlames = true
 	if shouldRunTraceMode(withTestLiveFlames) {
-		t.Fatalf("expected --testliveflames to stay in TUI mode")
+		t.Fatalf("expected -testliveflames to stay in TUI mode")
 	}
 }
 
@@ -353,7 +353,7 @@ func TestDispatchRunUsesTestFlamesModeWhenRequested(t *testing.T) {
 		return starter(context.Background())
 	}
 	deps.runTUITestLiveFlames = func(flags.Config, runtime.TraceStarter) error {
-		t.Fatalf("runTUITestLiveFlames should not be called for --testflames")
+		t.Fatalf("runTUITestLiveFlames should not be called for -testflames")
 		return nil
 	}
 
@@ -386,7 +386,7 @@ func TestDispatchRunUsesTestLiveFlamesModeWhenRequested(t *testing.T) {
 		return nil
 	}
 	deps.runTUITestFlames = func(flags.Config, runtime.TraceStarter) error {
-		t.Fatalf("runTUITestFlames should not be called for --testliveflames")
+		t.Fatalf("runTUITestFlames should not be called for -testliveflames")
 		return nil
 	}
 	deps.runTUITestLiveFlames = func(_ flags.Config, starter runtime.TraceStarter) error {

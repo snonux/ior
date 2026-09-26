@@ -42,8 +42,26 @@ type runnerDeps struct {
 }
 
 // productionRunnerDeps returns the production function set, completed with
-// the TUI launchers the cmd layer injected.
-func productionRunnerDeps(tui TUIRunners) runnerDeps {
+// the TUI launchers the cmd layer injected. It rejects a TUIRunners with any
+// nil field up front, so an omitted launcher is reported at startup instead of
+// panicking only once its mode is selected.
+func productionRunnerDeps(tui TUIRunners) (runnerDeps, error) {
+	var missing []string
+	for _, r := range []struct {
+		name string
+		fn   TUIRunFunc
+	}{
+		{"Trace", tui.Trace},
+		{"TestFlames", tui.TestFlames},
+		{"TestLiveFlames", tui.TestLiveFlames},
+	} {
+		if r.fn == nil {
+			missing = append(missing, r.name)
+		}
+	}
+	if len(missing) > 0 {
+		return runnerDeps{}, fmt.Errorf("internal: TUIRunners missing %s — this is a bug", strings.Join(missing, ", "))
+	}
 	return runnerDeps{
 		getEUID:              os.Geteuid,
 		runTrace:             runTrace,
@@ -52,7 +70,7 @@ func productionRunnerDeps(tui TUIRunners) runnerDeps {
 		runTUI:               tui.Trace,
 		runTUITestFlames:     tui.TestFlames,
 		runTUITestLiveFlames: tui.TestLiveFlames,
-	}
+	}, nil
 }
 
 // modeSelector is one command-line flag that selects an execution mode.
@@ -188,7 +206,7 @@ func (reg modeRegistry) resolve(cfg flags.Config) (modeHandler, error) {
 type testFlamesModeHandler struct{}
 
 func (h *testFlamesModeHandler) selectors() []modeSelector {
-	return []modeSelector{{flag: "--testflames", isSet: func(cfg flags.Config) bool { return cfg.TestFlames }}}
+	return []modeSelector{{flag: "-testflames", isSet: func(cfg flags.Config) bool { return cfg.TestFlames }}}
 }
 
 func (h *testFlamesModeHandler) validate(flags.Config) error { return nil }
@@ -205,7 +223,7 @@ func (h *testFlamesModeHandler) run(cfg flags.Config, deps runnerDeps) error {
 type testLiveFlamesModeHandler struct{}
 
 func (h *testLiveFlamesModeHandler) selectors() []modeSelector {
-	return []modeSelector{{flag: "--testliveflames", isSet: func(cfg flags.Config) bool { return cfg.TestLiveFlames }}}
+	return []modeSelector{{flag: "-testliveflames", isSet: func(cfg flags.Config) bool { return cfg.TestLiveFlames }}}
 }
 
 func (h *testLiveFlamesModeHandler) validate(flags.Config) error { return nil }
