@@ -168,3 +168,22 @@ func absDiff(a, b uint64) uint64 {
 	}
 	return b - a
 }
+
+func TestSyscallAccumulatorPercentilesRecomputeForSmallReservoir(t *testing.T) {
+	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewPCG(11, 0)))
+	traceID := types.SYS_ENTER_READ
+
+	for i := 0; i < 5; i++ {
+		acc.Add(newPair(traceID, 10, 0, 0))
+	}
+	_ = acc.Snapshot(1 * time.Second)
+	for i := 0; i < 200; i++ {
+		acc.Add(newPair(traceID, 1_000_000, 0, 0))
+	}
+	_ = acc.Snapshot(1 * time.Second)
+
+	stats := acc.byID[traceID]
+	if stats.cachedP50 != 1_000_000 {
+		t.Fatalf("expected p50 to reflect new samples, got %d", stats.cachedP50)
+	}
+}

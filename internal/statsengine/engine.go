@@ -202,8 +202,9 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	now := e.now()
 	return snapshotInputs{
-		now:              e.now(),
+		now:              now,
 		startedAt:        e.startedAt,
 		totalSyscalls:    e.totalSyscalls,
 		totalErrors:      e.totalErrors,
@@ -212,9 +213,9 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		totalWriteBytes:  e.totalWriteBytes,
 		totalLatency:     e.totalLatency,
 		totalGap:         e.totalGap,
-		latencySeries:    e.latencySeries.Values(),
-		gapSeries:        e.gapSeries.Values(),
-		throughputSeries: e.throughputSeries.Values(),
+		latencySeries:    e.latencySeries.ValuesAt(now),
+		gapSeries:        e.gapSeries.ValuesAt(now),
+		throughputSeries: e.throughputSeries.ValuesAt(now),
 		syscalls:         e.syscalls.snapshotInputs(),
 		files:            e.files.snapshotInputs(),
 		processes:        e.processes.snapshotInputs(),

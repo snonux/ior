@@ -83,6 +83,14 @@ func (m Model) SetDarkMode(isDark bool) Model {
 	return m
 }
 
+// SetHeight records the terminal height the modal is rendered into so the
+// scroll offset kept by Update matches the rows View will draw.
+func (m Model) SetHeight(height int) Model {
+	m.height = height
+	m.clampCursor()
+	return m
+}
+
 // Update dispatches Bubble Tea messages to the appropriate handler.
 // ProbeToggledMsg refreshes the probe list; key presses are forwarded to
 // the search or navigation handlers.
@@ -120,14 +128,12 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc":
 		return m.Close(), nil
 	case "j", "down":
-		if m.cursor < len(m.filtered())-1 {
-			m.cursor++
-		}
+		m.cursor++
+		m.clampCursor()
 		return m, nil
 	case "k", "up":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.cursor--
+		m.clampCursor()
 		return m, nil
 	case "/", "f":
 		m.searching = true

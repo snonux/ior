@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/magefile/mage/mg"
@@ -354,7 +355,7 @@ func BenchCompare() error {
 func Generate() error {
 	fmt.Println("Generating tracepoint and type artifacts...")
 	forceEnv := os.Getenv("IOR_FORCE_GENERATE")
-	force := strings.EqualFold(forceEnv, "1") || strings.EqualFold(forceEnv, "yes") || forceEnv != ""
+	force := strings.EqualFold(forceEnv, "1") || strings.EqualFold(forceEnv, "yes") || strings.EqualFold(forceEnv, "true")
 	if force {
 		fmt.Println("Force generation enabled – ignoring diff checks.")
 		mg.SerialDeps(GenerateTracepointsCForce, GenerateTracepointsGo, GenerateTypesGo)
@@ -698,10 +699,15 @@ func generateTracepointsC(strict bool, toStdout bool) error {
 		return nil
 	}
 
+	// Check the result audit first so a strict diff failure leaves the
+	// committed C file untouched instead of out of sync with the Go outputs.
+	if err := writeTracepointsResult(output, strict); err != nil {
+		return err
+	}
 	if err := os.WriteFile(tracepointsCPath, []byte(output), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", tracepointsCPath, err)
 	}
-	return writeTracepointsResult(output, strict)
+	return nil
 }
 
 func goEnv() map[string]string {
@@ -921,9 +927,39 @@ func buildGoTestCmd(env map[string]string, cmdArgs []string) *exec.Cmd {
 	return exec.Command("sudo", sudoArgs...)
 }
 
+// runningTests is the set of in-flight tests, shared between the event drain
+// loop and the progress ticker goroutine.
+type runningTests struct {
+	mu    sync.Mutex
+	tests map[string]time.Time
+}
+
+func (r *runningTests) add(key string) {
+	r.mu.Lock()
+	r.tests[key] = time.Now()
+	r.mu.Unlock()
+}
+
+func (r *runningTests) remove(key string) {
+	r.mu.Lock()
+	delete(r.tests, key)
+	r.mu.Unlock()
+}
+
+func (r *runningTests) sortedNames() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names := make([]string, 0, len(r.tests))
+	for k := range r.tests {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	return names
+}
+
 // startProgressTicker prints the set of currently-running tests every 15 s.
 // Call close(done) to stop the ticker goroutine.
-func startProgressTicker(running map[string]time.Time, done <-chan struct{}) {
+func startProgressTicker(running *runningTests, done <-chan struct{}) {
 	ticker := time.NewTicker(15 * time.Second)
 	go func() {
 		defer ticker.Stop()
@@ -932,15 +968,11 @@ func startProgressTicker(running map[string]time.Time, done <-chan struct{}) {
 			case <-done:
 				return
 			case <-ticker.C:
-				if len(running) == 0 {
+				names := running.sortedNames()
+				if len(names) == 0 {
 					fmt.Println("Integration tests still running... waiting for next test event")
 					continue
 				}
-				names := make([]string, 0, len(running))
-				for k := range running {
-					names = append(names, k)
-				}
-				slices.Sort(names)
 				fmt.Println("Integration tests running:", strings.Join(names, ", "))
 			}
 		}
@@ -949,7 +981,7 @@ func startProgressTicker(running map[string]time.Time, done <-chan struct{}) {
 
 // drainTestEvents reads JSON test events from scanner, updates the running map,
 // and prints human-readable RUN/PASS/FAIL/SKIP/LOG lines.
-func drainTestEvents(scanner *bufio.Scanner, running map[string]time.Time) {
+func drainTestEvents(scanner *bufio.Scanner, running *runningTests) {
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var ev goTestEvent
@@ -963,16 +995,16 @@ func drainTestEvents(scanner *bufio.Scanner, running map[string]time.Time) {
 		key := ev.Package + "/" + ev.Test
 		switch ev.Action {
 		case "run":
-			running[key] = time.Now()
+			running.add(key)
 			fmt.Println("RUN ", key)
 		case "pass":
-			delete(running, key)
+			running.remove(key)
 			fmt.Println("PASS", key)
 		case "fail":
-			delete(running, key)
+			running.remove(key)
 			fmt.Println("FAIL", key)
 		case "skip":
-			delete(running, key)
+			running.remove(key)
 			fmt.Println("SKIP", key)
 		case "output":
 			msg := strings.TrimSpace(ev.Output)
@@ -1001,22 +1033,35 @@ func runGoTestWithProgress(env map[string]string, args ...string) error {
 	}
 
 	// Forward stderr from the test binary so build errors are always visible.
-	go func() { _, _ = io.Copy(os.Stderr, stderr) }()
+	// cmd.Wait closes the pipe, so it must only run after this copy finished.
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		_, _ = io.Copy(os.Stderr, stderr)
+	}()
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	running := map[string]time.Time{}
+	running := &runningTests{tests: map[string]time.Time{}}
 	done := make(chan struct{})
 	startProgressTicker(running, done)
 
 	drainTestEvents(scanner, running)
 	close(done)
 
-	if err := scanner.Err(); err != nil {
-		return err
+	scanErr := scanner.Err()
+	if scanErr != nil {
+		// Keep draining so the child does not block on a full stdout pipe,
+		// then reap it below instead of leaking the process.
+		_, _ = io.Copy(io.Discard, stdout)
 	}
-	return cmd.Wait()
+	<-stderrDone
+	waitErr := cmd.Wait()
+	if scanErr != nil {
+		return scanErr
+	}
+	return waitErr
 }
 
 func envToList(env map[string]string) []string {

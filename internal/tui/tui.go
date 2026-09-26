@@ -88,10 +88,12 @@ type runtimeBindings struct {
 	// liveTrieSource is the flamegraph trie injected by the trace starter.
 	liveTrieSource runtime.LiveTrieSource
 	// probeManager is the BPF probe manager injected by the trace starter.
-	probeManager runtime.ProbeManager
+	probeManager    runtime.ProbeManager
+	probeManagerGen uint64
 	// liveFilterSetter, when non-nil, applies filter changes to the running
 	// event loop in-place so BPF probes need not be restarted.
-	liveFilterSetter func(globalfilter.Filter)
+	liveFilterSetter    func(globalfilter.Filter) bool
+	liveFilterSetterGen uint64
 	// filterEpoch increments on every filter change and is stored in parquet rows.
 	filterEpoch atomic.Uint64
 }
@@ -154,24 +156,45 @@ func (r *runtimeBindings) SetLiveTrie(liveTrie runtime.LiveTrieSource) {
 }
 
 // SetProbeManager wires the BPF probe manager into the TUI probes modal.
-func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) {
+// The release func only clears the manager if it is still this registration,
+// so a stopping trace cannot unregister the manager of its successor.
+func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) func() {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.probeManager = manager
-	r.mu.Unlock()
+	r.probeManagerGen++
+	gen := r.probeManagerGen
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.probeManagerGen == gen {
+			r.probeManager = nil
+		}
+	}
 }
 
-// SetLiveFilterSetter registers (or, with nil, unregisters) the live filter
-// callback so the TUI can update the running trace pipeline in-place.
-func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
+// SetLiveFilterSetter registers the live filter callback so the TUI can
+// update the running trace pipeline in-place. Like SetProbeManager, the
+// release func only clears the setter if it is still this registration.
+func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter) bool) func() {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.liveFilterSetter = setter
-	r.mu.Unlock()
+	r.liveFilterSetterGen++
+	gen := r.liveFilterSetterGen
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.liveFilterSetterGen == gen {
+			r.liveFilterSetter = nil
+		}
+	}
 }
 
 // applyLiveFilter swaps the active global filter in place via the setter
-// registered by the trace starter, returning true if a setter was available.
+// registered by the trace starter, returning true if the swap was applied.
 // Returning false tells the caller it must fall back to a full trace restart
-// (typically because no trace is currently running).
+// (no trace is currently running, or the filter changes the BPF scope).
 func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	r.mu.RLock()
 	setter := r.liveFilterSetter
@@ -179,8 +202,7 @@ func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	if setter == nil {
 		return false
 	}
-	setter(filter)
-	return true
+	return setter(filter)
 }
 
 // dashboardSnapshotSource returns the currently wired stats engine source.
@@ -501,6 +523,8 @@ func (m Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		_, height := common.EffectiveViewport(m.width, m.height)
+		m.probeModal = m.probeModal.SetHeight(height)
 		next, cmd := m.updateActiveModel(msg)
 		return next, cmd, true
 	case tea.BackgroundColorMsg:
@@ -577,13 +601,14 @@ func (m Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 	m.focused = true
 	// SetFocused returns a tea.Cmd that arms a fresh auto-reset tick
 	// when focus returns (or nil if the timer is disabled). It also
-	// bumps the dashboard's autoResetGen so any tick that was scheduled
-	// before the blur and is still in flight is dropped on arrival.
+	// bumps the dashboard's tick generations so any refresh, stream,
+	// flame, bubble or auto-reset tick that was scheduled before the blur
+	// and is still in flight is dropped on arrival.
 	focusCmd := m.dashboard.SetFocused(true)
 	if m.screen == ScreenDashboard && !m.attaching {
-		// Init() arms its own auto-reset tick at the post-bump
-		// generation, so discard focusCmd here to avoid two
-		// concurrently-live ticks racing the cadence.
+		// Init() arms all its ticks at the post-bump generations, so
+		// discard focusCmd here to avoid two concurrently-live
+		// auto-reset ticks racing the cadence.
 		return m, tea.Batch(m.dashboard.Init(), m.dashboard.SnapshotCmd())
 	}
 	return m, focusCmd
@@ -613,7 +638,9 @@ func (m Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	width, height := common.EffectiveViewport(m.width, m.height)
 	next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	m.dashboard = next.(dashboardui.Model)
-	return m, tea.Batch(sizeCmd, m.dashboard.Init(), m.dashboard.SnapshotCmd())
+	// StartTicks supersedes any tick chains left over from a previous trace
+	// so restarting tracing never doubles the refresh cadence.
+	return m, tea.Batch(sizeCmd, m.dashboard.StartTicks(), m.dashboard.SnapshotCmd())
 }
 
 func (m *Model) keyNormalizer(msg tea.Msg) (tea.Msg, bool) {
@@ -694,10 +721,33 @@ func (m Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool
 		m.tracer.stop()
 		return m, tea.Quit, true
 	}
+	if m.textInputFocused() && msg.Mod&tea.ModCtrl == 0 {
+		// Let a plain quit key (q) reach the focused text input as a
+		// typed character instead of closing the modal.
+		return m, nil, false
+	}
 	if m.shouldRouteQuitToEsc(msg) {
 		return m.routeQuitAsEsc()
 	}
+	if m.screen == ScreenDashboard && (m.attaching || m.lastErr != nil) {
+		// The attaching spinner and error screen offer no other way out,
+		// so quit must always stop the trace and exit from there. A
+		// recording is still closed best-effort so its file is flushed.
+		_ = recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
+		m.quitting = true
+		m.tracer.stop()
+		return m, tea.Quit, true
+	}
 	return m, nil, true
+}
+
+// textInputFocused reports whether a text input on the dashboard (trace
+// filter field edit, record path, stream/flame search) is capturing keys.
+func (m Model) textInputFocused() bool {
+	if m.screen != ScreenDashboard || m.attaching {
+		return false
+	}
+	return m.filterModal.Editing() || m.recordModal.Visible() || m.dashboard.TextInputFocused()
 }
 
 // routeQuitAsEsc synthesises an Esc key press and forwards it to whichever
@@ -738,7 +788,8 @@ func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.
 		return m.handleRecordKey()
 	}
 	if key.Matches(msg, m.keys.Probes) {
-		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).Open()
+		_, height := common.EffectiveViewport(m.width, m.height)
+		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetHeight(height).Open()
 		return m, nil, true
 	}
 	if key.Matches(msg, m.keys.Filter) {

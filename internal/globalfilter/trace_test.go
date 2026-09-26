@@ -19,6 +19,13 @@ func TestValidateTracepointFieldsRejectsOversizedPatterns(t *testing.T) {
 	}
 }
 
+func TestValidateTracepointFieldsIgnoresAnchors(t *testing.T) {
+	exactComm := "^" + strings.Repeat("a", types.MAX_PROGNAME_LENGTH-1) + "$"
+	if err := (Filter{Comm: &StringFilter{Pattern: exactComm}}).ValidateTracepointFields(); err != nil {
+		t.Fatalf("expected anchored max-length comm pattern to pass validation: %v", err)
+	}
+}
+
 func TestTracepointHelpersMatchRawEvents(t *testing.T) {
 	filter := Filter{
 		Comm: &StringFilter{Pattern: "^nginx"},

@@ -60,7 +60,15 @@ func (r *ringTimeSeries) Add(value float64, t time.Time) {
 	r.slots[idx].count++
 }
 
+// Values returns the window ending at the most recent slot that has data.
 func (r *ringTimeSeries) Values() []float64 {
+	return r.ValuesAt(time.Time{})
+}
+
+// ValuesAt returns the window ending at now (or at the most recent slot with
+// data, whichever is later), so idle periods scroll in as zero-valued slots
+// instead of freezing the series at the last event. A zero now is ignored.
+func (r *ringTimeSeries) ValuesAt(now time.Time) []float64 {
 	if r == nil {
 		return nil
 	}
@@ -70,7 +78,11 @@ func (r *ringTimeSeries) Values() []float64 {
 		return result
 	}
 
-	start := r.lastKey - int64(len(r.slots)-1)
+	end := r.lastKey
+	if !now.IsZero() {
+		end = max(end, r.slotKey(now))
+	}
+	start := end - int64(len(r.slots)-1)
 	for i := range result {
 		key := start + int64(i)
 		idx := r.slotIndex(key)

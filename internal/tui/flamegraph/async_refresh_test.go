@@ -1,6 +1,8 @@
 package flamegraph
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,5 +202,51 @@ func BenchmarkRecomputeFilterState(b *testing.B) {
 				benchIntSink = len(model.matchIndices)
 			}
 		})
+	}
+}
+
+func TestDiscardSnapshotReadyClearsRefreshInFlight(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	ingestTwoEventsForAsync(t, trie)
+	m := NewModel(trie)
+	m.width = 120
+	m.height = 30
+
+	cmd := m.RefreshFromLiveTrieCmd()
+	if cmd == nil {
+		t.Fatalf("expected a refresh command when trie has new events")
+	}
+	if m.DiscardSnapshotReady(tea.KeyPressMsg{}) {
+		t.Fatalf("expected non-snapshot message not to be discarded")
+	}
+	if !m.DiscardSnapshotReady(cmd()) || m.refreshInFlight {
+		t.Fatalf("expected discarded snapshot result to clear refreshInFlight")
+	}
+	if m.RefreshFromLiveTrieCmd() == nil {
+		t.Fatalf("expected a new refresh to dispatch after the discarded result")
+	}
+}
+
+func TestSetLiveTrieClearsRefreshInFlight(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	m := NewModel(nil)
+	m.refreshInFlight = true
+	m.SetLiveTrie(trie)
+	if m.refreshInFlight {
+		t.Fatalf("expected SetLiveTrie to reset refreshInFlight")
+	}
+}
+
+func TestSearchPromptViewUpdatesWhileTyping(t *testing.T) {
+	m := NewModel(nil)
+	m.SetViewport(120, 30)
+	next, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = next.(Model)
+	_ = m.View()
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	m = next.(Model)
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(plain, "/q") {
+		t.Fatalf("expected cached view to show the typed search text")
 	}
 }

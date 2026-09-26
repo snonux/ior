@@ -19,6 +19,7 @@ const (
 	defaultMaxPendingEnterEvs      = 16384
 	defaultMaxPendingHandleEntries = 8192
 	defaultMaxProcFdCacheSize      = 8192
+	defaultMaxTrackedFds           = 65536
 	cacheTrimDivisor               = 4
 )
 
@@ -43,14 +44,14 @@ type eventLoop struct {
 	// the TUI can swap filters in place via SetFilter without tearing down
 	// and reattaching the BPF probes (the previous behavior caused a multi-
 	// second 'Attaching tracepoints' overlay every time the filter changed).
-	filterPtr      atomic.Pointer[globalfilter.Filter]
-	pairs          pairTracker           // enter/exit pairing state and inter-syscall duration tracking
-	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
-	fdTracker      *fdTracker            // fd table and procfs resolution cache
-	commResolver   *commResolver
-	outputFormatter                      // pair-emission and warning-notification callbacks (embedded collaborator)
-	rawHandlers    map[types.EventType]rawEventHandler
-	cfg            eventLoopConfig
+	filterPtr       atomic.Pointer[globalfilter.Filter]
+	pairs           pairTracker           // enter/exit pairing state and inter-syscall duration tracking
+	pendingHandles  *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
+	fdTracker       *fdTracker            // fd table and procfs resolution cache
+	commResolver    *commResolver
+	outputFormatter // pair-emission and warning-notification callbacks (embedded collaborator)
+	rawHandlers     map[types.EventType]rawEventHandler
+	cfg             eventLoopConfig
 
 	// Statistics
 	numTracepoints          uint
@@ -103,7 +104,6 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
 	el.configureOutputCallback()
-	el.seedTrackedPidComm()
 	return el, nil
 }
 
@@ -112,7 +112,7 @@ func configuredFDTracker(injected *fdTracker) *fdTracker {
 		return newFDTracker(nil)
 	}
 	if injected.files == nil {
-		injected.files = make(map[int32]file.File)
+		injected.files = make(map[uint64]file.File)
 	}
 	return injected
 }
@@ -140,7 +140,7 @@ func (e *eventLoop) fdState() *fdTracker {
 		e.fdTracker = newFDTracker(nil)
 	}
 	if e.fdTracker.files == nil {
-		e.fdTracker.files = make(map[int32]file.File)
+		e.fdTracker.files = make(map[uint64]file.File)
 	}
 	return e.fdTracker
 }

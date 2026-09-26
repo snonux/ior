@@ -8,10 +8,13 @@ import (
 	"ior/internal/file"
 )
 
-// fdTracker holds the process's open file-descriptor table and a procfs
-// resolution cache for fds that were opened before tracing started.
+// fdTracker holds the traced processes' open file-descriptor tables and a
+// procfs resolution cache for fds that were opened before tracing started.
+// Both are keyed by (pid, fd) since fd numbers are only unique per process.
 type fdTracker struct {
-	files        map[int32]file.File
+	files        map[uint64]file.File
+	fileAges     map[uint64]uint64       // access age per tracked fd, for LRU eviction
+	maxFiles     int                     // max tracked fds before eviction; 0 = defaultMaxTrackedFds
 	procFdCache  map[uint64]*file.FdFile // procfs-resolved metadata for unknown FDs
 	procFdAges   map[uint64]uint64       // access age per cache entry, for LRU eviction
 	maxCacheSize int                     // max entries before eviction; 0 = defaultMaxProcFdCacheSize
@@ -27,12 +30,13 @@ type pendingHandleTracker struct {
 	age          uint64
 }
 
-func newFDTracker(files map[int32]file.File) *fdTracker {
+func newFDTracker(files map[uint64]file.File) *fdTracker {
 	if files == nil {
-		files = make(map[int32]file.File)
+		files = make(map[uint64]file.File)
 	}
 	return &fdTracker{
 		files:       files,
+		fileAges:    make(map[uint64]uint64),
 		procFdCache: make(map[uint64]*file.FdFile),
 		procFdAges:  make(map[uint64]uint64),
 	}
@@ -45,31 +49,63 @@ func newPendingHandleTracker() *pendingHandleTracker {
 	}
 }
 
-func (t *fdTracker) get(fd int32) (file.File, bool) {
-	f, ok := t.files[fd]
+func (t *fdTracker) get(fd int32, pid uint32) (file.File, bool) {
+	key := procFdCacheKey(pid, fd)
+	f, ok := t.files[key]
+	if ok {
+		t.age++
+		t.fileAges[key] = t.age
+	}
 	return f, ok
 }
 
-func (t *fdTracker) set(fd int32, f file.File) {
-	t.files[fd] = f
+func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
+	if t.files == nil {
+		t.files = make(map[uint64]file.File)
+	}
+	if t.fileAges == nil {
+		t.fileAges = make(map[uint64]uint64)
+	}
+	key := procFdCacheKey(pid, fd)
+	t.age++
+	t.files[key] = f
+	t.fileAges[key] = t.age
+	t.pruneFiles()
 }
 
-func (t *fdTracker) delete(fd int32) {
-	delete(t.files, fd)
+func (t *fdTracker) delete(fd int32, pid uint32) {
+	key := procFdCacheKey(pid, fd)
+	delete(t.files, key)
+	delete(t.fileAges, key)
 }
 
-func (t *fdTracker) closeRangeFrom(first int32) {
-	for fd := range t.files {
-		if fd >= first {
-			delete(t.files, fd)
+func (t *fdTracker) closeRangeFrom(first int32, pid uint32) {
+	for key := range t.files {
+		if uint32(key>>32) == pid && int32(uint32(key)) >= first {
+			delete(t.files, key)
+			delete(t.fileAges, key)
 		}
 	}
+}
+
+// pruneFiles bounds the fd tables: processes that exit without closing their
+// fds would otherwise leave their entries behind forever. An evicted fd is
+// resolved via procfs again if it is still in use.
+func (t *fdTracker) pruneFiles() {
+	limit := t.maxFiles
+	if limit <= 0 {
+		limit = defaultMaxTrackedFds
+	}
+	if len(t.files) <= limit {
+		return
+	}
+	trimLRU(t.files, t.fileAges, trimTarget(limit), nil)
 }
 
 // resolve returns the file.File for fd, checking the fd table first, then the
 // procfs cache, and finally resolving via procfs and caching the result.
 func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
-	if fdFile, ok := t.get(fd); ok {
+	if fdFile, ok := t.get(fd, pid); ok {
 		return fdFile
 	}
 	if fd < 0 {

@@ -185,7 +185,7 @@ func (s *syscallStats) ensurePercentiles() {
 	if s.lastPercentileVersion == s.sampleVersion {
 		return
 	}
-	if s.lastPercentileVersion != 0 && s.sampleVersion-s.lastPercentileVersion < syscallPercentileRecomputeStepDefault {
+	if s.lastPercentileVersion != 0 && !s.percentilesStale() {
 		return
 	}
 	if len(s.samples) == 0 {
@@ -200,6 +200,19 @@ func (s *syscallStats) ensurePercentiles() {
 	s.cachedP95 = samplePercentile(sorted, 0.95)
 	s.cachedP99 = samplePercentile(sorted, 0.99)
 	s.lastPercentileVersion = s.sampleVersion
+}
+
+// percentilesStale reports whether enough new samples arrived since the last
+// percentile computation. Recomputes are batched by a fixed step for large
+// reservoirs, but a small reservoir is recomputed once the new samples are a
+// noticeable fraction of it; otherwise a rarely called syscall would keep its
+// first-snapshot percentiles until it collected another full step of samples.
+func (s *syscallStats) percentilesStale() bool {
+	delta := s.sampleVersion - s.lastPercentileVersion
+	if delta >= syscallPercentileRecomputeStepDefault {
+		return true
+	}
+	return delta*8 >= uint64(len(s.samples))
 }
 
 func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
