@@ -1,6 +1,9 @@
 package tracepoints
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseSelectorEmpty(t *testing.T) {
 	// An empty attach and exclude string means accept everything.
@@ -94,5 +97,125 @@ func TestSelectorCloneCopiesSyscallAllowlist(t *testing.T) {
 	delete(clone.Syscalls, "openat")
 	if !sel.ShouldAttach("sys_enter_openat") {
 		t.Fatal("original syscall allowlist mutated through clone")
+	}
+}
+
+// TestParseSelectorTrimsAndSkipsBlankEntries pins the -tps/-tpsExclude list
+// splitting. An empty regex matches every name, so before entries were
+// trimmed and filtered a trailing comma attached (or excluded) every
+// tracepoint, and a space after a comma produced a pattern that never matched.
+func TestParseSelectorTrimsAndSkipsBlankEntries(t *testing.T) {
+	tests := []struct {
+		name        string
+		attach      string
+		exclude     string
+		wantAttach  []string
+		wantReject  []string
+		wantNAttach int
+		wantNExcl   int
+	}{
+		{
+			name:        "trailing comma in attach does not attach everything",
+			attach:      "^sys_enter_read$,",
+			wantAttach:  []string{"sys_enter_read"},
+			wantReject:  []string{"sys_enter_write", "sys_enter_openat"},
+			wantNAttach: 1,
+		},
+		{
+			name:        "leading and doubled commas in attach are ignored",
+			attach:      ",^sys_enter_read$,,^sys_enter_write$",
+			wantAttach:  []string{"sys_enter_read", "sys_enter_write"},
+			wantReject:  []string{"sys_enter_openat"},
+			wantNAttach: 2,
+		},
+		{
+			name:        "space after comma in attach still matches",
+			attach:      "^sys_enter_read$, ^sys_enter_write$",
+			wantAttach:  []string{"sys_enter_read", "sys_enter_write"},
+			wantReject:  []string{"sys_enter_openat"},
+			wantNAttach: 2,
+		},
+		{
+			name:        "tabs and newlines around attach entries are trimmed",
+			attach:      "\t^sys_enter_read$\n,\t^sys_enter_write$ ",
+			wantAttach:  []string{"sys_enter_read", "sys_enter_write"},
+			wantReject:  []string{"sys_enter_openat"},
+			wantNAttach: 2,
+		},
+		{
+			name:       "trailing comma in exclude does not exclude everything",
+			exclude:    "^sys_enter_read$,",
+			wantAttach: []string{"sys_enter_write", "sys_enter_openat"},
+			wantReject: []string{"sys_enter_read"},
+			wantNExcl:  1,
+		},
+		{
+			name:       "space after comma in exclude still matches",
+			exclude:    "^sys_enter_read$, ^sys_enter_write$",
+			wantAttach: []string{"sys_enter_openat"},
+			wantReject: []string{"sys_enter_read", "sys_enter_write"},
+			wantNExcl:  2,
+		},
+		{
+			name:       "comma-only and blank lists behave like unset",
+			attach:     " , ,",
+			exclude:    ",",
+			wantAttach: []string{"sys_enter_read", "sys_enter_openat"},
+		},
+		{
+			name:       "whitespace-only lists behave like unset",
+			attach:     "   ",
+			exclude:    "\t",
+			wantAttach: []string{"sys_enter_read", "sys_enter_openat"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sel, err := ParseSelector(tt.attach, tt.exclude)
+			if err != nil {
+				t.Fatalf("ParseSelector(%q, %q) error: %v", tt.attach, tt.exclude, err)
+			}
+			if got := len(sel.Attach); got != tt.wantNAttach {
+				t.Errorf("len(Attach) = %d, want %d", got, tt.wantNAttach)
+			}
+			if got := len(sel.Exclude); got != tt.wantNExcl {
+				t.Errorf("len(Exclude) = %d, want %d", got, tt.wantNExcl)
+			}
+			for _, name := range tt.wantAttach {
+				if !sel.ShouldAttach(name) {
+					t.Errorf("ShouldAttach(%q) = false, want true", name)
+				}
+			}
+			for _, name := range tt.wantReject {
+				if sel.ShouldAttach(name) {
+					t.Errorf("ShouldAttach(%q) = true, want false", name)
+				}
+			}
+		})
+	}
+}
+
+// TestParseSelectorInvalidEntryAmongPaddedEntriesReturnsError ensures that
+// trimming does not mask a genuinely bad pattern and that the error names the
+// trimmed entry rather than the padded input.
+func TestParseSelectorInvalidEntryAmongPaddedEntriesReturnsError(t *testing.T) {
+	tests := []struct {
+		name    string
+		attach  string
+		exclude string
+	}{
+		{name: "attach", attach: "read, [ ,write"},
+		{name: "exclude", exclude: "read, [ ,write"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseSelector(tt.attach, tt.exclude)
+			if err == nil {
+				t.Fatal("expected error for invalid regex entry")
+			}
+			if want := `unable to compile regex "["`; !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not contain %q", err, want)
+			}
+		})
 	}
 }

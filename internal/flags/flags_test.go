@@ -152,6 +152,32 @@ func TestParseInvalidTracepointRegexReturnsError(t *testing.T) {
 	}
 }
 
+// TestParseTracepointRegexListsTolerateBlankAndPaddedEntries checks the -tps
+// and -tpsExclude flags end to end: a trailing comma must not turn into an
+// empty regex that matches (and so attaches or excludes) every tracepoint, and
+// a space after a comma must not produce a pattern that never matches.
+func TestParseTracepointRegexListsTolerateBlankAndPaddedEntries(t *testing.T) {
+	cfg, err := parseForTest(t,
+		"-tps", "^sys_enter_openat$, ^sys_enter_read$, ^sys_enter_close$,",
+		"-tpsExclude", "^sys_enter_close$,")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	sel := cfg.TracepointSelector
+	for _, name := range []string{"sys_enter_openat", "sys_enter_read"} {
+		if !sel.ShouldAttach(name) {
+			t.Errorf("ShouldAttach(%q) = false, want true", name)
+		}
+	}
+	// sys_enter_close is attached by -tps but must still be excluded;
+	// sys_enter_write is outside the -tps list and must not be attached.
+	for _, name := range []string{"sys_enter_close", "sys_enter_write"} {
+		if sel.ShouldAttach(name) {
+			t.Errorf("ShouldAttach(%q) = true, want false", name)
+		}
+	}
+}
+
 func TestParseDefaultTraceDimensionsFSOnly(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {
