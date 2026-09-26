@@ -18,6 +18,7 @@ import (
 
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
+	"ior/internal/runtime"
 	"ior/internal/types"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -794,5 +795,42 @@ func assertSignalImmediatelyPrecedesSuccessReturn(
 			"shared trace setup's final return at %s must be exactly `return infra, nil`",
 			fset.Position(successReturn.Pos()),
 		)
+	}
+}
+
+// TestNewTraceInfraReportsShutdownProgress pins the shutdown-progress wiring
+// the shared setup gives every mode: each phase is logged, and published when
+// the parent context carries a TUI reporter. Without one - the headless modes
+// - the same callbacks must only log.
+func TestNewTraceInfraReportsShutdownProgress(t *testing.T) {
+	reporter := runtime.NewTraceShutdownReporter()
+	ctx := runtime.ContextWithTraceShutdownReporter(context.Background(), reporter)
+	var logs []string
+	logln := func(args ...any) { logs = append(logs, strings.TrimSuffix(fmt.Sprintln(args...), "\n")) }
+
+	infra := newTraceInfra(ctx, nil, logln)
+	infra.progress(0, 3)
+	if got := <-reporter.Updates(); got.Phase != runtime.TraceShutdownDetaching || got.Total != 3 || got.Completed != 0 {
+		t.Fatalf("detach progress = %+v, want detaching 0/3", got)
+	}
+	infra.progress(2, 3)
+	if got := <-reporter.Updates(); got.Completed != 2 {
+		t.Fatalf("detach progress = %+v, want detaching 2/3", got)
+	}
+	infra.releasing()
+	if got := <-reporter.Updates(); got.Phase != runtime.TraceShutdownReleasing {
+		t.Fatalf("release progress = %+v, want releasing", got)
+	}
+	wantLogs := []string{"Detaching 3 active BPF probe pairs...", "Releasing remaining BPF resources..."}
+	if !slices.Equal(logs, wantLogs) {
+		t.Fatalf("shutdown logs = %q, want %q (the detach line only once, at the start)", logs, wantLogs)
+	}
+
+	logs = nil
+	headless := newTraceInfra(context.Background(), nil, logln)
+	headless.progress(0, 1)
+	headless.releasing()
+	if len(logs) != 2 {
+		t.Fatalf("headless shutdown logs = %q, want both phases logged without a reporter", logs)
 	}
 }
