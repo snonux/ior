@@ -175,7 +175,8 @@ func shouldRunTraceMode(cfg flags.Config) bool {
 //
 // The stats engine is split into two narrower interfaces to honour SRP:
 //   - accumulator accepts incoming event pairs (statsengine.Accumulator)
-//   - snapSource serves read-only snapshot queries (runtime.SnapshotSource)
+//   - snapSource serves dashboard snapshot queries and baseline resets
+//     (runtime.ResettableSnapshotSource)
 //
 // Both are satisfied by the same *statsengine.Engine instance, but holding
 // them separately makes each consumer's dependency explicit and prevents
@@ -183,7 +184,7 @@ func shouldRunTraceMode(cfg flags.Config) bool {
 // versa.
 type tuiRuntime struct {
 	accumulator statsengine.Accumulator
-	snapSource  runtime.SnapshotSource
+	snapSource  runtime.ResettableSnapshotSource
 	streamBuf   runtime.EventSink
 	streamSrc   runtime.StreamSource
 	streamSeq   runtime.Sequencer

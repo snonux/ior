@@ -1259,7 +1259,7 @@ type traceRuntimeBindingsStub struct {
 	liveFilterUnregisteredDone chan struct{}
 }
 
-func (b *traceRuntimeBindingsStub) SetDashboardSnapshotSource(source runtime.SnapshotSource) {
+func (b *traceRuntimeBindingsStub) SetDashboardSnapshotSource(source runtime.ResettableSnapshotSource) {
 	b.snapshotSource = source
 }
 

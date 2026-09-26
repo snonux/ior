@@ -208,6 +208,20 @@ type SnapshotSource interface {
 	Snapshot() (*statsengine.Snapshot, error)
 }
 
+// ResettableSnapshotSource is the dashboard's stats-source contract: the read
+// side (SnapshotSource) plus Reset, which clears accumulated statistics and
+// restarts the series baselines. The dashboard resets its source on a baseline
+// reset (the refresh key and auto-reset ticks) and after a probe toggle, so
+// Reset is part of the contract rather than an optional capability discovered
+// by type assertion — a source that cannot reset must not be wireable into the
+// dashboard, instead of silently ignoring those resets.
+// *statsengine.Engine satisfies this interface.
+type ResettableSnapshotSource interface {
+	SnapshotSource
+	// Reset clears all accumulated stats and restarts series baselines.
+	Reset()
+}
+
 // EventIngester is the write-only, event-feeding side of the stats engine,
 // as needed by the trace event loop. It is an alias for the statsengine.Accumulator
 // contract so callers in the runtime layer can reference a single type without
@@ -274,7 +288,9 @@ type ProbeManager interface {
 // A trace starter calls these methods to inject live data into the active TUI.
 type RuntimePublisher interface {
 	// SetDashboardSnapshotSource wires the stats engine into the dashboard.
-	SetDashboardSnapshotSource(source SnapshotSource)
+	// The source must be resettable because the dashboard restarts its
+	// baseline on user resets and probe toggles.
+	SetDashboardSnapshotSource(source ResettableSnapshotSource)
 	// SetEventStreamSource wires the stream buffer into the TUI stream view.
 	SetEventStreamSource(source StreamSource)
 	// SetLiveTrie wires the live flamegraph trie into the TUI flamegraph view.
@@ -413,8 +429,9 @@ var (
 	// *statsengine.Engine must satisfy both the snapshot-source contract (read
 	// side) and the event-ingestion contract (write side). These interfaces
 	// represent the two distinct responsibilities of the engine.
-	_ SnapshotSource = (*statsengine.Engine)(nil)
-	_ EventIngester  = (*statsengine.Engine)(nil)
+	_ SnapshotSource           = (*statsengine.Engine)(nil)
+	_ ResettableSnapshotSource = (*statsengine.Engine)(nil)
+	_ EventIngester            = (*statsengine.Engine)(nil)
 
 	// *streamrow.RingBuffer must satisfy the full event-sink contract (read +
 	// write sides), which is a superset of StreamSource.
