@@ -43,6 +43,26 @@ func TestRunCollapsedConverterDerivesStacks(t *testing.T) {
 			t.Fatalf("collapsed output:\n got: %q\nwant: %q", got, want)
 		}
 	})
+
+	t.Run("padded fields with stray commas", func(t *testing.T) {
+		var out bytes.Buffer
+		if err := RunCollapsedConverter([]string{"-fields", " comm ,", "-count", "duration", path}, &out); err != nil {
+			t.Fatalf("RunCollapsedConverter() error = %v", err)
+		}
+		if got, want := out.String(), "keep 3\n"; got != want {
+			t.Fatalf("collapsed output:\n got: %q\nwant: %q", got, want)
+		}
+	})
+
+	t.Run("comma-only fields use defaults", func(t *testing.T) {
+		var out bytes.Buffer
+		if err := RunCollapsedConverter([]string{"-fields", " , ", path}, &out); err != nil {
+			t.Fatalf("RunCollapsedConverter() error = %v", err)
+		}
+		if got, want := out.String(), "keep;enter_openat;/tmp;/test 2\n"; got != want {
+			t.Fatalf("collapsed output:\n got: %q\nwant: %q", got, want)
+		}
+	})
 }
 
 func TestRunCollapsedConverterArgErrors(t *testing.T) {

@@ -185,7 +185,9 @@ Three modal pickers reshape what the rest of the TUI sees:
 
 Restricting to a single PID is also exposed as a CLI flag (`-pid <n>`), as is comm/path
 filtering (`-comm`, `-path`). Tracepoint subsetting on the command line uses `-tps <regex>`
-or `-tpsExclude <regex>`.
+or `-tpsExclude <regex>`. Both take a comma-separated list of regexes; whitespace around
+each regex and empty entries (for example a trailing comma) are ignored, and because the
+comma is the separator a regex cannot itself contain one.
 
 ## Recording for offline analysis
 

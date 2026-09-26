@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ior/internal/collapse"
+	"ior/internal/csvlist"
 	"ior/internal/flamegraph"
 )
 
@@ -41,7 +42,9 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 	}
 
 	return flamegraph.WriteCollapsedStacks(w, fs.Arg(0), flamegraph.CollapsedOptions{
-		Fields:     strings.Split(*fields, ","),
+		// Blank/comma-only -fields yields nil, which WriteCollapsedStacks
+		// treats as collapse.DefaultFields.
+		Fields:     csvlist.Split(*fields),
 		CountField: *count,
 	})
 }

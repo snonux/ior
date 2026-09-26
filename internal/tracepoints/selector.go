@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"ior/internal/csvlist"
 )
 
 // Selector holds compiled include and exclude regexes for choosing which
@@ -46,7 +48,7 @@ func ParseSelector(attach, exclude string) (Selector, error) {
 }
 
 // parseRegexList splits a comma-separated string of regex patterns and
-// compiles each one. Entries are split with splitCSV, the same helper the
+// compiles each one. Entries are split with csvlist.Split, the same helper the
 // -trace-* dimension flags use: surrounding whitespace is trimmed and blank
 // entries are dropped. That matters because an empty regex matches every
 // name, so a stray trailing comma ("read,") would otherwise attach — or with
@@ -54,8 +56,8 @@ func ParseSelector(attach, exclude string) (Selector, error) {
 // ("read, write") would compile " write", which never matches. Returns nil
 // (not an error) when no non-blank entry remains.
 func parseRegexList(patterns string) ([]*regexp.Regexp, error) {
-	entries, provided := splitCSV(patterns)
-	if !provided {
+	entries := csvlist.Split(patterns)
+	if len(entries) == 0 {
 		return nil, nil
 	}
 	regexes := make([]*regexp.Regexp, 0, len(entries))

@@ -2,10 +2,14 @@ package flags
 
 import (
 	"flag"
+	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"ior/internal/collapse"
 )
 
 // parseForTest builds a fresh FlagSet and parses the given args, returning
@@ -175,6 +179,93 @@ func TestParseTracepointRegexListsTolerateBlankAndPaddedEntries(t *testing.T) {
 		if sel.ShouldAttach(name) {
 			t.Errorf("ShouldAttach(%q) = true, want false", name)
 		}
+	}
+}
+
+// TestParseBlankTpsBehavesLikeUnset drives a blank or comma-only -tps through
+// the real flag parser: it must keep the FS-only default exactly as if the
+// flag had not been given, rather than attaching every tracepoint.
+func TestParseBlankTpsBehavesLikeUnset(t *testing.T) {
+	for _, tps := range []string{" , ", ",", "   "} {
+		t.Run(fmt.Sprintf("%q", tps), func(t *testing.T) {
+			cfg, err := parseForTest(t, "-tps", tps)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			sel := cfg.TracepointSelector
+			if !sel.RestrictSyscalls {
+				t.Fatal("RestrictSyscalls = false, want FS-only default as with no -tps")
+			}
+			if !sel.ShouldAttach("sys_enter_openat") {
+				t.Error("ShouldAttach(sys_enter_openat) = false, want true")
+			}
+			if sel.ShouldAttach("sys_enter_socket") {
+				t.Error("ShouldAttach(sys_enter_socket) = true, want false as with no -tps")
+			}
+		})
+	}
+}
+
+// TestParseBlankTpsExcludeWithTraceDimensions checks that a blank -tpsExclude
+// excludes nothing when combined with -trace-* selectors (a stray empty regex
+// would otherwise exclude every tracepoint).
+func TestParseBlankTpsExcludeWithTraceDimensions(t *testing.T) {
+	for _, exclude := range []string{" , ", ",", "   "} {
+		t.Run(fmt.Sprintf("%q", exclude), func(t *testing.T) {
+			cfg, err := parseForTest(t, "-trace-syscalls", "socket, openat", "-tpsExclude", exclude)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			sel := cfg.TracepointSelector
+			if len(sel.Exclude) != 0 {
+				t.Fatalf("len(Exclude) = %d, want 0", len(sel.Exclude))
+			}
+			for _, name := range []string{"sys_enter_socket", "sys_exit_openat"} {
+				if !sel.ShouldAttach(name) {
+					t.Errorf("ShouldAttach(%q) = false, want true", name)
+				}
+			}
+			if sel.ShouldAttach("sys_enter_read") {
+				t.Error("ShouldAttach(sys_enter_read) = true, want false (not in -trace-syscalls)")
+			}
+		})
+	}
+}
+
+// TestParseFieldsTrimsAndSkipsBlankEntries pins -fields splitting: padding
+// around entries is ignored, stray commas are dropped, and a blank or
+// comma-only value falls back to the default field list.
+func TestParseFieldsTrimsAndSkipsBlankEntries(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields string
+		want   []string
+	}{
+		{name: "padded entries", fields: " path , comm ", want: []string{"path", "comm"}},
+		{name: "stray commas", fields: ",comm,,pid,", want: []string{"comm", "pid"}},
+		{name: "comma only uses defaults", fields: " , ", want: collapse.DefaultFields()},
+		{name: "blank uses defaults", fields: "  ", want: collapse.DefaultFields()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := parseForTest(t, "-fields", tt.fields)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			if !slices.Equal(cfg.CollapsedFields, tt.want) {
+				t.Fatalf("CollapsedFields = %q, want %q", cfg.CollapsedFields, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFieldsInvalidEntryAmongPaddedEntriesReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-fields", " comm , bogus ,")
+	if err == nil {
+		t.Fatal("expected parse error for invalid collapse field")
+	}
+	if !strings.Contains(err.Error(), "invalid field for collapse: bogus") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
