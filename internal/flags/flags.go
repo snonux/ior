@@ -11,6 +11,7 @@ import (
 
 	"ior/internal/collapse"
 	appconfig "ior/internal/config"
+	"ior/internal/csvlist"
 	"ior/internal/globalfilter"
 	"ior/internal/tracepoints"
 	"ior/internal/types"
@@ -198,8 +199,8 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.StringVar(&cfg.PathFilter, "path", "", "Path to filter for")
 	fs.BoolVar(&cfg.PprofEnable, "pprof", false, "Enable profiling")
 
-	tpsAttach = fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
-	tpsExclude = fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
+	tpsAttach = fs.String("tps", "", "Comma separated list of regexes for tracepoints to load (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
+	tpsExclude = fs.String("tpsExclude", "", "Comma separated list of regexes for tracepoints to exclude (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
 	fs.StringVar(&dimensionCfg.TraceFamilies, "trace-families", "",
 		"Comma separated syscall families to attach; default attaches the FS family only (valid: "+strings.Join(validFamilies, ",")+")")
 	fs.StringVar(&dimensionCfg.TraceKinds, "trace-kinds", "",
@@ -255,10 +256,10 @@ func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string, 
 	// As of February 23, 2026, open_by_handle_at and name_to_handle_at were
 	// re-evaluated on newer kernels and do not require CO-RE-based exclusions.
 	// If future kernels regress, add targeted exclusions here.
-	if *fields == "" {
+	// A blank or comma-only -fields value falls back to the defaults, like an
+	// unset flag; padding around entries ("path, comm") is ignored.
+	if cfg.CollapsedFields = csvlist.Split(*fields); len(cfg.CollapsedFields) == 0 {
 		cfg.CollapsedFields = collapse.DefaultFields()
-	} else {
-		cfg.CollapsedFields = strings.Split(*fields, ",")
 	}
 
 	for _, field := range cfg.CollapsedFields {

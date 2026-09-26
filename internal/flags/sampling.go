@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ior/internal/csvlist"
 	"ior/internal/types"
 )
 
@@ -103,15 +104,7 @@ func parseSyscallSamplingRates(raw string) (map[string]uint32, error) {
 
 func parseSamplingEntries(raw string) (map[string]uint32, error) {
 	out := make(map[string]uint32)
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return out, nil
-	}
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
+	for _, part := range csvlist.Split(raw) {
 		key, valueRaw, ok := strings.Cut(part, "=")
 		if !ok {
 			return nil, fmt.Errorf("invalid sampling entry %q: expected name=rate", part)

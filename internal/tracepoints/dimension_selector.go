@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"ior/internal/csvlist"
 	"ior/internal/types"
 )
 
@@ -20,15 +21,18 @@ type DimensionSelectorConfig struct {
 }
 
 // hasAnySelector reports whether any positive or negative dimension selector
-// field is populated. When all fields are empty the caller provided no
-// -trace-* / -no-trace-* flags.
+// field holds at least one non-blank entry. A field that is empty, blank or
+// comma-only counts as unset, exactly as buildAllowedSyscalls treats it.
 func (d DimensionSelectorConfig) hasAnySelector() bool {
-	return d.TraceFamilies != "" ||
-		d.TraceKinds != "" ||
-		d.TraceSyscalls != "" ||
-		d.NoTraceFamilies != "" ||
-		d.NoTraceKinds != "" ||
-		d.NoTraceSyscalls != ""
+	for _, raw := range []string{
+		d.TraceFamilies, d.TraceKinds, d.TraceSyscalls,
+		d.NoTraceFamilies, d.NoTraceKinds, d.NoTraceSyscalls,
+	} {
+		if len(csvlist.Split(raw)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseSelectorWithDimensions compiles regex-based attach/exclude filters and
@@ -45,8 +49,11 @@ func ParseSelectorWithDimensions(attach, exclude string, dims DimensionSelectorC
 
 	// When an explicit -tps regex is provided without any dimension selectors,
 	// preserve legacy behaviour: the regex alone controls attachment and the
-	// implicit FS-only default is not applied.
-	if attach != "" && !dims.hasAnySelector() {
+	// implicit FS-only default is not applied. Decide on the parsed list, not
+	// the raw flag: a blank or comma-only -tps yields no regexes and must keep
+	// the FS-only default, otherwise the empty Attach list would admit every
+	// tracepoint.
+	if len(sel.Attach) > 0 && !dims.hasAnySelector() {
 		return sel, nil
 	}
 
@@ -137,8 +144,8 @@ func buildAllowedSyscalls(dims DimensionSelectorConfig) (map[string]struct{}, er
 }
 
 func parseFamiliesCSV(raw string) (map[string]struct{}, bool, error) {
-	values, provided := splitCSV(raw)
-	if !provided {
+	values := csvlist.Split(raw)
+	if len(values) == 0 {
 		return map[string]struct{}{}, false, nil
 	}
 	out := make(map[string]struct{}, len(values))
@@ -153,8 +160,8 @@ func parseFamiliesCSV(raw string) (map[string]struct{}, bool, error) {
 }
 
 func parseKindsCSV(raw string, knownKinds map[string]struct{}) (map[string]struct{}, bool, error) {
-	values, provided := splitCSV(raw)
-	if !provided {
+	values := csvlist.Split(raw)
+	if len(values) == 0 {
 		return map[string]struct{}{}, false, nil
 	}
 	out := make(map[string]struct{}, len(values))
@@ -169,8 +176,8 @@ func parseKindsCSV(raw string, knownKinds map[string]struct{}) (map[string]struc
 }
 
 func parseSyscallsCSV(raw string, knownSyscalls map[string]struct{}) (map[string]struct{}, bool, error) {
-	values, provided := splitCSV(raw)
-	if !provided {
+	values := csvlist.Split(raw)
+	if len(values) == 0 {
 		return map[string]struct{}{}, false, nil
 	}
 	out := make(map[string]struct{}, len(values))
@@ -182,26 +189,6 @@ func parseSyscallsCSV(raw string, knownSyscalls map[string]struct{}) (map[string
 		out[syscall] = struct{}{}
 	}
 	return out, true, nil
-}
-
-func splitCSV(raw string) ([]string, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, false
-	}
-	parts := strings.Split(raw, ",")
-	values := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		values = append(values, part)
-	}
-	if len(values) == 0 {
-		return nil, false
-	}
-	return values, true
 }
 
 func normalizeKind(raw string) string {

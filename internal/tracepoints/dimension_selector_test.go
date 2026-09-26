@@ -1,6 +1,7 @@
 package tracepoints
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -391,5 +392,77 @@ func TestDimensionSelectorConfigHasAnySelector(t *testing.T) {
 		if !cfg.hasAnySelector() {
 			t.Fatalf("expected config %+v to report selectors present", cfg)
 		}
+	}
+}
+
+// TestParseSelectorWithDimensionsBlankAttachKeepsFSDefault pins that a blank
+// or comma-only -tps is treated exactly like an unset one. The legacy "regex
+// alone controls attachment" shortcut must key off the parsed regex list, not
+// the raw flag, or an empty Attach list with no syscall restriction would
+// attach every tracepoint.
+func TestParseSelectorWithDimensionsBlankAttachKeepsFSDefault(t *testing.T) {
+	for _, attach := range []string{"", " ", "\t", ",", " , ", ",,"} {
+		t.Run(fmt.Sprintf("%q", attach), func(t *testing.T) {
+			sel, err := ParseSelectorWithDimensions(attach, "", DimensionSelectorConfig{})
+			if err != nil {
+				t.Fatalf("ParseSelectorWithDimensions: %v", err)
+			}
+			if len(sel.Attach) != 0 {
+				t.Fatalf("len(Attach) = %d, want 0", len(sel.Attach))
+			}
+			if !sel.RestrictSyscalls {
+				t.Fatal("RestrictSyscalls = false, want the FS-only default")
+			}
+			if !sel.ShouldAttach("sys_enter_openat") {
+				t.Error("ShouldAttach(sys_enter_openat) = false, want true (FS)")
+			}
+			if sel.ShouldAttach("sys_enter_socket") {
+				t.Error("ShouldAttach(sys_enter_socket) = true, want false (Network, not default)")
+			}
+		})
+	}
+}
+
+// TestParseSelectorWithDimensionsBlankDimensionKeepsLegacyRegexMode checks
+// that a blank or comma-only -trace-* value does not count as a dimension
+// selector, so an explicit -tps regex still controls attachment on its own.
+func TestParseSelectorWithDimensionsBlankDimensionKeepsLegacyRegexMode(t *testing.T) {
+	sel, err := ParseSelectorWithDimensions("^sys_enter_socket$", "", DimensionSelectorConfig{
+		TraceFamilies: " , ",
+		NoTraceKinds:  "\t",
+	})
+	if err != nil {
+		t.Fatalf("ParseSelectorWithDimensions: %v", err)
+	}
+	if sel.RestrictSyscalls {
+		t.Fatal("RestrictSyscalls = true, want legacy regex-only mode")
+	}
+	if !sel.ShouldAttach("sys_enter_socket") {
+		t.Error("ShouldAttach(sys_enter_socket) = false, want true via -tps regex")
+	}
+	if sel.ShouldAttach("sys_enter_openat") {
+		t.Error("ShouldAttach(sys_enter_openat) = true, want false (not matched by -tps)")
+	}
+}
+
+func TestDimensionSelectorConfigHasAnySelectorIgnoresBlankValues(t *testing.T) {
+	for _, blank := range []string{" ", "\t\n", ",", " , ,"} {
+		cfgs := []DimensionSelectorConfig{
+			{TraceFamilies: blank},
+			{TraceKinds: blank},
+			{TraceSyscalls: blank},
+			{NoTraceFamilies: blank},
+			{NoTraceKinds: blank},
+			{NoTraceSyscalls: blank},
+		}
+		for _, cfg := range cfgs {
+			if cfg.hasAnySelector() {
+				t.Errorf("hasAnySelector() = true for %+v, want false", cfg)
+			}
+		}
+	}
+	// A padded but non-blank value is still a selector.
+	if !(DimensionSelectorConfig{NoTraceSyscalls: " , openat ,"}).hasAnySelector() {
+		t.Error("hasAnySelector() = false for padded non-blank value, want true")
 	}
 }
