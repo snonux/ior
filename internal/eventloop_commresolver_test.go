@@ -341,3 +341,27 @@ func waitForCondition(t *testing.T, timeout time.Duration, message string, fn fu
 		}
 	}
 }
+
+// TestCommResolverLookupDoesNotOverwriteKnownComm verifies that an async
+// /proc lookup finishing after a comm was learned from an event (e.g. the
+// kernel-reported comm of an open event) does not replace that comm.
+func TestCommResolverLookupDoesNotOverwriteKnownComm(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	resolver := newCommResolver(nil)
+	resolver.resolveFn = func(context.Context, uint32) (string, error) {
+		started <- struct{}{}
+		<-release
+		return "from-proc", nil
+	}
+
+	resolver.queueLookup(42)
+	waitForStarts(t, started, 1, 2*time.Second)
+	resolver.setCached(42, "from-event")
+	close(release)
+	resolver.shutdown()
+
+	if got, _ := resolver.cached(42); got != "from-event" {
+		t.Fatalf("expected comm %q to be kept, got %q", "from-event", got)
+	}
+}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"ior/internal/event"
-	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
@@ -451,7 +450,7 @@ func TestCommFilterToggle(t *testing.T) {
 		// Create eventloop without comm filter
 		el := &eventLoop{
 			pairs:        newPairTracker(),
-			fdTracker:    newFDTracker(make(map[int32]file.File)),
+			fdTracker:    newFDTracker(nil),
 			commResolver: newCommResolver(make(map[uint32]string)),
 			cfg:          eventLoopConfig{synchronousRawProcessing: true},
 			outputFormatter: outputFormatter{
@@ -494,7 +493,7 @@ func TestCommFilterToggle(t *testing.T) {
 		// Create eventloop with comm filter enabled
 		el := &eventLoop{
 			pairs:        newPairTracker(),
-			fdTracker:    newFDTracker(make(map[int32]file.File)),
+			fdTracker:    newFDTracker(nil),
 			commResolver: newCommResolver(make(map[uint32]string)),
 			cfg:          eventLoopConfig{synchronousRawProcessing: true},
 			outputFormatter: outputFormatter{
@@ -532,7 +531,7 @@ func TestCommFilterToggle(t *testing.T) {
 func newEventLoopWithFilter(commFilter, pathFilter string) *eventLoop {
 	el := &eventLoop{
 		pairs:        newPairTracker(),
-		fdTracker:    newFDTracker(make(map[int32]file.File)),
+		fdTracker:    newFDTracker(nil),
 		commResolver: newCommResolver(make(map[uint32]string)),
 		cfg:          eventLoopConfig{synchronousRawProcessing: true},
 		outputFormatter: outputFormatter{

@@ -180,7 +180,14 @@ type tuiRuntime struct {
 	streamSeq   *streamrow.Sequencer
 	liveTrie    *flamegraph.LiveTrie
 	recorder    *parquet.Recorder
-	filterEpoch uint64
+	filterEpoch func() uint64
+}
+
+func (rt *tuiRuntime) currentFilterEpoch() uint64 {
+	if rt.filterEpoch == nil {
+		return 0
+	}
+	return rt.filterEpoch()
 }
 
 // buildTUIRuntime constructs fresh trace-session components via RuntimeBuilder
@@ -227,7 +234,8 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 		rt.streamSeq = persistentSeq
 	}
 	rt.recorder = bindings.Recorder()
-	rt.filterEpoch = bindings.FilterEpoch()
+	// Read the epoch per row: the TUI advances it on every live filter change.
+	rt.filterEpoch = bindings.FilterEpoch
 	// Expose the snapshot-read side to the dashboard; the accumulator (write
 	// side) is used only by the event-loop callback below.
 	bindings.SetDashboardSnapshotSource(rt.snapSource)
@@ -240,9 +248,13 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 // the event loop into the TUI runtime: it sets the initial filter, installs
 // the print callback that fans out to engine/stream/trie, and registers the
 // live-filter setter so the TUI can swap filters without restarting BPF probes.
-func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRuntime) func(*eventLoop) {
+// The returned release func unregisters that setter; it must be called from
+// the goroutine that ran the configure callback, once the trace has ended.
+func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRuntime) (configure func(*eventLoop), release func()) {
 	var recorderWarningOnce sync.Once
-	return func(el *eventLoop) {
+	releaseSetter := func() {}
+	release = func() { releaseSetter() }
+	configure = func(el *eventLoop) {
 		// Seed the event loop's filter from config so subsequent reads via
 		// el.Filter() see the same filter the trace was started with.
 		el.SetFilter(cfg.GlobalFilter)
@@ -255,7 +267,7 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 			rt.accumulator.Ingest(ep)
 			rt.streamBuf.Push(row)
 			if rt.recorder != nil {
-				if err := rt.recorder.Record(row, rt.filterEpoch); err != nil {
+				if err := rt.recorder.Record(row, rt.currentFilterEpoch()); err != nil {
 					recorderWarningOnce.Do(func() {
 						if el.warningCb != nil {
 							el.warningCb(fmt.Sprintf("Parquet recorder failed: %v", err))
@@ -272,8 +284,25 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 			rt.streamBuf.Push(streamrow.NewWarning(rt.streamSeq.Next(), message))
 		}
 		if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
-			bindings.SetLiveFilterSetter(el.SetFilter)
+			releaseSetter = bindings.SetLiveFilterSetter(liveFilterSetter(cfg, el))
 		}
+	}
+	return configure, release
+}
+
+// liveFilterSetter returns the in-place filter swap for el. It refuses (and
+// thereby asks the TUI for a full restart) any filter whose PID/TID equality
+// scope differs from the one the BPF program was loaded with, since that
+// scope is enforced in the kernel and cannot change while the trace runs.
+func liveFilterSetter(cfg flags.Config, el *eventLoop) func(globalfilter.Filter) bool {
+	return func(filter globalfilter.Filter) bool {
+		scoped := cfg
+		applyTraceScopeFromGlobalFilter(&scoped, filter)
+		if scoped.PidFilter != cfg.PidFilter || scoped.TidFilter != cfg.TidFilter {
+			return false
+		}
+		el.SetFilter(filter)
+		return true
 	}
 }
 
@@ -306,7 +335,7 @@ func tuiTraceStarterFromRunTrace(
 		if err != nil {
 			return err
 		}
-		configureEl := makeTUIEventLoopConfigurer(ctx, cfg, rt)
+		configureEl, releaseLiveFilter := makeTUIEventLoopConfigurer(ctx, cfg, rt)
 
 		startedCh := make(chan struct{})
 		// errCh carries at most one result from the trace goroutine to the
@@ -319,9 +348,7 @@ func tuiTraceStarterFromRunTrace(
 
 		go func() {
 			err := startTrace(ctx, cfg, startedCh, configureEl)
-			if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
-				bindings.SetLiveFilterSetter(nil)
-			}
+			releaseLiveFilter()
 			// Deliver the result only if the caller is still selecting.
 			// done is closed when the outer function returns, so the goroutine
 			// will always proceed through this select and never block.
@@ -539,9 +566,19 @@ func setupTraceInfra(
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
+	// releaseBPF undoes setupBPFModule: probes are detached and the probe
+	// manager is unpublished before the module it points into is freed.
+	releaseBPF := func() {
+		if err := mgr.Close(); err != nil {
+			logln("BPF probe manager close error:", err)
+		}
+		releaseBindings()
+		bpfModule.Close()
+	}
+
 	eventCh, rb, err := setupEventChannel(bpfModule)
 	if err != nil {
-		bpfModule.Close()
+		releaseBPF()
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
 
@@ -552,32 +589,28 @@ func setupTraceInfra(
 		cancel()
 		stopSignals()
 		rb.Stop()
-		bpfModule.Close()
+		releaseBPF()
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
-
-	signalTraceStarted(started)
 
 	el, err = newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
+		profiling.stop(logln)
 		cancel()
 		stopSignals()
 		rb.Stop()
-		bpfModule.Close()
+		releaseBPF()
 		return nil, nil, nil, nil, nil, nil, func() {}, err
 	}
+	// Only report the trace as started once every setup step succeeded, so
+	// the TUI sees a failing setup as an error instead of a silent trace.
+	signalTraceStarted(started)
 
 	teardown = func() {
 		// Stop the ring-buffer polling goroutine before the module is closed.
 		// rb.Stop() is idempotent; bpfModule.Close() calls rb.Close() for the C struct.
 		rb.Stop()
-		// mgr.Close() detaches BPF probes and releases kernel resources; log any
-		// error so that probe-detach failures are not silently discarded.
-		if err := mgr.Close(); err != nil {
-			logln("BPF probe manager close error:", err)
-		}
-		releaseBindings()
-		bpfModule.Close()
+		releaseBPF()
 		stopSignals()
 	}
 	return eventCh, ctx, cancel, profiling, el, mgr, teardown, nil

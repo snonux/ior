@@ -889,7 +889,7 @@ type traceRuntimeBindingsStub struct {
 	// goroutine (via SetLiveFilterSetter) and read from the test goroutine
 	// when invoking the in-place swap.
 	mu               sync.Mutex
-	liveFilterSetter func(globalfilter.Filter)
+	liveFilterSetter func(globalfilter.Filter) bool
 }
 
 func (b *traceRuntimeBindingsStub) SetDashboardSnapshotSource(runtime.SnapshotSource) {}
@@ -900,15 +900,20 @@ func (b *traceRuntimeBindingsStub) SetEventStreamSource(source runtime.StreamSou
 
 func (b *traceRuntimeBindingsStub) SetLiveTrie(runtime.LiveTrieSource) {}
 
-func (b *traceRuntimeBindingsStub) SetProbeManager(runtime.ProbeManager) {}
+func (b *traceRuntimeBindingsStub) SetProbeManager(runtime.ProbeManager) func() { return func() {} }
 
-func (b *traceRuntimeBindingsStub) SetLiveFilterSetter(setter func(globalfilter.Filter)) {
+func (b *traceRuntimeBindingsStub) SetLiveFilterSetter(setter func(globalfilter.Filter) bool) func() {
 	b.mu.Lock()
 	b.liveFilterSetter = setter
 	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		b.liveFilterSetter = nil
+		b.mu.Unlock()
+	}
 }
 
-func (b *traceRuntimeBindingsStub) currentLiveFilterSetter() func(globalfilter.Filter) {
+func (b *traceRuntimeBindingsStub) currentLiveFilterSetter() func(globalfilter.Filter) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.liveFilterSetter
@@ -982,5 +987,31 @@ func readRecordedParquet(t *testing.T, path string) []parquet.Record {
 			return rows
 		}
 		t.Fatalf("read parquet rows: %v", err)
+	}
+}
+
+// TestLiveFilterSetterRefusesPidScopeChange verifies that a filter changing
+// the BPF-level PID scope is not applied in place, so the TUI restarts the
+// trace with the new scope instead of silently keeping the old one.
+func TestLiveFilterSetterRefusesPidScopeChange(t *testing.T) {
+	cfg := flags.NewFlags()
+	start := globalfilter.Filter{PID: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 100}}
+	applyTraceScopeFromGlobalFilter(&cfg, start)
+	el := &eventLoop{}
+	el.SetFilter(start)
+	setter := liveFilterSetter(cfg, el)
+
+	if setter(globalfilter.Filter{PID: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 200}}) {
+		t.Fatalf("expected PID scope change to require a restart")
+	}
+	if setter(globalfilter.Filter{}) {
+		t.Fatalf("expected clearing the PID scope to require a restart")
+	}
+	sameScope := globalfilter.Filter{
+		PID:  &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 100},
+		Comm: &globalfilter.StringFilter{Pattern: "x"},
+	}
+	if !setter(sameScope) {
+		t.Fatalf("expected filter with unchanged PID scope to apply in place")
 	}
 }

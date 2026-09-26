@@ -72,6 +72,11 @@ func (m Model) Visible() bool {
 	return m.visible
 }
 
+// Editing reports whether a field's text input is currently being edited.
+func (m Model) Editing() bool {
+	return m.visible && m.editing
+}
+
 func (m Model) Filter() globalfilter.Filter {
 	return m.filter
 }

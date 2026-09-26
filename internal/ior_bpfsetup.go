@@ -81,8 +81,7 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config) (*bpf.Module, *
 	// setupBPFModule only injects the probe manager; it does not read TUI state,
 	// so RuntimePublisher is the correct narrower interface to use here.
 	if bindings, ok := runtime.RuntimePublisherFromContext(parentCtx); ok {
-		bindings.SetProbeManager(mgr)
-		releaseBindings = func() { bindings.SetProbeManager(nil) }
+		releaseBindings = bindings.SetProbeManager(mgr)
 	}
 	return bpfModule, mgr, releaseBindings, nil
 }

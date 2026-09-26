@@ -34,6 +34,8 @@ type flameViewCacheKey struct {
 	matchCount    int
 	visibleCount  int
 	searchQuery   string
+	searchInput   string
+	searchCursor  int
 	statusMessage string
 	zoomPath      string
 	searchActive  bool
@@ -431,10 +433,28 @@ func (m Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cm
 	return m, m.animationTickCmd()
 }
 
+// DiscardSnapshotReady drops a background refresh result that arrived while
+// the flame view is hidden, clearing refreshInFlight so the next flame tick
+// can dispatch a fresh refresh instead of freezing. lastVersion is left
+// unchanged so that refresh is not skipped. Reports whether msg was such a
+// result.
+func (m *Model) DiscardSnapshotReady(msg tea.Msg) bool {
+	if _, ok := msg.(flameSnapshotReadyMsg); !ok {
+		return false
+	}
+	m.refreshInFlight = false
+	return true
+}
+
 // userDriving delegates to the FrameAnimator helper that checks whether the user
 // pressed a key within the drive window.
 func (m Model) userDriving() bool {
 	return driveWindowActive(m.lastKeyAt)
+}
+
+// SearchActive reports whether the `/` search prompt is capturing typed keys.
+func (m Model) SearchActive() bool {
+	return m.searchActive
 }
 
 // ConsumesKey reports whether the flamegraph should handle a key press before
@@ -532,6 +552,8 @@ func (m Model) currentViewCacheKey() flameViewCacheKey {
 		matchCount:    len(m.matchIndices),
 		visibleCount:  len(m.filterVisible),
 		searchQuery:   m.searchQuery,
+		searchInput:   m.searchInput.Value(),
+		searchCursor:  m.searchInput.Position(),
 		statusMessage: m.statusMessage,
 		zoomPath:      m.zoomPath,
 		searchActive:  m.searchActive,
@@ -545,6 +567,7 @@ func (m Model) currentViewCacheKey() flameViewCacheKey {
 // snapshot state so the new trie starts fresh.
 func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
 	m.liveTrie = liveTrie
+	m.refreshInFlight = false
 	m.syncFieldPresetToTrie()
 	m.syncCountFieldToTrie()
 	m.lastVersion = 0
