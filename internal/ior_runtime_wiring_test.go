@@ -76,7 +76,7 @@ type fakeRuntimeBindings struct {
 	epoch uint64
 
 	publishedStreamSource runtime.StreamSource
-	publishedSnapshotSrc  runtime.SnapshotSource
+	publishedSnapshotSrc  runtime.ResettableSnapshotSource
 }
 
 func (b *fakeRuntimeBindings) StreamBuffer() runtime.EventSink {
@@ -99,7 +99,7 @@ func (b *fakeRuntimeBindings) StreamSequencer() runtime.Sequencer {
 }
 func (b *fakeRuntimeBindings) FilterEpoch() uint64 { return b.epoch }
 
-func (b *fakeRuntimeBindings) SetDashboardSnapshotSource(source runtime.SnapshotSource) {
+func (b *fakeRuntimeBindings) SetDashboardSnapshotSource(source runtime.ResettableSnapshotSource) {
 	b.publishedSnapshotSrc = source
 }
 func (b *fakeRuntimeBindings) SetEventStreamSource(source runtime.StreamSource) {
@@ -202,10 +202,12 @@ func TestWireRuntimeBindingsNilOptionalComponents(t *testing.T) {
 	}
 }
 
-// fakeSnapshotSource is a minimal SnapshotSource so the wiring test does not
-// depend on a live stats engine.
+// fakeSnapshotSource is a minimal ResettableSnapshotSource so the wiring test
+// does not depend on a live stats engine.
 type fakeSnapshotSource struct{}
 
 func (fakeSnapshotSource) Snapshot() (*statsengine.Snapshot, error) {
 	return nil, nil
 }
+
+func (fakeSnapshotSource) Reset() {}

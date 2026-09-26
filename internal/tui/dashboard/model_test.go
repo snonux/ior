@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -19,28 +20,29 @@ import (
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+// fakeSnapshotSource is a SnapshotSource test double. Reset swaps in
+// resetSnap (when set) so tests can tell a post-reset snapshot from a stale
+// one; err makes Snapshot fail.
 type fakeSnapshotSource struct {
-	snapshots int
-	snap      *statsengine.Snapshot
+	snapshots  int
+	resetCount int
+	snap       *statsengine.Snapshot
+	resetSnap  *statsengine.Snapshot
+	err        error
+}
+
+func (f *fakeSnapshotSource) Reset() {
+	f.resetCount++
+	if f.resetSnap != nil {
+		f.snap = f.resetSnap
+	}
 }
 
 func (f *fakeSnapshotSource) Snapshot() (*statsengine.Snapshot, error) {
 	f.snapshots++
-	return f.snap, nil
-}
-
-type fakeResettableSnapshotSource struct {
-	resetCount int
-	snapCount  int
-	snap       *statsengine.Snapshot
-}
-
-func (f *fakeResettableSnapshotSource) Reset() {
-	f.resetCount++
-}
-
-func (f *fakeResettableSnapshotSource) Snapshot() (*statsengine.Snapshot, error) {
-	f.snapCount++
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.snap, nil
 }
 
@@ -1420,9 +1422,10 @@ func TestRefreshKeyEmitsRefreshTick(t *testing.T) {
 	}
 }
 
-func TestRefreshKeyResetsBaselineWhenSourceSupportsReset(t *testing.T) {
-	snap := &statsengine.Snapshot{TotalSyscalls: 5}
-	engine := &fakeResettableSnapshotSource{snap: snap}
+func TestRefreshKeyResetsBaseline(t *testing.T) {
+	stale := &statsengine.Snapshot{TotalSyscalls: 5}
+	fresh := &statsengine.Snapshot{TotalSyscalls: 0}
+	engine := &fakeSnapshotSource{snap: stale, resetSnap: fresh}
 	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabOverview
 
@@ -1439,8 +1442,55 @@ func TestRefreshKeyResetsBaselineWhenSourceSupportsReset(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected StatsTickMsg from reset baseline, got %T", msg)
 	}
-	if stats.Snap != snap {
-		t.Fatalf("expected snapshot after reset")
+	if stats.Snap != fresh {
+		t.Fatalf("expected the post-reset snapshot, got %+v", stats.Snap)
+	}
+}
+
+// TestRefreshKeyResetWithoutSourceEmitsNilSnapshot covers a dashboard whose
+// source has not been wired yet: the reset must not panic and must publish a
+// nil snapshot rather than inventing one.
+func TestRefreshKeyResetWithoutSourceEmitsNilSnapshot(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m.activeTab = TabOverview
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatalf("expected reset baseline command")
+	}
+	stats, ok := cmd().(messages.StatsTickMsg)
+	if !ok {
+		t.Fatalf("expected StatsTickMsg from reset baseline")
+	}
+	if stats.Snap != nil {
+		t.Fatalf("expected nil snapshot without a source, got %+v", stats.Snap)
+	}
+}
+
+// TestRefreshKeyResetDiscardsFailedSnapshot checks that a Snapshot error after
+// the reset is not published as data: the source is still reset, but the
+// emitted snapshot is nil so the dashboard keeps its last good one.
+func TestRefreshKeyResetDiscardsFailedSnapshot(t *testing.T) {
+	engine := &fakeSnapshotSource{
+		snap: &statsengine.Snapshot{TotalSyscalls: 5},
+		err:  errors.New("snapshot build failed"),
+	}
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
+	m.activeTab = TabOverview
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatalf("expected reset baseline command")
+	}
+	if engine.resetCount != 1 {
+		t.Fatalf("expected reset count 1, got %d", engine.resetCount)
+	}
+	stats, ok := cmd().(messages.StatsTickMsg)
+	if !ok {
+		t.Fatalf("expected StatsTickMsg from reset baseline")
+	}
+	if stats.Snap != nil {
+		t.Fatalf("expected failed snapshot to be discarded, got %+v", stats.Snap)
 	}
 }
 
@@ -1721,7 +1771,7 @@ func TestTranslateFlamegraphMsgLeavesNonMouseUnchanged(t *testing.T) {
 // (no Reset() call on the engine), and no new tick is re-armed —
 // SetFocused will arm a fresh one when focus returns.
 func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
-	engine := &fakeResettableSnapshotSource{}
+	engine := &fakeSnapshotSource{}
 	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	if cmd := m.SetAutoResetInterval(50 * time.Millisecond); cmd == nil {
 		t.Fatalf("SetAutoResetInterval should return a tick command for a positive interval")
@@ -1766,7 +1816,7 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 // the reset path. We deliver the tick by direct injection (the same
 // payload tea.Tick would deliver) rather than waiting on real time.
 func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
-	engine := &fakeResettableSnapshotSource{}
+	engine := &fakeSnapshotSource{}
 	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	m.SetAutoResetInterval(50 * time.Millisecond)
 	m.SetFocused(false)

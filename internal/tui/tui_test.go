@@ -659,24 +659,19 @@ func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
 	}
 }
 
+// fakeDashboardSource is a runtime.ResettableSnapshotSource test double. Reset
+// counts calls and swaps in an empty snapshot, mimicking a stats engine that
+// restarts its baseline.
 type fakeDashboardSource struct {
-	snap *statsengine.Snapshot
-}
-
-func (f fakeDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
-	return f.snap, nil
-}
-
-type fakeResettableDashboardSource struct {
 	snap       *statsengine.Snapshot
 	resetCalls int
 }
 
-func (f *fakeResettableDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
+func (f *fakeDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
 	return f.snap, nil
 }
 
-func (f *fakeResettableDashboardSource) Reset() {
+func (f *fakeDashboardSource) Reset() {
 	f.resetCalls++
 	f.snap = &statsengine.Snapshot{TotalSyscalls: 0}
 }
@@ -686,7 +681,7 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	source := lateBoundDashboardSource{runtime: runtime}
 
 	want := &statsengine.Snapshot{TotalSyscalls: 77}
-	runtime.SetDashboardSnapshotSource(fakeDashboardSource{snap: want})
+	runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: want})
 
 	got, err := source.Snapshot()
 	if err != nil {
@@ -694,6 +689,50 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("expected late-bound source to use latest runtime source")
+	}
+}
+
+func TestLateBoundDashboardSourceResetForwardsToWiredSource(t *testing.T) {
+	runtime := newRuntimeBindings()
+	source := lateBoundDashboardSource{runtime: runtime}
+	wired := &fakeDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 42}}
+	runtime.SetDashboardSnapshotSource(wired)
+
+	source.Reset()
+
+	if wired.resetCalls != 1 {
+		t.Fatalf("expected Reset to reach the wired source once, got %d", wired.resetCalls)
+	}
+	got, err := source.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+	if got == nil || got.TotalSyscalls != 0 {
+		t.Fatalf("expected post-reset snapshot from wired source, got %+v", got)
+	}
+}
+
+// TestLateBoundDashboardSourceWithoutSourceIsInert covers the window before
+// the trace starter wires a stats engine (and a zero-value wrapper): Reset
+// and Snapshot must neither panic nor fabricate data.
+func TestLateBoundDashboardSourceWithoutSourceIsInert(t *testing.T) {
+	for name, source := range map[string]lateBoundDashboardSource{
+		"nil runtime":     {},
+		"no wired source": {runtime: newRuntimeBindings()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source.Reset()
+			got, err := source.Snapshot()
+			if err != nil || got != nil {
+				t.Fatalf("expected (nil, nil) without a source, got (%+v, %v)", got, err)
+			}
+		})
+	}
+}
+
+func TestResetDashboardSnapshotSourceWithoutSourceReturnsNil(t *testing.T) {
+	if snap := newRuntimeBindings().resetDashboardSnapshotSource(); snap != nil {
+		t.Fatalf("expected nil snapshot without a wired source, got %+v", snap)
 	}
 }
 
@@ -759,7 +798,7 @@ func TestRuntimeBindingsProvidePersistentRecorderAndSequencer(t *testing.T) {
 }
 
 func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
-	src := &fakeResettableDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
+	src := &fakeDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
 
 	m := NewModel(-1, func(context.Context) error { return nil })
 	m.runtime.SetDashboardSnapshotSource(src)
@@ -2045,7 +2084,7 @@ func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testin
 	oldTrie := aggregateTestTrie("oldsvc", "/srv/old")
 	newTrie := aggregateTestTrie("newsvc", "/srv/new")
 
-	m.runtime.SetDashboardSnapshotSource(fakeDashboardSource{snap: oldSnap})
+	m.runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: oldSnap})
 	m.runtime.SetLiveTrie(oldTrie)
 
 	next, _ := m.Update(TracingStartedMsg{})
@@ -2073,7 +2112,7 @@ func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testin
 		t.Fatalf("expected filter apply to restart tracing")
 	}
 
-	m.runtime.SetDashboardSnapshotSource(fakeDashboardSource{snap: newSnap})
+	m.runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: newSnap})
 	m.runtime.SetLiveTrie(newTrie)
 
 	next, _ = m.Update(TracingStartedMsg{})

@@ -29,16 +29,14 @@ const dashboardTabBarRows = 1
 
 // SnapshotSource is the dashboard data source. Snapshot returns nil, nil when
 // the engine is nil. A non-nil error indicates that snapshot construction
-// failed and the caller should discard the result.
+// failed and the caller should discard the result. Reset clears accumulated
+// state and restarts the series baselines; the dashboard calls it on every
+// baseline reset (refresh key and auto-reset ticks), so it is part of the
+// contract rather than an optional capability. It mirrors
+// runtime.ResettableSnapshotSource.
 type SnapshotSource interface {
 	Snapshot() (*statsengine.Snapshot, error)
-}
-
-// resettableSnapshotSource extends SnapshotSource with a Reset method that
-// clears accumulated state and restarts the series baselines.
-type resettableSnapshotSource interface {
 	Reset()
-	Snapshot() (*statsengine.Snapshot, error)
 }
 
 type refreshTickMsg struct{}
@@ -1046,15 +1044,12 @@ func (m *Model) resetBaselineCmd() tea.Cmd {
 		m.liveTrie.Reset()
 	}
 
-	// Errors from Snapshot are silently dropped here; the dashboard will
-	// continue to display the last successful snapshot.
-	var snap *statsengine.Snapshot
-	if resettable, ok := m.engine.(resettableSnapshotSource); ok {
-		resettable.Reset()
-		snap, _ = resettable.Snapshot()
-	} else {
-		snap = m.snapshot()
+	if m.engine != nil {
+		m.engine.Reset()
 	}
+	// snapshot drops Snapshot errors; the dashboard will continue to display
+	// the last successful snapshot.
+	snap := m.snapshot()
 	return func() tea.Msg { return messages.StatsTickMsg{Snap: snap} }
 }
 

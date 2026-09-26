@@ -90,7 +90,7 @@ type runtimeBindings struct {
 	mu sync.RWMutex
 
 	// snapshotSource is the stats engine injected by the trace starter.
-	snapshotSource runtime.SnapshotSource
+	snapshotSource runtime.ResettableSnapshotSource
 	// streamSource is the active read-side source (may be swapped on reset).
 	streamSource runtime.StreamSource
 	// streamBuffer is the TUI-owned ring buffer; it always satisfies both
@@ -123,7 +123,7 @@ func newRuntimeBindings() *runtimeBindings {
 }
 
 // SetDashboardSnapshotSource wires the stats engine into the dashboard.
-func (r *runtimeBindings) SetDashboardSnapshotSource(source runtime.SnapshotSource) {
+func (r *runtimeBindings) SetDashboardSnapshotSource(source runtime.ResettableSnapshotSource) {
 	r.mu.Lock()
 	r.snapshotSource = source
 	r.mu.Unlock()
@@ -230,7 +230,7 @@ func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 }
 
 // dashboardSnapshotSource returns the currently wired stats engine source.
-func (r *runtimeBindings) dashboardSnapshotSource() runtime.SnapshotSource {
+func (r *runtimeBindings) dashboardSnapshotSource() runtime.ResettableSnapshotSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.snapshotSource
@@ -271,23 +271,16 @@ func (r *runtimeBindings) advanceFilterEpoch() uint64 {
 	return r.filterEpoch.Add(1)
 }
 
-// resetDashboardSnapshotSource resets the dashboard snapshot source if it
-// implements the Resetter contract (i.e. exposes Reset()), then returns a
-// fresh snapshot. The check is intentionally narrow — only Reset() is required
-// so that test doubles and future sources can satisfy it without also
-// implementing Ingest (which belongs to statsengine.Accumulator and is not
-// needed here). Errors from Snapshot are silently dropped since callers handle
-// a nil snapshot.
+// resetDashboardSnapshotSource resets the wired dashboard snapshot source and
+// returns a fresh snapshot, or nil when no source is wired. Reset is part of
+// runtime.ResettableSnapshotSource, so every wired source honours it. Errors
+// from Snapshot are silently dropped since callers handle a nil snapshot.
 func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
 	src := r.dashboardSnapshotSource()
 	if src == nil {
 		return nil
 	}
-	// statsengine.Accumulator satisfies this interface; any other source that
-	// exposes Reset() (e.g. test fakes) also qualifies.
-	if resettable, ok := src.(interface{ Reset() }); ok {
-		resettable.Reset()
-	}
+	src.Reset()
 	snap, _ := src.Snapshot()
 	return snap
 }
@@ -1692,6 +1685,8 @@ func (s lateBoundDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
 	return source.Snapshot()
 }
 
+// Reset forwards to the underlying source; it is a no-op only while no source
+// has been wired yet (before the trace starter publishes its stats engine).
 func (s lateBoundDashboardSource) Reset() {
 	if s.runtime == nil {
 		return
@@ -1700,9 +1695,7 @@ func (s lateBoundDashboardSource) Reset() {
 	if source == nil {
 		return
 	}
-	if resettable, ok := source.(interface{ Reset() }); ok {
-		resettable.Reset()
-	}
+	source.Reset()
 }
 
 func placeToViewport(width, height int, content string) string {
@@ -1722,11 +1715,12 @@ var (
 	// composes RuntimePublisher (write side) and RuntimeState (read side).
 	_ runtime.TraceRuntimeBindings = (*runtimeBindings)(nil)
 
-	// lateBoundDashboardSource must satisfy the SnapshotSource contract used
-	// by the dashboard model. It wraps the injected stats engine and forwards
-	// calls through runtimeBindings so the dashboard source can be wired
-	// before the actual engine is available.
-	_ dashboardui.SnapshotSource = (*lateBoundDashboardSource)(nil)
+	// lateBoundDashboardSource must satisfy the resettable snapshot-source
+	// contract used by the dashboard model. It wraps the injected stats engine
+	// and forwards calls through runtimeBindings so the dashboard source can
+	// be wired before the actual engine is available.
+	_ dashboardui.SnapshotSource       = lateBoundDashboardSource{}
+	_ runtime.ResettableSnapshotSource = lateBoundDashboardSource{}
 )
 
 func altScreenView(content, title string) tea.View {
