@@ -588,7 +588,10 @@ func RenderTerminalView(ctx RenderContext) string {
 	filterIsActive := strings.TrimSpace(searchQuery) != ""
 	if filterIsActive {
 		if filterSet == nil {
-			filterSet = computeFilterVisibleSetInto(frames, matchSet, nil)
+			// Callers without a SearchController-maintained set get the same
+			// visibility rule as the live search path (matches, descendants
+			// and ancestors).
+			filterSet = filterVisibleSetUsingAncestry(frames, matchSet, buildFrameAncestry(frames), nil)
 		}
 		if len(filterSet) == 0 {
 			return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", searchQuery))
@@ -820,36 +823,6 @@ func hasPathBoundaryPrefix(value, prefix string) bool {
 		return false
 	}
 	return value[len(prefix)] == pathSeparatorByte
-}
-
-func computeFilterVisibleSetInto(frames []tuiFrame, matchSet, visible map[int]bool) map[int]bool {
-	if visible == nil {
-		visible = make(map[int]bool)
-	} else {
-		for idx := range visible {
-			delete(visible, idx)
-		}
-	}
-	if len(matchSet) == 0 {
-		return visible
-	}
-
-	matchPaths := make([]string, 0, len(matchSet))
-	for idx := range matchSet {
-		if idx >= 0 && idx < len(frames) {
-			matchPaths = append(matchPaths, frames[idx].Path)
-		}
-	}
-	for idx, frame := range frames {
-		for _, matchPath := range matchPaths {
-			// Show matching frames and their full ancestry to root.
-			if frame.Path == matchPath || hasPathBoundaryPrefix(matchPath, frame.Path) {
-				visible[idx] = true
-				break
-			}
-		}
-	}
-	return visible
 }
 
 func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark bool) lipgloss.Style {

@@ -1,8 +1,8 @@
 package flamegraph
 
 import (
-	"iter"
 	"maps"
+	"slices"
 	"strings"
 )
 
@@ -81,34 +81,30 @@ func subtreeSetUsingAncestry(frames []tuiFrame, selectedIdx int, ancestry frameA
 }
 
 // filterVisibleSetUsingAncestry fills `set` with every match plus its full
-// descendant subtree and ancestor chain in O(sum-of-subtree-sizes) instead of
-// the O(frames × matches) path scan of the legacy computeFilterVisibleSetInto
-// (which, unlike this function, keeps only matches and ancestors). Falls back
-// to building ancestry on the fly when the supplied index is stale (see
+// descendant subtree and ancestor chain in O(sum-of-subtree-sizes). It is the
+// single definition of which frames an active search keeps visible; both the
+// SearchController and RenderTerminalView's fallback use it. Falls back to
+// building ancestry on the fly when the supplied index is stale (see
 // subtreeSetUsingAncestry).
 func filterVisibleSetUsingAncestry(frames []tuiFrame, matchSet map[int]bool, ancestry frameAncestry, set map[int]bool) map[int]bool {
 	if set == nil {
 		set = make(map[int]bool)
-	} else {
-		for idx := range set {
-			delete(set, idx)
-		}
 	}
 	if len(matchSet) == 0 {
+		clear(set)
 		return set
 	}
 	if len(ancestry.parent) != len(frames) {
 		ancestry = buildFrameAncestry(frames)
 	}
-	markFilterVisible(ancestry, maps.Keys(matchSet), set)
+	markFilterVisible(ancestry, slices.Collect(maps.Keys(matchSet)), set)
 	return set
 }
 
-// markFilterVisible marks every in-range match in `matches`, its full
-// descendant subtree and its ancestor chain in `set`. The result does not
-// depend on the order in which `matches` yields indices, which matters because
-// the caller feeds it straight from map iteration. `matches` is ranged over
-// twice, so it must be re-iterable (maps.Keys and slices.Values both are).
+// markFilterVisible clears `set`, then marks every in-range match in
+// `matches`, its full descendant subtree and its ancestor chain. The result
+// does not depend on the order of `matches`, which matters because
+// filterVisibleSetUsingAncestry collects them from map iteration.
 //
 // The work runs in two passes on purpose. markSubtree skips any frame that is
 // already marked, which is only sound while "marked" implies "whole subtree
@@ -116,22 +112,23 @@ func filterVisibleSetUsingAncestry(frames []tuiFrame, matchSet map[int]bool, anc
 // match marks its enclosing match without marking the enclosing match's other
 // children, so interleaving the passes per match would let a later
 // markSubtree on the enclosing match stop at its root and hide those
-// children. Marking every subtree first keeps the implication true for the
-// whole first pass.
+// children. Clearing `set` and marking every subtree first keeps the
+// implication true for the whole first pass.
 //
 // The second pass may then stop each ancestor walk at the first marked frame.
 // Such a frame was either marked by an earlier walk, which continued upward
 // itself, or lies in the subtree of a shallower match, whose own walk covers
 // the chain above it; by induction on match depth every ancestor ends up
-// marked whatever the iteration order.
-func markFilterVisible(ancestry frameAncestry, matches iter.Seq[int], set map[int]bool) {
+// marked whatever the order of `matches`.
+func markFilterVisible(ancestry frameAncestry, matches []int, set map[int]bool) {
+	clear(set)
 	n := len(ancestry.parent)
-	for matchIdx := range matches {
+	for _, matchIdx := range matches {
 		if matchIdx >= 0 && matchIdx < n {
 			markSubtree(ancestry, matchIdx, set)
 		}
 	}
-	for matchIdx := range matches {
+	for _, matchIdx := range matches {
 		if matchIdx < 0 || matchIdx >= n {
 			continue
 		}
