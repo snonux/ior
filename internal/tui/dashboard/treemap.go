@@ -17,7 +17,11 @@ import (
 const maxSyscallTreemapItems = 20
 
 type syscallTreemapItem struct {
-	Name     string
+	Name string
+	// Key is the item's stable identity for selection re-anchoring across
+	// snapshot refreshes, where Name is only a display label. It is set by
+	// the Files treemap (the directory path) and empty elsewhere.
+	Key      string
 	Count    uint64
 	Bytes    uint64
 	Duration uint64
@@ -156,6 +160,7 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		item := syscallTreemapItem{
 			Name:     pathLabel,
+			Key:      dir.Dir,
 			Count:    dir.Accesses,
 			Bytes:    totalBytes,
 			Duration: dir.TotalLatencyNs,

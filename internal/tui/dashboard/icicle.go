@@ -97,9 +97,13 @@ func renderIcicleGrid(header string, tiles []icicleTile, width, height int, metr
 	return strings.Join(lines, "\n")
 }
 
-func filesIcicleTileCount(snap *statsengine.Snapshot, width, height int, metric bubbleMetric) int {
+// filesIcicleTileKeys returns the full path of every icicle tile in
+// selection order - the order renderFilesIcicle indexes its selected tile
+// by - applying the same size defaults. A node's full path identifies its
+// tile across snapshot refreshes, whose metric changes reorder the tiles.
+func filesIcicleTileKeys(snap *statsengine.Snapshot, width, height int, metric bubbleMetric) []string {
 	if snap == nil {
-		return 0
+		return nil
 	}
 	if width <= 0 {
 		width = 80
@@ -107,25 +111,12 @@ func filesIcicleTileCount(snap *statsengine.Snapshot, width, height int, metric 
 	if height <= 0 {
 		height = 18
 	}
-
-	dirs := aggregateFilesByDir(snap.Files())
-	if len(dirs) == 0 {
-		return 0
+	tiles, _ := buildIcicleTiles(snap, width, height, metric)
+	keys := make([]string, 0, len(tiles))
+	for _, tile := range tiles {
+		keys = append(keys, tile.node.fullPath)
 	}
-	root := buildIcicleTree(dirs)
-	children := sortedIcicleChildren(root, metric)
-	if len(children) == 0 {
-		return 0
-	}
-
-	chartHeight := height - 2
-	if chartHeight < 4 {
-		chartHeight = 4
-	}
-
-	tiles := make([]icicleTile, 0, 64)
-	layoutIcicle(children, 0, width, 0, chartHeight, 0, metric, &tiles)
-	return len(tiles)
+	return keys
 }
 
 func buildIcicleTree(dirs []DirSnapshot) *icicleNode {

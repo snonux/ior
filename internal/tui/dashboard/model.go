@@ -302,13 +302,15 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 	if m.syscallsTab.sort.active {
 		selectedSyscall = m.selectedSyscallName()
 	}
-	if m.filesTab.mode == tabVizModeTable {
-		if !m.filesDirGrouped && m.filesTab.sort.active {
-			selectedFile = m.selectedFilePath()
+	if m.filesDirGrouped {
+		// The viz modes reorder their items on every refresh (by metric
+		// value), so their selection is always anchored by identity; the
+		// table keeps its positional selection until a sort is chosen.
+		if m.filesTab.mode != tabVizModeTable || m.filesDirTab.sort.active {
+			selectedDir = m.selectedFilesDirKey()
 		}
-		if m.filesDirGrouped && m.filesDirTab.sort.active {
-			selectedDir = m.selectedDirPath()
-		}
+	} else if m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
+		selectedFile = m.selectedFilePath()
 	}
 	if m.processesTab.mode == tabVizModeTable && m.processesTab.sort.active {
 		selectedProcess = m.selectedProcessPID()
@@ -481,8 +483,12 @@ func (m *Model) reanchorFilesOffset(selectedPath string) {
 	m.filesTab.offset = reanchorOffset(m.filesTab.offset, m.sortedFileRows(), selectedPath, findFileOffset)
 }
 
-func (m *Model) reanchorFilesDirOffset(selectedDir string) {
-	m.filesDirTab.offset = reanchorOffset(m.filesDirTab.offset, m.sortedDirRows(), selectedDir, findDirOffset)
+// reanchorFilesDirOffset re-anchors the dir-grouped selection over the
+// items of the active viz mode (see filesDirSelectionKeys), so a treemap or
+// icicle selection is neither clamped against the directory count nor left
+// pointing at whatever item moved into its old position.
+func (m *Model) reanchorFilesDirOffset(selectedKey string) {
+	m.filesDirTab.offset = reanchorOffset(m.filesDirTab.offset, m.filesDirSelectionKeys(), selectedKey, findKeyOffset)
 }
 
 func (m *Model) reanchorProcessesOffset(selectedPID uint32) {
@@ -699,14 +705,6 @@ func (m *Model) selectedDirSnapshot() (DirSnapshot, bool) {
 
 func (m *Model) sortedDirRows() []DirSnapshot {
 	return sortedDirSnapshots(aggregateFilesByDir(m.snapshotOrZero().Files()), m.filesDirTab.sort)
-}
-
-func (m *Model) selectedDirPath() string {
-	selected, ok := m.selectedDirSnapshot()
-	if !ok {
-		return ""
-	}
-	return selected.Dir
 }
 
 func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -1004,12 +1002,49 @@ func (m *Model) filesDirRowCount() int {
 	return len(aggregateFilesByDir(m.snapshotOrZero().Files()))
 }
 
+// filesDirRowCountForMode is the navigation bound of the dir-grouped view:
+// the number of items filesDirTab.offset selects among in the active mode.
 func (m *Model) filesDirRowCountForMode() int {
-	if m.filesTab.mode != tabVizModeIcicle {
-		return m.filesDirRowCount()
+	return len(m.filesDirSelectionKeys())
+}
+
+// filesDirSelectionKeys returns, in selection order, the stable identity of
+// every item filesDirTab.offset indexes in the active viz mode: directory
+// paths of the sorted table rows (also the bubbles-mode fallback), of the
+// treemap items, or the full paths of the icicle tiles. Each list is built
+// the way its renderer builds it, so offset i here is item i on screen.
+func (m *Model) filesDirSelectionKeys() []string {
+	metric := m.filesTab.bubble.Metric()
+	switch m.filesTab.mode {
+	case tabVizModeTreemap:
+		items := buildFilesTreemapItems(m.latest, metric)
+		keys := make([]string, 0, len(items))
+		for _, item := range items {
+			keys = append(keys, item.Key)
+		}
+		return keys
+	case tabVizModeIcicle:
+		width, height := flameViewport(m.width, m.height, m.showHelp)
+		return filesIcicleTileKeys(m.latest, width, height, metric)
+	default:
+		rows := m.sortedDirRows()
+		keys := make([]string, 0, len(rows))
+		for _, row := range rows {
+			keys = append(keys, row.Dir)
+		}
+		return keys
 	}
-	width, height := flameViewport(m.width, m.height, m.showHelp)
-	return filesIcicleTileCount(m.latest, width, height, m.filesTab.bubble.Metric())
+}
+
+// selectedFilesDirKey returns the identity of the selected dir-grouped item
+// in the active viz mode, or "" when there is nothing to select.
+func (m *Model) selectedFilesDirKey() string {
+	keys := m.filesDirSelectionKeys()
+	index, ok := m.filesDirTab.selected(len(keys))
+	if !ok {
+		return ""
+	}
+	return keys[index]
 }
 
 func (m *Model) processesRowCount() int {

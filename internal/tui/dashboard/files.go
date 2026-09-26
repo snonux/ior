@@ -344,6 +344,13 @@ func findDirOffset(rows []DirSnapshot, dir string) (int, bool) {
 	return 0, false
 }
 
+// findKeyOffset locates key in the selection keys of the Files dir-grouped
+// view (see Model.filesDirSelectionKeys).
+func findKeyOffset(keys []string, key string) (int, bool) {
+	index := slices.Index(keys, key)
+	return index, index >= 0
+}
+
 func truncatePathMiddle(path string, limit int) string {
 	if len(path) <= limit {
 		return path
