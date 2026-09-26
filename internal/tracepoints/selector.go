@@ -28,9 +28,11 @@ type Selector struct {
 }
 
 // ParseSelector parses the comma-separated regex strings for the -tps and
-// -tpsExclude CLI flags into a Selector. Either string may be empty, which
-// leaves the corresponding list nil (i.e. "match all" for Attach, "exclude
-// nothing" for Exclude). An error is returned if any regex fails to compile.
+// -tpsExclude CLI flags into a Selector. Each entry is whitespace-trimmed and
+// empty entries are ignored, so "read, write," selects exactly "read" and
+// "write". A string with no non-blank entries leaves the corresponding list
+// nil (i.e. "match all" for Attach, "exclude nothing" for Exclude). An error
+// is returned if any regex fails to compile.
 func ParseSelector(attach, exclude string) (Selector, error) {
 	attachRegexes, err := parseRegexList(attach)
 	if err != nil {
@@ -44,13 +46,20 @@ func ParseSelector(attach, exclude string) (Selector, error) {
 }
 
 // parseRegexList splits a comma-separated string of regex patterns and
-// compiles each one. Returns nil (not an error) when the input is empty.
+// compiles each one. Entries are split with splitCSV, the same helper the
+// -trace-* dimension flags use: surrounding whitespace is trimmed and blank
+// entries are dropped. That matters because an empty regex matches every
+// name, so a stray trailing comma ("read,") would otherwise attach — or with
+// -tpsExclude, suppress — every tracepoint, and a space after a comma
+// ("read, write") would compile " write", which never matches. Returns nil
+// (not an error) when no non-blank entry remains.
 func parseRegexList(patterns string) ([]*regexp.Regexp, error) {
-	if len(patterns) == 0 {
+	entries, provided := splitCSV(patterns)
+	if !provided {
 		return nil, nil
 	}
-	var regexes []*regexp.Regexp
-	for _, pattern := range strings.Split(patterns, ",") {
+	regexes := make([]*regexp.Regexp, 0, len(entries))
+	for _, pattern := range entries {
 		re, err := regexp.Compile(pattern)
 		if err != nil {
 			return nil, fmt.Errorf("unable to compile regex %q: %w", pattern, err)
