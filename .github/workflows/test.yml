@@ -1,0 +1,49 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Format check and unit tests (race)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-ior
+
+      - name: mage fmtCheck
+        run: mage -v fmtCheck
+
+      # Runs as the unprivileged runner user, so the BPF integration tests in
+      # ./integrationtests skip themselves here and run in the job below.
+      - name: mage testRace
+        run: mage -v testRace
+
+  integration:
+    name: Integration tests (eBPF, root)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-ior
+        with:
+          go-cache: "false"
+
+      - name: Ensure tracefs is mounted
+        run: |
+          if ! sudo test -d /sys/kernel/tracing/events/syscalls; then
+            sudo mount -t tracefs nodev /sys/kernel/tracing
+          fi
+          sudo test -d /sys/kernel/tracing/events/syscalls
+
+      # Builds ior + ioworkload and runs go test via sudo so ior can load BPF.
+      - name: mage integrationTest
+        run: mage -v integrationTest

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"slices"
 	"time"
 )
@@ -15,6 +16,14 @@ import (
 // Under slower CI or locally saturated systems, 5s can still miss first-call
 // events for single-shot scenarios. Use a slightly larger delay for stability.
 const startupDelay = 8 * time.Second
+
+// Pin the main goroutine to the main thread so scenario syscalls run with
+// TID == PID. ior seeds the comm of the traced PID at startup but resolves
+// other TIDs asynchronously via /proc; a single-syscall scenario that lands on
+// another Go thread and exits right away can be recorded with an empty comm.
+func init() {
+	runtime.LockOSThread()
+}
 
 func main() {
 	scenario := flag.String("scenario", "", "I/O scenario to execute")
