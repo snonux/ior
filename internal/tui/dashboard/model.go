@@ -217,6 +217,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStatsTick(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case messages.OpenEditorRequestedMsg:
+		return m.handleOpenEditorRequested(msg)
 	case streamEditorDoneMsg:
 		return m.handleStreamEditorDone(msg)
 	}
