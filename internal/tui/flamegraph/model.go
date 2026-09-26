@@ -194,10 +194,17 @@ type Model struct {
 	// running. It coalesces flameTickMsg dispatches so we never queue more
 	// than one snapshot rebuild concurrently.
 	refreshInFlight bool
-	// refreshGeneration identifies the live-trie binding that owns an
-	// in-flight refresh. SetLiveTrie advances it so a completion from an old
-	// trace session cannot release or overwrite a newer session's refresh.
+	// refreshGeneration identifies the snapshot state a refresh result must
+	// match to be applied: the live-trie binding plus its baseline, field
+	// order and metrics. SetLiveTrie and clearSnapshotState advance it so a
+	// result computed for a superseded state is dropped instead of shown
+	// under the new state's labels.
 	refreshGeneration uint64
+	// inFlightGeneration is the refreshGeneration captured by the job that
+	// holds the refreshInFlight slot. Only that job's completion releases the
+	// slot, so a late or duplicate completion from an older job cannot free a
+	// newer job's slot and let refreshes overlap.
+	inFlightGeneration uint64
 
 	width  int
 	height int
@@ -330,15 +337,29 @@ func (m *Model) HandleRefreshCompletion(msg tea.Msg, apply bool) (bool, tea.Cmd)
 	if !ok {
 		return false, nil
 	}
-	if ready.generation != m.refreshGeneration {
-		return true, nil
-	}
 	if !apply {
-		m.refreshInFlight = false
+		m.settleRefresh(ready)
 		return true, nil
 	}
 	_, cmd := m.handleSnapshotReady(ready)
 	return true, cmd
+}
+
+// settleRefresh records the completion of a background refresh job. It
+// releases the in-flight slot when msg comes from the job holding it, and
+// reports whether msg was computed for the current snapshot state and may
+// therefore be applied.
+func (m *Model) settleRefresh(msg flameSnapshotReadyMsg) (current bool) {
+	if m.refreshInFlight && msg.generation == m.inFlightGeneration {
+		m.refreshInFlight = false
+	}
+	return msg.generation == m.refreshGeneration
+}
+
+// invalidateRefresh advances the refresh generation so any result already
+// being computed for the previous snapshot state is dropped on arrival.
+func (m *Model) invalidateRefresh() {
+	m.refreshGeneration++
 }
 
 // handleSearchInput processes key events while search mode is active.
@@ -446,17 +467,14 @@ func (m *Model) handleMovementKey(msg tea.KeyPressMsg) bool {
 }
 
 // handleSnapshotReady applies the result of a background snapshot+layout job.
-// Discards the result if viewport or zoom changed while the job was in flight
-// (the next tick will dispatch a fresh refresh), or if the user paused after a
-// snapshot already exists. A current-generation completion always clears
-// refreshInFlight so subsequent ticks can dispatch the next refresh; an old
-// generation cannot clear a newer session's slot.
+// Discards the result if it was computed for a superseded snapshot state
+// (live trie, baseline reset, field order or metric change), if viewport or
+// zoom changed while the job was in flight (the next tick will dispatch a
+// fresh refresh), or if the user paused after a snapshot already exists. The
+// job holding the in-flight slot always releases it so subsequent ticks can
+// dispatch the next refresh; any other completion cannot clear the slot.
 func (m *Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.refreshGeneration {
-		return m, nil
-	}
-	m.refreshInFlight = false
-	if msg.snapshot == nil {
+	if !m.settleRefresh(msg) || msg.snapshot == nil {
 		return m, nil
 	}
 	if msg.layoutWidth != m.width || msg.layoutHeight != m.height || msg.zoomPath != m.zoomPath {
@@ -617,7 +635,9 @@ func (m *Model) currentViewCacheKey() flameViewCacheKey {
 // resets all sub-controllers, and clears snapshot state so the new trie starts
 // fresh.
 func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
-	m.refreshGeneration++
+	// The old session's job runs against the old trie, so the new session
+	// need not wait for it: drop the slot along with its result.
+	m.invalidateRefresh()
 	m.refreshInFlight = false
 	m.liveTrie = liveTrie
 	m.syncFieldPresetToTrie()
@@ -770,6 +790,7 @@ func (m *Model) RefreshFromLiveTrieCmd() tea.Cmd {
 		return nil
 	}
 	m.refreshInFlight = true
+	m.inFlightGeneration = m.refreshGeneration
 	// Capture the fields needed by the goroutine to avoid concurrent reads of
 	// Model fields from outside the Bubble Tea Update goroutine.
 	liveTrie, generation := m.liveTrie, m.refreshGeneration
