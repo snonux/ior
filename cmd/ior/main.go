@@ -45,17 +45,17 @@ func main() {
 		return
 	}
 
-	// Wire the concrete TUI runner functions into the core internal package.
+	// Hand the concrete TUI runner functions to the core internal package.
 	// This is the only place that imports both internal and internal/tui, which
 	// breaks the cycle: internal no longer imports internal/tui.
-	internal.SetTUIRunners(
-		tui.RunWithTraceStarterConfig,
-		tui.RunTestFlamesWithTraceStarterConfig,
-		tui.RunTestFlamesWithTraceStarterConfig, // same runner; starter differs (static vs live)
-	)
+	tuiRunners := internal.TUIRunners{
+		Trace:          tui.RunWithTraceStarterConfig,
+		TestFlames:     tui.RunTestFlamesWithTraceStarterConfig,
+		TestLiveFlames: tui.RunTestFlamesWithTraceStarterConfig, // same runner; starter differs (static vs live)
+	}
 
 	// Run the internal logic of the application.
-	if err := internal.Run(cfg); err != nil {
+	if err := internal.Run(cfg, tuiRunners); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to run: %v\n", err)
 		os.Exit(2)
 	}

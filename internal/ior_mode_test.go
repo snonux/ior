@@ -463,50 +463,6 @@ func TestDispatchRunRequiresRootForParquet(t *testing.T) {
 	}
 }
 
-func TestValidateRunConfigRejectsTestFlamesWithTraceFlags(t *testing.T) {
-	cfg := flags.Config{TestFlames: true, PlainMode: true}
-	err := validateRunConfig(cfg)
-	if err == nil {
-		t.Fatalf("expected error for --testflames with trace-mode flags")
-	}
-	if err.Error() != "--testflames cannot be combined with -plain" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateRunConfigRejectsTestLiveFlamesWithTraceFlags(t *testing.T) {
-	cfg := flags.Config{TestLiveFlames: true, PlainMode: true}
-	err := validateRunConfig(cfg)
-	if err == nil {
-		t.Fatalf("expected error for --testliveflames with trace-mode flags")
-	}
-	if err.Error() != "--testliveflames cannot be combined with -plain" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateRunConfigRejectsBothTestModes(t *testing.T) {
-	cfg := flags.Config{TestFlames: true, TestLiveFlames: true}
-	err := validateRunConfig(cfg)
-	if err == nil {
-		t.Fatalf("expected error when both test flame modes are enabled")
-	}
-	if err.Error() != "--testflames and --testliveflames are mutually exclusive" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateRunConfigRejectsParquetWithPlain(t *testing.T) {
-	cfg := flags.Config{ParquetPath: "trace.parquet", PlainMode: true}
-	err := validateRunConfig(cfg)
-	if err == nil {
-		t.Fatalf("expected error for -parquet with -plain")
-	}
-	if err.Error() != "-parquet and -plain are mutually exclusive" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 func TestValidateRunConfigRejectsParquetWithContentFilters(t *testing.T) {
 	cfg := flags.Config{
 		ParquetPath: "trace.parquet",

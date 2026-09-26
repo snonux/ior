@@ -23,11 +23,22 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-// tuiRunFunc is the function type for launching the TUI with a given config
-// and trace starter. Concrete implementations live in the tui layer; they are
-// injected at startup via SetTUIRunners so that the core package (internal)
-// never imports the TUI layer.
-type tuiRunFunc func(flags.Config, runtime.TraceStarter) error
+// TUIRunFunc is the function type for launching the TUI with a given config
+// and trace starter. Concrete implementations live in the tui layer; the cmd
+// layer passes them to Run so that the core package (internal) never imports
+// the TUI layer.
+type TUIRunFunc func(flags.Config, runtime.TraceStarter) error
+
+// TUIRunners bundles the TUI launchers the cmd layer injects into Run. Every
+// field must be set; the matching mode calls it without a nil check.
+type TUIRunners struct {
+	// Trace launches the interactive TUI backed by a live BPF trace.
+	Trace TUIRunFunc
+	// TestFlames launches the TUI seeded with static synthetic flame data.
+	TestFlames TUIRunFunc
+	// TestLiveFlames launches the TUI fed by live synthetic flame data.
+	TestLiveFlames TUIRunFunc
+}
 
 // traceEventLoopFactory builds the mode-specific event loop after the shared
 // BPF, channel, context, and profiling setup has succeeded.
@@ -35,25 +46,13 @@ type traceEventLoopFactory func(flags.Config, *bpf.Module, func(...any)) (*event
 
 var errRootPrivilegesRequired = errors.New("tracing requires root privileges (run with sudo)")
 
-// SetTUIRunners injects the concrete TUI runner functions from the cmd layer
-// into the default registry so the core internal package does not need to
-// import the TUI packages. This must be called before Run when running in
-// TUI mode.
-func SetTUIRunners(
-	runTUI tuiRunFunc,
-	runTUITestFlames tuiRunFunc,
-	runTUITestLiveFlames tuiRunFunc,
-) {
-	defaultRegistry.deps.runTUI = runTUI
-	defaultRegistry.deps.runTUITestFlames = runTUITestFlames
-	defaultRegistry.deps.runTUITestLiveFlames = runTUITestLiveFlames
-}
-
 // Run is the main entry point for the ior binary.
-// cfg must be provided by the caller; it should not be fetched from the global singleton here.
-func Run(cfg flags.Config) error {
+// cfg must be provided by the caller; it should not be fetched from the global
+// singleton here. The mode registry is built per call from the injected TUI
+// runners, so no package-level state is mutated.
+func Run(cfg flags.Config, tui TUIRunners) error {
 	printStartupBanner(cfg)
-	return dispatchRun(cfg)
+	return newModeRegistry(productionRunnerDeps(tui)).dispatch(cfg)
 }
 
 // printStartupBanner prints the ASCII startup banner. In -plain mode stdout
@@ -67,25 +66,16 @@ func printStartupBanner(cfg flags.Config) {
 	flags.PrintVersion()
 }
 
-// dispatchRun delegates to the defaultRegistry, which validates all
-// mode-combination constraints and then runs the first matching handler.
-func dispatchRun(cfg flags.Config) error {
-	return defaultRegistry.dispatch(cfg)
-}
-
 // dispatchRunWithDeps constructs an isolated registry from the given deps and
-// dispatches cfg through it. Used by tests to inject stub functions without
-// mutating the global defaultRegistry.
+// dispatches cfg through it. Used by tests to inject stub functions.
 func dispatchRunWithDeps(cfg flags.Config, deps runnerDeps) error {
 	return newModeRegistry(deps).dispatch(cfg)
 }
 
-// validateRunConfig runs all cross-mode constraint checks without running
-// any mode. It is a thin wrapper around defaultRegistry.validate so that
-// callers (and tests) that only want validation do not need to know about
-// the registry.
+// validateRunConfig runs all mode-combination checks without running any
+// mode. Validation never calls a runner, so the registry needs no deps.
 func validateRunConfig(cfg flags.Config) error {
-	return defaultRegistry.validate(cfg)
+	return newModeRegistry(runnerDeps{}).validate(cfg)
 }
 
 // tuiTestFlamesStarter returns a TraceStarter that seeds static test flame data
