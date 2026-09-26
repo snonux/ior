@@ -134,9 +134,15 @@ func TestMarkFilterVisibleIsIndependentOfMatchOrder(t *testing.T) {
 					t.Fatalf("fixture has no hidden frames; oracle would not catch over-marking")
 				}
 
+				// Reuse one set across orders, seeded with every frame, so a
+				// markFilterVisible that failed to clear stale marks would
+				// over-report on the first permutation already.
+				got := make(map[int]bool)
+				for idx := range frames {
+					got[idx] = true
+				}
 				for _, perm := range permutations(matches) {
-					got := make(map[int]bool)
-					markFilterVisible(ancestry, slices.Values(perm), got)
+					markFilterVisible(ancestry, perm, got)
 					if !maps.Equal(got, want) {
 						t.Fatalf("match order %v:\n got  %v\n want %v",
 							perm, pathsOf(frames, got), pathsOf(frames, want))

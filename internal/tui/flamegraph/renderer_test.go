@@ -553,6 +553,69 @@ func TestRenderTerminalViewFilterKeepsNonMatchingBranchesVisible(t *testing.T) {
 	}
 }
 
+// TestRenderTerminalViewNilFilterSetMatchesSearchVisibility pins the
+// FilterSet==nil fallback to the SearchController rule: a match's descendants
+// stay selectable, and a frame outside every match's lineage does not.
+func TestRenderTerminalViewNilFilterSetMatchesSearchVisibility(t *testing.T) {
+	snapshot := &snapshotNode{
+		Name:  "root",
+		Total: 100,
+		Children: []*snapshotNode{
+			{
+				Name:  "keep",
+				Total: 60,
+				Children: []*snapshotNode{
+					{
+						Name:     "needle",
+						Total:    60,
+						Children: []*snapshotNode{{Name: "leaf", Total: 60}},
+					},
+				},
+			},
+			{Name: "drop", Total: 40},
+		},
+	}
+	frames := BuildTerminalLayout(snapshot, 80, 8)
+	sep := pathSeparator
+	needleIdx := frameIndexByPathRenderer(frames, "root"+sep+"keep"+sep+"needle")
+	leafIdx := frameIndexByPathRenderer(frames, "root"+sep+"keep"+sep+"needle"+sep+"leaf")
+	dropIdx := frameIndexByPathRenderer(frames, "root"+sep+"drop")
+	if needleIdx < 0 || leafIdx < 0 || dropIdx < 0 {
+		t.Fatalf("expected needle, leaf and drop frames in layout")
+	}
+	matchSet := map[int]bool{needleIdx: true}
+	render := func(selectedIdx int, filterSet map[int]bool) string {
+		return RenderTerminalView(RenderContext{
+			Frames:      frames,
+			Width:       180,
+			Height:      8,
+			SelectedIdx: selectedIdx,
+			MatchSet:    matchSet,
+			FilterSet:   filterSet,
+			GlobalTotal: 100,
+			MetricLabel: "events",
+			IsDark:      true,
+			SearchQuery: "needle",
+		})
+	}
+
+	// A descendant of the match keeps the selection; the legacy fallback
+	// (matches + ancestors only) moved it to root.
+	out := render(leafIdx, nil)
+	if !strings.Contains(out, "Selected: leaf ") {
+		t.Fatalf("expected descendant of match to stay selected, got %q", out)
+	}
+	searchSet := filterVisibleSetUsingAncestry(frames, matchSet, buildFrameAncestry(frames), nil)
+	if want := render(leafIdx, searchSet); out != want {
+		t.Fatalf("nil FilterSet render differs from SearchController set render:\n got  %q\n want %q", out, want)
+	}
+
+	// Negative: a frame outside the match lineage is not selectable.
+	if out := render(dropIdx, nil); !strings.Contains(out, "Selected: root ") {
+		t.Fatalf("expected selection outside the filter to fall back to root, got %q", out)
+	}
+}
+
 func TestBuildTerminalLayoutWithPathNormalizesZoomRootChildrenToFullWidth(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",
