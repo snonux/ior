@@ -40,9 +40,14 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 }
 
 // beginCmd creates a tea.Cmd that runs the trace starter in a goroutine and
-// returns a TracingStartedMsg or TracingErrorMsg. It also cancels any
-// previously running trace and stores the new cancel function.
+// returns a TracingStartedMsg or TracingErrorMsg. It cancels any previously
+// running trace before storing the new cancel function, so at most one trace
+// session (BPF module plus eventloop) is ever live per lifecycle: overwriting
+// traceStop without cancelling it would orphan the old session, leaving its
+// probes attached and feeding the same stream buffer as the new one. Callers
+// that already called stop() pay nothing extra, because stop() is idempotent.
 func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
+	t.stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.traceStop = cancel
 	t.shutdownReporter = runtime.NewTraceShutdownReporter()
