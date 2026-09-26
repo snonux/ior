@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -47,22 +46,46 @@ func setupBPFModuleError(stage string, err error) error {
 // bpfSetupLog routes the console output of BPF setup. Nothing in setup writes
 // to the terminal directly: in TUI mode Bubble Tea owns it, and each trace
 // restart re-runs this attach path while the dashboard is on screen.
+//
+// A nil sink falls back to stderr (see withDefaults), so a partially filled
+// value can neither panic nor silently drop a message.
 type bpfSetupLog struct {
-	// status receives non-fatal attach diagnostics (skipped syscall or sched
-	// probes). It is the mode-dependent logln: stderr in headless modes and a
-	// no-op in TUI mode, where a skipped syscall probe keeps its lastErr in
-	// the probe manager and States() surfaces it in the probe view instead.
+	// status receives per-syscall attach diagnostics. It is the
+	// mode-dependent logln: stderr in headless modes and a no-op in TUI mode,
+	// where a skipped syscall probe keeps its lastErr in the probe manager and
+	// States() surfaces it in the probe view instead. One line per missing
+	// tracepoint is also too many to replay as TUI warning rows on every
+	// trace start (dozens on an older kernel).
 	status func(args ...any)
+	// warn receives non-fatal degradations the user must see in every mode
+	// (a sched probe that could not attach). Trace setup wires the
+	// setupWarnings collector, which replays them as event-loop warnings.
+	warn func(args ...any)
 	// teardown receives detach failures of the sched probes. Like every other
 	// teardown error it must stay visible in all modes (audit domain-10 F2),
 	// so trace setup wires the always-on stderr logger here.
 	teardown func(args ...any)
 }
 
+// withDefaults returns l with every nil sink replaced by the stderr logger.
+func (l bpfSetupLog) withDefaults() bpfSetupLog {
+	if l.status == nil {
+		l.status = logStatus
+	}
+	if l.warn == nil {
+		l.warn = logStatus
+	}
+	if l.teardown == nil {
+		l.teardown = logStatus
+	}
+	return l
+}
+
 // setupBPFModule loads and attaches the BPF module, attaching tracepoints
 // and registering the probe manager with any TUI runtime bindings.
 func setupBPFModule(parentCtx context.Context, cfg flags.Config, log bpfSetupLog) (*bpf.Module, *probemanager.Manager, func(), error) {
 	releaseBindings := func() {}
+	log = log.withDefaults()
 
 	bpfModule, stage, err := loadBPFModule()
 	if err != nil {
@@ -124,21 +147,26 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config, log bpfSetupLog
 //
 // Per-syscall attach failures are non-fatal: on older kernels the tracepoint
 // may be absent (e.g. binary built against a newer kernel). They are reported
-// through logln and skipped; the affected probe stays in the manager with its
-// lastErr set, so States() and the TUI surface the failure.
+// through logln (stderr when nil) and skipped; the affected probe stays in the
+// manager with its lastErr set, so States() and the TUI surface the failure.
 //
-// On a fatal error the manager is closed here, and a failing Close is joined
-// into the returned error rather than printed: this is already the cleanup
-// path, and the caller (in TUI mode the trace starter) is the one place that
-// can surface it without writing over the dashboard.
+// The error branch is defensive: with a non-nil attach-error callback,
+// AttachAll only fails on a nil manager, which NewManager never returns. It is
+// kept so a future fatal AttachAll error still releases what was attached, and
+// a failing Close is folded into the returned error rather than printed: the
+// caller (in TUI mode the trace starter) is the one place that can surface it
+// without writing over the dashboard.
 func attachSyscallProbes(attacher probemanager.Attacher, shouldAttach func(string) bool, tpNames []string, logln func(args ...any)) (*probemanager.Manager, error) {
+	if logln == nil {
+		logln = logStatus
+	}
 	mgr := probemanager.NewManager(attacher)
 	warn := func(syscall string, err error) {
 		logln(fmt.Sprintf("ior: skipping tracepoint for %s: %v", syscall, err))
 	}
 	if err := mgr.AttachAll(shouldAttach, tpNames, warn); err != nil {
 		if closeErr := mgr.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close probe manager after failed attach: %w", closeErr))
+			return nil, fmt.Errorf("%w (close probe manager: %v)", err, closeErr)
 		}
 		return nil, err
 	}
@@ -184,22 +212,23 @@ func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // is idempotent: setupBPFModule hands it out both directly and wrapped inside
 // releaseBindings, and a double Destroy on a libbpf link is not safe.
 //
-// A skipped probe is reported through log.status (silent in TUI mode, where
-// the degradation is the pre-fix behaviour rather than a broken trace); a
-// detach failure goes to log.teardown, which stays visible in every mode.
+// A skipped probe is reported through log.warn, which trace setup replays as
+// an event-loop warning (a TUI warning row, stderr headless); a detach failure
+// goes to log.teardown, which stays visible in every mode.
 func attachSchedProbe(attacher probemanager.Attacher, progName, tracepointName string, log bpfSetupLog) func() {
 	noop := func() {}
 	if attacher == nil {
 		return noop
 	}
+	log = log.withDefaults()
 	prog, err := attacher.GetProgram(progName)
 	if err != nil {
-		log.status(fmt.Sprintf("ior: skipping %s probe: get program %s: %v", tracepointName, progName, err))
+		log.warn(fmt.Sprintf("skipping %s probe: get program %s: %v", tracepointName, progName, err))
 		return noop
 	}
 	link, err := prog.AttachTracepoint("sched", tracepointName)
 	if err != nil {
-		log.status(fmt.Sprintf("ior: skipping %s probe: %v", tracepointName, err))
+		log.warn(fmt.Sprintf("skipping %s probe: %v", tracepointName, err))
 		return noop
 	}
 	var once sync.Once

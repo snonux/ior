@@ -435,7 +435,7 @@ func TestStatsReportsUnknownRingbufDropsWhenTheCounterCannotBeRead(t *testing.T)
 // form of the same problem: a BPF object with no ringbuf_drop_map leaves
 // dropSrc nil, the monitor never runs, and nothing is ever measured. The line
 // used to print a confident 0 for that - a "no loss" claim backed by no
-// reading at all. attachRingbufDropCounter does warn on stderr at startup, but
+// reading at all. attachRingbufDropCounter does warn at startup, but
 // a long run's summary is read hours later and on its own.
 func TestStatsReportsUnknownRingbufDropsWithoutADropCounter(t *testing.T) {
 	el := &eventLoop{done: make(chan struct{})}

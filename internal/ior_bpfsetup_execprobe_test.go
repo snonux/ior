@@ -74,11 +74,24 @@ func captureConsole(t *testing.T, fn func()) (stdout, stderr string) {
 	return outBuf.String(), errBuf.String()
 }
 
-// recordingSetupLog returns a bpfSetupLog whose two sinks record into
-// separate line recorders, so a test can tell which sink a message used.
-func recordingSetupLog() (bpfSetupLog, *lineRecorder, *lineRecorder) {
-	status, teardown := &lineRecorder{}, &lineRecorder{}
-	return bpfSetupLog{status: status.log, teardown: teardown.log}, status, teardown
+// setupLogRecorders records each bpfSetupLog sink separately, so a test can
+// tell which sink a message used.
+type setupLogRecorders struct {
+	status, warn, teardown lineRecorder
+}
+
+func (r *setupLogRecorders) log() bpfSetupLog {
+	return bpfSetupLog{status: r.status.log, warn: r.warn.log, teardown: r.teardown.log}
+}
+
+// requireOnlySink fails unless every recorded line went to want.
+func (r *setupLogRecorders) requireOnlySink(t *testing.T, want *lineRecorder) {
+	t.Helper()
+	for name, sink := range map[string]*lineRecorder{"status": &r.status, "warn": &r.warn, "teardown": &r.teardown} {
+		if sink != want && len(sink.lines()) != 0 {
+			t.Fatalf("message reached the %s sink: %q", name, sink.lines())
+		}
+	}
 }
 
 // requireNoConsoleOutput fails when setup code wrote to the terminal
@@ -100,7 +113,7 @@ func TestAttachProcessExecProbeAttachesTheSchedTracepoint(t *testing.T) {
 	prog := &fakeProbeProgram{link: link}
 	attacher := &fakeProbeAttacher{prog: prog}
 
-	release := attachProcessExecProbe(attacher, bpfSetupLog{status: failOnLog(t), teardown: failOnLog(t)})
+	release := attachProcessExecProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
 
 	if attacher.requested != processExecProgName {
 		t.Fatalf("requested program %q, want %q", attacher.requested, processExecProgName)
@@ -140,16 +153,17 @@ func TestAttachProcessExecProbeFailuresAreNonFatal(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			log, status, teardown := recordingSetupLog()
+			var rec setupLogRecorders
 			var release func()
 			stdout, stderr := captureConsole(t, func() {
-				release = attachProcessExecProbe(tc.attacher, log)
+				release = attachProcessExecProbe(tc.attacher, rec.log())
 			})
 			requireNoConsoleOutput(t, stdout, stderr)
-			if lines := teardown.lines(); len(lines) != 0 {
-				t.Fatalf("attach failure reached the teardown logger: %q", lines)
-			}
-			logged := status.joined()
+			// A skipped sched probe is a degradation the user must see in
+			// every mode, so it goes to the replayed warn sink - not to
+			// status, which TUI mode silences.
+			rec.requireOnlySink(t, &rec.warn)
+			logged := rec.warn.joined()
 
 			if release == nil {
 				t.Fatal("expected a non-nil release closure even on failure")
@@ -159,10 +173,10 @@ func TestAttachProcessExecProbeFailuresAreNonFatal(t *testing.T) {
 			release()
 
 			if !strings.Contains(logged, "skipping sched_process_exec probe") {
-				t.Fatalf("status log = %q, want it to report the skipped probe", logged)
+				t.Fatalf("warn log = %q, want it to report the skipped probe", logged)
 			}
 			if !strings.Contains(logged, tc.wantLog) {
-				t.Fatalf("status log = %q, want it to contain %q", logged, tc.wantLog)
+				t.Fatalf("warn log = %q, want it to contain %q", logged, tc.wantLog)
 			}
 		})
 	}
@@ -174,8 +188,8 @@ func TestAttachProcessExecProbeReportsDetachErrors(t *testing.T) {
 	link := &fakeProbeLink{err: errors.New("detach boom")}
 	attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: link}}
 
-	log, status, teardown := recordingSetupLog()
-	release := attachProcessExecProbe(attacher, log)
+	var rec setupLogRecorders
+	release := attachProcessExecProbe(attacher, rec.log())
 	stdout, stderr := captureConsole(t, func() {
 		release()
 		release()
@@ -187,10 +201,8 @@ func TestAttachProcessExecProbeReportsDetachErrors(t *testing.T) {
 	}
 	// Teardown errors stay visible in every mode, so they must use the
 	// always-on teardown sink, never the status sink that TUI mode silences.
-	if lines := status.lines(); len(lines) != 0 {
-		t.Fatalf("detach error reached the status logger: %q", lines)
-	}
-	if logged := teardown.joined(); !strings.Contains(logged, "detach boom") {
+	rec.requireOnlySink(t, &rec.teardown)
+	if logged := rec.teardown.joined(); !strings.Contains(logged, "detach boom") {
 		t.Fatalf("teardown log = %q, want it to report the detach error", logged)
 	}
 }
@@ -198,7 +210,7 @@ func TestAttachProcessExecProbeReportsDetachErrors(t *testing.T) {
 // TestAttachProcessExecProbeWithoutAttacher guards the nil guard: setup code
 // must never panic on a missing module.
 func TestAttachProcessExecProbeWithoutAttacher(t *testing.T) {
-	release := attachProcessExecProbe(nil, bpfSetupLog{status: failOnLog(t), teardown: failOnLog(t)})
+	release := attachProcessExecProbe(nil, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
 	if release == nil {
 		t.Fatal("expected a non-nil release closure")
 	}
@@ -214,7 +226,7 @@ func TestAttachProcessExitProbeAttachesTheSchedTracepoint(t *testing.T) {
 	prog := &fakeProbeProgram{link: link}
 	attacher := &fakeProbeAttacher{prog: prog}
 
-	release := attachProcessExitProbe(attacher, bpfSetupLog{status: failOnLog(t), teardown: failOnLog(t)})
+	release := attachProcessExitProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
 
 	if attacher.requested != processExitProgName {
 		t.Fatalf("requested program %q, want %q", attacher.requested, processExitProgName)
@@ -253,16 +265,17 @@ func TestAttachProcessExitProbeFailuresAreNonFatal(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			log, status, teardown := recordingSetupLog()
+			var rec setupLogRecorders
 			var release func()
 			stdout, stderr := captureConsole(t, func() {
-				release = attachProcessExitProbe(tc.attacher, log)
+				release = attachProcessExitProbe(tc.attacher, rec.log())
 			})
 			requireNoConsoleOutput(t, stdout, stderr)
-			if lines := teardown.lines(); len(lines) != 0 {
-				t.Fatalf("attach failure reached the teardown logger: %q", lines)
-			}
-			logged := status.joined()
+			// A skipped sched probe is a degradation the user must see in
+			// every mode, so it goes to the replayed warn sink - not to
+			// status, which TUI mode silences.
+			rec.requireOnlySink(t, &rec.warn)
+			logged := rec.warn.joined()
 
 			if release == nil {
 				t.Fatal("expected a non-nil release closure even on failure")
@@ -271,10 +284,10 @@ func TestAttachProcessExitProbeFailuresAreNonFatal(t *testing.T) {
 			release()
 
 			if !strings.Contains(logged, "skipping sched_process_exit probe") {
-				t.Fatalf("status log = %q, want it to report the skipped probe", logged)
+				t.Fatalf("warn log = %q, want it to report the skipped probe", logged)
 			}
 			if !strings.Contains(logged, tc.wantLog) {
-				t.Fatalf("status log = %q, want it to contain %q", logged, tc.wantLog)
+				t.Fatalf("warn log = %q, want it to contain %q", logged, tc.wantLog)
 			}
 		})
 	}
