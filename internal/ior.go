@@ -30,7 +30,7 @@ import (
 type TUIRunFunc func(flags.Config, runtime.TraceStarter) error
 
 // TUIRunners bundles the TUI launchers the cmd layer injects into Run. Every
-// field must be set; the matching mode calls it without a nil check.
+// field must be set; Run rejects a value with any nil field.
 type TUIRunners struct {
 	// Trace launches the interactive TUI backed by a live BPF trace.
 	Trace TUIRunFunc
@@ -51,8 +51,12 @@ var errRootPrivilegesRequired = errors.New("tracing requires root privileges (ru
 // singleton here. The mode registry is built per call from the injected TUI
 // runners, so no package-level state is mutated.
 func Run(cfg flags.Config, tui TUIRunners) error {
+	deps, err := productionRunnerDeps(tui)
+	if err != nil {
+		return err
+	}
 	printStartupBanner(cfg)
-	return newModeRegistry(productionRunnerDeps(tui)).dispatch(cfg)
+	return newModeRegistry(deps).dispatch(cfg)
 }
 
 // printStartupBanner prints the ASCII startup banner. In -plain mode stdout

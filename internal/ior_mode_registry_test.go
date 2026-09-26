@@ -20,11 +20,87 @@ type modeFlag struct {
 // order a conflict error names them in.
 func allModeFlags() []modeFlag {
 	return []modeFlag{
-		{"--testflames", func(c *flags.Config) { c.TestFlames = true }},
-		{"--testliveflames", func(c *flags.Config) { c.TestLiveFlames = true }},
+		{"-testflames", func(c *flags.Config) { c.TestFlames = true }},
+		{"-testliveflames", func(c *flags.Config) { c.TestLiveFlames = true }},
 		{"-parquet", func(c *flags.Config) { c.ParquetPath = "trace.parquet" }},
 		{"-plain", func(c *flags.Config) { c.PlainMode = true }},
 		{"-flamegraph", func(c *flags.Config) { c.FlamegraphOutput = true }},
+	}
+}
+
+// registrySelectorFlags returns every selector flag of reg in registry order.
+func registrySelectorFlags(reg modeRegistry) []string {
+	var names []string
+	for _, h := range reg.handlers {
+		for _, s := range h.selectors() {
+			names = append(names, s.flag)
+		}
+	}
+	return names
+}
+
+// TestAllModeFlagsMatchesRegistry keeps the test table in sync with the
+// registry: a selector added to a handler without a matching allModeFlags
+// entry (or a setter that selects the wrong flag) fails here, so the
+// pairwise conflict test can never silently miss a mode.
+func TestAllModeFlagsMatchesRegistry(t *testing.T) {
+	reg := newModeRegistry(stubDeps())
+	var tableNames []string
+	for _, f := range allModeFlags() {
+		tableNames = append(tableNames, f.name)
+	}
+	if got, want := strings.Join(tableNames, ","), strings.Join(registrySelectorFlags(reg), ","); got != want {
+		t.Fatalf("allModeFlags = %s, registry selectors = %s", got, want)
+	}
+
+	for _, f := range allModeFlags() {
+		var cfg flags.Config
+		f.set(&cfg)
+		var set []string
+		for _, h := range reg.handlers {
+			for _, s := range h.selectors() {
+				if s.isSet(cfg) {
+					set = append(set, s.flag)
+				}
+			}
+		}
+		if len(set) != 1 || set[0] != f.name {
+			t.Errorf("setter for %s selects %v, want exactly [%s]", f.name, set, f.name)
+		}
+	}
+}
+
+// TestRunRejectsIncompleteTUIRunners checks that a TUIRunners literal that
+// omits a launcher is reported by name before any mode runs, rather than
+// panicking on a nil func once that mode is selected.
+func TestRunRejectsIncompleteTUIRunners(t *testing.T) {
+	stub := func(flags.Config, runtime.TraceStarter) error {
+		t.Error("no TUI runner may be called for an incomplete TUIRunners")
+		return nil
+	}
+	cases := []struct {
+		name    string
+		runners TUIRunners
+		want    string
+	}{
+		{"empty", TUIRunners{}, "internal: TUIRunners missing Trace, TestFlames, TestLiveFlames — this is a bug"},
+		{"missing TestLiveFlames", TUIRunners{Trace: stub, TestFlames: stub}, "internal: TUIRunners missing TestLiveFlames — this is a bug"},
+		{"missing Trace", TUIRunners{TestFlames: stub, TestLiveFlames: stub}, "internal: TUIRunners missing Trace — this is a bug"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// -testflames needs no root and no BPF, so a missing check would
+			// reach the runner instead of returning an error.
+			err := Run(flags.Config{TestFlames: true}, tc.runners)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("Run error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	full := TUIRunners{Trace: stub, TestFlames: stub, TestLiveFlames: stub}
+	if _, err := productionRunnerDeps(full); err != nil {
+		t.Fatalf("complete TUIRunners rejected: %v", err)
 	}
 }
 
@@ -91,7 +167,7 @@ func TestModeRegistryConflictNamesEveryFlag(t *testing.T) {
 		names = append(names, f.name)
 	}
 	err := dispatchRunWithDeps(cfg, failingDeps(t))
-	want := "--testflames, --testliveflames, -parquet, -plain and -flamegraph are mutually exclusive"
+	want := "-testflames, -testliveflames, -parquet, -plain and -flamegraph are mutually exclusive"
 	if err == nil || err.Error() != want {
 		t.Fatalf("error = %v, want %q", err, want)
 	}
@@ -111,8 +187,8 @@ func TestModeRegistryAcceptsEachSingleMode(t *testing.T) {
 		runner string
 	}{
 		{"default TUI", func(*flags.Config) {}, "runTUI"},
-		{"--testflames", func(c *flags.Config) { c.TestFlames = true }, "runTUITestFlames"},
-		{"--testliveflames", func(c *flags.Config) { c.TestLiveFlames = true }, "runTUITestLiveFlames"},
+		{"-testflames", func(c *flags.Config) { c.TestFlames = true }, "runTUITestFlames"},
+		{"-testliveflames", func(c *flags.Config) { c.TestLiveFlames = true }, "runTUITestLiveFlames"},
 		{"-parquet", func(c *flags.Config) { c.ParquetPath = "trace.parquet" }, "runParquet"},
 		{"-parquet with -pid", func(c *flags.Config) { c.ParquetPath = "trace.parquet"; c.PidFilter = 42 }, "runParquet"},
 		{"-plain", func(c *flags.Config) { c.PlainMode = true }, "runTrace"},
