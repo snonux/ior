@@ -1468,15 +1468,17 @@ func TestRefreshKeyResetWithoutSourceEmitsNilSnapshot(t *testing.T) {
 }
 
 // TestRefreshKeyResetDiscardsFailedSnapshot checks that a Snapshot error after
-// the reset is not published as data: the source is still reset, but the
-// emitted snapshot is nil so the dashboard keeps its last good one.
+// the reset is not published as data: the source is still reset, the tick
+// carries the error instead of a snapshot, and feeding that tick back keeps
+// the dashboard's last good snapshot rather than blanking the view.
 func TestRefreshKeyResetDiscardsFailedSnapshot(t *testing.T) {
-	engine := &fakeSnapshotSource{
-		snap: &statsengine.Snapshot{TotalSyscalls: 5},
-		err:  errors.New("snapshot build failed"),
-	}
+	good := &statsengine.Snapshot{TotalSyscalls: 7}
+	buildErr := errors.New("snapshot build failed")
+	engine := &fakeSnapshotSource{snap: good, err: buildErr}
 	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
 	m.activeTab = TabOverview
+	next, _ := m.Update(messages.StatsTickMsg{Snap: good})
+	m = next.(*Model)
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	if cmd == nil {
@@ -1491,6 +1493,54 @@ func TestRefreshKeyResetDiscardsFailedSnapshot(t *testing.T) {
 	}
 	if stats.Snap != nil {
 		t.Fatalf("expected failed snapshot to be discarded, got %+v", stats.Snap)
+	}
+	if !errors.Is(stats.Err, buildErr) {
+		t.Fatalf("expected tick to carry the snapshot error, got %v", stats.Err)
+	}
+
+	next, _ = m.Update(stats)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got != good {
+		t.Fatalf("expected last good snapshot to survive a failed tick, got %+v", got)
+	}
+}
+
+// TestRefreshTickFailureKeepsLastGoodSnapshot covers the periodic refresh
+// path: a failing source must not blank a dashboard that already has data.
+func TestRefreshTickFailureKeepsLastGoodSnapshot(t *testing.T) {
+	good := &statsengine.Snapshot{TotalSyscalls: 3}
+	engine := &fakeSnapshotSource{err: errors.New("snapshot build failed")}
+	m := NewModelWithConfig(engine, nil, 100, 200, common.DefaultKeyMap())
+	next, _ := m.Update(messages.StatsTickMsg{Snap: good})
+	m = next.(*Model)
+
+	tick := m.statsTick()
+	if tick.Err == nil || tick.Snap != nil {
+		t.Fatalf("expected an error-only tick from a failing source, got %+v", tick)
+	}
+	next, _ = m.Update(tick)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got != good {
+		t.Fatalf("expected last good snapshot to survive a failed refresh, got %+v", got)
+	}
+}
+
+// TestStatsTickWithoutSourceClearsSnapshot pins the other half of the
+// StatsTickMsg contract: a nil snapshot without an error means "no source
+// wired" and does clear the view, unlike a failed snapshot build.
+func TestStatsTickWithoutSourceClearsSnapshot(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 100, 200, common.DefaultKeyMap())
+	next, _ := m.Update(messages.StatsTickMsg{Snap: &statsengine.Snapshot{TotalSyscalls: 3}})
+	m = next.(*Model)
+
+	tick := m.statsTick()
+	if tick.Err != nil || tick.Snap != nil {
+		t.Fatalf("expected an empty tick without a source, got %+v", tick)
+	}
+	next, _ = m.Update(tick)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got != nil {
+		t.Fatalf("expected no-source tick to clear the snapshot, got %+v", got)
 	}
 }
 

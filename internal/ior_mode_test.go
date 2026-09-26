@@ -1246,7 +1246,7 @@ func TestTuiTraceStarterSurfacesAggregateOnlySyscallInSnapshot(t *testing.T) {
 type traceRuntimeBindingsStub struct {
 	streamBuffer   *streamrow.RingBuffer
 	streamSource   runtime.StreamSource
-	snapshotSource runtime.SnapshotSource
+	snapshotSource runtime.ResettableSnapshotSource
 	streamSeq      *streamrow.Sequencer
 	recorder       *parquet.Recorder
 	filterEpoch    uint64

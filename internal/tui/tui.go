@@ -53,10 +53,6 @@ const (
 // Long-lived tracing work should continue in background goroutines.
 type TraceStarter = runtime.TraceStarter
 
-// SnapshotSource provides dashboard snapshots for TUI rendering.
-// It is a type alias for runtime.SnapshotSource.
-type SnapshotSource = runtime.SnapshotSource
-
 // ProbeManager exposes runtime probe controls to TUI layers.
 // It is a type alias for runtime.ProbeManager.
 type ProbeManager = runtime.ProbeManager
@@ -272,17 +268,22 @@ func (r *runtimeBindings) advanceFilterEpoch() uint64 {
 }
 
 // resetDashboardSnapshotSource resets the wired dashboard snapshot source and
-// returns a fresh snapshot, or nil when no source is wired. Reset is part of
-// runtime.ResettableSnapshotSource, so every wired source honours it. Errors
-// from Snapshot are silently dropped since callers handle a nil snapshot.
-func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
+// returns the post-reset snapshot as a stats tick. ok is false when no source
+// is wired, so there is nothing to refresh. Reset is part of
+// runtime.ResettableSnapshotSource, so every wired source honours it. A
+// Snapshot failure is carried in the tick's Err, which the dashboard treats
+// as "keep the last good snapshot".
+func (r *runtimeBindings) resetDashboardSnapshotSource() (tick messages.StatsTickMsg, ok bool) {
 	src := r.dashboardSnapshotSource()
 	if src == nil {
-		return nil
+		return messages.StatsTickMsg{}, false
 	}
 	src.Reset()
-	snap, _ := src.Snapshot()
-	return snap
+	snap, err := src.Snapshot()
+	if err != nil {
+		return messages.StatsTickMsg{Err: err}, true
+	}
+	return messages.StatsTickMsg{Snap: snap}, true
 }
 
 // RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the
@@ -833,12 +834,14 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 }
 
 // handleProbeToggledMsg resets the dashboard aggregates after a probe toggle
-// so the new probe set is reflected immediately.
+// so the new probe set is reflected immediately. The post-reset tick goes
+// through the dashboard's normal stats handling, so a failed snapshot keeps
+// the last good one exactly as a failed refresh or baseline reset does.
 func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
-	if snap := m.runtime.resetDashboardSnapshotSource(); snap != nil {
-		next, dashboardCmd := m.dashboard.Update(messages.StatsTickMsg{Snap: snap})
+	if tick, ok := m.runtime.resetDashboardSnapshotSource(); ok {
+		next, dashboardCmd := m.dashboard.Update(tick)
 		m.dashboard = next.(*dashboardui.Model)
 		return m, tea.Batch(dashboardCmd, cmd)
 	}
