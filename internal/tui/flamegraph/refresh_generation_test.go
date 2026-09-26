@@ -87,8 +87,8 @@ func TestStateChangeDropsInFlightRefreshResult(t *testing.T) {
 			if m.HasSnapshot() {
 				t.Fatal("stale refresh result was applied after the state change")
 			}
-			if len(m.frames) != 0 {
-				t.Fatalf("stale refresh result laid out %d frames", len(m.frames))
+			if len(m.anim.frames) != 0 {
+				t.Fatalf("stale refresh result laid out %d frames", len(m.anim.frames))
 			}
 			if got := m.LastVersion(); got != 0 {
 				t.Fatalf("stale refresh result applied version %d", got)

@@ -488,7 +488,7 @@ func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
 	if changed := model.RefreshFromLiveTrie(); !changed {
 		t.Fatal("expected the first refresh to apply a snapshot")
 	}
-	if len(model.frames) == 0 {
+	if len(model.anim.frames) == 0 {
 		t.Fatal("refresh produced no frames")
 	}
 	if trie.treeCalls == 0 {
@@ -541,7 +541,7 @@ func TestStressRapidResize(t *testing.T) {
 	model.height = 40
 	model.snapshot = generateTestSnapshot(fixtureMediumDepth, fixtureMediumBreadth)
 	model.rebuildFrames(false)
-	if len(model.frames) == 0 {
+	if len(model.anim.frames) == 0 {
 		t.Fatal("expected initial medium fixture frames")
 	}
 
@@ -554,16 +554,16 @@ func TestStressRapidResize(t *testing.T) {
 		model = next.(*Model)
 		model = settleStressAnimation(model, 180)
 
-		assertFramesWithinBounds(t, model.frames, lastWidth, lastHeight)
-		if len(model.frames) > 0 && (model.selectedIdx < 0 || model.selectedIdx >= len(model.frames)) {
-			t.Fatalf("invalid selectedIdx after resize %d: idx=%d frames=%d", i, model.selectedIdx, len(model.frames))
+		assertFramesWithinBounds(t, model.anim.frames, lastWidth, lastHeight)
+		if len(model.anim.frames) > 0 && (model.sel.selectedIdx < 0 || model.sel.selectedIdx >= len(model.anim.frames)) {
+			t.Fatalf("invalid selectedIdx after resize %d: idx=%d frames=%d", i, model.sel.selectedIdx, len(model.anim.frames))
 		}
 	}
 
 	if model.width != lastWidth || model.height != lastHeight {
 		t.Fatalf("final viewport mismatch: got %dx%d want %dx%d", model.width, model.height, lastWidth, lastHeight)
 	}
-	assertFramesWithinBounds(t, model.frames, lastWidth, lastHeight)
+	assertFramesWithinBounds(t, model.anim.frames, lastWidth, lastHeight)
 }
 
 func TestStressZoomDuringRefresh(t *testing.T) {
@@ -577,7 +577,7 @@ func TestStressZoomDuringRefresh(t *testing.T) {
 	if changed := model.RefreshFromLiveTrie(); !changed {
 		t.Fatal("expected initial live trie refresh")
 	}
-	if len(model.frames) == 0 {
+	if len(model.anim.frames) == 0 {
 		t.Fatal("expected initial frames after refresh")
 	}
 
@@ -585,34 +585,34 @@ func TestStressZoomDuringRefresh(t *testing.T) {
 		ingestStressEvents(liveTrie, 20, 1000+i*20)
 		_ = model.RefreshFromLiveTrie()
 		model = settleStressAnimation(model, 180)
-		if len(model.frames) == 0 {
+		if len(model.anim.frames) == 0 {
 			t.Fatalf("expected frames after refresh tick %d", i)
 		}
 
-		prevDepth := len(model.zoomStack)
-		model.selectedIdx = midDepthFrameIndex(model.frames)
+		prevDepth := len(model.zoom.zoomStack)
+		model.sel.selectedIdx = midDepthFrameIndex(model.anim.frames)
 		model.zoomIn()
 		model = settleStressAnimation(model, 180)
-		if len(model.zoomStack) != prevDepth+1 {
-			t.Fatalf("zoom stack did not grow after zoom-in at iteration %d: got=%d want=%d", i, len(model.zoomStack), prevDepth+1)
+		if len(model.zoom.zoomStack) != prevDepth+1 {
+			t.Fatalf("zoom stack did not grow after zoom-in at iteration %d: got=%d want=%d", i, len(model.zoom.zoomStack), prevDepth+1)
 		}
 
 		model.zoomUndo()
 		model = settleStressAnimation(model, 180)
-		if len(model.zoomStack) != prevDepth {
-			t.Fatalf("zoom stack depth mismatch after undo at iteration %d: got=%d want=%d", i, len(model.zoomStack), prevDepth)
+		if len(model.zoom.zoomStack) != prevDepth {
+			t.Fatalf("zoom stack depth mismatch after undo at iteration %d: got=%d want=%d", i, len(model.zoom.zoomStack), prevDepth)
 		}
-		if model.zoomPath != "" {
-			if findNodeByPath(model.snapshot, model.zoomPath) == nil {
-				t.Fatalf("zoomPath became invalid after undo at iteration %d: %q", i, model.zoomPath)
+		if model.zoom.zoomPath != "" {
+			if findNodeByPath(model.snapshot, model.zoom.zoomPath) == nil {
+				t.Fatalf("zoomPath became invalid after undo at iteration %d: %q", i, model.zoom.zoomPath)
 			}
 		}
-		assertFramesWithinBounds(t, model.frames, model.width, model.height)
+		assertFramesWithinBounds(t, model.anim.frames, model.width, model.height)
 	}
 }
 
 func settleStressAnimation(model *Model, maxTicks int) *Model {
-	for i := 0; i < maxTicks && model.animating; i++ {
+	for i := 0; i < maxTicks && model.anim.animating; i++ {
 		next, _ := model.Update(animTickMsg{})
 		model = next.(*Model)
 	}

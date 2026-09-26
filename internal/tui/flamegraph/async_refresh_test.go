@@ -235,11 +235,11 @@ func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
 	m.lastKeyAt = time.Now()
 	next, _ := m.handleSnapshotReady(msg)
 	post := next.(*Model)
-	if post.animating {
+	if post.anim.animating {
 		t.Fatalf("expected snapshot ready to skip animation while user is driving")
 	}
-	if len(post.frames) != len(msg.targetFrames) {
-		t.Fatalf("expected frames to snap directly to target (len %d != %d)", len(post.frames), len(msg.targetFrames))
+	if len(post.anim.frames) != len(msg.targetFrames) {
+		t.Fatalf("expected frames to snap directly to target (len %d != %d)", len(post.anim.frames), len(msg.targetFrames))
 	}
 }
 
@@ -254,7 +254,7 @@ func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
 	}
 
 	// Drain any pending animation so the cache path is exercised.
-	for m.animating {
+	for m.anim.animating {
 		nextModel, _ := m.Update(animTickMsg{})
 		m = nextModel.(*Model)
 	}
@@ -290,14 +290,14 @@ func BenchmarkRecomputeFilterState(b *testing.B) {
 		decorateFramesForSearch(frames)
 		b.Run(tc.label, func(b *testing.B) {
 			model := NewModel(nil)
-			model.frames = frames
-			model.ancestry = buildFrameAncestry(frames)
-			model.selectedIdx = midDepthFrameIndex(frames)
+			model.anim.frames = frames
+			model.anim.ancestry = buildFrameAncestry(frames)
+			model.sel.selectedIdx = midDepthFrameIndex(frames)
 
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				model.applySearchQuery(queries[i%len(queries)])
-				benchIntSink = len(model.matchIndices)
+				benchIntSink = len(model.search.matchIndices)
 			}
 		})
 	}

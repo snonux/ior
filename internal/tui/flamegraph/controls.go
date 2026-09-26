@@ -37,22 +37,12 @@ func (m *Model) togglePause() {
 // the shared live trie never overlap.
 func (m *Model) clearSnapshotState(clearSearch bool) {
 	m.invalidateRefresh()
-	m.zoomRoot = nil
-	m.zoomPath = ""
-	m.zoomStack = nil
-	m.zoomLineWidth = 0
-	m.selectedIdx = 0
+	m.zoom.reset()
+	m.sel.reset()
 	m.snapshot = nil
 	m.globalTotal = 0
-	m.frames = nil
-	m.targetFrames = nil
-	m.matchIndices = resetBoolSet(m.matchIndices)
-	m.filterVisible = resetBoolSet(m.filterVisible)
-	m.subtreeSet = resetBoolSet(m.subtreeSet)
-	m.hasNavigableSnapshot = false
-	if clearSearch {
-		m.searchQuery = ""
-	}
+	m.anim.dropFrames()
+	m.search.discardResults(clearSearch)
 }
 
 func resetBoolSet(values map[int]bool) map[int]bool {
@@ -132,9 +122,9 @@ func (m *Model) toolbarLine() string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | v:height(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause",
 		state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel(), m.heightFieldLabel()))
-	if m.searchQuery != "" {
+	if query := m.search.query(); query != "" {
 		b.WriteString(" | filter:")
-		b.WriteString(m.searchQuery)
+		b.WriteString(query)
 	}
 	if m.statusMessage != "" {
 		b.WriteString(" | ")
@@ -173,20 +163,21 @@ func (m *Model) selectionStatusLine() string {
 	if m.heightMetricActive() {
 		heightLabel = " | height:" + m.heightFieldLabel()
 	}
-	if len(m.frames) == 0 {
+	frames := m.anim.currentFrames()
+	if len(frames) == 0 {
 		line := fmt.Sprintf("[%s] sel:none | arrows/hjkl navigate | enter zoom | / filter%s", mode, heightLabel)
 		return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(line, width))
 	}
-	selIdx := m.selectedIdx
-	if selIdx < 0 || selIdx >= len(m.frames) {
+	selIdx := m.sel.selected()
+	if selIdx < 0 || selIdx >= len(frames) {
 		selIdx = 0
 	}
-	frame := m.frames[selIdx]
+	frame := frames[selIdx]
 	if m.heightMetricActive() {
 		maxHeightTotal := uint64(0)
-		for i := range m.frames {
-			if m.frames[i].HeightTotal > maxHeightTotal {
-				maxHeightTotal = m.frames[i].HeightTotal
+		for i := range frames {
+			if frames[i].HeightTotal > maxHeightTotal {
+				maxHeightTotal = frames[i].HeightTotal
 			}
 		}
 		heightShare := percentOfTotal(frame.HeightTotal, maxHeightTotal)
@@ -198,10 +189,11 @@ func (m *Model) selectionStatusLine() string {
 	}
 	metric := m.countFieldLabel()
 	shareLabel := fmt.Sprintf("%.2f%% of total %s", systemShare, metric)
-	if strings.TrimSpace(m.searchQuery) != "" && len(m.matchIndices) > 0 {
-		filterTotal, _ := filterCoverageTotals(m.frames, m.matchIndices, m.globalTotal)
+	query, matches := m.search.query(), m.search.matches()
+	if strings.TrimSpace(query) != "" && len(matches) > 0 {
+		filterTotal, _ := filterCoverageTotals(frames, matches, m.globalTotal)
 		if filterTotal > 0 {
-			selectedFilterTotal := filterCoverageTotalForPath(m.frames, m.matchIndices, frame.Path)
+			selectedFilterTotal := filterCoverageTotalForPath(frames, matches, frame.Path)
 			filterShare := percentOfTotal(selectedFilterTotal, filterTotal)
 			shareLabel = fmt.Sprintf("%.2f%% of filtered %s", filterShare, metric)
 		}
@@ -209,10 +201,10 @@ func (m *Model) selectionStatusLine() string {
 	// Use a Builder to avoid a separate allocation for the optional filter suffix.
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s%s",
-		mode, selIdx+1, len(m.frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel, heightLabel))
-	if m.searchQuery != "" {
+		mode, selIdx+1, len(frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel, heightLabel))
+	if query != "" {
 		b.WriteString(" | filter:")
-		b.WriteString(m.searchQuery)
+		b.WriteString(query)
 	}
 	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
 }
