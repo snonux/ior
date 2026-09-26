@@ -1327,7 +1327,10 @@ func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 }
 
 // beginTraceCmd creates a tea.Cmd that starts the trace with the current
-// runtime bindings and active filter. It cancels any previously running trace.
+// runtime bindings and active filter. It cancels any previously running trace
+// (traceLifecycle.beginCmd stops the old session first). It must be called on
+// the Model Bubble Tea holds - the *Model receiver of Init and Update - so the
+// stored cancel func survives to the next restart or quit.
 func (m *Model) beginTraceCmd() tea.Cmd {
 	return m.tracer.beginCmd(m.runtime, m.filters.current())
 }
