@@ -1,0 +1,59 @@
+name: Set up ior build toolchain
+description: Install Go, the BPF/C toolchain, bpftool, mage, and a static libbpfgo build.
+
+inputs:
+  go-cache:
+    description: Whether actions/setup-go should cache Go modules and build outputs.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: ${{ inputs.go-cache }}
+
+    - name: Install system packages
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          clang llvm libelf-dev zlib1g-dev libzstd-dev pkg-config make
+
+    # Ubuntu 24.04 has no standalone bpftool package; the upstream static
+    # release is only needed to dump vmlinux.h from the runner's kernel BTF.
+    - name: Install bpftool
+      shell: bash
+      run: |
+        curl -fsSL -o /tmp/bpftool.tgz \
+          https://github.com/libbpf/bpftool/releases/download/v7.5.0/bpftool-v7.5.0-amd64.tar.gz
+        sudo tar -C /usr/local/bin -xzf /tmp/bpftool.tgz
+        sudo chmod +x /usr/local/bin/bpftool
+        bpftool version
+
+    - name: Install mage
+      shell: bash
+      run: go install github.com/magefile/mage@v1.15.0
+
+    # Mage runs some steps as `sudo env ... go`, and sudo's secure_path does
+    # not include the setup-go toolcache.
+    - name: Expose Go to sudo
+      shell: bash
+      run: sudo ln -sf "$(go env GOROOT)/bin/go" /usr/local/bin/go
+
+    - name: Cache libbpfgo
+      id: libbpfgo-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/../libbpfgo
+        key: libbpfgo-v0.9.2-libbpf-1.5.1-${{ runner.os }}-${{ runner.arch }}-v1
+
+    - name: Build libbpfgo (static)
+      if: steps.libbpfgo-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        git clone https://github.com/aquasecurity/libbpfgo ../libbpfgo
+        git -C ../libbpfgo checkout v0.9.2-libbpf-1.5.1
+        git -C ../libbpfgo submodule update --init --recursive
+        make -C ../libbpfgo libbpfgo-static
