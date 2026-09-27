@@ -255,7 +255,7 @@ func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
 
 	// Drain any pending animation so the cache path is exercised.
 	for m.anim.animating {
-		nextModel, _ := m.Update(animTickMsg{})
+		nextModel, _ := m.Update(currentAnimTick(m))
 		m = nextModel.(*Model)
 	}
 

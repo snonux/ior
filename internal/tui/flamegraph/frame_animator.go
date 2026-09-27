@@ -13,6 +13,14 @@ type FrameAnimator struct {
 	frames       []tuiFrame
 	targetFrames []tuiFrame
 	ancestry     frameAncestry
+	// generation identifies the animation state a scheduled tick belongs to.
+	// Every tick command captures it and the Model drops a tick whose
+	// generation no longer matches. reset advances it, so a tick scheduled
+	// before a reset can neither restore the discarded frames nor run as a
+	// second tick chain beside an animation started after the reset. Unlike
+	// the other fields it survives reset, which is what makes it an
+	// invalidation token.
+	generation uint64
 }
 
 // newFrameAnimator constructs a FrameAnimator with spring parameters suitable
@@ -76,16 +84,26 @@ func (fa *FrameAnimator) tickAnimation() bool {
 	return fa.animating
 }
 
-// dropFrames discards the current and target layouts while leaving the spring
-// state and ancestry index untouched, as done when the snapshot state is
-// cleared. Use reset to discard the animation as well.
-func (fa *FrameAnimator) dropFrames() {
-	fa.frames = nil
-	fa.targetFrames = nil
+// tickGeneration returns the generation a tick scheduled now must carry to be
+// accepted by acceptsTick.
+func (fa *FrameAnimator) tickGeneration() uint64 {
+	return fa.generation
 }
 
-// reset clears all frame/animation state, preserving the configured spring parameters.
+// acceptsTick reports whether a tick scheduled for generation may advance the
+// animation: it must belong to the current animation state, and a transition
+// must still be in progress.
+func (fa *FrameAnimator) acceptsTick(generation uint64) bool {
+	return fa.animating && generation == fa.generation
+}
+
+// reset clears all frame/animation state, preserving the configured spring
+// parameters, and advances the generation so every tick already scheduled is
+// dropped on arrival. The spring state goes too: kept, a later animated
+// layout would spring from the discarded positions instead of the frames on
+// screen.
 func (fa *FrameAnimator) reset() {
+	fa.generation++
 	fa.animation = NewAnimationState(30, 6.0, 1.0)
 	fa.animating = false
 	fa.frames = nil
