@@ -571,7 +571,10 @@ func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
 			if !handled || cmd == nil {
 				t.Fatalf("expected enter to emit a request")
 			}
-			req := cmd().(messages.GlobalFilterRequestedMsg)
+			req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+			if !ok {
+				t.Fatalf("expected GlobalFilterRequestedMsg")
+			}
 			if req.Action != tt.want {
 				t.Fatalf("expected action %q, got %q", tt.want, req.Action)
 			}

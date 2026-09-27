@@ -1,6 +1,7 @@
 package presenter_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -154,5 +155,56 @@ func TestDimensionSummaryEmptyAndSpecialValues(t *testing.T) {
 	}
 	if got := unknown.Name(); got != "?" {
 		t.Fatalf("unknown dimension name = %q, want ?", got)
+	}
+}
+
+// TestDimensionsCoverEveryFilterField guards against a new globalfilter.Filter
+// predicate field silently missing from summaries and action labels: setting
+// any *StringFilter/*NumericFilter field alone must produce a token on exactly
+// one dimension, every dimension must be reached by some field, and any other
+// field kind (besides the ErrorsOnly switch) fails the test until handled.
+func TestDimensionsCoverEveryFilterField(t *testing.T) {
+	stringType := reflect.TypeOf((*globalfilter.StringFilter)(nil))
+	numericType := reflect.TypeOf((*globalfilter.NumericFilter)(nil))
+	filterType := reflect.TypeOf(globalfilter.Filter{})
+	covered := make(map[presenter.Dimension]string)
+
+	for i := 0; i < filterType.NumField(); i++ {
+		field := filterType.Field(i)
+		var f globalfilter.Filter
+		value := reflect.ValueOf(&f).Elem().Field(i)
+		switch field.Type {
+		case stringType:
+			value.Set(reflect.ValueOf(&globalfilter.StringFilter{Pattern: "x"}))
+		case numericType:
+			value.Set(reflect.ValueOf(&globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 1}))
+		default:
+			if field.Name == "ErrorsOnly" && field.Type.Kind() == reflect.Bool {
+				continue
+			}
+			t.Fatalf("Filter.%s has unhandled type %s; teach the presenter about it", field.Name, field.Type)
+		}
+
+		var hits []presenter.Dimension
+		for _, d := range presenter.Dimensions() {
+			if presenter.DimensionSummary(f, d) != "" {
+				hits = append(hits, d)
+			}
+		}
+		if len(hits) != 1 {
+			t.Fatalf("Filter.%s yields tokens on %d dimensions %v, want exactly 1", field.Name, len(hits), hits)
+		}
+		if prev, dup := covered[hits[0]]; dup {
+			t.Fatalf("Filter.%s and Filter.%s both map to dimension %s", prev, field.Name, hits[0].Name())
+		}
+		covered[hits[0]] = field.Name
+		if summary := presenter.FilterSummary(f); summary == "all" {
+			t.Fatalf("Filter.%s missing from FilterSummary", field.Name)
+		}
+	}
+	for _, d := range presenter.Dimensions() {
+		if _, ok := covered[d]; !ok {
+			t.Fatalf("dimension %s is not backed by any Filter field", d.Name())
+		}
 	}
 }
