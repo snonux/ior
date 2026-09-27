@@ -21,7 +21,7 @@ import (
 func newErrorScreenModel(t *testing.T, err error) *Model {
 	t.Helper()
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 40
@@ -37,7 +37,7 @@ func newErrorScreenModel(t *testing.T, err error) *Model {
 func newRecorderStopErrorScreen(t *testing.T) *Model {
 	t.Helper()
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 40
@@ -291,8 +291,8 @@ func TestRecorderStopErrorEscReturnsToDashboard(t *testing.T) {
 	if updated.errorKind != errorScreenFatal {
 		t.Fatalf("dismissed error kind = %v, want reset fatal default", updated.errorKind)
 	}
-	if updated.screen != ScreenDashboard {
-		t.Fatalf("screen after dismiss = %v, want dashboard", updated.screen)
+	if updated.router.current() != ScreenDashboard {
+		t.Fatalf("screen after dismiss = %v, want dashboard", updated.router.current())
 	}
 	if updated.quitting {
 		t.Fatal("Esc put the model into quitting state")
@@ -340,7 +340,7 @@ func TestOverLongCLICommFilterStaysQuittable(t *testing.T) {
 	}
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = true
 	m.width = 120
 	m.height = 40
@@ -377,7 +377,7 @@ func TestErrorScreenQuitReportsTheFailureToTheCaller(t *testing.T) {
 // model that quits with no error must keep cmd/ior's exit status at zero.
 func TestCleanExitReportsNoError(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
@@ -424,7 +424,7 @@ func TestRecoverableErrorScreenAdvertisesBackAndQuit(t *testing.T) {
 // answer the key.
 func TestErrorScreenQuitOutranksAnOpenModal(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.filterModal = m.filterModal.Open(globalfilter.Filter{})
 	m.setError(errors.New("create event filter: comm filter max size is 15 (got 20)"), errorScreenFatal)
@@ -488,11 +488,10 @@ func TestRunProgramReportsTheFinalModelError(t *testing.T) {
 // route rather than letting an invisible picker consume the key.
 func TestRecoverableErrorScreenEscOutranksAndResumesPickerCancel(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenPIDPicker
-	m.attaching = false
 	// The pending return is what made esc recover here before task z3, so
 	// without it this test would exercise a different branch entirely.
-	m.router.savePendingReturn(-1, -1)
+	m.router.showPickerWithReturn(-1, -1)
+	m.attaching = false
 	m.setError(errors.New("stop recording: rename ior.parquet: no such file or directory"), errorScreenRecoverable)
 	if !m.shouldCancelPickerToDashboard(tea.KeyPressMsg{Code: tea.KeyEsc}) {
 		t.Fatal("the picker-cancel branch would not fire; this test would prove nothing")
@@ -510,8 +509,8 @@ func TestRecoverableErrorScreenEscOutranksAndResumesPickerCancel(t *testing.T) {
 		t.Fatal("Esc quit from the recoverable error view on the PID picker")
 	}
 	updated := next.(*Model)
-	if updated.screen != ScreenDashboard || !updated.attaching {
-		t.Fatalf("state after Esc = screen %v, attaching %t; want dashboard attaching", updated.screen, updated.attaching)
+	if updated.router.current() != ScreenDashboard || !updated.attaching {
+		t.Fatalf("state after Esc = screen %v, attaching %t; want dashboard attaching", updated.router.current(), updated.attaching)
 	}
 	if updated.lastErr != nil {
 		t.Fatalf("Esc left the recoverable error on screen: %v", updated.lastErr)
@@ -531,9 +530,8 @@ func TestRecoverableErrorScreenQuitOutranksPickerCancel(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-			m.screen = ScreenPIDPicker
+			m.router.showPickerWithReturn(-1, -1)
 			m.attaching = false
-			m.router.savePendingReturn(-1, -1)
 			m.setError(errors.New("stop recording: rename failed"), errorScreenRecoverable)
 			if !m.shouldCancelPickerToDashboard(press) {
 				t.Fatal("the picker-cancel branch would not fire; this test would prove nothing")
@@ -553,7 +551,7 @@ func TestRecoverableErrorScreenQuitOutranksPickerCancel(t *testing.T) {
 // ahead of it, so the overlay is not what the user is looking at.
 func TestErrorScreenQuitOutranksTheHelpOverlay(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.helpOverlayVisible = true
 	m.setError(errors.New("setup BPF module: attach probes: no such file or directory"), errorScreenFatal)

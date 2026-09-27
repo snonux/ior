@@ -417,8 +417,9 @@ type keyboardState struct {
 	suppressUntil time.Time
 }
 
-// processState groups PID/TID filter values and the picker navigation
-// return bookmark used to restore the dashboard after re-selecting a process.
+// processState groups the active PID/TID filter values. The picker return
+// bookmark used to restore them after a cancelled re-selection lives in
+// screenRouter.
 type processState struct {
 	pid int
 	tid int
@@ -437,7 +438,6 @@ type processState struct {
 // its local copy, so any non-addressable or later-copied Model silently
 // lost those mutations.
 type Model struct {
-	screen      Screen
 	pidPicker   pidpicker.Model
 	dashboard   *dashboardui.Model
 	exporter    tuiexport.Model
@@ -464,7 +464,8 @@ type Model struct {
 	tracer traceLifecycle
 	// filters owns the filter chain, undo history, and label stack.
 	filters filterStack
-	// router owns screen-transition state (pending picker return).
+	// router owns the active screen and the pending picker return; Model
+	// reads it and changes it only through its transition methods.
 	router screenRouter
 
 	proc          processState
@@ -473,11 +474,6 @@ type Model struct {
 	focused       bool
 
 	kb keyboardState
-}
-
-type pickerReturnState struct {
-	pidFilter int
-	tidFilter int
 }
 
 // Quitting reports whether the model has begun shutting down (the user pressed
@@ -553,7 +549,6 @@ func newModelWithRuntimeConfig(startup modelStartup) *Model {
 	spin.Spinner = spinner.MiniDot
 
 	model := &Model{
-		screen:        ScreenPIDPicker,
 		pidPicker:     pidpicker.New().SetDarkMode(true),
 		dashboard:     dashboard,
 		exporter:      tuiexport.NewModel(),
@@ -565,19 +560,27 @@ func newModelWithRuntimeConfig(startup modelStartup) *Model {
 		spin:          spin,
 		tracer:        newTraceLifecycle(startup.startTrace),
 		filters:       newFilterStack(startup.filter),
-		router:        newScreenRouter(),
+		router:        newScreenRouter(initialScreen(startup)),
 		exportEnabled: startup.exportEnabled,
 		isDark:        true,
 		focused:       true,
 	}
 	model.setProcessFilters(pidFilter, tidFilter)
 
-	if startup.initialPID > 0 || startup.skipPicker {
-		model.screen = ScreenDashboard
-		model.attaching = true
-	}
+	// A startup that skips the picker begins tracing from Init, so it starts
+	// in the attaching state.
+	model.attaching = model.router.current() == ScreenDashboard
 
 	return model
+}
+
+// initialScreen picks the first screen: the dashboard when startup has an
+// attach target or explicitly skips the picker, otherwise the PID picker.
+func initialScreen(startup modelStartup) Screen {
+	if startup.initialPID > 0 || startup.skipPicker {
+		return ScreenDashboard
+	}
+	return ScreenPIDPicker
 }
 
 // resolveStartupPIDFilters computes the effective pid/tid filter values from
@@ -607,7 +610,7 @@ func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fa
 // Init initializes the active child model and optional tracing startup command.
 func (m *Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
-	if m.screen == ScreenDashboard && m.attaching {
+	if m.router.current() == ScreenDashboard && m.attaching {
 		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, m.beginTraceCmd())
 	}
 	return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.pidPicker.Init())
@@ -673,7 +676,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Hidden completions are still consumed by their persistent dashboard owner,
 // but are discarded after releasing the matching in-flight slot.
 func (m *Model) canApplyFlameRefresh() bool {
-	return m.screen == ScreenDashboard &&
+	return m.router.current() == ScreenDashboard &&
 		!m.quitting &&
 		!m.attaching &&
 		m.lastErr == nil &&
@@ -789,7 +792,7 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 	// bumps the dashboard's autoResetGen so any tick that was scheduled
 	// before the blur and is still in flight is dropped on arrival.
 	focusCmd := m.dashboard.SetFocused(true)
-	if m.screen == ScreenDashboard && !m.attaching {
+	if m.router.current() == ScreenDashboard && !m.attaching {
 		// Init() arms its own auto-reset tick at the post-bump
 		// generation, so discard focusCmd here to avoid two
 		// concurrently-live ticks racing the cadence.
@@ -827,7 +830,7 @@ func (m *Model) keyNormalizer(msg tea.Msg) (tea.Msg, bool) {
 }
 
 func (m *Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
-	return m.screen == ScreenDashboard &&
+	return m.router.current() == ScreenDashboard &&
 		!m.attaching &&
 		m.lastErr == nil &&
 		!m.filterModal.Visible() &&
@@ -838,7 +841,7 @@ func (m *Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 }
 
 func (m *Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
-	return m.screen == ScreenPIDPicker &&
+	return m.router.current() == ScreenPIDPicker &&
 		m.router.hasPendingReturn() &&
 		(isEscKey(msg) || key.Matches(msg, m.keys.Quit))
 }
@@ -847,7 +850,7 @@ func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 	if m.helpOverlayVisible {
 		return false
 	}
-	return m.screen == ScreenDashboard &&
+	return m.router.current() == ScreenDashboard &&
 		(m.filterModal.Visible() || m.exporter.Visible() || m.recordModal.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
 }
 
@@ -903,11 +906,11 @@ func (m *Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.C
 // when a modal is active the quit key is re-routed as Esc so modals close
 // before the user needs to press q again.
 func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
-	if m.screen == ScreenDashboard && m.attaching {
+	if m.router.current() == ScreenDashboard && m.attaching {
 		return m.quitWithBestEffortCleanup()
 	}
 	if m.canHandleDashboardShortcut(msg) {
-		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
+		if err := m.stopRecording(); err != nil {
 			m.setError(err, errorScreenRecoverable)
 			return m, nil, true
 		}
@@ -916,7 +919,7 @@ func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 	if m.shouldRouteQuitToEsc(msg) {
 		return m.routeQuitAsEsc()
 	}
-	if m.screen == ScreenPIDPicker && !m.router.hasPendingReturn() {
+	if m.router.current() == ScreenPIDPicker && !m.router.hasPendingReturn() {
 		return m.quitFromStartupPicker()
 	}
 	return m, nil, true
@@ -951,7 +954,7 @@ func (m *Model) handleErrorScreenKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.C
 // existing return route so its saved filters and trace restart are preserved.
 func (m *Model) dismissRecoverableError() (tea.Model, tea.Cmd, bool) {
 	m.clearError()
-	if m.screen == ScreenPIDPicker && m.router.hasPendingReturn() {
+	if m.router.current() == ScreenPIDPicker && m.router.hasPendingReturn() {
 		next, cmd := m.cancelPickerToDashboard()
 		return next, cmd, true
 	}
@@ -970,7 +973,7 @@ func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
 }
 
 func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
-	_ = recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
+	_ = m.stopRecording()
 	return m.beginShutdown()
 }
 
@@ -1066,7 +1069,7 @@ func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea
 // to start a new one.
 func (m *Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 	if recorderActive(m.runtime.Recorder()) {
-		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
+		if err := m.stopRecording(); err != nil {
 			m.setError(err, errorScreenRecoverable)
 		}
 		return m, nil, true
@@ -1086,7 +1089,7 @@ func (m *Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateDashboardForModal(msg tea.Msg) (*Model, tea.Cmd) {
-	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.screen != ScreenDashboard {
+	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.router.current() != ScreenDashboard {
 		return m, nil
 	}
 	next, cmd := m.dashboard.Update(msg)
@@ -1168,7 +1171,7 @@ func (m *Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 }
 
 func (m *Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch m.screen {
+	switch m.router.current() {
 	case ScreenPIDPicker:
 		next, cmd := m.pidPicker.Update(msg)
 		m.pidPicker = next.(pidpicker.Model)
@@ -1182,88 +1185,74 @@ func (m *Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handlePidSelected stops any running trace, resets buffers, and starts a new
-// trace for the newly selected PID.
+// handlePidSelected starts tracing the PID chosen in the picker, with no TID
+// filter.
 func (m *Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
-	pid := selectedPIDFilter(msg.Pid)
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.setError(err, errorScreenRecoverable)
-		return m, nil
-	}
-	m.tracer.stop()
-	m.runtime.resetStreamBuffer()
-	m.setProcessFilters(pid, -1)
-	m.router.pickerReturn = nil
-	m.screen = ScreenDashboard
-	m.attaching = true
-	m.clearError()
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	return m.selectProcess(selectedPIDFilter(msg.Pid), -1)
 }
 
-// handleTidSelected stops any running trace, resets buffers, and starts a new
-// trace filtered to the selected TID within the current (or provided) PID.
+// handleTidSelected starts tracing the TID chosen in the picker, within the
+// PID the message carries or, when it carries none, the current one.
 func (m *Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
-	tid := selectedPIDFilter(msg.Tid)
 	pid := m.proc.pid
 	if msg.Pid > 0 {
 		pid = msg.Pid
 	}
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
+	return m.selectProcess(pid, selectedPIDFilter(msg.Tid))
+}
+
+// selectProcess is the shared body of handlePidSelected and
+// handleTidSelected: it stops any running trace, resets the stream buffer,
+// switches to the dashboard with the new pid/tid filters and starts a new
+// trace. A recorder that fails to stop aborts the switch and surfaces a
+// recoverable error, leaving the picker (and any return bookmark) as it was.
+func (m *Model) selectProcess(pid, tid int) (tea.Model, tea.Cmd) {
+	if err := m.stopRecording(); err != nil {
 		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
+	// Stop before discarding the buffered rows, so the old session is told
+	// to go away before its stream is reset (restartTrace's stop is then a
+	// no-op).
 	m.tracer.stop()
 	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, tid)
-	m.router.pickerReturn = nil
-	m.screen = ScreenDashboard
-	m.attaching = true
-	m.clearError()
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	m.router.showDashboard()
+	return m, m.restartTrace()
 }
 
 // reselectPID saves a return bookmark and switches to the PID picker so the
 // user can choose a different process without losing dashboard state.
 func (m *Model) reselectPID() (tea.Model, tea.Cmd) {
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.setError(err, errorScreenRecoverable)
-		return m, nil
-	}
-	m.router.savePendingReturn(m.proc.pid, m.proc.tid)
-	m.tracer.stop()
-	m.screen = ScreenPIDPicker
-	m.attaching = false
-	m.clearError()
-	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
-	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
-	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
-	m.pidPicker = pidpicker.New().SetDarkMode(m.isDark)
-	var sizeCmd tea.Cmd
-	m.pidPicker, sizeCmd = applyWindowSizeToPicker(m.pidPicker, m.width, m.height)
-	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
+	return m.enterPicker(pidpicker.New())
 }
 
 // reselectTID saves a return bookmark and switches to the TID picker within
 // the current PID so the user can narrow tracing to a specific thread.
 func (m *Model) reselectTID() (tea.Model, tea.Cmd) {
-	pid := m.proc.pid
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
+	return m.enterPicker(pidpicker.NewTIDWithKeys(m.proc.pid, pidpicker.DefaultKeyMap()))
+}
+
+// enterPicker is the shared body of reselectPID and reselectTID: it stops the
+// recorder and the trace, bookmarks the current pid/tid so Esc can return to
+// the dashboard, resets every modal and shows picker, sized to the terminal.
+// A recorder that fails to stop aborts the switch and surfaces a recoverable
+// error on the dashboard, with the trace still running and no bookmark set.
+func (m *Model) enterPicker(picker pidpicker.Model) (tea.Model, tea.Cmd) {
+	if err := m.stopRecording(); err != nil {
 		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
-	m.router.savePendingReturn(m.proc.pid, m.proc.tid)
+	m.router.showPickerWithReturn(m.proc.pid, m.proc.tid)
 	m.tracer.stop()
-	m.screen = ScreenPIDPicker
 	m.attaching = false
 	m.clearError()
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
 	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
-	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap()).SetDarkMode(m.isDark)
 	var sizeCmd tea.Cmd
-	m.pidPicker, sizeCmd = applyWindowSizeToPicker(m.pidPicker, m.width, m.height)
+	m.pidPicker, sizeCmd = applyWindowSizeToPicker(picker.SetDarkMode(m.isDark), m.width, m.height)
 	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
 }
 
@@ -1275,24 +1264,36 @@ func selectedPIDFilter(pid int) int {
 }
 
 // cancelPickerToDashboard restores the dashboard when the user presses Esc
-// while in the picker after a reselectPID/reselectTID navigation.
+// while in the picker after a reselectPID/reselectTID navigation. The return
+// bookmark is only read here; showDashboard drops it once the transition
+// happens, so a recorder failure leaves it in place for the next attempt.
 func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
-	returnState, ok := m.router.takePendingReturn()
+	returnState, ok := m.router.pendingReturn()
 	if !ok {
 		return m, nil
 	}
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
+	if err := m.stopRecording(); err != nil {
 		m.setError(err, errorScreenRecoverable)
-		// Restore the pending return state since we didn't complete the transition.
-		m.router.pickerReturn = &returnState
 		return m, nil
 	}
-	m.tracer.stop()
 	m.setProcessFilters(returnState.pidFilter, returnState.tidFilter)
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
+	return m, m.restartTrace()
+}
+
+// restartTrace is the shared tail of every path that (re)starts tracing from
+// a live model - process selection, picker cancel and the filter fallback: it
+// stops the running session (idempotent, so callers that already stopped it
+// pay nothing), enters the attaching state, clears any error and returns the
+// spinner tick batched with the new trace's start command.
+//
+// With no tracer running it still starts one: stop is a no-op then, and the
+// returned command attaches a fresh session.
+func (m *Model) restartTrace() tea.Cmd {
+	m.tracer.stop()
 	m.attaching = true
 	m.clearError()
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	return tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
 // beginTraceCmd creates a tea.Cmd that starts the trace with the current
@@ -1400,18 +1401,19 @@ func (m *Model) replaceGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.
 // the shared tail of applyGlobalFilter (push) and replaceGlobalFilter
 // (setGlobal) so both routes drive the pipeline identically (DRY).
 func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
-	if !changed || m.screen != ScreenDashboard {
+	if !changed || m.router.current() != ScreenDashboard {
 		return m, nil
 	}
-	return m.pushFilterToPipeline(m.filters.current())
+	return m.applyFilterLiveOrRestart(m.filters.current())
 }
 
-// pushFilterToPipeline hands filter to the running trace, preferring an
-// in-place live swap and falling back to a trace restart. It is the shared
+// applyFilterLiveOrRestart hands filter to the running trace, preferring an
+// in-place live swap (followed by resetAggregatesAfterLiveSwap) and falling
+// back to restartTrace. It is the shared
 // tail of reapplyActiveFilter and undoGlobalFilter, so every route that
 // changes the active filter drives the pipeline - and resets the aggregates -
 // identically.
-func (m *Model) pushFilterToPipeline(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
+func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
 	m.runtime.advanceFilterEpoch()
 	// Try the in-place swap first: hand the new filter to the running
 	// eventloop via the registered setter. The BPF probes stay attached, so
@@ -1424,12 +1426,11 @@ func (m *Model) pushFilterToPipeline(filter globalfilter.Filter) (tea.Model, tea
 
 	// Fallback: no trace currently running (e.g. first invocation), so
 	// restart the pipeline so the new filter takes effect on the next
-	// trace start.
+	// trace start. The old session is cancelled before its aggregates are
+	// cleared, as before; restartTrace's own stop is then a no-op.
 	m.tracer.stop()
 	m.dashboard.PrepareForTraceRestart()
-	m.attaching = true
-	m.clearError()
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	return m, m.restartTrace()
 }
 
 // resetAggregatesAfterLiveSwap starts a fresh baseline after an in-place
@@ -1470,10 +1471,10 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	// one must not survive it.
 	m.dashboard.SetFilterNotice("")
 	m.setGlobalFilter(prev)
-	if m.screen != ScreenDashboard || before.Equal(prev) {
+	if m.router.current() != ScreenDashboard || before.Equal(prev) {
 		return m, nil
 	}
-	return m.pushFilterToPipeline(prev)
+	return m.applyFilterLiveOrRestart(prev)
 }
 
 // startRecording opens the parquet recorder at path and syncs dashboard status.
@@ -1505,7 +1506,7 @@ func (m *Model) windowTitle() string {
 	if m.quitting {
 		return "ior - shutting down"
 	}
-	switch m.screen {
+	switch m.router.current() {
 	case ScreenPIDPicker:
 		return "ior - select process"
 	case ScreenDashboard:
@@ -1548,7 +1549,7 @@ func (m *Model) View() tea.View {
 		return altScreenView(helpView, title)
 	}
 
-	switch m.screen {
+	switch m.router.current() {
 	case ScreenPIDPicker:
 		return m.viewPickerScreen(width, height, title)
 	case ScreenDashboard:
