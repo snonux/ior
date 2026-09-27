@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/messages"
 
 	tea "charm.land/bubbletea/v2"
@@ -478,6 +479,26 @@ func TestGlobalFilterRequestIsDetachedFromLocalFilter(t *testing.T) {
 	}
 }
 
+// pressEnterOnCell pauses a stream holding only ev, selects column col of
+// its row and presses enter, returning whether the key was handled and the
+// command it produced.
+func pressEnterOnCell(t *testing.T, ev StreamEvent, col int) (bool, tea.Cmd) {
+	t.Helper()
+	rb := NewRingBuffer()
+	rb.Push(ev)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	pressLocal(t, &m, "space")
+	m.selectedIdx = 0
+	m.selectedCol = col
+	return m.HandleKey("enter")
+}
+
+// TestPausedEnterActionLabelPerColumn pins every column's action label to the
+// presenter's canonical token for the dimension the column sets, so the undo
+// stack reads exactly like the filter summary (durations included: the label
+// uses time.Duration wording such as "1.5µs", not the table cell's "1.5us").
 func TestPausedEnterActionLabelPerColumn(t *testing.T) {
 	ev := StreamEvent{
 		Seq: 1, PID: 11, TID: 12, Comm: "cc", Syscall: "openat", FD: 3,
@@ -485,35 +506,100 @@ func TestPausedEnterActionLabelPerColumn(t *testing.T) {
 	}
 	tests := []struct {
 		col  int
+		dim  presenter.Dimension
 		want string
 	}{
-		{streamColGap, "gap>=" + formatDurationNs(ev.GapNs)},
-		{streamColLatency, "latency>=" + formatDurationNs(ev.DurationNs)},
-		{streamColComm, "comm~cc"},
-		{streamColPID, "pid=11"},
-		{streamColTID, "tid=12"},
-		{streamColSyscall, "syscall~openat"},
-		{streamColFD, "fd=3"},
-		{streamColRet, "ret=-2"},
-		{streamColBytes, "bytes=64"},
-		{streamColFile, "file~/etc/x"},
+		{streamColGap, presenter.DimGap, "gap>=40ns"},
+		{streamColLatency, presenter.DimLatency, "latency>=1.5µs"},
+		{streamColComm, presenter.DimComm, "comm~cc"},
+		{streamColPID, presenter.DimPID, "pid=11"},
+		{streamColTID, presenter.DimTID, "tid=12"},
+		{streamColSyscall, presenter.DimSyscall, "syscall~openat"},
+		{streamColFD, presenter.DimFD, "fd=3"},
+		{streamColRet, presenter.DimRet, "ret=-2"},
+		{streamColBytes, presenter.DimBytes, "bytes=64"},
+		{streamColFile, presenter.DimFile, "file~/etc/x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
-			rb := NewRingBuffer()
-			rb.Push(ev)
-			m := NewModel(rb)
-			m.height = 20
-			m.Refresh()
-			pressLocal(t, &m, "space")
-			m.selectedIdx = 0
-			m.selectedCol = tt.col
-			req := pressRequest[messages.GlobalFilterRequestedMsg](t, &m, "enter")
+			handled, cmd := pressEnterOnCell(t, ev, tt.col)
+			if !handled || cmd == nil {
+				t.Fatalf("column %d: expected enter to emit a request", tt.col)
+			}
+			req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+			if !ok {
+				t.Fatalf("column %d: expected GlobalFilterRequestedMsg", tt.col)
+			}
 			if req.Action != tt.want {
 				t.Fatalf("column %d: expected action %q, got %q", tt.col, tt.want, req.Action)
 			}
+			if canonical := presenter.DimensionSummary(req.Filter, tt.dim); req.Action != canonical {
+				t.Fatalf("column %d: action %q differs from presenter token %q", tt.col, req.Action, canonical)
+			}
 			if !req.Filter.IsActive() {
 				t.Fatalf("column %d: expected an active filter in the request", tt.col)
+			}
+		})
+	}
+}
+
+// TestPausedEnterActionLabelEdgeValues covers values whose wording used to
+// be hand-built: zero and negative numbers, sub-microsecond and multi-second
+// durations, and string cells holding spaces or filter-syntax characters.
+func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   StreamEvent
+		col  int
+		dim  presenter.Dimension
+		want string
+	}{
+		{"zero gap", StreamEvent{Seq: 1, GapNs: 0}, streamColGap, presenter.DimGap, "gap>=0s"},
+		{"seconds latency", StreamEvent{Seq: 1, DurationNs: 2_500_000_000}, streamColLatency, presenter.DimLatency, "latency>=2.5s"},
+		{"odd latency", StreamEvent{Seq: 1, DurationNs: 1234}, streamColLatency, presenter.DimLatency, "latency>=1.234µs"},
+		{"zero pid", StreamEvent{Seq: 1, PID: 0}, streamColPID, presenter.DimPID, "pid=0"},
+		{"negative fd", StreamEvent{Seq: 1, FD: -1}, streamColFD, presenter.DimFD, "fd=-1"},
+		{"zero bytes", StreamEvent{Seq: 1, Bytes: 0}, streamColBytes, presenter.DimBytes, "bytes=0"},
+		{"comm with space and symbols", StreamEvent{Seq: 1, Comm: "kworker/0:1 ~x=y"}, streamColComm, presenter.DimComm, "comm~kworker/0:1 ~x=y"},
+		{"comm with padding", StreamEvent{Seq: 1, Comm: "  sh  "}, streamColComm, presenter.DimComm, "comm~sh"},
+		{"anchored file", StreamEvent{Seq: 1, FileName: "^/tmp/a b$"}, streamColFile, presenter.DimFile, "file~^/tmp/a b$"},
+		{"unicode syscall", StreamEvent{Seq: 1, Syscall: "écrire"}, streamColSyscall, presenter.DimSyscall, "syscall~écrire"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, cmd := pressEnterOnCell(t, tt.ev, tt.col)
+			if !handled || cmd == nil {
+				t.Fatalf("expected enter to emit a request")
+			}
+			req := cmd().(messages.GlobalFilterRequestedMsg)
+			if req.Action != tt.want {
+				t.Fatalf("expected action %q, got %q", tt.want, req.Action)
+			}
+			if canonical := presenter.DimensionSummary(req.Filter, tt.dim); req.Action != canonical {
+				t.Fatalf("action %q differs from presenter token %q", req.Action, canonical)
+			}
+		})
+	}
+}
+
+// TestPausedEnterOnBlankStringCellIsNotHandled: a blank pattern constrains
+// nothing (and has no presenter token), so enter on an empty comm, syscall or
+// file cell must not push an empty undo layer.
+func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ev   StreamEvent
+		col  int
+	}{
+		{"empty comm", StreamEvent{Seq: 1, PID: 5}, streamColComm},
+		{"blank comm", StreamEvent{Seq: 1, PID: 5, Comm: "   "}, streamColComm},
+		{"empty syscall", StreamEvent{Seq: 1, PID: 5}, streamColSyscall},
+		{"empty file", StreamEvent{Seq: 1, PID: 5}, streamColFile},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, cmd := pressEnterOnCell(t, tt.ev, tt.col)
+			if handled || cmd != nil {
+				t.Fatalf("expected blank cell enter to be ignored, got handled=%v cmd=%v", handled, cmd != nil)
 			}
 		})
 	}

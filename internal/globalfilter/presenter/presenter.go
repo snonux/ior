@@ -59,26 +59,117 @@ func AppendNumericSummary(parts []string, name string, nf *globalfilter.NumericF
 	return append(parts, fmt.Sprintf("%s%s%s", name, CompareOpSymbol(nf.Op), value))
 }
 
+// Dimension identifies one filter predicate of a globalfilter.Filter for
+// labelling. The declaration order is the canonical display order used by
+// FilterSummary and by change labels built from DimensionSummary.
+type Dimension int
+
+// The filter dimensions, in canonical display order.
+const (
+	DimSyscall Dimension = iota
+	DimFamily
+	DimComm
+	DimFile
+	DimPID
+	DimTID
+	DimFD
+	DimLatency
+	DimGap
+	DimBytes
+	DimRet
+)
+
+// Dimensions lists every Dimension in canonical display order. It returns a
+// fresh slice so callers cannot reorder the shared sequence.
+func Dimensions() []Dimension {
+	return []Dimension{
+		DimSyscall, DimFamily, DimComm, DimFile,
+		DimPID, DimTID, DimFD, DimLatency, DimGap, DimBytes, DimRet,
+	}
+}
+
+// Name returns the dimension's display name ("syscall", "pid", "latency",
+// ...), or "?" for an unknown dimension.
+func (d Dimension) Name() string {
+	switch d {
+	case DimSyscall:
+		return "syscall"
+	case DimFamily:
+		return "family"
+	case DimComm:
+		return "comm"
+	case DimFile:
+		return "file"
+	case DimPID:
+		return "pid"
+	case DimTID:
+		return "tid"
+	case DimFD:
+		return "fd"
+	case DimLatency:
+		return "latency"
+	case DimGap:
+		return "gap"
+	case DimBytes:
+		return "bytes"
+	case DimRet:
+		return "ret"
+	default:
+		return "?"
+	}
+}
+
+// DimensionSummary returns the canonical token for f's constraint on d, e.g.
+// "comm~nginx", "pid=42" or "latency>=1.5ms". It returns "" when that
+// dimension is unset (nil, or a blank string pattern) or d is unknown. This is
+// the single source of the per-predicate wording shared by FilterSummary and
+// by every UI filter action label.
+func DimensionSummary(f globalfilter.Filter, d Dimension) string {
+	var parts []string
+	switch d {
+	case DimSyscall:
+		parts = AppendStringSummary(nil, d.Name(), f.Syscall)
+	case DimFamily:
+		parts = AppendStringSummary(nil, d.Name(), f.Family)
+	case DimComm:
+		parts = AppendStringSummary(nil, d.Name(), f.Comm)
+	case DimFile:
+		parts = AppendStringSummary(nil, d.Name(), f.File)
+	case DimPID:
+		parts = AppendNumericSummary(nil, d.Name(), f.PID, false)
+	case DimTID:
+		parts = AppendNumericSummary(nil, d.Name(), f.TID, false)
+	case DimFD:
+		parts = AppendNumericSummary(nil, d.Name(), f.FD, false)
+	case DimLatency:
+		parts = AppendNumericSummary(nil, d.Name(), f.LatencyNs, true)
+	case DimGap:
+		parts = AppendNumericSummary(nil, d.Name(), f.GapNs, true)
+	case DimBytes:
+		parts = AppendNumericSummary(nil, d.Name(), f.Bytes, false)
+	case DimRet:
+		parts = AppendNumericSummary(nil, d.Name(), f.RetVal, false)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
+
 // FilterSummary returns a compact human-readable description of all active
 // filter predicates, e.g. "syscall~read pid=1234". Returns "all" when no
 // predicates are set. This is the canonical presentation of a Filter value
 // for status bars and log messages.
 func FilterSummary(f globalfilter.Filter) string {
-	parts := make([]string, 0, 10)
+	parts := make([]string, 0, 12)
 	if f.ErrorsOnly {
 		parts = append(parts, "errors")
 	}
-	parts = AppendStringSummary(parts, "syscall", f.Syscall)
-	parts = AppendStringSummary(parts, "family", f.Family)
-	parts = AppendStringSummary(parts, "comm", f.Comm)
-	parts = AppendStringSummary(parts, "file", f.File)
-	parts = AppendNumericSummary(parts, "pid", f.PID, false)
-	parts = AppendNumericSummary(parts, "tid", f.TID, false)
-	parts = AppendNumericSummary(parts, "fd", f.FD, false)
-	parts = AppendNumericSummary(parts, "latency", f.LatencyNs, true)
-	parts = AppendNumericSummary(parts, "gap", f.GapNs, true)
-	parts = AppendNumericSummary(parts, "bytes", f.Bytes, false)
-	parts = AppendNumericSummary(parts, "ret", f.RetVal, false)
+	for _, d := range Dimensions() {
+		if token := DimensionSummary(f, d); token != "" {
+			parts = append(parts, token)
+		}
+	}
 	if len(parts) == 0 {
 		return "all"
 	}

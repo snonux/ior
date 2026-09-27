@@ -117,11 +117,15 @@ func applyProcessFilters(filter globalfilter.Filter, pid, tid int) globalfilter.
 
 // globalFilterActionLabel builds a short human-readable summary of what
 // changed between prev and next. If action is non-empty it is returned as-is.
+// Every per-dimension token comes from presenter.DimensionSummary, so a
+// derived label uses exactly the wording the filter's own summary uses: a
+// dimension changed when its canonical token changed, and a dimension whose
+// token vanished is reported as "clear <name>".
 func globalFilterActionLabel(prev, next globalfilter.Filter, action string) string {
 	if strings.TrimSpace(action) != "" {
 		return action
 	}
-	parts := make([]string, 0, 10)
+	parts := make([]string, 0, 12)
 	if prev.ErrorsOnly != next.ErrorsOnly {
 		if next.ErrorsOnly {
 			parts = append(parts, "errors")
@@ -129,62 +133,20 @@ func globalFilterActionLabel(prev, next globalfilter.Filter, action string) stri
 			parts = append(parts, "clear errors")
 		}
 	}
-	parts = appendStringFilterChange(parts, "syscall", prev.Syscall, next.Syscall)
-	parts = appendStringFilterChange(parts, "family", prev.Family, next.Family)
-	parts = appendStringFilterChange(parts, "comm", prev.Comm, next.Comm)
-	parts = appendStringFilterChange(parts, "file", prev.File, next.File)
-	parts = appendNumericFilterChange(parts, "pid", prev.PID, next.PID, false)
-	parts = appendNumericFilterChange(parts, "tid", prev.TID, next.TID, false)
-	parts = appendNumericFilterChange(parts, "fd", prev.FD, next.FD, false)
-	parts = appendNumericFilterChange(parts, "latency", prev.LatencyNs, next.LatencyNs, true)
-	parts = appendNumericFilterChange(parts, "gap", prev.GapNs, next.GapNs, true)
-	parts = appendNumericFilterChange(parts, "bytes", prev.Bytes, next.Bytes, false)
-	parts = appendNumericFilterChange(parts, "ret", prev.RetVal, next.RetVal, false)
+	for _, d := range presenter.Dimensions() {
+		before := presenter.DimensionSummary(prev, d)
+		after := presenter.DimensionSummary(next, d)
+		switch {
+		case before == after:
+			// Unchanged dimension: nothing to report.
+		case after == "":
+			parts = append(parts, "clear "+d.Name())
+		default:
+			parts = append(parts, after)
+		}
+	}
 	if len(parts) == 0 {
 		return presenter.FilterSummary(next)
 	}
 	return strings.Join(parts, " ")
-}
-
-// appendStringFilterChange appends a change token to parts for a string
-// filter field. It emits "clear name" when the filter is removed, or delegates
-// to presenter.AppendStringSummary for the canonical "name~pattern" format.
-func appendStringFilterChange(parts []string, name string, prev, next *globalfilter.StringFilter) []string {
-	if sameStringFilter(prev, next) {
-		return parts
-	}
-	if next == nil || strings.TrimSpace(next.Pattern) == "" {
-		return append(parts, "clear "+name)
-	}
-	return presenter.AppendStringSummary(parts, name, next)
-}
-
-// appendNumericFilterChange appends a change token to parts for a numeric
-// filter field. It emits "clear name" when the filter is removed, or delegates
-// to presenter.AppendNumericSummary for the canonical "nameOPvalue" format.
-func appendNumericFilterChange(parts []string, name string, prev, next *globalfilter.NumericFilter, duration bool) []string {
-	if sameNumericFilter(prev, next) {
-		return parts
-	}
-	if next == nil {
-		return append(parts, "clear "+name)
-	}
-	return presenter.AppendNumericSummary(parts, name, next, duration)
-}
-
-func sameStringFilter(a, b *globalfilter.StringFilter) bool {
-	if a == nil || strings.TrimSpace(a.Pattern) == "" {
-		return b == nil || strings.TrimSpace(b.Pattern) == ""
-	}
-	if b == nil {
-		return false
-	}
-	return strings.TrimSpace(a.Pattern) == strings.TrimSpace(b.Pattern)
-}
-
-func sameNumericFilter(a, b *globalfilter.NumericFilter) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Op == b.Op && a.Value == b.Value
 }
