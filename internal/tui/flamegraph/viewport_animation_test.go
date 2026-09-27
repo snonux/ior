@@ -80,7 +80,7 @@ func TestSetViewportReusesLiveLoop(t *testing.T) {
 	if first == nil {
 		t.Fatal("SetViewport started an animation without a tick command")
 	}
-	keepTickLoopFresh(m)
+	m.KeepTickLoopFresh()
 	if cmd := m.SetViewport(90, 30, true); cmd != nil {
 		t.Fatal("a second viewport change started a duplicate tick loop")
 	}
@@ -116,7 +116,7 @@ func TestSetViewportWithoutAnimateSnaps(t *testing.T) {
 func TestResumeAnimationCmdRestartsLostLoop(t *testing.T) {
 	m, _, cmd := newAnimatingModel(t)
 	lost := runTickCmds(t, []tea.Cmd{cmd})[0]
-	keepTickLoopFresh(m)
+	m.KeepTickLoopFresh()
 	if m.AnimationCmd() != nil {
 		t.Fatal("precondition: the loop with a fresh tick should count as live")
 	}
@@ -142,7 +142,7 @@ func TestResumeAnimationCmdRestartsLostLoop(t *testing.T) {
 func TestResumeAnimationCmdWithoutAnimation(t *testing.T) {
 	m, _, _ := newAnimatingModel(t)
 	m.rebuildFrames(false)
-	keepTickLoopFresh(m)
+	m.KeepTickLoopFresh()
 
 	if cmd := m.ResumeAnimationCmd(); cmd != nil {
 		t.Fatal("resume scheduled a tick with nothing animating")

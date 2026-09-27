@@ -3,7 +3,6 @@ package flamegraph
 import (
 	"slices"
 	"testing"
-	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
 
@@ -258,7 +257,7 @@ func TestFastSnapshotsAndResizesDoNotStarveTicks(t *testing.T) {
 	pending := runTickCmds(t, []tea.Cmd{cmd})[0]
 	// Keep the live loop's tick from ever counting as lost, so the result
 	// does not depend on how long the test takes to reach the tick.
-	keepTickLoopFresh(m)
+	m.KeepTickLoopFresh()
 
 	widths := []int{90, 60, 100}
 	for i := uint64(1); i <= 3; i++ {
@@ -297,7 +296,7 @@ func TestFastSnapshotsAndResizesDoNotStarveTicks(t *testing.T) {
 func TestLostTickRestartsLoop(t *testing.T) {
 	m, trie, cmd := newAnimatingModel(t)
 	lost := runTickCmds(t, []tea.Cmd{cmd})[0]
-	m.anim.tickDue = time.Now().Add(-tickLostAfter - time.Millisecond)
+	m.ForceTickLost()
 
 	coreflamegraph.SeedTestLiveFlameData(trie, 1)
 	next, cmd := m.Update(dispatchAndCompute(t, m))
@@ -316,19 +315,12 @@ func TestLostTickRestartsLoop(t *testing.T) {
 	}
 }
 
-// keepTickLoopFresh marks the loop's pending tick as due far in the future, so
-// startTicks can only start a new loop if the loop was stopped, never because
-// its tick counts as lost.
-func keepTickLoopFresh(m *Model) {
-	m.anim.tickDue = time.Now().Add(time.Hour)
-}
-
 // TestSettledAnimationEndsTickLoop checks that the tick which settles an
 // animation ends its loop, so the next animation starts a new one.
 func TestSettledAnimationEndsTickLoop(t *testing.T) {
 	m, _, _ := newAnimatingModel(t)
 	m = settleFlameAnimation(t, m)
-	keepTickLoopFresh(m)
+	m.KeepTickLoopFresh()
 
 	next, cmd := m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
 	m = next.(*Model)
@@ -356,7 +348,7 @@ func TestTickAfterSnapEndsTickLoop(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("a tick after the snap scheduled another tick")
 	}
-	keepTickLoopFresh(m)
+	m.KeepTickLoopFresh()
 
 	next, cmd = m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
 	m = next.(*Model)

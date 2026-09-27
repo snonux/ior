@@ -2,10 +2,10 @@ package dashboard
 
 import (
 	"testing"
-	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
 	common "ior/internal/tui/common"
+	flamegraphtui "ior/internal/tui/flamegraph"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -35,24 +35,28 @@ func newPausedFlameDashboard(t *testing.T, width, height int) *Model {
 	return m
 }
 
-// flameAnimationTicks runs cmd as the runtime would and returns the messages
-// it emits other than the dashboard's own tick chains: the flamegraph's
-// animation ticks, whose type the dashboard cannot name.
+// flameAnimationTicks runs cmd as the runtime would and returns the
+// flamegraph animation ticks it emits. The dashboard's own tick chains are
+// skipped; any other message fails the test, so an unexpected command cannot
+// pass for an animation tick.
 func flameAnimationTicks(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	t.Helper()
 	if cmd == nil {
 		return nil
 	}
+	msg := cmd()
+	if flamegraphtui.IsAnimationTick(msg) {
+		return []tea.Msg{msg}
+	}
 	var ticks []tea.Msg
-	switch msg := cmd().(type) {
+	switch msg := msg.(type) {
 	case tea.BatchMsg:
 		for _, sub := range msg {
 			ticks = append(ticks, flameAnimationTicks(t, sub)...)
 		}
-	case flameTickMsg, refreshTickMsg, streamTickMsg, bubbleTickMsg:
-	case nil:
+	case flameTickMsg, refreshTickMsg, streamTickMsg, bubbleTickMsg, nil:
 	default:
-		ticks = append(ticks, msg)
+		t.Fatalf("unexpected message %T from a flame viewport command", msg)
 	}
 	return ticks
 }
@@ -122,16 +126,13 @@ func TestPausedFlameResizeSchedulesAnimationTick(t *testing.T) {
 	requireFlameAtTarget(t, m, false)
 }
 
-// flameTickLostAfter outlasts the flamegraph's tickLostAfter (ten animation
-// frames), after which a pending tick that never arrived counts as lost.
-const flameTickLostAfter = 400 * time.Millisecond
-
 // TestPausedFlameHelpToggleSchedulesAnimationTick covers the help toggle. It
 // only changes the flame viewport's height, which moves no frame, so on its
 // own it starts no animation; what it must not do is swallow the tick that
 // restarts a running animation whose loop was lost (its tick dropped while
 // the dashboard was not receiving messages, long enough ago to count as
-// lost). Before task kc that restart was discarded along with the command.
+// lost; ForceTickLost stands in for the wait). Before task kc that restart
+// was discarded along with the command.
 func TestPausedFlameHelpToggleSchedulesAnimationTick(t *testing.T) {
 	m := newPausedFlameDashboard(t, 120, 30)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
@@ -145,7 +146,7 @@ func TestPausedFlameHelpToggleSchedulesAnimationTick(t *testing.T) {
 	if lost == nil || !m.flamegraphModel.Animating() {
 		t.Fatal("the resize did not start a flame animation")
 	}
-	time.Sleep(flameTickLostAfter)
+	m.flamegraphModel.ForceTickLost()
 
 	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
 	m = next.(*Model)
@@ -186,6 +187,9 @@ func TestFlameAnimationResumesOnReturnToTab(t *testing.T) {
 	if !m.flamegraphModel.Animating() || m.flamegraphModel.View().Content != midway {
 		t.Fatal("expected the off-tab animation frozen mid-way")
 	}
+	// However long the test takes, the loop must still count as live, so
+	// lost-tick recovery cannot be what restarts it.
+	m.flamegraphModel.KeepTickLoopFresh()
 
 	next, cmd = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
 	m = next.(*Model)
@@ -214,6 +218,8 @@ func TestFlameViewportChangesScheduleNoExtraTicks(t *testing.T) {
 		if first == nil {
 			t.Fatal("the resize scheduled no tick")
 		}
+		// The loop's tick is pending, not lost, however long the test takes.
+		m.flamegraphModel.KeepTickLoopFresh()
 		next, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 		m = next.(*Model)
 		if cmd != nil {
@@ -256,4 +262,84 @@ func TestFlameViewportChangesScheduleNoExtraTicks(t *testing.T) {
 		}
 		requireFlameAtTarget(t, m, true)
 	})
+}
+
+// leaveFlameMidAnimation starts a resize animation on the Flame tab, lets one
+// tick through, switches to Overview and delivers the next tick there, where
+// the dashboard drops it. The flamegraph is left frozen mid-way with its loop
+// still marked live (and kept fresh, so it never counts as lost). It returns
+// the dropped tick.
+func leaveFlameMidAnimation(t *testing.T, m *Model) (*Model, tea.Msg) {
+	t.Helper()
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	m = next.(*Model)
+	next, cmd = m.Update(requireOneFlameTick(t, cmd))
+	m = next.(*Model)
+	if cmd == nil || !m.flamegraphModel.Animating() {
+		t.Fatal("expected the animation mid-way after its first tick")
+	}
+	m = pressKey(m, '2')
+	dropped := requireOneFlameTick(t, cmd)
+	next, cmd = m.Update(dropped)
+	m = next.(*Model)
+	if cmd != nil || !m.flamegraphModel.Animating() {
+		t.Fatal("expected the off-tab animation frozen with its tick dropped")
+	}
+	m.flamegraphModel.KeepTickLoopFresh()
+	return m, dropped
+}
+
+// TestHiddenFlameViewportChangeSettlesFrozenAnimation covers a viewport
+// change while the Flame tab is hidden and an animation is frozen there with
+// its tick dropped: the hidden change installs the final layout at rest, and
+// returning to Flame shows it without animating or scheduling a tick. The
+// stale loop must not outlive the return either: the next animation on the
+// tab gets its tick at once, and the dropped tick, arriving late, is ignored.
+func TestHiddenFlameViewportChangeSettlesFrozenAnimation(t *testing.T) {
+	cases := []struct {
+		name     string
+		msg      tea.Msg
+		showHelp bool
+	}{
+		{name: "resize", msg: tea.WindowSizeMsg{Width: 100, Height: 30}},
+		{name: "help toggle", msg: tea.KeyPressMsg{Code: tea.KeyF1}, showHelp: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, dropped := leaveFlameMidAnimation(t, newPausedFlameDashboard(t, 120, 30))
+
+			next, cmd := m.Update(tc.msg)
+			m = next.(*Model)
+			if ticks := flameAnimationTicks(t, cmd); len(ticks) != 0 {
+				t.Fatal("a hidden-tab viewport change scheduled a flame animation tick")
+			}
+			if m.flamegraphModel.Animating() {
+				t.Fatal("a hidden-tab viewport change left the frozen animation running")
+			}
+
+			next, cmd = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+			m = next.(*Model)
+			if m.activeTab != TabFlame {
+				t.Fatalf("expected the Flame tab, got %v", m.activeTab)
+			}
+			if ticks := flameAnimationTicks(t, cmd); len(ticks) != 0 {
+				t.Fatal("returning to a settled Flame tab scheduled an animation tick")
+			}
+			if m.flamegraphModel.Animating() {
+				t.Fatal("returning to Flame restarted the settled animation")
+			}
+			requireFlameAtTarget(t, m, tc.showHelp)
+
+			// The dropped tick has not arrived, so only the return can have
+			// ended the stale loop that would hold this animation's tick back.
+			next, cmd = m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+			m = next.(*Model)
+			tick := requireOneFlameTick(t, cmd)
+			if _, cmd = m.Update(dropped); cmd != nil {
+				t.Fatal("the dropped tick continued its loop next to the new one")
+			}
+			m = settleFlameThroughDashboard(t, m, tick)
+			requireFlameAtTarget(t, m, tc.showHelp)
+		})
+	}
 }
