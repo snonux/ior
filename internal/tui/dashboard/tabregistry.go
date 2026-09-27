@@ -155,9 +155,9 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortName:       "Flm",
 			Position:        10,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
-			// Use the model method so the configured fastRefreshEvery interval
+			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
-			InitCmd:     func(m *Model) tea.Cmd { return m.flameTickCmd() },
+			InitCmd:     func(m *Model) tea.Cmd { return m.ticks.flameCmd() },
 			Render:      tabRenderFlame,
 			ShortcutKey: func(k common.KeyMap) key.Binding { return k.One },
 			BlocksGlobalShortcut: func(m *Model, msg tea.KeyPressMsg) bool {
@@ -244,9 +244,9 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortName:       "Str",
 			Position:        70,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
-			// Use the model method so the configured fastRefreshEvery interval
+			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
-			InitCmd: func(m *Model) tea.Cmd { return m.streamTickCmd() },
+			InitCmd: func(m *Model) tea.Cmd { return m.ticks.streamCmd() },
 			// The stream draws its own footer, so its viewport ignores the
 			// dashboard help bar.
 			ContentViewport: func(width, height int, _ bool) (int, int) { return streamViewport(width, height) },

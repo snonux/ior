@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/globalfilter"
@@ -19,10 +18,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-const defaultRefreshMs = 1000
-const streamRefreshMs = 200
-const flameRefreshMs = 200
-const bubbleRefreshMs = 33
 const streamChromeRows = 4
 const dashboardHelpHintRows = 1
 const dashboardExpandedHelpRows = 2
@@ -41,17 +36,6 @@ type SnapshotSource interface {
 	Reset()
 }
 
-type refreshTickMsg struct{}
-type streamTickMsg struct{}
-type flameTickMsg struct{}
-type bubbleTickMsg struct{}
-
-// autoResetTickMsg fires when the auto-reset timer elapses. It carries the
-// generation it was scheduled for so that stale ticks (from a previous
-// interval setting) are ignored rather than triggering a wrong-cadence reset.
-type autoResetTickMsg struct {
-	generation uint64
-}
 type streamEditorDoneMsg struct {
 	err error
 }
@@ -88,27 +72,15 @@ type Model struct {
 	width  int
 	height int
 
-	refreshEvery time.Duration
-	// fastRefreshEvery is the high-frequency tick cadence for the stream and
-	// flame tabs. When zero it falls back to the streamRefreshMs / flameRefreshMs
-	// package-level constants so the model is backwards-compatible with callers
-	// that do not supply a fast-refresh interval.
-	fastRefreshEvery time.Duration
-	// autoResetEvery is the cadence for the periodic auto-reset of
-	// aggregate state (live trie + stats engine). Zero disables it.
-	autoResetEvery time.Duration
-	// autoResetGen is incremented every time autoResetEvery changes so
-	// in-flight ticks scheduled under the previous cadence can be ignored.
-	autoResetGen uint64
-	// autoResetArmedAt is the wall-clock instant the current tick was
-	// scheduled. The next reset is expected at autoResetArmedAt +
-	// autoResetEvery; autoResetStatus uses this to render the live
-	// countdown ("12s/30s") in the chrome. Updated on every arm
-	// (SetAutoResetInterval, focus regain, tick re-arm).
-	autoResetArmedAt time.Time
-	keys             common.KeyMap
-	globalFilter     globalfilter.Filter
-	filterStack      []string
+	// ticks owns the cadences of the periodic tick chains (ticks.go).
+	ticks tickScheduler
+	// autoReset owns the periodic auto-reset of aggregate state (live trie
+	// + stats engine): cadence, tick generation and countdown
+	// (autoreset.go).
+	autoReset    autoReset
+	keys         common.KeyMap
+	globalFilter globalfilter.Filter
+	filterStack  []string
 	// filterNotice explains why the last requested filter change was not
 	// applied. It is empty whenever the displayed globalFilter is the one
 	// the user last asked for, and is rendered ahead of the filter summary
@@ -149,21 +121,17 @@ func NewModel(engine SnapshotSource, streamSource eventstream.Source) *Model {
 // streamRefreshMs / flameRefreshMs (200 ms) so existing call sites are
 // backwards-compatible.
 func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, refreshMs int, fastRefreshMs int, keys common.KeyMap) *Model {
-	if refreshMs <= 0 {
-		refreshMs = defaultRefreshMs
-	}
 	m := &Model{
-		activeTab:        TabFlame,
-		engine:           engine,
-		statsGen:         1,
-		refreshEvery:     time.Duration(refreshMs) * time.Millisecond,
-		fastRefreshEvery: time.Duration(fastRefreshMs) * time.Millisecond,
-		keys:             keys,
-		pidFilter:        -1,
-		streamModel:      eventstream.NewModel(streamSource),
-		flamegraphModel:  flamegraphtui.NewModel(nil),
-		isDark:           true,
-		focused:          true,
+		activeTab:       TabFlame,
+		engine:          engine,
+		statsGen:        1,
+		ticks:           newTickScheduler(refreshMs, fastRefreshMs),
+		keys:            keys,
+		pidFilter:       -1,
+		streamModel:     eventstream.NewModel(streamSource),
+		flamegraphModel: flamegraphtui.NewModel(nil),
+		isDark:          true,
+		focused:         true,
 	}
 	// The tableTabState zero value already means table mode; only the bubble
 	// charts need construction.
@@ -182,23 +150,16 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 // consulted to start any additional high-frequency tick the active tab needs
 // (e.g. stream and flame use a fast cadence controlled by fastRefreshEvery,
 // defaulting to streamRefreshMs / flameRefreshMs when not explicitly set).
+//
+// Init only reads the model. The auto-reset chain is started through an
+// autoResetArmMsg that Update handles, because starting it also restarts
+// the chrome countdown (see autoResetArmMsg).
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd(m.refreshEvery)}
-	d := lookupTab(m.activeTab)
-	if d.InitCmd != nil {
-		// Pass the model so the closure can read fastRefreshEvery and use
-		// the configured cadence rather than falling back to a constant.
-		cmds = append(cmds, d.InitCmd(m))
-	} else if m.bubbleEnabledForTab(m.activeTab) {
-		cmds = append(cmds, bubbleTickCmdFn())
-	}
-	if cmd := m.autoResetTickCmd(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	if len(cmds) == 1 {
-		return cmds[0]
-	}
-	return tea.Batch(cmds...)
+	return batchCmds(
+		m.ticks.refreshCmd(),
+		m.tabEntryTickCmd(m.activeTab),
+		m.autoReset.armCmd(m.focused),
+	)
 }
 
 // Update handles ticks, snapshots, tab changes, and resize events.
@@ -216,6 +177,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleBubbleTick()
 	case autoResetTickMsg:
 		return m.handleAutoResetTick(msg)
+	case autoResetArmMsg:
+		return m.handleAutoResetArm(msg)
 	case messages.StatsTickMsg:
 		return m.handleStatsTick(msg)
 	case tea.KeyPressMsg:
@@ -243,55 +206,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.syncFlameViewport()
 	m.setBubbleViewports()
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return m, bubbleTickCmdFn()
-	}
-	return m, nil
-}
-
-func (m *Model) handleRefreshTick() (tea.Model, tea.Cmd) {
-	if !m.focused {
-		return m, nil
-	}
-	tick := m.statsTick()
-	return m, tea.Batch(
-		tickCmd(m.refreshEvery),
-		func() tea.Msg { return tick },
-	)
-}
-
-func (m *Model) handleStreamTick() (tea.Model, tea.Cmd) {
-	if !m.focused || m.activeTab != TabStream {
-		return m, nil
-	}
-	m.streamModel.Refresh()
-	// Re-arm with the configurable fast-refresh cadence (fastRefreshEvery).
-	return m, m.streamTickCmd()
-}
-
-func (m *Model) handleFlameTick() (tea.Model, tea.Cmd) {
-	if !m.focused || m.activeTab != TabFlame {
-		return m, nil
-	}
-	// Always re-arm the fast tick. The snapshot refresh itself runs on a
-	// background goroutine via RefreshFromLiveTrieCmd, so even when a previous
-	// refresh is still in flight (the cmd returns nil and skips), the tick
-	// channel stays alive. The cadence is controlled by fastRefreshEvery.
-	cmds := []tea.Cmd{m.flameTickCmd()}
-	if m.liveTrie != nil {
-		if refreshCmd := m.flamegraphModel.RefreshFromLiveTrieCmd(); refreshCmd != nil {
-			cmds = append(cmds, refreshCmd)
-		}
-	}
-	return m, tea.Batch(cmds...)
-}
-
-func (m *Model) handleBubbleTick() (tea.Model, tea.Cmd) {
-	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) {
-		return m, nil
-	}
-	_ = m.tickActiveBubbleChart()
-	if m.activeBubbleChartHasNodes() {
-		return m, bubbleTickCmdFn()
+		return m, m.ticks.bubbleCmd()
 	}
 	return m, nil
 }
@@ -322,7 +237,7 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
-		return m, bubbleTickCmdFn()
+		return m, m.ticks.bubbleCmd()
 	}
 	return m, nil
 }
@@ -367,7 +282,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if handled && isStreamResumeKey(msg) && m.activeTab == TabStream && !m.streamModel.Paused() {
 		// Re-arm the stream tick with the configurable fast-refresh cadence after
 		// the user unpauses the stream with a scroll/space key.
-		cmd = m.streamTickCmd()
+		cmd = m.ticks.streamCmd()
 	}
 	if !handled {
 		handled, cmd = m.handleEnterKey(msg)
@@ -402,70 +317,6 @@ func (m *Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return d.HandleEnter(m)
 	}
 	return false, nil
-}
-
-// handleSyscallsEnter is the Syscalls tab's HandleEnter hook: Enter on the
-// selected row requests a global filter on that row's syscall name, or on
-// its family when the Family column is selected.
-func handleSyscallsEnter(m *Model) (bool, tea.Cmd) {
-	if m.syscallsTab.mode != tabVizModeTable {
-		return false, nil
-	}
-	return requestSelectedFilter(m.selectedSyscallFilter())
-}
-
-// handleFilesEnter is the Files tab's HandleEnter hook, covering both the
-// dir-grouped and the plain sub-table.
-func handleFilesEnter(m *Model) (bool, tea.Cmd) {
-	if m.filesTab.mode != tabVizModeTable {
-		return false, nil
-	}
-	return requestSelectedFilter(m.selectedFileFilter())
-}
-
-// handleProcessesEnter is the Processes tab's HandleEnter hook. Enter also
-// works from the treemap and bubbles views there: both select whole rows,
-// so the filter request is well-defined in every mode.
-func handleProcessesEnter(m *Model) (bool, tea.Cmd) {
-	return requestSelectedFilter(m.selectedProcessFilter())
-}
-
-// requestSelectedFilter turns a tab's selected-row filter into the standard
-// GlobalFilterRequestedMsg command; the shared shape of every table tab's
-// HandleEnter hook.
-func requestSelectedFilter(filter globalfilter.Filter, action string, ok bool) (bool, tea.Cmd) {
-	if !ok {
-		return false, nil
-	}
-	return true, func() tea.Msg { return messages.GlobalFilterRequestedMsg{Filter: filter, Action: action} }
-}
-
-// syscallFamilyColumn is the index of the Family column in the Syscalls table
-// (right after the Syscall name column, in both the compact and full layouts).
-// Enter on this column scopes the dashboard to the selected row's family rather
-// than its syscall name.
-const syscallFamilyColumn = 1
-
-func (m *Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
-	selected, ok := m.selectedSyscallSnapshot()
-	if !ok {
-		return globalfilter.Filter{}, "", false
-	}
-	if m.syscallsTab.col == syscallFamilyColumn {
-		family := string(selected.TraceID.Family())
-		if strings.TrimSpace(family) == "" {
-			return globalfilter.Filter{}, "", false
-		}
-		filter := m.globalFilter.Clone()
-		filter.Family = &globalfilter.StringFilter{Pattern: family}
-		return filter, presenter.DimensionSummary(filter, presenter.DimFamily), true
-	}
-	if strings.TrimSpace(selected.Name) == "" {
-		return globalfilter.Filter{}, "", false
-	}
-	filter := m.globalFilter.Clone()
-	filter.Syscall = &globalfilter.StringFilter{Pattern: selected.Name}
-	return filter, presenter.DimensionSummary(filter, presenter.DimSyscall), true
 }
 
 // The re-anchor helpers keep a table's selection stable across a snapshot
@@ -643,33 +494,6 @@ func reanchorOffset[T any, K comparable](current int, rows []T, selected K, find
 	return clampOffset(current, len(rows))
 }
 
-func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
-	if m.latest == nil {
-		return globalfilter.Filter{}, "", false
-	}
-	filter := m.globalFilter.Clone()
-	if m.filesDirGrouped {
-		selected, ok := m.selectedDirSnapshot()
-		if !ok {
-			return globalfilter.Filter{}, "", false
-		}
-		if strings.TrimSpace(selected.Dir) == "" {
-			return globalfilter.Filter{}, "", false
-		}
-		filter.File = &globalfilter.StringFilter{Pattern: selected.Dir}
-		return filter, presenter.DimensionSummary(filter, presenter.DimFile), true
-	}
-	selected, ok := m.selectedFileSnapshot()
-	if !ok {
-		return globalfilter.Filter{}, "", false
-	}
-	if strings.TrimSpace(selected.Path) == "" {
-		return globalfilter.Filter{}, "", false
-	}
-	filter.File = &globalfilter.StringFilter{Pattern: selected.Path}
-	return filter, presenter.DimensionSummary(filter, presenter.DimFile), true
-}
-
 func (m *Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
 	rows := m.sortedFileRows()
 	index, ok := m.filesTab.selected(len(rows))
@@ -774,7 +598,7 @@ func (m *Model) toggleFilesDirGrouping() tea.Cmd {
 		m.filesTab.mode = tabVizModeTable
 	}
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return bubbleTickCmdFn()
+		return m.ticks.bubbleCmd()
 	}
 	return nil
 }
@@ -786,23 +610,6 @@ func (m *Model) handleUnhandledKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	next, flameCmd := m.flamegraphModel.Update(msg)
 	m.flamegraphModel = next.(*flamegraphtui.Model)
 	return m, flameCmd
-}
-
-func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
-	proc, ok := m.selectedProcessSnapshot()
-	if !ok || proc.PID == 0 {
-		return globalfilter.Filter{}, "", false
-	}
-	filter := m.globalFilter.Clone()
-	if m.processesTab.col == 1 {
-		comm := strings.TrimSpace(proc.Comm)
-		if comm != "" {
-			filter.Comm = &globalfilter.StringFilter{Pattern: comm}
-			return filter, presenter.DimensionSummary(filter, presenter.DimComm), true
-		}
-	}
-	filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(proc.PID)}
-	return filter, presenter.DimensionSummary(filter, presenter.DimPID), true
 }
 
 func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
@@ -901,14 +708,7 @@ func (m *Model) postKeyTransitionCmd(prevActiveTab Tab, cmd tea.Cmd) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 4)
 	cmds = append(cmds, cmd)
 	if prevActiveTab != m.activeTab {
-		d := lookupTab(m.activeTab)
-		if d.InitCmd != nil {
-			// Pass the model so the closure reads fastRefreshEvery and honours
-			// the configured cadence from the first tick after a tab switch.
-			cmds = append(cmds, d.InitCmd(m))
-		} else if m.bubbleEnabledForTab(m.activeTab) {
-			cmds = append(cmds, bubbleTickCmdFn())
-		}
+		cmds = append(cmds, m.tabEntryTickCmd(m.activeTab))
 	}
 	return batchCmds(cmds...)
 }
@@ -1142,88 +942,6 @@ func (m *Model) ResetStats() tea.Cmd {
 	return cmd
 }
 
-// autoResetTickCmd returns a command that fires an autoResetTickMsg after
-// the current auto-reset interval. Returns nil when the timer is disabled
-// (interval <= 0) or while the dashboard is blurred, so callers can
-// compose it without extra branching. SetFocused re-arms the tick when
-// focus returns.
-func (m *Model) autoResetTickCmd() tea.Cmd {
-	if m.autoResetEvery <= 0 || !m.focused {
-		return nil
-	}
-	gen := m.autoResetGen
-	return tea.Tick(m.autoResetEvery, func(time.Time) tea.Msg {
-		return autoResetTickMsg{generation: gen}
-	})
-}
-
-// handleAutoResetTick fires the same reset path as the `r` key (live trie
-// + stats engine) and re-arms the timer for the next tick. Stale ticks
-// from a previous cadence are dropped via the generation counter so that
-// changing the interval does not double-fire. While the dashboard is
-// blurred the tick is also dropped without re-arming; SetFocused will
-// arm a fresh tick on focus regain.
-func (m *Model) handleAutoResetTick(msg autoResetTickMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.autoResetGen || m.autoResetEvery <= 0 || !m.focused {
-		return m, nil
-	}
-	m.autoResetArmedAt = time.Now()
-	resetCmd := m.resetBaselineCmd()
-	nextTick := m.autoResetTickCmd()
-	switch {
-	case resetCmd == nil && nextTick == nil:
-		return m, nil
-	case resetCmd == nil:
-		return m, nextTick
-	case nextTick == nil:
-		return m, resetCmd
-	default:
-		return m, tea.Batch(resetCmd, nextTick)
-	}
-}
-
-// SetAutoResetInterval reconfigures the auto-reset cadence. A zero or
-// negative value disables the timer. Returns a tea.Cmd that arms the new
-// timer (or nil when disabling). The generation counter is bumped so any
-// in-flight tick scheduled under the previous interval is ignored.
-func (m *Model) SetAutoResetInterval(d time.Duration) tea.Cmd {
-	if d < 0 {
-		d = 0
-	}
-	m.autoResetEvery = d
-	m.autoResetGen++
-	if d > 0 {
-		m.autoResetArmedAt = time.Now()
-	} else {
-		m.autoResetArmedAt = time.Time{}
-	}
-	return m.autoResetTickCmd()
-}
-
-// AutoResetInterval reports the current auto-reset cadence. Zero means
-// the timer is disabled.
-func (m *Model) AutoResetInterval() time.Duration {
-	return m.autoResetEvery
-}
-
-// FastRefreshInterval reports the high-frequency tick cadence for the stream
-// and flame tabs (0 when the built-in default applies). It exists so the
-// parent package can assert its startup wiring without running the program.
-func (m *Model) FastRefreshInterval() time.Duration {
-	return m.fastRefreshEvery
-}
-
-// SetFastRefreshInterval overrides the high-frequency tick cadence used by the
-// stream and flame tabs. A zero or negative value resets the behaviour to the
-// package-level constants. Callers use this to apply -tui-fast-refresh after
-// constructing the dashboard model.
-func (m *Model) SetFastRefreshInterval(d time.Duration) {
-	if d < 0 {
-		d = 0
-	}
-	m.fastRefreshEvery = d
-}
-
 // LatestSnapshot returns the most recently received snapshot.
 func (m *Model) LatestSnapshot() *statsengine.Snapshot {
 	return m.latest
@@ -1316,29 +1034,6 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.forEachBubbleChart(func(chart *bubbleChart) { chart.SetDarkMode(isDark) })
 }
 
-// SetFocused controls whether periodic refresh ticks are processed and
-// returns a tea.Cmd that arms a fresh auto-reset tick when focus returns
-// (or nil otherwise). The auto-reset generation counter is bumped on
-// every focus change so any in-flight tick scheduled before a blur is
-// dropped when it eventually arrives — the tick payload's generation
-// will no longer match. Without bumping, a tick that was already in
-// flight when blur occurred could fire moments after the user re-focuses
-// and surprise them with a reset.
-func (m *Model) SetFocused(focused bool) tea.Cmd {
-	if m.focused == focused {
-		return nil
-	}
-	m.focused = focused
-	m.autoResetGen++
-	if !focused {
-		return nil
-	}
-	if m.autoResetEvery > 0 {
-		m.autoResetArmedAt = time.Now()
-	}
-	return m.autoResetTickCmd()
-}
-
 // SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
 func (m *Model) SnapshotCmd() tea.Cmd {
 	tick := m.statsTick()
@@ -1395,51 +1090,6 @@ func (m *Model) filterSummary() string {
 	b.WriteString(" | ")
 	b.WriteString(m.autoResetStatus())
 	return b.String()
-}
-
-// autoResetStatus is the human-readable label for the current
-// auto-reset cadence shown in the dashboard chrome.
-//   - "off" when the timer is disabled.
-//   - "<remaining>/<total>" while running and focused, e.g. "12s/30s".
-//     The countdown updates on every render (driven by the periodic
-//     refresh tick) so users can see when the next reset will fire.
-//   - "<total> (paused)" when enabled but the TUI has lost focus, so
-//     the user knows the timer will not fire until focus returns.
-//
-// Disabled timers stay "off" regardless of focus.
-func (m *Model) autoResetStatus() string {
-	if m.autoResetEvery <= 0 {
-		return "auto-reset: off"
-	}
-	if !m.focused {
-		return "auto-reset: " + m.autoResetEvery.String() + " (paused)"
-	}
-	return "auto-reset: " + formatAutoResetRemaining(m.autoResetArmedAt, m.autoResetEvery) + "/" + m.autoResetEvery.String()
-}
-
-// formatAutoResetRemaining renders the time left until the next
-// scheduled tick as a compact whole-second duration string ("12s",
-// "1m23s"). When armedAt is the zero value (e.g. just after enabling)
-// or the deadline has already elapsed, it returns "0s" so the chrome
-// always shows a value rather than an empty placeholder.
-func formatAutoResetRemaining(armedAt time.Time, every time.Duration) string {
-	if armedAt.IsZero() || every <= 0 {
-		return "0s"
-	}
-	remaining := time.Until(armedAt.Add(every))
-	if remaining < 0 {
-		remaining = 0
-	}
-	seconds := int(remaining.Round(time.Second).Seconds())
-	if seconds < 60 {
-		return fmt.Sprintf("%ds", seconds)
-	}
-	minutes := seconds / 60
-	secs := seconds % 60
-	if secs == 0 {
-		return fmt.Sprintf("%dm", minutes)
-	}
-	return fmt.Sprintf("%dm%ds", minutes, secs)
 }
 
 // renderActiveContent renders the active tab's body through its registered
@@ -1596,7 +1246,7 @@ func (m *Model) cycleVisualizationMode() tea.Cmd {
 	if next == tabVizModeBubbles {
 		m.refreshBubbleData()
 		if m.activeBubbleChartHasNodes() {
-			return bubbleTickCmdFn()
+			return m.ticks.bubbleCmd()
 		}
 	}
 	return nil
@@ -1618,7 +1268,7 @@ func (m *Model) toggleBubbleMetric() tea.Cmd {
 	m.keepSelection(m.activeTab, func() { ch.SetMetric(nextBubbleMetric(ch.Metric())) })
 	m.refreshBubbleData()
 	if m.bubbleEnabledForTab(m.activeTab) && m.activeBubbleChartHasNodes() {
-		return bubbleTickCmdFn()
+		return m.ticks.bubbleCmd()
 	}
 	return nil
 }
@@ -1647,10 +1297,6 @@ func nextBubbleMetric(metric bubbleMetric) bubbleMetric {
 	}
 }
 
-func tickCmd(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
-}
-
 // renderActiveTabContent dispatches to the registered render function for
 // tab. Each Render hook owns every state of its tab, including the
 // waiting-for-stats placeholder (snap may be nil) and the absent stream or
@@ -1661,34 +1307,6 @@ func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, strea
 		return common.Current().PanelStyle.Render("Unknown tab")
 	}
 	return d.Render(m, snap, streamModel, flameModel, width, height)
-}
-
-// streamTickCmd schedules the next high-frequency stream tab refresh tick.
-// It uses m.fastRefreshEvery when set; otherwise it falls back to the
-// streamRefreshMs constant so the behaviour is unchanged for callers that
-// did not supply a fast-refresh interval.
-func (m *Model) streamTickCmd() tea.Cmd {
-	d := m.fastRefreshEvery
-	if d <= 0 {
-		d = streamRefreshMs * time.Millisecond
-	}
-	return tea.Tick(d, func(time.Time) tea.Msg { return streamTickMsg{} })
-}
-
-// flameTickCmd schedules the next high-frequency flame tab refresh tick.
-// It uses m.fastRefreshEvery when set; otherwise it falls back to the
-// flameRefreshMs constant so the behaviour is unchanged for callers that
-// did not supply a fast-refresh interval.
-func (m *Model) flameTickCmd() tea.Cmd {
-	d := m.fastRefreshEvery
-	if d <= 0 {
-		d = flameRefreshMs * time.Millisecond
-	}
-	return tea.Tick(d, func(time.Time) tea.Msg { return flameTickMsg{} })
-}
-
-func bubbleTickCmdFn() tea.Cmd {
-	return tea.Tick(bubbleRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return bubbleTickMsg{} })
 }
 
 func streamViewport(width, height int) (int, int) {

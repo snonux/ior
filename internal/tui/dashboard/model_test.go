@@ -1876,13 +1876,13 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 	if cmd := m.SetAutoResetInterval(50 * time.Millisecond); cmd == nil {
 		t.Fatalf("SetAutoResetInterval should return a tick command for a positive interval")
 	}
-	gen := m.autoResetGen
+	gen := m.autoReset.gen
 
 	// Simulate blur. The returned cmd must be nil (no rearm).
 	if cmd := m.SetFocused(false); cmd != nil {
 		t.Fatalf("SetFocused(false) should not return a tick command, got %v", cmd)
 	}
-	if m.autoResetGen == gen {
+	if m.autoReset.gen == gen {
 		t.Fatalf("SetFocused(false) should bump autoResetGen so in-flight ticks are dropped")
 	}
 
@@ -1900,7 +1900,7 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 
 	// Even a tick crafted with the current generation must not fire
 	// while blurred — handleAutoResetTick gates on m.focused.
-	currentTick := autoResetTickMsg{generation: m.autoResetGen}
+	currentTick := autoResetTickMsg{generation: m.autoReset.gen}
 	next, cmd = m.Update(currentTick)
 	_ = next.(*Model)
 	if cmd != nil {
@@ -1923,18 +1923,18 @@ func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
 
 	// Focus regain must return a non-nil tick cmd because the timer is
 	// still configured, and bump the generation again.
-	preGen := m.autoResetGen
+	preGen := m.autoReset.gen
 	cmd := m.SetFocused(true)
 	if cmd == nil {
 		t.Fatalf("SetFocused(true) should return a fresh tick cmd when timer is enabled")
 	}
-	if m.autoResetGen == preGen {
+	if m.autoReset.gen == preGen {
 		t.Fatalf("SetFocused(true) should bump autoResetGen to invalidate any leftover ticks")
 	}
 
 	// Deliver a tick at the post-regain generation: the reset must fire
 	// and a fresh tick must be re-armed for the next interval.
-	tick := autoResetTickMsg{generation: m.autoResetGen}
+	tick := autoResetTickMsg{generation: m.autoReset.gen}
 	next, cmd := m.Update(tick)
 	_ = next.(*Model)
 	if cmd == nil {
@@ -1952,13 +1952,13 @@ func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
 func TestSetFocusedNoOpWhenStateUnchanged(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
 	m.SetAutoResetInterval(50 * time.Millisecond)
-	gen := m.autoResetGen
+	gen := m.autoReset.gen
 
 	if cmd := m.SetFocused(true); cmd != nil {
 		t.Fatalf("SetFocused(true) on already-focused model should be a no-op, got %v", cmd)
 	}
-	if m.autoResetGen != gen {
-		t.Fatalf("autoResetGen should not change on no-op focus call, was %d now %d", gen, m.autoResetGen)
+	if m.autoReset.gen != gen {
+		t.Fatalf("autoResetGen should not change on no-op focus call, was %d now %d", gen, m.autoReset.gen)
 	}
 }
 
@@ -2013,15 +2013,15 @@ func TestAutoResetStatusAddsPausedSuffixWhenBlurred(t *testing.T) {
 // backward-compatibility for callers that do not supply a fast refresh interval.
 func TestNewModelWithConfigZeroFastRefreshUsesDefault(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, 0, common.DefaultKeyMap())
-	if m.fastRefreshEvery != 0 {
-		t.Fatalf("expected fastRefreshEvery=0 (use constant default), got %v", m.fastRefreshEvery)
+	if m.ticks.fastRefreshEvery != 0 {
+		t.Fatalf("expected fastRefreshEvery=0 (use constant default), got %v", m.ticks.fastRefreshEvery)
 	}
 	// streamTickCmd and flameTickCmd should return non-nil commands even when
 	// fastRefreshEvery is zero, falling back to the constant cadence.
-	if cmd := m.streamTickCmd(); cmd == nil {
+	if cmd := m.ticks.streamCmd(); cmd == nil {
 		t.Fatalf("streamTickCmd() returned nil with zero fastRefreshEvery")
 	}
-	if cmd := m.flameTickCmd(); cmd == nil {
+	if cmd := m.ticks.flameCmd(); cmd == nil {
 		t.Fatalf("flameTickCmd() returned nil with zero fastRefreshEvery")
 	}
 }
@@ -2032,13 +2032,13 @@ func TestNewModelWithConfigFastRefreshStored(t *testing.T) {
 	const fastMs = 150
 	m := NewModelWithConfig(nil, nil, 1000, fastMs, common.DefaultKeyMap())
 	want := time.Duration(fastMs) * time.Millisecond
-	if m.fastRefreshEvery != want {
-		t.Fatalf("expected fastRefreshEvery=%v, got %v", want, m.fastRefreshEvery)
+	if m.ticks.fastRefreshEvery != want {
+		t.Fatalf("expected fastRefreshEvery=%v, got %v", want, m.ticks.fastRefreshEvery)
 	}
-	if cmd := m.streamTickCmd(); cmd == nil {
+	if cmd := m.ticks.streamCmd(); cmd == nil {
 		t.Fatalf("streamTickCmd() returned nil with fastRefreshEvery=%v", want)
 	}
-	if cmd := m.flameTickCmd(); cmd == nil {
+	if cmd := m.ticks.flameCmd(); cmd == nil {
 		t.Fatalf("flameTickCmd() returned nil with fastRefreshEvery=%v", want)
 	}
 }
@@ -2050,14 +2050,14 @@ func TestSetFastRefreshIntervalUpdatesModel(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 1000, 200, common.DefaultKeyMap())
 
 	m.SetFastRefreshInterval(500 * time.Millisecond)
-	if m.fastRefreshEvery != 500*time.Millisecond {
-		t.Fatalf("expected fastRefreshEvery=500ms after Set, got %v", m.fastRefreshEvery)
+	if m.ticks.fastRefreshEvery != 500*time.Millisecond {
+		t.Fatalf("expected fastRefreshEvery=500ms after Set, got %v", m.ticks.fastRefreshEvery)
 	}
 
 	// Negative value should be clamped to zero (constant fallback).
 	m.SetFastRefreshInterval(-1 * time.Millisecond)
-	if m.fastRefreshEvery != 0 {
-		t.Fatalf("expected fastRefreshEvery=0 after negative Set, got %v", m.fastRefreshEvery)
+	if m.ticks.fastRefreshEvery != 0 {
+		t.Fatalf("expected fastRefreshEvery=0 after negative Set, got %v", m.ticks.fastRefreshEvery)
 	}
 }
 
@@ -2083,7 +2083,7 @@ func TestFormatAutoResetRemainingFormats(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := formatAutoResetRemaining(tc.armedAt, tc.every); got != tc.want {
+			if got := formatAutoResetRemaining(tc.armedAt, tc.every, now); got != tc.want {
 				t.Fatalf("formatAutoResetRemaining(%v, %v) = %q, want %q", tc.armedAt, tc.every, got, tc.want)
 			}
 		})

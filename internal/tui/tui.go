@@ -713,7 +713,7 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 	case tea.BlurMsg:
 		m.focused = false
-		// SetFocused returns nil on blur but still bumps autoResetGen so
+		// SetFocused returns nil on blur but still bumps the auto-reset generation so
 		// that any in-flight tick scheduled before the blur is ignored.
 		m.dashboard.SetFocused(false)
 		return m, nil, true
@@ -789,13 +789,13 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 	m.focused = true
 	// SetFocused returns a tea.Cmd that arms a fresh auto-reset tick
 	// when focus returns (or nil if the timer is disabled). It also
-	// bumps the dashboard's autoResetGen so any tick that was scheduled
-	// before the blur and is still in flight is dropped on arrival.
+	// bumps the dashboard's auto-reset generation so any tick that was
+	// scheduled before the blur and is still in flight is dropped on arrival.
 	focusCmd := m.dashboard.SetFocused(true)
 	if m.router.current() == ScreenDashboard && !m.attaching {
-		// Init() arms its own auto-reset tick at the post-bump
-		// generation, so discard focusCmd here to avoid two
-		// concurrently-live ticks racing the cadence.
+		// Init() arms its own auto-reset chain (through an arm message
+		// that supersedes any other live chain), so discard focusCmd here
+		// to avoid two concurrently-live ticks racing the cadence.
 		return m, tea.Batch(m.dashboard.Init(), m.dashboard.SnapshotCmd())
 	}
 	return m, focusCmd
