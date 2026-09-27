@@ -181,9 +181,8 @@ otherwise round to zero.
 
 The cost and timing measurements execute `RefreshFromLiveTrieCmd()` and apply
 its `flameSnapshotReadyMsg`, so they cover the production `SnapshotTree`, zoom,
-layout, ancestry and update path rather than the heavier but irrelevant JSON
-round-trip. `TestFlameRefreshUsesTheTreeSnapshot` independently pins that both
-refresh entry points call `SnapshotTree` and never `SnapshotJSON`, and
+layout, ancestry and update path. `TestFlameRefreshUsesTheTreeSnapshot`
+independently pins that both refresh entry points call `SnapshotTree`, and
 `TestFlameTickDispatchesAndAppliesFlamegraphRefresh` starts one level higher:
 it advances the trie after `SetLiveTrie`, dispatches the dashboard's
 `flameTickMsg`, executes the returned batch and requires the new version to be
@@ -212,7 +211,7 @@ Same trap in the returned value: `flameSnapshotReadyMsg` is a struct, so
 a snapshot, frames and ancestry, apply it, and assert the model reaches the new
 version.
 
-Be precise about what the equivalence test catches. `SnapshotJSON` is
+Be precise about what the equivalence test catches. Its oracle is
 `json.Marshal(SnapshotTree())` decoded back into the same struct, so marshal
 and unmarshal stay self-consistent under any *rename* of a JSON tag — renaming
 `SnapshotNode.HeightTotal`'s tag, or dropping the tag, does not fail it. Only a

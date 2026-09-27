@@ -1,12 +1,15 @@
 package flamegraph
 
-// This file is the single home of the live-trie contract. Its two consumers —
-// the flamegraph TUI model (internal/tui/flamegraph) and the runtime wiring
-// contract (internal/runtime, which re-exports LiveTrieSource as an alias) —
-// both already import this leaf package, so declaring the interfaces here
-// keeps one definition without an import cycle and without making the TUI
-// widget depend on the runtime contract or the runtime contract depend on a
-// TUI package.
+// This file is the single home of the live-trie contract. Its consumers are
+// the flamegraph TUI model (internal/tui/flamegraph: Model holds a
+// LiveTrieSource, background refreshes a Snapshotter), the dashboard
+// (internal/tui/dashboard, which resets the trie and hands it to the
+// flamegraph model) and the runtime wiring contract (internal/runtime, via
+// its LiveTrieSource alias in RuntimePublisher.SetLiveTrie). All of them
+// already import this leaf package, so declaring the interfaces here keeps
+// one definition without an import cycle and without making the TUI widget
+// depend on the runtime contract or the runtime contract depend on a TUI
+// package.
 
 // Snapshotter is the read-only side of the trie contract: version polling and
 // snapshot retrieval. Background refresh jobs hold only this narrower view so
@@ -15,8 +18,8 @@ type Snapshotter interface {
 	// Version returns the monotonically-increasing snapshot generation counter.
 	// Callers use it to avoid re-rendering an unchanged trie.
 	Version() uint64
-	// SnapshotTree returns a ready-to-render snapshot tree without a JSON
-	// round-trip.
+	// SnapshotTree returns a ready-to-render snapshot tree. The tree is
+	// shared between callers and must be treated as read-only.
 	SnapshotTree() (*SnapshotNode, uint64)
 }
 

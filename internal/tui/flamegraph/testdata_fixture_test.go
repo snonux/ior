@@ -29,9 +29,9 @@ func TestFixtureSnapshotsHaveApproximateFrameCounts(t *testing.T) {
 
 func TestGenerateTestTrieProducesSnapshotData(t *testing.T) {
 	lt := generateTestTrie(fixtureSmallDepth, fixtureSmallBreadth)
-	snap, err := decodeTrieSnapshot(lt)
-	if err != nil {
-		t.Fatalf("decode trie snapshot: %v", err)
+	snap, _ := lt.SnapshotTree()
+	if snap == nil {
+		t.Fatal("SnapshotTree returned a nil tree")
 	}
 	if snap.Total == 0 {
 		t.Fatalf("expected generated trie snapshot to contain data")

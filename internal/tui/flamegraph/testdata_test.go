@@ -1,7 +1,6 @@
 package flamegraph
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 
@@ -173,13 +172,4 @@ func approxEqualCount(got, want int) bool {
 	const tolerance = 0.2
 	diff := math.Abs(float64(got-want)) / float64(want)
 	return diff <= tolerance
-}
-
-func decodeTrieSnapshot(lt *coreflamegraph.LiveTrie) (*snapshotNode, error) {
-	payload, _ := lt.SnapshotJSON()
-	var snap snapshotNode
-	if err := json.Unmarshal(payload, &snap); err != nil {
-		return nil, err
-	}
-	return &snap, nil
 }

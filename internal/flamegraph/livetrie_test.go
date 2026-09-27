@@ -1,12 +1,10 @@
 package flamegraph
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,7 +19,7 @@ func TestLiveTrieIngestAndSnapshotRoundTrip(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm", "pid"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 2, 3))
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if snap.Total != 1 {
 		t.Fatalf("root total = %d, want 1", snap.Total)
 	}
@@ -39,7 +37,7 @@ func TestLiveTrieIngestIsAdditive(t *testing.T) {
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 2, 10))
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 3, 4, 15))
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	leaf := findSnapshotPath(t, &snap, "/tmp", "/a")
 	if leaf.Value != 25 {
 		t.Fatalf("leaf bytes value = %d, want 25", leaf.Value)
@@ -56,7 +54,7 @@ func TestLiveTrieIngestCopiesBeforeRecycle(t *testing.T) {
 	lt.Ingest(pair)
 	pair.Recycle()
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	leaf := findSnapshotPath(t, &snap, "svc", "/tmp", "/a")
 	if got, want := leaf.Value, uint64(1); got != want {
 		t.Fatalf("leaf value after recycle = %d, want %d", got, want)
@@ -85,7 +83,7 @@ func TestLiveTrieCommTracepointPathAggregatesSameSyscallAcrossPaths(t *testing.T
 		Cnt:     Counter{Count: 1},
 	})
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	commNode := findSnapshotPath(t, &snap, "svc")
 	if len(commNode.Children) != 1 {
 		t.Fatalf("expected one syscall child under comm node, got %d", len(commNode.Children))
@@ -126,7 +124,7 @@ func TestLiveTrieAddRecordIncrementsVersion(t *testing.T) {
 	if got := lt.Version(); got != 1 {
 		t.Fatalf("version = %d, want 1", got)
 	}
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if snap.Total != 7 {
 		t.Fatalf("root total = %d, want 7", snap.Total)
 	}
@@ -139,7 +137,7 @@ func TestSeedTestFlameDataBuildsStaticFixture(t *testing.T) {
 	if got := lt.Version(); got == 0 {
 		t.Fatalf("expected seed fixture to add records")
 	}
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if snap.Total == 0 {
 		t.Fatalf("expected non-empty seeded snapshot")
 	}
@@ -155,13 +153,13 @@ func TestSeedTestLiveFlameDataVariesByTick(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 
 	SeedTestLiveFlameData(lt, 0)
-	snapTick0 := decodeLiveSnapshot(t, lt)
+	snapTick0 := liveSnapshot(t, lt)
 	apiTick0 := findSnapshotPath(t, &snapTick0, "api").Total
 	workerTick0 := findSnapshotPath(t, &snapTick0, "worker").Total
 
 	lt.Reset()
 	SeedTestLiveFlameData(lt, 1)
-	snapTick1 := decodeLiveSnapshot(t, lt)
+	snapTick1 := liveSnapshot(t, lt)
 	apiTick1 := findSnapshotPath(t, &snapTick1, "api").Total
 	workerTick1 := findSnapshotPath(t, &snapTick1, "worker").Total
 
@@ -191,13 +189,13 @@ func TestLiveTrieResetClearsDataAndAdvancesVersion(t *testing.T) {
 		t.Fatalf("version after reset = %d, want %d", got, before+1)
 	}
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if snap.Total != 0 {
 		t.Fatalf("snapshot total after reset = %d, want 0", snap.Total)
 	}
 
 	lt.Ingest(newTestPair("svc", 42, 1003, "/tmp/c", 1, 1, 1))
-	next := decodeLiveSnapshot(t, lt)
+	next := liveSnapshot(t, lt)
 	if next.Total != 1 {
 		t.Fatalf("snapshot total after new baseline ingest = %d, want 1", next.Total)
 	}
@@ -214,13 +212,13 @@ func TestLiveTrieReconfigureChangesOrderAndResets(t *testing.T) {
 		t.Fatalf("fields after reconfigure = %v, want [path comm]", got)
 	}
 
-	empty := decodeLiveSnapshot(t, lt)
+	empty := liveSnapshot(t, lt)
 	if empty.Total != 0 {
 		t.Fatalf("snapshot total after reconfigure = %d, want 0", empty.Total)
 	}
 
 	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/a", 1, 1, 1))
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	findSnapshotPath(t, &snap, "/tmp", "/a", "svc")
 }
 
@@ -245,7 +243,7 @@ func TestLiveTrieSetCountFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
 
-	initial := decodeLiveSnapshot(t, lt)
+	initial := liveSnapshot(t, lt)
 	if got, want := initial.Total, uint64(1); got != want {
 		t.Fatalf("count snapshot total = %d, want %d", got, want)
 	}
@@ -257,13 +255,13 @@ func TestLiveTrieSetCountFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
 		t.Fatalf("count field = %q, want %q", got, want)
 	}
 
-	empty := decodeLiveSnapshot(t, lt)
+	empty := liveSnapshot(t, lt)
 	if got := empty.Total; got != 0 {
 		t.Fatalf("expected reset baseline after metric switch, total=%d", got)
 	}
 
 	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 10, 1, 64))
-	bytesSnap := decodeLiveSnapshot(t, lt)
+	bytesSnap := liveSnapshot(t, lt)
 	if got, want := bytesSnap.Total, uint64(64); got != want {
 		t.Fatalf("bytes snapshot total = %d, want %d", got, want)
 	}
@@ -294,7 +292,7 @@ func TestLiveTrieHeightFieldTracksIndependentMetric(t *testing.T) {
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
 	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 10, 1, 128))
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if got, want := snap.Total, uint64(2); got != want {
 		t.Fatalf("root total = %d, want %d", got, want)
 	}
@@ -314,7 +312,7 @@ func TestLiveTrieSetHeightFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
 
-	initial := decodeLiveSnapshot(t, lt)
+	initial := liveSnapshot(t, lt)
 	if got, want := initial.HeightTotal, uint64(1); got != want {
 		t.Fatalf("initial height total = %d, want %d", got, want)
 	}
@@ -326,7 +324,7 @@ func TestLiveTrieSetHeightFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
 		t.Fatalf("height field = %q, want %q", got, want)
 	}
 
-	empty := decodeLiveSnapshot(t, lt)
+	empty := liveSnapshot(t, lt)
 	if got := empty.Total; got != 0 {
 		t.Fatalf("expected reset baseline after height metric switch, total=%d", got)
 	}
@@ -335,7 +333,7 @@ func TestLiveTrieSetHeightFieldSwitchesMetricAndResetsBaseline(t *testing.T) {
 	}
 
 	lt.Ingest(newTestPair("svc", 42, 1002, "/tmp/b", 10, 1, 64))
-	next := decodeLiveSnapshot(t, lt)
+	next := liveSnapshot(t, lt)
 	if got, want := next.Total, uint64(1); got != want {
 		t.Fatalf("total after switch = %d, want %d", got, want)
 	}
@@ -372,7 +370,7 @@ func TestLiveTrieSetHeightFieldNoopKeepsBaseline(t *testing.T) {
 		t.Fatalf("version changed on noop height field set: got %d want %d", got, beforeVersion)
 	}
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if got, want := snap.Total, uint64(1); got != want {
 		t.Fatalf("total after noop height switch = %d, want %d", got, want)
 	}
@@ -385,7 +383,7 @@ func TestLiveTrieHeightFieldEmptyDisablesHeightTotals(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "")
 	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 10, 1, 64))
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if got, want := snap.Total, uint64(1); got != want {
 		t.Fatalf("root total = %d, want %d", got, want)
 	}
@@ -400,7 +398,7 @@ func TestLiveTrieSnapshotHeightTotalsAccumulateAcrossBranches(t *testing.T) {
 	lt.Ingest(newTestPair("svc", 102, 1002, "/tmp/b", 10, 1, 40))
 	lt.Ingest(newTestPair("db", 201, 1003, "/tmp/c", 10, 1, 10))
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if got, want := snap.Total, uint64(3); got != want {
 		t.Fatalf("root total = %d, want %d", got, want)
 	}
@@ -425,56 +423,14 @@ func TestLiveTrieSnapshotHeightTotalsAccumulateAcrossBranches(t *testing.T) {
 	}
 }
 
-func TestLiveTrieSnapshotJSONCaching(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count", "count")
-	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
-
-	first, version1 := lt.SnapshotJSON()
-	second, version2 := lt.SnapshotJSON()
-
-	if version1 != version2 {
-		t.Fatalf("versions differ: %d != %d", version1, version2)
-	}
-	if !bytes.Equal(first, second) {
-		t.Fatalf("snapshot bytes differ across cached call")
-	}
-}
-
-func TestLiveTrieSnapshotJSONSkipsStaleCacheWrite(t *testing.T) {
-	lt := NewLiveTrie([]string{"comm"}, "count", "count")
-	lt.Ingest(newTestPair("svc", 42, 1001, "/tmp/a", 1, 1, 1))
-
-	_, version := lt.SnapshotJSON()
-	newerPayload := []byte(`{"n":"newer","v":7}`)
-
-	lt.cacheMu.Lock()
-	lt.cacheVersion = version + 1
-	lt.cacheJSON = slices.Clone(newerPayload)
-	lt.cacheMu.Unlock()
-
-	_, _ = lt.SnapshotJSON()
-
-	lt.cacheMu.Lock()
-	gotVersion := lt.cacheVersion
-	gotPayload := slices.Clone(lt.cacheJSON)
-	lt.cacheMu.Unlock()
-
-	if gotVersion != version+1 {
-		t.Fatalf("cache version overwritten by stale snapshot: got %d want %d", gotVersion, version+1)
-	}
-	if !bytes.Equal(gotPayload, newerPayload) {
-		t.Fatalf("cache payload overwritten by stale snapshot: got %q want %q", gotPayload, newerPayload)
-	}
-}
-
-func TestLiveTrieSnapshotJSONPrunesTinyNodes(t *testing.T) {
+func TestLiveTrieSnapshotTreePrunesTinyNodes(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	for i := 0; i < 2000; i++ {
 		lt.Ingest(newTestPair("big", 42, uint32(1000+i), "/tmp/a", 1, 1, 1))
 	}
 	lt.Ingest(newTestPair("tiny", 42, 99999, "/tmp/z", 1, 1, 1))
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if findSnapshotChild(&snap, "big") == nil {
 		t.Fatalf("expected big node in snapshot")
 	}
@@ -540,7 +496,7 @@ func TestLiveTrieSnapshotTreePrunesAgainstTheRunningRootTotal(t *testing.T) {
 	}
 }
 
-func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testing.T) {
+func TestLiveTrieSnapshotTreeKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "count")
 	const total = 6000
 	for i := 0; i < total; i++ {
@@ -548,7 +504,7 @@ func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testin
 		lt.Ingest(newTestPair(comm, 42, uint32(100000+i), "/tmp/a", 1, 1, 1))
 	}
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	if len(snap.Children) == 0 {
 		t.Fatalf("expected fallback root children when pruning would hide every branch")
 	}
@@ -557,7 +513,7 @@ func TestLiveTrieSnapshotJSONKeepsFallbackChildrenWhenAllAreTinyAtRoot(t *testin
 	}
 }
 
-func TestLiveTrieSnapshotJSONKeepsFallbackChildrenAtDepthOne(t *testing.T) {
+func TestLiveTrieSnapshotTreeKeepsFallbackChildrenAtDepthOne(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm", "pid"}, "count", "count")
 	const total = 6000
 	for i := 0; i < total; i++ {
@@ -565,7 +521,7 @@ func TestLiveTrieSnapshotJSONKeepsFallbackChildrenAtDepthOne(t *testing.T) {
 		lt.Ingest(newTestPair("svc", pid, pid, "/tmp/a", 1, 1, 1))
 	}
 
-	snap := decodeLiveSnapshot(t, lt)
+	snap := liveSnapshot(t, lt)
 	commNode := findSnapshotPath(t, &snap, "svc")
 	if len(commNode.Children) == 0 {
 		t.Fatalf("expected fallback depth-one children for pid branches")
@@ -591,10 +547,8 @@ func TestLiveTrieConcurrentIngestAndSnapshot(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 500; i++ {
-			payload, _ := lt.SnapshotJSON()
-			var snap SnapshotNode
-			if err := json.Unmarshal(payload, &snap); err != nil {
-				t.Errorf("unmarshal snapshot: %v", err)
+			if tree, _ := lt.SnapshotTree(); tree == nil {
+				t.Error("SnapshotTree returned a nil tree")
 				return
 			}
 		}
@@ -665,10 +619,8 @@ func TestLiveTrieConcurrentAddRecordAndMetricToggle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	payload, _ := lt.SnapshotJSON()
-	var snap SnapshotNode
-	if err := json.Unmarshal(payload, &snap); err != nil {
-		t.Fatalf("unmarshal snapshot after concurrent updates: %v", err)
+	if tree, _ := lt.SnapshotTree(); tree == nil {
+		t.Fatal("SnapshotTree returned a nil tree after concurrent updates")
 	}
 }
 
@@ -702,10 +654,8 @@ func TestLiveTrieStressHighRateConcurrentSnapshot(t *testing.T) {
 				case <-done:
 					return
 				case <-ticker.C:
-					payload, _ := lt.SnapshotJSON()
-					var snap SnapshotNode
-					if err := json.Unmarshal(payload, &snap); err != nil {
-						errCh <- fmt.Errorf("snapshot json invalid: %w", err)
+					if tree, _ := lt.SnapshotTree(); tree == nil {
+						errCh <- errors.New("SnapshotTree returned a nil tree")
 						return
 					}
 					snapshots.Add(1)
@@ -737,7 +687,7 @@ func TestLiveTrieStressHighRateConcurrentSnapshot(t *testing.T) {
 		t.Fatalf("expected at least one concurrent snapshot read")
 	}
 
-	final := decodeLiveSnapshot(t, lt)
+	final := liveSnapshot(t, lt)
 	if final.Total != totalEvents {
 		t.Fatalf("final total = %d, want %d", final.Total, totalEvents)
 	}
@@ -773,14 +723,13 @@ func newTestPair(comm string, pid uint32, tid uint32, path string, duration uint
 	return pair
 }
 
-func decodeLiveSnapshot(t *testing.T, lt *LiveTrie) SnapshotNode {
+func liveSnapshot(t *testing.T, lt *LiveTrie) SnapshotNode {
 	t.Helper()
-	payload, _ := lt.SnapshotJSON()
-	var snap SnapshotNode
-	if err := json.Unmarshal(payload, &snap); err != nil {
-		t.Fatalf("unmarshal snapshot: %v", err)
+	tree, _ := lt.SnapshotTree()
+	if tree == nil {
+		t.Fatal("SnapshotTree returned a nil tree")
 	}
-	return snap
+	return *tree
 }
 
 func findSnapshotPath(t *testing.T, root *SnapshotNode, names ...string) *SnapshotNode {
