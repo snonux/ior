@@ -306,11 +306,11 @@ func (m *Model) invalidateRefresh() {
 
 // handleSearchInput processes key events while search mode is active.
 // Delegates key dispatch (esc/enter/text) to SearchController, then updates
-// match state and status message on the Model. The text input's own command
-// (e.g. its cursor blink) is returned rather than dropped, as Bubble Tea
-// requires of a parent forwarding a key to a child model.
+// match state and status message on the Model. It returns no command: the
+// text input's cursor-blink command is dropped in handleInput because nothing
+// routes blink messages back to it.
 func (m *Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	inputCmd, committed, query, cancelled := m.search.handleInput(msg)
+	committed, query, cancelled := m.search.handleInput(msg)
 	switch {
 	case cancelled:
 		// ESC: clear search state and close search mode.
@@ -325,7 +325,7 @@ func (m *Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		m.recordKeyDebug(msg, true, false)
 	}
-	return m, inputCmd
+	return m, nil
 }
 
 // handleKeyNavigation processes navigation key events when search is not active.

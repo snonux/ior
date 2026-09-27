@@ -110,19 +110,26 @@ func (sc *SearchController) commit(raw string, frames []tuiFrame, ancestry frame
 	return sc.applyQuery(raw, frames, ancestry)
 }
 
-// handleInput processes a key event while search mode is active. Returns the
-// updated text input command, plus booleans for whether the search was committed
-// or cancelled. The committed value carries the final query string.
-func (sc *SearchController) handleInput(msg tea.KeyPressMsg) (cmd tea.Cmd, committed bool, query string, cancelled bool) {
+// handleInput processes a key event while search mode is active. It reports
+// whether the search was committed or cancelled; the committed value carries
+// the final query string.
+//
+// The text input's command is discarded, as in the stream search, stream
+// export and recording modals: it only schedules the cursor blink, and no
+// parent routes the blink message back to this input (the flamegraph's Update
+// handles keys, mouse clicks, resizes and its own ticks only), so returning
+// it would leave orphan timers while the cursor still never blinks.
+func (sc *SearchController) handleInput(msg tea.KeyPressMsg) (committed bool, query string, cancelled bool) {
 	switch msg.String() {
 	case "esc":
-		return nil, false, "", true
+		return false, "", true
 	case "enter":
-		return nil, true, sc.searchInput.Value(), false
+		return true, sc.searchInput.Value(), false
 	}
-	var c tea.Cmd
-	sc.searchInput, c = sc.searchInput.Update(msg)
-	return c, false, "", false
+	var cmd tea.Cmd
+	sc.searchInput, cmd = sc.searchInput.Update(msg)
+	_ = cmd
+	return false, "", false
 }
 
 // recomputeFilterState rebuilds matchIndices and filterVisible from the current
