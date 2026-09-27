@@ -5,6 +5,8 @@ import (
 	"time"
 
 	common "ior/internal/tui/common"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestNewTickSchedulerCadences(t *testing.T) {
@@ -121,5 +123,129 @@ func TestStaleAutoResetTickAfterIntervalChangeIsDropped(t *testing.T) {
 	}
 	if engine.resetCount != 0 {
 		t.Fatalf("a stale auto-reset tick reset the engine %d times", engine.resetCount)
+	}
+}
+
+// startChains delivers Init's tick chain start and returns the commands it
+// scheduled, without running them.
+func startChains(t *testing.T, m *Model) tea.BatchMsg {
+	t.Helper()
+	_, cmd := m.Update(tickChainsStartMsg{})
+	// tea.Batch yields its member list without running the members, so
+	// this never waits on a timer.
+	batch, ok := runCmd(cmd).(tea.BatchMsg)
+	if !ok {
+		t.Fatal("a focused chain start must schedule a batch of ticks")
+	}
+	return batch
+}
+
+// TestDoubleInitLeavesOneChainOfEachKind covers two Inits whose chain starts
+// are both handled (a focus regain followed by a trace start): the second
+// start supersedes the first, so the first chains' ticks are dropped without
+// rescheduling and only the second chains keep running.
+func TestDoubleInitLeavesOneChainOfEachKind(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
+	first := startChains(t, m)
+	firstRefresh, firstFast := m.ticks.refresh.gen, m.ticks.fast.gen
+	second := startChains(t, m)
+	if len(first) != 2 || len(second) != 2 {
+		t.Fatalf("chain starts scheduled %d and %d commands, want refresh and flame", len(first), len(second))
+	}
+	if m.ticks.refresh.gen == firstRefresh || m.ticks.fast.gen == firstFast {
+		t.Fatal("the second start must supersede the first chains")
+	}
+
+	for _, stale := range []tea.Msg{
+		refreshTickMsg{generation: firstRefresh},
+		flameTickMsg{generation: firstFast},
+	} {
+		if _, cmd := m.Update(stale); cmd != nil {
+			t.Errorf("stale %T was rescheduled", stale)
+		}
+	}
+	for _, live := range []tea.Msg{
+		refreshTickMsg{generation: m.ticks.refresh.gen},
+		flameTickMsg{generation: m.ticks.fast.gen},
+	} {
+		if _, cmd := m.Update(live); cmd == nil {
+			t.Errorf("live %T was not re-armed", live)
+		}
+	}
+	// The first start's own flame tick carries the superseded generation.
+	if msg, ok := runCmd(first[1]).(flameTickMsg); !ok || msg.generation != firstFast {
+		t.Fatalf("first start's flame tick = %#v, want generation %d", runCmd(first[1]), firstFast)
+	}
+}
+
+// TestChainStartWhileBlurredSchedulesNothing: a blurred dashboard still
+// supersedes the running chains (their ticks would be dropped anyway) but
+// starts none; focus regain requests a fresh start.
+func TestChainStartWhileBlurredSchedulesNothing(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
+	m.SetFocused(false)
+	gen := m.ticks.refresh.gen
+	if _, cmd := m.Update(tickChainsStartMsg{}); cmd != nil {
+		t.Fatal("a blurred chain start must schedule nothing")
+	}
+	if m.ticks.refresh.gen == gen {
+		t.Fatal("a blurred chain start must still supersede the running chains")
+	}
+}
+
+// TestTabReentrySupersedesFastChain covers leaving the Flame tab and coming
+// back before its in-flight tick arrives: the re-entry starts a new chain,
+// so the old tick is dropped instead of running a second chain.
+func TestTabReentrySupersedesFastChain(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
+	old := m.ticks.fast.gen
+	m = pressKey(m, '2')
+	m = pressKey(m, '1')
+	if m.activeTab != TabFlame {
+		t.Fatalf("active tab = %v, want Flame", m.activeTab)
+	}
+	if _, cmd := m.Update(flameTickMsg{generation: old}); cmd != nil {
+		t.Fatal("the pre-switch flame tick must be dropped")
+	}
+	if _, cmd := m.Update(flameTickMsg{generation: m.ticks.fast.gen}); cmd == nil {
+		t.Fatal("the re-entry chain's tick must re-arm")
+	}
+}
+
+// TestStreamResumeSupersedesFastChain: the stream chain keeps ticking while
+// paused, so resuming restarts it rather than adding a second chain.
+func TestStreamResumeSupersedesFastChain(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
+	m.activeTab = TabStream
+	space := tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	m.Update(space) // pause
+	old := m.ticks.fast.gen
+	if _, cmd := m.Update(streamTickMsg{generation: old}); cmd == nil {
+		t.Fatal("the stream chain must keep ticking while paused")
+	}
+	m.Update(space) // resume
+	if m.ticks.fast.gen == old {
+		t.Fatal("resuming must start a new stream chain")
+	}
+	if _, cmd := m.Update(streamTickMsg{generation: old}); cmd != nil {
+		t.Fatal("the pre-resume stream tick must be dropped")
+	}
+}
+
+// TestBubbleRestartDropsStaleFrames: every bubble chain start (a stats
+// tick, a viz or metric change) supersedes the running animation chain.
+func TestBubbleRestartDropsStaleFrames(t *testing.T) {
+	m := NewModelWithConfig(nil, nil, 250, 1, common.DefaultKeyMap())
+	m.activeTab = TabSyscalls
+	m.syscallsTab.mode = tabVizModeBubbles
+	old := m.ticks.bubble.gen
+	if cmd := m.ticks.startBubble(); cmd == nil {
+		t.Fatal("startBubble must schedule a frame")
+	}
+	if m.ticks.bubble.gen == old {
+		t.Fatal("startBubble must supersede the running chain")
+	}
+	if _, cmd := m.Update(bubbleTickMsg{generation: old}); cmd != nil {
+		t.Fatal("a frame of the superseded bubble chain must be dropped")
 	}
 }

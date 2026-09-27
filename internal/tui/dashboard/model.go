@@ -151,13 +151,13 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 // (e.g. stream and flame use a fast cadence controlled by fastRefreshEvery,
 // defaulting to streamRefreshMs / flameRefreshMs when not explicitly set).
 //
-// Init only reads the model. The auto-reset chain is started through an
-// autoResetArmMsg that Update handles, because starting it also restarts
-// the chrome countdown (see autoResetArmMsg).
+// Init only reads the model. Starting a tick chain supersedes the one
+// already running (and, for auto-reset, restarts the chrome countdown), so
+// Init asks Update to do it: the refresh and tab chains through a
+// tickChainsStartMsg, the auto-reset chain through an autoResetArmMsg.
 func (m *Model) Init() tea.Cmd {
 	return batchCmds(
-		m.ticks.refreshCmd(),
-		m.tabEntryTickCmd(m.activeTab),
+		tickChainsStartCmd(),
 		m.autoReset.armCmd(m.focused),
 	)
 }
@@ -167,14 +167,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
+	case tickChainsStartMsg:
+		return m.handleTickChainsStart()
 	case refreshTickMsg:
-		return m.handleRefreshTick()
+		return m.handleRefreshTick(msg)
 	case streamTickMsg:
-		return m.handleStreamTick()
+		return m.handleStreamTick(msg)
 	case flameTickMsg:
-		return m.handleFlameTick()
+		return m.handleFlameTick(msg)
 	case bubbleTickMsg:
-		return m.handleBubbleTick()
+		return m.handleBubbleTick(msg)
 	case autoResetTickMsg:
 		return m.handleAutoResetTick(msg)
 	case autoResetArmMsg:
@@ -206,7 +208,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.syncFlameViewport()
 	m.setBubbleViewports()
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return m, m.ticks.bubbleCmd()
+		return m, m.ticks.startBubble()
 	}
 	return m, nil
 }
@@ -237,7 +239,7 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
-		return m, m.ticks.bubbleCmd()
+		return m, m.ticks.startBubble()
 	}
 	return m, nil
 }
@@ -280,9 +282,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	prevActiveTab := m.activeTab
 	handled, cmd := m.handleScrollKey(msg)
 	if handled && isStreamResumeKey(msg) && m.activeTab == TabStream && !m.streamModel.Paused() {
-		// Re-arm the stream tick with the configurable fast-refresh cadence after
-		// the user unpauses the stream with a scroll/space key.
-		cmd = m.ticks.streamCmd()
+		// Restart the stream tick with the configurable fast-refresh cadence
+		// after the user unpauses the stream with a scroll/space key. The
+		// chain keeps ticking while paused, so this supersedes it rather
+		// than running a second one.
+		cmd = m.ticks.startStream()
 	}
 	if !handled {
 		handled, cmd = m.handleEnterKey(msg)
@@ -598,7 +602,7 @@ func (m *Model) toggleFilesDirGrouping() tea.Cmd {
 		m.filesTab.mode = tabVizModeTable
 	}
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return m.ticks.bubbleCmd()
+		return m.ticks.startBubble()
 	}
 	return nil
 }
@@ -1246,7 +1250,7 @@ func (m *Model) cycleVisualizationMode() tea.Cmd {
 	if next == tabVizModeBubbles {
 		m.refreshBubbleData()
 		if m.activeBubbleChartHasNodes() {
-			return m.ticks.bubbleCmd()
+			return m.ticks.startBubble()
 		}
 	}
 	return nil
@@ -1268,7 +1272,7 @@ func (m *Model) toggleBubbleMetric() tea.Cmd {
 	m.keepSelection(m.activeTab, func() { ch.SetMetric(nextBubbleMetric(ch.Metric())) })
 	m.refreshBubbleData()
 	if m.bubbleEnabledForTab(m.activeTab) && m.activeBubbleChartHasNodes() {
-		return m.ticks.bubbleCmd()
+		return m.ticks.startBubble()
 	}
 	return nil
 }

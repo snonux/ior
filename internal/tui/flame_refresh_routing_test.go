@@ -141,11 +141,19 @@ func newTopLevelFlameRefreshModel(t *testing.T) *Model {
 
 func dispatchTopLevelFlameRefresh(t *testing.T, m *Model) (tea.Msg, tea.Msg) {
 	t.Helper()
-	initBatch := requireTopLevelBatch(t, m.dashboard.Init())
-	if len(initBatch) < 2 {
-		t.Fatalf("dashboard init dispatched %d commands, want standard and flame ticks", len(initBatch))
+	// Init only asks for the tick chains to start; handling that request
+	// schedules the refresh and flame ticks. The auto-reset timer is off
+	// so Init's single command is that request.
+	m.dashboard.SetAutoResetInterval(0)
+	next, startCmd := m.Update(m.dashboard.Init()())
+	if next != m {
+		t.Fatalf("tick chain start returned %T at a different address", next)
 	}
-	flameTick := initBatch[1]()
+	startBatch := requireTopLevelBatch(t, startCmd)
+	if len(startBatch) < 2 {
+		t.Fatalf("tick chain start dispatched %d commands, want standard and flame ticks", len(startBatch))
+	}
+	flameTick := startBatch[1]()
 	next, cmd := m.Update(flameTick)
 	if next != m {
 		t.Fatalf("flame tick returned %T at a different address", next)

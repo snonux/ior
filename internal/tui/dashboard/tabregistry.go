@@ -76,11 +76,13 @@ type tabDescriptor struct {
 	// the standard viewport (tab bar plus the help hint or expanded help
 	// bar; see flameViewport).
 	ContentViewport func(width, height int, showHelp bool) (int, int)
-	// InitCmd is an optional extra Bubble Tea command to start alongside the
-	// global refresh tick when this tab is the active tab on Init. Tabs that
-	// need their own high-frequency tick (stream, flame) set this; others leave
-	// it nil. The model is passed so the closure can use the configured
-	// fastRefreshEvery interval rather than a hardcoded constant.
+	// InitCmd starts this tab's own tick chain whenever the tab becomes the
+	// active one: on entry and when Init's tickChainsStartMsg is handled,
+	// alongside the global refresh chain. It runs on the Update path and
+	// supersedes the chain already running (tickScheduler.start...). Tabs
+	// that need their own high-frequency tick (stream, flame) set this;
+	// others leave it nil. The model is passed so the closure can use the
+	// configured fastRefreshEvery interval rather than a hardcoded constant.
 	InitCmd func(*Model) tea.Cmd
 	// Render draws the tab body in every state the tab can be in, including
 	// the waiting-for-stats state before the first snapshot and, for a table
@@ -157,7 +159,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
 			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
-			InitCmd:     func(m *Model) tea.Cmd { return m.ticks.flameCmd() },
+			InitCmd:     func(m *Model) tea.Cmd { return m.ticks.startFlame() },
 			Render:      tabRenderFlame,
 			ShortcutKey: func(k common.KeyMap) key.Binding { return k.One },
 			BlocksGlobalShortcut: func(m *Model, msg tea.KeyPressMsg) bool {
@@ -246,7 +248,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
 			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
-			InitCmd: func(m *Model) tea.Cmd { return m.ticks.streamCmd() },
+			InitCmd: func(m *Model) tea.Cmd { return m.ticks.startStream() },
 			// The stream draws its own footer, so its viewport ignores the
 			// dashboard help bar.
 			ContentViewport: func(width, height int, _ bool) (int, int) { return streamViewport(width, height) },

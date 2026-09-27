@@ -13,17 +13,47 @@ const bubbleRefreshMs = 33
 
 // The periodic tick chains the dashboard runs. Each handler re-arms its own
 // chain while the chain is still wanted (focused, right tab, something to
-// animate) and lets it die otherwise; tab entry, Init and focus regain start
-// a chain again. The auto-reset chain lives in autoreset.go because it
-// carries a generation and a countdown.
-type refreshTickMsg struct{}
-type streamTickMsg struct{}
-type flameTickMsg struct{}
-type bubbleTickMsg struct{}
+// animate) and lets it die otherwise; tab entry, Init (through
+// tickChainsStartMsg) and focus regain start a chain again. Every tick
+// carries the generation of the chain that scheduled it: starting a chain
+// bumps the generation, so a chain that is still in flight when a new one
+// starts is dropped on its next tick instead of running alongside it. The
+// auto-reset chain lives in autoreset.go because it also carries a
+// countdown.
+type refreshTickMsg struct{ generation uint64 }
+type streamTickMsg struct{ generation uint64 }
+type flameTickMsg struct{ generation uint64 }
+type bubbleTickMsg struct{ generation uint64 }
 
-// tickScheduler owns the cadences of the dashboard's periodic tick chains and
-// builds the commands that schedule them. It holds no model state beyond the
-// cadences, so which chain runs when stays with the Model's tick handlers.
+// tickChainsStartMsg starts the refresh chain and the active tab's chain.
+// Init emits it instead of scheduling those ticks itself: starting a chain
+// supersedes the previous one by bumping its generation, and Init must stay
+// free of side effects. Handling it always supersedes, so two Inits in a row
+// (a focus regain followed by a trace start, say) leave one chain of each
+// kind rather than two.
+type tickChainsStartMsg struct{}
+
+// tickChain is the generation of one tick chain. A tick is current only
+// while it carries the generation the chain had when it was scheduled.
+type tickChain struct{ gen uint64 }
+
+// restart supersedes the running chain and returns the new generation.
+func (c *tickChain) restart() uint64 {
+	c.gen++
+	return c.gen
+}
+
+// isCurrent reports whether a tick of generation gen belongs to the live
+// chain.
+func (c *tickChain) isCurrent(gen uint64) bool {
+	return gen == c.gen
+}
+
+// tickScheduler owns the cadences and generations of the dashboard's
+// periodic tick chains and builds the commands that schedule them. The
+// "...Cmd" methods re-arm the live chain; the "start..." methods supersede it
+// and begin a new one. When each chain should run stays with the Model's
+// tick handlers and chain-start paths.
 type tickScheduler struct {
 	// refreshEvery is the stats refresh cadence (always positive).
 	refreshEvery time.Duration
@@ -33,6 +63,13 @@ type tickScheduler struct {
 	// backwards-compatible with callers that do not supply a fast-refresh
 	// interval.
 	fastRefreshEvery time.Duration
+	// refresh, fast and bubble are the generations of the stats refresh
+	// chain, the stream/flame fast chain (only one of the two tabs is
+	// active at a time, so they share a chain) and the bubble animation
+	// chain.
+	refresh tickChain
+	fast    tickChain
+	bubble  tickChain
 }
 
 // newTickScheduler builds the cadences from the constructor's millisecond
@@ -74,32 +111,59 @@ func fastOr(configured, fallback time.Duration) time.Duration {
 	return configured
 }
 
-// refreshCmd schedules the next stats refresh tick.
+// refreshCmd re-arms the stats refresh chain.
 func (s *tickScheduler) refreshCmd() tea.Cmd {
-	return tea.Tick(s.refreshEvery, func(time.Time) tea.Msg { return refreshTickMsg{} })
+	gen := s.refresh.gen
+	return tea.Tick(s.refreshEvery, func(time.Time) tea.Msg { return refreshTickMsg{generation: gen} })
 }
 
-// streamCmd schedules the next high-frequency stream tab refresh tick.
+// streamCmd re-arms the fast chain on the stream tab's cadence.
 func (s *tickScheduler) streamCmd() tea.Cmd {
-	return tea.Tick(s.streamInterval(), func(time.Time) tea.Msg { return streamTickMsg{} })
+	gen := s.fast.gen
+	return tea.Tick(s.streamInterval(), func(time.Time) tea.Msg { return streamTickMsg{generation: gen} })
 }
 
-// flameCmd schedules the next high-frequency flame tab refresh tick.
+// flameCmd re-arms the fast chain on the flame tab's cadence.
 func (s *tickScheduler) flameCmd() tea.Cmd {
-	return tea.Tick(s.flameInterval(), func(time.Time) tea.Msg { return flameTickMsg{} })
+	gen := s.fast.gen
+	return tea.Tick(s.flameInterval(), func(time.Time) tea.Msg { return flameTickMsg{generation: gen} })
 }
 
-// bubbleCmd schedules the next bubble-chart animation frame. Its cadence is
-// fixed, so it needs no scheduler state; it is a method so every tick chain
-// is started through the same collaborator.
+// bubbleCmd re-arms the bubble animation chain; its cadence is fixed.
 func (s *tickScheduler) bubbleCmd() tea.Cmd {
-	return tea.Tick(bubbleRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return bubbleTickMsg{} })
+	gen := s.bubble.gen
+	return tea.Tick(bubbleRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return bubbleTickMsg{generation: gen} })
+}
+
+// startRefresh supersedes the refresh chain and schedules its first tick.
+func (s *tickScheduler) startRefresh() tea.Cmd {
+	s.refresh.restart()
+	return s.refreshCmd()
+}
+
+// startStream supersedes the fast chain and starts it on the stream cadence.
+func (s *tickScheduler) startStream() tea.Cmd {
+	s.fast.restart()
+	return s.streamCmd()
+}
+
+// startFlame supersedes the fast chain and starts it on the flame cadence.
+func (s *tickScheduler) startFlame() tea.Cmd {
+	s.fast.restart()
+	return s.flameCmd()
+}
+
+// startBubble supersedes the bubble chain and schedules its first frame.
+func (s *tickScheduler) startBubble() tea.Cmd {
+	s.bubble.restart()
+	return s.bubbleCmd()
 }
 
 // tabEntryTickCmd starts the tick chain tab needs while it is active: the
-// tab's own InitCmd (the stream and flame fast ticks) or, failing that, the
-// bubble animation when the tab shows a bubble chart. It is shared by Init
-// and by the tab-switch path so both start the same chain.
+// tab's own InitCmd (the stream and flame fast chain) or, failing that, the
+// bubble animation when the tab shows a bubble chart. It is shared by the
+// chain start Init requests and by the tab-switch path so both start the
+// same chain; starting supersedes the chain already running.
 func (m *Model) tabEntryTickCmd(tab Tab) tea.Cmd {
 	if d := lookupTab(tab); d.InitCmd != nil {
 		// Pass the model so the closure reads the configured fast cadence
@@ -107,13 +171,33 @@ func (m *Model) tabEntryTickCmd(tab Tab) tea.Cmd {
 		return d.InitCmd(m)
 	}
 	if m.bubbleEnabledForTab(tab) {
-		return m.ticks.bubbleCmd()
+		return m.ticks.startBubble()
 	}
 	return nil
 }
 
-func (m *Model) handleRefreshTick() (tea.Model, tea.Cmd) {
+// tickChainsStartCmd is Init's side-effect-free request to start the
+// refresh chain and the active tab's chain (see tickChainsStartMsg).
+func tickChainsStartCmd() tea.Cmd {
+	return func() tea.Msg { return tickChainsStartMsg{} }
+}
+
+// handleTickChainsStart supersedes every chain Init starts and, while
+// focused, schedules the first tick of each. A blurred dashboard starts
+// nothing: its handlers would drop the ticks anyway, and focus regain asks
+// for a fresh start.
+func (m *Model) handleTickChainsStart() (tea.Model, tea.Cmd) {
+	m.ticks.refresh.restart()
+	m.ticks.fast.restart()
+	m.ticks.bubble.restart()
 	if !m.focused {
+		return m, nil
+	}
+	return m, batchCmds(m.ticks.refreshCmd(), m.tabEntryTickCmd(m.activeTab))
+}
+
+func (m *Model) handleRefreshTick(msg refreshTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || !m.ticks.refresh.isCurrent(msg.generation) {
 		return m, nil
 	}
 	tick := m.statsTick()
@@ -123,8 +207,8 @@ func (m *Model) handleRefreshTick() (tea.Model, tea.Cmd) {
 	)
 }
 
-func (m *Model) handleStreamTick() (tea.Model, tea.Cmd) {
-	if !m.focused || m.activeTab != TabStream {
+func (m *Model) handleStreamTick(msg streamTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || m.activeTab != TabStream || !m.ticks.fast.isCurrent(msg.generation) {
 		return m, nil
 	}
 	m.streamModel.Refresh()
@@ -132,8 +216,8 @@ func (m *Model) handleStreamTick() (tea.Model, tea.Cmd) {
 	return m, m.ticks.streamCmd()
 }
 
-func (m *Model) handleFlameTick() (tea.Model, tea.Cmd) {
-	if !m.focused || m.activeTab != TabFlame {
+func (m *Model) handleFlameTick(msg flameTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || m.activeTab != TabFlame || !m.ticks.fast.isCurrent(msg.generation) {
 		return m, nil
 	}
 	// Always re-arm the fast tick. The snapshot refresh itself runs on a
@@ -149,8 +233,8 @@ func (m *Model) handleFlameTick() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) handleBubbleTick() (tea.Model, tea.Cmd) {
-	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) {
+func (m *Model) handleBubbleTick(msg bubbleTickMsg) (tea.Model, tea.Cmd) {
+	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) || !m.ticks.bubble.isCurrent(msg.generation) {
 		return m, nil
 	}
 	_ = m.tickActiveBubbleChart()
