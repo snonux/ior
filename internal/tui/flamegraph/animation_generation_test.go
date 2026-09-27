@@ -3,6 +3,7 @@ package flamegraph
 import (
 	"slices"
 	"testing"
+	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
 
@@ -182,7 +183,7 @@ func runTickCmds(t *testing.T, cmds []tea.Cmd) []animTickMsg {
 }
 
 // TestSnapshotsMidAnimationLeaveOneTickLoop checks that snapshots restarting a
-// running animation retire its tick loop instead of adding a second one:
+// running animation reuse its tick loop instead of adding a second one:
 // every round of delivered ticks must schedule exactly one next tick.
 func TestSnapshotsMidAnimationLeaveOneTickLoop(t *testing.T) {
 	m, trie, cmd := newAnimatingModel(t)
@@ -192,10 +193,12 @@ func TestSnapshotsMidAnimationLeaveOneTickLoop(t *testing.T) {
 		var next tea.Model
 		next, cmd = m.Update(dispatchAndCompute(t, m))
 		m = next.(*Model)
-		if !m.anim.isAnimating() || cmd == nil {
+		if !m.anim.isAnimating() {
 			t.Fatalf("snapshot %d mid-animation did not keep animating", i)
 		}
-		cmds = append(cmds, cmd)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	pending := runTickCmds(t, cmds)
@@ -233,5 +236,79 @@ func TestSetLiveTrieDropsInFlightAnimationTick(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatal("stale animation tick scheduled another tick")
+	}
+}
+
+// springPositions returns the interpolated position of every spring, which a
+// tick moves even when the rounded frames happen not to change.
+func springPositions(m *Model) []float64 {
+	positions := make([]float64, 0, 2*len(m.anim.animation.springs))
+	for _, spring := range m.anim.animation.springs {
+		positions = append(positions, spring.currentW, spring.currentCol)
+	}
+	return positions
+}
+
+// TestFastSnapshotsAndResizesDoNotStarveTicks is the negative case of the
+// single-loop rule: snapshots and resizes arriving faster than a tick must
+// not push the pending tick back, so it is still accepted and advances the
+// frames once it fires.
+func TestFastSnapshotsAndResizesDoNotStarveTicks(t *testing.T) {
+	m, trie, cmd := newAnimatingModel(t)
+	pending := runTickCmds(t, []tea.Cmd{cmd})[0]
+
+	widths := []int{90, 60, 100}
+	for i := uint64(1); i <= 3; i++ {
+		coreflamegraph.SeedTestLiveFlameData(trie, i)
+		var next tea.Model
+		next, cmd = m.Update(dispatchAndCompute(t, m))
+		m = next.(*Model)
+		if cmd != nil {
+			t.Fatalf("snapshot %d mid-animation scheduled a tick beside the pending one", i)
+		}
+		next, cmd = m.Update(tea.WindowSizeMsg{Width: widths[i-1], Height: 30})
+		m = next.(*Model)
+		if cmd != nil {
+			t.Fatalf("resize %d mid-animation scheduled a tick beside the pending one", i)
+		}
+	}
+	if !m.anim.isAnimating() {
+		t.Fatal("snapshots and resizes ended the animation")
+	}
+
+	before := springPositions(m)
+	next, cmd := m.Update(pending)
+	m = next.(*Model)
+	if slices.Equal(springPositions(m), before) {
+		t.Fatal("the pending tick was dropped: the frames did not advance")
+	}
+	if cmd == nil {
+		t.Fatal("the pending tick did not continue the tick loop")
+	}
+}
+
+// TestLostTickRestartsLoop checks that a tick loop whose pending tick never
+// arrives (the dashboard drops ticks while another tab is active) does not
+// block every later animation: once the tick is overdue, the next restart
+// starts a new loop and the lost tick's generation is retired.
+func TestLostTickRestartsLoop(t *testing.T) {
+	m, trie, cmd := newAnimatingModel(t)
+	lost := runTickCmds(t, []tea.Cmd{cmd})[0]
+	m.anim.tickDue = time.Now().Add(-tickLostAfter - time.Millisecond)
+
+	coreflamegraph.SeedTestLiveFlameData(trie, 1)
+	next, cmd := m.Update(dispatchAndCompute(t, m))
+	m = next.(*Model)
+	if !m.anim.isAnimating() || cmd == nil {
+		t.Fatal("a snapshot after a lost tick did not start a new tick loop")
+	}
+	if m.anim.acceptsTick(lost.generation) {
+		t.Fatal("the new tick loop kept the lost loop's generation")
+	}
+	fresh := runTickCmds(t, []tea.Cmd{cmd})[0]
+	next, cmd = m.Update(fresh)
+	m = next.(*Model)
+	if m.anim.isAnimating() && cmd == nil {
+		t.Fatal("the new tick loop did not continue")
 	}
 }

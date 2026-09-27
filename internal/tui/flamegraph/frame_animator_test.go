@@ -1,6 +1,9 @@
 package flamegraph
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestFrameCoordToTargetRowKeepsUniformBarMapping(t *testing.T) {
 	frames := []tuiFrame{
@@ -153,9 +156,11 @@ func TestFrameAnimatorSnapSyncsSprings(t *testing.T) {
 	}
 }
 
-// TestFrameAnimatorGenerationRetiresTicks checks that reset and startTicks
-// both make acceptsTick reject every tick scheduled before them.
-func TestFrameAnimatorGenerationRetiresTicks(t *testing.T) {
+// TestFrameAnimatorTickLoopLifecycle covers the tick loop bookkeeping: a live
+// loop is reused rather than replaced, a stopped or lost loop is replaced by
+// one with a new generation, and reset makes acceptsTick reject every tick
+// scheduled before it.
+func TestFrameAnimatorTickLoopLifecycle(t *testing.T) {
 	fa := newFrameAnimator()
 	animate := func() {
 		t.Helper()
@@ -166,27 +171,42 @@ func TestFrameAnimatorGenerationRetiresTicks(t *testing.T) {
 			t.Fatal("expected an animation between differing layouts")
 		}
 	}
+	now := time.Now()
 
 	animate()
-	beforeReset := fa.startTicks()
-	if !fa.acceptsTick(beforeReset) {
-		t.Fatal("current tick loop rejected")
+	live, start := fa.startTicks(now)
+	if !start || !fa.acceptsTick(live) {
+		t.Fatal("startTicks did not start a loop when none was live")
 	}
+	if _, start := fa.startTicks(now.Add(animFrameDuration / 2)); start {
+		t.Fatal("startTicks started a second loop beside the live one")
+	}
+	if !fa.acceptsTick(live) {
+		t.Fatal("restarting the animation retired the live loop's pending tick")
+	}
+
+	fa.stopTicks()
+	next, start := fa.startTicks(now)
+	if !start || fa.acceptsTick(live) || !fa.acceptsTick(next) {
+		t.Fatal("a stopped loop was not replaced by a new generation")
+	}
+
+	lost := next
+	late := now.Add(animFrameDuration + tickLostAfter)
+	recovered, start := fa.startTicks(late)
+	if !start || fa.acceptsTick(lost) || !fa.acceptsTick(recovered) {
+		t.Fatal("an overdue loop was not replaced by a new generation")
+	}
+
 	fa.reset()
-	if fa.acceptsTick(beforeReset) {
+	if fa.acceptsTick(recovered) {
 		t.Fatal("reset accepted a tick of the previous generation")
 	}
-
 	animate()
-	if fa.acceptsTick(beforeReset) {
+	if fa.acceptsTick(recovered) {
 		t.Fatal("a new animation revived a tick scheduled before the reset")
 	}
-	older := fa.startTicks()
-	newer := fa.startTicks()
-	if fa.acceptsTick(older) {
-		t.Fatal("startTicks left the previous tick loop alive")
-	}
-	if !fa.acceptsTick(newer) {
-		t.Fatal("startTicks rejected its own tick loop")
+	if _, start := fa.startTicks(late); !start {
+		t.Fatal("reset left the old tick loop marked live")
 	}
 }

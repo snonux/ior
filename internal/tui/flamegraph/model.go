@@ -250,6 +250,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.anim.acceptsTick(msg.generation) {
 			return m, nil
 		}
+		if !m.anim.isAnimating() {
+			// Settled or snapped since the tick was scheduled.
+			m.anim.stopTicks()
+			return m, nil
+		}
 		m.tickAnimation()
 		return m, m.continueAnimationCmd()
 	case flameSnapshotReadyMsg:
@@ -745,8 +750,8 @@ func (m *Model) HasSnapshot() bool {
 }
 
 // AnimationCmd returns a frame animation tick command when animation is
-// active. The command starts a new tick loop and retires any loop already
-// running, so calling it while an animation is live never doubles its speed.
+// active and no tick loop is live yet, so calling it while a loop runs never
+// doubles the animation speed.
 func (m *Model) AnimationCmd() tea.Cmd {
 	return m.startAnimationCmd()
 }
@@ -886,24 +891,29 @@ func abs(v int) int {
 	return v
 }
 
-// continueAnimationCmd schedules the next tick of the running tick loop. Only
-// the tick handler may use it: it keeps the generation, so called anywhere
-// else it would run a second loop beside the live one.
+// continueAnimationCmd schedules the next tick of the live tick loop, or ends
+// the loop once the animation has settled. Only the tick handler may use it.
 func (m *Model) continueAnimationCmd() tea.Cmd {
 	if !m.anim.isAnimating() {
+		m.anim.stopTicks()
 		return nil
 	}
-	return animTickCmd(m.anim.tickGeneration())
+	return animTickCmd(m.anim.continueTicks(time.Now()))
 }
 
-// startAnimationCmd starts a new tick loop for the running animation and
-// retires any loop already scheduled, so there is at most one live loop no
-// matter how often a resize or snapshot restarts the animation.
+// startAnimationCmd makes sure a tick loop drives the running animation. It
+// returns nil when a loop is already live: that loop's pending tick picks up
+// the new springs, so there is at most one loop, and a stream of snapshots or
+// resizes faster than a tick never pushes the pending tick back.
 func (m *Model) startAnimationCmd() tea.Cmd {
 	if !m.anim.isAnimating() {
 		return nil
 	}
-	return animTickCmd(m.anim.startTicks())
+	generation, start := m.anim.startTicks(time.Now())
+	if !start {
+		return nil
+	}
+	return animTickCmd(generation)
 }
 
 func animTickCmd(generation uint64) tea.Cmd {
