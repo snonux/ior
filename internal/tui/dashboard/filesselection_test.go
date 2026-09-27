@@ -240,3 +240,131 @@ func TestFilesDirTableSelectionPolicyOnStatsTick(t *testing.T) {
 		})
 	}
 }
+
+// selectFilesDirKey moves the dir-grouped selection onto key with j presses.
+func selectFilesDirKey(t *testing.T, m *Model, key string) *Model {
+	t.Helper()
+	for range m.filesDirRowCountForMode() {
+		if m.selectedFilesDirKey() == key {
+			return m
+		}
+		m = pressJ(t, m, 1)
+	}
+	if got := m.selectedFilesDirKey(); got != key {
+		t.Fatalf("could not select %q, stuck on %q", key, got)
+	}
+	return m
+}
+
+func assertFilesDirSelection(t *testing.T, m *Model, wantAt int, want string) {
+	t.Helper()
+	if m.filesDirTab.offset != wantAt || m.selectedFilesDirKey() != want {
+		t.Fatalf("selected %q at %d, want %q at %d",
+			m.selectedFilesDirKey(), m.filesDirTab.offset, want, wantAt)
+	}
+}
+
+func TestFilesVizSelectionSurvivesMetricToggle(t *testing.T) {
+	// /x leads by events, /y by bytes, so b swaps their order.
+	snap := filesSnapshot(
+		statsengine.FileSnapshot{Path: "/x/f", Accesses: 9, BytesRead: 10},
+		statsengine.FileSnapshot{Path: "/y/f", Accesses: 1, BytesRead: 1000},
+	)
+	for _, mode := range []tabVizMode{tabVizModeTreemap, tabVizModeIcicle} {
+		m := newFilesVizModel(t, mode, snap)
+		m = selectFilesDirKey(t, m, "/y")
+		assertFilesDirSelection(t, m, 1, "/y")
+
+		m = pressKey(m, 'b')
+		if m.filesTab.bubble.Metric() != bubbleMetricBytes {
+			t.Fatalf("mode %d: expected b to switch to the bytes metric", mode)
+		}
+		assertFilesDirSelection(t, m, 0, "/y")
+	}
+}
+
+func TestFilesVizSelectionSurvivesModeCycle(t *testing.T) {
+	// Reverse directory sort puts /c first in the table (and bubbles);
+	// the treemap orders by events (/a/b, /c) and the icicle adds the /a
+	// parent tile (/a, /a/b, /c), so /c sits at a different offset in
+	// every mode.
+	m := newFilesVizModel(t, tabVizModeTable, filesSnapshot(
+		statsengine.FileSnapshot{Path: "/a/b/f", Accesses: 9},
+		statsengine.FileSnapshot{Path: "/c/f", Accesses: 5},
+	))
+	m.filesDirTab.sort = tableSortState[fileDirSortKey]{active: true, key: fileDirSortKeyDir, reverse: true}
+	assertFilesDirSelection(t, m, 0, "/c")
+
+	steps := []struct {
+		mode   tabVizMode
+		wantAt int
+	}{
+		{tabVizModeBubbles, 0},
+		{tabVizModeTreemap, 1},
+		{tabVizModeIcicle, 2},
+		{tabVizModeTable, 0},
+	}
+	for _, step := range steps {
+		m = pressKey(m, 'v')
+		if m.filesTab.mode != step.mode {
+			t.Fatalf("expected mode %d after v, got %d", step.mode, m.filesTab.mode)
+		}
+		assertFilesDirSelection(t, m, step.wantAt, "/c")
+	}
+}
+
+// deepIcicleSnapshot has a five-level /a/b/c/d/e branch laid out before /z,
+// so /z's tile index depends on how many levels the viewport shows.
+func deepIcicleSnapshot() *statsengine.Snapshot {
+	return filesSnapshot(
+		statsengine.FileSnapshot{Path: "/a/b/c/d/e/f", Accesses: 20},
+		statsengine.FileSnapshot{Path: "/z/f", Accesses: 1},
+	)
+}
+
+func TestFilesIcicleSelectionSurvivesViewportChange(t *testing.T) {
+	t.Run("window resize", func(t *testing.T) {
+		m := newFilesVizModel(t, tabVizModeIcicle, deepIcicleSnapshot())
+		next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 8})
+		m = next.(*Model)
+		m = selectFilesDirKey(t, m, "/z")
+		assertFilesDirSelection(t, m, 4, "/z") // four levels shown
+
+		next, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+		m = next.(*Model)
+		assertFilesDirSelection(t, m, 5, "/z") // all five levels shown
+	})
+	t.Run("help toggle", func(t *testing.T) {
+		m := newFilesVizModel(t, tabVizModeIcicle, deepIcicleSnapshot())
+		m.height = 9
+		m.showHelp = true // expanded help leaves room for four levels
+		m = selectFilesDirKey(t, m, "/z")
+		assertFilesDirSelection(t, m, 4, "/z")
+
+		next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
+		m = next.(*Model)
+		if m.showHelp {
+			t.Fatalf("expected F1 to collapse the help bar")
+		}
+		assertFilesDirSelection(t, m, 5, "/z")
+	})
+}
+
+func TestFilesBubblesSelectionTracksPositionWhenUnsorted(t *testing.T) {
+	// Bubbles mode follows the table rule: the offset is the table
+	// selection carried through bubbles mode (j/k move the bubble chart's
+	// own selection there), so unsorted it stays positional across ticks.
+	m := newFilesVizModel(t, tabVizModeBubbles, filesSnapshot(
+		statsengine.FileSnapshot{Path: "/x/f", Accesses: 9},
+		statsengine.FileSnapshot{Path: "/y/f", Accesses: 5},
+	))
+	m.filesDirTab.offset = 1
+	assertFilesDirSelection(t, m, 1, "/y")
+
+	m = tickStats(t, m, messages.StatsTickMsg{Snap: filesSnapshot(
+		statsengine.FileSnapshot{Path: "/w/f", Accesses: 20},
+		statsengine.FileSnapshot{Path: "/x/f", Accesses: 9},
+		statsengine.FileSnapshot{Path: "/y/f", Accesses: 5},
+	)})
+	assertFilesDirSelection(t, m, 1, "/x")
+}

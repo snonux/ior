@@ -224,8 +224,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
-	m.width = msg.Width
-	m.height = msg.Height
+	// The icicle's tiles depend on the viewport, so a resize can reorder
+	// or drop them under the selection.
+	m.keepFilesDirSelection(func() {
+		m.width = msg.Width
+		m.height = msg.Height
+	})
 	m.clampTableColumns()
 	streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
 	m.streamModel.SetViewport(streamWidth, streamHeight)
@@ -302,11 +306,11 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 	if m.syscallsTab.sort.active {
 		selectedSyscall = m.selectedSyscallName()
 	}
+	// The dir-grouped selection is anchored even while another tab is
+	// shown: skipping it would let the selection drift to a different item
+	// by the time the Files tab is shown again.
 	if m.filesDirGrouped {
-		// The viz modes reorder their items on every refresh (by metric
-		// value), so their selection is always anchored by identity; the
-		// table keeps its positional selection until a sort is chosen.
-		if m.filesTab.mode != tabVizModeTable || m.filesDirTab.sort.active {
+		if m.filesDirAnchorsByKey() {
 			selectedDir = m.selectedFilesDirKey()
 		}
 	} else if m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
@@ -715,7 +719,8 @@ func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.C
 	if msg.Code != tea.KeyF1 {
 		return false, m, nil
 	}
-	m.showHelp = !m.showHelp
+	// The help bar's height changes the icicle's viewport and so its tiles.
+	m.keepFilesDirSelection(func() { m.showHelp = !m.showHelp })
 	// Keep sub-model state in sync so View() stays a pure render pass.
 	// The flamegraph viewport shrinks/grows when the help bar expands/collapses;
 	// the live stream footer row follows the help bar, while the paused
@@ -1034,6 +1039,34 @@ func (m *Model) filesDirSelectionKeys() []string {
 		}
 		return keys
 	}
+}
+
+// filesDirAnchorsByKey reports whether a stats tick re-anchors the
+// dir-grouped selection by identity: always in the treemap and icicle, which
+// reorder their items by metric value on every refresh, and in the table
+// only once a sort is chosen (unsorted it tracks the position). Bubbles
+// mode follows the table rule because the offset indexes the table rows
+// there; the bubble chart keeps its own selection.
+func (m *Model) filesDirAnchorsByKey() bool {
+	switch m.filesTab.mode {
+	case tabVizModeTreemap, tabVizModeIcicle:
+		return true
+	default:
+		return m.filesDirTab.sort.active
+	}
+}
+
+// keepFilesDirSelection runs change - a mode, metric or viewport change
+// that reorders or resizes the dir-grouped item list - and re-finds the
+// previously selected item afterwards, clamping when it is gone.
+func (m *Model) keepFilesDirSelection(change func()) {
+	if !m.filesDirGrouped {
+		change()
+		return
+	}
+	selected := m.selectedFilesDirKey()
+	change()
+	m.reanchorFilesDirOffset(selected)
 }
 
 // selectedFilesDirKey returns the identity of the selected dir-grouped item
@@ -1609,7 +1642,13 @@ func (m *Model) cycleVisualizationMode() tea.Cmd {
 	}
 	current := m.tabVizModeFor(m.activeTab)
 	next := nextVizMode(current, allowed)
-	m.setTabVizMode(m.activeTab, next)
+	setMode := func() { m.setTabVizMode(m.activeTab, next) }
+	if m.activeTab == TabFiles {
+		// Each mode orders a different item list; keep the same directory.
+		m.keepFilesDirSelection(setMode)
+	} else {
+		setMode()
+	}
 
 	if next == tabVizModeBubbles {
 		m.refreshBubbleData()
@@ -1630,7 +1669,13 @@ func (m *Model) toggleBubbleMetric() tea.Cmd {
 	if ch == nil {
 		return nil
 	}
-	ch.SetMetric(nextBubbleMetric(ch.Metric()))
+	setMetric := func() { ch.SetMetric(nextBubbleMetric(ch.Metric())) }
+	if m.activeTab == TabFiles {
+		// The treemap and icicle order their items by the metric.
+		m.keepFilesDirSelection(setMetric)
+	} else {
+		setMetric()
+	}
 	m.refreshBubbleData()
 	if m.bubbleEnabledForTab(m.activeTab) && m.activeBubbleChartHasNodes() {
 		return bubbleTickCmdFn()
