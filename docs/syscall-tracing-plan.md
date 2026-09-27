@@ -52,8 +52,8 @@ Family names are the values accepted by `-trace-families` and `-no-trace-familie
 ## Traced Syscalls by TracepointKind
 
 Kind names are the values accepted by `-trace-kinds` and `-no-trace-kinds` (`_` is accepted
-in place of `-`). A kind describes the syscall's arguments and role, which decides the BPF
-handler and payload it gets.
+in place of `-`). A kind describes the syscall's role for selection; it is separate from the
+BPF record type (see What attaches).
 
 - accept: `accept`, `accept4`
 - bpf: `bpf`
@@ -134,7 +134,8 @@ the row names only one endpoint.
 `openat2` reports the `flags` word from offset zero of the userspace `struct open_how`
 pointer in `args[2]`. The enter handler first sets flags to the `-1` unknown sentinel. Only
 when the pointer is non-NULL and a guarded `bpf_probe_read_user` of the first `u64`
-succeeds does it store that word. A NULL or unreadable pointer therefore stays
+succeeds does it store that word, truncated to the 32-bit `flags` field of the event. A
+NULL or unreadable pointer therefore stays
 distinguishable from `O_RDONLY` (zero).
 
 Open-family handlers retry a filename read at syscall exit when the enter-side nofault
