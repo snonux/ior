@@ -229,21 +229,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
-	// The icicle's tiles depend on the viewport, so a resize can reorder
-	// or drop them under the selection.
-	m.keepFilesDirSelection(func() {
+	// A resize is a global layout change: viewport-dependent item lists
+	// (the Files icicle's tiles) can reorder or drop under the selection.
+	m.keepAllSelections(func() {
 		m.width = msg.Width
 		m.height = msg.Height
 	})
 	m.clampTableColumns()
-	streamWidth, streamHeight := streamViewport(msg.Width, msg.Height)
-	m.streamModel.SetViewport(streamWidth, streamHeight)
+	m.syncStreamViewport()
 	// Sync stream footer visibility so it matches the current help-bar state.
 	// This covers the case where showHelp was set before the first resize event.
 	m.streamModel.SetFooterVisible(m.showHelp)
-	flameWidth, flameHeight := flameViewport(msg.Width, msg.Height, m.showHelp)
-	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
-	m.setBubbleViewports(flameWidth, flameHeight)
+	m.syncFlameViewport()
+	m.setBubbleViewports()
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
 		return m, bubbleTickCmdFn()
 	}
@@ -388,8 +386,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Window-resize and help-toggle already call SetViewport; tab switching does
 	// not, so we compensate here before returning the updated model to the runtime.
 	if prevActiveTab != m.activeTab && m.activeTab == TabFlame {
-		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
-		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+		m.syncFlameViewport()
 	}
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
 }
@@ -715,14 +712,15 @@ func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.C
 	if msg.Code != tea.KeyF1 {
 		return false, m, nil
 	}
-	// The help bar's height changes the icicle's viewport and so its tiles.
-	m.keepFilesDirSelection(func() { m.showHelp = !m.showHelp })
+	// The help bar's height is a global layout change: it resizes the
+	// content viewport and so viewport-dependent item lists (the Files
+	// icicle's tiles).
+	m.keepAllSelections(func() { m.showHelp = !m.showHelp })
 	// Keep sub-model state in sync so View() stays a pure render pass.
 	// The flamegraph viewport shrinks/grows when the help bar expands/collapses;
 	// the live stream footer row follows the help bar, while the paused
 	// selection/column/search footer always renders (see eventstream.Model.View).
-	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
-	m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+	m.syncFlameViewport()
 	m.streamModel.SetFooterVisible(m.showHelp)
 	return true, m, nil
 }
@@ -1028,7 +1026,8 @@ func (m *Model) filesDirSelectionKeys() []string {
 		}
 		return keys
 	case tabVizModeIcicle:
-		width, height := flameViewport(m.width, m.height, m.showHelp)
+		// The Files viewport, the size View() lays the icicle out in.
+		width, height := m.contentViewport(TabFiles, m.width, m.height)
 		return filesIcicleTileKeys(m.latest, width, height, metric)
 	default:
 		rows := m.sortedDirRows()
@@ -1292,8 +1291,7 @@ func (m *Model) SetLiveTrie(liveTrie coreflamegraph.LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.flamegraphModel.SetLiveTrie(liveTrie)
 	if m.width > 0 && m.height > 0 {
-		flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
-		m.flamegraphModel.SetViewport(flameWidth, flameHeight)
+		m.syncFlameViewport()
 	}
 	m.flamegraphModel.RefreshFromLiveTrie()
 }
@@ -1454,16 +1452,34 @@ func (m *Model) renderActiveContent(width, activeHeight int, streamModel *events
 	)
 }
 
+// activeTableHeight is the active tab's content height, which bounds the
+// table page step.
 func (m *Model) activeTableHeight() int {
-	_, activeHeight := flameViewport(m.width, m.height, m.showHelp)
+	_, activeHeight := m.contentViewport(m.activeTab, m.width, m.height)
 	return activeHeight
 }
 
-// setBubbleViewports sizes every table tab's bubble chart to the current
-// active-content viewport, so any chart is ready before it becomes the
-// active view.
-func (m *Model) setBubbleViewports(width, height int) {
-	m.forEachBubbleChart(func(chart *bubbleChart) { chart.SetViewport(width, height) })
+// syncFlameViewport sizes the flamegraph sub-model to the Flame tab's
+// content viewport.
+func (m *Model) syncFlameViewport() {
+	m.flamegraphModel.SetViewport(m.contentViewport(TabFlame, m.width, m.height))
+}
+
+// syncStreamViewport sizes the event-stream sub-model to the Stream tab's
+// content viewport.
+func (m *Model) syncStreamViewport() {
+	m.streamModel.SetViewport(m.contentViewport(TabStream, m.width, m.height))
+}
+
+// setBubbleViewports sizes every table tab's bubble chart to that tab's
+// content viewport, so any chart is ready before it becomes the active
+// view.
+func (m *Model) setBubbleViewports() {
+	for _, tab := range orderedTabs() {
+		if t := m.tableTabFor(tab); t != nil {
+			t.bubbleChart().SetViewport(m.contentViewport(tab, m.width, m.height))
+		}
+	}
 }
 
 // refreshBubbleData pushes the latest snapshot data into EVERY registered
@@ -1476,8 +1492,7 @@ func (m *Model) setBubbleViewports(width, height int) {
 // active one) - lazily feeding only the active tab left both of those
 // windows showing stale or previous-session data (review finding).
 func (m *Model) refreshBubbleData() bool {
-	flameWidth, flameHeight := flameViewport(m.width, m.height, m.showHelp)
-	m.setBubbleViewports(flameWidth, flameHeight)
+	m.setBubbleViewports()
 	animating := false
 	for _, tab := range orderedTabs() {
 		if d := tabDescriptors[tab]; d.RefreshBubble != nil && d.RefreshBubble(m) && tab == m.activeTab {
