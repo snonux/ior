@@ -1,7 +1,6 @@
 package flamegraph
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -301,12 +300,8 @@ func BenchmarkLiveTrieIngestAndSnapshot(b *testing.B) {
 					pair.Recycle()
 				}
 
-				payload, _ := liveTrie.SnapshotJSON()
-				var snapshot snapshotNode
-				if err := json.Unmarshal(payload, &snapshot); err != nil {
-					b.Fatalf("snapshot decode failed: %v", err)
-				}
-				benchFramesSink = BuildTerminalLayout(&snapshot, 120, 40)
+				snapshot, _ := liveTrie.SnapshotTree()
+				benchFramesSink = BuildTerminalLayout(snapshot, 120, 40)
 			}
 		})
 	}

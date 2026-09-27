@@ -2,7 +2,6 @@ package flamegraph
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -40,14 +39,9 @@ type LiveTrie struct {
 	countField  string
 	heightField string
 
-	// Snapshot cache avoids recomputing JSON when version is unchanged.
-	cacheMu      sync.Mutex
-	cacheVersion uint64
-	cacheJSON    []byte
-
-	// Tree cache lets the TUI fetch the snapshot tree without a JSON
-	// marshal+unmarshal round-trip. Built lazily; invalidated on reset and
-	// on field/metric reconfiguration.
+	// Tree cache avoids rebuilding the snapshot tree while the version is
+	// unchanged. Built lazily; invalidated on reset and on field/metric
+	// reconfiguration.
 	treeCacheMu sync.Mutex
 	treeVersion uint64
 	treeCache   *SnapshotNode
@@ -87,18 +81,10 @@ func (lt *LiveTrie) resetLocked() {
 }
 
 func (lt *LiveTrie) invalidateCache() {
-	func() {
-		lt.cacheMu.Lock()
-		defer lt.cacheMu.Unlock()
-		lt.cacheVersion = 0
-		lt.cacheJSON = nil
-	}()
-	func() {
-		lt.treeCacheMu.Lock()
-		defer lt.treeCacheMu.Unlock()
-		lt.treeVersion = 0
-		lt.treeCache = nil
-	}()
+	lt.treeCacheMu.Lock()
+	defer lt.treeCacheMu.Unlock()
+	lt.treeVersion = 0
+	lt.treeCache = nil
 }
 
 // Ingest adds one event pair into the live trie.
@@ -257,46 +243,11 @@ func (lt *LiveTrie) Version() uint64 {
 	return lt.version.Load()
 }
 
-// SnapshotJSON returns a compact JSON snapshot for the current trie version.
-// Layered on top of SnapshotTree so the tree-building work is shared with
-// callers that want the typed form directly. It is deliberately not part of
-// LiveTrieSource: no production consumer renders from JSON, and tests use it
-// as the serialization-fidelity oracle against SnapshotTree.
-func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
-	version := lt.Version()
-	cached, ok := func() ([]byte, bool) {
-		lt.cacheMu.Lock()
-		defer lt.cacheMu.Unlock()
-		if lt.cacheVersion == version && lt.cacheJSON != nil {
-			return slices.Clone(lt.cacheJSON), true
-		}
-		return nil, false
-	}()
-	if ok {
-		return cached, version
-	}
-
-	snapshot, version := lt.SnapshotTree()
-	payload, err := json.Marshal(snapshot)
-	if err != nil {
-		return []byte(`{}`), version
-	}
-
-	lt.cacheMu.Lock()
-	defer lt.cacheMu.Unlock()
-	// Only commit if no concurrent caller stored a newer version.
-	if version >= lt.cacheVersion {
-		lt.cacheVersion = version
-		lt.cacheJSON = slices.Clone(payload)
-	}
-
-	return payload, version
-}
-
-// SnapshotTree returns the live trie snapshot as a typed node tree, bypassing
-// the JSON round-trip. The pointer is safe to retain — buildSnapshot allocates
-// fresh nodes per snapshot, and the trie never mutates a previously returned
-// tree. The TUI uses this on a background goroutine so per-tick refreshes don't
+// SnapshotTree returns the live trie snapshot as a typed node tree. The
+// pointer is safe to retain — buildSnapshot allocates fresh nodes per
+// snapshot, and the trie never mutates a previously returned tree. The tree
+// is cached per version and shared between callers, so callers must treat it
+// as read-only. The TUI uses this on a background goroutine so per-tick refreshes don't
 // block the Bubble Tea update loop.
 func (lt *LiveTrie) SnapshotTree() (*SnapshotNode, uint64) {
 	version := lt.Version()

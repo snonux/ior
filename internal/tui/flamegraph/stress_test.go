@@ -300,11 +300,16 @@ func renderStressFrame(model *Model) (*snapshotNode, []tuiFrame, bool, error) {
 	return ready.snapshot, ready.targetFrames, true, nil
 }
 
-// renderStressJSONFrame runs the external-consumer snapshot pipeline. Keeping
-// it separate from renderStressFrame makes JSON fidelity a correctness check
-// without mistaking its allocation profile for the TUI refresh cost.
+// renderStressJSONFrame round-trips the typed snapshot through JSON and lays
+// out the decoded tree. Keeping it separate from renderStressFrame makes JSON
+// fidelity a correctness check without mistaking its allocation profile for
+// the TUI refresh cost.
 func renderStressJSONFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []tuiFrame, error) {
-	payload, _ := liveTrie.SnapshotJSON()
+	tree, _ := liveTrie.SnapshotTree()
+	payload, err := json.Marshal(tree)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode snapshot: %w", err)
+	}
 	var snapshot snapshotNode
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
 		return nil, nil, fmt.Errorf("decode snapshot: %w", err)
@@ -395,10 +400,10 @@ func ingestStressEvent(liveTrie *coreflamegraph.LiveTrie, comm string, pid uint3
 const equivalenceFixtureEvents = 2000
 
 // TestSnapshotTreeMatchesJSONRoundTrip pins round-trip fidelity between the
-// two snapshot APIs: the typed tree from SnapshotTree and the tree the JSON
-// path yields (SnapshotJSON + decode) lay out to identical frames.
+// typed tree from SnapshotTree and the same tree after a JSON marshal+decode:
+// both lay out to identical frames.
 //
-// What this does and does not buy, precisely. SnapshotJSON is
+// What this does and does not buy, precisely. The payload is
 // json.Marshal(SnapshotTree()) and decodes back into the same struct, so
 // marshal and unmarshal stay self-consistent under any *rename* of a JSON tag
 // — renaming SnapshotNode.HeightTotal's tag, or deleting the tag outright,
@@ -449,13 +454,10 @@ func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
 
 // countingTrie records which snapshot API its caller reached for. It embeds a
 // real LiveTrie so the snapshots it returns are the real ones and it satisfies
-// the whole LiveTrieSource contract without a hand-written stub. SnapshotJSON
-// is not part of that contract, so reaching it would take a type assertion on
-// the concrete trie; the spy still counts it to catch exactly that fallback.
+// the whole LiveTrieSource contract without a hand-written stub.
 type countingTrie struct {
 	*coreflamegraph.LiveTrie
 	treeCalls int
-	jsonCalls int
 }
 
 var _ coreflamegraph.LiveTrieSource = (*countingTrie)(nil)
@@ -465,18 +467,13 @@ func (c *countingTrie) SnapshotTree() (*snapshotNode, uint64) {
 	return c.LiveTrie.SnapshotTree()
 }
 
-func (c *countingTrie) SnapshotJSON() ([]byte, uint64) {
-	c.jsonCalls++
-	return c.LiveTrie.SnapshotJSON()
-}
-
 // TestFlameRefreshUsesTheTreeSnapshot pins that the flame tab's refresh paths
-// take SnapshotTree and never the JSON round-trip.
+// take the cached SnapshotTree.
 //
 // The stress test measures this production path directly through
-// RefreshFromLiveTrieCmd. This spy independently guards the performance
-// property the tree API exists for: a refresh that fell back to SnapshotJSON
-// would marshal and re-parse the whole trie on every tick. The dashboard-level
+// RefreshFromLiveTrieCmd. This spy independently guards that both refresh
+// entry points actually reach the trie's snapshot API, so a refresh that
+// stopped consulting the trie is caught here. The dashboard-level
 // TestFlameTickDispatchesAndAppliesFlamegraphRefresh pins the outer tick
 // dispatch that reaches this command.
 func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
@@ -498,18 +495,15 @@ func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
 	if trie.treeCalls == 0 {
 		t.Error("RefreshFromLiveTrie never called SnapshotTree")
 	}
-	if trie.jsonCalls != 0 {
-		t.Errorf("RefreshFromLiveTrie took the JSON round-trip: SnapshotJSON calls=%d", trie.jsonCalls)
-	}
 
 	// The per-tick refresh the dashboard actually dispatches
 	// (dashboard/model.go calls RefreshFromLiveTrieCmd and runs the cmd).
 	// Drive it through the cmd, not through buildSnapshotMsg directly: the
 	// closure RefreshFromLiveTrieCmd returns is its own call site, and
-	// rewriting only that closure to round-trip through JSON is a regression
-	// a direct buildSnapshotMsg call cannot see.
+	// rewriting only that closure to bypass SnapshotTree is a regression a
+	// direct buildSnapshotMsg call cannot see.
 	ingestStressEvent(trie.LiveTrie, "worker-0", 1000, equivalenceFixtureEvents)
-	beforeTree, beforeJSON := trie.treeCalls, trie.jsonCalls
+	beforeTree := trie.treeCalls
 	cmd := model.RefreshFromLiveTrieCmd()
 	if cmd == nil {
 		t.Fatal("RefreshFromLiveTrieCmd returned no command for a changed trie")
@@ -530,10 +524,6 @@ func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
 	}
 	if trie.treeCalls == beforeTree {
 		t.Error("the per-tick refresh cmd never called SnapshotTree")
-	}
-	if trie.jsonCalls != beforeJSON {
-		t.Errorf("the per-tick refresh cmd took the JSON round-trip: SnapshotJSON calls=%d",
-			trie.jsonCalls-beforeJSON)
 	}
 }
 

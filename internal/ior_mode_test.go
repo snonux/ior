@@ -3,11 +3,11 @@ package internal
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -518,14 +518,9 @@ func TestBuildTestFlamesRuntimeSeedsLiveTrie(t *testing.T) {
 		t.Fatalf("expected seeded live trie version to be non-zero")
 	}
 
-	payload, _ := liveTrie.SnapshotJSON()
-	var snap map[string]any
-	if err := json.Unmarshal(payload, &snap); err != nil {
-		t.Fatalf("decode snapshot: %v", err)
-	}
-	total, ok := snap["t"].(float64)
-	if !ok || total <= 0 {
-		t.Fatalf("expected seeded snapshot total > 0, got %v", snap["t"])
+	snap, _ := liveTrie.SnapshotTree()
+	if snap == nil || snap.Total == 0 {
+		t.Fatalf("expected seeded snapshot total > 0, got %+v", snap)
 	}
 }
 
@@ -549,7 +544,7 @@ func TestBuildTestLiveFlamesRuntimeContinuouslyUpdatesLiveTrie(t *testing.T) {
 		if initialVersion == 0 {
 			t.Fatalf("expected seeded live trie version to be non-zero")
 		}
-		initialSnapshot, _ := liveTrie.SnapshotJSON()
+		initialSnapshot, _ := liveTrie.SnapshotTree()
 
 		time.Sleep(cfg.LiveInterval + time.Nanosecond)
 		synctest.Wait()
@@ -557,8 +552,8 @@ func TestBuildTestLiveFlamesRuntimeContinuouslyUpdatesLiveTrie(t *testing.T) {
 		if liveTrie.Version() <= initialVersion {
 			t.Fatalf("expected live trie version to advance beyond %d", initialVersion)
 		}
-		currentSnapshot, _ := liveTrie.SnapshotJSON()
-		if bytes.Equal(initialSnapshot, currentSnapshot) {
+		currentSnapshot, _ := liveTrie.SnapshotTree()
+		if reflect.DeepEqual(initialSnapshot, currentSnapshot) {
 			t.Fatalf("expected test live flames snapshot shape to change over time")
 		}
 	})

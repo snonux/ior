@@ -14,9 +14,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// snapshotNode aliases the live trie's snapshot type so the TUI can consume
-// trees directly via SnapshotTree() without paying for a JSON marshal+unmarshal
-// round-trip. The trie contract itself (coreflamegraph.LiveTrieSource and its
+// snapshotNode aliases the live trie's snapshot type so the TUI consumes the
+// trees SnapshotTree() returns directly. The trie contract itself (coreflamegraph.LiveTrieSource and its
 // Snapshotter/Configurator halves) is defined once in the core package.
 type snapshotNode = coreflamegraph.SnapshotNode
 
@@ -52,8 +51,8 @@ type flameViewCache struct {
 
 // flameSnapshotReadyMsg carries the result of a background snapshot+layout
 // job. It is emitted by RefreshFromLiveTrieCmd and consumed by Update so the
-// Bubble Tea goroutine can swap in the new state without blocking on JSON or
-// frame layout work.
+// Bubble Tea goroutine can swap in the new state without blocking on snapshot
+// or frame layout work.
 type flameSnapshotReadyMsg struct {
 	generation   uint64
 	version      uint64
@@ -73,7 +72,7 @@ const flameKeyDebugEnabled = false
 // driveWindow defines how recently a key must have been pressed to count as
 // "user is actively driving". While inside this window, the flamegraph defers
 // snapshot refresh and skips animation so keystrokes land without waiting on
-// JSON+layout work or a 1-second animation chain.
+// snapshot+layout work or a 1-second animation chain.
 const driveWindow = 250 * time.Millisecond
 
 type zoomState struct {
