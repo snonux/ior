@@ -90,3 +90,21 @@ timestamps, byte counts and other per-event fields.
 
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.
+
+## Bytes Classification
+
+Throughput bytes come from positive return values of these syscalls only:
+
+- `ReadClassified`: `fgetxattr`, `flistxattr`, `getcwd`, `getdents`,
+  `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`,
+  `listxattr`, `listxattrat`, `llistxattr`, `mq_timedreceive`, `msgrcv`,
+  `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`,
+  `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `sched_getaffinity`
+- `WriteClassified`: `process_vm_writev`, `pwrite64`, `pwritev`, `pwritev2`,
+  `sendmsg`, `sendto`, `write`, `writev`
+- `TransferClassified`: `copy_file_range`, `sendfile64`, `splice`, `tee`,
+  `vmsplice` (counted as both read and write bytes)
+- Non-bytes: all remaining traced syscalls
+
+[Syscall tracing](./docs/syscall-tracing-plan.md) lists every traced syscall by family and
+kind and covers the exceptions, such as xattr size probes.
