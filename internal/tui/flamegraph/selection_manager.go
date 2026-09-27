@@ -12,9 +12,8 @@ import (
 // rule comes from the SearchController, so every method receives them as
 // arguments and the manager never reaches into another collaborator.
 type SelectionManager struct {
-	selectedIdx          int
-	subtreeSet           map[int]bool
-	hasNavigableSnapshot bool
+	selectedIdx int
+	subtreeSet  map[int]bool
 }
 
 // frameFilter reports whether frame idx may be selected. A nil frameFilter
@@ -78,18 +77,11 @@ func (s *SelectionManager) jumpToMatch(frames []tuiFrame, ancestry frameAncestry
 	s.selectedIdx, s.subtreeSet = jumpMatch(frames, matchIndices, ancestry, s.selectedIdx, direction, s.subtreeSet)
 }
 
-// markNavigableSnapshot records that a layout with more than the root frame
-// has been installed at least once.
-func (s *SelectionManager) markNavigableSnapshot() {
-	s.hasNavigableSnapshot = true
-}
-
 // reset returns the selection to the first frame and clears the highlight in
 // place, as done when the snapshot state is discarded.
 func (s *SelectionManager) reset() {
 	s.selectedIdx = 0
 	s.subtreeSet = resetBoolSet(s.subtreeSet)
-	s.hasNavigableSnapshot = false
 }
 
 // clamp ensures selectedIdx is within [0, len(frames)-1].
@@ -418,11 +410,6 @@ func visibleRowOffset(frames []tuiFrame, height int, navigable frameFilter) int 
 		return 0
 	}
 	return maxRow + 1 - availableRows
-}
-
-// framesAtDepth returns all frame indices at a given depth, sorted by column.
-func framesAtDepth(frames []tuiFrame, depth int) []int {
-	return framesAtDepthFiltered(frames, depth, nil)
 }
 
 // framesAtDepthFiltered returns the indices of the frames at depth that pass

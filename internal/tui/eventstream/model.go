@@ -937,14 +937,6 @@ func clamp(v, min, max int) int {
 	return v
 }
 
-func (m *Model) setFilterForTest(f Filter) {
-	m.filter = f
-}
-
-func (m *Model) setExportDirForTest(dir string) {
-	m.exportDir = dir
-}
-
 // SetStatusMessage updates the stream footer status line.
 func (m *Model) SetStatusMessage(message string) {
 	m.statusMessage = message
@@ -1037,12 +1029,4 @@ func streamEventMatchesRegex(ev StreamEvent, re *regexp.Regexp) bool {
 		return true
 	}
 	return false
-}
-
-func (m *Model) dumpVisibleForTest() string {
-	rows := make([]string, 0, len(m.filtered))
-	for _, ev := range m.filtered {
-		rows = append(rows, ev.Syscall)
-	}
-	return strings.Join(rows, ",")
 }

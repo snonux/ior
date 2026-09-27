@@ -170,13 +170,6 @@ func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, 
 	}
 }
 
-// shouldRunTraceMode reports whether cfg selects a headless trace path
-// (plain CSV, flamegraph output, or headless Parquet). It is retained for
-// use by the test suite; the dispatch path uses modeRegistry instead.
-func shouldRunTraceMode(cfg flags.Config) bool {
-	return cfg.PlainMode || cfg.FlamegraphOutput || isHeadlessParquetMode(cfg)
-}
-
 // tuiRuntime holds all the per-restart state that the TUI trace starter
 // allocates and wires into the runtime bindings before each trace goroutine.
 //

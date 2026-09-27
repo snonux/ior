@@ -45,7 +45,7 @@ func BenchmarkBuildTerminalLayout(b *testing.B) {
 			b.Run(name, func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					benchFramesSink = BuildTerminalLayout(snapshot, width, height)
+					benchFramesSink = buildTerminalLayout(snapshot, width, height)
 				}
 				if len(benchFramesSink) == 0 {
 					b.Fatal("layout returned no frames")
@@ -301,20 +301,20 @@ func BenchmarkLiveTrieIngestAndSnapshot(b *testing.B) {
 				}
 
 				snapshot, _ := liveTrie.SnapshotTree()
-				benchFramesSink = BuildTerminalLayout(snapshot, 120, 40)
+				benchFramesSink = buildTerminalLayout(snapshot, 120, 40)
 			}
 		})
 	}
 }
 
 func BenchmarkResizeRelayout(b *testing.B) {
-	// Performance target: resize relayout cost should match BuildTerminalLayout (< 500us medium@120col).
+	// Performance target: resize relayout cost should match buildTerminalLayout (< 500us medium@120col).
 	snapshot := generateTestSnapshot(fixtureMediumDepth, fixtureMediumBreadth)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		frames120 := BuildTerminalLayout(snapshot, 120, 40)
-		frames80 := BuildTerminalLayout(snapshot, 80, 24)
-		benchFramesSink = BuildTerminalLayout(snapshot, 120, 40)
+		frames120 := buildTerminalLayout(snapshot, 120, 40)
+		frames80 := buildTerminalLayout(snapshot, 80, 24)
+		benchFramesSink = buildTerminalLayout(snapshot, 120, 40)
 		benchIntSink = len(frames120) + len(frames80) + len(benchFramesSink)
 	}
 }
@@ -331,7 +331,7 @@ func benchmarkFramesForCount(frameCount int) []tuiFrame {
 	default:
 		snapshot = generateTestSnapshot(10, 5)
 	}
-	return BuildTerminalLayout(snapshot, 200, 80)
+	return buildTerminalLayout(snapshot, 200, 80)
 }
 
 func decorateFramesForSearch(frames []tuiFrame) {
@@ -364,7 +364,7 @@ func midDepthFrameIndex(frames []tuiFrame) int {
 		}
 	}
 	targetDepth := maxDepth / 2
-	indices := framesAtDepth(frames, targetDepth)
+	indices := framesAtDepthFiltered(frames, targetDepth, nil)
 	if len(indices) == 0 {
 		return len(frames) / 2
 	}

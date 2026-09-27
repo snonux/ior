@@ -26,11 +26,6 @@ type childWidth struct {
 	raw   float64
 }
 
-// BuildTerminalLayout converts a live trie snapshot into terminal frame cells.
-func BuildTerminalLayout(snapshot *snapshotNode, width, height int) []tuiFrame {
-	return buildTerminalLayoutWithPath(snapshot, width, height, "")
-}
-
 func buildTerminalLayoutWithPath(snapshot *snapshotNode, width, height int, rootPath string) []tuiFrame {
 	if snapshot == nil || width <= 0 || height <= 0 {
 		return nil

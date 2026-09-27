@@ -314,7 +314,7 @@ func renderStressJSONFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
 		return nil, nil, fmt.Errorf("decode snapshot: %w", err)
 	}
-	return &snapshot, BuildTerminalLayout(&snapshot, stressViewWidth, stressViewHeight), nil
+	return &snapshot, buildTerminalLayout(&snapshot, stressViewWidth, stressViewHeight), nil
 }
 
 // measureStressRenderCost bounds the cost of the dispatched production refresh
@@ -431,8 +431,8 @@ func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
 		t.Fatalf("snapshot version = %d, want %d", treeVersion, equivalenceFixtureEvents)
 	}
 
-	treeFrames := BuildTerminalLayout(tree, stressViewWidth, stressViewHeight)
-	jsonFrames := BuildTerminalLayout(decoded, stressViewWidth, stressViewHeight)
+	treeFrames := buildTerminalLayout(tree, stressViewWidth, stressViewHeight)
+	jsonFrames := buildTerminalLayout(decoded, stressViewWidth, stressViewHeight)
 	if len(treeFrames) == 0 {
 		t.Fatal("SnapshotTree laid out no frames")
 	}

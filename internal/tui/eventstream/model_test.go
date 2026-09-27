@@ -12,6 +12,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+func (m *Model) setFilterForTest(f Filter) {
+	m.filter = f
+}
+
+func (m *Model) setExportDirForTest(dir string) {
+	m.exportDir = dir
+}
+
 func pushEvents(rb *RingBuffer, count int) {
 	for i := 0; i < count; i++ {
 		rb.Push(StreamEvent{

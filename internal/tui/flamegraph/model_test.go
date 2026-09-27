@@ -76,37 +76,16 @@ func TestRefreshFromLiveTrieAllowsInitialLoadWhilePaused(t *testing.T) {
 	}
 }
 
-func TestRefreshFromLiveTriePausedBlocksAfterNavigableSnapshot(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
-	m := NewModel(trie)
-	m.paused = true
-	m.snapshot = &snapshotNode{Name: "root", Total: 1}
-	m.anim.frames = []tuiFrame{
-		{Name: "root", Path: "root"},
-		{Name: "child", Path: "root" + pathSeparator + "child"},
-	}
-	m.sel.hasNavigableSnapshot = true
-	m.lastVersion = 1
-
-	if changed := m.RefreshFromLiveTrie(); changed {
-		t.Fatalf("expected paused refresh to remain frozen once navigable snapshot exists")
-	}
-	if got, want := m.lastVersion, uint64(1); got != want {
-		t.Fatalf("expected version to remain unchanged while paused, got %d want %d", got, want)
-	}
-}
-
 func TestRefreshFromLiveTriePausedBlocksAfterAnySnapshot(t *testing.T) {
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	m := NewModel(trie)
 	m.paused = true
 	m.snapshot = &snapshotNode{Name: "root", Total: 1}
 	m.anim.frames = []tuiFrame{{Name: "root", Path: "root"}}
-	m.sel.hasNavigableSnapshot = false
 	m.lastVersion = 1
 
 	if changed := m.RefreshFromLiveTrie(); changed {
-		t.Fatalf("expected paused refresh to freeze after first snapshot even when non-navigable")
+		t.Fatalf("expected paused refresh to freeze after the first snapshot")
 	}
 	if got, want := m.lastVersion, uint64(1); got != want {
 		t.Fatalf("expected paused refresh to keep existing snapshot version, got %d want %d", got, want)
@@ -881,7 +860,7 @@ func TestControlResetBaseline(t *testing.T) {
 	m.snapshot = &snapshotNode{Name: "root", Total: 10}
 	m.anim.frames = []tuiFrame{{Name: "root", Path: "root"}}
 	m.zoom.zoomPath = "root"
-	m.zoom.zoomStack = []zoomState{{path: "", previousSelectedIdx: 0}}
+	m.zoom.zoomStack = []zoomState{{path: ""}}
 	m.sel.selectedIdx = 3
 
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: []rune{'r'}[0], Text: "r"})
@@ -1011,7 +990,7 @@ func TestViewFilterSelectionStatusUsesFilteredTotalAndKeepsContextVisible(t *tes
 	m := NewModel(nil)
 	m.width = 220
 	m.height = 12
-	m.anim.frames = BuildTerminalLayout(snapshot, m.width, m.height)
+	m.anim.frames = buildTerminalLayout(snapshot, m.width, m.height)
 	m.globalTotal = 100
 	m.sel.selectedIdx = mustFrameIndex(t, m.anim.frames, "root"+pathSeparator+"keep"+pathSeparator+"needle")
 	m.search.searchQuery = "needle"
