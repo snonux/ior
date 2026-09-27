@@ -16,7 +16,7 @@ func newEditorRoutingModel(t *testing.T) *Model {
 	t.Helper()
 	t.Setenv("EDITOR", "true")
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	return m
 }
@@ -54,7 +54,7 @@ func TestOpenEditorRequestRouting(t *testing.T) {
 		setup func(m *Model)
 	}{
 		{"attaching", func(m *Model) { m.attaching = true }},
-		{"pid picker", func(m *Model) { m.screen = ScreenPIDPicker }},
+		{"pid picker", func(m *Model) { m.router = newScreenRouter(ScreenPIDPicker) }},
 		{"quitting", func(m *Model) { m.quitting = true }},
 	}
 	for _, tc := range cancelled {
@@ -76,7 +76,7 @@ func TestOpenEditorRequestRouting(t *testing.T) {
 // tab, pauses it (so its footer and status line render) and returns the view.
 func pausedStreamFooter(t *testing.T, m *Model) string {
 	t.Helper()
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.quitting = false
 	for _, msg := range []tea.Msg{

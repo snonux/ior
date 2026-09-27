@@ -54,9 +54,9 @@ func setTopLevelFlameRefreshHidden(m *Model, state string, hidden bool) {
 	switch state {
 	case "pid picker":
 		if hidden {
-			m.screen = ScreenPIDPicker
+			m.router = newScreenRouter(ScreenPIDPicker)
 		} else {
-			m.screen = ScreenDashboard
+			m.router.showDashboard()
 		}
 	case "attaching overlay":
 		m.attaching = hidden
@@ -100,7 +100,7 @@ func setTopLevelFlameRefreshHidden(m *Model, state string, hidden bool) {
 func topLevelFlameRefreshHidden(m *Model, state string) bool {
 	switch state {
 	case "pid picker":
-		return m.screen == ScreenPIDPicker
+		return m.router.current() == ScreenPIDPicker
 	case "attaching overlay":
 		return m.attaching
 	case "filter modal":
@@ -128,7 +128,7 @@ func newTopLevelFlameRefreshModel(t *testing.T) *Model {
 	coreflamegraph.SeedTestLiveFlameData(liveTrie, 0)
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30

@@ -28,7 +28,7 @@ func (r *liveFilterRecorder) set(filter globalfilter.Filter) {
 func newLiveSwapModel(t *testing.T) (*Model, *liveFilterRecorder) {
 	t.Helper()
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 40

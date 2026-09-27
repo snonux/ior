@@ -123,8 +123,8 @@ func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 	}
 
 	updated := next.(*Model)
-	if updated.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen, got %v", updated.screen)
+	if updated.router.current() != ScreenDashboard {
+		t.Fatalf("expected dashboard screen, got %v", updated.router.current())
 	}
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
@@ -140,8 +140,8 @@ func TestPidSelectedTransitionsToDashboardAndSetsPIDFilter(t *testing.T) {
 func TestInitialPIDSkipsPickerAndStartsTracing(t *testing.T) {
 	m := NewModel(7, func(context.Context, TraceRequest) error { return nil })
 
-	if m.screen != ScreenDashboard {
-		t.Fatalf("expected initial screen dashboard, got %v", m.screen)
+	if m.router.current() != ScreenDashboard {
+		t.Fatalf("expected initial screen dashboard, got %v", m.router.current())
 	}
 
 	cmd := m.Init()
@@ -196,7 +196,7 @@ func TestViewShowsAttachingAndErrorStates(t *testing.T) {
 
 func TestQuitKeySetsQuittingState(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
@@ -215,7 +215,7 @@ func TestQuitKeySetsQuittingState(t *testing.T) {
 
 func TestQuitDispatchWaitsForTheActiveTraceCleanup(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 100
 	m.height = 30
@@ -300,7 +300,7 @@ func TestQuitWhileDashboardIsAttachingWaitsForBlockedStarterCleanup(t *testing.T
 	}
 
 	m := NewModel(-1, starter)
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = true
 	startResult := make(chan tea.Msg, 1)
 	go func() { startResult <- m.beginTraceCmd()() }()
@@ -387,7 +387,7 @@ func TestTraceShutdownReporterIsIsolatedAcrossRestarts(t *testing.T) {
 func TestQuitKeyMatchesSingleBindingWithoutPanic(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.keys.Quit = key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "quit"))
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	_, _ = m.Update(tea.KeyPressMsg{Code: []rune{'z'}[0], Text: string([]rune{'z'})})
@@ -497,7 +497,7 @@ func TestStartTraceCmdContextCancelledBeforeTimeoutReturnsNil(t *testing.T) {
 
 func TestQuitInvokesTraceStop(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	done := make(chan struct{})
 	m.tracer.traceStop = func() {
@@ -528,7 +528,7 @@ func TestStartupPIDPickerQuitsOnQuitKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-			if m.screen != ScreenPIDPicker || m.router.hasPendingReturn() {
+			if m.router.current() != ScreenPIDPicker || m.router.hasPendingReturn() {
 				t.Fatalf("expected startup PID picker with no pending return")
 			}
 			stopCalls := 0
@@ -558,7 +558,7 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-			m.screen = ScreenDashboard
+			m.router.showDashboard()
 			m.attaching = false
 			m.width = 120
 			m.height = 30
@@ -570,7 +570,7 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 			m = next.(*Model)
 			next, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 			m = next.(*Model)
-			if m.screen != ScreenPIDPicker || !m.router.hasPendingReturn() {
+			if m.router.current() != ScreenPIDPicker || !m.router.hasPendingReturn() {
 				t.Fatalf("expected reselect PID picker with a pending return")
 			}
 
@@ -582,8 +582,8 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 			if isQuitMsg(cmd()) {
 				t.Fatalf("expected %s in reselect picker to return, not quit", tt.name)
 			}
-			if updated.screen != ScreenDashboard {
-				t.Fatalf("expected dashboard screen after %s cancel, got %v", tt.name, updated.screen)
+			if updated.router.current() != ScreenDashboard {
+				t.Fatalf("expected dashboard screen after %s cancel, got %v", tt.name, updated.router.current())
 			}
 			if !updated.attaching {
 				t.Fatalf("expected attaching=true after %s cancel", tt.name)
@@ -591,7 +591,7 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 			if updated.quitting {
 				t.Fatalf("expected %s in reselect picker to behave like esc, not quit", tt.name)
 			}
-			if updated.router.pickerReturn != nil {
+			if updated.router.hasPendingReturn() {
 				t.Fatalf("expected picker return context to clear after %s cancel", tt.name)
 			}
 			if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
@@ -603,7 +603,7 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 
 func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -616,8 +616,8 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 
 	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: string([]rune{'p'})})
 	m = next.(*Model)
-	if m.screen != ScreenPIDPicker {
-		t.Fatalf("expected pid picker screen after reselect, got %v", m.screen)
+	if m.router.current() != ScreenPIDPicker {
+		t.Fatalf("expected pid picker screen after reselect, got %v", m.router.current())
 	}
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
@@ -625,8 +625,8 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected esc in reselect picker to return to dashboard and restart tracing")
 	}
-	if updated.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen after esc cancel, got %v", updated.screen)
+	if updated.router.current() != ScreenDashboard {
+		t.Fatalf("expected dashboard screen after esc cancel, got %v", updated.router.current())
 	}
 	if !updated.attaching {
 		t.Fatalf("expected attaching=true after esc cancel")
@@ -634,7 +634,7 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 	if updated.quitting {
 		t.Fatalf("expected esc in reselect picker not to quit app")
 	}
-	if updated.router.pickerReturn != nil {
+	if updated.router.hasPendingReturn() {
 		t.Fatalf("expected picker return context to clear after cancel")
 	}
 	if updated.proc.pid != 3333 || updated.proc.tid != 4444 {
@@ -644,7 +644,7 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 
 func TestQuitKeyClosesProbeModalLikeEsc(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{
 		states: []probemanager.ProbeState{{Syscall: "read", Active: true}},
@@ -665,7 +665,7 @@ func TestQuitKeyClosesProbeModalLikeEsc(t *testing.T) {
 
 func TestQuitKeyClosesExportModalLikeEsc(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.exporter = m.exporter.Open()
 
@@ -681,7 +681,7 @@ func TestQuitKeyClosesExportModalLikeEsc(t *testing.T) {
 
 func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -847,7 +847,7 @@ func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.runtime.SetDashboardSnapshotSource(src)
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
 
@@ -872,7 +872,7 @@ func TestProbeToggledMsgKeepsLastGoodSnapshotOnFailure(t *testing.T) {
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.runtime.SetDashboardSnapshotSource(src)
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
 	next, _ := m.Update(messages.StatsTickMsg{Snap: good})
@@ -898,7 +898,7 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context, TraceRequest) error { return nil })
 	m.runtime.SetEventStreamSource(rb)
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = true
 
 	next, _ := m.Update(TracingStartedMsg{})
@@ -918,7 +918,7 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 
 func TestGlobalFilterApplyPreservesBufferedStreamRowsAcrossRestart(t *testing.T) {
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -969,7 +969,7 @@ func TestGlobalFilterApplyPreservesBufferedStreamRowsAcrossRestart(t *testing.T)
 
 func TestGlobalFilterApplyAdvancesRuntimeFilterEpochAndKeepsRecorder(t *testing.T) {
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	initialRecorder := m.runtime.Recorder()
@@ -1005,7 +1005,7 @@ func TestTracingStartedUsesCurrentViewportForFlameNavigationWithoutResize(t *tes
 	coreflamegraph.SeedTestFlameData(trie)
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = true
 	m.width = 120
 	m.height = 30
@@ -1048,7 +1048,7 @@ func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
 	coreflamegraph.SeedTestFlameData(trie)
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = true
 	m.runtime.SetLiveTrie(trie)
 	m.width = 0
@@ -1065,7 +1065,7 @@ func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
 
 func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
@@ -1077,7 +1077,7 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 
 func TestRecordKeyOpensRecordingModalOnDashboard(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'R'}[0], Text: "R"})
@@ -1089,7 +1089,7 @@ func TestRecordKeyOpensRecordingModalOnDashboard(t *testing.T) {
 
 func TestRecordModalSubmitStartsRecording(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	path := filepath.Join(t.TempDir(), "capture.parquet")
@@ -1116,7 +1116,7 @@ func TestRecordModalSubmitStartsRecording(t *testing.T) {
 
 func TestRecordModalRejectsBlankFilename(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.recordModal = m.recordModal.Open("   ")
 
@@ -1135,7 +1135,7 @@ func TestRecordModalRejectsBlankFilename(t *testing.T) {
 
 func TestStartRecordingUpdatesDashboardStatus(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1163,7 +1163,7 @@ func TestStartRecordingUpdatesDashboardStatus(t *testing.T) {
 
 func TestRecordKeyStopsActiveRecording(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	path := filepath.Join(t.TempDir(), "capture.parquet")
@@ -1182,7 +1182,7 @@ func TestQuitStopsActiveRecording(t *testing.T) {
 	for _, attaching := range []bool{false, true} {
 		t.Run(fmt.Sprintf("attaching=%t", attaching), func(t *testing.T) {
 			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-			m.screen = ScreenDashboard
+			m.router.showDashboard()
 			m.attaching = attaching
 
 			path := filepath.Join(t.TempDir(), "capture.parquet")
@@ -1204,7 +1204,7 @@ func TestQuitStopsActiveRecording(t *testing.T) {
 
 func TestSelectPIDStopsActiveRecording(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	path := filepath.Join(t.TempDir(), "capture.parquet")
@@ -1217,8 +1217,8 @@ func TestSelectPIDStopsActiveRecording(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected picker init command")
 	}
-	if updated.screen != ScreenPIDPicker {
-		t.Fatalf("expected p to switch to pid picker, got %v", updated.screen)
+	if updated.router.current() != ScreenPIDPicker {
+		t.Fatalf("expected p to switch to pid picker, got %v", updated.router.current())
 	}
 	if updated.runtime.Recorder().Status().Active {
 		t.Fatalf("expected pid reselect to stop active recording")
@@ -1227,7 +1227,7 @@ func TestSelectPIDStopsActiveRecording(t *testing.T) {
 
 func TestGlobalFilterApplyKeepsActiveRecordingAcrossRestart(t *testing.T) {
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	path := filepath.Join(t.TempDir(), "capture.parquet")
@@ -1264,15 +1264,15 @@ func TestGlobalFilterApplyKeepsActiveRecordingAcrossRestart(t *testing.T) {
 
 func TestFlamePauseKeyDoesNotTriggerPIDReselect(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	updated := next.(*Model)
-	if updated.screen != ScreenDashboard {
-		t.Fatalf("expected flame space key to keep dashboard screen, got %v", updated.screen)
+	if updated.router.current() != ScreenDashboard {
+		t.Fatalf("expected flame space key to keep dashboard screen, got %v", updated.router.current())
 	}
 	if !strings.Contains(updated.View().Content, "[PAUSED]") {
 		t.Fatalf("expected flame space key to toggle flame paused state")
@@ -1281,15 +1281,15 @@ func TestFlamePauseKeyDoesNotTriggerPIDReselect(t *testing.T) {
 
 func TestFlamePIDShortcutOpensPIDPickerInsteadOfPausing(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'p'}[0], Text: "p"})
 	updated := next.(*Model)
-	if updated.screen != ScreenPIDPicker {
-		t.Fatalf("expected p to open PID picker from flame tab, got %v", updated.screen)
+	if updated.router.current() != ScreenPIDPicker {
+		t.Fatalf("expected p to open PID picker from flame tab, got %v", updated.router.current())
 	}
 	if strings.Contains(updated.View().Content, "[PAUSED]") {
 		t.Fatalf("expected p not to pause flame tab")
@@ -1301,7 +1301,7 @@ func TestFlamePIDShortcutOpensPIDPickerInsteadOfPausing(t *testing.T) {
 
 func TestFlameSpaceKeyReleaseFallbackTogglesPause(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1315,7 +1315,7 @@ func TestFlameSpaceKeyReleaseFallbackTogglesPause(t *testing.T) {
 
 func TestFlameSpacePressReleaseDoesNotDoubleTogglePause(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1335,7 +1335,7 @@ func TestFlameSpacePressReleaseDoesNotDoubleTogglePause(t *testing.T) {
 
 func TestFlameSpaceReleasePressDoesNotDoubleTogglePause(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1416,7 +1416,7 @@ func TestNormalizeKeyEventReleaseFallbackDoesNotSuppressArrowPress(t *testing.T)
 
 func TestFlameOrderKeyDoesNotOpenProbeModal(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1430,7 +1430,7 @@ func TestFlameOrderKeyDoesNotOpenProbeModal(t *testing.T) {
 
 func TestFlameMetricKeyDoesNotOpenProbeModal(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1444,7 +1444,7 @@ func TestFlameMetricKeyDoesNotOpenProbeModal(t *testing.T) {
 
 func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1460,8 +1460,8 @@ func TestSelectPIDKeyReturnsToFreshPickerAndStopsTrace(t *testing.T) {
 	if !stopped {
 		t.Fatalf("expected active tracing to be stopped before returning to picker")
 	}
-	if updated.screen != ScreenPIDPicker {
-		t.Fatalf("expected PID picker screen, got %v", updated.screen)
+	if updated.router.current() != ScreenPIDPicker {
+		t.Fatalf("expected PID picker screen, got %v", updated.router.current())
 	}
 	if updated.attaching {
 		t.Fatalf("expected attaching=false on picker screen")
@@ -1488,7 +1488,7 @@ func TestPidSelectedClearsPersistentStreamBuffer(t *testing.T) {
 
 func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1504,8 +1504,8 @@ func TestSelectTIDKeyReturnsToPickerWhenPIDFilterIsAll(t *testing.T) {
 	if !stopped {
 		t.Fatalf("expected tracing stop before tid reselect")
 	}
-	if updated.screen != ScreenPIDPicker {
-		t.Fatalf("expected picker screen, got %v", updated.screen)
+	if updated.router.current() != ScreenPIDPicker {
+		t.Fatalf("expected picker screen, got %v", updated.router.current())
 	}
 	if cmd == nil {
 		t.Fatalf("expected picker init command")
@@ -1516,7 +1516,7 @@ func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.PidFilter = 1234
 	m := NewModelWithConfig(cfg, -1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1532,8 +1532,8 @@ func TestSelectTIDKeyReturnsToPickerWhenSinglePIDSelected(t *testing.T) {
 	if !stopped {
 		t.Fatalf("expected tracing stop before tid reselect")
 	}
-	if updated.screen != ScreenPIDPicker {
-		t.Fatalf("expected picker screen, got %v", updated.screen)
+	if updated.router.current() != ScreenPIDPicker {
+		t.Fatalf("expected picker screen, got %v", updated.router.current())
 	}
 	if cmd == nil {
 		t.Fatalf("expected picker init command")
@@ -1550,8 +1550,8 @@ func TestTidSelectedTransitionsToDashboardAndSetsTIDFilter(t *testing.T) {
 		t.Fatalf("expected tracing start command")
 	}
 	updated := next.(*Model)
-	if updated.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen, got %v", updated.screen)
+	if updated.router.current() != ScreenDashboard {
+		t.Fatalf("expected dashboard screen, got %v", updated.router.current())
 	}
 	if !updated.attaching {
 		t.Fatalf("expected attaching state to be true")
@@ -1572,8 +1572,8 @@ func TestTidSelectedFromAllPIDModeSetsOwningPID(t *testing.T) {
 		t.Fatalf("expected tracing start command")
 	}
 	updated := next.(*Model)
-	if updated.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen, got %v", updated.screen)
+	if updated.router.current() != ScreenDashboard {
+		t.Fatalf("expected dashboard screen, got %v", updated.router.current())
 	}
 	if updated.proc.pid != 4444 {
 		t.Fatalf("expected pid filter switched to owning pid 4444, got %d", updated.proc.pid)
@@ -1587,7 +1587,7 @@ func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.TUIExportEnable = false
 	m := NewModelWithConfig(cfg, -1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
@@ -1600,7 +1600,7 @@ func TestExportKeyIgnoredWhenExportDisabled(t *testing.T) {
 func TestStreamFilterModalConsumesEKeyInsteadOfOpeningExport(t *testing.T) {
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1638,7 +1638,7 @@ func TestRunExportCmdCSVWritesFilteredStreamSnapshot(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prev) })
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	buffer := requireTestStreamSink(t, m.runtime.StreamBuffer())
@@ -1693,14 +1693,14 @@ func TestHelpKeyDoesNotToggleOverlay(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'?'}[0], Text: string([]rune{'?'})})
 	updated := next.(*Model)
-	if updated.screen != ScreenPIDPicker {
-		t.Fatalf("expected ? to have no effect, got screen %v", updated.screen)
+	if updated.router.current() != ScreenPIDPicker {
+		t.Fatalf("expected ? to have no effect, got screen %v", updated.router.current())
 	}
 }
 
 func TestViewShowsDashboardWithoutHelpOverlay(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.width = 100
 	m.height = 30
 
@@ -1712,7 +1712,7 @@ func TestViewShowsDashboardWithoutHelpOverlay(t *testing.T) {
 
 func TestHelpOverlayOpensWithUppercaseHAndClosesWithEsc(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 100
 	m.height = 30
@@ -1739,7 +1739,7 @@ func TestHelpOverlayOpensWithUppercaseHAndClosesWithEsc(t *testing.T) {
 
 func TestHelpOverlayClosesWithQWithoutQuitting(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 100
 	m.height = 30
@@ -1765,7 +1765,7 @@ func TestHelpOverlayClosesWithQWithoutQuitting(t *testing.T) {
 
 func TestHelpOverlayCanOpenFromPIDPicker(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenPIDPicker
+	m.router = newScreenRouter(ScreenPIDPicker)
 	m.width = 100
 	m.height = 30
 
@@ -1781,7 +1781,7 @@ func TestHelpOverlayCanOpenFromPIDPicker(t *testing.T) {
 
 func TestGlobalFilterModalOpensFromDashboardShortcut(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
 	m = next.(*Model)
@@ -1792,7 +1792,7 @@ func TestGlobalFilterModalOpensFromDashboardShortcut(t *testing.T) {
 
 func TestQuitClosesGlobalFilterModalWithoutQuitting(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.filterModal = m.filterModal.Open(m.filters.global)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
@@ -1810,7 +1810,7 @@ func TestQuitClosesGlobalFilterModalWithoutQuitting(t *testing.T) {
 
 func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	stopped := false
@@ -1845,7 +1845,7 @@ func TestGlobalFilterModalUpdatesStoredFilterState(t *testing.T) {
 
 func TestGlobalFilterCloseWithoutChangesDoesNotRestartTrace(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	stopped := false
@@ -1873,7 +1873,7 @@ func TestGlobalFilterCloseWithoutChangesDoesNotRestartTrace(t *testing.T) {
 
 func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -1933,7 +1933,7 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 
 func TestGlobalFilterUndoKeyPopsLatestStackEntry(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'f'}[0], Text: string([]rune{'f'})})
@@ -1970,7 +1970,7 @@ func TestGlobalFilterUndoKeyPopsLatestStackEntry(t *testing.T) {
 
 func TestPausedStreamEscUndoesLatestGlobalFilter(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -2024,7 +2024,7 @@ func TestPausedStreamEscUndoesLatestGlobalFilter(t *testing.T) {
 
 func TestDashboardFooterShowsGlobalFilterStack(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 140
 	m.height = 35
@@ -2073,7 +2073,7 @@ func TestFilterStackHistoryCapEvictsOldestEntries(t *testing.T) {
 
 func TestProcessesTabEnterAppliesSelectedProcessAsGlobalFilter(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -2120,7 +2120,7 @@ func TestProcessesTabEnterAppliesSelectedProcessAsGlobalFilter(t *testing.T) {
 
 func TestGlobalFilterApplyPreservesActiveDashboardTab(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'4'}[0], Text: string([]rune{'4'})})
@@ -2148,7 +2148,7 @@ func TestGlobalFilterApplyPreservesActiveDashboardTab(t *testing.T) {
 
 func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testing.T) {
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 140
 	m.height = 36
@@ -2239,7 +2239,7 @@ func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testin
 
 func TestQuestionMarkDoesNotBlockUnderlyingActions(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(*Model)
@@ -2311,7 +2311,7 @@ func advanceFlameSelection(t *testing.T, m *Model) string {
 func TestQuestionMarkDoesNotBreakExportModalInput(t *testing.T) {
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: string([]rune{'e'})})
 	updated := next.(*Model)
@@ -2341,7 +2341,7 @@ func TestExportDisabledHidesHintsAndShortcuts(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.TUIExportEnable = false
 	m := NewModelWithConfig(cfg, -1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.width = 100
 	m.height = 30
 
@@ -2353,7 +2353,7 @@ func TestExportDisabledHidesHintsAndShortcuts(t *testing.T) {
 	// The enabled configuration must still advertise the shortcuts in the
 	// same surfaces, so the hiding is attributable to the flag.
 	enabled := NewModelWithConfig(flags.NewFlags(), -1, func(context.Context, TraceRequest) error { return nil })
-	enabled.screen = ScreenDashboard
+	enabled.router.showDashboard()
 	enabled.width = 100
 	enabled.height = 30
 	enabled.helpOverlayVisible = true
@@ -2374,7 +2374,7 @@ func TestExportDisabledHidesHintsAndShortcuts(t *testing.T) {
 
 func TestExportModalStillAllowsDashboardStatsUpdates(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.exporter = m.exporter.Open()
 
@@ -2389,7 +2389,7 @@ func TestExportModalStillAllowsDashboardStatsUpdates(t *testing.T) {
 
 func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	// Dimensions must flow through Update so that sub-model viewports are
 	// kept in sync with the new pure-View contract.
@@ -2420,7 +2420,7 @@ func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.runtime.SetProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.width = 120
 	m.height = 30
@@ -2437,7 +2437,7 @@ func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 
 func TestBlurPausesDashboardRefreshAndFocusResumesIt(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.attaching = false
 	m.dashboard = dashboardui.NewModelWithConfig(nil, nil, 1, 200, m.keys)
 	m.focused = true
@@ -2488,13 +2488,13 @@ func TestKeyboardEnhancementsMsgHandledGracefully(t *testing.T) {
 func TestViewSetsDynamicWindowTitle(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 
-	m.screen = ScreenPIDPicker
+	m.router = newScreenRouter(ScreenPIDPicker)
 	view := m.View()
 	if view.WindowTitle != "ior - select process" {
 		t.Fatalf("unexpected picker window title: %q", view.WindowTitle)
 	}
 
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
 	m.proc.pid = 1234
 	view = m.View()
 	if view.WindowTitle != "ior - tracing PID 1234" {
@@ -2618,8 +2618,8 @@ func TestNextAutoResetIntervalAdvancesCustomValueToNextPreset(t *testing.T) {
 func TestNewTestFlamesModelSkipsPickerWithoutPidFilter(t *testing.T) {
 	m := NewTestFlamesModel(flags.NewFlags(), func(context.Context, TraceRequest) error { return nil })
 
-	if m.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen (picker skipped), got %v", m.screen)
+	if m.router.current() != ScreenDashboard {
+		t.Fatalf("expected dashboard screen (picker skipped), got %v", m.router.current())
 	}
 	if !m.attaching {
 		t.Fatalf("expected attaching state so Init() starts the seeded trace")
@@ -2644,8 +2644,8 @@ func TestNewTestFlamesModelHonoursConfigPidFilter(t *testing.T) {
 
 	m := NewTestFlamesModel(cfg, func(context.Context, TraceRequest) error { return nil })
 
-	if m.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen (picker skipped), got %v", m.screen)
+	if m.router.current() != ScreenDashboard {
+		t.Fatalf("expected dashboard screen (picker skipped), got %v", m.router.current())
 	}
 	if m.proc.pid != 2002 {
 		t.Fatalf("expected pid filter 2002, got %d", m.proc.pid)
@@ -2692,8 +2692,8 @@ func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 
 	m := newRunModel(cfg, func(context.Context, TraceRequest) error { return nil })
 
-	if m.screen != ScreenDashboard {
-		t.Fatalf("a -pid attach target must start on the dashboard, got %v", m.screen)
+	if m.router.current() != ScreenDashboard {
+		t.Fatalf("a -pid attach target must start on the dashboard, got %v", m.router.current())
 	}
 	if !m.attaching {
 		t.Fatal("a -pid attach target must start attaching, or Init() never calls beginTraceCmd()")
@@ -2745,8 +2745,8 @@ func TestNewRunModelWiresTidFilterWithoutPid(t *testing.T) {
 func TestNewModelWithConfigInitialPIDStillFilters(t *testing.T) {
 	m := NewModelWithConfig(flags.NewFlags(), 7, func(context.Context, TraceRequest) error { return nil })
 
-	if m.screen != ScreenDashboard {
-		t.Fatalf("expected dashboard screen for an initial pid, got %v", m.screen)
+	if m.router.current() != ScreenDashboard {
+		t.Fatalf("expected dashboard screen for an initial pid, got %v", m.router.current())
 	}
 	if !m.attaching {
 		t.Fatalf("expected attaching state for an initial pid")

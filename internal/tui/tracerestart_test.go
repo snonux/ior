@@ -155,8 +155,8 @@ func TestInitTraceIsCancelledByEveryRestartPath(t *testing.T) {
 			starter := newRecordingStarter()
 			m := NewModel(initialPID, starter.start)
 			t.Cleanup(m.tracer.stop)
-			if m.screen != ScreenDashboard || !m.attaching {
-				t.Fatalf("startup state = screen %v attaching %v, want dashboard attaching", m.screen, m.attaching)
+			if m.router.current() != ScreenDashboard || !m.attaching {
+				t.Fatalf("startup state = screen %v attaching %v, want dashboard attaching", m.router.current(), m.attaching)
 			}
 
 			runCmdAsync(m.Init())
@@ -206,8 +206,8 @@ func TestInitOnPickerScreenStartsNoTrace(t *testing.T) {
 	if cmd := m.Init(); cmd == nil {
 		t.Fatal("Init on the picker screen returned no command")
 	}
-	if m.screen != ScreenPIDPicker || m.attaching {
-		t.Fatalf("startup state = screen %v attaching %v, want picker idle", m.screen, m.attaching)
+	if m.router.current() != ScreenPIDPicker || m.attaching {
+		t.Fatalf("startup state = screen %v attaching %v, want picker idle", m.router.current(), m.attaching)
 	}
 	if m.tracer.traceStop != nil || m.tracer.shutdownReporter != nil {
 		t.Fatal("Init on the picker screen armed a trace session")

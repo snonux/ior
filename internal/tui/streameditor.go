@@ -14,7 +14,7 @@ import (
 // live screen (a modal on top of it does not matter: the editor suspends the
 // whole program); otherwise the dashboard is told to mark it cancelled.
 func (m *Model) handleOpenEditorRequested(msg messages.OpenEditorRequestedMsg) (tea.Model, tea.Cmd) {
-	if m.screen != ScreenDashboard || m.attaching || m.quitting {
+	if m.router.current() != ScreenDashboard || m.attaching || m.quitting {
 		m.dashboard.CancelOpenEditorRequest(msg)
 		return m, nil
 	}
