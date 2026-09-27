@@ -259,7 +259,9 @@ func (lt *LiveTrie) Version() uint64 {
 
 // SnapshotJSON returns a compact JSON snapshot for the current trie version.
 // Layered on top of SnapshotTree so the tree-building work is shared with
-// callers that want the typed form directly.
+// callers that want the typed form directly. It is deliberately not part of
+// LiveTrieSource: no production consumer renders from JSON, and tests use it
+// as the serialization-fidelity oracle against SnapshotTree.
 func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
 	version := lt.Version()
 	cached, ok := func() ([]byte, bool) {

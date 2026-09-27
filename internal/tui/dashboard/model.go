@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/statsengine"
@@ -78,7 +79,7 @@ type Model struct {
 
 	engine   SnapshotSource
 	latest   *statsengine.Snapshot
-	liveTrie flamegraphtui.LiveTrieSource
+	liveTrie coreflamegraph.LiveTrieSource
 	// statsGen is the current stats generation. It starts at 1 so every tick
 	// built by statsTick is versioned, and advances on every stats reset so
 	// handleStatsTick can drop ticks built before the reset.
@@ -1305,7 +1306,7 @@ func (m *Model) SetRecordingStatus(status string) {
 }
 
 // SetLiveTrie updates the live trie source used by the flamegraph tab.
-func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
+func (m *Model) SetLiveTrie(liveTrie coreflamegraph.LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.flamegraphModel.SetLiveTrie(liveTrie)
 	if m.width > 0 && m.height > 0 {

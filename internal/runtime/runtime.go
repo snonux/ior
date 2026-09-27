@@ -260,51 +260,12 @@ type ResettableSnapshotSource interface {
 // *statsengine.Engine satisfies both interfaces.
 type EventIngester = statsengine.Accumulator
 
-// Snapshotter is the read-only subset of the trie contract used by consumers
-// that only need to poll the version and retrieve snapshot data. It mirrors the
-// Snapshotter interface in internal/tui/flamegraph but lives here so the core
-// package need not import that TUI sub-package.
-// *flamegraph.LiveTrie satisfies this interface.
-type Snapshotter interface {
-	// Version returns the monotonically-increasing snapshot generation counter.
-	Version() uint64
-	// SnapshotJSON serialises the current trie to JSON for external consumers.
-	SnapshotJSON() ([]byte, uint64)
-	// SnapshotTree returns a ready-to-render snapshot tree without a JSON round-trip.
-	SnapshotTree() (*flamegraph.SnapshotNode, uint64)
-}
-
-// Configurator is the write/mutating subset of the trie contract used by
-// consumers that need to change field layout, metric, or reset the baseline.
-// It mirrors the Configurator interface in internal/tui/flamegraph but lives
-// here so the core package need not import that TUI sub-package.
-// *flamegraph.LiveTrie satisfies this interface.
-type Configurator interface {
-	// Fields returns the current ordered list of grouping fields.
-	Fields() []string
-	// CountField returns the active aggregation metric name.
-	CountField() string
-	// HeightField returns the active frame-height metric (e.g. "bytes", "duration").
-	HeightField() string
-	// Reconfigure replaces the grouping fields and resets accumulated data.
-	Reconfigure([]string) error
-	// SetCountField changes the active aggregation metric and starts a fresh baseline.
-	SetCountField(string) error
-	// SetHeightField changes the frame-height metric and starts a fresh baseline.
-	SetHeightField(string) error
-	// Reset clears all accumulated data, starting a new baseline.
-	Reset()
-}
-
-// LiveTrieSource is the full flamegraph-trie contract needed by the tracing
-// engine and the flamegraph TUI model. It embeds Snapshotter (read-only
-// snapshot access) and Configurator (mutating operations) so each can be used
-// independently where a narrower interface suffices. Both interfaces are
-// satisfied by *flamegraph.LiveTrie.
-type LiveTrieSource interface {
-	Snapshotter
-	Configurator
-}
+// LiveTrieSource is the live flamegraph-trie contract the trace starter
+// publishes to the TUI through RuntimePublisher.SetLiveTrie. It is an alias for
+// flamegraph.LiveTrieSource, the single definition shared with the flamegraph
+// TUI model, so the runtime contract names it without redeclaring it.
+// *flamegraph.LiveTrie satisfies it (asserted in package flamegraph).
+type LiveTrieSource = flamegraph.LiveTrieSource
 
 // ProbeManager exposes runtime probe controls to the TUI probes modal.
 // *probemanager.Manager implements this interface.
@@ -366,17 +327,12 @@ type TraceRuntimeBindings interface {
 // These blank-identifier assignments cause a build error if any concrete type
 // drifts out of sync with the interface it claims to satisfy. They are grouped
 // here because the runtime package already imports every relevant package
-// (*flamegraph.LiveTrie, *probemanager.Manager, *statsengine.Engine, and
-// *streamrow.RingBuffer), keeping the assertions co-located with the interface
-// definitions without introducing new import cycles.
+// (*probemanager.Manager, *statsengine.Engine, and *streamrow.RingBuffer),
+// keeping the assertions co-located with the interface definitions without
+// introducing new import cycles. LiveTrieSource is an alias, so its assertion
+// lives with its definition in package flamegraph.
 
 var (
-	// *flamegraph.LiveTrie must satisfy both the read-only and mutating sides of
-	// the trie contract as well as the combined LiveTrieSource interface.
-	_ Snapshotter    = (*flamegraph.LiveTrie)(nil)
-	_ Configurator   = (*flamegraph.LiveTrie)(nil)
-	_ LiveTrieSource = (*flamegraph.LiveTrie)(nil)
-
 	// *probemanager.Manager must satisfy the probe-control surface exposed to the TUI.
 	_ ProbeManager = (*probemanager.Manager)(nil)
 

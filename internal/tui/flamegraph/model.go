@@ -16,8 +16,8 @@ import (
 
 // snapshotNode aliases the live trie's snapshot type so the TUI can consume
 // trees directly via SnapshotTree() without paying for a JSON marshal+unmarshal
-// round-trip. The JSON tags on SnapshotNode keep the legacy SnapshotJSON path
-// working unchanged.
+// round-trip. The trie contract itself (coreflamegraph.LiveTrieSource and its
+// Snapshotter/Configurator halves) is defined once in the core package.
 type snapshotNode = coreflamegraph.SnapshotNode
 
 type animTickMsg struct{}
@@ -76,63 +76,6 @@ const flameKeyDebugEnabled = false
 // JSON+layout work or a 1-second animation chain.
 const driveWindow = 250 * time.Millisecond
 
-// Snapshotter is the read-only subset of the trie contract: version polling and
-// snapshot retrieval. buildSnapshotMsg and background refresh goroutines use
-// only this narrower interface so they cannot accidentally mutate trie state.
-type Snapshotter interface {
-	// Version returns the monotonically-increasing snapshot generation counter.
-	// Callers use it to avoid re-rendering an unchanged trie.
-	Version() uint64
-	// SnapshotJSON serialises the current trie to JSON for external consumers
-	// (retained for tests and CLI callers; not used by the TUI render path).
-	SnapshotJSON() ([]byte, uint64)
-	// SnapshotTree returns a ready-to-render snapshot tree without a
-	// JSON round-trip. It is the fast path used by the background refresh.
-	SnapshotTree() (*snapshotNode, uint64)
-}
-
-// Configurator is the write/mutating subset of the trie contract: field layout,
-// metric selection, and baseline reset. The flamegraph controls (cycleFieldOrder,
-// toggleCountField, resetBaseline) call only these methods.
-type Configurator interface {
-	// Fields returns the current ordered list of grouping fields (e.g. ["comm","path"]).
-	Fields() []string
-	// HeightField returns the active frame-height metric (e.g. "bytes", "duration").
-	HeightField() string
-	// CountField returns the active aggregation metric name (e.g. "count", "bytes").
-	CountField() string
-	// Reconfigure replaces the grouping fields and resets accumulated data so a
-	// new baseline begins with the new field order.
-	Reconfigure([]string) error
-	// SetHeightField changes the frame-height metric and starts a fresh baseline.
-	SetHeightField(string) error
-	// SetCountField changes the active aggregation metric and starts a fresh baseline.
-	SetCountField(string) error
-	// Reset clears all accumulated data so the next ingested event starts a new baseline.
-	Reset()
-}
-
-// LiveTrieSource is the full trie contract needed by the flamegraph TUI model.
-// It embeds Snapshotter (read-only snapshot access) and Configurator (mutating
-// operations) so each can be used independently where a narrower interface suffices.
-type LiveTrieSource interface {
-	Snapshotter
-	Configurator
-}
-
-// --- compile-time interface satisfaction assertions ---
-//
-// *coreflamegraph.LiveTrie is the sole production implementation of all three
-// trie interfaces. The assertions are placed here rather than in the
-// flamegraph package itself to avoid an import cycle: runtime imports
-// flamegraph, so flamegraph cannot import runtime. The tui/flamegraph package
-// already imports coreflamegraph, making it the natural home.
-var (
-	_ Snapshotter    = (*coreflamegraph.LiveTrie)(nil)
-	_ Configurator   = (*coreflamegraph.LiveTrie)(nil)
-	_ LiveTrieSource = (*coreflamegraph.LiveTrie)(nil)
-)
-
 type zoomState struct {
 	path                string
 	previousSelectedIdx int
@@ -188,7 +131,7 @@ type Model struct {
 	anim   FrameAnimator    // frame layout, ancestry index, animated transitions
 	search SearchController // search query, match indices, filter-visible set
 
-	liveTrie    LiveTrieSource
+	liveTrie    coreflamegraph.LiveTrieSource
 	lastVersion uint64
 	snapshot    *snapshotNode
 	globalTotal uint64
@@ -263,7 +206,7 @@ type tuiFrame struct {
 // model (see the receiver note on the Model struct above), and a value return
 // would hand back a copy whose mutations could silently detach from the model
 // the program keeps.
-func NewModel(liveTrie LiveTrieSource) *Model {
+func NewModel(liveTrie coreflamegraph.LiveTrieSource) *Model {
 	m := &Model{
 		zoom:      ZoomNavigator{},
 		sel:       newSelectionManager(),
@@ -626,7 +569,7 @@ func (m *Model) currentViewCacheKey() flameViewCacheKey {
 // SetLiveTrie updates the data source. It invalidates any in-flight refresh,
 // resets all sub-controllers, and clears snapshot state so the new trie starts
 // fresh.
-func (m *Model) SetLiveTrie(liveTrie LiveTrieSource) {
+func (m *Model) SetLiveTrie(liveTrie coreflamegraph.LiveTrieSource) {
 	// The old session's job runs against the old trie, so the new session
 	// need not wait for it: drop the slot along with its result.
 	m.invalidateRefresh()
@@ -725,8 +668,8 @@ func (m *Model) RefreshFromLiveTrie() bool {
 // goroutine. It returns a flameSnapshotReadyMsg that the Update loop consumes
 // to apply the new frame layout without blocking the UI goroutine.
 // Only snapshot reads are needed here, so the parameter is narrowed to
-// Snapshotter rather than the full LiveTrieSource.
-func buildSnapshotMsg(liveTrie Snapshotter, generation uint64, width, height int, zoomPath string) tea.Msg {
+// coreflamegraph.Snapshotter rather than the full LiveTrieSource.
+func buildSnapshotMsg(liveTrie coreflamegraph.Snapshotter, generation uint64, width, height int, zoomPath string) tea.Msg {
 	tree, ver := liveTrie.SnapshotTree()
 	if tree == nil {
 		return flameSnapshotReadyMsg{generation: generation, version: ver, layoutWidth: width, layoutHeight: height, zoomPath: zoomPath}
