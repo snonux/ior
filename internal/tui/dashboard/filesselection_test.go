@@ -116,7 +116,7 @@ func TestFilesVizSelectionSurvivesStatsTick(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newFilesVizModel(t, tt.mode, tt.initial)
 			m = pressJ(t, m, tt.presses)
-			if got := m.selectedFilesDirKey(); got != tt.selected {
+			if got := m.filesDirSelection().selectedKey(); got != tt.selected {
 				t.Fatalf("before tick: selected %q, want %q", got, tt.selected)
 			}
 
@@ -126,7 +126,7 @@ func TestFilesVizSelectionSurvivesStatsTick(t *testing.T) {
 				if m.filesDirTab.offset != tt.want {
 					t.Fatalf("tick %d: offset %d, want %d", tick, m.filesDirTab.offset, tt.want)
 				}
-				if got := m.selectedFilesDirKey(); got != tt.selected {
+				if got := m.filesDirSelection().selectedKey(); got != tt.selected {
 					t.Fatalf("tick %d: selected %q, want %q", tick, got, tt.selected)
 				}
 			}
@@ -149,7 +149,7 @@ func TestFilesIcicleSelectionFallsBackWhenSelectedTileDisappears(t *testing.T) {
 	if m.filesDirTab.offset != 2 {
 		t.Fatalf("expected offset clamped to 2, got %d", m.filesDirTab.offset)
 	}
-	if got := m.selectedFilesDirKey(); got != "/a/b/c" {
+	if got := m.filesDirSelection().selectedKey(); got != "/a/b/c" {
 		t.Fatalf("expected fallback selection /a/b/c, got %q", got)
 	}
 }
@@ -163,15 +163,15 @@ func TestFilesVizSelectionResetsOnEmptySnapshot(t *testing.T) {
 		if m.filesDirTab.offset != 0 {
 			t.Fatalf("mode %d: expected offset 0 on empty snapshot, got %d", mode, m.filesDirTab.offset)
 		}
-		if got := m.selectedFilesDirKey(); got != "" {
+		if got := m.filesDirSelection().selectedKey(); got != "" {
 			t.Fatalf("mode %d: expected no selection on empty snapshot, got %q", mode, got)
 		}
 		_ = m.View() // must render the empty state without indexing tiles
 
 		m = tickStats(t, m, messages.StatsTickMsg{Snap: icicleSnapshot(9, 7)})
-		if m.filesDirTab.offset != 0 || m.selectedFilesDirKey() == "" {
+		if m.filesDirTab.offset != 0 || m.filesDirSelection().selectedKey() == "" {
 			t.Fatalf("mode %d: expected first item selected after data returns, got %q at %d",
-				mode, m.selectedFilesDirKey(), m.filesDirTab.offset)
+				mode, m.filesDirSelection().selectedKey(), m.filesDirTab.offset)
 		}
 	}
 }
@@ -185,8 +185,8 @@ func TestFilesVizSelectionKeptOnFailedStatsTick(t *testing.T) {
 	if m.latest != good {
 		t.Fatalf("expected last good snapshot kept on failed tick")
 	}
-	if m.filesDirTab.offset != 4 || m.selectedFilesDirKey() != "/a/d/e" {
-		t.Fatalf("expected selection /a/d/e at 4 kept, got %q at %d", m.selectedFilesDirKey(), m.filesDirTab.offset)
+	if m.filesDirTab.offset != 4 || m.filesDirSelection().selectedKey() != "/a/d/e" {
+		t.Fatalf("expected selection /a/d/e at 4 kept, got %q at %d", m.filesDirSelection().selectedKey(), m.filesDirTab.offset)
 	}
 }
 
@@ -234,7 +234,7 @@ func TestFilesDirTableSelectionPolicyOnStatsTick(t *testing.T) {
 			if m.filesDirTab.offset != tt.wantAt {
 				t.Fatalf("offset %d, want %d", m.filesDirTab.offset, tt.wantAt)
 			}
-			if got := m.selectedFilesDirKey(); got != tt.want {
+			if got := m.filesDirSelection().selectedKey(); got != tt.want {
 				t.Fatalf("selected %q, want %q", got, tt.want)
 			}
 		})
@@ -245,12 +245,12 @@ func TestFilesDirTableSelectionPolicyOnStatsTick(t *testing.T) {
 func selectFilesDirKey(t *testing.T, m *Model, key string) *Model {
 	t.Helper()
 	for range m.filesDirRowCountForMode() {
-		if m.selectedFilesDirKey() == key {
+		if m.filesDirSelection().selectedKey() == key {
 			return m
 		}
 		m = pressJ(t, m, 1)
 	}
-	if got := m.selectedFilesDirKey(); got != key {
+	if got := m.filesDirSelection().selectedKey(); got != key {
 		t.Fatalf("could not select %q, stuck on %q", key, got)
 	}
 	return m
@@ -258,9 +258,9 @@ func selectFilesDirKey(t *testing.T, m *Model, key string) *Model {
 
 func assertFilesDirSelection(t *testing.T, m *Model, wantAt int, want string) {
 	t.Helper()
-	if m.filesDirTab.offset != wantAt || m.selectedFilesDirKey() != want {
+	if m.filesDirTab.offset != wantAt || m.filesDirSelection().selectedKey() != want {
 		t.Fatalf("selected %q at %d, want %q at %d",
-			m.selectedFilesDirKey(), m.filesDirTab.offset, want, wantAt)
+			m.filesDirSelection().selectedKey(), m.filesDirTab.offset, want, wantAt)
 	}
 }
 

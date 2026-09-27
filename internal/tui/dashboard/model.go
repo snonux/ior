@@ -91,21 +91,24 @@ type Model struct {
 	// The three table tabs' state (selected offset/col, live sort, viz mode,
 	// bubble chart) plus the Files tab's directory-grouped sub-table, which
 	// shares the navigation and sort machinery but never has a viz mode or
-	// chart of its own. syscallsTreemapOffset stays a plain field: it is
-	// an offset into the treemap's item list (syscallsTreemapSelection), not
-	// the table the state above selects in. See tabletab.go for what the
-	// component is for.
-	syscallsTab           tableTabState[syscallSortKey]
-	syscallsTreemapOffset int
-	filesTab              tableTabState[fileSortKey]
-	filesDirGrouped       bool
-	filesDirTab           tableTabState[fileDirSortKey]
-	processesTab          tableTabState[processSortKey]
-	streamModel           eventstream.Model
-	flamegraphModel       *flamegraphtui.Model
-	showHelp              bool
-	isDark                bool
-	focused               bool
+	// chart of its own. syscallsTreemapOffset and processesTreemapOffset
+	// stay plain fields: each is an offset into its treemap's item list
+	// (syscallsTreemapSelection, processesTreemapSelection), not into the
+	// table the state above selects in, so clamping the treemap selection
+	// (a PID outside the top tiles) never moves the table selection. See
+	// tabletab.go for what the component is for.
+	syscallsTab            tableTabState[syscallSortKey]
+	syscallsTreemapOffset  int
+	filesTab               tableTabState[fileSortKey]
+	filesDirGrouped        bool
+	filesDirTab            tableTabState[fileDirSortKey]
+	processesTab           tableTabState[processSortKey]
+	processesTreemapOffset int
+	streamModel            eventstream.Model
+	flamegraphModel        *flamegraphtui.Model
+	showHelp               bool
+	isDark                 bool
+	focused                bool
 }
 
 // NewModel creates a dashboard model with default refresh cadence.
@@ -324,24 +327,11 @@ func (m *Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-// The re-anchor helpers keep a table's selection stable across a snapshot
-// refresh (handleStatsTick) and across a sort change (applySort's closure):
-// each finds the previously selected row - by name, path or PID - in the
-// freshly ordered rows and falls back to clamping the current offset.
-func (m *Model) reanchorSyscallsOffset(selectedName string) {
-	m.syscallsTab.offset = reanchorOffset(m.syscallsTab.offset, m.sortedSyscallRows(), selectedName, findSyscallOffset)
-}
-
+// reanchorFilesOffset keeps the plain Files table selection stable across a
+// snapshot refresh (handleStatsTick): it finds the previously selected path
+// in the freshly ordered rows and falls back to clamping the current offset.
 func (m *Model) reanchorFilesOffset(selectedPath string) {
 	m.filesTab.offset = reanchorOffset(m.filesTab.offset, m.sortedFileRows(), selectedPath, findFileOffset)
-}
-
-// reanchorFilesDirOffset re-anchors the dir-grouped selection over the
-// items of the active viz mode (see filesDirSelectionKeys), so a treemap or
-// icicle selection is neither clamped against the directory count nor left
-// pointing at whatever item moved into its old position.
-func (m *Model) reanchorFilesDirOffset(selectedKey string) {
-	m.filesDirSelection().reanchor(selectedKey)
 }
 
 // selectedSyscallSnapshot returns the row Enter and the stats-tick
@@ -384,14 +374,6 @@ func (m *Model) visibleSyscallRows(snap *statsengine.Snapshot) []statsengine.Sys
 		}
 	}
 	return filtered
-}
-
-func (m *Model) selectedSyscallName() string {
-	selected, ok := m.selectedSyscallSnapshot()
-	if !ok {
-		return ""
-	}
-	return selected.Name
 }
 
 // handleSortKey applies the sort / reverse-sort keys through the active
@@ -621,8 +603,8 @@ func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 
 	switch {
 	case m.processesTab.mode == tabVizModeTreemap:
-		// The same item the treemap highlights (see processesSelectionKeys).
-		return processByKey(rows, m.processesSelection().selectedKey())
+		// The same item the treemap highlights (processesTreemapSelection).
+		return processByKey(rows, m.processesTreemapSelection().selectedKey())
 	case m.processesTab.mode == tabVizModeBubbles:
 		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesTab.bubble.Metric(), bubbleMaxItems), m.processesTab.bubble.selected)
 	default:
@@ -632,14 +614,6 @@ func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 
 func (m *Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
 	return sortedProcessTableRows(m.snapshotOrZero().Processes(), m.processesTab.sort)
-}
-
-func (m *Model) selectedProcessPID() uint32 {
-	selected, ok := m.selectedProcessSnapshot()
-	if !ok {
-		return 0
-	}
-	return selected.PID
 }
 
 // processByKey returns the row whose selection key (processKey) is key; an
@@ -838,12 +812,7 @@ func (m *Model) filesDirSelectionKeys() []string {
 		width, height := m.contentViewport(TabFiles, m.width, m.height)
 		return filesIcicleTileKeys(m.latest, width, height, metric)
 	default:
-		rows := m.sortedDirRows()
-		keys := make([]string, 0, len(rows))
-		for _, row := range rows {
-			keys = append(keys, row.Dir)
-		}
-		return keys
+		return keysOf(m.sortedDirRows(), func(row DirSnapshot) string { return row.Dir })
 	}
 }
 
@@ -873,16 +842,18 @@ func (m *Model) keepFilesDirSelection(change func()) {
 	m.filesDirSelection().keep(change)
 }
 
-// selectedFilesDirKey returns the identity of the selected dir-grouped item
-// in the active viz mode, or "" when there is nothing to select.
-func (m *Model) selectedFilesDirKey() string {
-	return m.filesDirSelection().selectedKey()
-}
-
 // filesDirSelection is the dir-grouped selection over the items of the
 // active viz mode (filesDirSelectionKeys).
 func (m *Model) filesDirSelection() keyedSelection {
 	return keyedSelection{offset: &m.filesDirTab.offset, keys: m.filesDirSelectionKeys}
+}
+
+// syscallsTableSelection is the Syscalls table selection over the visible,
+// sorted rows, keyed by syscall name.
+func (m *Model) syscallsTableSelection() keyedSelection {
+	return keyedSelection{offset: &m.syscallsTab.offset, keys: func() []string {
+		return keysOf(m.sortedSyscallRows(), func(row statsengine.SyscallSnapshot) string { return row.Name })
+	}}
 }
 
 // syscallsTreemapSelection is the Syscalls treemap selection. It is keyed
@@ -900,66 +871,45 @@ func (m *Model) syscallsTreemapKeys() []string {
 	return treemapItemKeys(buildSyscallTreemapItems(m.visibleSyscallRows(m.latest), m.syscallsTab.bubble.Metric()))
 }
 
-// keepSyscallsSelection is the Syscalls tab's KeepSelection hook: the
-// metric key reorders the treemap, so its selection follows the syscall.
-// The table's order does not depend on the metric or the viewport, and its
-// sort key keeps its own selection (handleSyscallsSortKey).
+// keepSyscallsSelection is the Syscalls tab's KeepSelection hook. The
+// metric key reorders the treemap, and a global filter change (Syscall and
+// Family dimensions, see visibleSyscallRows) removes rows from both the
+// table and the treemap; either way both selections follow their syscall.
+// Changes that leave a list as it is leave its selection as it is.
 func (m *Model) keepSyscallsSelection(change func()) {
-	m.syscallsTreemapSelection().keep(change)
+	keepSelections(change, m.syscallsTableSelection(), m.syscallsTreemapSelection())
 }
 
-// processesSelection is the Processes selection over the items
-// processesTab.offset indexes in the active viz mode
-// (processesSelectionKeys).
-func (m *Model) processesSelection() keyedSelection {
-	return keyedSelection{offset: &m.processesTab.offset, keys: m.processesSelectionKeys}
+// processesTableSelection is the Processes table selection over the sorted
+// table rows, keyed by PID (processKey). Bubbles mode shares it: the bubble
+// chart keeps its own selection, the offset still indexes the table rows.
+func (m *Model) processesTableSelection() keyedSelection {
+	return keyedSelection{offset: &m.processesTab.offset, keys: func() []string {
+		return keysOf(m.sortedProcessTableRows(), func(row statsengine.ProcessSnapshot) string { return processKey(row.PID) })
+	}}
 }
 
-// processesSelectionKeys returns, in selection order, the PID key (see
-// processKey) of every item processesTab.offset indexes in the active viz
-// mode: the treemap items, built the way renderProcessesTreemap builds them,
-// or the sorted table rows otherwise (bubbles mode included: the bubble
-// chart keeps its own selection, the offset still indexes the table rows).
-func (m *Model) processesSelectionKeys() []string {
-	if m.processesTab.mode == tabVizModeTreemap {
+// processesTreemapSelection is the Processes treemap selection, keyed by
+// PID in every mode for the same reason as syscallsTreemapSelection. Its
+// keys are built the way renderProcessesTreemap builds its items, so offset
+// i here is tile i on screen.
+func (m *Model) processesTreemapSelection() keyedSelection {
+	return keyedSelection{offset: &m.processesTreemapOffset, keys: func() []string {
 		return treemapItemKeys(buildProcessesTreemapItems(m.latest, m.processesTab.bubble.Metric()))
-	}
-	rows := m.sortedProcessTableRows()
-	keys := make([]string, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, processKey(row.PID))
-	}
-	return keys
+	}}
 }
 
-// processesAnchorsByKey reports whether a stats tick re-anchors the
-// Processes selection by PID: always in the treemap, which reorders its
-// items by metric value on every refresh, and in the table (and bubbles
-// mode, whose offset indexes the table rows) only once a sort is chosen -
-// unsorted it tracks the position. The same rule as filesDirAnchorsByKey.
-func (m *Model) processesAnchorsByKey() bool {
-	return m.processesTab.mode == tabVizModeTreemap || m.processesTab.sort.active
-}
-
-// keepProcessesSelection is the Processes tab's KeepSelection hook: a viz
-// mode change switches between the table rows and the treemap items and a
-// metric change reorders the treemap, so the selection follows the PID
-// across both, clamping when the process is not in the new list.
+// keepProcessesSelection is the Processes tab's KeepSelection hook: the
+// metric key reorders the treemap, so its selection follows the PID. The
+// table selection is kept the same way; no current change reorders the
+// table rows, so it is left where it is. A viz-mode change touches neither:
+// each mode keeps its own selection.
 func (m *Model) keepProcessesSelection(change func()) {
-	m.processesSelection().keep(change)
+	keepSelections(change, m.processesTableSelection(), m.processesTreemapSelection())
 }
 
 func (m *Model) processesRowCount() int {
 	return m.snapshotOrZero().ProcessesCount()
-}
-
-// processesRowCountForMode is the navigation bound of the Processes tab:
-// the number of items processesTab.offset selects among in the active mode.
-func (m *Model) processesRowCountForMode() int {
-	if m.processesTab.mode == tabVizModeTreemap {
-		return len(m.processesSelectionKeys())
-	}
-	return m.processesRowCount()
 }
 
 // statsTick fetches the latest engine snapshot as a StatsTickMsg. Without an
@@ -1058,7 +1008,10 @@ func (m *Model) SetStreamSource(source eventstream.Source) {
 // SetGlobalFilter forwards the shared TUI filter into the stream tab so
 // buffered rows can be re-filtered immediately.
 func (m *Model) SetGlobalFilter(filter globalfilter.Filter) {
-	m.globalFilter = filter.Clone()
+	// The Syscall and Family dimensions scope the Syscalls rows
+	// (visibleSyscallRows), so the swap can drop rows from under a
+	// selection: keep every tab's selected item across it.
+	m.keepAllSelections(func() { m.globalFilter = filter.Clone() })
 	m.streamModel.SetFilter(eventstream.Filter(filter))
 }
 

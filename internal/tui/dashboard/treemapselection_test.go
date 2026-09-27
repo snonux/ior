@@ -5,13 +5,15 @@ import (
 	"strings"
 	"testing"
 
+	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/messages"
 )
 
 // These tests cover the Syscalls and Processes treemap selections across
-// stats ticks and metric / viz-mode changes (task cc). The treemaps order
+// stats ticks, stats resets, global filter changes and metric / viz-mode
+// changes (task cc). The treemaps order
 // their items by metric value, so every refresh can reorder them: the
 // selection must follow the selected syscall name / PID, as the Files tab's
 // dir-grouped selection does (filesselection_test.go), instead of staying on
@@ -66,16 +68,31 @@ func assertSyscallsTreemapSelection(t *testing.T, m *Model, wantAt int, want str
 	}
 }
 
-// assertProcessesSelection checks the selection offset and PID, and that
-// Enter's row (selectedProcessSnapshot) is the same process.
-func assertProcessesSelection(t *testing.T, m *Model, wantAt int, wantPID uint32) {
+// assertProcessesTreemapSelection checks the treemap offset and PID and,
+// in treemap mode, that Enter's row (selectedProcessSnapshot) is the same
+// process.
+func assertProcessesTreemapSelection(t *testing.T, m *Model, wantAt int, wantPID uint32) {
 	t.Helper()
-	got := m.processesSelection().selectedKey()
-	if m.processesTab.offset != wantAt || got != processKey(wantPID) {
-		t.Fatalf("selected PID %q at %d, want %d at %d", got, m.processesTab.offset, wantPID, wantAt)
+	assertProcessSelection(t, m, "treemap", m.processesTreemapSelection(), tabVizModeTreemap, wantAt, wantPID)
+}
+
+// assertProcessesTableSelection is assertProcessesTreemapSelection for the
+// table selection (shared by the table and bubbles modes).
+func assertProcessesTableSelection(t *testing.T, m *Model, wantAt int, wantPID uint32) {
+	t.Helper()
+	assertProcessSelection(t, m, "table", m.processesTableSelection(), tabVizModeTable, wantAt, wantPID)
+}
+
+func assertProcessSelection(t *testing.T, m *Model, name string, sel keyedSelection, mode tabVizMode, wantAt int, wantPID uint32) {
+	t.Helper()
+	if got := sel.selectedKey(); *sel.offset != wantAt || got != processKey(wantPID) {
+		t.Fatalf("%s: selected PID %q at %d, want %d at %d", name, got, *sel.offset, wantPID, wantAt)
 	}
-	if pid := m.selectedProcessPID(); pid != wantPID {
-		t.Fatalf("Enter targets PID %d, want %d", pid, wantPID)
+	if m.processesTab.mode != mode {
+		return
+	}
+	if row, ok := m.selectedProcessSnapshot(); !ok || row.PID != wantPID {
+		t.Fatalf("%s: Enter targets PID %d (ok=%v), want %d", name, row.PID, ok, wantPID)
 	}
 }
 
@@ -167,13 +184,23 @@ func TestSyscallsTreemapNavigationBoundedByTreemapItems(t *testing.T) {
 func TestProcessesTreemapSelectionFollowsPIDAcrossStatsTick(t *testing.T) {
 	m := newVizModel(t, TabProcesses, tabVizModeTreemap, procRanking(9, 5, 1))
 	m = pressJ(t, m, 2)
-	assertProcessesSelection(t, m, 2, 300)
+	assertProcessesTreemapSelection(t, m, 2, 300)
 
 	for range 2 {
 		m = tickStats(t, m, messages.StatsTickMsg{Snap: procRanking(9, 5, 30)})
-		assertProcessesSelection(t, m, 0, 300)
+		assertProcessesTreemapSelection(t, m, 0, 300)
 	}
 	assertRenderedSelection(t, m, "sel:1/3 300:gamma")
+}
+
+func TestProcessesTreemapSelectionAnchoredWhileTabHidden(t *testing.T) {
+	m := newVizModel(t, TabProcesses, tabVizModeTreemap, procRanking(9, 5, 1))
+	m = pressJ(t, m, 2)
+	m.activeTab = TabOverview
+
+	m = tickStats(t, m, messages.StatsTickMsg{Snap: procRanking(9, 5, 30)})
+	m.activeTab = TabProcesses
+	assertProcessesTreemapSelection(t, m, 0, 300)
 }
 
 func TestProcessesTreemapSelectionFallsBackWhenPIDDisappears(t *testing.T) {
@@ -185,7 +212,7 @@ func TestProcessesTreemapSelectionFallsBackWhenPIDDisappears(t *testing.T) {
 		statsengine.ProcessSnapshot{PID: 100, Comm: "alpha", Syscalls: 9},
 		statsengine.ProcessSnapshot{PID: 200, Comm: "beta", Syscalls: 5},
 	)})
-	assertProcessesSelection(t, m, 1, 200)
+	assertProcessesTreemapSelection(t, m, 1, 200)
 	assertRenderedSelection(t, m, "sel:2/2 200:beta")
 }
 
@@ -194,9 +221,8 @@ func TestProcessesTreemapSelectionResetsOnEmptySnapshot(t *testing.T) {
 	m = pressJ(t, m, 2)
 
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: processesSnapshot()})
-	if m.processesTab.offset != 0 || m.processesSelection().selectedKey() != "" {
-		t.Fatalf("expected no selection at 0, got %q at %d",
-			m.processesSelection().selectedKey(), m.processesTab.offset)
+	if key := m.processesTreemapSelection().selectedKey(); m.processesTreemapOffset != 0 || key != "" {
+		t.Fatalf("expected no selection at 0, got %q at %d", key, m.processesTreemapOffset)
 	}
 	if _, ok := m.selectedProcessSnapshot(); ok {
 		t.Fatalf("expected no Enter target on an empty snapshot")
@@ -204,7 +230,7 @@ func TestProcessesTreemapSelectionResetsOnEmptySnapshot(t *testing.T) {
 	assertRenderedSelection(t, m, "treemap: no data")
 
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: procRanking(9, 5, 1)})
-	assertProcessesSelection(t, m, 0, 100)
+	assertProcessesTreemapSelection(t, m, 0, 100)
 }
 
 func TestProcessesTreemapSelectionKeptOnFailedStatsTick(t *testing.T) {
@@ -216,7 +242,7 @@ func TestProcessesTreemapSelectionKeptOnFailedStatsTick(t *testing.T) {
 	if m.latest != good {
 		t.Fatalf("expected last good snapshot kept on failed tick")
 	}
-	assertProcessesSelection(t, m, 2, 300)
+	assertProcessesTreemapSelection(t, m, 2, 300)
 }
 
 func TestProcessesTreemapNavigationAndEnterBoundedByTreemapItems(t *testing.T) {
@@ -228,49 +254,84 @@ func TestProcessesTreemapNavigationAndEnterBoundedByTreemapItems(t *testing.T) {
 		statsengine.ProcessSnapshot{PID: 400, Comm: "idle"},
 	))
 	m = pressJ(t, m, 5)
-	assertProcessesSelection(t, m, 1, 200)
+	assertProcessesTreemapSelection(t, m, 1, 200)
 }
 
-func TestProcessesSelectionSurvivesMetricToggle(t *testing.T) {
+func TestProcessesTreemapSelectionSurvivesMetricToggle(t *testing.T) {
 	// 100 leads by syscalls, 200 by bytes, so b swaps their order.
 	m := newVizModel(t, TabProcesses, tabVizModeTreemap, procRanking(9, 5, 1))
 	m = pressJ(t, m, 1)
-	assertProcessesSelection(t, m, 1, 200)
+	assertProcessesTreemapSelection(t, m, 1, 200)
 
 	m = pressKey(m, 'b')
 	if m.processesTab.bubble.Metric() != bubbleMetricBytes {
 		t.Fatalf("expected b to switch to the bytes metric")
 	}
-	assertProcessesSelection(t, m, 0, 200)
+	assertProcessesTreemapSelection(t, m, 0, 200)
 }
 
-func TestProcessesSelectionSurvivesModeCycle(t *testing.T) {
-	// Sorted by PID descending the table (and bubbles mode, whose offset
-	// indexes the table) lists 300, 200, 100; the treemap orders by
-	// syscalls (100, 200, 300), so PID 100 moves in every mode.
-	m := newVizModel(t, TabProcesses, tabVizModeTable, procRanking(9, 5, 1))
-	m.processesTab.sort = tableSortState[processSortKey]{active: true, key: processSortKeyPID, reverse: true}
-	m = pressJ(t, m, 2)
-	assertProcessesSelection(t, m, 2, 100)
+// manyProcesses yields n processes, PID i+1 with n-i syscalls, so the
+// unsorted table lists them by PID and only PIDs 1-20 get a treemap tile.
+func manyProcesses(n int) *statsengine.Snapshot {
+	rows := make([]statsengine.ProcessSnapshot, 0, n)
+	for i := range n {
+		rows = append(rows, statsengine.ProcessSnapshot{PID: uint32(i + 1), Comm: "p", Syscalls: uint64(n - i)})
+	}
+	return processesSnapshot(rows...)
+}
 
-	steps := []struct {
-		mode   tabVizMode
-		wantAt int
+func TestProcessesModeCycleKeepsTableSelection(t *testing.T) {
+	tests := []struct {
+		name    string
+		snap    *statsengine.Snapshot
+		sort    tableSortState[processSortKey]
+		presses int
+		wantAt  int
+		wantPID uint32
 	}{
-		{tabVizModeBubbles, 2},
-		{tabVizModeTreemap, 0},
-		{tabVizModeTable, 2},
+		// The review repro: PID 26 is outside the treemap's top 20, so a
+		// shared offset got clamped to the last tile (PID 20).
+		{name: "unsorted, PID outside the top tiles", snap: manyProcesses(30), presses: 25, wantAt: 25, wantPID: 26},
+		// PID 300 has no syscalls: it is listed but has no tile.
+		{name: "unsorted, PID with a zero metric value", snap: procRanking(9, 5, 0), presses: 2, wantAt: 2, wantPID: 300},
+		{
+			name:    "sorted by PID descending",
+			snap:    procRanking(9, 5, 1),
+			sort:    tableSortState[processSortKey]{active: true, key: processSortKeyPID, reverse: true},
+			presses: 2, wantAt: 2, wantPID: 100,
+		},
 	}
-	for _, step := range steps {
-		m = pressKey(m, 'v')
-		if m.processesTab.mode != step.mode {
-			t.Fatalf("expected mode %d after v, got %d", step.mode, m.processesTab.mode)
-		}
-		if m.processesTab.offset != step.wantAt || m.processesSelection().selectedKey() != processKey(100) {
-			t.Fatalf("mode %d: selected %q at %d, want PID 100 at %d", step.mode,
-				m.processesSelection().selectedKey(), m.processesTab.offset, step.wantAt)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newVizModel(t, TabProcesses, tabVizModeTable, tt.snap)
+			m.processesTab.sort = tt.sort
+			m = pressJ(t, m, tt.presses)
+			assertProcessesTableSelection(t, m, tt.wantAt, tt.wantPID)
+
+			// table -> bubbles -> treemap -> table: each mode keeps its
+			// own selection, so the table's comes back untouched.
+			for _, mode := range []tabVizMode{tabVizModeBubbles, tabVizModeTreemap, tabVizModeTable} {
+				m = pressKey(m, 'v')
+				if m.processesTab.mode != mode {
+					t.Fatalf("expected mode %d after v, got %d", mode, m.processesTab.mode)
+				}
+				assertProcessesTableSelection(t, m, tt.wantAt, tt.wantPID)
+			}
+		})
 	}
+}
+
+func TestProcessesTreemapSelectionIndependentOfTable(t *testing.T) {
+	m := newVizModel(t, TabProcesses, tabVizModeTreemap, procRanking(9, 5, 1))
+	m = pressJ(t, m, 1)
+	assertProcessesTreemapSelection(t, m, 1, 200)
+
+	m = pressKey(m, 'v') // treemap -> table
+	m = pressJ(t, m, 2)
+	assertProcessesTableSelection(t, m, 2, 300)
+	m = pressKey(m, 'v') // table -> bubbles
+	m = pressKey(m, 'v') // bubbles -> treemap
+	assertProcessesTreemapSelection(t, m, 1, 200)
 }
 
 func TestProcessesTableSelectionPolicyOnStatsTick(t *testing.T) {
@@ -282,26 +343,104 @@ func TestProcessesTableSelectionPolicyOnStatsTick(t *testing.T) {
 		statsengine.ProcessSnapshot{PID: 200, Comm: "beta", Syscalls: 5},
 		statsengine.ProcessSnapshot{PID: 300, Comm: "gamma", Syscalls: 1},
 	)
+	bySyscalls := tableSortState[processSortKey]{active: true, key: processSortKeySyscalls}
 	tests := []struct {
 		name    string
+		mode    tabVizMode
 		sort    tableSortState[processSortKey]
 		wantAt  int
 		wantPID uint32
 	}{
 		// Unsorted, the table keeps its positional selection.
-		{name: "default order is positional", wantAt: 1, wantPID: 100},
-		// Sorted by syscalls, the selected PID 200 is followed to its new row.
-		{name: "sorted follows PID", sort: tableSortState[processSortKey]{active: true, key: processSortKeySyscalls}, wantAt: 2, wantPID: 200},
+		{name: "table default order is positional", mode: tabVizModeTable, wantAt: 1, wantPID: 100},
+		// Sorted, the selected PID 200 is followed to its new row.
+		{name: "table sorted follows PID", mode: tabVizModeTable, sort: bySyscalls, wantAt: 2, wantPID: 200},
+		// Bubbles mode shares the table offset and its rule.
+		{name: "bubbles default order is positional", mode: tabVizModeBubbles, wantAt: 1, wantPID: 100},
+		{name: "bubbles sorted follows PID", mode: tabVizModeBubbles, sort: bySyscalls, wantAt: 2, wantPID: 200},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newVizModel(t, TabProcesses, tabVizModeTable, initial)
 			m.processesTab.sort = tt.sort
 			m = pressJ(t, m, 1)
+			m.setTabVizMode(TabProcesses, tt.mode)
 			m = tickStats(t, m, messages.StatsTickMsg{Snap: refresh})
-			assertProcessesSelection(t, m, tt.wantAt, tt.wantPID)
+			m.setTabVizMode(TabProcesses, tabVizModeTable)
+			assertProcessesTableSelection(t, m, tt.wantAt, tt.wantPID)
 		})
 	}
+}
+
+// TestTreemapSelectionsAcrossResetStats: the post-reset snapshot is applied
+// through the normal stats tick, so both treemaps follow their item into it,
+// and a tick built before the reset is dropped without moving them.
+func TestTreemapSelectionsAcrossResetStats(t *testing.T) {
+	src := &fakeSnapshotSource{snap: syscallsAndProcesses(sysRanking(9, 5, 1), procRanking(9, 5, 1))}
+	m := NewModelWithConfig(src, nil, 250, 200, common.DefaultKeyMap())
+	m.width, m.height = 120, 28
+	m.setTabVizMode(TabSyscalls, tabVizModeTreemap)
+	m.setTabVizMode(TabProcesses, tabVizModeTreemap)
+	stale := m.statsTick()
+	m = tickStats(t, m, stale)
+
+	m.activeTab = TabSyscalls
+	m = pressJ(t, m, 2)
+	m.activeTab = TabProcesses
+	m = pressJ(t, m, 2)
+	assertSyscallsTreemapSelection(t, m, 2, "close")
+	assertProcessesTreemapSelection(t, m, 2, 300)
+
+	// After the reset close and PID 300 lead their treemaps.
+	src.resetSnap = syscallsAndProcesses(sysRanking(9, 5, 30), procRanking(9, 5, 30))
+	m.ResetStats()
+	if m.latest != src.resetSnap {
+		t.Fatalf("precondition: expected the post-reset snapshot on screen")
+	}
+	assertSyscallsTreemapSelection(t, m, 0, "close")
+	assertProcessesTreemapSelection(t, m, 0, 300)
+
+	m = tickStats(t, m, stale)
+	if m.latest != src.resetSnap {
+		t.Fatalf("a tick built before the reset was applied")
+	}
+	assertSyscallsTreemapSelection(t, m, 0, "close")
+	assertProcessesTreemapSelection(t, m, 0, 300)
+}
+
+// syscallsAndProcesses merges the syscall rows of sys and the process rows
+// of procs into one snapshot.
+func syscallsAndProcesses(sys, procs *statsengine.Snapshot) *statsengine.Snapshot {
+	snap := statsengine.NewSnapshot(nil, nil, nil, sys.Syscalls(), nil, procs.Processes(),
+		statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	return &snap
+}
+
+func TestSyscallsSelectionsSurviveGlobalFilterChange(t *testing.T) {
+	// The filter keeps the syscalls ending in "e": read is dropped, which
+	// shifts write from row / tile 1 to 0.
+	filter := globalfilter.Filter{Syscall: &globalfilter.StringFilter{Pattern: "e$"}}
+	t.Run("treemap", func(t *testing.T) {
+		m := newVizModel(t, TabSyscalls, tabVizModeTreemap, sysRanking(9, 5, 1))
+		m = pressJ(t, m, 1)
+		assertSyscallsTreemapSelection(t, m, 1, "write")
+
+		m.SetGlobalFilter(filter)
+		assertSyscallsTreemapSelection(t, m, 0, "write")
+		assertRenderedSelection(t, m, "sel:1/2 write")
+	})
+	t.Run("table", func(t *testing.T) {
+		m := newVizModel(t, TabSyscalls, tabVizModeTable, sysRanking(9, 5, 1))
+		m = pressJ(t, m, 1)
+		if row, _ := m.selectedSyscallSnapshot(); row.Name != "write" {
+			t.Fatalf("precondition: selected %q, want write", row.Name)
+		}
+
+		m.SetGlobalFilter(filter)
+		if row, _ := m.selectedSyscallSnapshot(); m.syscallsTab.offset != 0 || row.Name != "write" {
+			t.Fatalf("selected %q at %d, want write at 0", row.Name, m.syscallsTab.offset)
+		}
+	})
 }
 
 func TestKeyedSelection(t *testing.T) {
