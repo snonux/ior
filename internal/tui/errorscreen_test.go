@@ -20,7 +20,7 @@ import (
 // full-screen error view, i.e. the state every key used to fall into.
 func newErrorScreenModel(t *testing.T, err error) *Model {
 	t.Helper()
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.width = 120
@@ -36,7 +36,7 @@ func newErrorScreenModel(t *testing.T, err error) *Model {
 // dashboard's real record-stop shortcut rather than setting model fields.
 func newRecorderStopErrorScreen(t *testing.T) *Model {
 	t.Helper()
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.width = 120
@@ -339,7 +339,7 @@ func TestOverLongCLICommFilterStaysQuittable(t *testing.T) {
 		t.Fatalf("precondition: expected an over-long -comm to fail validation")
 	}
 
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = true
 	m.width = 120
@@ -376,7 +376,7 @@ func TestErrorScreenQuitReportsTheFailureToTheCaller(t *testing.T) {
 // TestCleanExitReportsNoError guards the other side of the same wiring: a
 // model that quits with no error must keep cmd/ior's exit status at zero.
 func TestCleanExitReportsNoError(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 
@@ -423,7 +423,7 @@ func TestRecoverableErrorScreenAdvertisesBackAndQuit(t *testing.T) {
 // dead end again, one keystroke further in. What is on screen is what must
 // answer the key.
 func TestErrorScreenQuitOutranksAnOpenModal(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.filterModal = m.filterModal.Open(globalfilter.Filter{})
@@ -459,14 +459,14 @@ func TestRunProgramReportsTheFinalModelError(t *testing.T) {
 		m.setError(wantErr, errorScreenFatal)
 		return m, nil
 	}
-	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); !errors.Is(err, wantErr) {
+	if err := runProgram(NewModel(-1, func(context.Context, TraceRequest) error { return nil })); !errors.Is(err, wantErr) {
 		t.Errorf("runProgram() = %v, want the final model's error", err)
 	}
 
 	// A clean run still reports nothing, so the caller does not print a
 	// spurious failure on an ordinary quit.
 	runTeaProgram = func(m *Model) (tea.Model, error) { return m, nil }
-	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); err != nil {
+	if err := runProgram(NewModel(-1, func(context.Context, TraceRequest) error { return nil })); err != nil {
 		t.Errorf("runProgram() = %v on a clean quit, want nil", err)
 	}
 
@@ -477,7 +477,7 @@ func TestRunProgramReportsTheFinalModelError(t *testing.T) {
 		m.setError(wantErr, errorScreenFatal)
 		return m, teaErr
 	}
-	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); !errors.Is(err, teaErr) {
+	if err := runProgram(NewModel(-1, func(context.Context, TraceRequest) error { return nil })); !errors.Is(err, teaErr) {
 		t.Errorf("runProgram() = %v, want the program's own error to win", err)
 	}
 }
@@ -487,7 +487,7 @@ func TestRunProgramReportsTheFinalModelError(t *testing.T) {
 // screen handles Esc itself, then deliberately resumes the saved picker-return
 // route rather than letting an invisible picker consume the key.
 func TestRecoverableErrorScreenEscOutranksAndResumesPickerCancel(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenPIDPicker
 	m.attaching = false
 	// The pending return is what made esc recover here before task z3, so
@@ -530,7 +530,7 @@ func TestRecoverableErrorScreenQuitOutranksPickerCancel(t *testing.T) {
 		"ctrl+c": {Code: 'c', Mod: tea.ModCtrl},
 	} {
 		t.Run(name, func(t *testing.T) {
-			m := NewModel(-1, func(context.Context) error { return nil })
+			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 			m.screen = ScreenPIDPicker
 			m.attaching = false
 			m.router.savePendingReturn(-1, -1)
@@ -552,7 +552,7 @@ func TestRecoverableErrorScreenQuitOutranksPickerCancel(t *testing.T) {
 // overlay can be open when a trace failure arrives, and View renders the error
 // ahead of it, so the overlay is not what the user is looking at.
 func TestErrorScreenQuitOutranksTheHelpOverlay(t *testing.T) {
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.helpOverlayVisible = true
@@ -589,7 +589,7 @@ func TestExportedEntryPointsReportTheError(t *testing.T) {
 		m.setError(wantErr, errorScreenFatal)
 		return m, nil
 	}
-	starter := func(context.Context) error { return nil }
+	starter := func(context.Context, TraceRequest) error { return nil }
 
 	for name, run := range map[string]func() error{
 		"RunWithTraceStarterConfig": func() error {

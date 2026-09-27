@@ -46,15 +46,30 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 // traceStop without cancelling it would orphan the old session, leaving its
 // probes attached and feeding the same stream buffer as the new one. Callers
 // that already called stop() pay nothing extra, because stop() is idempotent.
+//
+// The session's bindings, filter and shutdown reporter reach the starter
+// explicitly in a TraceRequest; the context only carries cancellation.
 func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
 	t.stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.traceStop = cancel
 	t.shutdownReporter = runtime.NewTraceShutdownReporter()
-	ctx = ContextWithRuntimeBindings(ctx, bindings)
-	ctx = ContextWithTraceFilters(ctx, filter)
-	ctx = runtime.ContextWithTraceShutdownReporter(ctx, t.shutdownReporter)
-	return startTraceCmd(ctx, t.startTrace)
+	return startTraceCmd(ctx, t.startTrace, newTraceRequest(bindings, filter, t.shutdownReporter))
+}
+
+// newTraceRequest assembles the explicit inputs of one trace session. The
+// filter is cloned so the starter never aliases the model's filter state,
+// which the user keeps editing while the session runs. A nil bindings pointer
+// becomes a nil interface rather than a typed nil, so a starter's "no TUI
+// attached" check (Bindings == nil) sees it as absent instead of calling
+// methods on a nil *runtimeBindings.
+func newTraceRequest(bindings *runtimeBindings, filter globalfilter.Filter, reporter *runtime.TraceShutdownReporter) TraceRequest {
+	cloned := filter.Clone()
+	req := TraceRequest{Filter: &cloned, ShutdownReporter: reporter}
+	if bindings != nil {
+		req.Bindings = bindings
+	}
+	return req
 }
 
 // stop cancels the running trace and clears the cancel function. Safe to call
@@ -102,23 +117,22 @@ const defaultStartupTimeout = 30 * time.Second
 // user-initiated stop as an error). It uses defaultStartupTimeout to
 // prevent the TUI from hanging indefinitely when BPF probe attachment stalls.
 // ctx is first per Go convention (context.Context always leads the parameter list).
-func startTraceCmd(ctx context.Context, starter TraceStarter) tea.Cmd {
-	return startTraceCmdWithTimeout(ctx, starter, defaultStartupTimeout)
+func startTraceCmd(ctx context.Context, starter TraceStarter, req TraceRequest) tea.Cmd {
+	return startTraceCmdWithTimeout(ctx, starter, req, defaultStartupTimeout)
 }
 
 // startTraceCmdWithTimeout is the testable core of startTraceCmd. It races
 // the starter goroutine against a caller-supplied timeout so that tests can
 // use a short deadline without waiting 30 seconds.
 // ctx is first per Go convention (context.Context always leads the parameter list).
-func startTraceCmdWithTimeout(ctx context.Context, starter TraceStarter, timeout time.Duration) tea.Cmd {
+func startTraceCmdWithTimeout(ctx context.Context, starter TraceStarter, req TraceRequest, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		if reporter, ok := runtime.TraceShutdownReporterFromContext(ctx); ok {
-			defer reporter.CompleteUnlessClaimed()
-		}
+		// Nil-safe: a request without a reporter has no waiter to release.
+		defer req.ShutdownReporter.CompleteUnlessClaimed()
 		type starterResult struct{ err error }
 		ch := make(chan starterResult, 1)
 		go func() {
-			err := starter(ctx)
+			err := starter(ctx, req)
 			ch <- starterResult{err: err}
 		}()
 		select {
@@ -142,7 +156,7 @@ func startTraceCmdWithTimeout(ctx context.Context, starter TraceStarter, timeout
 	}
 }
 
-func defaultTraceStarter(context.Context) error {
+func defaultTraceStarter(context.Context, TraceRequest) error {
 	return nil
 }
 

@@ -171,7 +171,7 @@ func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessPa
 // delegating the complete resource lifecycle to the shared trace setup.
 func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (*traceInfra, error) {
 	return setupTraceInfraWithEventLoop(
-		context.Background(), cfg, nil, logln, newHeadlessParquetEventLoop,
+		context.Background(), cfg, nil, traceSetupHooks{}, logln, newHeadlessParquetEventLoop,
 	)
 }
 

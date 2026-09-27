@@ -157,12 +157,12 @@ func (f tuiFakeProbeManager) ActiveCount() (int, int) {
 // "o" opens a non-empty probes modal.
 func tuiTestFlamesStarterWithProbes(cfg flags.Config) runtime.TraceStarter {
 	base := tuiTestFlamesStarter(cfg)
-	return func(ctx context.Context) error {
-		if err := base(ctx); err != nil {
+	return func(ctx context.Context, req runtime.TraceRequest) error {
+		if err := base(ctx, req); err != nil {
 			return err
 		}
-		if bindings, ok := runtime.RuntimePublisherFromContext(ctx); ok {
-			bindings.SetProbeManager(tuiNewFakeProbeManager())
+		if req.Bindings != nil {
+			req.Bindings.SetProbeManager(tuiNewFakeProbeManager())
 		}
 		return nil
 	}
@@ -243,12 +243,12 @@ func tuiNewStatefulProbesModel(t *testing.T) *tuiSession {
 	t.Helper()
 	cfg := tuiTestConfig()
 	starter := tuiTestFlamesStarter(cfg)
-	wrapped := func(ctx context.Context) error {
-		if err := starter(ctx); err != nil {
+	wrapped := func(ctx context.Context, req runtime.TraceRequest) error {
+		if err := starter(ctx, req); err != nil {
 			return err
 		}
-		if bindings, ok := runtime.RuntimePublisherFromContext(ctx); ok {
-			bindings.SetProbeManager(tuiNewStatefulProbeManager())
+		if req.Bindings != nil {
+			req.Bindings.SetProbeManager(tuiNewStatefulProbeManager())
 		}
 		return nil
 	}

@@ -1,9 +1,6 @@
 package runtime
 
-import (
-	"context"
-	"testing"
-)
+import "testing"
 
 func TestTraceShutdownReporterKeepsLatestUpdateAndTerminalState(t *testing.T) {
 	reporter := NewTraceShutdownReporter()
@@ -87,14 +84,5 @@ func TestTraceShutdownReporterClaimRacesGenericCompletionAtomically(t *testing.T
 		if got := <-reporter.Updates(); got.Phase != TraceShutdownComplete {
 			t.Fatalf("iteration %d: terminal progress = %+v, want complete", i, got)
 		}
-	}
-}
-
-func TestTraceShutdownReporterContextRoundTrip(t *testing.T) {
-	reporter := NewTraceShutdownReporter()
-	ctx := ContextWithTraceShutdownReporter(context.Background(), reporter)
-	got, ok := TraceShutdownReporterFromContext(ctx)
-	if !ok || got != reporter {
-		t.Fatalf("context reporter = %p, %t; want %p, true", got, ok, reporter)
 	}
 }

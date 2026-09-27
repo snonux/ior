@@ -165,7 +165,7 @@ func TestTraceInfraSetupsRejectAnUnusableFilterBeforeAnyBPFSetup(t *testing.T) {
 		{
 			name: "regular trace",
 			setup: func(started chan<- struct{}) (*traceInfra, error) {
-				return setupTraceInfra(context.Background(), cfg, started, func(...any) {})
+				return setupTraceInfra(context.Background(), cfg, started, traceSetupHooks{}, func(...any) {})
 			},
 		},
 		{
@@ -253,12 +253,12 @@ func TestTraceInfraEntryPointsUseSharedSetup(t *testing.T) {
 		{
 			file: "ior.go",
 			name: "setupTraceInfra",
-			args: []string{"parentCtx", "cfg", "started", "logln", "newTraceEventLoop"},
+			args: []string{"parentCtx", "cfg", "started", "hooks", "logln", "newTraceEventLoop"},
 		},
 		{
 			file: "ior_parquet_sink.go",
 			name: "setupHeadlessParquetInfra",
-			args: []string{"context.Background()", "cfg", "nil", "logln", "newHeadlessParquetEventLoop"},
+			args: []string{"context.Background()", "cfg", "nil", "traceSetupHooks{}", "logln", "newHeadlessParquetEventLoop"},
 		},
 	}
 	for _, tc := range tests {
@@ -268,6 +268,40 @@ func TestTraceInfraEntryPointsUseSharedSetup(t *testing.T) {
 			assertCallArguments(t, call, tc.args)
 		})
 	}
+}
+
+// TestTraceSetupPassesSessionHooksExplicitly pins where the TUI session's
+// collaborators go once the starter has handed them to the trace run: the
+// run passes its hooks to setup, setup gives the probe publisher to BPF setup
+// (which registers the probe manager with it) and the shutdown reporter to
+// the infra's progress wiring. setupBPFModule cannot run unprivileged, so the
+// wiring is checked structurally; the behaviour on either side is pinned by
+// TestTuiTraceStarterHandsRequestBindingsDownToSetup and
+// TestNewTraceInfraReportsShutdownProgress.
+func TestTraceSetupPassesSessionHooksExplicitly(t *testing.T) {
+	run, _ := parseInternalFunction(t, "ior.go", "runTraceWithContext")
+	assertCallArguments(t, singleBareCall(t, run, "setupTraceInfra"),
+		[]string{"parentCtx", "cfg", "started", "hooks", "logln"})
+
+	setup, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	bpfSetup := singleBareCall(t, setup, "setupBPFModule")
+	if got := renderedArgument(t, bpfSetup, 1); got != "hooks.probes" {
+		t.Fatalf("setupBPFModule probe publisher argument = %q, want hooks.probes", got)
+	}
+	assertCallArguments(t, singleBareCall(t, setup, "newTraceInfra"),
+		[]string{"mgr", "hooks.shutdown", "logln"})
+}
+
+func renderedArgument(t *testing.T, call *ast.CallExpr, index int) string {
+	t.Helper()
+	if index >= len(call.Args) {
+		t.Fatalf("call has %d arguments, want at least %d", len(call.Args), index+1)
+	}
+	var rendered bytes.Buffer
+	if err := printer.Fprint(&rendered, token.NewFileSet(), call.Args[index]); err != nil {
+		t.Fatalf("render argument %d: %v", index, err)
+	}
+	return rendered.String()
 }
 
 // TestNewTraceEventLoopPropagatesAnAggregateConsumerFailure covers the other
@@ -800,15 +834,14 @@ func assertSignalImmediatelyPrecedesSuccessReturn(
 
 // TestNewTraceInfraReportsShutdownProgress pins the shutdown-progress wiring
 // the shared setup gives every mode: each phase is logged, and published when
-// the parent context carries a TUI reporter. Without one - the headless modes
+// the session hands setup a TUI reporter. Without one - the headless modes
 // - the same callbacks must only log.
 func TestNewTraceInfraReportsShutdownProgress(t *testing.T) {
 	reporter := runtime.NewTraceShutdownReporter()
-	ctx := runtime.ContextWithTraceShutdownReporter(context.Background(), reporter)
 	var logs []string
 	logln := func(args ...any) { logs = append(logs, strings.TrimSuffix(fmt.Sprintln(args...), "\n")) }
 
-	infra := newTraceInfra(ctx, nil, logln)
+	infra := newTraceInfra(nil, reporter, logln)
 	infra.progress(0, 3)
 	if got := <-reporter.Updates(); got.Phase != runtime.TraceShutdownDetaching || got.Total != 3 || got.Completed != 0 {
 		t.Fatalf("detach progress = %+v, want detaching 0/3", got)
@@ -827,7 +860,7 @@ func TestNewTraceInfraReportsShutdownProgress(t *testing.T) {
 	}
 
 	logs = nil
-	headless := newTraceInfra(context.Background(), nil, logln)
+	headless := newTraceInfra(nil, nil, logln)
 	headless.progress(0, 1)
 	headless.releasing()
 	if len(logs) != 2 {

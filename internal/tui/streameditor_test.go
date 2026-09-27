@@ -15,7 +15,7 @@ import (
 func newEditorRoutingModel(t *testing.T) *Model {
 	t.Helper()
 	t.Setenv("EDITOR", "true")
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	return m

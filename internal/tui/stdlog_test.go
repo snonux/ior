@@ -33,7 +33,7 @@ func TestRunProgramDiscardsStdLogWhileTheProgramRuns(t *testing.T) {
 		log.Print("written over the dashboard")
 		return m, nil
 	}
-	if err := runProgram(NewModel(-1, func(context.Context) error { return nil })); err != nil {
+	if err := runProgram(NewModel(-1, func(context.Context, TraceRequest) error { return nil })); err != nil {
 		t.Fatalf("runProgram() = %v", err)
 	}
 
@@ -54,7 +54,7 @@ func TestRunProgramDiscardsStdLogWhileTheProgramRuns(t *testing.T) {
 // when the std log is not discarded (teatest and other in-process runs).
 func TestKeyboardEnhancementsMsgDoesNotLog(t *testing.T) {
 	buf := redirectStdLog(t)
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 
 	m.Update(tea.KeyboardEnhancementsMsg{Flags: 1})
 

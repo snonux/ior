@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log"
@@ -52,6 +51,12 @@ const (
 // the runtime package directly.
 // Long-lived tracing work should continue in background goroutines.
 type TraceStarter = runtime.TraceStarter
+
+// TraceRequest is what the TUI hands a TraceStarter for one trace session:
+// its runtime bindings, the active filter and the session's shutdown
+// reporter, passed explicitly rather than through context values.
+// It is a type alias for runtime.TraceRequest.
+type TraceRequest = runtime.TraceRequest
 
 // ProbeManager exposes runtime probe controls to TUI layers.
 // It is a type alias for runtime.ProbeManager.
@@ -284,38 +289,6 @@ func (r *runtimeBindings) resetDashboardSnapshotSource() (tick messages.StatsTic
 		return messages.StatsTickMsg{Err: err}, true
 	}
 	return messages.StatsTickMsg{Snap: snap}, true
-}
-
-// RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the
-// context was created by the TUI. Use RuntimePublisherFromContext when only
-// write access is needed. Delegates to runtime.RuntimeBindingsFromContext.
-func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool) {
-	return runtime.RuntimeBindingsFromContext(ctx)
-}
-
-// RuntimePublisherFromContext returns only the RuntimePublisher side of the TUI
-// bindings. Use this when the caller only injects data and does not need to
-// read persistent TUI state. Delegates to runtime.RuntimePublisherFromContext.
-func RuntimePublisherFromContext(ctx context.Context) (RuntimePublisher, bool) {
-	return runtime.RuntimePublisherFromContext(ctx)
-}
-
-// ContextWithRuntimeBindings stores trace runtime bindings on the context.
-// Delegates to runtime.ContextWithRuntimeBindings.
-func ContextWithRuntimeBindings(ctx context.Context, bindings TraceRuntimeBindings) context.Context {
-	return runtime.ContextWithRuntimeBindings(ctx, bindings)
-}
-
-// ContextWithTraceFilters stores the active trace filters for the trace starter.
-// Delegates to runtime.ContextWithTraceFilters.
-func ContextWithTraceFilters(ctx context.Context, filter globalfilter.Filter) context.Context {
-	return runtime.ContextWithTraceFilters(ctx, filter)
-}
-
-// TraceFiltersFromContext returns the active trace filters when provided by the TUI model.
-// Delegates to runtime.TraceFiltersFromContext.
-func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
-	return runtime.TraceFiltersFromContext(ctx)
 }
 
 // newRunModel builds the model RunWithTraceStarterConfig runs. It is split out

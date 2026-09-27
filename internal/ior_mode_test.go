@@ -36,11 +36,16 @@ func stubDeps() runnerDeps {
 		getEUID:              func() int { return 0 },
 		runTrace:             func(flags.Config) error { return nil },
 		runParquet:           func(flags.Config) error { return nil },
-		runTraceWithContext:  func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error { return nil },
+		runTraceWithContext:  noopTraceRun,
 		runTUI:               func(flags.Config, runtime.TraceStarter) error { return nil },
 		runTUITestFlames:     func(flags.Config, runtime.TraceStarter) error { return nil },
 		runTUITestLiveFlames: func(flags.Config, runtime.TraceStarter) error { return nil },
 	}
+}
+
+// noopTraceRun is the stub trace run: it neither signals start nor fails.
+func noopTraceRun(context.Context, flags.Config, chan<- struct{}, func(*eventLoop), traceSetupHooks) error {
+	return nil
 }
 
 // captureStdoutStderr redirects the process-wide os.Stdout/os.Stderr into
@@ -288,7 +293,7 @@ func TestDispatchRunUsesTUIWhenOnlyPprofEnabled(t *testing.T) {
 func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 	traceDone := make(chan struct{}, 1)
 	deps := stubDeps()
-	deps.runTraceWithContext = func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+	deps.runTraceWithContext = func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop), _ traceSetupHooks) error {
 		if configure != nil {
 			configure(&eventLoop{})
 		}
@@ -303,7 +308,7 @@ func TestDispatchRunUsesTUIStarterWhenNotPlain(t *testing.T) {
 		if starter == nil {
 			t.Fatalf("expected non-nil starter")
 		}
-		if err := starter(context.Background()); err != nil {
+		if err := starter(context.Background(), runtime.TraceRequest{}); err != nil {
 			t.Fatalf("starter returned error: %v", err)
 		}
 		return nil
@@ -350,7 +355,7 @@ func TestDispatchRunUsesTestFlamesModeWhenRequested(t *testing.T) {
 		if starter == nil {
 			t.Fatalf("expected non-nil starter for test flames mode")
 		}
-		return starter(context.Background())
+		return starter(context.Background(), runtime.TraceRequest{})
 	}
 	deps.runTUITestLiveFlames = func(flags.Config, runtime.TraceStarter) error {
 		t.Fatalf("runTUITestLiveFlames should not be called for -testflames")
@@ -394,7 +399,7 @@ func TestDispatchRunUsesTestLiveFlamesModeWhenRequested(t *testing.T) {
 		if starter == nil {
 			t.Fatalf("expected non-nil starter for test live flames mode")
 		}
-		return starter(context.Background())
+		return starter(context.Background(), runtime.TraceRequest{})
 	}
 
 	cfg := flags.Config{TestLiveFlames: true}
@@ -562,18 +567,18 @@ func TestBuildTestLiveFlamesRuntimeContinuouslyUpdatesLiveTrie(t *testing.T) {
 func TestTuiTraceStarterFromRunTracePropagatesError(t *testing.T) {
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error {
+		func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop), traceSetupHooks) error {
 			return errors.New("startup failed")
 		},
 	)
 
-	err := starter(context.Background())
+	err := starter(context.Background(), runtime.TraceRequest{})
 	if err == nil || err.Error() != "startup failed" {
 		t.Fatalf("expected startup error, got %v", err)
 	}
 }
 
-func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
+func TestTuiTraceStarterFromRunTraceUsesRequestFilter(t *testing.T) {
 	base := flags.NewFlags()
 	base.PidFilter = 11
 	base.TidFilter = 12
@@ -581,29 +586,32 @@ func TestTuiTraceStarterFromRunTraceUsesContextFilters(t *testing.T) {
 	var gotCfg flags.Config
 	starter := tuiTraceStarterFromRunTrace(
 		base,
-		func(_ context.Context, cfg flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
+		func(_ context.Context, cfg flags.Config, started chan<- struct{}, _ func(*eventLoop), _ traceSetupHooks) error {
 			gotCfg = cfg
 			close(started)
 			return nil
 		},
 	)
 
-	ctx := runtime.ContextWithTraceFilters(context.Background(), globalfilter.Filter{
+	filter := globalfilter.Filter{
 		PID:     &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 2222},
 		TID:     &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 3333},
 		Comm:    &globalfilter.StringFilter{Pattern: "nginx"},
 		File:    &globalfilter.StringFilter{Pattern: "/var/log"},
 		Syscall: &globalfilter.StringFilter{Pattern: "read"},
 		FD:      &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 7},
-	})
-	if err := starter(ctx); err != nil {
+	}
+	if err := starter(context.Background(), runtime.TraceRequest{Filter: &filter}); err != nil {
 		t.Fatalf("starter returned error: %v", err)
 	}
+	// The starter clones the request filter: the caller's later edits must
+	// not reach the running session's config.
+	filter.Comm.Pattern = "mutated"
 	if gotCfg.PidFilter != 2222 {
-		t.Fatalf("expected pid filter from context, got %d", gotCfg.PidFilter)
+		t.Fatalf("expected pid filter from request, got %d", gotCfg.PidFilter)
 	}
 	if gotCfg.TidFilter != 3333 {
-		t.Fatalf("expected tid filter from context, got %d", gotCfg.TidFilter)
+		t.Fatalf("expected tid filter from request, got %d", gotCfg.TidFilter)
 	}
 	if gotCfg.CommFilter != "" {
 		t.Fatalf("expected legacy comm filter to remain unused, got %q", gotCfg.CommFilter)
@@ -718,7 +726,7 @@ func TestProfilingFilesForMode(t *testing.T) {
 func TestTuiTraceStarterFromRunTraceRespectsCancel(t *testing.T) {
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(ctx context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop)) error {
+		func(ctx context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop), _ traceSetupHooks) error {
 			<-ctx.Done()
 			return ctx.Err()
 		},
@@ -727,7 +735,7 @@ func TestTuiTraceStarterFromRunTraceRespectsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := starter(ctx)
+	err := starter(ctx, runtime.TraceRequest{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
 	}
@@ -881,7 +889,7 @@ func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T)
 	runIndex := 0
 	starter := tuiTraceStarterFromRunTrace(
 		base,
-		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop), _ traceSetupHooks) error {
 			el := &eventLoop{}
 			configure(el)
 			for _, pair := range runs[runIndex] {
@@ -893,14 +901,14 @@ func TestTuiTraceStarterFromRunTracePersistsRecorderAcrossRestarts(t *testing.T)
 		},
 	)
 
-	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
-	if err := starter(ctx); err != nil {
+	ctx := context.Background()
+	if err := starter(ctx, runtime.TraceRequest{Bindings: bindings}); err != nil {
 		t.Fatalf("first starter() error = %v", err)
 	}
 	waitForStreamRows(t, bindings.streamBuffer, 1)
 
 	bindings.filterEpoch = 1
-	if err := starter(ctx); err != nil {
+	if err := starter(ctx, runtime.TraceRequest{Bindings: bindings}); err != nil {
 		t.Fatalf("second starter() error = %v", err)
 	}
 	waitForStreamRows(t, bindings.streamBuffer, 2)
@@ -951,7 +959,7 @@ func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 	captured := make(chan *eventLoop, 1)
 	starter := tuiTraceStarterFromRunTrace(
 		base,
-		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop), _ traceSetupHooks) error {
 			el := &eventLoop{}
 			configure(el)
 			captured <- el
@@ -961,9 +969,9 @@ func TestTuiTraceStarterAppliesLiveFilterSwapInPlace(t *testing.T) {
 		},
 	)
 
-	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
+	ctx := context.Background()
 	starterErr := make(chan error, 1)
-	go func() { starterErr <- starter(ctx) }()
+	go func() { starterErr <- starter(ctx, runtime.TraceRequest{Bindings: bindings}) }()
 
 	el := <-captured
 
@@ -1015,7 +1023,7 @@ func TestTuiTraceStarterSlowTeardownKeepsNextSessionLiveFilterSetter(t *testing.
 	}
 	base := flags.NewFlags()
 	base.GlobalFilter = globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "initial"}}
-	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
+	ctx := context.Background()
 
 	startSession := func() (*eventLoop, chan struct{}) {
 		t.Helper()
@@ -1023,7 +1031,7 @@ func TestTuiTraceStarterSlowTeardownKeepsNextSessionLiveFilterSetter(t *testing.
 		captured := make(chan *eventLoop, 1)
 		starter := tuiTraceStarterFromRunTrace(
 			base,
-			func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+			func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop), _ traceSetupHooks) error {
 				el := &eventLoop{}
 				configure(el)
 				captured <- el
@@ -1032,7 +1040,7 @@ func TestTuiTraceStarterSlowTeardownKeepsNextSessionLiveFilterSetter(t *testing.
 				return nil
 			},
 		)
-		if err := starter(ctx); err != nil {
+		if err := starter(ctx, runtime.TraceRequest{Bindings: bindings}); err != nil {
 			t.Fatalf("starter() error = %v", err)
 		}
 		return <-captured, release
@@ -1102,7 +1110,7 @@ func TestTuiTraceStarterInPlaceFilterSwapAdvancesRecordedEpoch(t *testing.T) {
 	captured := make(chan *eventLoop, 1)
 	starter := tuiTraceStarterFromRunTrace(
 		base,
-		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop), _ traceSetupHooks) error {
 			el := &eventLoop{}
 			configure(el)
 			captured <- el
@@ -1112,9 +1120,9 @@ func TestTuiTraceStarterInPlaceFilterSwapAdvancesRecordedEpoch(t *testing.T) {
 		},
 	)
 
-	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
+	ctx := context.Background()
 	starterErr := make(chan error, 1)
-	go func() { starterErr <- starter(ctx) }()
+	go func() { starterErr <- starter(ctx, runtime.TraceRequest{Bindings: bindings}) }()
 
 	el := <-captured
 
@@ -1171,7 +1179,7 @@ func TestTuiTraceStarterSurfacesAggregateOnlySyscallInSnapshot(t *testing.T) {
 
 	starter := tuiTraceStarterFromRunTrace(
 		base,
-		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, configure func(*eventLoop), _ traceSetupHooks) error {
 			el := &eventLoop{}
 			configure(el)
 			if el.aggregateSink == nil {
@@ -1195,8 +1203,8 @@ func TestTuiTraceStarterSurfacesAggregateOnlySyscallInSnapshot(t *testing.T) {
 		},
 	)
 
-	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
-	if err := starter(ctx); err != nil {
+	ctx := context.Background()
+	if err := starter(ctx, runtime.TraceRequest{Bindings: bindings}); err != nil {
 		t.Fatalf("starter() error = %v", err)
 	}
 
@@ -1402,15 +1410,15 @@ func TestTuiTraceStarterSurfacesAFailureArrivingAfterStart(t *testing.T) {
 	released := make(chan struct{})
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(_ context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
+		func(_ context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop), _ traceSetupHooks) error {
 			close(started)
 			<-released
 			return errors.New("get syscall_aggregate_map: not found")
 		},
 	)
 
-	ctx := runtime.ContextWithRuntimeBindings(context.Background(), bindings)
-	err := starter(ctx)
+	ctx := context.Background()
+	err := starter(ctx, runtime.TraceRequest{Bindings: bindings})
 	close(released)
 	if err != nil {
 		t.Fatalf("starter() error = %v, want nil: the trace did signal start", err)
@@ -1441,15 +1449,15 @@ func TestTuiTraceStarterKeepsACancelledStartSilent(t *testing.T) {
 	released := make(chan struct{})
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(_ context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop)) error {
+		func(_ context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop), _ traceSetupHooks) error {
 			<-released
 			return errors.New("setup BPF module: attach tracepoints: no such file or directory")
 		},
 	)
 
-	ctx, cancel := context.WithCancel(runtime.ContextWithRuntimeBindings(context.Background(), bindings))
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := starter(ctx)
+	err := starter(ctx, runtime.TraceRequest{Bindings: bindings})
 	close(released)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("starter() error = %v, want context.Canceled", err)
@@ -1480,18 +1488,18 @@ func TestTuiTraceStarterReportsAStopEvenWhenTheFailureIsReady(t *testing.T) {
 	}
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(_ context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop)) error {
+		func(_ context.Context, _ flags.Config, _ chan<- struct{}, _ func(*eventLoop), _ traceSetupHooks) error {
 			return errors.New("setup BPF module: attach tracepoints: no such file or directory")
 		},
 	)
 
-	ctx, cancel := context.WithCancel(runtime.ContextWithRuntimeBindings(context.Background(), bindings))
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// Repeated because the arms are chosen at random: a single run takes the
 	// unguarded one only about half the time, and the regression this pins was
 	// measured at well under 1% per run before both arms were gated.
 	for i := range 200 {
-		if err := starter(ctx); !errors.Is(err, context.Canceled) {
+		if err := starter(ctx, runtime.TraceRequest{Bindings: bindings}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("run %d: starter() error = %v, want context.Canceled: the user stopped this trace", i, err)
 		}
 	}
@@ -1509,7 +1517,7 @@ func TestTuiTraceStarterKeepsAnOrdinaryStopSilent(t *testing.T) {
 	stopped := make(chan struct{})
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(ctx context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
+		func(ctx context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop), _ traceSetupHooks) error {
 			close(started)
 			<-ctx.Done()
 			close(stopped)
@@ -1517,8 +1525,8 @@ func TestTuiTraceStarterKeepsAnOrdinaryStopSilent(t *testing.T) {
 		},
 	)
 
-	ctx, cancel := context.WithCancel(runtime.ContextWithRuntimeBindings(context.Background(), bindings))
-	if err := starter(ctx); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := starter(ctx, runtime.TraceRequest{Bindings: bindings}); err != nil {
 		t.Fatalf("starter() error = %v, want nil", err)
 	}
 	cancel()
@@ -1545,7 +1553,7 @@ func TestTuiTraceStarterCompletesShutdownOnlyAfterTraceCleanup(t *testing.T) {
 	releaseCleanup := make(chan struct{})
 	starter := tuiTraceStarterFromRunTrace(
 		flags.NewFlags(),
-		func(ctx context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop)) error {
+		func(ctx context.Context, _ flags.Config, started chan<- struct{}, _ func(*eventLoop), _ traceSetupHooks) error {
 			close(started)
 			<-ctx.Done()
 			close(cleanupStarted)
@@ -1554,8 +1562,8 @@ func TestTuiTraceStarterCompletesShutdownOnlyAfterTraceCleanup(t *testing.T) {
 		},
 	)
 
-	ctx, cancel := context.WithCancel(runtime.ContextWithTraceShutdownReporter(context.Background(), reporter))
-	if err := starter(ctx); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := starter(ctx, runtime.TraceRequest{ShutdownReporter: reporter}); err != nil {
 		t.Fatalf("starter() error = %v, want nil", err)
 	}
 	cancel()

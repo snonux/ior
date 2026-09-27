@@ -127,7 +127,7 @@ func newTopLevelFlameRefreshModel(t *testing.T) *Model {
 	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	coreflamegraph.SeedTestLiveFlameData(liveTrie, 0)
 
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.width = 120

@@ -18,7 +18,36 @@ import (
 
 // TraceStarter starts tracing and returns when startup succeeds or fails.
 // Long-lived tracing work must continue in background goroutines.
-type TraceStarter func(context.Context) error
+//
+// ctx carries only cancellation: cancelling it stops the session. Everything
+// else a session needs from its caller arrives explicitly in the TraceRequest,
+// so a starter's dependencies are visible in its signature rather than
+// discovered through context values that silently read as "absent" when a
+// caller forgets to set them.
+type TraceStarter func(context.Context, TraceRequest) error
+
+// TraceRequest is what the caller of a TraceStarter hands one trace session.
+// The zero value is valid and means a session with no TUI attached: nothing
+// is published, the starter's configured filter is kept, and no shutdown
+// progress is reported.
+type TraceRequest struct {
+	// Bindings is the TUI's runtime surface: the starter publishes the
+	// session's live components through it and reuses the TUI-owned
+	// persistent state it exposes. Nil means no TUI is attached, so the
+	// session publishes nothing.
+	Bindings TraceRuntimeBindings
+	// Filter is the trace filter the session starts with. It replaces the
+	// starter's configured global filter and derives the PID/TID scope from
+	// it. Nil keeps the starter's configured filter and scope unchanged,
+	// which is not the same as an empty filter: an empty filter clears the
+	// PID/TID scope. The starter clones it before use, so the caller may keep
+	// mutating its own copy.
+	Filter *globalfilter.Filter
+	// ShutdownReporter receives this session's shutdown progress. A starter
+	// that keeps tracing in the background claims it and owns its completion.
+	// Nil means nobody waits for the session's teardown.
+	ShutdownReporter *TraceShutdownReporter
+}
 
 // TraceShutdownPhase identifies the currently observable phase of a trace
 // session's shutdown. Stopping is indeterminate: the event loop and its
@@ -329,82 +358,6 @@ type RuntimeState interface {
 type TraceRuntimeBindings interface {
 	RuntimePublisher
 	RuntimeState
-}
-
-// --- context key types and helpers ---
-
-// runtimeBindingsKey is an unexported context key for runtime bindings.
-type runtimeBindingsKey struct{}
-
-// traceFiltersKey is an unexported context key for trace filter values.
-type traceFiltersKey struct{}
-
-// traceShutdownReporterKey is private so only helpers in this package can
-// install or retrieve the per-session reporter.
-type traceShutdownReporterKey struct{}
-
-// traceFilters wraps a cloned filter stored on the context by the TUI model.
-type traceFilters struct {
-	filter globalfilter.Filter
-}
-
-// ContextWithRuntimeBindings stores trace runtime bindings on the context so
-// a trace starter can retrieve them via RuntimeBindingsFromContext.
-func ContextWithRuntimeBindings(ctx context.Context, bindings TraceRuntimeBindings) context.Context {
-	return context.WithValue(ctx, runtimeBindingsKey{}, bindings)
-}
-
-// ContextWithTraceShutdownReporter stores one trace session's shutdown
-// reporter on ctx.
-func ContextWithTraceShutdownReporter(ctx context.Context, reporter *TraceShutdownReporter) context.Context {
-	return context.WithValue(ctx, traceShutdownReporterKey{}, reporter)
-}
-
-// TraceShutdownReporterFromContext returns the current session's reporter.
-func TraceShutdownReporterFromContext(ctx context.Context) (*TraceShutdownReporter, bool) {
-	reporter, ok := ctx.Value(traceShutdownReporterKey{}).(*TraceShutdownReporter)
-	if !ok || reporter == nil {
-		return nil, false
-	}
-	return reporter, true
-}
-
-// RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the
-// context was created by the TUI. Use RuntimePublisherFromContext when only
-// write access is needed.
-func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool) {
-	bindings, ok := ctx.Value(runtimeBindingsKey{}).(TraceRuntimeBindings)
-	if !ok || bindings == nil {
-		return nil, false
-	}
-	return bindings, true
-}
-
-// RuntimePublisherFromContext returns only the RuntimePublisher side of the TUI
-// bindings. Use this when the caller only injects data and does not need to
-// read persistent TUI state.
-func RuntimePublisherFromContext(ctx context.Context) (RuntimePublisher, bool) {
-	bindings, ok := ctx.Value(runtimeBindingsKey{}).(RuntimePublisher)
-	if !ok || bindings == nil {
-		return nil, false
-	}
-	return bindings, true
-}
-
-// ContextWithTraceFilters stores the active trace filters on the context so
-// a trace starter can retrieve them via TraceFiltersFromContext.
-func ContextWithTraceFilters(ctx context.Context, filter globalfilter.Filter) context.Context {
-	filters := traceFilters{filter: filter.Clone()}
-	return context.WithValue(ctx, traceFiltersKey{}, filters)
-}
-
-// TraceFiltersFromContext returns the active trace filters when provided by the TUI model.
-func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
-	filters, ok := ctx.Value(traceFiltersKey{}).(traceFilters)
-	if !ok {
-		return globalfilter.Filter{}, false
-	}
-	return filters.filter.Clone(), true
 }
 
 // --- compile-time interface satisfaction assertions ---
