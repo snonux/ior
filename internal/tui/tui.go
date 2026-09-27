@@ -251,6 +251,17 @@ func (r *runtimeBindings) liveTrie() runtime.LiveTrieSource {
 	return r.liveTrieSource
 }
 
+// resetLiveTrie clears the wired flamegraph trie, if any, and returns it so
+// the caller can re-bind the flamegraph view to the fresh baseline. It returns
+// nil when no trie is wired yet.
+func (r *runtimeBindings) resetLiveTrie() runtime.LiveTrieSource {
+	trie := r.liveTrie()
+	if trie != nil {
+		trie.Reset()
+	}
+	return trie
+}
+
 // currentProbeManager returns the currently wired probe manager.
 func (r *runtimeBindings) currentProbeManager() runtime.ProbeManager {
 	r.mu.RLock()
@@ -813,12 +824,23 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
-	if tick, ok := m.runtime.resetDashboardSnapshotSource(); ok {
-		next, dashboardCmd := m.dashboard.Update(tick)
-		m.dashboard = next.(*dashboardui.Model)
-		return m, tea.Batch(dashboardCmd, cmd)
+	return m, tea.Batch(m.resetDashboardStats(), cmd)
+}
+
+// resetDashboardStats resets the wired stats engine and feeds the post-reset
+// snapshot through the dashboard's normal stats handling, so the tabs show the
+// fresh baseline immediately rather than on the next refresh tick. A failed
+// post-reset Snapshot arrives as StatsTickMsg.Err, which the dashboard answers
+// by keeping its last good snapshot. With no engine wired there is nothing to
+// reset and the result is nil.
+func (m *Model) resetDashboardStats() tea.Cmd {
+	tick, ok := m.runtime.resetDashboardSnapshotSource()
+	if !ok {
+		return nil
 	}
-	return m, cmd
+	next, cmd := m.dashboard.Update(tick)
+	m.dashboard = next.(*dashboardui.Model)
+	return cmd
 }
 
 // handleTracingStarted wires live sources into the dashboard once the trace
@@ -1416,23 +1438,23 @@ func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 	if !changed || m.screen != ScreenDashboard {
 		return m, nil
 	}
+	return m.pushFilterToPipeline(m.filters.current())
+}
 
+// pushFilterToPipeline hands filter to the running trace, preferring an
+// in-place live swap and falling back to a trace restart. It is the shared
+// tail of reapplyActiveFilter and undoGlobalFilter, so every route that
+// changes the active filter drives the pipeline - and resets the aggregates -
+// identically.
+func (m *Model) pushFilterToPipeline(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
 	m.runtime.advanceFilterEpoch()
 	// Try the in-place swap first: hand the new filter to the running
-	// eventloop via the registered setter and only reset the dashboard
-	// aggregates so the displayed counts reflect the new filter going
-	// forward. The BPF probes stay attached, so the user no longer sees
-	// the multi-second 'Attaching tracepoints' overlay on filter changes.
-	if m.runtime.applyLiveFilter(m.filters.current()) {
-		m.dashboard.PrepareForTraceRestart()
-		// PrepareForTraceRestart nils the dashboard's live-trie reference
-		// because the full-restart path expects TracingStartedMsg to
-		// rebind it. We skip that message on in-place swaps, so reconnect
-		// the flamegraph to the still-running trace's live trie here.
-		// Without this the Flame tab gets stuck on 'waiting for data...'.
-		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
+	// eventloop via the registered setter. The BPF probes stay attached, so
+	// the user no longer sees the multi-second 'Attaching tracepoints'
+	// overlay on filter changes.
+	if m.runtime.applyLiveFilter(filter) {
 		m.clearError()
-		return m, nil
+		return m, m.resetAggregatesAfterLiveSwap()
 	}
 
 	// Fallback: no trace currently running (e.g. first invocation), so
@@ -1443,6 +1465,23 @@ func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 	m.attaching = true
 	m.clearError()
 	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+}
+
+// resetAggregatesAfterLiveSwap starts a fresh baseline after an in-place
+// filter swap, as a trace restart would with a new engine and trie: without
+// it the Syscalls/Files/Processes tabs and the Flame tab keep every pre-swap
+// event and mix it with the filtered ones that follow (apply comm~foo and the
+// Processes tab still lists every other process). It must run after the
+// setter, never before: resetting first would let events matched by the old
+// filter land in the new baseline between the reset and the swap.
+//
+// The trie is reset and then re-bound so the flamegraph drops its zoom,
+// selection and cached snapshot of frames that no longer exist. The stats
+// reset goes through resetDashboardStats, so a failed post-reset snapshot
+// keeps the last good one exactly as a probe toggle or the refresh key do.
+func (m *Model) resetAggregatesAfterLiveSwap() tea.Cmd {
+	m.dashboard.SetLiveTrie(m.runtime.resetLiveTrie())
+	return m.resetDashboardStats()
 }
 
 // undoGlobalFilter pops the filter stack and re-applies the previous filter,
@@ -1462,20 +1501,7 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.runtime.advanceFilterEpoch()
-	// Same in-place swap path as applyGlobalFilter — see comment there.
-	if m.runtime.applyLiveFilter(prev) {
-		m.dashboard.PrepareForTraceRestart()
-		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
-		m.clearError()
-		return m, nil
-	}
-
-	m.tracer.stop()
-	m.dashboard.PrepareForTraceRestart()
-	m.attaching = true
-	m.clearError()
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	return m.pushFilterToPipeline(prev)
 }
 
 // startRecording opens the parquet recorder at path and syncs dashboard status.
