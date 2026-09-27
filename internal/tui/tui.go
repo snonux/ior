@@ -841,8 +841,9 @@ func (m *Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 }
 
 func (m *Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
+	_, returning := m.router.pendingReturn()
 	return m.router.current() == ScreenPIDPicker &&
-		m.router.hasPendingReturn() &&
+		returning &&
 		(isEscKey(msg) || key.Matches(msg, m.keys.Quit))
 }
 
@@ -919,7 +920,7 @@ func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 	if m.shouldRouteQuitToEsc(msg) {
 		return m.routeQuitAsEsc()
 	}
-	if m.router.current() == ScreenPIDPicker && !m.router.hasPendingReturn() {
+	if _, returning := m.router.pendingReturn(); m.router.current() == ScreenPIDPicker && !returning {
 		return m.quitFromStartupPicker()
 	}
 	return m, nil, true
@@ -954,7 +955,7 @@ func (m *Model) handleErrorScreenKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.C
 // existing return route so its saved filters and trace restart are preserved.
 func (m *Model) dismissRecoverableError() (tea.Model, tea.Cmd, bool) {
 	m.clearError()
-	if m.router.current() == ScreenPIDPicker && m.router.hasPendingReturn() {
+	if _, returning := m.router.pendingReturn(); m.router.current() == ScreenPIDPicker && returning {
 		next, cmd := m.cancelPickerToDashboard()
 		return next, cmd, true
 	}
@@ -1212,7 +1213,7 @@ func (m *Model) selectProcess(pid, tid int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// Stop before discarding the buffered rows, so the old session is told
-	// to go away before its stream is reset (restartTrace's stop is then a
+	// to go away before its stream is reset (beginTraceCmd's stop is then a
 	// no-op).
 	m.tracer.stop()
 	m.runtime.resetStreamBuffer()
@@ -1283,14 +1284,17 @@ func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 
 // restartTrace is the shared tail of every path that (re)starts tracing from
 // a live model - process selection, picker cancel and the filter fallback: it
-// stops the running session (idempotent, so callers that already stopped it
-// pay nothing), enters the attaching state, clears any error and returns the
-// spinner tick batched with the new trace's start command.
+// enters the attaching state, clears any error and returns the spinner tick
+// batched with the new trace's start command.
 //
-// With no tracer running it still starts one: stop is a no-op then, and the
-// returned command attaches a fresh session.
+// It does not stop the previous session itself: beginTraceCmd owns that
+// (traceLifecycle.beginCmd cancels any running session before starting the
+// next), so at most one session is ever live. Callers that must quiesce the
+// old session before touching state it feeds - selectProcess before
+// resetStreamBuffer, the filter fallback before PrepareForTraceRestart - stop
+// it explicitly first, and beginCmd's stop is then a no-op. With no tracer
+// running it still starts one.
 func (m *Model) restartTrace() tea.Cmd {
-	m.tracer.stop()
 	m.attaching = true
 	m.clearError()
 	return tea.Batch(m.spin.Tick, m.beginTraceCmd())
@@ -1427,7 +1431,7 @@ func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model,
 	// Fallback: no trace currently running (e.g. first invocation), so
 	// restart the pipeline so the new filter takes effect on the next
 	// trace start. The old session is cancelled before its aggregates are
-	// cleared, as before; restartTrace's own stop is then a no-op.
+	// cleared, as before; beginTraceCmd's stop is then a no-op.
 	m.tracer.stop()
 	m.dashboard.PrepareForTraceRestart()
 	return m, m.restartTrace()

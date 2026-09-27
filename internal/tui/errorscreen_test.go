@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,19 +41,9 @@ func newRecorderStopErrorScreen(t *testing.T) *Model {
 	m.width = 120
 	m.height = 40
 
-	dir := filepath.Join(t.TempDir(), "recordings")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := m.startRecording(filepath.Join(dir, "capture.parquet")); err != nil {
-		t.Fatalf("startRecording() error = %v", err)
-	}
-	// Finalisation renames the recorder's temporary file into dir. Removing
-	// it makes the R shortcut's recorderStop call fail after the trace itself
-	// has remained untouched.
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatalf("RemoveAll() error = %v", err)
-	}
+	// The R shortcut's recorderStop call fails while the trace itself
+	// remains untouched.
+	armRecorderStopFailure(t, m)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'R', Text: "R"})
 	if cmd != nil {
@@ -251,18 +240,8 @@ func TestErrorScreenQuitStopsAnActiveRecording(t *testing.T) {
 // swallowed key all over again.
 func TestErrorScreenQuitSurvivesARecorderThatCannotStop(t *testing.T) {
 	m := newErrorScreenModel(t, errors.New("boom"))
-	dir := filepath.Join(t.TempDir(), "recordings")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := m.startRecording(filepath.Join(dir, "capture.parquet")); err != nil {
-		t.Fatalf("startRecording() error = %v", err)
-	}
-	// The writer finalises by renaming its temp file into this directory;
-	// removing it makes Close - and so recorderStop - fail for real.
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatalf("RemoveAll() error = %v", err)
-	}
+	// Close - and so recorderStop - fails for real.
+	armRecorderStopFailure(t, m)
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	updated := assertQuits(t, next, cmd)
@@ -515,7 +494,7 @@ func TestRecoverableErrorScreenEscOutranksAndResumesPickerCancel(t *testing.T) {
 	if updated.lastErr != nil {
 		t.Fatalf("Esc left the recoverable error on screen: %v", updated.lastErr)
 	}
-	if updated.router.hasPendingReturn() {
+	if hasReturn(updated) {
 		t.Fatal("Esc left the picker return bookmark pending")
 	}
 }
@@ -539,7 +518,7 @@ func TestRecoverableErrorScreenQuitOutranksPickerCancel(t *testing.T) {
 
 			next, cmd := m.Update(press)
 			updated := assertQuits(t, next, cmd)
-			if !updated.router.hasPendingReturn() {
+			if !hasReturn(updated) {
 				t.Fatal("quit key reached the picker cancel route and consumed its bookmark")
 			}
 		})

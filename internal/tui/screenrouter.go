@@ -11,10 +11,10 @@ import (
 // dashboard to the PID or TID picker and may want to cancel back to the
 // original dashboard view.
 //
-// Model reads this state through current/hasPendingReturn/pendingReturn and
-// changes it only through the transition methods, so the invariant "a return
-// bookmark exists only while the re-selection picker is showing" is kept in
-// one place instead of in every Model path that switches screens.
+// Model reads this state through current/pendingReturn and changes it only
+// through the transition methods, so the invariant "a return bookmark exists
+// only while the re-selection picker is showing" is kept in one place instead
+// of in every Model path that switches screens.
 type screenRouter struct {
 	// active is the screen currently shown.
 	active Screen
@@ -46,7 +46,7 @@ func (r *screenRouter) current() Screen {
 // once the dashboard is showing there is no picker navigation left to cancel.
 func (r *screenRouter) showDashboard() {
 	r.active = ScreenDashboard
-	r.clearPendingReturn()
+	r.pickerReturn = nil
 }
 
 // showPickerWithReturn switches to the picker and records the current pid/tid
@@ -61,25 +61,16 @@ func (r *screenRouter) showPickerWithReturn(pid, tid int) {
 }
 
 // pendingReturn returns the stored picker return state without consuming it.
-// Returns (zero, false) when no pending state exists. The bookmark is only
-// dropped once the transition back to the dashboard actually happens
-// (showDashboard), so a caller that fails halfway keeps it intact.
+// Returns (zero, false) when no pending state exists - that is, when the
+// picker was not reached from the dashboard, so Esc should quit rather than
+// return. The bookmark is only dropped once the transition back to the
+// dashboard actually happens (showDashboard), so a caller that fails halfway
+// keeps it intact.
 func (r *screenRouter) pendingReturn() (pickerReturnState, bool) {
 	if r.pickerReturn == nil {
 		return pickerReturnState{}, false
 	}
 	return *r.pickerReturn, true
-}
-
-// clearPendingReturn drops the return bookmark, if any.
-func (r *screenRouter) clearPendingReturn() {
-	r.pickerReturn = nil
-}
-
-// hasPendingReturn reports whether the user navigated from the dashboard to
-// the picker (meaning Esc should return to the dashboard instead of quitting).
-func (r *screenRouter) hasPendingReturn() bool {
-	return r.pickerReturn != nil
 }
 
 // applyWindowSizeToPicker sends the current window size to the pid picker when

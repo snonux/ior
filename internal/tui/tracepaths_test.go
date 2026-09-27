@@ -28,6 +28,12 @@ func armRecorderStopFailure(t *testing.T, m *Model) {
 	}
 }
 
+// hasReturn reports whether m's router holds a picker return bookmark.
+func hasReturn(m *Model) bool {
+	_, ok := m.router.pendingReturn()
+	return ok
+}
+
 // countTraceStops replaces the model's trace cancel func with a counter.
 func countTraceStops(m *Model) *int {
 	calls := 0
@@ -85,7 +91,7 @@ func TestRestartTraceWithNoTracerRunningStartsOne(t *testing.T) {
 }
 
 // TestRestartTraceStopsTheRunningSessionExactlyOnce pins that the restart
-// tail cancels the old session and that beginCmd's own stop is then a no-op.
+// tail cancels the old session exactly once, through beginTraceCmd.
 func TestRestartTraceStopsTheRunningSessionExactlyOnce(t *testing.T) {
 	m := newIdleDashboardModel(-1, -1)
 	stops := countTraceStops(m)
@@ -130,7 +136,7 @@ func TestProcessSelectionSharesOneSwitch(t *testing.T) {
 			if updated.router.current() != ScreenDashboard || !updated.attaching {
 				t.Fatalf("screen %v attaching %t, want dashboard attaching", updated.router.current(), updated.attaching)
 			}
-			if updated.router.hasPendingReturn() {
+			if hasReturn(updated) {
 				t.Fatal("selection left the picker return bookmark pending")
 			}
 			if updated.lastErr != nil {
@@ -147,32 +153,41 @@ func TestProcessSelectionSharesOneSwitch(t *testing.T) {
 // recorder that fails to stop aborts the selection, leaving the picker, its
 // bookmark, the filters and the trace untouched.
 func TestProcessSelectionRecorderFailureKeepsThePicker(t *testing.T) {
-	for _, msg := range []tea.Msg{PidSelectedMsg{Pid: 42}, TidSelectedMsg{Pid: 42, Tid: 7}} {
-		m := newIdleDashboardModel(1111, 2222)
-		m.router.showPickerWithReturn(1111, 2222)
-		armRecorderStopFailure(t, m)
-		stops := countTraceStops(m)
+	cases := []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{name: "pid", msg: PidSelectedMsg{Pid: 42}},
+		{name: "tid", msg: TidSelectedMsg{Pid: 42, Tid: 7}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newIdleDashboardModel(1111, 2222)
+			m.router.showPickerWithReturn(1111, 2222)
+			armRecorderStopFailure(t, m)
+			stops := countTraceStops(m)
 
-		next, cmd := m.Update(msg)
-		updated := next.(*Model)
-		if cmd != nil {
-			t.Fatalf("%T: failed selection returned a command", msg)
-		}
-		if updated.lastErr == nil || updated.errorKind != errorScreenRecoverable {
-			t.Fatalf("%T: error = %v (kind %v), want a recoverable recorder error", msg, updated.lastErr, updated.errorKind)
-		}
-		if updated.router.current() != ScreenPIDPicker || updated.attaching {
-			t.Fatalf("%T: screen %v attaching %t, want picker idle", msg, updated.router.current(), updated.attaching)
-		}
-		if state, ok := updated.router.pendingReturn(); !ok || state.pidFilter != 1111 || state.tidFilter != 2222 {
-			t.Fatalf("%T: bookmark = %+v, %t; want 1111/2222 kept", msg, state, ok)
-		}
-		if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
-			t.Fatalf("%T: pid/tid = %d/%d, want 1111/2222 kept", msg, updated.proc.pid, updated.proc.tid)
-		}
-		if *stops != 0 {
-			t.Fatalf("%T: failed selection stopped the trace %d times", msg, *stops)
-		}
+			next, cmd := m.Update(tc.msg)
+			updated := next.(*Model)
+			if cmd != nil {
+				t.Fatal("failed selection returned a command")
+			}
+			if updated.lastErr == nil || updated.errorKind != errorScreenRecoverable {
+				t.Fatalf("error = %v (kind %v), want a recoverable recorder error", updated.lastErr, updated.errorKind)
+			}
+			if updated.router.current() != ScreenPIDPicker || updated.attaching {
+				t.Fatalf("screen %v attaching %t, want picker idle", updated.router.current(), updated.attaching)
+			}
+			if state, ok := updated.router.pendingReturn(); !ok || state.pidFilter != 1111 || state.tidFilter != 2222 {
+				t.Fatalf("bookmark = %+v, %t; want 1111/2222 kept", state, ok)
+			}
+			if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
+				t.Fatalf("pid/tid = %d/%d, want 1111/2222 kept", updated.proc.pid, updated.proc.tid)
+			}
+			if *stops != 0 {
+				t.Fatalf("failed selection stopped the trace %d times", *stops)
+			}
+		})
 	}
 }
 
@@ -240,7 +255,7 @@ func TestEnterPickerRecorderFailureStaysOnTheDashboard(t *testing.T) {
 	if updated.router.current() != ScreenDashboard {
 		t.Fatalf("screen = %v, want dashboard kept", updated.router.current())
 	}
-	if updated.router.hasPendingReturn() {
+	if hasReturn(updated) {
 		t.Fatal("failed reselect set a picker return bookmark")
 	}
 	if *stops != 0 {
@@ -253,7 +268,7 @@ func TestEnterPickerRecorderFailureStaysOnTheDashboard(t *testing.T) {
 // a trace.
 func TestCancelPickerWithoutReturnIsANoOp(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	if m.router.current() != ScreenPIDPicker || m.router.hasPendingReturn() {
+	if m.router.current() != ScreenPIDPicker || hasReturn(m) {
 		t.Fatal("fixture is not the startup picker; this test would prove nothing")
 	}
 
@@ -285,7 +300,7 @@ func TestCancelPickerClearsReturnAndRestoresFilters(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("cancel returned no trace restart command")
 	}
-	if updated.router.hasPendingReturn() {
+	if hasReturn(updated) {
 		t.Fatal("cancel left the picker return bookmark pending")
 	}
 	if updated.router.current() != ScreenDashboard || !updated.attaching {
