@@ -33,8 +33,9 @@ type tableTabState[SortKey comparable] struct {
 
 // tableTab is the tab-agnostic behaviour every tableTabState exposes to the
 // paths that must not care which tab is active: viz-mode cycling, bubble
-// dispatch and mode queries. Model.tableTabFor is the single place that maps
-// tab identity to this interface; the paths behind it (tabVizModeFor,
+// dispatch and mode queries. Each tab's TableState registry hook (reached
+// through Model.tableTabFor) is the single place that maps tab identity to
+// this interface; the paths behind it (tabVizModeFor,
 // setTabVizMode, bubbleChartFor, bubbleEnabledForTab, cycleVisualizationMode)
 // are generic over tableTab instead of switching on the tab again.
 type tableTab interface {

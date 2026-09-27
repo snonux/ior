@@ -167,9 +167,7 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 	}
 	// The tableTabState zero value already means table mode; only the bubble
 	// charts need construction.
-	m.syscallsTab.bubble = newBubbleChart()
-	m.filesTab.bubble = newBubbleChart()
-	m.processesTab.bubble = newBubbleChart()
+	m.forEachBubbleChart(func(chart *bubbleChart) { *chart = newBubbleChart() })
 	// showHelp starts false; align the stream footer visibility so it matches
 	// from the first render without relying on View() to fix up the mismatch.
 	m.streamModel.SetFooterVisible(false)
@@ -311,32 +309,18 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 		// good snapshot instead of blanking the view on a transient failure.
 		return m, nil
 	}
-	selectedSyscall := ""
-	selectedFile := ""
-	selectedDir := ""
-	selectedProcess := uint32(0)
-	if m.syscallsTab.sort.active {
-		selectedSyscall = m.selectedSyscallName()
-	}
-	// The dir-grouped selection is anchored even while another tab is
-	// shown: skipping it would let the selection drift to a different item
-	// by the time the Files tab is shown again.
-	if m.filesDirGrouped {
-		if m.filesDirAnchorsByKey() {
-			selectedDir = m.selectedFilesDirKey()
+	// Every tab (not only the active one) records its selection against the
+	// old snapshot and re-anchors it once the new one is in place.
+	var reanchors []func()
+	for _, tab := range orderedTabs() {
+		if d := tabDescriptors[tab]; d.CaptureSelection != nil {
+			reanchors = append(reanchors, d.CaptureSelection(m))
 		}
-	} else if m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
-		selectedFile = m.selectedFilePath()
-	}
-	if m.processesTab.mode == tabVizModeTable && m.processesTab.sort.active {
-		selectedProcess = m.selectedProcessPID()
 	}
 	m.latest = msg.Snap
-	m.reanchorSyscallsOffset(selectedSyscall)
-	m.reanchorFilesOffset(selectedFile)
-	m.reanchorFilesDirOffset(selectedDir)
-	m.reanchorProcessesOffset(selectedProcess)
-	m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.syscallsRowCount())
+	for _, reanchor := range reanchors {
+		reanchor()
+	}
 	m.clampTableColumns()
 	m.streamModel.Refresh()
 	if m.refreshBubbleData() {
@@ -752,10 +736,10 @@ func (m *Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, te
 	return true, m, cmd
 }
 
-// handleShortcutKey processes tab-navigation and action shortcuts. Numeric
-// shortcuts are resolved via the tab registry so that adding a new tab with a
-// shortcut key requires only a new tabDescriptor entry — this function never
-// needs to be modified (OCP).
+// handleShortcutKey processes tab-navigation and action shortcuts. The
+// active tab's own keys (HandleKey) and the numeric shortcuts are resolved
+// via the tab registry so that adding a new tab requires only a new
+// tabDescriptor entry — this function never needs to be modified (OCP).
 func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Tab):
@@ -770,11 +754,11 @@ func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.toggleBubbleMetric()
 	case key.Matches(msg, m.keys.Refresh):
 		return true, m.resetBaselineCmd()
-	case key.Matches(msg, m.keys.DirGroup):
-		if m.activeTab != TabFiles {
-			return false, nil
+	}
+	if d := lookupTab(m.activeTab); d.HandleKey != nil {
+		if handled, cmd := d.HandleKey(m, msg); handled {
+			return true, cmd
 		}
-		return true, m.toggleFilesDirGrouping()
 	}
 	// Fall through to registry-driven numeric tab shortcuts. Each tab
 	// registers its own key binding in tabDescriptors; no changes here
@@ -996,11 +980,14 @@ func scrollOffset(keyStr string, offset *int, maxRows int) bool {
 	}
 }
 
+// clampTableColumns clamps every tab's selected column(s) through the
+// registry ClampColumns hooks.
 func (m *Model) clampTableColumns() {
-	m.syscallsTab.col = common.ClampTableCol(m.syscallsTab.col, len(syscallColumns(m.width)))
-	m.filesTab.col = common.ClampTableCol(m.filesTab.col, len(fileColumns(m.width)))
-	m.filesDirTab.col = common.ClampTableCol(m.filesDirTab.col, len(fileDirColumns(m.width)))
-	m.processesTab.col = common.ClampTableCol(m.processesTab.col, len(processColumns()))
+	for _, tab := range orderedTabs() {
+		if d := tabDescriptors[tab]; d.ClampColumns != nil {
+			d.ClampColumns(m)
+		}
+	}
 }
 
 // The row-count helpers feed the tab registry's RowCount hooks and the
@@ -1262,13 +1249,8 @@ func (m *Model) ExportStreamCSVInputs() (eventstream.Source, eventstream.Filter,
 // BlocksGlobalShortcuts reports whether the active tab should suppress a
 // top-level shortcut for the given key press.
 func (m *Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
-	if m.activeTab == TabStream {
-		return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
-	}
-	if m.activeTab == TabFlame {
-		return m.flamegraphModel.ConsumesKey(msg)
-	}
-	return false
+	d := lookupTab(m.activeTab)
+	return d.BlocksGlobalShortcut != nil && d.BlocksGlobalShortcut(m, msg)
 }
 
 // SetStreamSource updates the live stream source used by the stream tab.
@@ -1333,9 +1315,7 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.isDark = isDark
 	m.streamModel.SetDarkMode(isDark)
 	m.flamegraphModel.SetDarkMode(isDark)
-	m.syscallsTab.bubble.SetDarkMode(isDark)
-	m.filesTab.bubble.SetDarkMode(isDark)
-	m.processesTab.bubble.SetDarkMode(isDark)
+	m.forEachBubbleChart(func(chart *bubbleChart) { chart.SetDarkMode(isDark) })
 }
 
 // SetFocused controls whether periodic refresh ticks are processed and
@@ -1379,10 +1359,7 @@ func (m *Model) SetPidFilter(pid int) {
 // so no fixup is needed here.
 func (m *Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
-	_, activeHeight := flameViewport(width, height, m.showHelp)
-	if m.activeTab == TabStream {
-		_, activeHeight = streamViewport(width, height)
-	}
+	_, activeHeight := m.contentViewport(m.activeTab, width, height)
 
 	var b strings.Builder
 	b.WriteString(renderTabBar(m.activeTab, width))
@@ -1467,68 +1444,14 @@ func formatAutoResetRemaining(armedAt time.Time, every time.Duration) string {
 	return fmt.Sprintf("%dm%ds", minutes, secs)
 }
 
-// renderActiveContent dispatches rendering to the appropriate sub-renderer
-// based on the active tab and its current visualization mode. It tries the
-// specialized viz modes (treemap/icicle/bubble) first, then the plain table
-// renderers with sort state, and finally falls back to the generic tab renderer
-// for tabs that have no mode-specific override (overview, latency, stream, flame).
+// renderActiveContent renders the active tab's body through its registered
+// Render hook; each tab draws its own visualization modes and
+// waiting-for-stats state.
 func (m *Model) renderActiveContent(width, activeHeight int, streamModel *eventstream.Model, flameModel *flamegraphtui.Model) string {
-	if s, ok := m.renderActiveContentViz(width, activeHeight); ok {
-		return s
-	}
-	if s, ok := m.renderActiveContentTable(width, activeHeight); ok {
-		return s
-	}
 	return renderActiveTabContent(
 		m, m.activeTab, m.latest, streamModel, flameModel,
 		width, activeHeight,
 	)
-}
-
-// renderActiveContentViz handles treemap, icicle, and bubble chart rendering
-// for the tabs that support alternative visualization modes. Returns the
-// rendered content and true when a viz-mode override applies; otherwise
-// returns "", false so the caller can fall through to the next renderer.
-func (m *Model) renderActiveContentViz(width, activeHeight int) (string, bool) {
-	switch {
-	case m.activeTab == TabSyscalls && m.syscallsTab.mode == tabVizModeTreemap:
-		return renderSyscallsTreemap(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsTab.bubble.Metric(), m.syscallsTreemapSelection, m.isDark), true
-	case m.activeTab == TabFiles && m.filesTab.mode == tabVizModeTreemap && m.filesDirGrouped:
-		return renderFilesTreemap(m.latest, width, activeHeight, m.filesTab.bubble.Metric(), m.filesDirTab.offset, m.isDark), true
-	case m.activeTab == TabFiles && m.filesTab.mode == tabVizModeIcicle && m.filesDirGrouped:
-		return renderFilesIcicle(m.latest, width, activeHeight, m.filesTab.bubble.Metric(), m.filesDirTab.offset, m.isDark), true
-	case m.activeTab == TabProcesses && m.processesTab.mode == tabVizModeTreemap:
-		return renderProcessesTreemap(m.latest, width, activeHeight, m.processesTab.bubble.Metric(), m.processesTab.offset, m.isDark), true
-	}
-	if m.bubbleEnabledForTab(m.activeTab) {
-		switch m.activeTab {
-		case TabSyscalls:
-			return m.syscallsTab.bubble.Render("Syscalls", width, activeHeight), true
-		case TabFiles:
-			return m.filesTab.bubble.Render("Files/Dirs", width, activeHeight), true
-		case TabProcesses:
-			return m.processesTab.bubble.Render("Processes", width, activeHeight), true
-		}
-	}
-	return "", false
-}
-
-// renderActiveContentTable handles table rendering with live sort state for
-// the syscalls, files, and processes tabs. Returns the rendered content and
-// true when a table override applies; otherwise returns "", false.
-func (m *Model) renderActiveContentTable(width, activeHeight int) (string, bool) {
-	switch {
-	case m.activeTab == TabSyscalls && m.latest != nil:
-		return renderSyscallsWithSort(m.latest, m.visibleSyscallRows(m.latest), width, activeHeight, m.syscallsTab.offset, m.syscallsTab.col, m.syscallsTab.sort), true
-	case m.activeTab == TabFiles && m.latest != nil && m.filesTab.mode == tabVizModeTable:
-		if m.filesDirGrouped {
-			return renderFilesDirGroupedWithSort(m.latest, width, activeHeight, m.filesDirTab.offset, m.filesDirTab.col, m.filesDirTab.sort), true
-		}
-		return renderFilesWithSort(m.latest, width, activeHeight, m.filesTab.offset, m.filesTab.col, m.filesTab.sort), true
-	case m.activeTab == TabProcesses && m.latest != nil && m.processesTab.mode == tabVizModeTable:
-		return renderProcessesWithSort(m.latest, width, activeHeight, m.processesTab.offset, m.processesTab.col, m.pidFilter, m.processesTab.sort), true
-	}
-	return "", false
 }
 
 func (m *Model) activeTableHeight() int {
@@ -1540,9 +1463,7 @@ func (m *Model) activeTableHeight() int {
 // active-content viewport, so any chart is ready before it becomes the
 // active view.
 func (m *Model) setBubbleViewports(width, height int) {
-	m.syscallsTab.bubble.SetViewport(width, height)
-	m.filesTab.bubble.SetViewport(width, height)
-	m.processesTab.bubble.SetViewport(width, height)
+	m.forEachBubbleChart(func(chart *bubbleChart) { chart.SetViewport(width, height) })
 }
 
 // refreshBubbleData pushes the latest snapshot data into EVERY registered
@@ -1581,25 +1502,6 @@ func (m *Model) refreshFilesBubbleData() bool {
 	return false
 }
 
-// tableTabFor returns the table-tab state component for tab, or nil for the
-// tabs that have none (flame, overview, latency, stream). It is the ONE
-// place that maps tab identity to tab state; the viz-mode and bubble
-// dispatches below go through it generically instead of switching on the
-// tab again. Adding a table tab means adding a case here and a state
-// field - everything else hangs off the tableTab interface.
-func (m *Model) tableTabFor(tab Tab) tableTab {
-	switch tab {
-	case TabSyscalls:
-		return &m.syscallsTab
-	case TabFiles:
-		return &m.filesTab
-	case TabProcesses:
-		return &m.processesTab
-	default:
-		return nil
-	}
-}
-
 // bubbleChartFor returns the bubble chart for the given tab, or nil when
 // that tab has no bubble chart.
 func (m *Model) bubbleChartFor(tab Tab) *bubbleChart {
@@ -1627,13 +1529,10 @@ func (m *Model) setTabVizMode(tab Tab, mode tabVizMode) {
 }
 
 // bubbleEnabledForTab reports whether the bubble chart is the active view for
-// tab. The Files tab additionally requires dir-grouped mode to be on - the
-// one runtime condition the registry cannot express (see tabAllowedVizModes).
+// tab; never while the tab's alternative visualizations are unavailable (see
+// tabDescriptor.AltVizReady).
 func (m *Model) bubbleEnabledForTab(tab Tab) bool {
-	if tab == TabFiles && !m.filesDirGrouped {
-		return false
-	}
-	return m.tabVizModeFor(tab) == tabVizModeBubbles
+	return m.altVizReady(tab) && m.tabVizModeFor(tab) == tabVizModeBubbles
 }
 
 // tickActiveBubbleChart advances the animation frame for the active tab's
@@ -1675,13 +1574,9 @@ func (m *Model) cycleVisualizationMode() tea.Cmd {
 	}
 	current := m.tabVizModeFor(m.activeTab)
 	next := nextVizMode(current, allowed)
-	setMode := func() { m.setTabVizMode(m.activeTab, next) }
-	if m.activeTab == TabFiles {
-		// Each mode orders a different item list; keep the same directory.
-		m.keepFilesDirSelection(setMode)
-	} else {
-		setMode()
-	}
+	// Each mode may order a different item list; the tab's KeepSelection
+	// hook keeps the same item selected across the switch.
+	m.keepSelection(m.activeTab, func() { m.setTabVizMode(m.activeTab, next) })
 
 	if next == tabVizModeBubbles {
 		m.refreshBubbleData()
@@ -1693,34 +1588,24 @@ func (m *Model) cycleVisualizationMode() tea.Cmd {
 }
 
 // toggleBubbleMetric cycles the bubble metric for the active tab's chart.
-// The Files tab additionally requires dir-grouped mode to accept metric changes.
+// The metric is fixed while the tab's alternative visualizations are
+// unavailable (the Files tab outside dir-grouped mode).
 func (m *Model) toggleBubbleMetric() tea.Cmd {
-	if m.activeTab == TabFiles && !m.filesDirGrouped {
+	if !m.altVizReady(m.activeTab) {
 		return nil
 	}
 	ch := m.bubbleChartFor(m.activeTab)
 	if ch == nil {
 		return nil
 	}
-	setMetric := func() { ch.SetMetric(nextBubbleMetric(ch.Metric())) }
-	if m.activeTab == TabFiles {
-		// The treemap and icicle order their items by the metric.
-		m.keepFilesDirSelection(setMetric)
-	} else {
-		setMetric()
-	}
+	// The treemap and icicle order their items by the metric; the tab's
+	// KeepSelection hook keeps the same item selected.
+	m.keepSelection(m.activeTab, func() { ch.SetMetric(nextBubbleMetric(ch.Metric())) })
 	m.refreshBubbleData()
 	if m.bubbleEnabledForTab(m.activeTab) && m.activeBubbleChartHasNodes() {
 		return bubbleTickCmdFn()
 	}
 	return nil
-}
-
-// allowedVizModes returns the visualization modes available for tab. It
-// delegates to the tab registry so that new tabs need no changes here;
-// only the Files tab has a runtime condition (requires dir-grouped mode).
-func (m *Model) allowedVizModes(tab Tab) []tabVizMode {
-	return tabAllowedVizModes(tab, m.filesDirGrouped)
 }
 
 func nextVizMode(current tabVizMode, allowed []tabVizMode) tabVizMode {
@@ -1751,19 +1636,11 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return refreshTickMsg{} })
 }
 
-// renderActiveTabContent dispatches to the registered render function for tab.
-// It handles the common waiting-for-stats guard for snapshot-dependent tabs, so
-// individual render functions can assume snap is non-nil (stream and flame
-// tabs receive snap=nil and handle the absent-model case themselves).
+// renderActiveTabContent dispatches to the registered render function for
+// tab. Each Render hook owns every state of its tab, including the
+// waiting-for-stats placeholder (snap may be nil) and the absent stream or
+// flame model, so there is no tab-specific guard here.
 func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, streamModel *eventstream.Model, flameModel *flamegraphtui.Model, width, height int) string {
-	// Stream and flame manage their own "waiting" state; all others need a
-	// snapshot. This guard runs before the Render==nil check so the three
-	// table tabs - whose registered Render is nil because the sort-aware
-	// renderActiveContentTable owns their drawing - still show the waiting
-	// line rather than "Unknown tab" while no snapshot has arrived yet.
-	if tab != TabStream && tab != TabFlame && snap == nil {
-		return common.Current().PanelStyle.Render(tab.String() + ": waiting for stats...")
-	}
 	d := lookupTab(tab)
 	if d.Render == nil {
 		return common.Current().PanelStyle.Render("Unknown tab")

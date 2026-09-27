@@ -1774,12 +1774,9 @@ func TestRenderActiveTabUsesDirectoryFilesViewWhenGrouped(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 	// Build a minimal model with dir-grouped mode enabled and drive the real
-	// render path: renderActiveContent is what View uses, and its Files
-	// dispatch renders the directory view when dir grouping is on. (The
-	// registry's Render hook for the table tabs is nil - the sort-aware
-	// renderActiveContentTable owns their drawing - so the old direct call
-	// to renderActiveTabContent exercised a path production can no longer
-	// reach.)
+	// render path: renderActiveContent is what View uses, and the Files
+	// tab's registered Render hook draws the directory view when dir
+	// grouping is on.
 	m := Model{activeTab: TabFiles, filesDirGrouped: true, pidFilter: -1, latest: &snap}
 	out := m.renderActiveContent(120, 30, &m.streamModel, m.flamegraphModel)
 	if !strings.Contains(out, "Directory") {
