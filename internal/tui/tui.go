@@ -500,8 +500,9 @@ func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarte
 		startTrace:    startTrace,
 	})
 	// Seed the dashboard's auto-reset cadence from the parsed CLI flag
-	// (default DefaultResetTimer; 0 disables). Init() will arm the
-	// underlying tea.Tick when the dashboard becomes active.
+	// (default DefaultResetTimer; 0 disables). The dashboard's Init()
+	// requests the underlying tea.Tick (through an arm message its Update
+	// handles) when the dashboard becomes active.
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	return model
 }
@@ -567,8 +568,8 @@ func newModelWithRuntimeConfig(startup modelStartup) *Model {
 	}
 	model.setProcessFilters(pidFilter, tidFilter)
 
-	// A startup that skips the picker begins tracing from Init, so it starts
-	// in the attaching state.
+	// A startup that skips the picker begins tracing as soon as Update handles
+	// Init's initialTraceStartMsg, so it starts in the attaching state.
 	model.attaching = model.router.current() == ScreenDashboard
 
 	return model
@@ -607,13 +608,38 @@ func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fa
 	return dashboard
 }
 
-// Init initializes the active child model and optional tracing startup command.
+// Init initializes the active child model and requests the startup trace.
+//
+// Init only reads the model. Starting a trace stores its cancel func and
+// shutdown reporter on the tracer, so a startup that skips the picker asks
+// Update to do it through an initialTraceStartMsg (handleInitialTraceStart)
+// instead of calling beginTraceCmd here. Every mutation of the model thus
+// happens on Update, the one place Bubble Tea serialises them.
 func (m *Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
 	if m.router.current() == ScreenDashboard && m.attaching {
-		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, m.beginTraceCmd())
+		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, initialTraceStartCmd)
 	}
 	return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.pidPicker.Init())
+}
+
+// initialTraceStartMsg asks Update to start the trace a picker-skipping
+// startup (`ior -pid N`, test-flames) begins in. Init emits it rather than
+// starting the trace itself so Init stays side-effect free.
+type initialTraceStartMsg struct{}
+
+func initialTraceStartCmd() tea.Msg { return initialTraceStartMsg{} }
+
+// handleInitialTraceStart starts the startup trace Init requested, under the
+// same condition Init requested it (dashboard, attaching). A request that is
+// no longer wanted is dropped: the user quit before it arrived (the quit path
+// found no session to stop, so starting one now would outlive the program), or
+// a session is already running (a repeated Init must not restart it).
+func (m *Model) handleInitialTraceStart() (tea.Model, tea.Cmd) {
+	if m.router.current() != ScreenDashboard || !m.attaching || m.quitting || m.tracer.running() {
+		return m, nil
+	}
+	return m, m.beginTraceCmd()
 }
 
 // fallbackWindowSizeMsg carries the viewport size initialWindowSizeCmd guesses
@@ -756,6 +782,9 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 	case TidSelectedMsg:
 		next, cmd := m.handleTidSelected(msg)
+		return next, cmd, true
+	case initialTraceStartMsg:
+		next, cmd := m.handleInitialTraceStart()
 		return next, cmd, true
 	case TracingStartedMsg:
 		next, cmd := m.handleTracingStarted()
@@ -1302,9 +1331,10 @@ func (m *Model) restartTrace() tea.Cmd {
 
 // beginTraceCmd creates a tea.Cmd that starts the trace with the current
 // runtime bindings and active filter. It cancels any previously running trace
-// (traceLifecycle.beginCmd stops the old session first). It must be called on
-// the Model Bubble Tea holds - the *Model receiver of Init and Update - so the
-// stored cancel func survives to the next restart or quit.
+// (traceLifecycle.beginCmd stops the old session first). It stores the new
+// session's cancel func on the tracer, so it must only be called from Update
+// (never from Init, which stays side-effect free) on the *Model Bubble Tea
+// holds, so the cancel func survives to the next restart or quit.
 func (m *Model) beginTraceCmd() tea.Cmd {
 	return m.tracer.beginCmd(m.runtime, m.filters.current())
 }

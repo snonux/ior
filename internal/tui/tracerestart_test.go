@@ -64,6 +64,47 @@ func (r *recordingStarter) next(t *testing.T) context.Context {
 	}
 }
 
+// initTraceCmd drives a picker-skipping startup the way Bubble Tea does: it
+// runs Init, requires its batch to request the startup trace, hands that
+// request to Update and returns the start command Update produced.
+func initTraceCmd(t *testing.T, m *Model) tea.Cmd {
+	t.Helper()
+	if !cmdEmits[initialTraceStartMsg](m.Init()) {
+		t.Fatal("Init did not request the startup trace")
+	}
+	_, cmd := m.Update(initialTraceStartMsg{})
+	if cmd == nil {
+		t.Fatal("Update did not start the requested startup trace")
+	}
+	return cmd
+}
+
+// cmdEmits reports whether cmd, or any command of the batch it returns,
+// produces a message of type T. Every command Init returns is immediate, so
+// running them synchronously is safe.
+func cmdEmits[T tea.Msg](cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if _, ok := msg.(T); ok {
+		return true
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return false
+	}
+	for _, sub := range batch {
+		if sub == nil {
+			continue
+		}
+		if _, ok := sub().(T); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // runCmdAsync executes cmd the way Bubble Tea would, fanning a batch out to
 // one goroutine per command. The trace command blocks for the lifetime of its
 // session, so nothing here waits for results; the commands exit once their
@@ -102,8 +143,8 @@ func requireLive(t *testing.T, ctx context.Context, what string) {
 }
 
 // TestInitTraceIsCancelledByEveryRestartPath is the regression test for the
-// lost Init cancel: the trace started by Model.Init (the `ior -pid N` and
-// test-flames startup path) must be the one the next restart cancels. When
+// lost Init cancel: the startup trace Model.Init requests (the `ior -pid N`
+// and test-flames startup path) must be the one the next restart cancels. When
 // Init stored the cancel func on a discarded copy of the model, every later
 // stop() was a no-op for that first trace, and each restart path below
 // started a second BPF session while the first stayed attached.
@@ -159,10 +200,10 @@ func TestInitTraceIsCancelledByEveryRestartPath(t *testing.T) {
 				t.Fatalf("startup state = screen %v attaching %v, want dashboard attaching", m.router.current(), m.attaching)
 			}
 
-			runCmdAsync(m.Init())
+			runCmdAsync(initTraceCmd(t, m))
 			first := starter.next(t)
 			if m.tracer.traceStop == nil {
-				t.Fatal("Init started a trace but its cancel func did not reach the model")
+				t.Fatal("the startup trace started but its cancel func did not reach the model")
 			}
 			requireLive(t, first, "after Init")
 
@@ -228,7 +269,7 @@ func TestFilterChangeRestartHandsStarterTheNewFilter(t *testing.T) {
 	m := NewModel(initialPID, starter.start)
 	t.Cleanup(m.tracer.stop)
 
-	runCmdAsync(m.Init())
+	runCmdAsync(initTraceCmd(t, m))
 	first := starter.next(t)
 	firstReq := starter.nextRequest(t)
 	if firstReq.Bindings != TraceRuntimeBindings(m.runtime) {
