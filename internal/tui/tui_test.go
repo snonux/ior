@@ -528,7 +528,7 @@ func TestStartupPIDPickerQuitsOnQuitKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-			if m.router.current() != ScreenPIDPicker || m.router.hasPendingReturn() {
+			if m.router.current() != ScreenPIDPicker || hasReturn(m) {
 				t.Fatalf("expected startup PID picker with no pending return")
 			}
 			stopCalls := 0
@@ -570,7 +570,7 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 			m = next.(*Model)
 			next, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 			m = next.(*Model)
-			if m.router.current() != ScreenPIDPicker || !m.router.hasPendingReturn() {
+			if m.router.current() != ScreenPIDPicker || !hasReturn(m) {
 				t.Fatalf("expected reselect PID picker with a pending return")
 			}
 
@@ -591,7 +591,7 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 			if updated.quitting {
 				t.Fatalf("expected %s in reselect picker to behave like esc, not quit", tt.name)
 			}
-			if updated.router.hasPendingReturn() {
+			if hasReturn(updated) {
 				t.Fatalf("expected picker return context to clear after %s cancel", tt.name)
 			}
 			if updated.proc.pid != 1111 || updated.proc.tid != 2222 {
@@ -634,7 +634,7 @@ func TestEscOnReselectPIDPickerReturnsToDashboard(t *testing.T) {
 	if updated.quitting {
 		t.Fatalf("expected esc in reselect picker not to quit app")
 	}
-	if updated.router.hasPendingReturn() {
+	if hasReturn(updated) {
 		t.Fatalf("expected picker return context to clear after cancel")
 	}
 	if updated.proc.pid != 3333 || updated.proc.tid != 4444 {
