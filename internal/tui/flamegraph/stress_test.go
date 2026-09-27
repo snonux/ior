@@ -303,7 +303,7 @@ func renderStressFrame(model *Model) (*snapshotNode, []tuiFrame, bool, error) {
 // renderStressJSONFrame runs the external-consumer snapshot pipeline. Keeping
 // it separate from renderStressFrame makes JSON fidelity a correctness check
 // without mistaking its allocation profile for the TUI refresh cost.
-func renderStressJSONFrame(liveTrie Snapshotter) (*snapshotNode, []tuiFrame, error) {
+func renderStressJSONFrame(liveTrie *coreflamegraph.LiveTrie) (*snapshotNode, []tuiFrame, error) {
 	payload, _ := liveTrie.SnapshotJSON()
 	var snapshot snapshotNode
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
@@ -449,12 +449,16 @@ func TestSnapshotTreeMatchesJSONRoundTrip(t *testing.T) {
 
 // countingTrie records which snapshot API its caller reached for. It embeds a
 // real LiveTrie so the snapshots it returns are the real ones and it satisfies
-// the whole LiveTrieSource contract without a hand-written stub.
+// the whole LiveTrieSource contract without a hand-written stub. SnapshotJSON
+// is not part of that contract, so reaching it would take a type assertion on
+// the concrete trie; the spy still counts it to catch exactly that fallback.
 type countingTrie struct {
 	*coreflamegraph.LiveTrie
 	treeCalls int
 	jsonCalls int
 }
+
+var _ coreflamegraph.LiveTrieSource = (*countingTrie)(nil)
 
 func (c *countingTrie) SnapshotTree() (*snapshotNode, uint64) {
 	c.treeCalls++
