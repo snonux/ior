@@ -4,7 +4,7 @@
 package presenter
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,28 +35,46 @@ func CompareOpSymbol(op globalfilter.CompareOp) string {
 // AppendStringSummary appends a "name~pattern" token to parts when sf is
 // non-nil and its pattern is non-empty, then returns the updated slice.
 func AppendStringSummary(parts []string, name string, sf *globalfilter.StringFilter) []string {
-	if sf == nil {
-		return parts
+	if token := stringToken(name, sf); token != "" {
+		return append(parts, token)
 	}
-	pattern := strings.TrimSpace(sf.Pattern)
-	if pattern == "" {
-		return parts
-	}
-	return append(parts, fmt.Sprintf("%s~%s", name, pattern))
+	return parts
 }
 
 // AppendNumericSummary appends a "nameOPvalue" token to parts when nf is
 // non-nil. When duration is true the value is formatted as a time.Duration
 // string rather than a raw integer.
 func AppendNumericSummary(parts []string, name string, nf *globalfilter.NumericFilter, duration bool) []string {
-	if nf == nil {
-		return parts
+	if token := numericToken(name, nf, duration); token != "" {
+		return append(parts, token)
 	}
-	value := fmt.Sprintf("%d", nf.Value)
+	return parts
+}
+
+// stringToken returns the "name~pattern" token for sf, or "" when sf is nil
+// or its pattern is blank.
+func stringToken(name string, sf *globalfilter.StringFilter) string {
+	if sf == nil {
+		return ""
+	}
+	pattern := strings.TrimSpace(sf.Pattern)
+	if pattern == "" {
+		return ""
+	}
+	return name + "~" + pattern
+}
+
+// numericToken returns the "nameOPvalue" token for nf, or "" when nf is nil.
+// When duration is true the value is formatted as a time.Duration string.
+func numericToken(name string, nf *globalfilter.NumericFilter, duration bool) string {
+	if nf == nil {
+		return ""
+	}
+	value := strconv.FormatInt(nf.Value, 10)
 	if duration {
 		value = time.Duration(nf.Value).String()
 	}
-	return append(parts, fmt.Sprintf("%s%s%s", name, CompareOpSymbol(nf.Op), value))
+	return name + CompareOpSymbol(nf.Op) + value
 }
 
 // Dimension identifies one filter predicate of a globalfilter.Filter for
@@ -79,13 +97,21 @@ const (
 	DimRet
 )
 
-// Dimensions lists every Dimension in canonical display order. It returns a
-// fresh slice so callers cannot reorder the shared sequence.
-func Dimensions() []Dimension {
-	return []Dimension{
-		DimSyscall, DimFamily, DimComm, DimFile,
-		DimPID, DimTID, DimFD, DimLatency, DimGap, DimBytes, DimRet,
-	}
+// dimensionCount is the number of filter dimensions.
+const dimensionCount = int(DimRet) + 1
+
+// dimensionOrder is the canonical display order, kept as a fixed array so
+// ranging over it (directly or via Dimensions) never allocates.
+var dimensionOrder = [dimensionCount]Dimension{
+	DimSyscall, DimFamily, DimComm, DimFile,
+	DimPID, DimTID, DimFD, DimLatency, DimGap, DimBytes, DimRet,
+}
+
+// Dimensions returns every Dimension in canonical display order. It returns
+// the array by value, so callers can range over it without allocating and
+// cannot reorder the shared sequence.
+func Dimensions() [dimensionCount]Dimension {
+	return dimensionOrder
 }
 
 // Name returns the dimension's display name ("syscall", "pid", "latency",
@@ -125,35 +151,32 @@ func (d Dimension) Name() string {
 // the single source of the per-predicate wording shared by FilterSummary and
 // by every UI filter action label.
 func DimensionSummary(f globalfilter.Filter, d Dimension) string {
-	var parts []string
 	switch d {
 	case DimSyscall:
-		parts = AppendStringSummary(nil, d.Name(), f.Syscall)
+		return stringToken(d.Name(), f.Syscall)
 	case DimFamily:
-		parts = AppendStringSummary(nil, d.Name(), f.Family)
+		return stringToken(d.Name(), f.Family)
 	case DimComm:
-		parts = AppendStringSummary(nil, d.Name(), f.Comm)
+		return stringToken(d.Name(), f.Comm)
 	case DimFile:
-		parts = AppendStringSummary(nil, d.Name(), f.File)
+		return stringToken(d.Name(), f.File)
 	case DimPID:
-		parts = AppendNumericSummary(nil, d.Name(), f.PID, false)
+		return numericToken(d.Name(), f.PID, false)
 	case DimTID:
-		parts = AppendNumericSummary(nil, d.Name(), f.TID, false)
+		return numericToken(d.Name(), f.TID, false)
 	case DimFD:
-		parts = AppendNumericSummary(nil, d.Name(), f.FD, false)
+		return numericToken(d.Name(), f.FD, false)
 	case DimLatency:
-		parts = AppendNumericSummary(nil, d.Name(), f.LatencyNs, true)
+		return numericToken(d.Name(), f.LatencyNs, true)
 	case DimGap:
-		parts = AppendNumericSummary(nil, d.Name(), f.GapNs, true)
+		return numericToken(d.Name(), f.GapNs, true)
 	case DimBytes:
-		parts = AppendNumericSummary(nil, d.Name(), f.Bytes, false)
+		return numericToken(d.Name(), f.Bytes, false)
 	case DimRet:
-		parts = AppendNumericSummary(nil, d.Name(), f.RetVal, false)
-	}
-	if len(parts) == 0 {
+		return numericToken(d.Name(), f.RetVal, false)
+	default:
 		return ""
 	}
-	return parts[0]
 }
 
 // FilterSummary returns a compact human-readable description of all active
@@ -165,7 +188,7 @@ func FilterSummary(f globalfilter.Filter) string {
 	if f.ErrorsOnly {
 		parts = append(parts, "errors")
 	}
-	for _, d := range Dimensions() {
+	for _, d := range dimensionOrder {
 		if token := DimensionSummary(f, d); token != "" {
 			parts = append(parts, token)
 		}
