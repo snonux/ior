@@ -884,10 +884,6 @@ func (m *Model) followSearchResult(jumpDir int) {
 	m.ensureSelectionNavigable()
 }
 
-func (m *Model) frameIndexByPath(path string) int {
-	return m.anim.indexByPath(path)
-}
-
 func (m *Model) zoomIn() {
 	frames := m.anim.currentFrames()
 	if len(frames) == 0 || m.snapshot == nil {
