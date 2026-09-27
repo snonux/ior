@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+// buildTerminalLayout lays out the whole snapshot (no zoom root) into terminal
+// frame cells; production code calls buildTerminalLayoutWithPath directly.
+func buildTerminalLayout(snapshot *snapshotNode, width, height int) []tuiFrame {
+	return buildTerminalLayoutWithPath(snapshot, width, height, "")
+}
+
 func TestBuildTerminalLayoutWidthScaling(t *testing.T) {
 	snapshot := &snapshotNode{
 		Name:  "root",
@@ -39,7 +45,7 @@ func TestBuildTerminalLayoutWidthScaling(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		frames := BuildTerminalLayout(snapshot, tc.width, 10)
+		frames := buildTerminalLayout(snapshot, tc.width, 10)
 		if len(frames) != tc.wantAll {
 			t.Fatalf("width %d: expected %d frames, got %d", tc.width, tc.wantAll, len(frames))
 		}
@@ -89,7 +95,7 @@ func TestBuildTerminalLayoutProducesAStableDepthFirstOrder(t *testing.T) {
 	}
 
 	for run := 0; run < 3; run++ {
-		frames := BuildTerminalLayout(snapshot, 120, 10)
+		frames := buildTerminalLayout(snapshot, 120, 10)
 		got := make([]string, 0, len(frames))
 		for _, frame := range frames {
 			got = append(got, frame.Path)
@@ -111,7 +117,7 @@ func TestBuildTerminalLayoutPartitionsAParentSpanAfterRounding(t *testing.T) {
 		},
 	}
 
-	frames := BuildTerminalLayout(snapshot, 10, 4)
+	frames := buildTerminalLayout(snapshot, 10, 4)
 	children := framesAtRowRenderer(frames, 1)
 	if got, want := len(children), 3; got != want {
 		t.Fatalf("depth-one frame count = %d, want %d", got, want)
@@ -133,7 +139,7 @@ func TestBuildTerminalLayoutLeavesNoGapForAPrunedSubtree(t *testing.T) {
 		},
 	}
 
-	frames := BuildTerminalLayout(snapshot, 100, 4)
+	frames := buildTerminalLayout(snapshot, 100, 4)
 	children := framesAtRowRenderer(frames, 1)
 	if got, want := len(children), 2; got != want {
 		t.Fatalf("depth-one frame count = %d, want %d", got, want)
@@ -156,7 +162,7 @@ func TestBuildTerminalLayoutRedistributesPrunedShareWithoutChangingSelfValueGap(
 		},
 	}
 
-	frames := BuildTerminalLayout(snapshot, 100, 4)
+	frames := buildTerminalLayout(snapshot, 100, 4)
 	children := framesAtRowRenderer(frames, 1)
 	if got, want := len(children), 2; got != want {
 		t.Fatalf("depth-one frame count = %d, want %d", got, want)
@@ -178,7 +184,7 @@ func TestBuildTerminalLayoutPreservesAParentSelfValueGap(t *testing.T) {
 		},
 	}
 
-	frames := BuildTerminalLayout(snapshot, 100, 4)
+	frames := buildTerminalLayout(snapshot, 100, 4)
 	children := framesAtRowRenderer(frames, 1)
 	if got, want := len(children), 2; got != want {
 		t.Fatalf("depth-one frame count = %d, want %d", got, want)
@@ -201,7 +207,7 @@ func TestBuildTerminalLayoutClampsADeepTreeToViewportHeight(t *testing.T) {
 		node = child
 	}
 
-	frames := BuildTerminalLayout(root, 80, viewportHeight)
+	frames := buildTerminalLayout(root, 80, viewportHeight)
 	if got, want := len(frames), viewportHeight; got != want {
 		t.Fatalf("deep layout frame count = %d, want %d viewport rows", got, want)
 	}
@@ -228,7 +234,7 @@ func TestBuildTerminalLayoutCullsSubCellFramesAndRespectsHeight(t *testing.T) {
 		},
 	}
 
-	frames := BuildTerminalLayout(snapshot, 80, 2)
+	frames := buildTerminalLayout(snapshot, 80, 2)
 	if hasFrame(frames, "root"+pathSeparator+"tiny") {
 		t.Fatalf("expected tiny frame to be culled (<1 terminal cell)")
 	}
@@ -247,7 +253,7 @@ func TestBuildTerminalLayoutKeepsChildrenVisibleWhenRoundingWouldCullAll(t *test
 	}
 	snapshot := &snapshotNode{Name: "root", Children: children}
 
-	frames := BuildTerminalLayout(snapshot, 120, 6)
+	frames := buildTerminalLayout(snapshot, 120, 6)
 	depthOne := 0
 	for _, frame := range frames {
 		if frame.Depth == 1 {
@@ -282,7 +288,7 @@ func TestBuildTerminalLayoutCapsAllSubCellFallbackToTheChildBand(t *testing.T) {
 				Children: children,
 			}
 
-			frames := BuildTerminalLayout(snapshot, 120, 4)
+			frames := buildTerminalLayout(snapshot, 120, 4)
 			depthOne := framesAtRowRenderer(frames, 1)
 			if got, want := len(depthOne), 1; got != want {
 				t.Fatalf("fallback child count = %d, want %d within the proportional child band", got, want)
@@ -307,7 +313,7 @@ func TestBuildTerminalLayoutUsesPathSeparatorAndColor(t *testing.T) {
 		},
 	}
 
-	frames := BuildTerminalLayout(snapshot, 80, 4)
+	frames := buildTerminalLayout(snapshot, 80, 4)
 	child := mustFindFrame(t, frames, "root"+pathSeparator+"child")
 	if !strings.Contains(child.Path, pathSeparator) {
 		t.Fatalf("expected path %q to contain separator %q", child.Path, pathSeparator)
@@ -403,7 +409,7 @@ func TestRenderTerminalViewIncludesToolbarAndStatus(t *testing.T) {
 			{Name: "child", Total: 10},
 		},
 	}
-	frames := BuildTerminalLayout(snapshot, 80, 6)
+	frames := buildTerminalLayout(snapshot, 80, 6)
 
 	out := RenderTerminalView(RenderContext{
 		Frames:      frames,
@@ -429,7 +435,7 @@ func TestRenderTerminalViewFillsAvailableHeightForShallowTree(t *testing.T) {
 			{Name: "child", Total: 10},
 		},
 	}
-	frames := BuildTerminalLayout(snapshot, 100, 20)
+	frames := buildTerminalLayout(snapshot, 100, 20)
 
 	out := RenderTerminalView(RenderContext{
 		Frames:      frames,
@@ -482,7 +488,7 @@ func TestRenderTerminalViewShowsPersistentFilterContext(t *testing.T) {
 			{Name: "child", Total: 10},
 		},
 	}
-	frames := BuildTerminalLayout(snapshot, 80, 6)
+	frames := buildTerminalLayout(snapshot, 80, 6)
 	matchSet := map[int]bool{1: true}
 
 	out := RenderTerminalView(RenderContext{
@@ -521,7 +527,7 @@ func TestRenderTerminalViewFilterKeepsNonMatchingBranchesVisible(t *testing.T) {
 			},
 		},
 	}
-	frames := BuildTerminalLayout(snapshot, 80, 8)
+	frames := buildTerminalLayout(snapshot, 80, 8)
 	needleIdx := frameIndexByPathRenderer(frames, "root"+pathSeparator+"keep"+pathSeparator+"needle")
 	if needleIdx < 0 {
 		t.Fatalf("expected needle frame in layout")
@@ -575,7 +581,7 @@ func TestRenderTerminalViewNilFilterSetMatchesSearchVisibility(t *testing.T) {
 			{Name: "drop", Total: 40},
 		},
 	}
-	frames := BuildTerminalLayout(snapshot, 80, 8)
+	frames := buildTerminalLayout(snapshot, 80, 8)
 	sep := pathSeparator
 	needleIdx := frameIndexByPathRenderer(frames, "root"+sep+"keep"+sep+"needle")
 	leafIdx := frameIndexByPathRenderer(frames, "root"+sep+"keep"+sep+"needle"+sep+"leaf")
@@ -690,7 +696,7 @@ func TestRenderTerminalViewShowsDeepLevelTruncationHint(t *testing.T) {
 			},
 		},
 	}
-	frames := BuildTerminalLayout(snapshot, 80, 10)
+	frames := buildTerminalLayout(snapshot, 80, 10)
 	out := RenderTerminalView(RenderContext{
 		Frames:      frames,
 		Width:       80,
@@ -835,7 +841,7 @@ func TestBuildTerminalLayoutHeightTotalUsesSnapshotAggregation(t *testing.T) {
 		},
 	}
 
-	frames := BuildTerminalLayout(snapshot, 80, 8)
+	frames := buildTerminalLayout(snapshot, 80, 8)
 	root := mustFindFrame(t, frames, "root")
 	a := mustFindFrame(t, frames, "root"+pathSeparator+"A")
 	b := mustFindFrame(t, frames, "root"+pathSeparator+"B")

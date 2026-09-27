@@ -129,10 +129,6 @@ func renderHelpBarWithStatus(keys common.KeyMap, width int, status string) strin
 	return common.Current().HelpBarStyle.Width(width).Render(text)
 }
 
-func renderHelpHint(width int) string {
-	return renderHelpHintWithStatus(width, "")
-}
-
 func renderHelpHintWithStatus(width int, status string) string {
 	hint := "press H for help"
 	if status != "" {
@@ -168,39 +164,6 @@ func appendStatusText(base, status string, width int) string {
 		return statusText
 	}
 	return truncatePlain(base, room) + separator + statusText
-}
-
-func wrapHelpLines(parts []string, width int) (string, string) {
-	if len(parts) == 0 {
-		return "", ""
-	}
-	if width <= 0 {
-		return strings.Join(parts, " • "), ""
-	}
-	max := width
-	lines := []string{"", ""}
-	line := 0
-	for _, part := range parts {
-		token := part
-		if lines[line] != "" {
-			token = " • " + part
-		}
-		if utf8.RuneCountInString(lines[line]+token) <= max {
-			lines[line] += token
-			continue
-		}
-		if line == 0 {
-			line = 1
-			if utf8.RuneCountInString(part) <= max {
-				lines[line] = part
-			}
-			continue
-		}
-		break
-	}
-	lines[0] = truncatePlain(lines[0], max)
-	lines[1] = truncatePlain(lines[1], max)
-	return lines[0], lines[1]
 }
 
 // tabLabel returns the display label for tab. When short is true the

@@ -116,44 +116,6 @@ func TestPrintStartupBannerDefaultModeKeepsStdout(t *testing.T) {
 	}
 }
 
-func TestShouldRunTraceMode(t *testing.T) {
-	base := flags.Config{}
-
-	if shouldRunTraceMode(base) {
-		t.Fatalf("expected default mode to use TUI")
-	}
-
-	withPlain := base
-	withPlain.PlainMode = true
-	if !shouldRunTraceMode(withPlain) {
-		t.Fatalf("expected plain mode to use trace mode")
-	}
-
-	withParquet := base
-	withParquet.ParquetPath = "trace.parquet"
-	if !shouldRunTraceMode(withParquet) {
-		t.Fatalf("expected parquet mode to use trace mode")
-	}
-
-	withPprof := base
-	withPprof.PprofEnable = true
-	if shouldRunTraceMode(withPprof) {
-		t.Fatalf("expected pprof flag alone to keep TUI mode")
-	}
-
-	withTestFlames := base
-	withTestFlames.TestFlames = true
-	if shouldRunTraceMode(withTestFlames) {
-		t.Fatalf("expected -testflames to stay in TUI mode")
-	}
-
-	withTestLiveFlames := base
-	withTestLiveFlames.TestLiveFlames = true
-	if shouldRunTraceMode(withTestLiveFlames) {
-		t.Fatalf("expected -testliveflames to stay in TUI mode")
-	}
-}
-
 func TestShouldAutoStopByDuration(t *testing.T) {
 	base := flags.Config{}
 	if shouldAutoStopByDuration(base) {
@@ -176,6 +138,18 @@ func TestShouldAutoStopByDuration(t *testing.T) {
 	withPprof.PprofEnable = true
 	if shouldAutoStopByDuration(withPprof) {
 		t.Fatalf("expected pprof flag alone not to auto-stop by duration")
+	}
+
+	withTestFlames := base
+	withTestFlames.TestFlames = true
+	if shouldAutoStopByDuration(withTestFlames) {
+		t.Fatalf("expected -testflames (TUI mode) not to auto-stop by duration")
+	}
+
+	withTestLiveFlames := base
+	withTestLiveFlames.TestLiveFlames = true
+	if shouldAutoStopByDuration(withTestLiveFlames) {
+		t.Fatalf("expected -testliveflames (TUI mode) not to auto-stop by duration")
 	}
 }
 

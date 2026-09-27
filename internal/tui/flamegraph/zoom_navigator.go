@@ -8,10 +8,9 @@ import "strings"
 // Model's job (Model.rebuildFrames), which it does after every successful zoom
 // transition reported here.
 type ZoomNavigator struct {
-	zoomPath      string
-	zoomStack     []zoomState
-	zoomRoot      *snapshotNode
-	zoomLineWidth int
+	zoomPath  string
+	zoomStack []zoomState
+	zoomRoot  *snapshotNode
 }
 
 // path returns the zoom path, or "" when the view shows the whole snapshot.
@@ -68,7 +67,6 @@ func (z *ZoomNavigator) setPath(path string, snapshot *snapshotNode) bool {
 	if path == "" || path == frameName(snapshot.Name, 0) {
 		z.zoomRoot = nil
 		z.zoomPath = ""
-		z.zoomLineWidth = 0
 		return true
 	}
 	target := findNodeByPath(snapshot, path)
@@ -77,7 +75,6 @@ func (z *ZoomNavigator) setPath(path string, snapshot *snapshotNode) bool {
 	}
 	z.zoomRoot = target
 	z.zoomPath = path
-	z.zoomLineWidth = 0
 	return true
 }
 
@@ -122,7 +119,6 @@ func (z *ZoomNavigator) reset() {
 	z.zoomRoot = nil
 	z.zoomPath = ""
 	z.zoomStack = nil
-	z.zoomLineWidth = 0
 }
 
 // alreadyAtRoot reports whether no zoom is active and the stack is empty.

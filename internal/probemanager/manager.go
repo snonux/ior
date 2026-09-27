@@ -257,13 +257,13 @@ func (m *Manager) Detach(syscall string) error {
 	exitLink := entry.exitLink
 	m.mu.Unlock()
 
-	enterErr, exitErr, errs := destroyLinkPair(syscall, enterLink, exitLink)
+	errs, enterErr, exitErr := destroyLinkPair(syscall, enterLink, exitLink)
 	return m.commitDetach(entry, enterErr, exitErr, errs)
 }
 
 // destroyLinkPair destroys both BPF links and collects any errors into a slice.
 // It returns each link's error separately so partial-success can be recorded.
-func destroyLinkPair(syscall string, enterLink, exitLink Link) (enterErr, exitErr error, errs []string) {
+func destroyLinkPair(syscall string, enterLink, exitLink Link) (errs []string, enterErr, exitErr error) {
 	if enterLink != nil {
 		if err := enterLink.Destroy(); err != nil {
 			enterErr = err
@@ -276,7 +276,7 @@ func destroyLinkPair(syscall string, enterLink, exitLink Link) (enterErr, exitEr
 			errs = append(errs, fmt.Sprintf("detach exit %s: %v", syscall, err))
 		}
 	}
-	return enterErr, exitErr, errs
+	return errs, enterErr, exitErr
 }
 
 // commitDetach updates entry link pointers and active flag under the manager

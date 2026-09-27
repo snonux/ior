@@ -76,9 +76,7 @@ const flameKeyDebugEnabled = false
 const driveWindow = 250 * time.Millisecond
 
 type zoomState struct {
-	path                string
-	previousSelectedIdx int
-	lineWidth           int
+	path string
 }
 
 type flameKeyMap struct {
@@ -634,9 +632,10 @@ func (m *Model) syncHeightFieldToTrie() {
 }
 
 // RefreshFromLiveTrie loads a new snapshot synchronously and returns true when
-// a new snapshot was applied. Retained as a simple facade for tests; the
-// production TUI now uses RefreshFromLiveTrieCmd to do the heavy lifting on a
-// background goroutine.
+// a new snapshot was applied. The dashboard uses it for the one-off initial
+// load when a live trie is attached (dashboard.Model.SetLiveTrie); periodic
+// refreshes go through RefreshFromLiveTrieCmd, which does the heavy lifting on
+// a background goroutine.
 func (m *Model) RefreshFromLiveTrie() bool {
 	if m.liveTrie == nil {
 		return false
@@ -788,9 +787,6 @@ func (m *Model) rebuildFrames(animate bool) {
 func (m *Model) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestry, prevPath string, animate bool) {
 	m.anim.applyTargetFrames(targetFrames, ancestry, animate)
 	frames, ancestry := m.anim.currentFrames(), m.anim.currentAncestry()
-	if len(frames) > 1 {
-		m.sel.markNavigableSnapshot()
-	}
 	m.sel.restoreByPath(frames, prevPath)
 	m.sel.clamp(frames)
 	m.search.recomputeFilterState(frames, ancestry)
@@ -895,11 +891,6 @@ func (m *Model) currentRootPath() string {
 	return m.zoom.currentRootPath(m.anim.currentFrames())
 }
 
-// frameNavigable reports whether a frame can be selected under the current filter.
-func (m *Model) frameNavigable(idx int) bool {
-	return frameNavigable(idx, m.anim.currentFrames(), m.search.navigable())
-}
-
 // ensureSelectionNavigable delegates to SelectionManager to keep the selection
 // on a frame that is visible under the current filter.
 func (m *Model) ensureSelectionNavigable() {
@@ -960,12 +951,6 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 // terminal coordinates (x, y) to a frame index, accounting for UI chrome.
 func (m *Model) frameIndexAt(x, y int) int {
 	return frameIndexAt(m.anim.currentFrames(), x, y, m.width, m.height, m.showHelp, m.heightMetricActive())
-}
-
-// frameCoordToTargetRow delegates to the renderer package-level helper.
-func (m *Model) frameCoordToTargetRow(dataRow, availableRows int) int {
-	params := computeRenderParamsForAvailableRows(m.anim.currentFrames(), availableRows, m.heightMetricActive())
-	return frameCoordToTargetRow(dataRow, params)
 }
 
 func (m *Model) withZoomLineage(frames []tuiFrame) []tuiFrame {

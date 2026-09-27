@@ -113,12 +113,11 @@ func TestSelectionManagerResetClearsInPlace(t *testing.T) {
 	frames := jumpMatchFrames()
 	s := newSelectionManager()
 	s.selectFrame(frames, buildFrameAncestry(frames), 2)
-	s.markNavigableSnapshot()
 	set := s.subtree()
 
 	s.reset()
-	if s.selected() != 0 || s.hasNavigableSnapshot || len(s.subtree()) != 0 {
-		t.Fatalf("reset left state: selected=%d navigable=%t subtree=%v", s.selected(), s.hasNavigableSnapshot, s.subtree())
+	if s.selected() != 0 || len(s.subtree()) != 0 {
+		t.Fatalf("reset left state: selected=%d subtree=%v", s.selected(), s.subtree())
 	}
 	set[99] = true
 	if !s.subtree()[99] {
