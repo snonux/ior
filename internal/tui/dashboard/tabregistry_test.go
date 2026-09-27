@@ -108,6 +108,30 @@ func registerTestTab(t *testing.T, d tabDescriptor) Tab {
 	return testTab
 }
 
+// hookSentinelMsg is what the test tab's HandleKey command yields, so a test
+// can tell that the hook's command - not some other command - came back.
+type hookSentinelMsg struct{}
+
+func hookSentinelCmd() tea.Msg { return hookSentinelMsg{} }
+
+// cmdYields reports whether running cmd produces want, looking inside
+// tea.Batch results.
+func cmdYields(cmd tea.Cmd, want tea.Msg) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if cmdYields(sub, want) {
+				return true
+			}
+		}
+		return false
+	}
+	return msg == want
+}
+
 // countingDescriptor returns a descriptor whose every hook counts its calls.
 // Its table state is state, so viz-mode dispatch can be observed.
 func countingDescriptor(calls hookCounts, state *tableTabState[syscallSortKey]) tabDescriptor {
@@ -154,7 +178,10 @@ func countingDescriptor(calls hookCounts, state *tableTabState[syscallSortKey]) 
 		},
 		HandleKey: func(_ *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			calls["HandleKey"]++
-			return msg.String() == "x", nil
+			if msg.String() != "x" {
+				return false, nil
+			}
+			return true, hookSentinelCmd
 		},
 		BlocksGlobalShortcut: func(*Model, tea.KeyPressMsg) bool {
 			calls["BlocksGlobalShortcut"]++
@@ -204,7 +231,17 @@ func TestTabControllerHooksAreInvoked(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.Update(runeKey('s'))
-	m.Update(runeKey('x'))
+	// A key the tab handles returns the hook's command, both from
+	// handleShortcutKey and from Update.
+	if handled, cmd := m.handleShortcutKey(runeKey('x')); !handled || !cmdYields(cmd, hookSentinelMsg{}) {
+		t.Errorf("handleShortcutKey(x) = handled %v, want the HandleKey hook's command", handled)
+	}
+	if _, cmd := m.Update(runeKey('x')); !cmdYields(cmd, hookSentinelMsg{}) {
+		t.Error("Update(x) dropped the HandleKey hook's command")
+	}
+	if m.activeTab != tab {
+		t.Fatalf("a key the tab handles switched tabs to %v", m.activeTab)
+	}
 	if !m.BlocksGlobalShortcuts(runeKey('q')) {
 		t.Error("BlocksGlobalShortcuts ignored the hook's verdict")
 	}
@@ -226,6 +263,15 @@ func TestTabControllerHooksAreInvoked(t *testing.T) {
 	m.Update(runeKey('b'))
 	if state.bubble.Metric() == bubbleMetricCount {
 		t.Error("metric toggle did not reach the tab's bubble chart")
+	}
+	// A key the hook declines still reaches the numeric tab shortcuts.
+	keyCalls := calls["HandleKey"]
+	m.Update(runeKey('2'))
+	if calls["HandleKey"] == keyCalls {
+		t.Error("HandleKey was not consulted before the numeric shortcuts")
+	}
+	if m.activeTab != TabOverview {
+		t.Errorf("unhandled key did not fall through to the numeric shortcut, active = %v", m.activeTab)
 	}
 
 	for _, hook := range []string{
@@ -377,5 +423,154 @@ func TestTableTabsRenderWaitingBeforeFirstSnapshot(t *testing.T) {
 		if !strings.Contains(got, tab.String()+": waiting for stats...") {
 			t.Errorf("%v: render = %q, want the waiting placeholder", tab, got)
 		}
+	}
+}
+
+// TestUnhandledTabKeyFallsThroughToNumericShortcuts pins that a real tab's
+// HandleKey hook (the Files dir-group toggle) declining a key leaves it to
+// the numeric tab shortcuts.
+func TestUnhandledTabKeyFallsThroughToNumericShortcuts(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.activeTab = TabFiles
+	m.Update(runeKey('3'))
+	if m.activeTab != TabSyscalls {
+		t.Fatalf("active tab = %v, want %v", m.activeTab, TabSyscalls)
+	}
+	if m.filesDirGrouped {
+		t.Fatal("the numeric shortcut toggled Files dir grouping")
+	}
+}
+
+// TestStreamContentViewportHook pins the Stream tab's ContentViewport hook:
+// the stream draws its own footer, so its content viewport is
+// streamViewport whatever the help-bar state - not the standard viewport,
+// which follows the help bar.
+func TestStreamContentViewportHook(t *testing.T) {
+	const width, height = 120, 40
+	for _, showHelp := range []bool{false, true} {
+		m := NewModel(nil, nil)
+		m.showHelp = showHelp
+		m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+		m.activeTab = TabStream
+
+		wantW, wantH := streamViewport(width, height)
+		gotW, gotH := m.contentViewport(TabStream, width, height)
+		if gotW != wantW || gotH != wantH {
+			t.Errorf("showHelp=%v: stream viewport = %dx%d, want %dx%d", showHelp, gotW, gotH, wantW, wantH)
+		}
+		if _, stdH := flameViewport(width, height, showHelp); gotH == stdH {
+			t.Errorf("showHelp=%v: stream viewport height %d equals the standard one; the hook is not in effect", showHelp, gotH)
+		}
+	}
+}
+
+// TestContentViewportSizesDependentState pins that the state sized to a
+// tab's rendered content - its bubble chart and the table page step - is
+// sized through the tab's ContentViewport hook, not a hard-coded viewport.
+func TestContentViewportSizesDependentState(t *testing.T) {
+	state := &tableTabState[syscallSortKey]{bubble: newBubbleChart()}
+	tab := registerTestTab(t, tabDescriptor{
+		Name:            "Viewport",
+		ShortName:       "Vpt",
+		Position:        1000,
+		AllowedVizModes: []tabVizMode{tabVizModeTable, tabVizModeBubbles},
+		TableState:      func(*Model) tableTab { return state },
+		ContentViewport: func(width, height int, _ bool) (int, int) { return width - 7, height - 9 },
+	})
+
+	m := NewModel(nil, nil)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if state.bubble.width != 113 || state.bubble.height != 31 {
+		t.Errorf("resize: bubble viewport = %dx%d, want the hook's 113x31", state.bubble.width, state.bubble.height)
+	}
+	// The real table tabs keep the standard viewport.
+	wantW, wantH := flameViewport(120, 40, m.showHelp)
+	if b := m.syscallsTab.bubble; b.width != wantW || b.height != wantH {
+		t.Errorf("syscalls bubble viewport = %dx%d, want %dx%d", b.width, b.height, wantW, wantH)
+	}
+
+	m.width, m.height = 100, 30
+	m.refreshBubbleData()
+	if state.bubble.width != 93 || state.bubble.height != 21 {
+		t.Errorf("refresh: bubble viewport = %dx%d, want the hook's 93x21", state.bubble.width, state.bubble.height)
+	}
+
+	m.activeTab = tab
+	if got := m.activeTableHeight(); got != 21 {
+		t.Errorf("activeTableHeight = %d, want the hook's 21", got)
+	}
+}
+
+// TestFilesIcicleSelectionUsesFilesContentViewport pins that the icicle's
+// selection keys are laid out in the Files tab's content viewport - the size
+// View() renders the icicle in - so a Files ContentViewport hook moves both.
+func TestFilesIcicleSelectionUsesFilesContentViewport(t *testing.T) {
+	m := newFilesVizModel(t, tabVizModeIcicle, deepIcicleSnapshot())
+	metric := m.filesTab.bubble.Metric()
+	stdW, stdH := flameViewport(m.width, m.height, m.showHelp)
+	if got, want := m.filesDirSelectionKeys(), filesIcicleTileKeys(m.latest, stdW, stdH, metric); !slices.Equal(got, want) {
+		t.Fatalf("standard viewport keys = %v, want %v", got, want)
+	}
+
+	orig := tabDescriptors[TabFiles]
+	t.Cleanup(func() { tabDescriptors[TabFiles] = orig })
+	d := orig
+	d.ContentViewport = func(width, _ int, _ bool) (int, int) { return width, 6 }
+	tabDescriptors[TabFiles] = d
+
+	got := m.filesDirSelectionKeys()
+	want := filesIcicleTileKeys(m.latest, m.width, 6, metric)
+	if !slices.Equal(got, want) {
+		t.Fatalf("hooked viewport keys = %v, want %v", got, want)
+	}
+	if slices.Equal(got, filesIcicleTileKeys(m.latest, stdW, stdH, metric)) {
+		t.Fatal("test snapshot does not tell the two viewports apart")
+	}
+}
+
+// TestKeepAllSelectionsRunsEveryTabHook pins the global-layout-change
+// helper: every registered KeepSelection hook wraps the change, nested in
+// tab order, the change runs once, and resize and the help toggle go
+// through it whichever tab is active.
+func TestKeepAllSelectionsRunsEveryTabHook(t *testing.T) {
+	var trace []string
+	register := func(id Tab, name string, position int) {
+		if _, taken := tabDescriptors[id]; taken {
+			t.Fatalf("test tab id %d is already registered", id)
+		}
+		tabDescriptors[id] = tabDescriptor{
+			Name:            name,
+			ShortName:       name,
+			Position:        position,
+			AllowedVizModes: []tabVizMode{tabVizModeTable},
+			KeepSelection: func(_ *Model, change func()) {
+				trace = append(trace, name+" before")
+				change()
+				trace = append(trace, name+" after")
+			},
+		}
+		t.Cleanup(func() { delete(tabDescriptors, id) })
+	}
+	// Registered out of position order: the nesting follows Position.
+	register(101, "second", 1001)
+	register(100, "first", 1000)
+
+	m := NewModel(nil, nil)
+	m.keepAllSelections(func() { trace = append(trace, "change") })
+	want := []string{"first before", "second before", "change", "second after", "first after"}
+	if !slices.Equal(trace, want) {
+		t.Fatalf("trace = %v, want %v", trace, want)
+	}
+
+	m.activeTab = TabOverview
+	trace = nil
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if !slices.Contains(trace, "first before") || !slices.Contains(trace, "second before") {
+		t.Errorf("resize skipped a background tab's KeepSelection hook: %v", trace)
+	}
+	trace = nil
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
+	if !slices.Contains(trace, "first before") || !slices.Contains(trace, "second before") {
+		t.Errorf("help toggle skipped a background tab's KeepSelection hook: %v", trace)
 	}
 }

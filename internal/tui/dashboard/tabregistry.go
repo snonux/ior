@@ -60,13 +60,21 @@ type tabDescriptor struct {
 	// bubble dispatches stay generic over the tableTab interface. Nil means
 	// the tab has no table state (flame, overview, latency, stream).
 	TableState func(m *Model) tableTab
-	// KeepSelection runs change - a viz-mode or metric change that reorders
-	// the tab's item list - so that the selected item survives it. Nil
-	// means the change is applied as is.
+	// KeepSelection runs change - a change that reorders or resizes the
+	// tab's item list - so that the selected item survives it. It is run
+	// for the active tab on its own viz-mode and metric changes, and for
+	// every registered tab on global layout changes (terminal resize, help
+	// bar toggle; see keepAllSelections), so it must call change exactly
+	// once. Nil means the change is applied as is.
 	KeepSelection func(m *Model, change func())
-	// ContentViewport returns the active-content viewport for this tab from
-	// the terminal size. Nil means the standard viewport (tab bar plus the
-	// help hint or expanded help bar; see flameViewport).
+	// ContentViewport returns this tab's content viewport from the terminal
+	// size. It is the single source of that size: View() lays the tab out in
+	// it, and every piece of state sized to match the rendered content reads
+	// it through contentViewport too - the flame and stream sub-models'
+	// viewports, the tab's bubble chart viewport, the table page step
+	// (activeTableHeight) and the Files icicle's selection keys. Nil means
+	// the standard viewport (tab bar plus the help hint or expanded help
+	// bar; see flameViewport).
 	ContentViewport func(width, height int, showHelp bool) (int, int)
 	// InitCmd is an optional extra Bubble Tea command to start alongside the
 	// global refresh tick when this tab is the active tab on Init. Tabs that
@@ -130,6 +138,9 @@ type tabDescriptor struct {
 // legitimately reach back into the registry (a Files key toggles grouping,
 // which refreshes every tab's bubble chart through the registry); as a
 // package-level initializer that is a compile-time initialization cycle.
+// Package-level var initializers run before init, so none of them may read
+// the registry (directly or through orderedTabs, lookupTab,
+// forEachBubbleChart and friends): they would see it empty.
 var tabDescriptors map[Tab]tabDescriptor
 
 func init() {
@@ -329,7 +340,25 @@ func (m *Model) keepSelection(tab Tab, change func()) {
 	change()
 }
 
-// contentViewport returns the active-content viewport of tab for the given
+// keepAllSelections applies change - a global layout change such as a
+// terminal resize or the help bar toggle - through every registered tab's
+// KeepSelection hook, so each tab's selection survives it whether or not
+// the tab is active. The hooks nest in orderedTabs order (the first tab's
+// hook is outermost) and change runs exactly once, innermost.
+func (m *Model) keepAllSelections(change func()) {
+	tabs := orderedTabs()
+	for i := len(tabs) - 1; i >= 0; i-- {
+		hook := tabDescriptors[tabs[i]].KeepSelection
+		if hook == nil {
+			continue
+		}
+		inner := change
+		change = func() { hook(m, inner) }
+	}
+	change()
+}
+
+// contentViewport returns the content viewport of tab for the given
 // terminal size (see tabDescriptor.ContentViewport).
 func (m *Model) contentViewport(tab Tab, width, height int) (int, int) {
 	if d := lookupTab(tab); d.ContentViewport != nil {
@@ -339,8 +368,9 @@ func (m *Model) contentViewport(tab Tab, width, height int) (int, int) {
 }
 
 // forEachBubbleChart calls fn with the bubble chart of every registered
-// table tab, so chart-wide settings (construction, theme, viewport) reach
-// every chart without listing the tabs.
+// table tab, so chart-wide settings (construction, theme) reach every chart
+// without listing the tabs. It reads the registry, which is populated in
+// init: it must not be used from a package-level var initializer.
 func (m *Model) forEachBubbleChart(fn func(*bubbleChart)) {
 	for _, tab := range orderedTabs() {
 		if t := m.tableTabFor(tab); t != nil {
@@ -525,8 +555,7 @@ func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // any filter or editor request: the global-filter messages go to the top-level
 // model, messages.OpenEditorRequestedMsg comes back to Update here.
 func tabScrollStream(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	streamWidth, streamHeight := streamViewport(m.width, m.height)
-	m.streamModel.SetViewport(streamWidth, streamHeight)
+	m.syncStreamViewport()
 	return m.streamModel.HandleTeaKey(msg)
 }
 
