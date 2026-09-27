@@ -2198,30 +2198,9 @@ func verifyProcFdNotCached(t *testing.T, el *eventLoop, pid uint32, fd int32) {
 }
 
 // Helper functions for edge case tests
-func verifyNoEventOutput(t *testing.T, outCh <-chan *event.Pair, timeout time.Duration) {
-	select {
-	case ev := <-outCh:
-		t.Errorf("Expected no event output but got: %v", ev)
-	case <-time.After(timeout):
-		// Good, no output as expected
-	}
-}
-
 func verifyEnterEventPending(t *testing.T, el *eventLoop, tid uint32) {
 	if _, ok := el.pairs.enters[tid]; !ok {
 		t.Errorf("Expected enter event for tid %d to be pending but it wasn't found", tid)
-	}
-}
-
-func verifyNoEnterEventPending(t *testing.T, el *eventLoop, tid uint32) {
-	if _, ok := el.pairs.enters[tid]; ok {
-		t.Errorf("Expected no enter event for tid %d but one was found", tid)
-	}
-}
-
-func verifyMismatchCount(t *testing.T, el *eventLoop, expectedCount uint) {
-	if el.numTracepointMismatches != expectedCount {
-		t.Errorf("Expected %d tracepoint mismatches but got %d", expectedCount, el.numTracepointMismatches)
 	}
 }
 

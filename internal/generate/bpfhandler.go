@@ -802,7 +802,9 @@ func generateExtraBpf() string {
 type pollTimeoutStyle int
 
 const (
-	// pollTimeoutNone means no known timeout capture; emit defaults.
+	// pollTimeoutNone means no known timeout capture; emit defaults. It is
+	// the zero value, so it is only ever used implicitly.
+	//lint:ignore U1000 named zero value of pollTimeoutStyle
 	pollTimeoutNone pollTimeoutStyle = iota
 	// pollTimeoutMillis means the timeout is an __s32 millisecond value.
 	pollTimeoutMillis

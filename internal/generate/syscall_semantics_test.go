@@ -1514,10 +1514,6 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 	})
 }
 
-func temporaryArgs(task string, current map[string]int) *temporarySyscallSemantics {
-	return &temporarySyscallSemantics{task: task, current: syscallSemantics{args: current}}
-}
-
 func (e syscallSemanticExpectation) artifactExpectation() syscallSemantics {
 	result := syscallSemantics{kind: e.kind, args: e.args, ret: e.ret, family: e.family}
 	if e.temporary == nil {
