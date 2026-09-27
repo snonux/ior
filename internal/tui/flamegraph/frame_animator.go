@@ -138,6 +138,17 @@ func (fa *FrameAnimator) stopTicks() {
 	fa.ticking = false
 }
 
+// retireTicks ends the live loop without waiting for its tick: it advances
+// the generation, so the pending tick is dropped on arrival whether or not it
+// is ever delivered, and clears ticking, so the next startTicks starts a new
+// loop at once. It is for callers that know the pending tick may have been
+// dropped (the dashboard drops ticks while another tab is active) and cannot
+// wait out tickLostAfter.
+func (fa *FrameAnimator) retireTicks() {
+	fa.generation++
+	fa.ticking = false
+}
+
 // acceptsTick reports whether a tick scheduled for generation belongs to the
 // current tick loop. A current tick may still find the animation settled or
 // snapped; the Model then ends the loop with stopTicks.
@@ -151,8 +162,7 @@ func (fa *FrameAnimator) acceptsTick(generation uint64) bool {
 // layout would spring from the discarded positions instead of the frames on
 // screen.
 func (fa *FrameAnimator) reset() {
-	fa.generation++
-	fa.ticking = false
+	fa.retireTicks()
 	fa.animation = NewAnimationState(30, 6.0, 1.0)
 	fa.animating = false
 	fa.frames = nil
