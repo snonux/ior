@@ -16,11 +16,14 @@ type autoResetTickMsg struct {
 }
 
 // autoResetArmMsg starts a fresh auto-reset tick chain. Init emits it instead
-// of scheduling the tick itself so that Init stays free of side effects:
-// stamping the countdown start there would either not persist (the old
-// value-receiver Init) or mutate the model outside Update. Update handles the
-// message on the live model, where the countdown start is recorded together
-// with the tick it describes.
+// of scheduling the tick itself. Starting a chain has side effects - it
+// restarts the countdown and supersedes the running chain - and Init must be
+// free of them. Before this message existed, Init scheduled the tick without
+// restarting the countdown, so the chrome counted down from whenever the
+// interval was configured (model construction) rather than from the tick Init
+// actually scheduled once the trace started. Update handles the message on
+// the live model, where the countdown start is recorded together with the
+// tick it describes.
 type autoResetArmMsg struct {
 	generation uint64
 }
@@ -211,6 +214,15 @@ func (m *Model) SetAutoResetInterval(d time.Duration) tea.Cmd {
 // the timer is disabled.
 func (m *Model) AutoResetInterval() time.Duration {
 	return m.autoReset.interval()
+}
+
+// AutoResetGeneration identifies the live auto-reset tick chain; it changes
+// whenever that chain is superseded (a cadence or focus change, or an arm
+// from Init being handled). It exists so the parent package can assert that
+// Init's arm message reached the dashboard through its routing, without
+// running the program.
+func (m *Model) AutoResetGeneration() uint64 {
+	return m.autoReset.gen
 }
 
 // SetFocused controls whether periodic refresh ticks are processed and

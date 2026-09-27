@@ -288,15 +288,111 @@ func TestInitDoesNotArmAutoReset(t *testing.T) {
 	}
 }
 
-// TestInitWithoutAutoResetHasNoArm covers the disabled timer: Init neither
-// arms nor emits an arm message, and a stray arm message is inert.
-func TestInitWithoutAutoResetHasNoArm(t *testing.T) {
+// initMsgs runs Init and returns the messages its commands produce. Init
+// schedules no timer itself, so every command it returns is immediate.
+func initMsgs(t *testing.T, m *Model) []tea.Msg {
+	t.Helper()
+	msg := runCmd(m.Init())
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	msgs := make([]tea.Msg, 0, len(batch))
+	for _, cmd := range batch {
+		msgs = append(msgs, runCmd(cmd))
+	}
+	return msgs
+}
+
+// TestInitRequestsExactlyTheExpectedStarts pins Init's output: with the
+// timer disabled only the tick chain start, with it enabled that start plus
+// one arm of the current generation.
+func TestInitRequestsExactlyTheExpectedStarts(t *testing.T) {
 	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
-	if batch, ok := runCmd(m.Init()).(tea.BatchMsg); ok && len(batch) != 2 {
-		t.Fatalf("Init batched %d commands, want the refresh and flame ticks only", len(batch))
+	msgs := initMsgs(t, m)
+	if len(msgs) != 1 {
+		t.Fatalf("Init with auto-reset off produced %d messages (%v), want only the chain start", len(msgs), msgs)
+	}
+	if _, ok := msgs[0].(tickChainsStartMsg); !ok {
+		t.Fatalf("Init with auto-reset off produced %T, want tickChainsStartMsg", msgs[0])
 	}
 	if _, cmd := m.Update(autoResetArmMsg{generation: m.autoReset.gen}); cmd != nil {
 		t.Fatal("an arm message must be inert while the timer is disabled")
+	}
+
+	m.SetAutoResetInterval(30 * time.Second)
+	msgs = initMsgs(t, m)
+	if len(msgs) != 2 {
+		t.Fatalf("Init with auto-reset on produced %d messages (%v), want chain start and arm", len(msgs), msgs)
+	}
+	if _, ok := msgs[0].(tickChainsStartMsg); !ok {
+		t.Fatalf("Init's first message is %T, want tickChainsStartMsg", msgs[0])
+	}
+	if arm, ok := msgs[1].(autoResetArmMsg); !ok || arm.generation != m.autoReset.gen {
+		t.Fatalf("Init's second message is %#v, want an arm of generation %d", msgs[1], m.autoReset.gen)
+	}
+
+	m.SetFocused(false)
+	msgs = initMsgs(t, m)
+	for _, msg := range msgs {
+		if _, ok := msg.(autoResetArmMsg); ok {
+			t.Fatal("a blurred Init must not arm the auto-reset timer")
+		}
+	}
+}
+
+// TestTwoInitsBeforeArmLeaveOneAutoResetChain covers a focus regain followed
+// by a trace start, each running Init before either arm is handled. Both
+// arms carry the same generation: the first one handled starts the chain,
+// the duplicate is stale by then and is dropped, and ticks of the chain
+// that was running before are dropped too.
+func TestTwoInitsBeforeArmLeaveOneAutoResetChain(t *testing.T) {
+	engine := &fakeSnapshotSource{}
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
+	m.SetAutoResetInterval(30 * time.Second)
+	before := m.autoReset.gen
+
+	focusArm := initMsgs(t, m)[1].(autoResetArmMsg)
+	traceArm := initMsgs(t, m)[1].(autoResetArmMsg)
+
+	if _, cmd := m.Update(focusArm); cmd == nil {
+		t.Fatal("the first arm must start the chain")
+	}
+	live := m.autoReset.gen
+	if _, cmd := m.Update(traceArm); cmd != nil {
+		t.Fatal("the duplicate arm must not start a second chain")
+	}
+	if m.autoReset.gen != live {
+		t.Fatal("the duplicate arm superseded the live chain")
+	}
+
+	if _, cmd := m.Update(autoResetTickMsg{generation: before}); cmd != nil || engine.resetCount != 0 {
+		t.Fatalf("a tick of the pre-Init chain acted: cmd=%v resets=%d", cmd, engine.resetCount)
+	}
+	if _, cmd := m.Update(autoResetTickMsg{generation: live}); cmd == nil || engine.resetCount != 1 {
+		t.Fatalf("the live chain's tick: cmd=%v resets=%d, want a re-arm and one reset", cmd, engine.resetCount)
+	}
+}
+
+// TestAutoResetArmWhileBlurredIsIgnored delivers a current-generation arm
+// through Model.Update while blurred: it must schedule nothing and leave the
+// chain and countdown alone (focus regain arms afresh).
+func TestAutoResetArmWhileBlurredIsIgnored(t *testing.T) {
+	clock := newFakeClock()
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m.autoReset.now = clock.now
+	m.SetAutoResetInterval(30 * time.Second)
+	m.SetFocused(false)
+	gen, armedAt := m.autoReset.gen, m.autoReset.armedAt
+
+	clock.advance(time.Second)
+	next, cmd := m.Update(autoResetArmMsg{generation: gen})
+	m = next.(*Model)
+	if cmd != nil {
+		t.Fatal("a blurred dashboard must not schedule an auto-reset tick")
+	}
+	if m.autoReset.gen != gen || !m.autoReset.armedAt.Equal(armedAt) {
+		t.Fatal("an arm handled while blurred changed the auto-reset state")
 	}
 }
 

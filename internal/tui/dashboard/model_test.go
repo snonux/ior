@@ -929,7 +929,8 @@ func TestValidFlameRefreshCompletionOffTabIsDiscardedAndAllowsLaterRefresh(t *te
 	if m.activeTab != TabFlame {
 		t.Fatalf("expected to return to flame tab, got %v", m.activeTab)
 	}
-	next, cmd = m.Update(flameTickMsg{})
+	// Re-entering the tab started a new fast chain; deliver its tick.
+	next, cmd = m.Update(flameTickMsg{generation: m.ticks.fast.gen})
 	m = next.(*Model)
 	secondBatch := requireDashboardBatch(t, cmd)
 	if len(secondBatch) < 2 {
@@ -1883,7 +1884,7 @@ func TestAutoResetTickIgnoredWhileBlurred(t *testing.T) {
 		t.Fatalf("SetFocused(false) should not return a tick command, got %v", cmd)
 	}
 	if m.autoReset.gen == gen {
-		t.Fatalf("SetFocused(false) should bump autoResetGen so in-flight ticks are dropped")
+		t.Fatalf("SetFocused(false) should bump autoReset.gen so in-flight ticks are dropped")
 	}
 
 	// Deliver the in-flight tick that was scheduled before the blur. It
@@ -1929,7 +1930,7 @@ func TestAutoResetTickResumesOnFocusRegain(t *testing.T) {
 		t.Fatalf("SetFocused(true) should return a fresh tick cmd when timer is enabled")
 	}
 	if m.autoReset.gen == preGen {
-		t.Fatalf("SetFocused(true) should bump autoResetGen to invalidate any leftover ticks")
+		t.Fatalf("SetFocused(true) should bump autoReset.gen to invalidate any leftover ticks")
 	}
 
 	// Deliver a tick at the post-regain generation: the reset must fire
@@ -1958,7 +1959,7 @@ func TestSetFocusedNoOpWhenStateUnchanged(t *testing.T) {
 		t.Fatalf("SetFocused(true) on already-focused model should be a no-op, got %v", cmd)
 	}
 	if m.autoReset.gen != gen {
-		t.Fatalf("autoResetGen should not change on no-op focus call, was %d now %d", gen, m.autoReset.gen)
+		t.Fatalf("autoReset.gen should not change on no-op focus call, was %d now %d", gen, m.autoReset.gen)
 	}
 }
 
