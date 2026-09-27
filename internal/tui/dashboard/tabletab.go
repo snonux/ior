@@ -72,7 +72,15 @@ func (t *tableTabState[SortKey]) selected(rows int) (int, bool) {
 // navigate applies one navigation key press to the selection, clamping the
 // row against maxRows and the column against columns.
 func (t *tableTabState[SortKey]) navigate(keyStr string, maxRows, columns, pageStep int) bool {
-	return common.HandleTableNavigationKey(keyStr, &t.offset, &t.col, maxRows, columns, pageStep)
+	return t.navigateRow(keyStr, &t.offset, maxRows, columns, pageStep)
+}
+
+// navigateRow is navigate with the row selection held elsewhere - a viz
+// mode's own offset, such as the Processes treemap's: the row keys (j/k,
+// g/G, pgup/pgdn) move row, the column keys (h/l) still move the tab's
+// column, which drives Enter's filter dimension in every mode.
+func (t *tableTabState[SortKey]) navigateRow(keyStr string, row *int, maxRows, columns, pageStep int) bool {
+	return common.HandleTableNavigationKey(keyStr, row, &t.col, maxRows, columns, pageStep)
 }
 
 // applySort toggles the sort for the given column and hands the new offset
