@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
 	"ior/internal/tui/messages"
 
@@ -809,46 +810,55 @@ func (m *Model) ensureSelectedCol() {
 // copy of the current filter and returns a command emitting
 // messages.GlobalFilterRequestedMsg. The local filter is left unchanged: the
 // parent applies the shared filter and pushes it back via SetFilter.
+//
+// The action label is the presenter's canonical token for the dimension just
+// set, so it reads exactly like the filter summary. A blank string cell (e.g.
+// an event without a file name) is not handled: a blank pattern constrains
+// nothing, so requesting it would only push an empty undo layer.
 func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false, nil
 	}
 	ev := m.filtered[m.selectedIdx]
 	next := m.filter.Clone()
-	var action string
+	var dim presenter.Dimension
 
 	switch m.selectedCol {
 	case streamColGap:
 		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
-		action = fmt.Sprintf("gap>=%s", formatDurationNs(ev.GapNs))
+		dim = presenter.DimGap
 	case streamColLatency:
 		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
-		action = fmt.Sprintf("latency>=%s", formatDurationNs(ev.DurationNs))
+		dim = presenter.DimLatency
 	case streamColComm:
 		next.Comm = &StringFilter{Pattern: ev.Comm}
-		action = "comm~" + ev.Comm
+		dim = presenter.DimComm
 	case streamColPID:
 		next.PID = &NumericFilter{Op: OpEq, Value: int64(ev.PID)}
-		action = fmt.Sprintf("pid=%d", ev.PID)
+		dim = presenter.DimPID
 	case streamColTID:
 		next.TID = &NumericFilter{Op: OpEq, Value: int64(ev.TID)}
-		action = fmt.Sprintf("tid=%d", ev.TID)
+		dim = presenter.DimTID
 	case streamColSyscall:
 		next.Syscall = &StringFilter{Pattern: ev.Syscall}
-		action = "syscall~" + ev.Syscall
+		dim = presenter.DimSyscall
 	case streamColFD:
 		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
-		action = fmt.Sprintf("fd=%d", ev.FD)
+		dim = presenter.DimFD
 	case streamColRet:
 		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
-		action = fmt.Sprintf("ret=%d", ev.RetVal)
+		dim = presenter.DimRet
 	case streamColBytes:
 		next.Bytes = &NumericFilter{Op: OpEq, Value: int64(ev.Bytes)}
-		action = fmt.Sprintf("bytes=%d", ev.Bytes)
+		dim = presenter.DimBytes
 	case streamColFile:
 		next.File = &StringFilter{Pattern: ev.FileName}
-		action = "file~" + ev.FileName
+		dim = presenter.DimFile
 	default:
+		return false, nil
+	}
+	action := presenter.DimensionSummary(next, dim)
+	if action == "" {
 		return false, nil
 	}
 	return true, emit(messages.GlobalFilterRequestedMsg{Filter: next, Action: action})

@@ -465,14 +465,14 @@ func (m *Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 		}
 		filter := m.globalFilter.Clone()
 		filter.Family = &globalfilter.StringFilter{Pattern: family}
-		return filter, "family~" + family, true
+		return filter, presenter.DimensionSummary(filter, presenter.DimFamily), true
 	}
 	if strings.TrimSpace(selected.Name) == "" {
 		return globalfilter.Filter{}, "", false
 	}
 	filter := m.globalFilter.Clone()
 	filter.Syscall = &globalfilter.StringFilter{Pattern: selected.Name}
-	return filter, "syscall~" + selected.Name, true
+	return filter, presenter.DimensionSummary(filter, presenter.DimSyscall), true
 }
 
 // The re-anchor helpers keep a table's selection stable across a snapshot
@@ -664,7 +664,7 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 			return globalfilter.Filter{}, "", false
 		}
 		filter.File = &globalfilter.StringFilter{Pattern: selected.Dir}
-		return filter, "file~" + selected.Dir, true
+		return filter, presenter.DimensionSummary(filter, presenter.DimFile), true
 	}
 	selected, ok := m.selectedFileSnapshot()
 	if !ok {
@@ -674,7 +674,7 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 		return globalfilter.Filter{}, "", false
 	}
 	filter.File = &globalfilter.StringFilter{Pattern: selected.Path}
-	return filter, "file~" + selected.Path, true
+	return filter, presenter.DimensionSummary(filter, presenter.DimFile), true
 }
 
 func (m *Model) selectedFileSnapshot() (statsengine.FileSnapshot, bool) {
@@ -804,11 +804,11 @@ func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 		comm := strings.TrimSpace(proc.Comm)
 		if comm != "" {
 			filter.Comm = &globalfilter.StringFilter{Pattern: comm}
-			return filter, "comm~" + comm, true
+			return filter, presenter.DimensionSummary(filter, presenter.DimComm), true
 		}
 	}
 	filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(proc.PID)}
-	return filter, fmt.Sprintf("pid=%d", proc.PID), true
+	return filter, presenter.DimensionSummary(filter, presenter.DimPID), true
 }
 
 func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
