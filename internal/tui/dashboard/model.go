@@ -877,7 +877,7 @@ func (m *Model) syscallsTreemapKeys() []string {
 // table and the treemap; either way both selections follow their syscall.
 // Changes that leave a list as it is leave its selection as it is.
 func (m *Model) keepSyscallsSelection(change func()) {
-	keepSelections(change, m.syscallsTableSelection(), m.syscallsTreemapSelection())
+	m.keepSnapshotSelections(change, m.syscallsTableSelection(), m.syscallsTreemapSelection())
 }
 
 // processesTableSelection is the Processes table selection over the sorted
@@ -905,7 +905,23 @@ func (m *Model) processesTreemapSelection() keyedSelection {
 // table rows, so it is left where it is. A viz-mode change touches neither:
 // each mode keeps its own selection.
 func (m *Model) keepProcessesSelection(change func()) {
-	keepSelections(change, m.processesTableSelection(), m.processesTreemapSelection())
+	m.keepSnapshotSelections(change, m.processesTableSelection(), m.processesTreemapSelection())
+}
+
+// keepSnapshotSelections is keepSelections for selections whose keys come
+// from the stats snapshot. Without a snapshot (before the first tick, or
+// after PrepareForTraceRestart until the new session's first tick) the key
+// lists are empty for lack of data, not because the items are gone, so
+// re-anchoring would reset every offset to 0. The change is then applied
+// as is and the offsets are left for the first tick to clamp, as a
+// positional selection is. A snapshot with no rows is data and still
+// re-anchors (resetting to 0).
+func (m *Model) keepSnapshotSelections(change func(), sels ...keyedSelection) {
+	if m.latest == nil {
+		change()
+		return
+	}
+	keepSelections(change, sels...)
 }
 
 func (m *Model) processesRowCount() int {

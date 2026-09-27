@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -443,6 +444,67 @@ func TestSyscallsSelectionsSurviveGlobalFilterChange(t *testing.T) {
 			t.Fatalf("selected %q at %d, want write at 0", row.Name, m.syscallsTab.offset)
 		}
 	})
+}
+
+// manySyscalls yields n syscalls, sys0 with n events down to one, so the
+// table and the treemap both list them in index order.
+func manySyscalls(n int) *statsengine.Snapshot {
+	rows := make([]statsengine.SyscallSnapshot, 0, n)
+	for i := range n {
+		rows = append(rows, statsengine.SyscallSnapshot{Name: fmt.Sprintf("sys%d", i), Count: uint64(n - i)})
+	}
+	return syscallsSnapshot(rows...)
+}
+
+// TestSelectionsSurviveTraceRestart: PrepareForTraceRestart drops the
+// snapshot, then handleTracingStarted swaps the filter and resizes before
+// the new session's first tick. Without a snapshot the keep hooks have no
+// keys to follow, so they must leave every offset alone (not reset it to
+// 0); the first tick then keeps it, clamped to the new rows as before.
+func TestSelectionsSurviveTraceRestart(t *testing.T) {
+	tests := []struct {
+		name   string
+		tab    Tab
+		mode   tabVizMode
+		snap   func(n int) *statsengine.Snapshot
+		offset func(m *Model) int
+	}{
+		{"syscalls table", TabSyscalls, tabVizModeTable, manySyscalls, func(m *Model) int { return m.syscallsTab.offset }},
+		{"syscalls treemap", TabSyscalls, tabVizModeTreemap, manySyscalls, func(m *Model) int { return m.syscallsTreemapOffset }},
+		{"processes table", TabProcesses, tabVizModeTable, manyProcesses, func(m *Model) int { return m.processesTab.offset }},
+		{"processes treemap", TabProcesses, tabVizModeTreemap, manyProcesses, func(m *Model) int { return m.processesTreemapOffset }},
+	}
+	for _, tt := range tests {
+		for _, restart := range []struct {
+			name   string
+			rows   int
+			wantAt int
+		}{
+			{"preserved", 5, 3},
+			{"clamped", 2, 1},
+		} {
+			t.Run(tt.name+" "+restart.name, func(t *testing.T) {
+				m := newVizModel(t, tt.tab, tt.mode, tt.snap(5))
+				m = pressJ(t, m, 3)
+				if got := tt.offset(m); got != 3 {
+					t.Fatalf("precondition: offset %d, want 3", got)
+				}
+
+				m.PrepareForTraceRestart()
+				m.SetGlobalFilter(globalfilter.Filter{})
+				next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 28})
+				m = next.(*Model)
+				if got := tt.offset(m); got != 3 {
+					t.Fatalf("restart without a snapshot moved the offset to %d, want 3", got)
+				}
+
+				m = tickStats(t, m, messages.StatsTickMsg{Snap: tt.snap(restart.rows), Generation: m.statsGen})
+				if got := tt.offset(m); got != restart.wantAt {
+					t.Fatalf("first tick: offset %d, want %d", got, restart.wantAt)
+				}
+			})
+		}
+	}
 }
 
 // pressTreemapKey sends one key press to the dashboard.
