@@ -256,6 +256,9 @@ func springPositions(m *Model) []float64 {
 func TestFastSnapshotsAndResizesDoNotStarveTicks(t *testing.T) {
 	m, trie, cmd := newAnimatingModel(t)
 	pending := runTickCmds(t, []tea.Cmd{cmd})[0]
+	// Keep the live loop's tick from ever counting as lost, so the result
+	// does not depend on how long the test takes to reach the tick.
+	keepTickLoopFresh(m)
 
 	widths := []int{90, 60, 100}
 	for i := uint64(1); i <= 3; i++ {
@@ -310,5 +313,57 @@ func TestLostTickRestartsLoop(t *testing.T) {
 	m = next.(*Model)
 	if m.anim.isAnimating() && cmd == nil {
 		t.Fatal("the new tick loop did not continue")
+	}
+}
+
+// keepTickLoopFresh marks the loop's pending tick as due far in the future, so
+// startTicks can only start a new loop if the loop was stopped, never because
+// its tick counts as lost.
+func keepTickLoopFresh(m *Model) {
+	m.anim.tickDue = time.Now().Add(time.Hour)
+}
+
+// TestSettledAnimationEndsTickLoop checks that the tick which settles an
+// animation ends its loop, so the next animation starts a new one.
+func TestSettledAnimationEndsTickLoop(t *testing.T) {
+	m, _, _ := newAnimatingModel(t)
+	m = settleFlameAnimation(t, m)
+	keepTickLoopFresh(m)
+
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
+	m = next.(*Model)
+	if !m.anim.isAnimating() {
+		t.Fatal("resize after settling did not start a frame animation")
+	}
+	if cmd == nil {
+		t.Fatal("settling left the tick loop marked live: the new animation got no tick")
+	}
+}
+
+// TestTickAfterSnapEndsTickLoop checks that a pending tick finding the
+// animation snapped ends its loop without scheduling another tick, and the
+// next animation starts a new loop.
+func TestTickAfterSnapEndsTickLoop(t *testing.T) {
+	m, _, cmd := newAnimatingModel(t)
+	pending := runTickCmds(t, []tea.Cmd{cmd})[0]
+
+	m.rebuildFrames(false)
+	if m.anim.isAnimating() {
+		t.Fatal("rebuildFrames(false) did not snap the animation")
+	}
+	next, cmd := m.Update(pending)
+	m = next.(*Model)
+	if cmd != nil {
+		t.Fatal("a tick after the snap scheduled another tick")
+	}
+	keepTickLoopFresh(m)
+
+	next, cmd = m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
+	m = next.(*Model)
+	if !m.anim.isAnimating() {
+		t.Fatal("resize after the snap did not start a frame animation")
+	}
+	if cmd == nil {
+		t.Fatal("the tick after the snap left the loop marked live: the new animation got no tick")
 	}
 }
