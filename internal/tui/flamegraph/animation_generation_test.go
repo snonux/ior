@@ -165,3 +165,73 @@ func TestAnimationAfterResetIgnoresPreResetTick(t *testing.T) {
 		t.Fatal("post-reset animation did not settle on the target layout")
 	}
 }
+
+// runTickCmds executes animation tick commands, as the Bubble Tea runtime
+// would, and returns the ticks they emit.
+func runTickCmds(t *testing.T, cmds []tea.Cmd) []animTickMsg {
+	t.Helper()
+	msgs := make([]animTickMsg, 0, len(cmds))
+	for _, cmd := range cmds {
+		msg, ok := cmd().(animTickMsg)
+		if !ok {
+			t.Fatal("animation command did not emit an animTickMsg")
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs
+}
+
+// TestSnapshotsMidAnimationLeaveOneTickLoop checks that snapshots restarting a
+// running animation retire its tick loop instead of adding a second one:
+// every round of delivered ticks must schedule exactly one next tick.
+func TestSnapshotsMidAnimationLeaveOneTickLoop(t *testing.T) {
+	m, trie, cmd := newAnimatingModel(t)
+	cmds := []tea.Cmd{cmd}
+	for i := uint64(1); i <= 2; i++ {
+		coreflamegraph.SeedTestLiveFlameData(trie, i)
+		var next tea.Model
+		next, cmd = m.Update(dispatchAndCompute(t, m))
+		m = next.(*Model)
+		if !m.anim.isAnimating() || cmd == nil {
+			t.Fatalf("snapshot %d mid-animation did not keep animating", i)
+		}
+		cmds = append(cmds, cmd)
+	}
+
+	pending := runTickCmds(t, cmds)
+	for round := 0; round < 3; round++ {
+		var live []tea.Cmd
+		for _, msg := range pending {
+			next, cmd := m.Update(msg)
+			m = next.(*Model)
+			if cmd != nil {
+				live = append(live, cmd)
+			}
+		}
+		if len(live) != 1 {
+			t.Fatalf("round %d: %d live tick loops, want 1", round, len(live))
+		}
+		pending = runTickCmds(t, live)
+	}
+}
+
+// TestSetLiveTrieDropsInFlightAnimationTick checks that a tick scheduled for
+// the previous session cannot restore its frames after SetLiveTrie.
+func TestSetLiveTrieDropsInFlightAnimationTick(t *testing.T) {
+	m, _, cmd := newAnimatingModel(t)
+	stale := runTickCmds(t, []tea.Cmd{cmd})[0]
+
+	m.SetLiveTrie(coreflamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count", ""))
+	if m.anim.isAnimating() {
+		t.Fatal("SetLiveTrie left the frame animation running")
+	}
+
+	next, cmd := m.Update(stale)
+	m = next.(*Model)
+	if n := len(m.anim.currentFrames()); n != 0 {
+		t.Fatalf("stale animation tick restored %d frames of the previous session", n)
+	}
+	if cmd != nil {
+		t.Fatal("stale animation tick scheduled another tick")
+	}
+}

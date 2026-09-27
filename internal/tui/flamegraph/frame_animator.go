@@ -13,13 +13,14 @@ type FrameAnimator struct {
 	frames       []tuiFrame
 	targetFrames []tuiFrame
 	ancestry     frameAncestry
-	// generation identifies the animation state a scheduled tick belongs to.
+	// generation identifies the tick loop that may advance the animation.
 	// Every tick command captures it and the Model drops a tick whose
 	// generation no longer matches. reset advances it, so a tick scheduled
-	// before a reset can neither restore the discarded frames nor run as a
-	// second tick chain beside an animation started after the reset. Unlike
-	// the other fields it survives reset, which is what makes it an
-	// invalidation token.
+	// before a reset cannot restore the discarded frames, and startTicks
+	// advances it whenever a new tick loop is started, so a loop already
+	// running dies instead of running beside the new one (N loops would
+	// animate N times as fast). Unlike the other fields it survives reset,
+	// which is what makes it an invalidation token.
 	generation uint64
 }
 
@@ -62,7 +63,11 @@ func (fa *FrameAnimator) indexByPath(path string) int {
 // applyTargetFrames installs a new frame layout and ancestry index. When animate
 // is true and a previous layout exists, it kicks off a spring animation from
 // the current positions. When animate is false (zoom transitions, user driving),
-// it snaps directly to the target.
+// it snaps directly to the target, and the springs are moved onto the snapped
+// positions so the next animated layout starts from what is on screen.
+//
+// Starting an animation does not schedule a tick: the Model does that through
+// startTicks, which supersedes any tick loop already running.
 func (fa *FrameAnimator) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestry, animate bool) {
 	fa.targetFrames = targetFrames
 	fa.ancestry = ancestry
@@ -72,6 +77,7 @@ func (fa *FrameAnimator) applyTargetFrames(targetFrames []tuiFrame, ancestry fra
 		fa.frames = fa.animation.CurrentFrames()
 	} else {
 		fa.animating = false
+		fa.animation.SnapToTargets()
 		fa.frames = append(fa.frames[:0], fa.targetFrames...)
 	}
 }
@@ -87,6 +93,14 @@ func (fa *FrameAnimator) tickAnimation() bool {
 // tickGeneration returns the generation a tick scheduled now must carry to be
 // accepted by acceptsTick.
 func (fa *FrameAnimator) tickGeneration() uint64 {
+	return fa.generation
+}
+
+// startTicks begins a new tick loop: it advances the generation, which
+// retires every tick loop already running, and returns the generation the new
+// loop's ticks must carry.
+func (fa *FrameAnimator) startTicks() uint64 {
+	fa.generation++
 	return fa.generation
 }
 

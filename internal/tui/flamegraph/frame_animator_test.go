@@ -123,3 +123,70 @@ func TestFrameAnimatorIndexByPathAndReset(t *testing.T) {
 		t.Fatal("reset kept animation or ancestry state")
 	}
 }
+
+// TestFrameAnimatorSnapSyncsSprings checks that a snapped layout leaves the
+// springs at the snapped positions: re-applying it animated must not jump
+// back to the layout before the snap, and a later animation starts from what
+// is on screen.
+func TestFrameAnimatorSnapSyncsSprings(t *testing.T) {
+	fa := newFrameAnimator()
+	first := animatorTestFrames(40)
+	fa.applyTargetFrames(first, buildFrameAncestry(first), false)
+	snapped := animatorTestFrames(80)
+	fa.applyTargetFrames(snapped, buildFrameAncestry(snapped), false)
+
+	fa.applyTargetFrames(snapped, buildFrameAncestry(snapped), true)
+	if fa.isAnimating() {
+		t.Fatal("re-applying the snapped layout animated from the pre-snap positions")
+	}
+	if got := fa.currentFrames()[1].Width; got != snapped[1].Width {
+		t.Fatalf("width = %d, want snapped %d", got, snapped[1].Width)
+	}
+
+	next := animatorTestFrames(20)
+	fa.applyTargetFrames(next, buildFrameAncestry(next), true)
+	if !fa.isAnimating() {
+		t.Fatal("expected an animation towards the next layout")
+	}
+	if got := fa.currentFrames()[1].Width; got != snapped[1].Width {
+		t.Fatalf("animation starts at width %d, want the on-screen %d", got, snapped[1].Width)
+	}
+}
+
+// TestFrameAnimatorGenerationRetiresTicks checks that reset and startTicks
+// both make acceptsTick reject every tick scheduled before them.
+func TestFrameAnimatorGenerationRetiresTicks(t *testing.T) {
+	fa := newFrameAnimator()
+	animate := func() {
+		t.Helper()
+		first, second := animatorTestFrames(40), animatorTestFrames(80)
+		fa.applyTargetFrames(first, buildFrameAncestry(first), false)
+		fa.applyTargetFrames(second, buildFrameAncestry(second), true)
+		if !fa.isAnimating() {
+			t.Fatal("expected an animation between differing layouts")
+		}
+	}
+
+	animate()
+	beforeReset := fa.startTicks()
+	if !fa.acceptsTick(beforeReset) {
+		t.Fatal("current tick loop rejected")
+	}
+	fa.reset()
+	if fa.acceptsTick(beforeReset) {
+		t.Fatal("reset accepted a tick of the previous generation")
+	}
+
+	animate()
+	if fa.acceptsTick(beforeReset) {
+		t.Fatal("a new animation revived a tick scheduled before the reset")
+	}
+	older := fa.startTicks()
+	newer := fa.startTicks()
+	if fa.acceptsTick(older) {
+		t.Fatal("startTicks left the previous tick loop alive")
+	}
+	if !fa.acceptsTick(newer) {
+		t.Fatal("startTicks rejected its own tick loop")
+	}
+}
