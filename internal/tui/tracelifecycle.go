@@ -72,6 +72,12 @@ func newTraceRequest(bindings *runtimeBindings, filter globalfilter.Filter, repo
 	return req
 }
 
+// running reports whether a trace session is live, i.e. started and not yet
+// stopped.
+func (t *traceLifecycle) running() bool {
+	return t.traceStop != nil
+}
+
 // stop cancels the running trace and clears the cancel function. Safe to call
 // multiple times or when no trace is running.
 func (t *traceLifecycle) stop() {

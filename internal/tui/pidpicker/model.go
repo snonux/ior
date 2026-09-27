@@ -52,7 +52,9 @@ type processesLoadedMsg struct {
 	err       error
 }
 
-// Model is the Bubble Tea model for the PID picker screen.
+// Model is the Bubble Tea model for the PID picker screen. It is value-flow:
+// every method has a value receiver and every mutator returns the updated
+// Model (see the TUI Model receiver policy in AGENTS.md).
 type Model struct {
 	input         textinput.Model
 	processes     []ProcessInfo
@@ -106,7 +108,8 @@ func NewTIDWithKeys(targetPID int, keys KeyMap) Model {
 	return m
 }
 
-// Init starts the initial process scan.
+// Init starts the initial process scan. It only reads the model: the scan
+// result reaches Update as a processesLoadedMsg.
 func (m Model) Init() tea.Cmd {
 	return m.scanCmd()
 }
@@ -126,7 +129,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case processesLoadedMsg:
 		m.processes = msg.processes
 		m.lastErr = msg.err
-		m.applyFilter()
+		m = m.applyFilter()
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
@@ -134,7 +137,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.applyFilter()
+	m = m.applyFilter()
 	return m, cmd
 }
 
@@ -170,7 +173,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.applyFilter()
+	m = m.applyFilter()
 	return m, cmd
 }
 
@@ -200,14 +203,17 @@ func (m Model) emitSelection() tea.Cmd {
 	return func() tea.Msg { return messages.PidSelectedMsg{Pid: pid} }
 }
 
-func (m *Model) applyFilter() {
+// applyFilter returns m with filtered rebuilt from processes for the current
+// query and the selection clamped to it. Like every Model method it takes and
+// returns a value, so it only ever changes the copy the caller keeps.
+func (m Model) applyFilter() Model {
 	query := strings.TrimSpace(strings.ToLower(m.input.Value()))
 	if query == "" {
 		m.filtered = cloneProcesses(m.processes)
 		if m.selectedIndex > len(m.filtered) {
 			m.selectedIndex = len(m.filtered)
 		}
-		return
+		return m
 	}
 
 	filtered := make([]ProcessInfo, 0, len(m.processes))
@@ -221,6 +227,7 @@ func (m *Model) applyFilter() {
 	if m.selectedIndex > len(m.filtered) {
 		m.selectedIndex = len(m.filtered)
 	}
+	return m
 }
 
 func matchesQuery(process ProcessInfo, query string) bool {

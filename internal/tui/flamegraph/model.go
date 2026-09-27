@@ -230,7 +230,8 @@ func NewModel(liveTrie coreflamegraph.LiveTrieSource) *Model {
 	return m
 }
 
-// Init starts the flamegraph model.
+// Init returns no command and leaves the model untouched: the dashboard
+// drives the flamegraph's refreshes and animation ticks through Update.
 func (m *Model) Init() tea.Cmd {
 	return nil
 }
@@ -305,9 +306,11 @@ func (m *Model) invalidateRefresh() {
 
 // handleSearchInput processes key events while search mode is active.
 // Delegates key dispatch (esc/enter/text) to SearchController, then updates
-// match state and status message on the Model.
+// match state and status message on the Model. The text input's own command
+// (e.g. its cursor blink) is returned rather than dropped, as Bubble Tea
+// requires of a parent forwarding a key to a child model.
 func (m *Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	_, committed, query, cancelled := m.search.handleInput(msg)
+	inputCmd, committed, query, cancelled := m.search.handleInput(msg)
 	switch {
 	case cancelled:
 		// ESC: clear search state and close search mode.
@@ -322,7 +325,7 @@ func (m *Model) handleSearchInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		m.recordKeyDebug(msg, true, false)
 	}
-	return m, nil
+	return m, inputCmd
 }
 
 // handleKeyNavigation processes navigation key events when search is not active.

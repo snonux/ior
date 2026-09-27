@@ -326,14 +326,24 @@ committed set contains syscalls that only exist on recent mainline kernels
 - **TUI Model receiver policy**: the three Bubble Tea models (`tui.Model`, `dashboard.Model`,
   `flamegraph.Model`) and the stream tab's model use **all-pointer methods** — `*Model`
   implements `tea.Model`, constructors return `*Model`, and every mutator takes
-  `*Model` (the `eventstream` template). The filter modal
-  (`tracefilter.Model`, like the sibling modals in `tui/probes` and `tui/export`)
-  is **all-value-flow** instead: value receivers and every mutator returns the
-  updated `Model`, matching its `Open`/`Close`/`Update` API. Do not mix
+  `*Model` (the `eventstream` template). The small modal/screen models
+  (`tracefilter.Model`, `probes.Model`, `export.Model`, `pidpicker.Model`,
+  `tui.recordingModal`, and `eventstream`'s `SearchModal`/`ExportModal`) are
+  **all-value-flow** instead: value receivers and every mutator returns the
+  updated `Model`, matching their `Open`/`Close`/`Update` API. Do not mix
   receivers within a Model type: a value-receiver `Update` calling a
   pointer-receiver mutator only works while the value happens to be
   addressable, and a non-addressable or later-copied Model silently loses
-  those mutations (task b2).
+  those mutations (tasks b2, fc).
+- **`Init` is side-effect free**: every `Init` only reads its model and
+  returns commands. Work that must change model state (starting a trace and
+  storing its cancel func, arming a tick chain) is requested with a message
+  that `Update` handles: `tui.Model.Init` emits `initialTraceStartMsg`
+  (handled by `handleInitialTraceStart`, which drops the request after a quit
+  or when a session is already running), and `dashboard.Model.Init` emits
+  `tickChainsStartMsg` / `autoResetArmMsg`. Tests pin this per model
+  (`TestInitDoesNotMutateModel` in `tui`, `pidpicker` and `flamegraph`,
+  `TestInitDoesNotArmAutoReset` in `dashboard`; task fc).
 - **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
 
