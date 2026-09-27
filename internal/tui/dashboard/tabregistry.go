@@ -547,15 +547,18 @@ func tabScrollFiles(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		len(fileColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
 }
 
-// tabScrollProcesses handles navigation keys for the processes tab.
-// When the treemap viz is active it moves the treemap's own selection over
-// its tiles, like tabScrollSyscalls.
+// tabScrollProcesses handles navigation keys for the processes tab: the
+// full table key set in every mode. In the treemap the row keys (j/k, g/G,
+// pgup/pgdn) move the treemap's own selection, bounded by its tile count,
+// while h/l still move the table column, which picks Enter's PID or Comm
+// filter (selectedProcessFilter) there too.
 func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	row, rows := &m.processesTab.offset, m.processesRowCount()
 	if m.processesTab.mode == tabVizModeTreemap {
 		sel := m.processesTreemapSelection()
-		return scrollOffset(msg.String(), sel.offset, len(sel.keys())), nil
+		row, rows = sel.offset, len(sel.keys())
 	}
-	return m.processesTab.navigate(msg.String(), m.processesRowCount(),
+	return m.processesTab.navigateRow(msg.String(), row, rows,
 		len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 }
 

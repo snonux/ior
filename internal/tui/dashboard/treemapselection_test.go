@@ -9,6 +9,8 @@ import (
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	"ior/internal/tui/messages"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // These tests cover the Syscalls and Processes treemap selections across
@@ -441,6 +443,77 @@ func TestSyscallsSelectionsSurviveGlobalFilterChange(t *testing.T) {
 			t.Fatalf("selected %q at %d, want write at 0", row.Name, m.syscallsTab.offset)
 		}
 	})
+}
+
+// pressTreemapKey sends one key press to the dashboard.
+func pressTreemapKey(t *testing.T, m *Model, msg tea.KeyPressMsg) *Model {
+	t.Helper()
+	next, _ := m.Update(msg)
+	return next.(*Model)
+}
+
+// enterFilter presses Enter and returns the global filter request it emits.
+func enterFilter(t *testing.T, m *Model) messages.GlobalFilterRequestedMsg {
+	t.Helper()
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected Enter to emit a filter request")
+	}
+	req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg")
+	}
+	return req
+}
+
+func TestProcessesTreemapColumnKeysPickEnterFilter(t *testing.T) {
+	m := newVizModel(t, TabProcesses, tabVizModeTreemap, procRanking(9, 5, 1))
+	m = pressJ(t, m, 1)
+	assertProcessesTreemapSelection(t, m, 1, 200)
+
+	// l selects the Comm column: Enter filters by the tile's command name.
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if m.processesTab.col != processCommColumn {
+		t.Fatalf("expected l to select the Comm column, got column %d", m.processesTab.col)
+	}
+	assertProcessesTreemapSelection(t, m, 1, 200)
+	if req := enterFilter(t, m); req.Filter.Comm == nil || req.Filter.Comm.Pattern != "beta" || req.Filter.PID != nil {
+		t.Fatalf("expected a Comm=beta filter, got comm %+v pid %+v", req.Filter.Comm, req.Filter.PID)
+	}
+
+	// h goes back to the PID column.
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	if req := enterFilter(t, m); req.Filter.PID == nil || req.Filter.PID.Value != 200 || req.Filter.Comm != nil {
+		t.Fatalf("expected a PID=200 filter, got comm %+v pid %+v", req.Filter.Comm, req.Filter.PID)
+	}
+}
+
+func TestProcessesTreemapJumpAndPageKeys(t *testing.T) {
+	// 30 processes, of which PIDs 1-20 get a tile (tile i is PID i+1).
+	m := newVizModel(t, TabProcesses, tabVizModeTreemap, manyProcesses(30))
+	m.height = 16 // a page step well below the tile count
+	step := tablePageStep(m.activeTableHeight())
+	if step < 2 || 3*step <= 19 {
+		t.Fatalf("precondition: page step %d must page within, and past, the 20 tiles", step)
+	}
+
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: 'G', Text: "G"})
+	assertProcessesTreemapSelection(t, m, 19, 20) // last tile, not the last table row
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: 'g', Text: "g"})
+	assertProcessesTreemapSelection(t, m, 0, 1)
+
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	assertProcessesTreemapSelection(t, m, step, uint32(step+1))
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	assertProcessesTreemapSelection(t, m, 19, 20) // clamped to the last tile
+	m = pressTreemapKey(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	assertProcessesTreemapSelection(t, m, 19-step, uint32(20-step))
+
+	// None of it touched the table selection.
+	if m.processesTab.offset != 0 {
+		t.Fatalf("treemap navigation moved the table offset to %d", m.processesTab.offset)
+	}
 }
 
 func TestKeyedSelection(t *testing.T) {
