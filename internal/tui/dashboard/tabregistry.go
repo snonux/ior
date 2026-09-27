@@ -187,6 +187,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			RefreshBubble: func(m *Model) bool {
 				return m.syscallsTab.bubble.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest)))
 			},
+			KeepSelection:    (*Model).keepSyscallsSelection,
 			CaptureSelection: captureSyscallsSelection,
 			ClampColumns: func(m *Model) {
 				m.syscallsTab.col = common.ClampTableCol(m.syscallsTab.col, len(syscallColumns(m.width)))
@@ -222,6 +223,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			Position:         50,
 			AllowedVizModes:  []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
 			TableState:       func(m *Model) tableTab { return &m.processesTab },
+			KeepSelection:    (*Model).keepProcessesSelection,
 			Render:           tabRenderProcesses,
 			HandleScroll:     tabScrollProcesses,
 			HandleEnter:      handleProcessesEnter,
@@ -419,7 +421,7 @@ func tabRenderStream(_ *Model, _ *statsengine.Snapshot, stream *eventstream.Mode
 func tabRenderSyscalls(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
 	switch m.syscallsTab.mode {
 	case tabVizModeTreemap:
-		return renderSyscallsTreemap(snap, m.visibleSyscallRows(snap), width, height, m.syscallsTab.bubble.Metric(), m.syscallsTreemapSelection, m.isDark)
+		return renderSyscallsTreemap(snap, m.visibleSyscallRows(snap), width, height, m.syscallsTab.bubble.Metric(), m.syscallsTreemapOffset, m.isDark)
 	case tabVizModeBubbles:
 		return m.syscallsTab.bubble.Render("Syscalls", width, height)
 	}
@@ -470,16 +472,18 @@ func tabRenderProcesses(m *Model, snap *statsengine.Snapshot, _ *eventstream.Mod
 
 // captureSyscallsSelection is the Syscalls tab's CaptureSelection hook.
 // Unsorted the table tracks the row position, so only a sorted table
-// re-anchors by syscall name; the treemap selection is re-clamped against
-// the new row count either way.
+// re-anchors by syscall name. The treemap reorders by metric value on every
+// refresh, so its selection always follows the syscall name (see
+// syscallsTreemapSelection), falling back to a clamp when it is gone.
 func captureSyscallsSelection(m *Model) func() {
 	selected := ""
 	if m.syscallsTab.sort.active {
 		selected = m.selectedSyscallName()
 	}
+	reanchorTreemap := m.syscallsTreemapSelection().capture(true)
 	return func() {
 		m.reanchorSyscallsOffset(selected)
-		m.syscallsTreemapSelection = clampOffset(m.syscallsTreemapSelection, m.syscallsRowCount())
+		reanchorTreemap()
 	}
 }
 
@@ -502,14 +506,12 @@ func captureFilesSelection(m *Model) func() {
 	}
 }
 
-// captureProcessesSelection is the Processes tab's CaptureSelection hook: a
-// sorted table re-anchors by PID.
+// captureProcessesSelection is the Processes tab's CaptureSelection hook:
+// the treemap and a sorted table re-anchor by PID (processesAnchorsByKey),
+// an unsorted table keeps the position; either way the offset is clamped
+// against the new item list when the process is gone.
 func captureProcessesSelection(m *Model) func() {
-	selected := uint32(0)
-	if m.processesTab.mode == tabVizModeTable && m.processesTab.sort.active {
-		selected = m.selectedProcessPID()
-	}
-	return func() { m.reanchorProcessesOffset(selected) }
+	return m.processesSelection().capture(m.processesAnchorsByKey())
 }
 
 // handleFilesKey is the Files tab's HandleKey hook: the directory-grouping
@@ -527,7 +529,7 @@ func handleFilesKey(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func tabScrollSyscalls(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	if m.syscallsTab.mode == tabVizModeTreemap {
-		return scrollOffset(keyStr, &m.syscallsTreemapSelection, m.syscallsRowCount()), nil
+		return scrollOffset(keyStr, &m.syscallsTreemapOffset, len(m.syscallsTreemapKeys())), nil
 	}
 	return m.syscallsTab.navigate(keyStr, m.syscallsRowCount(),
 		len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
@@ -548,7 +550,7 @@ func tabScrollFiles(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 
 // tabScrollProcesses handles navigation keys for the processes tab.
 func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	return m.processesTab.navigate(msg.String(), m.processesRowCount(),
+	return m.processesTab.navigate(msg.String(), m.processesRowCountForMode(),
 		len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 }
 

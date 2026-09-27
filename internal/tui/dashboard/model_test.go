@@ -1282,8 +1282,8 @@ func TestTreemapModeUsesJKForSelection(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'j'}[0], Text: string([]rune{'j'})})
 	model := next.(*Model)
-	if model.syscallsTreemapSelection != 1 {
-		t.Fatalf("expected treemap selection to move to index 1, got %d", model.syscallsTreemapSelection)
+	if model.syscallsTreemapOffset != 1 {
+		t.Fatalf("expected treemap selection to move to index 1, got %d", model.syscallsTreemapOffset)
 	}
 }
 

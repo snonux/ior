@@ -19,8 +19,9 @@ const maxSyscallTreemapItems = 20
 type syscallTreemapItem struct {
 	Name string
 	// Key is the item's stable identity for selection re-anchoring across
-	// snapshot refreshes, where Name is only a display label. It is set by
-	// the Files treemap (the directory path) and empty elsewhere.
+	// snapshot refreshes (see keyedSelection), where Name is only a display
+	// label: the directory path (Files), the syscall name (Syscalls) or the
+	// PID (Processes, via processKey).
 	Key      string
 	Count    uint64
 	Bytes    uint64
@@ -116,6 +117,7 @@ func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bub
 	for _, syscall := range syscalls {
 		item := syscallTreemapItem{
 			Name:     syscall.Name,
+			Key:      syscall.Name,
 			Count:    syscall.Count,
 			Bytes:    syscall.Bytes,
 			Duration: syscall.TotalLatencyNs,
@@ -129,24 +131,9 @@ func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bub
 			),
 		}
 		item.Value = treemapValue(item, metric)
-		if item.Value == 0 {
-			continue
-		}
 		items = append(items, item)
 	}
-	if len(items) == 0 {
-		return nil
-	}
-	slices.SortFunc(items, func(a, b syscallTreemapItem) int {
-		if a.Value != b.Value {
-			return cmp.Compare(b.Value, a.Value)
-		}
-		return cmp.Compare(a.Name, b.Name)
-	})
-	if len(items) > maxSyscallTreemapItems {
-		items = items[:maxSyscallTreemapItems]
-	}
-	return items
+	return rankTreemapItems(items)
 }
 
 func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
@@ -174,24 +161,9 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 			),
 		}
 		item.Value = treemapValue(item, metric)
-		if item.Value == 0 {
-			continue
-		}
 		items = append(items, item)
 	}
-	if len(items) == 0 {
-		return nil
-	}
-	slices.SortFunc(items, func(a, b syscallTreemapItem) int {
-		if a.Value != b.Value {
-			return cmp.Compare(b.Value, a.Value)
-		}
-		return cmp.Compare(a.Name, b.Name)
-	})
-	if len(items) > maxSyscallTreemapItems {
-		items = items[:maxSyscallTreemapItems]
-	}
-	return items
+	return rankTreemapItems(items)
 }
 
 func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
@@ -207,6 +179,7 @@ func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric)
 		}
 		item := syscallTreemapItem{
 			Name:     label,
+			Key:      processKey(proc.PID),
 			Count:    proc.Syscalls,
 			Bytes:    proc.Bytes,
 			Duration: proc.TotalLatencyNs,
@@ -218,11 +191,17 @@ func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric)
 			),
 		}
 		item.Value = treemapValue(item, metric)
-		if item.Value == 0 {
-			continue
-		}
 		items = append(items, item)
 	}
+	return rankTreemapItems(items)
+}
+
+// rankTreemapItems is the shared tail of the treemap item builders: it drops
+// the items without a value for the metric, orders the rest by value
+// (largest first, ties by label) and keeps the maxSyscallTreemapItems
+// largest. The order is the layout order, so it is also the selection order.
+func rankTreemapItems(items []syscallTreemapItem) []syscallTreemapItem {
+	items = slices.DeleteFunc(items, func(item syscallTreemapItem) bool { return item.Value == 0 })
 	if len(items) == 0 {
 		return nil
 	}
