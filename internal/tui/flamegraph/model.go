@@ -251,14 +251,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.tickAnimation()
-		return m, m.animationTickCmd()
+		return m, m.continueAnimationCmd()
 	case flameSnapshotReadyMsg:
 		return m.handleSnapshotReady(msg)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.rebuildFrames(true)
-		return m, m.animationTickCmd()
+		return m, m.startAnimationCmd()
 	case tea.MouseClickMsg:
 		_ = m.handleMouseClick(msg)
 		return m, nil
@@ -438,10 +438,7 @@ func (m *Model) handleSnapshotReady(msg flameSnapshotReadyMsg) (tea.Model, tea.C
 	// expires.
 	animate := !m.userDriving()
 	m.applyTargetFrames(msg.targetFrames, msg.ancestry, prevPath, animate)
-	if !m.anim.isAnimating() {
-		return m, nil
-	}
-	return m, m.animationTickCmd()
+	return m, m.startAnimationCmd()
 }
 
 // userDriving delegates to the FrameAnimator helper that checks whether the user
@@ -747,9 +744,11 @@ func (m *Model) HasSnapshot() bool {
 	return m.snapshot != nil
 }
 
-// AnimationCmd returns a frame animation tick command when animation is active.
+// AnimationCmd returns a frame animation tick command when animation is
+// active. The command starts a new tick loop and retires any loop already
+// running, so calling it while an animation is live never doubles its speed.
 func (m *Model) AnimationCmd() tea.Cmd {
-	return m.animationTickCmd()
+	return m.startAnimationCmd()
 }
 
 // Paused reports whether live refresh is paused.
@@ -887,11 +886,27 @@ func abs(v int) int {
 	return v
 }
 
-func (m *Model) animationTickCmd() tea.Cmd {
+// continueAnimationCmd schedules the next tick of the running tick loop. Only
+// the tick handler may use it: it keeps the generation, so called anywhere
+// else it would run a second loop beside the live one.
+func (m *Model) continueAnimationCmd() tea.Cmd {
 	if !m.anim.isAnimating() {
 		return nil
 	}
-	generation := m.anim.tickGeneration()
+	return animTickCmd(m.anim.tickGeneration())
+}
+
+// startAnimationCmd starts a new tick loop for the running animation and
+// retires any loop already scheduled, so there is at most one live loop no
+// matter how often a resize or snapshot restarts the animation.
+func (m *Model) startAnimationCmd() tea.Cmd {
+	if !m.anim.isAnimating() {
+		return nil
+	}
+	return animTickCmd(m.anim.startTicks())
+}
+
+func animTickCmd(generation uint64) tea.Cmd {
 	return tea.Tick(animFrameDuration, func(time.Time) tea.Msg { return animTickMsg{generation: generation} })
 }
 
