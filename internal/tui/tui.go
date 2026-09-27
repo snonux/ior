@@ -283,25 +283,6 @@ func (r *runtimeBindings) advanceFilterEpoch() uint64 {
 	return r.filterEpoch.Add(1)
 }
 
-// resetDashboardSnapshotSource resets the wired dashboard snapshot source and
-// returns the post-reset snapshot as a stats tick. ok is false when no source
-// is wired, so there is nothing to refresh. Reset is part of
-// runtime.ResettableSnapshotSource, so every wired source honours it. A
-// Snapshot failure is carried in the tick's Err, which the dashboard treats
-// as "keep the last good snapshot".
-func (r *runtimeBindings) resetDashboardSnapshotSource() (tick messages.StatsTickMsg, ok bool) {
-	src := r.dashboardSnapshotSource()
-	if src == nil {
-		return messages.StatsTickMsg{}, false
-	}
-	src.Reset()
-	snap, err := src.Snapshot()
-	if err != nil {
-		return messages.StatsTickMsg{Err: err}, true
-	}
-	return messages.StatsTickMsg{Snap: snap}, true
-}
-
 // newRunModel builds the model RunWithTraceStarterConfig runs. It is split out
 // so the production startup wiring is unit-testable: the struct literal below
 // is the one path real users take, and a dropped or misnamed field there is
@@ -824,23 +805,7 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
-	return m, tea.Batch(m.resetDashboardStats(), cmd)
-}
-
-// resetDashboardStats resets the wired stats engine and feeds the post-reset
-// snapshot through the dashboard's normal stats handling, so the tabs show the
-// fresh baseline immediately rather than on the next refresh tick. A failed
-// post-reset Snapshot arrives as StatsTickMsg.Err, which the dashboard answers
-// by keeping its last good snapshot. With no engine wired there is nothing to
-// reset and the result is nil.
-func (m *Model) resetDashboardStats() tea.Cmd {
-	tick, ok := m.runtime.resetDashboardSnapshotSource()
-	if !ok {
-		return nil
-	}
-	next, cmd := m.dashboard.Update(tick)
-	m.dashboard = next.(*dashboardui.Model)
-	return cmd
+	return m, tea.Batch(m.dashboard.ResetStats(), cmd)
 }
 
 // handleTracingStarted wires live sources into the dashboard once the trace
@@ -1477,16 +1442,24 @@ func (m *Model) pushFilterToPipeline(filter globalfilter.Filter) (tea.Model, tea
 //
 // The trie is reset and then re-bound so the flamegraph drops its zoom,
 // selection and cached snapshot of frames that no longer exist. The stats
-// reset goes through resetDashboardStats, so a failed post-reset snapshot
-// keeps the last good one exactly as a probe toggle or the refresh key do.
+// reset goes through the dashboard's ResetStats, so a failed post-reset
+// snapshot keeps the last good one exactly as a probe toggle or the refresh
+// key do, and a refresh tick built before the swap cannot restore the
+// pre-swap numbers.
 func (m *Model) resetAggregatesAfterLiveSwap() tea.Cmd {
 	m.dashboard.SetLiveTrie(m.runtime.resetLiveTrie())
-	return m.resetDashboardStats()
+	return m.dashboard.ResetStats()
 }
 
 // undoGlobalFilter pops the filter stack and re-applies the previous filter,
-// using the same in-place swap or restart logic as applyGlobalFilter.
+// using the same in-place swap or restart logic as applyGlobalFilter. The
+// undo level is always consumed (so the label stack shrinks), but the pipeline
+// is only touched when the filter really changes: a family re-scope replaces
+// the active filter without pushing, so after Apply family=Network and '['
+// back to all, the popped level equals the active filter, and re-applying it
+// would wipe the stats, the flame trie and its zoom for nothing.
 func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
+	before := m.filters.current()
 	prev, ok := m.filters.pop()
 	if !ok {
 		return m, nil
@@ -1497,10 +1470,9 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	// one must not survive it.
 	m.dashboard.SetFilterNotice("")
 	m.setGlobalFilter(prev)
-	if m.screen != ScreenDashboard {
+	if m.screen != ScreenDashboard || before.Equal(prev) {
 		return m, nil
 	}
-
 	return m.pushFilterToPipeline(prev)
 }
 

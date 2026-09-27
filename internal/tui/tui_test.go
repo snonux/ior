@@ -781,12 +781,6 @@ func TestLateBoundDashboardSourceWithoutSourceIsInert(t *testing.T) {
 	}
 }
 
-func TestResetDashboardSnapshotSourceWithoutSourceReportsNothingToRefresh(t *testing.T) {
-	if tick, ok := newRuntimeBindings().resetDashboardSnapshotSource(); ok {
-		t.Fatalf("expected no tick without a wired source, got %+v", tick)
-	}
-}
-
 func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
 	runtime := newRuntimeBindings()
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")

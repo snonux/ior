@@ -31,8 +31,9 @@ const dashboardTabBarRows = 1
 // the engine is nil. A non-nil error indicates that snapshot construction
 // failed and the caller should discard the result. Reset clears accumulated
 // state and restarts the series baselines; the dashboard calls it on every
-// baseline reset (refresh key and auto-reset ticks), so it is part of the
-// contract rather than an optional capability. It mirrors
+// stats reset (refresh key, auto-reset ticks and ResetStats for probe toggles
+// and in-place filter swaps), so it is part of the contract rather than an
+// optional capability. It mirrors
 // runtime.ResettableSnapshotSource.
 type SnapshotSource interface {
 	Snapshot() (*statsengine.Snapshot, error)
@@ -78,6 +79,10 @@ type Model struct {
 	engine   SnapshotSource
 	latest   *statsengine.Snapshot
 	liveTrie flamegraphtui.LiveTrieSource
+	// statsGen is the current stats generation. It starts at 1 so every tick
+	// built by statsTick is versioned, and advances on every stats reset so
+	// handleStatsTick can drop ticks built before the reset.
+	statsGen uint64
 
 	width  int
 	height int
@@ -149,6 +154,7 @@ func NewModelWithConfig(engine SnapshotSource, streamSource eventstream.Source, 
 	m := &Model{
 		activeTab:        TabFlame,
 		engine:           engine,
+		statsGen:         1,
 		refreshEvery:     time.Duration(refreshMs) * time.Millisecond,
 		fastRefreshEvery: time.Duration(fastRefreshMs) * time.Millisecond,
 		keys:             keys,
@@ -294,6 +300,11 @@ func (m *Model) handleBubbleTick() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
+	if msg.Generation != 0 && msg.Generation < m.statsGen {
+		// Built before the latest stats reset: applying it would put the
+		// pre-reset numbers back over the post-reset snapshot.
+		return m, nil
+	}
 	if msg.Err != nil {
 		// A failed snapshot build carries no data: keep rendering the last
 		// good snapshot instead of blanking the view on a transient failure.
@@ -1089,13 +1100,13 @@ func (m *Model) processesRowCount() int {
 // through Err so handleStatsTick keeps the last successful snapshot.
 func (m *Model) statsTick() messages.StatsTickMsg {
 	if m.engine == nil {
-		return messages.StatsTickMsg{}
+		return messages.StatsTickMsg{Generation: m.statsGen}
 	}
 	snap, err := m.engine.Snapshot()
 	if err != nil {
-		return messages.StatsTickMsg{Err: err}
+		return messages.StatsTickMsg{Err: err, Generation: m.statsGen}
 	}
-	return messages.StatsTickMsg{Snap: snap}
+	return messages.StatsTickMsg{Snap: snap, Generation: m.statsGen}
 }
 
 func (m *Model) snapshotOrZero() statsengine.Snapshot {
@@ -1116,14 +1127,32 @@ func (m *Model) resetBaselineCmd() tea.Cmd {
 	if m.liveTrie != nil {
 		m.liveTrie.Reset()
 	}
+	tick := m.resetStats()
+	return func() tea.Msg { return tick }
+}
 
+// resetStats resets the stats engine, starts a new stats generation so every
+// tick built before the reset is dropped on arrival, and returns the
+// post-reset snapshot as a tick of the new generation. A Snapshot failure
+// travels as StatsTickMsg.Err, so the dashboard keeps displaying the last
+// successful snapshot.
+func (m *Model) resetStats() messages.StatsTickMsg {
+	m.statsGen++
 	if m.engine != nil {
 		m.engine.Reset()
 	}
-	// A Snapshot failure travels as StatsTickMsg.Err, so the dashboard keeps
-	// displaying the last successful snapshot.
-	tick := m.statsTick()
-	return func() tea.Msg { return tick }
+	return m.statsTick()
+}
+
+// ResetStats restarts the stats baseline on behalf of the parent model (probe
+// toggles and in-place filter swaps) and applies the post-reset snapshot
+// straight away, so the tabs show the fresh baseline without waiting for the
+// next refresh tick and no older in-flight tick can overwrite it. The live
+// trie is left alone: callers that also need a fresh flame baseline reset it
+// themselves.
+func (m *Model) ResetStats() tea.Cmd {
+	_, cmd := m.handleStatsTick(m.resetStats())
+	return cmd
 }
 
 // autoResetTickCmd returns a command that fires an autoResetTickMsg after
@@ -1289,6 +1318,9 @@ func (m *Model) SetLiveTrie(liveTrie flamegraphtui.LiveTrieSource) {
 // PrepareForTraceRestart clears aggregate state while keeping the current tab
 // and retained stream rows intact for the next trace session.
 func (m *Model) PrepareForTraceRestart() {
+	// The next session brings a fresh engine: a tick from the old one that
+	// is still in flight must not repopulate the cleared view.
+	m.statsGen++
 	m.latest = nil
 	m.liveTrie = nil
 	m.flamegraphModel.SetLiveTrie(nil)

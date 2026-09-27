@@ -273,3 +273,64 @@ func TestRuntimeBindingsResetLiveTrieWithoutTrie(t *testing.T) {
 		t.Fatalf("expected nil with no trie wired, got %T", got)
 	}
 }
+
+// TestUndoAfterFamilyCycleBackToAllKeepsAggregates: Apply family=Network
+// pushes an undo level; '[' re-scopes back to all without pushing; the undo
+// then pops a level equal to the active filter. It must still consume the
+// level, but must not re-apply an unchanged filter and wipe the stats, the
+// trie and the flame zoom for nothing.
+func TestUndoAfterFamilyCycleBackToAllKeepsAggregates(t *testing.T) {
+	f := newLiveSwapFixture(t)
+	f.apply(t, globalfilter.Filter{Family: &globalfilter.StringFilter{Pattern: "Network"}})
+
+	next, _ := f.m.cycleFamilyScope(-1)
+	f.m = next.(*Model)
+	if got := f.m.filters.current(); got.Family != nil {
+		t.Fatalf("precondition: expected '[' to cycle Network back to all, got family %q", got.Family.Pattern)
+	}
+	if len(f.applied) != 2 || f.src.resetCalls != 2 || f.trie.resets != 2 {
+		t.Fatalf("precondition: expected apply and cycle to swap and reset twice, got swaps=%d engine=%d trie=%d",
+			len(f.applied), f.src.resetCalls, f.trie.resets)
+	}
+	next, _ = f.m.Update(messages.StatsTickMsg{Snap: f.preSwap})
+	f.m = next.(*Model)
+	coreflamegraph.SeedTestFlameData(f.trie.LiveTrie)
+	before := trieTotal(t, f.trie)
+
+	next, _ = f.m.Update(messages.GlobalFilterUndoRequestedMsg{})
+	f.m = next.(*Model)
+
+	if got := len(f.m.filters.stack); got != 0 {
+		t.Errorf("expected the undo to consume the Network level, %d level(s) left", got)
+	}
+	if len(f.applied) != 2 {
+		t.Errorf("an undo to the filter already in effect reached the pipeline: %d swaps", len(f.applied))
+	}
+	if f.src.resetCalls != 2 || f.trie.resets != 2 {
+		t.Errorf("an undo to the filter already in effect reset the aggregates: engine=%d trie=%d",
+			f.src.resetCalls, f.trie.resets)
+	}
+	if got := f.m.dashboard.LatestSnapshot(); got != f.preSwap {
+		t.Errorf("an undo to the filter already in effect replaced the snapshot on screen: %+v", got)
+	}
+	if got := trieTotal(t, f.trie); got != before {
+		t.Errorf("an undo to the filter already in effect changed the trie total from %d to %d", before, got)
+	}
+}
+
+// TestLiveFilterSwapDropsRefreshTickBuiltBeforeTheSwap: a refresh tick built
+// from the pre-swap engine and delivered after the swap must not put the
+// unfiltered numbers back on screen.
+func TestLiveFilterSwapDropsRefreshTickBuiltBeforeTheSwap(t *testing.T) {
+	f := newLiveSwapFixture(t)
+	stale, ok := f.m.dashboard.SnapshotCmd()().(messages.StatsTickMsg)
+	if !ok || stale.Snap != f.preSwap {
+		t.Fatalf("precondition: expected a pre-swap refresh tick, got %+v", stale)
+	}
+
+	f.apply(t, commFilter("foo"))
+	next, _ := f.m.Update(stale)
+	f.m = next.(*Model)
+
+	f.assertFreshBaseline(t, 1)
+}
