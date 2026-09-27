@@ -607,7 +607,7 @@ func TestStressZoomDuringRefresh(t *testing.T) {
 
 func settleStressAnimation(model *Model, maxTicks int) *Model {
 	for i := 0; i < maxTicks && model.anim.animating; i++ {
-		next, _ := model.Update(animTickMsg{})
+		next, _ := model.Update(currentAnimTick(model))
 		model = next.(*Model)
 	}
 	return model

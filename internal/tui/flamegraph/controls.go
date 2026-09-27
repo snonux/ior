@@ -34,14 +34,16 @@ func (m *Model) togglePause() {
 // still in flight: that job was computed for the previous state, so its
 // result must not be applied (and, while paused, frozen) under the new one.
 // The job keeps the in-flight slot until it completes, so refreshes against
-// the shared live trie never overlap.
+// the shared live trie never overlap. The frame animation is reset the same
+// way: a tick still scheduled for the previous layout is dropped instead of
+// restoring the discarded frames.
 func (m *Model) clearSnapshotState(clearSearch bool) {
 	m.invalidateRefresh()
 	m.zoom.reset()
 	m.sel.reset()
 	m.snapshot = nil
 	m.globalTotal = 0
-	m.anim.dropFrames()
+	m.anim.reset()
 	m.search.discardResults(clearSearch)
 }
 

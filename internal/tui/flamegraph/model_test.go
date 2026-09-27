@@ -1233,14 +1233,14 @@ func TestDataRefreshAnimationConvergesOverTicks(t *testing.T) {
 		t.Fatalf("expected animation to start after animated rebuild")
 	}
 
-	next, _ := m.Update(animTickMsg{})
+	next, _ := m.Update(currentAnimTick(m))
 	m = next.(*Model)
 	if len(m.anim.frames) != len(initial) {
 		t.Fatalf("expected frame count to remain stable during animation")
 	}
 
 	for i := 0; i < 180 && m.anim.animating; i++ {
-		next, _ = m.Update(animTickMsg{})
+		next, _ = m.Update(currentAnimTick(m))
 		m = next.(*Model)
 	}
 	if m.anim.animating {
@@ -1328,7 +1328,7 @@ func TestResizeRecalculatesLayoutAndCullsNarrowFrames(t *testing.T) {
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = next.(*Model)
 	for i := 0; i < 180 && m.anim.animating; i++ {
-		next, _ = m.Update(animTickMsg{})
+		next, _ = m.Update(currentAnimTick(m))
 		m = next.(*Model)
 	}
 
@@ -1451,7 +1451,7 @@ func firstClickablePointForFrame(m *Model, frameIdx int) (x, y int, ok bool) {
 func settleFlameAnimation(t *testing.T, m *Model) *Model {
 	t.Helper()
 	for i := 0; i < 240 && m.anim.animating; i++ {
-		next, _ := m.Update(animTickMsg{})
+		next, _ := m.Update(currentAnimTick(m))
 		m = next.(*Model)
 	}
 	if m.anim.animating {

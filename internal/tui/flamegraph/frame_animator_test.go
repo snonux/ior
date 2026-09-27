@@ -103,7 +103,7 @@ func TestFrameAnimatorAnimatesTowardsNewLayout(t *testing.T) {
 	}
 }
 
-func TestFrameAnimatorIndexByPathAndDrop(t *testing.T) {
+func TestFrameAnimatorIndexByPathAndReset(t *testing.T) {
 	fa := newFrameAnimator()
 	frames := animatorTestFrames(40)
 	fa.applyTargetFrames(frames, buildFrameAncestry(frames), false)
@@ -115,11 +115,10 @@ func TestFrameAnimatorIndexByPathAndDrop(t *testing.T) {
 		t.Fatalf("indexByPath(missing) = %d, want -1", got)
 	}
 
-	fa.dropFrames()
-	if len(fa.currentFrames()) != 0 || fa.indexByPath("root") != -1 {
-		t.Fatal("dropFrames kept frames")
-	}
 	fa.reset()
+	if len(fa.currentFrames()) != 0 || fa.indexByPath("root") != -1 {
+		t.Fatal("reset kept frames")
+	}
 	if fa.isAnimating() || len(fa.currentAncestry().parent) != 0 {
 		t.Fatal("reset kept animation or ancestry state")
 	}

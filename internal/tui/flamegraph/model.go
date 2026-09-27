@@ -19,7 +19,12 @@ import (
 // Snapshotter/Configurator halves) is defined once in the core package.
 type snapshotNode = coreflamegraph.SnapshotNode
 
-type animTickMsg struct{}
+// animTickMsg advances the frame animation by one step. generation is the
+// FrameAnimator generation at scheduling time; Update drops a tick whose
+// generation is stale (see FrameAnimator.generation).
+type animTickMsg struct {
+	generation uint64
+}
 
 // flameViewCacheKey captures the View() inputs that determine the rendered
 // output. When two consecutive calls produce the same key, the cached content
@@ -242,7 +247,7 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case animTickMsg:
-		if !m.anim.isAnimating() {
+		if !m.anim.acceptsTick(msg.generation) {
 			return m, nil
 		}
 		m.tickAnimation()
@@ -886,7 +891,8 @@ func (m *Model) animationTickCmd() tea.Cmd {
 	if !m.anim.isAnimating() {
 		return nil
 	}
-	return tea.Tick(animFrameDuration, func(time.Time) tea.Msg { return animTickMsg{} })
+	generation := m.anim.tickGeneration()
+	return tea.Tick(animFrameDuration, func(time.Time) tea.Msg { return animTickMsg{generation: generation} })
 }
 
 // currentRootPath delegates to ZoomNavigator to return the current view root path.
