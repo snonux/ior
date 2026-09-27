@@ -1,9 +1,11 @@
 package internal
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
@@ -77,6 +79,7 @@ type fakeRuntimeBindings struct {
 
 	publishedStreamSource runtime.StreamSource
 	publishedSnapshotSrc  runtime.ResettableSnapshotSource
+	liveFilterSetters     int
 }
 
 func (b *fakeRuntimeBindings) StreamBuffer() runtime.EventSink {
@@ -108,6 +111,7 @@ func (b *fakeRuntimeBindings) SetEventStreamSource(source runtime.StreamSource) 
 func (b *fakeRuntimeBindings) SetLiveTrie(runtime.LiveTrieSource)   {}
 func (b *fakeRuntimeBindings) SetProbeManager(runtime.ProbeManager) {}
 func (b *fakeRuntimeBindings) SetLiveFilterSetter(func(globalfilter.Filter)) func() {
+	b.liveFilterSetters++
 	return func() {}
 }
 
@@ -211,3 +215,112 @@ func (fakeSnapshotSource) Snapshot() (*statsengine.Snapshot, error) {
 }
 
 func (fakeSnapshotSource) Reset() {}
+
+// capturedTraceRun records what the TUI trace starter handed its trace run,
+// standing in for runTraceWithContext so the explicit request-to-setup path
+// can be checked without BPF.
+type capturedTraceRun struct {
+	cfg   flags.Config
+	hooks traceSetupHooks
+}
+
+func captureTraceRun(runs chan<- capturedTraceRun) traceRunFunc {
+	return func(_ context.Context, cfg flags.Config, started chan<- struct{}, configure func(*eventLoop), hooks traceSetupHooks) error {
+		configure(&eventLoop{})
+		runs <- capturedTraceRun{cfg: cfg, hooks: hooks}
+		close(started)
+		return nil
+	}
+}
+
+// TestTuiTraceStarterHandsRequestBindingsDownToSetup pins that the request's
+// bindings and shutdown reporter reach trace setup explicitly - the probe
+// manager publisher and the shutdown progress sink - and that the same
+// bindings wire the session runtime and its live filter setter. These used to
+// be fished out of the context at each layer, where a lost value silently
+// meant "no TUI".
+func TestTuiTraceStarterHandsRequestBindingsDownToSetup(t *testing.T) {
+	runs := make(chan capturedTraceRun, 1)
+	starter := tuiTraceStarterFromRunTrace(flags.NewFlags(), captureTraceRun(runs))
+	bindings := &fakeRuntimeBindings{sink: &fakeEventSink{}, seq: &fakeSequencer{}}
+	reporter := runtime.NewTraceShutdownReporter()
+
+	req := runtime.TraceRequest{Bindings: bindings, ShutdownReporter: reporter}
+	if err := starter(context.Background(), req); err != nil {
+		t.Fatalf("starter() error = %v", err)
+	}
+	run := <-runs
+
+	if run.hooks.probes != probeManagerPublisher(bindings) {
+		t.Fatalf("setup probe publisher = %v, want the request's bindings", run.hooks.probes)
+	}
+	if run.hooks.shutdown != reporter {
+		t.Fatal("setup shutdown reporter is not the request's reporter")
+	}
+	if bindings.publishedStreamSource != runtime.StreamSource(bindings.sink) {
+		t.Fatal("the session runtime was not wired to the request's bindings")
+	}
+	if bindings.liveFilterSetters != 1 {
+		t.Fatalf("live filter setters registered = %d, want 1 through the request's bindings", bindings.liveFilterSetters)
+	}
+}
+
+// TestTuiTraceStarterZeroRequestRunsWithoutTUI is the negative case: a zero
+// request (no bindings, no filter, no reporter) must reach setup as the
+// headless zero hooks - a true nil publisher, not a typed nil that setup
+// would call - and keep the starter's configured filter and PID/TID scope.
+func TestTuiTraceStarterZeroRequestRunsWithoutTUI(t *testing.T) {
+	base := flags.NewFlags()
+	base.PidFilter = 11
+	base.TidFilter = 12
+	base.GlobalFilter = globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "base"}}
+	runs := make(chan capturedTraceRun, 1)
+	starter := tuiTraceStarterFromRunTrace(base, captureTraceRun(runs))
+
+	if err := starter(context.Background(), runtime.TraceRequest{}); err != nil {
+		t.Fatalf("starter() error = %v", err)
+	}
+	run := <-runs
+
+	if run.hooks.probes != nil {
+		t.Fatalf("setup probe publisher = %#v, want nil without bindings", run.hooks.probes)
+	}
+	if run.hooks.shutdown != nil {
+		t.Fatal("setup got a shutdown reporter the request never carried")
+	}
+	if run.cfg.PidFilter != 11 || run.cfg.TidFilter != 12 {
+		t.Fatalf("scope = pid %d tid %d, want the configured 11/12 kept without a request filter",
+			run.cfg.PidFilter, run.cfg.TidFilter)
+	}
+	if run.cfg.GlobalFilter.Comm == nil || run.cfg.GlobalFilter.Comm.Pattern != "base" {
+		t.Fatalf("global filter = %+v, want the configured filter kept", run.cfg.GlobalFilter)
+	}
+}
+
+// TestTraceConfigForRequestDistinguishesAbsentFromEmptyFilter pins the one
+// place a nil and an empty request filter differ: an empty filter is a real
+// filter change (the user cleared every dimension) and drops the PID/TID
+// scope, while an absent one keeps the configured scope.
+func TestTraceConfigForRequestDistinguishesAbsentFromEmptyFilter(t *testing.T) {
+	base := flags.NewFlags()
+	base.PidFilter = 11
+	base.TidFilter = 12
+
+	if got := traceConfigForRequest(base, nil); got.PidFilter != 11 || got.TidFilter != 12 {
+		t.Fatalf("nil filter scope = pid %d tid %d, want 11/12 kept", got.PidFilter, got.TidFilter)
+	}
+	empty := globalfilter.Filter{}
+	if got := traceConfigForRequest(base, &empty); got.PidFilter != -1 || got.TidFilter != -1 {
+		t.Fatalf("empty filter scope = pid %d tid %d, want -1/-1", got.PidFilter, got.TidFilter)
+	}
+
+	filter := globalfilter.Filter{PID: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 42}}
+	got := traceConfigForRequest(base, &filter)
+	filter.PID.Value = 7
+	if got.PidFilter != 42 || got.TidFilter != -1 {
+		t.Fatalf("pid filter scope = pid %d tid %d, want 42/-1", got.PidFilter, got.TidFilter)
+	}
+	if got.GlobalFilter.PID == nil || got.GlobalFilter.PID.Value != 42 {
+		t.Fatalf("global filter PID = %+v, want a clone unaffected by the caller's edit", got.GlobalFilter.PID)
+	}
+}

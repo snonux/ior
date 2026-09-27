@@ -86,14 +86,9 @@ func validateRunConfig(cfg flags.Config) error {
 // tuiTestFlamesStarter returns a TraceStarter that seeds static test flame data
 // into the runtime bindings without starting BPF tracing.
 func tuiTestFlamesStarter(cfg flags.Config) runtime.TraceStarter {
-	return func(ctx context.Context) error {
+	return func(_ context.Context, req runtime.TraceRequest) error {
 		engine, streamBuf, liveTrie := buildTestFlamesRuntime(cfg)
-		// Only setter methods are needed here; use the narrower publisher interface.
-		if bindings, ok := runtime.RuntimePublisherFromContext(ctx); ok {
-			bindings.SetDashboardSnapshotSource(engine)
-			bindings.SetEventStreamSource(streamBuf)
-			bindings.SetLiveTrie(liveTrie)
-		}
+		publishTestFlamesRuntime(req.Bindings, engine, streamBuf, liveTrie)
 		return nil
 	}
 }
@@ -101,16 +96,28 @@ func tuiTestFlamesStarter(cfg flags.Config) runtime.TraceStarter {
 // tuiTestLiveFlamesStarter returns a TraceStarter that seeds a continuously
 // updating synthetic flame data source into the runtime bindings.
 func tuiTestLiveFlamesStarter(cfg flags.Config) runtime.TraceStarter {
-	return func(ctx context.Context) error {
+	return func(ctx context.Context, req runtime.TraceRequest) error {
 		engine, streamBuf, liveTrie := buildTestLiveFlamesRuntime(ctx, cfg)
-		// Only setter methods are needed here; use the narrower publisher interface.
-		if bindings, ok := runtime.RuntimePublisherFromContext(ctx); ok {
-			bindings.SetDashboardSnapshotSource(engine)
-			bindings.SetEventStreamSource(streamBuf)
-			bindings.SetLiveTrie(liveTrie)
-		}
+		publishTestFlamesRuntime(req.Bindings, engine, streamBuf, liveTrie)
 		return nil
 	}
+}
+
+// publishTestFlamesRuntime hands the synthetic test-flames components to the
+// TUI. Only setter methods are needed, so it takes the narrower publisher
+// side of the bindings; a nil publisher (no TUI attached) publishes nothing.
+func publishTestFlamesRuntime(
+	publisher runtime.RuntimePublisher,
+	engine *statsengine.Engine,
+	streamBuf *streamrow.RingBuffer,
+	liveTrie *flamegraph.LiveTrie,
+) {
+	if publisher == nil {
+		return
+	}
+	publisher.SetDashboardSnapshotSource(engine)
+	publisher.SetEventStreamSource(streamBuf)
+	publisher.SetLiveTrie(liveTrie)
 }
 
 // buildTestFlamesRuntime allocates a stats engine, stream buffer, and seeded
@@ -211,12 +218,13 @@ func (rt *tuiRuntime) currentFilterEpoch() uint64 {
 }
 
 // buildTUIRuntime constructs fresh trace-session components via RuntimeBuilder
-// and then wires them into any persistent runtime bindings found in ctx.
+// and then wires them into the persistent runtime bindings, when a TUI
+// supplied them (nil bindings leave the fresh components unwired).
 // Construction (allocating engine, buffer, sequencer, trie) is handled by
 // RuntimeBuilder; this function focuses on the wiring: reusing the persistent
 // stream buffer and sequencer from the TUI, reading the recorder and filter
 // epoch, and publishing the new components back to the runtime bindings.
-func buildTUIRuntime(ctx context.Context, cfg flags.Config) (*tuiRuntime, error) {
+func buildTUIRuntime(cfg flags.Config, bindings runtime.TraceRuntimeBindings) (*tuiRuntime, error) {
 	components := newRuntimeBuilder(cfg).Build()
 	rt := &tuiRuntime{
 		// Wire the same engine instance into both roles: accumulator for
@@ -229,7 +237,7 @@ func buildTUIRuntime(ctx context.Context, cfg flags.Config) (*tuiRuntime, error)
 		liveTrie:    components.liveTrie,
 	}
 
-	if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
+	if bindings != nil {
 		if err := wireRuntimeBindings(rt, bindings); err != nil {
 			return nil, err
 		}
@@ -240,7 +248,7 @@ func buildTUIRuntime(ctx context.Context, cfg flags.Config) (*tuiRuntime, error)
 // wireRuntimeBindings reuses persistent TUI-owned state (stream buffer,
 // sequencer, recorder, filter epoch) from bindings and publishes the freshly
 // built components back to the TUI so the new trace session is visible.
-// It is called only when a TraceRuntimeBindings is present in the context.
+// It is called only when the trace request carries TraceRuntimeBindings.
 func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) error {
 	// StreamBuffer returns the EventSink the core needs directly - the old
 	// read-only StreamSource return forced a downcast here, which turned a
@@ -269,9 +277,9 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 // the event loop into the TUI runtime and an ownership-aware function that
 // unregisters its live-filter setter. The callback sets the initial filter,
 // installs the print callback that fans out to engine/stream/trie, and
-// registers the setter so the TUI can swap filters without restarting BPF
-// probes.
-func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRuntime) (func(*eventLoop), func()) {
+// registers the setter with publisher so the TUI can swap filters without
+// restarting BPF probes. A nil publisher (no TUI attached) registers nothing.
+func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
 	// Overflow and genuine failures are warned about independently: a shed
 	// storm must not consume the once-guard that would later surface a
 	// real recorder error in the stream.
@@ -325,8 +333,8 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 		if sink, ok := rt.snapSource.(aggregateSink); ok {
 			el.SetAggregateSink(sink)
 		}
-		if bindings, ok := runtime.RuntimeBindingsFromContext(ctx); ok {
-			unregisterLiveFilterSetter = bindings.SetLiveFilterSetter(el.SetFilter)
+		if publisher != nil {
+			unregisterLiveFilterSetter = publisher.SetLiveFilterSetter(el.SetFilter)
 		}
 	}
 	unregister := func() {
@@ -338,9 +346,11 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 }
 
 // tuiTraceStarterFromRunTrace returns a runtime.TraceStarter that drives a
-// full BPF trace session from within the TUI lifecycle. It allocates
-// per-restart state via buildTUIRuntime, wires the event loop via
-// makeTUIEventLoopConfigurer, and starts the trace in a goroutine, signalling
+// full BPF trace session from within the TUI lifecycle. It derives the
+// session config from the request's filter, allocates per-restart state via
+// buildTUIRuntime, wires the event loop via makeTUIEventLoopConfigurer, and
+// hands the request's bindings and shutdown reporter explicitly down to setup
+// (traceSetupHooks). It starts the trace in a goroutine, signalling
 // the TUI once BPF probes are attached (via startedCh) or returning an error
 // if startup fails.
 //
@@ -353,10 +363,10 @@ func makeTUIEventLoopConfigurer(ctx context.Context, cfg flags.Config, rt *tuiRu
 // unless the context was cancelled, which means the caller asked for the stop.
 func tuiTraceStarterFromRunTrace(
 	baseCfg flags.Config,
-	startTrace func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error,
+	startTrace traceRunFunc,
 ) runtime.TraceStarter {
-	return func(ctx context.Context) error {
-		shutdownReporter, _ := runtime.TraceShutdownReporterFromContext(ctx)
+	return func(ctx context.Context, req runtime.TraceRequest) error {
+		shutdownReporter := req.ShutdownReporter
 		if shutdownReporter != nil && !shutdownReporter.Claim() {
 			return context.Canceled
 		}
@@ -368,17 +378,14 @@ func tuiTraceStarterFromRunTrace(
 			}
 		}()
 
-		cfg := baseCfg
-		if filter, ok := runtime.TraceFiltersFromContext(ctx); ok {
-			cfg.GlobalFilter = filter.Clone()
-			applyTraceScopeFromGlobalFilter(&cfg, filter)
-		}
+		cfg := traceConfigForRequest(baseCfg, req.Filter)
 
-		rt, err := buildTUIRuntime(ctx, cfg)
+		rt, err := buildTUIRuntime(cfg, req.Bindings)
 		if err != nil {
 			return err
 		}
-		configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(ctx, cfg, rt)
+		configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(cfg, rt, req.Bindings)
+		hooks := traceSetupHooks{probes: req.Bindings, shutdown: shutdownReporter}
 		startedCh := make(chan struct{})
 		// errCh carries at most one result from the trace goroutine to the
 		// outer select below.  done is closed on return so the goroutine can
@@ -391,7 +398,7 @@ func tuiTraceStarterFromRunTrace(
 		backgroundOwnsCompletion = true
 		go func() {
 			defer shutdownReporter.Complete()
-			err := startTrace(ctx, cfg, startedCh, configureEl)
+			err := startTrace(ctx, cfg, startedCh, configureEl, hooks)
 			unregisterLiveFilterSetter()
 			// Deliver the result only if the caller is still selecting.
 			// done is closed when the outer function returns, so the goroutine
@@ -469,6 +476,21 @@ func shouldIngestTracePair(filter globalfilter.Filter, pair *event.Pair) bool {
 	return filter.MatchPair(pair)
 }
 
+// traceConfigForRequest returns the config one TUI trace session runs with:
+// baseCfg with the request's filter applied. A nil filter keeps baseCfg's
+// filter and PID/TID scope as configured; a non-nil one replaces the global
+// filter with a clone (so the caller may keep mutating its own copy) and
+// derives the scope from it.
+func traceConfigForRequest(baseCfg flags.Config, filter *globalfilter.Filter) flags.Config {
+	cfg := baseCfg
+	if filter == nil {
+		return cfg
+	}
+	cfg.GlobalFilter = filter.Clone()
+	applyTraceScopeFromGlobalFilter(&cfg, cfg.GlobalFilter)
+	return cfg
+}
+
 func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filter) {
 	if cfg == nil {
 		return
@@ -492,7 +514,7 @@ func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filt
 }
 
 func runTrace(cfg flags.Config) error {
-	return runTraceWithContext(context.Background(), cfg, nil, nil)
+	return runTraceWithContext(context.Background(), cfg, nil, nil, traceSetupHooks{})
 }
 
 func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
@@ -644,15 +666,46 @@ func logTraceStopped(totalDuration time.Duration, logln func(...any)) {
 	logln("Trace stopped after", totalDuration, "- cleaning up...")
 }
 
+// traceRunFunc is the shape of runTraceWithContext, the seam through which the
+// TUI trace starter drives one trace run (and tests stub it).
+type traceRunFunc func(
+	parentCtx context.Context,
+	cfg flags.Config,
+	started chan<- struct{},
+	configure func(*eventLoop),
+	hooks traceSetupHooks,
+) error
+
+// probeManagerPublisher is the one publisher method trace setup needs: handing
+// the attached probe manager to the TUI probes view (and clearing it on
+// release). runtime.RuntimePublisher satisfies it.
+type probeManagerPublisher interface {
+	SetProbeManager(manager runtime.ProbeManager)
+}
+
+// traceSetupHooks are the per-session collaborators a TUI trace hands setup
+// explicitly, instead of setup fishing them out of the context. The zero
+// value is a headless run: nothing is published and no shutdown progress is
+// reported beyond the log.
+type traceSetupHooks struct {
+	// probes receives the probe manager once the syscall probes are attached,
+	// and nil again when the BPF side is released. Nil: no TUI attached.
+	probes probeManagerPublisher
+	// shutdown receives this session's shutdown progress. Nil: nobody waits.
+	shutdown *runtime.TraceShutdownReporter
+}
+
 // runTraceWithContext is the concrete BPF trace implementation. Root privilege
 // is checked by the mode handler (via runnerDeps.getEUID) before calling this
 // function; the handler is the authoritative place for the EUID gate.
-func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started chan<- struct{}, configure func(*eventLoop)) error {
+// hooks carries the TUI collaborators setup reports to; headless modes pass
+// the zero value.
+func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started chan<- struct{}, configure func(*eventLoop), hooks traceSetupHooks) error {
 	verbose := started == nil
 	logln := newLogger(verbose)
 	configure, recorder := maybePrependFlamegraphConfigure(cfg, configure)
 
-	infra, err := setupTraceInfra(parentCtx, cfg, started, logln)
+	infra, err := setupTraceInfra(parentCtx, cfg, started, hooks, logln)
 	if err != nil {
 		return err
 	}
@@ -755,9 +808,10 @@ func setupTraceInfra(
 	parentCtx context.Context,
 	cfg flags.Config,
 	started chan<- struct{},
+	hooks traceSetupHooks,
 	logln func(...any),
 ) (*traceInfra, error) {
-	return setupTraceInfraWithEventLoop(parentCtx, cfg, started, logln, newTraceEventLoop)
+	return setupTraceInfraWithEventLoop(parentCtx, cfg, started, hooks, logln, newTraceEventLoop)
 }
 
 // setupTraceInfraWithEventLoop owns the setup sequence shared by interactive,
@@ -768,6 +822,7 @@ func setupTraceInfraWithEventLoop(
 	parentCtx context.Context,
 	cfg flags.Config,
 	started chan<- struct{},
+	hooks traceSetupHooks,
 	logln func(...any),
 	buildEventLoop traceEventLoopFactory,
 ) (*traceInfra, error) {
@@ -789,12 +844,12 @@ func setupTraceInfraWithEventLoop(
 	warnings := &setupWarnings{}
 	warnSetup := warnings.add
 
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
 	if err != nil {
 		return nil, err
 	}
 
-	infra := newTraceInfra(parentCtx, mgr, logln)
+	infra := newTraceInfra(mgr, hooks.shutdown, logln)
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
@@ -826,10 +881,9 @@ func setupTraceInfraWithEventLoop(
 }
 
 // newTraceInfra returns the still-empty infrastructure of one run, with its
-// shutdown progress wired: every phase is logged through logln and, when
-// parentCtx carries a TUI shutdown reporter, published to it as well.
-func newTraceInfra(parentCtx context.Context, mgr *probemanager.Manager, logln func(...any)) *traceInfra {
-	reporter, _ := runtime.TraceShutdownReporterFromContext(parentCtx)
+// shutdown progress wired: every phase is logged through logln and, when the
+// session has a TUI shutdown reporter, published to it as well.
+func newTraceInfra(mgr *probemanager.Manager, reporter *runtime.TraceShutdownReporter, logln func(...any)) *traceInfra {
 	publish := func(progress runtime.TraceShutdownProgress) {
 		if reporter != nil {
 			reporter.Publish(progress)

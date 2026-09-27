@@ -20,16 +20,36 @@ const traceRestartWait = time.Second
 // observable: started via sessions, still live until ctx.Done fires.
 type recordingStarter struct {
 	sessions chan context.Context
+	// requests receives each session's TraceRequest, in the same order as
+	// sessions, so a test can check what the model handed the starter.
+	requests chan TraceRequest
 }
 
 func newRecordingStarter() *recordingStarter {
-	return &recordingStarter{sessions: make(chan context.Context, 8)}
+	return &recordingStarter{
+		sessions: make(chan context.Context, 8),
+		requests: make(chan TraceRequest, 8),
+	}
 }
 
-func (r *recordingStarter) start(ctx context.Context) error {
+func (r *recordingStarter) start(ctx context.Context, req TraceRequest) error {
+	r.requests <- req
 	r.sessions <- ctx
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// nextRequest returns the request of the next session the starter ran. Call
+// it after next, which is what waits for the session to begin.
+func (r *recordingStarter) nextRequest(t *testing.T) TraceRequest {
+	t.Helper()
+	select {
+	case req := <-r.requests:
+		return req
+	case <-time.After(traceRestartWait):
+		t.Fatal("trace starter recorded no request")
+		return TraceRequest{}
+	}
 }
 
 // next waits for the next trace session the starter was asked to run.
@@ -194,4 +214,55 @@ func TestInitOnPickerScreenStartsNoTrace(t *testing.T) {
 	}
 	m.tracer.stop()
 	m.tracer.stop()
+}
+
+// TestFilterChangeRestartHandsStarterTheNewFilter pins the filter restart
+// path end to end: with no live filter setter registered, a filter change
+// restarts the trace, and the restarted session must receive the new filter,
+// the same runtime bindings and a fresh shutdown reporter explicitly in its
+// TraceRequest. Before the request existed these rode on the context, where a
+// missing value silently meant "start without the TUI's filter".
+func TestFilterChangeRestartHandsStarterTheNewFilter(t *testing.T) {
+	const initialPID = 4242
+	starter := newRecordingStarter()
+	m := NewModel(initialPID, starter.start)
+	t.Cleanup(m.tracer.stop)
+
+	runCmdAsync(m.Init())
+	first := starter.next(t)
+	firstReq := starter.nextRequest(t)
+	if firstReq.Bindings != TraceRuntimeBindings(m.runtime) {
+		t.Fatal("initial session did not receive the model's runtime bindings")
+	}
+	if firstReq.Filter == nil || firstReq.Filter.PID == nil || firstReq.Filter.PID.Value != initialPID {
+		t.Fatalf("initial session filter = %+v, want the startup PID %d", firstReq.Filter, initialPID)
+	}
+
+	changed := m.filters.current()
+	changed.Comm = &globalfilter.StringFilter{Pattern: "nginx"}
+	_, cmd := m.applyGlobalFilter(changed, "comm")
+	if !m.attaching {
+		t.Fatal("filter change without a live setter did not take the restart path")
+	}
+	runCmdAsync(cmd)
+	requireCancelled(t, first, "initial session after filter restart")
+	second := starter.next(t)
+	requireLive(t, second, "restarted session")
+	secondReq := starter.nextRequest(t)
+
+	if secondReq.Filter == nil || secondReq.Filter.Comm == nil || secondReq.Filter.Comm.Pattern != "nginx" {
+		t.Fatalf("restarted session filter = %+v, want the new comm filter", secondReq.Filter)
+	}
+	if secondReq.Filter.PID == nil || secondReq.Filter.PID.Value != initialPID {
+		t.Fatalf("restarted session filter = %+v, want the PID scope kept", secondReq.Filter)
+	}
+	if firstReq.Filter.Comm != nil {
+		t.Fatalf("the restart mutated the previous session's filter: %+v", firstReq.Filter.Comm)
+	}
+	if secondReq.Bindings != firstReq.Bindings {
+		t.Fatal("restarted session received different runtime bindings")
+	}
+	if secondReq.ShutdownReporter == nil || secondReq.ShutdownReporter == firstReq.ShutdownReporter {
+		t.Fatal("restarted session did not receive its own shutdown reporter")
+	}
 }

@@ -1,14 +1,12 @@
 package internal
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
 	appconfig "ior/internal/config"
 	"ior/internal/flags"
 	"ior/internal/probemanager"
-	"ior/internal/runtime"
 	"ior/internal/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -82,8 +80,9 @@ func (l bpfSetupLog) withDefaults() bpfSetupLog {
 }
 
 // setupBPFModule loads and attaches the BPF module, attaching tracepoints
-// and registering the probe manager with any TUI runtime bindings.
-func setupBPFModule(parentCtx context.Context, cfg flags.Config, log bpfSetupLog) (*bpf.Module, *probemanager.Manager, func(), error) {
+// and handing the probe manager to probes, the TUI publisher of the session.
+// A nil probes (headless modes) registers the manager nowhere.
+func setupBPFModule(cfg flags.Config, probes probeManagerPublisher, log bpfSetupLog) (*bpf.Module, *probemanager.Manager, func(), error) {
 	releaseBindings := func() {}
 	log = log.withDefaults()
 
@@ -129,12 +128,12 @@ func setupBPFModule(parentCtx context.Context, cfg flags.Config, log bpfSetupLog
 		bpfModule.Close()
 		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)
 	}
-	// setupBPFModule only injects the probe manager; it does not read TUI state,
-	// so RuntimePublisher is the correct narrower interface to use here.
-	if bindings, ok := runtime.RuntimePublisherFromContext(parentCtx); ok {
-		bindings.SetProbeManager(mgr)
+	// setupBPFModule only injects the probe manager; it does not read TUI
+	// state, so the one-method probeManagerPublisher is all it takes.
+	if probes != nil {
+		probes.SetProbeManager(mgr)
 		releaseBindings = func() {
-			bindings.SetProbeManager(nil)
+			probes.SetProbeManager(nil)
 			releaseSchedProbes()
 		}
 		return bpfModule, mgr, releaseBindings, nil

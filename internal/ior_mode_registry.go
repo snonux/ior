@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -26,8 +25,9 @@ type runnerDeps struct {
 	runParquet func(flags.Config) error
 
 	// runTraceWithContext drives a BPF trace with a parent context, started
-	// signal channel, and event-loop configurator. Used by the TUI starter.
-	runTraceWithContext func(context.Context, flags.Config, chan<- struct{}, func(*eventLoop)) error
+	// signal channel, event-loop configurator, and the TUI setup hooks. Used
+	// by the TUI starter.
+	runTraceWithContext traceRunFunc
 
 	// runTUI launches the interactive TUI backed by a live BPF trace.
 	// Injected by the cmd layer through Run's TUIRunners argument so that the

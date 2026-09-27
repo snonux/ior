@@ -27,7 +27,7 @@ func (r *liveFilterRecorder) set(filter globalfilter.Filter) {
 // stops the trace.
 func newLiveSwapModel(t *testing.T) (*Model, *liveFilterRecorder) {
 	t.Helper()
-	m := NewModel(-1, func(context.Context) error { return nil })
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.screen = ScreenDashboard
 	m.attaching = false
 	m.width = 120
