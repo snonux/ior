@@ -21,10 +21,10 @@ const (
 func TestNotificationRowsKeepBothIdentities(t *testing.T) {
 	tests := []struct {
 		name, path, want string
-		fanotify        bool
-		dirfd           int32
-		status, flags   uint32
-		ret             int64
+		fanotify         bool
+		dirfd            int32
+		status, flags    uint32
+		ret              int64
 	}{
 		{name: "inotify absolute", path: "/watch/file", want: "/watch/file", ret: 81},
 		{name: "inotify relative", path: "watched", want: "watched", ret: 81},

@@ -135,12 +135,6 @@ func (s *tickScheduler) bubbleCmd() tea.Cmd {
 	return tea.Tick(bubbleRefreshMs*time.Millisecond, func(time.Time) tea.Msg { return bubbleTickMsg{generation: gen} })
 }
 
-// startRefresh supersedes the refresh chain and schedules its first tick.
-func (s *tickScheduler) startRefresh() tea.Cmd {
-	s.refresh.restart()
-	return s.refreshCmd()
-}
-
 // startStream supersedes the fast chain and starts it on the stream cadence.
 func (s *tickScheduler) startStream() tea.Cmd {
 	s.fast.restart()
