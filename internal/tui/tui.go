@@ -288,7 +288,7 @@ func (r *runtimeBindings) advanceFilterEpoch() uint64 {
 // is the one path real users take, and a dropped or misnamed field there is
 // silently valid Go. Without this seam, removing initialPID left the whole
 // suite green while `ior -pid <n>` would open the PID picker instead of the
-// dashboard and never call beginTraceCmd().
+// dashboard and never start a trace (Init would not request one).
 func newRunModel(cfg flags.Config, starter TraceStarter) *Model {
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    cfg.PidFilter,
@@ -617,10 +617,17 @@ func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fa
 // happens on Update, the one place Bubble Tea serialises them.
 func (m *Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
-	if m.router.current() == ScreenDashboard && m.attaching {
+	if m.attachingOnDashboard() {
 		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, initialTraceStartCmd)
 	}
 	return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.pidPicker.Init())
+}
+
+// attachingOnDashboard reports whether the dashboard is shown while a trace
+// is still being attached: the startup state of a picker-skipping run and the
+// state every trace restart enters until TracingStartedMsg arrives.
+func (m *Model) attachingOnDashboard() bool {
+	return m.router.current() == ScreenDashboard && m.attaching
 }
 
 // initialTraceStartMsg asks Update to start the trace a picker-skipping
@@ -636,7 +643,7 @@ func initialTraceStartCmd() tea.Msg { return initialTraceStartMsg{} }
 // found no session to stop, so starting one now would outlive the program), or
 // a session is already running (a repeated Init must not restart it).
 func (m *Model) handleInitialTraceStart() (tea.Model, tea.Cmd) {
-	if m.router.current() != ScreenDashboard || !m.attaching || m.quitting || m.tracer.running() {
+	if !m.attachingOnDashboard() || m.quitting || m.tracer.running() {
 		return m, nil
 	}
 	return m, m.beginTraceCmd()
@@ -936,7 +943,7 @@ func (m *Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.C
 // when a modal is active the quit key is re-routed as Esc so modals close
 // before the user needs to press q again.
 func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
-	if m.router.current() == ScreenDashboard && m.attaching {
+	if m.attachingOnDashboard() {
 		return m.quitWithBestEffortCleanup()
 	}
 	if m.canHandleDashboardShortcut(msg) {

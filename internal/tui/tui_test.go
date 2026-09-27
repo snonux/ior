@@ -144,9 +144,8 @@ func TestInitialPIDSkipsPickerAndStartsTracing(t *testing.T) {
 		t.Fatalf("expected initial screen dashboard, got %v", m.router.current())
 	}
 
-	cmd := m.Init()
-	if cmd == nil {
-		t.Fatalf("expected init command when initial pid is set")
+	if !cmdEmits[initialTraceStartMsg](m.Init()) {
+		t.Fatal("Init with an initial pid must request the startup trace")
 	}
 }
 
@@ -2622,7 +2621,7 @@ func TestNewTestFlamesModelSkipsPickerWithoutPidFilter(t *testing.T) {
 		t.Fatalf("expected dashboard screen (picker skipped), got %v", m.router.current())
 	}
 	if !m.attaching {
-		t.Fatalf("expected attaching state so Init() starts the seeded trace")
+		t.Fatalf("expected attaching state so Init() requests the seeded trace")
 	}
 	if m.proc.pid != -1 {
 		t.Fatalf("expected no pid filter, got %d", m.proc.pid)
@@ -2696,7 +2695,7 @@ func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 		t.Fatalf("a -pid attach target must start on the dashboard, got %v", m.router.current())
 	}
 	if !m.attaching {
-		t.Fatal("a -pid attach target must start attaching, or Init() never calls beginTraceCmd()")
+		t.Fatal("a -pid attach target must start attaching, or Init() never requests the startup trace")
 	}
 	if m.proc.pid != 1234 {
 		t.Fatalf("expected pid filter 1234, got %d", m.proc.pid)
