@@ -240,10 +240,11 @@ type SnapshotSource interface {
 // ResettableSnapshotSource is the dashboard's stats-source contract: the read
 // side (SnapshotSource) plus Reset, which clears accumulated statistics and
 // restarts the series baselines. The dashboard resets its source on a baseline
-// reset (the refresh key and auto-reset ticks) and after a probe toggle, so
-// Reset is part of the contract rather than an optional capability discovered
-// by type assertion — a source that cannot reset must not be wireable into the
-// dashboard, instead of silently ignoring those resets.
+// reset (the refresh key and auto-reset ticks), after a probe toggle and after
+// an in-place filter swap, so Reset is part of the contract rather than an
+// optional capability discovered by type assertion — a source that cannot
+// reset must not be wireable into the dashboard, instead of silently ignoring
+// those resets.
 // *statsengine.Engine satisfies this interface.
 type ResettableSnapshotSource interface {
 	SnapshotSource

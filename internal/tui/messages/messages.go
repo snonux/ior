@@ -23,10 +23,19 @@ type TidSelectedMsg struct {
 // means building the snapshot failed; Snap is then nil and receivers keep
 // their last good snapshot rather than blanking the view on a transient
 // failure.
+//
+// Generation is the dashboard's stats generation at the moment the snapshot
+// was taken. Every stats reset starts a new generation, and the dashboard
+// drops a tick from an older one: a refresh tick built just before a reset
+// can otherwise arrive after the post-reset snapshot and put the pre-reset
+// numbers back on screen for a whole refresh interval. Zero means the tick
+// was not built by the dashboard's own snapshot path and is always accepted.
 type StatsTickMsg struct {
 	Snap *statsengine.Snapshot
 	// Err is non-nil when snapshot construction failed.
 	Err error
+	// Generation is the stats generation the snapshot belongs to (0: unversioned).
+	Generation uint64
 }
 
 // ExportRequestMsg requests an export of the current UI state.
