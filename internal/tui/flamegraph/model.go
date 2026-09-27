@@ -761,14 +761,35 @@ func (m *Model) Paused() bool {
 	return m.paused
 }
 
-// SetViewport updates model render dimensions.
-func (m *Model) SetViewport(width, height int) {
+// Animating reports whether a frame transition is in progress, that is
+// whether the frames on screen are still interpolated towards the layout.
+func (m *Model) Animating() bool {
+	return m.anim.isAnimating()
+}
+
+// ResumeAnimationCmd restarts the tick loop of a running animation after a
+// period in which its ticks may have been dropped, such as while the
+// dashboard showed another tab. It retires the old loop first, so its tick is
+// dropped if it does arrive and a lost tick does not hold the new loop back
+// for tickLostAfter: there is exactly one loop afterwards while animating,
+// and none (and no command) otherwise.
+func (m *Model) ResumeAnimationCmd() tea.Cmd {
+	m.anim.retireTicks()
+	return m.startAnimationCmd()
+}
+
+// SetViewport updates model render dimensions. With animate the frames spring
+// to the new layout and the returned command drives the animation (nil when a
+// tick loop is already live or nothing moves); without it they snap, as for a
+// hidden flame tab whose ticks the dashboard does not deliver.
+func (m *Model) SetViewport(width, height int, animate bool) tea.Cmd {
 	if m.width == width && m.height == height {
-		return
+		return nil
 	}
 	m.width = width
 	m.height = height
-	m.rebuildFrames(true)
+	m.rebuildFrames(animate)
+	return m.startAnimationCmd()
 }
 
 // SetDarkMode sets the active color theme mode. Delegates the text input style

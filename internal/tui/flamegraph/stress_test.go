@@ -185,7 +185,7 @@ func runStressRenderLoop(
 	defer ticker.Stop()
 
 	model := NewModel(liveTrie)
-	model.SetViewport(stressViewWidth, stressViewHeight)
+	model.SetViewport(stressViewWidth, stressViewHeight, true)
 	stats := stressRenderStats{}
 	for {
 		if stats.err = renderStressSample(model, &stats, partialObserved); stats.err != nil {
@@ -325,7 +325,7 @@ func measureStressRenderCost(t *testing.T, liveTrie *coreflamegraph.LiveTrie) {
 	t.Helper()
 
 	model := NewModel(liveTrie)
-	model.SetViewport(stressViewWidth, stressViewHeight)
+	model.SetViewport(stressViewWidth, stressViewHeight, true)
 	if !model.RefreshFromLiveTrie() {
 		t.Fatal("render cost setup did not load the baseline snapshot")
 	}
@@ -485,7 +485,7 @@ func TestFlameRefreshUsesTheTreeSnapshot(t *testing.T) {
 	}
 
 	model := NewModel(trie)
-	model.SetViewport(stressViewWidth, stressViewHeight)
+	model.SetViewport(stressViewWidth, stressViewHeight, true)
 	if changed := model.RefreshFromLiveTrie(); !changed {
 		t.Fatal("expected the first refresh to apply a snapshot")
 	}
@@ -567,7 +567,7 @@ func TestStressZoomDuringRefresh(t *testing.T) {
 	ingestStressEvents(liveTrie, 200, 0)
 
 	model := NewModel(liveTrie)
-	model.SetViewport(120, 40)
+	model.SetViewport(120, 40, true)
 	if changed := model.RefreshFromLiveTrie(); !changed {
 		t.Fatal("expected initial live trie refresh")
 	}

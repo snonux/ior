@@ -34,7 +34,7 @@ func TestNewModelDefaults(t *testing.T) {
 
 func TestSetViewportAndDarkMode(t *testing.T) {
 	m := NewModel(nil)
-	m.SetViewport(120, 40)
+	m.SetViewport(120, 40, true)
 	m.SetDarkMode(false)
 	if m.width != 120 || m.height != 40 {
 		t.Fatalf("expected viewport 120x40, got %dx%d", m.width, m.height)
@@ -468,7 +468,7 @@ func TestStaticFixtureArrowTraversalVisitsAllFrames(t *testing.T) {
 	coreflamegraph.SeedTestFlameData(trie)
 
 	m := NewModel(trie)
-	m.SetViewport(180, 40)
+	m.SetViewport(180, 40, true)
 	if changed := m.RefreshFromLiveTrie(); !changed {
 		t.Fatalf("expected seeded fixture refresh to load frames")
 	}
@@ -499,7 +499,7 @@ func TestLiveFixtureArrowTraversalWhileStreamingVisitsAllFrames(t *testing.T) {
 	coreflamegraph.SeedTestLiveFlameData(trie, 0)
 
 	m := NewModel(trie)
-	m.SetViewport(180, 40)
+	m.SetViewport(180, 40, true)
 	if changed := m.RefreshFromLiveTrie(); !changed {
 		t.Fatalf("expected initial refresh to load frames")
 	}
@@ -558,7 +558,7 @@ func TestSelectionRestoresByPathAcrossLiveRefresh(t *testing.T) {
 	coreflamegraph.SeedTestLiveFlameData(trie, 0)
 
 	m := NewModel(trie)
-	m.SetViewport(180, 40)
+	m.SetViewport(180, 40, true)
 	if changed := m.RefreshFromLiveTrie(); !changed {
 		t.Fatalf("expected initial refresh")
 	}
@@ -1360,7 +1360,7 @@ func TestSetViewportSameSizeKeepsPausedZoomLayoutStable(t *testing.T) {
 
 	beforeFrames := append([]tuiFrame(nil), m.anim.frames...)
 	beforeTargets := append([]tuiFrame(nil), m.anim.targetFrames...)
-	m.SetViewport(m.width, m.height)
+	m.SetViewport(m.width, m.height, true)
 
 	if m.anim.animating {
 		t.Fatalf("expected redundant viewport set to avoid starting animation")

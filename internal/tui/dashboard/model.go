@@ -209,12 +209,12 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	// Sync stream footer visibility so it matches the current help-bar state.
 	// This covers the case where showHelp was set before the first resize event.
 	m.streamModel.SetFooterVisible(m.showHelp)
-	m.syncFlameViewport()
+	flameCmd := m.syncFlameViewport()
 	m.setBubbleViewports()
 	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return m, m.ticks.startBubble()
+		return m, batchCmds(flameCmd, m.ticks.startBubble())
 	}
-	return m, nil
+	return m, flameCmd
 }
 
 func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) {
@@ -304,12 +304,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !handled {
 		return m.handleUnhandledKey(msg)
 	}
-	// When the user switches to the flame tab from any other tab, the flamegraph
-	// model needs its viewport updated to reflect the current dimensions.
-	// Window-resize and help-toggle already call SetViewport; tab switching does
-	// not, so we compensate here before returning the updated model to the runtime.
 	if prevActiveTab != m.activeTab && m.activeTab == TabFlame {
-		m.syncFlameViewport()
+		cmd = batchCmds(cmd, m.enterFlameTab())
 	}
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
 }
@@ -527,9 +523,9 @@ func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.C
 	// The flamegraph viewport shrinks/grows when the help bar expands/collapses;
 	// the live stream footer row follows the help bar, while the paused
 	// selection/column/search footer always renders (see eventstream.Model.View).
-	m.syncFlameViewport()
+	flameCmd := m.syncFlameViewport()
 	m.streamModel.SetFooterVisible(m.showHelp)
-	return true, m, nil
+	return true, m, flameCmd
 }
 
 func (m *Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -1058,7 +1054,9 @@ func (m *Model) SetLiveTrie(liveTrie coreflamegraph.LiveTrieSource) {
 	m.liveTrie = liveTrie
 	m.flamegraphModel.SetLiveTrie(liveTrie)
 	if m.width > 0 && m.height > 0 {
-		m.syncFlameViewport()
+		// SetLiveTrie dropped every frame, so there is nothing to animate
+		// and no tick to schedule.
+		_ = m.syncFlameViewport()
 	}
 	m.flamegraphModel.RefreshFromLiveTrie()
 }
@@ -1159,9 +1157,25 @@ func (m *Model) activeTableHeight() int {
 }
 
 // syncFlameViewport sizes the flamegraph sub-model to the Flame tab's
-// content viewport.
-func (m *Model) syncFlameViewport() {
-	m.flamegraphModel.SetViewport(m.contentViewport(TabFlame, m.width, m.height))
+// content viewport and returns the command driving the resulting frame
+// animation, which the caller must hand to the runtime: without it the
+// frames stay at the first interpolated step. A hidden Flame tab snaps
+// instead of animating, because handleActiveTabMsg drops animation ticks
+// while another tab is active.
+func (m *Model) syncFlameViewport() tea.Cmd {
+	width, height := m.contentViewport(TabFlame, m.width, m.height)
+	return m.flamegraphModel.SetViewport(width, height, m.activeTab == TabFlame)
+}
+
+// enterFlameTab brings the flamegraph up to date when the Flame tab becomes
+// active. An animation left running when the user switched away lost its
+// tick (handleActiveTabMsg drops them off-tab), so the tick loop is restarted
+// first; the viewport sync then reuses that loop, keeping it to one. The sync
+// itself is normally a no-op, since hidden resizes already snapped the layout,
+// and stays as a guard against a viewport that was never set.
+func (m *Model) enterFlameTab() tea.Cmd {
+	resume := m.flamegraphModel.ResumeAnimationCmd()
+	return batchCmds(resume, m.syncFlameViewport())
 }
 
 // syncStreamViewport sizes the event-stream sub-model to the Stream tab's
