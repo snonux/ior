@@ -13,9 +13,10 @@ import (
 // before the change, re-find it afterwards, and clamp the offset against the
 // new list when the item is gone (or when there is nothing to follow).
 //
-// A tab exposes one through an accessor (filesDirSelection,
-// syscallsTreemapSelection, processesSelection) and wires it into its
-// CaptureSelection and KeepSelection registry hooks.
+// A tab exposes one per selection through an accessor (filesDirSelection,
+// syscallsTableSelection, syscallsTreemapSelection, processesTableSelection,
+// processesTreemapSelection) and wires them into its CaptureSelection and
+// KeepSelection registry hooks.
 type keyedSelection struct {
 	// offset is the selection index the tab renders and navigates with.
 	offset *int
@@ -62,6 +63,37 @@ func (s keyedSelection) keep(change func()) {
 	reanchor()
 }
 
+// keepSelections runs change exactly once and keeps every one of sels on
+// its selected item across it: for a tab whose several selections (table
+// and treemap) a single change can reorder.
+func keepSelections(change func(), sels ...keyedSelection) {
+	reanchors := make([]func(), 0, len(sels))
+	for _, sel := range sels {
+		reanchors = append(reanchors, sel.capture(true))
+	}
+	change()
+	captureSelections(reanchors...)()
+}
+
+// captureSelections combines the re-anchor functions of several captures
+// into one CaptureSelection result.
+func captureSelections(reanchors ...func()) func() {
+	return func() {
+		for _, reanchor := range reanchors {
+			reanchor()
+		}
+	}
+}
+
+// keysOf maps rows to their selection keys, in order.
+func keysOf[T any](rows []T, key func(T) string) []string {
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, key(row))
+	}
+	return keys
+}
+
 // findKeyOffset locates key in a keyedSelection's key list.
 func findKeyOffset(keys []string, key string) (int, bool) {
 	index := slices.Index(keys, key)
@@ -71,11 +103,7 @@ func findKeyOffset(keys []string, key string) (int, bool) {
 // treemapItemKeys returns the selection keys of treemap items in layout
 // order, so index i here is tile i on screen.
 func treemapItemKeys(items []syscallTreemapItem) []string {
-	keys := make([]string, 0, len(items))
-	for _, item := range items {
-		keys = append(keys, item.Key)
-	}
-	return keys
+	return keysOf(items, func(item syscallTreemapItem) string { return item.Key })
 }
 
 // processKey is a process's selection identity: its PID. The treemap items

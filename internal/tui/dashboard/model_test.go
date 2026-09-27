@@ -415,8 +415,8 @@ func TestStatsTickReanchorsSortedProcessSelectionByPID(t *testing.T) {
 	if model.processesTab.offset != 2 {
 		t.Fatalf("expected selected worker row reanchored to offset 2, got %d", model.processesTab.offset)
 	}
-	if selected := model.selectedProcessPID(); selected != 200 {
-		t.Fatalf("expected selected process PID 200 after stats refresh, got %d", selected)
+	if selected, _ := model.selectedProcessSnapshot(); selected.PID != 200 {
+		t.Fatalf("expected selected process PID 200 after stats refresh, got %d", selected.PID)
 	}
 }
 
@@ -526,8 +526,8 @@ func TestSyscallsSortReanchorsSelectedSyscall(t *testing.T) {
 	if model.syscallsTab.offset != 0 {
 		t.Fatalf("expected selected read row reanchored to offset 0, got %d", model.syscallsTab.offset)
 	}
-	if selected := model.selectedSyscallName(); selected != "read" {
-		t.Fatalf("expected selected syscall read after reanchor, got %q", selected)
+	if selected, _ := model.selectedSyscallSnapshot(); selected.Name != "read" {
+		t.Fatalf("expected selected syscall read after reanchor, got %q", selected.Name)
 	}
 }
 
@@ -620,8 +620,8 @@ func TestStatsTickReanchorsSortedSyscallSelectionByName(t *testing.T) {
 	if model.syscallsTab.offset != 2 {
 		t.Fatalf("expected selected write row reanchored to offset 2, got %d", model.syscallsTab.offset)
 	}
-	if selected := model.selectedSyscallName(); selected != "write" {
-		t.Fatalf("expected selected syscall write after stats refresh, got %q", selected)
+	if selected, _ := model.selectedSyscallSnapshot(); selected.Name != "write" {
+		t.Fatalf("expected selected syscall write after stats refresh, got %q", selected.Name)
 	}
 }
 

@@ -63,9 +63,9 @@ type tabDescriptor struct {
 	// KeepSelection runs change - a change that reorders or resizes the
 	// tab's item list - so that the selected item survives it. It is run
 	// for the active tab on its own viz-mode and metric changes, and for
-	// every registered tab on global layout changes (terminal resize, help
-	// bar toggle; see keepAllSelections), so it must call change exactly
-	// once. Nil means the change is applied as is.
+	// every registered tab on global changes (terminal resize, help bar
+	// toggle, global filter swap; see keepAllSelections), so it must call
+	// change exactly once. Nil means the change is applied as is.
 	KeepSelection func(m *Model, change func())
 	// ContentViewport returns this tab's content viewport from the terminal
 	// size. It is the single source of that size: View() lays the tab out in
@@ -344,8 +344,9 @@ func (m *Model) keepSelection(tab Tab, change func()) {
 	change()
 }
 
-// keepAllSelections applies change - a global layout change such as a
-// terminal resize or the help bar toggle - through every registered tab's
+// keepAllSelections applies change - a global change such as a terminal
+// resize, the help bar toggle or a global filter swap - through every
+// registered tab's
 // KeepSelection hook, so each tab's selection survives it whether or not
 // the tab is active. The hooks nest in orderedTabs order (the first tab's
 // hook is outermost) and change runs exactly once, innermost.
@@ -460,7 +461,7 @@ func tabRenderFiles(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, 
 func tabRenderProcesses(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, _ *flamegraphtui.Model, width, height int) string {
 	switch m.processesTab.mode {
 	case tabVizModeTreemap:
-		return renderProcessesTreemap(snap, width, height, m.processesTab.bubble.Metric(), m.processesTab.offset, m.isDark)
+		return renderProcessesTreemap(snap, width, height, m.processesTab.bubble.Metric(), m.processesTreemapOffset, m.isDark)
 	case tabVizModeBubbles:
 		return m.processesTab.bubble.Render("Processes", width, height)
 	}
@@ -474,17 +475,13 @@ func tabRenderProcesses(m *Model, snap *statsengine.Snapshot, _ *eventstream.Mod
 // Unsorted the table tracks the row position, so only a sorted table
 // re-anchors by syscall name. The treemap reorders by metric value on every
 // refresh, so its selection always follows the syscall name (see
-// syscallsTreemapSelection), falling back to a clamp when it is gone.
+// syscallsTreemapSelection). Either falls back to a clamp when its syscall
+// is gone.
 func captureSyscallsSelection(m *Model) func() {
-	selected := ""
-	if m.syscallsTab.sort.active {
-		selected = m.selectedSyscallName()
-	}
-	reanchorTreemap := m.syscallsTreemapSelection().capture(true)
-	return func() {
-		m.reanchorSyscallsOffset(selected)
-		reanchorTreemap()
-	}
+	return captureSelections(
+		m.syscallsTableSelection().capture(m.syscallsTab.sort.active),
+		m.syscallsTreemapSelection().capture(true),
+	)
 }
 
 // captureFilesSelection is the Files tab's CaptureSelection hook. The
@@ -492,26 +489,27 @@ func captureSyscallsSelection(m *Model) func() {
 // skipping it would let the selection drift to a different item by the time
 // the Files tab is shown again.
 func captureFilesSelection(m *Model) func() {
-	selectedFile, selectedDir := "", ""
-	if m.filesDirGrouped {
-		if m.filesDirAnchorsByKey() {
-			selectedDir = m.selectedFilesDirKey()
-		}
-	} else if m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
+	selectedFile := ""
+	if !m.filesDirGrouped && m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
 		selectedFile = m.selectedFilePath()
 	}
+	reanchorDir := m.filesDirSelection().capture(m.filesDirGrouped && m.filesDirAnchorsByKey())
 	return func() {
 		m.reanchorFilesOffset(selectedFile)
-		m.reanchorFilesDirOffset(selectedDir)
+		reanchorDir()
 	}
 }
 
-// captureProcessesSelection is the Processes tab's CaptureSelection hook:
-// the treemap and a sorted table re-anchor by PID (processesAnchorsByKey),
-// an unsorted table keeps the position; either way the offset is clamped
-// against the new item list when the process is gone.
+// captureProcessesSelection is the Processes tab's CaptureSelection hook,
+// the Syscalls rule by PID: a sorted table (and bubbles mode, which shares
+// the table offset) re-anchors by PID, an unsorted one keeps the position,
+// and the treemap always follows the PID. Each has its own offset, so a
+// PID without a treemap tile never moves the table selection.
 func captureProcessesSelection(m *Model) func() {
-	return m.processesSelection().capture(m.processesAnchorsByKey())
+	return captureSelections(
+		m.processesTableSelection().capture(m.processesTab.sort.active),
+		m.processesTreemapSelection().capture(true),
+	)
 }
 
 // handleFilesKey is the Files tab's HandleKey hook: the directory-grouping
@@ -529,7 +527,8 @@ func handleFilesKey(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func tabScrollSyscalls(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	if m.syscallsTab.mode == tabVizModeTreemap {
-		return scrollOffset(keyStr, &m.syscallsTreemapOffset, len(m.syscallsTreemapKeys())), nil
+		sel := m.syscallsTreemapSelection()
+		return scrollOffset(keyStr, sel.offset, len(sel.keys())), nil
 	}
 	return m.syscallsTab.navigate(keyStr, m.syscallsRowCount(),
 		len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
@@ -549,8 +548,14 @@ func tabScrollFiles(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 // tabScrollProcesses handles navigation keys for the processes tab.
+// When the treemap viz is active it moves the treemap's own selection over
+// its tiles, like tabScrollSyscalls.
 func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	return m.processesTab.navigate(msg.String(), m.processesRowCountForMode(),
+	if m.processesTab.mode == tabVizModeTreemap {
+		sel := m.processesTreemapSelection()
+		return scrollOffset(msg.String(), sel.offset, len(sel.keys())), nil
+	}
+	return m.processesTab.navigate(msg.String(), m.processesRowCount(),
 		len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 }
 
