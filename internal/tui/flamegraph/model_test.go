@@ -344,7 +344,7 @@ func TestZoomLineageParentsAreNeverNarrowerThanChildren(t *testing.T) {
 		if parentPath == "" {
 			continue
 		}
-		parentIdx := m.frameIndexByPath(parentPath)
+		parentIdx := m.anim.indexByPath(parentPath)
 		if parentIdx < 0 {
 			continue
 		}
