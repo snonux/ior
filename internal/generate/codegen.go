@@ -55,9 +55,11 @@ func GenerateTracepointsC(formats []Format) string {
 	}
 	b.WriteString("\n")
 
-	for _, tp := range accepted {
+	for i, tp := range accepted {
 		b.WriteString(generateBPFHandler(tp))
-		b.WriteString("\n")
+		if i < len(accepted)-1 {
+			b.WriteString("\n")
+		}
 	}
 
 	return b.String()
