@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -82,39 +83,89 @@ func (l bpfSetupLog) withDefaults() bpfSetupLog {
 // setupBPFModule loads and attaches the BPF module, attaching tracepoints
 // and handing the probe manager to probes, the TUI publisher of the session.
 // A nil probes (headless modes) registers the manager nowhere.
-func setupBPFModule(cfg flags.Config, probes probeManagerPublisher, log bpfSetupLog) (*bpf.Module, *probemanager.Manager, func(), error) {
-	releaseBindings := func() {}
+//
+// ctx is the trace session's parent context. Loading and attaching take
+// seconds, and a TUI restart cancels the old session without waiting for it,
+// so setup checks ctx between its stages and stops attaching the moment it is
+// cancelled (see attachTraceProbes). A cancelled setup releases everything it
+// built and returns an error wrapping ctx.Err(), so the caller can tell a
+// requested stop (errors.Is(err, context.Canceled)) from a real failure. Most
+// importantly it never publishes the probe manager: a session the user has
+// already abandoned must not hand the TUI a manager that is about to close.
+func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPublisher, log bpfSetupLog) (*bpf.Module, *probemanager.Manager, func(), error) {
+	noRelease := func() {}
 	log = log.withDefaults()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, noRelease, setupBPFModuleError("start", err)
+	}
 
-	bpfModule, stage, err := loadBPFModule()
+	bpfModule, stage, err := loadConfiguredBPFModule(cfg)
 	if err != nil {
-		return nil, nil, releaseBindings, setupBPFModuleError(stage, err)
+		if bpfModule != nil {
+			bpfModule.Close()
+		}
+		return nil, nil, noRelease, setupBPFModuleError(stage, err)
 	}
-	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
+	// Loading is the other slow stage; do not start attaching for a session
+	// that was cancelled while it ran.
+	if err := ctx.Err(); err != nil {
 		bpfModule.Close()
-		return nil, nil, releaseBindings, setupBPFModuleError("resize maps", err)
-	}
-	if err := setBPFGlobals(cfg, bpfModule); err != nil {
-		bpfModule.Close()
-		return nil, nil, releaseBindings, setupBPFModuleError("set globals", err)
-	}
-	if err := bpfModule.BPFLoadObject(); err != nil {
-		bpfModule.Close()
-		return nil, nil, releaseBindings, setupBPFModuleError("load object", err)
-	}
-	if err := applySyscallSamplingRates(cfg, bpfModule); err != nil {
-		bpfModule.Close()
-		return nil, nil, releaseBindings, setupBPFModuleError("configure sampling rates", err)
+		return nil, nil, noRelease, setupBPFModuleError("load", err)
 	}
 
 	attacher := libbpfTracepointModule{module: bpfModule}
-	// Attach the sched probes before the syscall tracepoints. AttachAll walks
-	// hundreds of tracepoints and takes a noticeable amount of time, during
-	// which syscall records already flow from the ones attached first. Any task
-	// that execs in that window would otherwise produce syscall rows with no
-	// preceding comm record, which is exactly the stale/empty label the exec
-	// probe exists to prevent. The exit probe has no ordering requirement but
-	// costs nothing to attach here.
+	mgr, releaseSchedProbes, err := attachTraceProbes(ctx, attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, log)
+	if err != nil {
+		bpfModule.Close()
+		return nil, nil, noRelease, setupBPFModuleError("attach probes", err)
+	}
+	return bpfModule, mgr, publishProbeManager(probes, mgr, releaseSchedProbes), nil
+}
+
+// loadConfiguredBPFModule opens the embedded BPF object, sizes its maps, sets
+// its globals, loads it into the kernel and applies the sampling rates. On
+// failure it returns the failed stage and, when the module was already opened,
+// the module itself so the caller can close it (nil otherwise).
+func loadConfiguredBPFModule(cfg flags.Config) (*bpf.Module, string, error) {
+	bpfModule, stage, err := loadBPFModule()
+	if err != nil {
+		return nil, stage, err
+	}
+	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
+		return bpfModule, "resize maps", err
+	}
+	if err := setBPFGlobals(cfg, bpfModule); err != nil {
+		return bpfModule, "set globals", err
+	}
+	if err := bpfModule.BPFLoadObject(); err != nil {
+		return bpfModule, "load object", err
+	}
+	if err := applySyscallSamplingRates(cfg, bpfModule); err != nil {
+		return bpfModule, "configure sampling rates", err
+	}
+	return bpfModule, "", nil
+}
+
+// attachTraceProbes attaches the sched probes and then the syscall tracepoint
+// pairs through attacher, and returns the probe manager together with the
+// idempotent release closure of the sched probes.
+//
+// The sched probes go first. AttachAll walks hundreds of tracepoints and takes
+// a noticeable amount of time, during which syscall records already flow from
+// the ones attached first. Any task that execs in that window would otherwise
+// produce syscall rows with no preceding comm record, which is exactly the
+// stale/empty label the exec probe exists to prevent. The exit probe has no
+// ordering requirement but costs nothing to attach here.
+//
+// Cancellation: shouldAttach is wrapped so that once ctx is done every
+// remaining tracepoint is skipped instead of attached, which ends the long
+// AttachAll walk early. If ctx is done after the walk - whether it stopped
+// early or not - everything attached so far is detached again (probe manager
+// first, then the sched probes) and an error wrapping ctx.Err() is returned;
+// a detach failure is folded into that error. It takes the Attacher seam, not
+// a *bpf.Module, so all of this is testable without a live BPF module.
+func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shouldAttach func(string) bool, tpNames []string, log bpfSetupLog) (*probemanager.Manager, func(), error) {
+	log = log.withDefaults()
 	releaseExecProbe := attachProcessExecProbe(attacher, log)
 	releaseExitProbe := attachProcessExitProbe(attacher, log)
 	releaseSchedProbes := func() {
@@ -122,23 +173,45 @@ func setupBPFModule(cfg flags.Config, probes probeManagerPublisher, log bpfSetup
 		releaseExitProbe()
 	}
 
-	mgr, err := attachSyscallProbes(attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, log.status)
+	attachUnlessCancelled := func(name string) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		return shouldAttach == nil || shouldAttach(name)
+	}
+	mgr, err := attachSyscallProbes(attacher, attachUnlessCancelled, tpNames, log.status)
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+		if closeErr := mgr.Close(); closeErr != nil {
+			err = fmt.Errorf("%w (close probe manager: %v)", err, closeErr)
+		}
+	}
 	if err != nil {
 		releaseSchedProbes()
-		bpfModule.Close()
-		return nil, nil, releaseBindings, setupBPFModuleError("attach probes", err)
+		return nil, nil, err
 	}
-	// setupBPFModule only injects the probe manager; it does not read TUI
-	// state, so the one-method probeManagerPublisher is all it takes.
-	if probes != nil {
-		probes.SetProbeManager(mgr)
-		releaseBindings = func() {
-			probes.SetProbeManager(nil)
-			releaseSchedProbes()
-		}
-		return bpfModule, mgr, releaseBindings, nil
+	return mgr, releaseSchedProbes, nil
+}
+
+// publishProbeManager hands mgr to probes (the TUI probes modal) and returns
+// the session's release closure: it clears the published manager again and
+// detaches the sched probes. A nil probes (headless) publishes nothing and the
+// release only detaches the sched probes.
+//
+// The clear is safe against overlapping sessions because in TUI mode probes is
+// the session-scoped view of the TUI bindings (see the tui package's
+// traceSessionBindings): once a newer session has begun, both this session's
+// publish and its clear are dropped there, so a slow setup or teardown of an
+// older session can neither replace nor erase the newer session's manager.
+func publishProbeManager(probes probeManagerPublisher, mgr *probemanager.Manager, releaseSchedProbes func()) func() {
+	if probes == nil {
+		return releaseSchedProbes
 	}
-	return bpfModule, mgr, releaseSchedProbes, nil
+	probes.SetProbeManager(mgr)
+	return func() {
+		probes.SetProbeManager(nil)
+		releaseSchedProbes()
+	}
 }
 
 // attachSyscallProbes registers every syscall tracepoint pair with a new probe
@@ -208,8 +281,9 @@ func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // It takes the same probemanager.Attacher seam the syscall probes use rather
 // than a *bpf.Module, so both non-fatal failure paths and the detach path are
 // reachable from tests without a live BPF module. The returned release closure
-// is idempotent: setupBPFModule hands it out both directly and wrapped inside
-// releaseBindings, and a double Destroy on a libbpf link is not safe.
+// is idempotent: attachTraceProbes calls it on a cancelled setup and
+// publishProbeManager wraps it into the session's release closure, and a
+// double Destroy on a libbpf link is not safe.
 //
 // A skipped probe is reported through log.warn, which trace setup replays as
 // an event-loop warning (a TUI warning row, stderr headless); a detach failure
