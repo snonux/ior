@@ -686,6 +686,13 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 // before the comm check below: an empty comm makes the record useless as a
 // label, but the exec it reports still happened. ev.Pid is the tgid, the key
 // of the fd table; after de_thread the exec'ing thread holds that id too.
+//
+// Unlike the comm, the fd table has no recovery path for a lost record: if
+// bpf_ringbuf_reserve() fails for the exec record (ring-buffer backpressure,
+// counted in ringbuf_drop_map), the process's FD_CLOEXEC entries stay in the
+// table, and markAllStale only re-resolves comms. They then stay stale until
+// the process closes, re-opens or re-dups those numbers through a traced
+// syscall, exits, or they age out of the LRU.
 func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent) {
 	defer ev.Recycle()
 	e.fdState().dropOnExec(ev.Pid)

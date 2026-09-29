@@ -26,17 +26,25 @@ type fdTracker struct {
 	procFdCache  map[uint64]*file.FdFile // procfs-resolved metadata for unknown FDs
 	procFdAges   map[uint64]uint64       // access age per cache entry, for LRU eviction
 	maxCacheSize int                     // max entries before eviction; 0 = defaultMaxProcFdCacheSize
-	// pidPresent is a conservative over-approximation of the pids that own at
-	// least one entry in either map: entries are added on set/setProcFdCache
-	// and removed only by deletePid. A pid whose entries were all closed but
-	// that has not exited yet stays in the set, so deletePid may scan a pid
-	// with nothing left - never the reverse: an entry cannot exist for a pid
-	// missing from the set. Its whole purpose is the common sched_process_exit
-	// case: a task exit for a process that never registered a descriptor (most
-	// tasks on a system-wide trace) becomes O(1) instead of a full scan of both
-	// maps on the single event-loop goroutine.
-	pidPresent map[uint32]struct{}
-	age        uint64 // monotonic counter for LRU ordering
+	// pidIndex maps each pid to the exact set of its keys in files and in
+	// procFdCache. The per-process operations - the exec record's dropOnExec,
+	// the exit record's deletePid, close_range's closeRange and friends - run
+	// on the single event-loop goroutine, and scanning both capped maps
+	// (32768 + 8192 entries) for every one of them cost about a millisecond
+	// per exec or exit; through the index they cost O(descriptors of that
+	// pid). The index is exact, not an over-approximation: every insertion
+	// goes through addFileKey/addCacheKey and every removal (close, exit,
+	// exec, LRU eviction) through removeFileKey/deleteCacheKey, and a pid
+	// whose sets both become empty is dropped from the index.
+	pidIndex map[uint32]*pidFdKeys
+	age      uint64 // monotonic counter for LRU ordering
+}
+
+// pidFdKeys is one pid's slice of the fdTracker key space: the fdKey keys it
+// owns in the fd table and in the procfs cache.
+type pidFdKeys struct {
+	files map[uint64]struct{}
+	cache map[uint64]struct{}
 }
 
 // pendingHandleTracker holds unresolved name_to_handle_at pathnames keyed by
@@ -49,13 +57,13 @@ type pendingHandleTracker struct {
 }
 
 // ensureInit makes any tracker usable: every map is allocated, and the
-// pid-presence set is seeded from whatever entries already exist. It is the
+// per-pid index is built from whatever entries already exist. It is the
 // one place the tracker's map representation and invariants are spelled
 // out for the hand-built / injected case (the constructors produce fully
 // usable trackers, and the individual mutators lazily allocate their own
 // map, so the zero value is safe - but a hand-built tracker carrying
-// entries without a presence set would make deletePid's nil-set guard
-// silently skip eviction, which is what the seeding closes).
+// entries without an index would make the per-pid operations, which only
+// consult the index, silently skip them; the seeding closes that).
 //
 // Unlike newFDTracker, ensureInit does NOT stamp LRU ages for pre-existing
 // files - those entries keep age 0 and evict first until touched, exactly
@@ -76,17 +84,14 @@ func (t *fdTracker) ensureInit() {
 	if t.procFdAges == nil {
 		t.procFdAges = make(map[uint64]uint64)
 	}
-	if t.pidPresent == nil {
-		pidPresent := make(map[uint32]struct{})
+	if t.pidIndex == nil {
+		t.pidIndex = make(map[uint32]*pidFdKeys)
 		for key := range t.files {
-			pid, _ := fdKeyParts(key)
-			pidPresent[pid] = struct{}{}
+			t.indexKey(key).files[key] = struct{}{}
 		}
 		for key := range t.procFdCache {
-			pid, _ := fdKeyParts(key)
-			pidPresent[pid] = struct{}{}
+			t.indexKey(key).cache[key] = struct{}{}
 		}
-		t.pidPresent = pidPresent
 	}
 }
 
@@ -149,21 +154,65 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 	if t.fileAges == nil {
 		t.fileAges = make(map[uint64]uint64)
 	}
-	if t.pidPresent == nil {
-		t.pidPresent = make(map[uint32]struct{})
-	}
 	key := fdKey(pid, fd)
 	t.age++
 	t.files[key] = f
 	t.fileAges[key] = t.age
-	t.pidPresent[pid] = struct{}{}
+	t.indexKey(key).files[key] = struct{}{}
 	t.pruneFiles()
 }
 
 func (t *fdTracker) delete(fd int32, pid uint32) {
-	key := fdKey(pid, fd)
+	t.removeFileKey(fdKey(pid, fd))
+}
+
+// indexKey returns the index entry of key's pid, creating it (and the index
+// itself, for a zero-value tracker) on first use. Only the insertion paths
+// call it; removals go through unindexKey so they never allocate.
+func (t *fdTracker) indexKey(key uint64) *pidFdKeys {
+	if t.pidIndex == nil {
+		t.pidIndex = make(map[uint32]*pidFdKeys)
+	}
+	pid, _ := fdKeyParts(key)
+	keys, ok := t.pidIndex[pid]
+	if !ok {
+		keys = &pidFdKeys{files: make(map[uint64]struct{}), cache: make(map[uint64]struct{})}
+		t.pidIndex[pid] = keys
+	}
+	return keys
+}
+
+// unindexKey removes key from its pid's set selected by pick, and drops the
+// pid from the index once it owns nothing in either map, so the index stays
+// exactly as large as the set of pids with entries.
+func (t *fdTracker) unindexKey(key uint64, pick func(*pidFdKeys) map[uint64]struct{}) {
+	pid, _ := fdKeyParts(key)
+	keys, ok := t.pidIndex[pid]
+	if !ok {
+		return
+	}
+	delete(pick(keys), key)
+	if len(keys.files) == 0 && len(keys.cache) == 0 {
+		delete(t.pidIndex, pid)
+	}
+}
+
+func indexedFiles(keys *pidFdKeys) map[uint64]struct{} { return keys.files }
+func indexedCache(keys *pidFdKeys) map[uint64]struct{} { return keys.cache }
+
+// removeFileKey is the one removal path for fd-table entries: close, close_range,
+// process exit, exec and LRU eviction all go through it so the entry, its age
+// and its index slot can never disagree.
+func (t *fdTracker) removeFileKey(key uint64) {
 	delete(t.files, key)
 	delete(t.fileAges, key)
+	t.unindexKey(key, indexedFiles)
+}
+
+// pidKeySets returns pid's index entry, or nil when pid owns no entry in
+// either map (the common case for a task exit on a system-wide trace).
+func (t *fdTracker) pidKeySets(pid uint32) *pidFdKeys {
+	return t.pidIndex[pid]
 }
 
 // closeRange removes pid's tracked fds in the inclusive range [first, last], as
@@ -174,9 +223,12 @@ func (t *fdTracker) delete(fd int32, pid uint32) {
 // another process's table, and evicting by bare fd number dropped unrelated
 // processes' still-open mappings.
 func (t *fdTracker) closeRange(first, last int32, pid uint32) {
-	for _, key := range fdKeysInRange(t.files, first, last, pid) {
-		delete(t.files, key)
-		delete(t.fileAges, key)
+	keys := t.pidKeySets(pid)
+	if keys == nil {
+		return
+	}
+	for _, key := range fdKeysInRange(keys.files, first, last) {
+		t.removeFileKey(key)
 	}
 }
 
@@ -184,12 +236,16 @@ func (t *fdTracker) closeRange(first, last int32, pid uint32) {
 // range [first, last]. It updates both authoritative entries and cached procfs
 // resolutions because either may satisfy the next lookup.
 func (t *fdTracker) addFlagsRange(first, last int32, pid uint32, flags int32) {
-	for _, key := range fdKeysInRange(t.files, first, last, pid) {
+	keys := t.pidKeySets(pid)
+	if keys == nil {
+		return
+	}
+	for _, key := range fdKeysInRange(keys.files, first, last) {
 		if fdFile, ok := t.files[key].(*file.FdFile); ok {
 			fdFile.AddFlags(flags)
 		}
 	}
-	for _, key := range fdKeysInRange(t.procFdCache, first, last, pid) {
+	for _, key := range fdKeysInRange(keys.cache, first, last) {
 		t.procFdCache[key].AddFlags(flags)
 	}
 }
@@ -197,28 +253,26 @@ func (t *fdTracker) addFlagsRange(first, last int32, pid uint32, flags int32) {
 // deletePid removes every entry of pid from the fd table and the procfs
 // cache. Called from handleProcessExitEvent on a sched_process_exit control
 // record: a process that exited owns no descriptors anymore, so its slice of
-// the (pid, fd) key space is pure garbage until this runs. Scanning the maps
-// is O(size), but the pidPresent set skips the common case - a task exit for a
-// process that never registered a descriptor - in O(1); a present pid may
-// still have nothing left (its entries were closed, it has not exited yet,
-// but another of its threads exits), which only costs the scan it would have
-// paid anyway. The alternative (a pid-indexed secondary map updated on every
-// set/delete) would add a map mutation to the per-syscall hot path.
+// the (pid, fd) key space is pure garbage until this runs. The per-pid index
+// makes this O(entries of pid), and O(1) for the common case - a task exit
+// for a process that never registered a descriptor. The price is one extra
+// small-map insertion per registered descriptor on the syscall path, which is
+// far cheaper than the full scan of both capped maps it replaced (see
+// BenchmarkDeletePidFullTable).
 func (t *fdTracker) deletePid(pid uint32) {
-	if t.pidPresent == nil {
+	keys := t.pidKeySets(pid)
+	if keys == nil {
 		return
 	}
-	if _, ok := t.pidPresent[pid]; !ok {
-		return
+	// Deleting from the set being ranged over is well-defined in Go, and
+	// removeFileKey/deleteCacheKey drop the pid from the index once both sets
+	// are empty; keys stays valid for the rest of the loop.
+	for key := range keys.files {
+		t.removeFileKey(key)
 	}
-	for _, key := range pidKeys(t.files, pid) {
-		delete(t.files, key)
-		delete(t.fileAges, key)
-	}
-	for _, key := range pidKeys(t.procFdCache, pid) {
+	for key := range keys.cache {
 		t.deleteCacheKey(key)
 	}
-	delete(t.pidPresent, pid)
 }
 
 // dropOnExec forgets the descriptors of pid that a successful execve(2) closed.
@@ -229,83 +283,75 @@ func (t *fdTracker) deletePid(pid uint32) {
 // descriptor number through a syscall ior does not trace (socket, recvmsg
 // SCM_RIGHTS, ... under the default FS-only trace set).
 //
-// Only pid's slice is touched. Threads share their process's table and all
-// but the exec'ing one are killed by de_thread, and the table is keyed by
-// tgid; a process sharing the table via CLONE_FILES without being a thread
-// gets its own copy before the closes (unshare_files in begin_new_exec), so
-// its entries, keyed by its own tgid, are unaffected.
+// Only pid's slice is touched, through the per-pid index, so an exec costs
+// O(entries of pid) rather than a scan of both capped maps. Threads share
+// their process's table and all but the exec'ing one are killed by
+// de_thread, and the table is keyed by tgid; a process sharing the table via
+// CLONE_FILES without being a thread gets its own copy before the closes
+// (unshare_files in begin_new_exec), so its entries, keyed by its own tgid,
+// are unaffected.
 //
-// The fd table keeps an entry only when its close-on-exec state is known to
-// be clear (survivesExec). Unknown state is dropped on purpose: the costs are
-// asymmetric. Dropping a descriptor that in fact survived costs one lazy
-// procfs re-resolution on its next use (resolve -> /proc/<pid>/fd/<fd>),
-// which answers correctly for a live descriptor; keeping one the kernel
-// closed mislabels every later row on that number with a name procfs would
-// never have reported.
+// Both maps keep an entry only when its close-on-exec state is known to be
+// clear (survivesExec). Procfs cache entries carry that state too: the fdinfo
+// flags word NewFdWithPid parses includes O_CLOEXEC, and later traced
+// fcntl/dup3/close_range updates reach the cached object because resolve
+// hands it out. An unresolvable cache entry has unknown flags and is dropped.
 //
-// The procfs cache is dropped for pid wholesale. Its entries are snapshots
-// taken at first use - possibly an empty name for a descriptor that did not
-// exist yet - so their close-on-exec bit is no stronger than a guess about
-// the current table, and re-reading procfs after exec is cheap and exact.
-//
-// pidPresent is left alone: it may over-approximate (see its field comment),
-// and a surviving entry must keep pid registered for deletePid.
+// Unknown state is dropped on purpose: the costs are asymmetric. Keeping an
+// entry the kernel closed mislabels every later row on that number with the
+// old program's file. Dropping one that in fact survived falls back to a
+// lazy procfs re-resolution on its next use (resolve -> /proc/<pid>/fd/<fd>).
+// That fallback is not free of error either - it reads procfs after the
+// fact, so for a short-lived program the read can fail (empty name), and
+// the number may already name a different file opened by an untraced
+// syscall - but it never invents a name the process no longer has.
 func (t *fdTracker) dropOnExec(pid uint32) {
-	if t.pidPresent == nil {
+	keys := t.pidKeySets(pid)
+	if keys == nil {
 		return
 	}
-	if _, ok := t.pidPresent[pid]; !ok {
-		return
-	}
-	for _, key := range pidKeys(t.files, pid) {
+	for key := range keys.files {
 		if !survivesExec(t.files[key]) {
-			delete(t.files, key)
-			delete(t.fileAges, key)
+			t.removeFileKey(key)
 		}
 	}
-	for _, key := range pidKeys(t.procFdCache, pid) {
-		t.deleteCacheKey(key)
+	for key := range keys.cache {
+		if !survivesExec(t.procFdCache[key]) {
+			t.deleteCacheKey(key)
+		}
 	}
 }
 
 // survivesExec reports whether a tracked descriptor is known to stay open
-// across execve(2): only an *FdFile whose FD_CLOEXEC state is known and clear
-// qualifies. Any other File, or an unknown state, counts as closed (see
-// dropOnExec for why unknown resolves that way).
+// across execve(2): only a non-nil *FdFile whose FD_CLOEXEC state is known
+// and clear qualifies. Any other File, or an unknown state, counts as closed
+// (see dropOnExec for why unknown resolves that way).
 func survivesExec(f file.File) bool {
 	fdFile, ok := f.(*file.FdFile)
-	if !ok {
+	if !ok || fdFile == nil {
 		return false
 	}
 	set, known := fdFile.CloseOnExec()
 	return known && !set
 }
 
-// pidKeys returns the composite keys of m that belong to pid. Collected first
-// so the caller can delete while iterating (see fdKeysInRange).
-func pidKeys[V any](m map[uint64]V, pid uint32) []uint64 {
-	var keys []uint64
-	for key := range m {
-		if keyPid, _ := fdKeyParts(key); keyPid == pid {
-			keys = append(keys, key)
-		}
-	}
-	return keys
-}
-
 // pruneFiles evicts the least recently used fd entries once the table exceeds
 // its cap. Unlike the flat map this replaced, the (pid, fd) key space grows
-// with the number of traced processes and nothing reclaims the entries of a
-// process that exited (see the note on defaultMaxFdTableEntries), so the cap is
-// what bounds it. Eviction is safe rather than merely lossy: resolve falls back
-// to the procfs cache and then to /proc/<pid>/fd, which still answers correctly
-// for a descriptor that is genuinely still open.
+// with the number of traced processes, and the syscall stream alone does not
+// reclaim a dead process's entries (the sched_process_exit record usually
+// does; see the note on defaultMaxFdTableEntries), so the cap is what bounds
+// it. Eviction is safe rather than merely lossy: resolve falls back to the
+// procfs cache and then to /proc/<pid>/fd, which still answers correctly for
+// a descriptor that is genuinely still open. Victims leave through
+// removeFileKey so the per-pid index forgets them too.
 func (t *fdTracker) pruneFiles() {
 	limit := t.filesLimit()
 	if len(t.files) <= limit {
 		return
 	}
-	trimOldestFdEntries(t.files, t.fileAges, trimTarget(limit))
+	for _, key := range lruVictims(t.files, t.fileAges, trimTarget(limit)) {
+		t.removeFileKey(key)
+	}
 }
 
 func (t *fdTracker) filesLimit() int {
@@ -351,14 +397,11 @@ func (t *fdTracker) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) 
 		t.procFdCache = make(map[uint64]*file.FdFile)
 		t.procFdAges = make(map[uint64]uint64)
 	}
-	if t.pidPresent == nil {
-		t.pidPresent = make(map[uint32]struct{})
-	}
 	key := fdKey(pid, fd)
 	t.age++
 	t.procFdCache[key] = resolved
 	t.procFdAges[key] = t.age
-	t.pidPresent[pid] = struct{}{}
+	t.indexKey(key).cache[key] = struct{}{}
 	t.pruneCache()
 }
 
@@ -370,30 +413,30 @@ func (t *fdTracker) deleteProcFdCache(fd int32, pid uint32) {
 // inclusive range [first, last]. A negative last means "no upper bound" (see
 // closeRange for why close_range's last argument can arrive negative).
 func (t *fdTracker) deleteProcFdCacheRange(first, last int32, pid uint32) {
-	for _, key := range fdKeysInRange(t.procFdCache, first, last, pid) {
+	keys := t.pidKeySets(pid)
+	if keys == nil {
+		return
+	}
+	for _, key := range fdKeysInRange(keys.cache, first, last) {
 		t.deleteCacheKey(key)
 	}
 }
 
-// fdKeysInRange returns the keys of m that belong to pid and whose descriptor
+// fdKeysInRange returns the keys of one pid's index set whose descriptor
 // number falls in the inclusive range [first, last]; a negative last means "no
 // upper bound" (see closeRange for why close_range's last argument can arrive
 // negative). A negative first means the opposite extreme: close_range's first
 // argument is unsigned too, so a value above INT32_MAX wraps negative, and no
 // descriptor number can be >= it - the range closes nothing. Collecting first
-// keeps the caller from deleting while ranging over its own map through a
-// helper.
-func fdKeysInRange[V any](m map[uint64]V, first, last int32, pid uint32) []uint64 {
+// keeps the caller from mutating the set it is filtering through a helper.
+func fdKeysInRange(pidKeys map[uint64]struct{}, first, last int32) []uint64 {
 	if first < 0 {
 		return nil
 	}
 	var keys []uint64
-	for key := range m {
-		keyPid, keyFd := fdKeyParts(key)
-		if keyPid != pid || keyFd < first {
-			continue
-		}
-		if last >= 0 && keyFd > last {
+	for key := range pidKeys {
+		_, keyFd := fdKeyParts(key)
+		if keyFd < first || (last >= 0 && keyFd > last) {
 			continue
 		}
 		keys = append(keys, key)
@@ -409,7 +452,9 @@ func (t *fdTracker) pruneCache() {
 	if len(t.procFdCache) <= limit {
 		return
 	}
-	trimOldestProcFdEntries(t.procFdCache, t.procFdAges, trimTarget(limit))
+	for _, key := range lruVictims(t.procFdCache, t.procFdAges, trimTarget(limit)) {
+		t.deleteCacheKey(key)
+	}
 }
 
 func (t *fdTracker) cacheLimit() int {
@@ -419,11 +464,14 @@ func (t *fdTracker) cacheLimit() int {
 	return defaultMaxProcFdCacheSize
 }
 
-// deleteCacheKey removes a cache entry by its composite key.
-// delete on a nil map is a no-op in Go, so this is safe even before any cache entries are set.
+// deleteCacheKey is the one removal path for procfs cache entries (the
+// counterpart of removeFileKey), keeping the entry, its age and its index
+// slot in step. delete on a nil map is a no-op in Go, so this is safe even
+// before any cache entries are set.
 func (t *fdTracker) deleteCacheKey(key uint64) {
 	delete(t.procFdCache, key)
 	delete(t.procFdAges, key)
+	t.unindexKey(key, indexedCache)
 }
 
 func (t *pendingHandleTracker) set(tid uint32, pathname string) {
@@ -610,9 +658,23 @@ func (p *pairTracker) limit() int {
 // called with each evicted value before it is removed from state — use it to
 // recycle pooled objects (e.g. event.Pair.Recycle).
 func trimLRU[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize int, cleanup func(V)) {
+	for _, key := range lruVictims(state, ages, targetSize) {
+		if cleanup != nil {
+			cleanup(state[key])
+		}
+		delete(state, key)
+		delete(ages, key)
+	}
+}
+
+// lruVictims returns the keys trimLRU would evict to shrink state to
+// targetSize, oldest first, without removing them. The fdTracker uses it
+// directly so each eviction goes through its own removal helper, which also
+// maintains the per-pid index.
+func lruVictims[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize int) []K {
 	excess := len(state) - targetSize
 	if excess <= 0 {
-		return
+		return nil
 	}
 	type entry struct {
 		key K
@@ -623,13 +685,11 @@ func trimLRU[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize i
 		oldest = append(oldest, entry{key: k, age: ages[k]})
 	}
 	slices.SortFunc(oldest, func(a, b entry) int { return cmp.Compare(a.age, b.age) })
-	for _, e := range oldest[:excess] {
-		if cleanup != nil {
-			cleanup(state[e.key])
-		}
-		delete(state, e.key)
-		delete(ages, e.key)
+	victims := make([]K, excess)
+	for i, e := range oldest[:excess] {
+		victims[i] = e.key
 	}
+	return victims
 }
 
 func trimOldestPendingPairs(state map[uint32]*event.Pair, ages map[uint32]uint64, targetSize int) {
@@ -639,14 +699,6 @@ func trimOldestPendingPairs(state map[uint32]*event.Pair, ages map[uint32]uint64
 			pair.Recycle()
 		}
 	})
-}
-
-func trimOldestProcFdEntries(state map[uint64]*file.FdFile, ages map[uint64]uint64, targetSize int) {
-	trimLRU(state, ages, targetSize, nil)
-}
-
-func trimOldestFdEntries(state map[uint64]file.File, ages map[uint64]uint64, targetSize int) {
-	trimLRU(state, ages, targetSize, nil)
 }
 
 func trimOldestPendingHandles(state map[uint32]string, ages map[uint32]uint64, targetSize int) {
