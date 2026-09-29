@@ -155,15 +155,11 @@ func (r *runtimeBindings) StreamBuffer() runtime.EventSink {
 
 // Recorder returns the parquet recorder for optional stream recording,
 // behind the runtime contract (the concrete recorder stays an implementation
-// detail of these bindings). A nil recorder is returned as a nil interface:
-// handing a typed-nil pointer through would make the caller's nil check see
-// a non-nil interface whose every call panics.
+// detail of these bindings). The field already has the interface type and is
+// only ever assigned a real recorder or left nil, so no typed-nil can leak.
 func (r *runtimeBindings) Recorder() runtime.RecordingController {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if r.recorder == nil {
-		return nil
-	}
 	return r.recorder
 }
 

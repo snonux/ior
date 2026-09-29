@@ -185,7 +185,9 @@ func (r *Recorder) Record(row streamrow.Row, filterEpoch uint64) error {
 // returns its terminal error. Without an active session it returns the last
 // session's error, unless that failure was already taken (by TakeFailure or
 // an earlier Stop), in which case it returns nil so no failure is reported
-// twice. Either way a failure Stop returns counts as reported: TakeFailure
+// twice. Of several concurrent Stop calls on one session only the first
+// returns the failure; the others wait for the session and return nil.
+// Either way a failure Stop returns counts as reported: TakeFailure
 // will not hand it out again.
 func (r *Recorder) Stop() error {
 	if r == nil {
@@ -203,21 +205,36 @@ func (r *Recorder) Stop() error {
 		r.mu.Unlock()
 		return failure
 	}
+	if stopSnapshotHook != nil {
+		stopSnapshotHook()
+	}
 	// Mark the stop request while still holding r.mu: a session aborting on
 	// its own must publish its failure through finishSession, which takes
 	// r.mu, so it either finished before this point (session == nil above)
 	// or sees stopRequested and marks the failure taken for this caller.
 	// Marking after unlocking left a window where the failure was both
 	// returned here and handed out by TakeFailure.
-	session.markStopRequested()
+	first := session.markStopRequested()
 	r.mu.Unlock()
 
 	session.stop(nil)
-	if err := <-session.doneC; err != nil {
-		return err
+	err := <-session.doneC
+	if err == nil {
+		err = session.doneErr
 	}
-	return session.doneErr
+	// Concurrent Stop calls on one session all wait for it to finish, but
+	// only the first one reports its failure.
+	if !first {
+		return nil
+	}
+	return err
 }
+
+// stopSnapshotHook, when non-nil, runs inside Stop after it has seen an
+// active session and before it marks the stop request, with r.mu held. It is
+// a test seam for forcing interleavings with a finishing session; always nil
+// in production.
+var stopSnapshotHook func()
 
 // TakeFailure returns the error the last recording died with, exactly once
 // per failure, and nil otherwise: while a recording is active, when the last
@@ -443,12 +460,15 @@ func (s *recordingSession) stop(cause error) {
 }
 
 // markStopRequested records that Recorder.Stop, whose caller receives the
-// terminal error, is ending this session. Called with r.mu held (lock order
-// r.mu then session.mu).
-func (s *recordingSession) markStopRequested() {
+// terminal error, is ending this session, and reports whether this was the
+// first such request. Called with r.mu held (lock order r.mu then
+// session.mu).
+func (s *recordingSession) markStopRequested() (first bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	first = !s.stopRequested
 	s.stopRequested = true
-	s.mu.Unlock()
+	return first
 }
 
 func (s *recordingSession) wasStopRequested() bool {

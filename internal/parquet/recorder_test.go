@@ -226,9 +226,11 @@ func TestRecorderStressQueueSaturation(t *testing.T) {
 	}
 }
 
-func TestRecorderStopReturnsTerminalErrorOnRepeatedCalls(t *testing.T) {
+func TestRecorderStopReportsTerminalErrorOnceOnRepeatedCalls(t *testing.T) {
 	// Queue overflow no longer aborts a session, so a writer failure stands
-	// in for the terminal error a finished session may carry.
+	// in for the terminal error a finished session may carry. Repeated Stop
+	// calls must all return promptly (the done channel is already closed),
+	// but only the first reports the failure: a failure is reported once.
 	terminalErr := errors.New("parquet writer failed")
 	recorder := NewRecorder(RecorderConfig{})
 	session := newRecordingSession(1)
@@ -243,10 +245,11 @@ func TestRecorderStopReturnsTerminalErrorOnRepeatedCalls(t *testing.T) {
 	}
 	recorder.mu.Unlock()
 
-	for i := 0; i < 2; i++ {
-		if err := recorder.Stop(); !errors.Is(err, terminalErr) {
-			t.Fatalf("Stop() call %d error = %v, want %v", i+1, err, terminalErr)
-		}
+	if err := recorder.Stop(); !errors.Is(err, terminalErr) {
+		t.Fatalf("first Stop() error = %v, want %v", err, terminalErr)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("second Stop() error = %v, want nil (already reported)", err)
 	}
 }
 

@@ -240,9 +240,12 @@ func (w abortBlockingWriter) Abort() error {
 	return nil
 }
 
-// TestRecorderStopDuringSelfAbortReportsOnce pins Stop into a session that
-// is aborting on its own (write failed, finishSession not yet run): Stop must
-// return the failure and TakeFailure must not hand it out a second time.
+// TestRecorderStopDuringSelfAbortReportsOnce covers Stop arriving before
+// finishSession of a session that is aborting on its own (write failed,
+// writer held in Abort): Stop must return the failure and TakeFailure must
+// not hand it out a second time. The narrower interleaving - finishSession
+// running inside Stop, between its snapshot and its stop mark - is forced by
+// TestRecorderFinishInsideStopSnapshotReportsOnce.
 func TestRecorderStopDuringSelfAbortReportsOnce(t *testing.T) {
 	writeErr := errors.New("disk full")
 	w := abortBlockingWriter{
@@ -289,8 +292,8 @@ func TestRecorderStopRacingSelfAbortStress(t *testing.T) {
 	writeErr := errors.New("disk full")
 	// The race window is tiny: the pre-fix code failed about once in ~10k
 	// iterations without -race (much sooner with it), so run many; this is
-	// a probabilistic guard, TestRecorderStopDuringSelfAbortReportsOnce the
-	// deterministic one for the Stop-during-abort ordering.
+	// a probabilistic guard next to the hook-driven
+	// TestRecorderFinishInsideStopSnapshotReportsOnce.
 	iterations := 10000
 	if testing.Short() {
 		iterations = 1000
@@ -314,6 +317,97 @@ func TestRecorderStopRacingSelfAbortStress(t *testing.T) {
 		if reports != 1 {
 			t.Fatalf("iteration %d: failure reported %d times (Stop=%v), want exactly once", i, reports, stopErr)
 		}
+	}
+}
+
+// setStopSnapshotHook installs hook as Stop's test seam for this test.
+func setStopSnapshotHook(t *testing.T, hook func()) {
+	t.Helper()
+	stopSnapshotHook = hook
+	t.Cleanup(func() { stopSnapshotHook = nil })
+}
+
+// startAbortBlockedRecorder returns a recorder whose writer fails every
+// write and blocks in Abort until w.release is closed, with a recording
+// started. batchSize 1 makes the first Record fail the session on its own;
+// a large one defers the failure to Stop's final flush.
+func startAbortBlockedRecorder(t *testing.T, batchSize int) (*Recorder, abortBlockingWriter, error) {
+	t.Helper()
+	writeErr := errors.New("disk full")
+	w := abortBlockingWriter{
+		failingWriter: failingWriter{err: writeErr},
+		aborting:      make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+	r := NewRecorder(RecorderConfig{
+		BatchSize:     batchSize,
+		FlushInterval: time.Hour,
+		newWriter: func(string, WriterConfig, FileMetadata) (rowWriter, error) {
+			return w, nil
+		},
+	})
+	mustStart(t, r)
+	if err := r.Record(testStreamRow(1, "read", false), 0); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	return r, w, writeErr
+}
+
+// TestRecorderFinishInsideStopSnapshotReportsOnce forces the interleaving
+// that used to report a failure twice: the self-aborting session is released
+// to run finishSession after Stop has seen it active but before Stop marks
+// the stop request. Holding r.mu across both keeps finishSession out until
+// the mark is set, so the failure goes to Stop only. (With the mark taken
+// after unlocking, finishSession completes during the hook's pause, publishes
+// the failure as untaken, and TakeFailure hands it out again.)
+func TestRecorderFinishInsideStopSnapshotReportsOnce(t *testing.T) {
+	r, w, writeErr := startAbortBlockedRecorder(t, 1)
+	<-w.aborting // the session failed and is blocked before finishSession
+	setStopSnapshotHook(t, func() {
+		close(w.release)
+		// Give finishSession ample time to run if nothing holds it off.
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	if err := r.Stop(); !errors.Is(err, writeErr) {
+		t.Fatalf("Stop() = %v, want %v", err, writeErr)
+	}
+	if err := r.TakeFailure(); err != nil {
+		t.Fatalf("TakeFailure() after Stop returned the failure = %v, want nil", err)
+	}
+}
+
+// TestRecorderConcurrentStopsReportFailureOnce has two Stop calls reach the
+// same active session; the failure (Stop's final flush fails) must be
+// returned by exactly one of them, and not handed out by TakeFailure.
+func TestRecorderConcurrentStopsReportFailureOnce(t *testing.T) {
+	r, w, writeErr := startAbortBlockedRecorder(t, 1024)
+	entered := make(chan struct{}, 2)
+	setStopSnapshotHook(t, func() { entered <- struct{}{} })
+
+	results := make(chan error, 2)
+	for range 2 {
+		go func() { results <- r.Stop() }()
+	}
+	// Both Stops have seen the session active; the session is held in Abort
+	// after its final flush failed, so neither can have finished yet.
+	<-entered
+	<-entered
+	close(w.release)
+
+	reports := 0
+	for range 2 {
+		if err := <-results; errors.Is(err, writeErr) {
+			reports++
+		} else if err != nil {
+			t.Fatalf("Stop() = %v, want nil or %v", err, writeErr)
+		}
+	}
+	if reports != 1 {
+		t.Fatalf("failure returned by %d Stop calls, want exactly 1", reports)
+	}
+	if err := r.TakeFailure(); err != nil {
+		t.Fatalf("TakeFailure() = %v, want nil", err)
 	}
 }
 
