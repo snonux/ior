@@ -242,7 +242,7 @@ func TestSyscallAggregateConsumerDrainEmitsDeltas(t *testing.T) {
 			Histogram:     [8]uint64{2, 1, 1},
 		},
 		rawSyscallAggregate{
-			Count:         3,
+			Count:         4,
 			TotalDuration: 110,
 			MinDuration:   5,
 			MaxDuration:   70,
@@ -253,9 +253,12 @@ func TestSyscallAggregateConsumerDrainEmitsDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Drain error: %v", err)
 	}
+	// The second CPU's slot gained one timed invocation (histogram 3 -> 4),
+	// so it gained one count as well: a slot's count is never below its
+	// histogram total.
 	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
 		TraceID:        types.TraceId(traceID),
-		Count:          2,
+		Count:          3,
 		Errors:         1,
 		TotalLatencyNs: 70,
 		MinLatencyNs:   4,
@@ -275,7 +278,7 @@ func TestSyscallAggregateConsumerDrainEmitsDeltas(t *testing.T) {
 			Histogram:     [8]uint64{3, 1, 1},
 		},
 		rawSyscallAggregate{
-			Count:         3,
+			Count:         4,
 			TotalDuration: 110,
 			MinDuration:   5,
 			MaxDuration:   70,
