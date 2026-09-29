@@ -223,12 +223,14 @@ func TestVisibleRowsDefault(t *testing.T) {
 	}
 }
 
-// TestVisibleRowsMinimum verifies that visibleRows never returns less than 3.
+// TestVisibleRowsMinimum verifies that visibleRows keeps at least one row
+// (so the selection stays visible) even when the chrome alone exceeds the
+// terminal height.
 func TestVisibleRowsMinimum(t *testing.T) {
 	m := NewModel(nil)
 	m.height = 5
-	if got := m.visibleRows(); got < 3 {
-		t.Fatalf("visibleRows = %d, want >= 3", got)
+	if got := m.visibleRows(); got != 1 {
+		t.Fatalf("visibleRows = %d, want 1", got)
 	}
 }
 
