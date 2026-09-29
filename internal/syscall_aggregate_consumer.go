@@ -157,11 +157,12 @@ func (c *syscallAggregateConsumer) drainRow(traceID types.TraceId, raw rawSyscal
 // but no histogram increment and would book that timed invocation as
 // untimed; the cumulative value stays exact. The reported cumulative value
 // only grows, so each untimed invocation is reported once, and never more
-// than the row's own count. The opposite tear, count ahead of the histogram,
-// cannot be told apart from a real untimed invocation and would be booked as
-// one for good (its latency still arrives with a later row); the kernel's
-// store order rules it out on x86. A cumulative count that went backwards means the
-// kernel row was recreated, which restarts the tally (diff restarts too).
+// than the row's own count. The opposite tear, count ahead of the
+// histogram, cannot be told apart from a real untimed invocation and would
+// be booked as one for good (its latency still arrives with a later row);
+// the kernel's store order rules it out on x86. A cumulative count that went
+// backwards means the kernel row was recreated, which restarts the tally
+// (diff restarts too).
 func (c *syscallAggregateConsumer) untimedDelta(traceID types.TraceId, raw, prev rawSyscallAggregate, deltaCount uint64) uint64 {
 	if c.untimed == nil {
 		c.untimed = make(map[types.TraceId]uint64)
@@ -200,8 +201,9 @@ func decodeRawSyscallAggregateSlot(raw []byte) (rawSyscallAggregate, error) {
 //     invocation whose count store is pending; count is raised to it so the
 //     invocation never looks untimed.
 //
-// Genuine 0ns durations would also look in flight, but two boot-clock reads
-// around a syscall never coincide.
+// A completed invocation never records 0ns: ior_on_syscall_exit clamps its
+// aggregate duration to at least 1ns, so min and max of a settled timed slot
+// are always non-zero.
 func (r rawSyscallAggregate) normalizeTornSlot() rawSyscallAggregate {
 	timed := r.timedCount()
 	if timed > 0 && (r.MinDuration == 0 || r.MaxDuration == 0) {

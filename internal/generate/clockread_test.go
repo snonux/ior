@@ -178,7 +178,7 @@ func TestSyscallHooksDoNotReadTheClock(t *testing.T) {
 	if !strings.Contains(filterC, "    state.start_ns = now;\n") {
 		t.Error("ior_on_syscall_enter must record the handler's timestamp as start_ns")
 	}
-	if !strings.Contains(filterC, "        duration = now - state->start_ns;\n") {
+	if !strings.Contains(filterC, "    duration = now > state->start_ns ? now - state->start_ns : 1;\n") {
 		t.Error("ior_on_syscall_exit must derive the duration from the handler's timestamp")
 	}
 }

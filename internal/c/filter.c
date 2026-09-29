@@ -296,7 +296,7 @@ static __always_inline int ior_on_noreturn_syscall_enter(__u32 enter_trace_id) {
 }
 
 static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now) {
-    __u64 duration = 0;
+    __u64 duration;
     __u8 emit_event = 1;
     struct syscall_enter_state *state;
 
@@ -311,8 +311,14 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
         return ior_stateless_exit_emits(enter_trace_id);
     }
 
-    if (now >= state->start_ns)
-        duration = now - state->start_ns;
+    // A completed invocation always has a duration of at least 1ns in the
+    // aggregate. A coarse clocksource can return the same reading at enter
+    // and exit, but a 0 duration would leave min_duration_ns/max_duration_ns
+    // at 0, which userspace reserves for "first timed sample still being
+    // written" (normalizeTornSlot in internal/syscall_aggregate_consumer.go)
+    // and would then drop the slot's latency for the rest of the session.
+    // The clamp also covers a start timestamp ahead of now.
+    duration = now > state->start_ns ? now - state->start_ns : 1;
 
     emit_event = state->emit_event;
 

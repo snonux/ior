@@ -261,6 +261,15 @@ var accountingScenarios = []accountingScenario{
 		{"enter 2 100 1000", accEmit0}, {"exit 2 100 0 81000", accEmit0},
 		{"agg 100", "count=4 errors=0 total=135000 min=5000 max=80000 hist=0,1,2,0,0,0,0,0"},
 	}},
+	// Equal enter/exit readings (coarse clocksource) or a start ahead of now
+	// must still record a non-zero duration: userspace reads min or max of 0
+	// with histogram samples as a first sample still being written.
+	{name: "zero-length sample records 1ns", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"enter 1 100 5000", accEmit0}, {"exit 1 100 0 5000", accEmit0},
+		{"enter 1 100 9000", accEmit0}, {"exit 1 100 0 8000", accEmit0},
+		{"agg 100", "count=2 errors=0 total=2 min=1 max=1 hist=2,0,0,0,0,0,0,0"},
+	}},
 	{name: "timed then untimed keeps min", steps: []accountingStep{
 		{"rate 100 0", accOK},
 		{"enter 1 100 1000", accEmit0}, {"exit 1 100 0 51000", accEmit0},
@@ -317,6 +326,10 @@ func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 		"untimed count touches the histogram": {
 			"        existing->count += 1;\n        return;\n    }\n\n    fresh.count = 1;\n    bpf_map_update_elem",
 			"        existing->count += 1;\n        existing->duration_histogram[0] += 1;\n        return;\n    }\n\n    fresh.count = 1;\n    bpf_map_update_elem",
+		},
+		"zero duration not clamped": {
+			"duration = now > state->start_ns ? now - state->start_ns : 1;",
+			"duration = now > state->start_ns ? now - state->start_ns : 0;",
 		},
 		"timed check looks at count": {
 			"    if (agg->max_duration_ns)\n        return 1;",
