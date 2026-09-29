@@ -13,8 +13,10 @@ import (
 )
 
 // failedRecordingController is an idle RecordingController whose previous
-// recording failed: TakeFailure hands the failure out once, as
-// parquet.Recorder does.
+// recording failed. It mirrors parquet.Recorder's semantics for that state
+// (tested for real in package parquet): Record keeps returning the failure
+// (the dead recording's LastError), TakeFailure hands it out exactly once and
+// nil afterwards, and Stop/Status report an inactive recorder.
 type failedRecordingController struct {
 	failure error
 	takes   int
