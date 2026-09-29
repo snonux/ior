@@ -140,6 +140,11 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 // queue is full the row is shed (counted in Status().RowsDropped) and
 // ErrRecorderQueueFull is returned; the session stays active so later rows
 // are recorded as capacity frees up.
+//
+// Without an active session Record returns ErrRecorderNotActive, or, if the
+// last session died with an error, that error (Status().LastError) until the
+// next successful Start - so callers see a failed recording's error on every
+// later call, not just once.
 func (r *Recorder) Record(row streamrow.Row, filterEpoch uint64) error {
 	if r == nil {
 		return ErrRecorderNotActive

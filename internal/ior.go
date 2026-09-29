@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -266,40 +265,75 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	return nil
 }
 
-// recorderWarner turns errors returned by the TUI's per-event recorder.Record
-// call into stream warnings, at most one per category per trace session.
+// recorderWarner turns the results of the TUI's per-event recorder.Record
+// call into stream warnings: at most one overflow warning and one failure
+// warning per recording observed in this trace session.
 //
-// The TUI bindings always hold a recorder, but a recording only runs while
-// the user has started one, so Record returns ErrRecorderNotActive for every
-// event of an unrecorded session. That is the idle state, not a failure: it
-// is dropped silently. Otherwise the very first event of each session would
-// push a bogus "recorder failed: not active" warning and burn the failure
-// once-guard, hiding a genuine failure (e.g. disk full) later in the session.
-// A session that died with an error is still reported, because Record then
-// returns the session's LastError rather than ErrRecorderNotActive.
+// The TUI owns a single recorder for its whole lifetime, but a recording
+// only runs while the user has started one. Record therefore returns, for
+// every event outside a healthy recording:
+//   - ErrRecorderNotActive while idle (never started, cleanly stopped, or a
+//     Stop racing this Record), and
+//   - the dead recording's LastError after a failure, until the next Start -
+//     including in every later trace session.
 //
-// Overflow and genuine failures have independent once-guards: a shed storm
-// must not consume the guard that would later surface a real recorder error.
+// Neither is news for this session, so the warner starts un-armed and only
+// reports a failure after it has seen the current recording accept a row
+// (nil or ErrRecorderQueueFull). Reporting the failure disarms it again, so
+// the repeated LastError results stay silent, and the next accepted row -
+// necessarily a new recording - re-arms the failure and overflow warnings.
+// Treating either idle result as a failure would warn on the first event of
+// every such session and could hide a genuine failure (e.g. disk full) of a
+// recording started later in the session.
+//
+// Known gap: a recording that dies before accepting a row in this session is
+// not warned about here (the TUI status line still shows its LastError), and
+// a clean Stop/Start with no events in between keeps the overflow warning
+// from the previous recording suppressed.
+//
+// Plain bools suffice: the event loop invokes the print callback, and so
+// warn, from its single run goroutine.
 type recorderWarner struct {
-	overflowOnce sync.Once
-	failureOnce  sync.Once
+	// recording is true once the current recording has accepted a row in
+	// this session; it arms the failure warning.
+	recording bool
+	// overflowWarned suppresses repeated queue-full warnings within one
+	// recording; shedding comes in storms and must not flood the stream.
+	overflowWarned bool
 }
 
-// warn reports err through el's warning callback (notifyWarning reads it at
-// call time, since configure installs it after the print callback). Nil
-// errors and the idle ErrRecorderNotActive state are ignored.
+// warn classifies one Record result and reports it through el's warning
+// callback (notifyWarning reads it at call time, since configure installs it
+// after the print callback).
 func (w *recorderWarner) warn(el *eventLoop, err error) {
 	switch {
-	case err == nil, errors.Is(err, parquet.ErrRecorderNotActive):
-		return
+	case err == nil:
+		w.observeAcceptingRecording()
 	case errors.Is(err, parquet.ErrRecorderQueueFull):
-		w.overflowOnce.Do(func() {
+		// The row was shed but the recording is alive and accepting.
+		w.observeAcceptingRecording()
+		if !w.overflowWarned {
+			w.overflowWarned = true
 			el.notifyWarning("Parquet recorder queue full: rows are being dropped")
-		})
+		}
+	case errors.Is(err, parquet.ErrRecorderNotActive):
+		// Idle or stopped: the next accepted row belongs to a new recording.
+		w.recording = false
 	default:
-		w.failureOnce.Do(func() {
+		if w.recording {
+			w.recording = false
 			el.notifyWarning(fmt.Sprintf("Parquet recorder failed: %v", err))
-		})
+		}
+	}
+}
+
+// observeAcceptingRecording arms the warner when a recording accepts a row.
+// The transition from not-recording marks a new recording, whose overflow
+// warning is re-armed.
+func (w *recorderWarner) observeAcceptingRecording() {
+	if !w.recording {
+		w.recording = true
+		w.overflowWarned = false
 	}
 }
 
@@ -310,8 +344,8 @@ func (w *recorderWarner) warn(el *eventLoop, err error) {
 // registers the setter with publisher so the TUI can swap filters without
 // restarting BPF probes. A nil publisher (no TUI attached) registers nothing.
 func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
-	// One warner per configurer, i.e. per trace session: each session may
-	// surface its own overflow and failure warning once.
+	// One warner per configurer, i.e. per trace session, starting un-armed so
+	// a failure left over from an earlier session is not re-announced.
 	warner := &recorderWarner{}
 	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {
