@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"ior/internal/parquet"
@@ -61,6 +62,17 @@ func TestFormatRecorderStatusSurfacesDroppedRows(t *testing.T) {
 				Path: "abcdefghijabcdefghijabcdefghijabcdefghij",
 			},
 			want: "rec: ...hijabcdefghijabcdefghijabcdefghij",
+		},
+		{
+			name: "long multi-byte path stays valid UTF-8",
+			status: parquet.Status{
+				Active: true,
+				// 45 cells: byte slicing used to split a 3-byte rune here.
+				// "..." leaves 33 cells, and a 2-cell rune cannot straddle
+				// the cut, so 16 runes (32 cells) are kept.
+				Path: "/tmp/" + strings.Repeat("日", 20),
+			},
+			want: "rec: ..." + strings.Repeat("日", 16),
 		},
 	}
 

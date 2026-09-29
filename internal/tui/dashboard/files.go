@@ -344,20 +344,11 @@ func findDirOffset(rows []DirSnapshot, dir string) (int, bool) {
 	return 0, false
 }
 
+// truncatePathMiddle shortens path to at most limit display cells, keeping
+// both ends joined by "...". It delegates to common.TruncateMiddle, which cuts
+// on grapheme boundaries so multi-byte (e.g. CJK) paths stay valid UTF-8.
 func truncatePathMiddle(path string, limit int) string {
-	if len(path) <= limit {
-		return path
-	}
-	if limit <= 3 {
-		return path[:limit]
-	}
-
-	head := (limit - 3) / 2
-	tail := limit - 3 - head
-	if tail <= 0 {
-		return path[:limit]
-	}
-	return path[:head] + "..." + path[len(path)-tail:]
+	return common.TruncateMiddle(path, limit, common.ASCIIEllipsis)
 }
 
 func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {

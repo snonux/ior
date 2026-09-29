@@ -264,6 +264,11 @@ func TestTruncateText(t *testing.T) {
 	if got := truncateText("abcde", 0); got != "" {
 		t.Fatalf("truncateText 0 = %q, want empty", got)
 	}
+	// Wide runes are measured in cells: 8 cells leave 5 for text, and the
+	// third 2-cell rune would straddle the cut, so only 2 runes are kept.
+	if got := truncateText("権限がありません", 8); got != "権限..." {
+		t.Fatalf("truncateText cjk = %q, want 権限...", got)
+	}
 }
 
 // TestToggleCmdNilManager verifies that toggleCmd with a nil manager returns a

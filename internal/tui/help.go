@@ -141,19 +141,9 @@ func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
+// truncateHelpLine shortens s to at most width display cells, ending in "…"
+// when cut. Measuring and cutting by display width (common.TruncateRight)
+// keeps wide runes from overflowing the help box.
 func truncateHelpLine(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	r := []rune(s)
-	if len(r) >= width {
-		return string(r[:width-1]) + "…"
-	}
-	return s
+	return common.TruncateRight(s, width, common.Ellipsis)
 }

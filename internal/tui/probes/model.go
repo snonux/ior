@@ -3,9 +3,9 @@ package probes
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"ior/internal/probemanager"
+	common "ior/internal/tui/common"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -383,18 +383,12 @@ func sanitizeOneLine(s string) string {
 	return s
 }
 
+// truncateText shortens s to at most limit display cells, ending in "..." when
+// cut; limits of three cells or fewer hard-cut instead. It measures terminal
+// cells and cuts on grapheme boundaries (common.TruncateRight), so wide or
+// multi-byte error text stays valid UTF-8 and within the column.
 func truncateText(s string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(s) <= limit {
-		return s
-	}
-	runes := []rune(s)
-	if limit <= 3 {
-		return string(runes[:limit])
-	}
-	return string(runes[:limit-3]) + "..."
+	return common.TruncateRight(s, limit, common.ASCIIEllipsis)
 }
 
 // --- compile-time interface satisfaction assertion ---

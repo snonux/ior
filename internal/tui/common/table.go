@@ -2,7 +2,6 @@ package common
 
 import (
 	"strings"
-	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 )
@@ -110,17 +109,12 @@ func ClampTableCol(col, colCount int) int {
 	return clampIndex(col, colCount)
 }
 
+// renderTableCell fits value into exactly width display cells: newlines and
+// tabs become spaces, an overlong value is cut on a grapheme boundary and
+// ends in "...", and the rest is space-padded. Width is measured in terminal
+// cells (not runes) so CJK and emoji cells keep the columns aligned.
 func renderTableCell(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	value = sanitizeTableCell(value)
-	value = truncateTableCell(value, width)
-	cellWidth := utf8.RuneCountInString(value)
-	if cellWidth >= width {
-		return value
-	}
-	return value + strings.Repeat(" ", width-cellWidth)
+	return FitRight(sanitizeTableCell(value), width, ASCIIEllipsis)
 }
 
 func sanitizeTableCell(value string) string {
@@ -128,20 +122,6 @@ func sanitizeTableCell(value string) string {
 	value = strings.ReplaceAll(value, "\r", " ")
 	value = strings.ReplaceAll(value, "\t", " ")
 	return value
-}
-
-func truncateTableCell(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(value) <= width {
-		return value
-	}
-	if width <= 3 {
-		return string([]rune(value)[:width])
-	}
-	runes := []rune(value)
-	return string(runes[:width-3]) + "..."
 }
 
 func clampIndex(value, count int) int {
