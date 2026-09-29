@@ -460,6 +460,12 @@ not sufficient.
     (`aggregateIngestAllowedForFilter`), so aggregate-only syscalls disappear
     and sampled syscalls fall back to their 1-in-N counts until the filter is
     cleared.
+  - A live filter swap (`eventLoop.SetFilter` while the drain loop runs) goes
+    through `aggregateDrainer.SwapFilter`: it drains and ingests the map under
+    the *outgoing* filter before installing the new one, serialised with the
+    poll ticks. The counts pending at swap time therefore land in the pre-swap
+    baseline the TUI resets right after (`resetAggregatesAfterLiveSwap`)
+    instead of inflating the first post-swap interval.
 - **Additional metric dimensions**:
   - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints): `-1` when unknown (null/unreadable or kernel-invalid timespec, absolute `TIMER_ABSTIME` sleeps); valid requests whose nanoseconds are unrepresentable in `__s64` saturate to `S64_MAX` (`generateExtraSleep`). The kernel similarly clamps to `KTIME_MAX`, but from `tv_sec >= KTIME_SEC_MAX` regardless of `tv_nsec`, so values within ~1s of the boundary may differ.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"ior/internal/globalfilter"
@@ -31,6 +32,13 @@ type aggregateDrainer struct {
 	filter                  func() globalfilter.Filter
 	aggregateIngestTraceIDs map[types.TraceId]struct{}
 	kernelScope             kernelProcessScope
+
+	// mu serialises every drain-and-handle cycle (poll ticks, the final
+	// drain, and the flush of SwapFilter), so a filter swap can never land
+	// between one cycle's Drain and its ingest. handle is the sink Start
+	// wired; it is nil until Start runs, which makes SwapFilter a plain swap.
+	mu     sync.Mutex
+	handle func(aggregateDrainResult)
 }
 
 func newAggregateDrainer(
@@ -69,7 +77,42 @@ func (d *aggregateDrainer) Start(ctx context.Context, every time.Duration, handl
 	if d == nil || d.source == nil {
 		return func() {}
 	}
-	return startPollLoop(ctx, every, func() { handle(d.Tick()) })
+	d.mu.Lock()
+	d.handle = handle
+	d.mu.Unlock()
+	return startPollLoop(ctx, every, d.flush)
+}
+
+// flush runs one drain-and-handle cycle under mu.
+func (d *aggregateDrainer) flush() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.flushLocked()
+}
+
+func (d *aggregateDrainer) flushLocked() {
+	if d.handle != nil {
+		d.handle(d.Tick())
+	}
+}
+
+// SwapFilter drains the kernel aggregate map under the outgoing filter, hands
+// the rows to the sink, and only then runs apply (which installs the new
+// filter), all under mu. Without the flush, the map would still hold up to one
+// drain interval of pre-swap invocations when the swap lands, and the first
+// post-swap tick would ingest them into the baseline the TUI resets right
+// after the swap (resetAggregatesAfterLiveSwap): e.g. `-syscall futex` showed
+// up to ~2x its rate for the first interval. Flushing first attributes those
+// counts to the pre-swap baseline, which is where they belong and which the
+// reset then discards. What remains is the few-microsecond window between
+// SwapFilter returning and the caller's stats reset: counts drained there go
+// to the old baseline and are dropped by the reset (an undercount of that
+// window, never a pre-swap count in the new baseline).
+func (d *aggregateDrainer) SwapFilter(apply func()) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.flushLocked()
+	apply()
 }
 
 // filterRowsForIngest keeps only the aggregate rows the stats engine may
@@ -122,7 +165,10 @@ func (d *aggregateDrainer) currentFilter() globalfilter.Filter {
 // return value or errors-only: with any of those set, ingesting the row would
 // count invocations the filter excludes, so ingestion is gated off (the
 // all-or-nothing fallback: aggregate-only syscalls disappear and sampled ones
-// show their 1-in-N emitted counts until the filter is cleared).
+// show their 1-in-N emitted counts until the filter is cleared). PID and TID
+// pass only when unset or equal to the PID_FILTER/TID_FILTER scope the kernel
+// already enforced (scope, see kernelEnforces); any other PID/TID constraint
+// gates ingestion off too.
 func aggregateIngestAllowedForFilter(filter *globalfilter.Filter, scope kernelProcessScope) bool {
 	if filter.ErrorsOnly {
 		return false

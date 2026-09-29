@@ -56,7 +56,14 @@ func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
 	// for aggregate rows instead of gating them off.
 	scope := kernelProcessScope{pid: e.cfg.pidFilter, tid: e.cfg.tidFilter}
 	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateIngestTraceIDs, scope, e.Filter)
-	return drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
+	stop := drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
+	// Publish the drainer so SetFilter flushes it before a live swap, and
+	// unpublish it before the final drain so no swap drains a stopped loop.
+	e.aggregateDrainer.Store(drainer)
+	return func() {
+		e.aggregateDrainer.Store(nil)
+		stop()
+	}
 }
 
 // startRingbufDropMonitor polls the kernel-side ring-buffer drop counter for

@@ -204,20 +204,49 @@ func TestAggregateEndToEndFamilyFilterExcludesOtherFamilies(t *testing.T) {
 	}
 }
 
+// TestAggregateEndToEndPIDFilterUsesKernelScopeFromConfig covers the
+// eventLoopConfig -> drainer wiring of the kernel PID/TID scope: a PID filter
+// equal to cfg.pidFilter is kernel-enforced and ingests, a different PID
+// cannot be answered by aggregate rows and gates ingestion off.
+func TestAggregateEndToEndPIDFilterUsesKernelScopeFromConfig(t *testing.T) {
+	scoped := func(cfg *eventLoopConfig) { cfg.pidFilter, cfg.tidFilter = 42, -1 }
+
+	snap := drainIntoEngineWith(t, globalfilter.Filter{PID: globalfilter.NewEqFilter(42)}, scoped)
+	if snap.TotalSyscalls != 28 {
+		t.Fatalf("TotalSyscalls = %d, want 28 (all rows, PID enforced by the kernel)", snap.TotalSyscalls)
+	}
+
+	snap = drainIntoEngineWith(t, globalfilter.Filter{PID: globalfilter.NewEqFilter(7)}, scoped)
+	if snap.TotalSyscalls != 0 {
+		t.Fatalf("TotalSyscalls = %d, want 0 (PID 7 is not the kernel scope)", snap.TotalSyscalls)
+	}
+}
+
 // drainIntoEngine runs one final-flush drain of aggregateFilterTestRows
 // through a real event loop into a real statsengine under filter.
 func drainIntoEngine(t *testing.T, filter globalfilter.Filter) *statsengine.Snapshot {
+	t.Helper()
+	return drainIntoEngineWith(t, filter, nil)
+}
+
+// drainIntoEngineWith is drainIntoEngine with a hook that adjusts the event
+// loop config (e.g. the kernel PID/TID scope) before the loop starts.
+func drainIntoEngineWith(t *testing.T, filter globalfilter.Filter, configure func(*eventLoopConfig)) *statsengine.Snapshot {
 	t.Helper()
 	engine := statsengine.NewEngine(statsengine.DefaultTopN)
 	ids := map[types.TraceId]struct{}{}
 	for _, row := range aggregateFilterTestRows() {
 		ids[row.TraceID] = struct{}{}
 	}
+	cfg := eventLoopConfig{
+		aggregateDrainEvery:     5 * time.Second,
+		aggregateIngestTraceIDs: ids,
+	}
+	if configure != nil {
+		configure(&cfg)
+	}
 	el := &eventLoop{
-		cfg: eventLoopConfig{
-			aggregateDrainEvery:     5 * time.Second,
-			aggregateIngestTraceIDs: ids,
-		},
+		cfg:           cfg,
 		aggregateSrc:  &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{aggregateFilterTestRows()}},
 		aggregateSink: engine,
 	}
