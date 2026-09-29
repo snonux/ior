@@ -87,7 +87,7 @@ func TestEngineCaptureDoesNotSortReservoirs(t *testing.T) {
 	engine := NewEngine(DefaultTopN)
 	ids := fillReservoirs(engine, 8, 2_000)
 
-	in := engine.captureSnapshotInputs(nil)
+	in := engine.captureSnapshotInputs()
 	if len(in.syscalls.jobs) != len(ids) {
 		t.Fatalf("expected %d percentile jobs, got %d", len(ids), len(in.syscalls.jobs))
 	}
@@ -121,15 +121,15 @@ func TestEngineCaptureDoesNotSortReservoirs(t *testing.T) {
 	}
 
 	// With the cache fresh, the next capture must not copy any reservoir.
-	if jobs := engine.captureSnapshotInputs(nil).syscalls.jobs; len(jobs) != 0 {
+	if jobs := engine.captureSnapshotInputs().syscalls.jobs; len(jobs) != 0 {
 		t.Fatalf("expected no percentile jobs with a fresh cache, got %d", len(jobs))
 	}
 }
 
 // TestEngineSnapshotCachesPercentilesAcrossStaleSnapshots checks that every
 // Snapshot that resolves stale reservoirs writes the fresh percentiles back to
-// the cache, also the second time round when its scratch buffers come from
-// the pool, and that the buffers are recycled.
+// the cache, also on later rounds when the samples are copied into the
+// scratch buffers the previous round handed back.
 func TestEngineSnapshotCachesPercentilesAcrossStaleSnapshots(t *testing.T) {
 	engine := NewEngine(DefaultTopN)
 	ids := fillReservoirs(engine, 6, 3_000)
@@ -158,64 +158,58 @@ func TestEngineSnapshotCachesPercentilesAcrossStaleSnapshots(t *testing.T) {
 					stats.cachedP50, stats.cachedP95, stats.cachedP99, wantP50, wantP95, wantP99)
 			}
 		}
-		// Round 0 has no demand recorded yet, so its capture allocates
-		// exact-size buffers under the lock, which the pool drops as they are
-		// below the bucket size; from then on the buffers are acquired
-		// outside the lock and recycled.
-		if got := len(engine.samplePool.free); round > 0 && got != len(ids) {
-			t.Fatalf("round %d: expected %d pooled buffers after Snapshot, got %d", round, len(ids), got)
+		// From round 1 on every stale reservoir must be copied into the
+		// scratch buffer the previous round handed back.
+		for _, id := range ids {
+			if stats := engine.syscalls.byID[id]; stats.scratch == nil {
+				t.Fatalf("round %d, %s: scratch buffer not handed back", round, stats.name)
+			}
 		}
 	}
 }
 
-// TestEngineSamplePoolFollowsStaleVolume is the regression test for the pool
-// being sized by the number of tracked syscalls: 300 near-empty reservoirs
-// used to make every Snapshot allocate and retain 300 full 80KB buffers.
-// Retention must stay proportional to the stale sample volume, and once a
-// snapshot finds nothing stale, the next one must acquire nothing.
-func TestEngineSamplePoolFollowsStaleVolume(t *testing.T) {
+// TestEngineCaptureReusesScratchAtMixedRates is the regression test for
+// allocating reservoir copies under the engine lock: syscalls ingesting at
+// different rates go stale on different ticks, and after the first capture
+// every stale reservoir must still be copied into its own scratch buffer,
+// never into a buffer allocated under the lock.
+func TestEngineCaptureReusesScratchAtMixedRates(t *testing.T) {
 	engine := NewEngine(DefaultTopN)
-	const numIDs, samplesPerID = 300, 3
-	fillReservoirs(engine, numIDs, samplesPerID)
-
-	if _, err := engine.Snapshot(); err != nil { // all 300 stale
+	const numIDs, ticks = 24, 40
+	ids := fillReservoirs(engine, numIDs, syscallReservoirSampleCapDefault)
+	if _, err := engine.Snapshot(); err != nil { // warm-up: allocates scratch
 		t.Fatalf("unexpected snapshot error: %v", err)
 	}
-	staleVolume := numIDs * samplesPerID
-	if got := engine.samplePool.retainedCap(); got > 2*staleVolume {
-		t.Fatalf("pool retains %d samples of capacity for a stale volume of %d", got, staleVolume)
-	}
 
-	// A second stale round: every reservoir grows by one sample, which is
-	// past the small-reservoir recompute threshold.
-	fillReservoirs(engine, numIDs, 1)
-	scratch := engine.samplePool.acquire()
-	if len(scratch) != numIDs {
-		t.Fatalf("expected %d demand-sized scratch buffers, got %d", numIDs, len(scratch))
-	}
-	for _, buf := range scratch {
-		if cap(buf) > 4 {
-			t.Fatalf("scratch buffer for a 3-sample reservoir has capacity %d", cap(buf))
+	misses, jobs := 0, 0
+	for tick := 0; tick < ticks; tick++ {
+		for i, id := range ids {
+			rate := 24 + (i*97)%237 // 24..260 samples per tick
+			for n := 0; n < rate; n++ {
+				engine.Ingest(newPair(id, uint64((tick*rate+n)%90_000+1), 1, 0))
+			}
 		}
+		in := engine.captureSnapshotInputs()
+		misses += in.syscalls.scratchMisses
+		jobs += len(in.syscalls.jobs)
+		ss, err := buildSubSnapshots(in, time.Second)
+		if err != nil {
+			t.Fatalf("tick %d: unexpected build error: %v", tick, err)
+		}
+		engine.storeSyscallPercentiles(ss.syscallJobs)
 	}
-	engine.releaseSampleBuffers(scratch)
-	if _, err := engine.Snapshot(); err != nil {
-		t.Fatalf("unexpected snapshot error: %v", err)
+	if jobs == 0 {
+		t.Fatalf("expected stale reservoirs across the ticks")
 	}
-	if got := engine.samplePool.retainedCap(); got > 2*numIDs*(samplesPerID+1) {
-		t.Fatalf("pool retains %d samples of capacity after second round", got)
+	if misses != 0 {
+		t.Fatalf("%d of %d jobs allocated their buffer under the lock after warm-up", misses, jobs)
 	}
-
-	// Nothing is stale now: this snapshot records zero demand and trims the
-	// pool, so the following acquire hands out (and allocates) nothing.
-	if _, err := engine.Snapshot(); err != nil {
-		t.Fatalf("unexpected snapshot error: %v", err)
-	}
-	if got := engine.samplePool.acquire(); got != nil {
-		t.Fatalf("acquire after a no-stale snapshot returned %d buffers", len(got))
-	}
-	if got := engine.samplePool.retainedCap(); got != 0 {
-		t.Fatalf("pool retains %d samples of capacity with no stale demand", got)
+	// Retention stays at one buffer per reservoir, no larger than it.
+	for _, id := range ids {
+		stats := engine.syscalls.byID[id]
+		if cap(stats.scratch) > cap(stats.samples) {
+			t.Fatalf("%s: scratch cap %d exceeds reservoir cap %d", stats.name, cap(stats.scratch), cap(stats.samples))
+		}
 	}
 }
 
@@ -226,7 +220,7 @@ func TestEngineStoreAfterResetLeavesNewStatsUntouched(t *testing.T) {
 	engine := NewEngine(DefaultTopN)
 	ids := fillReservoirs(engine, 3, 1_000)
 
-	in := engine.captureSnapshotInputs(nil)
+	in := engine.captureSnapshotInputs()
 	engine.Reset()
 	for _, id := range ids {
 		engine.Ingest(newPair(id, 42, 1, 0))
@@ -260,49 +254,56 @@ func TestEngineStoreAfterResetLeavesNewStatsUntouched(t *testing.T) {
 
 func TestSyscallCaptureUsesScratchBuffers(t *testing.T) {
 	tests := []struct {
-		name      string
-		scratch   int
-		wantSpare int
+		name       string
+		scratchCap int // -1: no scratch buffer
+		wantReused bool
 	}{
-		{name: "more scratch than jobs", scratch: 5, wantSpare: 2},
-		{name: "exact scratch", scratch: 3, wantSpare: 0},
-		{name: "too little scratch falls back to allocating", scratch: 1, wantSpare: 0},
-		{name: "no scratch", scratch: 0, wantSpare: 0},
+		{name: "no scratch allocates", scratchCap: -1, wantReused: false},
+		{name: "too small scratch allocates", scratchCap: 10, wantReused: false},
+		{name: "exact scratch is reused", scratchCap: 50, wantReused: true},
+		{name: "larger scratch is reused", scratchCap: 64, wantReused: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			acc := newSyscallAccumulator()
-			for _, id := range []types.TraceId{types.SYS_ENTER_READ, types.SYS_ENTER_WRITE, types.SYS_ENTER_CLOSE} {
-				for i := 0; i < 50; i++ {
-					acc.Add(newPair(id, uint64(i+1), 0, 0))
-				}
+			for i := 0; i < 50; i++ {
+				acc.Add(newPair(types.SYS_ENTER_READ, uint64(i+1), 0, 0))
 			}
-			scratch := make([][]uint64, 0, tc.scratch)
-			for range tc.scratch {
-				scratch = append(scratch, make([]uint64, 0, 64))
+			stats := acc.byID[types.SYS_ENTER_READ]
+			if tc.scratchCap >= 0 {
+				stats.scratch = make([]uint64, 3, tc.scratchCap)
 			}
-			fromScratch := make(map[*uint64]bool, len(scratch))
-			for _, buf := range scratch {
-				fromScratch[&buf[:1][0]] = true
+			old := stats.scratch
+
+			capture := acc.captureInputs()
+			if len(capture.jobs) != 1 || stats.scratch != nil {
+				t.Fatalf("expected 1 job and the scratch taken, got %d jobs, scratch %v", len(capture.jobs), stats.scratch != nil)
+			}
+			job := capture.jobs[0]
+			if !slices.Equal(job.samples, stats.samples) || &job.samples[0] == &stats.samples[0] {
+				t.Fatalf("job samples are not a private copy of the reservoir")
+			}
+			reused := old != nil && &job.samples[0] == &old[:1][0]
+			if reused != tc.wantReused || (capture.scratchMisses == 0) != tc.wantReused {
+				t.Fatalf("reused=%v misses=%d, want reused=%v", reused, capture.scratchMisses, tc.wantReused)
 			}
 
-			capture := acc.captureInputs(scratch)
-			if len(capture.jobs) != 3 || len(capture.spare) != tc.wantSpare {
-				t.Fatalf("got %d jobs / %d spare, want 3 / %d", len(capture.jobs), len(capture.spare), tc.wantSpare)
-			}
-			reused := 0
-			for _, job := range capture.jobs {
-				if !slices.Equal(job.samples, job.stats.samples) || &job.samples[0] == &job.stats.samples[0] {
-					t.Fatalf("%s: job samples are not a private copy of the reservoir", job.stats.name)
-				}
-				if fromScratch[&job.samples[0]] {
-					reused++
-				}
-			}
-			if want := min(tc.scratch, 3); reused != want {
-				t.Fatalf("%d jobs reused scratch buffers, want %d", reused, want)
+			storePercentileJobs(capture.jobs)
+			if stats.scratch == nil || len(stats.scratch) != 0 || &stats.scratch[:1][0] != &job.samples[0] {
+				t.Fatalf("store must hand the job buffer back as empty scratch")
 			}
 		})
+	}
+}
+
+// TestStorePercentileJobsKeepsExistingScratch covers two overlapping
+// snapshots: the second store must not replace the buffer the first returned.
+func TestStorePercentileJobsKeepsExistingScratch(t *testing.T) {
+	stats := &syscallStats{scratch: make([]uint64, 0, 8)}
+	kept := &stats.scratch[:1][0]
+	storePercentileJobs([]percentileJob{{stats: stats, version: 1, samples: make([]uint64, 4, 8)}})
+	if &stats.scratch[:1][0] != kept {
+		t.Fatalf("store replaced an existing scratch buffer")
 	}
 }
 
@@ -364,7 +365,7 @@ func TestSyscallCaptureSkipsEmptyReservoir(t *testing.T) {
 	acc := newSyscallAccumulator()
 	acc.AddAggregate(SyscallAggregate{TraceID: types.SYS_ENTER_READ, Count: 5, TotalLatencyNs: 50, MinLatencyNs: 1, MaxLatencyNs: 20})
 
-	capture := acc.captureInputs(nil)
+	capture := acc.captureInputs()
 	if len(capture.jobs) != 0 {
 		t.Fatalf("aggregate-only syscall must not produce a percentile job, got %d", len(capture.jobs))
 	}
@@ -375,10 +376,9 @@ func TestSyscallCaptureSkipsEmptyReservoir(t *testing.T) {
 
 func TestSyscallCaptureNilAccumulator(t *testing.T) {
 	var acc *syscallAccumulator
-	scratch := [][]uint64{make([]uint64, 0, 4)}
-	capture := acc.captureInputs(scratch)
-	if capture.inputs != nil || capture.jobs != nil || len(capture.spare) != 1 {
-		t.Fatalf("expected empty capture returning the scratch for nil accumulator, got %+v", capture)
+	capture := acc.captureInputs()
+	if capture.inputs != nil || capture.jobs != nil {
+		t.Fatalf("expected empty capture for nil accumulator, got %+v", capture)
 	}
 	capture.resolvePercentiles()
 	storePercentileJobs(capture.jobs)

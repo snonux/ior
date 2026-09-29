@@ -35,6 +35,12 @@ type syscallStats struct {
 
 	seenLatencies uint64
 	samples       []uint64
+	// scratch is a reusable buffer the snapshot capture copies samples into
+	// (under the engine lock) so that it neither allocates under the lock
+	// nor sorts the live reservoir. A capture takes it (leaving nil) and
+	// storePercentileJobs hands it back. At most one buffer per reservoir is
+	// retained, and it is freed together with the stats on Reset.
+	scratch []uint64
 
 	sampleVersion         uint64
 	lastPercentileVersion uint64
@@ -48,9 +54,9 @@ type syscallStats struct {
 // percentile computation, and from there back to the cached values in stats.
 // Sorting a full 10k-sample reservoir costs ~0.5ms, so doing it for every
 // active syscall under the lock used to stall Engine.Ingest for tens of ms per
-// refresh. Under the lock only an 80KB copy per stale reservoir remains, into
-// a buffer the caller acquired beforehand (see sampleBufferPool) so that the
-// lock is not also held across allocation and GC assists.
+// refresh. Under the lock only a copy per stale reservoir (80KB when full)
+// remains, into the stats' reusable scratch buffer, so the lock is normally not
+// also held across allocation and GC assists.
 type percentileJob struct {
 	stats    *syscallStats
 	version  uint64   // stats.sampleVersion at the time samples was copied
@@ -62,13 +68,15 @@ type percentileJob struct {
 }
 
 // syscallCapture is the syscall part of a snapshot capture: per-syscall
-// inputs (percentiles pre-filled from the cache), the percentile jobs for
-// reservoirs whose cached percentiles are stale, and the scratch buffers the
-// capture was given but did not need.
+// inputs (percentiles pre-filled from the cache) and the percentile jobs for
+// reservoirs whose cached percentiles are stale. scratchMisses counts the jobs
+// whose buffer had to be allocated under the lock because the stats' scratch
+// buffer was missing (first capture, or held by a concurrent Snapshot) or too
+// small (the reservoir grew).
 type syscallCapture struct {
-	inputs []syscallSnapshotInput
-	jobs   []percentileJob
-	spare  [][]uint64
+	inputs        []syscallSnapshotInput
+	jobs          []percentileJob
+	scratchMisses int
 }
 
 type syscallSnapshotInput struct {
@@ -172,7 +180,7 @@ func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 		return nil
 	}
 
-	capture := a.captureInputs(nil)
+	capture := a.captureInputs()
 	capture.resolvePercentiles()
 	storePercentileJobs(capture.jobs)
 	snap, err := buildSyscallSnapshots(capture.inputs, elapsed)
@@ -184,34 +192,31 @@ func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 
 // captureInputs copies the per-syscall counters and, for every reservoir whose
 // cached percentiles are stale, a private copy of its samples. It must run
-// under the lock guarding the accumulator but performs no sorting. Samples are
-// copied into the best-fitting scratch buffer (empty, pre-allocated outside
-// the lock); only when no scratch buffer is large enough, e.g. for reservoirs
-// that went stale or grew since the caller sized it, does it allocate. Unused
-// scratch buffers are returned in spare.
-// The returned inputs carry the cached percentiles; resolvePercentiles
-// overwrites the stale ones.
-func (a *syscallAccumulator) captureInputs(scratch [][]uint64) syscallCapture {
+// under the lock guarding the accumulator but performs no sorting, and after
+// the first capture it normally does not allocate either: samples are copied
+// into the stats' own scratch buffer (see takeScratch). The returned inputs
+// carry the cached percentiles; resolvePercentiles overwrites the stale ones.
+func (a *syscallAccumulator) captureInputs() syscallCapture {
 	if a == nil {
-		return syscallCapture{spare: scratch}
+		return syscallCapture{}
 	}
 
 	capture := syscallCapture{inputs: make([]syscallSnapshotInput, 0, len(a.byID))}
 	for _, stats := range a.byID {
 		if stats.needsPercentileRecompute() {
-			// Best fit, so a small reservoir does not take the buffer a full
-			// one needs; with no fitting buffer, append allocates exactly.
-			buf, _ := takeBestFit(&scratch, len(stats.samples))
+			buf, reused := stats.takeScratch()
+			if !reused {
+				capture.scratchMisses++
+			}
 			capture.jobs = append(capture.jobs, percentileJob{
 				stats:    stats,
 				version:  stats.sampleVersion,
-				samples:  append(buf[:0], stats.samples...),
+				samples:  append(buf, stats.samples...),
 				inputIdx: len(capture.inputs),
 			})
 		}
 		capture.inputs = append(capture.inputs, stats.snapshotInput())
 	}
-	capture.spare = scratch
 	return capture
 }
 
@@ -230,30 +235,26 @@ func (c *syscallCapture) resolvePercentiles() {
 }
 
 // storePercentileJobs writes resolved percentiles back into the per-syscall
-// cache so later snapshots can reuse them. It must run under the lock guarding
-// the accumulator. A job is dropped when the cache already holds percentiles
-// for the same or a newer sample version (a concurrent Snapshot got there
-// first), so an older result never replaces a fresher one.
+// cache so later snapshots can reuse them, and hands each job's sample buffer
+// back as the stats' scratch buffer. It must run under the lock guarding the
+// accumulator, after the job's samples are no longer used. A job's
+// percentiles are dropped when the cache already holds percentiles for the
+// same or a newer sample version (a concurrent Snapshot got there first), so
+// an older result never replaces a fresher one; likewise a buffer is dropped
+// when a concurrent Snapshot already returned one.
 func storePercentileJobs(jobs []percentileJob) {
 	for i := range jobs {
 		job := &jobs[i]
 		stats := job.stats
+		if stats.scratch == nil {
+			stats.scratch = job.samples[:0]
+		}
 		if stats.lastPercentileVersion >= job.version {
 			continue
 		}
 		stats.cachedP50, stats.cachedP95, stats.cachedP99 = job.p50, job.p95, job.p99
 		stats.lastPercentileVersion = job.version
 	}
-}
-
-// jobSampleBuffers returns the sample buffers owned by jobs so the caller can
-// recycle them once the jobs are resolved and stored.
-func jobSampleBuffers(jobs []percentileJob) [][]uint64 {
-	bufs := make([][]uint64, 0, len(jobs))
-	for i := range jobs {
-		bufs = append(bufs, jobs[i].samples)
-	}
-	return bufs
 }
 
 // buildSyscallSnapshots converts raw syscall accumulator inputs into sorted
@@ -316,6 +317,19 @@ func (s *syscallStats) needsPercentileRecompute() bool {
 		return false
 	}
 	return s.lastPercentileVersion == 0 || s.percentilesStale()
+}
+
+// takeScratch removes the stats' scratch buffer and returns it emptied, with
+// room for the whole reservoir. If the buffer is missing (first capture, or a
+// concurrent Snapshot still holds it) or too small (the reservoir grew), it
+// allocates one matching the reservoir's capacity and reports reused=false.
+// Must run under the lock guarding the stats.
+func (s *syscallStats) takeScratch() (buf []uint64, reused bool) {
+	buf, s.scratch = s.scratch, nil
+	if cap(buf) >= len(s.samples) && buf != nil {
+		return buf[:0], true
+	}
+	return make([]uint64, 0, cap(s.samples)), false
 }
 
 // snapshotInput copies the counters and the cached percentiles of s.
