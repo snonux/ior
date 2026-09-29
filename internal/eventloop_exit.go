@@ -3,7 +3,6 @@ package internal
 import (
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"syscall"
 
@@ -1052,15 +1051,10 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 			e.recyclePair(ep, "Dropped malformed getcwd exit event")
 			return false
 		}
-		if retEvent.Ret != 0 && !event.IsErrnoRet(retEvent.Ret) {
-			cwd, err := os.Readlink(procTidPathPrefix(nullEv.GetTid()) + "/cwd")
-			switch {
-			case err == nil:
-				ep.File = file.NewPathname([]byte(cwd))
-			case !isTransientProcError(err):
-				e.notifyWarning(fmt.Sprintf("failed to resolve cwd for tid %d: %v", nullEv.GetTid(), err))
-			}
-		}
+		// The path was captured kernel-side from the output buffer and put on
+		// the pair by the fixup record that precedes this exit
+		// (applyCapturedOutputPath); here it is only validated against ret.
+		ep.File = finishGetcwdPath(ep.File, retEvent.Ret)
 	}
 	ep.Comm = e.comm(nullEv.GetTid())
 	return e.finishPair(ep)

@@ -56,6 +56,11 @@ var (
 	retClassRE        = regexp.MustCompile(`(?m)^\s*ev->ret_type\s*=\s*([A-Z_]+);`)
 	ringbufSubmitRE   = regexp.MustCompile(`(?m)^\s*bpf_ringbuf_submit\(ev,\s*0\);`)
 	disabledIfZeroRE  = regexp.MustCompile(`(?ms)^\s*#if\s+0\s*$.*?^\s*#endif\s*$`)
+	// outputBufferStashRE matches the unconditional, top-level stash of an
+	// output-path syscall's buffer (outputPathSyscalls). The faulted-filename
+	// stash of the open kinds sits nested inside its failed-read branch and is
+	// validated by validateFilenameFallback instead.
+	outputBufferStashRE = regexp.MustCompile(`(?m)^    ior_stash_pending_filename\(tid,\s*ctx->args\[([0-9]+)\]\);$`)
 )
 
 // syscallSemanticExpectations is reviewed data from Linux syscall signatures.
@@ -154,8 +159,10 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"get_mempolicy":   {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
 	"get_robust_list": {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"getcpu":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
-	// Raw getcwd returns the copied pathname byte count including its NUL.
-	"getcwd":       {kind: "null", args: map[string]int{}, ret: "READ_CLASSIFIED", family: "FS"},
+	// Raw getcwd returns the copied pathname byte count including its NUL. Its
+	// path is the output buffer args[0], read back at sys_exit after a
+	// successful return (outputPathSyscalls).
+	"getcwd":       {kind: "null", args: map[string]int{"buf": 0}, ret: "READ_CLASSIFIED", family: "FS"},
 	"getdents":     {kind: "fd", args: map[string]int{"fd": 0}, ret: "READ_CLASSIFIED", family: "FS"},
 	"getdents64":   {kind: "fd", args: map[string]int{"fd": 0}, ret: "READ_CLASSIFIED", family: "FS"},
 	"getegid":      {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
@@ -833,6 +840,49 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 				return replaceInHandler(t, source, "enter", "openat",
 					"if (ctx->args[1] == 0) {",
 					"if (false) {")
+			},
+		},
+		{
+			name: "output buffer stash removed",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "getcwd",
+					"    ior_stash_pending_filename(tid, ctx->args[0]);\n", "")
+			},
+		},
+		{
+			name: "output buffer wrong argument",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "getcwd",
+					"ior_stash_pending_filename(tid, ctx->args[0]);",
+					"ior_stash_pending_filename(tid, ctx->args[1]);")
+			},
+		},
+		{
+			name: "output buffer stashed before the enter hook",
+			mutate: func(t *testing.T, source string) string {
+				source = replaceInHandler(t, source, "enter", "getcwd",
+					"    ior_stash_pending_filename(tid, ctx->args[0]);\n", "")
+				return replaceInHandler(t, source, "enter", "getcwd",
+					"    __u64 now = bpf_ktime_get_boot_ns();\n",
+					"    ior_stash_pending_filename(tid, ctx->args[0]);\n    __u64 now = bpf_ktime_get_boot_ns();\n")
+			},
+		},
+		{
+			name: "output buffer published on failure",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "exit", "getcwd",
+					"    if (ctx->ret > 0)\n        ior_emit_open_name_fixup",
+					"    if (1)\n        ior_emit_open_name_fixup")
+			},
+		},
+		{
+			name: "output buffer taken after the exit hook",
+			mutate: func(t *testing.T, source string) string {
+				source = replaceInHandler(t, source, "exit", "getcwd",
+					"    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETCWD);\n\n", "")
+				return replaceInHandler(t, source, "exit", "getcwd",
+					"    if (ctx->ret > 0)\n",
+					"    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETCWD);\n    if (ctx->ret > 0)\n")
 			},
 		},
 		{
@@ -2032,6 +2082,13 @@ func parseEnterArgSources(name, enterBody, exitBody string) (map[string]int, err
 	if err := addMatches(pendingMatches); err != nil {
 		return nil, err
 	}
+	if argIndex, ok, err := parseOutputBufferCapture(name, enterBody, exitBody); err != nil {
+		return nil, err
+	} else if ok {
+		if err := addArgSource(name, result, "buf", argIndex); err != nil {
+			return nil, err
+		}
+	}
 
 	localSources := map[string]int{}
 	localSourceEnds := map[string]int{}
@@ -2584,6 +2641,45 @@ func validateFilenameFallback(name, enterBody, argIndex string) error {
 		return fmt.Errorf("sys_enter_%s does not stash the exact filename argument once after a failed probe", name)
 	}
 	return nil
+}
+
+// parseOutputBufferCapture recognizes the output-path capture (getcwd): the
+// enter handler stashes the buffer pointer once, after ior_on_syscall_enter
+// created the enter state and before its own reserve, and the exit handler
+// takes it before ior_on_syscall_exit deletes that state and publishes it,
+// guarded by a successful return, before its own reserve. It returns the
+// buffer's argument index and whether the capture is present.
+func parseOutputBufferCapture(name, enterBody, exitBody string) (int, bool, error) {
+	stashes := outputBufferStashRE.FindAllStringSubmatchIndex(enterBody, -1)
+	if len(stashes) == 0 {
+		return 0, false, nil
+	}
+	if len(stashes) != 1 {
+		return 0, false, fmt.Errorf("sys_enter_%s stashes its output buffer %d times, want 1", name, len(stashes))
+	}
+	stash := stashes[0]
+	argIndex := mustArgIndex(enterBody[stash[2]:stash[3]])
+	enterHook := strings.Index(enterBody, "ior_on_syscall_enter(")
+	enterReserve := ringbufReserveRE.FindStringIndex(enterBody)
+	if enterHook < 0 || stash[0] < enterHook || enterReserve == nil || stash[0] > enterReserve[0] {
+		return 0, false, fmt.Errorf("sys_enter_%s stashes its output buffer outside the enter hook..reserve window", name)
+	}
+	if exitBody == "" {
+		return 0, false, fmt.Errorf("sys_enter_%s stashes an output buffer no exit handler takes", name)
+	}
+	enterConst := regexp.QuoteMeta("SYS_ENTER_" + strings.ToUpper(name))
+	takes := regexp.MustCompile(`(?m)^    __u64 pending_filename = ior_take_pending_filename\(tid, `+enterConst+`\);$`).FindAllStringIndex(exitBody, -1)
+	emits := regexp.MustCompile(`(?m)^    if \(ctx->ret > 0\)\n        ior_emit_open_name_fixup\(tid, `+enterConst+`, pending_filename\);$`).FindAllStringIndex(exitBody, -1)
+	allEmits := regexp.MustCompile(`\bior_emit_open_name_fixup\s*\(`).FindAllStringIndex(exitBody, -1)
+	if len(takes) != 1 || len(emits) != 1 || len(allEmits) != 1 {
+		return 0, false, fmt.Errorf("sys_exit_%s must take its output buffer once and publish it once, only after a successful return", name)
+	}
+	exitHook := strings.Index(exitBody, "ior_on_syscall_exit(")
+	exitReserve := ringbufReserveRE.FindStringIndex(exitBody)
+	if exitHook < 0 || takes[0][0] > exitHook || emits[0][0] < exitHook || exitReserve == nil || emits[0][0] > exitReserve[0] {
+		return 0, false, fmt.Errorf("sys_exit_%s takes or publishes its output buffer out of order", name)
+	}
+	return argIndex, true, nil
 }
 
 func validateLocalNotWrittenAfter(name, local, body string, sourceEnd int) error {
