@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -3458,6 +3459,65 @@ func TestGenerateOpenHandlersRecoverAFaultedFilename(t *testing.T) {
 	}
 }
 
+// outputPathStashLine is the unconditional enter-side stash of an output-path
+// syscall's buffer pointer (outputPathSyscalls).
+func outputPathStashLine(argIdx int) string {
+	return fmt.Sprintf("    ior_stash_pending_filename(tid, ctx->args[%d]);\n", argIdx)
+}
+
+// outputPathEmitLines publishes the output buffer only after a successful
+// return: on failure the kernel wrote nothing into it.
+func outputPathEmitLines(enterConst string) string {
+	return "    if (ctx->ret > 0)\n        ior_emit_open_name_fixup(tid, " + enterConst + ", pending_filename);\n"
+}
+
+// TestGenerateGetcwdCapturesItsOutputBuffer pins the generator emission for the
+// output-path capture: getcwd's path only exists once the call has returned,
+// so the enter stashes the buffer pointer and the exit reads it back.
+func TestGenerateGetcwdCapturesItsOutputBuffer(t *testing.T) {
+	out := GenerateTracepointsC(mustParseAll(t, FormatGetcwd+"\n"+FormatExitGetcwd+"\n"+FormatSync+"\n"+FormatExitSync+"\n"))
+
+	enterBody := handlerBody(t, out, "sys_enter_getcwd")
+	stash := outputPathStashLine(0)
+	if !strings.Contains(enterBody, stash) {
+		t.Fatalf("sys_enter_getcwd does not stash its output buffer:\n%s", enterBody)
+	}
+	// The stash needs the enter-state entry ior_on_syscall_enter creates, and
+	// must stay a header-only null_event: the buffer holds nothing yet.
+	if strings.Index(enterBody, stash) < strings.Index(enterBody, "ior_on_syscall_enter(") {
+		t.Errorf("sys_enter_getcwd stashes before ior_on_syscall_enter created the enter state:\n%s", enterBody)
+	}
+	if strings.Contains(enterBody, "bpf_probe_read_user_str") {
+		t.Errorf("sys_enter_getcwd reads the output buffer before the kernel filled it:\n%s", enterBody)
+	}
+
+	exitBody := handlerBody(t, out, "sys_exit_getcwd")
+	take := openNameTakeLine("SYS_ENTER_GETCWD")
+	emit := outputPathEmitLines("SYS_ENTER_GETCWD")
+	takeAt := strings.Index(exitBody, take)
+	exitHookAt := strings.Index(exitBody, "ior_on_syscall_exit(")
+	emitAt := strings.Index(exitBody, emit)
+	reserveAt := strings.Index(exitBody, "bpf_ringbuf_reserve(&event_map,")
+	switch {
+	case takeAt < 0 || emitAt < 0:
+		t.Fatalf("sys_exit_getcwd does not take and publish its output buffer:\n%s", exitBody)
+	case takeAt > exitHookAt:
+		t.Errorf("sys_exit_getcwd takes the pointer after ior_on_syscall_exit deleted the enter state:\n%s", exitBody)
+	case emitAt < exitHookAt:
+		t.Errorf("sys_exit_getcwd publishes for an event ior_on_syscall_exit suppressed:\n%s", exitBody)
+	case emitAt > reserveAt:
+		t.Errorf("sys_exit_getcwd publishes after its own exit record:\n%s", exitBody)
+	}
+	requireContains(t, exitBody, "ev->ret_type = READ_CLASSIFIED;")
+
+	// Other null-kind syscalls must not pay for the capture.
+	for _, name := range []string{"sys_enter_sync", "sys_exit_sync"} {
+		if body := handlerBody(t, out, name); strings.Contains(body, "pending_filename") {
+			t.Errorf("%s must not participate in the output-path capture:\n%s", name, body)
+		}
+	}
+}
+
 // TestGeneratedArtifactRecoversFaultedOpenFilenames applies the same invariant
 // to the committed internal/c/generated_tracepoints.c. `mage generate` needs
 // root and a newer kernel than this host, so the artifact is spliced by hand;
@@ -3510,6 +3570,23 @@ func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 			!strings.Contains(exitBody, openNameEmitLine(enterConst)) {
 			t.Errorf("sys_exit_%s does not recover its identifying string", syscallName)
 		}
+	}
+
+	// The output-path syscalls (outputPathSyscalls) share the stash/take/fixup
+	// helpers: their enter stashes the output buffer unconditionally and their
+	// exit publishes it after a successful return.
+	for syscallName, argIdx := range outputPathSyscalls {
+		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+		enterBody := handlerBody(t, artifact, "sys_enter_"+syscallName)
+		if !strings.Contains(enterBody, outputPathStashLine(argIdx)) {
+			t.Errorf("sys_enter_%s does not stash its output buffer", syscallName)
+		}
+		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
+			!strings.Contains(exitBody, outputPathEmitLines(enterConst)) {
+			t.Errorf("sys_exit_%s does not capture its output buffer after a successful return", syscallName)
+		}
+		recoveryEnters = append(recoveryEnters, "sys_enter_"+syscallName)
 	}
 
 	// Exactly the reviewed recovery pairs, nothing else: an over-broad splice would

@@ -1806,18 +1806,22 @@ func makeSyncEventTestData(t *testing.T) (td testData) {
 	return td
 }
 
+// makeGetcwdEventTestData feeds a getcwd pair the way the kernel emits it:
+// the enter, the path read from the output buffer after the successful return
+// (an OPEN_NAME_FIXUP_EVENT reserved before the exit record), then the exit
+// with ret = the copied byte count including the NUL. The captured path
+// deliberately differs from this process's real cwd: the row must report what
+// the kernel returned, not what /proc/<tid>/cwd says at processing time.
 func makeGetcwdEventTestData(t *testing.T) (td testData) {
 	pid := uint32(os.Getpid())
 	tid := uint32(os.Getpid())
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
+	const cwd = "/ior-getcwd-test/captured"
 
 	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, pid, tid, types.SYS_ENTER_GETCWD)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+	td.rawTracepoints = append(td.rawTracepoints, makeOpenNameFixupEvent(t, tid, types.SYS_ENTER_GETCWD, cwd))
 
-	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, pid, tid, types.SYS_EXIT_GETCWD, 1)
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, pid, tid, types.SYS_EXIT_GETCWD, int64(len(cwd)+1))
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, _ *eventLoop, ep *event.Pair) {
@@ -1827,9 +1831,6 @@ func makeGetcwdEventTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
-		// getcwd args[0] (buf) is an OUTPUT buffer that is only valid at exit,
-		// so the path is never read at enter. Instead it is resolved at exit
-		// from /proc/<tid>/cwd, which must equal the process cwd here.
 		if ep.File == nil {
 			t.Fatalf("Expected getcwd to attach a pathname")
 		}
@@ -1842,9 +1843,9 @@ func makeGetcwdEventTestData(t *testing.T) (td testData) {
 }
 
 // makeGetcwdFailureEventTestData locks in that a failed getcwd (negative
-// errno return) does NOT resolve or attach a cwd path. The exit handler only
-// reads /proc/<tid>/cwd when ret > 0 (success returns the path length); on
-// error there is nothing to attach.
+// errno return) does NOT attach a cwd path. The kernel only captures the
+// output buffer when ret > 0 (success returns the path length), and
+// userspace re-checks ret, so on error there is nothing to attach.
 func makeGetcwdFailureEventTestData(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_GETCWD)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)

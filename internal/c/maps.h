@@ -5,11 +5,13 @@ struct {
     __uint(max_entries, 1 << 24);
 } event_map SEC(".maps");
 
-// pending_filename carries the user-space filename pointer of an open whose
-// sys_enter bpf_probe_read_user_str faulted, so the sys_exit handler can read
-// the string once the kernel has faulted the page in. 0 means "nothing to
-// recover" and is the state ior_on_syscall_enter leaves behind for every other
-// syscall (the struct is zero-initialised there).
+// pending_filename carries a user-space string pointer from sys_enter to
+// sys_exit: the filename of an open whose sys_enter bpf_probe_read_user_str
+// faulted, so the sys_exit handler can read the string once the kernel has
+// faulted the page in, and the output buffer of getcwd (outputPathSyscalls in
+// internal/generate/classify.go), whose path the kernel only writes during the
+// call. 0 means "nothing to read" and is the state ior_on_syscall_enter leaves
+// behind for every other syscall (the struct is zero-initialised there).
 struct syscall_enter_state {
     __u64 start_ns;
     __u64 pending_filename;

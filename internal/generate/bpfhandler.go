@@ -47,7 +47,18 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 		// "long ret", so the exit's own classification cannot tell us that -
 		// EnterKind carries it across (see codegen.go).
 		recoverFilename: !isEnter && kindRecoversFilename(tp.EnterKind),
+		outputPathArg:   outputPathArgForHandler(f.Name),
 	})
+}
+
+// outputPathArgForHandler returns the output-buffer argument index of the
+// syscall behind tracepoint name, or -1 when it has none. Both sides need it:
+// the enter handler stashes the pointer, the exit handler reads it back.
+func outputPathArgForHandler(name string) int {
+	if idx, ok := outputPathArgIndex(syscallName(name)); ok {
+		return idx
+	}
+	return -1
 }
 
 // handlerComment renders the /// reason line of a handler. It is also the line
@@ -78,6 +89,16 @@ type handlerSpec struct {
 	noreturn        bool
 	enterName       string
 	recoverFilename bool
+	// outputPathArg is the argument index of an output path buffer the exit
+	// handler captures (outputPathSyscalls), or -1 for every other syscall.
+	outputPathArg int
+}
+
+// takesPendingFilename reports whether this exit handler takes the pointer the
+// enter handler stashed: the faulted-filename recovery and the output-path
+// capture share the enter-state slot and the fixup record.
+func (h handlerSpec) takesPendingFilename() bool {
+	return !h.isEnter && (h.recoverFilename || h.outputPathArg >= 0)
 }
 
 // enterConstForHandler returns the C #define constant name for the
@@ -93,15 +114,17 @@ func enterConstForHandler(name string, isEnter bool) string {
 }
 
 // renderHandlerPrologue writes everything ahead of the ring-buffer reserve: the
-// scope gate, the per-tid enter/exit hook, and - for the open kinds only - the
-// two halves of the faulted-filename recovery. Both recovery lines are
-// position-critical, which is why they live here rather than in the kind
-// emitters: the take must precede ior_on_syscall_exit (which deletes this tid's
-// enter-state entry) and the fixup must precede this handler's own reserve, so
-// the ring buffer hands userspace the recovered name while the enter event of
-// the same syscall is still pending and unpaired.
+// scope gate, the per-tid enter/exit hook, and - for the open kinds and the
+// output-path syscalls (outputPathSyscalls) only - the stash/take/emit of a
+// user pointer carried on the enter state. Those lines are position-critical,
+// which is why they live here rather than in the kind emitters: the enter-side
+// stash must follow ior_on_syscall_enter (which creates this tid's enter-state
+// entry), the take must precede ior_on_syscall_exit (which deletes it) and the
+// fixup must precede this handler's own reserve, so the ring buffer hands
+// userspace the name while the enter event of the same syscall is still
+// pending and unpaired.
 func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
-	name, isEnter := h.name, h.isEnter
+	name := h.name
 	fmt.Fprintf(b, "/// %s is a struct %s\n", name, h.comment)
 	fmt.Fprintf(b, "SEC(\"tracepoint/syscalls/%s\")\n", name)
 	fmt.Fprintf(b, "int handle_%s(struct %s *ctx) {\n", strings.ToLower(name), h.ctxStruct)
@@ -109,16 +132,23 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 	b.WriteString("    if (filter(&pid, &tid))\n")
 	b.WriteString("        return 0;\n")
 	b.WriteString("\n")
-	if h.recoverFilename {
+	if h.takesPendingFilename() {
 		fmt.Fprintf(b, "    __u64 pending_filename = ior_take_pending_filename(tid, %s);\n", h.enterName)
 		b.WriteString("\n")
 	}
-	// The handler reads the clock exactly once (clockReadLine) and hands that
-	// value to the enter/exit hook and to ev->time, instead of the hook and the
-	// body each calling bpf_ktime_get_boot_ns(). The hook's duration and the
-	// pair's ev->time delta are then the same two instants.
+	renderSyscallHook(b, h)
+	b.WriteString("\n")
+	renderPendingFilenameUse(b, h)
+}
+
+// renderSyscallHook writes the clock read and the per-tid enter/exit hook.
+// The handler reads the clock exactly once (clockReadLine) and hands that
+// value to the hook and to ev->time, instead of the hook and the body each
+// calling bpf_ktime_get_boot_ns(). The hook's duration and the pair's ev->time
+// delta are then the same two instants.
+func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 	switch {
-	case isEnter && h.noreturn:
+	case h.isEnter && h.noreturn:
 		// Noreturn enter: only the sampling decision, no enter-state write. The
 		// syscall never returns, so its exit handler is suppressed and nothing
 		// would ever look up or delete a recorded enter-state entry. Skipping
@@ -126,21 +156,41 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 		// syscall_enter_state_map; the enter null_event is still emitted below.
 		// The hook needs no timestamp, so the clock is read only once the event
 		// is known to be emitted, as before.
-		fmt.Fprintf(b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(name))
+		fmt.Fprintf(b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(h.name))
 		b.WriteString("        return 0;\n")
 		b.WriteString("\n")
 		b.WriteString(clockReadLine)
-	case isEnter:
+	case h.isEnter:
 		b.WriteString(clockReadLine)
-		fmt.Fprintf(b, "    if (!ior_on_syscall_enter(tid, %s, now))\n", strings.ToUpper(name))
+		fmt.Fprintf(b, "    if (!ior_on_syscall_enter(tid, %s, now))\n", strings.ToUpper(h.name))
 		b.WriteString("        return 0;\n")
 	default:
 		b.WriteString(clockReadLine)
 		fmt.Fprintf(b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret, now))\n", h.enterName)
 		b.WriteString("        return 0;\n")
 	}
-	b.WriteString("\n")
-	if h.recoverFilename {
+}
+
+// renderPendingFilenameUse writes what follows the hook for the handlers that
+// carry a user pointer from sys_enter to sys_exit.
+//
+// An output-path enter stashes its buffer pointer unconditionally: there is
+// nothing to read yet, and only an emitted enter (the hook returned) can ever
+// be paired with the fixup. Its exit publishes the buffer only after a
+// successful return (ret > 0, the copied byte count including the NUL): on
+// failure the kernel wrote nothing, so the buffer holds whatever the caller
+// left there. The faulted-filename recovery instead always emits, because its
+// pointer is only stashed when the enter-side read failed.
+func renderPendingFilenameUse(b *strings.Builder, h handlerSpec) {
+	switch {
+	case h.isEnter && !h.noreturn && h.outputPathArg >= 0:
+		fmt.Fprintf(b, "    ior_stash_pending_filename(tid, ctx->args[%d]);\n", h.outputPathArg)
+		b.WriteString("\n")
+	case !h.isEnter && h.outputPathArg >= 0:
+		b.WriteString("    if (ctx->ret > 0)\n")
+		fmt.Fprintf(b, "        ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
+		b.WriteString("\n")
+	case h.takesPendingFilename():
 		fmt.Fprintf(b, "    ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
 		b.WriteString("\n")
 	}

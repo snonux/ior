@@ -708,6 +708,32 @@ func ClassifyRet(name string) RetClassification {
 	return Unclassified
 }
 
+// outputPathSyscalls maps each syscall whose identifying path is an OUTPUT
+// buffer - one the kernel fills in and that only holds the path once the call
+// has returned - to that buffer's argument index. The enter side has nothing
+// to read yet (it stays a header-only null_event), so the generated enter
+// handler stashes the buffer pointer on the tid's enter state and the exit
+// handler reads the string back after a successful return, publishing it as
+// the same OPEN_NAME_FIXUP_EVENT control record the faulted-filename recovery
+// uses (see renderHandlerPrologue and internal/c/filter.c).
+//
+// getcwd is the reason this exists: userspace used to readlink
+// /proc/<tid>/cwd while processing the pair, which reported the directory at
+// processing time (wrong once the tracee had moved on, empty once it had
+// exited) and cost a syscall on the event loop per getcwd. Its raw return is
+// the copied byte count including the NUL (see retClassifications), which is
+// what lets userspace detect a path longer than the captured field.
+var outputPathSyscalls = map[string]int{
+	"getcwd": 0,
+}
+
+// outputPathArgIndex returns the argument index of syscall's output path
+// buffer, or false when the syscall has none (see outputPathSyscalls).
+func outputPathArgIndex(syscall string) (int, bool) {
+	idx, ok := outputPathSyscalls[syscall]
+	return idx, ok
+}
+
 var retClassifications = map[string]RetClassification{
 	"fgetxattr":  ReadClassified,
 	"flistxattr": ReadClassified,

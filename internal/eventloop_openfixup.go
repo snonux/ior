@@ -31,12 +31,19 @@ import (
 // later exit - which is already broken with or without this splice - so it is
 // left to the drop counter rather than to extra per-record identity state.
 //
+// The same record also carries the path getcwd returned to its caller, read by
+// the exit handler from the output buffer after a successful return; that one
+// lands on the pair rather than in the enter event (applyCapturedOutputPath).
+//
 // Like every control record it never becomes a row, and it owns the event it is
 // handed, so it must recycle it.
 func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 	defer ev.Recycle()
 	pair, ok := e.pairs.pending(ev.Tid)
 	if !ok {
+		return
+	}
+	if applyCapturedOutputPath(pair, ev) {
 		return
 	}
 	applyRecoveredFilename(pair.EnterEv, ev)

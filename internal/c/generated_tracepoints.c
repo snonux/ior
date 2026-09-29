@@ -6199,6 +6199,8 @@ int handle_sys_enter_getcwd(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_GETCWD, now))
         return 0;
 
+    ior_stash_pending_filename(tid, ctx->args[0]);
+
     struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -6222,9 +6224,14 @@ int handle_sys_exit_getcwd(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETCWD);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_GETCWD, ctx->ret, now))
         return 0;
+
+    if (ctx->ret > 0)
+        ior_emit_open_name_fixup(tid, SYS_ENTER_GETCWD, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
