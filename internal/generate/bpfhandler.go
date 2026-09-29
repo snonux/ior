@@ -1085,10 +1085,14 @@ const (
 	// tv_nsec <= timespecMaxNsRem.
 	timespecMaxNsSec = "9223372036LL"
 	timespecMaxNsRem = "854775807LL"
-	// sleepRequestedNsSaturated is the value a valid but unrepresentable sleep
-	// request saturates to (S64_MAX). It mirrors the kernel, which clamps such
-	// requests to KTIME_MAX (timespec64_to_ktime) and sleeps "forever"; e.g.
-	// `sleep infinity` passes {LLONG_MAX, 999999999}.
+	// sleepRequestedNsSaturated is the value a valid sleep request saturates
+	// to when its nanoseconds are unrepresentable in __s64 (S64_MAX), e.g.
+	// `sleep infinity` passing {LLONG_MAX, 999999999}. The kernel similarly
+	// clamps to KTIME_MAX (ktime_set), but already from tv_sec >= KTIME_SEC_MAX
+	// (9223372036) regardless of tv_nsec, so values within ~1s of the boundary
+	// may differ: {9223372036, 0} sleeps forever in the kernel but is recorded
+	// exactly as 9223372036000000000. ior keeps the exact representable-range
+	// boundary shared with the poll timeout capture.
 	sleepRequestedNsSaturated = "9223372036854775807LL /* S64_MAX */"
 )
 
@@ -1130,9 +1134,11 @@ func timespecNsExpr(v string) string {
 //     (variable) clockid in BPF, which is racy and clock-dependent.
 //
 // A valid relative request is converted to nanoseconds. One too large for
-// __s64 (e.g. `sleep infinity`) saturates to S64_MAX like the kernel's own
-// KTIME_MAX clamp; before this range check the multiplication wrapped into
-// garbage negative values, and {LLONG_MAX, 999999999} landed exactly on -1.
+// __s64 (e.g. `sleep infinity`) saturates to S64_MAX (the kernel similarly
+// clamps to KTIME_MAX, from tv_sec >= KTIME_SEC_MAX; values within ~1s of the
+// boundary may differ, see sleepRequestedNsSaturated). Before this range check
+// the multiplication wrapped into garbage negative values, and
+// {LLONG_MAX, 999999999} landed exactly on -1.
 func generateExtraSleep(name string) string {
 	spec := sleepTimespecPtr[name] // zero value (ptr "") if not found
 	ptrExpr := spec.ptr

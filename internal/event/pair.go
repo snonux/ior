@@ -34,8 +34,9 @@ type Pair struct {
 	// RequestedSleepNs tracks requested sleep duration for nanosleep-style
 	// syscalls. -1 means unknown (null/unreadable or kernel-invalid timespec,
 	// or an absolute TIMER_ABSTIME sleep); a valid request too large for int64
-	// nanoseconds (e.g. `sleep infinity`) is saturated to math.MaxInt64 in BPF,
-	// mirroring the kernel's KTIME_MAX clamp.
+	// nanoseconds (e.g. `sleep infinity`) is saturated to math.MaxInt64 in BPF.
+	// The kernel similarly clamps to KTIME_MAX, but from tv_sec >=
+	// KTIME_SEC_MAX, so values within ~1s of the boundary may differ.
 	RequestedSleepNs int64
 	// Nfds and TimeoutNs carry poll/select readiness metadata. For epoll waits,
 	// Nfds is maxevents. TimeoutNs uses -1 for an infinite wait and -2 when a
