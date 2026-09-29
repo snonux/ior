@@ -3,6 +3,7 @@ package statsengine
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -64,6 +65,13 @@ type Engine struct {
 	latencySeries    *ringTimeSeries
 	gapSeries        *ringTimeSeries
 	throughputSeries *ringTimeSeries
+
+	// samplePool supplies the scratch buffers Snapshot copies stale latency
+	// reservoirs into, acquired before e.mu is taken. syscallCountHint is the
+	// number of tracked syscalls seen by the last capture, an upper bound on
+	// how many buffers the next capture needs (barring new syscalls).
+	samplePool       *sampleBufferPool
+	syscallCountHint atomic.Int64
 }
 
 type snapshotInputs struct {
@@ -113,6 +121,7 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 		latencySeries:    newRingTimeSeries(),
 		gapSeries:        newRingTimeSeries(),
 		throughputSeries: newRingTimeSeries(),
+		samplePool:       newSampleBufferPool(syscallReservoirSampleCapDefault),
 	}
 }
 
@@ -198,6 +207,7 @@ func (e *Engine) updateErrorAndByteClasses(pair *event.Pair) {
 // subSnapshots holds the concurrently built per-category snapshot slices.
 type subSnapshots struct {
 	syscalls    []SyscallSnapshot
+	syscallJobs []percentileJob // resolved, to be cached by storeSyscallPercentiles
 	files       []FileSnapshot
 	processes   []ProcessSnapshot
 	latencyHist HistogramSnapshot
@@ -206,13 +216,15 @@ type subSnapshots struct {
 
 // captureSnapshotInputs copies all engine state under the lock so that the
 // subsequent (lock-free) computation does not block ingestion. Syscall latency
-// reservoirs are only copied here; sorting them for percentiles is deferred to
-// buildSubSnapshots because it dominated the lock hold time (~25ms per refresh
-// with 60 full reservoirs), stalling Ingest on the event-loop goroutine.
-func (e *Engine) captureSnapshotInputs() snapshotInputs {
+// reservoirs are only copied here, into the pre-acquired scratch buffers;
+// computing their percentiles is deferred to buildSubSnapshots because it
+// dominated the lock hold time (~25ms per refresh with 60 full reservoirs),
+// stalling Ingest on the event-loop goroutine.
+func (e *Engine) captureSnapshotInputs(scratch [][]uint64) snapshotInputs {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.now()
+	e.syscallCountHint.Store(int64(len(e.syscalls.byID)))
 
 	return snapshotInputs{
 		now:                    now,
@@ -228,7 +240,7 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		latencySeries:          e.latencySeries.ValuesAt(now),
 		gapSeries:              e.gapSeries.ValuesAt(now),
 		throughputSeries:       e.throughputSeries.ValuesAt(now),
-		syscalls:               e.syscalls.captureInputs(),
+		syscalls:               e.syscalls.captureInputs(scratch),
 		files:                  e.files.snapshotInputs(),
 		processes:              e.processes.snapshotInputs(),
 		latencyHist:            e.latencyHist.snapshotInputs(),
@@ -239,9 +251,8 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 // buildSubSnapshots runs all per-category snapshot builders concurrently
 // using errgroup so that any error from a sub-builder is captured and returned
 // to the caller instead of being silently dropped. It runs without the engine
-// lock and also resolves the stale syscall percentiles; in is passed by value
-// but its syscall capture slices share backing arrays with the caller, so the
-// resolved jobs are visible to storeSyscallPercentiles afterwards.
+// lock and also resolves the stale syscall percentiles, returning the resolved
+// jobs in subSnapshots.syscallJobs for the caller to cache.
 func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) (subSnapshots, error) {
 	var (
 		ss subSnapshots
@@ -250,8 +261,10 @@ func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) (subSnapshots, 
 
 	eg.Go(func() error {
 		var err error
-		in.syscalls.resolvePercentiles()
-		ss.syscalls, err = buildSyscallSnapshots(in.syscalls.inputs, elapsed)
+		capture := in.syscalls
+		capture.resolvePercentiles()
+		ss.syscallJobs = capture.jobs
+		ss.syscalls, err = buildSyscallSnapshots(capture.inputs, elapsed)
 		return err
 	})
 	eg.Go(func() error {
@@ -309,34 +322,46 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 // resolved outside it, so the next snapshot does not sort the same reservoirs
 // again. After a concurrent Reset the jobs point at the discarded accumulator's
 // stats; writing to those is harmless.
-func (e *Engine) storeSyscallPercentiles(capture *syscallCapture) {
-	if len(capture.jobs) == 0 {
+func (e *Engine) storeSyscallPercentiles(jobs []percentileJob) {
+	if len(jobs) == 0 {
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	capture.storePercentiles()
+	storePercentileJobs(jobs)
+}
+
+// releaseSampleBuffers hands scratch buffers back to the pool once nothing
+// references them any more.
+func (e *Engine) releaseSampleBuffers(bufs [][]uint64) {
+	e.samplePool.release(bufs, int(e.syscallCountHint.Load()))
 }
 
 // Snapshot returns an immutable point-in-time view of all stats.
-// It captures engine state under the lock, then builds sub-snapshots
-// (including the syscall percentile sorts) concurrently via errgroup without
-// holding the lock, caches the fresh percentiles under a short second lock,
-// and finally assembles the result. An error is returned if any sub-builder
-// fails.
+// It acquires reservoir scratch buffers, captures engine state under the lock,
+// then builds sub-snapshots (including the syscall percentile selection)
+// concurrently via errgroup without holding the lock, caches the fresh
+// percentiles under a short second lock, and finally assembles the result.
+// An error is returned if any sub-builder fails.
 func (e *Engine) Snapshot() (*Snapshot, error) {
 	if e == nil {
 		return nil, nil
 	}
 
-	in := e.captureSnapshotInputs()
+	in := e.captureSnapshotInputs(e.samplePool.acquire(int(e.syscallCountHint.Load())))
+	e.releaseSampleBuffers(in.syscalls.spare)
+	// Job buffers go back to the pool once the builders and the write-back
+	// are done with them, also on error. The very first snapshot (hint 0)
+	// falls back to allocating under the lock; later ones find enough
+	// buffers unless new syscalls appeared in between.
+	defer e.releaseSampleBuffers(jobSampleBuffers(in.syscalls.jobs))
 	elapsed := nonNegativeDuration(in.now.Sub(in.startedAt))
 
 	ss, err := buildSubSnapshots(in, elapsed)
 	if err != nil {
 		return nil, err
 	}
-	e.storeSyscallPercentiles(&in.syscalls)
+	e.storeSyscallPercentiles(ss.syscallJobs)
 
 	snap := NewSnapshot(
 		in.latencySeries, in.gapSeries, in.throughputSeries,
