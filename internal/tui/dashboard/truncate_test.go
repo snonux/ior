@@ -56,3 +56,29 @@ func TestRenderTabBarPlainExactWidth(t *testing.T) {
 		}
 	}
 }
+
+// TestPadOrTrimExactDisplayWidth is the regression for the bubble/treemap/
+// icicle header and status lines: padOrTrim cut by display width but padded
+// by rune count, so "sel: 日本語のファイル" at width 20 came out 27 cells.
+func TestPadOrTrimExactDisplayWidth(t *testing.T) {
+	tests := []struct {
+		in    string
+		width int
+		want  string
+	}{
+		{"sel: 日本語のファイル", 20, "sel: 日本語のファイ…"},
+		{"sel: 日本", 12, "sel: 日本   "},
+		{"sel: none", 12, "sel: none   "},
+		{"日本", 1, "…"},
+	}
+	for _, tc := range tests {
+		got := padOrTrim(tc.in, tc.width)
+		if got != tc.want || common.DisplayWidth(got) != tc.width || !utf8.ValidString(got) {
+			t.Fatalf("padOrTrim(%q, %d) = %q (%d cells), want %q", tc.in, tc.width, got, common.DisplayWidth(got), tc.want)
+		}
+	}
+	// A non-positive width means unconstrained: the value is kept as is.
+	if got := padOrTrim("日本語", 0); got != "日本語" {
+		t.Fatalf("padOrTrim(width 0) = %q, want unchanged", got)
+	}
+}

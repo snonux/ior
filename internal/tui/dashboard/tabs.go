@@ -177,6 +177,9 @@ func tabLabel(tab Tab, short bool) string {
 // truncatePlain shortens s to at most width display cells, ending in "…" when
 // cut. It measures terminal cells rather than runes (common.TruncateRight), so
 // wide CJK/emoji text in filter or status strings cannot overflow the row.
+// Per the shared marker rule, "…" is added only when it leaves room for
+// content: a width of 1 hard-cuts to the first cell ("abc" -> "a"), falling
+// back to "…" only when that cell would be half of a wide rune ("日本" -> "…").
 func truncatePlain(s string, width int) string {
 	return common.TruncateRight(s, width, common.Ellipsis)
 }
