@@ -32,17 +32,18 @@ const (
 	// interval. Allocation counters, unlike wall clock, do not measure how much
 	// CPU the host has left.
 	//
-	// With gap-free child-span allocation, the production path measured 26366
-	// allocations / 1479201 bytes in an idle non-race run and 26376 / 1480425
-	// with GOGC=1, GOMEMLIMIT=16MiB and GOMAXPROCS=128. A full -race run also
-	// stayed below the ceilings. They leave about 11-14% headroom over the
-	// measured non-race costs.
+	// Since LiveTrie snapshots prune before they build (reading incrementally
+	// maintained subtree totals and materialising only visible nodes), the
+	// production path measured 3686 allocations / 439512 bytes in an idle
+	// non-race run, 3686 / 439601 with GOGC=1, GOMEMLIMIT=16MiB and
+	// GOMAXPROCS=128, and 3686 / 446248 under -race. The ceilings leave about
+	// 12-14% headroom over those costs.
 	//
-	// Dropping the childStates preallocation in livetrie.go demonstrates that
-	// both dimensions still matter: non-race rises to 30009 allocations and
-	// 1829280 bytes, tripping both ceilings.
-	stressMaxRenderAllocs = 30000
-	stressMaxRenderBytes  = 1650000
+	// Both dimensions still matter: the former full-walk snapshot, which
+	// cloned and sorted every trie node's children before pruning, measured
+	// 26366 allocations / 1479201 bytes here and trips both ceilings.
+	stressMaxRenderAllocs = 4200
+	stressMaxRenderBytes  = 500000
 	stressCostSamples     = 20
 
 	// stressExpectedFrames is how many frames the completed fixture trie lays
