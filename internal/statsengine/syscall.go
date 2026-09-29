@@ -174,9 +174,10 @@ func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 // captureInputs copies the per-syscall counters and, for every reservoir whose
 // cached percentiles are stale, a private copy of its samples. It must run
 // under the lock guarding the accumulator but performs no sorting. Samples are
-// copied into the scratch buffers (empty, pre-allocated outside the lock);
-// only when scratch runs out, e.g. for syscalls first seen since the caller
-// sized it, does it allocate. Unused scratch buffers are returned in spare.
+// copied into the best-fitting scratch buffer (empty, pre-allocated outside
+// the lock); only when no scratch buffer is large enough, e.g. for reservoirs
+// that went stale or grew since the caller sized it, does it allocate. Unused
+// scratch buffers are returned in spare.
 // The returned inputs carry the cached percentiles; resolvePercentiles
 // overwrites the stale ones.
 func (a *syscallAccumulator) captureInputs(scratch [][]uint64) syscallCapture {
@@ -187,10 +188,9 @@ func (a *syscallAccumulator) captureInputs(scratch [][]uint64) syscallCapture {
 	capture := syscallCapture{inputs: make([]syscallSnapshotInput, 0, len(a.byID))}
 	for _, stats := range a.byID {
 		if stats.needsPercentileRecompute() {
-			var buf []uint64
-			if n := len(scratch); n > 0 {
-				buf, scratch = scratch[n-1], scratch[:n-1]
-			}
+			// Best fit, so a small reservoir does not take the buffer a full
+			// one needs; with no fitting buffer, append allocates exactly.
+			buf, _ := takeBestFit(&scratch, len(stats.samples))
 			capture.jobs = append(capture.jobs, percentileJob{
 				stats:    stats,
 				version:  stats.sampleVersion,

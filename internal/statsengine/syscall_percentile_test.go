@@ -158,12 +158,64 @@ func TestEngineSnapshotCachesPercentilesAcrossStaleSnapshots(t *testing.T) {
 					stats.cachedP50, stats.cachedP95, stats.cachedP99, wantP50, wantP95, wantP99)
 			}
 		}
-		// Round 0 has no hint yet, so its capture allocates exact-size
-		// buffers under the lock, which the pool drops; from then on the
-		// buffers are acquired outside the lock and recycled.
+		// Round 0 has no demand recorded yet, so its capture allocates
+		// exact-size buffers under the lock, which the pool drops as they are
+		// below the bucket size; from then on the buffers are acquired
+		// outside the lock and recycled.
 		if got := len(engine.samplePool.free); round > 0 && got != len(ids) {
 			t.Fatalf("round %d: expected %d pooled buffers after Snapshot, got %d", round, len(ids), got)
 		}
+	}
+}
+
+// TestEngineSamplePoolFollowsStaleVolume is the regression test for the pool
+// being sized by the number of tracked syscalls: 300 near-empty reservoirs
+// used to make every Snapshot allocate and retain 300 full 80KB buffers.
+// Retention must stay proportional to the stale sample volume, and once a
+// snapshot finds nothing stale, the next one must acquire nothing.
+func TestEngineSamplePoolFollowsStaleVolume(t *testing.T) {
+	engine := NewEngine(DefaultTopN)
+	const numIDs, samplesPerID = 300, 3
+	fillReservoirs(engine, numIDs, samplesPerID)
+
+	if _, err := engine.Snapshot(); err != nil { // all 300 stale
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+	staleVolume := numIDs * samplesPerID
+	if got := engine.samplePool.retainedCap(); got > 2*staleVolume {
+		t.Fatalf("pool retains %d samples of capacity for a stale volume of %d", got, staleVolume)
+	}
+
+	// A second stale round: every reservoir grows by one sample, which is
+	// past the small-reservoir recompute threshold.
+	fillReservoirs(engine, numIDs, 1)
+	scratch := engine.samplePool.acquire()
+	if len(scratch) != numIDs {
+		t.Fatalf("expected %d demand-sized scratch buffers, got %d", numIDs, len(scratch))
+	}
+	for _, buf := range scratch {
+		if cap(buf) > 4 {
+			t.Fatalf("scratch buffer for a 3-sample reservoir has capacity %d", cap(buf))
+		}
+	}
+	engine.releaseSampleBuffers(scratch)
+	if _, err := engine.Snapshot(); err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+	if got := engine.samplePool.retainedCap(); got > 2*numIDs*(samplesPerID+1) {
+		t.Fatalf("pool retains %d samples of capacity after second round", got)
+	}
+
+	// Nothing is stale now: this snapshot records zero demand and trims the
+	// pool, so the following acquire hands out (and allocates) nothing.
+	if _, err := engine.Snapshot(); err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+	if got := engine.samplePool.acquire(); got != nil {
+		t.Fatalf("acquire after a no-stale snapshot returned %d buffers", len(got))
+	}
+	if got := engine.samplePool.retainedCap(); got != 0 {
+		t.Fatalf("pool retains %d samples of capacity with no stale demand", got)
 	}
 }
 
@@ -225,7 +277,10 @@ func TestSyscallCaptureUsesScratchBuffers(t *testing.T) {
 					acc.Add(newPair(id, uint64(i+1), 0, 0))
 				}
 			}
-			scratch := newSampleBufferPool(syscallReservoirSampleCapDefault).acquire(tc.scratch)
+			scratch := make([][]uint64, 0, tc.scratch)
+			for range tc.scratch {
+				scratch = append(scratch, make([]uint64, 0, 64))
+			}
 			fromScratch := make(map[*uint64]bool, len(scratch))
 			for _, buf := range scratch {
 				fromScratch[&buf[:1][0]] = true

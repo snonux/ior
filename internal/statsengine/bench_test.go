@@ -39,19 +39,28 @@ func BenchmarkEngineSnapshotCaptureLockHold(b *testing.B) {
 	engine := NewEngine(DefaultTopN)
 	fillReservoirs(engine, 60, syscallReservoirSampleCapDefault)
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	// capture runs one Snapshot-style capture; only the locked part is timed.
+	// The untimed warm-up records the demand so later acquires are sized.
+	capture := func() {
 		b.StopTimer()
-		scratch := engine.samplePool.acquire(60)
+		scratch := engine.samplePool.acquire()
 		b.StartTimer()
 		in := engine.captureSnapshotInputs(scratch)
 		b.StopTimer()
 		if len(in.syscalls.jobs) != 60 {
 			b.Fatalf("expected 60 stale reservoirs, got %d", len(in.syscalls.jobs))
 		}
+		engine.samplePool.recordDemand(in.syscalls.jobs)
+		engine.releaseSampleBuffers(in.syscalls.spare)
 		engine.releaseSampleBuffers(jobSampleBuffers(in.syscalls.jobs))
 		b.StartTimer()
+	}
+	capture()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		capture()
 	}
 }
 
