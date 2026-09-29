@@ -3,8 +3,10 @@ package internal
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ior/internal/flags"
 	"ior/internal/parquet"
@@ -27,10 +29,17 @@ func (r *scriptedRowRecorder) Record(streamrow.Row, uint64) error {
 	return nil
 }
 
-// runTUIPairs builds a TUI runtime (optionally swapping in recorder), wires an
-// event loop through makeTUIEventLoopConfigurer, feeds n trace pairs through
-// the print callback and returns the stream rows that were pushed.
-func runTUIPairs(t *testing.T, bindings runtime.TraceRuntimeBindings, recorder runtime.RowRecorder, n int) []streamrow.Row {
+// tuiTestSession is one TUI trace session wired through
+// makeTUIEventLoopConfigurer, driven by calling feed.
+type tuiTestSession struct {
+	rt *tuiRuntime
+	el *eventLoop
+}
+
+// newTUITestSession builds a TUI runtime (optionally swapping in recorder)
+// and wires a fresh event loop through makeTUIEventLoopConfigurer, like one
+// trace start of the TUI does.
+func newTUITestSession(t *testing.T, bindings runtime.TraceRuntimeBindings, recorder runtime.RowRecorder) *tuiTestSession {
 	t.Helper()
 	rt, err := buildTUIRuntime(flags.NewFlags(), bindings)
 	if err != nil {
@@ -40,13 +49,30 @@ func runTUIPairs(t *testing.T, bindings runtime.TraceRuntimeBindings, recorder r
 		rt.recorder = recorder
 	}
 	configure, unregister := makeTUIEventLoopConfigurer(flags.NewFlags(), rt, nil)
-	defer unregister()
+	t.Cleanup(unregister)
 	el := &eventLoop{}
 	configure(el)
-	for i := 1; i <= n; i++ {
-		el.printCb(testTracePair(uint64(i), "keep"))
+	return &tuiTestSession{rt: rt, el: el}
+}
+
+// feed pushes n trace pairs through the session's print callback.
+func (s *tuiTestSession) feed(n int) {
+	for i := 0; i < n; i++ {
+		s.el.printCb(testTracePair(uint64(i+1), "keep"))
 	}
-	return rt.streamSrc.Snapshot()
+}
+
+// warnings returns the warning messages pushed to the session's stream.
+func (s *tuiTestSession) warnings() []string {
+	return warningMessages(s.rt.streamSrc.Snapshot())
+}
+
+// runTUIPairs feeds n pairs through a fresh session and returns its stream.
+func runTUIPairs(t *testing.T, bindings runtime.TraceRuntimeBindings, recorder runtime.RowRecorder, n int) []streamrow.Row {
+	t.Helper()
+	s := newTUITestSession(t, bindings, recorder)
+	s.feed(n)
+	return s.rt.streamSrc.Snapshot()
 }
 
 // warningMessages returns the messages of the synthetic warning rows.
@@ -80,16 +106,17 @@ func TestTUIIdleRecorderEmitsNoWarning(t *testing.T) {
 }
 
 // TestTUIRealRecorderFailureSurvivesIdleEvents checks that idle
-// ErrRecorderNotActive results do not consume the failure once-guard: a real
-// failure later in the same session is still reported, exactly once.
+// ErrRecorderNotActive results do not disarm the failure warning: a real
+// failure of a recording started later in the session is reported, once.
 func TestTUIRealRecorderFailureSurvivesIdleEvents(t *testing.T) {
 	recorder := &scriptedRowRecorder{errs: []error{
 		parquet.ErrRecorderNotActive,
 		fmt.Errorf("wrapped: %w", parquet.ErrRecorderNotActive),
+		nil, // recording started
 		errors.New("disk full"),
-		errors.New("second failure"),
+		errors.New("disk full"), // dead recording's LastError repeats
 	}}
-	msgs := warningMessages(runTUIPairs(t, nil, recorder, 5))
+	msgs := warningMessages(runTUIPairs(t, nil, recorder, 6))
 	if len(msgs) != 1 {
 		t.Fatalf("warnings = %q, want exactly one failure warning", msgs)
 	}
@@ -99,14 +126,17 @@ func TestTUIRealRecorderFailureSurvivesIdleEvents(t *testing.T) {
 }
 
 // TestTUIRecorderOverflowAndFailureWarnIndependently checks that queue-full
-// and genuine failures each get their own single warning.
+// and genuine failures each get their own single warning per recording.
 func TestTUIRecorderOverflowAndFailureWarnIndependently(t *testing.T) {
 	recorder := &scriptedRowRecorder{errs: []error{
+		nil,
+		parquet.ErrRecorderQueueFull,
+		nil, // capacity freed within the same recording: no re-warn
 		parquet.ErrRecorderQueueFull,
 		parquet.ErrRecorderQueueFull,
 		errors.New("writer boom"),
 	}}
-	msgs := warningMessages(runTUIPairs(t, nil, recorder, 4))
+	msgs := warningMessages(runTUIPairs(t, nil, recorder, 6))
 	if len(msgs) != 2 {
 		t.Fatalf("warnings = %q, want one overflow and one failure warning", msgs)
 	}
@@ -115,12 +145,136 @@ func TestTUIRecorderOverflowAndFailureWarnIndependently(t *testing.T) {
 	}
 }
 
+// TestTUIRecorderWarningsRearmPerRecording checks that the guards are per
+// recording, not per trace session: a second recording in the same session
+// gets its own overflow and failure warnings.
+func TestTUIRecorderWarningsRearmPerRecording(t *testing.T) {
+	recorder := &scriptedRowRecorder{errs: []error{
+		nil, parquet.ErrRecorderQueueFull, errors.New("rec1 disk full"),
+		errors.New("rec1 disk full"), // LastError until the next Start
+		nil, parquet.ErrRecorderQueueFull, errors.New("rec2 boom"),
+	}}
+	msgs := warningMessages(runTUIPairs(t, nil, recorder, 8))
+	want := []string{"queue full", "rec1 disk full", "queue full", "rec2 boom"}
+	assertWarnings(t, msgs, want)
+}
+
+// TestTUIStaleRecorderErrorIsSilent checks that a trace session starting
+// after an earlier recording failed does not re-announce the stale LastError
+// that Record keeps returning until the next Start.
+func TestTUIStaleRecorderErrorIsSilent(t *testing.T) {
+	recorder := &scriptedRowRecorder{errs: []error{
+		errors.New("old disk full"), errors.New("old disk full"),
+	}}
+	if msgs := warningMessages(runTUIPairs(t, nil, recorder, 3)); len(msgs) != 0 {
+		t.Fatalf("warnings = %q, want none for a stale failure", msgs)
+	}
+}
+
+// TestTUIRealRecorderFailuresAcrossRecordingsAndSessions drives a real
+// parquet.Recorder whose writes fail: two failing recordings in one trace
+// session are each reported once, and a later trace session on the same
+// (TUI-lifetime) recorder stays silent about the stale error.
+func TestTUIRealRecorderFailuresAcrossRecordingsAndSessions(t *testing.T) {
+	writeErr := errors.New("disk full")
+	recorder := parquet.NewRecorder(parquet.RecorderConfig{
+		BatchSize: 1, FlushInterval: time.Hour,
+	}.WithFailingWriter(writeErr))
+	bindings := &traceRuntimeBindingsStub{
+		streamBuffer: streamrow.NewRingBuffer(),
+		streamSeq:    streamrow.NewSequencer(0),
+		recorder:     recorder,
+	}
+	dir := t.TempDir()
+
+	first := newTUITestSession(t, bindings, nil)
+	for i := range 2 {
+		startRecorder(t, recorder, filepath.Join(dir, fmt.Sprintf("rec%d", i)))
+		first.feed(1) // accepted, then the batch write fails
+		waitRecorderFailed(t, recorder)
+		first.feed(2) // LastError: reported once, then silent
+	}
+	assertWarnings(t, first.warnings(), []string{"disk full", "disk full"})
+
+	bindings.streamBuffer.Reset()
+	second := newTUITestSession(t, bindings, nil)
+	second.feed(3)
+	if msgs := second.warnings(); len(msgs) != 0 {
+		t.Fatalf("new session warnings = %q, want none for the stale failure", msgs)
+	}
+}
+
+// TestTUIRecorderStopRaceIsSilent checks that Record calls hitting a stopped
+// recording (ErrRecorderNotActive, as when Stop races the event loop) stay
+// silent, with a real recorder that stops cleanly.
+func TestTUIRecorderStopRaceIsSilent(t *testing.T) {
+	recorder := parquet.NewRecorder(parquet.RecorderConfig{BatchSize: 1, FlushInterval: time.Hour})
+	startRecorder(t, recorder, filepath.Join(t.TempDir(), "rec"))
+	s := newTUITestSession(t, nil, recorder)
+	s.feed(2)
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("recorder.Stop() error = %v", err)
+	}
+	s.feed(2)
+	if msgs := s.warnings(); len(msgs) != 0 {
+		t.Fatalf("warnings = %q, want none after a clean stop", msgs)
+	}
+}
+
 // TestRecorderWarnerWithoutWarningCallback checks that a loop without a
-// warning sink (headless wiring, tests) tolerates every error category.
+// warning sink tolerates every result category, and that the same sequence
+// with a sink wired yields exactly the expected warnings.
 func TestRecorderWarnerWithoutWarningCallback(t *testing.T) {
-	w := &recorderWarner{}
+	results := []error{nil, parquet.ErrRecorderQueueFull, parquet.ErrRecorderNotActive, nil, errors.New("boom")}
+	silent := &recorderWarner{}
+	for _, err := range results {
+		silent.warn(&eventLoop{}, err) // no sink: must not panic
+	}
+
+	var got []string
 	el := &eventLoop{}
-	for _, err := range []error{nil, parquet.ErrRecorderNotActive, parquet.ErrRecorderQueueFull, errors.New("boom")} {
-		w.warn(el, err) // must not panic
+	el.SetWarningCallback(func(msg string) { got = append(got, msg) })
+	w := &recorderWarner{}
+	for _, err := range results {
+		w.warn(el, err)
+	}
+	assertWarnings(t, got, []string{"queue full", "boom"})
+}
+
+// startRecorder starts a recording at path or fails the test.
+func startRecorder(t *testing.T, recorder *parquet.Recorder, path string) {
+	t.Helper()
+	if err := recorder.Start(path, parquet.StartOptions{}); err != nil {
+		t.Fatalf("recorder.Start() error = %v", err)
+	}
+}
+
+// waitRecorderFailed waits until the recorder's session has died with an
+// error (the writer goroutine fails asynchronously).
+func waitRecorderFailed(t *testing.T, recorder *parquet.Recorder) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if st := recorder.Status(); !st.Active && st.LastError != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recorder did not fail in time: %+v", recorder.Status())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// assertWarnings checks that got has one message per want entry, each
+// containing the corresponding substring.
+func assertWarnings(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("warnings = %q, want %d matching %q", got, len(want), want)
+	}
+	for i := range want {
+		if !strings.Contains(got[i], want[i]) {
+			t.Fatalf("warning[%d] = %q, want it to contain %q (all: %q)", i, got[i], want[i], got)
+		}
 	}
 }
