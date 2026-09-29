@@ -153,3 +153,99 @@ func TestRenderFDTraceTableShowsHeaderAndScope(t *testing.T) {
 		}
 	}
 }
+
+// narrowTestEvents returns rows whose cells all overflow their columns, the
+// worst case for wrapping on narrow terminals.
+func narrowTestEvents() []StreamEvent {
+	return []StreamEvent{
+		{Syscall: "very_long_syscall_name", Comm: "very-long-command-name", PID: 4294967295, TID: 4294967295, FD: 12345,
+			DurationNs: 123456789012, GapNs: 123456789012, Bytes: 18446744073709551615, RetVal: -9223372036854775808,
+			FileName: "/very/long/path/that/should/be/truncated/for/narrow/views/file.log", IsError: true},
+		{Syscall: "read", Comm: "worker", PID: 1, TID: 2, FD: 3, FileName: "/tmp/a"},
+	}
+}
+
+// assertPanelFits checks that out has exactly wantLines terminal lines (no
+// wrapping) and that no line is wider than the panel's outer width.
+func assertPanelFits(t *testing.T, width int, out string, wantLines int) {
+	t.Helper()
+	lines := strings.Split(out, "\n")
+	if len(lines) != wantLines {
+		t.Fatalf("width %d: got %d lines, want %d (rows wrapped)\n%s", width, len(lines), wantLines, out)
+	}
+	limit := panelContentWidth(width)
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > limit {
+			t.Fatalf("width %d: line is %d cols wide, limit %d: %q", width, w, limit, line)
+		}
+	}
+}
+
+// Regression for task go2: below ~94 columns the column layout was sized for
+// the panel's outer width, so every row wrapped to two lines while
+// visibleRows() budgets one, pushing footer/status off-screen.
+func TestRenderStreamTableDoesNotWrapAtAnyWidth(t *testing.T) {
+	filter := Filter{Comm: &StringFilter{Pattern: strings.Repeat("c", 150)}, PID: &NumericFilter{Op: OpEq, Value: 1}}
+	stack := []string{strings.Repeat("comm~x", 30), "fd=20"}
+	events := narrowTestEvents()
+	for width := 20; width <= 160; width++ {
+		for _, paused := range []bool{false, true} {
+			sel := -1
+			if paused {
+				sel = 0
+			}
+			out := RenderStreamTable(width, paused, 123456789, 123456789, 123456, 1234567, filter, stack, events, sel, streamColFile)
+			// border top + status + filter + stack + header + rows + border bottom
+			assertPanelFits(t, width, out, 5+len(events)+1)
+		}
+	}
+}
+
+func TestRenderFDTraceTableDoesNotWrapAtAnyWidth(t *testing.T) {
+	events := narrowTestEvents()
+	for width := 20; width <= 160; width++ {
+		out := RenderFDTraceTable(width, 4294967295, 2147483647, 123456789, events)
+		// border top + title + scope + header + rows + border bottom
+		assertPanelFits(t, width, out, 4+len(events)+1)
+	}
+}
+
+func TestRenderStreamTableNonPositiveWidthUsesDefault(t *testing.T) {
+	want := RenderStreamTable(100, false, 1, 1, 1, 10, Filter{}, nil, narrowTestEvents(), -1, -1)
+	for _, width := range []int{0, -1, -500} {
+		if got := RenderStreamTable(width, false, 1, 1, 1, 10, Filter{}, nil, narrowTestEvents(), -1, -1); got != want {
+			t.Fatalf("width %d: expected default-width rendering", width)
+		}
+	}
+}
+
+func TestComputeColumnLayoutFitsWidth(t *testing.T) {
+	// 10 one-cell columns plus 9 separators is the smallest possible row.
+	const minRow = streamColumnCount*2 - 1
+	for width := 1; width <= 200; width++ {
+		cols := computeColumnLayout(width)
+		for i, f := range columnFields(&cols) {
+			if *f < 1 {
+				t.Fatalf("width %d: column %d has width %d", width, i, *f)
+			}
+		}
+		got := rowWidth(&cols)
+		switch {
+		case width >= minRow && got > width:
+			t.Fatalf("width %d: row is %d wide", width, got)
+		case width < minRow && got != minRow:
+			t.Fatalf("width %d: expected minimal row %d, got %d", width, minRow, got)
+		case width >= 78 && cols.file < 12:
+			t.Fatalf("width %d: file column squeezed to %d", width, cols.file)
+		}
+	}
+}
+
+func TestComputeColumnLayoutNonPositiveWidthUsesDefault(t *testing.T) {
+	want := computeColumnLayout(100)
+	for _, width := range []int{0, -1} {
+		if got := computeColumnLayout(width); got != want {
+			t.Fatalf("width %d: got %+v, want %+v", width, got, want)
+		}
+	}
+}
