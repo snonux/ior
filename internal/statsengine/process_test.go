@@ -86,7 +86,9 @@ func TestProcessAccumulatorCommUpdateAndZeroRate(t *testing.T) {
 // TestProcessAccumulatorKeepsCountingAcrossCommChanges is the regression test
 // for task 0o2: pair.Comm is a per-thread name, so a comm change for a known
 // PID (differently named threads, or an exec) must not reset the counters.
-// The comm is only a label and follows the most recent non-empty name.
+// The pairs carry tid 0, so the leader is never seen and the label falls back
+// to the most recent non-empty thread comm (see
+// TestProcessAccumulatorPrefersLeaderComm for the leader-preferred label).
 func TestProcessAccumulatorKeepsCountingAcrossCommChanges(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -136,6 +138,45 @@ func TestProcessAccumulatorSameCommDifferentPIDsStaySeparate(t *testing.T) {
 	}
 	if snap[0].PID != 2 || snap[0].Syscalls != 2 || snap[1].PID != 1 || snap[1].Syscalls != 1 {
 		t.Fatalf("unexpected per-PID counts: %+v", snap)
+	}
+}
+
+// TestProcessAccumulatorPrefersLeaderComm checks that the label is the
+// thread-group leader's comm (tid == pid) whatever order the threads arrive
+// in, falls back to the latest thread comm until the leader is seen, and
+// still follows an exec (which renames the leader).
+func TestProcessAccumulatorPrefersLeaderComm(t *testing.T) {
+	const pid = 2000
+	leader := func(comm string) *event.Pair { return newThreadPair(pid, pid, comm) }
+	gc := func(comm string) *event.Pair { return newThreadPair(pid, pid+1, comm) }
+	tests := []struct {
+		name     string
+		pairs    []*event.Pair
+		wantComm string
+	}{
+		{name: "leader first", pairs: []*event.Pair{leader("java"), gc("GC Thread#0"), leader("java"), gc("GC Thread#0")}, wantComm: "java"},
+		{name: "thread first", pairs: []*event.Pair{gc("GC Thread#0"), leader("java"), gc("GC Thread#0")}, wantComm: "java"},
+		{name: "leader never seen", pairs: []*event.Pair{gc("GC Thread#0"), gc("worker")}, wantComm: "worker"},
+		{name: "exec relabels leader", pairs: []*event.Pair{leader("bash"), gc("helper"), leader("ls"), gc("helper")}, wantComm: "ls"},
+		{name: "empty leader comm ignored", pairs: []*event.Pair{leader("java"), leader(""), gc("GC Thread#0")}, wantComm: "java"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := newProcessAccumulator()
+			for _, pair := range tt.pairs {
+				acc.Add(pair)
+			}
+			snap := acc.Snapshot(time.Second)
+			if len(snap) != 1 {
+				t.Fatalf("expected 1 snapshot row, got %d: %+v", len(snap), snap)
+			}
+			if snap[0].Comm != tt.wantComm {
+				t.Fatalf("expected comm %q, got %q", tt.wantComm, snap[0].Comm)
+			}
+			if want := uint64(len(tt.pairs)); snap[0].Syscalls != want {
+				t.Fatalf("expected %d syscalls, got %d", want, snap[0].Syscalls)
+			}
+		})
 	}
 }
 
@@ -199,4 +240,12 @@ func newProcessPair(pid uint32, comm string, duration uint64, bytes uint64) *eve
 		Duration: duration,
 		Bytes:    bytes,
 	}
+}
+
+// newThreadPair is newProcessPair with an explicit thread id, for tests that
+// distinguish the thread-group leader (tid == pid) from its other threads.
+func newThreadPair(pid, tid uint32, comm string) *event.Pair {
+	pair := newProcessPair(pid, comm, 100, 10)
+	pair.EnterEv = &types.RetEvent{Pid: pid, Tid: tid}
+	return pair
 }

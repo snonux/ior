@@ -17,8 +17,13 @@ type processAccumulator struct {
 }
 
 type processStats struct {
-	pid          uint32
-	comm         string
+	pid uint32
+	// leaderComm is the comm last seen on the thread-group leader (tid ==
+	// pid), i.e. the process name ps shows. It is the preferred label.
+	leaderComm string
+	// latestComm is the most recent non-empty comm of any thread, used as the
+	// label only until the leader itself has been seen.
+	latestComm   string
 	count        uint64
 	totalBytes   uint64
 	totalLatency uint64
@@ -68,19 +73,20 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 // two threads and made the Processes tab undercount multithreaded apps
 // drastically (200 interleaved syscalls reported as 1).
 //
-// Real PID reuse is not detected here on purpose. The accumulator only sees
-// pairs; the sched_process_exit records that could mark the end of a lifetime
-// are consumed inside the event loop (handleProcessExitEvent) and fire per
-// task, not per process, and evicting on exit would also erase finished
-// processes from what is a cumulative per-session table. With pid_max in the
-// millions on modern kernels a PID is rarely recycled within one trace, and
-// when it is, merging the two lifetimes into one row is a small, bounded
-// overcount - far better than the systematic undercount of the old heuristic.
+// The trade-off is that real PID reuse is not detected: when the kernel hands
+// a dead process's PID to a new one within the same trace, both lifetimes are
+// merged into one row, and the new process's comm then labels counts that
+// largely belong to the old one - misattribution, not merely a bounded
+// overcount. That is not a corner case: the kernel default pid_max is 32768
+// (or 1024 per CPU), and on a box churning short-lived processes PIDs wrap
+// quickly. The accumulator cannot fix it alone, because it only sees pairs;
+// the sched_process_exit records that end a lifetime are consumed inside the
+// event loop (handleProcessExitEvent) and fire per task, not per process. A
+// real fix needs a process-exit signal (or a pid+start-time key) forwarded to
+// the stats engine; until then merging is preferred over the old heuristic,
+// which was wrong for every multithreaded process rather than only on reuse.
 //
-// The comm is therefore only a label: the most recent non-empty thread name
-// seen for the PID. For a multithreaded process it may switch between thread
-// names from one snapshot to the next; that is cosmetic, whereas tracking a
-// most-frequent name would need a per-PID map of every thread name.
+// The comm is only a label, see processStats.label.
 func (a *processAccumulator) Add(pair *event.Pair) {
 	if a == nil || pair == nil || pair.EnterEv == nil {
 		return
@@ -96,9 +102,7 @@ func (a *processAccumulator) Add(pair *event.Pair) {
 	stats.count++
 	stats.totalBytes += pair.Bytes
 	stats.totalLatency += pair.Duration
-	if pair.Comm != "" {
-		stats.comm = pair.Comm
-	}
+	stats.observeComm(pair.EnterEv.GetTid(), pair.Comm)
 	a.compactIfNeeded()
 }
 
@@ -125,7 +129,7 @@ func (a *processAccumulator) snapshotInputs() []processSnapshotInput {
 	for _, stats := range a.byPID {
 		inputs = append(inputs, processSnapshotInput{
 			pid:          stats.pid,
-			comm:         stats.comm,
+			comm:         stats.label(),
 			count:        stats.count,
 			totalBytes:   stats.totalBytes,
 			totalLatency: stats.totalLatency,
@@ -192,6 +196,35 @@ func betterProcessRank(a, b *processStats) bool {
 		return a.totalBytes > b.totalBytes
 	}
 	return a.pid < b.pid
+}
+
+// observeComm records the comm of the thread tid of this process. Empty comms
+// are ignored so an unresolved name never blanks a known label.
+func (s *processStats) observeComm(tid uint32, comm string) {
+	if comm == "" {
+		return
+	}
+	s.latestComm = comm
+	if tid == s.pid {
+		s.leaderComm = comm
+	}
+}
+
+// label returns the process name shown for this PID: the thread-group
+// leader's comm when the leader has been seen, else the latest thread comm.
+//
+// Preferring the leader keeps the label stable for multithreaded processes;
+// a plain "latest thread wins" label flipped between thread names on every
+// snapshot, which reordered Sort-by-Comm (moving the index-based selection to
+// another PID), rebuilt the Comm column filter from an arbitrary thread name
+// and made treemap/bubble labels flicker. exec() still relabels the row: the
+// kernel makes the exec'ing thread the leader (tid == pid) and updates its
+// comm, so the next leader syscall carries the new name.
+func (s *processStats) label() string {
+	if s.leaderComm != "" {
+		return s.leaderComm
+	}
+	return s.latestComm
 }
 
 func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
