@@ -152,11 +152,15 @@ func (c *syscallAggregateConsumer) drainRow(traceID types.TraceId, raw rawSyscal
 
 // untimedDelta returns how many of this row's deltaCount invocations are
 // untimed. It works on the cumulative untimed count (Count minus histogram
-// total) rather than on the delta: a delta whose histogram lags its count by
-// a torn read would otherwise book a timed invocation as untimed, and the
-// following delta could not take that back. The reported cumulative value
+// total) rather than on the delta: after a torn read with the histogram
+// ahead of count (the kernel stores count last), the next delta has a count
+// but no histogram increment and would book that timed invocation as
+// untimed; the cumulative value stays exact. The reported cumulative value
 // only grows, so each untimed invocation is reported once, and never more
-// than the row's own count. A cumulative count that went backwards means the
+// than the row's own count. The opposite tear, count ahead of the histogram,
+// cannot be told apart from a real untimed invocation and would be booked as
+// one for good (its latency still arrives with a later row); the kernel's
+// store order rules it out on x86. A cumulative count that went backwards means the
 // kernel row was recreated, which restarts the tally (diff restarts too).
 func (c *syscallAggregateConsumer) untimedDelta(traceID types.TraceId, raw, prev rawSyscallAggregate, deltaCount uint64) uint64 {
 	if c.untimed == nil {
@@ -172,17 +176,43 @@ func (c *syscallAggregateConsumer) untimedDelta(traceID types.TraceId, raw, prev
 }
 
 // decodeRawSyscallAggregateSlot decodes one CPU's slot as read from the live
-// map. A slot whose histogram total exceeds its count was read mid-update
-// (the kernel stores count last), so count is raised to the histogram total:
-// that invocation has completed and is timed, and counting it now keeps it
-// from ever looking untimed.
+// map, which the kernel may be updating at the same time (see
+// normalizeTornSlot).
 func decodeRawSyscallAggregateSlot(raw []byte) (rawSyscallAggregate, error) {
 	out, err := decodeRawSyscallAggregate(raw)
 	if err != nil {
 		return rawSyscallAggregate{}, err
 	}
-	out.Count = max(out.Count, out.timedCount())
-	return out, nil
+	return out.normalizeTornSlot(), nil
+}
+
+// normalizeTornSlot repairs a slot read mid-update. The copy runs in address
+// order (count, errors, total, min, max, histogram) while the kernel stores
+// min, total, histogram, max, errors and count last, so a read can see a
+// newer histogram than count, min or max:
+//   - Histogram samples with min or max still 0 are the slot's first timed
+//     invocation in flight: every completed one leaves both non-zero. Its
+//     extrema are not visible yet, and reporting it would seed a minimum of
+//     0 that no later row can raise. So its timed part (histogram, total,
+//     min, max) is left out of this read; count cannot include it yet
+//     either, and the next drain picks the whole invocation up.
+//   - Otherwise a histogram total above count is a completed timed
+//     invocation whose count store is pending; count is raised to it so the
+//     invocation never looks untimed.
+//
+// Genuine 0ns durations would also look in flight, but two boot-clock reads
+// around a syscall never coincide.
+func (r rawSyscallAggregate) normalizeTornSlot() rawSyscallAggregate {
+	timed := r.timedCount()
+	if timed > 0 && (r.MinDuration == 0 || r.MaxDuration == 0) {
+		r.TotalDuration = 0
+		r.MinDuration = 0
+		r.MaxDuration = 0
+		r.Histogram = [8]uint64{}
+		return r
+	}
+	r.Count = max(r.Count, timed)
+	return r
 }
 
 // decodeRawSyscallAggregate decodes the C struct syscall_aggregate verbatim.

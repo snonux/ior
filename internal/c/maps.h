@@ -19,6 +19,12 @@ struct syscall_enter_state {
     __u8 emit_event;
 };
 
+// count must stay the first field: userspace may read a slot while the
+// kernel updates it, the copy runs in ascending address order, and
+// ior_update_syscall_aggregate (filter.c) stores count last so that a torn
+// read sees count no newer than any other field. Moving count down would let
+// a torn read see it ahead of the histogram and book a timed invocation as
+// untimed. internal/generate/enterstate_fallback_test.go pins this.
 struct syscall_aggregate {
     __u64 count;
     __u64 errors;

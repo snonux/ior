@@ -71,6 +71,9 @@ static struct sim_map syscall_aggregate_map = { SIM_SLOTS, sizeof(struct syscall
 static struct sim_map syscall_sampling_rate_map = { SIM_SLOTS, sizeof(__u32) };
 static __u32 sim_rand;
 
+/* filter.c's stand-in for the kernel errno must match it. */
+_Static_assert(IOR_E2BIG == E2BIG, "IOR_E2BIG differs from E2BIG");
+
 static int sim_find(struct sim_map *m, __u32 key) {
     for (int i = 0; i < SIM_SLOTS; i++)
         if (m->used[i] && m->keys[i] == key)
@@ -284,12 +287,16 @@ func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 	filterC, mapsH := readAccountingSources(t)
 	mutations := map[string][2]string{
 		"enter ignores a failed write": {
-			"return ior_on_enter_state_lost(enter_trace_id, rate);\n    }",
-			"}",
+			"        return ior_on_enter_state_lost(enter_trace_id, rate);\n    }",
+			"    }",
+		},
+		"delete skipped for every error": {
+			"if (err != -IOR_E2BIG)",
+			"if (0)",
 		},
 		"failed replacement keeps the old entry": {
-			"        bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n        return ior_on_enter_state_lost(",
-			"        return ior_on_enter_state_lost(",
+			"            bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n",
+			"            (void)tid;\n",
 		},
 		"stateless exit always emits": {
 			"if (!state)\n        return ior_stateless_exit_emits(enter_trace_id);",
@@ -338,9 +345,18 @@ func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 // torn userspace read shows the histogram ahead of count, never behind
 // (internal/syscall_aggregate_consumer.go relies on that).
 func TestSyscallAggregateStoreOrder(t *testing.T) {
-	filterC, _ := readAccountingSources(t)
+	filterC, mapsH := readAccountingSources(t)
 	if problem := aggregateStoreOrderProblem(filterC); problem != "" {
 		t.Fatal(problem)
+	}
+	// Storing count last only helps because userspace copies it first: it
+	// must stay the first field of the struct (see maps.h).
+	if problem := countFirstFieldProblem(mapsH); problem != "" {
+		t.Fatal(problem)
+	}
+	moved := strings.Replace(mapsH, "    __u64 count;\n    __u64 errors;\n", "    __u64 errors;\n    __u64 count;\n", 1)
+	if moved == mapsH || countFirstFieldProblem(moved) == "" {
+		t.Error("count-first check accepted a struct with count moved down")
 	}
 	mutations := map[string][2]string{
 		"count stored first": {
@@ -364,6 +380,19 @@ func TestSyscallAggregateStoreOrder(t *testing.T) {
 			t.Errorf("%s: store-order check accepted the regression", name)
 		}
 	}
+}
+
+// countFirstFieldProblem reports when count is not the first member of struct
+// syscall_aggregate in maps.h, or returns "".
+func countFirstFieldProblem(mapsH string) string {
+	m := regexp.MustCompile(`struct syscall_aggregate \{\s*([^;]*);`).FindStringSubmatch(stripCComments(mapsH))
+	if m == nil {
+		return "struct syscall_aggregate not found in maps.h"
+	}
+	if strings.Join(strings.Fields(m[1]), " ") != "__u64 count" {
+		return fmt.Sprintf("first field of struct syscall_aggregate is %q, want __u64 count", m[1])
+	}
+	return ""
 }
 
 // aggregateStoreOrderProblem describes a store-order violation in the
@@ -411,12 +440,14 @@ func readAccountingSources(t *testing.T) (string, string) {
 	return filterC, mapsH
 }
 
-var cDefineRE = regexp.MustCompile(`(?m)^#define IOR_(HISTOGRAM_BUCKETS|MAX_ERRNO) .*$`)
+var cDefineRE = regexp.MustCompile(`(?m)^#define IOR_(HISTOGRAM_BUCKETS|MAX_ERRNO|E2BIG) .*$`)
 
 // accountingHarnessSource assembles the harness from the defines and
 // functions of filter.c and the two state structs of maps.h.
 func accountingHarnessSource(filterC, mapsH string) (string, error) {
 	defines := strings.Join(cDefineRE.FindAllString(filterC, -1), "\n")
+	// Comments may hold braces that would derail extractCFunction.
+	code := stripCComments(filterC)
 	var structs []string
 	for _, name := range []string{"syscall_enter_state", "syscall_aggregate"} {
 		re := regexp.MustCompile(`(?s)struct ` + name + ` \{.*?\n\};`)
@@ -428,7 +459,7 @@ func accountingHarnessSource(filterC, mapsH string) (string, error) {
 	}
 	var funcs []string
 	for _, name := range accountingFunctions {
-		fn := extractCFunction(filterC, name)
+		fn := extractCFunction(code, name)
 		if fn == "" {
 			return "", fmt.Errorf("function %s not found in filter.c", name)
 		}
