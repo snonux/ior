@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
+	"iter"
 	"math"
 	"slices"
 	"strings"
@@ -437,81 +438,92 @@ func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp, heightMe
 	if y < 1 || y > params.availableRows {
 		return -1
 	}
-	targetRow := frameCoordToTargetRow(y-1, params)
-	if targetRow < 0 {
+	line, ok := frameCoordToLine(y-1, params)
+	if !ok {
 		return -1
 	}
-	return findFrameAtRow(frames, targetRow, x, width)
+	return findFrameAtLine(frames, line, x, width)
 }
 
-// frameCoordToTargetRow converts a data-area row offset (0-based, after
-// stripping the toolbar row) into the logical frame row index. Returns -1 when
-// the coordinate falls in the top padding above the first visible row.
-func frameCoordToTargetRow(dataRow int, params renderViewParams) int {
+// frameLine identifies one rendered terminal line of the frame area: the
+// logical frame row it belongs to and, for the height-metric leaf row, which
+// of its bands it is. band is -1 for every other row, whose repeated lines
+// all draw the same frames; for the leaf row it counts up from 0 (the bottom
+// band) exactly like the band argument of renderLeafRowBand, and
+// leafBarHeight is the band count needed to rescale leafFrameHeights.
+type frameLine struct {
+	row           int
+	band          int
+	leafBarHeight int
+}
+
+// frameCoordToLine converts a data-area row offset (0-based, after stripping
+// the toolbar row) into the frameLine drawn there, mirroring buildRenderRows'
+// top-to-bottom emission order (deepest row first, leaf bands from the top
+// band down). ok is false when the coordinate falls in the top padding above
+// the first visible row or outside the data area.
+func frameCoordToLine(dataRow int, params renderViewParams) (line frameLine, ok bool) {
 	if params.visibleFrames == 0 || params.availableRows < 1 || dataRow < 0 || dataRow >= params.availableRows {
-		return -1
+		return frameLine{}, false
 	}
 	renderedRows := (params.maxRow - params.rowOffset + 1) * params.barHeight
 	if params.heightMetric {
 		renderedRows = params.leafBarHeight + max(0, params.maxRow-params.rowOffset)*params.barHeight
 	}
-	padTop := 0
-	if renderedRows < params.availableRows {
-		padTop = params.availableRows - renderedRows
-	}
+	padTop := max(0, params.availableRows-renderedRows)
 	if dataRow < padTop {
-		return -1
+		return frameLine{}, false
 	}
 	rowInRender := dataRow - padTop
 	for row := params.maxRow; row >= params.rowOffset; row-- {
-		rowHeight := params.barHeight
 		if params.heightMetric && row == params.maxRow {
-			rowHeight = params.leafBarHeight
+			if rowInRender < params.leafBarHeight {
+				// buildRenderRows emits band leafBarHeight-1 first.
+				band := params.leafBarHeight - 1 - rowInRender
+				return frameLine{row: row, band: band, leafBarHeight: params.leafBarHeight}, true
+			}
+			rowInRender -= params.leafBarHeight
+			continue
 		}
-		if rowInRender < rowHeight {
-			return row
+		if rowInRender < params.barHeight {
+			return frameLine{row: row, band: -1}, true
 		}
-		rowInRender -= rowHeight
+		rowInRender -= params.barHeight
 	}
-	return -1
+	return frameLine{}, false
 }
 
-// findFrameAtRow returns the index of the frame drawn at column x of logical
-// row targetRow, or -1 when that cell is blank. It replays renderRow's column
-// walk (same Col ordering, same drawnCellSpan clipping) over all frames of
-// the row instead of testing the raw [Col, Col+Width) ranges, because while
-// the spring animation is running a frame can start inside the previous
-// frame's cell; renderRow then draws the later frame only from the end of the
-// earlier one, and a click on the overlap must select the frame that is
-// actually visible there.
-//
-// Limitation: for the height-metric leaf row this matches the bottom band
-// only. renderLeafRowBand drops shorter frames from the upper bands, but the
-// caller resolves just the logical row, not the band, so a click in an upper
-// band still hits a shorter frame that is not drawn there.
-func findFrameAtRow(frames []tuiFrame, targetRow, x, width int) int {
+// findFrameAtLine returns the index of the frame drawn at column x of line,
+// or -1 when that cell is blank. It selects the same frames the renderer
+// draws on that line (framesOnLine, which applies the leaf-band filter of
+// renderLeafRowBand) and resolves the cell with frameAtCell, which replays
+// renderRow's clipped column walk. Hit testing therefore agrees with the
+// screen cell by cell, including upper leaf bands above shorter frames and
+// mid-animation overlaps where a later frame is drawn only from the end of
+// an earlier one.
+func findFrameAtLine(frames []tuiFrame, line frameLine, x, width int) int {
 	if x < 0 || x >= width {
 		return -1
 	}
+	return frameAtCell(framesOnLine(frames, line), x, width)
+}
+
+// framesOnLine collects the frames of line.row in renderRow order and, for a
+// leaf band, keeps only those tall enough to reach it. It recomputes
+// leafFrameHeights over the same row set buildRenderRows uses, so both sides
+// derive identical band heights.
+func framesOnLine(frames []tuiFrame, line frameLine) []indexedFrame {
 	var framesAtRow []indexedFrame
 	for idx, frame := range frames {
-		if frame.Row == targetRow {
+		if frame.Row == line.row {
 			framesAtRow = append(framesAtRow, indexedFrame{idx: idx, frame: frame})
 		}
 	}
 	sortFramesByCol(framesAtRow)
-	cursor := 0
-	for _, item := range framesAtRow {
-		start, end, ok := drawnCellSpan(item.frame, cursor, width)
-		if !ok {
-			continue
-		}
-		if x >= start && x < end {
-			return item.idx
-		}
-		cursor = end
+	if line.band < 0 {
+		return framesAtRow
 	}
-	return -1
+	return leafBandFrames(framesAtRow, leafFrameHeights(framesAtRow, line.leafBarHeight), line.band)
 }
 
 // buildToolbar assembles the top-of-view toolbar string and pads/trims it to
@@ -721,6 +733,10 @@ func buildRenderRows(ctx renderRowsContext) []string {
 	return rows
 }
 
+// leafFrameHeights scales each leaf-row frame's HeightTotal to a band count in
+// [1, leafBarHeight], relative to the tallest frame of the row. It is keyed by
+// frame index and consumed by leafBandFrames on both the drawing path
+// (buildRenderRows) and the hit-testing path (framesOnLine).
 func leafFrameHeights(frames []indexedFrame, leafBarHeight int) map[int]int {
 	heights := make(map[int]int, len(frames))
 	if leafBarHeight < 1 {
@@ -745,20 +761,30 @@ func leafFrameHeights(frames []indexedFrame, leafBarHeight int) map[int]int {
 	return heights
 }
 
+// renderLeafRowBand draws one band of the height-metric leaf row: only the
+// frames whose scaled height reaches band (see leafBandFrames).
 func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, showLabels bool) string {
+	return renderRow(leafBandFrames(frames, frameHeights, band), width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels)
+}
+
+// leafBandFrames returns the frames drawn on leaf band band (0 = bottom):
+// those whose leafFrameHeights entry is taller than band, so shorter frames
+// leave the upper bands blank. Order is preserved. renderLeafRowBand and the
+// mouse hit test (framesOnLine) share it so they agree on band contents.
+func leafBandFrames(frames []indexedFrame, frameHeights map[int]int, band int) []indexedFrame {
 	visible := make([]indexedFrame, 0, len(frames))
 	for _, item := range frames {
 		if frameHeights[item.idx] > band {
 			visible = append(visible, item)
 		}
 	}
-	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels)
+	return visible
 }
 
 // sortFramesByCol orders one row's frames left to right. The sort is stable
 // so frames sharing a Col (possible mid-animation) keep their layout order;
-// renderRow and findFrameAtRow both rely on this exact order to agree on
-// which frame owns an overlapping cell.
+// renderRow and the mouse hit test both walk this exact order (via
+// drawnSpans) to agree on which frame owns an overlapping cell.
 func sortFramesByCol(frames []indexedFrame) {
 	slices.SortStableFunc(frames, func(a, b indexedFrame) int {
 		return cmp.Compare(a.frame.Col, b.frame.Col)
@@ -782,10 +808,49 @@ func drawnCellSpan(frame tuiFrame, cursor, width int) (start, end int, ok bool) 
 	return start, end, true
 }
 
+// cellSpan is the half-open column range [start, end) a frame is drawn on.
+type cellSpan struct {
+	start, end int
+}
+
+// drawnSpans yields every visible frame of a line (sorted by sortFramesByCol)
+// with the cells it is drawn on, advancing the cursor through drawnCellSpan
+// and skipping fully hidden frames. It is the single column walk shared by
+// renderRow (drawing) and frameAtCell (hit testing).
+func drawnSpans(frames []indexedFrame, width int) iter.Seq2[indexedFrame, cellSpan] {
+	return func(yield func(indexedFrame, cellSpan) bool) {
+		cursor := 0
+		for _, item := range frames {
+			start, end, ok := drawnCellSpan(item.frame, cursor, width)
+			if !ok {
+				continue
+			}
+			if !yield(item, cellSpan{start: start, end: end}) {
+				return
+			}
+			cursor = end
+		}
+	}
+}
+
+// frameAtCell returns the index of the frame renderRow draws at column x of
+// the given line frames, or -1 when that cell is blank.
+func frameAtCell(frames []indexedFrame, x, width int) int {
+	for item, span := range drawnSpans(frames, width) {
+		if x < span.start {
+			return -1 // spans are ascending: x lies in a gap
+		}
+		if x < span.end {
+			return item.idx
+		}
+	}
+	return -1
+}
+
 // renderRow draws one terminal line of frames, which must already be sorted
-// by sortFramesByCol. Every frame is clipped by drawnCellSpan, which keeps the
-// line exactly width cells wide even mid-animation; findFrameAtRow uses the
-// same spans so mouse hits match what is on screen.
+// by sortFramesByCol. The cells come from drawnSpans, which keeps the line
+// exactly width cells wide even mid-animation; frameAtCell walks the same
+// spans so mouse hits match what is on screen.
 func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, showLabels bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
@@ -793,22 +858,18 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 	var b strings.Builder
 	b.Grow(width + 8)
 	cursor := 0
-	for _, item := range frames {
-		start, end, ok := drawnCellSpan(item.frame, cursor, width)
-		if !ok {
-			continue
+	for item, span := range drawnSpans(frames, width) {
+		if span.start > cursor {
+			b.WriteString(strings.Repeat(" ", span.start-cursor))
 		}
-		if start > cursor {
-			b.WriteString(strings.Repeat(" ", start-cursor))
-		}
-		cellWidth := end - start
+		cellWidth := span.end - span.start
 		label := strings.Repeat(" ", cellWidth)
 		if showLabels {
 			label = frameLabel(item.frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
 		}
 		style := styleForFrame(item.idx, item.frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark)
 		b.WriteString(style.Render(label))
-		cursor = end
+		cursor = span.end
 	}
 	if cursor < width {
 		b.WriteString(strings.Repeat(" ", width-cursor))
