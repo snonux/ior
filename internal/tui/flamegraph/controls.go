@@ -129,13 +129,15 @@ func (m *Model) toolbarLine() string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | v:height(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause",
 		state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel(), m.heightFieldLabel()))
+	// The search query is typed by the user but can be pasted, and the status
+	// message can echo errors or frame names: both are sanitised.
 	if query := m.search.query(); query != "" {
 		b.WriteString(" | filter:")
-		b.WriteString(query)
+		b.WriteString(common.Sanitize(query))
 	}
 	if m.statusMessage != "" {
 		b.WriteString(" | ")
-		b.WriteString(m.statusMessage)
+		b.WriteString(common.Sanitize(m.statusMessage))
 	}
 	if flameKeyDebugEnabled && m.lastKeyDebug != "" {
 		b.WriteString(" | ")
