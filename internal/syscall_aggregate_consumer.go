@@ -123,6 +123,7 @@ func (c *syscallAggregateConsumer) Drain() ([]statsengine.SyscallAggregate, erro
 			MinLatencyNs:       delta.MinDuration,
 			MaxLatencyNs:       delta.MaxDuration,
 			LatencyHistogramNs: delta.Histogram,
+			UntimedCount:       delta.untimedCount(),
 		})
 	}
 	if err := iter.Err(); err != nil {
@@ -182,15 +183,40 @@ func roundUp(value, alignment int) int {
 	return value + alignment - remainder
 }
 
+// timedCount returns how many of r's invocations carry a measured duration.
+// Every timed kernel update bumps exactly one histogram bucket, while an
+// invocation counted by ior_count_untimed_syscall (internal/c/filter.c, the
+// fallback for a failed syscall_enter_state_map write) bumps only Count.
+func (r rawSyscallAggregate) timedCount() uint64 {
+	var timed uint64
+	for _, bucket := range r.Histogram {
+		timed += bucket
+	}
+	return timed
+}
+
+// untimedCount returns how many of r's invocations have no duration: Count
+// minus the histogram total, saturating at zero.
+func (r rawSyscallAggregate) untimedCount() uint64 {
+	return subtractU64(r.Count, r.timedCount())
+}
+
+// add merges one CPU's slot of the per-CPU aggregate into r. Min/max come only
+// from slots with timed invocations: a slot holding nothing but untimed counts
+// carries min = max = 0, which are not latencies and would otherwise pin the
+// merged minimum to zero. Likewise r's own min is replaced, not compared, as
+// long as r has no timed invocation yet.
 func (r rawSyscallAggregate) add(next rawSyscallAggregate) rawSyscallAggregate {
 	if next.Count == 0 {
 		return r
 	}
-	if r.Count == 0 || next.MinDuration < r.MinDuration {
-		r.MinDuration = next.MinDuration
-	}
-	if next.MaxDuration > r.MaxDuration {
-		r.MaxDuration = next.MaxDuration
+	if next.timedCount() > 0 {
+		if r.timedCount() == 0 || next.MinDuration < r.MinDuration {
+			r.MinDuration = next.MinDuration
+		}
+		if next.MaxDuration > r.MaxDuration {
+			r.MaxDuration = next.MaxDuration
+		}
 	}
 	r.Count += next.Count
 	r.Errors += next.Errors
@@ -206,6 +232,29 @@ func (r rawSyscallAggregate) diff(prev rawSyscallAggregate) rawSyscallAggregate 
 		return r
 	}
 	histogram := diffHistogram(r.Histogram, prev.Histogram)
+	minLatency, maxLatency := r.deltaExtrema(prev, histogram)
+	return rawSyscallAggregate{
+		Count:         r.Count - prev.Count,
+		Errors:        subtractU64(r.Errors, prev.Errors),
+		TotalDuration: subtractU64(r.TotalDuration, prev.TotalDuration),
+		MinDuration:   minLatency,
+		MaxDuration:   maxLatency,
+		Histogram:     histogram,
+	}
+}
+
+// deltaExtrema returns the latency extrema of the invocations r added since
+// prev, whose delta histogram is histogram. Cumulative extrema only say
+// something about the delta when they moved; otherwise the delta's bucket
+// bounds are the best available estimate.
+//
+// While prev holds no timed invocation (only untimed counts, see timedCount)
+// its min/max of 0 are not latencies, and every timed invocation in r is new,
+// so r's own extrema are exact for the delta.
+func (r rawSyscallAggregate) deltaExtrema(prev rawSyscallAggregate, histogram [8]uint64) (uint64, uint64) {
+	if prev.timedCount() == 0 {
+		return r.MinDuration, r.MaxDuration
+	}
 	minLatency, maxLatency, ok := latencyExtremaFromHistogram(histogram)
 	if !ok {
 		minLatency = r.MinDuration
@@ -217,14 +266,7 @@ func (r rawSyscallAggregate) diff(prev rawSyscallAggregate) rawSyscallAggregate 
 	if r.MaxDuration > prev.MaxDuration {
 		maxLatency = r.MaxDuration
 	}
-	return rawSyscallAggregate{
-		Count:         r.Count - prev.Count,
-		Errors:        subtractU64(r.Errors, prev.Errors),
-		TotalDuration: subtractU64(r.TotalDuration, prev.TotalDuration),
-		MinDuration:   minLatency,
-		MaxDuration:   maxLatency,
-		Histogram:     histogram,
-	}
+	return minLatency, maxLatency
 }
 
 func latencyExtremaFromHistogram(histogram [8]uint64) (minLatency uint64, maxLatency uint64, ok bool) {

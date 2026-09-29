@@ -79,6 +79,24 @@ static __always_inline __u32 ior_histogram_bucket_index(__u64 duration_ns) {
     return 7;
 }
 
+// ior_aggregate_has_timed_samples reports whether agg already holds at least
+// one invocation with a measured duration. A row can carry untimed counts
+// (ior_count_untimed_syscall below), whose invocations have no duration and so
+// must never seed min_duration_ns; and on a PERCPU_HASH the slots of the other
+// CPUs start zeroed. Either way "count == 1" no longer identifies the first
+// timed sample, the histogram does: every timed update bumps exactly one
+// bucket. max_duration_ns is non-zero for nearly every timed row, so the hot
+// path costs one compare and the bucket scan only runs for fresh rows.
+static __always_inline int ior_aggregate_has_timed_samples(const struct syscall_aggregate *agg) {
+    if (agg->max_duration_ns)
+        return 1;
+    for (int i = 0; i < IOR_HISTOGRAM_BUCKETS; i++) {
+        if (agg->duration_histogram[i])
+            return 1;
+    }
+    return 0;
+}
+
 static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, __u64 duration_ns, __s64 ret) {
     __u32 bucket_idx;
     struct syscall_aggregate *existing;
@@ -90,12 +108,13 @@ static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, _
         bucket_idx = IOR_HISTOGRAM_BUCKETS - 1;
 
     if (existing) {
+        // Decide before the histogram below is bumped by this very sample.
+        if (!ior_aggregate_has_timed_samples(existing) || duration_ns < existing->min_duration_ns)
+            existing->min_duration_ns = duration_ns;
         existing->count += 1;
         existing->total_duration_ns += duration_ns;
         if (ior_is_errno_ret(ret))
             existing->errors += 1;
-        if (existing->count == 1 || duration_ns < existing->min_duration_ns)
-            existing->min_duration_ns = duration_ns;
         if (duration_ns > existing->max_duration_ns)
             existing->max_duration_ns = duration_ns;
         existing->duration_histogram[bucket_idx] += 1;
@@ -112,17 +131,99 @@ static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, _
     bpf_map_update_elem(&syscall_aggregate_map, &enter_trace_id, &fresh, BPF_ANY);
 }
 
-static __always_inline int ior_should_emit_trace(__u32 enter_trace_id) {
-    __u32 default_rate = 1;
-    __u32 *configured = bpf_map_lookup_elem(&syscall_sampling_rate_map, &enter_trace_id);
-    __u32 rate = configured ? *configured : default_rate;
+// ior_count_untimed_syscall counts one invocation of enter_trace_id into
+// syscall_aggregate_map without a duration or a return value: only count
+// moves. It is the fallback for an enter whose syscall_enter_state_map write
+// failed (see ior_on_syscall_enter), where neither the start time nor the
+// sampling decision survives until sys_exit. The row's latency fields and
+// histogram keep describing the timed invocations only, so userspace sees
+// count > sum(histogram) and must not take min/max from a row without
+// histogram samples (rawSyscallAggregate.add in
+// internal/syscall_aggregate_consumer.go). Errors of untimed invocations are
+// unknown and not counted.
+static __always_inline void ior_count_untimed_syscall(__u32 enter_trace_id) {
+    struct syscall_aggregate *existing;
+    struct syscall_aggregate fresh = {};
 
+    existing = bpf_map_lookup_elem(&syscall_aggregate_map, &enter_trace_id);
+    if (existing) {
+        existing->count += 1;
+        return;
+    }
+
+    fresh.count = 1;
+    bpf_map_update_elem(&syscall_aggregate_map, &enter_trace_id, &fresh, BPF_ANY);
+}
+
+// ior_sampling_rate returns the configured sampling rate of enter_trace_id:
+// 0 = aggregate-only, 1 = emit every event (also the default for a syscall
+// userspace did not configure), N = emit 1-in-N.
+static __always_inline __u32 ior_sampling_rate(__u32 enter_trace_id) {
+    __u32 *configured = bpf_map_lookup_elem(&syscall_sampling_rate_map, &enter_trace_id);
+
+    return configured ? *configured : 1;
+}
+
+static __always_inline int ior_sample_rate_emits(__u32 rate) {
     // A zero rate means aggregate-only mode for this syscall.
     if (rate == 0)
         return 0;
     if (rate == 1)
         return 1;
     return (bpf_get_prandom_u32() % rate) == 0;
+}
+
+static __always_inline int ior_should_emit_trace(__u32 enter_trace_id) {
+    return ior_sample_rate_emits(ior_sampling_rate(enter_trace_id));
+}
+
+// Enter state and its two fallbacks.
+//
+// The aggregate map and the ring-buffer stream must partition the invocations
+// exactly (see ior_on_syscall_exit), and the per-tid syscall_enter_state_map
+// entry is what carries the sampling decision from sys_enter to sys_exit. Two
+// situations leave a sys_exit without a matching entry, and both are handled
+// so that every invocation whose sys_enter ior saw is counted exactly once:
+//
+//   1. The enter-state write fails. syscall_enter_state_map is a bounded
+//      (32768) HASH, and a host-wide trace with more threads parked inside
+//      traced syscalls (futex, epoll_wait, ...) fills it. A full map only
+//      rejects tids without an entry yet (replacing an entry in place uses
+//      the map's spare per-CPU element); rarer failures such as -EBUSY
+//      bucket-lock contention take the same path. Whatever the cause,
+//      ior_on_enter_state_lost then decides by rate alone, without the
+//      per-invocation sample: at rate 1 the enter is emitted and the
+//      stateless exit below emits too, so userspace pairs them as usual; at
+//      any other rate an emitted enter could never be paired (its exit is
+//      suppressed), so the enter is suppressed and the invocation is counted
+//      right here with ior_count_untimed_syscall. Its duration and errno are
+//      lost, its count is not.
+//
+//   2. The exit has no entry of its own: the child side of clone/clone3/
+//      fork/vfork (its first return runs in a task that never entered the
+//      syscall), an execve by a non-leader thread (it returns under the
+//      leader's tid, see de_thread), a syscall already in flight when the
+//      tracepoints were attached, or case 1 above. A stale entry left by a
+//      different syscall (enter_trace_id mismatch) is the same situation.
+//      ior_stateless_exit_emits emits such an exit only when the syscall's
+//      rate is 1, i.e. exactly when a rate-1 enter would have been emitted,
+//      and never counts it: its enter was either never seen (nothing to
+//      count, as at rate 1, where userspace drops the unpaired exit) or was
+//      already counted by case 1. Emitting it at rate 0/N would ship an
+//      orphan exit for an aggregate-only syscall - every clone child did so
+//      before - and counting it would count a clone twice.
+//
+// The rate is read again at sys_exit. Userspace writes the sampling map once
+// before the tracepoints are attached, so it cannot change between the two.
+static __always_inline int ior_on_enter_state_lost(__u32 enter_trace_id, __u32 rate) {
+    if (rate == 1)
+        return 1;
+    ior_count_untimed_syscall(enter_trace_id);
+    return 0;
+}
+
+static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
+    return ior_sampling_rate(enter_trace_id) == 1;
 }
 
 // The per-syscall hooks below take the handler's timestamp instead of reading
@@ -133,11 +234,13 @@ static __always_inline int ior_should_emit_trace(__u32 enter_trace_id) {
 // (exit ev->time - enter ev->time) are derived from the same two instants.
 static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id, __u64 now) {
     struct syscall_enter_state state = {};
+    __u32 rate = ior_sampling_rate(enter_trace_id);
 
     state.start_ns = now;
     state.enter_trace_id = enter_trace_id;
-    state.emit_event = ior_should_emit_trace(enter_trace_id) ? 1 : 0;
-    bpf_map_update_elem(&syscall_enter_state_map, &tid, &state, BPF_ANY);
+    state.emit_event = ior_sample_rate_emits(rate) ? 1 : 0;
+    if (bpf_map_update_elem(&syscall_enter_state_map, &tid, &state, BPF_ANY))
+        return ior_on_enter_state_lost(enter_trace_id, rate);
     return state.emit_event != 0;
 }
 
@@ -165,7 +268,14 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 
     state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
     if (!state)
-        return 1;
+        return ior_stateless_exit_emits(enter_trace_id);
+    // A different syscall's leftover entry says nothing about this one: drop
+    // it (the tid is back at the syscall boundary, so it is dead anyway) and
+    // treat the exit as stateless. See "Enter state and its two fallbacks".
+    if (state->enter_trace_id != enter_trace_id) {
+        bpf_map_delete_elem(&syscall_enter_state_map, &tid);
+        return ior_stateless_exit_emits(enter_trace_id);
+    }
 
     if (now >= state->start_ns)
         duration = now - state->start_ns;
@@ -189,7 +299,9 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
     //
     // Pairing uses the explicit enter_trace_id passed by the generated exit
     // handler, avoiding any numeric adjacency assumption between
-    // kernel-assigned enter and exit tracepoint IDs.
+    // kernel-assigned enter and exit tracepoint IDs. A mismatching entry has
+    // already been diverted to the stateless path above; the ID check below
+    // restates that invariant right at the only aggregate write.
     if (!emit_event && state->enter_trace_id == enter_trace_id)
         ior_update_syscall_aggregate(state->enter_trace_id, duration, ret);
 
