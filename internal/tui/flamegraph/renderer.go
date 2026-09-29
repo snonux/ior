@@ -1091,8 +1091,9 @@ func percentOfTotal(value, total uint64) float64 {
 //
 // The exact-width guarantee holds only for control-character-free input:
 // tabs, C1 bytes or an unterminated escape sequence are measured as zero
-// width but move the terminal cursor. padOrTrim does not sanitise; frame names
-// and status text are expected to be sanitised upstream (task io2).
+// width but move the cursor (tab) or swallow the following bytes, including
+// padding (unterminated escape). padOrTrim does not sanitise; frame names and
+// paths are sanitised upstream (task io2).
 func padOrTrim(s string, width int) string {
 	if width <= 0 {
 		return ""
