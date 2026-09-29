@@ -201,6 +201,12 @@ type Model struct {
 }
 
 // tuiFrame stores one terminal flamegraph frame cell.
+//
+// Name is the display label and is sanitised (common.Sanitize) where frames
+// are built, because frame names are traced comm/syscall/path values that an
+// unprivileged user controls. Path is the raw pathSeparator-joined node path:
+// it is a lookup key (zoom, selection, filters) and must be sanitised by
+// whoever renders it (compactFramePath).
 type tuiFrame struct {
 	Name        string
 	Col         int
@@ -1073,7 +1079,10 @@ func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string
 		}
 		name := parts[depth]
 		out = append(out, tuiFrame{
-			Name:        name,
+			// Name is display-only and sanitised (traced comm/path frame names
+			// are attacker-controlled); Path stays raw because it is the
+			// lookup key for zoom, selection and filters.
+			Name:        common.Sanitize(name),
 			Col:         0,
 			Row:         depth,
 			Width:       width,

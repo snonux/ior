@@ -55,7 +55,10 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 
 	name := frameName(node.Name, depth)
 	*out = append(*out, tuiFrame{
-		Name:        name,
+		// Sanitised display label (traced names are attacker-controlled, and
+		// an unterminated ESC[ would swallow padOrTrim's padding); Path keeps
+		// the raw names because it is the lookup key.
+		Name:        common.Sanitize(name),
 		Col:         col,
 		Row:         depth,
 		Width:       span,
@@ -976,15 +979,18 @@ func frameLabel(name string, width int, isSelected, isMatch bool) string {
 	return padOrTrim(name, width)
 }
 
+// compactFramePath renders a raw frame Path for the toolbar and status line:
+// at most the first and last component joined by "/...". Path holds raw
+// traced names (it is a lookup key), so the display text is sanitised here.
 func compactFramePath(path string) string {
 	if path == "" {
 		return "root"
 	}
 	parts := strings.Split(path, pathSeparator)
 	if len(parts) <= 3 {
-		return strings.Join(parts, "/")
+		return common.Sanitize(strings.Join(parts, "/"))
 	}
-	return strings.Join([]string{parts[0], "...", parts[len(parts)-1]}, "/")
+	return common.Sanitize(strings.Join([]string{parts[0], "...", parts[len(parts)-1]}, "/"))
 }
 
 type relation int
