@@ -7,6 +7,7 @@ import (
 
 	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/parser"
+	common "ior/internal/tui/common"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -295,7 +296,10 @@ func (m Model) renderField(field filterField, active bool) string {
 		return fmt.Sprintf("%-8s %s", field.label+":", checked)
 	}
 
-	value := field.value
+	// Field values are seeded from the active filter, whose patterns are often
+	// pushed from traced comm/file values, so they are sanitised for display
+	// (the stored value stays raw so the filter still matches).
+	value := common.Sanitize(field.value)
 	if active && m.editing {
 		value = m.textInput.View()
 	}

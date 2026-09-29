@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	common "ior/internal/tui/common"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -166,7 +168,8 @@ func (m Model) View(width, height int) string {
 		lines = append(lines, prefix+label)
 	}
 	if m.status != "" {
-		lines = append(lines, "", m.status)
+		// The status echoes the export path and error text; sanitise it.
+		lines = append(lines, "", common.Sanitize(m.status))
 	}
 	if !m.exporting {
 		lines = append(lines, "", "Enter confirm • Esc cancel")
