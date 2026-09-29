@@ -256,7 +256,7 @@ func TestRenderProbeRowSanitizesError(t *testing.T) {
 func TestRenderViewSanitizesLastErr(t *testing.T) {
 	m := NewModel(nil)
 	m.lastErr = "boom\x1b[8mhidden\x9b"
-	for _, line := range m.buildProbeLines() {
+	for _, line := range m.buildProbeLines(m.layout(), m.filtered()) {
 		if strings.ContainsAny(line, "\x1b") || strings.Contains(line, "\x9b") {
 			t.Fatalf("line %q contains escape bytes", line)
 		}

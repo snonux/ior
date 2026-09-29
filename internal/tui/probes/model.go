@@ -41,11 +41,10 @@ type Model struct {
 
 	lastErr string
 	manager Manager
-	// height and width are the terminal size the modal is laid out for. The
-	// row budget (visibleRows) depends on both: height bounds the box and
-	// width decides how many lines the wrapped help and error text take.
-	// The caller only reports the height (SetHeight), so width is set just on
-	// View's local copy; zero (Update-time clamping) means defaultWidth.
+	// height and width are the terminal size the modal is laid out for, as
+	// reported by SetSize. The row budget (visibleRows) depends on both:
+	// height bounds the box and width decides how many lines the wrapped help
+	// and error text take. Zero means "not reported yet" (see the defaults).
 	height int
 	width  int
 	isDark bool
@@ -53,10 +52,14 @@ type Model struct {
 
 // defaultWidth and defaultHeight are the terminal size assumed when the
 // caller has not reported one; defaultRows is the row budget without a height.
+// maxModalWidth is the preferred modal width and minModalWidth the narrowest
+// it shrinks to before simply taking the whole (tiny) terminal width.
 const (
 	defaultWidth  = 80
 	defaultHeight = 24
 	defaultRows   = 10
+	maxModalWidth = 66
+	minModalWidth = 24
 )
 
 // probesHelp is the footer key help. It is wider than the modal content area,
@@ -107,9 +110,11 @@ func (m Model) SetDarkMode(isDark bool) Model {
 	return m
 }
 
-// SetHeight records the terminal height the modal is rendered into so the
-// scroll offset kept by Update matches the rows View will draw.
-func (m Model) SetHeight(height int) Model {
+// SetSize records the terminal size the modal is rendered into so the scroll
+// offset kept by Update matches the rows View will draw. Callers must report
+// the same size they later pass to View.
+func (m Model) SetSize(width, height int) Model {
+	m.width = width
 	m.height = height
 	return m.clampCursor()
 }
@@ -259,25 +264,36 @@ func (m Model) selectedSyscall() string {
 	return items[m.cursor].Syscall
 }
 
-// visibleRows returns how many probe rows fit on screen: the terminal height
-// minus the chrome actually rendered around them (see chromeHeight). The
-// chrome is measured rather than assumed because it varies with state — the
-// search/filter line, the error block and the help footer, the latter two of
-// which wrap depending on the modal width. At least one row is kept so the
-// selection stays visible; View clips the degenerate tiny-terminal case.
-func (m Model) visibleRows() int {
-	if m.height <= 0 {
-		return defaultRows
-	}
-	return max(m.height-m.chromeHeight(), 1)
+// probeLayout is the modal layout for one size and state: the header and
+// footer lines around the probe rows, the frame style, and how many rows fit.
+type probeLayout struct {
+	header, footer []string
+	box            lipgloss.Style
+	rows           int
 }
 
-// chromeHeight returns the number of terminal lines the modal occupies
-// besides the probe rows: border, padding, header and footer, measured by
-// rendering them in the real box style at the current modal width.
-func (m Model) chromeHeight() int {
-	lines := append(m.headerLines(), m.footerLines()...)
-	return lipgloss.Height(m.boxStyle().Render(strings.Join(lines, "\n")))
+// layout computes the modal layout for the current size and state. The row
+// budget is the terminal height minus the chrome actually rendered around the
+// rows: header and footer are rendered in the real box style and measured
+// with lipgloss.Height. The chrome is measured rather than assumed because it
+// varies with state — the search/filter line, the error block and the help
+// footer, the latter two of which wrap depending on the modal width. At least
+// one row is kept so the selection stays visible; View clips the degenerate
+// tiny-terminal case.
+func (m Model) layout() probeLayout {
+	l := probeLayout{header: m.headerLines(), footer: m.footerLines(), box: m.boxStyle(), rows: defaultRows}
+	if m.height <= 0 {
+		return l
+	}
+	chrome := make([]string, 0, len(l.header)+len(l.footer))
+	chrome = append(append(chrome, l.header...), l.footer...)
+	l.rows = max(m.height-lipgloss.Height(l.box.Render(strings.Join(chrome, "\n"))), 1)
+	return l
+}
+
+// visibleRows returns how many probe rows fit on screen (see layout).
+func (m Model) visibleRows() int {
+	return m.layout().rows
 }
 
 // boxStyle returns the modal frame style sized for the current terminal width.
@@ -292,15 +308,16 @@ func (m Model) boxStyle() lipgloss.Style {
 		Width(probeModalWidth(width))
 }
 
-// contentWidth returns the cells available to a line inside the modal frame.
+// contentWidth returns the cells available to a line inside the given frame.
 // lipgloss v2 widths include border and padding, so the frame is subtracted.
-func (m Model) contentWidth() int {
-	box := m.boxStyle()
+func contentWidth(box lipgloss.Style) int {
 	return box.GetWidth() - box.GetHorizontalFrameSize()
 }
 
 // View renders the probe modal centered on the terminal. It returns an empty
-// string when the modal is not visible. The output never exceeds height lines.
+// string when the modal is not visible. The window of rows starts at the
+// offset Update kept for the size reported via SetSize; width and height
+// should be that same size. The output never exceeds width x height cells.
 func (m Model) View(width, height int) string {
 	if !m.visible {
 		return ""
@@ -311,30 +328,23 @@ func (m Model) View(width, height int) string {
 	if height <= 0 {
 		height = defaultHeight
 	}
-	// Re-clamp against the real size: Update only knows the height (SetHeight)
-	// and assumes defaultWidth, which differs on terminals narrower than the
-	// modal. Clamping here keeps the selected row inside the drawn window.
-	m.height = height
 	m.width = width
-	m = m.clampCursor()
+	m.height = height
 
-	box := m.boxStyle().Render(strings.Join(m.buildProbeLines(), "\n"))
+	l := m.layout()
+	box := l.box.Render(strings.Join(m.buildProbeLines(l, m.filtered()), "\n"))
 	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
-	// Terminals too short for even the chrome plus one row would overflow;
-	// cut the bottom rather than scroll the whole screen.
-	return lipgloss.NewStyle().MaxHeight(height).Render(placed)
+	// Terminals too small for even the chrome plus one row (or narrower than
+	// the frame) would overflow; cut the excess rather than scroll the screen.
+	return lipgloss.NewStyle().MaxHeight(height).MaxWidth(width).Render(placed)
 }
 
-// probeModalWidth returns the clamped modal width for the given terminal width.
+// probeModalWidth returns the modal width for the given terminal width: the
+// preferred width with a 2-cell margin each side when it fits, shrinking to
+// minModalWidth, and below that the whole terminal width, so the box never
+// grows wider than the terminal.
 func probeModalWidth(termWidth int) int {
-	modalWidth := 66
-	if termWidth < modalWidth+4 {
-		modalWidth = termWidth - 4
-		if modalWidth < 44 {
-			modalWidth = 44
-		}
-	}
-	return modalWidth
+	return max(min(maxModalWidth, termWidth-4), min(minModalWidth, termWidth))
 }
 
 // headerLines returns the modal lines above the probe rows: the title, the
@@ -363,24 +373,26 @@ func (m Model) footerLines() []string {
 	return append(lines, "", probesHelp)
 }
 
-// buildProbeLines assembles the text lines that make up the modal content:
-// header, the visible window of probe rows, and the footer. Rows are cut to
-// the content width so each takes exactly one line, as visibleRows assumes.
-func (m Model) buildProbeLines() []string {
-	items := m.filtered()
-	lines := m.headerLines()
+// buildProbeLines assembles the text lines that make up the modal content
+// from a precomputed layout and filtered item list: header, the l.rows-high
+// window of probe rows starting at the scroll offset, and the footer. Rows
+// are cut to the content width so each takes exactly one line, as the row
+// budget assumes.
+func (m Model) buildProbeLines(l probeLayout, items []probemanager.ProbeState) []string {
+	lines := make([]string, 0, len(l.header)+l.rows+len(l.footer))
+	lines = append(lines, l.header...)
 
 	start := min(m.offset, len(items))
-	end := min(start+m.visibleRows(), len(items))
-	contentWidth := m.contentWidth()
+	end := min(start+l.rows, len(items))
+	width := contentWidth(l.box)
 	for i := start; i < end; i++ {
 		row := m.renderProbeRow(items[i], i == m.cursor)
-		lines = append(lines, common.TruncateRight(row, contentWidth, common.ASCIIEllipsis))
+		lines = append(lines, common.TruncateRight(row, width, common.ASCIIEllipsis))
 	}
 	if len(items) == 0 {
 		lines = append(lines, "  (no probes)")
 	}
-	return append(lines, m.footerLines()...)
+	return append(lines, l.footer...)
 }
 
 // renderProbeRow formats a single probe entry with selection prefix, checkbox,

@@ -127,7 +127,7 @@ func TestNavigationKeepsCursorInsideScrolledWindow(t *testing.T) {
 	for i := 0; i < 60; i++ {
 		states = append(states, probemanager.ProbeState{Syscall: fmt.Sprintf("sys_%02d", i), Active: true})
 	}
-	m := NewModel(&fakeManager{states: states}).SetHeight(24).Open()
+	m := NewModel(&fakeManager{states: states}).SetSize(100, 24).Open()
 	for i := 0; i < 30; i++ {
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	}

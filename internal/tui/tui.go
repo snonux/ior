@@ -684,7 +684,9 @@ type fallbackWindowSizeMsg tea.WindowSizeMsg
 func (m *Model) applyWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool) {
 	m.width = msg.Width
 	m.height = msg.Height
-	m.probeModal = m.probeModal.SetHeight(msg.Height)
+	// The probes modal budgets its rows from the same effective viewport View
+	// renders into, so its scroll offset matches the rows actually drawn.
+	m.probeModal = m.probeModal.SetSize(common.EffectiveViewport(msg.Width, msg.Height))
 	next, cmd := m.updateActiveModel(msg)
 	return next, cmd, true
 }
@@ -1085,8 +1087,8 @@ func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea
 		return m.handleRecordKey()
 	}
 	if key.Matches(msg, m.keys.Probes) {
-		_, height := common.EffectiveViewport(m.width, m.height)
-		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetHeight(height).Open()
+		width, height := common.EffectiveViewport(m.width, m.height)
+		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetSize(width, height).Open()
 		return m, nil, true
 	}
 	if key.Matches(msg, m.keys.Filter) {
@@ -1320,7 +1322,7 @@ func (m *Model) enterPicker(picker pidpicker.Model) (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.clearError()
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetHeight(m.height)
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetSize(common.EffectiveViewport(m.width, m.height))
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
 	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
 	var sizeCmd tea.Cmd
