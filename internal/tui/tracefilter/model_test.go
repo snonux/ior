@@ -378,6 +378,44 @@ func TestModelOpenEscKeepsNonCanonicalPatterns(t *testing.T) {
 	}
 }
 
+// TestModelRoundTripsExactRowPatterns covers the patterns dashboard row
+// filters now emit (task yo2): ^value$ / ^dir/ with the value's blanks and
+// literal edge ^/$ inside the anchors. Opening one and leaving must hand it
+// back unchanged, and typing the displayed text into a fresh modal must
+// rebuild the very same filter - the anchors put the blanks out of reach of
+// the modal's TrimSpace, so the text shown is the text that applies.
+func TestModelRoundTripsExactRowPatterns(t *testing.T) {
+	for _, initial := range []globalfilter.Filter{
+		{File: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("/tmp/a ")}},
+		{File: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern(" /tmp/x$")}},
+		{File: &globalfilter.StringFilter{Pattern: globalfilter.DirPattern("/var/log")}},
+		{Comm: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("  sh  ")}},
+		{Syscall: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("read")}},
+	} {
+		model := NewModel().Open(initial)
+		model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+		if got := model.Filter(); !got.Equal(initial) {
+			t.Fatalf("open+esc changed the filter:\n got  %+v\n want %+v", got, initial)
+		}
+
+		typed := NewModel().Open(globalfilter.Filter{})
+		for _, key := range []fieldKey{fieldSyscall, fieldComm, fieldFile} {
+			text := model.fields[key].value
+			if text == "" {
+				continue
+			}
+			typed.activeField = int(key)
+			typed = typed.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			typed.textInput.SetValue(text)
+			typed = typed.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		}
+		typed = typed.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+		if got := typed.Filter(); !got.Equal(initial) {
+			t.Fatalf("retyping the shown text did not rebuild the filter:\n got  %+v\n want %+v", got, initial)
+		}
+	}
+}
+
 // TestModelEditOfNonCanonicalPatternApplies is the negative side of keeping
 // untouched fields verbatim: a real edit of such a field, a blanked field and
 // a changed numeric op must still be applied.

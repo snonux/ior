@@ -208,6 +208,74 @@ func TestFilterStringAnchorsSupportExactPrefixAndSuffix(t *testing.T) {
 	}
 }
 
+// TestExactPatternMatchesOnlyTheValue checks that ExactPattern is exact for
+// every value, including those the matcher would otherwise reinterpret:
+// blank-padded values (the matcher trims blanks outside the anchors only),
+// values with a literal edge ^ or $ (one anchor is taken per end only), and
+// the empty value. Case still folds, as for every string filter.
+func TestExactPatternMatchesOnlyTheValue(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		match []string
+		miss  []string
+	}{
+		{"/tmp/a", []string{"/tmp/a", "/TMP/A"}, []string{"/tmp/ab", "/var/tmp/a", "/tmp/a "}},
+		{"/tmp/a ", []string{"/tmp/a "}, []string{"/tmp/a", "/tmp/ab", "/tmp/a  "}},
+		{"  sh  ", []string{"  sh  "}, []string{"sh", " sh ", "bash"}},
+		{"x$", []string{"x$"}, []string{"x", "ax$", "x$y"}},
+		{"^x", []string{"^x"}, []string{"x", "^xy"}},
+		{"^", []string{"^"}, []string{"", "^^", "a"}},
+		{"$", []string{"$"}, []string{"", "$$"}},
+		{"$$", []string{"$$"}, []string{"$", "$$$"}},
+		{"", []string{""}, []string{"a", " "}},
+	} {
+		sf := &StringFilter{Pattern: ExactPattern(tt.value)}
+		for _, v := range tt.match {
+			if !matchString(sf, v) {
+				t.Errorf("ExactPattern(%q) = %q should match %q", tt.value, sf.Pattern, v)
+			}
+		}
+		for _, v := range tt.miss {
+			if matchString(sf, v) {
+				t.Errorf("ExactPattern(%q) = %q should not match %q", tt.value, sf.Pattern, v)
+			}
+		}
+	}
+}
+
+// TestDirPatternMatchesTheSubtree checks that DirPattern selects every path
+// below the directory and no sibling that merely shares its name as a prefix
+// or contains it elsewhere; the root must not become "^//".
+func TestDirPatternMatchesTheSubtree(t *testing.T) {
+	for _, tt := range []struct {
+		dir   string
+		want  string
+		match []string
+		miss  []string
+	}{
+		{"/tmp", "^/tmp/", []string{"/tmp/a", "/tmp/sub/b", "/TMP/a"}, []string{"/tmp", "/tmpfoo/a", "/var/tmp/a"}},
+		{"/", "^/", []string{"/a", "/etc/passwd"}, []string{"a", "socket:[1]"}},
+		{"/tmp/a ", "^/tmp/a /", []string{"/tmp/a /x"}, []string{"/tmp/a/x"}},
+		{"/a$", "^/a$/", []string{"/a$/x"}, []string{"/a/x"}},
+	} {
+		got := DirPattern(tt.dir)
+		if got != tt.want {
+			t.Errorf("DirPattern(%q) = %q, want %q", tt.dir, got, tt.want)
+		}
+		sf := &StringFilter{Pattern: got}
+		for _, v := range tt.match {
+			if !matchString(sf, v) {
+				t.Errorf("DirPattern(%q) should match %q", tt.dir, v)
+			}
+		}
+		for _, v := range tt.miss {
+			if matchString(sf, v) {
+				t.Errorf("DirPattern(%q) should not match %q", tt.dir, v)
+			}
+		}
+	}
+}
+
 func TestFilterErrorsOnlyAndClone(t *testing.T) {
 	filter := Filter{
 		ErrorsOnly: true,
