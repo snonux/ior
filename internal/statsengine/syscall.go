@@ -52,11 +52,12 @@ type syscallStats struct {
 // percentileJob carries a private copy of one syscall's latency reservoir from
 // snapshot capture (which runs under the engine lock) to the lock-free
 // percentile computation, and from there back to the cached values in stats.
-// Sorting a full 10k-sample reservoir costs ~0.5ms (selection ~0.16ms), so
-// doing it for every active syscall under the lock used to stall Engine.Ingest for tens of ms per
-// refresh. Under the lock only a copy per stale reservoir (80KB when full)
-// remains, into the stats' reusable scratch buffer, so the lock is normally not
-// also held across allocation and GC assists.
+// Selecting the percentiles from a full 10k-sample reservoir costs ~0.16ms
+// (~0.5ms with a full sort), so doing it for every active syscall under the
+// engine lock used to stall Engine.Ingest for tens of ms per refresh. Under
+// the lock only a copy per stale reservoir (80KB when full) remains, into the
+// stats' reusable scratch buffer, so the lock is normally not also held across
+// allocation and GC assists.
 type percentileJob struct {
 	stats    *syscallStats
 	version  uint64   // stats.sampleVersion at the time samples was copied
