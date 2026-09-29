@@ -72,6 +72,9 @@ var relativeSleepCases = []sleepCase{
 	{name: "one second plus", sec: 1, nsec: 500, want: 1_000_000_500},
 	{name: "max nsec", sec: 1, nsec: 999_999_999, want: 1_999_999_999},
 	{name: "below limit", sec: 9_223_372_035, nsec: 999_999_999, want: 9_223_372_035_999_999_999},
+	// The kernel already clamps this to KTIME_MAX (tv_sec >= KTIME_SEC_MAX);
+	// ior records the exactly representable value (documented divergence).
+	{name: "at KTIME_SEC_MAX", sec: 9_223_372_036, want: 9_223_372_036_000_000_000},
 	{name: "exactly S64_MAX", sec: 9_223_372_036, nsec: 854_775_807, want: math.MaxInt64},
 	{name: "one ns above limit", sec: 9_223_372_036, nsec: 854_775_808, want: math.MaxInt64},
 	{name: "one second above limit", sec: 9_223_372_037, want: math.MaxInt64},
