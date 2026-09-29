@@ -63,18 +63,23 @@ func (m *Model) resetBaseline() {
 	m.statusMessage = "Baseline reset"
 }
 
+// cycleFieldOrder switches the trie to the next field-order preset. The model's
+// fieldIndex only advances once the trie accepted the preset: advancing first
+// would make the toolbar's o:order(...) label advertise a preset the trie
+// rejected and is not using.
 func (m *Model) cycleFieldOrder() {
 	if len(m.fieldPresets) == 0 {
 		return
 	}
-	m.fieldIndex = (m.fieldIndex + 1) % len(m.fieldPresets)
-	nextPreset := m.fieldPresets[m.fieldIndex]
+	nextIndex := (m.fieldIndex + 1) % len(m.fieldPresets)
+	nextPreset := m.fieldPresets[nextIndex]
 	if m.liveTrie != nil {
 		if err := m.liveTrie.Reconfigure(nextPreset); err != nil {
 			m.statusMessage = "Field order error: " + err.Error()
 			return
 		}
 	}
+	m.fieldIndex = nextIndex
 	m.clearSnapshotState(false)
 	m.statusMessage = "Order: " + strings.Join(nextPreset, "/")
 }
