@@ -1,6 +1,7 @@
 package streamrow
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -165,5 +166,65 @@ func TestRingBufferAppendSnapshotReusesBuffer(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("AppendSnapshot into a reused buffer allocated %.0f times, want 0", allocs)
+	}
+}
+
+// TestRingBufferConcurrentPushAndSnapshot runs a writer pushing increasing
+// Seq values against a reader snapshotting (alternately via Snapshot and
+// AppendSnapshot into a reused buffer). Under -race it checks the locking;
+// in any mode each snapshot must be a consistent window: at most capacity
+// rows with strictly consecutive Seq values, never a torn mix of old and new.
+func TestRingBufferConcurrentPushAndSnapshot(t *testing.T) {
+	rb := NewRingBuffer()
+	const pushes = 3 * RingBufferCapacity
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(done)
+		for i := range pushes {
+			rb.Push(Row{Seq: uint64(i + 1)})
+		}
+	}()
+
+	var buf []Row
+	for round := 0; ; round++ {
+		finished := false
+		select {
+		case <-done:
+			finished = true
+		default:
+		}
+		var snap []Row
+		if round%2 == 0 {
+			buf = rb.AppendSnapshot(buf[:0])
+			snap = buf
+		} else {
+			snap = rb.Snapshot()
+		}
+		checkConsecutiveSnapshot(t, snap)
+		if finished {
+			break
+		}
+	}
+	wg.Wait()
+
+	final := rb.AppendSnapshot(buf[:0])
+	if len(final) != RingBufferCapacity || final[len(final)-1].Seq != pushes {
+		t.Fatalf("final snapshot len=%d last seq=%d, want %d and %d", len(final), final[len(final)-1].Seq, RingBufferCapacity, pushes)
+	}
+}
+
+func checkConsecutiveSnapshot(t *testing.T, snap []Row) {
+	t.Helper()
+	if len(snap) > RingBufferCapacity {
+		t.Fatalf("snapshot len %d exceeds capacity %d", len(snap), RingBufferCapacity)
+	}
+	for i := 1; i < len(snap); i++ {
+		if snap[i].Seq != snap[i-1].Seq+1 {
+			t.Fatalf("torn snapshot at %d: seq %d follows %d", i, snap[i].Seq, snap[i-1].Seq)
+		}
 	}
 }
