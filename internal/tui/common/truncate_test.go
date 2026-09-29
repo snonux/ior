@@ -162,7 +162,9 @@ func TestRenderTableCellCJKAlignment(t *testing.T) {
 
 // TestASCIIFastPathMatchesGraphemePath checks the printable-ASCII fast path
 // (byte slicing, width == len) returns exactly what the general ansi-based
-// grapheme path returns, for every width from -1 to past the input length.
+// grapheme path returns, for every width 1..len(s)-1 (the widths that force
+// a cut, the only ones reaching the internal helpers). The exported helpers'
+// early returns for widths -1, 0, len(s) and len(s)+1 are checked separately.
 func TestASCIIFastPathMatchesGraphemePath(t *testing.T) {
 	inputs := []string{"", "a", "ab", "/very/long/path/with/segments/and/filename.log", "  spaced  out  ", "~!@#$%^&*()_+{}|:<>?"}
 	markers := []string{"", ASCIIEllipsis, Ellipsis, ".."}
@@ -171,10 +173,8 @@ func TestASCIIFastPathMatchesGraphemePath(t *testing.T) {
 			t.Fatalf("measure(%q) did not take the ASCII fast path", s)
 		}
 		total := len(s)
-		for width := 1; width <= total+1; width++ {
-			if total <= width {
-				continue // the exported helpers return s unchanged here
-			}
+		checkASCIIEarlyReturns(t, s)
+		for width := 1; width < total; width++ {
 			for _, m := range markers {
 				pairs := [][2]string{
 					{truncateRight(s, true, width, m), truncateRight(s, false, width, m)},
@@ -194,6 +194,27 @@ func TestASCIIFastPathMatchesGraphemePath(t *testing.T) {
 	}
 	if w, ascii := measure(Ellipsis); w != 1 || ascii {
 		t.Fatalf("measure(Ellipsis) = %d, %v; want 1, false", w, ascii)
+	}
+}
+
+// checkASCIIEarlyReturns checks the exported helpers at the widths that never
+// reach the cutting code: -1 and 0 yield "", len(s) and len(s)+1 yield s.
+func checkASCIIEarlyReturns(t *testing.T, s string) {
+	t.Helper()
+	for _, width := range []int{-1, 0, len(s), len(s) + 1} {
+		want := s
+		if width <= 0 {
+			want = ""
+		}
+		for name, got := range map[string]string{
+			"Right":  TruncateRight(s, width, ASCIIEllipsis),
+			"Left":   TruncateLeft(s, width, ASCIIEllipsis),
+			"Middle": TruncateMiddle(s, width, ASCIIEllipsis),
+		} {
+			if got != want {
+				t.Fatalf("Truncate%s(%q, %d) = %q, want %q", name, s, width, got, want)
+			}
+		}
 	}
 }
 
