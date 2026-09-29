@@ -44,6 +44,20 @@ func (sc *SearchController) query() string {
 	return sc.searchQuery
 }
 
+// inputValue returns the text currently typed into the search input. It
+// differs from query() while the input is open: query() is only updated on
+// commit, whereas the input value changes on every keystroke.
+func (sc *SearchController) inputValue() string {
+	return sc.searchInput.Value()
+}
+
+// inputCursor returns the cursor position inside the search input. Cursor
+// moves (left/right/home/end) change the rendered footer without changing the
+// value, so the view cache must see them too.
+func (sc *SearchController) inputCursor() int {
+	return sc.searchInput.Position()
+}
+
 // matches returns the set of frame indices whose name matches the query. The
 // map is owned by the controller and is refilled in place on every recompute,
 // so callers must not retain or mutate it.
