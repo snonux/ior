@@ -272,8 +272,8 @@ func TestFilterChangeRestartHandsStarterTheNewFilter(t *testing.T) {
 	runCmdAsync(initTraceCmd(t, m))
 	first := starter.next(t)
 	firstReq := starter.nextRequest(t)
-	if firstReq.Bindings != TraceRuntimeBindings(m.runtime) {
-		t.Fatal("initial session did not receive the model's runtime bindings")
+	if view, ok := firstReq.Bindings.(traceSessionBindings); !ok || view.bindings != m.runtime {
+		t.Fatal("initial session did not receive a view of the model's runtime bindings")
 	}
 	if firstReq.Filter == nil || firstReq.Filter.PID == nil || firstReq.Filter.PID.Value != initialPID {
 		t.Fatalf("initial session filter = %+v, want the startup PID %d", firstReq.Filter, initialPID)
@@ -300,8 +300,14 @@ func TestFilterChangeRestartHandsStarterTheNewFilter(t *testing.T) {
 	if firstReq.Filter.Comm != nil {
 		t.Fatalf("the restart mutated the previous session's filter: %+v", firstReq.Filter.Comm)
 	}
-	if secondReq.Bindings != firstReq.Bindings {
-		t.Fatal("restarted session received different runtime bindings")
+	// Same underlying TUI bindings, but a new session view: the first
+	// session's view must no longer be able to publish over the second's.
+	secondView, ok := secondReq.Bindings.(traceSessionBindings)
+	if !ok || secondView.bindings != m.runtime {
+		t.Fatal("restarted session did not receive a view of the model's runtime bindings")
+	}
+	if secondReq.Bindings == firstReq.Bindings {
+		t.Fatal("restarted session shares the previous session's bindings view")
 	}
 	if secondReq.ShutdownReporter == nil || secondReq.ShutdownReporter == firstReq.ShutdownReporter {
 		t.Fatal("restarted session did not receive its own shutdown reporter")

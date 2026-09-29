@@ -309,6 +309,9 @@ func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
 // installs the print callback that fans out to engine/stream/trie, and
 // registers the setter with publisher so the TUI can swap filters without
 // restarting BPF probes. A nil publisher (no TUI attached) registers nothing.
+// In TUI mode publisher is the session's bindings view, so a session that a
+// restart has already superseded registers nothing either: its setter would
+// otherwise replace the newer session's (see tui.traceSessionBindings).
 func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
 	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {
@@ -686,7 +689,10 @@ type traceRunFunc func(
 
 // probeManagerPublisher is the one publisher method trace setup needs: handing
 // the attached probe manager to the TUI probes view (and clearing it on
-// release). runtime.RuntimePublisher satisfies it.
+// release). runtime.RuntimePublisher satisfies it. In TUI mode it is the
+// session-scoped view of the TUI bindings, which drops the publish and the
+// clear of a session a newer one has superseded, so trace setup can publish
+// and clear unconditionally.
 type probeManagerPublisher interface {
 	SetProbeManager(manager runtime.ProbeManager)
 }
@@ -852,7 +858,7 @@ func setupTraceInfraWithEventLoop(
 	warnings := &setupWarnings{}
 	warnSetup := warnings.add
 
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
 	if err != nil {
 		return nil, err
 	}

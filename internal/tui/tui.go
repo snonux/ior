@@ -111,6 +111,11 @@ type runtimeBindings struct {
 	// event loop in-place so BPF probes need not be restarted.
 	liveFilterSetter       func(globalfilter.Filter)
 	liveFilterRegistration *liveFilterRegistration
+	// session is the generation of the newest trace session, advanced by
+	// beginSession. A traceSessionBindings view publishes only while its
+	// generation is still this one, so an older session that finishes setup
+	// or teardown late cannot overwrite or clear the newer session's state.
+	session uint64
 	// filterEpoch increments on every filter change and is stored in parquet rows.
 	filterEpoch atomic.Uint64
 }
@@ -197,11 +202,24 @@ func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) {
 // only while this registration still owns it, preventing a slow teardown from
 // an older trace session from unregistering a newer session's callback.
 func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) func() {
-	registration := &liveFilterRegistration{}
 	r.mu.Lock()
+	registration := r.installLiveFilterSetterLocked(setter)
+	r.mu.Unlock()
+	return r.liveFilterUnregisterer(registration)
+}
+
+// installLiveFilterSetterLocked stores setter under a fresh registration and
+// returns it. The caller must hold r.mu for writing.
+func (r *runtimeBindings) installLiveFilterSetterLocked(setter func(globalfilter.Filter)) *liveFilterRegistration {
+	registration := &liveFilterRegistration{}
 	r.liveFilterSetter = setter
 	r.liveFilterRegistration = registration
-	r.mu.Unlock()
+	return registration
+}
+
+// liveFilterUnregisterer returns the release func of one registration: it
+// clears the setter only while that registration is still the installed one.
+func (r *runtimeBindings) liveFilterUnregisterer(registration *liveFilterRegistration) func() {
 	return func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()

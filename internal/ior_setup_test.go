@@ -285,7 +285,12 @@ func TestTraceSetupPassesSessionHooksExplicitly(t *testing.T) {
 
 	setup, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
 	bpfSetup := singleBareCall(t, setup, "setupBPFModule")
-	if got := renderedArgument(t, bpfSetup, 1); got != "hooks.probes" {
+	// The session context goes to BPF setup too, so a restart that cancels
+	// this session stops its load/attach instead of letting it publish late.
+	if got := renderedArgument(t, bpfSetup, 0); got != "parentCtx" {
+		t.Fatalf("setupBPFModule context argument = %q, want parentCtx", got)
+	}
+	if got := renderedArgument(t, bpfSetup, 2); got != "hooks.probes" {
 		t.Fatalf("setupBPFModule probe publisher argument = %q, want hooks.probes", got)
 	}
 	assertCallArguments(t, singleBareCall(t, setup, "newTraceInfra"),

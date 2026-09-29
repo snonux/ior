@@ -318,10 +318,10 @@ func TestSetupTraceInfraWiresConsoleSinks(t *testing.T) {
 	decl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
 
 	bpfCalls := callsNamed(decl, "setupBPFModule")
-	if len(bpfCalls) != 1 || len(bpfCalls[0].Args) != 3 {
-		t.Fatal("shared trace setup must call setupBPFModule(cfg, hooks.probes, bpfSetupLog{...}) once")
+	if len(bpfCalls) != 1 || len(bpfCalls[0].Args) != 4 {
+		t.Fatal("shared trace setup must call setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{...}) once")
 	}
-	literal, ok := bpfCalls[0].Args[2].(*ast.CompositeLit)
+	literal, ok := bpfCalls[0].Args[3].(*ast.CompositeLit)
 	if !ok || !isIdentifier(literal.Type, "bpfSetupLog") {
 		t.Fatal("setupBPFModule's log argument must be a bpfSetupLog literal")
 	}

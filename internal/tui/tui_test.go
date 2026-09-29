@@ -81,8 +81,8 @@ func TestBeginCmdHandsStarterItsInputsExplicitly(t *testing.T) {
 	}
 	req := <-requests
 
-	if req.Bindings != TraceRuntimeBindings(bindings) {
-		t.Fatalf("request bindings = %v, want the model's runtime bindings", req.Bindings)
+	if view, ok := req.Bindings.(traceSessionBindings); !ok || view.bindings != bindings {
+		t.Fatalf("request bindings = %v, want a session view of the model's runtime bindings", req.Bindings)
 	}
 	if req.Filter == nil {
 		t.Fatal("request carries no filter; the starter would keep the startup filter on every restart")

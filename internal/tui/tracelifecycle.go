@@ -50,6 +50,13 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 //
 // The session's bindings, filter and shutdown reporter reach the starter
 // explicitly in a TraceRequest; the context only carries cancellation.
+//
+// The cancelled session is not waited for, so it may still be loading,
+// attaching or detaching while the new one starts. That is why each session
+// gets its own bindings view (runtimeBindings.beginSession): the view drops
+// whatever the superseded session publishes or clears from then on, so its
+// late setup or teardown cannot replace or erase the new session's probe
+// manager, live-filter setter or dashboard sources.
 func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
 	t.stop()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -58,17 +65,18 @@ func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter
 	return startTraceCmd(ctx, t.startTrace, newTraceRequest(bindings, filter, t.shutdownReporter))
 }
 
-// newTraceRequest assembles the explicit inputs of one trace session. The
-// filter is cloned so the starter never aliases the model's filter state,
-// which the user keeps editing while the session runs. A nil bindings pointer
-// becomes a nil interface rather than a typed nil, so a starter's "no TUI
-// attached" check (Bindings == nil) sees it as absent instead of calling
-// methods on a nil *runtimeBindings.
+// newTraceRequest assembles the explicit inputs of one trace session and
+// begins the session's bindings generation. The filter is cloned so the
+// starter never aliases the model's filter state, which the user keeps
+// editing while the session runs. A nil bindings pointer becomes a nil
+// interface rather than a (non-nil) session view of nothing, so a starter's
+// "no TUI attached" check (Bindings == nil) sees it as absent instead of
+// calling methods on a nil *runtimeBindings.
 func newTraceRequest(bindings *runtimeBindings, filter globalfilter.Filter, reporter *runtime.TraceShutdownReporter) TraceRequest {
 	cloned := filter.Clone()
 	req := TraceRequest{Filter: &cloned, ShutdownReporter: reporter}
 	if bindings != nil {
-		req.Bindings = bindings
+		req.Bindings = bindings.beginSession()
 	}
 	return req
 }
