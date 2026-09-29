@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"encoding/binary"
+	"math"
 	"testing"
 
 	"ior/internal/event"
@@ -222,24 +224,31 @@ func TestApplyAddressSpaceBytes(t *testing.T) {
 	}
 }
 
+// TestApplyRequestedSleepNs decodes real sleep_event wire bytes and checks
+// that requested_ns reaches the pair unchanged, including the BPF-side -1
+// "unknown" sentinel and the S64_MAX saturation of oversized requests (e.g.
+// `sleep infinity`), neither of which userspace may reinterpret.
 func TestApplyRequestedSleepNs(t *testing.T) {
-	pair := &event.Pair{
-		EnterEv: &types.SleepEvent{
-			TraceId:     types.SYS_ENTER_NANOSLEEP,
-			RequestedNs: 7_500_000,
-			EventType:   types.ENTER_SLEEP_EVENT,
-			Time:        10,
-			Pid:         1,
-			Tid:         2,
-		},
-		ExitEv: &types.RetEvent{
-			TraceId: types.SYS_EXIT_NANOSLEEP,
-			Ret:     0,
-		},
-	}
+	for _, requested := range []int64{7_500_000, 0, -1, math.MaxInt64} {
+		raw := make([]byte, 32)
+		binary.LittleEndian.PutUint32(raw[0:4], uint32(types.ENTER_SLEEP_EVENT))
+		binary.LittleEndian.PutUint32(raw[4:8], uint32(types.SYS_ENTER_NANOSLEEP))
+		binary.LittleEndian.PutUint64(raw[8:16], 10)
+		binary.LittleEndian.PutUint32(raw[16:20], 1)
+		binary.LittleEndian.PutUint32(raw[20:24], 2)
+		binary.LittleEndian.PutUint64(raw[24:32], uint64(requested))
+		enterEv := types.NewSleepEventFast(raw)
+		if enterEv == nil {
+			t.Fatalf("NewSleepEventFast rejected a %d-byte payload", len(raw))
+		}
+		pair := &event.Pair{
+			EnterEv: enterEv,
+			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_NANOSLEEP, Ret: 0},
+		}
 
-	applyRequestedSleepNs(pair)
-	if pair.RequestedSleepNs != 7_500_000 {
-		t.Fatalf("pair.RequestedSleepNs = %d, want 7500000", pair.RequestedSleepNs)
+		applyRequestedSleepNs(pair)
+		if pair.RequestedSleepNs != requested {
+			t.Errorf("pair.RequestedSleepNs = %d, want %d", pair.RequestedSleepNs, requested)
+		}
 	}
 }

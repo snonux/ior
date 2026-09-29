@@ -17400,7 +17400,14 @@ int handle_sys_enter_clock_nanosleep(struct syscall_trace_enter *ctx) {
         } ts = {};
         if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {
             if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {
-                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+                if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL) {
+                    if (ts.tv_sec > 9223372036LL ||
+                        (ts.tv_sec == 9223372036LL && ts.tv_nsec > 854775807LL)) {
+                        ev->requested_ns = 9223372036854775807LL /* S64_MAX */;
+                    } else {
+                        ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+                    }
+                }
             }
         }
     }
@@ -17467,7 +17474,14 @@ int handle_sys_enter_nanosleep(struct syscall_trace_enter *ctx) {
             __s64 tv_nsec;
         } ts = {};
         if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[0]) == 0) {
-            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL) {
+                if (ts.tv_sec > 9223372036LL ||
+                    (ts.tv_sec == 9223372036LL && ts.tv_nsec > 854775807LL)) {
+                    ev->requested_ns = 9223372036854775807LL /* S64_MAX */;
+                } else {
+                    ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+                }
+            }
         }
     }
 

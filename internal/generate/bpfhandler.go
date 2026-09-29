@@ -955,10 +955,10 @@ func pollTimeoutBody(argIdx int, style pollTimeoutStyle) string {
 				"            __s64 tv_nsec;\n"+
 				"        } ts = {};\n"+
 				"        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[%d]) == 0) {\n"+
-				"            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL &&\n"+
-				"                (ts.tv_sec < 9223372036LL ||\n"+
-				"                 (ts.tv_sec == 9223372036LL && ts.tv_nsec <= 854775807LL))) {\n"+
-				"                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+				"            if ("+timespecValidCond("ts")+" &&\n"+
+				"                (ts.tv_sec < "+timespecMaxNsSec+" ||\n"+
+				"                 (ts.tv_sec == "+timespecMaxNsSec+" && ts.tv_nsec <= "+timespecMaxNsRem+"))) {\n"+
+				"                ev->timeout_ns = "+timespecNsExpr("ts")+";\n"+
 				"            }\n"+
 				"        }\n"+
 				"    }\n", argIdx, argIdx)
@@ -1072,20 +1072,67 @@ var sleepTimespecPtr = map[string]sleepSpec{
 // absolute wakeup time rather than a relative duration.
 const timerAbstimeFlag = "1 /* TIMER_ABSTIME */"
 
+// Timespec validation shared by the poll-family timeout capture
+// (pollTimeoutBody) and the sleep-family request capture (generateExtraSleep).
+// Both convert a user-space struct __kernel_timespec into signed 64-bit
+// nanoseconds, so both must reject what the kernel rejects and must never let
+// tv_sec * 1e9 + tv_nsec wrap around __s64.
+const (
+	// timespecMaxNsSec and timespecMaxNsRem split S64_MAX
+	// (9223372036854775807) into whole seconds and the nanosecond remainder:
+	// a valid timespec converts to __s64 nanoseconds without overflow iff
+	// tv_sec < timespecMaxNsSec, or tv_sec == timespecMaxNsSec and
+	// tv_nsec <= timespecMaxNsRem.
+	timespecMaxNsSec = "9223372036LL"
+	timespecMaxNsRem = "854775807LL"
+	// sleepRequestedNsSaturated is the value a valid but unrepresentable sleep
+	// request saturates to (S64_MAX). It mirrors the kernel, which clamps such
+	// requests to KTIME_MAX (timespec64_to_ktime) and sleeps "forever"; e.g.
+	// `sleep infinity` passes {LLONG_MAX, 999999999}.
+	sleepRequestedNsSaturated = "9223372036854775807LL /* S64_MAX */"
+)
+
+// timespecValidCond returns the C condition mirroring the kernel's
+// timespec64_valid(): tv_sec >= 0 and tv_nsec in [0, 1e9). A timespec failing
+// it makes nanosleep/clock_nanosleep/ppoll/pselect6/epoll_pwait2 return
+// -EINVAL, so its nanosecond value is meaningless. v names the C struct local.
+func timespecValidCond(v string) string {
+	return v + ".tv_sec >= 0 && " + v + ".tv_nsec >= 0 && " + v + ".tv_nsec < 1000000000LL"
+}
+
+// timespecOverflowCond returns the C condition that is true when a VALID
+// timespec (see timespecValidCond) does not fit in __s64 nanoseconds. It is
+// the exact negation of the representable range the poll capture accepts.
+func timespecOverflowCond(v, indent string) string {
+	return v + ".tv_sec > " + timespecMaxNsSec + " ||\n" +
+		indent + "(" + v + ".tv_sec == " + timespecMaxNsSec + " && " + v + ".tv_nsec > " + timespecMaxNsRem + ")"
+}
+
+// timespecNsExpr returns the C expression converting timespec local v to
+// nanoseconds. Callers must guard it with timespecValidCond and a
+// representability check; unguarded it wraps for huge tv_sec.
+func timespecNsExpr(v string) string {
+	return v + ".tv_sec * 1000000000LL + " + v + ".tv_nsec"
+}
+
 // generateExtraSleep emits the requested_ns capture body for sleep-family
 // syscalls. The timespec pointer (and optional flags) expression come from
 // sleepTimespecPtr.
 //
-// requested_ns defaults to the -1 sentinel (the same value used for a
-// null/unreadable timespec pointer). For relative sleeps we overwrite it with
-// tv_sec*1e9 + tv_nsec. For an absolute sleep (clock_nanosleep with
-// TIMER_ABSTIME set) the request timespec is an absolute clock value, NOT a
-// duration; computing tv_sec*1e9 + tv_nsec there would export a bogus
-// multi-decade "sleep duration". Deriving the true relative duration would
-// require reading the current time of the (variable) clockid in BPF, which is
-// racy and clock-dependent. Instead we leave the -1 sentinel so downstream
-// consumers (CSV/parquet/stream) report "unknown" rather than a misleading
-// value.
+// requested_ns defaults to the -1 "unknown" sentinel, which it keeps for:
+//   - a null or unreadable timespec pointer;
+//   - an invalid timespec (negative tv_sec, tv_nsec outside [0, 1e9)), which
+//     the kernel rejects with -EINVAL, so no sleep was requested at all;
+//   - an absolute sleep (clock_nanosleep with TIMER_ABSTIME set): the request
+//     is an absolute clock value, NOT a duration, and tv_sec*1e9 + tv_nsec
+//     would export a bogus multi-decade "sleep duration". Deriving the true
+//     relative duration would require reading the current time of the
+//     (variable) clockid in BPF, which is racy and clock-dependent.
+//
+// A valid relative request is converted to nanoseconds. One too large for
+// __s64 (e.g. `sleep infinity`) saturates to S64_MAX like the kernel's own
+// KTIME_MAX clamp; before this range check the multiplication wrapped into
+// garbage negative values, and {LLONG_MAX, 999999999} landed exactly on -1.
 func generateExtraSleep(name string) string {
 	spec := sleepTimespecPtr[name] // zero value (ptr "") if not found
 	ptrExpr := spec.ptr
@@ -1093,16 +1140,32 @@ func generateExtraSleep(name string) string {
 		ptrExpr = "0"
 	}
 
-	compute := "            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"
+	compute := sleepRequestedNsBody("            ")
 	if spec.flagsArg != "" {
 		// Absolute sleeps keep the -1 sentinel; only relative sleeps get a
 		// computed duration.
 		compute = "            if ((" + spec.flagsArg + " & " + timerAbstimeFlag + ") == 0) {\n" +
-			"                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n" +
+			sleepRequestedNsBody("                ") +
 			"            }\n"
 	}
 
 	return "    ev->requested_ns = -1;\n    if (" + ptrExpr + " != 0) {\n        struct __ior_timespec {\n            __s64 tv_sec;\n            __s64 tv_nsec;\n        } ts = {};\n        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)" + ptrExpr + ") == 0) {\n" + compute + "        }\n    }\n"
+}
+
+// sleepRequestedNsBody returns the C statements, indented by indent, that set
+// requested_ns from the already-read timespec local ts: invalid requests keep
+// the -1 sentinel, overflowing ones saturate, the rest convert exactly. The
+// saturating branch comes first so the ts-derived assignment is the handler's
+// final write to requested_ns, as the syscall semantics oracle requires.
+func sleepRequestedNsBody(indent string) string {
+	in := indent + "    "
+	return indent + "if (" + timespecValidCond("ts") + ") {\n" +
+		in + "if (" + timespecOverflowCond("ts", in+"    ") + ") {\n" +
+		in + "    ev->requested_ns = " + sleepRequestedNsSaturated + ";\n" +
+		in + "} else {\n" +
+		in + "    ev->requested_ns = " + timespecNsExpr("ts") + ";\n" +
+		in + "}\n" +
+		indent + "}\n"
 }
 
 // keyctlFieldSpec describes the three fields captured for keyctl-family syscalls.

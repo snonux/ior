@@ -402,7 +402,7 @@ not sufficient.
     1-in-N counts until the filter is cleared.
 - **Additional metric dimensions**:
   - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
-  - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints).
+  - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints): `-1` when unknown (null/unreadable or kernel-invalid timespec, absolute `TIMER_ABSTIME` sleeps); valid requests too large for `__s64` saturate to `S64_MAX` like the kernel's `KTIME_MAX` clamp (`generateExtraSleep`).
 - **The trace-started signal is a promise, not a progress report**: in TUI mode
   `setupTraceInfra` closing the `started` channel is what makes
   `tuiTraceStarterFromRunTrace` report success, and from that moment nothing is

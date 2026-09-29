@@ -2271,12 +2271,19 @@ func TestGenerateClockNanosleepHandlerSkipsAbsoluteSleeps(t *testing.T) {
 	// The flags check on args[1] against TIMER_ABSTIME (value 1) must be present,
 	// guarding the relative-duration assignment.
 	requireContains(t, output, "if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {")
-	// The duration is computed inside the guard (relative branch only); the abs
-	// branch leaves the -1 sentinel set above.
+	// The validated duration is computed inside the guard (relative branch
+	// only); the abs branch leaves the -1 sentinel set above.
 	requireContains(t, output,
 		"        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {\n"+
 			"            if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {\n"+
-			"                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"                if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL) {\n"+
+			"                    if (ts.tv_sec > 9223372036LL ||\n"+
+			"                        (ts.tv_sec == 9223372036LL && ts.tv_nsec > 854775807LL)) {\n"+
+			"                        ev->requested_ns = 9223372036854775807LL /* S64_MAX */;\n"+
+			"                    } else {\n"+
+			"                        ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"                    }\n"+
+			"                }\n"+
 			"            }\n        }")
 }
 
