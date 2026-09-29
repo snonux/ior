@@ -50,13 +50,16 @@ type snapshotAppender interface {
 type Model struct {
 	source Source
 
-	// allEvents, filtered and blankLines are owned by the model and their
-	// backing arrays are reused across Refresh calls (see takeSnapshot,
-	// applyFilter and blankContentLines), so no caller may retain them
-	// beyond a synchronous use.
-	allEvents  []StreamEvent
-	filtered   []StreamEvent
-	blankLines []string
+	// filtered and blankLines are owned by the model and their backing
+	// arrays are reused across Refresh calls (see applyFilter and
+	// blankContentLines), so no caller may retain them beyond a synchronous
+	// use. allEvents is reused the same way (see takeSnapshot), but only
+	// while ownsAllEvents is set: a Source's plain Snapshot result may alias
+	// storage the source still uses, so it must never be written into.
+	allEvents     []StreamEvent
+	ownsAllEvents bool
+	filtered      []StreamEvent
+	blankLines    []string
 
 	filter      Filter
 	filterStack []string
@@ -611,6 +614,7 @@ func (m *Model) Refresh() {
 	}
 	if m.source == nil {
 		m.allEvents = []StreamEvent{}
+		m.ownsAllEvents = false
 		m.filtered = []StreamEvent{}
 		m.scrollOffset = 0
 		m.viewport.SetContentLines(nil)
@@ -622,15 +626,26 @@ func (m *Model) Refresh() {
 	m.applyFilter()
 }
 
-// takeSnapshot replaces allEvents with the source's current rows, reusing
-// allEvents' backing array when the source supports AppendSnapshot. Nothing
-// outside the model holds allEvents, so overwriting it in place is safe.
+// takeSnapshot replaces allEvents with the source's current rows. When the
+// source supports AppendSnapshot it appends into allEvents' backing array,
+// but only if that array was allocated by an earlier AppendSnapshot here
+// (ownsAllEvents); nothing outside the model holds such an array, so
+// overwriting it in place is safe. A plain Snapshot result is kept as is
+// and marked not owned: the Source contract does not promise a private
+// copy (a test sink may return its internal slice), and reusing it after a
+// SetSource switch would clobber the previous source's storage.
 func (m *Model) takeSnapshot() {
 	if appender, ok := m.source.(snapshotAppender); ok {
-		m.allEvents = appender.AppendSnapshot(m.allEvents[:0])
+		var dst []StreamEvent
+		if m.ownsAllEvents {
+			dst = m.allEvents[:0]
+		}
+		m.allEvents = appender.AppendSnapshot(dst)
+		m.ownsAllEvents = true
 		return
 	}
 	m.allEvents = m.source.Snapshot()
+	m.ownsAllEvents = false
 }
 
 // applyFilter rebuilds filtered from allEvents and re-syncs the viewport.

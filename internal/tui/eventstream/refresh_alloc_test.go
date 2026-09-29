@@ -73,8 +73,7 @@ func TestRefreshFullBufferAllocations(t *testing.T) {
 // TestRefreshReusedBuffersTrackShrinkingSource checks the buffer reuse is
 // invisible to readers: after the ring is reset and refilled with fewer
 // rows, the model shows exactly the new rows (no stale tail from the larger
-// previous snapshot), and a later snapshot does not rewrite rows handed out
-// by the previous one's filter results.
+// previous snapshot), and an emptied source clears the view.
 func TestRefreshReusedBuffersTrackShrinkingSource(t *testing.T) {
 	rb := NewRingBuffer()
 	pushEvents(rb, 50)
@@ -128,6 +127,51 @@ func TestRefreshFallsBackToSnapshotForPlainSource(t *testing.T) {
 	m.Refresh()
 	if len(m.allEvents) != 2 || len(m.filtered) != 1 || m.filtered[0].Seq != 2 {
 		t.Fatalf("plain source: allEvents=%d filtered=%+v", len(m.allEvents), m.filtered)
+	}
+}
+
+// aliasingSource returns its internal slice from Snapshot, which the plain
+// Source contract permits (internal/ior_runtime_wiring_test.go's
+// fakeEventSink does the same).
+type aliasingSource struct{ rows []StreamEvent }
+
+func (s *aliasingSource) Len() int { return len(s.rows) }
+
+func (s *aliasingSource) Snapshot() []StreamEvent { return s.rows }
+
+// TestRefreshNeverWritesIntoForeignSnapshot guards the allEvents reuse: a
+// slice obtained from a plain Snapshot is not owned by the model, so after
+// switching to an AppendSnapshot source the next refresh must allocate its
+// own buffer instead of overwriting the previous source's storage.
+func TestRefreshNeverWritesIntoForeignSnapshot(t *testing.T) {
+	old := &aliasingSource{rows: make([]StreamEvent, 2, 64)}
+	old.rows[0] = StreamEvent{Seq: 1, Syscall: "read", FD: UnknownFD}
+	old.rows[1] = StreamEvent{Seq: 2, Syscall: "read", FD: UnknownFD}
+	m := NewModel(old)
+	m.SetViewport(160, 40)
+	m.Refresh()
+
+	rb := NewRingBuffer()
+	for i := range 5 {
+		rb.Push(StreamEvent{Seq: uint64(100 + i), Syscall: "write", FD: UnknownFD})
+	}
+	m.SetSource(rb)
+	if len(m.allEvents) != 5 || m.allEvents[0].Seq != 100 {
+		t.Fatalf("after SetSource: allEvents=%+v", m.allEvents)
+	}
+	backing := old.rows[:cap(old.rows)]
+	for i, want := range []uint64{1, 2, 0, 0, 0} {
+		if backing[i].Seq != want {
+			t.Fatalf("previous source storage clobbered: row %d seq = %d, want %d", i, backing[i].Seq, want)
+		}
+	}
+
+	// Once the model owns its buffer, reuse resumes (no reallocation).
+	m.Refresh()
+	owned := &m.allEvents[0]
+	m.Refresh()
+	if &m.allEvents[0] != owned {
+		t.Fatal("owned allEvents buffer was not reused across refreshes")
 	}
 }
 
