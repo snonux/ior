@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,5 +147,92 @@ func TestNewEventLoopConfigCarriesKernelProcessScope(t *testing.T) {
 	unscoped := newEventLoopConfig(flags.NewFlags())
 	if unscoped.pidFilter != -1 || unscoped.tidFilter != -1 {
 		t.Fatalf("default pidFilter/tidFilter = %d/%d, want -1/-1", unscoped.pidFilter, unscoped.tidFilter)
+	}
+}
+
+// gatedAggregateSource counts Drain calls and, while armed, parks the next
+// Drain until release is closed, signalling entered first. It lets a test
+// hold the drainer's lock inside the final drain.
+type gatedAggregateSource struct {
+	pendingAggregateSource
+	drains  atomic.Int32
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *gatedAggregateSource) Drain() ([]statsengine.SyscallAggregate, error) {
+	s.drains.Add(1)
+	if s.armed.CompareAndSwap(true, false) {
+		close(s.entered)
+		<-s.release
+	}
+	return s.pendingAggregateSource.Drain()
+}
+
+func newFutexDrainer(src syscallAggregateSource) *aggregateDrainer {
+	return newAggregateDrainer(src,
+		map[types.TraceId]struct{}{types.SYS_ENTER_FUTEX: {}},
+		kernelProcessScope{},
+		func() globalfilter.Filter { return globalfilter.Filter{} })
+}
+
+// TestSwapFilterAfterDrainerStopDrainsNothing covers a SetFilter that loaded
+// the drainer pointer before stop unpublished it and calls SwapFilter only
+// after stop returned (when the BPF map may already be closed): the final
+// drain retired the drainer, so the swap must not drain or handle anything.
+func TestSwapFilterAfterDrainerStopDrainsNothing(t *testing.T) {
+	src := &gatedAggregateSource{}
+	d := newFutexDrainer(src)
+	handled := 0
+	stop := d.Start(context.Background(), time.Hour, func(aggregateDrainResult) { handled++ })
+	stop()
+	drainsAtStop, handledAtStop := src.drains.Load(), handled
+
+	src.add(types.SYS_ENTER_FUTEX, 3)
+	applied := false
+	d.SwapFilter(func() { applied = true })
+
+	if !applied {
+		t.Fatal("SwapFilter after stop did not apply the new filter")
+	}
+	if got := src.drains.Load(); got != drainsAtStop {
+		t.Fatalf("Drain calls = %d after late SwapFilter, want %d (retired drainer)", got, drainsAtStop)
+	}
+	if handled != handledAtStop {
+		t.Fatalf("handle calls = %d, want %d", handled, handledAtStop)
+	}
+	if got := src.pendingCount(types.SYS_ENTER_FUTEX); got != 3 {
+		t.Fatalf("pending futex = %d, want 3 (not drained)", got)
+	}
+}
+
+// TestSwapFilterBlockedDuringFinalDrainDrainsNothing is the concurrent
+// variant: the SwapFilter waits on the drainer lock while the final drain
+// runs, and must find the drainer retired once it gets the lock.
+func TestSwapFilterBlockedDuringFinalDrainDrainsNothing(t *testing.T) {
+	src := &gatedAggregateSource{entered: make(chan struct{}), release: make(chan struct{})}
+	d := newFutexDrainer(src)
+	stop := d.Start(context.Background(), time.Hour, func(aggregateDrainResult) {})
+
+	src.armed.Store(true)
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	<-src.entered // the final drain now holds the drainer lock
+
+	swapped := make(chan struct{})
+	go func() { d.SwapFilter(func() {}); close(swapped) }()
+	time.Sleep(20 * time.Millisecond) // let SwapFilter block on the lock
+	close(src.release)
+	<-stopped
+	<-swapped
+
+	if got := src.drains.Load(); got != 1 {
+		t.Fatalf("Drain calls = %d, want 1 (only the final drain)", got)
+	}
+	src.add(types.SYS_ENTER_FUTEX, 7)
+	d.SwapFilter(func() {})
+	if got := src.pendingCount(types.SYS_ENTER_FUTEX); got != 7 {
+		t.Fatalf("pending futex = %d, want 7 (retired drainer never drains)", got)
 	}
 }

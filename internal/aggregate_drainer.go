@@ -35,10 +35,21 @@ type aggregateDrainer struct {
 
 	// mu serialises every drain-and-handle cycle (poll ticks, the final
 	// drain, and the flush of SwapFilter), so a filter swap can never land
-	// between one cycle's Drain and its ingest. handle is the sink Start
-	// wired; it is nil until Start runs, which makes SwapFilter a plain swap.
-	mu     sync.Mutex
+	// between one cycle's Drain and its ingest. It also guards handle,
+	// source (once Start ran) and stopping.
+	mu sync.Mutex
+	// handle is the sink Start wired. It is nil before Start and after the
+	// drainer retired; SwapFilter is then a plain swap that drains nothing.
 	handle func(aggregateDrainResult)
+	// stopping is set by the stop function Start returns; the next poll
+	// cycle (normally the final drain) then retires the drainer under mu by
+	// clearing handle and source. From then on no call drains: the BPF map
+	// behind source may already be closed (infra.Close runs once the event
+	// loop's run returns), and draining it would read a freed libbpf object.
+	// A SwapFilter that loaded the drainer before it was unpublished and
+	// waited on mu during the final drain thus finds it retired and only
+	// swaps.
+	stopping bool
 }
 
 func newAggregateDrainer(
@@ -72,7 +83,8 @@ func (d *aggregateDrainer) Tick() aggregateDrainResult {
 
 // Start polls the aggregate map every `every` until ctx is cancelled or the
 // returned stop function runs; stop performs a final drain so the last partial
-// interval is still ingested (see startPollLoop).
+// interval is still ingested (see startPollLoop) and retires the drainer in the
+// same locked cycle, so no later call can drain a closed source.
 func (d *aggregateDrainer) Start(ctx context.Context, every time.Duration, handle func(aggregateDrainResult)) func() {
 	if d == nil || d.source == nil {
 		return func() {}
@@ -80,14 +92,28 @@ func (d *aggregateDrainer) Start(ctx context.Context, every time.Duration, handl
 	d.mu.Lock()
 	d.handle = handle
 	d.mu.Unlock()
-	return startPollLoop(ctx, every, d.flush)
+	stopLoop := startPollLoop(ctx, every, d.pollCycle)
+	return func() {
+		d.mu.Lock()
+		d.stopping = true
+		d.mu.Unlock()
+		stopLoop()
+	}
 }
 
-// flush runs one drain-and-handle cycle under mu.
-func (d *aggregateDrainer) flush() {
+// pollCycle is one poll-loop cycle: drain and handle under mu and, once stop
+// was requested, retire the drainer in that same critical section. Normally
+// that is startPollLoop's final drain; a ticker cycle racing the stop request
+// may retire it first, which only moves the last drain a few microseconds
+// earlier - the source is still open until stop returns.
+func (d *aggregateDrainer) pollCycle() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.flushLocked()
+	if d.stopping {
+		d.handle = nil
+		d.source = nil
+	}
 }
 
 func (d *aggregateDrainer) flushLocked() {
@@ -107,7 +133,8 @@ func (d *aggregateDrainer) flushLocked() {
 // reset then discards. What remains is the few-microsecond window between
 // SwapFilter returning and the caller's stats reset: counts drained there go
 // to the old baseline and are dropped by the reset (an undercount of that
-// window, never a pre-swap count in the new baseline).
+// window, never a pre-swap count in the new baseline). Once the drainer
+// retired (see pollCycle), SwapFilter drains nothing and only runs apply.
 func (d *aggregateDrainer) SwapFilter(apply func()) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
