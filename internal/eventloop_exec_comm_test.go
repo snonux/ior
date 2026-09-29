@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
@@ -973,5 +974,125 @@ func TestLookupInFlightAcrossAStalenessSweepLandsStale(t *testing.T) {
 	// read under is the current one.
 	if stale, _ := commEntryStale(resolver, execCommTid); stale {
 		t.Fatal("the healing re-read must land clean, otherwise re-resolution never terminates")
+	}
+}
+
+// TestProcessExecEventDropsCloseOnExecDescriptors is the regression test for
+// the stale-descriptor bug: a process opens /etc/app.conf O_CLOEXEC as fd 7
+// and execs; the kernel closes fd 7, and the new program gets fd 7 back from a
+// syscall ior does not trace. Without the eviction on the sched_process_exec
+// record, every later row on fd 7 reported /etc/app.conf with the old
+// program's O_RDONLY|O_CLOEXEC flags.
+func TestProcessExecEventDropsCloseOnExecDescriptors(t *testing.T) {
+	const staleName = "/etc/app.conf"
+	const staleFd = 7
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	if ep := feedOpenPairWithFlags(t, el, staleName, execCommPid, execCommTid, staleFd,
+		syscall.O_RDONLY|syscall.O_CLOEXEC); ep != nil {
+		ep.Recycle()
+	}
+	verifyFileDescriptor(t, el, execCommPid, staleFd, staleName)
+
+	el.processRawEvent(makeProcessExecEvent(t, defaulTime+1, execCommPid, execCommTid, "newprog"),
+		make(chan *event.Pair, 1))
+
+	verifyFdNotTracked(t, el, execCommPid, staleFd)
+	ep := feedReadPairForPid(t, el, execCommPid, execCommTid, staleFd)
+	if ep == nil {
+		t.Fatal("expected the post-exec read to produce a row")
+	}
+	defer ep.Recycle()
+	if got := ep.File.Name(); got == staleName {
+		t.Fatalf("post-exec row on fd %d still reports the pre-exec file %q", staleFd, got)
+	}
+}
+
+// TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive pins which entries
+// the exec record evicts: exactly those not known to survive execve(2). The
+// close-on-exec state is exercised through every way the tracker learns it
+// (open flags, F_SETFD-style MergeFlags in both directions, close_range's
+// CLOSE_RANGE_CLOEXEC via addFlagsRange), plus the unknown cases that must be
+// dropped conservatively, and another pid that must stay untouched.
+func TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive(t *testing.T) {
+	const otherPid = execCommPid + 1
+	cases := []struct {
+		name  string
+		fd    int32
+		entry func() file.File
+		keep  bool
+	}{
+		{"opened O_CLOEXEC", 10, func() file.File { return file.NewFd(10, "/a", syscall.O_RDONLY|syscall.O_CLOEXEC) }, false},
+		{"opened without O_CLOEXEC", 11, func() file.File { return file.NewFd(11, "/b", syscall.O_RDWR) }, true},
+		{"F_SETFD set FD_CLOEXEC later", 12, func() file.File {
+			f := file.NewFd(12, "/c", syscall.O_RDONLY)
+			f.MergeFlags(syscall.O_CLOEXEC, syscall.O_CLOEXEC)
+			return f
+		}, false},
+		{"F_SETFD cleared FD_CLOEXEC later", 13, func() file.File {
+			f := file.NewFd(13, "/d", syscall.O_RDONLY|syscall.O_CLOEXEC)
+			f.MergeFlags(syscall.O_CLOEXEC, 0)
+			return f
+		}, true},
+		{"known clear, status flags unknown", 14, func() file.File {
+			f := file.NewFd(14, "/e", -1)
+			f.MergeFlags(syscall.O_CLOEXEC, 0)
+			return f
+		}, true},
+		{"flags entirely unknown", 15, func() file.File { return file.NewFd(15, "/f", -1) }, false},
+		{"not an FdFile", 16, func() file.File { return file.NewPathname([]byte("/g")) }, false},
+	}
+
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	fds := el.fdState()
+	for _, tc := range cases {
+		fds.set(tc.fd, execCommPid, tc.entry())
+	}
+	// close_range(17, 17, CLOSE_RANGE_CLOEXEC) on a known-clear descriptor.
+	fds.set(17, execCommPid, file.NewFd(17, "/h", syscall.O_RDONLY))
+	fds.addFlagsRange(17, 17, execCommPid, syscall.O_CLOEXEC)
+	fds.set(10, otherPid, file.NewFd(10, "/other", syscall.O_RDONLY|syscall.O_CLOEXEC))
+	fds.setProcFdCache(20, execCommPid, file.NewFd(20, "/cached", syscall.O_RDONLY))
+	fds.setProcFdCache(20, otherPid, file.NewFd(20, "/cached-other", syscall.O_RDONLY))
+
+	// An empty comm makes the record useless as a label, but the exec still
+	// happened, so the eviction must not hide behind the comm early return.
+	el.processRawEvent(makeProcessExecEvent(t, defaulTime, execCommPid, execCommTid, ""),
+		make(chan *event.Pair, 1))
+
+	for _, tc := range cases {
+		_, tracked := fds.files[fdKey(execCommPid, tc.fd)]
+		if tracked != tc.keep {
+			t.Errorf("%s: fd %d tracked after exec = %v, want %v", tc.name, tc.fd, tracked, tc.keep)
+		}
+	}
+	verifyFdNotTracked(t, el, execCommPid, 17)
+	if _, ok := fds.fileAges[fdKey(execCommPid, 10)]; ok {
+		t.Error("evicted fd 10 left its LRU age behind")
+	}
+	if _, ok := fds.procFdCache[fdKey(execCommPid, 20)]; ok {
+		t.Error("exec'ing pid's procfs cache entry survived the exec")
+	}
+	verifyFileDescriptor(t, el, otherPid, 10, "/other")
+	if _, ok := fds.procFdCache[fdKey(otherPid, 20)]; !ok {
+		t.Error("another pid's procfs cache entry was dropped by this pid's exec")
+	}
+	// A surviving descriptor must keep its pid registered so a later exit
+	// still evicts it (pidPresent must never miss).
+	fds.deletePid(execCommPid)
+	verifyFdNotTracked(t, el, execCommPid, 11)
+}
+
+// TestDropOnExecIgnoresUnregisteredPids covers the fast paths: a zero-value
+// tracker must not panic, and an exec of a pid that never registered a
+// descriptor must leave every other pid alone.
+func TestDropOnExecIgnoresUnregisteredPids(t *testing.T) {
+	(&fdTracker{}).dropOnExec(execCommPid)
+
+	fds := newFDTracker(nil)
+	fds.dropOnExec(execCommPid)
+	fds.set(3, execCommPid, file.NewFd(3, "/x", syscall.O_RDONLY|syscall.O_CLOEXEC))
+	fds.dropOnExec(execCommPid + 1)
+	if _, ok := fds.get(3, execCommPid); !ok {
+		t.Fatal("exec of an unregistered pid evicted another pid's descriptor")
 	}
 }

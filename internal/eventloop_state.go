@@ -221,6 +221,66 @@ func (t *fdTracker) deletePid(pid uint32) {
 	delete(t.pidPresent, pid)
 }
 
+// dropOnExec forgets the descriptors of pid that a successful execve(2) closed.
+// Called from handleProcessExecEvent on a sched_process_exec control record:
+// the kernel closes every FD_CLOEXEC descriptor of the exec'ing process
+// (do_close_on_exec), so an entry that stayed here would keep labelling the
+// new program's rows with the old program's file whenever it reuses that
+// descriptor number through a syscall ior does not trace (socket, recvmsg
+// SCM_RIGHTS, ... under the default FS-only trace set).
+//
+// Only pid's slice is touched. Threads share their process's table and all
+// but the exec'ing one are killed by de_thread, and the table is keyed by
+// tgid; a process sharing the table via CLONE_FILES without being a thread
+// gets its own copy before the closes (unshare_files in begin_new_exec), so
+// its entries, keyed by its own tgid, are unaffected.
+//
+// The fd table keeps an entry only when its close-on-exec state is known to
+// be clear (survivesExec). Unknown state is dropped on purpose: the costs are
+// asymmetric. Dropping a descriptor that in fact survived costs one lazy
+// procfs re-resolution on its next use (resolve -> /proc/<pid>/fd/<fd>),
+// which answers correctly for a live descriptor; keeping one the kernel
+// closed mislabels every later row on that number with a name procfs would
+// never have reported.
+//
+// The procfs cache is dropped for pid wholesale. Its entries are snapshots
+// taken at first use - possibly an empty name for a descriptor that did not
+// exist yet - so their close-on-exec bit is no stronger than a guess about
+// the current table, and re-reading procfs after exec is cheap and exact.
+//
+// pidPresent is left alone: it may over-approximate (see its field comment),
+// and a surviving entry must keep pid registered for deletePid.
+func (t *fdTracker) dropOnExec(pid uint32) {
+	if t.pidPresent == nil {
+		return
+	}
+	if _, ok := t.pidPresent[pid]; !ok {
+		return
+	}
+	for _, key := range pidKeys(t.files, pid) {
+		if !survivesExec(t.files[key]) {
+			delete(t.files, key)
+			delete(t.fileAges, key)
+		}
+	}
+	for _, key := range pidKeys(t.procFdCache, pid) {
+		t.deleteCacheKey(key)
+	}
+}
+
+// survivesExec reports whether a tracked descriptor is known to stay open
+// across execve(2): only an *FdFile whose FD_CLOEXEC state is known and clear
+// qualifies. Any other File, or an unknown state, counts as closed (see
+// dropOnExec for why unknown resolves that way).
+func survivesExec(f file.File) bool {
+	fdFile, ok := f.(*file.FdFile)
+	if !ok {
+		return false
+	}
+	set, known := fdFile.CloseOnExec()
+	return known && !set
+}
+
 // pidKeys returns the composite keys of m that belong to pid. Collected first
 // so the caller can delete while iterating (see fdKeysInRange).
 func pidKeys[V any](m map[uint64]V, pid uint32) []uint64 {
