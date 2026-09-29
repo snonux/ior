@@ -392,6 +392,15 @@ not sufficient.
     (`buildAggregateIngestTraceIDs`), so TUI/stats counts, error counts,
     latency totals and the latency histogram for sampled syscalls are the true
     full-population values with no double counting and no scaling estimate.
+  - The partition also holds without a per-tid enter state
+    (`syscall_enter_state_map` full, clone/fork child exits, exec by a
+    non-leader thread, syscalls in flight at attach): a failed enter-state
+    write is counted *untimed* into the aggregate at sys_enter unless the rate
+    is `1`, and a stateless or mismatched sys_exit is emitted only at rate `1`
+    and never counted (see "Enter state and its two fallbacks" in
+    `internal/c/filter.c`). Untimed counts bump `count` only; userspace reports
+    them as `SyscallAggregate.UntimedCount` and keeps them out of min/max and
+    the latency sparkline.
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
     rows, file/process attribution, byte totals, gaps, and latency percentiles
     come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,
