@@ -59,6 +59,11 @@ struct {
     __type(value, __s32);
 } eventfd_flags_map SEC(".maps");
 
+// syscall_enter_state_map carries each tid's in-flight syscall from sys_enter
+// to sys_exit. It is bounded, so a write can fail on a host with more threads
+// parked in traced syscalls than entries; ior_on_syscall_enter and
+// ior_on_syscall_exit (internal/c/filter.c, "Enter state and its two
+// fallbacks") keep the aggregate/ring-buffer partition exact when it does.
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 32768);

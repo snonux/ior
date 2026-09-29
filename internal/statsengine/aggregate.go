@@ -11,6 +11,24 @@ type SyscallAggregate struct {
 	MinLatencyNs       uint64
 	MaxLatencyNs       uint64
 	LatencyHistogramNs [8]uint64
+	// UntimedCount is the part of Count that has no latency: invocations the
+	// kernel counted without a start timestamp because its per-tid enter
+	// state could not be recorded (ior_count_untimed_syscall in
+	// internal/c/filter.c). They add to Count but not to TotalLatencyNs, the
+	// histogram or Min/MaxLatencyNs, and a row made only of them carries no
+	// latency extrema at all. Zero means every counted invocation is timed.
+	// Means that divide total latency by the full count (per-syscall and
+	// overall mean) are diluted by them; that is accepted, because they only
+	// appear once the kernel's enter-state map is full.
+	UntimedCount uint64
+}
+
+// timedCount returns the invocations of row that carry a latency.
+func (row SyscallAggregate) timedCount() uint64 {
+	if row.UntimedCount >= row.Count {
+		return 0
+	}
+	return row.Count - row.UntimedCount
 }
 
 // IngestSyscallAggregates folds kernel aggregate rows into the engine.
@@ -36,8 +54,10 @@ func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 		e.syscalls.AddAggregate(row)
 		e.latencyHist.AddBucketCounts(row.LatencyHistogramNs)
 
+		// The latency series is an average over timed invocations only;
+		// untimed ones contribute no latency and would drag it down.
 		batchLatency += row.TotalLatencyNs
-		batchCount += row.Count
+		batchCount += row.timedCount()
 	}
 	if batchCount > 0 {
 		e.latencySeries.Add(float64(batchLatency)/float64(batchCount), now)

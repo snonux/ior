@@ -29,6 +29,9 @@ type syscallStats struct {
 	totalLatency uint64
 	minLatency   uint64
 	maxLatency   uint64
+	// untimedCount is the part of count that carries no latency (see
+	// SyscallAggregate.UntimedCount); min/max track the timed rest only.
+	untimedCount uint64
 
 	seenLatencies uint64
 	samples       []uint64
@@ -139,11 +142,19 @@ func (a *syscallAccumulator) AddAggregate(row SyscallAggregate) {
 		a.byID[row.TraceID] = stats
 	}
 
-	prevCount := stats.count
+	// Only a row with timed invocations has latency extrema; a row of
+	// untimed counts carries min = max = 0, which must neither seed nor lower
+	// the minimum. Likewise the minimum is seeded by the first *timed*
+	// invocation, not by the first counted one.
+	hadTimed := stats.timedCount() > 0
 	stats.count += row.Count
+	stats.untimedCount += row.Count - row.timedCount()
 	stats.errorCount += row.Errors
 	stats.totalLatency += row.TotalLatencyNs
-	if prevCount == 0 || row.MinLatencyNs < stats.minLatency {
+	if row.timedCount() == 0 {
+		return
+	}
+	if !hadTimed || row.MinLatencyNs < stats.minLatency {
 		stats.minLatency = row.MinLatencyNs
 	}
 	if row.MaxLatencyNs > stats.maxLatency {
@@ -263,8 +274,15 @@ func buildSyscallSnapshots(inputs []syscallSnapshotInput, elapsed time.Duration)
 	return result, nil
 }
 
+// timedCount returns how many of the counted invocations carry a latency.
+func (s *syscallStats) timedCount() uint64 {
+	return s.count - s.untimedCount
+}
+
+// updateMinMax folds one timed invocation, already included in count, into
+// the latency extrema; the first timed one seeds the minimum.
 func (s *syscallStats) updateMinMax(duration uint64) {
-	if s.count == 1 || duration < s.minLatency {
+	if s.timedCount() == 1 || duration < s.minLatency {
 		s.minLatency = duration
 	}
 	if duration > s.maxLatency {
