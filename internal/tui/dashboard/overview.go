@@ -174,14 +174,11 @@ func summarizeHistogramBrief(hist statsengine.HistogramSnapshot) string {
 	return strings.Join(parts, ", ")
 }
 
+// trimPathTail shortens path to at most max display cells, keeping its end
+// (the file name) behind a "..." prefix. It delegates to common.TruncateLeft,
+// which cuts on grapheme boundaries so multi-byte paths stay valid UTF-8.
 func trimPathTail(path string, max int) string {
-	if len(path) <= max {
-		return path
-	}
-	if max <= 3 {
-		return path[len(path)-max:]
-	}
-	return "..." + path[len(path)-max+3:]
+	return common.TruncateLeft(path, max, common.ASCIIEllipsis)
 }
 
 func formatElapsed(elapsed time.Duration) string {

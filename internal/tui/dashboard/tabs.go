@@ -3,7 +3,6 @@ package dashboard
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	common "ior/internal/tui/common"
 
@@ -159,7 +158,7 @@ func appendStatusText(base, status string, width int) string {
 		return base + separator + status
 	}
 	statusText := truncatePlain(status, width)
-	room := width - utf8.RuneCountInString(statusText) - utf8.RuneCountInString(separator)
+	room := width - common.DisplayWidth(statusText) - common.DisplayWidth(separator)
 	if room < 1 {
 		return statusText
 	}
@@ -175,18 +174,11 @@ func tabLabel(tab Tab, short bool) string {
 	return lookupTab(tab).ShortName
 }
 
+// truncatePlain shortens s to at most width display cells, ending in "…" when
+// cut. It measures terminal cells rather than runes (common.TruncateRight), so
+// wide CJK/emoji text in filter or status strings cannot overflow the row.
 func truncatePlain(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(s) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	r := []rune(s)
-	return string(r[:width-1]) + "…"
+	return common.TruncateRight(s, width, common.Ellipsis)
 }
 
 // renderTabBarPlain renders a plain-text tab bar suitable for narrow terminals.
@@ -204,16 +196,7 @@ func renderTabBarPlain(active Tab, width int) string {
 	}
 	text := strings.Join(parts, " ")
 	if width > 0 {
-		text = truncatePlain(text, width)
-		padding := width - utf8.RuneCountInString(text)
-		if padding > 0 {
-			// Use a Builder to avoid a redundant allocation when right-padding to width.
-			var b strings.Builder
-			b.Grow(len(text) + padding)
-			b.WriteString(text)
-			b.WriteString(strings.Repeat(" ", padding))
-			return b.String()
-		}
+		return common.FitRight(text, width, common.Ellipsis)
 	}
 	return text
 }

@@ -236,27 +236,12 @@ func formatDurationNs(v uint64) string {
 	return fmt.Sprintf("%.2fs", s)
 }
 
-func truncateMiddle(path string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(path) <= limit {
-		return path
-	}
-	if limit <= 3 {
-		return path[:limit]
-	}
-
-	head := (limit - 3) / 2
-	tail := limit - 3 - head
-	if tail <= 0 {
-		return path[:limit]
-	}
-	return path[:head] + "..." + path[len(path)-tail:]
-}
-
+// fitCell flattens s onto one line and shortens it to at most width display
+// cells, keeping both ends joined by "..." (the middle of a long path is the
+// least informative part). The cut is grapheme- and display-width-aware, so
+// non-ASCII file names never turn into invalid UTF-8; the table pads the rest.
 func fitCell(s string, width int) string {
-	return truncateMiddle(sanitizeOneLine(s), width)
+	return common.TruncateMiddle(sanitizeOneLine(s), width, common.ASCIIEllipsis)
 }
 
 func sanitizeOneLine(s string) string {

@@ -9,6 +9,7 @@ import (
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
+	common "ior/internal/tui/common"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -237,12 +238,12 @@ func tuiParquetMetadata() parquet.FileMetadata {
 	return parquet.NewFileMetadata("tui")
 }
 
+// shortenRecordingPath keeps the status-line recording path within 36 display
+// cells, preserving its end (the file name) behind a "..." prefix. The cut is
+// grapheme-aware (common.TruncateLeft) so non-ASCII paths stay valid UTF-8.
 func shortenRecordingPath(path string) string {
-	const maxLen = 36
-	if len(path) <= maxLen {
-		return path
-	}
-	return "..." + path[len(path)-maxLen+3:]
+	const maxWidth = 36
+	return common.TruncateLeft(path, maxWidth, common.ASCIIEllipsis)
 }
 
 // autoResetCycle is the ordered set of cadences exposed via the `I` hotkey.

@@ -3,6 +3,7 @@ package eventstream
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"ior/internal/tui/common"
 
@@ -250,6 +251,35 @@ func TestComputeColumnLayoutNonPositiveWidthUsesDefault(t *testing.T) {
 	for _, width := range []int{0, -1} {
 		if got := computeColumnLayout(width); got != want {
 			t.Fatalf("width %d: got %+v, want %+v", width, got, want)
+		}
+	}
+}
+
+// TestFitCellMultiByteFileName is the regression for byte-based middle
+// truncation: cutting "/data/日本語のファイル名.txt" at byte offsets split a
+// multi-byte rune and rendered invalid glyphs. fitCell must keep whole
+// graphemes and stay within the column's display width.
+func TestFitCellMultiByteFileName(t *testing.T) {
+	tests := []struct {
+		in    string
+		width int
+		want  string
+	}{
+		{"/data/日本語のファイル名.txt", 20, "/data/日...ル名.txt"},
+		{"/data/日本語のファイル名.txt", 3, "/da"},
+		// The newline is flattened to a space ("日本 語", 7 cells); the
+		// 1-cell head budget cannot hold 日, so its cell goes to the tail.
+		{"日本\n語", 5, "...語"},
+		{"x", 0, ""},
+		{"x", -1, ""},
+	}
+	for _, tc := range tests {
+		got := fitCell(tc.in, tc.width)
+		if got != tc.want {
+			t.Fatalf("fitCell(%q, %d) = %q, want %q", tc.in, tc.width, got, tc.want)
+		}
+		if !utf8.ValidString(got) || common.DisplayWidth(got) > max(tc.width, 0) {
+			t.Fatalf("fitCell(%q, %d) = %q: invalid UTF-8 or too wide", tc.in, tc.width, got)
 		}
 	}
 }

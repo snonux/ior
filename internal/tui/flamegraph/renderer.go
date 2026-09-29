@@ -12,7 +12,6 @@ import (
 	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 const pathSeparator = "\x1f"
@@ -1082,12 +1081,14 @@ func percentOfTotal(value, total uint64) float64 {
 	return 100 * float64(value) / float64(total)
 }
 
-// padOrTrim fits s into exactly width terminal cells. It measures and cuts by
-// display width (ansi.StringWidth/ansi.Truncate), not rune count: a CJK or
-// emoji rune takes two cells, so counting runes let a wide-character frame
-// name overflow its cell and push the whole row past the viewport. When s is
-// too wide it is cut and ends in "…"; Truncate never splits a wide rune, so
-// the result can be one cell short and is then space-padded to width.
+// padOrTrim fits s into exactly width terminal cells via the shared
+// common.FitRight. It measures and cuts by display width, not rune count: a
+// CJK or emoji rune takes two cells, so counting runes let a wide-character
+// frame name overflow its cell and push the whole row past the viewport. When
+// s is too wide it is cut and ends in "…" (a 1-cell width hard-cuts to the
+// first cell, or shows "…" when that cell would be half of a wide rune); a
+// wide rune is never split, so the cut can be one cell short and is then
+// space-padded to width.
 //
 // The exact-width guarantee holds only for control-character-free input:
 // tabs, C1 bytes or an unterminated escape sequence are measured as zero
@@ -1095,14 +1096,5 @@ func percentOfTotal(value, total uint64) float64 {
 // padding (unterminated escape). padOrTrim does not sanitise; frame names and
 // paths are sanitised upstream (task io2).
 func padOrTrim(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if ansi.StringWidth(s) > width {
-		s = ansi.Truncate(s, width, "…")
-	}
-	if pad := width - ansi.StringWidth(s); pad > 0 {
-		s += strings.Repeat(" ", pad)
-	}
-	return s
+	return common.FitRight(s, width, common.Ellipsis)
 }
