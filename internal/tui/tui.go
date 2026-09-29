@@ -1599,7 +1599,9 @@ func (m *Model) View() tea.View {
 		if m.errorKind == errorScreenRecoverable {
 			hint = "esc  back  •  q  quit"
 		}
-		body := theme.ErrorStyle.Render(m.lastErr.Error()) + "\n\n" + theme.HelpBarStyle.Render(hint)
+		// Errors can echo traced or user-supplied paths; SanitizeLines keeps
+		// intentional line breaks but no escape sequence.
+		body := theme.ErrorStyle.Render(common.SanitizeLines(m.lastErr.Error())) + "\n\n" + theme.HelpBarStyle.Render(hint)
 		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(body)), title)
 	}
 	if m.helpOverlayVisible {

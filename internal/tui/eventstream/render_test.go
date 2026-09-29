@@ -283,3 +283,56 @@ func TestFitCellMultiByteFileName(t *testing.T) {
 		}
 	}
 }
+
+// hostileEvent carries attacker-controlled comm and file names: an OSC 8
+// hyperlink, SGR hidden text, a raw C1 CSI byte and DEL (task io2).
+func hostileEvent() StreamEvent {
+	return StreamEvent{
+		Syscall:  "openat",
+		Comm:     "a\x1b[8mhid\x7f",
+		PID:      1,
+		TID:      1,
+		FD:       3,
+		FileName: "/tmp/\x1b]8;;http://evil\aclick\x1b]8;;\a/\x9b31mred",
+	}
+}
+
+// assertNoInjectedEscapes fails when out contains one of the payloads'
+// terminal-control sequences or bytes. The theme's own styling may emit
+// ESC [ ... m, so it checks for the payload sequences specifically.
+func assertNoInjectedEscapes(t *testing.T, out string) {
+	t.Helper()
+	for _, bad := range []string{"\x1b]8", "\x1b[8m", "\a", "\x9b", "\x7f"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("output contains injected %q:\n%q", bad, out)
+		}
+	}
+}
+
+func TestRenderEventRowSanitizesEscapeSequences(t *testing.T) {
+	columns := streamColumns(120)
+	row := renderEventRow(hostileEvent(), columns, false, -1)
+	if strings.Contains(row, "\x1b") {
+		t.Fatalf("unstyled row contains ESC: %q", row)
+	}
+	if !utf8.ValidString(row) {
+		t.Fatalf("row is not valid UTF-8: %q", row)
+	}
+	layout := computeColumnLayout(120)
+	if got, want := common.DisplayWidth(row), rowWidth(&layout); got != want {
+		t.Fatalf("row width = %d, want %d: %q", got, want, row)
+	}
+}
+
+func TestRenderStreamAndFDTraceTablesSanitizeEscapeSequences(t *testing.T) {
+	ev := hostileEvent()
+	filter := Filter{Comm: &StringFilter{Pattern: ev.Comm}, File: &StringFilter{Pattern: ev.FileName}}
+	assertNoInjectedEscapes(t, RenderStreamTable(120, true, 1, 1, 1, 10, filter, []string{"comm~" + ev.Comm}, []StreamEvent{ev}, 0, 9))
+	assertNoInjectedEscapes(t, RenderFDTraceTable(120, 1, 3, 1, []StreamEvent{ev}))
+}
+
+func TestStreamFooterSanitizesStatusMessage(t *testing.T) {
+	m := &Model{}
+	m.SetStatusMessage("Exported: /tmp/\x1b]8;;http://evil\a.csv")
+	assertNoInjectedEscapes(t, m.appendStreamFooter("base", 0))
+}

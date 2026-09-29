@@ -321,7 +321,7 @@ func (m Model) buildProbeLines() []string {
 		lines = append(lines, "  (no probes)")
 	}
 	if m.lastErr != "" {
-		lines = append(lines, "", "Error: "+m.lastErr)
+		lines = append(lines, "", "Error: "+common.Sanitize(m.lastErr))
 	}
 	lines = append(lines, "", "j/k move • space|enter toggle • a all-on • n all-off • / search • esc close")
 	return lines
@@ -344,7 +344,7 @@ func (m Model) renderProbeRow(p probemanager.ProbeState, selected bool) string {
 	lb.WriteString(fmt.Sprintf("%s%s %-24s", prefix, check, p.Syscall))
 	if p.Error != "" {
 		lb.WriteString(" ! ")
-		lb.WriteString(truncateText(sanitizeOneLine(p.Error), 28))
+		lb.WriteString(truncateText(common.Sanitize(p.Error), 28))
 	}
 	return lb.String()
 }
@@ -374,13 +374,6 @@ func bulkToggleCmd(manager Manager, probes []probemanager.ProbeState, sourceActi
 		}
 		return ProbeToggledMsg{Err: firstErr}
 	}
-}
-
-func sanitizeOneLine(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	return s
 }
 
 // truncateText shortens s to at most limit display cells, ending in "..." when

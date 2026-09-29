@@ -110,17 +110,21 @@ func renderStatusLine(paused bool, totalCount, filteredCount, bufferLen, bufferC
 	return fmt.Sprintf("%s | total:%d filtered:%d buffer:%s", state, totalCount, filteredCount, buffer)
 }
 
+// renderFilterLine shows the active filter. Its patterns are often copied from
+// traced comm/file values, so the summary is sanitised before styling.
 func renderFilterLine(filter Filter) string {
 	theme := common.Current()
-	summary := presenter.FilterSummary(filter)
+	summary := common.Sanitize(presenter.FilterSummary(filter))
 	if summary == "all" {
 		summary = theme.HighlightStyle.Render(summary)
 	}
 	return theme.HeaderStyle.Render("Filter:") + " " + summary
 }
 
+// renderFilterStackLine shows the undo stack labels; like the filter line they
+// can contain traced values and are sanitised.
 func renderFilterStackLine(filterStack []string) string {
-	return common.Current().HeaderStyle.Render("Stack:") + " " + strings.Join(filterStack, " | ")
+	return common.Current().HeaderStyle.Render("Stack:") + " " + common.Sanitize(strings.Join(filterStack, " | "))
 }
 
 func streamColumns(width int) []common.TableColumn {
@@ -236,19 +240,14 @@ func formatDurationNs(v uint64) string {
 	return fmt.Sprintf("%.2fs", s)
 }
 
-// fitCell flattens s onto one line and shortens it to at most width display
-// cells, keeping both ends joined by "..." (the middle of a long path is the
-// least informative part). The cut is grapheme- and display-width-aware, so
-// non-ASCII file names never turn into invalid UTF-8; the table pads the rest.
+// fitCell neutralises control characters in s (common.Sanitize: traced comm
+// and file names are attacker-controlled, and newlines/tabs flatten to
+// spaces) and shortens it to at most width display cells, keeping both ends
+// joined by "..." (the middle of a long path is the least informative part).
+// The cut is grapheme- and display-width-aware, so non-ASCII file names never
+// turn into invalid UTF-8; the table pads the rest.
 func fitCell(s string, width int) string {
-	return common.TruncateMiddle(sanitizeOneLine(s), width, common.ASCIIEllipsis)
-}
-
-func sanitizeOneLine(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	return s
+	return common.TruncateMiddle(common.Sanitize(s), width, common.ASCIIEllipsis)
 }
 
 // panelContentWidth is the value passed to PanelStyle.Width for a given

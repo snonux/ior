@@ -34,8 +34,9 @@ const (
 // than width): then the marker is returned if it fits, so a non-empty value
 // never renders as blank.
 //
-// These helpers do not sanitise control characters; callers pass printable
-// text (see task io2 for control-character handling).
+// These helpers do not sanitise control characters themselves; callers pass
+// traced or foreign text through Sanitize (sanitize.go) first, so no escape
+// sequence reaches the terminal and every rune has a well-defined width.
 
 // DisplayWidth returns the number of terminal cells s occupies.
 func DisplayWidth(s string) int {

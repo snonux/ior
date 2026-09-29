@@ -272,7 +272,7 @@ func (m Model) View() tea.View {
 
 	if m.lastErr != nil {
 		b.WriteString("\n")
-		b.WriteString(theme.ErrorStyle.Render("scan error: " + m.lastErr.Error()))
+		b.WriteString(theme.ErrorStyle.Render("scan error: " + common.Sanitize(m.lastErr.Error())))
 	}
 
 	b.WriteString("\n")
@@ -387,7 +387,17 @@ func clamp(v, min, max int) int {
 	return v
 }
 
+// formatProcess renders one picker row label. Comm and Cmdline come from
+// /proc and belong to arbitrary (possibly other users') processes, so the
+// label goes through common.Sanitize: argv with embedded newlines stays on
+// one row and planted escape sequences (OSC 8 links, SGR hidden text) never
+// reach the terminal. ProcessInfo itself keeps the raw values for searching.
 func formatProcess(process ProcessInfo) string {
+	return common.Sanitize(rawProcessLabel(process))
+}
+
+// rawProcessLabel formats the unsanitised row label for formatProcess.
+func rawProcessLabel(process ProcessInfo) string {
 	if process.ParentPID > 0 && process.ParentPID != process.Pid {
 		if process.Cmdline == "" {
 			return fmt.Sprintf("%d (pid:%d)  %s", process.Pid, process.ParentPID, process.Comm)

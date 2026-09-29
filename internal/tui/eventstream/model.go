@@ -600,8 +600,10 @@ func (m *Model) appendStreamFooter(base string, start int) string {
 	b.WriteString("\n")
 	b.WriteString(status)
 	if m.statusMessage != "" {
+		// The message can echo export paths, error text and search terms,
+		// so it is sanitised like every other foreign string.
 		b.WriteString("\n")
-		b.WriteString(m.statusMessage)
+		b.WriteString(common.Sanitize(m.statusMessage))
 	}
 	return b.String()
 }

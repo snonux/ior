@@ -232,15 +232,32 @@ func TestVisibleRowsMinimum(t *testing.T) {
 	}
 }
 
-// TestSanitizeOneLine verifies embedded control characters are replaced with
-// spaces.
-func TestSanitizeOneLine(t *testing.T) {
-	out := sanitizeOneLine("a\nb\rc\td")
-	if strings.ContainsAny(out, "\n\r\t") {
-		t.Fatalf("sanitizeOneLine left control chars: %q", out)
+// TestRenderProbeRowSanitizesError verifies a probe error carrying control
+// characters (newlines, an OSC 8 hyperlink, SGR hidden text) is rendered on
+// one line with no escape byte reaching the terminal (task io2).
+func TestRenderProbeRowSanitizesError(t *testing.T) {
+	m := NewModel(nil)
+	row := m.renderProbeRow(probemanager.ProbeState{
+		Syscall: "openat",
+		Error:   "a\nb\x1b]8;;http://evil\x07x\x1b[8m",
+	}, false)
+	if strings.ContainsAny(row, "\n\r\t\x1b\x07") {
+		t.Fatalf("renderProbeRow left control chars: %q", row)
 	}
-	if out != "a b c d" {
-		t.Fatalf("sanitizeOneLine = %q, want 'a b c d'", out)
+	if !strings.Contains(row, "a b?]8;;http:") {
+		t.Fatalf("renderProbeRow = %q, want newline as space and ESC as '?'", row)
+	}
+}
+
+// TestRenderViewSanitizesLastErr verifies the "Error:" line of the probe list
+// is sanitised as well.
+func TestRenderViewSanitizesLastErr(t *testing.T) {
+	m := NewModel(nil)
+	m.lastErr = "boom\x1b[8mhidden\x9b"
+	for _, line := range m.buildProbeLines() {
+		if strings.ContainsAny(line, "\x1b") || strings.Contains(line, "\x9b") {
+			t.Fatalf("line %q contains escape bytes", line)
+		}
 	}
 }
 

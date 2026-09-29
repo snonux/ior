@@ -3,6 +3,8 @@ package eventstream
 import (
 	"strings"
 
+	"ior/internal/tui/common"
+
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -129,7 +131,7 @@ func (m SearchModal) View(width, height int) string {
 		prefix + m.textInput.View(),
 	}
 	if m.err != "" {
-		lines = append(lines, "Error: "+m.err)
+		lines = append(lines, "Error: "+common.Sanitize(m.err))
 	}
 	lines = append(lines, "", "Enter search • Esc cancel")
 
