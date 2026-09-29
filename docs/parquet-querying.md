@@ -29,7 +29,7 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `ret` | Int64 | Return value; negative values are errno results |
 | `bytes` | UInt64 | Classified payload bytes |
 | `address_space_bytes` | UInt64 | Memory-region extent, when applicable |
-| `requested_sleep_ns` | Int64 | Requested sleep duration, when applicable |
+| `requested_sleep_ns` | Int64 | Requested relative sleep duration; `-1` unknown (null/invalid timespec, `TIMER_ABSTIME`), `9223372036854775807` for requests too large for Int64 (e.g. `sleep infinity`) |
 | `nfds` | Int32 | Poll/select count or epoll `maxevents` |
 | `timeout_ns` | Int64 | Polling timeout; `-1` infinite, `-2` unknown |
 | `file`, `old_file` | String | Resolved path and source path for rename/link calls |

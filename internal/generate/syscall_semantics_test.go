@@ -1422,7 +1422,7 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "requested duration outside TIMER_ABSTIME guard",
 			mutate: func(t *testing.T, source string) string {
 				source = replaceInHandler(t, source, "enter", "clock_nanosleep",
-					"                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n", "")
+					"                        ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n", "")
 				return replaceInHandler(t, source, "enter", "clock_nanosleep",
 					"            }\n        }\n    }\n\n    bpf_ringbuf_submit(ev, 0);",
 					"            }\n            ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n        }\n    }\n\n    bpf_ringbuf_submit(ev, 0);")

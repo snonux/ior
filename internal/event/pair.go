@@ -31,7 +31,11 @@ type Pair struct {
 	// AddressSpaceBytes tracks memory-region extent for memory syscalls
 	// (e.g. munmap/mremap) and is intentionally separate from I/O bytes.
 	AddressSpaceBytes uint64
-	// RequestedSleepNs tracks requested sleep duration for nanosleep-style syscalls.
+	// RequestedSleepNs tracks requested sleep duration for nanosleep-style
+	// syscalls. -1 means unknown (null/unreadable or kernel-invalid timespec,
+	// or an absolute TIMER_ABSTIME sleep); a valid request too large for int64
+	// nanoseconds (e.g. `sleep infinity`) is saturated to math.MaxInt64 in BPF,
+	// mirroring the kernel's KTIME_MAX clamp.
 	RequestedSleepNs int64
 	// Nfds and TimeoutNs carry poll/select readiness metadata. For epoll waits,
 	// Nfds is maxevents. TimeoutNs uses -1 for an infinite wait and -2 when a
