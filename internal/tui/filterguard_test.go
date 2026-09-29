@@ -33,7 +33,7 @@ func newLiveSwapModel(t *testing.T) (*Model, *liveFilterRecorder) {
 	m.width = 120
 	m.height = 40
 	recorder := &liveFilterRecorder{}
-	m.runtime.SetLiveFilterSetter(recorder.set)
+	m.runtime.setLiveFilterSetter(recorder.set)
 	return m, recorder
 }
 

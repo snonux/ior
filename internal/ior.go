@@ -311,7 +311,10 @@ func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
 // restarting BPF probes. A nil publisher (no TUI attached) registers nothing.
 // In TUI mode publisher is the session's bindings view, so a session that a
 // restart has already superseded registers nothing either: its setter would
-// otherwise replace the newer session's (see tui.traceSessionBindings).
+// otherwise replace the newer session's (see tui.traceSessionBindings). The
+// stream buffer and recorder in rt come from that same view, which drops the
+// rows and warnings a stopped session still pushes, so the callbacks below
+// need no session check of their own.
 func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
 	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {

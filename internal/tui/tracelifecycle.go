@@ -22,12 +22,29 @@ type traceLifecycle struct {
 	startTrace       TraceStarter
 	traceStop        context.CancelFunc
 	shutdownReporter *runtime.TraceShutdownReporter
+	// session numbers the sessions begun by this lifecycle; the running one
+	// (if any) is session. It tags each session's start result so a result
+	// of a session that has since been stopped or replaced can be ignored.
+	session uint64
+	// endSession retires the running session's bindings view (nil without
+	// bindings or when no session runs), see traceSessionBindings.
+	endSession func()
 }
 
 // tracingShutdownProgressMsg carries one progress update from the active
 // trace session back onto Bubble Tea's Update goroutine.
 type tracingShutdownProgressMsg struct {
 	progress runtime.TraceShutdownProgress
+}
+
+// traceSessionResultMsg is the start result (TracingStartedMsg or
+// TracingErrorMsg) of one session, tagged with that session's number. The
+// model applies result only while traceLifecycle.isCurrent(session): a restart
+// does not wait for the old session, whose result can still arrive after the
+// new session has begun.
+type traceSessionResultMsg struct {
+	session uint64
+	result  tea.Msg
 }
 
 // newTraceLifecycle creates a traceLifecycle bound to the given starter.
@@ -53,32 +70,54 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 //
 // The cancelled session is not waited for, so it may still be loading,
 // attaching or detaching while the new one starts. That is why each session
-// gets its own bindings view (runtimeBindings.beginSession): the view drops
-// whatever the superseded session publishes or clears from then on, so its
-// late setup or teardown cannot replace or erase the new session's probe
-// manager, live-filter setter or dashboard sources.
+// gets its own bindings view (runtimeBindings.beginSession), retired again by
+// stop: the view drops whatever the stopped session publishes, clears or emits
+// from then on, so its late setup, events or teardown cannot replace or erase
+// the new session's probe manager, live-filter setter, dashboard sources or
+// stream. For the same reason its start result is tagged with the session
+// number (traceSessionResultMsg) and ignored once the session is not current.
 func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
 	t.stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.traceStop = cancel
 	t.shutdownReporter = runtime.NewTraceShutdownReporter()
-	return startTraceCmd(ctx, t.startTrace, newTraceRequest(bindings, filter, t.shutdownReporter))
+	t.session++
+	var sessionBindings runtime.TraceRuntimeBindings
+	if bindings != nil {
+		view := bindings.beginSession()
+		t.endSession = view.end
+		sessionBindings = view
+	}
+	req := newTraceRequest(sessionBindings, filter, t.shutdownReporter)
+	return tagSessionResult(t.session, startTraceCmd(ctx, t.startTrace, req))
 }
 
-// newTraceRequest assembles the explicit inputs of one trace session and
-// begins the session's bindings generation. The filter is cloned so the
-// starter never aliases the model's filter state, which the user keeps
-// editing while the session runs. A nil bindings pointer becomes a nil
-// interface rather than a (non-nil) session view of nothing, so a starter's
-// "no TUI attached" check (Bindings == nil) sees it as absent instead of
-// calling methods on a nil *runtimeBindings.
-func newTraceRequest(bindings *runtimeBindings, filter globalfilter.Filter, reporter *runtime.TraceShutdownReporter) TraceRequest {
+// newTraceRequest assembles the explicit inputs of one trace session. The
+// filter is cloned so the starter never aliases the model's filter state,
+// which the user keeps editing while the session runs. A nil bindings stays a
+// nil interface, which a starter's "no TUI attached" check (Bindings == nil)
+// sees as absent.
+func newTraceRequest(bindings runtime.TraceRuntimeBindings, filter globalfilter.Filter, reporter *runtime.TraceShutdownReporter) TraceRequest {
 	cloned := filter.Clone()
-	req := TraceRequest{Filter: &cloned, ShutdownReporter: reporter}
-	if bindings != nil {
-		req.Bindings = bindings.beginSession()
+	return TraceRequest{Bindings: bindings, Filter: &cloned, ShutdownReporter: reporter}
+}
+
+// tagSessionResult wraps cmd so that its non-nil result arrives as a
+// traceSessionResultMsg of session.
+func tagSessionResult(session uint64, cmd tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		result := cmd()
+		if result == nil {
+			return nil
+		}
+		return traceSessionResultMsg{session: session, result: result}
 	}
-	return req
+}
+
+// isCurrent reports whether session is the running session, i.e. the newest
+// one begun and not stopped since.
+func (t *traceLifecycle) isCurrent(session uint64) bool {
+	return t.running() && session == t.session
 }
 
 // running reports whether a trace session is live, i.e. started and not yet
@@ -93,6 +132,14 @@ func (t *traceLifecycle) stop() {
 	if t.traceStop != nil {
 		t.traceStop()
 		t.traceStop = nil
+	}
+	// Retire the session's bindings view synchronously, here on the Update
+	// goroutine: once stop returns, none of the stopped session's rows can
+	// still reach the stream or the recorder, which is what lets callers reset
+	// the stream (selectProcess) or advance the filter epoch right after.
+	if t.endSession != nil {
+		t.endSession()
+		t.endSession = nil
 	}
 }
 
@@ -152,14 +199,23 @@ func startTraceCmdWithTimeout(ctx context.Context, starter TraceStarter, req Tra
 		}()
 		select {
 		case res := <-ch:
+			// A stopped session reports nothing, whatever the starter
+			// returned: a success that raced the stop is not a running
+			// trace, and its failure is not the user's concern any more.
+			if ctx.Err() != nil || errors.Is(res.err, context.Canceled) {
+				return nil
+			}
 			if res.err != nil {
-				if errors.Is(res.err, context.Canceled) {
-					return nil
-				}
 				return TracingErrorMsg{Err: res.err}
 			}
 			return TracingStartedMsg{}
 		case <-time.After(timeout):
+			// A session stopped while its starter hung (for example stuck
+			// in BPFLoadObject) must not report a fatal timeout against
+			// whatever runs now.
+			if ctx.Err() != nil {
+				return nil
+			}
 			// BPF probe attachment did not complete in time. The stuck
 			// goroutine will be cleaned up when the caller cancels ctx
 			// (e.g. on the next traceLifecycle.stop call).

@@ -76,8 +76,9 @@ func TestBeginCmdHandsStarterItsInputsExplicitly(t *testing.T) {
 	// must not alias it.
 	filter.Comm.Pattern = "mutated"
 	filter.PID.Value = 7
-	if msg := cmd(); msg != (TracingStartedMsg{}) {
-		t.Fatalf("begin command = %T, want TracingStartedMsg", msg)
+	msg := cmd()
+	if msg != (traceSessionResultMsg{session: lifecycle.session, result: TracingStartedMsg{}}) {
+		t.Fatalf("begin command = %#v, want this session's TracingStartedMsg", msg)
 	}
 	req := <-requests
 
@@ -98,9 +99,9 @@ func TestBeginCmdHandsStarterItsInputsExplicitly(t *testing.T) {
 	}
 }
 
-// TestNewTraceRequestTreatsNilBindingsAsAbsent is the negative case: a nil
-// *runtimeBindings must become a nil interface, not a typed nil the starter's
-// "no TUI attached" check would miss before calling methods on it.
+// TestNewTraceRequestTreatsNilBindingsAsAbsent is the negative case: absent
+// bindings must stay a nil interface, which the starter's "no TUI attached"
+// check relies on.
 func TestNewTraceRequestTreatsNilBindingsAsAbsent(t *testing.T) {
 	req := newTraceRequest(nil, globalfilter.Filter{}, nil)
 	if req.Bindings != nil {
@@ -731,7 +732,7 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	source := lateBoundDashboardSource{runtime: runtime}
 
 	want := &statsengine.Snapshot{TotalSyscalls: 77}
-	runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: want})
+	runtime.setDashboardSnapshotSource(&fakeDashboardSource{snap: want})
 
 	got, err := source.Snapshot()
 	if err != nil {
@@ -746,7 +747,7 @@ func TestLateBoundDashboardSourceResetForwardsToWiredSource(t *testing.T) {
 	runtime := newRuntimeBindings()
 	source := lateBoundDashboardSource{runtime: runtime}
 	wired := &fakeDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 42}}
-	runtime.SetDashboardSnapshotSource(wired)
+	runtime.setDashboardSnapshotSource(wired)
 
 	source.Reset()
 
@@ -783,12 +784,12 @@ func TestLateBoundDashboardSourceWithoutSourceIsInert(t *testing.T) {
 func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
 	runtime := newRuntimeBindings()
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
-	runtime.SetLiveTrie(trie)
+	runtime.setLiveTrie(trie)
 	if got := runtime.liveTrie(); got != trie {
 		t.Fatalf("expected live trie to be stored and returned")
 	}
 
-	runtime.SetLiveTrie(nil)
+	runtime.setLiveTrie(nil)
 	if got := runtime.liveTrie(); got != nil {
 		t.Fatalf("expected live trie to clear on nil assignment")
 	}
@@ -845,7 +846,7 @@ func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 	src := &fakeDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetDashboardSnapshotSource(src)
+	m.runtime.setDashboardSnapshotSource(src)
 	m.router.showDashboard()
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
@@ -870,7 +871,7 @@ func TestProbeToggledMsgKeepsLastGoodSnapshotOnFailure(t *testing.T) {
 	src := &fakeDashboardSource{snap: good, err: errors.New("snapshot build failed")}
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetDashboardSnapshotSource(src)
+	m.runtime.setDashboardSnapshotSource(src)
 	m.router.showDashboard()
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
@@ -896,7 +897,7 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 1, TID: 1})
 
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetEventStreamSource(rb)
+	m.runtime.setEventStreamSource(rb)
 	m.router.showDashboard()
 	m.attaching = true
 
@@ -1008,7 +1009,7 @@ func TestTracingStartedUsesCurrentViewportForFlameNavigationWithoutResize(t *tes
 	m.attaching = true
 	m.width = 120
 	m.height = 30
-	m.runtime.SetLiveTrie(trie)
+	m.runtime.setLiveTrie(trie)
 
 	next, _ := m.Update(TracingStartedMsg{})
 	m = next.(*Model)
@@ -1049,7 +1050,7 @@ func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.router.showDashboard()
 	m.attaching = true
-	m.runtime.SetLiveTrie(trie)
+	m.runtime.setLiveTrie(trie)
 	m.width = 0
 	m.height = 0
 
@@ -2157,8 +2158,8 @@ func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testin
 	oldTrie := aggregateTestTrie("oldsvc", "/srv/old")
 	newTrie := aggregateTestTrie("newsvc", "/srv/new")
 
-	m.runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: oldSnap})
-	m.runtime.SetLiveTrie(oldTrie)
+	m.runtime.setDashboardSnapshotSource(&fakeDashboardSource{snap: oldSnap})
+	m.runtime.setLiveTrie(oldTrie)
 
 	next, _ := m.Update(TracingStartedMsg{})
 	m = next.(*Model)
@@ -2185,8 +2186,8 @@ func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testin
 		t.Fatalf("expected filter apply to restart tracing")
 	}
 
-	m.runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: newSnap})
-	m.runtime.SetLiveTrie(newTrie)
+	m.runtime.setDashboardSnapshotSource(&fakeDashboardSource{snap: newSnap})
+	m.runtime.setLiveTrie(newTrie)
 
 	next, _ = m.Update(TracingStartedMsg{})
 	m = next.(*Model)
@@ -2417,7 +2418,7 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 
 func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
+	m.runtime.setProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
 	m.router.showDashboard()
 	m.attaching = false

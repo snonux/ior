@@ -132,7 +132,7 @@ func newTopLevelFlameRefreshModel(t *testing.T) *Model {
 	m.attaching = false
 	m.width = 120
 	m.height = 30
-	m.runtime.SetLiveTrie(liveTrie)
+	m.runtime.setLiveTrie(liveTrie)
 	next, _ := m.Update(TracingStartedMsg{})
 	m = next.(*Model)
 	coreflamegraph.SeedTestLiveFlameData(liveTrie, 1)

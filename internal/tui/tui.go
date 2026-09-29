@@ -130,20 +130,6 @@ func newRuntimeBindings() *runtimeBindings {
 	}
 }
 
-// SetDashboardSnapshotSource wires the stats engine into the dashboard.
-func (r *runtimeBindings) SetDashboardSnapshotSource(source runtime.ResettableSnapshotSource) {
-	r.mu.Lock()
-	r.snapshotSource = source
-	r.mu.Unlock()
-}
-
-// SetEventStreamSource wires the stream buffer into the TUI stream view.
-func (r *runtimeBindings) SetEventStreamSource(source runtime.StreamSource) {
-	r.mu.Lock()
-	r.streamSource = source
-	r.mu.Unlock()
-}
-
 // StreamBuffer returns the TUI-owned ring buffer. The full EventSink (push
 // plus read side) is returned because the tracing engine pushes events into
 // it; the TUI itself reads through the SetEventStreamSource wiring. A nil
@@ -183,30 +169,11 @@ func (r *runtimeBindings) FilterEpoch() uint64 {
 	return r.filterEpoch.Load()
 }
 
-// SetLiveTrie wires the live flamegraph trie into the TUI flamegraph view.
-func (r *runtimeBindings) SetLiveTrie(liveTrie runtime.LiveTrieSource) {
-	r.mu.Lock()
-	r.liveTrieSource = liveTrie
-	r.mu.Unlock()
-}
-
-// SetProbeManager wires the BPF probe manager into the TUI probes modal.
-func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) {
-	r.mu.Lock()
-	r.probeManager = manager
-	r.mu.Unlock()
-}
-
-// SetLiveFilterSetter registers the live filter callback so the TUI can update
-// the running trace pipeline in-place. The returned function clears the setter
-// only while this registration still owns it, preventing a slow teardown from
-// an older trace session from unregistering a newer session's callback.
-func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) func() {
-	r.mu.Lock()
-	registration := r.installLiveFilterSetterLocked(setter)
-	r.mu.Unlock()
-	return r.liveFilterUnregisterer(registration)
-}
+// The runtime bindings deliberately have no exported setters and so do not
+// satisfy runtime.RuntimePublisher: trace sessions publish only through their
+// traceSessionBindings view (see tracesession.go), whose writes are dropped
+// once the session is superseded. Handing *runtimeBindings to a trace starter
+// directly would bring back the clobbering that view prevents.
 
 // installLiveFilterSetterLocked stores setter under a fresh registration and
 // returns it. The caller must hold r.mu for writing.
@@ -235,6 +202,11 @@ func (r *runtimeBindings) liveFilterUnregisterer(registration *liveFilterRegistr
 // registered by the trace starter, returning true if a setter was available.
 // Returning false tells the caller it must fall back to a full trace restart
 // (typically because no trace is currently running).
+//
+// With a setter it advances the filter epoch first, so rows recorded under
+// the new filter carry the new epoch. Without one it advances nothing: the
+// caller's restart path advances the epoch only after it stopped the old
+// session, so none of that session's rows can be stamped with the new epoch.
 func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	r.mu.RLock()
 	setter := r.liveFilterSetter
@@ -242,6 +214,7 @@ func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	if setter == nil {
 		return false
 	}
+	r.advanceFilterEpoch()
 	setter(filter)
 	return true
 }
@@ -812,6 +785,15 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case initialTraceStartMsg:
 		next, cmd := m.handleInitialTraceStart()
 		return next, cmd, true
+	case traceSessionResultMsg:
+		// A result of a session the lifecycle has since stopped or replaced
+		// must not touch the model: a stale TracingStartedMsg would end the
+		// new session's attaching state early and a stale error would show
+		// the old session's failure against the new one.
+		if !m.tracer.isCurrent(msg.session) {
+			return m, nil, true
+		}
+		return m.dispatchAppMsg(msg.result)
 	case TracingStartedMsg:
 		next, cmd := m.handleTracingStarted()
 		return next, cmd, true
@@ -1492,7 +1474,6 @@ func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 // changes the active filter drives the pipeline - and resets the aggregates -
 // identically.
 func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
-	m.runtime.advanceFilterEpoch()
 	// Try the in-place swap first: hand the new filter to the running
 	// eventloop via the registered setter. The BPF probes stay attached, so
 	// the user no longer sees the multi-second 'Attaching tracepoints'
@@ -1504,9 +1485,12 @@ func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model,
 
 	// Fallback: no trace currently running (e.g. first invocation), so
 	// restart the pipeline so the new filter takes effect on the next
-	// trace start. The old session is cancelled before its aggregates are
-	// cleared, as before; beginTraceCmd's stop is then a no-op.
+	// trace start. The old session is stopped - which also retires its
+	// bindings view, so none of its rows is recorded from here on - before
+	// the epoch advances and its aggregates are cleared; beginTraceCmd's
+	// stop is then a no-op.
 	m.tracer.stop()
+	m.runtime.advanceFilterEpoch()
 	m.dashboard.PrepareForTraceRestart()
 	return m, m.restartTrace()
 }
@@ -1766,9 +1750,10 @@ func placeToViewport(width, height int, content string) string {
 // drifts out of sync with the interface it claims to satisfy.
 
 var (
-	// *runtimeBindings must satisfy the full TUI runtime contract, which
-	// composes RuntimePublisher (write side) and RuntimeState (read side).
-	_ runtime.TraceRuntimeBindings = (*runtimeBindings)(nil)
+	// *runtimeBindings provides the read side of the runtime contract. The
+	// write side (RuntimePublisher) is only provided per session, by
+	// traceSessionBindings (asserted in tracesession.go).
+	_ runtime.RuntimeState = (*runtimeBindings)(nil)
 
 	// lateBoundDashboardSource must satisfy the resettable snapshot-source
 	// contract used by the dashboard model. It wraps the injected stats engine
