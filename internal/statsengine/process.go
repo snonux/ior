@@ -57,6 +57,30 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 	}
 }
 
+// Add folds one syscall pair into the stats of its process (tgid).
+//
+// A comm change for a known PID never resets the counters. pair.Comm is the
+// per-*thread* name (bpf_get_current_comm / the tid-keyed comm resolver), so
+// the threads of a single process routinely disagree (pthread_setname_np:
+// Java "GC Thread#0", browsers, thread pools), and exec() renames the process
+// without starting a new lifetime. Treating a differing comm as PID reuse -
+// what this method used to do - reset the row on every alternation between
+// two threads and made the Processes tab undercount multithreaded apps
+// drastically (200 interleaved syscalls reported as 1).
+//
+// Real PID reuse is not detected here on purpose. The accumulator only sees
+// pairs; the sched_process_exit records that could mark the end of a lifetime
+// are consumed inside the event loop (handleProcessExitEvent) and fire per
+// task, not per process, and evicting on exit would also erase finished
+// processes from what is a cumulative per-session table. With pid_max in the
+// millions on modern kernels a PID is rarely recycled within one trace, and
+// when it is, merging the two lifetimes into one row is a small, bounded
+// overcount - far better than the systematic undercount of the old heuristic.
+//
+// The comm is therefore only a label: the most recent non-empty thread name
+// seen for the PID. For a multithreaded process it may switch between thread
+// names from one snapshot to the next; that is cosmetic, whereas tracking a
+// most-frequent name would need a per-PID map of every thread name.
 func (a *processAccumulator) Add(pair *event.Pair) {
 	if a == nil || pair == nil || pair.EnterEv == nil {
 		return
@@ -65,12 +89,6 @@ func (a *processAccumulator) Add(pair *event.Pair) {
 	pid := pair.EnterEv.GetPid()
 	stats := a.byPID[pid]
 	if stats == nil {
-		stats = &processStats{pid: pid}
-		a.byPID[pid] = stats
-	}
-	if pair.Comm != "" && stats.comm != "" && stats.comm != pair.Comm {
-		// Best-effort PID reuse handling: when command name changes for an
-		// existing PID, treat it as a new process lifetime and reset counters.
 		stats = &processStats{pid: pid}
 		a.byPID[pid] = stats
 	}

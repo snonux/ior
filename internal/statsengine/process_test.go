@@ -83,22 +83,69 @@ func TestProcessAccumulatorCommUpdateAndZeroRate(t *testing.T) {
 	}
 }
 
-func TestProcessAccumulatorResetsOnCommChangeForSamePID(t *testing.T) {
-	acc := newProcessAccumulator()
+// TestProcessAccumulatorKeepsCountingAcrossCommChanges is the regression test
+// for task 0o2: pair.Comm is a per-thread name, so a comm change for a known
+// PID (differently named threads, or an exec) must not reset the counters.
+// The comm is only a label and follows the most recent non-empty name.
+func TestProcessAccumulatorKeepsCountingAcrossCommChanges(t *testing.T) {
+	tests := []struct {
+		name      string
+		comms     []string
+		wantCount uint64
+		wantComm  string
+	}{
+		{name: "interleaved thread names", comms: repeatComms(100, "main", "worker-1"), wantCount: 200, wantComm: "worker-1"},
+		{name: "exec renames process", comms: []string{"bash", "bash", "ls"}, wantCount: 3, wantComm: "ls"},
+		{name: "empty comm keeps previous label", comms: []string{"old", "new", ""}, wantCount: 3, wantComm: "new"},
+		{name: "only empty comms", comms: []string{"", ""}, wantCount: 2, wantComm: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := newProcessAccumulator()
+			for _, comm := range tt.comms {
+				acc.Add(newProcessPair(2000, comm, 100, 10))
+			}
+			snap := acc.Snapshot(time.Second)
+			if len(snap) != 1 {
+				t.Fatalf("expected 1 snapshot row, got %d: %+v", len(snap), snap)
+			}
+			got := snap[0]
+			if got.Syscalls != tt.wantCount || got.Bytes != tt.wantCount*10 ||
+				got.TotalLatencyNs != tt.wantCount*100 || got.AvgLatencyNs != 100 {
+				t.Fatalf("expected %d accumulated syscalls, got %+v", tt.wantCount, got)
+			}
+			if got.Comm != tt.wantComm {
+				t.Fatalf("expected comm %q, got %q", tt.wantComm, got.Comm)
+			}
+		})
+	}
+}
 
-	acc.Add(newProcessPair(42, "old", 100, 10))
-	acc.Add(newProcessPair(42, "new", 200, 20))
+// TestProcessAccumulatorSameCommDifferentPIDsStaySeparate guards the other
+// direction: the comm is not part of the key, and two PIDs sharing a name
+// (e.g. several worker processes) must not be merged.
+func TestProcessAccumulatorSameCommDifferentPIDsStaySeparate(t *testing.T) {
+	acc := newProcessAccumulator()
+	acc.Add(newProcessPair(1, "worker", 10, 1))
+	acc.Add(newProcessPair(2, "worker", 10, 1))
+	acc.Add(newProcessPair(2, "worker", 10, 1))
 
 	snap := acc.Snapshot(time.Second)
-	if len(snap) != 1 {
-		t.Fatalf("expected 1 snapshot row, got %d", len(snap))
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 snapshot rows, got %d: %+v", len(snap), snap)
 	}
-	if snap[0].Comm != "new" {
-		t.Fatalf("expected new comm after reset, got %q", snap[0].Comm)
+	if snap[0].PID != 2 || snap[0].Syscalls != 2 || snap[1].PID != 1 || snap[1].Syscalls != 1 {
+		t.Fatalf("unexpected per-PID counts: %+v", snap)
 	}
-	if snap[0].Syscalls != 1 || snap[0].Bytes != 20 || snap[0].AvgLatencyNs != 200 {
-		t.Fatalf("expected counters to reset on comm change, got %+v", snap[0])
+}
+
+// repeatComms returns n alternations of the given comm names, in order.
+func repeatComms(n int, comms ...string) []string {
+	out := make([]string, 0, n*len(comms))
+	for i := 0; i < n; i++ {
+		out = append(out, comms...)
 	}
+	return out
 }
 
 func TestProcessAccumulatorNilInputs(t *testing.T) {
