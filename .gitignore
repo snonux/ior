@@ -27,3 +27,8 @@ internal/c/generated_tracepoints.c.tmp-*
 # scripts/perf-baseline.sh in-progress recordings (mktemp; removed on exit)
 perf/.bench-*
 perf/.static-*
+
+# Generated test and audit output
+*.test
+*.log
+/audit/check/
