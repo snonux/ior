@@ -1,9 +1,13 @@
 package flamegraph
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
 )
 
 // selectedBgSGR is the background parameter styleForFrame gives the selected
@@ -68,6 +72,27 @@ func TestFrameIndexAtMatchesDrawnCellsInAllBands(t *testing.T) {
 	for _, height := range []int{6, 9, 14, 25} {
 		frames := buildTerminalLayout(snapshot, width, height)
 		for _, heightMetric := range []bool{true, false} {
+			assertHitsMatchDrawnView(t, frames, width, height, heightMetric)
+		}
+	}
+
+	// An 18-level chain ending in two leaves of different heights (19 rows)
+	// is deeper than every viewport below (at most 17 data rows), so rows
+	// are scrolled off (rowOffset > 0) in both height modes and the leaf
+	// bands share the viewport with the still-visible non-leaf rows.
+	deep := &snapshotNode{Name: "L17", Total: 100, Children: []*snapshotNode{
+		{Name: "p", Total: 60, HeightTotal: 100},
+		{Name: "q", Total: 40, HeightTotal: 35},
+	}}
+	for level := 16; level >= 0; level-- {
+		deep = &snapshotNode{Name: fmt.Sprintf("L%d", level), Total: 100, Children: []*snapshotNode{deep}}
+	}
+	for _, height := range []int{6, 8, 12, 20} {
+		frames := buildTerminalLayout(deep, width, height)
+		for _, heightMetric := range []bool{true, false} {
+			if params := computeRenderParamsForAvailableRows(frames, height-3, heightMetric); params.rowOffset == 0 {
+				t.Fatalf("height=%d heightMetric=%v: rowOffset=0, deep case does not scroll", height, heightMetric)
+			}
 			assertHitsMatchDrawnView(t, frames, width, height, heightMetric)
 		}
 	}
@@ -159,23 +184,70 @@ func drawnCellOwners(t *testing.T, frames []tuiFrame, width, height int, heightM
 // selectedCells reports, for each of the width cells of a rendered line,
 // whether it carries the selected-frame background. Every styled segment
 // starts with one full SGR and ends with a reset, so the most recent SGR
-// alone decides a cell's style.
+// alone decides a cell's style. Each rune advances by its display width, so
+// wide or multi-byte labels ("…", CJK) keep later cells aligned.
 func selectedCells(line string, width int) []bool {
 	cells := make([]bool, 0, width)
 	active := false
 	for i := 0; i < len(line); {
-		if line[i] == '\x1b' && i+1 < len(line) && line[i+1] == '[' {
+		if strings.HasPrefix(line[i:], "\x1b[") {
 			end := strings.IndexByte(line[i:], 'm')
-			active = strings.Contains(line[i+2:i+end], selectedBgSGR)
+			active = sgrHasSelectedBg(line[i+2 : i+end])
 			i += end + 1
 			continue
 		}
-		cells = append(cells, active)
-		// Skip the rest of a multi-byte rune ("…" is one cell).
-		i++
-		for i < len(line) && line[i]&0xC0 == 0x80 {
-			i++
+		r, size := utf8.DecodeRuneInString(line[i:])
+		for range lipgloss.Width(string(r)) {
+			cells = append(cells, active)
 		}
+		i += size
 	}
 	return cells
+}
+
+// sgrHasSelectedBg reports whether the ';'-separated SGR parameter list sets
+// the selected-frame background, i.e. contains the exact consecutive
+// parameters 48;5;129. Matching whole parameters avoids false hits such as
+// 38;2;248;5;129 (a truecolor foreground whose digits contain the pattern).
+// Extended colour sequences (38/48 with 5;n or 2;r;g;b) are skipped as units
+// so their arguments are never mistaken for a new 48 introducer.
+func sgrHasSelectedBg(params string) bool {
+	p := strings.Split(params, ";")
+	for i := 0; i < len(p); i++ {
+		if p[i] != "38" && p[i] != "48" && p[i] != "58" {
+			continue
+		}
+		switch {
+		case i+2 < len(p) && p[i+1] == "5":
+			if p[i] == "48" && p[i+2] == "129" {
+				return true
+			}
+			i += 2
+		case i+4 < len(p) && p[i+1] == "2":
+			i += 4
+		}
+	}
+	return false
+}
+
+// TestSGRHasSelectedBg pins the parameter-exact matching of selectedCells.
+func TestSGRHasSelectedBg(t *testing.T) {
+	for _, tc := range []struct {
+		params string
+		want   bool
+	}{
+		{"1;97;48;5;129", true},
+		{"48;5;129", true},
+		{"38;2;248;5;129", false},  // digits contain 48;5;129
+		{"38;5;48;5;129", false},   // fg 48, then blink (5) and a stray 129
+		{"38;5;48;48;5;129", true}, // fg 48, then the real 48;5;129 bg
+		{"38;2;1;48;5;129", false}, // 48 is the truecolor blue component
+		{"48;5;1290", false},
+		{"48;5;238", false},
+		{"", false},
+	} {
+		if got := sgrHasSelectedBg(tc.params); got != tc.want {
+			t.Errorf("sgrHasSelectedBg(%q)=%v want %v", tc.params, got, tc.want)
+		}
+	}
 }
