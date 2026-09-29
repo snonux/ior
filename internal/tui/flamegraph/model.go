@@ -29,6 +29,11 @@ type animTickMsg struct {
 // flameViewCacheKey captures the View() inputs that determine the rendered
 // output. When two consecutive calls produce the same key, the cached content
 // string is reused instead of re-running RenderTerminalView.
+//
+// searchQuery is only the committed filter; searchInput and searchCursor track
+// the live text input that the search footer renders while the prompt is open.
+// Without them every keystroke after '/' hit the cache and the typed text stayed
+// invisible until Enter.
 type flameViewCacheKey struct {
 	version       uint64
 	selectedIdx   int
@@ -38,6 +43,8 @@ type flameViewCacheKey struct {
 	matchCount    int
 	visibleCount  int
 	searchQuery   string
+	searchInput   string
+	searchCursor  int
 	statusMessage string
 	zoomPath      string
 	countField    string
@@ -551,7 +558,9 @@ func (m *Model) renderViewContent() string {
 
 // currentViewCacheKey snapshots every Model field that influences View()
 // output. If any of these differ between successive View() invocations, the
-// cache misses and the content is rebuilt.
+// cache misses and the content is rebuilt. Any rendered input left out of the
+// key is served stale from the cache, which is why the live search input value
+// and cursor are included alongside the committed query.
 func (m *Model) currentViewCacheKey() flameViewCacheKey {
 	return flameViewCacheKey{
 		version:       m.lastVersion,
@@ -562,6 +571,8 @@ func (m *Model) currentViewCacheKey() flameViewCacheKey {
 		matchCount:    len(m.search.matches()),
 		visibleCount:  len(m.search.visibleSet()),
 		searchQuery:   m.search.query(),
+		searchInput:   m.search.inputValue(),
+		searchCursor:  m.search.inputCursor(),
 		statusMessage: m.statusMessage,
 		zoomPath:      m.zoom.path(),
 		countField:    m.countField,

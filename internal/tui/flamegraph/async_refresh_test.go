@@ -1,6 +1,8 @@
 package flamegraph
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,25 +246,9 @@ func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
 }
 
 func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
-	ingestTwoEventsForAsync(t, trie)
-	m := NewModel(trie)
-	m.width = 120
-	m.height = 30
-	if !m.RefreshFromLiveTrie() {
-		t.Fatalf("expected initial refresh to populate snapshot")
-	}
-
-	// Drain any pending animation so the cache path is exercised.
-	for m.anim.animating {
-		nextModel, _ := m.Update(currentAnimTick(m))
-		m = nextModel.(*Model)
-	}
+	m := newSettledCachedModel(t)
 
 	first := m.View().Content
-	if !m.viewCache.valid {
-		t.Fatalf("expected viewCache to be marked valid after first View() call")
-	}
 	cachedAddr := &m.viewCache.content
 
 	second := m.View().Content
@@ -271,6 +257,88 @@ func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
 	}
 	if cachedAddr != &m.viewCache.content {
 		t.Fatalf("expected cache content pointer to remain stable on a hit")
+	}
+}
+
+// newSettledCachedModel returns a model with a populated snapshot, no pending
+// animation and a primed view cache, so the next View() goes through the
+// cache path rather than the always-render animation path.
+func newSettledCachedModel(t *testing.T) *Model {
+	t.Helper()
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	ingestTwoEventsForAsync(t, trie)
+	m := NewModel(trie)
+	m.width = 120
+	m.height = 30
+	if !m.RefreshFromLiveTrie() {
+		t.Fatalf("expected initial refresh to populate snapshot")
+	}
+	for m.anim.animating {
+		nextModel, _ := m.Update(currentAnimTick(m))
+		m = nextModel.(*Model)
+	}
+	_ = m.View()
+	if !m.viewCache.valid {
+		t.Fatalf("precondition: expected primed view cache")
+	}
+	return m
+}
+
+// visibleText strips ANSI SGR sequences so assertions see the text a user
+// would read; the text input styles the prompt, value and cursor separately.
+func visibleText(s string) string {
+	return ansiSGR.ReplaceAllString(s, "")
+}
+
+var ansiSGR = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+
+// TestViewShowsLiveSearchInputWhileTyping is the regression test for the
+// search prompt staying blank while typing: the view cache key only held the
+// committed query, so every keystroke after '/' was served the stale frame.
+func TestViewShowsLiveSearchInputWhileTyping(t *testing.T) {
+	m := newSettledCachedModel(t)
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	typed := ""
+	for _, r := range "xyz" {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+		typed += string(r)
+		if got := visibleText(m.View().Content); !strings.Contains(got, "/"+typed) {
+			t.Fatalf("after typing %q the view does not show the input:\n%s", typed, got)
+		}
+	}
+
+	// Backspace must shrink the visible input, not keep serving "/xyz".
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	got := visibleText(m.View().Content)
+	if !strings.Contains(got, "/xy") || strings.Contains(got, "/xyz") {
+		t.Fatalf("after backspace expected \"/xy\" without \"/xyz\":\n%s", got)
+	}
+
+	// Esc cancels: the typed text must disappear from the view again.
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if got := visibleText(m.View().Content); strings.Contains(got, "/xy") {
+		t.Fatalf("after esc the search input is still rendered:\n%s", got)
+	}
+}
+
+// TestViewCacheKeyTracksSearchCursor checks that moving the cursor without
+// changing the value still invalidates the cache, since the rendered footer
+// places the cursor differently.
+func TestViewCacheKeyTracksSearchCursor(t *testing.T) {
+	m := newSettledCachedModel(t)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	for _, r := range "ab" {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	before := m.currentViewCacheKey()
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	after := m.currentViewCacheKey()
+	if before == after {
+		t.Fatalf("cursor move left the cache key unchanged: %+v", after)
+	}
+	if after.searchInput != "ab" || after.searchCursor != 1 {
+		t.Fatalf("expected key input %q cursor 1, got %q cursor %d", "ab", after.searchInput, after.searchCursor)
 	}
 }
 
