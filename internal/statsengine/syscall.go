@@ -41,6 +41,30 @@ type syscallStats struct {
 	cachedP99             uint64
 }
 
+// percentileJob carries a private copy of one syscall's latency reservoir from
+// snapshot capture (which runs under the engine lock) to the lock-free
+// percentile computation, and from there back to the cached values in stats.
+// Sorting a full 10k-sample reservoir costs ~0.5ms, so doing it for every
+// active syscall under the lock used to stall Engine.Ingest for tens of ms per
+// refresh; copying the samples instead is a cheap memmove.
+type percentileJob struct {
+	stats    *syscallStats
+	version  uint64   // stats.sampleVersion at the time samples was copied
+	samples  []uint64 // private copy, sorted in place outside the lock
+	inputIdx int      // index of the matching entry in syscallCapture.inputs
+	p50      uint64
+	p95      uint64
+	p99      uint64
+}
+
+// syscallCapture is the syscall part of a snapshot capture: per-syscall
+// inputs (percentiles pre-filled from the cache) plus the percentile jobs for
+// reservoirs whose cached percentiles are stale.
+type syscallCapture struct {
+	inputs []syscallSnapshotInput
+	jobs   []percentileJob
+}
+
 type syscallSnapshotInput struct {
 	traceID      types.TraceId
 	name         string
@@ -126,41 +150,81 @@ func (a *syscallAccumulator) AddAggregate(row SyscallAggregate) {
 
 // Snapshot returns a slice of SyscallSnapshots for all tracked syscalls.
 // It panics on build error, which should never happen for a valid accumulator.
+// The accumulator is not safe for concurrent use on its own, so capture,
+// percentile computation and write-back simply run back to back here; Engine
+// splits them to keep the sort out of its lock.
 func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 	if a == nil {
 		return nil
 	}
 
-	snap, err := buildSyscallSnapshots(a.snapshotInputs(), elapsed)
+	capture := a.captureInputs()
+	capture.resolvePercentiles()
+	capture.storePercentiles()
+	snap, err := buildSyscallSnapshots(capture.inputs, elapsed)
 	if err != nil {
 		panic("buildSyscallSnapshots: " + err.Error())
 	}
 	return snap
 }
 
-func (a *syscallAccumulator) snapshotInputs() []syscallSnapshotInput {
+// captureInputs copies the per-syscall counters and, for every reservoir whose
+// cached percentiles are stale, a private copy of its samples. It must run
+// under the lock guarding the accumulator but performs no sorting, so it stays
+// cheap even with many full reservoirs. The returned inputs carry the cached
+// percentiles; resolvePercentiles overwrites the stale ones.
+func (a *syscallAccumulator) captureInputs() syscallCapture {
 	if a == nil {
-		return nil
+		return syscallCapture{}
 	}
 
-	inputs := make([]syscallSnapshotInput, 0, len(a.byID))
+	capture := syscallCapture{inputs: make([]syscallSnapshotInput, 0, len(a.byID))}
 	for _, stats := range a.byID {
-		stats.ensurePercentiles()
-		inputs = append(inputs, syscallSnapshotInput{
-			traceID:      stats.traceID,
-			name:         stats.name,
-			count:        stats.count,
-			errorCount:   stats.errorCount,
-			totalBytes:   stats.totalBytes,
-			totalLatency: stats.totalLatency,
-			minLatency:   stats.minLatency,
-			maxLatency:   stats.maxLatency,
-			p50Latency:   stats.cachedP50,
-			p95Latency:   stats.cachedP95,
-			p99Latency:   stats.cachedP99,
-		})
+		if stats.needsPercentileRecompute() {
+			capture.jobs = append(capture.jobs, percentileJob{
+				stats:    stats,
+				version:  stats.sampleVersion,
+				samples:  slices.Clone(stats.samples),
+				inputIdx: len(capture.inputs),
+			})
+		}
+		capture.inputs = append(capture.inputs, stats.snapshotInput())
 	}
-	return inputs
+	return capture
+}
+
+// resolvePercentiles sorts each job's private sample copy and fills in the
+// fresh percentiles, both on the job (for storePercentiles) and on the
+// matching input. It touches no accumulator state, so callers run it without
+// holding any lock.
+func (c *syscallCapture) resolvePercentiles() {
+	for i := range c.jobs {
+		job := &c.jobs[i]
+		slices.Sort(job.samples)
+		job.p50 = samplePercentile(job.samples, 0.50)
+		job.p95 = samplePercentile(job.samples, 0.95)
+		job.p99 = samplePercentile(job.samples, 0.99)
+
+		in := &c.inputs[job.inputIdx]
+		in.p50Latency, in.p95Latency, in.p99Latency = job.p50, job.p95, job.p99
+	}
+}
+
+// storePercentiles writes the resolved percentiles back into the per-syscall
+// cache so later snapshots can reuse them. It must run under the lock guarding
+// the accumulator. A job is dropped when the cache already holds percentiles
+// for the same or a newer sample version (a concurrent Snapshot got there
+// first), so an older result never replaces a fresher one.
+func (c *syscallCapture) storePercentiles() {
+	for i := range c.jobs {
+		job := &c.jobs[i]
+		stats := job.stats
+		if stats.lastPercentileVersion >= job.version {
+			continue
+		}
+		stats.cachedP50, stats.cachedP95, stats.cachedP99 = job.p50, job.p95, job.p99
+		stats.lastPercentileVersion = job.version
+	}
 }
 
 // buildSyscallSnapshots converts raw syscall accumulator inputs into sorted
@@ -206,25 +270,33 @@ func (s *syscallStats) addSample(duration uint64, cap int, rng *rand.Rand) {
 	s.sampleVersion++
 }
 
-func (s *syscallStats) ensurePercentiles() {
-	if s.lastPercentileVersion == s.sampleVersion {
-		return
+// needsPercentileRecompute reports whether the cached percentiles must be
+// recomputed from the samples. An empty reservoir (e.g. a syscall only seen
+// through AddAggregate) never needs a job: its cached zero percentiles are
+// already correct. Otherwise the first computation always happens, later ones
+// are batched by percentilesStale.
+func (s *syscallStats) needsPercentileRecompute() bool {
+	if s.lastPercentileVersion == s.sampleVersion || len(s.samples) == 0 {
+		return false
 	}
-	if s.lastPercentileVersion != 0 && !s.percentilesStale() {
-		return
-	}
-	if len(s.samples) == 0 {
-		s.cachedP50, s.cachedP95, s.cachedP99 = 0, 0, 0
-		s.lastPercentileVersion = s.sampleVersion
-		return
-	}
+	return s.lastPercentileVersion == 0 || s.percentilesStale()
+}
 
-	sorted := append([]uint64(nil), s.samples...)
-	slices.Sort(sorted)
-	s.cachedP50 = samplePercentile(sorted, 0.50)
-	s.cachedP95 = samplePercentile(sorted, 0.95)
-	s.cachedP99 = samplePercentile(sorted, 0.99)
-	s.lastPercentileVersion = s.sampleVersion
+// snapshotInput copies the counters and the cached percentiles of s.
+func (s *syscallStats) snapshotInput() syscallSnapshotInput {
+	return syscallSnapshotInput{
+		traceID:      s.traceID,
+		name:         s.name,
+		count:        s.count,
+		errorCount:   s.errorCount,
+		totalBytes:   s.totalBytes,
+		totalLatency: s.totalLatency,
+		minLatency:   s.minLatency,
+		maxLatency:   s.maxLatency,
+		p50Latency:   s.cachedP50,
+		p95Latency:   s.cachedP95,
+		p99Latency:   s.cachedP99,
+	}
 }
 
 // percentilesStale reports whether enough new samples arrived since the last
