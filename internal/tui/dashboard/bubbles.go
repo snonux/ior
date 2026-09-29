@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/harmonica"
@@ -896,16 +897,16 @@ func processBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 	return data
 }
 
+// padOrTrim fits value into exactly width display cells for the bubble,
+// treemap and icicle header/status lines: cut with "…" when too wide, then
+// space-padded (common.FitRight). Both steps measure terminal cells, so wide
+// CJK/emoji text cannot overflow the line. A width of zero or less means
+// "unconstrained" and returns value unchanged.
 func padOrTrim(value string, width int) string {
 	if width <= 0 {
 		return value
 	}
-	value = truncatePlain(value, width)
-	padding := width - utf8.RuneCountInString(value)
-	if padding <= 0 {
-		return value
-	}
-	return value + strings.Repeat(" ", padding)
+	return common.FitRight(value, width, common.Ellipsis)
 }
 
 func maxInt(a, b int) int {

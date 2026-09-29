@@ -39,26 +39,30 @@ const (
 
 // DisplayWidth returns the number of terminal cells s occupies.
 func DisplayWidth(s string) int {
-	return ansi.StringWidth(s)
+	w, _ := measure(s)
+	return w
 }
 
 // PadRight right-pads s with spaces to width display cells. It never
 // truncates: s already at least width cells wide is returned unchanged.
 func PadRight(s string, width int) string {
-	if pad := width - ansi.StringWidth(s); pad > 0 {
-		return s + strings.Repeat(" ", pad)
-	}
-	return s
+	w, _ := measure(s)
+	return padTo(s, w, width)
 }
 
 // FitRight returns s in exactly width display cells: truncated on the right
 // with tail when too wide (see TruncateRight), then space-padded. A width of
-// zero or less yields "".
+// zero or less yields "". s is measured once; only a cut result is measured
+// again (it is at most width cells, so that is cheap).
 func FitRight(s string, width int, tail string) string {
 	if width <= 0 {
 		return ""
 	}
-	return PadRight(TruncateRight(s, width, tail), width)
+	w, ascii := measure(s)
+	if w <= width {
+		return padTo(s, w, width)
+	}
+	return PadRight(truncateRight(s, ascii, width, tail), width)
 }
 
 // TruncateRight shortens s to at most width display cells, keeping the start
@@ -68,13 +72,11 @@ func TruncateRight(s string, width int, tail string) string {
 	if width <= 0 {
 		return ""
 	}
-	if ansi.StringWidth(s) <= width {
+	w, ascii := measure(s)
+	if w <= width {
 		return s
 	}
-	if ansi.StringWidth(tail) < width {
-		return ansi.Truncate(s, width, tail)
-	}
-	return orMarker(ansi.Truncate(s, width, ""), tail, width)
+	return truncateRight(s, ascii, width, tail)
 }
 
 // TruncateLeft shortens s to at most width display cells, keeping the end and
@@ -85,13 +87,11 @@ func TruncateLeft(s string, width int, head string) string {
 	if width <= 0 {
 		return ""
 	}
-	if ansi.StringWidth(s) <= width {
+	w, ascii := measure(s)
+	if w <= width {
 		return s
 	}
-	if headWidth := ansi.StringWidth(head); headWidth < width {
-		return head + keepRight(s, width-headWidth)
-	}
-	return orMarker(keepRight(s, width), head, width)
+	return truncateLeft(s, w, ascii, width, head)
 }
 
 // TruncateMiddle shortens s to at most width display cells, keeping both its
@@ -103,27 +103,86 @@ func TruncateMiddle(s string, width int, sep string) string {
 	if width <= 0 {
 		return ""
 	}
-	if ansi.StringWidth(s) <= width {
+	w, ascii := measure(s)
+	if w <= width {
 		return s
 	}
-	sepWidth := ansi.StringWidth(sep)
-	if sepWidth >= width {
-		return TruncateRight(s, width, sep)
-	}
-	head := ansi.Truncate(s, (width-sepWidth)/2, "")
-	tailWidth := width - sepWidth - ansi.StringWidth(head)
-	return head + sep + keepRight(s, tailWidth)
+	return truncateMiddle(s, w, ascii, width, sep)
 }
 
-// keepRight returns the longest suffix of s that is at most width cells wide.
-// ansi.TruncateLeft removes n cells but keeps a wide rune that straddles the
-// cut, which would leave the result one cell too wide, so the cut is widened
-// by a cell until the suffix fits (at most one retry for two-cell runes).
-func keepRight(s string, width int) string {
+// measure returns the display width of s and whether s is printable ASCII
+// (bytes 0x20..0x7E). Printable ASCII is the common case on the event-stream
+// hot path (paths, comms, numbers): there every byte is one grapheme of one
+// cell, so the width is len(s) and byte slicing is safe, which is orders of
+// magnitude cheaper than ansi's grapheme segmentation. Anything else, control
+// bytes included, takes the exact ansi.StringWidth path.
+func measure(s string) (int, bool) {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c > 0x7e {
+			if s == Ellipsis {
+				return 1, false
+			}
+			return ansi.StringWidth(s), false
+		}
+	}
+	return len(s), true
+}
+
+// truncateRight cuts s (known to be wider than width > 0) to at most width
+// cells, applying the marker rule for tail. ascii reports whether s is
+// printable ASCII, enabling byte slicing.
+func truncateRight(s string, ascii bool, width int, tail string) string {
+	if tw, _ := measure(tail); tw < width {
+		return prefix(s, ascii, width-tw) + tail
+	}
+	return orMarker(prefix(s, ascii, width), tail, width)
+}
+
+// truncateLeft cuts s (total cells wide, known to exceed width > 0) keeping
+// its end, applying the marker rule for head.
+func truncateLeft(s string, total int, ascii bool, width int, head string) string {
+	if hw, _ := measure(head); hw < width {
+		return head + keepRight(s, total, ascii, width-hw)
+	}
+	return orMarker(keepRight(s, total, ascii, width), head, width)
+}
+
+// truncateMiddle cuts s (total cells wide, known to exceed width > 0) keeping
+// both ends joined by sep.
+func truncateMiddle(s string, total int, ascii bool, width int, sep string) string {
+	sw, _ := measure(sep)
+	if sw >= width {
+		return truncateRight(s, ascii, width, sep)
+	}
+	headWidth := (width - sw) / 2
+	head := prefix(s, ascii, headWidth)
+	if !ascii {
+		headWidth = ansi.StringWidth(head)
+	}
+	return head + sep + keepRight(s, total, ascii, width-sw-headWidth)
+}
+
+// prefix returns the longest prefix of s at most width cells wide, never
+// splitting a grapheme.
+func prefix(s string, ascii bool, width int) string {
+	if ascii {
+		return s[:min(width, len(s))]
+	}
+	return ansi.Truncate(s, width, "")
+}
+
+// keepRight returns the longest suffix of s (total cells wide) that is at
+// most width cells wide. ansi.TruncateLeft removes n cells but keeps a wide
+// rune that straddles the cut, which would leave the result one cell too
+// wide, so the cut is widened by a cell until the suffix fits (at most one
+// retry for two-cell runes).
+func keepRight(s string, total int, ascii bool, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	total := ansi.StringWidth(s)
+	if ascii {
+		return s[max(len(s)-width, 0):]
+	}
 	for cut := total - width; cut <= total; cut++ {
 		if kept := ansi.TruncateLeft(s, cut, ""); ansi.StringWidth(kept) <= width {
 			return kept
@@ -132,10 +191,18 @@ func keepRight(s string, width int) string {
 	return ""
 }
 
+// padTo right-pads s, which is w cells wide, with spaces to width cells.
+func padTo(s string, w, width int) string {
+	if pad := width - w; pad > 0 {
+		return s + strings.Repeat(" ", pad)
+	}
+	return s
+}
+
 // orMarker returns cut, or marker instead when cut is empty and marker fits
 // in width, so a hard cut never blanks out a non-empty value.
 func orMarker(cut, marker string, width int) string {
-	if cut == "" && ansi.StringWidth(marker) <= width {
+	if mw, _ := measure(marker); cut == "" && mw <= width {
 		return marker
 	}
 	return cut
