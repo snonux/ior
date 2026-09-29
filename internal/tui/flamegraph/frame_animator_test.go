@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestFrameCoordToTargetRowKeepsUniformBarMapping(t *testing.T) {
+func TestFrameCoordToLineKeepsUniformBarMapping(t *testing.T) {
 	frames := []tuiFrame{
 		{Name: "root", Row: 0, Col: 0, Width: 20, Path: "root"},
 		{Name: "a", Row: 1, Col: 0, Width: 20, Path: "root" + pathSeparator + "a"},
@@ -23,7 +23,7 @@ func TestFrameCoordToTargetRowKeepsUniformBarMapping(t *testing.T) {
 	}
 }
 
-func TestFrameCoordToTargetRowHeightMetricMapsExpandedLeafBand(t *testing.T) {
+func TestFrameCoordToLineHeightMetricMapsExpandedLeafBand(t *testing.T) {
 	frames := []tuiFrame{
 		{Name: "root", Row: 0, Col: 0, Width: 20, Path: "root"},
 		{Name: "leaf", Row: 1, Col: 0, Width: 20, Path: "root" + pathSeparator + "leaf", HeightTotal: 100},
