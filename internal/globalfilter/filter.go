@@ -170,9 +170,19 @@ func (f Filter) Equal(other Filter) bool {
 // stream tick (and per pair on the event loop), where most dimensions are
 // unset; callers that re-filter many rows against one filter can skip the
 // loop entirely when IsActive reports false.
-func (f Filter) Matches(candidate Candidate) bool {
+//
+// Matches (like IsActive) has a pointer receiver although Filter is otherwise
+// used by value: Filter is 12 words, and a value receiver copied it on every
+// call, i.e. once per buffered row per stream tick. Callers hold their own
+// copy of the filter (the stream model, the export, the ingest check), so the
+// pointer never aliases a filter that is swapped concurrently. A nil *Filter
+// behaves like the zero filter.
+func (f *Filter) Matches(candidate Candidate) bool {
 	if candidate == nil {
 		return false
+	}
+	if f == nil {
+		return true
 	}
 	if f.ErrorsOnly && !candidate.ErrorValue() {
 		return false
@@ -248,8 +258,12 @@ func (f Filter) MatchesSyscallRow(name, family string) bool {
 }
 
 // IsActive reports whether any dimension is configured; an inactive filter
-// is a pass-through and lets hot paths skip evaluation.
-func (f Filter) IsActive() bool {
+// is a pass-through and lets hot paths skip evaluation. It has a pointer
+// receiver for the same reason as Matches; a nil *Filter is inactive.
+func (f *Filter) IsActive() bool {
+	if f == nil {
+		return false
+	}
 	if f.ErrorsOnly {
 		return true
 	}

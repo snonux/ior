@@ -135,8 +135,13 @@ func TestMatchesEmptyFilterMatchesEverything(t *testing.T) {
 			}
 		}
 	}
-	if (Filter{}).Matches(nil) {
+	if (&Filter{}).Matches(nil) {
 		t.Fatal("zero filter matched a nil candidate")
+	}
+	// A nil *Filter behaves like the zero filter (pointer receivers).
+	var nilFilter *Filter
+	if nilFilter.IsActive() || !nilFilter.Matches(testCandidate()) || nilFilter.Matches(nil) {
+		t.Fatal("nil *Filter should be inactive, match every candidate and reject nil")
 	}
 
 	familyOnly := Filter{Family: &StringFilter{Pattern: "Network"}}

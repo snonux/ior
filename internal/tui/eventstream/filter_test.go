@@ -59,17 +59,17 @@ func TestFilterStringDimensions(t *testing.T) {
 
 func TestFilterStringDimensionsSupportAnchors(t *testing.T) {
 	ev := sampleEvent()
-	if !(Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(&ev) {
+	if !(&Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(&ev) {
 		t.Fatalf("expected ^read$ to exactly match read")
 	}
 	ev.Syscall = "readlink"
-	if (Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(&ev) {
+	if (&Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(&ev) {
 		t.Fatalf("expected ^read$ not to match readlink")
 	}
-	if !(Filter{Syscall: &StringFilter{Pattern: "^read"}}).Matches(&ev) {
+	if !(&Filter{Syscall: &StringFilter{Pattern: "^read"}}).Matches(&ev) {
 		t.Fatalf("expected ^read to match readlink")
 	}
-	if !(Filter{Syscall: &StringFilter{Pattern: "link$"}}).Matches(&ev) {
+	if !(&Filter{Syscall: &StringFilter{Pattern: "link$"}}).Matches(&ev) {
 		t.Fatalf("expected link$ to match readlink")
 	}
 }

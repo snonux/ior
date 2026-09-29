@@ -24,12 +24,13 @@ func filteredSeqs(rows []StreamEvent) []uint64 {
 	return seqs
 }
 
-// TestFilterRowsEmptyFilterFastPath covers the stream re-filter used by
-// Model.applyFilter and the CSV export: inactive filters (zero, or only
-// blank patterns) take the bulk-copy fast path and keep every row in order,
-// while a filter with a single configured dimension (family only, errors
-// only) still filters.
-func TestFilterRowsEmptyFilterFastPath(t *testing.T) {
+// TestFilterRowsSelectsMatchingRowsInOrder covers the row selection shared by
+// Model.applyFilter and the CSV export: inactive filters (zero, or only blank
+// patterns) keep every row in order, a filter with a single configured
+// dimension (family only, errors only) still filters, and the result is
+// appended to dst. It checks the result, not which path produced it; the
+// cost of the inactive-filter bulk copy is measured by BenchmarkFilterRows.
+func TestFilterRowsSelectsMatchingRowsInOrder(t *testing.T) {
 	src := filterRowsFixture()
 	cases := []struct {
 		name   string
@@ -54,5 +55,32 @@ func TestFilterRowsEmptyFilterFastPath(t *testing.T) {
 	}
 	if got := filterRows(nil, nil, Filter{}); len(got) != 0 {
 		t.Fatalf("filterRows over no rows = %v, want empty", got)
+	}
+}
+
+// BenchmarkFilterRows measures filterRows over a full ring buffer's worth of
+// rows. The "inactive" case is the bulk-copy fast path taken on every stream
+// tick when no filter is set; compare it with "family" (one configured
+// dimension, Matches per row) to see what the shortcut saves.
+func BenchmarkFilterRows(b *testing.B) {
+	fixture := filterRowsFixture()
+	src := make([]StreamEvent, ringBufferCapacity)
+	for i := range src {
+		src[i] = fixture[i%len(fixture)]
+	}
+	dst := make([]StreamEvent, 0, len(src))
+	for _, bc := range []struct {
+		name   string
+		filter Filter
+	}{
+		{name: "inactive", filter: Filter{}},
+		{name: "family", filter: Filter{Family: &StringFilter{Pattern: "fs"}}},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				dst = filterRows(dst[:0], src, bc.filter)
+			}
+		})
 	}
 }

@@ -85,16 +85,16 @@ func TestFilterFamilyMatchesAndExcludes(t *testing.T) {
 	candidate := testCandidate()
 	candidate.family = "Polling"
 
-	if !(Filter{Family: &StringFilter{Pattern: "Polling"}}).Matches(candidate) {
+	if !(&Filter{Family: &StringFilter{Pattern: "Polling"}}).Matches(candidate) {
 		t.Fatalf("family filter Polling should match Polling candidate")
 	}
-	if !(Filter{Family: &StringFilter{Pattern: "poll"}}).Matches(candidate) {
+	if !(&Filter{Family: &StringFilter{Pattern: "poll"}}).Matches(candidate) {
 		t.Fatalf("family filter should match case-insensitive substring")
 	}
-	if (Filter{Family: &StringFilter{Pattern: "Network"}}).Matches(candidate) {
+	if (&Filter{Family: &StringFilter{Pattern: "Network"}}).Matches(candidate) {
 		t.Fatalf("family filter Network should exclude Polling candidate")
 	}
-	if !(Filter{Family: &StringFilter{Pattern: "Polling"}}).IsActive() {
+	if !(&Filter{Family: &StringFilter{Pattern: "Polling"}}).IsActive() {
 		t.Fatalf("non-empty family filter should be active")
 	}
 
@@ -186,24 +186,24 @@ func TestMatchesSyscallRow(t *testing.T) {
 func TestFilterStringAnchorsSupportExactPrefixAndSuffix(t *testing.T) {
 	candidate := testCandidate()
 
-	if !(Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(candidate) {
+	if !(&Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(candidate) {
 		t.Fatalf("expected ^read$ to exactly match read")
 	}
-	if !(Filter{Syscall: &StringFilter{Pattern: "^re"}}).Matches(candidate) {
+	if !(&Filter{Syscall: &StringFilter{Pattern: "^re"}}).Matches(candidate) {
 		t.Fatalf("expected ^re to match read by prefix")
 	}
-	if !(Filter{File: &StringFilter{Pattern: ".log$"}}).Matches(candidate) {
+	if !(&Filter{File: &StringFilter{Pattern: ".log$"}}).Matches(candidate) {
 		t.Fatalf("expected .log$ to match by suffix")
 	}
 
 	candidate.syscall = "readlink"
-	if (Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(candidate) {
+	if (&Filter{Syscall: &StringFilter{Pattern: "^read$"}}).Matches(candidate) {
 		t.Fatalf("expected ^read$ not to match readlink")
 	}
-	if !(Filter{Syscall: &StringFilter{Pattern: "^read"}}).Matches(candidate) {
+	if !(&Filter{Syscall: &StringFilter{Pattern: "^read"}}).Matches(candidate) {
 		t.Fatalf("expected ^read to match readlink by prefix")
 	}
-	if !(Filter{Syscall: &StringFilter{Pattern: "link$"}}).Matches(candidate) {
+	if !(&Filter{Syscall: &StringFilter{Pattern: "link$"}}).Matches(candidate) {
 		t.Fatalf("expected link$ to match readlink by suffix")
 	}
 }
