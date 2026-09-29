@@ -63,8 +63,8 @@ func BenchmarkEngineSnapshotCaptureLockHold(b *testing.B) {
 }
 
 // BenchmarkEngineSnapshotStaleReservoirs measures a whole Engine.Snapshot
-// (capture, lock-free percentile selection, cached write-back) when every one of 60 full
-// reservoirs needs a percentile recompute.
+// (capture, lock-free percentile selection, cached write-back) when every one
+// of 60 full reservoirs needs a percentile recompute.
 func BenchmarkEngineSnapshotStaleReservoirs(b *testing.B) {
 	engine := NewEngine(DefaultTopN)
 	ids := fillReservoirs(engine, 60, syscallReservoirSampleCapDefault)
