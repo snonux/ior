@@ -495,8 +495,10 @@ not sufficient.
   as the signalling bug above, reached without any restart. The limits are one
   byte below those constants, because the kernel NUL-terminates what it writes.
   "Cannot be found" is scoped to the kernel-field gates: a path resolved
-  through the procfs fallback (`/proc/<pid>/fd`, getcwd) can be longer than the
-  event field, so the check is conservative for those rows. `Model.refuseUnusableFilter`
+  through the procfs fallback (`/proc/<pid>/fd`) can be longer than the event
+  field, and a getcwd row whose cwd did not fit the captured field reports its
+  `MAX_FILENAME_LENGTH - 1`-byte prefix plus a `...` suffix, so the check is
+  conservative for those rows. `Model.refuseUnusableFilter`
   (`internal/tui/tui.go`) therefore runs `ValidateTracepointFields` at *both*
   entry points into the pipeline tail - `applyGlobalFilter` (modal apply,
   table drill-downs, undo-stack pushes) and `replaceGlobalFilter` (the `[`/`]`
@@ -951,8 +953,9 @@ not sufficient.
 
   Retrying at `sys_enter` cannot help (still nofault, still not resident), but
   by `sys_exit` the kernel's own `getname()` has faulted the page in, so the
-  identical read succeeds. The generator therefore emits, **for the open kinds
-  only** (`KindOpen`/`KindMqOpen`, flagged by `recoversFilename` in
+  identical read succeeds. The generator therefore emits, for the open kinds
+  (`KindOpen`/`KindMqOpen`/`KindOpenTree` and the named eventfd creators
+  memfd_create/fsopen, flagged by `recoversFilename` in
   `internal/generate/kindregistry.go`; an exit handler learns what its enter
   captured through `GeneratedTracepoint.EnterKind`, since every `sys_exit_*`
   format is just `long ret` and so classifies as `KindRet`):
@@ -964,6 +967,25 @@ not sufficient.
     `ior_emit_open_name_fixup(...)`, which re-reads the string and publishes it
     as an `OPEN_NAME_FIXUP_EVENT` (48) control record **before** reserving the
     handler's own exit record. All three helpers live in `internal/c/filter.c`.
+
+  **getcwd reuses the same three helpers for an output buffer.** Its path only
+  exists once the call has returned, so `outputPathSyscalls`
+  (`internal/generate/classify.go`, currently just `getcwd`) makes the enter
+  handler stash `args[0]` *unconditionally* right after `ior_on_syscall_enter`
+  (only emitted enters get this far) while the enter stays a header-only
+  `null_event`; the exit handler takes it before `ior_on_syscall_exit` and
+  emits the fixup only under `if (ctx->ret > 0)`, since a failed call wrote
+  nothing into the buffer. Userspace does not splice it into the enter event:
+  `applyCapturedOutputPath` (`internal/eventloop_getcwd.go`, keyed on
+  `capturedOutputPathEnters`, which a test pins to
+  `generate.OutputPathSyscalls()`) puts the path on the pending pair and
+  `handleNullExit` validates it with `finishGetcwdPath` against `ret` (the byte
+  count including the NUL): no path on failure or when the record was lost, a
+  `...` suffix when the cwd was longer than the field, a cut to `ret - 1`
+  bytes otherwise. This replaced a `/proc/<tid>/cwd` readlink at processing
+  time, which reported the wrong directory when the loop lagged behind a
+  `chdir`, nothing once the tracee had exited, and cost a syscall per getcwd
+  on the event loop.
 
   The record uses a dedicated `struct open_name_fixup_event` carrying only the
   enter trace ID, tid and filename alongside its event type: 268 bytes instead
