@@ -28,8 +28,9 @@ func insertLiveTriePath(root *trieNode, frames []string, value, heightValue uint
 //
 // Keeping subtree totals current on every insert is what lets LiveTrie
 // snapshots decide pruning from cached totals instead of re-summing the whole
-// history under the read lock; compaction ranks nodes by them. The batch
-// trie's computeTotals recomputes the same totals.
+// history under the read lock; compaction ranks nodes by their rate,
+// derived from them. The batch trie's computeTotals recomputes the same
+// totals.
 //
 // A new node's name is cloned: frames can be substrings of a much longer
 // record string (see appendPathFrames), and a long-lived trie node must not
@@ -69,14 +70,15 @@ func insertPath(root *trieNode, frames []string, value, heightValue uint64, trac
 // promoteTopChild updates top, a node's list of its largest children ordered
 // by compareLargestFirst, after child's total grew, and returns it.
 //
-// The list stays exact because totals only grow between compactions (which
-// rebuild it, see appendLargestChildren): every child outside the list orders after every child in it.
-// A member that grows can only move forward; a non-member that grows past
-// the last member replaces it, and the evicted member still orders before
-// all remaining non-members. Empty children never enter, matching the
-// snapshot fallback, which ignores them; neither does a compaction bucket,
-// which inserts never reach. Cost: at most trieTopChildren
-// comparisons per path level.
+// The list stays exact because totals only grow and every child outside the
+// list orders after every child in it. Compaction keeps that invariant:
+// folding non-members leaves the list as it is, and folding a member makes
+// foldMarked rebuild it with appendLargestChildren. A member that grows can
+// only move forward; a non-member that grows past the last member replaces
+// it, and the evicted member still orders before all remaining non-members.
+// Empty children never enter, matching the snapshot fallback, which ignores
+// them; neither does a compaction bucket, which inserts never reach. Cost:
+// at most trieTopChildren comparisons per path level.
 func promoteTopChild(top []*trieNode, child *trieNode) []*trieNode {
 	if child.total == 0 {
 		return top

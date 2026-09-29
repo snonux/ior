@@ -10,11 +10,11 @@ const (
 	// show: the 0.1% pruning rule admits at most 1000 visible nodes per depth.
 	liveTrieMaxNodes = 1 << 18
 
-	// liveTrieOtherFrame names the bucket that compaction folds small
-	// sibling subtrees into. It is a leaf whose own value carries their
-	// totals, so every ancestor's total is unchanged by compaction. It is
-	// identified by trieNode.bucket, not by name, so a real frame with this
-	// name stays a separate node.
+	// liveTrieOtherFrame names the bucket that compaction folds the
+	// lowest-ranked sibling subtrees into. It is a leaf whose own value
+	// carries their totals, so every ancestor's total is unchanged by
+	// compaction. It is identified by trieNode.bucket, not by name, so a real
+	// frame with this name stays a separate node.
 	liveTrieOtherFrame = "[other]"
 )
 

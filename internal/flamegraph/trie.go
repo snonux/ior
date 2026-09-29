@@ -14,9 +14,9 @@ import (
 // ties by name, maintained by insertLiveTriePath: its first entry bounds
 // every frame child's total and it is exactly the snapshot fallback set, so
 // a wide fan-out costs a snapshot constant time. bucket is the child that
-// compaction folded small children into (also listed in children, never in
-// childMap or topChildren). mark is compaction's scratch state and is
-// markNone outside compactLocked.
+// compaction folded the lowest-ranked children into (also listed in
+// children, never in childMap or topChildren). mark is compaction's scratch
+// state and is markNone outside compactLocked.
 type trieNode struct {
 	name        string
 	value       uint64
