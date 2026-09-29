@@ -2,9 +2,10 @@ package globalfilter
 
 import (
 	"ior/internal/event"
-	"ior/internal/types"
 )
 
+// MatchPair is the package-level form of Filter.MatchPair, kept for callers
+// that hold the filter and pair as separate values.
 func MatchPair(filter Filter, pair *event.Pair) bool {
 	return filter.MatchPair(pair)
 }
@@ -13,11 +14,28 @@ type pairCandidate struct {
 	pair *event.Pair
 }
 
+func (p pairCandidate) OldFileValue() string {
+	if p.pair == nil {
+		return ""
+	}
+	// The rename-like kinds carry their source path here (Pair.Oldname);
+	// every other kind leaves it empty, where the file dimension of Matches
+	// is exactly its single-name behaviour.
+	return p.pair.Oldname
+}
+
 func (p pairCandidate) SyscallValue() string {
 	if p.pair == nil || p.pair.EnterEv == nil {
 		return ""
 	}
 	return p.pair.EnterEv.GetTraceId().Name()
+}
+
+func (p pairCandidate) FamilyValue() string {
+	if p.pair == nil || p.pair.EnterEv == nil {
+		return ""
+	}
+	return string(p.pair.EnterEv.GetTraceId().Family())
 }
 
 func (p pairCandidate) CommValue() string {
@@ -84,13 +102,16 @@ func (p pairCandidate) ReturnValue() int64 {
 	if p.pair == nil {
 		return 0
 	}
-	retEvent, ok := p.pair.ExitEv.(*types.RetEvent)
+	// Match on the ret-carrying interface so filters on ret/error also see the
+	// kind-specific exits (accept/accept4, pipe/pipe2, socketpair,
+	// eventfd/pidfd), not just the generic *types.RetEvent.
+	retEvent, ok := p.pair.ExitEv.(event.RetCarrier)
 	if !ok {
 		return 0
 	}
-	return retEvent.Ret
+	return retEvent.GetRet()
 }
 
 func (p pairCandidate) ErrorValue() bool {
-	return p.ReturnValue() < 0
+	return event.IsErrnoRet(p.ReturnValue())
 }

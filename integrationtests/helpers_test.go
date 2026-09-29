@@ -3,7 +3,10 @@ package integrationtests
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+
+	iorparquet "ior/internal/parquet"
 )
 
 const (
@@ -52,9 +55,14 @@ func runScenario(t *testing.T, scenario string, expected []ExpectedEvent) {
 
 func runScenarioResult(t *testing.T, scenario string, expected []ExpectedEvent) (TestResult, int) {
 	t.Helper()
+	return runScenarioResultWithIorArgs(t, scenario, expected, nil)
+}
+
+func runScenarioResultWithIorArgs(t *testing.T, scenario string, expected []ExpectedEvent, extraIorArgs []string) (TestResult, int) {
+	t.Helper()
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
-	result, pid, err := h.Run(scenario, defaultDuration)
+	result, pid, err := h.RunWithIorArgs(scenario, defaultDuration, extraIorArgs)
 	if err != nil {
 		t.Fatalf("run scenario %s: %v", scenario, err)
 	}
@@ -63,6 +71,58 @@ func runScenarioResult(t *testing.T, scenario string, expected []ExpectedEvent) 
 	AssertNoUnexpectedComm(t, result, "ioworkload")
 	AssertEventsPresent(t, result, expected)
 	return result, pid
+}
+
+func runParquetScenarioRows(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string) ([]iorparquet.Record, int) {
+	t.Helper()
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	h.WorkloadEnv = workloadEnv
+	path, pid, err := h.RunParquetWithIorArgs(scenario, duration, extraIorArgs)
+	if err != nil {
+		t.Fatalf("run parquet scenario %s: %v", scenario, err)
+	}
+
+	rows := readParquetRecords(t, path)
+	if len(rows) == 0 {
+		t.Fatalf("scenario %s produced no parquet rows", scenario)
+	}
+	assertParquetRowsOwnedBy(t, rows, uint32(pid), "ioworkload")
+	return rows, pid
+}
+
+func runParquetErrorScenario(t *testing.T, scenario string, errno syscall.Errno, exp ExpectedRow, extraIorArgs []string) {
+	t.Helper()
+	rows, _ := runParquetScenarioRows(t, scenario, defaultDuration, extraIorArgs, nil)
+	exp.Comm = "ioworkload"
+	exp.RetVal = ptrTo(-int64(errno))
+	exp.IsError = ptrTo(true)
+	AssertRowsPresent(t, rows, []ExpectedRow{exp})
+}
+
+func readParquetRecords(t *testing.T, path string) []iorparquet.Record {
+	t.Helper()
+	rows, err := LoadParquetRows(path)
+	if err != nil {
+		t.Fatalf("load parquet records: %v", err)
+	}
+	return rows
+}
+
+func assertParquetRowsOwnedBy(t *testing.T, rows []iorparquet.Record, pid uint32, comm string) {
+	t.Helper()
+	for _, row := range rows {
+		if row.PID != pid {
+			t.Fatalf("parquet row PID = %d, want %d: %+v", row.PID, pid, row)
+		}
+		if row.Comm != "" && row.Comm != comm {
+			t.Fatalf("parquet row comm = %q, want %q: %+v", row.Comm, comm, row)
+		}
+	}
+}
+
+func ptrTo[T any](value T) *T {
+	return &value
 }
 
 func enableParallelIfRequested(t *testing.T) {

@@ -56,7 +56,7 @@ func writeIorZst(t *testing.T, dir string, records []flamegraph.IterRecord) stri
 	if err != nil {
 		t.Fatalf("create file: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := zstd.NewWriter(f)
 	if _, err := w.Write(buf.Bytes()); err != nil {
@@ -237,8 +237,8 @@ func TestLoadTestResultInvalidData(t *testing.T) {
 	if _, err := w.Write([]byte("this is not gob data")); err != nil {
 		t.Fatalf("zstd write: %v", err)
 	}
-	w.Close()
-	f.Close()
+	_ = w.Close()
+	_ = f.Close()
 
 	_, err = LoadTestResult(filePath)
 	if err == nil {

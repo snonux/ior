@@ -6,7 +6,10 @@ import (
 	"syscall"
 )
 
-const sysCloseRange = 436
+const (
+	sysCloseRange         = 436
+	closeRangeCloexecFlag = 1 << 2
+)
 
 // closeBasic opens multiple files and closes them.
 func closeBasic() error {
@@ -60,6 +63,96 @@ func closeRange() error {
 	_, _, errno := syscall.Syscall(sysCloseRange, first, last, 0)
 	if errno != 0 {
 		return fmt.Errorf("close_range: %w", errno)
+	}
+	return nil
+}
+
+// closeRangeBounded opens a contiguous block of low fds plus one higher fd,
+// then closes only the low block via close_range(first, last, 0) where last is
+// strictly below the higher fd. It writes to the higher fd afterwards to prove
+// it stayed open. This exercises close_range's upper-bound handling end to end:
+// ior must keep the higher fd tracked rather than evicting everything >= first.
+func closeRangeBounded() error {
+	dir, cleanup, err := makeTempDir("close-range-bounded")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	var lowFds []int
+	for i := range 3 {
+		path := filepath.Join(dir, fmt.Sprintf("closerangelow-%d.txt", i))
+		fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+		if err != nil {
+			return fmt.Errorf("open low %d: %w", i, err)
+		}
+		lowFds = append(lowFds, fd)
+	}
+
+	highPath := filepath.Join(dir, "closerangehigh.txt")
+	highFd, err := syscall.Open(highPath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open high: %w", err)
+	}
+	defer syscall.Close(highFd)
+
+	if highFd <= lowFds[len(lowFds)-1] {
+		return fmt.Errorf("high fd %d not above low fds %v", highFd, lowFds)
+	}
+
+	first := uintptr(lowFds[0])
+	last := uintptr(lowFds[len(lowFds)-1])
+	if _, _, errno := syscall.Syscall(sysCloseRange, first, last, 0); errno != 0 {
+		return fmt.Errorf("close_range: %w", errno)
+	}
+
+	// highFd is above last, so it must still be open and usable.
+	if _, err := syscall.Write(highFd, []byte("still-open")); err != nil {
+		return fmt.Errorf("write high fd: %w", err)
+	}
+	return nil
+}
+
+// closeRangeCloexec marks a bounded range close-on-exec, then writes through
+// every descriptor to prove the operation did not close them.
+func closeRangeCloexec() error {
+	dir, cleanup, err := makeTempDir("close-range-cloexec")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	var lowFds []int
+	for i := range 3 {
+		path := filepath.Join(dir, fmt.Sprintf("closerangecloexec-low-%d.txt", i))
+		fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+		if err != nil {
+			return fmt.Errorf("open %d: %w", i, err)
+		}
+		lowFds = append(lowFds, fd)
+		defer syscall.Close(fd)
+	}
+
+	highPath := filepath.Join(dir, "closerangecloexec-high.txt")
+	highFD, err := syscall.Open(highPath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open high: %w", err)
+	}
+	defer syscall.Close(highFD)
+
+	if lowFds[2]-lowFds[0] != 2 || highFD <= lowFds[2] {
+		return fmt.Errorf("fds are not an ordered low range plus high descriptor: low=%v high=%d", lowFds, highFD)
+	}
+	if _, _, errno := syscall.Syscall(sysCloseRange, uintptr(lowFds[0]), uintptr(lowFds[2]), closeRangeCloexecFlag); errno != 0 {
+		return fmt.Errorf("close_range CLOEXEC: %w", errno)
+	}
+	for _, fd := range lowFds {
+		if _, err := syscall.Write(fd, []byte("still-open")); err != nil {
+			return fmt.Errorf("write CLOEXEC fd %d: %w", fd, err)
+		}
+	}
+	if _, err := syscall.Write(highFD, []byte("outside-range")); err != nil {
+		return fmt.Errorf("write high fd %d: %w", highFD, err)
 	}
 	return nil
 }

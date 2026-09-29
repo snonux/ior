@@ -18,6 +18,13 @@ type Syscall struct {
 type GeneratedTracepoint struct {
 	Format         *Format
 	Classification ClassificationResult
+	// EnterKind is the classification of the *enter* side of the same syscall.
+	// It is only meaningful on an exit tracepoint, where the handler otherwise
+	// has no idea what the enter side captured: a sys_exit_* format is always
+	// just "long ret", so every exit classifies as KindRet. The filename
+	// recovery in renderHandler needs exactly that missing context - it must
+	// run on the exit of an open, not on the exit of a read.
+	EnterKind TracepointKind
 }
 
 // GenerateTracepointsC produces the full generated_tracepoints.c content from
@@ -48,9 +55,11 @@ func GenerateTracepointsC(formats []Format) string {
 	}
 	b.WriteString("\n")
 
-	for _, tp := range accepted {
+	for i, tp := range accepted {
 		b.WriteString(generateBPFHandler(tp))
-		b.WriteString("\n")
+		if i < len(accepted)-1 {
+			b.WriteString("\n")
+		}
 	}
 
 	return b.String()
@@ -94,7 +103,7 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 	allCanGenerate := true
 
 	if sc.Enter != nil {
-		enterClass = ClassifyFormat(sc.Enter)
+		enterClass = classifyEnterForGeneration(sc.Enter)
 		if enterClass.Kind == KindNone {
 			allCanGenerate = false
 		}
@@ -113,7 +122,7 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 
 	if !allCanGenerate {
 		names := syscallFormatNames(sc)
-		return nil, fmt.Sprintf("Ignoring %s as possibly not file I/O related", strings.Join(names, " "))
+		return nil, fmt.Sprintf("Skipping %s as incomplete or unclassifiable", strings.Join(names, " "))
 	}
 
 	if isEnterRejected(enterClass.Kind) {
@@ -125,10 +134,27 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 	if sc.Enter != nil {
 		result = append(result, GeneratedTracepoint{Format: sc.Enter, Classification: enterClass})
 	}
-	if sc.Exit != nil {
-		result = append(result, GeneratedTracepoint{Format: sc.Exit, Classification: exitClass})
+	// Emit the exit handler only for syscalls that can actually return.
+	// Noreturn syscalls (exit, exit_group, rt_sigreturn) never return to the
+	// syscall site, so their sys_exit tracepoint never fires; emitting a handler
+	// would be dead code in the generated BPF program. We still emit their enter
+	// handler above.
+	if sc.Exit != nil && !isNoreturnSyscall(sc.Name) {
+		result = append(result, GeneratedTracepoint{
+			Format:         sc.Exit,
+			Classification: exitClass,
+			EnterKind:      enterClass.Kind,
+		})
 	}
 	return result, ""
+}
+
+func classifyEnterForGeneration(f *Format) ClassificationResult {
+	classification := ClassifyFormat(f)
+	if classification.Kind != KindNone || len(f.ExternalFields) == 0 {
+		return classification
+	}
+	return ClassificationResult{Kind: KindNull}
 }
 
 // isEnterRejected reports whether kind must not appear on a syscall-enter
@@ -136,6 +162,33 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 // needs updating when a new TracepointKind is added.
 func isEnterRejected(kind TracepointKind) bool {
 	return !lookupKind(kind).enterAccepted
+}
+
+// noreturnSyscalls lists syscalls that never return to the syscall site.
+// Their sys_exit tracepoint can never fire, so the generator suppresses the
+// matching exit handler (see classifySyscall) to avoid dead code in the
+// generated BPF program, and the enter handler uses the noreturn enter hook
+// that skips the (otherwise un-reclaimable) syscall_enter_state_map write.
+//
+//   - exit / exit_group terminate the thread/process; control never returns.
+//   - rt_sigreturn restores the pre-signal execution context off the signal
+//     stack frame and resumes the interrupted instruction. It does NOT return
+//     to the instruction after the rt_sigreturn syscall, so the kernel never
+//     fires sys_exit_rt_sigreturn. Verified empirically against
+//     /sys/kernel/tracing: sys_enter_rt_sigreturn fires once per signal-handler
+//     return while sys_exit_rt_sigreturn never does. The man page (sigreturn(2))
+//     states plainly that "sigreturn() never returns". rt_sigreturn is emitted
+//     by the signal trampoline, not called directly by applications.
+var noreturnSyscalls = map[string]bool{
+	"exit":         true,
+	"exit_group":   true,
+	"rt_sigreturn": true,
+}
+
+// isNoreturnSyscall reports whether the named syscall never returns and thus
+// must not have an exit handler emitted.
+func isNoreturnSyscall(name string) bool {
+	return noreturnSyscalls[name]
 }
 
 func syscallFormatNames(sc Syscall) []string {

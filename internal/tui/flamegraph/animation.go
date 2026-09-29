@@ -77,13 +77,28 @@ func (a *AnimationState) SetTargets(targets []tuiFrame) {
 	} else {
 		a.frames = a.frames[:len(a.springs)]
 	}
-	a.settled = len(a.springs) == 0
+	// Settled only when every spring is at rest on its target, so installing
+	// a layout identical to the one at rest does not start an animation.
+	a.settled = true
 	for _, spring := range a.springs {
 		if !isSpringSettled(spring) {
 			a.settled = false
 			break
 		}
 	}
+}
+
+// SnapToTargets moves every spring onto its target at rest, as done when a
+// layout is installed without animating. Left in place, the springs would keep
+// the pre-snap positions, and a later animated layout of the same paths would
+// spring from those instead of from the frames on screen.
+func (a *AnimationState) SnapToTargets() {
+	for idx := range a.springs {
+		spring := &a.springs[idx]
+		spring.currentW, spring.velocityW = spring.targetW, 0
+		spring.currentCol, spring.velocityCol = spring.targetCol, 0
+	}
+	a.settled = true
 }
 
 // Tick advances springs by delta seconds and returns true while animation is active.

@@ -39,10 +39,6 @@ type fileSnapshotInput struct {
 
 type fileRankHeap []*fileRankStats
 
-func newFileRanker() *fileRanker {
-	return newFileRankerWithConfig(fileRankTopNDefault)
-}
-
 func newFileRankerWithConfig(topN int) *fileRanker {
 	if topN <= 0 {
 		topN = fileRankTopNDefault

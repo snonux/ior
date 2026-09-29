@@ -130,6 +130,363 @@ func TestNullEventSerialization(t *testing.T) {
 	t.Log("NullEvent could be serialized correctly")
 }
 
+func TestSocketEventSerialization(t *testing.T) {
+	socketEv1 := SocketEvent{
+		EventType: ENTER_SOCKET_EVENT,
+		TraceId:   SYS_ENTER_SOCKET,
+		Time:      1234,
+		Pid:       30,
+		Tid:       31,
+		Family:    1,
+		Type:      2,
+		Protocol:  0,
+	}
+	bytes, err := socketEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	socketEv2 := NewSocketEvent(bytes)
+
+	assertEquals(t, socketEv1.EventType, socketEv2.EventType)
+	assertEquals(t, socketEv1.TraceId, socketEv2.TraceId)
+	assertEquals(t, socketEv1.Time, socketEv2.Time)
+	assertEquals(t, socketEv1.Pid, socketEv2.Pid)
+	assertEquals(t, socketEv1.Tid, socketEv2.Tid)
+	assertEquals(t, socketEv1.Family, socketEv2.Family)
+	assertEquals(t, socketEv1.Type, socketEv2.Type)
+	assertEquals(t, socketEv1.Protocol, socketEv2.Protocol)
+}
+
+func TestSocketpairEventSerialization(t *testing.T) {
+	socketpairEv1 := SocketpairEvent{
+		EventType: ENTER_SOCKETPAIR_EVENT,
+		TraceId:   SYS_ENTER_SOCKETPAIR,
+		Time:      2345,
+		Pid:       32,
+		Tid:       33,
+		Family:    1,
+		Type:      1,
+		Protocol:  0,
+		Sv0:       42,
+		Sv1:       43,
+		Ret:       -1,
+	}
+	bytes, err := socketpairEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	socketpairEv2 := NewSocketpairEvent(bytes)
+
+	assertEquals(t, socketpairEv1.EventType, socketpairEv2.EventType)
+	assertEquals(t, socketpairEv1.TraceId, socketpairEv2.TraceId)
+	assertEquals(t, socketpairEv1.Time, socketpairEv2.Time)
+	assertEquals(t, socketpairEv1.Pid, socketpairEv2.Pid)
+	assertEquals(t, socketpairEv1.Tid, socketpairEv2.Tid)
+	assertEquals(t, socketpairEv1.Family, socketpairEv2.Family)
+	assertEquals(t, socketpairEv1.Type, socketpairEv2.Type)
+	assertEquals(t, socketpairEv1.Protocol, socketpairEv2.Protocol)
+	assertEquals(t, socketpairEv1.Sv0, socketpairEv2.Sv0)
+	assertEquals(t, socketpairEv1.Sv1, socketpairEv2.Sv1)
+	assertEquals(t, socketpairEv1.Ret, socketpairEv2.Ret)
+}
+
+func TestAcceptEventSerialization(t *testing.T) {
+	acceptEv1 := AcceptEvent{
+		EventType:     ENTER_ACCEPT_EVENT,
+		TraceId:       SYS_ENTER_ACCEPT4,
+		Time:          3456,
+		Pid:           34,
+		Tid:           35,
+		Fd:            9,
+		Ret:           -1,
+		Flags:         0x80800,
+		SchemaVersion: ACCEPT_EVENT_SCHEMA_VERSION,
+	}
+	bytes, err := acceptEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	acceptEv2 := NewAcceptEvent(bytes)
+
+	assertEquals(t, acceptEv1.EventType, acceptEv2.EventType)
+	assertEquals(t, acceptEv1.TraceId, acceptEv2.TraceId)
+	assertEquals(t, acceptEv1.Time, acceptEv2.Time)
+	assertEquals(t, acceptEv1.Pid, acceptEv2.Pid)
+	assertEquals(t, acceptEv1.Tid, acceptEv2.Tid)
+	assertEquals(t, acceptEv1.Fd, acceptEv2.Fd)
+	assertEquals(t, acceptEv1.Ret, acceptEv2.Ret)
+	assertEquals(t, acceptEv1.Flags, acceptEv2.Flags)
+	assertEquals(t, acceptEv1.SchemaVersion, acceptEv2.SchemaVersion)
+}
+
+func TestPipeEventSerialization(t *testing.T) {
+	pipeEv1 := PipeEvent{
+		EventType: ENTER_PIPE_EVENT,
+		TraceId:   SYS_ENTER_PIPE2,
+		Time:      4567,
+		Pid:       36,
+		Tid:       37,
+		Flags:     0x80000,
+		Fd0:       10,
+		Fd1:       11,
+		Ret:       0,
+	}
+	bytes, err := pipeEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	pipeEv2 := NewPipeEvent(bytes)
+
+	assertEquals(t, pipeEv1.EventType, pipeEv2.EventType)
+	assertEquals(t, pipeEv1.TraceId, pipeEv2.TraceId)
+	assertEquals(t, pipeEv1.Time, pipeEv2.Time)
+	assertEquals(t, pipeEv1.Pid, pipeEv2.Pid)
+	assertEquals(t, pipeEv1.Tid, pipeEv2.Tid)
+	assertEquals(t, pipeEv1.Flags, pipeEv2.Flags)
+	assertEquals(t, pipeEv1.Fd0, pipeEv2.Fd0)
+	assertEquals(t, pipeEv1.Fd1, pipeEv2.Fd1)
+	assertEquals(t, pipeEv1.Ret, pipeEv2.Ret)
+}
+
+func TestEventfdEventSerialization(t *testing.T) {
+	eventfdEv1 := EventfdEvent{
+		EventType:      ENTER_EVENTFD_EVENT,
+		TraceId:        SYS_ENTER_EVENTFD2,
+		Time:           5678,
+		Pid:            38,
+		Tid:            39,
+		Flags:          0x800,
+		Ret:            12,
+		Fd:             7,
+		Filename:       testFilename("ior-memfd"),
+		FilenameStatus: PATH_READ_OK,
+		SchemaVersion:  EVENTFD_EVENT_SCHEMA_VERSION,
+	}
+	bytes, err := eventfdEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	if len(bytes) != eventfdNameEventSize {
+		t.Fatalf("serialized eventfd size = %d, want %d", len(bytes), eventfdNameEventSize)
+	}
+	eventfdEv2 := NewEventfdEvent(bytes)
+
+	assertEquals(t, eventfdEv1.EventType, eventfdEv2.EventType)
+	assertEquals(t, eventfdEv1.TraceId, eventfdEv2.TraceId)
+	assertEquals(t, eventfdEv1.Time, eventfdEv2.Time)
+	assertEquals(t, eventfdEv1.Pid, eventfdEv2.Pid)
+	assertEquals(t, eventfdEv1.Tid, eventfdEv2.Tid)
+	assertEquals(t, eventfdEv1.Flags, eventfdEv2.Flags)
+	assertEquals(t, eventfdEv1.Ret, eventfdEv2.Ret)
+	assertEquals(t, eventfdEv1.Fd, eventfdEv2.Fd)
+	assertEquals(t, eventfdEv1.Filename, eventfdEv2.Filename)
+	assertEquals(t, eventfdEv1.FilenameStatus, eventfdEv2.FilenameStatus)
+	assertEquals(t, eventfdEv1.SchemaVersion, eventfdEv2.SchemaVersion)
+}
+
+func TestEpollCtlEventSerialization(t *testing.T) {
+	epollCtlEv1 := EpollCtlEvent{
+		EventType: ENTER_EPOLL_CTL_EVENT,
+		TraceId:   SYS_ENTER_EPOLL_CTL,
+		Time:      6789,
+		Pid:       40,
+		Tid:       41,
+		Epfd:      9,
+		Op:        1,
+		Fd:        12,
+		Events:    0x5,
+	}
+	bytes, err := epollCtlEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	epollCtlEv2 := NewEpollCtlEvent(bytes)
+
+	assertEquals(t, epollCtlEv1.EventType, epollCtlEv2.EventType)
+	assertEquals(t, epollCtlEv1.TraceId, epollCtlEv2.TraceId)
+	assertEquals(t, epollCtlEv1.Time, epollCtlEv2.Time)
+	assertEquals(t, epollCtlEv1.Pid, epollCtlEv2.Pid)
+	assertEquals(t, epollCtlEv1.Tid, epollCtlEv2.Tid)
+	assertEquals(t, epollCtlEv1.Epfd, epollCtlEv2.Epfd)
+	assertEquals(t, epollCtlEv1.Op, epollCtlEv2.Op)
+	assertEquals(t, epollCtlEv1.Fd, epollCtlEv2.Fd)
+	assertEquals(t, epollCtlEv1.Events, epollCtlEv2.Events)
+}
+
+func TestTwoFdEventSerialization(t *testing.T) {
+	twoFdEv1 := TwoFdEvent{
+		EventType:     ENTER_TWO_FD_EVENT,
+		TraceId:       SYS_ENTER_MOVE_MOUNT,
+		Time:          6790,
+		Pid:           40,
+		Tid:           41,
+		FdA:           12,
+		FdB:           34,
+		Extra:         0x20,
+		Oldname:       testFilename("source"),
+		Newname:       testFilename("destination"),
+		OldnameStatus: PATH_READ_OK,
+		NewnameStatus: PATH_READ_OK,
+		SchemaVersion: TWO_FD_EVENT_SCHEMA_VERSION,
+	}
+	bytes, err := twoFdEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	twoFdEv2 := NewTwoFdEvent(bytes)
+
+	assertEquals(t, twoFdEv1.EventType, twoFdEv2.EventType)
+	assertEquals(t, twoFdEv1.TraceId, twoFdEv2.TraceId)
+	assertEquals(t, twoFdEv1.Time, twoFdEv2.Time)
+	assertEquals(t, twoFdEv1.Pid, twoFdEv2.Pid)
+	assertEquals(t, twoFdEv1.Tid, twoFdEv2.Tid)
+	assertEquals(t, twoFdEv1.FdA, twoFdEv2.FdA)
+	assertEquals(t, twoFdEv1.FdB, twoFdEv2.FdB)
+	assertEquals(t, twoFdEv1.Extra, twoFdEv2.Extra)
+	assertEquals(t, twoFdEv1.Oldname, twoFdEv2.Oldname)
+	assertEquals(t, twoFdEv1.Newname, twoFdEv2.Newname)
+	assertEquals(t, twoFdEv1.OldnameStatus, twoFdEv2.OldnameStatus)
+	assertEquals(t, twoFdEv1.NewnameStatus, twoFdEv2.NewnameStatus)
+	assertEquals(t, twoFdEv1.SchemaVersion, twoFdEv2.SchemaVersion)
+}
+
+func TestPollEventSerialization(t *testing.T) {
+	pollEv1 := PollEvent{
+		EventType: ENTER_POLL_EVENT,
+		TraceId:   SYS_ENTER_POLL,
+		Time:      7890,
+		Pid:       42,
+		Tid:       43,
+		Nfds:      6,
+		TimeoutNs: 250_000_000,
+	}
+	bytes, err := pollEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	pollEv2 := NewPollEvent(bytes)
+
+	assertEquals(t, pollEv1.EventType, pollEv2.EventType)
+	assertEquals(t, pollEv1.TraceId, pollEv2.TraceId)
+	assertEquals(t, pollEv1.Time, pollEv2.Time)
+	assertEquals(t, pollEv1.Pid, pollEv2.Pid)
+	assertEquals(t, pollEv1.Tid, pollEv2.Tid)
+	assertEquals(t, pollEv1.Nfds, pollEv2.Nfds)
+	assertEquals(t, pollEv1.TimeoutNs, pollEv2.TimeoutNs)
+}
+
+func TestSleepEventSerialization(t *testing.T) {
+	sleepEv1 := SleepEvent{
+		EventType:   ENTER_SLEEP_EVENT,
+		TraceId:     SYS_ENTER_CLOCK_NANOSLEEP,
+		Time:        7901,
+		Pid:         44,
+		Tid:         45,
+		RequestedNs: 150_000_000,
+	}
+	bytes, err := sleepEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	sleepEv2 := NewSleepEvent(bytes)
+
+	assertEquals(t, sleepEv1.EventType, sleepEv2.EventType)
+	assertEquals(t, sleepEv1.TraceId, sleepEv2.TraceId)
+	assertEquals(t, sleepEv1.Time, sleepEv2.Time)
+	assertEquals(t, sleepEv1.Pid, sleepEv2.Pid)
+	assertEquals(t, sleepEv1.Tid, sleepEv2.Tid)
+	assertEquals(t, sleepEv1.RequestedNs, sleepEv2.RequestedNs)
+}
+
+func TestKeyctlEventSerialization(t *testing.T) {
+	keyctlEv1 := KeyctlEvent{
+		EventType: ENTER_KEYCTL_EVENT,
+		TraceId:   SYS_ENTER_KEYCTL,
+		Time:      7902,
+		Pid:       46,
+		Tid:       47,
+		Option:    1,
+		KeySerial: 2,
+		Value:     3,
+	}
+	bytes, err := keyctlEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	keyctlEv2 := NewKeyctlEvent(bytes)
+
+	assertEquals(t, keyctlEv1.EventType, keyctlEv2.EventType)
+	assertEquals(t, keyctlEv1.TraceId, keyctlEv2.TraceId)
+	assertEquals(t, keyctlEv1.Time, keyctlEv2.Time)
+	assertEquals(t, keyctlEv1.Pid, keyctlEv2.Pid)
+	assertEquals(t, keyctlEv1.Tid, keyctlEv2.Tid)
+	assertEquals(t, keyctlEv1.Option, keyctlEv2.Option)
+	assertEquals(t, keyctlEv1.KeySerial, keyctlEv2.KeySerial)
+	assertEquals(t, keyctlEv1.Value, keyctlEv2.Value)
+}
+
+func TestPtraceEventSerialization(t *testing.T) {
+	ptraceEv1 := PtraceEvent{
+		EventType: ENTER_PTRACE_EVENT,
+		TraceId:   SYS_ENTER_PTRACE,
+		Time:      7903,
+		Pid:       48,
+		Tid:       49,
+		Request:   4,
+		TargetPid: 10,
+		Data:      5,
+	}
+	bytes, err := ptraceEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	ptraceEv2 := NewPtraceEvent(bytes)
+
+	assertEquals(t, ptraceEv1.EventType, ptraceEv2.EventType)
+	assertEquals(t, ptraceEv1.TraceId, ptraceEv2.TraceId)
+	assertEquals(t, ptraceEv1.Time, ptraceEv2.Time)
+	assertEquals(t, ptraceEv1.Pid, ptraceEv2.Pid)
+	assertEquals(t, ptraceEv1.Tid, ptraceEv2.Tid)
+	assertEquals(t, ptraceEv1.Request, ptraceEv2.Request)
+	assertEquals(t, ptraceEv1.TargetPid, ptraceEv2.TargetPid)
+	assertEquals(t, ptraceEv1.Data, ptraceEv2.Data)
+}
+
+func TestPerfOpenEventSerialization(t *testing.T) {
+	perfEv1 := PerfOpenEvent{
+		EventType: ENTER_PERF_OPEN_EVENT,
+		TraceId:   SYS_ENTER_PERF_EVENT_OPEN,
+		Time:      7904,
+		Pid:       50,
+		Tid:       51,
+		AttrType:  1,
+		AttrSize:  64,
+		Config:    2,
+		TargetPid: 0,
+		Cpu:       -1,
+		GroupFd:   -1,
+		Flags:     0,
+	}
+	bytes, err := perfEv1.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	perfEv2 := NewPerfOpenEvent(bytes)
+
+	assertEquals(t, perfEv1.EventType, perfEv2.EventType)
+	assertEquals(t, perfEv1.TraceId, perfEv2.TraceId)
+	assertEquals(t, perfEv1.Time, perfEv2.Time)
+	assertEquals(t, perfEv1.Pid, perfEv2.Pid)
+	assertEquals(t, perfEv1.Tid, perfEv2.Tid)
+	assertEquals(t, perfEv1.AttrType, perfEv2.AttrType)
+	assertEquals(t, perfEv1.AttrSize, perfEv2.AttrSize)
+	assertEquals(t, perfEv1.Config, perfEv2.Config)
+	assertEquals(t, perfEv1.TargetPid, perfEv2.TargetPid)
+	assertEquals(t, perfEv1.Cpu, perfEv2.Cpu)
+	assertEquals(t, perfEv1.GroupFd, perfEv2.GroupFd)
+	assertEquals(t, perfEv1.Flags, perfEv2.Flags)
+}
+
 func TestEqualsDifferentTypes(t *testing.T) {
 	openEv := OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 1, Tid: 1}
 	nullEv := NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 1, Tid: 1}

@@ -25,6 +25,17 @@ struct open_event {
     __s32 flags;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
+    __s32 dirfd;
+    __u32 schema_version;
+    __u32 filename_status;
+    __u32 schema_reserved;
+};
+
+struct open_name_fixup_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u32 tid;
+    char filename[MAX_FILENAME_LENGTH];
 };
 
 struct null_event {
@@ -47,6 +58,8 @@ struct fd_event {
 
 const testDefines = `#define SYS_ENTER_OPENAT 784
 #define SYS_EXIT_OPENAT 783
+#define SYS_ENTER_EPOLL_WAIT 782
+#define SYS_EXIT_EPOLL_WAIT 781
 `
 
 func TestParseCTypesInput(t *testing.T) {
@@ -55,14 +68,14 @@ func TestParseCTypesInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCTypesInput failed: %v", err)
 	}
-	if len(structs) != 3 {
-		t.Fatalf("expected 3 structs, got %d", len(structs))
+	if len(structs) != 4 {
+		t.Fatalf("expected 4 structs, got %d", len(structs))
 	}
 	if structs[0].Name != "open_event" {
 		t.Errorf("first struct name = %q, want open_event", structs[0].Name)
 	}
-	if len(structs[0].Members) != 8 {
-		t.Errorf("open_event members = %d, want 8", len(structs[0].Members))
+	if len(structs[0].Members) != 12 {
+		t.Errorf("open_event members = %d, want 12", len(structs[0].Members))
 	}
 
 	// Check array member
@@ -72,7 +85,7 @@ func TestParseCTypesInput(t *testing.T) {
 	}
 
 	// Check constants
-	expectedConsts := 8 // MAX_FILENAME_LENGTH, MAX_PROGNAME_LENGTH, 2 event types, 2 classified, 2 SYS_
+	expectedConsts := 10 // MAX_FILENAME_LENGTH, MAX_PROGNAME_LENGTH, 2 event types, 2 classified, 4 SYS_
 	if len(constants) != expectedConsts {
 		t.Errorf("constants = %d, want %d", len(constants), expectedConsts)
 	}
@@ -85,9 +98,9 @@ func TestParseCStructMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fd := structs[2] // fd_event
+	fd := structs[3] // fd_event
 	if fd.Name != "fd_event" {
-		t.Fatalf("third struct = %q, want fd_event", fd.Name)
+		t.Fatalf("fourth struct = %q, want fd_event", fd.Name)
 	}
 	if len(fd.Members) != 6 {
 		t.Fatalf("fd_event members = %d, want 6", len(fd.Members))
@@ -146,9 +159,40 @@ func TestGenerateTypesGoStructs(t *testing.T) {
 	requireContains(t, output, "TraceId TraceId")
 	requireContains(t, output, "Time uint64")
 	requireContains(t, output, "Pid uint32")
+	requireContains(t, output, "Dirfd int32")
+	requireContains(t, output, "SchemaVersion uint32")
+	requireContains(t, output, "FilenameStatus uint32")
+	requireContains(t, output, "SchemaReserved uint32")
 	requireContains(t, output, "Flags int32")
 	requireContains(t, output, "Filename [MAX_FILENAME_LENGTH]byte")
 	requireContains(t, output, "Comm [MAX_PROGNAME_LENGTH]byte")
+	requireContains(t, output, "type OpenNameFixupEvent struct {")
+	requireContains(t, output, "EventType EventType; TraceId TraceId; Tid uint32; Filename [MAX_FILENAME_LENGTH]byte")
+}
+
+func TestGenerateTypesGoOmitsGettersForFieldsARecordDoesNotCarry(t *testing.T) {
+	structs, constants, err := ParseCTypesInput(strings.NewReader(testTypesH + testDefines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+	start := strings.Index(output, "type OpenNameFixupEvent struct {")
+	if start < 0 {
+		t.Fatal("generated output has no OpenNameFixupEvent")
+	}
+	end := strings.Index(output[start:], "type NullEvent struct {")
+	if end < 0 {
+		t.Fatal("could not isolate generated OpenNameFixupEvent")
+	}
+	fixup := output[start : start+end]
+	for _, getter := range []string{"GetEventType", "GetTraceId", "GetTid"} {
+		requireContains(t, fixup, getter)
+	}
+	for _, getter := range []string{"GetPid", "GetTime"} {
+		if strings.Contains(fixup, getter) {
+			t.Errorf("compact fixup record unexpectedly has %s", getter)
+		}
+	}
 }
 
 func TestGenerateTypesGoMethods(t *testing.T) {
@@ -160,8 +204,8 @@ func TestGenerateTypesGoMethods(t *testing.T) {
 	output := GenerateTypesGo(structs, constants)
 
 	// String method with char array conversion
-	requireContains(t, output, `string(o.Filename[:])`)
-	requireContains(t, output, `string(o.Comm[:])`)
+	requireContains(t, output, `StringValue(o.Filename[:])`)
+	requireContains(t, output, `StringValue(o.Comm[:])`)
 	requireContains(t, output, "func (o OpenEvent) String() string")
 
 	// Equals method
@@ -201,6 +245,57 @@ func TestGenerateTypesGoSyncPool(t *testing.T) {
 	requireContains(t, output, "func NewFdEvent(raw []byte) *FdEvent")
 }
 
+func TestGenerateTypesGoEventfdCodecPreservesKernelPadding(t *testing.T) {
+	structs := []CStruct{{
+		Name: "eventfd_event",
+		Members: []CMember{
+			{TypeName: "__u32", FieldName: "event_type"},
+			{TypeName: "__u32", FieldName: "trace_id"},
+			{TypeName: "__u64", FieldName: "time"},
+			{TypeName: "__u32", FieldName: "pid"},
+			{TypeName: "__u32", FieldName: "tid"},
+			{TypeName: "__s32", FieldName: "flags"},
+			{TypeName: "__s64", FieldName: "ret"},
+			{TypeName: "__s32", FieldName: "fd"},
+		},
+	}}
+	output := GenerateTypesGo(structs, nil)
+
+	requireContains(t, output, "if len(raw) != 312 && len(raw) != 48 && len(raw) != 40 && len(raw) != 36")
+	requireContains(t, output, "binary.LittleEndian.Uint64(raw[retOffset : retOffset+8])")
+	requireContains(t, output, "binary.LittleEndian.Uint32(raw[40:44])")
+	requireContains(t, output, "size := 48")
+	requireContains(t, output, "size = 312")
+	requireContains(t, output, "binary.LittleEndian.PutUint64(raw[32:40], uint64(e.Ret))")
+	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[40:44], uint32(e.Fd))")
+	requireContains(t, output, "copy(raw[44:300], e.Filename[:])")
+}
+
+func TestGenerateTypesGoTwoFdCodecPinsCurrentAndLegacyLayouts(t *testing.T) {
+	structs := []CStruct{{
+		Name: "two_fd_event",
+		Members: []CMember{
+			{TypeName: "__u32", FieldName: "event_type"},
+			{TypeName: "__u32", FieldName: "trace_id"},
+			{TypeName: "__u64", FieldName: "time"},
+			{TypeName: "__u32", FieldName: "pid"},
+			{TypeName: "__u32", FieldName: "tid"},
+			{TypeName: "__s32", FieldName: "fd_a"},
+			{TypeName: "__s32", FieldName: "fd_b"},
+			{TypeName: "__u64", FieldName: "extra"},
+			{TypeName: "__u32", FieldName: "schema_version"},
+		},
+	}}
+	output := GenerateTypesGo(structs, nil)
+
+	requireContains(t, output, "if len(raw) != 568 && len(raw) != 564 && len(raw) != 48 && len(raw) != 44 && len(raw) != 40")
+	requireContains(t, output, "if len(raw) != 40")
+	requireContains(t, output, "t.SchemaVersion != TWO_FD_EVENT_SCHEMA_VERSION && !(len(raw) >= 564 && t.SchemaVersion == TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION)")
+	requireContains(t, output, "size = 568")
+	requireContains(t, output, "copy(raw[40:296], t.Oldname[:])")
+	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[560:564], t.SchemaVersion)")
+}
+
 func TestGenerateTypesGoConstants(t *testing.T) {
 	input := testTypesH + testDefines
 	structs, constants, err := ParseCTypesInput(strings.NewReader(input))
@@ -232,6 +327,9 @@ func TestGenerateTypesGoTraceIdMaps(t *testing.T) {
 	requireContains(t, output, "var traceId2Name = map[TraceId]string{")
 	requireContains(t, output, `784: "openat"`)
 	requireContains(t, output, `783: "openat"`)
+	requireContains(t, output, "var traceId2Family = map[TraceId]SyscallFamily{")
+	requireContains(t, output, `784: FamilyFS`)
+	requireContains(t, output, `782: FamilyPolling`)
 }
 
 func TestGenerateTypesGoTraceIdMethods(t *testing.T) {
@@ -244,6 +342,7 @@ func TestGenerateTypesGoTraceIdMethods(t *testing.T) {
 
 	requireContains(t, output, "func (s TraceId) String() string")
 	requireContains(t, output, "func (s TraceId) Name() string")
+	requireContains(t, output, "func (s TraceId) Family() SyscallFamily")
 	requireContains(t, output, `return fmt.Sprintf("unknown_trace_id_%d", s)`)
 }
 
@@ -326,5 +425,93 @@ func TestParseCTypesInputEmpty(t *testing.T) {
 	}
 	if len(constants) != 0 {
 		t.Errorf("expected 0 constants, got %d", len(constants))
+	}
+}
+
+// retTypesH exercises the ret-accessor emission: ret_event and accept_event
+// carry a scalar `ret`, null_event does not, and pipe_event's `ret` is a
+// narrower type that has to be widened to int64.
+const retTypesH = `struct null_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+};
+
+struct ret_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __s64 ret;
+    __u32 pid;
+    __u32 tid;
+};
+
+struct accept_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd;
+    __s64 ret;
+};
+
+struct pipe_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 ret;
+};
+`
+
+// TestGenerateTypesGoEmitsRetGetter locks in the accessor that lets
+// streamrow.New read a return value through event.RetCarrier instead of a
+// hand-maintained type switch: every struct with a `ret` member — not just
+// ret_event — must get GetRet, so a newly generated kind-specific exit struct
+// is covered automatically and cannot silently report ret=0.
+func TestGenerateTypesGoEmitsRetGetter(t *testing.T) {
+	structs, constants, err := ParseCTypesInput(strings.NewReader(retTypesH + testDefines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+
+	requireContains(t, output, "func (r *RetEvent) GetRet() int64 {\n\treturn r.Ret\n}")
+	requireContains(t, output, "func (a *AcceptEvent) GetRet() int64 {\n\treturn a.Ret\n}")
+
+	// A narrower ret type is widened rather than emitted as a type error.
+	requireContains(t, output, "func (p *PipeEvent) GetRet() int64 {\n\treturn int64(p.Ret)\n}")
+
+	if strings.Contains(output, "func (n *NullEvent) GetRet()") {
+		t.Fatalf("null_event has no ret member but got a GetRet accessor")
+	}
+}
+
+// TestGenerateTypesGoRetGetterCoversEveryRetStruct is the generator-side
+// invariant: whatever set of structs the C header defines, the number of
+// emitted GetRet accessors must equal the number of structs carrying a ret
+// member. This is what keeps the fix from rotting as new kinds are added.
+func TestGenerateTypesGoRetGetterCoversEveryRetStruct(t *testing.T) {
+	structs, constants, err := ParseCTypesInput(strings.NewReader(retTypesH + testDefines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+
+	want := 0
+	for _, s := range structs {
+		if _, ok := findRetMember(s.Members); ok {
+			want++
+		}
+	}
+	if want == 0 {
+		t.Fatal("test input defines no ret-carrying struct")
+	}
+	if got := strings.Count(output, ") GetRet() int64 {"); got != want {
+		t.Fatalf("emitted %d GetRet accessors for %d ret-carrying structs", got, want)
 	}
 }

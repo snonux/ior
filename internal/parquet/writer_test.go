@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -90,10 +91,10 @@ func readAllRecords(t *testing.T, path string) []Record {
 	if err != nil {
 		t.Fatalf("Open(%q) error = %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	reader := parquetgo.NewGenericReader[Record](f)
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	var rows []Record
 	buf := make([]Record, 4)
@@ -105,7 +106,7 @@ func readAllRecords(t *testing.T, path string) []Record {
 		if err == nil {
 			continue
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return rows
 		}
 		t.Fatalf("Read() error = %v", err)

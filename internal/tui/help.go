@@ -34,7 +34,7 @@ func renderHelpOverlay(width, height int, groups [][]key.Binding) string {
 		boxWidth = 72
 	}
 
-	box := common.PanelStyle.Copy().
+	box := common.Current().PanelStyle.
 		Width(boxWidth).
 		Render(strings.Join(lines, "\n"))
 
@@ -46,15 +46,10 @@ type helpSection struct {
 	lines []string
 }
 
-func (m Model) helpSections() []helpSection {
+func (m *Model) helpSections() []helpSection {
 	line1 := "f filter  p pid picker  t tid picker  o probes  R parquet rec"
-	if help := m.keys.Export.Help(); help.Key != "" || help.Desc != "" {
-		// Use a Builder to append the optional export hint without reallocating
-		// the base string on each render when help is visible.
-		var b strings.Builder
-		b.WriteString(line1)
-		b.WriteString("  e stream export")
-		line1 = b.String()
+	if m.keys.ExportEnabled() {
+		line1 += "  e stream export"
 	}
 	globalLines := []string{
 		"H help  esc/? close help  q quit",
@@ -68,18 +63,7 @@ func (m Model) helpSections() []helpSection {
 		},
 		{
 			title: "Dashboard Tabs",
-			lines: []string{
-				"tab/shift+tab tabs  1..7 jump tab  r reset baseline  R parquet rec",
-				"I cycle auto-reset (off → 10s → 30s → 1m → 2m → 5m); status shows remaining/total",
-				"sys/files/proc/stream tables: arrows or hjkl move  pgup/pgdown page  g/G top/bottom",
-				"sys/files/proc tables: s sort  S reverse sort",
-				"sys/proc: v bubbles  b metric events/bytes",
-				"files: d dirs toggle  v bubbles (dirs only)  b metric",
-				"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",
-				"flame: / filter  n/N match next/prev  space pause  b metric",
-				"stream: space pause  enter push filter  esc/F undo  /? n/N search",
-				"stream: x/X export  E open",
-			},
+			lines: dashboardTabHelpLines(m.keys.ExportEnabled()),
 		},
 		{
 			title: "PID/TID Picker",
@@ -88,6 +72,29 @@ func (m Model) helpSections() []helpSection {
 			},
 		},
 	}
+}
+
+// dashboardTabHelpLines builds the Dashboard Tabs section of the global help
+// overlay. The stream export shortcuts (x/X/E) line is included only when
+// export is enabled, so -tuiExport=false hides both the hints and the
+// shortcuts themselves.
+func dashboardTabHelpLines(exportEnabled bool) []string {
+	lines := []string{
+		"tab/shift+tab tabs  1..7 jump tab  r reset baseline  R parquet rec",
+		"F1 toggle the dashboard help bar (H opens this overlay)",
+		"I cycle auto-reset (off → 10s → 30s → 1m → 2m → 5m); status shows remaining/total",
+		"sys/files/proc/stream tables: arrows or hjkl move  pgup/pgdown page  g/G top/bottom",
+		"sys/files/proc tables: s sort  S reverse sort",
+		"sys/proc: v bubbles  b metric events/bytes",
+		"files: d dirs toggle  v bubbles (dirs only)  b metric",
+		"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",
+		"flame: / filter  n/N match next/prev  space pause  b metric",
+		"stream: space pause  enter push filter  esc/F undo  /? n/N search",
+	}
+	if exportEnabled {
+		lines = append(lines, "stream: x/X export  E open")
+	}
+	return lines
 }
 
 func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
@@ -130,7 +137,7 @@ func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
 		lines = append(lines, truncateHelpLine("... (resize for full help)", contentWidth))
 	}
 
-	box := common.PanelStyle.Copy().Width(boxWidth).Render(strings.Join(lines, "\n"))
+	box := common.Current().PanelStyle.Width(boxWidth).Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 

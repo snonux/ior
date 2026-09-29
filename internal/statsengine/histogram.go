@@ -47,6 +47,16 @@ func (h *histogram) Increment(durationNs uint64) {
 	h.total++
 }
 
+func (h *histogram) AddBucketCounts(counts [histogramBucketCount]uint64) {
+	if h == nil {
+		return
+	}
+	for i, count := range counts {
+		h.counts[i] += count
+		h.total += count
+	}
+}
+
 // Snapshot returns a HistogramSnapshot of the current histogram state.
 // It panics on build error, which should never happen for a valid histogram.
 func (h *histogram) Snapshot() HistogramSnapshot {

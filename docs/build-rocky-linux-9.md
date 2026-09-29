@@ -1,10 +1,10 @@
 # Building ior on Rocky Linux 9
 
-Verified on a fresh Rocky Linux 9.7 install (kernel `5.14.0-611.5.1.el9_7` or
-newer). Runs on the **stock RHEL 9 kernel**, no kernel upgrade needed.
+Verified on a fresh Rocky Linux 9.7 install (kernel `5.14.0-611.5.1.el9_7` or newer). Runs
+on the **stock RHEL 9 kernel**, no kernel upgrade needed.
 
-One build-time caveat: Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no
-`*-static` packages). Both must be built from source.
+One build-time caveat: Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no `*-static`
+packages). Both must be built from source.
 
 > Historical note. Earlier versions of `ior` typed BPF tracepoint context as
 > `struct trace_event_raw_sys_enter`/`_exit` (the BTF-emitted alias). RHEL 9
@@ -19,8 +19,8 @@ One build-time caveat: Rocky 9 ships neither `libelf.a` nor `libzstd.a` (no
 
 ## Docker build (no Rocky 9 host required)
 
-The easiest path. Builds entirely inside a container from any Docker-capable
-Linux host:
+The container build avoids installing the C and Go toolchains on the host. It still reads
+the host's BTF and tracepoint list:
 
 ```shell
 mage buildDocker
@@ -30,9 +30,8 @@ mage buildDocker
 ./scripts/build-with-docker.sh --run
 ```
 
-`mage buildDocker` builds a `ior-builder:rocky9` image on first run (~15–20 min),
-then runs it with the repo root mounted as a volume so the resulting static
-binary lands at `./ior`.
+`mage buildDocker` builds a `ior-builder:rocky9` image on first run (~15–20 min), then runs
+it with the repo root mounted as a volume so the resulting static binary lands at `./ior`.
 
 ## Manual build on a Rocky Linux 9 host
 
@@ -40,16 +39,13 @@ binary lands at `./ior`.
 # 1) Enable repos and install build dependencies (CRB ships static libs).
 sudo dnf config-manager --set-enabled crb
 sudo dnf install -y epel-release
-sudo dnf install -y gcc clang bpftool elfutils-libelf-devel zlib-static \
+sudo dnf install -y gcc clang bpftool golang elfutils-libelf-devel zlib-static \
     glibc-static libzstd-devel git make cmake wget rpmdevtools strace bpftrace
 sudo dnf builddep -y elfutils
 
-# 2) Install Go 1.26 from go.dev (Rocky 9 ships only Go 1.25; ior needs 1.26+).
-cd /tmp
-wget -q https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
-sudo tar -C /usr/local -xf go1.26.2.linux-amd64.tar.gz
-echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' | sudo tee /etc/profile.d/go.sh
-source /etc/profile.d/go.sh
+# 2) Let Go fetch the toolchain required by go.mod when the packaged Go is older.
+export GOTOOLCHAIN=auto
+export PATH="$HOME/go/bin:$PATH"
 
 # 3) Build libelf.a from elfutils source.
 mkdir -p ~/src && cd ~
@@ -79,8 +75,8 @@ make -C ~/git/libbpfgo libbpfgo-static
 go install github.com/magefile/mage@latest
 
 # 6) Generate against the live kernel and build.
-# IOR_FORCE_GENERATE=1 skips the strict diff against the committed audit
-# (generated on a different kernel build).
+# IOR_FORCE_GENERATE=1 regenerates for this older kernel. Keep those generated
+# outputs local: they omit syscalls present in the committed newer-kernel set.
 cd ~/git/ior
 IOR_FORCE_GENERATE=1 mage generate
 mage all
@@ -89,17 +85,17 @@ mage all
 sudo ./ior -plain -duration 5
 ```
 
-If `./ior -plain -duration 5` prints `Probing for 5s` and a stream of CSV rows,
-the install is good.
+If `sudo ./ior -plain -duration 5` writes status lines such as `Probing for 5s` to stderr
+and a stream of CSV rows to stdout, the install is good.
 
 ## libbpfgo toolchain
 
-`ior` links against a locally built `libbpfgo` checkout. By default
-`Magefile.go` expects that checkout at `../libbpfgo` relative to this repo; set
+`ior` links against a locally built `libbpfgo` checkout. By default `Magefile.go` expects
+that checkout at `../libbpfgo` relative to this repo; set
 `LIBBPFGO=/absolute/path/to/libbpfgo` to override.
 
-Pin that checkout to `v0.9.2-libbpf-1.5.1` and rebuild the static artifacts
-before running `mage` targets:
+Pin that checkout to `v0.9.2-libbpf-1.5.1` and rebuild the static artifacts before running
+`mage` targets:
 
 ```shell
 git -C ../libbpfgo checkout v0.9.2-libbpf-1.5.1
@@ -107,18 +103,23 @@ git -C ../libbpfgo submodule update --init --recursive
 make -C ../libbpfgo libbpfgo-static
 ```
 
-Validated commands for this pin:
+Once the pin is built, use these targets on a kernel matching the committed tracepoint set:
 
 ```shell
 mage world
 mage integrationTest
 ```
 
+On a Rocky 9 kernel, `mage world` stops at its generation diff gate before building: the
+committed tracepoint set includes newer syscalls. Use `IOR_FORCE_GENERATE=1 mage generate`
+for a local build, then run `mage fmtCheck`, `mage vet`, `mage lint`, `mage test`,
+`mage testRace` and `mage build` separately. Do not commit the older-kernel generated
+outputs.
+
 Troubleshooting and rollback:
 
 - If builds fail with `bpf/bpf.h` missing, re-run the checkout, submodule
-  sync, and `make libbpfgo-static` commands above, then retry
-  `mage world`.
+  sync, and `make libbpfgo-static` commands above, then retry the failed Mage target.
 - Prefer Mage targets over raw `go test` for packages that import `libbpfgo`;
   Mage injects the required `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LIBBPFGO` values.
 - To roll back to the previous pin, reset to commit `90dbffffbdab`
@@ -130,30 +131,25 @@ git -C ../libbpfgo submodule update --init --recursive
 make -C ../libbpfgo libbpfgo-static
 ```
 
-## Compile once, run everywhere
+## Using the binary on another host
 
-The full build dance above only has to happen on **one** machine. The resulting
-`ior` binary is portable across Linux hosts: `scp ior other-host:/usr/local/bin/`
-and run it there.
+Build once and copy `ior` to compatible Linux/amd64 hosts, for example with
+`scp ior other-host:/usr/local/bin/`.
 
 Two reasons it works:
 
 - The Go binary is compiled with `-extldflags "-static"` and links libbpf,
-  libelf, libzstd, and zlib as static archives. There is no runtime dependency
-  on the build host's library versions (a couple of glibc resolver functions,
-  `getpwnam_r` and friends, fall back to the target's libc, which is fine on
-  any reasonable distro).
+  libelf, libzstd, and zlib as static archives. There is no runtime dependency on the build
+  host's library versions (a couple of glibc resolver functions, `getpwnam_r` and friends may
+  still need compatible NSS libraries at runtime).
 - The BPF object inside the binary is built with libbpf's CO-RE
-  (Compile-Once, Run-Everywhere) machinery. Field offsets are not baked into
-  the bytecode; libbpf reads the target kernel's BTF (`/sys/kernel/btf/vmlinux`)
-  at load time and patches the program for that kernel. As long as the target
-  ships BTF (true on every Debian, Ubuntu, Fedora, Arch, RHEL, and ElRepo
-  `kernel-ml` build at the time of writing) the same `ior` binary runs without
-  recompilation.
+  (Compile-Once, Run-Everywhere) machinery. Field offsets are not baked into the bytecode;
+  libbpf reads the target kernel's BTF (`/sys/kernel/btf/vmlinux`) at load time and patches
+  the program for that kernel. The target still needs BTF and the BPF features used by `ior`;
+  tracepoints missing on that kernel are skipped with a warning.
 
-Pick one Rocky 9 / Fedora box, do the build dance once, then distribute the
-23 MB binary to wherever you want to trace. The build host needs all the dev
-tooling; the trace hosts need only a BTF-enabled kernel and `sudo`.
+The build host needs the development toolchain. Target hosts need compatible kernel support
+and permission to attach BPF tracepoints.
 
 ## Timing semantics
 

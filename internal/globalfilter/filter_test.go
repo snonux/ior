@@ -7,6 +7,7 @@ import (
 
 type sampleCandidate struct {
 	syscall string
+	family  string
 	comm    string
 	file    string
 	pid     uint32
@@ -20,8 +21,10 @@ type sampleCandidate struct {
 }
 
 func (s sampleCandidate) SyscallValue() string { return s.syscall }
+func (s sampleCandidate) FamilyValue() string  { return s.family }
 func (s sampleCandidate) CommValue() string    { return s.comm }
 func (s sampleCandidate) FileValue() string    { return s.file }
+func (s sampleCandidate) OldFileValue() string { return "" }
 func (s sampleCandidate) PIDValue() uint32     { return s.pid }
 func (s sampleCandidate) TIDValue() uint32     { return s.tid }
 func (s sampleCandidate) FDValue() int32       { return s.fd }
@@ -34,6 +37,7 @@ func (s sampleCandidate) ErrorValue() bool     { return s.isError }
 func testCandidate() sampleCandidate {
 	return sampleCandidate{
 		syscall: "read",
+		family:  "FS",
 		comm:    "nginx",
 		file:    "/var/log/access.log",
 		pid:     1234,
@@ -74,6 +78,108 @@ func TestFilterStringAndNumericMatching(t *testing.T) {
 	}
 	if !filter.Matches(candidate) {
 		t.Fatalf("combined filter should match candidate")
+	}
+}
+
+func TestFilterFamilyMatchesAndExcludes(t *testing.T) {
+	candidate := testCandidate()
+	candidate.family = "Polling"
+
+	if !(Filter{Family: &StringFilter{Pattern: "Polling"}}).Matches(candidate) {
+		t.Fatalf("family filter Polling should match Polling candidate")
+	}
+	if !(Filter{Family: &StringFilter{Pattern: "poll"}}).Matches(candidate) {
+		t.Fatalf("family filter should match case-insensitive substring")
+	}
+	if (Filter{Family: &StringFilter{Pattern: "Network"}}).Matches(candidate) {
+		t.Fatalf("family filter Network should exclude Polling candidate")
+	}
+	if !(Filter{Family: &StringFilter{Pattern: "Polling"}}).IsActive() {
+		t.Fatalf("non-empty family filter should be active")
+	}
+
+	base := Filter{Family: &StringFilter{Pattern: "Polling"}}
+	cloned := base.Clone()
+	cloned.Family.Pattern = "Process"
+	if base.Family.Pattern != "Polling" {
+		t.Fatalf("Clone() should deep-copy the Family filter")
+	}
+	if base.Equal(cloned) {
+		t.Fatalf("filters with different Family patterns should not be Equal")
+	}
+}
+
+func TestMatchesSyscallRow(t *testing.T) {
+	cases := []struct {
+		name    string
+		filter  Filter
+		syscall string
+		family  string
+		want    bool
+	}{
+		{
+			name:    "empty filter matches everything",
+			filter:  Filter{},
+			syscall: "epoll_wait",
+			family:  "Polling",
+			want:    true,
+		},
+		{
+			name:    "matches on family",
+			filter:  Filter{Family: &StringFilter{Pattern: "Polling"}},
+			syscall: "epoll_wait",
+			family:  "Polling",
+			want:    true,
+		},
+		{
+			name:    "excludes on non-matching family",
+			filter:  Filter{Family: &StringFilter{Pattern: "FS"}},
+			syscall: "epoll_wait",
+			family:  "Polling",
+			want:    false,
+		},
+		{
+			name:    "matches on syscall name",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}},
+			syscall: "write",
+			family:  "FS",
+			want:    true,
+		},
+		{
+			name:    "excludes on non-matching syscall name",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}},
+			syscall: "read",
+			family:  "FS",
+			want:    false,
+		},
+		{
+			name:    "both dimensions must match",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}, Family: &StringFilter{Pattern: "FS"}},
+			syscall: "write",
+			family:  "FS",
+			want:    true,
+		},
+		{
+			name:    "one dimension mismatch fails the AND",
+			filter:  Filter{Syscall: &StringFilter{Pattern: "write"}, Family: &StringFilter{Pattern: "Polling"}},
+			syscall: "write",
+			family:  "FS",
+			want:    false,
+		},
+		{
+			name:    "trace-scope dimensions are ignored",
+			filter:  Filter{PID: NewEqFilter(999), Comm: &StringFilter{Pattern: "nope"}},
+			syscall: "write",
+			family:  "FS",
+			want:    true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.filter.MatchesSyscallRow(tc.syscall, tc.family); got != tc.want {
+				t.Fatalf("MatchesSyscallRow(%q, %q) = %v, want %v", tc.syscall, tc.family, got, tc.want)
+			}
+		})
 	}
 }
 

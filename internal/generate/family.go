@@ -1,0 +1,353 @@
+package generate
+
+import "strings"
+
+// SyscallFamily is the broad syscall grouping attached to every parsed format.
+type SyscallFamily string
+
+const (
+	// FamilyNetwork groups network sockets and the splice/tee byte-mover cohort.
+	FamilyNetwork SyscallFamily = "Network"
+	// FamilyIPC groups SysV IPC, pipes, and the eventfd/signalfd/inotify
+	// notification descriptors.
+	FamilyIPC SyscallFamily = "IPC"
+	// FamilyMemory groups memory management (mmap, mremap, ...).
+	FamilyMemory SyscallFamily = "Memory"
+	// FamilyProcess groups process lifecycle (fork/clone, exit, wait, ...).
+	FamilyProcess SyscallFamily = "Process"
+	// FamilySignals groups signal delivery and handling.
+	FamilySignals SyscallFamily = "Signals"
+	// FamilyTime groups clock/time retrieval and the sleep/timer calls.
+	FamilyTime SyscallFamily = "Time"
+	// FamilySched groups scheduler control (sched_setparam, ...).
+	FamilySched SyscallFamily = "Sched"
+	// FamilyFS groups the filesystem family - the default attach set.
+	FamilyFS SyscallFamily = "FS"
+	// FamilyPolling groups fd multiplexing (poll, epoll, select).
+	FamilyPolling SyscallFamily = "Polling"
+	// FamilyAIO groups async I/O (io_uring, aio).
+	FamilyAIO SyscallFamily = "AIO"
+	// FamilySecurity groups LSM and capability syscalls plus the
+	// privileged neighbours (bpf, ptrace, perf_event_open, keyctl, ...).
+	FamilySecurity SyscallFamily = "Security"
+	// FamilyMisc groups everything without a more specific family.
+	FamilyMisc SyscallFamily = "Misc"
+)
+
+var syscallFamilies = map[string]SyscallFamily{
+	"accept": FamilyNetwork, "accept4": FamilyNetwork, "bind": FamilyNetwork,
+	"connect": FamilyNetwork, "getpeername": FamilyNetwork, "getsockname": FamilyNetwork,
+	"getsockopt": FamilyNetwork, "listen": FamilyNetwork, "recvfrom": FamilyNetwork,
+	"recvmmsg": FamilyNetwork, "recvmsg": FamilyNetwork, "sendfile64": FamilyNetwork,
+	"sendmmsg": FamilyNetwork, "sendmsg": FamilyNetwork, "sendto": FamilyNetwork,
+	"setsockopt": FamilyNetwork, "shutdown": FamilyNetwork, "socket": FamilyNetwork,
+	"socketpair": FamilyNetwork,
+	// splice/tee/vmsplice are the fd byte-mover cohort. splice moves data between
+	// two fds (one a pipe); tee duplicates pipe contents between pipe fds.
+	// vmsplice(int fd, const struct iovec*, unsigned long nr_segs, unsigned int
+	// flags) is the iovec<->pipe variant of splice(2) and is documented/grouped
+	// with splice/tee/sendfile64/copy_file_range as an fd byte-mover. Its KIND
+	// (KindFd@arg0) and RET (TransferClassified, byte count) already match
+	// splice/tee — only the family was wrong: vmsplice was absent from this map
+	// and fell through to FamilyMisc (the same alarm/adjtimex-style misclassi-
+	// fication fixed for fanotify_*/file_*attr). The established mj0 decision put
+	// splice/tee in Network, so for sibling consistency vmsplice belongs here too.
+	"splice": FamilyNetwork, "tee": FamilyNetwork, "vmsplice": FamilyNetwork,
+
+	"eventfd": FamilyIPC, "eventfd2": FamilyIPC,
+	// fanotify_init(2) creates and initializes an fanotify notification group and
+	// returns an event-queue file descriptor — it is the direct analog of
+	// inotify_init1 (both are filesystem-event notification facilities whose
+	// group-creating syscall is a flags-taking fd-creator). inotify_init/
+	// inotify_init1 are FamilyIPC alongside the other fd-based event-notification
+	// primitives (eventfd, signalfd, timerfd, userfaultfd), so fanotify_init
+	// belongs in IPC too rather than falling through to Misc by omission (an
+	// alarm/adjtimex-style misclassification). The flags argument is at args[0]
+	// (KindEventfd / eventfd flags capture) and the returned fd is captured via
+	// the fd mechanism, so the return is UNCLASSIFIED (not a byte count).
+	//
+	// fanotify_mark(2) adds/removes/modifies a mark on an fanotify group and is
+	// the operation counterpart of fanotify_init — the direct analog of
+	// inotify_add_watch (both register a watch/mark on a filesystem object,
+	// taking the notification-group fd as arg0). inotify_add_watch is FamilyIPC,
+	// so for sibling consistency fanotify_mark belongs in IPC too rather than
+	// falling through to Misc by omission (the same alarm/adjtimex-style
+	// misclassification just fixed for fanotify_init). Both watch operations use
+	// KindFdPathname to capture the group fd and target together, including the
+	// independent dirfd@arg3 + pathname@arg4 pair for fanotify_mark. It returns
+	// 0/-1, so the return is UNCLASSIFIED (not a byte count).
+	"fanotify_init":     FamilyIPC,
+	"fanotify_mark":     FamilyIPC,
+	"inotify_add_watch": FamilyIPC,
+	"inotify_init":      FamilyIPC, "inotify_init1": FamilyIPC, "inotify_rm_watch": FamilyIPC,
+	"memfd_create": FamilyIPC, "memfd_secret": FamilyIPC, "mq_getsetattr": FamilyIPC,
+	"mq_notify": FamilyIPC, "mq_open": FamilyIPC, "mq_timedreceive": FamilyIPC,
+	"mq_timedsend": FamilyIPC, "mq_unlink": FamilyIPC, "msgctl": FamilyIPC,
+	"msgget": FamilyIPC, "msgrcv": FamilyIPC, "msgsnd": FamilyIPC,
+	"pidfd_getfd": FamilyIPC, "pidfd_open": FamilyIPC, "pidfd_send_signal": FamilyIPC,
+	"pipe": FamilyIPC, "pipe2": FamilyIPC, "semctl": FamilyIPC, "semget": FamilyIPC,
+	"semop": FamilyIPC, "semtimedop": FamilyIPC, "shmat": FamilyIPC,
+	"shmctl": FamilyIPC, "shmdt": FamilyIPC, "shmget": FamilyIPC,
+	"signalfd": FamilyIPC, "signalfd4": FamilyIPC, "timerfd_create": FamilyIPC,
+	"timerfd_gettime": FamilyIPC, "timerfd_settime": FamilyIPC, "userfaultfd": FamilyIPC,
+	// Futexes ("fast user-space locking", futex(2)) are shared-memory
+	// synchronization/IPC primitives in the same vein as the System V
+	// semaphores (semop/semget) above; group them under IPC rather than
+	// letting them fall through to Misc. Covers the classic futex() plus the
+	// Linux 6.7+ split syscalls (futex_wait/futex_wake/futex_requeue) and
+	// futex_waitv. The futex word is a userspace pointer, so argument capture
+	// is handled by KindFutex (null_event); the family tag only affects
+	// per-family aggregation/reporting.
+	//
+	// Boundary rule for the futex/IPC vs Misc split (keep consistent): a
+	// syscall is IPC only if it PERFORMS the actual IPC/synchronization
+	// operation — wait/wake/requeue on the futex word, or an operation on an
+	// IPC object (semaphore, message queue, shared-memory segment, pipe, etc.).
+	// By contrast, per-thread registration/bookkeeping that merely hands the
+	// kernel a pointer it consults LATER (at thread exit) is NOT IPC and stays
+	// in Misc. get_robust_list/set_robust_list fall in the latter camp: per
+	// get_robust_list(2), the robust futex list is "managed in user space: the
+	// kernel knows only about the location of the head of the list." They
+	// register/query that per-thread head pointer; they never wait, wake, or
+	// touch the shared futex word themselves. That makes them structurally
+	// identical to rseq (per-thread restartable-sequences area registration),
+	// so both deliberately fall through to FamilyMisc (they are absent from this
+	// explicit table by design — see ClassifySyscallFamily's default and the
+	// rseq/robust_list assertions in family_test.go / classify_test.go). Do not
+	// promote them to IPC for "futex consistency": the consistent axis is
+	// operation-vs-registration, not name similarity.
+	"futex": FamilyIPC, "futex_wait": FamilyIPC, "futex_wake": FamilyIPC,
+	"futex_requeue": FamilyIPC, "futex_waitv": FamilyIPC,
+
+	"brk": FamilyMemory, "get_mempolicy": FamilyMemory, "madvise": FamilyMemory,
+	"map_shadow_stack": FamilyMemory,
+	"mbind":            FamilyMemory, "membarrier": FamilyMemory, "migrate_pages": FamilyMemory,
+	"mincore": FamilyMemory, "mlock": FamilyMemory, "mlock2": FamilyMemory,
+	"mlockall": FamilyMemory, "mmap": FamilyMemory, "mmap2": FamilyMemory,
+	"mprotect": FamilyMemory, "mremap": FamilyMemory, "mseal": FamilyMemory,
+	"munlock": FamilyMemory, "munlockall": FamilyMemory, "munmap": FamilyMemory,
+	"move_pages": FamilyMemory, "pkey_alloc": FamilyMemory, "pkey_free": FamilyMemory,
+	"pkey_mprotect": FamilyMemory, "process_madvise": FamilyMemory,
+	"process_mrelease": FamilyMemory, "process_vm_readv": FamilyMemory,
+	"process_vm_writev": FamilyMemory, "remap_file_pages": FamilyMemory,
+	"set_mempolicy": FamilyMemory, "set_mempolicy_home_node": FamilyMemory,
+
+	"arch_prctl": FamilyProcess, "clone": FamilyProcess, "clone3": FamilyProcess,
+	"execve": FamilyProcess, "execveat": FamilyProcess, "exit": FamilyProcess,
+	"exit_group": FamilyProcess, "fork": FamilyProcess, "getegid": FamilyProcess,
+	"geteuid": FamilyProcess, "getgid": FamilyProcess, "getgroups": FamilyProcess,
+	"getpgid": FamilyProcess, "getpgrp": FamilyProcess, "getpid": FamilyProcess,
+	"getppid": FamilyProcess, "getpriority": FamilyProcess, "getresgid": FamilyProcess,
+	"getresuid": FamilyProcess, "getrlimit": FamilyProcess, "getrusage": FamilyProcess,
+	"getsid": FamilyProcess, "gettid": FamilyProcess, "getuid": FamilyProcess,
+	// ioprio_get/ioprio_set query/set the I/O scheduling class and priority of a
+	// process, process group, or user (ioprio_set(which, who, ioprio)). They are
+	// the I/O-priority analogues of getpriority/setpriority (the CPU nice value
+	// for a process/group/user) and share the identical which/who selector
+	// signature, so they classify as Process alongside them rather than falling
+	// through to Misc. The who argument is a pid/pgid/uid (selected by which),
+	// never an fd or path, so argument capture is KindNull (null_event).
+	"ioprio_get": FamilyProcess, "ioprio_set": FamilyProcess,
+	"kcmp": FamilyProcess, "personality": FamilyProcess, "pivot_root": FamilyProcess,
+	"prctl": FamilyProcess, "prlimit64": FamilyProcess, "reboot": FamilyProcess,
+	"restart_syscall": FamilyProcess,
+	// Boundary rule for the Process vs Misc split of PER-THREAD POINTER
+	// REGISTRATION syscalls (keep consistent — distinct from the futex IPC-vs-
+	// Misc rule documented in the futex block above):
+	//
+	//   - set_tid_address(2) stays Process. Although it "merely" hands the
+	//     kernel a tidptr it consults later, that pointer is the kernel's
+	//     primary THREAD-EXIT notification mechanism: it sets clear_child_tid,
+	//     which the kernel zeroes and FUTEX_WAKEs at thread teardown. The C
+	//     runtime sets it (via clone(2) CLONE_CHILD_CLEARTID, or this syscall)
+	//     for essentially every thread, the call returns the caller's thread ID
+	//     (a pid_t, like gettid/getpid), and it is mandatory thread-lifecycle
+	//     plumbing. It therefore belongs with the core process/thread lifecycle
+	//     cluster — clone/clone3/fork/vfork/exit/exit_group/wait4/waitid/gettid
+	//     — not with optional opt-in features.
+	//
+	//   - rseq(2) and set_robust_list/get_robust_list(2) stay Misc (absent from
+	//     this table by design; see ClassifySyscallFamily's default and the
+	//     assertions in family_test.go). They register OPTIONAL, opt-in
+	//     per-thread feature areas: rseq a restartable-sequences scheduling
+	//     optimization, robust_list a futex-cleanup list a program only uses if
+	//     it opts into robust mutexes. They are not part of the mandatory
+	//     thread-lifecycle path and a thread runs fine without ever calling
+	//     them.
+	//
+	// The split axis here is mandatory-thread-lifecycle vs optional-opt-in-
+	// feature, NOT pointer-registration-vs-operation (which would lump all
+	// three into Misc). Do not move set_tid_address to Misc for "registration
+	// consistency" with rseq/robust_list: registration is the surface form, but
+	// set_tid_address is core thread lifecycle while the others are optional
+	// features.
+	"set_tid_address": FamilyProcess,
+	"setfsuid":        FamilyProcess, "setfsgid": FamilyProcess, "setgid": FamilyProcess,
+	"setgroups": FamilyProcess, "setns": FamilyProcess, "setpgid": FamilyProcess,
+	"setpriority": FamilyProcess, "setregid": FamilyProcess, "setresgid": FamilyProcess,
+	"setresuid": FamilyProcess, "setreuid": FamilyProcess, "setrlimit": FamilyProcess,
+	// seteuid/setegid set the effective user/group ID (seteuid(2)) and belong
+	// with the rest of the credential-setting cluster (setuid/setgid/setresuid/
+	// setreuid/setfsuid) under Process. They are latent here: current kernels
+	// expose no dedicated seteuid/setegid tracepoints (glibc implements them as
+	// wrappers over setreuid/setresuid), so they never reach the generated
+	// tracepoint map or docs. Classified for consistency so that if such
+	// tracepoints ever appear they land in Process rather than falling to Misc.
+	"seteuid": FamilyProcess, "setegid": FamilyProcess,
+	"setsid": FamilyProcess, "setuid": FamilyProcess, "umask": FamilyProcess,
+	"unshare": FamilyProcess, "vfork": FamilyProcess, "vhangup": FamilyProcess,
+	"wait4": FamilyProcess, "waitid": FamilyProcess,
+
+	"kill": FamilySignals, "pause": FamilySignals, "rt_sigaction": FamilySignals,
+	"rt_sigpending": FamilySignals, "rt_sigprocmask": FamilySignals,
+	"rt_sigqueueinfo": FamilySignals, "rt_sigreturn": FamilySignals,
+	"rt_sigsuspend": FamilySignals, "rt_sigtimedwait": FamilySignals,
+	"rt_tgsigqueueinfo": FamilySignals, "sigaltstack": FamilySignals,
+	"tgkill": FamilySignals, "tkill": FamilySignals,
+
+	// adjtimex(2) and clock_adjtime(2) share one man page: both tune or query
+	// the kernel clock (clock_adjtime is adjtimex with an explicit clockid) and
+	// return a clock-state code (TIME_OK/TIME_INS/...) or -1. adjtimex therefore
+	// belongs in FamilyTime alongside clock_adjtime and the rest of the
+	// gettimeofday/settimeofday/clock_* cluster, not in Misc. The single argument
+	// is a userspace struct timex *, so argument capture is KindNull (null_event)
+	// and the return is UNCLASSIFIED (a state code, not a byte count).
+	"adjtimex": FamilyTime,
+	// alarm(2) arranges for a SIGALRM after a given number of seconds; it is a
+	// simplified setitimer(ITIMER_REAL) and, per alarm(2) NOTES, "alarm() and
+	// setitimer(2) share the same timer; calls to one will interfere with use of
+	// the other." It therefore belongs in FamilyTime alongside setitimer/
+	// getitimer/timer_create, not in Misc (where it previously fell through by
+	// omission, an adjtimex-style misclassification). The single argument is an
+	// unsigned int seconds (no fd/path), so argument capture is KindNull
+	// (null_event); the return is the seconds remaining on any previously set
+	// alarm (or 0) and alarm never fails, so the return is UNCLASSIFIED — not a
+	// byte count.
+	"alarm":         FamilyTime,
+	"clock_adjtime": FamilyTime, "clock_getres": FamilyTime, "clock_gettime": FamilyTime,
+	"clock_nanosleep": FamilyTime, "clock_settime": FamilyTime, "getitimer": FamilyTime,
+	"gettimeofday": FamilyTime, "nanosleep": FamilyTime, "setitimer": FamilyTime,
+	"settimeofday": FamilyTime, "time": FamilyTime, "timer_create": FamilyTime,
+	"timer_delete": FamilyTime, "timer_getoverrun": FamilyTime,
+	"timer_gettime": FamilyTime, "timer_settime": FamilyTime, "times": FamilyTime,
+
+	"sched_get_priority_max": FamilySched, "sched_get_priority_min": FamilySched,
+	"sched_getaffinity": FamilySched, "sched_getattr": FamilySched,
+	"sched_getparam": FamilySched, "sched_getscheduler": FamilySched,
+	"sched_rr_get_interval": FamilySched, "sched_setaffinity": FamilySched,
+	"sched_setattr": FamilySched, "sched_setparam": FamilySched,
+	"sched_setscheduler": FamilySched, "sched_yield": FamilySched,
+
+	"epoll_create": FamilyPolling, "epoll_create1": FamilyPolling,
+	"epoll_ctl": FamilyPolling, "epoll_pwait": FamilyPolling,
+	"epoll_pwait2": FamilyPolling, "epoll_wait": FamilyPolling,
+	"poll": FamilyPolling, "ppoll": FamilyPolling, "pselect6": FamilyPolling,
+	"select": FamilyPolling,
+
+	"io_cancel": FamilyAIO, "io_destroy": FamilyAIO, "io_getevents": FamilyAIO,
+	"io_pgetevents": FamilyAIO, "io_setup": FamilyAIO, "io_submit": FamilyAIO,
+	"io_uring_enter": FamilyAIO, "io_uring_register": FamilyAIO,
+	"io_uring_setup": FamilyAIO,
+
+	"add_key": FamilySecurity, "bpf": FamilySecurity, "capget": FamilySecurity,
+	"capset": FamilySecurity, "delete_module": FamilySecurity, "finit_module": FamilySecurity,
+	"getrandom": FamilySecurity, "init_module": FamilySecurity,
+	// kexec_load and kexec_file_load are documented together on the same man
+	// page (kexec_load(2)): both load a new kernel for later execution by
+	// reboot(2). They belong in the same family even though kexec_load takes
+	// raw user pointers (KindNull) while kexec_file_load takes fds (KindFd).
+	"kexec_file_load": FamilySecurity, "kexec_load": FamilySecurity,
+	"keyctl":            FamilySecurity,
+	"landlock_add_rule": FamilySecurity, "landlock_create_ruleset": FamilySecurity,
+	"landlock_restrict_self": FamilySecurity, "lookup_dcookie": FamilySecurity,
+	// lsm_* are the Linux Security Module (LSM) introspection syscalls
+	// (Linux 6.8+): list loaded LSMs and get/set per-task LSM attributes.
+	// They belong with the other security syscalls, alongside their
+	// landlock_* and *_key siblings.
+	"lsm_get_self_attr": FamilySecurity, "lsm_list_modules": FamilySecurity,
+	"lsm_set_self_attr": FamilySecurity,
+	"perf_event_open":   FamilySecurity, "ptrace": FamilySecurity,
+	"request_key": FamilySecurity, "seccomp": FamilySecurity,
+
+	// file_getattr(2) (Linux 6.13+) is the path-based counterpart of statx
+	// and the FS_IOC_FSGETXATTR ioctl: it retrieves a file's extended
+	// attributes (struct file_attr) given dirfd@args[0] + pathname@args[1]
+	// + attr-buffer + size + at_flags. It is squarely a filesystem
+	// operation and belongs in FamilyFS alongside its statx/getxattr
+	// siblings. It must be listed explicitly because the fsNameMarkers list
+	// keys on "stat"/"xattr"/"chmod"/"chown" substrings — "getattr" matches
+	// none of them — and it is absent from the fsSyscalls set, so without
+	// this entry it would fall through to FamilyMisc (the same
+	// alarm/fanotify-style misclassification). KIND is data-driven from the
+	// live tracepoint (pathname@args[1] -> KindPathname) and the return is
+	// 0/-1, hence UNCLASSIFIED (not a byte count).
+	"file_getattr": FamilyFS,
+
+	// file_setattr(2) (Linux 6.13+) is the write counterpart of file_getattr:
+	// it sets a file's extended attributes (struct file_attr) given
+	// dirfd@args[0] + pathname@args[1] + attr-buffer + size + at_flags. Like
+	// file_getattr it is a filesystem operation, its name ("setattr") matches
+	// none of the fsNameMarkers substrings ("stat"/"xattr"/"chmod"/"chown"),
+	// and it is absent from the fsSyscalls set, so without this explicit entry
+	// it falls through to FamilyMisc (the same alarm/fanotify-style
+	// misclassification). KIND is data-driven (pathname@args[1] -> KindPathname)
+	// and the return is 0/-1, hence UNCLASSIFIED.
+	"file_setattr": FamilyFS,
+}
+
+// ClassifySyscallFamily returns the high-level syscall family for a tracepoint.
+func ClassifySyscallFamily(tracepointName string) SyscallFamily {
+	syscall := syscallName(tracepointName)
+	if family, ok := syscallFamilies[syscall]; ok {
+		return family
+	}
+	if isFSSyscall(syscall) {
+		return FamilyFS
+	}
+	return FamilyMisc
+}
+
+func syscallName(tracepointName string) string {
+	name := strings.TrimPrefix(tracepointName, "sys_enter_")
+	return strings.TrimPrefix(name, "sys_exit_")
+}
+
+func isFSSyscall(syscall string) bool {
+	for _, marker := range fsNameMarkers {
+		if strings.Contains(syscall, marker) {
+			return true
+		}
+	}
+	_, ok := fsSyscalls[syscall]
+	return ok
+}
+
+var fsNameMarkers = []string{"xattr", "stat", "chmod", "chown"}
+
+var fsSyscalls = map[string]struct{}{
+	"access": {}, "cachestat": {}, "chdir": {}, "chroot": {}, "close": {},
+	"close_range": {}, "copy_file_range": {}, "creat": {}, "dup": {}, "dup2": {},
+	"dup3": {}, "faccessat": {}, "faccessat2": {}, "fadvise64": {}, "fallocate": {},
+	"fcntl": {}, "fdatasync": {}, "fchdir": {}, "flock": {}, "fsconfig": {},
+	"fsmount": {}, "fsopen": {}, "fspick": {}, "fsync": {}, "ftruncate": {},
+	"futimesat": {}, "getcwd": {}, "getdents": {}, "getdents64": {}, "ioctl": {},
+	"link": {}, "linkat": {}, "lseek": {}, "mkdir": {}, "mkdirat": {},
+	"listmount": {}, "listns": {}, "mknod": {}, "mknodat": {}, "mount": {},
+	"mount_setattr": {}, "move_mount": {},
+	"msync":             {},
+	"name_to_handle_at": {}, "newfstat": {}, "newfstatat": {}, "newlstat": {},
+	"newstat": {}, "open": {}, "open_by_handle_at": {}, "open_tree": {},
+	"open_tree_attr": {}, "openat": {}, "openat2": {}, "quotactl": {},
+	"quotactl_fd": {}, "read": {}, "readahead": {}, "readlink": {}, "readlinkat": {},
+	"readv": {}, "rename": {}, "renameat": {}, "renameat2": {}, "rmdir": {},
+	"statfs": {}, "statmount": {}, "swapoff": {}, "swapon": {}, "sync": {},
+	"sync_file_range": {}, "syncfs": {}, "symlink": {}, "symlinkat": {},
+	"truncate": {}, "umount": {}, "umount2": {}, "unlink": {}, "unlinkat": {},
+	// utime/utimes change a file's access and modification times by path
+	// (filename at args[0] is a real filesystem path, captured as
+	// KindPathname). They belong with their siblings utimensat/futimesat
+	// in the FS family rather than falling through to Misc.
+	"utime": {}, "utimes": {},
+	"utimensat": {}, "write": {}, "writev": {}, "pread64": {}, "preadv": {},
+	"preadv2": {}, "pwrite64": {}, "pwritev": {}, "pwritev2": {},
+}

@@ -13,26 +13,35 @@ const (
 	defaultOpenFlags int32  = syscall.O_RDWR
 	defaultOpenName         = "testfile.txt"
 	defaultOpenComm         = "testcomm"
+	defaultDirfd     int32  = -100
 )
 
+// EventGenerator produces pre-encoded kernel payload fixtures for the
+// benchmark and integration harnesses: one method per event kind returning
+// both the typed event and its ring-buffer bytes.
 type EventGenerator struct {
+	// PairDelta is the exit-minus-enter timestamp applied by the Pair helpers.
 	PairDelta uint64
 }
 
+// NewEventGenerator returns a generator with the default pair delta.
 func NewEventGenerator() EventGenerator {
 	return EventGenerator{PairDelta: defaultPairDelta}
 }
 
+// EnterOpenEvent generates an open enter payload carrying the default filename, comm and flags.
 func (g EventGenerator) EnterOpenEvent(time uint64, pid, tid uint32) (types.OpenEvent, []byte, error) {
 	ev := types.OpenEvent{
-		EventType: types.ENTER_OPEN_EVENT,
-		TraceId:   types.SYS_ENTER_OPENAT,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Flags:     defaultOpenFlags,
-		Filename:  [types.MAX_FILENAME_LENGTH]byte{},
-		Comm:      [types.MAX_PROGNAME_LENGTH]byte{},
+		EventType:     types.ENTER_OPEN_EVENT,
+		TraceId:       types.SYS_ENTER_OPENAT,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
+		Flags:         defaultOpenFlags,
+		Filename:      [types.MAX_FILENAME_LENGTH]byte{},
+		Comm:          [types.MAX_PROGNAME_LENGTH]byte{},
 	}
 	copy(ev.Filename[:], defaultOpenName)
 	copy(ev.Comm[:], defaultOpenComm)
@@ -40,6 +49,7 @@ func (g EventGenerator) EnterOpenEvent(time uint64, pid, tid uint32) (types.Open
 	return ev, raw, err
 }
 
+// ExitOpenEvent generates an open exit payload (ret event) for the given return value.
 func (g EventGenerator) ExitOpenEvent(time uint64, pid, tid uint32) (types.RetEvent, []byte, error) {
 	ev := types.RetEvent{
 		EventType: types.EXIT_OPEN_EVENT,
@@ -53,6 +63,7 @@ func (g EventGenerator) ExitOpenEvent(time uint64, pid, tid uint32) (types.RetEv
 	return ev, raw, err
 }
 
+// EnterFdEvent generates an fd-event enter payload (read/write/close/... keyed by traceID).
 func (g EventGenerator) EnterFdEvent(time uint64, pid, tid uint32, fd int32, traceID types.TraceId) (types.FdEvent, []byte, error) {
 	ev := types.FdEvent{
 		EventType: types.ENTER_FD_EVENT,
@@ -66,6 +77,7 @@ func (g EventGenerator) EnterFdEvent(time uint64, pid, tid uint32, fd int32, tra
 	return ev, raw, err
 }
 
+// ExitFdEvent generates an fd-event exit payload echoing the descriptor.
 func (g EventGenerator) ExitFdEvent(time uint64, pid, tid uint32, fd int32, traceID types.TraceId) (types.FdEvent, []byte, error) {
 	ev := types.FdEvent{
 		EventType: types.EXIT_FD_EVENT,
@@ -79,6 +91,7 @@ func (g EventGenerator) ExitFdEvent(time uint64, pid, tid uint32, fd int32, trac
 	return ev, raw, err
 }
 
+// EnterNullEvent generates a null-event enter payload (io_uring_setup, getcwd, ...) keyed by traceID.
 func (g EventGenerator) EnterNullEvent(time uint64, pid, tid uint32, traceID types.TraceId) (types.NullEvent, []byte, error) {
 	ev := types.NullEvent{
 		EventType: types.ENTER_NULL_EVENT,
@@ -91,6 +104,7 @@ func (g EventGenerator) EnterNullEvent(time uint64, pid, tid uint32, traceID typ
 	return ev, raw, err
 }
 
+// ExitNullEvent generates a null-event exit payload.
 func (g EventGenerator) ExitNullEvent(time uint64, pid, tid uint32, traceID types.TraceId) (types.NullEvent, []byte, error) {
 	ev := types.NullEvent{
 		EventType: types.EXIT_NULL_EVENT,
@@ -103,6 +117,7 @@ func (g EventGenerator) ExitNullEvent(time uint64, pid, tid uint32, traceID type
 	return ev, raw, err
 }
 
+// ExitRetEvent generates a generic ret-event exit payload for the given trace ID and return value.
 func (g EventGenerator) ExitRetEvent(time uint64, pid, tid uint32, traceID types.TraceId, ret int64) (types.RetEvent, []byte, error) {
 	ev := types.RetEvent{
 		EventType: types.EXIT_RET_EVENT,
@@ -117,29 +132,36 @@ func (g EventGenerator) ExitRetEvent(time uint64, pid, tid uint32, traceID types
 	return ev, raw, err
 }
 
+// EnterPathEvent generates a path-event enter payload (creat, chmod, ...) carrying pathname.
 func (g EventGenerator) EnterPathEvent(time uint64, pid, tid uint32, pathname string, traceID types.TraceId) (types.PathEvent, []byte, error) {
 	ev := types.PathEvent{
-		EventType: types.ENTER_PATH_EVENT,
-		TraceId:   traceID,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Pathname:  [types.MAX_FILENAME_LENGTH]byte{},
+		EventType:     types.ENTER_PATH_EVENT,
+		TraceId:       traceID,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Dirfd:         defaultDirfd,
+		SchemaVersion: types.PATH_EVENT_SCHEMA_VERSION,
+		Pathname:      [types.MAX_FILENAME_LENGTH]byte{},
 	}
 	copy(ev.Pathname[:], pathname)
 	raw, err := eventBytes(&ev)
 	return ev, raw, err
 }
 
+// EnterNameEvent generates a name-event enter payload (rename/link/symlink) carrying oldname and newname.
 func (g EventGenerator) EnterNameEvent(time uint64, pid, tid uint32, oldname, newname string, traceID types.TraceId) (types.NameEvent, []byte, error) {
 	ev := types.NameEvent{
-		EventType: types.ENTER_NAME_EVENT,
-		TraceId:   traceID,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Oldname:   [types.MAX_FILENAME_LENGTH]byte{},
-		Newname:   [types.MAX_FILENAME_LENGTH]byte{},
+		EventType:     types.ENTER_NAME_EVENT,
+		TraceId:       traceID,
+		Time:          time,
+		Pid:           pid,
+		Tid:           tid,
+		Olddirfd:      defaultDirfd,
+		Newdirfd:      defaultDirfd,
+		SchemaVersion: types.NAME_EVENT_SCHEMA_VERSION,
+		Oldname:       [types.MAX_FILENAME_LENGTH]byte{},
+		Newname:       [types.MAX_FILENAME_LENGTH]byte{},
 	}
 	copy(ev.Oldname[:], oldname)
 	copy(ev.Newname[:], newname)
@@ -147,6 +169,7 @@ func (g EventGenerator) EnterNameEvent(time uint64, pid, tid uint32, oldname, ne
 	return ev, raw, err
 }
 
+// EnterFcntlEvent generates a fcntl enter payload carrying fd, cmd and arg.
 func (g EventGenerator) EnterFcntlEvent(time uint64, pid, tid uint32, fd uint32, cmd uint32, arg uint64) (types.FcntlEvent, []byte, error) {
 	ev := types.FcntlEvent{
 		EventType: types.ENTER_FCNTL_EVENT,
@@ -162,6 +185,7 @@ func (g EventGenerator) EnterFcntlEvent(time uint64, pid, tid uint32, fd uint32,
 	return ev, raw, err
 }
 
+// EnterDup3Event generates a dup3 enter payload carrying fd and flags.
 func (g EventGenerator) EnterDup3Event(time uint64, pid, tid uint32, fd int32, flags int32) (types.Dup3Event, []byte, error) {
 	ev := types.Dup3Event{
 		EventType: types.ENTER_DUP3_EVENT,
@@ -176,6 +200,7 @@ func (g EventGenerator) EnterDup3Event(time uint64, pid, tid uint32, fd int32, f
 	return ev, raw, err
 }
 
+// EnterOpenByHandleAtEvent generates an open_by_handle_at enter payload.
 func (g EventGenerator) EnterOpenByHandleAtEvent(time uint64, pid, tid uint32, flags int32) (types.OpenByHandleAtEvent, []byte, error) {
 	ev := types.OpenByHandleAtEvent{
 		EventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT,
@@ -189,6 +214,7 @@ func (g EventGenerator) EnterOpenByHandleAtEvent(time uint64, pid, tid uint32, f
 	return ev, raw, err
 }
 
+// OpenPair generates a full open enter/exit pair, the exit stamped PairDelta after the enter.
 func (g EventGenerator) OpenPair(time uint64, pid, tid uint32) ([]byte, []byte, error) {
 	_, enter, err := g.EnterOpenEvent(time, pid, tid)
 	if err != nil {
@@ -201,6 +227,7 @@ func (g EventGenerator) OpenPair(time uint64, pid, tid uint32) ([]byte, []byte, 
 	return enter, exit, nil
 }
 
+// FdPair generates a full fd enter / ret-exit pair keyed by the given trace IDs.
 func (g EventGenerator) FdPair(time uint64, pid, tid uint32, fd int32, enterTraceID, exitTraceID types.TraceId, ret int64) ([]byte, []byte, error) {
 	_, enter, err := g.EnterFdEvent(time, pid, tid, fd, enterTraceID)
 	if err != nil {
@@ -213,6 +240,7 @@ func (g EventGenerator) FdPair(time uint64, pid, tid uint32, fd int32, enterTrac
 	return enter, exit, nil
 }
 
+// NullPair generates a full null enter / ret-exit pair keyed by the given trace IDs.
 func (g EventGenerator) NullPair(time uint64, pid, tid uint32, enterTraceID, exitTraceID types.TraceId) ([]byte, []byte, error) {
 	_, enter, err := g.EnterNullEvent(time, pid, tid, enterTraceID)
 	if err != nil {
@@ -225,6 +253,7 @@ func (g EventGenerator) NullPair(time uint64, pid, tid uint32, enterTraceID, exi
 	return enter, exit, nil
 }
 
+// PathPair generates a full path enter / ret-exit pair keyed by the given trace IDs.
 func (g EventGenerator) PathPair(time uint64, pid, tid uint32, pathname string, enterTraceID, exitTraceID types.TraceId, ret int64) ([]byte, []byte, error) {
 	_, enter, err := g.EnterPathEvent(time, pid, tid, pathname, enterTraceID)
 	if err != nil {
@@ -237,6 +266,7 @@ func (g EventGenerator) PathPair(time uint64, pid, tid uint32, pathname string, 
 	return enter, exit, nil
 }
 
+// NamePair generates a full name enter / ret-exit pair keyed by the given trace IDs.
 func (g EventGenerator) NamePair(time uint64, pid, tid uint32, oldname, newname string, enterTraceID, exitTraceID types.TraceId, ret int64) ([]byte, []byte, error) {
 	_, enter, err := g.EnterNameEvent(time, pid, tid, oldname, newname, enterTraceID)
 	if err != nil {
@@ -249,6 +279,7 @@ func (g EventGenerator) NamePair(time uint64, pid, tid uint32, oldname, newname 
 	return enter, exit, nil
 }
 
+// FcntlPair generates a full fcntl enter / ret-exit pair keyed by the given trace IDs.
 func (g EventGenerator) FcntlPair(time uint64, pid, tid uint32, fd uint32, cmd uint32, arg uint64, exitTraceID types.TraceId, ret int64) ([]byte, []byte, error) {
 	_, enter, err := g.EnterFcntlEvent(time, pid, tid, fd, cmd, arg)
 	if err != nil {
@@ -261,6 +292,7 @@ func (g EventGenerator) FcntlPair(time uint64, pid, tid uint32, fd uint32, cmd u
 	return enter, exit, nil
 }
 
+// Dup3Pair generates a full dup3 enter / ret-exit pair keyed by the given trace IDs.
 func (g EventGenerator) Dup3Pair(time uint64, pid, tid uint32, fd int32, flags int32, exitTraceID types.TraceId, ret int64) ([]byte, []byte, error) {
 	_, enter, err := g.EnterDup3Event(time, pid, tid, fd, flags)
 	if err != nil {

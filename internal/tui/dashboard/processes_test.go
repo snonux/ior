@@ -47,7 +47,7 @@ func TestRenderProcessesShowsSinglePIDNote(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 
-	out := renderProcessesWithOffset(&snap, 100, 20, 0, 0, 77)
+	out := renderProcessesWithSort(&snap, 100, 20, 0, 0, 77, tableSortState[processSortKey]{})
 	if !strings.Contains(out, "most useful with All PIDs") {
 		t.Fatalf("expected single-pid guidance note")
 	}

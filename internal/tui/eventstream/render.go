@@ -24,6 +24,8 @@ type columnLayout struct {
 	file    int
 }
 
+// RenderStreamTable renders the stream tab's main panel: status line, filter
+// line and the (selected) event rows, fitted to width.
 func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, filterStack []string, events []StreamEvent, selectedVisibleIdx int, selectedCol int) string {
 	if width <= 0 {
 		width = 100
@@ -42,9 +44,11 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 		lines = append(lines, renderEventRow(ev, columns, i == selectedVisibleIdx, selectedCol))
 	}
 
-	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
+	return common.Current().PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
 }
 
+// RenderFDTraceTable renders the fd-trace view: all events of one pid/fd
+// pair, the stream tab's drill-down from a selected row.
 func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events []StreamEvent) string {
 	if width <= 0 {
 		width = 100
@@ -52,7 +56,7 @@ func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events 
 	contentWidth := panelContentWidth(width)
 
 	lines := make([]string, 0, len(events)+3)
-	lines = append(lines, common.HeaderStyle.Render("FD Trace (ring snapshot)"))
+	lines = append(lines, common.Current().HeaderStyle.Render("FD Trace (ring snapshot)"))
 	lines = append(lines, fmt.Sprintf("PID:%d FD:%d matched:%d", pid, fd, totalCount))
 	columns := streamColumns(contentWidth)
 	lines = append(lines, common.RenderTableHeader(columns))
@@ -60,13 +64,14 @@ func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events 
 		lines = append(lines, renderEventRow(ev, columns, false, -1))
 	}
 
-	return common.PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
+	return common.Current().PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
 }
 
 func renderStatusLine(paused bool, totalCount, filteredCount, bufferLen, bufferCap int) string {
-	state := common.HighlightStyle.Render("LIVE")
+	theme := common.Current()
+	state := theme.HighlightStyle.Render("LIVE")
 	if paused {
-		state = common.ErrorStyle.Render("PAUSED")
+		state = theme.ErrorStyle.Render("PAUSED")
 	}
 	buffer := strconv.Itoa(bufferLen)
 	if bufferCap > 0 {
@@ -76,15 +81,16 @@ func renderStatusLine(paused bool, totalCount, filteredCount, bufferLen, bufferC
 }
 
 func renderFilterLine(filter Filter) string {
+	theme := common.Current()
 	summary := presenter.FilterSummary(filter)
 	if summary == "all" {
-		summary = common.HighlightStyle.Render(summary)
+		summary = theme.HighlightStyle.Render(summary)
 	}
-	return common.HeaderStyle.Render("Filter:") + " " + summary
+	return theme.HeaderStyle.Render("Filter:") + " " + summary
 }
 
 func renderFilterStackLine(filterStack []string) string {
-	return common.HeaderStyle.Render("Stack:") + " " + strings.Join(filterStack, " | ")
+	return common.Current().HeaderStyle.Render("Stack:") + " " + strings.Join(filterStack, " | ")
 }
 
 func streamColumns(width int) []common.TableColumn {
@@ -121,7 +127,7 @@ func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool,
 		fitCell(ev.FileName, columns[9].Width),
 	}
 	if ev.IsError {
-		return common.RenderTableRow(columns, cells, selected, selectedCol, common.ErrorStyle)
+		return common.RenderTableRow(columns, cells, selected, selectedCol, common.Current().ErrorStyle)
 	}
 	return common.RenderTableRow(columns, cells, selected, selectedCol, lipgloss.Style{})
 }

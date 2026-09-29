@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestUnlinkBasic(t *testing.T) {
 	runScenario(t, "unlink-basic", []ExpectedEvent{
@@ -36,14 +39,10 @@ func TestUnlinkRmdir(t *testing.T) {
 }
 
 func TestUnlinkEnoent(t *testing.T) {
-	runScenario(t, "unlink-enoent", []ExpectedEvent{
-		{
-			PathContains: "unlink-enoent-missing.txt",
-			Tracepoint:   "enter_unlink",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "unlink-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "unlink-enoent-missing.txt",
+		Syscall:      "unlink",
+	}, nil)
 }
 
 func TestUnlinkRmdirNotempty(t *testing.T) {
@@ -58,12 +57,8 @@ func TestUnlinkRmdirNotempty(t *testing.T) {
 }
 
 func TestUnlinkUnlinkatEnoent(t *testing.T) {
-	runScenario(t, "unlink-unlinkat-enoent", []ExpectedEvent{
-		{
-			PathContains: "unlinkat-enoent-missing.txt",
-			Tracepoint:   "enter_unlinkat",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "unlink-unlinkat-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "unlinkat-enoent-missing.txt",
+		Syscall:      "unlinkat",
+	}, nil)
 }

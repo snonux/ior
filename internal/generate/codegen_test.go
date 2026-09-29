@@ -1,6 +1,8 @@
 package generate
 
 import (
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -24,12 +26,760 @@ func TestGenerateFdHandler(t *testing.T) {
 	requireContains(t, output, "#define SYS_ENTER_READ 844")
 }
 
+// TestGenerateModuleHandlers locks in the generated BPF C for the module-load
+// syscalls (man 2 init_module). init_module is a null_event: it must capture no
+// fd and no path/filename (its param_values arg is a parameter string, not a
+// path). finit_module is an fd_event capturing fd = args[0].
+func TestGenerateModuleHandlers(t *testing.T) {
+	initOut := generateFromPair(t, FormatInitModule, FormatExitInitModule)
+	requireContains(t, initOut, `SEC("tracepoint/syscalls/sys_enter_init_module")`)
+	requireContains(t, initOut, "struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);")
+	requireContains(t, initOut, "ev->event_type = ENTER_NULL_EVENT;")
+	// init_module must not capture an fd or any filename/path.
+	if strings.Contains(initOut, "ev->fd =") {
+		t.Error("init_module handler must not capture an fd")
+	}
+	if strings.Contains(initOut, "ev->filename") || strings.Contains(initOut, "bpf_probe_read_user_str") {
+		t.Error("init_module handler must not capture param_values as a path/filename")
+	}
+
+	finitOut := generateFromPair(t, FormatFinitModule, FormatExitFinitModule)
+	requireContains(t, finitOut, `SEC("tracepoint/syscalls/sys_enter_finit_module")`)
+	requireContains(t, finitOut, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, finitOut, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, finitOut, "ev->fd = (__s32)ctx->args[0];")
+}
+
+// TestGenerateBindHandler locks in the generated BPF C for bind(2):
+//
+//	int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+//
+// bind assigns an address to a socket and returns 0 on success or -1 on error.
+// Its sockfd is at args[0], so the enter handler is a KindFd fd_event capturing
+// ev->fd = args[0] — matching its socket siblings connect/listen/accept/
+// getsockname/getpeername. The addr pointer (args[1]) and addrlen (args[2]) must
+// NOT be captured: bind reads no path and copies no userspace buffer we track.
+// The exit handler is a plain ret_event marked UNCLASSIFIED (0/-1, no byte
+// count), so it must not carry a READ/WRITE/TRANSFER classification.
+func TestGenerateBindHandler(t *testing.T) {
+	output := generateFromPair(t, FormatBind, FormatExitBind)
+
+	// Enter: KindFd fd_event capturing the sockfd from args[0].
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_bind")`)
+	requireContains(t, output, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_BIND;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+
+	// Negative guards: the sockaddr pointer (args[1]) must never be read as a
+	// path/buffer, and addrlen (args[2]) must not be captured as another fd.
+	requireNotContains(t, output, "bpf_probe_read_user_str")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[2];")
+
+	// Exit: plain ret_event, UNCLASSIFIED (bind returns 0/-1, no byte count).
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_bind")`)
+	requireContains(t, output, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = WRITE_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = TRANSFER_CLASSIFIED;")
+}
+
+// TestGenerateGetsocknameHandler locks in the generated BPF C for getsockname(2):
+//
+//	int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+//
+// getsockname returns the local address a socket is bound to and yields 0 on
+// success or -1 on error. Its sockfd is at args[0], so the enter handler is a
+// KindFd fd_event capturing ev->fd = args[0] — matching its socket siblings
+// bind/connect/listen/accept/getpeername. The addr output pointer (args[1]) and
+// the addrlen in/out pointer (args[2]) must NOT be captured: getsockname reads
+// no path and copies no userspace buffer we track. The exit handler is a plain
+// ret_event marked UNCLASSIFIED (0/-1, no byte count), so it must not carry a
+// READ/WRITE/TRANSFER classification — guarding against any mistaken
+// recvfrom/sendto-style byte-transfer accounting.
+func TestGenerateGetsocknameHandler(t *testing.T) {
+	output := generateFromPair(t, FormatGetsockname, FormatExitGetsockname)
+
+	// Enter: KindFd fd_event capturing the sockfd from args[0].
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_getsockname")`)
+	requireContains(t, output, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_GETSOCKNAME;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+
+	// Negative guards: the sockaddr output pointer (args[1]) must never be read
+	// as a path/buffer, and the addrlen pointer (args[2]) must not be captured as
+	// another fd.
+	requireNotContains(t, output, "bpf_probe_read_user_str")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[2];")
+
+	// Exit: plain ret_event, UNCLASSIFIED (getsockname returns 0/-1, no byte count).
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_getsockname")`)
+	requireContains(t, output, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = WRITE_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = TRANSFER_CLASSIFIED;")
+}
+
+// TestGenerateListenHandler locks in the generated BPF C for listen(2):
+//
+//	int listen(int sockfd, int backlog)
+//
+// listen marks the socket referred to by sockfd as passive (it will accept
+// incoming connections via accept(2)) and returns 0 on success or -1 on error.
+// Its sockfd is at args[0], so the enter handler is a KindFd fd_event capturing
+// ev->fd = args[0] — matching its socket siblings bind/connect/accept/
+// getsockname/getpeername. The backlog argument (args[1]) is a plain int queue
+// length, NOT a second fd, so it must NOT be captured. The exit handler is a
+// plain ret_event marked UNCLASSIFIED (0/-1, no byte count), so it must not
+// carry a READ/WRITE/TRANSFER classification — guarding against any mistaken
+// recvfrom/sendto-style byte-transfer accounting.
+func TestGenerateListenHandler(t *testing.T) {
+	output := generateFromPair(t, FormatListen, FormatExitListen)
+
+	// Enter: KindFd fd_event capturing the sockfd from args[0].
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_listen")`)
+	requireContains(t, output, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_LISTEN;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+
+	// Negative guards: the backlog (args[1]) must not be captured as another fd,
+	// and listen reads no userspace path/buffer.
+	requireNotContains(t, output, "bpf_probe_read_user_str")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+
+	// Exit: plain ret_event, UNCLASSIFIED (listen returns 0/-1, no byte count).
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_listen")`)
+	requireContains(t, output, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = WRITE_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = TRANSFER_CLASSIFIED;")
+}
+
 func TestGeneratePidfdGetfdHandlerUsesPidfdArgument(t *testing.T) {
 	output := generateFromPair(t, FormatPidfdGetfd, FormatExitPidfdGetfd)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_pidfd_getfd")`)
 	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_PIDFD_GETFD;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+}
+
+// TestGenerateKexecFileLoadHandler locks in the generated BPF C for
+// kexec_file_load(2):
+//
+//	long kexec_file_load(int kernel_fd, int initrd_fd,
+//	                     unsigned long cmdline_len, const char *cmdline,
+//	                     unsigned long flags)
+//
+// kexec_file_load loads a new kernel (and optional initrd) from open file
+// descriptors so it can later be booted by reboot(2); it returns 0 on success
+// or -1 on error. The leading kernel_fd (args[0]) makes the enter a KindFd
+// fd_event capturing ev->fd = args[0]. There are TWO fds (kernel_fd at args[0],
+// initrd_fd at args[1]); by the single-fd KindFd convention only the first
+// (kernel_fd) is captured, so the handler must NOT wire args[1]. Critically,
+// cmdline_ptr (args[3]) is a command-line STRING for the new kernel, NOT a
+// filesystem path, so it must NOT be read with bpf_probe_read_user_str. On exit
+// kexec_file_load returns 0/-1 — UNCLASSIFIED (a plain ret_event, no
+// read/write/transfer byte count). It shares FamilySecurity with its sibling
+// kexec_load(2) (asserted in family_test.go).
+func TestGenerateKexecFileLoadHandler(t *testing.T) {
+	output := generateFromPair(t, FormatKexecFileLoad, FormatExitKexecFileLoad)
+
+	// Enter: KindFd fd_event capturing kernel_fd from args[0].
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_kexec_file_load")`)
+	requireContains(t, output, "struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_KEXEC_FILE_LOAD;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+
+	// Negative guards: only kernel_fd (args[0]) is captured — initrd_fd (args[1])
+	// must not be wired as a second fd, and cmdline_ptr (args[3]) is a kernel
+	// command-line string, never a filesystem path, so it must not be slurped via
+	// bpf_probe_read_user_str.
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "bpf_probe_read_user_str")
+
+	// Exit: plain ret_event, UNCLASSIFIED (kexec_file_load returns 0/-1, no byte
+	// count).
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_kexec_file_load")`)
+	requireContains(t, output, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = WRITE_CLASSIFIED;")
+	requireNotContains(t, output, "ev->ret_type = TRANSFER_CLASSIFIED;")
+}
+
+// TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd locks in the BPF
+// handler wiring for process_madvise(2):
+//
+//	ssize_t process_madvise(int pidfd, const struct iovec iovec[.n], size_t n,
+//	                        int advice, unsigned int flags).
+//
+// Unlike the sibling madvise(2) (KindMem, addr/length at args[0]/args[1]), the
+// first argument here is a pidfd — a PID *file descriptor* selecting the target
+// process (see pidfd_open(2)) — so process_madvise is classified KindFd and the
+// enter handler must capture ev->fd from args[0], NOT treat args[0] as an
+// address. process_madvise returns the number of bytes advised on success or -1
+// on error, but that count is advisory (no data is actually transferred), so the
+// exit handler reports the raw status as UNCLASSIFIED exactly like madvise(2) —
+// it must never be misclassified as a READ/WRITE/TRANSFER byte count.
+func TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("process_madvise")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_process_madvise")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_PROCESS_MADVISE;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	// args[0] is a pidfd, never an address: the KindMem addr wiring must not leak
+	// into the process_madvise enter handler.
+	if strings.Contains(output, "ev->addr = (__u64)ctx->args[0];") &&
+		strings.Contains(output, `SEC("tracepoint/syscalls/sys_enter_process_madvise")`) &&
+		strings.Contains(output, "struct mem_event *ev") {
+		t.Error("process_madvise must be KindFd (fd=args[0]), not KindMem (addr=args[0])")
+	}
+	// The exit handler returns the advisory byte count generically as the raw
+	// status, classified UNCLASSIFIED — not as a transfer/byte-count.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_process_madvise")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateRtSigpendingHandler locks in how rt_sigpending(2) is generated.
+// Per the man page:
+//
+//	int rt_sigpending(sigset_t *set, size_t sigsetsize)
+//
+// It reports the set of signals pending for delivery into the userspace *set
+// buffer and returns 0 on success or -1 on error. Neither argument is an fd or
+// a path: args[0] is a userspace output pointer to a sigset_t (a signal mask,
+// not an I/O resource) and args[1] is the byte size of that set. ior therefore
+// classifies rt_sigpending as KindNull in FamilySignals, alongside the rest of
+// the rt_sig* group. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     as an fd/path/addr — the sigset pointer is not a traced I/O resource.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateRtSigpendingHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("rt_sigpending")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_rt_sigpending")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_rt_sigpending")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_RT_SIGPENDING;")
+
+	// The KindNull enter handler must not wire the sigset pointer (args[0]) or the
+	// sigsetsize (args[1]) as an fd/path/addr — they are not traced I/O resources.
+	// Scope to the enter handler body (everything from the enter SEC up to the
+	// exit SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("rt_sigpending: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("rt_sigpending must be KindNull: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateRtTgsigqueueinfoHandler locks in how rt_tgsigqueueinfo(2) is
+// generated. Per the man page:
+//
+//	int rt_tgsigqueueinfo(pid_t tgid, pid_t tid, int sig, siginfo_t *info)
+//
+// It queues signal sig (plus the accompanying siginfo data) to the thread tid
+// within thread group tgid, and returns 0 on success or -1 on error. NONE of
+// the arguments is an fd or a filesystem path: args[0] (tgid) and args[1] (tid)
+// are process/thread IDs (pids, not fds — they must not be misclassified as
+// file descriptors), args[2] (sig) is a signal number, and args[3] (info) is a
+// userspace pointer to a siginfo_t control block, not a traced I/O resource.
+// ior therefore classifies rt_tgsigqueueinfo as KindNull in FamilySignals,
+// alongside its sibling rt_sigqueueinfo and the rest of the rt_sig* group.
+// Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg
+//     as an fd/path/addr — the pids and siginfo pointer are not traced I/O.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateRtTgsigqueueinfoHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("rt_tgsigqueueinfo")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_rt_tgsigqueueinfo")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_rt_tgsigqueueinfo")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_RT_TGSIGQUEUEINFO;")
+
+	// The KindNull enter handler must not wire tgid/tid (the pids, args[0]/args[1])
+	// or the siginfo pointer (args[3]) as an fd/path/addr — none are traced I/O
+	// resources, and the pids in particular must never be treated as fds. Scope to
+	// the enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("rt_tgsigqueueinfo: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("rt_tgsigqueueinfo must be KindNull: enter handler must not capture any arg (tgid/tid are pids, not fds)")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateMsgctlHandler locks in how msgctl(2) is generated. Per the man
+// page:
+//
+//	int msgctl(int msqid, int op, struct msqid_ds *buf)
+//
+// msgctl performs a control operation (op) on the System V message queue
+// identified by msqid. CRITICAL: msqid (args[0]) is a System V IPC identifier
+// returned by msgget — it is NOT a file descriptor. Capturing it as an fd would
+// record a meaningless number in the fd column and corrupt the fd-resource view.
+// args[1] (op) is a command and args[2] (buf) is a userspace pointer to a
+// struct msqid_ds control block; neither is a traced I/O resource. The return
+// value is an int status (0, or a non-negative value for IPC_INFO/MSG_INFO/
+// MSG_STAT, and -1 on error) — never a byte count. ior therefore classifies
+// msgctl as KindSysVOp in FamilyIPC, identical to its SysV control-syscall
+// siblings semctl and shmctl (and the rest of the sysv-op group). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg —
+//     in particular it must NOT wire args[0] (the msqid IPC id) as an fd.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; it is not a
+//     byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a regression to KindFd (which would misrecord the SysV
+// IPC id as a file descriptor) and pins consistency with semctl/shmctl.
+func TestGenerateMsgctlHandler(t *testing.T) {
+	// Classification consistency: msgctl and its SysV control-syscall siblings
+	// semctl/shmctl must all resolve to KindSysVOp.
+	for _, sc := range []string{"msgctl", "semctl", "shmctl"} {
+		res, ok := classifyNameOnly("sys_enter_" + sc)
+		if !ok || res.Kind != KindSysVOp {
+			t.Fatalf("%s classified as kind=%v ok=%v, want KindSysVOp", sc, res.Kind, ok)
+		}
+		if fam := ClassifySyscallFamily("sys_enter_" + sc); fam != FamilyIPC {
+			t.Errorf("%s family = %q, want FamilyIPC", sc, fam)
+		}
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("msgctl")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_msgctl")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_msgctl")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MSGCTL;")
+
+	// The KindSysVOp enter handler must not wire any argument: args[0] (msqid) is
+	// a SysV IPC id, NOT an fd; args[1] (op) is a command; args[2] (buf) is a
+	// userspace control-block pointer. Scope to the enter handler body (from the
+	// enter SEC up to the exit SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("msgctl: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("msgctl must be KindSysVOp: enter handler must not capture any arg (args[0] msqid is a SysV IPC id, not an fd)")
+	}
+	// Belt-and-suspenders: the enter handler must never assign ev->fd, which would
+	// mean the SysV msqid was captured as a file descriptor.
+	requireNotContains(t, enterBody, "ev->fd")
+
+	// The exit handler reports the raw int status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateSemctlHandler locks in how semctl(2) is generated. Per the man
+// page:
+//
+//	int semctl(int semid, int semnum, int op, ...)
+//
+// semctl performs the control operation (op) on the System V semaphore set
+// identified by semid (or on the semnum-th semaphore of that set). CRITICAL:
+// semid (args[0]) is a System V IPC identifier returned by semget — it is NOT a
+// file descriptor. Capturing it as an fd would record a meaningless number in
+// the fd column and corrupt the fd-resource view. args[1] (semnum) is a
+// semaphore index, args[2] (op) is a command, and the optional fourth arg is a
+// union semun (an int val or a userspace pointer to a control block / value
+// array); none of these is a traced I/O resource. The return value is an int
+// status (0, or a non-negative value for the GETVAL/GETPID/GETNCNT/GETZCNT/
+// IPC_INFO/SEM_INFO/SEM_STAT info ops, and -1 on error) — never a byte count.
+// ior therefore classifies semctl as KindSysVOp in FamilyIPC, identical to its
+// SysV control-syscall siblings msgctl and shmctl (and the rest of the sysv-op
+// group). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg —
+//     in particular it must NOT wire args[0] (the semid IPC id) as an fd.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; it is not a
+//     byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a regression to KindFd (which would misrecord the SysV
+// IPC id as a file descriptor) and pins consistency with msgctl/shmctl. The
+// sibling TestGenerateMsgctlHandler checks the same invariants on msgctl's
+// generated output; this test exercises semctl's own generated handler body.
+func TestGenerateSemctlHandler(t *testing.T) {
+	// Classification consistency: semctl must resolve to KindSysVOp in FamilyIPC,
+	// matching its SysV control-syscall siblings msgctl/shmctl.
+	res, ok := classifyNameOnly("sys_enter_semctl")
+	if !ok || res.Kind != KindSysVOp {
+		t.Fatalf("semctl classified as kind=%v ok=%v, want KindSysVOp", res.Kind, ok)
+	}
+	if fam := ClassifySyscallFamily("sys_enter_semctl"); fam != FamilyIPC {
+		t.Errorf("semctl family = %q, want FamilyIPC", fam)
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("semctl")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_semctl")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_semctl")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SEMCTL;")
+
+	// The KindSysVOp enter handler must not wire any argument: args[0] (semid) is
+	// a SysV IPC id, NOT an fd; args[1] (semnum) is a semaphore index; args[2]
+	// (op) is a command; the optional union semun arg is an int/userspace
+	// pointer. Scope to the enter handler body (from the enter SEC up to the exit
+	// SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("semctl: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("semctl must be KindSysVOp: enter handler must not capture any arg (args[0] semid is a SysV IPC id, not an fd)")
+	}
+	// Belt-and-suspenders: the enter handler must never assign ev->fd, which would
+	// mean the SysV semid was captured as a file descriptor.
+	requireNotContains(t, enterBody, "ev->fd")
+
+	// The exit handler reports the raw int status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateClone3Handler locks in how clone3(2) is generated. Per the man
+// page:
+//
+//	long clone3(struct clone_args *cl_args, size_t size)
+//
+// clone3 is the modern superset of clone/fork/vfork: it creates a new process
+// or thread. args[0] is a userspace pointer to a struct clone_args (a control
+// block, not an fd or filesystem path) and args[1] is its byte size. The return
+// value is a pid_t: the child's PID in the parent, 0 in the child, or -1 on
+// error — never a byte count. ior therefore classifies clone3 as KindProc in
+// FamilyProcess, identical to its siblings clone/fork/vfork. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     (the clone_args pointer) or args[1] (size) as an fd/path/addr — neither is
+//     a traced I/O resource.
+//   - The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED; it is not
+//     a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a misclassification to KindNull (which would still emit a
+// null_event but break sibling/dimension consistency) or to any fd/path kind
+// (which would wrongly treat the clone_args pointer as a resource).
+func TestGenerateClone3Handler(t *testing.T) {
+	// Classification consistency with the clone/fork/vfork siblings. clone3's
+	// real tracepoint args are (struct clone_args *, size_t); we feed a generic
+	// pointer arg here to prove the name-only table — not a field heuristic —
+	// pins all four siblings to KindProc.
+	for _, name := range []string{"sys_enter_clone3", "sys_enter_clone", "sys_enter_fork", "sys_enter_vfork"} {
+		r := ClassifyFormat(&Format{
+			Name: name,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "struct clone_args *", Name: "uargs"},
+				{Type: "unsigned long", Name: "size"},
+			},
+		})
+		if r.Kind != KindProc {
+			t.Errorf("%s kind = %v, want KindProc", name, r.Kind)
+		}
+	}
+	if got := ClassifySyscallFamily("sys_enter_clone3"); got != FamilyProcess {
+		t.Errorf("clone3 family = %q, want %q", got, FamilyProcess)
+	}
+	if got := ClassifyRet("sys_exit_clone3"); got != Unclassified {
+		t.Errorf("clone3 ret classification = %q, want %q (pid, not a byte count)", got, Unclassified)
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("clone3")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_clone3")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_clone3")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_CLONE3;")
+
+	// The KindProc enter handler must not wire args[0] (clone_args ptr) or
+	// args[1] (size) as an fd/path/addr — neither is a traced I/O resource.
+	// Scope to the enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("clone3: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("clone3 must be KindProc: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateWait4Handler locks in how wait4(2) is generated. Per the man
+// page:
+//
+//	pid_t wait4(pid_t pid, int *wstatus, int options, struct rusage *rusage)
+//
+// wait4 waits for a child process to change state and optionally retrieves its
+// resource usage. NONE of the arguments is an fd or a filesystem path: args[0]
+// (pid) is a process/group selector — a pid, NOT a file descriptor, so it must
+// never be misclassified as one; args[1] (wstatus) is a userspace output pointer
+// for the wait status; args[2] (options) is an int flag set; and args[3]
+// (rusage) is a userspace output pointer to a struct rusage. The return value is
+// a pid_t: the pid of the child whose state changed, 0 (WNOHANG, none ready), or
+// -1 on error — never a byte count. ior therefore classifies wait4 as KindProc
+// in FamilyProcess, identical to its siblings waitid/clone/fork/vfork.
+// Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg
+//     as an fd/path/addr — neither the pid selector, the status/rusage pointers,
+//     nor the options flags are traced I/O resources.
+//   - The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED; it is not
+//     a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+//
+// This guards against a misclassification to KindNull (which would still emit a
+// null_event but break sibling/dimension consistency) or to any fd kind (which
+// would wrongly treat the pid at args[0] as a file descriptor).
+func TestGenerateWait4Handler(t *testing.T) {
+	// Classification consistency with the waitid/clone/fork/vfork siblings. We
+	// feed a generic pointer arg so the name-only table — not a field heuristic —
+	// is what pins both wait* siblings to KindProc.
+	for _, name := range []string{"sys_enter_wait4", "sys_enter_waitid"} {
+		r := ClassifyFormat(&Format{
+			Name: name,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "pid_t", Name: "upid"},
+			},
+		})
+		if r.Kind != KindProc {
+			t.Errorf("%s kind = %v, want KindProc", name, r.Kind)
+		}
+	}
+	if got := ClassifySyscallFamily("sys_enter_wait4"); got != FamilyProcess {
+		t.Errorf("wait4 family = %q, want %q", got, FamilyProcess)
+	}
+	if got := ClassifyRet("sys_exit_wait4"); got != Unclassified {
+		t.Errorf("wait4 ret classification = %q, want %q (pid, not a byte count)", got, Unclassified)
+	}
+
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("wait4")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_wait4")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_wait4")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_WAIT4;")
+
+	// The KindProc enter handler must not wire any arg as an fd/path/addr — in
+	// particular the pid at args[0] must never be treated as an fd. Scope to the
+	// enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("wait4: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("wait4 must be KindProc: enter handler must not capture any arg (pid at args[0] is not an fd)")
+	}
+
+	// The exit handler reports the raw pid/0/-1 status as UNCLASSIFIED.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateSigaltstackHandler locks in how sigaltstack(2) is generated. Per
+// the man page:
+//
+//	int sigaltstack(const stack_t *ss, stack_t *old_ss)
+//
+// It sets and/or gets the calling thread's alternate signal stack and returns 0
+// on success or -1 on error. Neither argument is an fd or a path: args[0] is a
+// userspace input pointer to a stack_t describing a new alternate stack and
+// args[1] is a userspace output pointer that receives the previously installed
+// stack. Both are signal-handling control structures, not I/O resources, so ior
+// classifies sigaltstack as KindNull in FamilySignals, alongside the rest of the
+// signal group (rt_sig*/kill/pause/tkill/tgkill). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0] or
+//     args[1] as an fd/path/addr — the stack_t pointers are not traced I/O.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateSigaltstackHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("sigaltstack")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_sigaltstack")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_sigaltstack")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SIGALTSTACK;")
+
+	// The KindNull enter handler must not wire the new-stack pointer (args[0]) or
+	// the old-stack output pointer (args[1]) as an fd/path/addr — neither is a
+	// traced I/O resource. Scope to the enter handler body (everything from the
+	// enter SEC up to the exit SEC) so we only check what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("sigaltstack: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("sigaltstack must be KindNull: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateTkillHandler locks in how tkill(2) is generated. Per the man page:
+//
+//	int tkill(pid_t tid, int sig)
+//
+// tkill sends signal sig to the thread whose thread id is tid; it is the
+// obsolete predecessor of tgkill(tgid, tid, sig) (the kernel recommends tgkill
+// because a bare tid can be recycled). It returns 0 on success or -1 on error.
+// Neither argument is an fd or a path: args[0] is a thread id (a signal target,
+// NOT a file descriptor) and args[1] is the signal number. tkill is not listed
+// in the name-only kind table; it carries fields named "pid"/"sig" that match no
+// fd/path/name pattern, so ClassifyFormat returns KindNone and the generation
+// fallback (classifyEnterForGeneration) promotes it to KindNull. This test guards
+// that path: tkill must emit a struct null_event and the args[0] tid must never be
+// captured as an fd. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture any arg —
+//     in particular the tid must not be mistaken for an fd.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateTkillHandler(t *testing.T) {
+	// syntheticPair derives the fixture from FormatKill, whose fields
+	// (pid_t pid; int sig) match the real sys_enter_tkill tracepoint layout
+	// exactly, so this exercises tkill's true argument shape.
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("tkill")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_tkill")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_tkill")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_TKILL;")
+
+	// The KindNull enter handler must not wire the tid (args[0]) or sig (args[1])
+	// as an fd/path/addr — the tid is a signal target, not a traced I/O resource.
+	// Scope to the enter handler body (from the enter SEC up to the exit SEC).
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("tkill: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("tkill must be KindNull: enter handler must not capture any arg (tid is not an fd)")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateSysinfoHandler locks in how sysinfo(2) is generated. Per the man
+// page:
+//
+//	int sysinfo(struct sysinfo *info)
+//
+// It returns overall system statistics (memory/swap usage and load averages)
+// into the single userspace *info output buffer and returns 0 on success or -1
+// on error. The lone argument is NOT an fd or a path: it is a userspace output
+// pointer to a struct sysinfo (a statistics buffer, not an I/O resource). ior
+// therefore classifies sysinfo as KindNull in FamilyMisc, alongside its
+// system-introspection siblings newuname/sysfs/ustat. Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     as an fd/path/addr — the info pointer is not a traced I/O resource.
+//   - The exit handler reports the raw int status as UNCLASSIFIED; the 0/-1
+//     return is not a byte count, so it must never be tagged READ/WRITE/TRANSFER.
+func TestGenerateSysinfoHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("sysinfo")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_sysinfo")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_sysinfo")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SYSINFO;")
+
+	// The KindNull enter handler must not wire the info pointer (args[0]) as an
+	// fd/path/addr — it is not a traced I/O resource. Scope to the enter handler
+	// body (everything from the enter SEC up to the exit SEC) so we only check
+	// what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("sysinfo: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("sysinfo must be KindNull: enter handler must not capture any arg")
+	}
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+func TestGenerateLandlockAddRuleHandlerUsesFirstArgumentAsFd(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("landlock_add_rule")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_landlock_add_rule")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_LANDLOCK_ADD_RULE;")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 }
 
@@ -40,17 +790,321 @@ func TestGenerateOpenHandler(t *testing.T) {
 	requireContains(t, output, "struct open_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_OPENAT;")
-	requireContains(t, output, "__builtin_memset(&(ev->filename), 0, sizeof(ev->filename) + sizeof(ev->comm));")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]);")
+	requireNotContains(t, output, "__builtin_memset")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)")
+	requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[1]);")
 	requireContains(t, output, "bpf_get_current_comm(&ev->comm, sizeof(ev->comm));")
 	requireContains(t, output, "ev->flags = ctx->args[2];")
+}
+
+func TestGenerateDirfdFieldsForEveryPathEventShape(t *testing.T) {
+	tests := []struct {
+		name  string
+		enter string
+		exit  string
+		want  []string
+	}{
+		{
+			name:  "openat",
+			enter: FormatOpenat,
+			exit:  FormatExitOpenat,
+			want: []string{
+				"ev->dirfd = (__s32)ctx->args[0];",
+				"ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;",
+			},
+		},
+		{
+			name:  "pathname-at",
+			enter: FormatMkdirat,
+			exit:  FormatExitMkdirat,
+			want:  []string{"ev->dirfd = (__s32)ctx->args[0];"},
+		},
+		{
+			name:  "two-path-at",
+			enter: FormatLinkat,
+			exit:  strings.Replace(FormatExitRename, "sys_exit_rename", "sys_exit_linkat", 1),
+			want: []string{
+				"ev->olddirfd = (__s32)ctx->args[0];",
+				"ev->newdirfd = (__s32)ctx->args[2];",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := generateFromPair(t, tc.enter, tc.exit)
+			for _, want := range tc.want {
+				requireContains(t, output, want)
+			}
+		})
+	}
+}
+
+func TestGenerateNonAtPathEventsUseATFDCWD(t *testing.T) {
+	tests := []struct {
+		name  string
+		enter string
+		exit  string
+		want  []string
+	}{
+		{name: "open", enter: FormatOpen, exit: FormatExitOpen, want: []string{"ev->dirfd = -100; // AT_FDCWD: no dirfd argument"}},
+		{name: "pathname", enter: FormatMkdir, exit: FormatExitMkdir, want: []string{"ev->dirfd = -100; // AT_FDCWD: no dirfd argument"}},
+		{name: "two-path", enter: FormatRename, exit: FormatExitRename, want: []string{
+			"ev->olddirfd = -100; // AT_FDCWD: no dirfd argument",
+			"ev->newdirfd = -100; // AT_FDCWD: no dirfd argument",
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := generateFromPair(t, tc.enter, tc.exit)
+			for _, want := range tc.want {
+				requireContains(t, output, want)
+			}
+		})
+	}
+}
+
+func TestGeneratePathReadStatusDistinguishesEmptyNullAndFailure(t *testing.T) {
+	open := generateFromPair(t, FormatOpenat, FormatExitOpenat)
+	for _, want := range []string{
+		"if (ctx->args[1] == 0) {",
+		"ev->filename_status = PATH_READ_NULL;",
+		"ev->filename_status = PATH_READ_OK;",
+		"ev->filename_status = PATH_READ_FAILED;",
+		"ev->schema_version = OPEN_EVENT_SCHEMA_VERSION;",
+		"ev->schema_reserved = 0;",
+	} {
+		requireContains(t, open, want)
+	}
+
+	pathname := generateFromPair(t, FormatMkdirat, FormatExitMkdirat)
+	requireContains(t, pathname, "if (ctx->args[1] == 0) {")
+	requireContains(t, pathname, "ev->pathname_status = PATH_READ_NULL;")
+	requireContains(t, pathname, "ev->pathname_status = PATH_READ_OK;")
+	requireContains(t, pathname, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
+	requireContains(t, pathname, "ev->pathname_status = PATH_READ_FAILED;")
+	requireContains(t, pathname, "ev->flags = 0;")
+	requireContains(t, pathname, "ev->target_status = PATH_TARGET_REQUIRED;")
+	requireContains(t, pathname, "ev->schema_version = PATH_EVENT_SCHEMA_VERSION;")
+	// args[0] is mkdirat's dirfd, never the pathname pointer whose nullness or
+	// probe result the status describes.
+	requireNotContains(t, pathname, "if (ctx->args[0] == 0) {")
+	requireNotContains(t, pathname, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0])")
+
+	name := generateFromPair(t, FormatLinkat,
+		strings.Replace(FormatExitRename, "sys_exit_rename", "sys_exit_linkat", 1))
+	for _, want := range []string{
+		"if (ctx->args[1] == 0) {",
+		"ev->oldname_status = PATH_READ_NULL;",
+		"ev->oldname_status = PATH_READ_OK;",
+		"if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0)",
+		"ev->oldname_status = PATH_READ_FAILED;",
+		"if (ctx->args[3] == 0) {",
+		"ev->newname_status = PATH_READ_NULL;",
+		"ev->newname_status = PATH_READ_OK;",
+		"if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0)",
+		"ev->newname_status = PATH_READ_FAILED;",
+	} {
+		requireContains(t, name, want)
+	}
+	requireContains(t, name, "ev->flags = (__u32)ctx->args[4];")
+	requireContains(t, name, "ev->schema_version = NAME_EVENT_SCHEMA_VERSION;")
+	// The two directory descriptors at args[0]/args[2] must not be mistaken
+	// for either pathname pointer.
+	requireNotContains(t, name, "if (ctx->args[0] == 0) {")
+	requireNotContains(t, name, "if (ctx->args[2] == 0) {")
+}
+
+func TestGenerateUtimensatDistinguishesDoubleOmitFromTargetValidation(t *testing.T) {
+	output := GenerateTracepointsC([]Format{
+		{
+			Name:   "sys_enter_utimensat",
+			ID:     24_000,
+			Family: FamilyFS,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "int", Name: "dfd"},
+				{Type: "const char *", Name: "filename"},
+				{Type: "const struct __kernel_timespec *", Name: "utimes"},
+				{Type: "int", Name: "flags"},
+			},
+		},
+		{
+			Name:   "sys_exit_utimensat",
+			ID:     23_999,
+			Family: FamilyFS,
+			ExternalFields: []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "long", Name: "ret"},
+			},
+		},
+	})
+	for _, want := range []string{
+		"ev->target_status = PATH_TARGET_REQUIRED;",
+		"struct __kernel_timespec ior_times[2] = {};",
+		"if (ctx->args[2] != 0) {",
+		"if (bpf_probe_read_user(&ior_times, sizeof(ior_times), (void *)ctx->args[2]) < 0) {",
+		"ev->target_status = PATH_TARGET_UNKNOWN;",
+		"IOR_UTIME_OMIT == ior_times[0].tv_nsec",
+		"IOR_UTIME_OMIT == ior_times[1].tv_nsec",
+		"ev->target_status = PATH_TARGET_SKIPPED;",
+		"ev->schema_version = PATH_EVENT_SCHEMA_VERSION;",
+	} {
+		requireContains(t, output, want)
+	}
+	requireContains(t, output, "IOR_UTIME_OMIT == ior_times[0].tv_nsec &&")
+	requireNotContains(t, output, "IOR_UTIME_OMIT == ior_times[0].tv_nsec ||")
+	// The target metadata is an independent field. Invalid user flags must not
+	// be repurposed as a hidden sentinel because the double-OMIT kernel path
+	// returns before validating them.
+	requireContains(t, output, "ev->flags = (__u32)ctx->args[3];")
+}
+
+func TestGeneratePathFlagsForEmptyPathSemantics(t *testing.T) {
+	output := generateFromPair(t, FormatNameToHandleAt, FormatExitNameToHandleAt)
+	requireContains(t, output, "ev->flags = (__u32)ctx->args[4];")
+	requireContains(t, output, "ev->schema_version = PATH_EVENT_SCHEMA_VERSION;")
+}
+
+func TestGenerateNewerAtFlagsForEmptyPathSemantics(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagsArg int
+	}{
+		{name: "getxattrat", flagsArg: 2},
+		{name: "setxattrat", flagsArg: 2},
+		{name: "listxattrat", flagsArg: 2},
+		{name: "removexattrat", flagsArg: 2},
+		{name: "file_getattr", flagsArg: 4},
+		{name: "file_setattr", flagsArg: 4},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := []Field{
+				{Type: "long", Name: "__syscall_nr"},
+				{Type: "int", Name: "dfd"},
+				{Type: "const char *", Name: "pathname"},
+			}
+			for arg := 2; arg < tc.flagsArg; arg++ {
+				fields = append(fields, Field{Type: "unsigned long", Name: "arg" + itoa(arg)})
+			}
+			fields = append(fields, Field{Type: "unsigned int", Name: "at_flags"})
+			id := 20_000 + i*2
+			output := GenerateTracepointsC([]Format{
+				{Name: "sys_enter_" + tc.name, ID: id, Family: FamilyFS, ExternalFields: fields},
+				{Name: "sys_exit_" + tc.name, ID: id - 1, Family: FamilyFS, ExternalFields: []Field{
+					{Type: "long", Name: "__syscall_nr"},
+					{Type: "long", Name: "ret"},
+				}},
+			})
+			requireContains(t, output, "ev->flags = (__u32)ctx->args["+itoa(tc.flagsArg)+"];")
+			requireNotContains(t, output, "ev->flags = 0;")
+		})
+	}
 }
 
 func TestGenerateOpenHandlerDirect(t *testing.T) {
 	output := generateFromPair(t, FormatOpen, FormatExitOpen)
 
-	requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)")
+	requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
 	requireContains(t, output, "ev->flags = ctx->args[1];")
+}
+
+func TestGenerateMqOpenHandler(t *testing.T) {
+	output := GenerateTracepointsC(mqFormats("mq_open", 9300))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mq_open")`)
+	requireContains(t, output, "struct open_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MQ_OPEN;")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)")
+	requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
+	requireContains(t, output, "ev->flags = ctx->args[1];")
+}
+
+// TestGenerateMkdiratHandlerCapturesPathFromArgs1 locks in that mkdirat(2) is a
+// KindPathname event whose path is read from args[1]. mkdirat(dirfd, pathname,
+// mode) places the dirfd at args[0] and the real filesystem path at args[1];
+// reading args[0] would capture the dir fd (often AT_FDCWD) instead of the path.
+// The arg index is data-driven from the kernel format (FieldNumber of the
+// "pathname" field), so this guards against a regression in that derivation.
+func TestGenerateMkdiratHandlerCapturesPathFromArgs1(t *testing.T) {
+	output := generateFromPair(t, FormatMkdirat, FormatExitMkdirat)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mkdirat")`)
+	requireContains(t, output, "struct path_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MKDIRAT;")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
+	// Negative guard: the path must NOT be read from args[0] (the dirfd).
+	requireNotContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
+	// Return value is a 0/-1 status code, not a byte count: UNCLASSIFIED.
+	requireContains(t, output, "ev->trace_id = SYS_EXIT_MKDIRAT;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateMkdirHandlerCapturesPathFromArgs0 locks in that the sibling
+// mkdir(2) — which has no dirfd — reads its pathname from args[0]. Contrasting
+// it with mkdirat above ensures the two never collapse onto a shared arg index.
+func TestGenerateMkdirHandlerCapturesPathFromArgs0(t *testing.T) {
+	output := generateFromPair(t, FormatMkdir, FormatExitMkdir)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mkdir")`)
+	requireContains(t, output, "struct path_event *ev")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MKDIR;")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
+	requireContains(t, output, "ev->trace_id = SYS_EXIT_MKDIR;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateRmdirHandlerCapturesPathFromArgs0 locks in that rmdir(2) is a
+// KindPathname event whose real filesystem path is read from args[0]. rmdir is
+// "int rmdir(const char *pathname)" with a single pathname argument (no dirfd),
+// so the path lives at args[0] — exactly like its single-pathname sibling
+// unlink(2) and unlike the dirfd-relative mkdirat/unlinkat which read args[1].
+// A regression that dropped rmdir's path capture (while unlink/mkdir keep theirs)
+// or read the wrong arg would surface here. The exit returns int 0/-1 (a status
+// code, not a byte count), so the exit handler must stay UNCLASSIFIED.
+func TestGenerateRmdirHandlerCapturesPathFromArgs0(t *testing.T) {
+	exitRmdir := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_rmdir", 1)
+	exitRmdir = strings.Replace(exitRmdir, "ID: 843", "ID: 881", 1)
+	output := generateFromPair(t, FormatRmdir, exitRmdir)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_rmdir")`)
+	requireContains(t, output, "struct path_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_RMDIR;")
+	requireNotContains(t, output, "__builtin_memset")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
+	// Negative guard: rmdir has no dirfd, so the path must NOT be read from args[1].
+	requireNotContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
+	// Return value is a 0/-1 status code, not a byte count: UNCLASSIFIED.
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+func TestGenerateExecHandler(t *testing.T) {
+	output := generateFromPair(t, FormatExecveat, FormatExitExecveat)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_execveat")`)
+	requireContains(t, output, "struct exec_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EXEC_EVENT;")
+	requireContains(t, output, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)\n        ev->filename[0] = 0;\n")
+	requireNotContains(t, output, "__builtin_memset")
+	requireContains(t, output, "ev->dirfd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->flags = (__s32)ctx->args[4];")
+}
+
+func TestGenerateExecHandlerDirfdFallbackForExecveat(t *testing.T) {
+	enter := strings.ReplaceAll(FormatExecveat, "dfd", "fd")
+	output := generateFromPair(t, enter, FormatExitExecveat)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_execveat")`)
+	requireContains(t, output, "ev->dirfd = (__s32)ctx->args[0];")
+	if strings.Contains(output, "ev->dirfd = -1;") {
+		t.Fatal("execveat handler unexpectedly falls back to ev->dirfd = -1")
+	}
 }
 
 func TestGenerateOpenat2Handler(t *testing.T) {
@@ -60,10 +1114,17 @@ func TestGenerateOpenat2Handler(t *testing.T) {
 		t.Fatalf("openat2 classified as %d, want KindOpen", r.Kind)
 	}
 	// openat2 has filename at args[1] but flags field name = "how" (not "flags"),
-	// so FieldNumber("flags") returns -1
+	// so FieldNumber("flags") returns -1. The open generator handles that ABI
+	// exception by reading the first u64 through the how pointer.
 	if n := f.FieldNumber("flags"); n != -1 {
 		t.Errorf("openat2 FieldNumber(flags) = %d, want -1", n)
 	}
+	output := generateFromPair(t, FormatOpenat2, syntheticExit("openat2", 781))
+	requireContains(t, output, "ev->flags = -1;")
+	requireContains(t, output, "if (ctx->args[2] != 0) {")
+	requireContains(t, output, "__u64 open_how_flags = 0;")
+	requireContains(t, output, "if (bpf_probe_read_user(&open_how_flags, sizeof(open_how_flags), (void *)ctx->args[2]) == 0) {")
+	requireContains(t, output, "ev->flags = (__s32)open_how_flags;")
 }
 
 func TestGenerateRetHandlerRead(t *testing.T) {
@@ -76,6 +1137,23 @@ func TestGenerateRetHandlerRead(t *testing.T) {
 	requireContains(t, output, "ev->trace_id = SYS_EXIT_READ;")
 	requireContains(t, output, "ev->ret = ctx->ret;")
 	requireContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+}
+
+// TestGenerateReadByteCountReturnHandlers pins the raw Linux ABI for syscalls
+// whose libc wrappers hide or transform the successful return value. getcwd(2)
+// returns the copied pathname size including its terminating NUL, while
+// sched_getaffinity(2) returns the number of mask bytes copied. Both values are
+// read byte counts and must reach userspace as READ_CLASSIFIED.
+func TestGenerateReadByteCountReturnHandlers(t *testing.T) {
+	for _, name := range []string{"getcwd", "sched_getaffinity"} {
+		t.Run(name, func(t *testing.T) {
+			output := GenerateTracepointsC(mustParseAll(t, syntheticPair(name)))
+
+			requireContains(t, output, "/// sys_exit_"+name+" is a struct ret_event (READ_CLASSIFIED) (kind=ret)")
+			requireContains(t, output, "ev->ret_type = READ_CLASSIFIED;")
+			requireNotContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+		})
+	}
 }
 
 func TestGenerateRetHandlerWrite(t *testing.T) {
@@ -99,9 +1177,9 @@ func TestGenerateNameHandler(t *testing.T) {
 	requireContains(t, output, "struct name_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_NAME_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_RENAME;")
-	requireContains(t, output, "__builtin_memset(&(ev->oldname), 0, sizeof(ev->oldname) + sizeof(ev->newname));")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]);")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]);")
+	requireNotContains(t, output, "__builtin_memset")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0)")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0)")
 }
 
 func TestGeneratePathnameHandler(t *testing.T) {
@@ -112,8 +1190,66 @@ func TestGeneratePathnameHandler(t *testing.T) {
 
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
-	requireContains(t, output, "__builtin_memset(&(ev->pathname), 0, sizeof(ev->pathname));")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]);")
+	requireNotContains(t, output, "__builtin_memset")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
+}
+
+// TestGenerateAccessFaccessatHandlers locks in the generated BPF C for
+// access(2) and its dirfd-relative sibling faccessat(2). Both capture a real
+// path into a path_event's pathname member, but from DIFFERENT argument slots:
+// access(2) has no dirfd so its path is at args[0], whereas faccessat(2) takes
+// dfd at args[0] and the path at args[1]. This guards against a regression that
+// would read the wrong arg (e.g. capturing faccessat's dirfd as a path, or
+// dropping access's path entirely). The exit side is a ret_event (int 0/-1,
+// UNCLASSIFIED) — verified via the shared ret_event handler shape.
+func TestGenerateAccessFaccessatHandlers(t *testing.T) {
+	exitAccess := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_access", 1)
+	exitAccess = strings.Replace(exitAccess, "ID: 843", "ID: 816", 1)
+	accessOut := generateFromPair(t, FormatAccess, exitAccess)
+	requireContains(t, accessOut, `SEC("tracepoint/syscalls/sys_enter_access")`)
+	requireContains(t, accessOut, "struct path_event *ev")
+	requireContains(t, accessOut, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, accessOut, "ev->trace_id = SYS_ENTER_ACCESS;")
+	// access(2): path (filename) is at args[0] — no dirfd precedes it.
+	requireContains(t, accessOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
+
+	exitFaccessat := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_faccessat", 1)
+	exitFaccessat = strings.Replace(exitFaccessat, "ID: 843", "ID: 820", 1)
+	faccessatOut := generateFromPair(t, FormatFaccessat, exitFaccessat)
+	requireContains(t, faccessatOut, `SEC("tracepoint/syscalls/sys_enter_faccessat")`)
+	requireContains(t, faccessatOut, "struct path_event *ev")
+	requireContains(t, faccessatOut, "ev->trace_id = SYS_ENTER_FACCESSAT;")
+	// faccessat(2): dfd is at args[0], so the path (filename) is at args[1].
+	requireContains(t, faccessatOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
+}
+
+// TestGenerateMknodMknodatHandlers locks in the generated BPF C for mknod(2)
+// and its dirfd-relative sibling mknodat(2). Both create a filesystem node and
+// capture a real path into a path_event's pathname member, but from DIFFERENT
+// argument slots: mknod(2) has no dirfd so its path is at args[0], whereas
+// mknodat(2) takes dfd at args[0] and the path at args[1]. This guards against
+// a regression that would read the wrong arg (e.g. capturing mknodat's dirfd
+// as a path, or dropping mknod's path entirely). The exit side is a ret_event
+// (int 0/-1, UNCLASSIFIED) — verified via the shared ret_event handler shape.
+func TestGenerateMknodMknodatHandlers(t *testing.T) {
+	exitMknod := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_mknod", 1)
+	exitMknod = strings.Replace(exitMknod, "ID: 843", "ID: 893", 1)
+	mknodOut := generateFromPair(t, FormatMknod, exitMknod)
+	requireContains(t, mknodOut, `SEC("tracepoint/syscalls/sys_enter_mknod")`)
+	requireContains(t, mknodOut, "struct path_event *ev")
+	requireContains(t, mknodOut, "ev->event_type = ENTER_PATH_EVENT;")
+	requireContains(t, mknodOut, "ev->trace_id = SYS_ENTER_MKNOD;")
+	// mknod(2): path (filename) is at args[0] — no dirfd precedes it.
+	requireContains(t, mknodOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0)")
+
+	exitMknodat := strings.Replace(FormatExitRead, "sys_exit_read", "sys_exit_mknodat", 1)
+	exitMknodat = strings.Replace(exitMknodat, "ID: 843", "ID: 895", 1)
+	mknodatOut := generateFromPair(t, FormatMknodat, exitMknodat)
+	requireContains(t, mknodatOut, `SEC("tracepoint/syscalls/sys_enter_mknodat")`)
+	requireContains(t, mknodatOut, "struct path_event *ev")
+	requireContains(t, mknodatOut, "ev->trace_id = SYS_ENTER_MKNODAT;")
+	// mknodat(2): dfd is at args[0], so the path (filename) is at args[1].
+	requireContains(t, mknodatOut, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
 }
 
 func TestGenerateFcntlHandler(t *testing.T) {
@@ -135,6 +1271,97 @@ func TestGenerateNullHandler(t *testing.T) {
 	// Null handler should NOT have ev->fd, ev->filename, etc.
 	if strings.Contains(output, "ev->fd") {
 		t.Error("null handler should not have ev->fd")
+	}
+}
+
+// TestGenerateSyncHandler locks in how the bare sync(2) syscall is generated.
+// Per sync(2): `void sync(void)` — it flushes all filesystem buffers to disk,
+// takes NO arguments and returns NO value. This makes it distinct from its
+// filesystem-sync siblings, which all take a leading fd and return int:
+//   - int syncfs(int fd)
+//   - int fsync(int fd)
+//   - int fdatasync(int fd)
+//   - int sync_file_range(int fd, off64_t off, off64_t n, unsigned flags)
+//
+// Because sync has no arguments, ior classifies it as KindNull in FamilyFS, so:
+//   - The enter handler emits a struct null_event and, since there are no args
+//     at all, must NOT reference ctx->args[...] anywhere in its body.
+//   - Crucially, although sync returns void, the syscall still *completes* and
+//     the kernel sys_exit_sync tracepoint fires with a (meaningless) ret field.
+//     Unlike the noreturn exit(2)/exit_group(2) syscalls, sync DOES return, so
+//     the generator must emit a live exit handler — it must NOT be suppressed.
+//   - The void return is recorded generically via EXIT_RET_EVENT and classified
+//     UNCLASSIFIED: it is not a byte count and must never be tagged
+//     READ/WRITE/TRANSFER.
+func TestGenerateSyncHandler(t *testing.T) {
+	output := generateFromPair(t, FormatSync, FormatExitSync)
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_sync")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_sync")`
+
+	// Enter: null_event, no argument capture (sync takes no arguments).
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SYNC;")
+
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("sync: enter/exit handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("sync must be KindNull and takes no args: enter handler must not capture any arg")
+	}
+
+	// Exit: sync is void but DOES return, so unlike exit/exit_group the exit
+	// handler must be emitted and report the meaningless ret as UNCLASSIFIED.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestSyncIsNotNoreturn locks in that bare sync(2) is NOT treated as a noreturn
+// syscall: it is void but returns control to userspace, so its exit handler must
+// be generated (see TestGenerateSyncHandler). Only exit(2)/exit_group(2)/
+// rt_sigreturn(2) are noreturn. This guards against sync accidentally being added
+// to the noreturn suppression list, which would silently drop its exit events.
+func TestSyncIsNotNoreturn(t *testing.T) {
+	if isNoreturnSyscall("sync") {
+		t.Error("sync must not be noreturn: it is void but DOES return, so its exit handler must be emitted")
+	}
+}
+
+// TestRtSigreturnIsNoreturn locks in that rt_sigreturn(2) is treated as a
+// noreturn syscall. rt_sigreturn restores the pre-signal execution context off
+// the signal-stack frame and resumes the interrupted instruction; it does NOT
+// return to the instruction after the syscall, so the kernel never fires
+// sys_exit_rt_sigreturn (verified empirically against /sys/kernel/tracing:
+// sys_enter_rt_sigreturn fires once per signal-handler return, sys_exit never
+// does). man sigreturn(2): "sigreturn() never returns". Suppressing the dead
+// exit handler also stops the bounded syscall_enter_state_map from leaking a
+// per-tid entry on every signal-handler return.
+func TestRtSigreturnIsNoreturn(t *testing.T) {
+	if !isNoreturnSyscall("rt_sigreturn") {
+		t.Error("rt_sigreturn must be noreturn: it never returns to the syscall site, so sys_exit_rt_sigreturn never fires and its exit handler must be suppressed")
+	}
+}
+
+// TestRtSigSiblingsAreNotNoreturn is the contrast to TestRtSigreturnIsNoreturn:
+// every OTHER rt_sig* syscall returns normally to its caller, so it must NOT be
+// in the noreturn set or its exit events (and durations) would be silently
+// dropped. Only rt_sigreturn is the kernel/libc signal-trampoline return path.
+func TestRtSigSiblingsAreNotNoreturn(t *testing.T) {
+	siblings := []string{
+		"rt_sigaction", "rt_sigprocmask", "rt_sigpending",
+		"rt_sigsuspend", "rt_sigtimedwait", "rt_sigqueueinfo",
+		"rt_tgsigqueueinfo",
+	}
+	for _, s := range siblings {
+		if isNoreturnSyscall(s) {
+			t.Errorf("%s must not be noreturn: it returns normally, so its exit handler must be emitted", s)
+		}
 	}
 }
 
@@ -162,10 +1389,306 @@ func TestGenerateMmapHandlerUsesFdArgumentIndex(t *testing.T) {
 	output := generateFromPair(t, FormatMmap, FormatExitMmap)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mmap")`)
-	requireContains(t, output, "struct fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "struct mmap_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MMAP_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_MMAP;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->prot = (__u64)ctx->args[2];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[3];")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[4];")
+}
+
+func TestGenerateMsyncHandlerCapturesMemoryRange(t *testing.T) {
+	output := generateFromPair(t, FormatMsync, FormatExitMsync)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_msync")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+func TestGenerateMemHandler(t *testing.T) {
+	output := generateFromPair(t, FormatMremap, FormatExitMremap)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mremap")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = (__u64)ctx->args[2];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[3];")
+}
+
+func TestGenerateMemHandlerMlock2(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mlock2")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mlock2")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+// TestGenerateMemHandlerMunlock locks in the BPF handler wiring for munlock(2):
+// int munlock(const void addr[.size], size_t size). munlock unlocks the page
+// range [addr, addr+size) so it may be paged out again — the converse of
+// mlock(2). The range is args[0]/args[1] (addr/length). Crucially munlock has
+// NO flags argument (unlike its sibling mlock2(2), which carries
+// MLOCK_ONFAULT at args[2]) and no second length region, so both ev->flags and
+// ev->length2 must stay zero. This guards against accidentally copying the
+// mlock2 wiring and surfacing a nonexistent args[2] as flags. munlock must not
+// be confused with munlockall(2), which takes no address range and is
+// classified KindNull. munlock returns int 0 on success / -1 on error,
+// captured generically via ev->ret as UNCLASSIFIED like every other KindMem
+// exit (it is not a byte-count, so it is intentionally absent from
+// retClassifications).
+func TestGenerateMemHandlerMunlock(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("munlock")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_munlock")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = 0;")
+	// munlock has no flags argument; args[2] must never be wired into ev->flags
+	// (that is the mlock2-only MLOCK_ONFAULT slot).
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[2];") {
+		t.Error("munlock handler must keep flags zero; munlock has no flags argument (that is mlock2's args[2])")
+	}
+	// munlock has no second length region.
+	if strings.Contains(output, "ev->length2 = (__u64)ctx->args") {
+		t.Error("munlock handler must keep length2 zero; it has no second length argument")
+	}
+	// addr (args[0]) must never be reused as flags.
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[0];") {
+		t.Error("munlock handler must keep flags zero; args[0] is the addr, not a flags value")
+	}
+	// The exit handler returns the int status generically (0 on success, -1 on
+	// error), not via a byte-count classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_munlock")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateNullHandlerMlockall locks in the BPF handler wiring for mlockall(2):
+//
+//	int mlockall(int flags)
+//
+// mlockall locks ALL of the calling process's memory (code/data/stack/shared
+// libraries/mmaps) into RAM. Unlike its KindMem siblings mlock(2)/mlock2(2)/
+// munlock(2) — which take an (addr, len) address range — mlockall has NO address
+// range at all: its single argument is a flags bitmask (MCL_CURRENT/MCL_FUTURE/
+// MCL_ONFAULT), an int, not an addr/fd/path. There is therefore no I/O resource
+// to capture, so ior classifies mlockall as KindNull in FamilyMemory (matching
+// its sibling munlockall(2), which takes no argument). Consequently:
+//   - The enter handler emits a struct null_event and must NOT capture args[0]
+//     (the flags int) as an fd/path/addr — nor wire it into a mem_event addr/
+//     length/flags the way KindMem mlock/mlock2 do. Capturing it would falsely
+//     present mlockall as a ranged memory-lock with a bogus address.
+//   - The exit handler reports the raw int status (0 success / -1 error) as
+//     UNCLASSIFIED; it is not a byte count, so it must never be tagged
+//     READ/WRITE/TRANSFER.
+func TestGenerateNullHandlerMlockall(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mlockall")))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_mlockall")`
+	exitSec := `SEC("tracepoint/syscalls/sys_exit_mlockall")`
+	requireContains(t, output, enterSec)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_MLOCKALL;")
+
+	// Scope the negative assertions to the enter handler body (from the enter SEC
+	// up to the exit SEC) so we only inspect what the enter handler emits.
+	enterStart := strings.Index(output, enterSec)
+	exitStart := strings.Index(output, exitSec)
+	if enterStart < 0 || exitStart < 0 || exitStart <= enterStart {
+		t.Fatalf("mlockall: handlers not found in expected order")
+	}
+	enterBody := output[enterStart:exitStart]
+	// KindNull: the flags int (args[0]) must not be captured as any resource, and
+	// no mem_event addr/length/flags wiring must leak in from the KindMem siblings.
+	if strings.Contains(enterBody, "ctx->args[") {
+		t.Error("mlockall must be KindNull: enter handler must not capture any arg (args[0] is a flags int, not an addr/fd/path)")
+	}
+	requireNotContains(t, enterBody, "struct mem_event")
+	requireNotContains(t, enterBody, "ev->addr")
+
+	// The exit handler reports the raw 0/-1 status as UNCLASSIFIED, not a byte count.
+	requireContains(t, output, exitSec)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateMemHandlerRemapFilePages locks in the BPF handler wiring for the
+// (deprecated) remap_file_pages(2):
+// int remap_file_pages(void *addr, size_t size, int prot, size_t pgoff, int flags).
+// The mapping address range is args[0]/args[1] (addr/length). Crucially, the
+// flags argument is at args[4], NOT args[2] — args[2] is `prot` (which the man
+// page requires to be 0 and which carries no useful information). The pgoff
+// argument (args[3]) is a file offset in pages and is parked in the generic
+// length2 slot. The historical hazard here is wiring flags from args[2] (prot)
+// the way flags-bearing siblings (madvise/mlock2/mseal/mprotect) legitimately
+// do — doing so would surface the always-zero prot value as flags and drop the
+// real MAP_NONBLOCK flag. remap_file_pages returns int 0 on success / -1 on
+// error, captured generically via ev->ret as UNCLASSIFIED like every other
+// KindMem exit (it is not a byte-count, so it is intentionally absent from
+// retClassifications).
+func TestGenerateMemHandlerRemapFilePages(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("remap_file_pages")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_remap_file_pages")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	// pgoff (args[3]) is parked in the generic length2 slot.
+	requireContains(t, output, "ev->length2 = (__u64)ctx->args[3];")
+	// flags is at args[4]; prot (args[2]) must never be wired into ev->flags.
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[4];")
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[2];") {
+		t.Error("remap_file_pages handler must read flags from args[4]; args[2] is prot (always 0), not a flags value")
+	}
+	// addr (args[0]) must never be reused as flags.
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[0];") {
+		t.Error("remap_file_pages handler must read flags from args[4]; args[0] is the addr, not a flags value")
+	}
+	// The exit handler returns the int status generically (0 on success, -1 on
+	// error), not via a byte-count classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_remap_file_pages")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+func TestGenerateMemHandlerMprotect(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mprotect")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mprotect")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+// TestGenerateMemHandlerMadvise locks in the BPF handler wiring for madvise(2):
+// int madvise(void addr[.size], size_t size, int advice).
+// The address range is args[0]/args[1] (addr/length) and the `advice` enum
+// (MADV_DONTNEED, MADV_WILLNEED, ...) is flags-like, so it maps to ev->flags at
+// args[2]. There is no second length, so length2 must stay zero. madvise returns
+// int 0 on success / -1 on error, captured generically via ev->ret as
+// UNCLASSIFIED like every other KindMem exit. This must NOT be confused with the
+// sibling process_madvise(2), whose first arg is a pidfd and is classified KindFd
+// (covered by TestGenerateProcessMadviseHandlerUsesFirstArgumentAsFd).
+func TestGenerateMemHandlerMadvise(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("madvise")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_madvise")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+	// The advice enum lives at args[2]; addr (args[0]) must never be reused as flags.
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[0];") {
+		t.Error("madvise handler must use args[2] (advice) as flags, not args[0] (addr)")
+	}
+	// madvise has no second length region (unlike mremap/pkey_mprotect).
+	if strings.Contains(output, "ev->length2 = (__u64)ctx->args") {
+		t.Error("madvise handler must keep length2 zero; it has no second length argument")
+	}
+	// The exit handler returns the int status generically, not via a byte-count
+	// classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_madvise")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateMemHandlerMincore locks in the BPF handler wiring for mincore(2):
+// int mincore(void addr[.length], size_t length, unsigned char *vec).
+// The queried address range is args[0]/args[1] (addr/length). args[2] is `vec`,
+// a *userspace output pointer* where the kernel writes one byte per page telling
+// whether that page is resident — it is NOT a flags value. mincore therefore has
+// neither a flags argument nor a second length, so both ev->flags and ev->length2
+// must stay zero. This guards against the historical mistake of blindly mapping
+// args[2] onto ev->flags (as flags-bearing siblings like madvise/mlock2/mseal do);
+// doing so here would surface a meaningless userspace pointer as a flags field.
+// mincore returns int 0 on success / -1 on error, captured generically via
+// ev->ret as UNCLASSIFIED like every other KindMem exit.
+func TestGenerateMemHandlerMincore(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("mincore")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_mincore")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = 0;")
+	// args[2] is the userspace `vec` output pointer, not flags. It must never be
+	// wired into ev->flags (nor ev->length2).
+	if strings.Contains(output, "ev->flags = (__u64)ctx->args[2];") {
+		t.Error("mincore handler must keep flags zero; args[2] is the vec output pointer, not a flags value")
+	}
+	if strings.Contains(output, "ev->length2 = (__u64)ctx->args") {
+		t.Error("mincore handler must keep length2 zero; it has no second length argument")
+	}
+	// The exit handler returns the int status generically (0 on success, -1 on
+	// error), not via a byte-count classification.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_mincore")`)
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+func TestGenerateMemHandlerPkeyMprotect(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("pkey_mprotect")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_pkey_mprotect")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = (__u64)ctx->args[3];")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+// TestGenerateMemHandlerMapShadowStack locks in the BPF handler wiring for the
+// x86 CET map_shadow_stack syscall (Linux 6.6+):
+// void *map_shadow_stack(unsigned long addr, unsigned long size, unsigned int flags).
+// The hint addr and size are args[0]/args[1] and flags is args[2]; there is no
+// second length, so length2 must stay zero. The return is a mapped address (or
+// -errno), captured generically via ev->ret like every other KindMem exit.
+func TestGenerateMemHandlerMapShadowStack(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("map_shadow_stack")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_map_shadow_stack")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = (__u64)ctx->args[1];")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = (__u64)ctx->args[2];")
+}
+
+func TestGenerateMemHandlerBrk(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("brk")))
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_brk")`)
+	requireContains(t, output, "struct mem_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_MEM_EVENT;")
+	requireContains(t, output, "ev->addr = (__u64)ctx->args[0];")
+	requireContains(t, output, "ev->length = 0;")
+	requireContains(t, output, "ev->length2 = 0;")
+	requireContains(t, output, "ev->flags = 0;")
 }
 
 func TestGenerateDup3Handler(t *testing.T) {
@@ -177,12 +1700,663 @@ func TestGenerateDup3Handler(t *testing.T) {
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
 }
 
+// TestGenerateDup2Handler locks in the generated BPF C for dup2(2):
+//
+//	int dup2(int oldfd, int newfd)
+//
+// dup2 duplicates oldfd onto newfd and returns the new descriptor (newfd) on
+// success, or -1 on error. It is classified KindFd (a plain fd_event), so the
+// enter handler must capture ev->fd from args[0] (oldfd) — the SAME convention
+// as dup (args[0]=fildes) and dup3 (args[0]=oldfd). Unlike dup3, dup2 carries
+// NO flags (it always clears FD_CLOEXEC on the duplicate), so the dup2 handler
+// must emit a struct fd_event (not a dup3_event) and must NOT wire any flags or
+// read args[1] (newfd) / args[2]. The exit returns the new fd number as a plain
+// ret_event (UNCLASSIFIED), exactly like dup/dup3/open — never a byte-count
+// transfer.
+func TestGenerateDup2Handler(t *testing.T) {
+	output := generateFromPair(t, FormatDup2, FormatExitDup2)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_dup2")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_DUP2;")
+	// fd must come from oldfd (args[0]), never newfd (args[1]).
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	if strings.Contains(output, "ev->fd = (__s32)ctx->args[1];") {
+		t.Error("dup2 must capture fd from args[0] (oldfd), not args[1] (newfd)")
+	}
+	// dup2 is a plain fd_event: it must not be promoted to a dup3_event and must
+	// not capture any flags (it always clears FD_CLOEXEC on the duplicate).
+	if strings.Contains(output, "struct dup3_event *ev") &&
+		strings.Contains(output, `SEC("tracepoint/syscalls/sys_enter_dup2")`) {
+		t.Error("dup2 must be KindFd (fd_event), not KindDup3 (dup3_event)")
+	}
+	if strings.Contains(output, "ev->flags") &&
+		strings.Contains(output, `int handle_sys_enter_dup2`) {
+		t.Error("dup2 handler must not capture any flags (dup2 has no flags arg)")
+	}
+	// The exit handler returns the new fd number generically as the raw status,
+	// classified UNCLASSIFIED — not a read/write/transfer byte count.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_dup2")`)
+	requireContains(t, output, "struct ret_event *ev")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGenerateDupHandler locks in the generated BPF C for dup(2):
+//
+//	int dup(int oldfd)
+//
+// dup duplicates oldfd and returns the lowest-numbered unused descriptor on
+// success, or -1 on error. Its single argument is captured by the tracepoint as
+// the "fildes" field at args[0]. dup is classified KindFd (a plain fd_event),
+// so the enter handler must capture ev->fd from args[0] (oldfd/fildes) — the
+// SAME convention as dup2 (args[0]=oldfd) and dup3 (args[0]=oldfd). dup has no
+// newfd and no flags arguments, so the handler must emit a struct fd_event (not
+// a dup3_event) and must NOT wire any flags or read args[1]/args[2]. The exit
+// returns the new fd number as a plain ret_event (UNCLASSIFIED), exactly like
+// dup2/dup3/open — never a byte-count transfer. The eventloop registerDup path
+// registers the returned newfd onto the same underlying file with flags=0,
+// since plain dup always clears FD_CLOEXEC on the duplicate.
+func TestGenerateDupHandler(t *testing.T) {
+	output := generateFromPair(t, FormatDup, FormatExitDup)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_dup")`)
+	requireContains(t, output, "struct fd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_DUP;")
+	// fd must come from oldfd/fildes (args[0]); dup has no other args.
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	if strings.Contains(output, "ev->fd = (__s32)ctx->args[1];") {
+		t.Error("dup must capture fd from args[0] (fildes/oldfd), not args[1]")
+	}
+	// dup is a plain fd_event: it must not be promoted to a dup3_event and must
+	// not capture any flags (dup has no flags arg and always clears FD_CLOEXEC).
+	if strings.Contains(output, "struct dup3_event *ev") &&
+		strings.Contains(output, `SEC("tracepoint/syscalls/sys_enter_dup")`) {
+		t.Error("dup must be KindFd (fd_event), not KindDup3 (dup3_event)")
+	}
+	if strings.Contains(output, "ev->flags") &&
+		strings.Contains(output, `int handle_sys_enter_dup`) {
+		t.Error("dup handler must not capture any flags (dup has no flags arg)")
+	}
+	// The exit handler returns the new fd number generically as the raw status,
+	// classified UNCLASSIFIED — not a read/write/transfer byte count.
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_dup")`)
+	requireContains(t, output, "struct ret_event *ev")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
 func TestGenerateOpenByHandleAtHandler(t *testing.T) {
 	output := generateFromPair(t, FormatOpenByHandleAt, FormatExitOpenByHandleAt)
 
 	requireContains(t, output, "struct open_by_handle_at_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_BY_HANDLE_AT_EVENT;")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
+}
+
+func TestGenerateSocketHandler(t *testing.T) {
+	output := generateFromPair(t, FormatSocket, FormatExitSocket)
+
+	requireContains(t, output, "struct socket_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_SOCKET_EVENT;")
+	requireContains(t, output, "ev->family = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->type = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->protocol = (__s32)ctx->args[2];")
+}
+
+func TestGenerateSocketpairHandler(t *testing.T) {
+	output := generateFromPair(t, FormatSocketpair, FormatExitSocketpair)
+
+	requireContains(t, output, "struct socketpair_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_SOCKETPAIR_EVENT;")
+	requireContains(t, output, "struct socketpair_ctx pending;")
+	requireContains(t, output, "bpf_map_update_elem(&socketpair_ctx_map, &tid, &pending, BPF_ANY);")
+	requireContains(t, output, "ev->sv0 = -1;")
+	requireContains(t, output, "ev->ret = 0;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_socketpair\")")
+	requireContains(t, output, "ev->event_type = EXIT_SOCKETPAIR_EVENT;")
+	requireContains(t, output, "struct socketpair_ctx *pending = bpf_map_lookup_elem(&socketpair_ctx_map, &tid);")
+	requireContains(t, output, "if (ctx->ret == 0 && pending->usockvec != 0) {")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->family = pending.family;")
+}
+
+func TestGenerateAcceptHandler(t *testing.T) {
+	output := generateFromPair(t, FormatAccept, FormatExitAccept)
+	exitBody := handlerBody(t, output, "sys_exit_accept")
+
+	requireContains(t, output, "struct accept_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_ACCEPT_EVENT;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "ev->flags = 0;")
+	requireContains(t, output, "ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_accept\")")
+	requireContains(t, output, "ev->event_type = EXIT_ACCEPT_EVENT;")
+	requireContains(t, output, "ev->fd = -1;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, exitBody, "ev->flags = -1;\n    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
+}
+
+func TestGenerateAccept4CapturesCreationFlags(t *testing.T) {
+	output := generateFromPair(t, FormatAccept4, FormatExitAccept4)
+	exitBody := handlerBody(t, output, "sys_exit_accept4")
+
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->flags = (__s32)ctx->args[3];")
+	requireContains(t, output, "ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
+	requireContains(t, exitBody, "ev->flags = -1;\n    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;")
+}
+
+func TestGeneratePipeHandler(t *testing.T) {
+	output := generateFromPair(t, FormatPipe2, FormatExitPipe2)
+
+	requireContains(t, output, "struct pipe_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PIPE_EVENT;")
+	requireContains(t, output, "struct pipe_ctx pending;")
+	requireContains(t, output, "pending.upipefd = ctx->args[0];")
+	requireContains(t, output, "pending.flags = (__s32)ctx->args[1];")
+	requireContains(t, output, "bpf_map_update_elem(&pipe_ctx_map, &tid, &pending, BPF_ANY);")
+	requireContains(t, output, "ev->fd0 = -1;")
+	requireContains(t, output, "ev->fd1 = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_pipe2\")")
+	requireContains(t, output, "ev->event_type = EXIT_PIPE_EVENT;")
+	requireContains(t, output, "struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+// TestGeneratePipeHandlerExitReadsFdPair locks in the pipe-specific exit path:
+// args[0] is an OUTPUT pointer to int[2], not an fd. The two created fds are
+// only valid AFTER the syscall returns, so the exit handler must read them from
+// the stashed userspace buffer with bpf_probe_read_user, guarded by ret == 0
+// (a failed pipe(2) leaves the buffer untouched). This mirrors the socketpair
+// audit (task c00) pipe-like pattern.
+func TestGeneratePipeHandlerExitReadsFdPair(t *testing.T) {
+	output := generateFromPair(t, FormatPipe2, FormatExitPipe2)
+
+	// Exit reads the fd pair from the stashed output pointer only on success.
+	requireContains(t, output, "if (ctx->ret == 0 && pending->upipefd != 0) {")
+	requireContains(t, output, "int pipefd[2];")
+	requireContains(t, output, "bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd)")
+	requireContains(t, output, "fd0 = (__s32)pipefd[0];")
+	requireContains(t, output, "fd1 = (__s32)pipefd[1];")
+	requireContains(t, output, "bpf_map_delete_elem(&pipe_ctx_map, &tid);")
+	requireContains(t, output, "ev->fd0 = fd0;")
+	requireContains(t, output, "ev->fd1 = fd1;")
+}
+
+// TestGeneratePlainPipeHandlerZeroFlags locks in that the flag-less pipe(2)
+// variant hardcodes flags = 0 and never reads args[1] (which does not exist for
+// pipe; only pipe2 has a flags argument at args[1]).
+func TestGeneratePlainPipeHandlerZeroFlags(t *testing.T) {
+	output := generateFromPair(t, FormatPipe, FormatExitPipe)
+
+	requireContains(t, output, "struct pipe_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PIPE_EVENT;")
+	requireContains(t, output, "pending.upipefd = ctx->args[0];")
+	requireContains(t, output, "pending.flags = 0;")
+	requireNotContains(t, output, "pending.flags = (__s32)ctx->args[1];")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_pipe\")")
+	requireContains(t, output, "ev->event_type = EXIT_PIPE_EVENT;")
+}
+
+func TestGenerateEventfdHandler(t *testing.T) {
+	output := generateFromPair(t, FormatEventfd2, FormatExitEventfd2)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "bpf_map_update_elem(&eventfd_flags_map, &tid, &flags, BPF_ANY);")
+	requireContains(t, output, "ev->flags = flags;")
+	requireContains(t, output, "ev->ret = -1;")
+	if got := strings.Count(output, "ev->fd = -1;"); got != 2 {
+		t.Fatalf("eventfd2 enter/exit fd initializers = %d, want 2", got)
+	}
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_eventfd2\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+func TestGenerateEpollCreateHandlerUsesZeroFlags(t *testing.T) {
+	output := generateFromPair(t, FormatEpollCreate, FormatExitEpollCreate)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_EPOLL_CREATE;")
+	// epoll_create(size) has no flags argument; the generated code must
+	// hardcode flags to 0 instead of reading ctx->args[0] (which is size).
+	requireContains(t, output, "__s32 flags = 0;")
+	if strings.Contains(output, "flags = (__s32)ctx->args[0]") {
+		t.Error("epoll_create handler must not use ctx->args[0] (size) as flags")
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_epoll_create\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+func TestGenerateEpollCreate1HandlerUsesArg0Flags(t *testing.T) {
+	output := generateFromPair(t, FormatEpollCreate1, FormatExitEpollCreate1)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_EPOLL_CREATE1;")
+	// epoll_create1(flags) carries its flags (e.g. EPOLL_CLOEXEC) in args[0];
+	// the generated enter handler must capture it rather than hardcoding 0.
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[0];")
+	if strings.Contains(output, "__s32 flags = 0;\n    bpf_map_update_elem") {
+		t.Error("epoll_create1 enter handler must read ctx->args[0] as flags, not 0")
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_epoll_create1\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+func TestGeneratePidfdOpenHandlerUsesArg1Flags(t *testing.T) {
+	output := generateFromPair(t, FormatPidfdOpen, FormatExitPidfdOpen)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_PIDFD_OPEN;")
+	// pidfd_open(pid, flags): flags is at args[1], not args[0] (which is pid).
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[1];")
+	if strings.Contains(output, "flags = (__s32)ctx->args[0]") {
+		t.Error("pidfd_open handler must not use ctx->args[0] (pid) as flags")
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_pidfd_open\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+// TestGenerateSignalfd4HandlerUsesArg3Flags locks in that signalfd4(2) is
+// emitted as a KindEventfd handler whose flags are read from args[3]. The raw
+// syscall is signalfd4(int ufd, const sigset_t *mask, size_t sizemask, int
+// flags): args[0] (ufd) is an existing signalfd or -1, args[1]/args[2] are the
+// mask pointer and its size — none of those are the flags. A wrong index would
+// silently report bogus SFD_NONBLOCK/SFD_CLOEXEC bits, so guard args[3]
+// explicitly. The exit returns the new (or modified) fd, captured as a plain
+// ret with no read/write byte classification.
+func TestGenerateSignalfd4HandlerUsesArg3Flags(t *testing.T) {
+	output := generateFromPair(t, FormatSignalfd4, FormatExitSignalfd4)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SIGNALFD4;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	// signalfd4(ufd, mask, sizemask, flags): flags is at args[3].
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[3];")
+	// Must not mistake ufd (args[0]), the mask pointer (args[1]) or sizemask
+	// (args[2]) for the flags argument.
+	for _, wrong := range []string{
+		"flags = (__s32)ctx->args[0]",
+		"flags = (__s32)ctx->args[1]",
+		"flags = (__s32)ctx->args[2]",
+	} {
+		if strings.Contains(output, wrong) {
+			t.Errorf("signalfd4 handler must read flags from args[3], not via %q", wrong)
+		}
+	}
+	requireContains(t, output, "ev->ret = -1;")
+	requireContains(t, output, "SEC(\"tracepoint/syscalls/sys_exit_signalfd4\")")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->fd = -1;")
+}
+
+func TestGenerateSignalfdHandlerCapturesExistingFD(t *testing.T) {
+	// The signalfd and signalfd4 tracepoint formats share the common syscall
+	// argument slots needed by this generator path. Rename the reviewed fixture
+	// so the independent plain-signalfd mapping is exercised directly.
+	enter := strings.ReplaceAll(FormatSignalfd4, "signalfd4", "signalfd")
+	exit := strings.ReplaceAll(FormatExitSignalfd4, "signalfd4", "signalfd")
+	output := generateFromPair(t, enter, exit)
+
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SIGNALFD;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "__s32 flags = 0;")
+	requireContains(t, output, "ev->trace_id = SYS_EXIT_SIGNALFD;")
+	requireContains(t, output, "ev->fd = -1;")
+}
+
+func TestGenerateEpollCtlHandler(t *testing.T) {
+	output := generateFromPair(t, FormatEpollCtl, FormatExitEpollCtl)
+
+	requireContains(t, output, "struct epoll_ctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EPOLL_CTL_EVENT;")
+	requireContains(t, output, "ev->epfd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->op = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[2];")
+	requireContains(t, output, "ev->events = 0;")
+	requireContains(t, output, "if (ctx->args[3] != 0) {")
+	requireContains(t, output, "bpf_probe_read_user(&user_events, sizeof(user_events), (void *)ctx->args[3])")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+func TestGenerateMoveMountHandler(t *testing.T) {
+	output := generateFromPair(t, FormatMoveMount, FormatExitMoveMount)
+
+	requireContains(t, output, "struct two_fd_names_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_TWO_FD_NAMES_EVENT;")
+	requireContains(t, output, "ev->fd_a = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->fd_b = (__s32)ctx->args[2];")
+	requireContains(t, output, "ev->extra = (__u64)ctx->args[4];")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+func TestGenerateFsmountHandler(t *testing.T) {
+	output := generateFromPair(t, FormatFsmount, FormatExitFsmount)
+
+	requireContains(t, output, "struct eventfd_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_EVENTFD_EVENT;")
+	requireContains(t, output, "flags = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->event_type = EXIT_EVENTFD_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+func TestGenerateEpollWaitHandlerCapturesFdMaxeventsAndMillisTimeout(t *testing.T) {
+	output := generateFromPair(t, FormatEpollWait, FormatExitEpollWait)
+
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_EPOLL_WAIT;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[2];")
+	requireContains(t, output, "__s32 timeout_ms = (__s32)ctx->args[3];")
+	requireContains(t, output, "ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;")
+	requireContains(t, output, "ev->schema_version = POLL_EVENT_SCHEMA_VERSION;")
+}
+
+func TestGenerateEpollPwait2HandlerCapturesFdMaxeventsAndTimespec(t *testing.T) {
+	output := generateFromPair(t, FormatEpollPwait2, FormatExitEpollPwait2)
+
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[2];")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "if (ctx->args[3] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;")
+	requireContains(t, output, "bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[3])")
+	requireNotContains(t, output, "ev->timeout_ns = -1;")
+}
+
+func TestGeneratePollHandlerCapturesNfdsAndTimeout(t *testing.T) {
+	output := generateFromPair(t, FormatPoll, FormatExitPoll)
+
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "if (timeout_ms < 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;")
+	requireContains(t, output, "ev->timeout_ns = ((__s64)timeout_ms) * 1000000LL;")
+	requireContains(t, output, "ev->fd = -1;")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+func TestGeneratePselect6HandlerCapturesTimeoutPointer(t *testing.T) {
+	output := generateFromPair(t, FormatPselect6, FormatExitPselect6)
+
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[0];")
+	requireContains(t, output, "if (ctx->args[4] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;")
+	requireContains(t, output, "ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+}
+
+// TestGenerateSelectHandlerCapturesNfdsAndTimevalTimeout locks in the select
+// argument layout. select(int nfds, fd_set *readfds, fd_set *writefds,
+// fd_set *exceptfds, struct timeval *timeout): args[0] is nfds — the highest
+// fd number plus one, i.e. a COUNT, NOT a file descriptor — and args[1..3] are
+// userspace fd_set bitmask pointers (also NOT single fds). The timeout is a
+// timeval pointer at args[4]. The handler must therefore capture nfds from
+// args[0] and the timeout from the args[4] timeval (sec*1e9 + usec*1e3), and
+// must NEVER read any argument as an fd: capturing args[0] as an fd would
+// record a garbage fd (it is a count), and capturing the bitmask pointers
+// would record garbage pointers. The exit is an UNCLASSIFIED ret_event because
+// the return value is a ready-fd count (>=0) or -1, never a byte transfer.
+func TestGenerateSelectHandlerCapturesNfdsAndTimevalTimeout(t *testing.T) {
+	output := generateFromPair(t, FormatSelect, FormatExitSelect)
+
+	// Enter: poll_event with nfds from args[0] and timeval timeout from args[4].
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_SELECT;")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[0];")
+	requireContains(t, output, "if (ctx->args[4] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;")
+
+	// Negative: nfds is a count and the fd_set args are bitmask pointers, so no
+	// argument may ever be captured as an fd, and the exit carries no bytes/fd
+	// fields (the ready count is not a byte transfer).
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "ev->bytes")
+
+	// Exit: plain ret_event recording the ready-count (>=0) or -1, UNCLASSIFIED.
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+}
+
+// TestGeneratePpollHandlerCapturesNfdsAndTimeoutPointer locks in the ppoll
+// argument layout. ppoll(struct pollfd *fds, nfds_t nfds,
+// const struct timespec *tmo_p, const sigset_t *sigmask): args[0] is a
+// userspace pointer to an ARRAY of pollfd structs (NOT a file descriptor),
+// nfds is args[1], and the timeout is a timespec pointer at args[2]. The
+// handler must therefore capture nfds from args[1] and the timeout from the
+// args[2] timespec, and must NEVER read args[0] as an fd (that would be a real
+// bug: args[0] is a pointer, so an fd capture would record a garbage fd).
+func TestGeneratePpollHandlerCapturesNfdsAndTimeoutPointer(t *testing.T) {
+	output := generateFromPair(t, FormatPpoll, FormatExitPpoll)
+
+	// Enter: poll_event with nfds from args[1] and timespec timeout from args[2].
+	requireContains(t, output, "struct poll_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_POLL_EVENT;")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_PPOLL;")
+	requireContains(t, output, "ev->nfds = (__s32)ctx->args[1];")
+	requireContains(t, output, "if (ctx->args[2] == 0) {")
+	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
+	requireContains(t, output, "ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+
+	// Negative: args[0] is a pollfd-array pointer and must never be captured
+	// as an fd, and the exit is an UNCLASSIFIED ret_event (ready count, not a
+	// byte transfer), so no bytes/fd fields are emitted.
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireNotContains(t, output, "ev->bytes")
+	// Exit: plain ret_event recording the ready-count (>=0) or -1.
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+}
+
+// TestGeneratePointerPollingTimeoutsRejectInvalidAndOverflowingValues pins the
+// distinction between a valid finite timeout and POLL_TIMEOUT_UNKNOWN_NS. A
+// readable userspace pointer is not sufficient: negative or non-normalized
+// subsecond fields are invalid, and a valid-looking value may still overflow
+// signed nanoseconds. In each case the handler must retain the unknown
+// sentinel rather than collide with the infinite sentinel or wrap around.
+func TestGeneratePointerPollingTimeoutsRejectInvalidAndOverflowingValues(t *testing.T) {
+	timespecOutput := generateFromPair(t, FormatPpoll, FormatExitPpoll)
+	requireContains(t, timespecOutput,
+		"            if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL &&\n"+
+			"                (ts.tv_sec < 9223372036LL ||\n"+
+			"                 (ts.tv_sec == 9223372036LL && ts.tv_nsec <= 854775807LL))) {\n"+
+			"                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"            }")
+
+	timevalOutput := generateFromPair(t, FormatSelect, FormatExitSelect)
+	requireContains(t, timevalOutput,
+		"            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&\n"+
+			"                (tv.tv_sec < 9223372036LL ||\n"+
+			"                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {\n"+
+			"                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
+			"            }")
+}
+
+// TestCommittedPollingHandlersMatchGenerator keeps the targeted artifact
+// update honest on development hosts whose older kernel cannot regenerate the
+// complete committed syscall corpus. It covers both millisecond and pointer
+// timeout styles, including the epoll descriptor/maxevents extension.
+func TestCommittedPollingHandlersMatchGenerator(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	tests := []struct {
+		name  string
+		enter string
+		exit  string
+	}{
+		{name: "epoll_wait", enter: FormatEpollWait, exit: FormatExitEpollWait},
+		{name: "epoll_pwait", enter: FormatEpollPwait, exit: FormatExitEpollPwait},
+		{name: "epoll_pwait2", enter: FormatEpollPwait2, exit: FormatExitEpollPwait2},
+		{name: "poll", enter: FormatPoll, exit: FormatExitPoll},
+		{name: "ppoll", enter: FormatPpoll, exit: FormatExitPpoll},
+		{name: "select", enter: FormatSelect, exit: FormatExitSelect},
+		{name: "pselect6", enter: FormatPselect6, exit: FormatExitPselect6},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			generated := generateFromPair(t, tc.enter, tc.exit)
+			for _, phase := range []string{"enter", "exit"} {
+				name := "sys_" + phase + "_" + tc.name
+				if got, want := handlerBody(t, artifact, name), handlerBody(t, generated, name); got != want {
+					t.Errorf("committed %s handler differs from generator\n--- committed ---\n%s\n--- generated ---\n%s", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateSleepHandlerCapturesRequestedTimespec(t *testing.T) {
+	output := generateFromPair(t, FormatNanosleep, FormatExitNanosleep)
+
+	requireContains(t, output, "struct sleep_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_SLEEP_EVENT;")
+	requireContains(t, output, "ev->requested_ns = -1;")
+	requireContains(t, output, "if (ctx->args[0] != 0) {")
+	requireContains(t, output, "ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+	// nanosleep is ALWAYS a relative sleep (no flags argument), so its handler
+	// must compute the duration unconditionally — no TIMER_ABSTIME flags check.
+	requireNotContains(t, output, "TIMER_ABSTIME")
+	requireNotContains(t, output, "& 1 /* TIMER_ABSTIME */")
+}
+
+func TestGenerateClockNanosleepHandlerCapturesRequestedTimespec(t *testing.T) {
+	output := generateFromPair(t, FormatClockNanosleep, FormatExitClockNanosleep)
+
+	requireContains(t, output, "struct sleep_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_SLEEP_EVENT;")
+	// clock_nanosleep(clockid_t, int flags, const struct timespec *request,
+	// struct timespec *remain): the request pointer is args[2], not args[0]
+	// (which is the clockid). The sentinel -1 marks a missing/unreadable ptr.
+	requireContains(t, output, "ev->requested_ns = -1;")
+	requireContains(t, output, "if (ctx->args[2] != 0) {")
+	requireContains(t, output, "ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;")
+}
+
+// TestGenerateClockNanosleepHandlerSkipsAbsoluteSleeps locks in the
+// TIMER_ABSTIME fix: when flags (args[1]) has TIMER_ABSTIME set, the request
+// timespec is an ABSOLUTE wakeup time, not a relative duration, so the handler
+// must keep the -1 sentinel instead of exporting a bogus multi-decade
+// "sleep duration". The relative-duration computation is therefore guarded by a
+// flags check, and only runs when the flag is clear.
+func TestGenerateClockNanosleepHandlerSkipsAbsoluteSleeps(t *testing.T) {
+	output := generateFromPair(t, FormatClockNanosleep, FormatExitClockNanosleep)
+
+	// The flags check on args[1] against TIMER_ABSTIME (value 1) must be present,
+	// guarding the relative-duration assignment.
+	requireContains(t, output, "if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {")
+	// The duration is computed inside the guard (relative branch only); the abs
+	// branch leaves the -1 sentinel set above.
+	requireContains(t, output,
+		"        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {\n"+
+			"            if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {\n"+
+			"                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"            }\n        }")
+}
+
+// TestClockNanosleepExitHandlerIsUnclassifiedRet locks in that the exit side of
+// clock_nanosleep records a plain ret_event with ret_type UNCLASSIFIED. The
+// syscall returns 0 on success or a positive errno (and -1 only when invoked
+// via the libc wrapper on error), never an fd or byte count, so UNCLASSIFIED is
+// the correct return classification — same as its nanosleep sibling.
+func TestClockNanosleepExitHandlerIsUnclassifiedRet(t *testing.T) {
+	output := generateFromPair(t, FormatClockNanosleep, FormatExitClockNanosleep)
+
+	requireContains(t, output, "handle_sys_exit_clock_nanosleep")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+	requireContains(t, output, "ev->ret = ctx->ret;")
+	requireContains(t, output, "ev->ret_type = UNCLASSIFIED;")
+	// The exit handler must not try to read a timespec or treat ret as an fd.
+	requireNotContains(t, output, "handle_sys_exit_clock_nanosleep(struct syscall_trace_exit *ctx) {\n    __u32 pid, tid;\n    if (filter(&pid, &tid))\n        return 0;\n\n    __u64 now = bpf_ktime_get_boot_ns();\n    if (!ior_on_syscall_exit(tid, SYS_ENTER_CLOCK_NANOSLEEP, ctx->ret, now))\n        return 0;\n\n    struct sleep_event")
+}
+
+func TestGenerateKeyctlHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("keyctl")))
+
+	requireContains(t, output, "struct keyctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_KEYCTL_EVENT;")
+	requireContains(t, output, "ev->option = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->key_serial = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->value = (__u64)ctx->args[2];")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+func TestGenerateAddKeyHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("add_key")))
+
+	requireContains(t, output, "struct keyctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_KEYCTL_EVENT;")
+	requireContains(t, output, "ev->option = -1;")
+	requireContains(t, output, "ev->key_serial = (__s32)ctx->args[4];")
+	requireContains(t, output, "ev->value = (__u64)ctx->args[3];")
+}
+
+func TestGenerateRequestKeyHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("request_key")))
+
+	requireContains(t, output, "struct keyctl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_KEYCTL_EVENT;")
+	requireContains(t, output, "ev->option = -2;")
+	requireContains(t, output, "ev->key_serial = (__s32)ctx->args[3];")
+}
+
+func TestGeneratePtraceHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("ptrace")))
+
+	requireContains(t, output, "struct ptrace_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PTRACE_EVENT;")
+	requireContains(t, output, "ev->request = (__s64)ctx->args[0];")
+	requireContains(t, output, "ev->target_pid = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->data = (__u64)ctx->args[3];")
+}
+
+func TestGeneratePerfEventOpenHandler(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("perf_event_open")))
+
+	requireContains(t, output, "struct perf_open_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_PERF_OPEN_EVENT;")
+	requireContains(t, output, "struct __ior_perf_event_attr {")
+	requireContains(t, output, "ev->attr_type = attr.type;")
+	requireContains(t, output, "ev->config = attr.config;")
+	requireContains(t, output, "ev->target_pid = (__s32)ctx->args[1];")
+	requireContains(t, output, "ev->group_fd = (__s32)ctx->args[3];")
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+
+	// Audit lock-in (perf_event_open(2)): args[0] is a
+	// `struct perf_event_attr *` userspace pointer, NOT an fd, and args[1]
+	// is a pid (not an fd). The handler must read args[0] only via
+	// bpf_probe_read_user (the attr struct) and never capture args[0] or
+	// args[1] as an fd. Only group_fd at args[3] is a genuine fd.
+	requireContains(t, output, "bpf_probe_read_user(&attr, sizeof(attr), (void *)ctx->args[0])")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireNotContains(t, output, "ev->fd = (__s32)ctx->args[1];")
+	requireNotContains(t, output, "ev->group_fd = (__s32)ctx->args[0];")
 }
 
 func TestGenerateNameToHandleAtHandler(t *testing.T) {
@@ -192,13 +2366,191 @@ func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "struct path_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_NAME_TO_HANDLE_AT;")
-	requireContains(t, output, "bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]);")
+	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
 }
 
-func TestGenerateIgnoredComment(t *testing.T) {
+func TestGenerateFallbackNullHandler(t *testing.T) {
 	output := generateFromPair(t, FormatKill, FormatExitKill)
 
-	requireContains(t, output, "/// Ignoring sys_enter_kill sys_exit_kill as possibly not file I/O related")
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_kill")`)
+	requireContains(t, output, "struct null_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_kill")`)
+	requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+}
+
+// TestGenerateExitNoreturnHandlers locks in how the noreturn syscalls are
+// generated. exit(2)/exit_group(2) take a single `int status` argument and
+// never return (they terminate the thread/process). rt_sigreturn(2) takes no
+// meaningful arguments and never returns to the syscall site: it restores the
+// pre-signal execution context off the signal-stack frame and resumes the
+// interrupted instruction (man sigreturn(2): "sigreturn() never returns";
+// verified empirically against /sys/kernel/tracing where sys_enter_rt_sigreturn
+// fires once per signal-handler return while sys_exit_rt_sigreturn never does).
+// All three are KindNull, so:
+//   - The enter handler emits a struct null_event and intentionally does NOT
+//     capture any arg (status/whatever is not an I/O resource like an fd/path).
+//   - The kernel still exposes the sys_exit_<name> tracepoints, but those
+//     handlers can never fire at runtime because the syscall does not return.
+//     The generator suppresses the dead exit handlers.
+func TestGenerateExitNoreturnHandlers(t *testing.T) {
+	for _, syscall := range []string{"exit", "exit_group", "rt_sigreturn"} {
+		t.Run(syscall, func(t *testing.T) {
+			output := GenerateTracepointsC(mustParseAll(t, syntheticPair(syscall)))
+
+			enterSec := `SEC("tracepoint/syscalls/sys_enter_` + syscall + `")`
+			exitSec := `SEC("tracepoint/syscalls/sys_exit_` + syscall + `")`
+			requireContains(t, output, enterSec)
+			requireContains(t, output, "struct null_event *ev")
+			requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+			if strings.Contains(output, exitSec) {
+				t.Errorf("%s: noreturn syscall must not emit an exit handler", syscall)
+			}
+
+			enterStart := strings.Index(output, enterSec)
+			if enterStart < 0 {
+				t.Fatalf("%s: enter handler not found", syscall)
+			}
+			enterBody := output[enterStart:]
+			if strings.Contains(enterBody, "ctx->args[") {
+				t.Errorf("%s: enter handler unexpectedly captures an arg; the int status must be ignored", syscall)
+			}
+
+			// Regression guard (task z10): the noreturn enter handler must emit
+			// the enter null_event WITHOUT recording enter-state. Because the
+			// exit handler is suppressed, nothing would ever look up or delete a
+			// syscall_enter_state_map entry, so recording one would leak a stale
+			// per-tid entry in the bounded map. The handler must therefore call
+			// the dedicated ior_on_noreturn_syscall_enter hook (which only makes
+			// the sampling decision) and must NOT call the state-recording
+			// ior_on_syscall_enter that normal returning syscalls use.
+			requireContains(t, output, "ior_on_noreturn_syscall_enter("+strings.ToUpper("sys_enter_"+syscall)+")")
+			if strings.Contains(enterBody, "ior_on_syscall_enter(") {
+				t.Errorf("%s: noreturn enter handler must not record enter-state "+
+					"(found ior_on_syscall_enter, which writes syscall_enter_state_map)", syscall)
+			}
+		})
+	}
+}
+
+// TestGenerateReturningSyscallEnterRecordsState is the positive contrast to
+// TestGenerateExitNoreturnHandlers: a normal returning syscall's enter handler
+// DOES record enter-state via ior_on_syscall_enter (so its later exit handler
+// can pair durations and delete the entry), and must NOT use the noreturn hook.
+func TestGenerateReturningSyscallEnterRecordsState(t *testing.T) {
+	syscall := "sched_get_priority_min" // a returning KindNull syscall
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair(syscall)))
+
+	enterSec := `SEC("tracepoint/syscalls/sys_enter_` + syscall + `")`
+	enterStart := strings.Index(output, enterSec)
+	if enterStart < 0 {
+		t.Fatalf("%s: enter handler not found", syscall)
+	}
+	enterEnd := strings.Index(output[enterStart+len(enterSec):], `SEC("tracepoint/`)
+	enterBody := output[enterStart:]
+	if enterEnd >= 0 {
+		enterBody = output[enterStart : enterStart+len(enterSec)+enterEnd]
+	}
+
+	if !strings.Contains(enterBody, "ior_on_syscall_enter(tid, "+strings.ToUpper("sys_enter_"+syscall)+", now)") {
+		t.Errorf("%s: returning syscall enter handler must record enter-state via ior_on_syscall_enter", syscall)
+	}
+	if strings.Contains(enterBody, "ior_on_noreturn_syscall_enter(") {
+		t.Errorf("%s: returning syscall enter handler must not use the noreturn hook", syscall)
+	}
+}
+
+// TestGenerateSchedGetPriorityMinHandler locks in how sched_get_priority_min
+// (and its identical sibling sched_get_priority_max) are generated. Per
+// sched_get_priority_min(2): `int sched_get_priority_min(int policy)` takes a
+// single `int policy` scheduling-policy enum (SCHED_FIFO, SCHED_RR, ...) and
+// returns the minimum static priority value for that policy on success, or -1
+// on error. The `policy` arg is neither an fd nor a path, so ior classifies the
+// syscall as KindNull in FamilySched (alongside every other sched_* syscall).
+// Therefore:
+//   - The enter handler emits a struct null_event and intentionally does NOT
+//     capture the int policy arg (it is not an I/O resource).
+//   - Unlike the noreturn exit() syscalls, this syscall DOES return, so the
+//     kernel sys_exit_sched_get_priority_min tracepoint fires and the generator
+//     emits a live exit handler that records the int return value (-1 or the
+//     priority) via the generic EXIT_RET_EVENT path.
+func TestGenerateSchedGetPriorityMinHandler(t *testing.T) {
+	for _, syscall := range []string{"sched_get_priority_min", "sched_get_priority_max"} {
+		t.Run(syscall, func(t *testing.T) {
+			formats := mustParseAll(t, syntheticPair(syscall))
+			if got := formats[0].Family; got != FamilySched {
+				t.Fatalf("%s family = %s, want %s", syscall, got, FamilySched)
+			}
+			if got := ClassifySyscallFamily("sys_enter_" + syscall); got != FamilySched {
+				t.Fatalf("ClassifySyscallFamily(%s) = %s, want %s", syscall, got, FamilySched)
+			}
+
+			output := GenerateTracepointsC(formats)
+			if strings.Contains(output, "Skipping") {
+				t.Fatalf("%s was skipped: %s", syscall, output)
+			}
+
+			enterSec := `SEC("tracepoint/syscalls/sys_enter_` + syscall + `")`
+			exitSec := `SEC("tracepoint/syscalls/sys_exit_` + syscall + `")`
+			requireContains(t, output, enterSec)
+			requireContains(t, output, "struct null_event *ev")
+			requireContains(t, output, "ev->event_type = ENTER_NULL_EVENT;")
+			// Returning syscall: the exit handler must exist and emit the ret value.
+			requireContains(t, output, exitSec)
+			requireContains(t, output, "ev->event_type = EXIT_RET_EVENT;")
+
+			// The int policy arg is not an fd/path, so the enter handler must not
+			// capture any ctx->args[].
+			enterStart := strings.Index(output, enterSec)
+			if enterStart < 0 {
+				t.Fatalf("%s: enter handler not found", syscall)
+			}
+			enterEnd := strings.Index(output[enterStart+len(enterSec):], `SEC("tracepoint/`)
+			enterBody := output[enterStart:]
+			if enterEnd >= 0 {
+				enterBody = output[enterStart : enterStart+len(enterSec)+enterEnd]
+			}
+			if strings.Contains(enterBody, "ctx->args[") {
+				t.Errorf("%s: enter handler unexpectedly captures an arg; the int policy must be ignored", syscall)
+			}
+		})
+	}
+}
+
+func TestGenerateHandlersForEverySyscallFamily(t *testing.T) {
+	tests := []struct {
+		syscall string
+		family  SyscallFamily
+	}{
+		{"accept", FamilyNetwork},
+		{"pipe2", FamilyIPC},
+		{"munmap", FamilyMemory},
+		{"execve", FamilyProcess},
+		{"kill", FamilySignals},
+		{"nanosleep", FamilyTime},
+		{"sched_yield", FamilySched},
+		{"mknod", FamilyFS},
+		{"epoll_wait", FamilyPolling},
+		{"io_setup", FamilyAIO},
+		{"bpf", FamilySecurity},
+		{"sysinfo", FamilyMisc},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.syscall, func(t *testing.T) {
+			input := syntheticPair(tt.syscall)
+			formats := mustParseAll(t, input)
+			if formats[0].Family != tt.family {
+				t.Fatalf("%s family = %s, want %s", tt.syscall, formats[0].Family, tt.family)
+			}
+			output := GenerateTracepointsC(formats)
+			if strings.Contains(output, "Skipping") {
+				t.Fatalf("%s was skipped: %s", tt.syscall, output)
+			}
+			requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_`+tt.syscall+`")`)
+			requireContains(t, output, `SEC("tracepoint/syscalls/sys_exit_`+tt.syscall+`")`)
+		})
+	}
 }
 
 func TestGenerateDefineConstants(t *testing.T) {
@@ -231,9 +2583,91 @@ func TestGenerateHandlerStructure(t *testing.T) {
 	requireContains(t, output, "if (filter(&pid, &tid))")
 	requireContains(t, output, "ev->pid = pid;")
 	requireContains(t, output, "ev->tid = tid;")
-	requireContains(t, output, "ev->time = bpf_ktime_get_boot_ns();")
+	requireContains(t, output, "__u64 now = bpf_ktime_get_boot_ns();")
+	requireContains(t, output, "ev->time = now;")
 	requireContains(t, output, "bpf_ringbuf_submit(ev, 0);")
 	requireContains(t, output, "return 0;")
+}
+
+func TestGenerateOpenTreeHandlersUseOpenTransport(t *testing.T) {
+	for i, name := range []string{"open_tree", "open_tree_attr"} {
+		t.Run(name, func(t *testing.T) {
+			output := GenerateTracepointsC(openTreeFormats(name, 9600+i*2))
+
+			requireContains(t, output, "/// sys_enter_"+name+" is a struct open_event (kind=open-tree)")
+			requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
+			requireContains(t, output, "(void *)ctx->args[1]")
+			requireContains(t, output, "ev->flags = ctx->args[2];")
+			requireContains(t, output, "ior_take_pending_filename(tid, SYS_ENTER_"+strings.ToUpper(name)+")")
+		})
+	}
+}
+
+func TestGenerateNamedEventfdHandlersCaptureIdentityAndRecoverFaults(t *testing.T) {
+	tests := []struct {
+		name          string
+		filenameField string
+	}{
+		{name: "memfd_create", filenameField: "uname"},
+		{name: "fsopen", filenameField: "_fs_name"},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := GenerateTracepointsC(namedEventfdFormats(tt.name, tt.filenameField, 9700+i*2))
+			requireContains(t, output, "struct eventfd_name_event *ev")
+			requireContains(t, output, "ev->event_type = ENTER_EVENTFD_NAME_EVENT;")
+			requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0])")
+			requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
+			requireContains(t, output, "ior_take_pending_filename(tid, SYS_ENTER_"+strings.ToUpper(tt.name)+")")
+			requireContains(t, output, "ev->flags = flags;")
+		})
+	}
+}
+
+func TestGenerateFsmountCapturesSourceFd(t *testing.T) {
+	output := generateFromPair(t, FormatFsmount, FormatExitFsmount)
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "__s32 flags = (__s32)ctx->args[1];")
+}
+
+func TestGenerateMoveMountCapturesBothPaths(t *testing.T) {
+	output := generateFromPair(t, FormatMoveMount, FormatExitMoveMount)
+	requireContains(t, output, "ev->fd_a = (__s32)ctx->args[0];")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1])")
+	requireContains(t, output, "ev->fd_b = (__s32)ctx->args[2];")
+	requireContains(t, output, "bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3])")
+	requireContains(t, output, "ev->extra = (__u64)ctx->args[4];")
+}
+
+func TestGenerateBpfCapturesCommand(t *testing.T) {
+	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("bpf")))
+	requireContains(t, output, "struct bpf_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_BPF_EVENT;")
+	requireContains(t, output, "ev->cmd = (__u32)ctx->args[0];")
+}
+
+func namedEventfdFormats(name, filenameField string, enterID int) []Format {
+	return []Format{
+		{
+			Name:   "sys_enter_" + name,
+			ID:     enterID,
+			Family: ClassifySyscallFamily("sys_enter_" + name),
+			ExternalFields: []Field{
+				{Type: "int", Name: "__syscall_nr"},
+				{Type: "const char *", Name: filenameField},
+				{Type: "unsigned int", Name: "flags"},
+			},
+		},
+		{
+			Name:   "sys_exit_" + name,
+			ID:     enterID - 1,
+			Family: ClassifySyscallFamily("sys_exit_" + name),
+			ExternalFields: []Field{
+				{Type: "int", Name: "__syscall_nr"},
+				{Type: "long", Name: "ret"},
+			},
+		},
+	}
 }
 
 func TestGenerateAllEventTypes(t *testing.T) {
@@ -245,13 +2679,44 @@ func TestGenerateAllEventTypes(t *testing.T) {
 	}{
 		{KindFd, "ENTER_FD_EVENT", "EXIT_FD_EVENT"},
 		{KindOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
+		{KindMqOpen, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
+		{KindOpenTree, "ENTER_OPEN_EVENT", "EXIT_OPEN_EVENT"},
+		{KindExec, "ENTER_EXEC_EVENT", "EXIT_EXEC_EVENT"},
 		{KindPathname, "ENTER_PATH_EVENT", "EXIT_PATH_EVENT"},
+		{KindFdPathname, "ENTER_FD_PATH_EVENT", "EXIT_FD_PATH_EVENT"},
 		{KindName, "ENTER_NAME_EVENT", "EXIT_NAME_EVENT"},
 		{KindRet, "ENTER_RET_EVENT", "EXIT_RET_EVENT"},
 		{KindFcntl, "ENTER_FCNTL_EVENT", "EXIT_FCNTL_EVENT"},
 		{KindNull, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindDup3, "ENTER_DUP3_EVENT", "EXIT_DUP3_EVENT"},
 		{KindOpenByHandleAt, "ENTER_OPEN_BY_HANDLE_AT_EVENT", "EXIT_OPEN_BY_HANDLE_AT_EVENT"},
+		{KindSocket, "ENTER_SOCKET_EVENT", "EXIT_SOCKET_EVENT"},
+		{KindSocketpair, "ENTER_SOCKETPAIR_EVENT", "EXIT_SOCKETPAIR_EVENT"},
+		{KindAccept, "ENTER_ACCEPT_EVENT", "EXIT_ACCEPT_EVENT"},
+		{KindPipe, "ENTER_PIPE_EVENT", "EXIT_PIPE_EVENT"},
+		{KindEventfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
+		{KindNamedEventfd, "ENTER_EVENTFD_NAME_EVENT", "EXIT_EVENTFD_NAME_EVENT"},
+		{KindPidfd, "ENTER_EVENTFD_EVENT", "EXIT_EVENTFD_EVENT"},
+		{KindEpollCtl, "ENTER_EPOLL_CTL_EVENT", "EXIT_EPOLL_CTL_EVENT"},
+		{KindTwoFd, "ENTER_TWO_FD_EVENT", "EXIT_TWO_FD_EVENT"},
+		{KindPoll, "ENTER_POLL_EVENT", "EXIT_POLL_EVENT"},
+		{KindMem, "ENTER_MEM_EVENT", "EXIT_MEM_EVENT"},
+		{KindMmap, "ENTER_MMAP_EVENT", "EXIT_MMAP_EVENT"},
+		{KindSleep, "ENTER_SLEEP_EVENT", "EXIT_SLEEP_EVENT"},
+		{KindKeyctl, "ENTER_KEYCTL_EVENT", "EXIT_KEYCTL_EVENT"},
+		{KindPtrace, "ENTER_PTRACE_EVENT", "EXIT_PTRACE_EVENT"},
+		{KindPerfOpen, "ENTER_PERF_OPEN_EVENT", "EXIT_PERF_OPEN_EVENT"},
+		{KindSeccomp, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindModule, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindSysVId, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindSysVOp, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindProc, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindBpf, "ENTER_BPF_EVENT", "EXIT_BPF_EVENT"},
+		{KindFutex, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindPrctl, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindTimerObj, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
+		{KindFdSize, "ENTER_FD_SIZE_EVENT", "EXIT_FD_SIZE_EVENT"},
+		{KindTwoFdNames, "ENTER_TWO_FD_NAMES_EVENT", "EXIT_TWO_FD_NAMES_EVENT"},
 	}
 
 	for _, tt := range tests {
@@ -271,13 +2736,44 @@ func TestEventStructNames(t *testing.T) {
 	}{
 		{KindFd, "fd_event"},
 		{KindOpen, "open_event"},
+		{KindMqOpen, "open_event"},
+		{KindOpenTree, "open_event"},
+		{KindExec, "exec_event"},
 		{KindPathname, "path_event"},
+		{KindFdPathname, "fd_path_event"},
 		{KindName, "name_event"},
 		{KindRet, "ret_event"},
 		{KindFcntl, "fcntl_event"},
 		{KindNull, "null_event"},
 		{KindDup3, "dup3_event"},
 		{KindOpenByHandleAt, "open_by_handle_at_event"},
+		{KindSocket, "socket_event"},
+		{KindSocketpair, "socketpair_event"},
+		{KindAccept, "accept_event"},
+		{KindPipe, "pipe_event"},
+		{KindEventfd, "eventfd_event"},
+		{KindNamedEventfd, "eventfd_name_event"},
+		{KindPidfd, "eventfd_event"},
+		{KindEpollCtl, "epoll_ctl_event"},
+		{KindTwoFd, "two_fd_event"},
+		{KindPoll, "poll_event"},
+		{KindMem, "mem_event"},
+		{KindMmap, "mmap_event"},
+		{KindSleep, "sleep_event"},
+		{KindKeyctl, "keyctl_event"},
+		{KindPtrace, "ptrace_event"},
+		{KindPerfOpen, "perf_open_event"},
+		{KindSeccomp, "null_event"},
+		{KindModule, "null_event"},
+		{KindSysVId, "null_event"},
+		{KindSysVOp, "null_event"},
+		{KindProc, "null_event"},
+		{KindBpf, "bpf_event"},
+		{KindFutex, "null_event"},
+		{KindPrctl, "null_event"},
+		{KindTimerObj, "null_event"},
+		{KindFdSize, "fd_size_event"},
+		{KindTwoFdNames, "two_fd_names_event"},
 	}
 
 	for _, tt := range tests {
@@ -296,7 +2792,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindOpen, KindPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt}
+	accepted := []TracepointKind{KindFd, KindFdSize, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindFdPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindTwoFdNames, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)
@@ -333,15 +2829,862 @@ func TestGroupBySyscallInvalid(t *testing.T) {
 func TestClassifySyscallNoExit(t *testing.T) {
 	formats := mustParseAll(t, FormatRead)
 	output := GenerateTracepointsC(formats)
-	requireContains(t, output, "Ignoring")
+	requireContains(t, output, "Skipping")
 	if strings.Contains(output, "SEC(") {
 		t.Error("syscall with only enter and no exit should be ignored")
 	}
+}
+
+func TestEnterConstForHandler(t *testing.T) {
+	tests := []struct {
+		name    string
+		isEnter bool
+		want    string
+	}{
+		{"sys_enter_read", true, "SYS_ENTER_READ"},
+		{"sys_exit_read", false, "SYS_ENTER_READ"},
+		{"sys_enter_openat", true, "SYS_ENTER_OPENAT"},
+		{"sys_exit_openat", false, "SYS_ENTER_OPENAT"},
+		{"sys_exit_io_uring_enter", false, "SYS_ENTER_IO_URING_ENTER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := enterConstForHandler(tt.name, tt.isEnter)
+			if got != tt.want {
+				t.Errorf("enterConstForHandler(%q, %v) = %q, want %q", tt.name, tt.isEnter, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExitHandlerPassesEnterTraceID(t *testing.T) {
+	output := generateFromPair(t, FormatRead, FormatExitRead)
+
+	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret, now)")
+	if strings.Contains(output, "ior_on_syscall_exit(tid, SYS_EXIT_READ") {
+		t.Error("exit handler must pass the enter trace ID, not the exit trace ID")
+	}
+}
+
+func TestExitHandlerDoesNotRelyOnIDAdjacency(t *testing.T) {
+	input := FormatRead + "\n" + FormatExitRead
+	formats := mustParseAll(t, input)
+	enterID := -1
+	exitID := -1
+	for _, f := range formats {
+		if strings.HasPrefix(f.Name, "sys_enter_") {
+			enterID = f.ID
+		}
+		if strings.HasPrefix(f.Name, "sys_exit_") {
+			exitID = f.ID
+		}
+	}
+	if enterID < 0 || exitID < 0 {
+		t.Fatal("missing enter or exit format")
+	}
+	if enterID != exitID+1 {
+		t.Skipf("IDs are not adjacent (enter=%d, exit=%d), adjacency test not applicable", enterID, exitID)
+	}
+
+	output := GenerateTracepointsC(formats)
+	if strings.Contains(output, "ior_on_syscall_exit(tid, SYS_EXIT_") {
+		t.Error("generated exit handler passes exit trace ID; should pass enter trace ID to avoid adjacency dependency")
+	}
+	requireContains(t, output, "ior_on_syscall_exit(tid, SYS_ENTER_READ, ctx->ret, now)")
+}
+
+func syntheticPair(syscall string) string {
+	enter := strings.Replace(FormatKill, "sys_enter_kill", "sys_enter_"+syscall, 1)
+	enter = strings.Replace(enter, "ID: 183", "ID: 1001", 1)
+	exit := strings.Replace(FormatExitKill, "sys_exit_kill", "sys_exit_"+syscall, 1)
+	exit = strings.Replace(exit, "ID: 182", "ID: 1000", 1)
+	return enter + "\n" + exit
 }
 
 func requireContains(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
 		t.Errorf("output missing expected string: %q", needle)
+	}
+}
+
+// requireNotContains fails when haystack unexpectedly contains needle. Used for
+// negative assertions, e.g. that a pointer argument is not misclassified as an
+// fd capture.
+func requireNotContains(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if strings.Contains(haystack, needle) {
+		t.Errorf("output unexpectedly contains forbidden string: %q", needle)
+	}
+}
+
+// TestGenerateSeccompModuleExitsCarryRet locks in audit finding M1/F2: the
+// enter side of seccomp(2)/init_module(2)/delete_module(2) is deliberately a
+// payload-less null_event (KindSeccomp/KindModule), but their *exit* side must
+// never be. null_event has no ret field, so pinning the exit formats to the
+// same kinds made these three handlers submit a ring-buffer record without the
+// syscall return value: streamrow.New fills RetVal/IsError only for
+// *types.RetEvent, so stream/CSV/Parquet rows reported ret=0, is_error=false
+// even for failed calls (the kernel-side aggregate map was unaffected because
+// ior_on_syscall_exit still receives ctx->ret). The exits are now unpinned and
+// fall through to field-based classification, which sees "long ret" and picks
+// KindRet -> ret_event, like every other generic syscall exit.
+func TestGenerateSeccompModuleExitsCarryRet(t *testing.T) {
+	tests := []struct {
+		name        string
+		enter, exit string
+		enterStruct string
+		enterKind   TracepointKind
+	}{
+		{"seccomp", syntheticEnter("seccomp", 526), syntheticExit("seccomp", 525), "null_event", KindSeccomp},
+		{"init_module", FormatInitModule, FormatExitInitModule, "null_event", KindModule},
+		{"delete_module", syntheticEnter("delete_module", 410), syntheticExit("delete_module", 409), "null_event", KindModule},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exitFormat := mustParseAll(t, tt.exit)[0]
+			if got := ClassifyFormat(&exitFormat).Kind; got != KindRet {
+				t.Fatalf("sys_exit_%s classified as %v, want KindRet", tt.name, got)
+			}
+
+			out := generateFromPair(t, tt.enter, tt.exit)
+
+			// Enter side is unchanged: still the payload-less null_event.
+			requireContains(t, out, "/// sys_enter_"+tt.name+" is a struct "+tt.enterStruct+" (kind="+tt.enterKind.MetadataName()+")")
+
+			// Exit side must be a ret_event that records the return value.
+			requireContains(t, out, "/// sys_exit_"+tt.name+" is a struct ret_event (UNCLASSIFIED) (kind=ret)")
+			requireContains(t, out, "struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);")
+			requireContains(t, out, "ev->event_type = EXIT_RET_EVENT;")
+			requireContains(t, out, "ev->trace_id = SYS_EXIT_"+strings.ToUpper(tt.name)+";")
+			requireContains(t, out, "ev->ret = ctx->ret;")
+			if strings.Contains(out, "ev->event_type = EXIT_NULL_EVENT;") {
+				t.Errorf("sys_exit_%s must not emit a payload-less null_event:\n%s", tt.name, out)
+			}
+		})
+	}
+}
+
+// TestGenerateEveryExitHandlerCapturesRet is the generic guard behind
+// TestGenerateSeccompModuleExitsCarryRet: whatever struct an exit handler
+// picks, it must record the kernel return value. All five exit-side structs
+// (ret_event, accept_event, pipe_event, socketpair_event, eventfd_event) have
+// a ret field, so there is no legitimate exception.
+func TestGenerateEveryExitHandlerCapturesRet(t *testing.T) {
+	pairs := []struct{ enter, exit string }{
+		{FormatRead, FormatExitRead},
+		{FormatOpenat, FormatExitOpenat},
+		{FormatAccept, FormatExitAccept},
+		{FormatPipe2, FormatExitPipe2},
+		{FormatSocketpair, FormatExitSocketpair},
+		{FormatEventfd2, FormatExitEventfd2},
+		{FormatInitModule, FormatExitInitModule},
+		{syntheticEnter("seccomp", 526), syntheticExit("seccomp", 525)},
+		{syntheticEnter("delete_module", 410), syntheticExit("delete_module", 409)},
+		{syntheticEnter("ptrace", 163), syntheticExit("ptrace", 162)},
+	}
+	var input strings.Builder
+	for _, p := range pairs {
+		input.WriteString(p.enter + "\n" + p.exit + "\n")
+	}
+	out := GenerateTracepointsC(mustParseAll(t, input.String()))
+
+	for _, name := range exitHandlerNames(out) {
+		body := handlerBody(t, out, name)
+		if !strings.Contains(body, "ev->ret = ctx->ret;") {
+			t.Errorf("%s does not capture the syscall return value:\n%s", name, body)
+		}
+	}
+}
+
+// TestGeneratedArtifactExitHandlersCaptureRet applies the same invariant to the
+// committed internal/c/generated_tracepoints.c so a stale artifact cannot
+// silently reintroduce a ret-less exit handler.
+func TestGeneratedArtifactExitHandlersCaptureRet(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	names := exitHandlerNames(artifact)
+	if len(names) == 0 {
+		t.Fatal("no sys_exit_* handlers found in the generated artifact")
+	}
+	for _, name := range names {
+		if !strings.Contains(handlerBody(t, artifact, name), "ev->ret = ctx->ret;") {
+			t.Errorf("%s in generated_tracepoints.c does not capture ctx->ret", name)
+		}
+	}
+}
+
+// TestGeneratePtraceZeroesPad locks in audit finding F3: struct ptrace_event
+// has an explicit __s32 _pad filler between target_pid and data. bpf_ringbuf_
+// reserve hands back uninitialized memory, so a handler that never writes _pad
+// submits 4 bytes left over from a previously submitted record, which the Go
+// decoder then surfaces as PtraceEvent.Pad.
+func TestGeneratePtraceZeroesPad(t *testing.T) {
+	out := generateFromPair(t, syntheticEnter("ptrace", 163), syntheticExit("ptrace", 162))
+	requireContains(t, out, "struct ptrace_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ptrace_event), 0);")
+	requireContains(t, out, "ev->target_pid = (__s32)ctx->args[1];\n    ev->_pad = 0;\n    ev->data = (__u64)ctx->args[3];")
+}
+
+// TestGenerateOpenat2FlagsCaptureIsDocumented pins audit finding S7:
+// openat2's flags sit at offset zero of the struct open_how pointer at args[2].
+// The handler must retain -1 for NULL/unreadable pointers and publish the
+// captured word only after a successful nofault read.
+func TestGenerateOpenat2FlagsCaptureIsDocumented(t *testing.T) {
+	out := generateFromPair(t, FormatOpenat2, syntheticExit("openat2", 781))
+	requireContains(t, out, `    ev->flags = -1;
+    if (ctx->args[2] != 0) {
+        __u64 open_how_flags = 0;
+        if (bpf_probe_read_user(&open_how_flags, sizeof(open_how_flags), (void *)ctx->args[2]) == 0) {
+            ev->flags = (__s32)open_how_flags;
+        }
+    }
+`)
+	requireNotContains(t, out, "flags not a tracepoint arg")
+
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	if got, want := handlerBody(t, artifact, "sys_enter_openat2"), handlerBody(t, out, "sys_enter_openat2"); got != want {
+		t.Error("committed sys_enter_openat2 handler differs from the generator")
+	}
+
+	doc, err := readSyscallTracingPlan()
+	if err != nil {
+		t.Fatalf("read syscall tracing plan: %v", err)
+	}
+	for _, text := range []string{"struct open_how", "bpf_probe_read_user", "`-1`"} {
+		if !strings.Contains(doc, text) {
+			t.Errorf("docs/syscall-tracing-plan.md must document openat2 flags capture with %q", text)
+		}
+	}
+	if strings.Contains(doc, "`openat2` does not report `flags`") {
+		t.Error("docs/syscall-tracing-plan.md still describes openat2 flags as uncaptured")
+	}
+}
+
+// exitHandlerNames returns every sys_exit_* handler name emitted in generated C.
+func exitHandlerNames(generated string) []string {
+	var names []string
+	for _, line := range strings.Split(generated, "\n") {
+		const prefix = "/// sys_exit_"
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "/// ")
+		if idx := strings.Index(rest, " is a struct "); idx > 0 {
+			names = append(names, rest[:idx])
+		}
+	}
+	return names
+}
+
+// handlerBody returns the generated C body of the named handler, from its ///
+// doc comment through the closing brace.
+func handlerBody(t *testing.T, generated, name string) string {
+	t.Helper()
+	lines := strings.Split(generated, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "/// "+name+" is a struct ") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("handler %s not found in generated output", name)
+	}
+	for i := start; i < len(lines); i++ {
+		if lines[i] == "}" {
+			return strings.Join(lines[start:i+1], "\n")
+		}
+	}
+	t.Fatalf("handler %s has no closing brace", name)
+	return ""
+}
+
+// ringbufDropCountCall is the shared BPF helper every generated handler must
+// call when bpf_ringbuf_reserve() returns NULL. Kernel-side drops were
+// previously silent (audit findings D2 F1 / D9 Y2): the event just vanished,
+// with no counter in BPF, stats() or the TUI.
+const ringbufDropCountCall = "ior_count_ringbuf_drop();"
+
+// reserveNullBranch is the exact emitted NULL-reserve branch, counting the
+// drop before bailing out.
+const reserveNullBranch = "    if (!ev) {\n" +
+	"        " + ringbufDropCountCall + "\n" +
+	"        return 0;\n" +
+	"    }\n"
+
+// countRingbufReserves returns how many bpf_ringbuf_reserve call sites the
+// given generated C contains.
+func countRingbufReserves(generated string) int {
+	return strings.Count(generated, "bpf_ringbuf_reserve(&event_map,")
+}
+
+// TestGenerateEveryHandlerCountsRingbufDrops asserts the invariant on freshly
+// generated output: every reserve site is followed by the drop-counting NULL
+// branch, so no emit site can lose an event silently.
+func TestGenerateEveryHandlerCountsRingbufDrops(t *testing.T) {
+	pairs := []struct{ enter, exit string }{
+		{FormatRead, FormatExitRead},
+		{FormatOpenat, FormatExitOpenat},
+		{FormatAccept, FormatExitAccept},
+		{FormatPipe2, FormatExitPipe2},
+		{FormatSocketpair, FormatExitSocketpair},
+		{FormatEventfd2, FormatExitEventfd2},
+		{FormatMmap, FormatExitMmap},
+		{FormatExecve, FormatExitExecve},
+		{syntheticEnter("ptrace", 163), syntheticExit("ptrace", 162)},
+		{syntheticEnter("exit_group", 60), syntheticExit("exit_group", 59)},
+	}
+	var input strings.Builder
+	for _, p := range pairs {
+		input.WriteString(p.enter + "\n" + p.exit + "\n")
+	}
+	out := GenerateTracepointsC(mustParseAll(t, input.String()))
+
+	reserves := countRingbufReserves(out)
+	if reserves == 0 {
+		t.Fatal("no bpf_ringbuf_reserve sites generated")
+	}
+	if got := strings.Count(out, reserveNullBranch); got != reserves {
+		t.Errorf("%d of %d reserve sites count the drop, want all of them", got, reserves)
+	}
+	if strings.Contains(out, "    if (!ev)\n        return 0;") {
+		t.Error("a reserve site still drops events without counting them")
+	}
+}
+
+// TestGeneratedArtifactCountsRingbufDrops applies the same invariant to the
+// committed internal/c/generated_tracepoints.c, so a stale or hand-edited
+// artifact cannot reintroduce silent drops.
+func TestGeneratedArtifactCountsRingbufDrops(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	reserves := countRingbufReserves(artifact)
+	if reserves == 0 {
+		t.Fatal("no bpf_ringbuf_reserve sites in the generated artifact")
+	}
+	if got := strings.Count(artifact, reserveNullBranch); got != reserves {
+		t.Errorf("%d of %d reserve sites in generated_tracepoints.c count the drop, want all", got, reserves)
+	}
+	if got := strings.Count(artifact, ringbufDropCountCall); got != reserves {
+		t.Errorf("%d drop-count calls for %d reserve sites in generated_tracepoints.c", got, reserves)
+	}
+}
+
+// TestRingbufDropHelperIsDefinedInBPFSource pins the other half of the
+// contract: the helper the generated handlers call, and the map it updates,
+// must exist in the hand-written BPF sources included ahead of the generated
+// file (internal/c/ior.bpf.c includes filter.c before generated_tracepoints.c).
+func TestRingbufDropHelperIsDefinedInBPFSource(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+	if !strings.Contains(filterC, "static __always_inline void ior_count_ringbuf_drop(void)") {
+		t.Error("filter.c must define ior_count_ringbuf_drop")
+	}
+	if !strings.Contains(filterC, "bpf_map_lookup_elem(&ringbuf_drop_map,") {
+		t.Error("ior_count_ringbuf_drop must update ringbuf_drop_map")
+	}
+
+	mapsH, err := readCSource("maps.h")
+	if err != nil {
+		t.Fatalf("read maps.h: %v", err)
+	}
+	if !strings.Contains(mapsH, "} ringbuf_drop_map SEC(\".maps\");") {
+		t.Error("maps.h must declare ringbuf_drop_map")
+	}
+	if !strings.Contains(mapsH, "BPF_MAP_TYPE_PERCPU_ARRAY") {
+		t.Error("ringbuf_drop_map must be a per-CPU array so the hot-path increment needs no atomics")
+	}
+}
+
+// TestSyscallAggregateCountsOnlyNonEmittedEvents pins the kernel half of the
+// sampled-count fix. ior_on_syscall_exit must update syscall_aggregate_map
+// only for syscalls whose events are NOT emitted to the ring buffer, so the
+// kernel aggregate and the per-event stream partition the invocations:
+// userspace can then merge aggregate rows for sampled (rate N>1) syscalls to
+// recover their true counts without double counting the ~1/N emitted pairs.
+// Dropping the emit guard would silently double-count every traced syscall,
+// and BPF behaviour cannot be exercised from a unit test, so the contract is
+// asserted over the source.
+func TestSyscallAggregateCountsOnlyNonEmittedEvents(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+
+	const guardedUpdate = "if (!emit_event && state->enter_trace_id == enter_trace_id)\n" +
+		"        ior_update_syscall_aggregate(state->enter_trace_id, duration, ret);"
+	if !strings.Contains(filterC, guardedUpdate) {
+		t.Error("ior_on_syscall_exit must call ior_update_syscall_aggregate only when the event is not emitted")
+	}
+	if got := strings.Count(filterC, "ior_update_syscall_aggregate(state->enter_trace_id"); got != 1 {
+		t.Errorf("%d aggregate update call sites in ior_on_syscall_exit, want exactly 1 (the emit-guarded one)", got)
+	}
+	if !strings.Contains(filterC, "emit_event = state->emit_event;") {
+		t.Error("ior_on_syscall_exit must read state->emit_event before the aggregate guard")
+	}
+}
+
+func TestSyscallAggregateUsesTheKernelErrnoReturnWindow(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+
+	if !syscallAggregateUsesErrnoWindow(filterC) {
+		t.Fatal("filter.c must use the exact kernel errno window in both aggregate branches")
+	}
+
+	mutations := []struct {
+		name   string
+		mutate func(string) string
+	}{
+		{
+			name: "an earlier sign check overrides the helper result",
+			mutate: func(source string) string {
+				return strings.Replace(source,
+					"return ret >= -IOR_MAX_ERRNO && ret < 0;",
+					"if (ret < 0) return 1;\n    return ret >= -IOR_MAX_ERRNO && ret < 0;", 1)
+			},
+		},
+		{
+			name: "helper calls move outside the aggregate",
+			mutate: func(source string) string {
+				source = strings.ReplaceAll(source,
+					"if (ior_is_errno_ret(ret))",
+					"if (ret < 0)")
+				return source + `
+static __always_inline void decoy_errno_calls(__s64 ret) {
+    if (ior_is_errno_ret(ret)) {}
+    if (ior_is_errno_ret(ret)) {}
+}
+`
+			},
+		},
+		{
+			name: "a stale sign check overwrites the fresh error count",
+			mutate: func(source string) string {
+				return strings.Replace(source,
+					"fresh.errors = 1;",
+					"fresh.errors = 1;\n    fresh.errors = ret < 0;", 1)
+			},
+		},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if syscallAggregateUsesErrnoWindow(mutation.mutate(filterC)) {
+				t.Fatal("errno-window source contract accepted a semantic mutation")
+			}
+		})
+	}
+}
+
+func syscallAggregateUsesErrnoWindow(source string) bool {
+	source = stripCComments(source)
+	if !strings.Contains(source, "#define IOR_MAX_ERRNO 4095") {
+		return false
+	}
+
+	helper, ok := cFunctionBody(source, "static __always_inline int ior_is_errno_ret(__s64 ret)")
+	if !ok || strings.TrimSpace(helper) != "return ret >= -IOR_MAX_ERRNO && ret < 0;" {
+		return false
+	}
+
+	aggregate, ok := cFunctionBody(source,
+		"static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, __u64 duration_ns, __s64 ret)")
+	if !ok || strings.Count(aggregate, "if (ior_is_errno_ret(ret))") != 2 {
+		return false
+	}
+	if strings.Count(aggregate,
+		"if (ior_is_errno_ret(ret))\n            existing->errors += 1;") != 1 {
+		return false
+	}
+	if strings.Count(aggregate,
+		"if (ior_is_errno_ret(ret))\n        fresh.errors = 1;") != 1 {
+		return false
+	}
+	// The two guarded increments above must be the only aggregate error-field
+	// writes. Otherwise a later stale sign check can silently override them.
+	return strings.Count(aggregate, "errors") == 2
+}
+
+// cFunctionBody returns the text enclosed by the outermost braces of the
+// function with signature. Callers strip comments first so braces in comments
+// cannot disguise the structural boundary being asserted.
+func cFunctionBody(source, signature string) (string, bool) {
+	start := strings.Index(source, signature)
+	if start < 0 {
+		return "", false
+	}
+	openOffset := strings.IndexByte(source[start+len(signature):], '{')
+	if openOffset < 0 {
+		return "", false
+	}
+	open := start + len(signature) + openOffset
+	depth := 0
+	for i := open; i < len(source); i++ {
+		switch source[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return source[open+1 : i], true
+			}
+		}
+	}
+	return "", false
+}
+
+// --- open filename recovery (task w1) ---
+//
+// bpf_probe_read_user_str() at sys_enter is a nofault read, so it returns
+// -EFAULT and leaves the buffer untouched whenever the path string's page is
+// not resident - routinely the first open a program makes through a freshly
+// mmap'ed library. Measured on this tree, ~15% of the openats of a fork/exec
+// workload lost their filename that way: the row printed "E:name", the
+// descriptor was registered under the empty string, and -path could not match
+// a name that was never captured. The generator now emits, for the open kinds
+// only, a stash at enter and a re-read at exit (where the kernel's own
+// getname() has already faulted the page in).
+
+// openNameStashLine is the enter-side emission: the nofault read is now tested
+// and its user pointer stashed for the exit handler when it fails.
+func openNameStashLine(argIdx string) string {
+	return "    if (ctx->args[" + argIdx + "] == 0) {\n" +
+		"        ev->filename[0] = 0;\n" +
+		"        ev->filename_status = PATH_READ_NULL;\n" +
+		"    } else {\n" +
+		"        ev->filename_status = PATH_READ_OK;\n" +
+		"        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[" + argIdx + "]) < 0) {\n" +
+		"            ev->filename_status = PATH_READ_FAILED;\n" +
+		"            ev->filename[0] = 0;\n" +
+		"            ior_stash_pending_filename(tid, ctx->args[" + argIdx + "]);\n" +
+		"        }\n" +
+		"    }\n"
+}
+
+// openNameTakeLine must precede ior_on_syscall_exit, which deletes the per-tid
+// enter-state entry the pointer is stashed in.
+func openNameTakeLine(enterConst string) string {
+	return "    __u64 pending_filename = ior_take_pending_filename(tid, " + enterConst + ");\n"
+}
+
+// openNameEmitLine must precede this handler's own ring-buffer reserve, so the
+// fixup record reaches userspace while the enter event is still pending.
+func openNameEmitLine(enterConst string) string {
+	return "    ior_emit_open_name_fixup(tid, " + enterConst + ", pending_filename);\n"
+}
+
+// TestGenerateOpenHandlersRecoverAFaultedFilename pins the generator emission
+// for both recovering kinds, and pins that no other kind pays for it.
+func TestGenerateOpenHandlersRecoverAFaultedFilename(t *testing.T) {
+	input := FormatOpenat + "\n" + FormatExitOpenat + "\n" +
+		FormatOpen + "\n" + FormatExitOpen + "\n" +
+		FormatRead + "\n" + FormatExitRead + "\n" +
+		FormatExecve + "\n" + FormatExitExecve + "\n"
+	// mq_open is the only KindMqOpen syscall; it names its fields u_name/oflag
+	// rather than filename/flags, so it is the second recovering kind and comes
+	// from the shared synthetic mq format builder.
+	out := GenerateTracepointsC(mustParseAll(t, input)) + GenerateTracepointsC(mqFormats("mq_open", 9300))
+
+	cases := []struct {
+		enter, exit, enterConst, argIdx string
+	}{
+		{"sys_enter_openat", "sys_exit_openat", "SYS_ENTER_OPENAT", "1"},
+		{"sys_enter_open", "sys_exit_open", "SYS_ENTER_OPEN", "0"},
+		{"sys_enter_mq_open", "sys_exit_mq_open", "SYS_ENTER_MQ_OPEN", "0"},
+	}
+	for _, tc := range cases {
+		enterBody := handlerBody(t, out, tc.enter)
+		if !strings.Contains(enterBody, openNameStashLine(tc.argIdx)) {
+			t.Errorf("%s does not stash the user pointer when the nofault read fails:\n%s", tc.enter, enterBody)
+		}
+		exitBody := handlerBody(t, out, tc.exit)
+		take := openNameTakeLine(tc.enterConst)
+		emit := openNameEmitLine(tc.enterConst)
+		if !strings.Contains(exitBody, take) {
+			t.Errorf("%s does not take the stashed pointer:\n%s", tc.exit, exitBody)
+		}
+		if !strings.Contains(exitBody, emit) {
+			t.Errorf("%s does not emit the fixup record:\n%s", tc.exit, exitBody)
+		}
+		// Ordering is load-bearing in both directions: the take must happen
+		// before ior_on_syscall_exit deletes the enter state, and the fixup
+		// must be reserved before this handler's own exit record so the ring
+		// buffer hands userspace the name while the enter event is still
+		// pending.
+		takeAt := strings.Index(exitBody, take)
+		exitHookAt := strings.Index(exitBody, "ior_on_syscall_exit(")
+		emitAt := strings.Index(exitBody, emit)
+		reserveAt := strings.Index(exitBody, "bpf_ringbuf_reserve(&event_map,")
+		if takeAt < 0 || exitHookAt < 0 || takeAt > exitHookAt {
+			t.Errorf("%s takes the stashed pointer after ior_on_syscall_exit deleted the enter state:\n%s", tc.exit, exitBody)
+		}
+		if emitAt < 0 || reserveAt < 0 || emitAt > reserveAt {
+			t.Errorf("%s emits the fixup after its own exit record:\n%s", tc.exit, exitBody)
+		}
+		if exitHookAt > emitAt {
+			t.Errorf("%s emits the fixup for an event ior_on_syscall_exit suppressed:\n%s", tc.exit, exitBody)
+		}
+	}
+
+	// Only the open kinds recover. read's exit is the generic ret handler and
+	// execve's enter reads a user string into a different struct, so neither
+	// may grow the recovery.
+	for _, name := range []string{"sys_exit_read", "sys_exit_execve", "sys_enter_read", "sys_enter_execve"} {
+		body := handlerBody(t, out, name)
+		if strings.Contains(body, "pending_filename") || strings.Contains(body, "ior_stash_pending_filename") {
+			t.Errorf("%s must not participate in the open filename recovery:\n%s", name, body)
+		}
+	}
+}
+
+// TestGeneratedArtifactRecoversFaultedOpenFilenames applies the same invariant
+// to the committed internal/c/generated_tracepoints.c. `mage generate` needs
+// root and a newer kernel than this host, so the artifact is spliced by hand;
+// this test is what keeps the splice honest and complete across all open and
+// named-eventfd syscalls that recover identifying strings.
+func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+
+	openEnters := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct open_event \(kind=(?:open|mq-open|open-tree)\)$`).
+		FindAllStringSubmatch(artifact, -1)
+	if len(openEnters) == 0 {
+		t.Fatal("no open-kind enter handlers in the generated artifact")
+	}
+	for _, m := range openEnters {
+		enter := m[1]
+		syscallName := strings.TrimPrefix(enter, "sys_enter_")
+		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+		enterBody := handlerBody(t, artifact, enter)
+		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[") {
+			t.Errorf("%s does not stash the user pointer when the nofault read fails", enter)
+		}
+		if strings.Contains(enterBody, "    bpf_probe_read_user_str(ev->filename") {
+			t.Errorf("%s still reads the filename without testing the return value", enter)
+		}
+		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) {
+			t.Errorf("sys_exit_%s does not take the stashed pointer", syscallName)
+		}
+		if !strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+			t.Errorf("sys_exit_%s does not emit the fixup record", syscallName)
+		}
+	}
+	recoveryEnters := make([]string, 0, len(openEnters)+2)
+	for _, match := range openEnters {
+		recoveryEnters = append(recoveryEnters, match[1])
+	}
+	recoveryEnters = append(recoveryEnters, "sys_enter_fsopen", "sys_enter_memfd_create")
+	for _, enter := range recoveryEnters[len(openEnters):] {
+		syscallName := strings.TrimPrefix(enter, "sys_enter_")
+		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+		enterBody := handlerBody(t, artifact, enter)
+		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[0]);") {
+			t.Errorf("%s does not stash its identifying string pointer", enter)
+		}
+		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
+			!strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+			t.Errorf("sys_exit_%s does not recover its identifying string", syscallName)
+		}
+	}
+
+	// Exactly the reviewed recovery pairs, nothing else: an over-broad splice would
+	// make every exit handler pay two extra map operations.
+	if got := strings.Count(artifact, "ior_take_pending_filename("); got != len(recoveryEnters) {
+		t.Errorf("%d ior_take_pending_filename call sites, want %d", got, len(recoveryEnters))
+	}
+	if got := strings.Count(artifact, "ior_emit_open_name_fixup("); got != len(recoveryEnters) {
+		t.Errorf("%d ior_emit_open_name_fixup call sites, want %d", got, len(recoveryEnters))
+	}
+	if got := strings.Count(artifact, "ior_stash_pending_filename("); got != len(recoveryEnters) {
+		t.Errorf("%d ior_stash_pending_filename call sites, want %d", got, len(recoveryEnters))
+	}
+}
+
+func TestGeneratedArtifactInitializesExtendedEventfdPayloads(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	handlers := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct eventfd_name_event`).
+		FindAllStringSubmatch(artifact, -1)
+	if len(handlers) != 2 {
+		t.Fatalf("%d named eventfd handlers in generated artifact, want 2", len(handlers))
+	}
+	for _, match := range handlers {
+		body := handlerBody(t, artifact, match[1])
+		if got := strings.Count(body, "ev->schema_version = EVENTFD_NAME_EVENT_SCHEMA_VERSION;"); got != 1 {
+			t.Errorf("%s writes the eventfd schema version %d times, want 1", match[1], got)
+		}
+		if got := strings.Count(body, "ev->filename_status = PATH_READ_NULL;"); got != 1 {
+			t.Errorf("%s initializes filename status %d times, want 1", match[1], got)
+		}
+		if got := strings.Count(body, "ev->filename[0] = 0;"); got != 2 {
+			t.Errorf("%s terminates filename %d times, want 2", match[1], got)
+		}
+		if strings.Contains(body, "__builtin_memset") {
+			t.Errorf("%s still memsets a string buffer", match[1])
+		}
+	}
+	lean := regexp.MustCompile(`(?m)^/// (sys_(?:enter|exit)_\S+) is a struct eventfd_event`).FindAllStringSubmatch(artifact, -1)
+	if len(lean) == 0 {
+		t.Fatal("no lean eventfd handlers")
+	}
+	for _, match := range lean {
+		body := handlerBody(t, artifact, match[1])
+		if strings.Contains(body, "ev->filename") || strings.Contains(body, "ev->schema_version") {
+			t.Errorf("%s touches fields absent from lean eventfd_event", match[1])
+		}
+	}
+}
+
+func TestGeneratedArtifactInitializesExtendedTwoFdPayloads(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	handlers := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct two_fd_names_event`).
+		FindAllStringSubmatch(artifact, -1)
+	if len(handlers) != 1 || handlers[0][1] != "sys_enter_move_mount" {
+		t.Fatalf("named two-fd handlers = %v, want move_mount", handlers)
+	}
+	for _, match := range handlers {
+		body := handlerBody(t, artifact, match[1])
+		if strings.Contains(body, "__builtin_memset") {
+			t.Errorf("%s still memsets a string buffer", match[1])
+		}
+		for _, field := range []string{"oldname", "newname"} {
+			if got := strings.Count(body, "ev->"+field+"[0] = 0;"); got != 2 {
+				t.Errorf("%s terminates %s %d times, want 2", match[1], field, got)
+			}
+		}
+		for _, statement := range []string{
+			"ev->oldname_status = PATH_READ_NULL;",
+			"ev->newname_status = PATH_READ_NULL;",
+			"ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;",
+		} {
+			if got := strings.Count(body, statement); got != 1 {
+				t.Errorf("%s contains %d %q statements, want 1", match[1], got, statement)
+			}
+		}
+	}
+	lean := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct two_fd_event`).FindAllStringSubmatch(artifact, -1)
+	if len(lean) == 0 {
+		t.Fatal("no lean two-fd handlers")
+	}
+	for _, match := range lean {
+		body := handlerBody(t, artifact, match[1])
+		if strings.Contains(body, "ev->oldname") || strings.Contains(body, "ev->newname") {
+			t.Errorf("%s touches fields absent from lean two_fd_event", match[1])
+		}
+	}
+}
+
+// TestOpenNameFixupHelpersAreDefinedInBPFSource pins the hand-written kernel
+// side the generated handlers call. None of it can be exercised from a unit
+// test, so the contract is asserted over the source.
+func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
+	filterC, err := readCSource("filter.c")
+	if err != nil {
+		t.Fatalf("read filter.c: %v", err)
+	}
+	for _, helper := range []string{
+		"static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr)",
+		"static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id)",
+		"static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,",
+	} {
+		if !strings.Contains(filterC, helper) {
+			t.Errorf("filter.c must define %q", helper)
+		}
+	}
+	// A stale enter-state entry belonging to a different syscall must not be
+	// allowed to graft a foreign path onto this pair.
+	if !strings.Contains(filterC, "if (!state || state->enter_trace_id != enter_trace_id)") {
+		t.Error("ior_take_pending_filename must reject an enter state from a different syscall")
+	}
+	// A still-failing re-read carries no information; submitting it would only
+	// cost a ring-buffer record.
+	if !strings.Contains(filterC, "bpf_ringbuf_discard(ev, 0);") {
+		t.Error("ior_emit_open_name_fixup must discard a fixup whose re-read failed")
+	}
+	if !strings.Contains(filterC, "ev->event_type = OPEN_NAME_FIXUP_EVENT;") {
+		t.Error("the fixup record must carry OPEN_NAME_FIXUP_EVENT")
+	}
+	emitStart := strings.Index(filterC, "static __always_inline void ior_emit_open_name_fixup(")
+	if emitStart < 0 {
+		t.Fatal("could not find ior_emit_open_name_fixup")
+	}
+	emitEnd := strings.Index(filterC[emitStart:], "\n// filter()")
+	if emitEnd < 0 {
+		t.Fatal("could not isolate ior_emit_open_name_fixup")
+	}
+	emitBody := filterC[emitStart : emitStart+emitEnd]
+	if !strings.Contains(emitBody, "struct open_name_fixup_event *ev;") ||
+		!strings.Contains(emitBody, "sizeof(struct open_name_fixup_event)") {
+		t.Error("ior_emit_open_name_fixup must reserve the dedicated compact record")
+	}
+	for _, discarded := range []string{"bpf_get_current_comm", "ev->pid", "ev->time", "ev->flags", "ev->comm"} {
+		if strings.Contains(emitBody, discarded) {
+			t.Errorf("ior_emit_open_name_fixup still populates discarded field/call %q", discarded)
+		}
+	}
+
+	mapsH, err := readCSource("maps.h")
+	if err != nil {
+		t.Fatalf("read maps.h: %v", err)
+	}
+	if !strings.Contains(mapsH, "__u64 pending_filename;") {
+		t.Error("struct syscall_enter_state must carry the stashed filename pointer")
+	}
+
+	typesH, err := readCSource("types.h")
+	if err != nil {
+		t.Fatalf("read types.h: %v", err)
+	}
+	if !strings.Contains(typesH, "#define OPEN_NAME_FIXUP_EVENT 48") {
+		t.Error("types.h must define OPEN_NAME_FIXUP_EVENT (the Go constant is generated from it)")
+	}
+	if !strings.Contains(typesH, "#define PROCESS_EXIT_EVENT 49") {
+		t.Error("types.h must define PROCESS_EXIT_EVENT (the Go constant is generated from it)")
+	}
+	structs, _, err := ParseCTypesInput(strings.NewReader(typesH))
+	if err != nil {
+		t.Fatalf("parse types.h: %v", err)
+	}
+	var fixup *CStruct
+	for i := range structs {
+		if structs[i].Name == "open_name_fixup_event" {
+			fixup = &structs[i]
+			break
+		}
+	}
+	if fixup == nil {
+		t.Fatal("types.h must define struct open_name_fixup_event")
+	}
+	wantMembers := []CMember{
+		{TypeName: "__u32", FieldName: "event_type"},
+		{TypeName: "__u32", FieldName: "trace_id"},
+		{TypeName: "__u32", FieldName: "tid"},
+		{TypeName: "char", FieldName: "filename", ArraySize: "MAX_FILENAME_LENGTH"},
+	}
+	if !reflect.DeepEqual(fixup.Members, wantMembers) {
+		t.Errorf("open_name_fixup_event members = %#v, want only %#v", fixup.Members, wantMembers)
 	}
 }

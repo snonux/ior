@@ -59,3 +59,86 @@ func TestAttachTracepointsExcludeByInclusion(t *testing.T) {
 		},
 	})
 }
+
+func TestAttachTraceFamiliesTimeOnly(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("sleep-syscalls", defaultDuration, []string{
+		"-trace-families", "Time",
+	})
+	if err != nil {
+		t.Fatalf("run scenario sleep-syscalls with trace-families=Time: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_nanosleep", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_clock_nanosleep", Comm: "ioworkload", MinCount: 1},
+	})
+}
+
+func TestAttachTraceSyscallsWithExclusion(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("open-rdonly-write", defaultDuration, []string{
+		"-trace-syscalls", "openat,write",
+		"-no-trace-syscalls", "openat",
+	})
+	if err != nil {
+		t.Fatalf("run scenario open-rdonly-write with syscall include/exclude: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_write", Comm: "ioworkload", MinCount: 1},
+	})
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_openat", Comm: "ioworkload"},
+	})
+}
+
+func TestAttachTraceKindsPidfdOnly(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("pidfd-getfd-success", defaultDuration, []string{
+		"-trace-kinds", "pidfd",
+	})
+	if err != nil {
+		t.Fatalf("run scenario pidfd-getfd-success with trace-kinds=pidfd: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_pidfd_open", Comm: "ioworkload", MinCount: 1},
+	})
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_pidfd_getfd", Comm: "ioworkload"},
+	})
+}
+
+func TestAttachTraceKindsEventfdOnly(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+
+	result, pid, err := h.RunWithIorArgs("polling-epoll", defaultDuration, []string{
+		"-trace-kinds", "eventfd",
+	})
+	if err != nil {
+		t.Fatalf("run scenario polling-epoll with trace-kinds=eventfd: %v", err)
+	}
+
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertNoUnexpectedComm(t, result, "ioworkload")
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_epoll_create1", Comm: "ioworkload", MinCount: 1},
+	})
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{Tracepoint: "enter_epoll_wait", Comm: "ioworkload"},
+	})
+}

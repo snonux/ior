@@ -15,11 +15,12 @@ func TestFilterSummaryViaPresenter(t *testing.T) {
 	filter := globalfilter.Filter{
 		ErrorsOnly: true,
 		Syscall:    &globalfilter.StringFilter{Pattern: "read"},
+		Family:     &globalfilter.StringFilter{Pattern: "Polling"},
 		PID:        &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 1234},
 		LatencyNs:  &globalfilter.NumericFilter{Op: globalfilter.OpGt, Value: 1_000_000},
 	}
 	got := presenter.FilterSummary(filter)
-	for _, want := range []string{"errors", "syscall~read", "pid=1234", "latency>1ms"} {
+	for _, want := range []string{"errors", "syscall~read", "family~Polling", "pid=1234", "latency>1ms"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("FilterSummary() = %q, missing %q", got, want)
 		}

@@ -345,22 +345,3 @@ func TestLoadFromFileCorruptDataReturnsContext(t *testing.T) {
 		t.Fatalf("Expected decode context, got %v", err)
 	}
 }
-
-func bothArraysHaveSameElements(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for _, v1 := range a {
-		found := false
-		for _, v2 := range b {
-			if v1 == v2 {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}

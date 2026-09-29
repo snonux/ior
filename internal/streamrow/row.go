@@ -15,6 +15,7 @@ type Row struct {
 	Seq        uint64
 	TimeNs     uint64
 	Syscall    string
+	Family     string
 	Comm       string
 	PID        uint32
 	TID        uint32
@@ -22,51 +23,95 @@ type Row struct {
 	DurationNs uint64
 	GapNs      uint64
 	Bytes      uint64
-	RetVal     int64
-	IsError    bool
-	FD         int32
+	// AddressSpaceBytes tracks memory-region extent for memory-management syscalls.
+	AddressSpaceBytes uint64
+	// RequestedSleepNs stores requested sleep duration metadata for sleep syscalls.
+	RequestedSleepNs int64
+	// Nfds and TimeoutNs store readiness-wait metadata. Nfds is maxevents for
+	// epoll waits. TimeoutNs is -1 for infinite and -2 for unreadable, invalid,
+	// unrepresentable, or otherwise unknown values.
+	Nfds      int32
+	TimeoutNs int64
+	RetVal    int64
+	IsError   bool
+	FD        int32
+	// EpollOp is the epoll_ctl operation as a readable token (ADD/MOD/DEL),
+	// empty for non-epoll_ctl rows. EpollTargetFD and EpollEvents hold the
+	// registered descriptor (args[2]) and requested event mask (args[3]->events)
+	// for epoll_ctl rows; both are zero when EpollOp is empty.
+	EpollOp       string
+	EpollTargetFD int32
+	EpollEvents   uint32
+	// OldName is the source/old path for rename-family (rename/renameat/
+	// renameat2) and link-family (link/linkat/symlink/symlinkat) syscalls;
+	// FileName carries the "new" path. Empty for every other syscall.
+	OldName string
 }
 
+// SyscallValue reports the syscall name.
 func (r Row) SyscallValue() string {
 	return r.Syscall
 }
 
+// FamilyValue reports the syscall family (FS, Network, ...).
+func (r Row) FamilyValue() string {
+	return r.Family
+}
+
+// CommValue reports the process command name.
 func (r Row) CommValue() string {
 	return r.Comm
 }
 
+// FileValue reports the file path, the rename destination for rename-like rows.
 func (r Row) FileValue() string {
 	return r.FileName
 }
 
+// OldFileValue reports the rename/link source path, the alternate value of
+// the file dimension. Empty for every other row; see the comment on
+// globalfilter.Candidate.OldFileValue for why Matches treats it as a second
+// legitimate `-path` value instead of each caller deciding.
+func (r Row) OldFileValue() string {
+	return r.OldName
+}
+
+// PIDValue reports the process (tgid) id.
 func (r Row) PIDValue() uint32 {
 	return r.PID
 }
 
+// TIDValue reports the thread id.
 func (r Row) TIDValue() uint32 {
 	return r.TID
 }
 
+// FDValue reports the descriptor number, UnknownFD when the row has none.
 func (r Row) FDValue() int32 {
 	return r.FD
 }
 
+// LatencyValue reports the syscall latency in nanoseconds.
 func (r Row) LatencyValue() uint64 {
 	return r.DurationNs
 }
 
+// GapValue reports the inter-syscall gap in nanoseconds.
 func (r Row) GapValue() uint64 {
 	return r.GapNs
 }
 
+// BytesValue reports the number of bytes transferred.
 func (r Row) BytesValue() uint64 {
 	return r.Bytes
 }
 
+// ReturnValue reports the syscall's return value.
 func (r Row) ReturnValue() int64 {
 	return r.RetVal
 }
 
+// ErrorValue reports whether the syscall returned an error.
 func (r Row) ErrorValue() bool {
 	return r.IsError
 }
@@ -98,25 +143,48 @@ func (s *Sequencer) Next() uint64 {
 // New converts one syscall pair into the shared row model.
 func New(seq uint64, pair *event.Pair) Row {
 	row := Row{
-		Seq:        seq,
-		TimeNs:     pair.EnterEv.GetTime(),
-		Syscall:    pair.EnterEv.GetTraceId().Name(),
-		Comm:       pair.Comm,
-		PID:        pair.EnterEv.GetPid(),
-		TID:        pair.EnterEv.GetTid(),
-		FileName:   pair.FileName(),
-		DurationNs: pair.Duration,
-		GapNs:      pair.DurationToPrev,
-		Bytes:      pair.Bytes,
-		FD:         UnknownFD,
+		Seq:               seq,
+		TimeNs:            pair.EnterEv.GetTime(),
+		Syscall:           pair.EnterEv.GetTraceId().Name(),
+		Family:            string(pair.EnterEv.GetTraceId().Family()),
+		Comm:              pair.Comm,
+		PID:               pair.EnterEv.GetPid(),
+		TID:               pair.EnterEv.GetTid(),
+		FileName:          pair.FileName(),
+		DurationNs:        pair.Duration,
+		GapNs:             pair.DurationToPrev,
+		Bytes:             pair.Bytes,
+		AddressSpaceBytes: pair.AddressSpaceBytes,
+		RequestedSleepNs:  pair.RequestedSleepNs,
+		Nfds:              pair.Nfds,
+		TimeoutNs:         pair.TimeoutNs,
+		FD:                UnknownFD,
+		// OldName carries the rename/link source path; FileName is the new path.
+		// Empty for non-rename/link syscalls (pair.Oldname is zero there).
+		OldName: pair.Oldname,
 	}
 	if fd, ok := pair.FileDescriptor(); ok {
 		row.FD = fd
 	}
 
-	if retEv, ok := pair.ExitEv.(*types.RetEvent); ok {
-		row.RetVal = retEv.Ret
-		row.IsError = retEv.Ret < 0
+	// Surface epoll_ctl control metadata when present. The Pair's FD/File still
+	// reflect the epoll instance (epfd); these fields expose the target fd and
+	// operation so consumers can see which descriptor was registered.
+	if pair.HasEpoll {
+		row.EpollOp = pair.Epoll.OpName()
+		row.EpollTargetFD = pair.Epoll.TargetFD
+		row.EpollEvents = pair.Epoll.Events
+	}
+
+	// Any exit event carrying a `ret` field surfaces the return value, not just
+	// the generic *types.RetEvent: the kind-specific exits (accept/accept4,
+	// pipe/pipe2, socketpair, eventfd/pidfd) carry one too. Matching on the
+	// event.RetCarrier interface instead of concrete types means a newly
+	// generated ret-carrying kind is covered without touching this function.
+	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok {
+		ret := retEv.GetRet()
+		row.RetVal = ret
+		row.IsError = event.IsErrnoRet(ret)
 	}
 
 	return row
@@ -138,6 +206,7 @@ func NewWarning(seq uint64, message string) Row {
 		Seq:      seq,
 		TimeNs:   now,
 		Syscall:  "warning",
+		Family:   string(types.FamilyMisc),
 		Comm:     "ior",
 		FileName: message,
 		FD:       UnknownFD,

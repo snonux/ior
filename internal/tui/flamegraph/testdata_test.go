@@ -1,7 +1,6 @@
 package flamegraph
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 
@@ -29,7 +28,7 @@ const (
 )
 
 func generateTestTrie(depth, breadthPerLevel int) *coreflamegraph.LiveTrie {
-	lt := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+	lt := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 	comms := []string{"api", "db", "worker", "cache"}
 	traceIDs := []types.TraceId{
 		types.SYS_ENTER_READ,
@@ -173,13 +172,4 @@ func approxEqualCount(got, want int) bool {
 	const tolerance = 0.2
 	diff := math.Abs(float64(got-want)) / float64(want)
 	return diff <= tolerance
-}
-
-func decodeTrieSnapshot(lt *coreflamegraph.LiveTrie) (*snapshotNode, error) {
-	payload, _ := lt.SnapshotJSON()
-	var snap snapshotNode
-	if err := json.Unmarshal(payload, &snap); err != nil {
-		return nil, err
-	}
-	return &snap, nil
 }

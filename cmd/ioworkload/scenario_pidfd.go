@@ -75,6 +75,26 @@ func pidfdGetfdFailure() error {
 	return nil
 }
 
+// pidfdSendSignal opens a pidfd for the current process and issues a
+// pidfd_send_signal liveness probe against it. Signal 0 is a special "no signal"
+// value: the kernel performs only the permission/existence checks and delivers
+// NOTHING, so targeting our own process is completely safe (no signal handler
+// runs and the process is not affected). The scenario exercises the enter
+// fd_event (pidfd at args[0]) and the exit ret_event (UNCLASSIFIED) end-to-end.
+func pidfdSendSignal() error {
+	pidfd, err := pidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		return fmt.Errorf("pidfd_open self: %w", err)
+	}
+	defer syscall.Close(pidfd)
+
+	// pidfd_send_signal(pidfd, sig=0, info=NULL, flags=0): liveness probe only.
+	if err := pidfdSendSignalRaw(pidfd, 0, 0, 0); err != nil {
+		return fmt.Errorf("pidfd_send_signal: %w", err)
+	}
+	return nil
+}
+
 func pidfdOpen(pid int, flags uintptr) (int, error) {
 	syscallNr, err := pidfdOpenSyscallNr()
 	if err != nil {
@@ -112,6 +132,30 @@ func pidfdGetfdSyscallNr() (uintptr, error) {
 	return pidfdGetfdSyscallNrForArch(runtime.GOARCH)
 }
 
+func pidfdSendSignalRaw(pidfd int, sig int, info uintptr, flags uintptr) error {
+	syscallNr, err := pidfdSendSignalSyscallNr()
+	if err != nil {
+		return err
+	}
+	_, _, errno := syscall.Syscall6(
+		syscallNr,
+		uintptr(pidfd),
+		uintptr(sig),
+		info,
+		flags,
+		0,
+		0,
+	)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func pidfdSendSignalSyscallNr() (uintptr, error) {
+	return pidfdSendSignalSyscallNrForArch(runtime.GOARCH)
+}
+
 func pidfdOpenSyscallNrForArch(arch string) (uintptr, error) {
 	// Go's syscall package does not expose pidfd constants on all toolchains.
 	switch arch {
@@ -129,5 +173,15 @@ func pidfdGetfdSyscallNrForArch(arch string) (uintptr, error) {
 		return 438, nil
 	default:
 		return 0, fmt.Errorf("pidfd_getfd syscall number not defined for GOARCH=%s", arch)
+	}
+}
+
+func pidfdSendSignalSyscallNrForArch(arch string) (uintptr, error) {
+	// Go's syscall package does not expose pidfd constants on all toolchains.
+	switch arch {
+	case "amd64", "arm64":
+		return 424, nil
+	default:
+		return 0, fmt.Errorf("pidfd_send_signal syscall number not defined for GOARCH=%s", arch)
 	}
 }

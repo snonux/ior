@@ -170,7 +170,7 @@ func TestRenderOverviewSparklineAlignedFitsSinglePanelRow(t *testing.T) {
 	panelInner := panelInnerWidth(220)
 	labelWidth := maxLabelWidth("Latency:", "Gap:", "Throughput:")
 	line := renderOverviewSparklineAligned("Latency:", []float64{0, 10, 5, 10, 0}, panelInner, labelWidth)
-	rendered := common.PanelStyle.Width(panelW).Render(line)
+	rendered := common.Current().PanelStyle.Width(panelW).Render(line)
 	if got := len(strings.Split(rendered, "\n")); got != 3 {
 		t.Fatalf("expected sparkline to fit one panel row (3 total lines with border), got %d lines", got)
 	}

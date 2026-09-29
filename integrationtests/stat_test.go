@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestStatBasic(t *testing.T) {
 	runScenario(t, "stat-basic", []ExpectedEvent{
@@ -80,33 +83,41 @@ func TestStatFaccessat(t *testing.T) {
 }
 
 func TestStatEnoent(t *testing.T) {
-	runScenario(t, "stat-enoent", []ExpectedEvent{
-		{
-			PathContains: "stat-enoent-missing.txt",
-			Tracepoint:   "enter_newstat",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "stat-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "stat-enoent-missing.txt",
+		Syscall:      "newstat",
+	}, nil)
 }
 
 func TestStatAccessEnoent(t *testing.T) {
-	runScenario(t, "stat-access-enoent", []ExpectedEvent{
+	runParquetErrorScenario(t, "stat-access-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "access-enoent-missing.txt",
+		Syscall:      "access",
+	}, nil)
+}
+
+// TestStatStatfs verifies the statfs family (statfs/fstatfs) is traced
+// end-to-end. enter_statfs is a path_event, so its record must contain the
+// file's path; enter_fstatfs is an fd_event, asserted via enter-presence.
+func TestStatStatfs(t *testing.T) {
+	runScenario(t, "stat-statfs", []ExpectedEvent{
 		{
-			PathContains: "access-enoent-missing.txt",
-			Tracepoint:   "enter_access",
+			PathContains: "statfsfile.txt",
+			Tracepoint:   "enter_statfs",
 			Comm:         "ioworkload",
 			MinCount:     1,
+		},
+		{
+			Tracepoint: "enter_fstatfs",
+			Comm:       "ioworkload",
+			MinCount:   1,
 		},
 	})
 }
 
 func TestStatFstatEbadf(t *testing.T) {
-	runScenario(t, "stat-fstat-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_newfstat",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "stat-fstat-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "newfstat",
+		FD:      ptrTo(int32(99999)),
+	}, nil)
 }

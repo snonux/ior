@@ -9,6 +9,13 @@ type kindMeta struct {
 	// enterAccepted reports whether this kind is valid for a syscall-enter tracepoint.
 	// Kinds that are exit-only (e.g. KindRet) must not appear on enter.
 	enterAccepted bool
+	// recoversFilename reports whether this enter kind stashes its user-space
+	// filename pointer when bpf_probe_read_user_str faults, so that the matching
+	// exit handler re-reads the string once the kernel has faulted the page in
+	// (see internal/c/filter.c). Only the open kinds do: they are the ones
+	// measurably losing names, and the only ones whose loss also poisons the fd
+	// table for every later read/write/close on the descriptor.
+	recoversFilename bool
 }
 
 // kindRegistry maps every known TracepointKind to its static metadata.
@@ -17,17 +24,54 @@ type kindMeta struct {
 // automatically via lookupKind.
 var kindRegistry = map[TracepointKind]kindMeta{
 	KindFd:             {structName: "fd_event", enterAccepted: true},
-	KindOpen:           {structName: "open_event", enterAccepted: true},
+	KindFdSize:         {structName: "fd_size_event", enterAccepted: true},
+	KindOpen:           {structName: "open_event", enterAccepted: true, recoversFilename: true},
+	KindMqOpen:         {structName: "open_event", enterAccepted: true, recoversFilename: true},
+	KindOpenTree:       {structName: "open_event", enterAccepted: true, recoversFilename: true},
+	KindExec:           {structName: "exec_event", enterAccepted: true},
 	KindPathname:       {structName: "path_event", enterAccepted: true},
+	KindFdPathname:     {structName: "fd_path_event", enterAccepted: true},
 	KindName:           {structName: "name_event", enterAccepted: true},
 	KindRet:            {structName: "ret_event", enterAccepted: false},
 	KindFcntl:          {structName: "fcntl_event", enterAccepted: true},
 	KindNull:           {structName: "null_event", enterAccepted: true},
 	KindDup3:           {structName: "dup3_event", enterAccepted: true},
 	KindOpenByHandleAt: {structName: "open_by_handle_at_event", enterAccepted: true},
+	KindSocket:         {structName: "socket_event", enterAccepted: true},
+	KindSocketpair:     {structName: "socketpair_event", enterAccepted: true},
+	KindAccept:         {structName: "accept_event", enterAccepted: true},
+	KindPipe:           {structName: "pipe_event", enterAccepted: true},
+	KindEventfd:        {structName: "eventfd_event", enterAccepted: true},
+	KindNamedEventfd:   {structName: "eventfd_name_event", enterAccepted: true, recoversFilename: true},
+	KindPidfd:          {structName: "eventfd_event", enterAccepted: true},
+	KindEpollCtl:       {structName: "epoll_ctl_event", enterAccepted: true},
+	KindTwoFd:          {structName: "two_fd_event", enterAccepted: true},
+	KindTwoFdNames:     {structName: "two_fd_names_event", enterAccepted: true},
+	KindPoll:           {structName: "poll_event", enterAccepted: true},
+	KindMem:            {structName: "mem_event", enterAccepted: true},
+	KindMmap:           {structName: "mmap_event", enterAccepted: true},
+	KindSleep:          {structName: "sleep_event", enterAccepted: true},
+	KindKeyctl:         {structName: "keyctl_event", enterAccepted: true},
+	KindPtrace:         {structName: "ptrace_event", enterAccepted: true},
+	KindPerfOpen:       {structName: "perf_open_event", enterAccepted: true},
+	KindSeccomp:        {structName: "null_event", enterAccepted: true},
+	KindModule:         {structName: "null_event", enterAccepted: true},
+	KindSysVId:         {structName: "null_event", enterAccepted: true},
+	KindSysVOp:         {structName: "null_event", enterAccepted: true},
+	KindProc:           {structName: "null_event", enterAccepted: true},
+	KindBpf:            {structName: "bpf_event", enterAccepted: true},
+	KindFutex:          {structName: "null_event", enterAccepted: true},
+	KindPrctl:          {structName: "null_event", enterAccepted: true},
+	KindTimerObj:       {structName: "null_event", enterAccepted: true},
 	// KindNone is intentionally absent: it represents "unclassified" and is
 	// never enter-accepted. lookupKind returns the zero kindMeta (enterAccepted=false)
 	// for any unregistered kind, so KindNone is implicitly rejected.
+}
+
+// kindRecoversFilename reports whether kind participates in the sys_exit
+// filename recovery described in internal/c/filter.c.
+func kindRecoversFilename(kind TracepointKind) bool {
+	return lookupKind(kind).recoversFilename
 }
 
 // lookupKind returns the metadata for kind. If kind is not registered (e.g.

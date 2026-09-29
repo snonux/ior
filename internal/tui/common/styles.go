@@ -2,6 +2,7 @@ package common
 
 import (
 	"image/color"
+	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
 )
@@ -42,18 +43,15 @@ func NewPalette(isDark bool) Palette {
 	}
 }
 
-var (
-	// Palette colors shared across the TUI package.
-	ColorBackground color.Color
-	ColorPanel      color.Color
-	ColorPrimary    color.Color
-	ColorAccent     color.Color
-	ColorMuted      color.Color
-	ColorText       color.Color
-	ColorDanger     color.Color
-)
+// Theme is an immutable snapshot of the palette colors and every style derived
+// from them. Theme values are never mutated after construction: ApplyPalette
+// publishes a new snapshot atomically and renderers read it through Current,
+// which makes theme switching safe while a Bubble Tea renderer goroutine is
+// rendering.
+type Theme struct {
+	// Palette colors for the active theme.
+	Palette
 
-var (
 	// ScreenStyle is the base style for full-screen models.
 	ScreenStyle lipgloss.Style
 
@@ -86,51 +84,65 @@ var (
 
 	// TableSelectedCellStyle highlights the selected cell in shared tables.
 	TableSelectedCellStyle lipgloss.Style
-)
+}
 
-// ApplyPalette updates shared colors and styles to match the provided theme.
-func ApplyPalette(isDark bool) {
+// newTheme builds an immutable theme snapshot for the given terminal mode.
+func newTheme(isDark bool) *Theme {
 	palette := NewPalette(isDark)
-	ColorBackground = palette.Background
-	ColorPanel = palette.Panel
-	ColorPrimary = palette.Primary
-	ColorAccent = palette.Accent
-	ColorMuted = palette.Muted
-	ColorText = palette.Text
-	ColorDanger = palette.Danger
+	return &Theme{
+		Palette: palette,
 
-	ScreenStyle = lipgloss.NewStyle().Foreground(ColorText)
-	HeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
-	TabActiveStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorBackground).
-		Background(ColorPrimary).
-		Padding(0, 1)
-	TabInactiveStyle = lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		Padding(0, 1)
-	PanelStyle = lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(ColorPanel).
-		Padding(0, 1)
-	HelpBarStyle = lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		BorderTop(true).
-		BorderForeground(ColorPanel)
-	HighlightStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
-	ErrorStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorDanger)
-	TableHeaderStyle = lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		BorderTop(true).
-		BorderForeground(ColorPanel)
-	TableSelectedRowStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorBackground).
-		Background(ColorPrimary)
-	TableSelectedCellStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorBackground).
-		Background(ColorAccent)
+		ScreenStyle: lipgloss.NewStyle().Foreground(palette.Text),
+		HeaderStyle: lipgloss.NewStyle().Bold(true).Foreground(palette.Primary),
+		TabActiveStyle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(palette.Background).
+			Background(palette.Primary).
+			Padding(0, 1),
+		TabInactiveStyle: lipgloss.NewStyle().
+			Foreground(palette.Muted).
+			Padding(0, 1),
+		PanelStyle: lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(palette.Panel).
+			Padding(0, 1),
+		HelpBarStyle: lipgloss.NewStyle().
+			Foreground(palette.Muted).
+			BorderTop(true).
+			BorderForeground(palette.Panel),
+		HighlightStyle: lipgloss.NewStyle().Bold(true).Foreground(palette.Accent),
+		ErrorStyle:     lipgloss.NewStyle().Bold(true).Foreground(palette.Danger),
+		TableHeaderStyle: lipgloss.NewStyle().
+			Foreground(palette.Muted).
+			BorderTop(true).
+			BorderForeground(palette.Panel),
+		TableSelectedRowStyle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(palette.Background).
+			Background(palette.Primary),
+		TableSelectedCellStyle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(palette.Background).
+			Background(palette.Accent),
+	}
+}
+
+// currentTheme holds the active immutable Theme snapshot. It is written only
+// by ApplyPalette and read by Current, both safe for concurrent use.
+var currentTheme atomic.Pointer[Theme]
+
+// Current returns the active theme snapshot. The returned value is immutable
+// and safe to use from any goroutine, including renderer goroutines. It never
+// returns nil: the default dark palette is published during package
+// initialization, before any goroutines start.
+func Current() *Theme {
+	return currentTheme.Load()
+}
+
+// ApplyPalette atomically publishes a new theme snapshot matching the provided
+// terminal mode. It is safe to call while other goroutines render.
+func ApplyPalette(isDark bool) {
+	currentTheme.Store(newTheme(isDark))
 }
 
 func init() {

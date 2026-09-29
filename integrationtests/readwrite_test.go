@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestReadwriteBasic(t *testing.T) {
 	const payloadLen = uint64(len("hello from ioworkload"))
@@ -31,7 +34,11 @@ func TestReadwriteBasic(t *testing.T) {
 }
 
 func TestReadwritePread(t *testing.T) {
-	runScenario(t, "readwrite-pread", []ExpectedEvent{
+	// pread64 returns the number of bytes read (READ_CLASSIFIED), so a
+	// successful positional read must attribute the payload byte count
+	// end-to-end, mirroring the pwrite64 byte-count assertion below.
+	const payloadLen = uint64(len("pread test data"))
+	result, _ := runScenarioResult(t, "readwrite-pread", []ExpectedEvent{
 		{
 			PathContains: "preadfile.txt",
 			Tracepoint:   "enter_pread64",
@@ -39,6 +46,11 @@ func TestReadwritePread(t *testing.T) {
 			MinCount:     1,
 		},
 	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "preadfile.txt",
+		Tracepoint:   "enter_pread64",
+		Comm:         "ioworkload",
+	}, payloadLen)
 }
 
 func TestReadwritePwrite(t *testing.T) {
@@ -55,6 +67,84 @@ func TestReadwritePwrite(t *testing.T) {
 		Tracepoint:   "enter_pwrite64",
 		Comm:         "ioworkload",
 	}, 1)
+}
+
+func TestReadwritePwritev(t *testing.T) {
+	// pwritev is the positional vectored write sibling of pwrite64/writev and is
+	// WRITE_CLASSIFIED, so a successful write must attribute the iovec total
+	// (sum of both buffers) end-to-end.
+	const payloadLen = uint64(len("pwritev ") + len("test data"))
+	result, _ := runScenarioResult(t, "readwrite-pwritev", []ExpectedEvent{
+		{
+			PathContains: "pwritevfile.txt",
+			Tracepoint:   "enter_pwritev",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "pwritevfile.txt",
+		Tracepoint:   "enter_pwritev",
+		Comm:         "ioworkload",
+	}, payloadLen)
+}
+
+func TestReadwritePwritev2(t *testing.T) {
+	// pwritev2 is the positional vectored write variant with flags; like pwritev
+	// it is WRITE_CLASSIFIED and must attribute the iovec total end-to-end.
+	const payloadLen = uint64(len("pwritev2 ") + len("test data"))
+	result, _ := runScenarioResult(t, "readwrite-pwritev2", []ExpectedEvent{
+		{
+			PathContains: "pwritev2file.txt",
+			Tracepoint:   "enter_pwritev2",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "pwritev2file.txt",
+		Tracepoint:   "enter_pwritev2",
+		Comm:         "ioworkload",
+	}, payloadLen)
+}
+
+func TestReadwritePreadv(t *testing.T) {
+	// preadv is the positional vectored read sibling of pread64/readv and is
+	// READ_CLASSIFIED, so a successful read must attribute the payload bytes
+	// end-to-end.
+	const payloadLen = uint64(len("preadv test data"))
+	result, _ := runScenarioResult(t, "readwrite-preadv", []ExpectedEvent{
+		{
+			PathContains: "preadvfile.txt",
+			Tracepoint:   "enter_preadv",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "preadvfile.txt",
+		Tracepoint:   "enter_preadv",
+		Comm:         "ioworkload",
+	}, payloadLen)
+}
+
+func TestReadwritePreadv2(t *testing.T) {
+	// preadv2 is the positional vectored read variant with flags; like preadv
+	// it is READ_CLASSIFIED and must attribute the payload bytes end-to-end.
+	const payloadLen = uint64(len("preadv2 test data"))
+	result, _ := runScenarioResult(t, "readwrite-preadv2", []ExpectedEvent{
+		{
+			PathContains: "preadv2file.txt",
+			Tracepoint:   "enter_preadv2",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "preadv2file.txt",
+		Tracepoint:   "enter_preadv2",
+		Comm:         "ioworkload",
+	}, payloadLen)
 }
 
 func TestReadwriteReadv(t *testing.T) {
@@ -173,6 +263,105 @@ func TestReadwritePwriteInvalid(t *testing.T) {
 	})
 }
 
+func TestReadwriteReadahead(t *testing.T) {
+	// readahead(2) is KindFd / UNCLASSIFIED: despite its ssize_t prototype it
+	// returns 0/-1 and transfers no bytes to userspace, so the tracer must
+	// attribute zero bytes (not misread the 0/-1 return as a byte count) while
+	// still capturing the fd (args[0]) on enter and timing the syscall.
+	result, _ := runScenarioResult(t, "readwrite-readahead", []ExpectedEvent{
+		{
+			PathContains: "readaheadfile.txt",
+			Tracepoint:   "enter_readahead",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	exp := ExpectedEvent{
+		PathContains: "readaheadfile.txt",
+		Tracepoint:   "enter_readahead",
+		Comm:         "ioworkload",
+	}
+	// UNCLASSIFIED: no byte count is attributed for a successful readahead.
+	assertEventBytesEqual(t, result, exp, 0)
+	// Timing is captured end-to-end (enter/exit paired into a duration).
+	assertEventDurationPositive(t, result, exp)
+}
+
+func TestReadwriteReadaheadEbadf(t *testing.T) {
+	// readahead on an invalid fd fails with EBADF, but ior still captures the
+	// enter_readahead tracepoint because arguments are read on syscall entry
+	// before the kernel returns the error. The UNCLASSIFIED -1 return must not
+	// be attributed as bytes.
+	runParquetErrorScenario(t, "readwrite-readahead-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "readahead",
+		FD:      ptrTo(int32(99999)),
+		Bytes:   ptrTo(uint64(0)),
+	}, nil)
+}
+
+func TestReadwriteFadvise64(t *testing.T) {
+	// fadvise64(2) is KindFd / UNCLASSIFIED: it declares a page-cache access hint
+	// and returns 0/-1 (no byte count, transfers no bytes to userspace), so the
+	// tracer must attribute zero bytes (not misread the 0/-1 return or the
+	// offset/len hint parameters as a byte count) while still capturing the fd
+	// (args[0]) on enter and timing the syscall.
+	result, _ := runScenarioResult(t, "readwrite-fadvise64", []ExpectedEvent{
+		{
+			PathContains: "fadvise64file.txt",
+			Tracepoint:   "enter_fadvise64",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	exp := ExpectedEvent{
+		PathContains: "fadvise64file.txt",
+		Tracepoint:   "enter_fadvise64",
+		Comm:         "ioworkload",
+	}
+	// UNCLASSIFIED: no byte count is attributed for a successful fadvise64.
+	assertEventBytesEqual(t, result, exp, 0)
+	// Timing is captured end-to-end (enter/exit paired into a duration).
+	assertEventDurationPositive(t, result, exp)
+}
+
+func TestReadwriteFadvise64Ebadf(t *testing.T) {
+	// fadvise64 on an invalid fd fails with EBADF, but ior still captures the
+	// enter_fadvise64 tracepoint because arguments are read on syscall entry
+	// before the kernel returns the error. The UNCLASSIFIED -1 return must not
+	// be attributed as bytes.
+	runParquetErrorScenario(t, "readwrite-fadvise64-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "fadvise64",
+		FD:      ptrTo(int32(99999)),
+		Bytes:   ptrTo(uint64(0)),
+	}, nil)
+}
+
+func TestReadwriteCachestat(t *testing.T) {
+	// cachestat(2) is KindFd / UNCLASSIFIED: it queries page-cache residency for
+	// a file and returns 0/-1 (no byte count, no I/O bytes to userspace), so the
+	// tracer must attribute zero bytes while still capturing the fd (args[0]) on
+	// enter and timing the syscall. cachestat is Linux 6.5+; the enter tracepoint
+	// fires before the kernel checks availability, so even an ENOSYS kernel would
+	// still record enter_cachestat, but this dev kernel (7.0.9) supports it fully.
+	result, _ := runScenarioResult(t, "readwrite-cachestat", []ExpectedEvent{
+		{
+			PathContains: "cachestatfile.txt",
+			Tracepoint:   "enter_cachestat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+	exp := ExpectedEvent{
+		PathContains: "cachestatfile.txt",
+		Tracepoint:   "enter_cachestat",
+		Comm:         "ioworkload",
+	}
+	// UNCLASSIFIED: no byte count is attributed for a successful cachestat.
+	assertEventBytesEqual(t, result, exp, 0)
+	// Timing is captured end-to-end (enter/exit paired into a duration).
+	assertEventDurationPositive(t, result, exp)
+}
+
 func assertEventBytesAtLeast(t *testing.T, result TestResult, exp ExpectedEvent, minBytes uint64) {
 	t.Helper()
 	var matched bool
@@ -226,5 +415,24 @@ func assertEventBytesReasonable(t *testing.T, result TestResult, exp ExpectedEve
 	}
 	if !matched {
 		t.Fatalf("expected event not found while asserting byte range: %+v", exp)
+	}
+}
+
+func assertEventDurationPositive(t *testing.T, result TestResult, exp ExpectedEvent) {
+	t.Helper()
+	var matched bool
+	var totalDuration uint64
+	for _, rec := range result.Records {
+		if !matchesExpectation(rec, exp) {
+			continue
+		}
+		matched = true
+		totalDuration += rec.Cnt.Duration
+	}
+	if !matched {
+		t.Fatalf("expected event not found while asserting duration: %+v", exp)
+	}
+	if totalDuration == 0 {
+		t.Fatalf("duration for %+v is zero", exp)
 	}
 }

@@ -26,11 +26,11 @@ func TestEngineIngestAndSnapshotIntegration(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	engine := newEngineWithClock(2, clock.Now)
 
-	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 100, types.READ_CLASSIFIED, "proc-a", 1, "/tmp/a", 100, 10, 3))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 100, types.READ_CLASSIFIED, "proc-a", 1, "/tmp/a", 100, 0, 10, 3))
 	clock.Advance(500 * time.Millisecond)
-	engine.Ingest(newEnginePair(types.SYS_ENTER_WRITE, -1, types.WRITE_CLASSIFIED, "proc-a", 1, "/tmp/a", 50, 20, 5))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_WRITE, -1, types.WRITE_CLASSIFIED, "proc-a", 1, "/tmp/a", 50, 0, 20, 5))
 	clock.Advance(500 * time.Millisecond)
-	engine.Ingest(newEnginePair(types.SYS_ENTER_COPY_FILE_RANGE, 80, types.TRANSFER_CLASSIFIED, "proc-b", 2, "/tmp/b", 20, 40, 8))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_COPY_FILE_RANGE, 80, types.TRANSFER_CLASSIFIED, "proc-b", 2, "/tmp/b", 20, 0, 40, 8))
 	clock.Advance(1 * time.Second)
 
 	snap, err := engine.Snapshot()
@@ -43,6 +43,9 @@ func TestEngineIngestAndSnapshotIntegration(t *testing.T) {
 
 	if snap.TotalSyscalls != 3 || snap.TotalErrors != 1 || snap.TotalBytes != 170 {
 		t.Fatalf("unexpected totals: syscalls=%d errors=%d bytes=%d", snap.TotalSyscalls, snap.TotalErrors, snap.TotalBytes)
+	}
+	if snap.TotalAddressSpaceBytes != 0 {
+		t.Fatalf("unexpected address-space total: %d", snap.TotalAddressSpaceBytes)
 	}
 	if snap.LatencyMeanNs != (10+20+40)/3.0 {
 		t.Fatalf("unexpected latency mean: %v", snap.LatencyMeanNs)
@@ -97,6 +100,29 @@ func TestEngineSnapshotWithNoEvents(t *testing.T) {
 	}
 }
 
+func TestEngineTracksAddressSpaceBytesSeparately(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(4000, 0)}
+	engine := newEngineWithClock(10, clock.Now)
+
+	engine.Ingest(newEnginePair(types.SYS_ENTER_MUNMAP, 0, types.UNCLASSIFIED, "proc", 1, "", 0, 4096, 10, 1))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_MREMAP, 0, types.UNCLASSIFIED, "proc", 1, "", 0, 8192, 20, 2))
+	clock.Advance(2 * time.Second)
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snap.TotalBytes != 0 {
+		t.Fatalf("TotalBytes = %d, want 0 for non-IO memory operations", snap.TotalBytes)
+	}
+	if snap.TotalAddressSpaceBytes != 12288 {
+		t.Fatalf("TotalAddressSpaceBytes = %d, want 12288", snap.TotalAddressSpaceBytes)
+	}
+	if math.Abs(snap.AddressSpaceBytesPerSec-6144.0) > 1e-9 {
+		t.Fatalf("AddressSpaceBytesPerSec = %v, want 6144", snap.AddressSpaceBytesPerSec)
+	}
+}
+
 func TestEngineTrendDetection(t *testing.T) {
 	if got := detectTrend(make([]float64, trendWindowSlots*2)); got.Direction != TrendStable {
 		t.Fatalf("expected stable for flat data, got %+v", got)
@@ -124,14 +150,83 @@ func TestEngineTrendDetection(t *testing.T) {
 	}
 }
 
-func newEnginePair(traceID types.TraceId, ret int64, retType uint32, comm string, pid uint32, path string, bytes uint64, duration uint64, gap uint64) *event.Pair {
+func newEnginePair(traceID types.TraceId, ret int64, retType uint32, comm string, pid uint32, path string, bytes uint64, addressSpaceBytes uint64, duration uint64, gap uint64) *event.Pair {
 	return &event.Pair{
-		EnterEv:        &types.RetEvent{TraceId: traceID, Pid: pid},
-		ExitEv:         &types.RetEvent{TraceId: traceID, Pid: pid, Ret: ret, RetType: retType},
-		Comm:           comm,
-		Duration:       duration,
-		DurationToPrev: gap,
-		Bytes:          bytes,
-		File:           file.NewFd(3, path, -1),
+		EnterEv:           &types.RetEvent{TraceId: traceID, Pid: pid},
+		ExitEv:            &types.RetEvent{TraceId: traceID, Pid: pid, Ret: ret, RetType: retType},
+		Comm:              comm,
+		Duration:          duration,
+		DurationToPrev:    gap,
+		Bytes:             bytes,
+		AddressSpaceBytes: addressSpaceBytes,
+		File:              file.NewFd(3, path, -1),
+	}
+}
+
+// TestEngineCountsErrorsForKindSpecificExits guards the ret-carrier fix at the
+// aggregation layer: accept/pipe/socketpair/eventfd exits decode into their own
+// event structs, not *types.RetEvent, so a failing call used to be invisible to
+// both the global error total and the per-syscall Errors column.
+func TestEngineCountsErrorsForKindSpecificExits(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	engine := newEngineWithClock(4, clock.Now)
+
+	exits := []struct {
+		traceID types.TraceId
+		exit    event.Event
+	}{
+		{types.SYS_ENTER_ACCEPT, &types.AcceptEvent{TraceId: types.SYS_EXIT_ACCEPT, Ret: -11}},
+		{types.SYS_ENTER_PIPE, &types.PipeEvent{TraceId: types.SYS_EXIT_PIPE, Ret: -24}},
+		{types.SYS_ENTER_SOCKETPAIR, &types.SocketpairEvent{TraceId: types.SYS_EXIT_SOCKETPAIR, Ret: -93}},
+		{types.SYS_ENTER_EVENTFD2, &types.EventfdEvent{TraceId: types.SYS_EXIT_EVENTFD2, Ret: -24}},
+	}
+	for _, tc := range exits {
+		engine.Ingest(&event.Pair{
+			EnterEv:  &types.NullEvent{TraceId: tc.traceID, Pid: 4242},
+			ExitEv:   tc.exit,
+			Comm:     "srv",
+			Duration: 1000,
+			File:     file.NewFd(3, "socket:accepted", -1),
+		})
+		clock.Advance(100 * time.Millisecond)
+	}
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+	if snap.TotalErrors != uint64(len(exits)) {
+		t.Fatalf("TotalErrors = %d, want %d", snap.TotalErrors, len(exits))
+	}
+
+	seen := make(map[types.TraceId]uint64, len(exits))
+	for _, row := range snap.Syscalls() {
+		seen[row.TraceID] = row.Errors
+	}
+	for _, tc := range exits {
+		if got := seen[tc.traceID]; got != 1 {
+			t.Errorf("syscall %s Errors = %d, want 1", tc.traceID.Name(), got)
+		}
+	}
+}
+
+func TestEngineCountsOnlyTheErrnoReturnWindowAsErrors(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	engine := newEngineWithClock(4, clock.Now)
+	for _, ret := range []int64{-4096, -4095} {
+		engine.Ingest(newEnginePair(types.SYS_ENTER_MMAP, ret, types.UNCLASSIFIED,
+			"mapper", 1, "", 0, 0, 10, 0))
+	}
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.TotalErrors != 1 {
+		t.Fatalf("TotalErrors = %d, want 1", snap.TotalErrors)
+	}
+	rows := snap.Syscalls()
+	if len(rows) != 1 || rows[0].Errors != 1 {
+		t.Fatalf("syscall rows = %+v, want one mmap row with one error", rows)
 	}
 }

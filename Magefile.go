@@ -5,7 +5,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"go/format"
@@ -17,33 +16,37 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 
+	"ior/internal/gatecmd"
 	"ior/internal/generate"
 )
 
+// Build-input and output paths used by the Mage targets. Exported names
+// (VMLINUXPath) are referenced by targets that regenerate vmlinux.h.
 const (
-	clickhouseImage      = "clickhouse/clickhouse-server:latest"
-	binaryName           = "ior"
-	workloadBinaryName   = "ioworkload"
-	defaultLibbpfgoPath  = "../libbpfgo"
-	libbpfgoRequiredTag  = "v0.9.2-libbpf-1.5.1"
-	bpfSourcePath        = "internal/c/ior.bpf.c"
-	bpfObjectPath        = "internal/c/ior.bpf.o"
-	bpfOutputPath        = "ior.bpf.o"
-	workloadSourcePath   = "./cmd/ioworkload"
-	tracepointsCPath     = "internal/c/generated_tracepoints.c"
-	tracepointsResult    = "internal/c/generated_tracepoints_result.txt"
-	tracepointsResultNew = "internal/c/generated_tracepoints_result.txt.new"
-	tracepointsGoPath    = "internal/tracepoints/generated_tracepoints.go"
-	typesGoPath          = "internal/types/generated_types.go"
-	dockerBuildScript    = "scripts/build-with-docker.sh"
-	dockerBuildScriptEl8 = "scripts/build-with-docker-el8.sh"
-	typesHeaderPath      = "internal/c/types.h"
+	clickhouseImage           = "clickhouse/clickhouse-server:latest"
+	binaryName                = "ior"
+	workloadBinaryName        = "ioworkload"
+	integrationTestBinaryName = "integrationtests.test"
+	defaultLibbpfgoPath       = "../libbpfgo"
+	libbpfgoRequiredTag       = "v0.9.2-libbpf-1.5.1"
+	bpfSourcePath             = "internal/c/ior.bpf.c"
+	bpfObjectPath             = "internal/c/ior.bpf.o"
+	bpfOutputPath             = "ior.bpf.o"
+	workloadSourcePath        = "./cmd/ioworkload"
+	tracepointsCPath          = "internal/c/generated_tracepoints.c"
+	tracepointsResult         = "internal/c/generated_tracepoints_result.txt"
+	tracepointsResultNew      = "internal/c/generated_tracepoints_result.txt.new"
+	tracepointsGoPath         = "internal/tracepoints/generated_tracepoints.go"
+	typesGoPath               = "internal/types/generated_types.go"
+	dockerBuildScript         = "scripts/build-with-docker.sh"
+	dockerBuildScriptEl8      = "scripts/build-with-docker-el8.sh"
+	typesHeaderPath           = "internal/c/types.h"
+	// VMLINUXPath is the BTF-dumped kernel header the BPF object builds against.
 	VMLINUXPath          = "internal/c/vmlinux.h"
 	benchProfilesDir     = "bench-profiles"
 	integrationParallel  = "INTEGRATION_PARALLEL"
@@ -110,10 +113,10 @@ func BpfExport() error {
 // Test runs the full test suite.
 func Test() error {
 	mg.Deps(BpfBuild)
-	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
+	if err := run(gatecmd.CleanTestCache()); err != nil {
 		return err
 	}
-	return sh.RunWithV(goEnv(), "go", "test", "./...", "-failfast", "-timeout=90m")
+	return run(gatecmd.TestAll())
 }
 
 // TestRace runs the full test suite with the race detector enabled.
@@ -123,6 +126,83 @@ func TestRace() error {
 		return err
 	}
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-race", "-failfast", "-timeout=90m")
+}
+
+// TestTUI runs the in-process TUI integration suite (teatest, no root needed).
+// These tests drive the whole Bubble Tea program via synthetic key presses and
+// assert on rendered frames. They are also covered by `mage test`; this target
+// is a focused convenience runner.
+func TestTUI() error {
+	mg.Deps(BpfBuild)
+	if err := sh.RunWithV(goEnv(), "go", "clean", "-testcache"); err != nil {
+		return err
+	}
+	return sh.RunWithV(goEnv(), "go", "test", "./internal/",
+		"-run", "TestTUIIntegration", "-count=1", "-v")
+}
+
+// Vet runs go vet over the module with the libbpfgo cgo environment.
+//
+// It is split into two passes so the single unsafeptr exemption stays scoped
+// to one package instead of disabling the analyzer module-wide; see
+// gatecmd.VetUnsafeptrExempt for why that package needs it.
+func Vet() error {
+	mg.Deps(BpfBuild)
+	packages, err := vetPackagesExcept(gatecmd.VetUnsafeptrExempt)
+	if err != nil {
+		return err
+	}
+	if err := run(gatecmd.VetAll(packages)); err != nil {
+		return err
+	}
+	return run(gatecmd.VetUnsafeptrExempted())
+}
+
+// vetPackagesExcept lists the module's packages minus the excluded one.
+func vetPackagesExcept(excluded string) ([]string, error) {
+	out, err := sh.OutputWith(goEnv(), "go", "list", "./...")
+	if err != nil {
+		return nil, fmt.Errorf("go list: %w", err)
+	}
+	var packages []string
+	for _, pkg := range strings.Fields(out) {
+		if pkg != excluded {
+			packages = append(packages, pkg)
+		}
+	}
+	if len(packages) == 0 {
+		return nil, fmt.Errorf("go list returned no packages besides %s", excluded)
+	}
+	return packages, nil
+}
+
+// Lint runs golangci-lint over the module with the libbpfgo cgo environment.
+//
+// The configured linters are errcheck and staticcheck's SA checks; see
+// .golangci.yml for what is enabled and which exclusions apply. As with Vet,
+// the cgo environment is the reason this has to go through Mage: every package
+// that imports libbpfgo fails to typecheck without it, so a bare
+// `golangci-lint run` reports "bpf/bpf.h: No such file or directory" instead of
+// any real finding. BpfBuild is a dependency because internal/bpfembed.go
+// embeds c/ior.bpf.o, which must exist before the package can be built.
+//
+// It runs with the mage build tag so Magefile.go itself is covered.
+func Lint() error {
+	mg.Deps(BpfBuild)
+	if _, err := exec.LookPath(gatecmd.GolangciLintBin); err != nil {
+		return fmt.Errorf("%s not on PATH; install it with `go install %s`", gatecmd.GolangciLintBin, gatecmd.GolangciLintPkg)
+	}
+	if err := run(gatecmd.LintConfigVerify()); err != nil {
+		return err
+	}
+	return run(gatecmd.LintRun())
+}
+
+// run executes one gate command line with the libbpfgo cgo environment. The
+// argv comes from internal/gatecmd so it is ordinary data that
+// internal/buildgate can both assert on and execute; see that package for why.
+func run(argv []string) error {
+	return sh.RunWithV(goEnv(), argv[0], argv[1:]...)
 }
 
 // Fmt runs gofmt -w on all Go source files to enforce canonical formatting.
@@ -204,13 +284,15 @@ func TestWithName() error {
 		fmt.Println("Running integration test", testName, "(requires root)...")
 		env := goEnv()
 		forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "PATH", "GOTOOLCHAIN")
-		return runGoTestWithProgress(env,
-			"./integrationtests/...",
-			"-run", "^"+testName+"$",
-			"-failfast",
-			"-timeout=30m",
-			"-count=1",
-			"-json",
+		if err := compileIntegrationTestBinary(env); err != nil {
+			return err
+		}
+		return runIntegrationTestBinary(env,
+			"-test.run", "^"+testName+"$",
+			"-test.failfast",
+			"-test.timeout=30m",
+			"-test.count=1",
+			"-test.v",
 		)
 	}
 	return sh.RunWithV(goEnv(), "go", "test", "./...", "-run", "^"+testName+"$", "-v", "-failfast")
@@ -226,7 +308,8 @@ func Bench() error {
 	return BenchFlame()
 }
 
-// PrReview runs a reproducible baseline for Codex-assisted PR reviews.
+// PrReview runs a reproducible baseline for Codex-assisted PR reviews. It
+// inherits the vet and lint gates from World.
 func PrReview() error {
 	fmt.Println("Running PR review baseline: world + benchProf")
 	if err := World(); err != nil {
@@ -350,12 +433,13 @@ func BenchCompare() error {
 }
 
 // Generate regenerates all generated files.
-// If the environment variable IOR_FORCE_GENERATE=1 is set,
+// If the environment variable IOR_FORCE_GENERATE is set to 1/yes/true,
 // the C tracepoint generation will be forced even when it would cause a diff.
+// Explicit falsey values (0/no/false) keep the diff-gated default; unknown
+// values are ignored with a warning.
 func Generate() error {
 	fmt.Println("Generating tracepoint and type artifacts...")
-	forceEnv := os.Getenv("IOR_FORCE_GENERATE")
-	force := strings.EqualFold(forceEnv, "1") || strings.EqualFold(forceEnv, "yes") || strings.EqualFold(forceEnv, "true")
+	force := forceGenerateFromEnv()
 	if force {
 		fmt.Println("Force generation enabled – ignoring diff checks.")
 		mg.SerialDeps(GenerateTracepointsCForce, GenerateTracepointsGo, GenerateTypesGo)
@@ -364,6 +448,24 @@ func Generate() error {
 	}
 	fmt.Println("Generation complete.")
 	return nil
+}
+
+// forceGenerateFromEnv parses IOR_FORCE_GENERATE strictly: only 1/yes/true
+// (case-insensitive) enable forcing. Any other value — including 0/no/false —
+// keeps the default diff-gated behavior, and unknown non-empty values print a
+// warning instead of silently forcing.
+func forceGenerateFromEnv() bool {
+	switch value := strings.ToLower(strings.TrimSpace(os.Getenv("IOR_FORCE_GENERATE"))); value {
+	case "":
+		return false
+	case "1", "yes", "true":
+		return true
+	case "0", "no", "false":
+		return false
+	default:
+		fmt.Printf("Warning: ignoring unknown IOR_FORCE_GENERATE value %q (use 1/yes/true to force).\n", value)
+		return false
+	}
 }
 
 // GenerateTracepointsC regenerates the tracepoint handlers in C.
@@ -391,7 +493,14 @@ func GenerateTracepointsGo() error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", tracepointsCPath, err)
 	}
-	output, err := generate.ExtractTracepoints(strings.NewReader(string(input)))
+	kindsInput, err := os.ReadFile(tracepointsResult)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", tracepointsResult, err)
+	}
+	output, err := generate.ExtractTracepointsWithKinds(
+		strings.NewReader(string(input)),
+		strings.NewReader(string(kindsInput)),
+	)
 	if err != nil {
 		return err
 	}
@@ -451,6 +560,7 @@ func Install() error {
 }
 
 // Clean removes build artifacts.
+// internal/c/vmlinux.h is deliberately preserved (see cleanBPFArtifacts).
 func Clean() error {
 	if err := removeFilesByName(binaryName); err != nil {
 		return err
@@ -459,6 +569,9 @@ func Clean() error {
 		return err
 	}
 	if err := removeFilesByPath(bpfOutputPath); err != nil {
+		return err
+	}
+	if err := removeFilesByPath(integrationTestBinaryName); err != nil {
 		return err
 	}
 	if err := cleanBPFArtifacts(); err != nil {
@@ -480,7 +593,14 @@ func Mrproper() error {
 	return nil
 }
 
-// World runs clean, generate, test, and build targets.
+// World runs clean, generate, fmtCheck, vet, lint, test, and build targets.
+//
+// FmtCheck, Vet and Lint run before the tests: they are the cheap gates
+// (FmtCheck is instant, the whole trio is seconds against ~45s of tests), so
+// a static finding fails the run without waiting for the suite. All three
+// existed as standalone targets before they were part of any gate, which is
+// exactly how their findings accumulated unnoticed: they only ran when
+// somebody remembered to run them.
 func World() error {
 	fmt.Println("World: cleaning...")
 	if err := Clean(); err != nil {
@@ -488,6 +608,18 @@ func World() error {
 	}
 	fmt.Println("World: generating...")
 	if err := Generate(); err != nil {
+		return err
+	}
+	fmt.Println("World: checking formatting...")
+	if err := FmtCheck(); err != nil {
+		return err
+	}
+	fmt.Println("World: vetting...")
+	if err := Vet(); err != nil {
+		return err
+	}
+	fmt.Println("World: linting...")
+	if err := Lint(); err != nil {
 		return err
 	}
 	fmt.Println("World: running tests...")
@@ -513,6 +645,43 @@ func IntegrationTestSerial() error {
 	return runIntegrationTests(false)
 }
 
+func compileIntegrationTestBinary(env map[string]string) error {
+	return sh.RunWithV(env, "go", "test", "-c", "./integrationtests/...", "-o", integrationTestBinaryName)
+}
+
+// runIntegrationTestBinary execs the compiled integration test binary. The
+// binary is compiled to the repo root so its absolute path matches the scoped
+// sudoers rule (/home/paul/git/ior/integrationtests.test), while the child
+// process runs with Dir=integrationtests as before. Output is wired through
+// to mage so failures are visible instead of an opaque exit status
+// (audit M12).
+func runIntegrationTestBinary(env map[string]string, args ...string) error {
+	binaryPath, err := filepath.Abs(integrationTestBinaryName)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", integrationTestBinaryName, err)
+	}
+	envList := make([]string, 0, len(env))
+	for k, v := range env {
+		envList = append(envList, k+"="+v)
+	}
+	slices.Sort(envList)
+
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Dir = "integrationtests"
+	cmd.Env = append(os.Environ(), envList...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if os.Geteuid() == 0 {
+		return cmd.Run()
+	}
+	sudoCmd := exec.Command("sudo", append([]string{"-n", "-E", binaryPath}, args...)...)
+	sudoCmd.Dir = "integrationtests"
+	sudoCmd.Env = cmd.Env
+	sudoCmd.Stdout = os.Stdout
+	sudoCmd.Stderr = os.Stderr
+	return sudoCmd.Run()
+}
+
 func runIntegrationTests(parallel bool) error {
 	mg.SerialDeps(All)
 	if err := buildWorkloadBinary(); err != nil {
@@ -522,16 +691,19 @@ func runIntegrationTests(parallel bool) error {
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN")
 
+	if err := compileIntegrationTestBinary(env); err != nil {
+		return err
+	}
+
 	timeout := "30m"
 	if !parallel {
 		timeout = "90m"
 	}
 
 	args := []string{
-		"./integrationtests/...",
-		"-failfast",
-		"-timeout=" + timeout,
-		"-count=1",
+		"-test.failfast",
+		"-test.timeout=" + timeout,
+		"-test.count=1",
 	}
 
 	if parallel {
@@ -541,13 +713,12 @@ func runIntegrationTests(parallel bool) error {
 		}
 		env[integrationParallelE] = "1"
 		fmt.Printf("Running integration tests in parallel (requires root, parallel=%d)...\n", parallelism)
-		args = append(args, "-parallel", strconv.Itoa(parallelism))
+		args = append(args, "-test.parallel", strconv.Itoa(parallelism))
 	} else {
 		fmt.Println("Running integration tests serially (requires root)...")
 	}
 
-	args = append(args, "-json")
-	return runGoTestWithProgress(env, args...)
+	return runIntegrationTestBinary(env, args...)
 }
 
 func resolveIntegrationParallelism() (int, error) {
@@ -654,7 +825,13 @@ func runFlameBenchToFile(outputFile string) error {
 }
 
 func cleanBPFArtifacts() error {
-	for _, pattern := range []string{"internal/c/*.o", VMLINUXPath} {
+	// internal/c/vmlinux.h is deliberately preserved: it is a gitignored build
+	// input recoverable only with root (ensureVMLINUX regenerates it via
+	// sudo bpftool). Deleting it in Clean/Mrproper would leave the tree
+	// unbuildable on hosts without the scoped sudoers rule (audit F6).
+	// The *.tmp-* glob also sweeps generate temp renders orphaned by a signal
+	// interrupt between render and the atomic rename.
+	for _, pattern := range []string{"internal/c/*.o", "internal/c/generated_tracepoints.c.tmp-*"} {
 		if err := removeFilesByGlob(pattern); err != nil {
 			return err
 		}
@@ -699,15 +876,78 @@ func generateTracepointsC(strict bool, toStdout bool) error {
 		return nil
 	}
 
-	// Check the result audit first so a strict diff failure leaves the
-	// committed C file untouched instead of out of sync with the Go outputs.
-	if err := writeTracepointsResult(output, strict); err != nil {
+	// Render to a temp file first and run the strict result gate BEFORE
+	// replacing the committed C file, so a failing generate (e.g. on a host
+	// whose kernel lacks newer tracepoints than the committed artifacts)
+	// leaves the working tree untouched (audit M11).
+	tmpCPath, err := writeTempRender(filepath.Dir(tracepointsCPath), filepath.Base(tracepointsCPath), output)
+	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tracepointsCPath, []byte(output), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tracepointsCPath, err)
+	defer func() {
+		_ = os.Remove(tmpCPath)
+		_ = os.Remove(tracepointsResultNew)
+	}()
+
+	if err := stageTracepointsResultGate(output, strict); err != nil {
+		return err
 	}
-	return nil
+	if err := os.Rename(tmpCPath, tracepointsCPath); err != nil {
+		return fmt.Errorf("replace %s: %w", tracepointsCPath, err)
+	}
+	return adoptTracepointsResult()
+}
+
+// writeTempRender writes content to a 0644 temp file in dir whose name starts
+// with base, so the later rename lands atomically in the target directory.
+func writeTempRender(dir, base, content string) (string, error) {
+	tmp, err := os.CreateTemp(dir, base+".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp render: %w", err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("write temp render: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("close temp render: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("chmod temp render: %w", err)
+	}
+	return tmp.Name(), nil
+}
+
+// stageTracepointsResultGate renders the .new result transient and, in strict
+// mode, fails when it would change the committed result file. The caller's
+// cleanup removes the transients; nothing else is written.
+func stageTracepointsResultGate(output string, strict bool) error {
+	result := extractTracepointReasons(output)
+	if err := os.WriteFile(tracepointsResultNew, []byte(result), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tracepointsResultNew, err)
+	}
+	if _, err := os.Stat(tracepointsResult); errors.Is(err, os.ErrNotExist) {
+		return nil // bootstrap: no committed result to gate against yet
+	} else if err != nil {
+		return fmt.Errorf("stat %s: %w", tracepointsResult, err)
+	}
+	err := sh.RunV("diff", "-u", tracepointsResult, tracepointsResultNew)
+	if err == nil || !strict {
+		return nil
+	}
+	return err
+}
+
+// adoptTracepointsResult copies the staged .new result onto the committed
+// result file and removes the transient.
+func adoptTracepointsResult() error {
+	if err := sh.RunV("cp", tracepointsResultNew, tracepointsResult); err != nil {
+		return err
+	}
+	return os.Remove(tracepointsResultNew)
 }
 
 func goEnv() map[string]string {
@@ -809,7 +1049,7 @@ func sudoOutput(cmd string, args ...string) (string, error) {
 	if os.Geteuid() == 0 {
 		return sh.Output(cmd, args...)
 	}
-	return sh.Output("sudo", append([]string{cmd}, args...)...)
+	return sh.Output("sudo", append([]string{"-n", cmd}, args...)...)
 }
 
 func sudoRunWithEnv(env map[string]string, cmd string, args ...string) error {
@@ -821,8 +1061,8 @@ func sudoRunWithEnv(env map[string]string, cmd string, args ...string) error {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	sudoArgs := make([]string, 0, 1+len(keys)+1+len(args))
-	sudoArgs = append(sudoArgs, "env")
+	sudoArgs := make([]string, 0, 2+len(keys)+1+len(args))
+	sudoArgs = append(sudoArgs, "-n", "env")
 	for _, k := range keys {
 		sudoArgs = append(sudoArgs, k+"="+env[k])
 	}
@@ -837,24 +1077,6 @@ func forwardEnv(env map[string]string, keys ...string) {
 			env[k] = v
 		}
 	}
-}
-
-func writeTracepointsResult(output string, strict bool) error {
-	result := extractTracepointReasons(output)
-	if err := os.WriteFile(tracepointsResultNew, []byte(result), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tracepointsResultNew, err)
-	}
-	if _, err := os.Stat(tracepointsResult); errors.Is(err, os.ErrNotExist) {
-		return sh.RunV("cp", tracepointsResultNew, tracepointsResult)
-	} else if err != nil {
-		return fmt.Errorf("stat %s: %w", tracepointsResult, err)
-	}
-	if err := sh.RunV("diff", "-u", tracepointsResult, tracepointsResultNew); err != nil {
-		if strict {
-			return err
-		}
-	}
-	return sh.RunV("cp", tracepointsResultNew, tracepointsResult)
 }
 
 func extractTracepointReasons(output string) string {
@@ -894,232 +1116,6 @@ func sortLinesWithLocale(lines []string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
-}
-
-type goTestEvent struct {
-	Action  string `json:"Action"`
-	Package string `json:"Package"`
-	Test    string `json:"Test"`
-	Output  string `json:"Output"`
-}
-
-// buildGoTestCmd constructs the exec.Cmd for running `go test -json` with the
-// given env vars. When not root it wraps the command with `sudo env KEY=VAL …`
-// so elevated integration tests inherit the correct CGO/LIBBPFGO environment.
-func buildGoTestCmd(env map[string]string, cmdArgs []string) *exec.Cmd {
-	if os.Geteuid() == 0 {
-		cmd := exec.Command("go", cmdArgs...)
-		cmd.Env = append(os.Environ(), envToList(env)...)
-		return cmd
-	}
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	sudoArgs := make([]string, 0, 1+len(keys)+1+len(cmdArgs))
-	sudoArgs = append(sudoArgs, "env")
-	for _, k := range keys {
-		sudoArgs = append(sudoArgs, k+"="+env[k])
-	}
-	sudoArgs = append(sudoArgs, "go")
-	sudoArgs = append(sudoArgs, cmdArgs...)
-	return exec.Command("sudo", sudoArgs...)
-}
-
-// runningTests is the set of in-flight tests, shared between the event drain
-// loop and the progress ticker goroutine.
-type runningTests struct {
-	mu    sync.Mutex
-	tests map[string]time.Time
-}
-
-func (r *runningTests) add(key string) {
-	r.mu.Lock()
-	r.tests[key] = time.Now()
-	r.mu.Unlock()
-}
-
-func (r *runningTests) remove(key string) {
-	r.mu.Lock()
-	delete(r.tests, key)
-	r.mu.Unlock()
-}
-
-func (r *runningTests) sortedNames() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	names := make([]string, 0, len(r.tests))
-	for k := range r.tests {
-		names = append(names, k)
-	}
-	slices.Sort(names)
-	return names
-}
-
-// startProgressTicker prints the set of currently-running tests every 15 s.
-// Call close(done) to stop the ticker goroutine.
-func startProgressTicker(running *runningTests, done <-chan struct{}) {
-	ticker := time.NewTicker(15 * time.Second)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				names := running.sortedNames()
-				if len(names) == 0 {
-					fmt.Println("Integration tests still running... waiting for next test event")
-					continue
-				}
-				fmt.Println("Integration tests running:", strings.Join(names, ", "))
-			}
-		}
-	}()
-}
-
-// drainTestEvents reads JSON test events from scanner, updates the running map,
-// and prints human-readable RUN/PASS/FAIL/SKIP/LOG lines.
-func drainTestEvents(scanner *bufio.Scanner, running *runningTests) {
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var ev goTestEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			fmt.Println(string(line))
-			continue
-		}
-		if ev.Test == "" {
-			continue
-		}
-		key := ev.Package + "/" + ev.Test
-		switch ev.Action {
-		case "run":
-			running.add(key)
-			fmt.Println("RUN ", key)
-		case "pass":
-			running.remove(key)
-			fmt.Println("PASS", key)
-		case "fail":
-			running.remove(key)
-			fmt.Println("FAIL", key)
-		case "skip":
-			running.remove(key)
-			fmt.Println("SKIP", key)
-		case "output":
-			msg := strings.TrimSpace(ev.Output)
-			if msg != "" && shouldPrintTestLog(msg) {
-				fmt.Println("LOG ", key, "-", msg)
-			}
-		}
-	}
-}
-
-// runGoTestWithProgress runs `go test -json` (via sudo when not root), streams
-// progress to stdout every 15 s, and returns a non-nil error on test failure.
-func runGoTestWithProgress(env map[string]string, args ...string) error {
-	cmd := buildGoTestCmd(env, append([]string{"test"}, args...))
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	// Forward stderr from the test binary so build errors are always visible.
-	// cmd.Wait closes the pipe, so it must only run after this copy finished.
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stderrDone)
-		_, _ = io.Copy(os.Stderr, stderr)
-	}()
-
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	running := &runningTests{tests: map[string]time.Time{}}
-	done := make(chan struct{})
-	startProgressTicker(running, done)
-
-	drainTestEvents(scanner, running)
-	close(done)
-
-	scanErr := scanner.Err()
-	if scanErr != nil {
-		// Keep draining so the child does not block on a full stdout pipe,
-		// then reap it below instead of leaking the process.
-		_, _ = io.Copy(io.Discard, stdout)
-	}
-	<-stderrDone
-	waitErr := cmd.Wait()
-	if scanErr != nil {
-		return scanErr
-	}
-	return waitErr
-}
-
-func envToList(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(env))
-	for k, v := range env {
-		out = append(out, k+"="+v)
-	}
-	slices.Sort(out)
-	return out
-}
-
-func shouldPrintTestLog(msg string) bool {
-	// Always keep error/failure lines.
-	if strings.Contains(msg, "--- FAIL:") ||
-		strings.Contains(msg, " FAIL ") ||
-		strings.Contains(msg, "panic:") ||
-		strings.Contains(strings.ToLower(msg), "error") ||
-		strings.Contains(strings.ToLower(msg), "expected event not found") {
-		return true
-	}
-
-	// Drop high-volume attach/debug noise from ior startup in integration tests.
-	noisePrefixes := []string{
-		"=== RUN",
-		"___",
-		"|_ _|",
-		"| |",
-		"|___",
-		"v0.0.0",
-		"libbpf:",
-		"Attaching tracepoint ",
-		"Attached prog handle_ ",
-		"Attached tracepoint",
-		"Attaching sys_",
-		"Not attaching sys_",
-		"Collecting flame graph stats",
-		"Starting flamegraph worker",
-		"Waiting for stats to be ready",
-		"Stopping event loop",
-		"Waiting for flamegraph",
-		"Worker ",
-		"Writing ",
-		"Good bye...",
-		"Statistics:",
-		"duration:",
-		"tracepoints:",
-		"syscalls:",
-		"syscalls after filter:",
-	}
-	for _, p := range noisePrefixes {
-		if strings.HasPrefix(msg, p) {
-			return false
-		}
-	}
-	return true
 }
 
 func isIntegrationTest(testName string) (bool, error) {
@@ -1202,11 +1198,15 @@ func runClickHouseQuery(dir, file, sql string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// expectedParquetColumns lists the 14 column names that the parquet schema must contain.
+// expectedParquetColumns lists the column names that the parquet schema must
+// contain. Keep in lockstep with parquet.Record (internal/parquet/schema.go).
 var expectedParquetColumns = []string{
 	"seq", "time_ns", "gap_ns", "latency_ns", "comm",
-	"pid", "tid", "syscall", "fd", "ret",
-	"bytes", "file", "is_error", "filter_epoch",
+	"pid", "tid", "syscall", "family", "fd", "ret",
+	"bytes", "address_space_bytes", "requested_sleep_ns",
+	"nfds", "timeout_ns",
+	"file", "old_file", "is_error", "filter_epoch",
+	"epoll_op", "epoll_target_fd", "epoll_events",
 }
 
 // parquetSchemaCheck verifies that all expectedParquetColumns appear in the

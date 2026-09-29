@@ -1,9 +1,12 @@
 package eventstream
 
 import (
+	"bytes"
+	"encoding/csv"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -196,6 +199,49 @@ func TestExportRowsToCSVPathTraversal(t *testing.T) {
 	_ = traversal // silence unused-variable warning
 }
 
+func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
+	var buf bytes.Buffer
+	rows := []StreamEvent{{
+		Seq:              7,
+		TimeNs:           100,
+		GapNs:            3,
+		DurationNs:       5,
+		Comm:             "worker",
+		PID:              10,
+		TID:              11,
+		Syscall:          "socketpair",
+		FD:               4,
+		RetVal:           0,
+		Bytes:            0,
+		FileName:         "/tmp/sock",
+		IsError:          false,
+		Family:           "Network",
+		RequestedSleepNs: 4_200_000,
+		Nfds:             8,
+		TimeoutNs:        -1,
+	}}
+	fail := func(err error) (string, error) { return "", err }
+
+	if err := writeStreamCSV(csv.NewWriter(&buf), rows, fail); err != nil {
+		t.Fatalf("writeStreamCSV() error = %v", err)
+	}
+
+	records, err := csv.NewReader(bytes.NewReader(buf.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("read CSV: %v", err)
+	}
+	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
+	if !reflect.DeepEqual(records[0], wantHeader) {
+		t.Fatalf("header = %#v, want %#v", records[0], wantHeader)
+	}
+	if records[1][8] != "4" || records[1][12] != "false" || records[1][13] != "Network" || records[1][14] != "4200000" {
+		t.Fatalf("family should be appended without shifting legacy columns, got %#v", records[1])
+	}
+	if records[1][15] != "8" || records[1][16] != "-1" {
+		t.Fatalf("poll metadata = %q/%q, want 8/-1", records[1][15], records[1][16])
+	}
+}
+
 // TestShellSplitVariousCases covers the tokenizer with a table-driven approach.
 func TestShellSplitVariousCases(t *testing.T) {
 	cases := []struct {
@@ -232,5 +278,47 @@ func TestShellSplitVariousCases(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("shellSplit(%q): got %#v, want %#v", tc.input, got, tc.want)
 		}
+	}
+}
+
+// TestExportSnapshotMatchesRenameOnEitherName guards the export half of the
+// either-name contract. The export command path (ExportSourceSnapshotToCSV,
+// the `E` path) filters the
+// source snapshot itself rather than reusing m.filtered, so it needs its own
+// regression test: without one, reverting it to plain Matches leaves the whole
+// package green while the exported CSV silently loses rename rows that the
+// Stream tab is showing.
+func TestExportSnapshotMatchesRenameOnEitherName(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{
+		Seq:      1,
+		Syscall:  "renameat2",
+		Comm:     "mv",
+		FileName: "/tmp/new.txt",
+		OldName:  "/tmp/old.txt",
+	})
+	rb.Push(StreamEvent{
+		Seq:      2,
+		Syscall:  "openat",
+		Comm:     "cat",
+		FileName: "/tmp/unrelated.txt",
+	})
+
+	dir := t.TempDir()
+	path, err := exportSnapshotToCSV(rb, Filter{File: &StringFilter{Pattern: "old.txt"}}, dir, "either-name.csv")
+	if err != nil {
+		t.Fatalf("exportSnapshotToCSV: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read exported csv: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "renameat2") {
+		t.Fatalf("a rename matched on its oldname must be exported, got:\n%s", got)
+	}
+	if strings.Contains(got, "openat") {
+		t.Fatalf("the export must not include rows the filter rejects, got:\n%s", got)
 	}
 }

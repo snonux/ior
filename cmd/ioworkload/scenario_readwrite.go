@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // readwriteBasic opens a file, writes data, seeks to start, reads it back.
@@ -65,6 +67,103 @@ func readwritePread() error {
 	return nil
 }
 
+// readwritePreadv opens a file, writes data, then reads it back via preadv
+// (positional vectored read). preadv returns the number of bytes read and is
+// READ_CLASSIFIED, so the scenario reads a known payload to validate
+// end-to-end byte attribution for the positional vectored read variant.
+func readwritePreadv() error {
+	dir, cleanup, err := makeTempDir("readwrite-preadv")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "preadvfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	data := []byte("preadv test data")
+	if _, err := syscall.Write(fd, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	buf1 := make([]byte, 6)
+	buf2 := make([]byte, 10)
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	// preadv(fd, iov, iovcnt, offset) reads at the given offset (0) without
+	// changing the file position.
+	_, _, errno := syscall.Syscall6(syscall.SYS_PREADV, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("preadv: %w", errno)
+	}
+	return nil
+}
+
+// readwritePreadv2 opens a file, writes data, then reads it back via preadv2
+// (positional vectored read with flags). Like preadv it returns the bytes read
+// and is READ_CLASSIFIED; the scenario reads a known payload to validate
+// end-to-end byte attribution.
+func readwritePreadv2() error {
+	dir, cleanup, err := makeTempDir("readwrite-preadv2")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "preadv2file.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	data := []byte("preadv2 test data")
+	if _, err := syscall.Write(fd, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	buf1 := make([]byte, 7)
+	buf2 := make([]byte, 10)
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	nr, err := preadv2SyscallNr(runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	// preadv2(fd, iov, iovcnt, pos_l, pos_h, flags): offset 0, no flags.
+	_, _, errno := syscall.Syscall6(nr, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("preadv2: %w", errno)
+	}
+	return nil
+}
+
+// preadv2SyscallNr returns the preadv2(2) syscall number for the given GOARCH.
+// Go's syscall package lacks a SYS_PREADV2 constant, so the architecture
+// numbers are provided explicitly (matching securitySyscallNumbers' pattern).
+func preadv2SyscallNr(arch string) (uintptr, error) {
+	switch arch {
+	case "amd64":
+		return 327, nil
+	case "arm64":
+		return 286, nil
+	default:
+		return 0, fmt.Errorf("preadv2 syscall number not defined for GOARCH=%s", arch)
+	}
+}
+
 // readwritePwrite opens a file and writes data via pwrite64.
 func readwritePwrite() error {
 	dir, cleanup, err := makeTempDir("readwrite-pwrite")
@@ -84,6 +183,93 @@ func readwritePwrite() error {
 		return fmt.Errorf("pwrite: %w", err)
 	}
 	return nil
+}
+
+// readwritePwritev opens a file and writes data via pwritev (positional
+// vectored write). pwritev returns the number of bytes written and is
+// WRITE_CLASSIFIED, so the scenario writes a known iovec total to validate
+// end-to-end byte attribution for the positional vectored write variant.
+func readwritePwritev() error {
+	dir, cleanup, err := makeTempDir("readwrite-pwritev")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "pwritevfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	buf1 := []byte("pwritev ")
+	buf2 := []byte("test data")
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	// pwritev(fd, iov, iovcnt, offset) writes at the given offset (0) without
+	// changing the file position.
+	_, _, errno := syscall.Syscall6(syscall.SYS_PWRITEV, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("pwritev: %w", errno)
+	}
+	return nil
+}
+
+// readwritePwritev2 opens a file and writes data via pwritev2 (positional
+// vectored write with flags). Like pwritev it returns the bytes written and is
+// WRITE_CLASSIFIED; the scenario writes a known iovec total to validate
+// end-to-end byte attribution.
+func readwritePwritev2() error {
+	dir, cleanup, err := makeTempDir("readwrite-pwritev2")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "pwritev2file.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	buf1 := []byte("pwritev2 ")
+	buf2 := []byte("test data")
+	iovs := []syscall.Iovec{
+		{Base: &buf1[0], Len: uint64(len(buf1))},
+		{Base: &buf2[0], Len: uint64(len(buf2))},
+	}
+	nr, err := pwritev2SyscallNr(runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	// pwritev2(fd, iov, iovcnt, pos_l, pos_h, flags): offset 0, no flags.
+	_, _, errno := syscall.Syscall6(nr, uintptr(fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)), 0, 0, 0)
+	runtime.KeepAlive(buf1)
+	runtime.KeepAlive(buf2)
+	if errno != 0 {
+		return fmt.Errorf("pwritev2: %w", errno)
+	}
+	return nil
+}
+
+// pwritev2SyscallNr returns the pwritev2(2) syscall number for the given GOARCH.
+// Go's syscall package lacks a SYS_PWRITEV2 constant, so the architecture
+// numbers are provided explicitly (mirroring preadv2SyscallNr).
+func pwritev2SyscallNr(arch string) (uintptr, error) {
+	switch arch {
+	case "amd64":
+		return 328, nil
+	case "arm64":
+		return 287, nil
+	default:
+		return 0, fmt.Errorf("pwritev2 syscall number not defined for GOARCH=%s", arch)
+	}
 }
 
 // readwriteReadv opens a file, writes data, then reads it back via readv.
@@ -150,6 +336,165 @@ func readwriteWritev() error {
 	runtime.KeepAlive(buf2)
 	if errno != 0 {
 		return fmt.Errorf("writev: %w", errno)
+	}
+	return nil
+}
+
+// readwriteReadahead opens a file, writes data, then calls readahead(2) on it.
+// readahead(fd, offset, count) initiates non-blocking readahead so subsequent
+// reads are served from the page cache. Despite its ssize_t prototype it returns
+// 0 on success / -1 on error (it does NOT return a byte count and transfers no
+// bytes to userspace), so ior classifies it KindFd / UNCLASSIFIED. The scenario
+// exercises the enter fd_event (fd at args[0]) and the exit ret_event end-to-end.
+func readwriteReadahead() error {
+	dir, cleanup, err := makeTempDir("readwrite-readahead")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "readaheadfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("readahead test data")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	// readahead(fd, offset=0, count=4096): prime the page cache for the file.
+	_, _, errno := syscall.Syscall(syscall.SYS_READAHEAD, uintptr(fd), 0, 4096)
+	if errno != 0 {
+		return fmt.Errorf("readahead: %w", errno)
+	}
+	return nil
+}
+
+// readwriteReadaheadEbadf calls readahead(2) on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_readahead tracepoint
+// because arguments are read on syscall entry before the kernel returns an error.
+func readwriteReadaheadEbadf() error {
+	for i := 0; i < 5; i++ {
+		_, _, errno := syscall.Syscall(syscall.SYS_READAHEAD, 99999, 0, 4096)
+		if errno == 0 {
+			return fmt.Errorf("expected EBADF, but readahead succeeded")
+		}
+	}
+	return nil
+}
+
+// readwriteFadvise64 opens a file, writes data, then calls fadvise64(2) on it.
+// fadvise64(fd, offset, len, advice) declares an access-pattern hint for the
+// file's page cache; offset=0/len=0 means "the whole file". It returns 0 on
+// success / -1 on error and transfers NO bytes to userspace, so ior classifies
+// it KindFd / UNCLASSIFIED (offset/len are hint parameters, not bytes moved).
+// The scenario exercises the enter fd_event (fd at args[0]) and the exit
+// ret_event end-to-end. unix.Fadvise wraps the per-arch fadvise64 syscall.
+func readwriteFadvise64() error {
+	dir, cleanup, err := makeTempDir("readwrite-fadvise64")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "fadvise64file.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("fadvise64 test data")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	// fadvise64(fd, offset=0, len=0, FADV_NORMAL): hint over the whole file.
+	if err := unix.Fadvise(fd, 0, 0, unix.FADV_NORMAL); err != nil {
+		return fmt.Errorf("fadvise64: %w", err)
+	}
+	return nil
+}
+
+// readwriteFadvise64Ebadf calls fadvise64(2) on an invalid fd.
+// The syscall fails with EBADF, but ior captures the enter_fadvise64 tracepoint
+// because arguments are read on syscall entry before the kernel returns an error.
+func readwriteFadvise64Ebadf() error {
+	for i := 0; i < 5; i++ {
+		if err := unix.Fadvise(99999, 0, 0, unix.FADV_NORMAL); err == nil {
+			return fmt.Errorf("expected EBADF, but fadvise64 succeeded")
+		}
+	}
+	return nil
+}
+
+// cachestatRange mirrors the kernel's struct cachestat_range, the second
+// cachestat(2) argument: { __u64 off; __u64 len; }. off=0/len=0 means "the
+// whole file".
+type cachestatRange struct {
+	off uint64
+	len uint64
+}
+
+// cachestatResult mirrors the kernel's struct cachestat output, the third
+// cachestat(2) argument. The kernel fills it in; the scenario only needs to
+// hand the kernel a correctly-sized buffer, so the fields are not inspected.
+type cachestatResult struct {
+	nrCache           uint64
+	nrDirty           uint64
+	nrWriteback       uint64
+	nrEvicted         uint64
+	nrRecentlyEvicted uint64
+}
+
+// readwriteCachestat opens a file, writes data (so the file has pages in the
+// page cache), then queries the cache residency of the whole file via
+// cachestat(2). cachestat has no glibc/unix wrapper, so it is issued as a raw
+// syscall: cachestat(fd, &cachestat_range{0,0}, &cachestat, flags=0). It returns
+// 0 on success / -1 on error and transfers no I/O bytes to userspace, so ior
+// classifies it KindFd / UNCLASSIFIED. The scenario exercises the enter fd_event
+// (fd at args[0]) and the exit ret_event end-to-end. cachestat is Linux 6.5+;
+// ENOSYS on older kernels is tolerated so the workload stays portable.
+func readwriteCachestat() error {
+	dir, cleanup, err := makeTempDir("readwrite-cachestat")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	path := filepath.Join(dir, "cachestatfile.txt")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if _, err := syscall.Write(fd, []byte("cachestat test data")); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	// cachestat(fd, &range{off:0,len:0}=whole file, &cstat output, flags=0).
+	cr := cachestatRange{off: 0, len: 0}
+	var cs cachestatResult
+	_, _, errno := syscall.Syscall6(
+		unix.SYS_CACHESTAT,
+		uintptr(fd),
+		uintptr(unsafe.Pointer(&cr)),
+		uintptr(unsafe.Pointer(&cs)),
+		0, // flags must be 0
+		0,
+		0,
+	)
+	runtime.KeepAlive(cr)
+	runtime.KeepAlive(cs)
+	if errno == syscall.ENOSYS {
+		// Kernel < 6.5: cachestat is unavailable. Tolerate gracefully so the
+		// scenario does not fail on older portable targets.
+		return nil
+	}
+	if errno != 0 {
+		return fmt.Errorf("cachestat: %w", errno)
 	}
 	return nil
 }

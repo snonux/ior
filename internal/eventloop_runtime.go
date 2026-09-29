@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"time"
 
@@ -11,39 +12,151 @@ import (
 	"ior/internal/types"
 )
 
+// logStatus prints a human-facing status line to stderr, so stdout carries
+// only machine-readable output (the CSV header and rows in -plain mode). It is
+// the fallback sink for notifyStatus and notifyWarningOrLog; lifecycle lines
+// go through notifyStatus so TUI mode can silence them.
+func logStatus(args ...any) {
+	_, _ = fmt.Fprintln(os.Stderr, args...)
+}
+
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
 	defer e.shutdownCommResolver()
+	stopAggregateLoop := e.startAggregateDrainLoop(ctx)
+	defer stopAggregateLoop()
+	stopDropMonitor := e.startRingbufDropMonitor(ctx)
+	defer stopDropMonitor()
 
 	if e.cfg.pprofEnable {
-		fmt.Println("Profiling, press Ctrl+C to stop")
+		e.notifyStatus("Profiling, press Ctrl+C to stop")
 	}
 	if e.cfg.plainMode && !e.cfg.pprofEnable {
 		fmt.Println(event.EventStreamHeader)
 	}
+	e.flushPendingWarnings()
 
 	e.startTime = time.Now()
 	// emit() already handles a nil printCb safely, but guard here so that
 	// hot-path event emission never pays for a nil check inside the loop.
 	if e.printCb == nil {
-		e.printCb = func(ep *event.Pair) { ep.Recycle() }
+		e.SetPrintCallback(func(ep *event.Pair) { ep.Recycle() })
 	}
 	e.initRawHandlers()
-	// Seed here rather than in newEventLoop: seeding can start the comm lookup
-	// workers, which report failures via warningCb, and callers configure
-	// warningCb between construction and run.
-	e.seedTrackedPidComm()
-	if e.cfg.synchronousRawProcessing {
-		e.runSynchronously(ctx, rawCh)
-		return
-	}
-	for ep := range e.events(ctx, rawCh) {
-		e.emit(ep)
-		e.numSyscallsAfterFilter++
-	}
+	e.processRawEvents(ctx, rawCh)
 }
 
-func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
+func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
+	if e.aggregateSrc == nil || e.aggregateSink == nil {
+		return func() {}
+	}
+
+	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateIngestTraceIDs, e.Filter)
+	return drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
+}
+
+// startRingbufDropMonitor polls the kernel-side ring-buffer drop counter for
+// the lifetime of the run. Both stop paths (ctx cancellation and the deferred
+// stop) take a final reading before stats() is unblocked by close(e.done), so
+// the reported total covers the whole run.
+func (e *eventLoop) startRingbufDropMonitor(ctx context.Context) func() {
+	if e.dropSrc == nil {
+		return func() {}
+	}
+	monitor := newRingbufDropMonitor(e.dropSrc)
+	return monitor.Start(ctx, e.cfg.aggregateDrainEvery, e.handleRingbufDropResult)
+}
+
+// handleRingbufDropResult records the running drop total and raises a warning
+// for every interval that lost events, so backpressure shows up live in the
+// TUI stream (and in -plain runs via the end-of-run statistics).
+func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
+	if result.warning != "" {
+		// The counter could not be read, so the run total is not "unchanged"
+		// - it is unknown. Record that so stats() stops asserting the last
+		// reading (0, for a run whose first read already failed) as fact, and
+		// surface the failure in every mode: a headless run that only called
+		// notifyWarning here learnt nothing at all, which is precisely the
+		// silence this counter exists to end.
+		e.ringbufDropReadFailed.Store(true)
+		e.notifyWarningOrLog(result.warning)
+		return
+	}
+	// The kernel counter is cumulative, so one successful read supersedes any
+	// earlier failure: the total is authoritative again.
+	//
+	// The total is published before the flag is cleared, and stats() reads
+	// them in the opposite order, so a reader that sees "not failed" is
+	// guaranteed to see the total that cleared it. Storing the flag first
+	// would leave a window where stats() reads the stale total (0, on a run
+	// whose first read failed) together with a cleared flag and prints it as a
+	// confident "no loss" - the very statement this whole change exists to
+	// prevent. The two goroutines do overlap: startTraceShutdownWatcher calls
+	// stats() on ctx.Done() while the monitor is still winding down on the
+	// same signal.
+	e.numRingbufDrops.Store(result.total)
+	e.ringbufDropReadFailed.Store(false)
+	if result.delta == 0 {
+		return
+	}
+	// Some of those lost records may have been sched_process_exec control
+	// records, and that is the one loss the stream cannot repair on its own:
+	// with an active -comm filter the open-side cache refresh never runs for a
+	// non-matching program, so a tid stale-cached under its pre-exec name would
+	// keep that name forever. Ask the event-loop goroutine to re-resolve the
+	// comm cache; the flag is consumed in applyPendingCommRefresh because this
+	// callback runs on the monitor goroutine.
+	e.commRefreshPending.Store(true)
+	// Modes without a warning sink (-plain, -flamegraph, headless -parquet)
+	// would otherwise only learn about the loss from the end-of-run
+	// statistics, which can be hours away. Losing events silently is exactly
+	// the finding this counter closes, so notifyWarningOrLog falls back to
+	// stderr - stdout stays machine-readable.
+	e.notifyWarningOrLog(formatRingbufDropWarning(result))
+}
+
+// handleAggregateDrainResult ingests one drained batch of kernel-side syscall
+// aggregates, or reports why the drain failed. The drain loop only runs with an
+// aggregate sink wired, which today means TUI mode only (makeTUIEventLoopConfigurer
+// is the sole caller of both SetAggregateSink and SetWarningCallback), so the
+// stderr fallback is unreachable in production right now. It is used anyway
+// rather than plain notifyWarning: a future headless aggregate consumer would
+// otherwise silently reintroduce exactly the swallow this file just fixed.
+func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
+	if result.warning != "" {
+		e.notifyWarningOrLog(result.warning)
+		return
+	}
+	if len(result.rows) == 0 {
+		return
+	}
+	e.aggregateSink.IngestSyscallAggregates(result.rows)
+}
+
+// processRawEvents decodes rawCh and emits every completed pair on the
+// calling goroutine, until rawCh is closed or ctx is cancelled.
+//
+// Decoding and emission share one goroutine on purpose. Handing each pair to
+// a separate emit goroutine cost a goroutine park and wake per pair, which
+// dominated the pipeline profile, and a buffered handoff let decoding run
+// ahead of emission: warnings raised while decoding (notifyWarning) then
+// overtook the pairs decoded before them in the TUI stream, and a stopped
+// trace kept emitting its buffered pairs into the next session's stream.
+// Here a pair is emitted before the next raw record is read, so
+//   - pairs and decode-side warnings reach the callbacks in stream order;
+//   - no decoded pair is ever pending when the loop returns: every pair
+//     produced (numSyscalls) is emitted and counted (numSyscallsAfterFilter),
+//     whichever way the loop stops;
+//   - a slow consumer stalls decoding directly, so backpressure reaches
+//     rawCh and, through it, the BPF ring buffer.
+//
+// rawCh itself stays buffered (see appconfig.DefaultChannelBufferSize), so
+// ring-buffer polling remains decoupled from decoding.
+func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
+	// A raw record completes at most one pair (tracepointExited, through
+	// sendPair, is the only sender), so one slot always suffices. sendPair
+	// never blocks: a second pair for one record panics instead of
+	// deadlocking this goroutine, which is the channel's only reader.
 	pairs := make(chan *event.Pair, 1)
 
 	for {
@@ -55,17 +168,18 @@ func (e *eventLoop) runSynchronously(ctx context.Context, rawCh <-chan []byte) {
 			if len(raw) == 0 {
 				continue
 			}
-			e.processRawEvent(raw, pairs)
+			// Recover from any panic inside a handler so a single bad
+			// event cannot crash the entire process.
+			e.processRawEventSafe(raw, pairs)
 			e.drainPairs(pairs)
 		case <-ctx.Done():
-			fmt.Println("Stopping event loop")
+			e.notifyStatus("Stopping event loop")
 			return
 		}
 	}
 }
 
-// drainPairs consumes all immediately available pairs from the buffered channel,
-// routing each completed pair through the outputFormatter.
+// drainPairs emits the pair, if any, that the last raw record completed.
 func (e *eventLoop) drainPairs(pairs <-chan *event.Pair) {
 	for {
 		select {
@@ -76,34 +190,6 @@ func (e *eventLoop) drainPairs(pairs <-chan *event.Pair) {
 			return
 		}
 	}
-}
-
-func (e *eventLoop) events(ctx context.Context, rawCh <-chan []byte) <-chan *event.Pair {
-	ch := make(chan *event.Pair)
-
-	go func() {
-		defer close(ch)
-
-		for {
-			select {
-			case raw, ok := <-rawCh:
-				if !ok {
-					return
-				}
-				if len(raw) == 0 {
-					continue
-				}
-				// Recover from any panic inside a callback so a single
-				// bad event cannot crash the entire process.
-				e.processRawEventSafe(raw, ch)
-			case <-ctx.Done():
-				fmt.Println("Stopping event loop")
-				return
-			}
-		}
-	}()
-
-	return ch
 }
 
 // processRawEventSafe calls processRawEvent and recovers from any panic,
@@ -123,6 +209,7 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	if len(raw) == 0 {
 		return
 	}
+	e.applyPendingCommRefresh()
 	e.numTracepoints++
 	evType := types.EventType(raw[0])
 	handler, ok := e.rawHandlers[evType]
@@ -133,10 +220,9 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 	handler(raw, ch)
 }
 
-// initRawHandlers registers all BPF event-type dispatch callbacks. It is
-// idempotent: a second call after the map is populated is a no-op. Handlers
-// are grouped by event class (open, fd, null, ret, name/path, misc) so that
-// each helper stays under 30 lines.
+// initRawHandlers registers all BPF event-type dispatch callbacks from the
+// runtime event-kind table. It is idempotent: a second call after the map is
+// populated is a no-op.
 func (e *eventLoop) initRawHandlers() {
 	if e.rawHandlers == nil {
 		e.rawHandlers = make(map[types.EventType]rawEventHandler)
@@ -144,132 +230,55 @@ func (e *eventLoop) initRawHandlers() {
 	if len(e.rawHandlers) != 0 {
 		return
 	}
-	e.registerOpenHandlers()
-	e.registerFdHandlers()
-	e.registerNullHandlers()
-	e.registerRetHandlers()
-	e.registerNamePathHandlers()
-	e.registerMiscHandlers()
-}
-
-// registerOpenHandlers wires enter/exit handlers for open-family events.
-func (e *eventLoop) registerOpenHandlers() {
-	e.rawHandlers[types.ENTER_OPEN_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		openEv, ok := decodeRawEvent(e, types.ENTER_OPEN_EVENT, raw, types.NewOpenEventFast)
-		if !ok {
-			return
-		}
-		if e.Filter().MatchOpenEvent(openEv) {
-			e.tracepointEntered(openEv)
-		}
-	}
-	e.rawHandlers[types.EXIT_OPEN_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		retEv, ok := decodeRawEvent(e, types.EXIT_OPEN_EVENT, raw, types.NewRetEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointExited(retEv, ch)
+	for _, rawEvent := range rawRuntimeEvents() {
+		e.rawHandlers[rawEvent.eventType] = e.rawRuntimeEventHandler(rawEvent)
 	}
 }
 
-// registerFdHandlers wires enter/exit handlers for fd-family events (read/write/close…).
-func (e *eventLoop) registerFdHandlers() {
-	e.rawHandlers[types.ENTER_FD_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		fdEv, ok := decodeRawEvent(e, types.ENTER_FD_EVENT, raw, types.NewFdEventFast)
+func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHandler {
+	return func(raw []byte, ch chan<- *event.Pair) {
+		ev, ok := e.decodeRuntimeEvent(rawEvent, raw)
 		if !ok {
 			return
 		}
-		e.tracepointEntered(fdEv)
-	}
-	e.rawHandlers[types.EXIT_FD_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		fdEv, ok := decodeRawEvent(e, types.EXIT_FD_EVENT, raw, types.NewFdEventFast)
-		if !ok {
+		if rawEvent.direction == rawControlEvent {
+			// Control records never become rows; they only update event-loop
+			// state. Because the BPF ring buffer preserves reservation order
+			// and this goroutine is the single consumer, a control record that
+			// reaches userspace is applied before any later event of the same
+			// task is turned into a pair. The caveat is backpressure: a record
+			// the kernel could not reserve never arrives at all, so the
+			// ordering guarantee holds for delivered records only and the drop
+			// counter drives the recovery path (applyPendingCommRefresh).
+			if rawEvent.control == nil {
+				ev.Recycle()
+				return
+			}
+			rawEvent.control(e, ev)
 			return
 		}
-		e.tracepointExited(fdEv, ch)
-	}
-}
-
-// registerNullHandlers wires enter/exit handlers for syscalls with no interesting arguments.
-func (e *eventLoop) registerNullHandlers() {
-	e.rawHandlers[types.ENTER_NULL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		nullEv, ok := decodeRawEvent(e, types.ENTER_NULL_EVENT, raw, types.NewNullEventFast)
+		syscallEvent, ok := ev.(event.Event)
 		if !ok {
+			e.notifyWarning("Dropped malformed syscall event")
+			ev.Recycle()
 			return
 		}
-		e.tracepointEntered(nullEv)
-	}
-	e.rawHandlers[types.EXIT_NULL_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		nullEv, ok := decodeRawEvent(e, types.EXIT_NULL_EVENT, raw, types.NewNullEventFast)
-		if !ok {
+		if rawEvent.direction == rawExitEvent {
+			e.tracepointExited(syscallEvent, ch)
 			return
 		}
-		e.tracepointExited(nullEv, ch)
-	}
-}
-
-// registerRetHandlers wires the exit handler for generic return-value events.
-func (e *eventLoop) registerRetHandlers() {
-	e.rawHandlers[types.EXIT_RET_EVENT] = func(raw []byte, ch chan<- *event.Pair) {
-		retEv, ok := decodeRawEvent(e, types.EXIT_RET_EVENT, raw, types.NewRetEventFast)
-		if !ok {
+		if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), syscallEvent) {
+			syscallEvent.Recycle()
 			return
 		}
-		e.tracepointExited(retEv, ch)
+		e.tracepointEntered(syscallEvent)
 	}
 }
 
-// registerNamePathHandlers wires enter handlers for name- and path-carrying events.
-func (e *eventLoop) registerNamePathHandlers() {
-	e.rawHandlers[types.ENTER_NAME_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		nameEv, ok := decodeRawEvent(e, types.ENTER_NAME_EVENT, raw, types.NewNameEventFast)
-		if !ok {
-			return
-		}
-		if e.Filter().MatchNameEvent(nameEv) {
-			e.tracepointEntered(nameEv)
-		}
-	}
-	e.rawHandlers[types.ENTER_PATH_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		pathEv, ok := decodeRawEvent(e, types.ENTER_PATH_EVENT, raw, types.NewPathEventFast)
-		if !ok {
-			return
-		}
-		if e.Filter().MatchPathEvent(pathEv) {
-			e.tracepointEntered(pathEv)
-		}
-	}
-}
-
-// registerMiscHandlers wires enter handlers for fcntl, open_by_handle_at, and dup3.
-func (e *eventLoop) registerMiscHandlers() {
-	e.rawHandlers[types.ENTER_FCNTL_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		fcntlEv, ok := decodeRawEvent(e, types.ENTER_FCNTL_EVENT, raw, types.NewFcntlEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(fcntlEv)
-	}
-	e.rawHandlers[types.ENTER_OPEN_BY_HANDLE_AT_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		openByHandleEv, ok := decodeRawEvent(e, types.ENTER_OPEN_BY_HANDLE_AT_EVENT, raw, types.NewOpenByHandleAtEventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(openByHandleEv)
-	}
-	e.rawHandlers[types.ENTER_DUP3_EVENT] = func(raw []byte, _ chan<- *event.Pair) {
-		dup3Ev, ok := decodeRawEvent(e, types.ENTER_DUP3_EVENT, raw, types.NewDup3EventFast)
-		if !ok {
-			return
-		}
-		e.tracepointEntered(dup3Ev)
-	}
-}
-
-func decodeRawEvent[T any](e *eventLoop, eventType types.EventType, raw []byte, decode func([]byte) *T) (*T, bool) {
-	decoded := decode(raw)
+func (e *eventLoop) decodeRuntimeEvent(rawEvent rawRuntimeEvent, raw []byte) (runtimeDecodedEvent, bool) {
+	decoded := rawEvent.decode(raw)
 	if decoded == nil {
-		e.dropMalformedRawEvent(eventType, raw)
+		e.dropMalformedRawEvent(rawEvent.eventType, raw)
 		return nil, false
 	}
 	return decoded, true
@@ -287,12 +296,17 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	switch enterEv.(type) {
 	case *types.OpenEvent:
 		e.pairs.set(enterEv)
+	case *types.ExecEvent:
+		e.pairs.set(enterEv)
 	default:
 		// Only, when we have a comm name
 		if _, ok := e.cachedComm(tid); ok {
 			e.pairs.set(enterEv)
 		} else {
 			e.notifyWarning(fmt.Sprintf("No comm name for %v process probably already vanished?", enterEv))
+			// The event is dropped (no cached comm to match a comm filter
+			// against): return it to its pool per the EventLifecycle contract.
+			enterEv.Recycle()
 		}
 	}
 }
@@ -315,33 +329,60 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep.Recycle()
 		return
 	}
+	// The derived values must be on the Pair *before* the exit handlers run,
+	// because that is where the pair filter is applied: MatchPair reads
+	// Bytes/Duration/DurationToPrev, and evaluating them while they are still
+	// zero silently turns `-latency`/`-gap`/`-bytes` into "compare against 0"
+	// for every kind (a `-latency >= 50` filter dropped a row whose real
+	// latency was 100ns). Only the emission-side freeze has to wait for the
+	// handler, since that is what assigns ep.File.
+	e.applyDerivedPairValues(ep)
 	if !e.handleTracepointExit(ep) {
 		return
 	}
-	tid := ep.EnterEv.GetTid()
-	ep.CalculateDurations(e.pairs.prevTime(tid))
-	e.pairs.setPrevTime(tid, ep.ExitEv.GetTime())
-	// Filter only once the pair is complete: latency, gap and bytes are not
-	// known inside the exit handlers, and fd-state changes (dup, fcntl, close)
-	// must be applied even for pairs the filter hides.
-	if pairFilteredAtExit(ep) && !e.Filter().MatchPair(ep) {
-		ep.Recycle()
-		return
-	}
-	e.freezePairForEmission(ep)
-	ch <- ep
+	e.finalizeTracepointPair(ep)
+	sendPair(ch, ep)
 }
 
-// pairFilteredAtExit reports whether the pair is subject to the full pair
-// filter. Open, name and path events are filtered on their enter event
-// instead, where both names of a rename-like syscall are still available.
-func pairFilteredAtExit(ep *event.Pair) bool {
-	switch ep.EnterEv.(type) {
-	case *types.FdEvent, *types.Dup3Event, *types.NullEvent, *types.FcntlEvent:
-		return true
+// secondPairPanic is the panic message of sendPair on a full channel.
+const secondPairPanic = "raw record completed more than one pair; extra pair dropped"
+
+// sendPair hands a completed pair to processRawEvents, which drains the
+// channel only after the handler has returned. Its one slot is enough
+// because a raw record completes at most one pair; a full channel therefore
+// means a handler broke that rule. A blocking send would then wait forever
+// for a reader that runs on this very goroutine - run() would never return,
+// e.done never close, and stats and shutdown would hang with it. So the send
+// never blocks: the extra pair is recycled and the handler panics, which
+// processRawEventSafe turns into a warning before the loop carries on. The
+// dropped pair stays counted in numSyscalls but not in
+// numSyscallsAfterFilter, so the loss also shows in the statistics. Its
+// tid's prevTime has already advanced, since finalizeTracepointPair runs first.
+func sendPair(ch chan<- *event.Pair, ep *event.Pair) {
+	select {
+	case ch <- ep:
 	default:
-		return false
+		ep.Recycle()
+		panic(secondPairPanic)
 	}
+}
+
+// applyDerivedPairValues computes every filterable value the Pair does not
+// carry straight from its two events: transferred bytes, address-space extent,
+// requested sleep, syscall latency and the inter-syscall gap. It reads the
+// per-tid previous-exit timestamp but deliberately does not advance it - that
+// happens in finalizeTracepointPair, so the gap keeps being measured from the
+// previously *emitted* pair rather than from a filtered-out one.
+func (e *eventLoop) applyDerivedPairValues(ep *event.Pair) {
+	applyRetBytes(ep)
+	applyAddressSpaceBytes(ep)
+	applyRequestedSleepNs(ep)
+	ep.CalculateDurations(e.pairs.prevTime(ep.EnterEv.GetTid()))
+}
+
+func (e *eventLoop) finalizeTracepointPair(ep *event.Pair) {
+	e.pairs.setPrevTime(ep.EnterEv.GetTid(), ep.ExitEv.GetTime())
+	e.freezePairForEmission(ep)
 }
 
 func (e *eventLoop) freezePairForEmission(ep *event.Pair) {

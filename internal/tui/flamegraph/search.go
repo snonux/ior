@@ -18,40 +18,34 @@ func orderedMatchIndices(matchSet map[int]bool) []int {
 
 // openSearch activates search mode on the Model by delegating to SearchController.
 func (m *Model) openSearch() {
-	m.SearchController.open()
+	m.search.open()
 }
 
 // clearSearch deactivates search mode and clears all search state.
 // Delegates to SearchController and updates the Model status message.
 func (m *Model) clearSearch() {
-	m.statusMessage = m.SearchController.clear()
+	m.statusMessage = m.search.clear()
 }
 
 // applySearchQuery applies a new search query, rebuilds filter state, and jumps
-// to the first match. Delegates to SearchController.applyQuery, then applies
-// any resulting selection change via the shared jumpMatch helper.
+// to the first match. Delegates to SearchController.applyQuery, then moves the
+// selection via followSearchResult.
 func (m *Model) applySearchQuery(raw string) {
-	statusMsg, jumpDir := m.SearchController.applyQuery(raw, m.frames, m.ancestry)
+	statusMsg, jumpDir := m.search.applyQuery(raw, m.anim.currentFrames(), m.anim.currentAncestry())
 	m.statusMessage = statusMsg
-	if jumpDir != 0 {
-		m.selectedIdx, m.subtreeSet = jumpMatch(
-			m.frames, m.matchIndices, m.ancestry, m.selectedIdx, jumpDir,
-		)
-	} else {
-		m.SelectionManager.ensureNavigable(m.frames, m.matchIndices, m.searchQuery, m.filterVisible)
-	}
+	m.followSearchResult(jumpDir)
 }
 
 // recomputeFilterState rebuilds the match and filter-visible sets after a
 // frame layout change. Delegates to SearchController.recomputeFilterState.
 func (m *Model) recomputeFilterState() {
-	m.SearchController.recomputeFilterState(m.frames, m.ancestry)
+	m.search.recomputeFilterState(m.anim.currentFrames(), m.anim.currentAncestry())
 }
 
 // searchFooter renders the search bar with match position info. Delegates to
 // SearchController.footerLine.
-func (m Model) searchFooter() string {
-	return m.SearchController.footerLine(m.frames, m.selectedIdx)
+func (m *Model) searchFooter() string {
+	return m.search.footerLine(m.sel.selected())
 }
 
 func replaceFooterLine(content, footer string) string {

@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestLinkBasic(t *testing.T) {
 	runScenario(t, "link-basic", []ExpectedEvent{
@@ -59,12 +62,9 @@ func TestLinkReadlinkat(t *testing.T) {
 }
 
 func TestLinkEnoent(t *testing.T) {
-	runScenario(t, "link-enoent", []ExpectedEvent{
-		{
-			Tracepoint: "enter_link",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "link-enoent", syscall.ENOENT, ExpectedRow{
+		Syscall: "link",
+	}, nil)
 }
 
 func TestLinkSymlinkEexist(t *testing.T) {

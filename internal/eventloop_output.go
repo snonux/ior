@@ -7,9 +7,10 @@ import "ior/internal/event"
 // separates "what to do with a completed event pair" and "how to report
 // non-fatal problems" from the core event-matching and FD-tracking logic.
 //
-// The struct is embedded (not pointed-to) inside eventLoop so that existing
-// call sites — including tests — can still write e.printCb = ... and
-// e.warningCb = ... without any changes.
+// The struct is embedded (not pointed-to) inside eventLoop. Production
+// wiring goes through the Set*Callback setters below so the loop's mutation
+// surface is explicit; the fields themselves stay writable for same-package
+// tests that construct loops directly.
 type outputFormatter struct {
 	// printCb is called for each completed, filter-passing event pair.
 	// The callback owns the pair after the call: it must either recycle it
@@ -19,6 +20,69 @@ type outputFormatter struct {
 	// warningCb is an optional callback for non-fatal event-processing
 	// warnings (e.g. malformed events, unresolved comms). nil means silent.
 	warningCb func(message string)
+
+	// statusCb receives human-facing lifecycle lines ("Stopping event loop",
+	// the -pprof hint, the stats wait note). Trace setup wires it to the
+	// mode-dependent logln, which is a no-op in TUI mode: those lines used to
+	// go straight to the terminal on every trace restart while Bubble Tea
+	// owned it. nil falls back to logStatus (stderr) so loops built outside
+	// trace setup - tests, benchmarks - keep the historical behaviour.
+	statusCb func(args ...any)
+
+	// pendingWarnings are warnings raised before the loop's output was wired
+	// (see setupWarnings). run replays them through notifyWarningOrLog before
+	// the first event, by which time every mode has installed its sinks.
+	pendingWarnings []string
+}
+
+// SetPrintCallback replaces the pair-emission callback. The callback owns
+// each pair after the call: it must either recycle it (ep.Recycle) or hand it
+// off to another owner. This is the production wiring seam for the mode
+// packages (plain output, TUI ingest, parquet/flamegraph recorders).
+func (e *eventLoop) SetPrintCallback(cb func(ep *event.Pair)) {
+	e.printCb = cb
+}
+
+// SetWarningCallback replaces the warning-notification sink. nil silences
+// warnings; the callback receives one human-readable message per problem.
+func (e *eventLoop) SetWarningCallback(cb func(message string)) {
+	e.warningCb = cb
+}
+
+// SetStatusCallback replaces the human-facing status-line sink. The callback
+// receives fmt.Sprintln-style arguments; nil restores the stderr default.
+func (e *eventLoop) SetStatusCallback(cb func(args ...any)) {
+	e.statusCb = cb
+}
+
+// notifyStatus delivers one lifecycle status line to statusCb, or to stderr
+// when none is wired. Unlike warnings, status lines are purely informational,
+// so a silent sink (TUI mode) is allowed to drop them.
+func (f *outputFormatter) notifyStatus(args ...any) {
+	if f.statusCb == nil {
+		logStatus(args...)
+		return
+	}
+	f.statusCb(args...)
+}
+
+// deferWarnings queues warnings for replay when the loop starts running. It
+// must be called before run.
+func (f *outputFormatter) deferWarnings(messages []string) {
+	f.pendingWarnings = append(f.pendingWarnings, messages...)
+}
+
+// flushPendingWarnings replays the queued warnings, once, on the event-loop
+// goroutine - the same goroutine every other warning is raised on.
+// notifyWarningOrLog is used because these report degraded observability the
+// user must see in every mode: a TUI warning row, or stderr where no warning
+// sink is wired.
+func (f *outputFormatter) flushPendingWarnings() {
+	pending := f.pendingWarnings
+	f.pendingWarnings = nil
+	for _, message := range pending {
+		f.notifyWarningOrLog(message)
+	}
 }
 
 // emit invokes printCb for the given pair, falling back to a safe recycle-only
@@ -41,4 +105,23 @@ func (f *outputFormatter) notifyWarning(message string) {
 		return
 	}
 	f.warningCb(message)
+}
+
+// notifyWarningOrLog delivers message to warningCb when one is registered and
+// falls back to stderr when none is. Modes without a warning sink (-plain,
+// -flamegraph, headless -parquet) never wire warningCb - only
+// makeTUIEventLoopConfigurer does - so plain notifyWarning silently discards
+// everything they report. That is acceptable for a per-event nuisance warning,
+// but not for a signal about lost data: use this for warnings the user must
+// see in every mode. stdout stays machine-readable because logStatus writes to
+// stderr.
+func (f *outputFormatter) notifyWarningOrLog(message string) {
+	if message == "" {
+		return
+	}
+	if f.warningCb != nil {
+		f.warningCb(message)
+		return
+	}
+	logStatus("Warning:", message)
 }

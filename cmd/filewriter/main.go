@@ -13,7 +13,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "filewriter: failed to open output file: %v\n", err)
 		os.Exit(1)
 	}
-	defer file.Close()
+	// No deferred Close: the loop below runs until the process is killed or
+	// an error exits via os.Exit (which skips defers anyway), so the file
+	// descriptor lives for the process lifetime and the OS reclaims it.
 
 	// Define the byte to be written
 	data := []byte("A") // Replace 'A' with any byte you wish to write

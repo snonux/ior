@@ -16,10 +16,13 @@ import (
 const allPIDsLabel = "All PIDs"
 const allTIDsLabel = "All TIDs"
 
+// PickerMode selects which id column the picker screen shows and emits.
 type PickerMode int
 
 const (
+	// PickerModePID lists processes (tgids).
 	PickerModePID PickerMode = iota
+	// PickerModeTID lists threads of the selected process.
 	PickerModeTID
 )
 
@@ -39,24 +42,9 @@ func DefaultKeyMap() KeyMap {
 	}
 }
 
+// PickerShortHelp returns the picker's key bindings in short-help order.
 func (k KeyMap) PickerShortHelp() []key.Binding {
 	return []key.Binding{k.Enter, k.Refresh, k.Esc}
-}
-
-var (
-	screenStyle    = common.ScreenStyle
-	headerStyle    = common.HeaderStyle
-	helpBarStyle   = common.HelpBarStyle
-	highlightStyle = common.HighlightStyle
-	errorStyle     = common.ErrorStyle
-)
-
-func syncPickerStyles() {
-	screenStyle = common.ScreenStyle
-	headerStyle = common.HeaderStyle
-	helpBarStyle = common.HelpBarStyle
-	highlightStyle = common.HighlightStyle
-	errorStyle = common.ErrorStyle
 }
 
 type processesLoadedMsg struct {
@@ -64,7 +52,9 @@ type processesLoadedMsg struct {
 	err       error
 }
 
-// Model is the Bubble Tea model for the PID picker screen.
+// Model is the Bubble Tea model for the PID picker screen. It is value-flow:
+// every method has a value receiver and every mutator returns the updated
+// Model (see the TUI Model receiver policy in AGENTS.md).
 type Model struct {
 	input         textinput.Model
 	processes     []ProcessInfo
@@ -91,7 +81,6 @@ func NewWithKeys(keys KeyMap) Model {
 
 // NewPIDWithKeys creates a PID picker model with the provided key bindings.
 func NewPIDWithKeys(keys KeyMap) Model {
-	syncPickerStyles()
 	input := textinput.New()
 	input.Prompt = "Filter: "
 	input.Placeholder = "pid, comm, or cmdline"
@@ -119,7 +108,8 @@ func NewTIDWithKeys(targetPID int, keys KeyMap) Model {
 	return m
 }
 
-// Init starts the initial process scan.
+// Init starts the initial process scan. It only reads the model: the scan
+// result reaches Update as a processesLoadedMsg.
 func (m Model) Init() tea.Cmd {
 	return m.scanCmd()
 }
@@ -139,7 +129,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case processesLoadedMsg:
 		m.processes = msg.processes
 		m.lastErr = msg.err
-		m.applyFilter()
+		m = m.applyFilter()
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
@@ -147,7 +137,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.applyFilter()
+	m = m.applyFilter()
 	return m, cmd
 }
 
@@ -183,7 +173,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.applyFilter()
+	m = m.applyFilter()
 	return m, cmd
 }
 
@@ -213,14 +203,17 @@ func (m Model) emitSelection() tea.Cmd {
 	return func() tea.Msg { return messages.PidSelectedMsg{Pid: pid} }
 }
 
-func (m *Model) applyFilter() {
+// applyFilter returns m with filtered rebuilt from processes for the current
+// query and the selection clamped to it. Like every Model method it takes and
+// returns a value, so it only ever changes the copy the caller keeps.
+func (m Model) applyFilter() Model {
 	query := strings.TrimSpace(strings.ToLower(m.input.Value()))
 	if query == "" {
 		m.filtered = cloneProcesses(m.processes)
 		if m.selectedIndex > len(m.filtered) {
 			m.selectedIndex = len(m.filtered)
 		}
-		return
+		return m
 	}
 
 	filtered := make([]ProcessInfo, 0, len(m.processes))
@@ -234,6 +227,7 @@ func (m *Model) applyFilter() {
 	if m.selectedIndex > len(m.filtered) {
 		m.selectedIndex = len(m.filtered)
 	}
+	return m
 }
 
 func matchesQuery(process ProcessInfo, query string) bool {
@@ -258,15 +252,16 @@ func cloneProcesses(in []ProcessInfo) []ProcessInfo {
 
 // View renders the PID picker with filter input, list, and help bar.
 func (m Model) View() tea.View {
+	theme := common.Current()
 	var b strings.Builder
 	if m.mode == PickerModeTID {
 		if m.targetPID > 0 {
-			b.WriteString(headerStyle.Render(fmt.Sprintf("Select TID for PID %d", m.targetPID)))
+			b.WriteString(theme.HeaderStyle.Render(fmt.Sprintf("Select TID for PID %d", m.targetPID)))
 		} else {
-			b.WriteString(headerStyle.Render("Select TID"))
+			b.WriteString(theme.HeaderStyle.Render("Select TID"))
 		}
 	} else {
-		b.WriteString(headerStyle.Render("Select PID"))
+		b.WriteString(theme.HeaderStyle.Render("Select PID"))
 	}
 	b.WriteString("\n")
 	b.WriteString(m.input.View())
@@ -277,20 +272,19 @@ func (m Model) View() tea.View {
 
 	if m.lastErr != nil {
 		b.WriteString("\n")
-		b.WriteString(errorStyle.Render("scan error: " + m.lastErr.Error()))
+		b.WriteString(theme.ErrorStyle.Render("scan error: " + m.lastErr.Error()))
 	}
 
 	b.WriteString("\n")
 	viewWidth, _ := common.EffectiveViewport(m.width, m.height)
-	helpStyle := helpBarStyle.Copy().Width(viewWidth)
+	helpStyle := theme.HelpBarStyle.Width(viewWidth)
 	b.WriteString(helpStyle.Render(renderHelp(m.keys.PickerShortHelp())))
-	return tea.NewView(screenStyle.Render(b.String()))
+	return tea.NewView(theme.ScreenStyle.Render(b.String()))
 }
 
 // SetDarkMode updates picker theme and text input styles.
 func (m Model) SetDarkMode(isDark bool) Model {
 	m.isDark = isDark
-	syncPickerStyles()
 	m.input.SetStyles(textinput.DefaultStyles(isDark))
 	return m
 }
@@ -327,7 +321,7 @@ func (m Model) renderRow(index int, label string) string {
 	style := lipgloss.NewStyle()
 	if index == m.selectedIndex {
 		prefix = "> "
-		style = highlightStyle
+		style = common.Current().HighlightStyle
 	}
 	return style.Render(prefix + label)
 }
