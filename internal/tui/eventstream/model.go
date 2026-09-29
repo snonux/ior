@@ -648,6 +648,32 @@ func (m *Model) takeSnapshot() {
 	m.ownsAllEvents = false
 }
 
+// filterRows appends the rows of src that match filter to dst and returns it.
+// An inactive filter matches every row, so it bulk-copies src instead of
+// evaluating Matches per row: that is the common case (no filter set) and it
+// runs over the whole ring buffer on every stream tick. Both Model.applyFilter
+// and the CSV export use it, so the export contains exactly the rows the
+// Stream tab shows.
+func filterRows(dst, src []StreamEvent, filter Filter) []StreamEvent {
+	if !filter.IsActive() {
+		return append(dst, src...)
+	}
+	for i := range src {
+		// Match through a pointer into src: the Row accessors have pointer
+		// receivers, so this neither copies the row per accessor call nor
+		// boxes a copy into the Candidate interface (a heap allocation per
+		// row per tick).
+		ev := &src[i]
+		// Plain Matches: the either-name rule for rename rows lives inside it
+		// (Candidate.OldFileValue), so this stage cannot re-narrow what the
+		// event loop and the dashboard ingest already applied.
+		if filter.Matches(ev) {
+			dst = append(dst, *ev)
+		}
+	}
+	return dst
+}
+
 // applyFilter rebuilds filtered from allEvents and re-syncs the viewport.
 // It reuses filtered's backing array: rows past the new length stay pinned
 // until overwritten, which is bounded by the ring capacity and cheaper than
@@ -662,20 +688,7 @@ func (m *Model) applyFilter() {
 		return
 	}
 
-	filtered := m.filtered[:0]
-	for i := range m.allEvents {
-		// Match through a pointer into allEvents: taking the address of a
-		// loop-local copy would make every copy escape to the heap via the
-		// Candidate interface (one allocation per buffered row per tick).
-		ev := &m.allEvents[i]
-		// Plain Matches: the either-name rule for rename rows lives inside it
-		// now (Candidate.OldFileValue), so this stage cannot re-narrow what the
-		// event loop and the dashboard ingest already applied.
-		if m.filter.Matches(ev) {
-			filtered = append(filtered, *ev)
-		}
-	}
-	m.filtered = filtered
+	m.filtered = filterRows(m.filtered[:0], m.allEvents, m.filter)
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(m.visibleRows())
 	m.viewport.SetContentLines(m.blankContentLines(len(m.filtered)))

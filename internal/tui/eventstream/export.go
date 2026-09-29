@@ -122,18 +122,9 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 	rows := make([]StreamEvent, 0)
 	if source != nil {
 		snapshot := source.Snapshot()
-		rows = make([]StreamEvent, 0, len(snapshot))
-		for i := range snapshot {
-			// Pointer into snapshot, as in Model.applyFilter, so matching
-			// does not heap-allocate a copy of every row.
-			ev := &snapshot[i]
-			// Plain Matches, as in Model.applyFilter: the either-name rule is
-			// inside it now, so the export must contain exactly the rows the
-			// Stream tab is showing.
-			if filter.Matches(ev) {
-				rows = append(rows, *ev)
-			}
-		}
+		// Same row selection as Model.applyFilter, so the export contains
+		// exactly the rows the Stream tab is showing.
+		rows = filterRows(make([]StreamEvent, 0, len(snapshot)), snapshot, filter)
 	}
 
 	return exportRowsToCSV(rows, exportDir, name)
