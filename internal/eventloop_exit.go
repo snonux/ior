@@ -683,11 +683,11 @@ func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool
 
 // handleEventfdExit records the descriptor returned by the fd-creating
 // syscalls grouped under the eventfd payload (eventfd, epoll_create, memfd,
-// landlock_create_ruleset, ...). A landlock_create_ruleset call with non-zero
-// flags (an ABI probe) returns a version/errata number or an error rather
-// than an fd, so it is labelled without touching
-// the fd table: registering its return value would clobber the name of a real
-// descriptor that happens to share that number.
+// landlock_create_ruleset, ...). A non-zero-flag landlock_create_ruleset call
+// (ABI query or invalid flags) returns a version/errata number or an error
+// rather than an fd, so it is labelled without touching the fd table:
+// registering its return value would clobber the name of a real descriptor
+// that happens to share that number.
 func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEvent) bool {
 	exitEv, ok := ep.ExitEv.(*types.EventfdEvent)
 	if !ok {
@@ -737,8 +737,9 @@ func (e *eventLoop) registerEventfdResult(eventfdEv *types.EventfdEvent, fd, fla
 	return fdFile
 }
 
-// isLandlockRulesetProbe reports whether a landlock_create_ruleset call cannot
-// have returned a ruleset fd. The kernel only creates a ruleset when flags is
+// isLandlockRulesetProbe reports whether a landlock_create_ruleset call is a
+// non-zero-flag call (ABI query or invalid flags) and so cannot have returned
+// a ruleset fd. The kernel only creates a ruleset when flags is
 // 0; LANDLOCK_CREATE_RULESET_VERSION or _ERRATA return the ABI version or the
 // errata bitmask instead (libraries such as go-landlock and the Rust landlock
 // crate probe this at startup), and any other non-zero flags fail with
@@ -748,8 +749,9 @@ func isLandlockRulesetProbe(traceID types.TraceId, flags int32) bool {
 	return traceID == types.SYS_ENTER_LANDLOCK_CREATE_RULESET && flags != 0
 }
 
-// landlockProbeName labels an ABI probe row; it is a pathname-style label
-// rather than an fd because no descriptor was created.
+// landlockProbeName labels a non-zero-flag landlock_create_ruleset row (ABI
+// query or invalid flags); it is a pathname-style label rather than an fd
+// because no descriptor was created.
 func landlockProbeName(flags int32) string {
 	return fmt.Sprintf("landlock-probe:%d", flags)
 }
